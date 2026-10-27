@@ -30,7 +30,7 @@ pub const DEFAULT_TOKEN_HEADER: &str = "proxy-authorization";
 ///
 /// A TCP listener on a non-loopback address must have TLS, checked here at load rather than at bind so an unsafe
 /// configuration is never approved (R-26). Whether the callers on a listener may use `isolated-network` or `socket`
-/// authentication depends on every caller section, so that is checked with the other cross-references (K-11).
+/// authentication depends on every caller section, so [`ValidatedConfig`](crate::ValidatedConfig) checks it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawListener")]
 pub struct ListenerConfig {

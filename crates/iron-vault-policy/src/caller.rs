@@ -31,7 +31,7 @@ use crate::token_hash::TokenHash;
 /// Only rules local to the section are checked here. That `listener` and every route exist, that a per-caller rate
 /// limit is no looser than its route's, and that the listener suits the caller's `auth` (a TLS TCP listener for
 /// `isolated-network`, a Unix socket for `socket`, a sole caller for either) need the whole configuration and are
-/// checked with the other cross-references (K-11).
+/// checked by [`ValidatedConfig`](crate::ValidatedConfig).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawCaller")]
 pub struct CallerConfig {

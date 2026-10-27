@@ -28,8 +28,11 @@ pub mod route_prefix;
 pub mod slot;
 pub mod slot_format;
 pub mod slot_value;
+#[cfg(test)]
+mod spec_example;
 pub mod token_hash;
 pub mod upstream;
+pub mod validated;
 
 pub use caller::{CallerAuth, CallerConfig, CallerError};
 pub use config::{ConfigError, Location, ParsedConfig, SCHEMA_VERSION};
@@ -54,3 +57,4 @@ pub use slot_format::{SlotFormat, SlotFormatError};
 pub use slot_value::{SlotValue, SlotValueError};
 pub use token_hash::{TokenHash, TokenHashError};
 pub use upstream::{UpstreamUrl, UpstreamUrlError};
+pub use validated::{ValidatedConfig, ValidationError};
