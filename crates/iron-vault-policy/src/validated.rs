@@ -5,6 +5,7 @@
 //! the same document always yields the same report.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::{IpAddr, SocketAddr};
 
 use thiserror::Error;
 
@@ -17,11 +18,7 @@ use crate::name::{CallerName, ListenerName, RouteName};
 use crate::rate_limit::RateLimit;
 use crate::route::RouteConfig;
 use crate::route_prefix::RoutePrefix;
-use crate::slot::Slot;
 use crate::token_hash::TOKEN_DIGEST_LEN;
-
-/// The header a Basic slot writes.
-const AUTHORIZATION: &str = "authorization";
 
 /// A parsed config whose references resolve and whose sections cannot conflict.
 ///
@@ -76,6 +73,22 @@ pub enum ValidationError {
         listener: ListenerName,
         /// The kind of listener the `auth` value needs.
         required: &'static str,
+    },
+    /// An `isolated-network` caller's listener binds an address that is not confined to one network.
+    ///
+    /// The caller has no token, so the listener address is its whole identity: a loopback bind hands its routes to every
+    /// local process, and a wildcard bind to every host that can reach any interface (spec §3.4).
+    #[error(
+        "caller {caller} uses auth = \"isolated-network\", so listener {listener} must bind a dedicated non-loopback, \
+         non-wildcard address; {address} would let any local process or reachable host use its routes"
+    )]
+    UndedicatedAddress {
+        /// The caller.
+        caller: CallerName,
+        /// The listener.
+        listener: ListenerName,
+        /// The listener's address.
+        address: SocketAddr,
     },
     /// A caller identified by its listener shares that listener, so the listener no longer identifies it.
     #[error(
@@ -211,31 +224,56 @@ fn higher_rate(a: RateLimit, b: RateLimit) -> bool {
 
 /// Callers identified by their listener use the right kind of listener and are its only caller (spec §3.4).
 ///
-/// An `isolated-network` caller needs a TLS address listener bound to its own network; a `socket` caller needs a Unix
-/// socket whose permissions admit only it. Either way a second caller on the listener would be indistinguishable.
+/// An `isolated-network` caller needs a TLS listener on a dedicated, non-loopback, non-wildcard address, bound to its
+/// own network; a `socket` caller needs a Unix socket whose permissions admit only it. Either way a second caller on
+/// the listener would be indistinguishable.
 fn check_listener_auth(config: &ParsedConfig) -> Vec<ValidationError> {
     config.callers().iter().flat_map(|(name, caller)| listener_auth(config, name, caller)).collect()
 }
 
 fn listener_auth(config: &ParsedConfig, name: &CallerName, caller: &CallerConfig) -> Vec<ValidationError> {
     let Some(listener) = config.listeners().get(caller.listener()) else { return Vec::new() };
-    let (auth, required, kind_ok) = match caller.auth() {
+    let (auth, fault) = match caller.auth() {
         CallerAuth::Token(_) => return Vec::new(),
-        CallerAuth::IsolatedNetwork => {
-            ("isolated-network", "an address listener with TLS", matches!(listener.endpoint(), Endpoint::Tcp { tls: Some(_), .. }))
-        }
-        CallerAuth::Socket => ("socket", "a unix_socket listener", matches!(listener.endpoint(), Endpoint::UnixSocket(_))),
+        CallerAuth::IsolatedNetwork => ("isolated-network", isolated_network_fault(name, caller.listener(), listener)),
+        CallerAuth::Socket => ("socket", socket_fault(name, caller.listener(), listener)),
     };
-    let kind = (!kind_ok).then(|| ValidationError::WrongListenerKind {
-        caller: name.clone(),
-        auth,
-        listener: caller.listener().clone(),
-        required,
-    });
     let others: Vec<_> = callers_on(config, caller.listener()).map(|(other, _)| other).filter(|other| *other != name).cloned().collect();
     let shared = (!others.is_empty())
         .then(|| ValidationError::SharedListener { caller: name.clone(), auth, listener: caller.listener().clone(), others });
-    kind.into_iter().chain(shared).collect()
+    fault.into_iter().chain(shared).collect()
+}
+
+/// Why `listener` cannot identify an `isolated-network` caller, if it cannot.
+fn isolated_network_fault(caller: &CallerName, name: &ListenerName, listener: &ListenerConfig) -> Option<ValidationError> {
+    match listener.endpoint() {
+        Endpoint::Tcp { address, tls: Some(_) } if !is_dedicated(address.ip()) => {
+            Some(ValidationError::UndedicatedAddress { caller: caller.clone(), listener: name.clone(), address: *address })
+        }
+        Endpoint::Tcp { tls: Some(_), .. } => None,
+        Endpoint::Tcp { tls: None, .. } | Endpoint::UnixSocket(_) => {
+            Some(wrong_kind(caller, "isolated-network", name, "an address listener with TLS"))
+        }
+    }
+}
+
+/// Why `listener` cannot identify a `socket` caller, if it cannot.
+fn socket_fault(caller: &CallerName, name: &ListenerName, listener: &ListenerConfig) -> Option<ValidationError> {
+    (!matches!(listener.endpoint(), Endpoint::UnixSocket(_))).then(|| wrong_kind(caller, "socket", name, "a unix_socket listener"))
+}
+
+fn wrong_kind(caller: &CallerName, auth: &'static str, listener: &ListenerName, required: &'static str) -> ValidationError {
+    ValidationError::WrongListenerKind { caller: caller.clone(), auth, listener: listener.clone(), required }
+}
+
+/// Whether a bind on `ip` admits only the hosts of one network: it is neither loopback (every local process) nor
+/// unspecified (every interface).
+///
+/// The address is canonicalized first, so `::ffff:127.0.0.1` counts as loopback here. The listener's TLS rule treats
+/// that same address as non-loopback; each rule takes the reading that rejects more.
+fn is_dedicated(ip: IpAddr) -> bool {
+    let ip = ip.to_canonical();
+    !ip.is_loopback() && !ip.is_unspecified()
 }
 
 /// No two token callers on one listener share a token hash.
@@ -299,17 +337,9 @@ fn token_header_collisions(config: &ParsedConfig, listener: &ListenerName, heade
     let reachable: BTreeSet<_> = callers_on(config, listener).flat_map(|(_, caller)| caller.routes()).collect();
     reachable
         .into_iter()
-        .filter(|route| config.routes().get(*route).is_some_and(|r| writes_header(r.slot(), header)))
+        .filter(|route| config.routes().get(*route).is_some_and(|r| r.slot().header_written() == Some(header.lowercase())))
         .map(|route| ValidationError::TokenHeaderIsSlot { listener: listener.clone(), header: header.clone(), route: route.clone() })
         .collect()
-}
-
-fn writes_header(slot: &Slot, header: &HeaderName) -> bool {
-    match slot {
-        Slot::Header(slot) => slot.name() == header,
-        Slot::Basic => header.lowercase() == AUTHORIZATION,
-        Slot::Query(_) => false,
-    }
 }
 
 /// The callers configured on `listener`, in name order.
@@ -427,6 +457,20 @@ mod tests {
             let err = errors(&[listener, &fx(), &caller("a", name, "isolated-network")]);
             assert!(matches!(&err[..], [ValidationError::WrongListenerKind { auth: "isolated-network", .. }]), "{err:?}");
         });
+    }
+
+    #[test]
+    fn isolated_network_caller_needs_a_dedicated_address() {
+        ["127.0.0.1:7878", "[::1]:7878", "0.0.0.0:7878", "[::]:7878", "[::ffff:127.0.0.1]:7878", "[::ffff:0.0.0.0]:7878"].iter().for_each(
+            |address| {
+                let listener = NET.replace("10.20.0.2:7878", address);
+                let err = errors(&[&listener, &fx(), &caller("a", "net", "isolated-network")]);
+                let expected = ValidationError::UndedicatedAddress { caller: n("a"), listener: n("net"), address: n(address) };
+                assert_eq!(err, [expected], "{address}");
+            },
+        );
+        let err = errors(&[&NET.replace("10.20.0.2", "0.0.0.0"), &fx(), &caller("a", "net", "isolated-network")]);
+        assert!(err[0].to_string().contains("must bind a dedicated non-loopback, non-wildcard address; 0.0.0.0:7878"), "{}", err[0]);
     }
 
     #[test]

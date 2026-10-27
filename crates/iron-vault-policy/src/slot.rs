@@ -28,6 +28,9 @@ use crate::slot_format::SlotFormat;
 /// The keyword that selects the Basic slot.
 const BASIC: &str = "basic";
 
+/// The header a Basic slot writes, in lowercase.
+const AUTHORIZATION: &str = "authorization";
+
 /// Where a route writes its credential.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Slot {
@@ -37,6 +40,20 @@ pub enum Slot {
     Query(QueryParamName),
     /// `Authorization: Basic …`, built from the credential's username and password.
     Basic,
+}
+
+impl Slot {
+    /// The lowercase name of the header this slot writes, or `None` for a query slot.
+    ///
+    /// Every check that asks "does this route write header X" goes through here, so the Basic slot's implicit
+    /// `Authorization` cannot be forgotten by one of them.
+    pub fn header_written(&self) -> Option<&str> {
+        match self {
+            Self::Header(slot) => Some(slot.name().lowercase()),
+            Self::Basic => Some(AUTHORIZATION),
+            Self::Query(_) => None,
+        }
+    }
 }
 
 /// A header slot: a non-reserved header name and the format of its value.
@@ -214,6 +231,13 @@ mod tests {
 
     fn header(name: &str, format: &str) -> Slot {
         Slot::Header(HeaderSlot::new(name.parse().unwrap(), format.parse().unwrap()).unwrap())
+    }
+
+    #[test]
+    fn header_written_names_the_header_in_lowercase() {
+        assert_eq!(header("X-Subscription-Token", "{}").header_written(), Some("x-subscription-token"));
+        assert_eq!(Slot::Basic.header_written(), Some("authorization"));
+        assert_eq!(parse(r#"{ query = "access_key" }"#).unwrap().header_written(), None);
     }
 
     #[test]
