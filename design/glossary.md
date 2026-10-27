@@ -33,6 +33,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Marker            | An inert SDK placeholder such as `{iv:fx_key}` that Iron Vault interprets only in the selected slot.                        | `iron-vault-policy` |           | §1.3 |
 | Method            | An HTTP method from the allowlist a route may grant; `CONNECT` and `TRACE` are never allowed.                               | `iron-vault-policy` | `Method` | §3.3, §3.5 |
 | Owner             | The person authorized to enroll credentials, approve policy, recover the vault, and authorize destructive changes.          | `iron-vault`        |           | §1.3 |
+| Path pattern      | A route restriction on the normalized upstream path, built from literal, `*` and `**` segments and matching the whole path. | `iron-vault-policy` | `PathPattern` | §3.3 |
 | Recipient         | A public key or hardware-backed mechanism that can unwrap the vault identity.                                               | `iron-vault-store`  |           | §1.3 |
 | Recovery key      | A generated offline `age` X25519 identity that opens the vault identity independently of the primary recipient.             | `iron-vault-store`  |           | §1.3 |
 | Route             | A caller grant and upstream mapping that selects one credential, its slot, and usage restrictions.                          | `iron-vault-policy` |           | §1.3 |
