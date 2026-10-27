@@ -30,7 +30,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Config approval   | A service-generated signature binding a vault identifier, approval version, and exact configuration hash.                   | `iron-vault-store`  |           | §1.3 |
 | Confirmation      | A route's owner-confirmation policy: `none` (the default) or `touch`, which v0 parses but refuses to activate. | `iron-vault-policy` | `Confirmation` | §2, §3.3, §5.1 |
 | Credential        | A named provider secret and the rules that govern its use.                                                                  | `iron-vault-kinds`  |           | §1.3 |
-| Credential catalog | The service's view of the vault for activation: per credential name, unknown, or known with whether it is usable and its permitted host and port pairs. | `iron-vault-policy` | `CredentialCatalog`, `CatalogEntry` | §3.3, §3.9 |
+| Credential catalog | The service's view of the vault for activation: per credential name, unknown, unusable (damaged or needing login), or usable with its permitted host and port pairs. | `iron-vault-policy` | `CredentialCatalog`, `CatalogEntry` | §3.3, §3.9 |
 | Credential record | The encrypted record containing a credential's secret, kind, permitted origins, and provider settings.                      | `iron-vault-store`  |           | §1.3 |
 | Hardware key      | A removable device, initially a YubiKey, that protects keys and supports PIN and touch policies.                            | `iron-vault-store`  |           | §1.3 |
 | Header value      | The bytes of one HTTP field value; never contains CR, LF or NUL, may contain obs-text, and is never rendered in logs or errors. | `iron-vault-policy` | `HeaderValue` | §3.6 |

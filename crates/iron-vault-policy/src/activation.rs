@@ -35,10 +35,12 @@ pub trait CredentialCatalog {
 pub enum CatalogEntry {
     /// No record has this name.
     Unknown,
-    /// A record has this name.
-    Known {
-        /// False when the record is damaged or needs login; its routes are then unavailable (spec §3.9).
-        usable: bool,
+    /// A record has this name but is damaged or needs login, so its routes are unavailable (spec §3.9).
+    ///
+    /// It carries no origins: a damaged record cannot be trusted to report them.
+    Unusable,
+    /// A record has this name and can serve requests.
+    Usable {
         /// The exact host and port pairs the record permits its secret to reach (spec §3.3).
         origins: BTreeSet<(Host, Port)>,
     },
@@ -87,8 +89,18 @@ pub enum ActivationError {
 
 impl ActivePolicy {
     /// The validated configuration this policy serves.
+    ///
+    /// Its routes include unavailable ones; serve requests through [`ActivePolicy::route`], which omits them.
     pub fn config(&self) -> &ValidatedConfig {
         &self.config
+    }
+
+    /// The route named `route`, if it exists and is available.
+    ///
+    /// This is the lookup for serving a request, so a route whose record is unusable can never be reached by forgetting
+    /// to check [`ActivePolicy::is_available`].
+    pub fn route(&self, route: &RouteName) -> Option<&RouteConfig> {
+        self.config.routes().get(route).filter(|_| !self.unavailable.contains(route))
     }
 
     /// Routes whose credential record is unusable, in name order.
@@ -98,15 +110,14 @@ impl ActivePolicy {
 
     /// Whether `route` exists and may serve requests.
     pub fn is_available(&self, route: &RouteName) -> bool {
-        self.config.routes().contains_key(route) && !self.unavailable.contains(route)
+        self.route(route).is_some()
     }
 }
 
 /// Activates `config`, or returns every reason it cannot be, in route name order.
 ///
-/// The catalog is asked once per credential. A record that is known but unusable makes only its routes unavailable;
-/// its origins are not checked, because a damaged record cannot be trusted to report them, and activation runs again
-/// once the record is repaired.
+/// The catalog is asked once per credential. An unusable record makes only its routes unavailable; activation runs
+/// again once the record is repaired, and checks its origins then.
 pub fn activate(
     config: &ValidatedConfig,
     capabilities: &Capabilities,
@@ -135,7 +146,7 @@ fn credential_error(name: &RouteName, route: &RouteConfig, entry: &CatalogEntry)
     let upstream = route.upstream();
     match entry {
         CatalogEntry::Unknown => Some(ActivationError::UnknownCredential { route: name.clone(), credential: route.credential().clone() }),
-        CatalogEntry::Known { usable: true, origins } if !origins.iter().any(|(h, p)| h == upstream.host() && *p == upstream.port()) => {
+        CatalogEntry::Usable { origins } if !origins.iter().any(|(h, p)| h == upstream.host() && *p == upstream.port()) => {
             Some(ActivationError::OriginNotPermitted {
                 route: name.clone(),
                 credential: route.credential().clone(),
@@ -143,12 +154,12 @@ fn credential_error(name: &RouteName, route: &RouteConfig, entry: &CatalogEntry)
                 port: upstream.port(),
             })
         }
-        CatalogEntry::Known { .. } => None,
+        CatalogEntry::Usable { .. } | CatalogEntry::Unusable => None,
     }
 }
 
 fn is_usable(entry: &CatalogEntry) -> bool {
-    matches!(entry, CatalogEntry::Known { usable: true, .. })
+    matches!(entry, CatalogEntry::Usable { .. })
 }
 
 #[cfg(test)]
@@ -172,14 +183,14 @@ mod tests {
         s.parse().unwrap()
     }
 
-    fn known(usable: bool, hosts: &[(&str, u16)]) -> CatalogEntry {
-        CatalogEntry::Known { usable, origins: hosts.iter().map(|(h, p)| (n(h), Port::try_from(*p).unwrap())).collect() }
+    fn usable(hosts: &[(&str, u16)]) -> CatalogEntry {
+        CatalogEntry::Usable { origins: hosts.iter().map(|(h, p)| (n(h), Port::try_from(*p).unwrap())).collect() }
     }
 
     /// A catalog that permits each §3.3 route's upstream, with `overrides` replacing individual entries.
     fn spec_catalog(overrides: &[(&str, CatalogEntry)]) -> FakeCatalog {
         let healthy = [("fx_key", "api.fx.example"), ("venice", "api.venice.ai"), ("brave", "api.search.brave.com")];
-        let mut entries: BTreeMap<_, _> = healthy.iter().map(|(name, host)| (n(name), known(true, &[(host, 443)]))).collect();
+        let mut entries: BTreeMap<_, _> = healthy.iter().map(|(name, host)| (n(name), usable(&[(host, 443)]))).collect();
         entries.extend(overrides.iter().map(|(name, entry)| (n(name), entry.clone())));
         FakeCatalog(entries)
     }
@@ -200,7 +211,7 @@ mod tests {
     impl CredentialCatalog for CountingCatalog {
         fn entry(&self, name: &CredentialName) -> CatalogEntry {
             self.0.borrow_mut().push(name.clone());
-            known(true, &[("api.fx.example", 443), ("api.venice.ai", 443), ("api.search.brave.com", 443)])
+            usable(&[("api.fx.example", 443), ("api.venice.ai", 443), ("api.search.brave.com", 443)])
         }
     }
 
@@ -238,11 +249,22 @@ mod tests {
 
     #[test]
     fn damaged_credential_disables_only_its_route() {
-        let catalog = spec_catalog(&[("venice", known(false, &[]))]);
+        let catalog = spec_catalog(&[("venice", CatalogEntry::Unusable)]);
         let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog).unwrap();
         assert_eq!(policy.unavailable_routes().iter().map(RouteName::as_str).collect::<Vec<_>>(), ["venice"]);
         assert!(!policy.is_available(&n("venice")));
         assert!(policy.is_available(&n("fx")) && policy.is_available(&n("brave")));
+    }
+
+    #[test]
+    fn route_lookup_omits_unavailable_and_missing_routes() {
+        let catalog = spec_catalog(&[("venice", CatalogEntry::Unusable)]);
+        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog).unwrap();
+        assert_eq!(policy.route(&n("fx")), policy.config().routes().get(&n("fx")));
+        assert!(policy.route(&n("fx")).is_some() && policy.route(&n("brave")).is_some());
+        assert_eq!(policy.route(&n("venice")), None);
+        assert!(policy.config().routes().contains_key(&n("venice")));
+        assert_eq!(policy.route(&n("missing")), None);
     }
 
     #[test]
@@ -260,14 +282,14 @@ mod tests {
         let other_port = spec_with("https://api.fx.example", "https://api.fx.example:8443");
         let err = activate(&other_port, &NO_TOUCH, &spec_catalog(&[])).unwrap_err();
         assert!(matches!(&err[..], [ActivationError::OriginNotPermitted { port, .. }] if port.get() == 8443), "{err:?}");
-        let catalog = spec_catalog(&[("fx_key", known(true, &[("api.fx.example", 443), ("api.fx.example", 8443)]))]);
+        let catalog = spec_catalog(&[("fx_key", usable(&[("api.fx.example", 443), ("api.fx.example", 8443)]))]);
         assert!(activate(&other_port, &NO_TOUCH, &catalog).is_ok());
     }
 
     #[test]
     fn every_error_is_reported_in_route_order() {
         let touch = spec_with("credential = \"fx_key\"", "credential = \"fx_key\"\nconfirm = \"touch\"");
-        let catalog = spec_catalog(&[("brave", CatalogEntry::Unknown), ("fx_key", known(true, &[("api.fx.example", 8443)]))]);
+        let catalog = spec_catalog(&[("brave", CatalogEntry::Unknown), ("fx_key", usable(&[("api.fx.example", 8443)]))]);
         let err = activate(&touch, &NO_TOUCH, &catalog).unwrap_err();
         let expected = [
             ActivationError::UnknownCredential { route: n("brave"), credential: n("brave") },
