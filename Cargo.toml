@@ -13,6 +13,7 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "1"
+url = "2.5"
 
 [workspace.lints.rust]
 missing_docs = "warn"
