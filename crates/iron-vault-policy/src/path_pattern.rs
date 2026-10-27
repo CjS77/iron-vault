@@ -147,6 +147,19 @@ impl PathPattern {
         }
         pattern.get(p..).is_some_and(|tail| tail.iter().all(|seg| *seg == Segment::Any))
     }
+
+    /// The segments' text when every segment is a literal, or `None` when the pattern has a wildcard.
+    ///
+    /// Lets a route prefix share this type's literal-segment rules without accepting wildcards.
+    pub(crate) fn literal_segments(&self) -> Option<Vec<String>> {
+        self.segments
+            .iter()
+            .map(|segment| match segment {
+                Segment::Literal(text) => Some(text.clone()),
+                Segment::One | Segment::Any => None,
+            })
+            .collect()
+    }
 }
 
 impl TryFrom<String> for PathPattern {

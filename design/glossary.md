@@ -38,12 +38,14 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Normalized path   | A caller's validated request path, unreserved escapes decoded and others in uppercase hex; authorized and forwarded as is.  | `iron-vault-policy` | `NormalizedPath` | §3.3, §3.6 |
 | Operational limits | Service-wide bounds on request head and body size, decompressed response size, timeouts, and concurrent connections. | `iron-vault-policy` | `Limits` | §9 |
 | Owner             | The person authorized to enroll credentials, approve policy, recover the vault, and authorize destructive changes.          | `iron-vault`        |           | §1.3 |
+| Parsed config     | A configuration document whose listeners, callers, routes and limits each passed their own validation, before cross-references are checked. | `iron-vault-policy` | `ParsedConfig` | §3.3 |
 | Path pattern      | A route restriction on the normalized upstream path, built from literal, `*` and `**` segments and matching the whole path. | `iron-vault-policy` | `PathPattern` | §3.3 |
 | Rate limit        | A route's token-bucket allowance: `requests` per `per_seconds`, with at most `burst` available at once.      | `iron-vault-policy` | `RateLimit` | §3.3, §3.5 |
 | Recipient         | A public key or hardware-backed mechanism that can unwrap the vault identity.                                               | `iron-vault-store`  |           | §1.3 |
 | Recovery key      | A generated offline `age` X25519 identity that opens the vault identity independently of the primary recipient.             | `iron-vault-store`  |           | §1.3 |
 | Reserved header   | A caller-authentication or transport-control header that is stripped before forwarding and can never be a slot.         | `iron-vault-policy` | `reserved_headers` | §3.6 |
-| Route             | A caller grant and upstream mapping that selects one credential, its slot, and usage restrictions.                          | `iron-vault-policy` |           | §1.3 |
+| Route             | A caller grant and upstream mapping that selects one credential, its slot, and usage restrictions.                          | `iron-vault-policy` | `RouteName`, `RouteConfig` | §1.3, §3.3 |
+| Route prefix      | The literal leading request-path segments, such as `/fx`, that select a route; never `/` alone and never a wildcard.        | `iron-vault-policy` | `RoutePrefix` | §3.3, §3.6 |
 | Slot              | The route's permitted credential location: a named header, a named query parameter, or Basic authorization.                 | `iron-vault-policy` | `Slot` | §1.3, §3.3 |
 | Slot format       | The fixed text around a header slot's credential, with exactly one `{}` substitution point, such as `Bearer {}`.          | `iron-vault-policy` | `SlotFormat` | §3.6 |
 | Source            | The origin of a credential imported into the vault, initially direct entry and later password-manager sync.                 | `iron-vault-store`  |           | §1.3 |
