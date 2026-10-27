@@ -97,6 +97,7 @@ pub enum TargetError {
 /// A validated origin-form request target: its normalized path and optional query.
 ///
 /// [`Display`](fmt::Display) renders the exact target to forward, and parsing that rendering gives back an equal value.
+/// Forward that rendered text as it is; see [`NormalizedPath`] for why the path must not be rebuilt from its segments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestTarget {
     path: NormalizedPath,
@@ -143,6 +144,10 @@ impl fmt::Display for RequestTarget {
 /// A caller path in its single normalized representation (see the module documentation).
 ///
 /// The root path `/` has zero segments and no trailing slash; any other path may keep one trailing slash.
+///
+/// Segments are percent-encoded text. Forward the path as its [`Display`](fmt::Display) rendering, for example with
+/// `Url::set_path`, which keeps existing escapes. Never push the segments through `Url::path_segments_mut().extend`,
+/// which escapes `%` again and so forwards a different path from the one that was authorized.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedPath {
     segments: Vec<String>,
@@ -151,6 +156,9 @@ pub struct NormalizedPath {
 
 impl NormalizedPath {
     /// The normalized segments, without separators; empty for the root path.
+    ///
+    /// Each segment is percent-encoded text (`%C3%A9`, not `é`), so it is never a forwarding input on its own: see the
+    /// type documentation.
     pub fn segments(&self) -> &[String] {
         &self.segments
     }
@@ -176,6 +184,8 @@ impl NormalizedPath {
 }
 
 /// Renders the forwarded path: `/`, the segments joined by `/`, and the trailing slash if there was one.
+///
+/// The segments are already percent-encoded, so this text is forwarded verbatim and never encoded again.
 impl fmt::Display for NormalizedPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let trailing = if self.trailing_slash { "/" } else { "" };

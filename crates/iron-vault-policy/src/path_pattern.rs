@@ -2,7 +2,11 @@
 //!
 //! A pattern is written as an absolute path whose segments are literals, `*` (exactly one segment) or `**` (zero or
 //! more complete segments). Patterns match the whole normalized upstream path, never its query. Normalizing a request
-//! path into segments is the caller's job; matching here assumes segments that are already decoded and validated.
+//! path into segments is [`NormalizedPath`](crate::NormalizedPath)'s job; matching here assumes segments in that form:
+//! validated, with unreserved characters decoded and every other escape kept as uppercase `%XX`.
+//!
+//! A literal pattern segment never contains `%`, so a request segment that still holds an escape (`caf%C3%A9`) can be
+//! matched only by `*` or `**`. Matching therefore fails closed: no literal can match a spelling it did not name.
 
 use std::fmt;
 
@@ -161,8 +165,10 @@ impl fmt::Display for PathPattern {
 
 /// Whether a character may appear in a pattern: `/`, `*`, or an RFC 3986 `pchar` other than `%`.
 ///
-/// Excluding `%` keeps patterns in decoded form, the same form the normalizer hands to [`PathPattern::matches`], so
-/// one path never has two spellings. `?` and `#` are excluded because patterns never cover a query or fragment.
+/// Excluding `%` gives each literal exactly one spelling, which is also how [`NormalizedPath`](crate::NormalizedPath)
+/// spells it: characters allowed here are never escaped in a normalized segment. A normalized segment that still holds
+/// a `%XX` escape is matched only by a wildcard. `?` and `#` are excluded because patterns never cover a query or
+/// fragment.
 fn is_pattern_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || "/*-._~!$&'()+,;=:@".contains(c)
 }
