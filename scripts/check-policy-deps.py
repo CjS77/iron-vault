@@ -19,14 +19,17 @@ import sys
 POLICY_CRATE = "iron-vault-policy"
 
 ALLOWED_DIRECT = {
-    "thiserror",  # K-3: typed errors
-    "serde",  # K-3, K-5, K-6: configuration and policy model deserialization
+    "thiserror",  # K-3, K-4, K-5, K-6: typed errors
+    "serde",  # K-3, K-4, K-5, K-6: configuration and policy model deserialization
     "url",  # K-4: destination URL parsing
-    "idna",  # K-4: host name normalization
-    "toml",  # K-10: configuration parsing from an in-memory string
 }
 
-DENIED_TRANSITIVE = {"tokio", "mio", "socket2", "hyper", "reqwest", "async-std"}
+DENIED_TRANSITIVE = {"tokio", "mio", "socket2", "hyper", "reqwest", "async-std", "async-io", "smol", "async-net"}
+DENIED_PREFIXES = ("tokio-",)
+
+
+def is_denied(name):
+    return name in DENIED_TRANSITIVE or name.startswith(DENIED_PREFIXES)
 
 
 def load_metadata():
@@ -39,7 +42,10 @@ def is_normal(dep):
 
 
 def policy_package(meta):
-    return next(p for p in meta["packages"] if p["name"] == POLICY_CRATE)
+    pkg = next((p for p in meta["packages"] if p["name"] == POLICY_CRATE), None)
+    if pkg is None:
+        sys.exit(f"error: package '{POLICY_CRATE}' not found in cargo metadata; update POLICY_CRATE if it was renamed")
+    return pkg
 
 
 def normal_closure(meta, root_id):
@@ -59,7 +65,7 @@ def main():
     names = {p["id"]: p["name"] for p in meta["packages"]}
     direct = sorted({d["name"] for d in pkg["dependencies"] if d["kind"] is None})
     unapproved = [d for d in direct if d not in ALLOWED_DIRECT]
-    denied = sorted({names[i] for i in normal_closure(meta, pkg["id"])} & DENIED_TRANSITIVE)
+    denied = sorted({names[i] for i in normal_closure(meta, pkg["id"]) if is_denied(names[i])})
     for d in unapproved:
         print(f"error: {POLICY_CRATE} depends on '{d}', which is not in ALLOWED_DIRECT", file=sys.stderr)
     for d in denied:
