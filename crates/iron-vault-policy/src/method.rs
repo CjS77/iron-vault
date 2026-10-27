@@ -9,6 +9,8 @@ use std::str::FromStr;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::display::quoted;
+
 /// An HTTP method from the allowlist a route may grant (spec §3.3, §3.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
@@ -71,7 +73,7 @@ impl TryFrom<&str> for Method {
             FORBIDDEN
                 .into_iter()
                 .find(|f| *f == s)
-                .map_or_else(|| MethodError::Unsupported(format!("\"{}\"", s.escape_default())), MethodError::Forbidden)
+                .map_or_else(|| MethodError::Unsupported(quoted(s)), MethodError::Forbidden)
         })
     }
 }

@@ -6,6 +6,8 @@ use std::str::FromStr;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::display::quoted;
+
 /// The placeholder a slot format replaces with the credential.
 const PLACEHOLDER: &str = "{}";
 
@@ -47,14 +49,15 @@ pub enum SlotFormatError {
 }
 
 impl SlotFormat {
-    /// The header value carrying `credential` in place of `{}`.
-    pub fn render(&self, credential: &str) -> String {
-        format!("{}{credential}{}", self.prefix, self.suffix)
+    /// The fixed text written before the credential.
+    pub fn prefix(&self) -> &str {
+        &self.prefix
     }
-}
 
-fn escaped(s: &str) -> String {
-    format!("\"{}\"", s.escape_default())
+    /// The fixed text written after the credential.
+    pub fn suffix(&self) -> &str {
+        &self.suffix
+    }
 }
 
 impl TryFrom<&str> for SlotFormat {
@@ -62,11 +65,11 @@ impl TryFrom<&str> for SlotFormat {
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         if let Some(found) = s.chars().find(|c| !(' '..='~').contains(c)) {
-            return Err(SlotFormatError::InvalidChar { format: escaped(s), found });
+            return Err(SlotFormatError::InvalidChar { format: quoted(s), found });
         }
-        let (prefix, suffix) = s.split_once(PLACEHOLDER).ok_or_else(|| SlotFormatError::MissingPlaceholder(escaped(s)))?;
+        let (prefix, suffix) = s.split_once(PLACEHOLDER).ok_or_else(|| SlotFormatError::MissingPlaceholder(quoted(s)))?;
         if prefix.contains(['{', '}']) || suffix.contains(['{', '}']) {
-            return Err(SlotFormatError::ExtraBrace(escaped(s)));
+            return Err(SlotFormatError::ExtraBrace(quoted(s)));
         }
         Ok(Self { prefix: prefix.to_owned(), suffix: suffix.to_owned() })
     }
@@ -100,17 +103,18 @@ mod tests {
 
     #[test]
     fn default_is_the_bare_credential() {
-        assert_eq!(SlotFormat::default().render("k3y"), "k3y");
+        assert_eq!((SlotFormat::default().prefix(), SlotFormat::default().suffix()), ("", ""));
         assert_eq!(SlotFormat::default(), "{}".parse().unwrap());
         assert_eq!(SlotFormat::default().to_string(), "{}");
     }
 
     #[test]
-    fn renders_prefix_and_suffix() {
+    fn splits_prefix_and_suffix() {
         let format: SlotFormat = "Bearer {}".parse().unwrap();
-        assert_eq!(format.render("k3y"), "Bearer k3y");
+        assert_eq!((format.prefix(), format.suffix()), ("Bearer ", ""));
         assert_eq!(format.to_string(), "Bearer {}");
-        assert_eq!("token={}; v=1".parse::<SlotFormat>().unwrap().render("k"), "token=k; v=1");
+        let format: SlotFormat = "token={}; v=1".parse().unwrap();
+        assert_eq!((format.prefix(), format.suffix()), ("token=", "; v=1"));
     }
 
     #[test]

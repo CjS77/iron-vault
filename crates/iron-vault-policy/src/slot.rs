@@ -20,9 +20,10 @@ use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
-use crate::header_name::{HeaderName, HeaderNameError};
+use crate::display::quoted;
+use crate::header_name::HeaderName;
 use crate::reserved_headers;
-use crate::slot_format::{SlotFormat, SlotFormatError};
+use crate::slot_format::SlotFormat;
 
 /// The keyword that selects the Basic slot.
 const BASIC: &str = "basic";
@@ -47,10 +48,10 @@ pub struct HeaderSlot {
     format: SlotFormat,
 }
 
-/// A query parameter name: non-empty, with no `&`, `=`, `#`, whitespace or control characters.
+/// A query parameter name: non-empty, with no `&`, `=`, `#`, `%`, `+`, whitespace or control characters.
 ///
-/// Those characters would end the name, start the value or fragment, or read differently after decoding, so the
-/// parameter the policy removes could differ from the one the upstream reads.
+/// Those characters would end the name, start the value or fragment, or read differently after decoding (`%` starts an
+/// escape, `+` decodes to a space), so the parameter the policy removes could differ from the one the upstream reads.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub struct QueryParamName(String);
@@ -58,19 +59,13 @@ pub struct QueryParamName(String);
 /// A slot that cannot be accepted.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SlotError {
-    /// The header slot's name is not a valid HTTP field name.
-    #[error(transparent)]
-    HeaderName(#[from] HeaderNameError),
-    /// The header slot's format is invalid.
-    #[error(transparent)]
-    Format(#[from] SlotFormatError),
     /// The header slot names a caller-authentication or transport-control header.
     #[error("header {0} is reserved for caller authentication or transport control and cannot be a slot")]
     ReservedHeader(HeaderName),
     /// The query parameter name is empty.
     #[error("query parameter name is empty")]
     EmptyQueryName,
-    /// The query parameter name contains a delimiter, whitespace or control character.
+    /// The query parameter name contains a delimiter, decoding character, whitespace or control character.
     #[error("query parameter name {name} contains {found:?}")]
     InvalidQueryChar {
         /// The rejected name, escaped so control characters never reach a log raw.
@@ -114,7 +109,7 @@ impl QueryParamName {
 }
 
 fn is_forbidden_query_char(c: char) -> bool {
-    matches!(c, '&' | '=' | '#') || c.is_whitespace() || c.is_control()
+    matches!(c, '&' | '=' | '#' | '%' | '+') || c.is_whitespace() || c.is_control()
 }
 
 impl TryFrom<&str> for QueryParamName {
@@ -125,7 +120,7 @@ impl TryFrom<&str> for QueryParamName {
             return Err(SlotError::EmptyQueryName);
         }
         match s.chars().find(|c| is_forbidden_query_char(*c)) {
-            Some(found) => Err(SlotError::InvalidQueryChar { name: format!("\"{}\"", s.escape_default()), found }),
+            Some(found) => Err(SlotError::InvalidQueryChar { name: quoted(s), found }),
             None => Ok(Self(s.to_owned())),
         }
     }
@@ -235,13 +230,15 @@ mod tests {
             panic!("expected a header slot");
         };
         assert_eq!(slot.name().as_str(), "Authorization");
-        assert_eq!(slot.format().render("k"), "Bearer k");
+        assert_eq!(slot.format().to_string(), "Bearer {}");
     }
 
     #[test]
     fn rejects_bad_formats() {
-        assert!(parse(r#"{ header = "Authorization", format = "Bearer {} {}" }"#).is_err());
-        assert!(parse(r#"{ header = "Authorization", format = "x\r\ny: {}" }"#).is_err());
+        let error = parse(r#"{ header = "Authorization", format = "Bearer {} {}" }"#).unwrap_err().to_string();
+        assert!(error.contains("exactly one {}"), "{error}");
+        let error = parse(r#"{ header = "Authorization", format = "x\r\ny: {}" }"#).unwrap_err().to_string();
+        assert!(error.contains("only printable ASCII"), "{error}");
     }
 
     #[test]
@@ -264,6 +261,16 @@ mod tests {
         assert_eq!(QueryParamName::try_from("a&b"), Err(SlotError::InvalidQueryChar { name: "\"a&b\"".into(), found: '&' }));
         assert_eq!(QueryParamName::try_from(""), Err(SlotError::EmptyQueryName));
         assert_eq!(QueryParamName::try_from("api-key.v2").unwrap().as_str(), "api-key.v2");
+    }
+
+    #[test]
+    fn rejects_percent_escapes_in_query_names() {
+        assert_eq!(QueryParamName::try_from("api%5Fkey"), Err(SlotError::InvalidQueryChar { name: "\"api%5Fkey\"".into(), found: '%' }));
+    }
+
+    #[test]
+    fn rejects_plus_in_query_names() {
+        assert_eq!(QueryParamName::try_from("api+key"), Err(SlotError::InvalidQueryChar { name: "\"api+key\"".into(), found: '+' }));
     }
 
     #[test]

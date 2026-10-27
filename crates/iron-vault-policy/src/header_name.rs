@@ -8,6 +8,8 @@ use std::str::FromStr;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::display::quoted;
+
 /// An HTTP field name: a non-empty RFC 9110 `token`.
 ///
 /// Field names are case-insensitive (RFC 9110 §5.1), so equality, hashing and ordering use the lowercase form. The
@@ -61,7 +63,7 @@ impl TryFrom<&str> for HeaderName {
             return Err(HeaderNameError::Empty);
         }
         match s.chars().find(|c| !is_tchar(*c)) {
-            Some(found) => Err(HeaderNameError::InvalidChar { name: format!("\"{}\"", s.escape_default()), found }),
+            Some(found) => Err(HeaderNameError::InvalidChar { name: quoted(s), found }),
             None => Ok(Self { spelling: s.to_owned(), lowercase: s.to_ascii_lowercase() }),
         }
     }
