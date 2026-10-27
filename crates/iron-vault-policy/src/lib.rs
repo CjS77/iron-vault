@@ -6,6 +6,8 @@
 
 pub mod method;
 pub mod name;
+pub mod path_pattern;
 
 pub use method::{Method, MethodError};
 pub use name::{CallerName, CredentialName, ListenerName, NameError, NameRule, RouteName};
+pub use path_pattern::{PathPattern, PathPatternError, PathPatterns};

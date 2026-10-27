@@ -12,6 +12,7 @@ rust-version = "1.98.0"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+toml = "1"
 
 [workspace.lints.rust]
 missing_docs = "warn"
