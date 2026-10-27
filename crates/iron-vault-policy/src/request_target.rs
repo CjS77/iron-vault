@@ -6,6 +6,7 @@
 //! segments and each segment is rewritten into its normalized form:
 //!
 //! - percent-encoded RFC 3986 unreserved characters (letters, digits, `-`, `_`, `~`) are decoded;
+//! - escapes of `.`, `/`, `\`, `%`, `?`, `#` and control characters are rejected;
 //! - every other escape is kept, with uppercase hex digits;
 //! - literal characters are kept as written.
 //!
@@ -25,20 +26,60 @@ use thiserror::Error;
 
 use crate::escape::{EscapeAction, EscapeError, decode_hex_pair, is_path_char, is_unreserved, walk_escapes};
 
-/// Decoded characters that a Unicode-folding decoder (NFKC, or a "best fit" code-page conversion) could turn into
-/// `.`, `/`, `\` or `%`, and so into traversal or a second decoding pass.
-const LOOK_ALIKES: [char; 11] = [
+/// Code points that NFKC or a common best-fit code-page conversion turns into text containing `.`, `/`, `\` or `%`, and
+/// so into traversal, an extra separator, or a second decoding pass at an upstream that folds Unicode.
+///
+/// The NFKC part is every such single code point in Unicode 15.0, found by scanning all code points:
+/// `[c for c in map(chr, range(0x110000)) if c not in "./\\%" and set(unicodedata.normalize("NFKC", c)) & set("./\\%")]`.
+/// The best-fit part covers the yen and won signs, which Japanese and Korean code pages map to `\`, and the fraction
+/// and division slashes, which Windows best-fit tables map to `/`.
+const LOOK_ALIKES: &[char] = &[
+    // NFKC.
     '\u{2024}', // ONE DOT LEADER
     '\u{2025}', // TWO DOT LEADER
+    '\u{2026}', // HORIZONTAL ELLIPSIS
+    '\u{2100}', // ACCOUNT OF
+    '\u{2101}', // ADDRESSED TO THE SUBJECT
+    '\u{2105}', // CARE OF
+    '\u{2106}', // CADA UNA
+    '\u{2488}', // DIGIT ONE FULL STOP
+    '\u{2489}', // DIGIT TWO FULL STOP
+    '\u{248A}', // DIGIT THREE FULL STOP
+    '\u{248B}', // DIGIT FOUR FULL STOP
+    '\u{248C}', // DIGIT FIVE FULL STOP
+    '\u{248D}', // DIGIT SIX FULL STOP
+    '\u{248E}', // DIGIT SEVEN FULL STOP
+    '\u{248F}', // DIGIT EIGHT FULL STOP
+    '\u{2490}', // DIGIT NINE FULL STOP
+    '\u{2491}', // NUMBER TEN FULL STOP
+    '\u{2492}', // NUMBER ELEVEN FULL STOP
+    '\u{2493}', // NUMBER TWELVE FULL STOP
+    '\u{2494}', // NUMBER THIRTEEN FULL STOP
+    '\u{2495}', // NUMBER FOURTEEN FULL STOP
+    '\u{2496}', // NUMBER FIFTEEN FULL STOP
+    '\u{2497}', // NUMBER SIXTEEN FULL STOP
+    '\u{2498}', // NUMBER SEVENTEEN FULL STOP
+    '\u{2499}', // NUMBER EIGHTEEN FULL STOP
+    '\u{249A}', // NUMBER NINETEEN FULL STOP
+    '\u{249B}', // NUMBER TWENTY FULL STOP
+    '\u{33C2}', // SQUARE AM
+    '\u{33C7}', // SQUARE CO
+    '\u{33D8}', // SQUARE PM
+    '\u{FE19}', // PRESENTATION FORM FOR VERTICAL HORIZONTAL ELLIPSIS
+    '\u{FE30}', // PRESENTATION FORM FOR VERTICAL TWO DOT LEADER
     '\u{FE52}', // SMALL FULL STOP
-    '\u{FF0E}', // FULLWIDTH FULL STOP
-    '\u{2044}', // FRACTION SLASH
-    '\u{2215}', // DIVISION SLASH
-    '\u{FF0F}', // FULLWIDTH SOLIDUS
     '\u{FE68}', // SMALL REVERSE SOLIDUS
-    '\u{FF3C}', // FULLWIDTH REVERSE SOLIDUS
     '\u{FE6A}', // SMALL PERCENT SIGN
     '\u{FF05}', // FULLWIDTH PERCENT SIGN
+    '\u{FF0E}', // FULLWIDTH FULL STOP
+    '\u{FF0F}', // FULLWIDTH SOLIDUS
+    '\u{FF3C}', // FULLWIDTH REVERSE SOLIDUS
+    '\u{1F100}', // DIGIT ZERO FULL STOP
+    // Best fit, not NFKC.
+    '\u{00A5}', // YEN SIGN
+    '\u{2044}', // FRACTION SLASH
+    '\u{20A9}', // WON SIGN
+    '\u{2215}', // DIVISION SLASH
 ];
 
 /// Why a caller's request target was rejected; the request interface answers every variant with `400` (§3.12).
@@ -74,6 +115,10 @@ pub enum TargetError {
     /// The path percent-encodes `.`, `/` or `\`.
     #[error("request path percent-encodes a dot, slash or backslash")]
     EncodedDotOrSeparator,
+    /// The path percent-encodes `?` or `#`; an upstream that decodes the path once and parses it again would read them
+    /// as the start of a query or fragment and cut the path short.
+    #[error("request path percent-encodes '?' or '#'")]
+    EncodedDelimiter,
     /// The path percent-encodes `%`, which a second decoding pass would turn into a new escape.
     #[error("request path percent-encodes '%' (double encoding)")]
     EncodedPercent,
@@ -195,7 +240,9 @@ impl fmt::Display for NormalizedPath {
 
 /// A non-empty query string, validated but otherwise kept exactly as the caller sent it.
 ///
-/// It contains only RFC 3986 query characters and well-formed escapes; structural parsing belongs to query slots.
+/// It contains only RFC 3986 query characters other than `'`, and well-formed escapes; structural parsing belongs to
+/// query slots. `'` is excluded because the `url` crate escapes it in `https` queries, so the forwarded query would
+/// differ from the validated one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawQuery(String);
 
@@ -206,7 +253,7 @@ impl RawQuery {
     }
 
     fn parse(query: &str) -> Result<Self, TargetError> {
-        if !query.chars().all(|c| is_path_char(c) || matches!(c, '/' | '?')) {
+        if !query.chars().all(is_query_char) {
             return Err(TargetError::ForbiddenQueryCharacter);
         }
         query.split('%').skip(1).try_for_each(|part| match part.get(..2).and_then(decode_hex_pair) {
@@ -234,6 +281,11 @@ fn check_target_char(c: char) -> Result<(), TargetError> {
     }
 }
 
+/// RFC 3986 query characters that the `url` crate forwards unchanged in an `https` query: everything but `'`.
+fn is_query_char(c: char) -> bool {
+    (is_path_char(c) || matches!(c, '/' | '?')) && c != '\''
+}
+
 /// Normalizes one raw segment, then checks the fully decoded text for traversal that a later decoder could see.
 fn normalize_segment(raw: &str) -> Result<String, TargetError> {
     if raw.is_empty() {
@@ -254,6 +306,7 @@ fn escape_action(byte: u8) -> EscapeAction<TargetError> {
     match byte {
         b'.' | b'/' | b'\\' => EscapeAction::Reject(TargetError::EncodedDotOrSeparator),
         b'%' => EscapeAction::Reject(TargetError::EncodedPercent),
+        b'?' | b'#' => EscapeAction::Reject(TargetError::EncodedDelimiter),
         _ if byte.is_ascii_control() => EscapeAction::Reject(TargetError::EncodedControl),
         _ if is_unreserved(char::from(byte)) => EscapeAction::Decode,
         _ => EscapeAction::Keep,
@@ -356,11 +409,33 @@ mod tests {
 
     #[test]
     fn rendering_is_a_fixed_point_of_the_url_parser() {
-        ["/fx/latest/", "/a/%c3%a9", "/!$&'()*+,;=:@/x", "/a%20b?q=%20&r=/?"].into_iter().map(parse).for_each(|target| {
-            let url = url::Url::parse(&format!("https://host.example{target}")).unwrap();
-            let forwarded = format!("{}{}", url.path(), url.query().map(|q| format!("?{q}")).unwrap_or_default());
-            assert_eq!(forwarded, target.to_string());
+        let targets = ["/fx/latest/", "/a/%c3%a9", "/!$&'()*+,;=:@/x", "/a%20b?q=%20&r=/?", "/x?a=!$&()*+,;=:@-._~%27%2e"];
+        targets.into_iter().map(parse).for_each(|target| {
+            assert_eq!(forwarded_by_url(&target.to_string()), target.to_string());
         });
+    }
+
+    /// The path and query the `url` crate would forward for `target` on an `https` upstream.
+    fn forwarded_by_url(target: &str) -> String {
+        let url = url::Url::parse(&format!("https://host.example{target}")).unwrap();
+        format!("{}{}", url.path(), url.query().map(|q| format!("?{q}")).unwrap_or_default())
+    }
+
+    #[test]
+    fn every_accepted_ascii_character_is_forwarded_unchanged() {
+        let targets = (0u8..0x80).map(char::from).flat_map(|c| [format!("/a{c}b"), format!("/x?a{c}b")]);
+        let accepted: Vec<_> = targets.filter_map(|raw| RequestTarget::parse(&raw).ok()).collect();
+        accepted.iter().for_each(|target| assert_eq!(forwarded_by_url(&target.to_string()), target.to_string()));
+        // Path: 66 unreserved, 11 sub-delims, ':', '@' and '/', plus `/a?b` as a path and query. Query: the same 80 with
+        // '?' in place of '\''.
+        assert_eq!(accepted.len(), 161);
+    }
+
+    #[test]
+    fn rejects_encoded_query_and_fragment_delimiters() {
+        ["/fx/a%3Fb", "/fx/%3f", "/fx/a%23b", "/fx/%23/x"]
+            .into_iter()
+            .for_each(|raw| assert_eq!(reject(raw), TargetError::EncodedDelimiter, "{raw}"));
     }
 
     #[test]
@@ -486,7 +561,7 @@ mod tests {
 
     #[test]
     fn rejects_non_rfc3986_query_characters() {
-        ["/fx?a=\"", "/fx?a[]=1", "/fx?a=<b>", "/fx?a=|", "/fx?a=`"]
+        ["/fx?a=\"", "/fx?a[]=1", "/fx?a=<b>", "/fx?a=|", "/fx?a=`", "/fx?a='", "/fx?name=o'brien&x=1"]
             .into_iter()
             .for_each(|raw| assert_eq!(reject(raw), TargetError::ForbiddenQueryCharacter, "{raw}"));
         assert_eq!(reject("/fx?a=\\"), TargetError::Backslash);
@@ -511,15 +586,32 @@ mod tests {
         ["/fx/;/x", "/fx/;x", "/fx/%3B"].into_iter().for_each(|raw| assert_eq!(reject(raw), TargetError::EmptySegment, "{raw}"));
     }
 
+    /// Uppercase and lowercase percent-encodings of a character's UTF-8 bytes.
+    fn escapes_of(c: char) -> [String; 2] {
+        let upper: String = c.to_string().bytes().map(|b| format!("%{b:02X}")).collect();
+        [upper.clone(), upper.to_ascii_lowercase()]
+    }
+
     #[test]
-    fn rejects_unicode_look_alikes() {
+    fn rejects_every_unicode_look_alike() {
+        LOOK_ALIKES.iter().flat_map(|&c| escapes_of(c)).flat_map(|e| [format!("/fx/{e}"), format!("/fx/a{e}b")]).for_each(|raw| {
+            assert_eq!(reject(&raw), TargetError::LookAlike, "{raw}");
+        });
+    }
+
+    #[test]
+    fn rejects_look_alikes_named_by_their_escapes() {
         let escapes = [
             "%E2%80%A4", "%E2%80%A5", "%EF%B9%92", "%EF%BC%8E", "%E2%81%84", "%E2%88%95", "%EF%BC%8F", "%EF%B9%A8", "%EF%BC%BC",
-            "%EF%B9%AA", "%EF%BC%85",
+            "%EF%B9%AA", "%EF%BC%85", "%EF%B8%B0", "%E2%84%80", "%E2%84%81", "%E2%84%85", "%E2%84%86", "%C2%A5", "%E2%82%A9",
         ];
-        assert_eq!(escapes.len(), LOOK_ALIKES.len());
-        escapes.iter().flat_map(|e| [format!("/fx/{e}"), format!("/fx/a{e}b"), format!("/fx/{}", e.to_ascii_lowercase())]).for_each(|raw| {
-            assert_eq!(reject(&raw), TargetError::LookAlike, "{raw}");
+        escapes.iter().for_each(|e| assert_eq!(reject(&format!("/fx/{e}/x")), TargetError::LookAlike, "{e}"));
+    }
+
+    #[test]
+    fn look_alikes_are_listed_once_and_are_not_ascii() {
+        LOOK_ALIKES.iter().enumerate().for_each(|(i, c)| {
+            assert!(!c.is_ascii() && !LOOK_ALIKES[..i].contains(c), "{c:?}");
         });
     }
 
