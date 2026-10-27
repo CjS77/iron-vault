@@ -53,14 +53,28 @@ impl TokenBucket {
     /// When no whole token is available the bucket is left refilled but unspent, and the error says how long until
     /// one will be.
     pub fn try_take(&mut self, now: Instant) -> Result<(), RetryAfter> {
+        self.refill_and_check(now)?;
+        self.spend();
+        Ok(())
+    }
+
+    /// Refills for the time elapsed up to `now` and reports whether a whole token is available, without spending it.
+    ///
+    /// A request charged against two buckets checks both before spending from either, so a refusal by one never
+    /// costs a token from the other.
+    pub(crate) fn refill_and_check(&mut self, now: Instant) -> Result<(), RetryAfter> {
         self.refill(now);
-        match self.level.checked_sub(self.token_units) {
-            Some(rest) => {
-                self.level = rest;
-                Ok(())
-            }
-            None => Err(RetryAfter::for_deficit(self.token_units.saturating_sub(self.level), self.requests)),
+        match self.level >= self.token_units {
+            true => Ok(()),
+            false => Err(RetryAfter::for_deficit(self.token_units - self.level, self.requests)),
         }
+    }
+
+    /// Spends one token; call it only after [`TokenBucket::refill_and_check`] succeeded under the same borrow.
+    ///
+    /// Saturating, so a misuse can only leave the bucket empty, never wrap around to a full one.
+    pub(crate) fn spend(&mut self) {
+        self.level = self.level.saturating_sub(self.token_units);
     }
 
     /// Whole tokens available at `now`, rounded down, without changing the bucket.
@@ -192,6 +206,23 @@ mod tests {
         // A step back after a refill must not let the same elapsed time be counted again.
         assert!(bucket.try_take(t10).is_err());
         assert!(bucket.try_take(t10 + Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn check_reports_without_spending_and_spend_takes_one() {
+        let t0 = Instant::now();
+        let mut bucket = TokenBucket::new(limit(60, 60, 10), t0);
+        assert_eq!(bucket.refill_and_check(t0).unwrap_err().as_secs(), 1);
+        let t2 = t0 + Duration::from_secs(2);
+        assert!(bucket.refill_and_check(t2).is_ok());
+        assert!(bucket.refill_and_check(t2).is_ok());
+        assert_eq!(bucket.level_at(t2), 2);
+        bucket.spend();
+        assert_eq!(bucket.level_at(t2), 1);
+        bucket.spend();
+        bucket.spend();
+        assert_eq!(bucket.level_at(t2), 0);
+        assert!(bucket.refill_and_check(t2).is_err());
     }
 
     #[test]
