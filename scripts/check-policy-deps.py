@@ -22,6 +22,7 @@ ALLOWED_DIRECT = {
     "thiserror",  # K-3, K-4, K-5, K-6: typed errors
     "serde",  # K-3, K-4, K-5, K-6: configuration and policy model deserialization
     "url",  # K-4: destination URL parsing
+    "toml",  # K-10: config document parsing; it parses bytes the caller already holds and opens no files or sockets
 }
 
 DENIED_TRANSITIVE = {"tokio", "mio", "socket2", "hyper", "reqwest", "async-std", "async-io", "smol", "async-net"}

@@ -5,6 +5,7 @@
 //! and cannot be bypassed by an adapter.
 
 pub mod caller;
+pub mod config;
 pub mod config_path;
 pub mod confirmation;
 mod display;
@@ -28,6 +29,7 @@ pub mod token_hash;
 pub mod upstream;
 
 pub use caller::{CallerAuth, CallerConfig, CallerError};
+pub use config::{ConfigError, Location, ParsedConfig, SCHEMA_VERSION};
 pub use config_path::{ConfigPath, ConfigPathError};
 pub use confirmation::Confirmation;
 pub use header_name::{HeaderName, HeaderNameError};
