@@ -4,6 +4,7 @@
 //! This crate performs no I/O: every decision is a pure function of its inputs, so policy can be tested exhaustively
 //! and cannot be bypassed by an adapter.
 
+pub mod activation;
 pub mod caller;
 pub mod config;
 pub mod config_path;
@@ -34,6 +35,7 @@ pub mod token_hash;
 pub mod upstream;
 pub mod validated;
 
+pub use activation::{ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
 pub use caller::{CallerAuth, CallerConfig, CallerError};
 pub use config::{ConfigError, Location, ParsedConfig, SCHEMA_VERSION};
 pub use config_path::{ConfigPath, ConfigPathError};

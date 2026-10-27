@@ -33,8 +33,9 @@ use crate::upstream::UpstreamUrl;
 /// ```
 ///
 /// Methods, paths and the rate limit are required so a missing restriction never widens into "allow all" (spec §3.3).
-/// Whether `credential` exists and permits `upstream`, whether prefixes overlap, and whether `confirm = "touch"` can
-/// be honoured need the whole configuration or the vault, so they are checked elsewhere (K-11).
+/// Whether prefixes overlap needs the whole configuration, so [`ValidatedConfig`](crate::ValidatedConfig) checks it.
+/// Whether `credential` exists and permits `upstream`, and whether `confirm = "touch"` can be honoured, need the vault
+/// and the service, so [`activate`](crate::activate) checks them.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawRoute")]
 pub struct RouteConfig {
