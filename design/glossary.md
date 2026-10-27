@@ -23,7 +23,8 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Term              | Definition                                                                                                                  | Context             | Rust type | Spec |
 |-------------------|-----------------------------------------------------------------------------------------------------------------------------|---------------------|-----------|------|
 | Approval version  | A per-vault unsigned 64-bit counter that strictly increases for every reserved signing attempt.                             | `iron-vault-store`  |           | §1.3 |
-| Caller            | An authenticated program identity with grants to named routes.                                                              | `iron-vault-policy` |           | §1.3 |
+| Caller            | An authenticated program identity with grants to named routes.                                                              | `iron-vault-policy` | `CallerName`, `CallerConfig` | §1.3, §3.4 |
+| Caller token      | A high-entropy secret a caller presents in `Proxy-Authorization` or its listener's `token_header`; only its BLAKE2b-256 hash is stored. | `iron-vault-policy` | `TokenHash` | §3.3, §3.4 |
 | Config approval   | A service-generated signature binding a vault identifier, approval version, and exact configuration hash.                   | `iron-vault-store`  |           | §1.3 |
 | Confirmation      | A route's owner-confirmation policy: `none` (the default) or `touch`, which v0 parses but refuses to activate. | `iron-vault-policy` | `Confirmation` | §2, §3.3, §5.1 |
 | Credential        | A named provider secret and the rules that govern its use.                                                                  | `iron-vault-kinds`  |           | §1.3 |
@@ -31,7 +32,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Hardware key      | A removable device, initially a YubiKey, that protects keys and supports PIN and touch policies.                            | `iron-vault-store`  |           | §1.3 |
 | Host              | An upstream host name or IP literal in its one canonical form; hosts compare exactly, never by suffix or wildcard.          | `iron-vault-policy` | `Host`    | §3.6 |
 | Kind              | The operation that turns a credential into request bytes, such as a static key, an OAuth access token, or a signature.      | `iron-vault-kinds`  |           | §1.3 |
-| Listener          | A configured endpoint, a Unix socket or TCP address, on which callers reach the request interface.                          | `iron-vault-policy` | `ListenerName` | §3.3, §3.4 |
+| Listener          | A configured endpoint, a Unix socket or TCP address, on which callers reach the request interface.                          | `iron-vault-policy` | `ListenerName`, `ListenerConfig` | §3.3, §3.4 |
 | Marker            | An inert SDK placeholder such as `{iv:fx_key}` that Iron Vault interprets only in the selected slot.                        | `iron-vault-policy` |           | §1.3 |
 | Method            | An HTTP method from the allowlist a route may grant; `CONNECT` and `TRACE` are never allowed.                               | `iron-vault-policy` | `Method` | §3.3, §3.5 |
 | Operational limits | Service-wide bounds on request head and body size, decompressed response size, timeouts, and concurrent connections. | `iron-vault-policy` | `Limits` | §9 |
