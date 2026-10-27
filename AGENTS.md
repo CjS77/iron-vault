@@ -4,7 +4,7 @@
 
 Develop using Domain-Driven Design (Eric Evans), strategic ideas first.
 
-- **Ubiquitous language.** `design/glossary.md` names things, in docs and code alike: one name per concept, defined once.
+- **Ubiquitous language.** [`design/glossary.md`](design/glossary.md) names things, in docs and code alike: one name per concept, defined once.
   A new concept enters the glossary before the code.
 - **Bounded contexts**, each with its own model and crate; don't reach into another's internals.
 - **Tactical patterns where they earn their place:**
