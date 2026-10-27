@@ -27,6 +27,12 @@ Keep domain logic pure, with I/O at the edges.
 - Public items have doc comments. Comments say *why*, not what.
 - Output must be deterministic: no `HashMap` iteration order in anything that is written to disk or the wire.
 
+## Specification
+
+The product specification is in @design/iron-vault-specification.md. After writing a piece of code, check the code's function against 
+the specification. If there is a conflict, prefer the specification and change the code to confirm.
+If you feel that the specification is wrong, STOP and ask the user for direction.
+
 ## Workflow
 
 Use the Kanban board to plan, track and review work.
