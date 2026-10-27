@@ -35,6 +35,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Listener          | A configured endpoint, a Unix socket or TCP address, on which callers reach the request interface.                          | `iron-vault-policy` | `ListenerName`, `ListenerConfig` | §3.3, §3.4 |
 | Marker            | An inert SDK placeholder such as `{iv:fx_key}` that Iron Vault interprets only in the selected slot.                        | `iron-vault-policy` |           | §1.3 |
 | Method            | An HTTP method from the allowlist a route may grant; `CONNECT` and `TRACE` are never allowed.                               | `iron-vault-policy` | `Method` | §3.3, §3.5 |
+| Normalized path   | A caller's validated request path, unreserved escapes decoded and others in uppercase hex; authorized and forwarded as is.  | `iron-vault-policy` | `NormalizedPath` | §3.3, §3.6 |
 | Operational limits | Service-wide bounds on request head and body size, decompressed response size, timeouts, and concurrent connections. | `iron-vault-policy` | `Limits` | §9 |
 | Owner             | The person authorized to enroll credentials, approve policy, recover the vault, and authorize destructive changes.          | `iron-vault`        |           | §1.3 |
 | Path pattern      | A route restriction on the normalized upstream path, built from literal, `*` and `**` segments and matching the whole path. | `iron-vault-policy` | `PathPattern` | §3.3 |
