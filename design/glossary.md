@@ -47,6 +47,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Parsed config     | A configuration document whose listeners, callers, routes and limits each passed their own validation, before cross-references are checked. | `iron-vault-policy` | `ParsedConfig` | §3.3 |
 | Path pattern      | A route restriction on the normalized upstream path, built from literal, `*` and `**` segments and matching the whole path. | `iron-vault-policy` | `PathPattern` | §3.3 |
 | Rate limit        | A route's token-bucket allowance: `requests` per `per_seconds`, with at most `burst` available at once.      | `iron-vault-policy` | `RateLimit` | §3.3, §3.5 |
+| Rate limiter      | The token buckets for one active policy: one per route shared by all its callers, plus one per caller/route pair with a stricter limit; a request takes a token from both or neither, and a reload starts every bucket empty. | `iron-vault-policy` | `RateLimiter` | §3.5, §3.12, §3.15 |
 | Recipient         | A public key or hardware-backed mechanism that can unwrap the vault identity.                                               | `iron-vault-store`  |           | §1.3 |
 | Recovery key      | A generated offline `age` X25519 identity that opens the vault identity independently of the primary recipient.             | `iron-vault-store`  |           | §1.3 |
 | Reserved header   | A caller-authentication or transport-control header that is stripped before forwarding and can never be a slot.         | `iron-vault-policy` | `reserved_headers` | §3.6 |

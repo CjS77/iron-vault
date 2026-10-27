@@ -23,6 +23,7 @@ pub mod outgoing_headers;
 pub mod path_pattern;
 pub mod port;
 pub mod rate_limit;
+pub mod rate_limiter;
 pub mod request_target;
 pub mod reserved_headers;
 pub mod route;
@@ -54,6 +55,7 @@ pub use outgoing_headers::{OutgoingHeaders, OutgoingHeadersError, SanitizeError,
 pub use path_pattern::{PathPattern, PathPatternError, PathPatterns};
 pub use port::{Port, PortError};
 pub use rate_limit::RateLimit;
+pub use rate_limiter::{ChargeError, ExhaustedLimit, RateLimited, RateLimiter};
 pub use request_target::{NormalizedPath, RawQuery, RequestTarget, TargetError};
 pub use route::{RouteConfig, RouteError};
 pub use route_prefix::{RoutePrefix, RoutePrefixError};
