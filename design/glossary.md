@@ -30,6 +30,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Credential        | A named provider secret and the rules that govern its use.                                                                  | `iron-vault-kinds`  |           | §1.3 |
 | Credential record | The encrypted record containing a credential's secret, kind, permitted origins, and provider settings.                      | `iron-vault-store`  |           | §1.3 |
 | Hardware key      | A removable device, initially a YubiKey, that protects keys and supports PIN and touch policies.                            | `iron-vault-store`  |           | §1.3 |
+| Header value      | The bytes of one HTTP field value; never contains CR, LF or NUL, may contain obs-text, and is never rendered in logs or errors. | `iron-vault-policy` | `HeaderValue` | §3.6 |
 | Host              | An upstream host name or IP literal in its one canonical form; hosts compare exactly, never by suffix or wildcard.          | `iron-vault-policy` | `Host`    | §3.6 |
 | Kind              | The operation that turns a credential into request bytes, such as a static key, an OAuth access token, or a signature.      | `iron-vault-kinds`  |           | §1.3 |
 | Listener          | A configured endpoint, a Unix socket or TCP address, on which callers reach the request interface.                          | `iron-vault-policy` | `ListenerName`, `ListenerConfig` | §3.3, §3.4 |
@@ -37,6 +38,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Method            | An HTTP method from the allowlist a route may grant; `CONNECT` and `TRACE` are never allowed.                               | `iron-vault-policy` | `Method` | §3.3, §3.5 |
 | Normalized path   | A caller's validated request path, unreserved escapes decoded and others in uppercase hex; authorized and forwarded as is.  | `iron-vault-policy` | `NormalizedPath` | §3.3, §3.6 |
 | Operational limits | Service-wide bounds on request head and body size, decompressed response size, timeouts, and concurrent connections. | `iron-vault-policy` | `Limits` | §9 |
+| Outgoing headers  | The ordered header list an upstream request carries; built from sanitized caller headers and never holding a reserved header. | `iron-vault-policy` | `OutgoingHeaders` | §3.6 |
 | Owner             | The person authorized to enroll credentials, approve policy, recover the vault, and authorize destructive changes.          | `iron-vault`        |           | §1.3 |
 | Parsed config     | A configuration document whose listeners, callers, routes and limits each passed their own validation, before cross-references are checked. | `iron-vault-policy` | `ParsedConfig` | §3.3 |
 | Path pattern      | A route restriction on the normalized upstream path, built from literal, `*` and `**` segments and matching the whole path. | `iron-vault-policy` | `PathPattern` | §3.3 |
