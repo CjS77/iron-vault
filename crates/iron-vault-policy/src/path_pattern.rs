@@ -165,10 +165,10 @@ impl fmt::Display for PathPattern {
 
 /// Whether a character may appear in a pattern: `/`, `*`, or an RFC 3986 `pchar` other than `%`.
 ///
-/// Excluding `%` gives each literal exactly one spelling, which is also how [`NormalizedPath`](crate::NormalizedPath)
-/// spells it: characters allowed here are never escaped in a normalized segment. A normalized segment that still holds
-/// a `%XX` escape is matched only by a wildcard. `?` and `#` are excluded because patterns never cover a query or
-/// fragment.
+/// Excluding `%` gives each literal exactly one spelling. A normalized segment ([`NormalizedPath`](crate::NormalizedPath))
+/// never escapes an unreserved character, but keeps an escaped sub-delimiter such as `%3B` encoded and distinct from a
+/// literal `;`, so a literal here matches only the literal spelling. A normalized segment that still holds a `%XX`
+/// escape is matched only by a wildcard. `?` and `#` are excluded because patterns never cover a query or fragment.
 fn is_pattern_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || "/*-._~!$&'()+,;=:@".contains(c)
 }

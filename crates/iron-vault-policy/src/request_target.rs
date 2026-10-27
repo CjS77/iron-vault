@@ -26,18 +26,23 @@ use thiserror::Error;
 
 use crate::escape::{EscapeAction, EscapeError, decode_hex_pair, is_path_char, is_unreserved, walk_escapes};
 
-/// Code points that NFKC or a common best-fit code-page conversion turns into text containing `.`, `/`, `\` or `%`, and
-/// so into traversal, an extra separator, or a second decoding pass at an upstream that folds Unicode.
+/// Code points that NFKC or a common best-fit code-page conversion turns into text containing `.`, `/`, `\`, `%`, `?`,
+/// `#` or `;`, and so into traversal, an extra separator, a second decoding pass, a cut-short path or a path parameter
+/// at an upstream that folds Unicode.
 ///
-/// The NFKC part is every such single code point in Unicode 15.0, found by scanning all code points:
-/// `[c for c in map(chr, range(0x110000)) if c not in "./\\%" and set(unicodedata.normalize("NFKC", c)) & set("./\\%")]`.
-/// The best-fit part covers the yen and won signs, which Japanese and Korean code pages map to `\`, and the fraction
-/// and division slashes, which Windows best-fit tables map to `/`.
+/// The NFKC part is every such single code point in Unicode 15.0 (52 of them), found by scanning all code points:
+/// `[c for c in map(chr, range(0x110000)) if c not in S and set(unicodedata.normalize("NFKC", c)) & set(S)]`
+/// with `S = "./\\%?#;"`. The best-fit part (4 code points) covers the yen and won signs, which Japanese and Korean
+/// code pages map to `\`, and the fraction and division slashes, which Windows best-fit tables map to `/`.
 const LOOK_ALIKES: &[char] = &[
     // NFKC.
+    '\u{037E}', // GREEK QUESTION MARK
     '\u{2024}', // ONE DOT LEADER
     '\u{2025}', // TWO DOT LEADER
     '\u{2026}', // HORIZONTAL ELLIPSIS
+    '\u{2047}', // DOUBLE QUESTION MARK
+    '\u{2048}', // QUESTION EXCLAMATION MARK
+    '\u{2049}', // EXCLAMATION QUESTION MARK
     '\u{2100}', // ACCOUNT OF
     '\u{2101}', // ADDRESSED TO THE SUBJECT
     '\u{2105}', // CARE OF
@@ -65,14 +70,22 @@ const LOOK_ALIKES: &[char] = &[
     '\u{33C2}', // SQUARE AM
     '\u{33C7}', // SQUARE CO
     '\u{33D8}', // SQUARE PM
+    '\u{FE14}', // PRESENTATION FORM FOR VERTICAL SEMICOLON
+    '\u{FE16}', // PRESENTATION FORM FOR VERTICAL QUESTION MARK
     '\u{FE19}', // PRESENTATION FORM FOR VERTICAL HORIZONTAL ELLIPSIS
     '\u{FE30}', // PRESENTATION FORM FOR VERTICAL TWO DOT LEADER
     '\u{FE52}', // SMALL FULL STOP
+    '\u{FE54}', // SMALL SEMICOLON
+    '\u{FE56}', // SMALL QUESTION MARK
+    '\u{FE5F}', // SMALL NUMBER SIGN
     '\u{FE68}', // SMALL REVERSE SOLIDUS
     '\u{FE6A}', // SMALL PERCENT SIGN
+    '\u{FF03}', // FULLWIDTH NUMBER SIGN
     '\u{FF05}', // FULLWIDTH PERCENT SIGN
     '\u{FF0E}', // FULLWIDTH FULL STOP
     '\u{FF0F}', // FULLWIDTH SOLIDUS
+    '\u{FF1B}', // FULLWIDTH SEMICOLON
+    '\u{FF1F}', // FULLWIDTH QUESTION MARK
     '\u{FF3C}', // FULLWIDTH REVERSE SOLIDUS
     '\u{1F100}', // DIGIT ZERO FULL STOP
     // Best fit, not NFKC.
@@ -128,8 +141,8 @@ pub enum TargetError {
     /// A segment's escapes do not decode to valid UTF-8, which includes overlong forms such as `%C0%AE`.
     #[error("request path escapes do not decode to valid UTF-8")]
     InvalidUtf8,
-    /// A segment encodes a Unicode look-alike of `.`, `/`, `\` or `%`.
-    #[error("request path encodes a look-alike of a dot, slash, backslash or percent sign")]
+    /// A segment encodes a Unicode look-alike of `.`, `/`, `\`, `%`, `?`, `#` or `;`.
+    #[error("request path encodes a look-alike of a URL delimiter or percent sign")]
     LookAlike,
     /// A segment is `.` or `..`, alone or before a `;` path parameter (`..;x`).
     #[error("request path contains a dot segment")]
@@ -606,6 +619,13 @@ mod tests {
             "%EF%B9%AA", "%EF%BC%85", "%EF%B8%B0", "%E2%84%80", "%E2%84%81", "%E2%84%85", "%E2%84%86", "%C2%A5", "%E2%82%A9",
         ];
         escapes.iter().for_each(|e| assert_eq!(reject(&format!("/fx/{e}/x")), TargetError::LookAlike, "{e}"));
+    }
+
+    #[test]
+    fn rejects_look_alikes_of_semicolon_and_question_mark() {
+        ["/fx/..%EF%BC%9B/x", "/fx/..%CD%BE/x", "/admin%EF%BC%9F/public"]
+            .iter()
+            .for_each(|raw| assert_eq!(reject(raw), TargetError::LookAlike, "{raw}"));
     }
 
     #[test]
