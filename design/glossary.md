@@ -55,6 +55,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Slot format       | The fixed text around a header slot's credential, with exactly one `{}` substitution point, such as `Bearer {}`.          | `iron-vault-policy` | `SlotFormat` | §3.6 |
 | Slot value        | The credential text a kind produces for the route's slot, before the slot's format or encoding is applied. | `iron-vault-policy` | `SlotValue` | §3.6, §3.11, §5.2 |
 | Source            | The origin of a credential imported into the vault, initially direct entry and later password-manager sync.                 | `iron-vault-store`  |           | §1.3 |
+| Token bucket      | A route's rate-limit counter: it starts empty, refills at `requests / per_seconds` up to `burst`, and spends one token per request. | `iron-vault-policy` | `TokenBucket` | §3.5, §3.12 |
 | Upstream          | The HTTPS service to which Iron Vault forwards an authorized request.                                                       | `iron-vault-policy` | `UpstreamUrl` | §1.3 |
 | Validated config  | A parsed config whose cross-references all resolve and whose listeners, token hashes, route prefixes and slots cannot conflict. | `iron-vault-policy` | `ValidatedConfig` | §3.3, §3.4, §3.5, §3.6 |
 | Vault             | The service-owned encrypted storage and protected metadata on disk.                                                         | `iron-vault-store`  |           | §1.3 |

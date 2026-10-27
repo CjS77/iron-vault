@@ -31,6 +31,7 @@ pub mod slot_format;
 pub mod slot_value;
 #[cfg(test)]
 mod spec_example;
+pub mod token_bucket;
 pub mod token_hash;
 pub mod upstream;
 pub mod validated;
@@ -57,6 +58,7 @@ pub use route_prefix::{RoutePrefix, RoutePrefixError};
 pub use slot::{HeaderSlot, QueryParamName, Slot, SlotError};
 pub use slot_format::{SlotFormat, SlotFormatError};
 pub use slot_value::{SlotValue, SlotValueError};
+pub use token_bucket::{RetryAfter, TokenBucket};
 pub use token_hash::{TokenHash, TokenHashError};
 pub use upstream::{UpstreamUrl, UpstreamUrlError};
 pub use validated::{ValidatedConfig, ValidationError};
