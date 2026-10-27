@@ -8,6 +8,7 @@ pub mod caller;
 pub mod config_path;
 pub mod confirmation;
 mod display;
+mod escape;
 pub mod header_name;
 pub mod host;
 pub mod limits;

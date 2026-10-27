@@ -11,6 +11,7 @@ use std::str::FromStr;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::escape::{EscapeAction, EscapeError, is_path_char, is_unreserved, walk_escapes};
 use crate::host::{Host, HostError};
 use crate::port::{Port, PortError};
 
@@ -195,35 +196,22 @@ fn parse_segment(segment: &str) -> Result<String, UpstreamUrlError> {
     }
 }
 
-/// RFC 3986 `pchar` plus `%`; anything else would be percent-encoded by a URL serializer and so change meaning.
+/// Anything outside [`is_path_char`] would be percent-encoded by a URL serializer and so change meaning.
 fn check_path_characters(segment: &str) -> Result<(), UpstreamUrlError> {
-    segment
-        .chars()
-        .find(|c| !(is_unreserved(*c) || is_sub_delim(*c) || matches!(c, ':' | '@' | '%')))
-        .map_or(Ok(()), |c| Err(UpstreamUrlError::ForbiddenPathCharacter(c)))
+    segment.chars().find(|c| !is_path_char(*c)).map_or(Ok(()), |c| Err(UpstreamUrlError::ForbiddenPathCharacter(c)))
 }
 
 /// Uppercases escape hex digits and checks each escape, then requires the decoded segment to be UTF-8 so overlong
 /// encodings such as `%C0%AE` (a lenient decoder's `.`) cannot slip through.
 fn normalize_escapes(segment: &str) -> Result<String, UpstreamUrlError> {
-    let mut parts = segment.split('%');
-    let head = parts.next().unwrap_or_default();
-    let (normalized, decoded) = parts.try_fold((head.to_owned(), head.as_bytes().to_vec()), |(out, mut decoded), part| {
-        let (hex, tail) = part.split_at_checked(2).ok_or_else(|| UpstreamUrlError::MalformedEscape(segment.to_owned()))?;
-        let byte = decode_hex_pair(hex).ok_or_else(|| UpstreamUrlError::MalformedEscape(segment.to_owned()))?;
-        if is_forbidden_escape(byte) {
-            return Err(UpstreamUrlError::ForbiddenEscape(segment.to_owned()));
-        }
-        decoded.push(byte);
-        decoded.extend_from_slice(tail.as_bytes());
-        Ok((format!("{out}%{}{tail}", hex.to_ascii_uppercase()), decoded))
-    })?;
-    std::str::from_utf8(&decoded).map(|_| normalized).map_err(|_| UpstreamUrlError::ForbiddenEscape(segment.to_owned()))
-}
-
-/// Two ASCII hex digits; `u8::from_str_radix` alone would also accept a leading `+`.
-pub(crate) fn decode_hex_pair(hex: &str) -> Option<u8> {
-    hex.bytes().all(|b| b.is_ascii_hexdigit()).then(|| u8::from_str_radix(hex, 16).ok()).flatten()
+    let policy = |byte| match is_forbidden_escape(byte) {
+        true => EscapeAction::Reject(()),
+        false => EscapeAction::Keep,
+    };
+    walk_escapes(segment, policy).map(|walked| walked.normalized).map_err(|e| match e {
+        EscapeError::Malformed => UpstreamUrlError::MalformedEscape(segment.to_owned()),
+        EscapeError::Rejected(()) | EscapeError::InvalidUtf8 => UpstreamUrlError::ForbiddenEscape(segment.to_owned()),
+    })
 }
 
 /// Encoded unreserved characters (including `.`) have an unencoded equivalent, so encoding them only hides intent;
@@ -231,16 +219,6 @@ pub(crate) fn decode_hex_pair(hex: &str) -> Option<u8> {
 fn is_forbidden_escape(byte: u8) -> bool {
     let c = char::from(byte);
     is_unreserved(c) || matches!(c, '/' | '\\' | '%') || c.is_ascii_control()
-}
-
-/// RFC 3986 `unreserved`: characters whose escaped and unescaped forms are equivalent.
-pub(crate) fn is_unreserved(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~')
-}
-
-/// RFC 3986 `sub-delims`: allowed unescaped in a path segment, but distinct from their escaped forms.
-pub(crate) fn is_sub_delim(c: char) -> bool {
-    matches!(c, '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=')
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::upstream::{decode_hex_pair, is_sub_delim, is_unreserved};
+use crate::escape::{EscapeAction, EscapeError, decode_hex_pair, is_path_char, is_unreserved, walk_escapes};
 
 /// Decoded characters that a Unicode-folding decoder (NFKC, or a "best fit" code-page conversion) could turn into
 /// `.`, `/`, `\` or `%`, and so into traversal or a second decoding pass.
@@ -224,48 +224,29 @@ fn check_target_char(c: char) -> Result<(), TargetError> {
     }
 }
 
-/// RFC 3986 `pchar` plus `%`: the characters a path segment may contain literally.
-fn is_path_char(c: char) -> bool {
-    is_unreserved(c) || is_sub_delim(c) || matches!(c, ':' | '@' | '%')
-}
-
 /// Normalizes one raw segment, then checks the fully decoded text for traversal that a later decoder could see.
 fn normalize_segment(raw: &str) -> Result<String, TargetError> {
     if raw.is_empty() {
         return Err(TargetError::EmptySegment);
     }
-    let mut parts = raw.split('%');
-    let head = parts.next().unwrap_or_default();
-    let (normalized, decoded) = parts.try_fold((head.to_owned(), head.as_bytes().to_vec()), |(mut out, mut decoded), part| {
-        let (hex, tail) = part.split_at_checked(2).ok_or(TargetError::MalformedEscape)?;
-        let byte = decode_hex_pair(hex).ok_or(TargetError::MalformedEscape)?;
-        check_escaped_byte(byte)?;
-        push_escape(&mut out, byte);
-        out.push_str(tail);
-        decoded.push(byte);
-        decoded.extend_from_slice(tail.as_bytes());
-        Ok((out, decoded))
+    let walked = walk_escapes(raw, escape_action).map_err(|e| match e {
+        EscapeError::Malformed => TargetError::MalformedEscape,
+        EscapeError::Rejected(e) => e,
+        EscapeError::InvalidUtf8 => TargetError::InvalidUtf8,
     })?;
-    let decoded = String::from_utf8(decoded).map_err(|_| TargetError::InvalidUtf8)?;
-    check_decoded_segment(&decoded)?;
-    Ok(normalized)
+    check_decoded_segment(&walked.decoded)?;
+    Ok(walked.normalized)
 }
 
-/// Rejects escapes whose decoded byte a second decoding pass or a lenient server could turn into traversal.
-fn check_escaped_byte(byte: u8) -> Result<(), TargetError> {
+/// The single path representation: unreserved characters decoded, other escapes kept with uppercase hex, and escapes
+/// rejected when a second decoding pass or a lenient server could turn them into traversal.
+fn escape_action(byte: u8) -> EscapeAction<TargetError> {
     match byte {
-        b'.' | b'/' | b'\\' => Err(TargetError::EncodedDotOrSeparator),
-        b'%' => Err(TargetError::EncodedPercent),
-        _ if byte.is_ascii_control() => Err(TargetError::EncodedControl),
-        _ => Ok(()),
-    }
-}
-
-/// Appends an escape in normalized form: decoded when unreserved, otherwise `%XX` with uppercase hex.
-fn push_escape(out: &mut String, byte: u8) {
-    match char::from(byte) {
-        c if is_unreserved(c) => out.push(c),
-        _ => out.push_str(&format!("%{byte:02X}")),
+        b'.' | b'/' | b'\\' => EscapeAction::Reject(TargetError::EncodedDotOrSeparator),
+        b'%' => EscapeAction::Reject(TargetError::EncodedPercent),
+        _ if byte.is_ascii_control() => EscapeAction::Reject(TargetError::EncodedControl),
+        _ if is_unreserved(char::from(byte)) => EscapeAction::Decode,
+        _ => EscapeAction::Keep,
     }
 }
 
