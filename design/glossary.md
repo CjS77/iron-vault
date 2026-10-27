@@ -48,6 +48,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Route prefix      | The literal leading request-path segments, such as `/fx`, that select a route; never `/` alone and never a wildcard.        | `iron-vault-policy` | `RoutePrefix` | §3.3, §3.6 |
 | Slot              | The route's permitted credential location: a named header, a named query parameter, or Basic authorization.                 | `iron-vault-policy` | `Slot` | §1.3, §3.3 |
 | Slot format       | The fixed text around a header slot's credential, with exactly one `{}` substitution point, such as `Bearer {}`.          | `iron-vault-policy` | `SlotFormat` | §3.6 |
+| Slot value        | The credential text a kind produces for the route's slot, before the slot's format or encoding is applied. | `iron-vault-policy` | `SlotValue` | §3.6, §3.11, §5.2 |
 | Source            | The origin of a credential imported into the vault, initially direct entry and later password-manager sync.                 | `iron-vault-store`  |           | §1.3 |
 | Upstream          | The HTTPS service to which Iron Vault forwards an authorized request.                                                       | `iron-vault-policy` | `UpstreamUrl` | §1.3 |
 | Vault             | The service-owned encrypted storage and protected metadata on disk.                                                         | `iron-vault-store`  |           | §1.3 |

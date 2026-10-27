@@ -19,6 +19,7 @@ import sys
 POLICY_CRATE = "iron-vault-policy"
 
 ALLOWED_DIRECT = {
+    "secrecy",  # K-16: SlotValue wraps SecretString; pure memory wrappers, zeroize on drop, no I/O
     "thiserror",  # K-3, K-4, K-5, K-6: typed errors
     "serde",  # K-3, K-4, K-5, K-6: configuration and policy model deserialization
     "url",  # K-4: destination URL parsing

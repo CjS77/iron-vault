@@ -10,6 +10,7 @@ rust-version = "1.98.0"
 
 [workspace.dependencies]
 anyhow = "1"
+secrecy = "0.10.3"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "1"

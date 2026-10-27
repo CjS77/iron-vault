@@ -25,6 +25,7 @@ pub mod route;
 pub mod route_prefix;
 pub mod slot;
 pub mod slot_format;
+pub mod slot_value;
 pub mod token_hash;
 pub mod upstream;
 
@@ -46,5 +47,6 @@ pub use route::{RouteConfig, RouteError};
 pub use route_prefix::{RoutePrefix, RoutePrefixError};
 pub use slot::{HeaderSlot, QueryParamName, Slot, SlotError};
 pub use slot_format::{SlotFormat, SlotFormatError};
+pub use slot_value::{SlotValue, SlotValueError};
 pub use token_hash::{TokenHash, TokenHashError};
 pub use upstream::{UpstreamUrl, UpstreamUrlError};
