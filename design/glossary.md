@@ -24,8 +24,8 @@ From specification §7. Each crate owns its model; crates do not reach into each
 |-------------------|-----------------------------------------------------------------------------------------------------------------------------|---------------------|-----------|------|
 | Approval version  | A per-vault unsigned 64-bit counter that strictly increases for every reserved signing attempt.                             | `iron-vault-store`  |           | §1.3 |
 | Caller            | An authenticated program identity with grants to named routes.                                                              | `iron-vault-policy` |           | §1.3 |
-| Confirmation      | A route's owner-confirmation policy: `none` (the default) or `touch`, which v0 parses but refuses to activate. | `iron-vault-policy` | `Confirmation` | §2, §3.3, §5.1 |
 | Config approval   | A service-generated signature binding a vault identifier, approval version, and exact configuration hash.                   | `iron-vault-store`  |           | §1.3 |
+| Confirmation      | A route's owner-confirmation policy: `none` (the default) or `touch`, which v0 parses but refuses to activate. | `iron-vault-policy` | `Confirmation` | §2, §3.3, §5.1 |
 | Credential        | A named provider secret and the rules that govern its use.                                                                  | `iron-vault-kinds`  |           | §1.3 |
 | Credential record | The encrypted record containing a credential's secret, kind, permitted origins, and provider settings.                      | `iron-vault-store`  |           | §1.3 |
 | Hardware key      | A removable device, initially a YubiKey, that protects keys and supports PIN and touch policies.                            | `iron-vault-store`  |           | §1.3 |
@@ -34,6 +34,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Listener          | A configured endpoint, a Unix socket or TCP address, on which callers reach the request interface.                          | `iron-vault-policy` | `ListenerName` | §3.3, §3.4 |
 | Marker            | An inert SDK placeholder such as `{iv:fx_key}` that Iron Vault interprets only in the selected slot.                        | `iron-vault-policy` |           | §1.3 |
 | Method            | An HTTP method from the allowlist a route may grant; `CONNECT` and `TRACE` are never allowed.                               | `iron-vault-policy` | `Method` | §3.3, §3.5 |
+| Operational limits | Service-wide bounds on request head and body size, decompressed response size, timeouts, and concurrent connections. | `iron-vault-policy` | `Limits` | §9 |
 | Owner             | The person authorized to enroll credentials, approve policy, recover the vault, and authorize destructive changes.          | `iron-vault`        |           | §1.3 |
 | Path pattern      | A route restriction on the normalized upstream path, built from literal, `*` and `**` segments and matching the whole path. | `iron-vault-policy` | `PathPattern` | §3.3 |
 | Rate limit        | A route's token-bucket allowance: `requests` per `per_seconds`, with at most `burst` available at once.      | `iron-vault-policy` | `RateLimit` | §3.3, §3.5 |

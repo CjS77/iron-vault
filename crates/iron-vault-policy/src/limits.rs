@@ -30,6 +30,14 @@ pub enum LimitsError {
         /// The largest accepted value.
         max: u64,
     },
+    /// The upstream header wait outlasts the whole-request timeout, so it could never take effect.
+    #[error("limits.upstream_timeout_secs ({upstream}) must not exceed limits.request_timeout_secs ({request})")]
+    UpstreamExceedsRequest {
+        /// The configured upstream timeout, in seconds.
+        upstream: u64,
+        /// The configured whole-request timeout, in seconds.
+        request: u64,
+    },
 }
 
 /// Validated operational limits.
@@ -38,12 +46,12 @@ pub enum LimitsError {
 ///
 /// | Field | Default | Ceiling | Reason |
 /// |---|---|---|---|
-/// | `max_header_bytes` | 64 KiB | 1 MiB | Request line plus all headers; fits large bearer and cookie headers while capping memory per connection. |
+/// | `max_header_bytes` | 64 KiB | 1 MiB | Request line plus headers; fits large bearer/cookie headers, caps per-connection memory. |
 /// | `max_header_count` | 100 | 1 000 | Matches common HTTP server defaults; real API clients send far fewer. |
 /// | `max_request_body_bytes` | 10 MiB | 1 GiB | Covers JSON API payloads and small uploads; larger uploads are an explicit choice. |
 /// | `max_decompressed_response_bytes` | 64 MiB | 4 GiB | Scrubbing decompresses responses, so this bounds decompression bombs. |
 /// | `request_timeout_secs` | 300 | 3 600 | Whole-request ceiling long enough for streamed model responses. |
-/// | `upstream_timeout_secs` | 60 | 600 | Wait for upstream response headers; a stalled upstream frees its slot within a minute. |
+/// | `upstream_timeout_secs` | 300 | 600 | Wait for upstream response headers; non-streaming LLM replies send them after generation. |
 /// | `max_connections` | 256 | 65 536 | Concurrent caller connections; well above local use, low enough to bound file descriptors. |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawLimits")]
@@ -65,7 +73,7 @@ impl Default for Limits {
             max_request_body_bytes: 10 * MIB,
             max_decompressed_response_bytes: 64 * MIB,
             request_timeout_secs: 300,
-            upstream_timeout_secs: 60,
+            upstream_timeout_secs: 300,
             max_connections: 256,
         }
     }
@@ -136,7 +144,7 @@ impl TryFrom<RawLimits> for Limits {
 
     fn try_from(raw: RawLimits) -> Result<Self, Self::Error> {
         let d = Limits::default();
-        Ok(Self {
+        let limits = Self {
             max_header_bytes: pick("max_header_bytes", raw.max_header_bytes, d.max_header_bytes, MIB)?,
             max_header_count: pick("max_header_count", raw.max_header_count, d.max_header_count, 1_000)?,
             max_request_body_bytes: pick("max_request_body_bytes", raw.max_request_body_bytes, d.max_request_body_bytes, GIB)?,
@@ -149,7 +157,16 @@ impl TryFrom<RawLimits> for Limits {
             request_timeout_secs: pick("request_timeout_secs", raw.request_timeout_secs, d.request_timeout_secs, 3_600)?,
             upstream_timeout_secs: pick("upstream_timeout_secs", raw.upstream_timeout_secs, d.upstream_timeout_secs, 600)?,
             max_connections: pick("max_connections", raw.max_connections, d.max_connections, 65_536)?,
-        })
+        };
+        check_timeouts(limits)
+    }
+}
+
+/// Rejects an upstream timeout longer than the whole-request timeout; equal values are valid.
+fn check_timeouts(limits: Limits) -> Result<Limits, LimitsError> {
+    match (limits.upstream_timeout_secs, limits.request_timeout_secs) {
+        (upstream, request) if upstream > request => Err(LimitsError::UpstreamExceedsRequest { upstream, request }),
+        _ => Ok(limits),
     }
 }
 
@@ -175,7 +192,7 @@ mod tests {
         assert_eq!(d.max_request_body_bytes(), 10_485_760);
         assert_eq!(d.max_decompressed_response_bytes(), 67_108_864);
         assert_eq!(d.request_timeout_secs(), 300);
-        assert_eq!(d.upstream_timeout_secs(), 60);
+        assert_eq!(d.upstream_timeout_secs(), 300);
         assert_eq!(d.max_connections(), 256);
     }
 
@@ -202,9 +219,18 @@ mod tests {
 
     #[test]
     fn ceiling_is_inclusive_and_enforced() {
-        assert_eq!(parse("[limits]\nupstream_timeout_secs = 600").unwrap().upstream_timeout_secs(), 600);
+        let l = parse("[limits]\nupstream_timeout_secs = 600\nrequest_timeout_secs = 600").unwrap();
+        assert_eq!(l.upstream_timeout_secs(), 600);
         let err = parse("[limits]\nupstream_timeout_secs = 601").unwrap_err();
         assert!(err.to_string().contains("limits.upstream_timeout_secs is 601; the maximum is 600"), "{err}");
+    }
+
+    #[test]
+    fn upstream_timeout_may_equal_but_not_exceed_request_timeout() {
+        let d = Limits::default();
+        assert_eq!(d.upstream_timeout_secs(), d.request_timeout_secs());
+        let err = parse("[limits]\nrequest_timeout_secs = 120").unwrap_err();
+        assert!(err.to_string().contains("limits.upstream_timeout_secs (300) must not exceed limits.request_timeout_secs (120)"), "{err}");
     }
 
     #[test]
