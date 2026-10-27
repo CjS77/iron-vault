@@ -17,6 +17,7 @@ pub mod name;
 pub mod path_pattern;
 pub mod port;
 pub mod rate_limit;
+pub mod request_target;
 pub mod reserved_headers;
 pub mod slot;
 pub mod slot_format;
@@ -35,6 +36,7 @@ pub use name::{CallerName, CredentialName, ListenerName, NameError, NameRule, Ro
 pub use path_pattern::{PathPattern, PathPatternError, PathPatterns};
 pub use port::{Port, PortError};
 pub use rate_limit::RateLimit;
+pub use request_target::{NormalizedPath, RawQuery, RequestTarget, TargetError};
 pub use slot::{HeaderSlot, QueryParamName, Slot, SlotError};
 pub use slot_format::{SlotFormat, SlotFormatError};
 pub use token_hash::{TokenHash, TokenHashError};

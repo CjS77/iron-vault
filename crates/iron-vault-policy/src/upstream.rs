@@ -222,7 +222,7 @@ fn normalize_escapes(segment: &str) -> Result<String, UpstreamUrlError> {
 }
 
 /// Two ASCII hex digits; `u8::from_str_radix` alone would also accept a leading `+`.
-fn decode_hex_pair(hex: &str) -> Option<u8> {
+pub(crate) fn decode_hex_pair(hex: &str) -> Option<u8> {
     hex.bytes().all(|b| b.is_ascii_hexdigit()).then(|| u8::from_str_radix(hex, 16).ok()).flatten()
 }
 
@@ -233,11 +233,13 @@ fn is_forbidden_escape(byte: u8) -> bool {
     is_unreserved(c) || matches!(c, '/' | '\\' | '%') || c.is_ascii_control()
 }
 
-fn is_unreserved(c: char) -> bool {
+/// RFC 3986 `unreserved`: characters whose escaped and unescaped forms are equivalent.
+pub(crate) fn is_unreserved(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~')
 }
 
-fn is_sub_delim(c: char) -> bool {
+/// RFC 3986 `sub-delims`: allowed unescaped in a path segment, but distinct from their escaped forms.
+pub(crate) fn is_sub_delim(c: char) -> bool {
     matches!(c, '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '=')
 }
 
