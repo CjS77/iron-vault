@@ -623,7 +623,7 @@ mod tests {
 
     #[test]
     fn rejects_look_alikes_of_semicolon_and_question_mark() {
-        ["/fx/..%EF%BC%9B/x", "/fx/..%CD%BE/x", "/admin%EF%BC%9F/public"]
+        ["/fx/..%EF%BC%9B/x", "/fx/..%CD%BE/x", "/fx/..%EF%B9%94/x", "/fx/..%ef%b9%94/x", "/admin%EF%BC%9F/public"]
             .iter()
             .for_each(|raw| assert_eq!(reject(raw), TargetError::LookAlike, "{raw}"));
     }
