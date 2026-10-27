@@ -13,6 +13,7 @@ use serde::de::IgnoredAny;
 use thiserror::Error;
 
 use crate::caller::CallerConfig;
+use crate::display::escaped;
 use crate::limits::Limits;
 use crate::listener::ListenerConfig;
 use crate::name::{CallerName, ListenerName, RouteName};
@@ -70,7 +71,7 @@ pub enum ConfigError {
     /// The document is not valid TOML or a section breaks its rules.
     #[error("{message}{}", at(.location.as_ref()))]
     Invalid {
-        /// The parser's description, with control characters escaped.
+        /// The parser's description, with control and non-ASCII characters escaped.
         message: String,
         /// The offending key or value, when the parser could place it.
         location: Option<Location>,
@@ -188,12 +189,7 @@ fn not_utf8(bytes: &[u8], valid_up_to: usize) -> ConfigError {
 
 /// Keeps the parser's message and position but not its rendering of the input line.
 fn invalid(text: &str, err: &toml::de::Error) -> ConfigError {
-    ConfigError::Invalid { message: escape_controls(err.message().trim_end()), location: err.span().map(|span| Location::new(text, span)) }
-}
-
-/// Escapes control characters so a value echoed by the parser cannot reach a log raw.
-fn escape_controls(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() { c.escape_default().to_string() } else { c.to_string() }).collect()
+    ConfigError::Invalid { message: escaped(err.message().trim_end()), location: err.span().map(|span| Location::new(text, span)) }
 }
 
 /// " at <location>", or nothing when the parser gave no position.
@@ -390,6 +386,13 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
     fn control_characters_are_escaped() {
         let err = parse("schema_version = 1\n[routes.fx]\nprefix = \"/a\\u001b[31m\"\n").unwrap_err().to_string();
         assert!(!err.chars().any(char::is_control), "{err}");
+    }
+
+    #[test]
+    fn bidi_controls_are_escaped() {
+        let err = parse("schema_version = 1\n\"a\u{202e}b\" = 1\n").unwrap_err().to_string();
+        assert!(err.contains("a\\u{202e}b"), "{err}");
+        assert!(err.is_ascii(), "{err}");
     }
 
     #[test]

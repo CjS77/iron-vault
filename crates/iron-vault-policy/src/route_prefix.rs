@@ -11,9 +11,10 @@ use crate::path_pattern::{PathPattern, PathPatternError};
 
 /// A route's prefix, such as `/fx` or `/api/fx`: one or more literal segments with no wildcard or trailing slash.
 ///
-/// Segments follow the same literal rules as a [`PathPattern`], so they are in decoded form and never contain `%`. A
-/// request segment that still holds a percent escape therefore never equals a prefix segment, and a request that
-/// spells its prefix with escapes matches no route: the comparison fails closed instead of decoding twice.
+/// Segments follow the same literal rules as a [`PathPattern`], so a prefix literal never contains `%`. Prefix literals
+/// are compared with [`NormalizedPath`](crate::NormalizedPath) segments, in which unreserved escapes are decoded and
+/// every other escape is kept as uppercase `%XX`; `/f%78` therefore matches the prefix `/fx`. A request segment that
+/// still holds an escape never equals a prefix literal, so matching fails closed.
 ///
 /// `/` alone is rejected so that no route can claim every request path.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
@@ -27,7 +28,7 @@ pub struct RoutePrefix {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RoutePrefixError {
     /// The prefix breaks a literal-segment rule shared with path patterns.
-    #[error("invalid route prefix: {0}")]
+    #[error("route prefix breaks a path-pattern literal rule: {0}")]
     Segment(#[from] PathPatternError),
     /// The prefix is `/`, which would match every request path.
     #[error("route prefix must not be \"/\"; it would match every request path")]
