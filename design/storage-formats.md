@@ -288,6 +288,33 @@ open_passphrase_envelope, unlock_with_passphrase}`.
 - **Changing the passphrase.** `reseal_passphrase_envelope` opens the file with the old passphrase and seals the same
   operational identity to the new one. Only `operational.age` is rewritten; `identity.age` stays byte-identical.
 
+## Approver key envelope
+
+The [approver key envelope](glossary.md), state-directory file `approver.age`, holds the
+[software signer](glossary.md)'s private key. It is a plain binary `age` v1 file with no Iron Vault framing, written by
+the same passphrase envelope code as `operational.age` but opened only with the [approval passphrase](glossary.md).
+Its plaintext is the 32-byte Ed25519 private key (the RFC 8032 seed), raw. Rust:
+`iron_vault_store::{seal_signer_key, open_signer_key, write_signer_key, read_signer_key}`.
+
+| Bytes | Content                                                                 |
+|------:|-------------------------------------------------------------------------|
+|    22 | `age-encryption.org/v1` and a newline                                   |
+|    36 | `-> scrypt <salt> <log_n>`: a 22-character base64 salt (16 bytes) and the work factor in decimal, then a newline |
+|    44 | the stanza body: the 32-byte wrapped file key in 43 base64 characters, then a newline |
+|    48 | `--- ` and the 43-character header MAC, then a newline                  |
+|    64 | the payload: a 16-byte nonce, the 32-byte private key and a 16-byte tag |
+
+- **Stanzas, work factor and reading order.** As for the passphrase envelope: exactly one scrypt stanza, sealed at
+  `PASSPHRASE_WORK_FACTOR`, refused from the header above `MAX_PASSPHRASE_WORK_FACTOR` or with any other stanza, and
+  bounded by `MAX_PASSPHRASE_ENVELOPE_LEN` (1 KiB; the file is 214 bytes). A plaintext that is not exactly 32 bytes is
+  malformed, so `operational.age` never opens as an approver key.
+- **Separate passphrase.** The vault-unlock passphrase and the approval passphrase are separate types and separate
+  files, so holding the unlock passphrase gives no way to sign an approval.
+- **Pinned key check.** `open_signer_key` derives the public key from the decrypted private key and refuses with
+  `KeyMismatch` unless it equals the pinned approver's, so a swapped `approver.age` signs nothing.
+- **Lifetime.** A software signer is opened for one approval and dropped; the private key is cleared on drop and never
+  cached.
+
 ## Approval payload v1
 
 The bytes a [config approval](glossary.md) signs (specification §3.9). It binds the fixed purpose, the vault, the
