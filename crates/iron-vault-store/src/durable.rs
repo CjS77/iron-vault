@@ -21,6 +21,10 @@ pub enum WriteStep {
     /// Renaming the temporary file over the destination.
     Rename,
     /// Fsyncing the state directory after a rename or unlink.
+    ///
+    /// This failure comes after the change: the destination already holds the new bytes, or the file is already
+    /// unlinked, but the change may not survive power loss. It is never "unchanged". On a platform without directory
+    /// fsync, the durable functions report this step before changing anything.
     SyncDir,
     /// Unlinking the file.
     Remove,
@@ -49,11 +53,11 @@ pub enum WriteError {
         file: StateFileName,
     },
     /// A filesystem step failed.
-    #[error("durable write of state file {file} failed at {step}: {kind}")]
+    #[error("store file operation on state file {file} failed at {step}: {kind}")]
     Io {
         /// The step that failed.
         step: WriteStep,
-        /// The destination file of the write.
+        /// The state file being replaced or removed.
         file: StateFileName,
         /// The underlying error kind.
         kind: io::ErrorKind,
@@ -86,19 +90,29 @@ pub enum ReadError {
 /// Writes a private `.<name>.tmp`, fsyncs it, renames it over `name` and fsyncs the state directory. A failure before
 /// the rename removes the temporary file and leaves `name` untouched; the destination is never half-written. A stale
 /// temporary file blocks the write with a [`WriteStep::CreateTemp`] error rather than being reused or followed.
+///
+/// A [`WriteStep::SyncDir`] failure comes after the rename: `name` already holds the new bytes and no temporary file is
+/// left, but the replacement may not survive power loss. Callers must not treat that error as "unchanged". Where
+/// directory fsync does not exist, this returns that error before touching the filesystem.
 pub fn durable_replace(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileName, bytes: &[u8]) -> Result<(), WriteError> {
+    ensure_dir_sync_supported(name)?;
     let dir = lock.dir();
     let temp = dir.join(name.temp_name());
     let file = fs.create_private(&temp).map_err(io_error(WriteStep::CreateTemp, name))?;
     fill_and_rename(fs, file, bytes, &temp, &dir.join(name.as_str()), name).inspect_err(|_| {
         // Best effort: the original error is the one worth reporting, and a leftover temp file blocks only this name.
+        // No directory fsync follows: a lost unlink only leaves a stale temp file for the startup sweep.
         let _ = fs.remove_file(&temp);
     })?;
     fs.sync_dir(dir).map_err(io_error(WriteStep::SyncDir, name))
 }
 
 /// Removes the state file `name`, durably: unlinks it, then fsyncs the state directory.
+///
+/// A [`WriteStep::SyncDir`] failure comes after the unlink: the file is already gone, but the deletion may not
+/// survive power loss. Where directory fsync does not exist, this returns that error before touching the filesystem.
 pub fn durable_remove(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileName) -> Result<(), WriteError> {
+    ensure_dir_sync_supported(name)?;
     fs.remove_file(&lock.dir().join(name.as_str())).map_err(|e| match e.kind() {
         io::ErrorKind::NotFound => WriteError::NotFound { file: name.clone() },
         kind => WriteError::Io { step: WriteStep::Remove, file: name.clone(), kind },
@@ -128,6 +142,15 @@ fn fill_and_rename<F: StoreFs>(
     // Close before renaming: some platforms refuse to rename an open file.
     drop(file);
     fs.rename(temp, dest).map_err(io_error(WriteStep::Rename, name))
+}
+
+/// Fails closed before any change on a platform with no directory fsync, so a write never claims durability it lacks.
+fn ensure_dir_sync_supported(name: &StateFileName) -> Result<(), WriteError> {
+    if cfg!(unix) {
+        Ok(())
+    } else {
+        Err(WriteError::Io { step: WriteStep::SyncDir, file: name.clone(), kind: io::ErrorKind::Unsupported })
+    }
 }
 
 fn io_error(step: WriteStep, file: &StateFileName) -> impl Fn(io::Error) -> WriteError + '_ {

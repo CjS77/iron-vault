@@ -77,7 +77,8 @@ impl StoreFs for OsFs {
         File::open(dir)?.sync_all()
     }
 
-    /// No directory fsync exists here yet, so every durable write fails closed rather than claim durability.
+    /// No directory fsync exists here yet. The durable functions check the platform before mutating anything, so
+    /// they fail closed; a direct caller of this method has already renamed or unlinked by the time it fails.
     #[cfg(not(unix))]
     fn sync_dir(&self, _dir: &Path) -> io::Result<()> {
         Err(io::Error::new(io::ErrorKind::Unsupported, "directory fsync is not supported on this platform"))

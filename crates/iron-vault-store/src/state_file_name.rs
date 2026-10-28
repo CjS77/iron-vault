@@ -2,13 +2,14 @@
 
 use std::fmt;
 
-/// Name of the lock file, which no store write may touch.
+/// Name of the lock file, which no store write may touch in any letter case.
 const LOCK_NAME: &str = "lock";
 
 /// One flat file name inside the state directory, valid on construction.
 ///
 /// Store files sit directly in the state directory, so a durable write only ever fsyncs that one directory. A name
-/// never starts with `.`, which keeps it distinct from every temporary name, and is never the lock file.
+/// never starts with `.`, which keeps it distinct from every temporary name, and is never `lock` in any letter case:
+/// on a case-insensitive filesystem `LOCK` names the held lock file, and replacing it would break the single writer.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StateFileName(String);
 
@@ -24,8 +25,8 @@ pub enum StateFileNameError {
     /// The name starts with `.`, which temporary names use.
     #[error("state file name {0:?} must not start with '.'")]
     LeadingDot(String),
-    /// The name is the state-directory lock file.
-    #[error("state file name must not be {LOCK_NAME:?}")]
+    /// The name is the state-directory lock file in some letter case.
+    #[error("state file name must not be {LOCK_NAME:?} in any letter case")]
     Lock,
 }
 
@@ -34,7 +35,7 @@ impl StateFileName {
     pub fn new(name: &str) -> Result<Self, StateFileNameError> {
         match name {
             "" => Err(StateFileNameError::Empty),
-            LOCK_NAME => Err(StateFileNameError::Lock),
+            _ if name.eq_ignore_ascii_case(LOCK_NAME) => Err(StateFileNameError::Lock),
             _ if !name.bytes().all(is_name_byte) => Err(StateFileNameError::BadCharacter(name.to_owned())),
             _ if name.starts_with('.') => Err(StateFileNameError::LeadingDot(name.to_owned())),
             _ => Ok(Self(name.to_owned())),
@@ -94,7 +95,7 @@ mod tests {
 
     #[test]
     fn rejects_lock() {
-        assert_eq!(StateFileName::new("lock"), Err(StateFileNameError::Lock));
+        ["lock", "LOCK", "Lock"].iter().for_each(|n| assert_eq!(StateFileName::new(n), Err(StateFileNameError::Lock)));
         assert!(StateFileName::new("lock2").is_ok());
     }
 
