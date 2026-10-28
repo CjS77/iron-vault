@@ -278,7 +278,8 @@ impl StoreFs for FaultFs {
     fn list_dir(&self, dir: &Path) -> io::Result<Vec<OsString>> {
         self.call(FsCall::ListDir(dir.to_path_buf()), |st| {
             // BTreeMap order over paths with one parent is file-name order, so the result is already sorted.
-            Ok(st.visible.keys().filter(|path| path.parent() == Some(dir)).filter_map(|path| path.file_name()).map(OsString::from).collect())
+            let in_dir = st.visible.keys().filter(|path| path.parent() == Some(dir));
+            Ok(in_dir.filter_map(|path| path.file_name()).map(OsString::from).collect())
         })
     }
 

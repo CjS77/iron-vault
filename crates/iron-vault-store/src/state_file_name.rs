@@ -64,6 +64,13 @@ impl StateFileName {
     pub(crate) fn temp_name(&self) -> String {
         format!(".{}.tmp", self.0)
     }
+
+    /// The state file whose temporary name is exactly `temp`, if `temp` is one [`StateFileName::temp_name`] can
+    /// produce. Any other name, including every other dotfile, gives `None`, so nothing else is taken for a temp file.
+    pub(crate) fn from_temp_name(temp: &str) -> Option<Self> {
+        let name = Self::new(temp.strip_prefix('.')?.strip_suffix(".tmp")?).ok()?;
+        (name.temp_name() == temp).then_some(name)
+    }
 }
 
 impl fmt::Display for StateFileName {
@@ -127,5 +134,20 @@ mod tests {
         let temp = StateFileName::new("vault").unwrap().temp_name();
         assert_eq!(temp, ".vault.tmp");
         assert!(StateFileName::new(&temp).is_err());
+    }
+
+    #[test]
+    fn from_temp_name_inverts_temp_name() {
+        ["vault", "a.tmp", "rec-01_a.age"].iter().for_each(|n| {
+            let name = StateFileName::new(n).unwrap();
+            assert_eq!(StateFileName::from_temp_name(&name.temp_name()), Some(name));
+        });
+    }
+
+    #[test]
+    fn from_temp_name_rejects_everything_else() {
+        [".tmp", "..tmp", "...tmp", ".lock.tmp", ".LOCK.tmp", ".a/b.tmp", "a.tmp", ".a.tmp~", ".a.TMP", ".hidden", ". .tmp", ""]
+            .iter()
+            .for_each(|n| assert_eq!(StateFileName::from_temp_name(n), None, "{n:?}"));
     }
 }

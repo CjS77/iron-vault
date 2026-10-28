@@ -52,6 +52,12 @@ pub enum WriteError {
         /// The file that was to be removed.
         file: StateFileName,
     },
+    /// Listing the state directory failed, so no file in it was examined.
+    #[error("cannot list the state directory: {kind}")]
+    ListStateDir {
+        /// The underlying error kind.
+        kind: io::ErrorKind,
+    },
     /// A filesystem step failed.
     #[error("store file operation on state file {file} failed at {step}: {kind}")]
     Io {
@@ -145,7 +151,7 @@ fn fill_and_rename<F: StoreFs>(
 }
 
 /// Fails closed before any change on a platform with no directory fsync, so a write never claims durability it lacks.
-fn ensure_dir_sync_supported(name: &StateFileName) -> Result<(), WriteError> {
+pub(crate) fn ensure_dir_sync_supported(name: &StateFileName) -> Result<(), WriteError> {
     if cfg!(unix) {
         Ok(())
     } else {
@@ -153,7 +159,7 @@ fn ensure_dir_sync_supported(name: &StateFileName) -> Result<(), WriteError> {
     }
 }
 
-fn io_error(step: WriteStep, file: &StateFileName) -> impl Fn(io::Error) -> WriteError + '_ {
+pub(crate) fn io_error(step: WriteStep, file: &StateFileName) -> impl Fn(io::Error) -> WriteError + '_ {
     move |e| WriteError::Io { step, file: file.clone(), kind: e.kind() }
 }
 
