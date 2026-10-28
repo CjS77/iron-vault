@@ -256,3 +256,111 @@ derived from. Rust: `iron_vault_store::{wrap_identity, unwrap_identity}`.
   alone, and parse the plaintext as an X25519 identity.
 - **Trust.** `age` does not authenticate the sender, so anyone who knows a recipient key can write an envelope. An
   unwrapped identity is trusted only once the vault manifest's MAC, keyed from it, verifies.
+
+## Approval payload v1
+
+The bytes a [config approval](glossary.md) signs (specification §3.9). It binds the fixed purpose, the vault, the
+approval version and the config digest, so a signature cannot be moved to another vault, another version or another
+config. It uses the conventions of record payload v1: big-endian unsigned integers, `u64` length prefixes, lengths
+checked against the bytes remaining before anything is read, and no trailing bytes. Rust:
+`iron_vault_store::ApprovalPayload::{encode, decode}`.
+
+### Layout
+
+| Offset | Size | Content                                                                                 |
+|--------|------|-----------------------------------------------------------------------------------------|
+| 0      | 4    | Magic: ASCII `IVAP` (`49 56 41 50`)                                                     |
+| 4      | 1    | Format version: `01`                                                                    |
+| 5      | 28   | Purpose: field holding exactly the 20 ASCII bytes `iron-vault-config-v1`                |
+| 33     | 16   | Vault ID: the 16 bytes of a version 4 UUID                                              |
+| 49     | 8    | Approval version: `u64`, never zero                                                     |
+| 57     | 32   | Config digest: BLAKE2b-256 (unkeyed, 32-byte output) of the exact config bytes reviewed |
+
+A payload is always 89 bytes. The magic and the purpose are its domain separation: a signature over any other
+structure, or over a payload for a later purpose, is never read as a config approval. The purpose is
+length-prefixed so a later purpose of a different length cannot be confused with this one by its prefix.
+
+The digest covers the config file byte for byte, so a change to whitespace or a comment needs a fresh approval.
+
+### Example
+
+Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b`, approval version 1, approving an empty config (the BLAKE2b-256
+digest of zero bytes):
+
+```text
+49 56 41 50                                        magic "IVAP"
+01                                                 format version 1
+00 00 00 00 00 00 00 14                            purpose length 20
+69 72 6f 6e 2d 76 61 75 6c 74 2d 63 6f 6e 66 69    "iron-vault-confi"
+67 2d 76 31                                        "g-v1"
+3f 2b 8c 1e 5d 4a 4e 6f 9a 7b 1c 2d 3e 4f 5a 6b    vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b
+00 00 00 00 00 00 00 01                            approval version 1
+0e 57 51 c0 26 e5 43 b2 e8 ab 2e b0 60 99 da a1    config digest
+d1 e5 df 47 77 8f 77 87 fa ab 45 cd f1 2f e3 a8
+```
+
+### One encoding per payload
+
+Decoding accepts only the encoding above, so the bytes a verifier re-encodes are the bytes that were signed. It
+rejects a wrong magic, an unknown format version, any purpose other than `iron-vault-config-v1`, a vault ID that is
+not a version 4 UUID, approval version 0, truncation and trailing bytes.
+
+## Approval envelope v1
+
+The file `config.toml.sig`: an approval payload, the [signature algorithm](glossary.md) that signed it and the
+signature. Software, TPM and later YubiKey signers all write this one envelope (specification §8.2 Q-9). Rust:
+`iron_vault_store::ApprovalEnvelope::{encode, decode}`.
+
+### Layout
+
+| Offset | Size | Content                                                               |
+|--------|------|-----------------------------------------------------------------------|
+| 0      | 4    | Magic: ASCII `IVAS` (`49 56 41 53`)                                   |
+| 4      | 1    | Format version: `01`                                                  |
+| 5      | 1    | Signature algorithm ID (below)                                        |
+| 6      | var  | Payload: field holding an approval payload v1                         |
+| var    | var  | Signature: field holding the signature over the payload field's bytes |
+
+| ID   | Algorithm                                                                      |
+|------|--------------------------------------------------------------------------------|
+| `00` | Never valid                                                                    |
+| `01` | Ed25519 (RFC 8032), the software signer; the signature is exactly 64 bytes     |
+| `02` | Reserved for ECDSA P-256 with SHA-256, the TPM signer; not accepted in v0      |
+
+Any other ID is refused as unknown. The signature is over exactly the bytes inside the payload field.
+
+The envelope carries **no public key**. Specification §3.9 forbids trusting a key from the signature file; the
+verifier uses the approver key and algorithm pinned in protected vault metadata, and refuses an envelope whose
+algorithm differs from the pinned one.
+
+### Example
+
+The payload example above, signed with Ed25519. The signature here is 64 bytes of `5a`, a stand-in: the format does
+not check signatures, verification does.
+
+```text
+49 56 41 53                                        magic "IVAS"
+01                                                 format version 1
+01                                                 algorithm Ed25519
+00 00 00 00 00 00 00 59                            payload length 89
+…                                                  the 89 payload bytes from the example above
+00 00 00 00 00 00 00 40                            signature length 64
+5a 5a 5a 5a 5a 5a 5a 5a  5a 5a 5a 5a 5a 5a 5a 5a   signature (stand-in)
+5a 5a 5a 5a 5a 5a 5a 5a  5a 5a 5a 5a 5a 5a 5a 5a
+5a 5a 5a 5a 5a 5a 5a 5a  5a 5a 5a 5a 5a 5a 5a 5a
+5a 5a 5a 5a 5a 5a 5a 5a  5a 5a 5a 5a 5a 5a 5a 5a
+```
+
+The whole file is 175 bytes.
+
+### One encoding per envelope
+
+Decoding rejects a wrong magic, an unknown format version, an unknown or reserved algorithm ID, a payload that is not
+a canonical approval payload v1 (including trailing bytes inside the payload field), a signature of the wrong length
+for its algorithm, truncation and trailing bytes.
+
+### Size limit
+
+`MAX_APPROVAL_ENVELOPE_LEN` is 4096 bytes, checked before anything else is read. A v1 envelope is 175 bytes with an
+Ed25519 signature and at most 183 with a DER-encoded ECDSA P-256 one; the limit leaves room for a later algorithm with
+a larger signature while keeping a planted file cheap to refuse.
