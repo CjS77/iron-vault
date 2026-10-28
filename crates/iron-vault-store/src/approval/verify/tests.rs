@@ -1,6 +1,6 @@
 //! Approval verification: each check accepts the committed approval and refuses everything else with its own variant.
 
-use ed25519_dalek::{Signer, SigningKey, Verifier};
+use ed25519_dalek::{Signer, SigningKey};
 
 use super::*;
 use crate::fault_fs::FaultFs;
@@ -44,22 +44,11 @@ struct Vault {
 
 impl Vault {
     fn new(label: &str) -> Self {
-        Self::with_approver(label, pinned(APPROVER_SEED))
-    }
-
-    fn with_approver(label: &str, approver: PinnedApprover) -> Self {
         let dir = TestDir::new(label);
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         let (fs, identity) = (FaultFs::new(), VaultIdentity::from_secret(KAT_IDENTITY));
-        let state = ApprovalState::create(&lock, &fs, &identity, VaultId::new_random(), approver).unwrap();
+        let state = ApprovalState::create(&lock, &fs, &identity, VaultId::new_random(), pinned(APPROVER_SEED)).unwrap();
         Self { _dir: dir, lock, fs, identity, state }
-    }
-
-    /// Reserves and commits `config(v)` as the next version `v`, signing nothing.
-    fn commit_next(&mut self) -> ApprovalVersion {
-        let v = self.state.reserve(&self.lock, &self.fs, &self.identity).unwrap();
-        self.state.commit(&self.lock, &self.fs, &self.identity, v, ConfigDigest::of(&config(v.get()))).unwrap();
-        v
     }
 
     /// Reserves the next version and returns the envelope signing `config(v)` as it, without committing it.
@@ -147,29 +136,6 @@ fn edited_payload_fails_on_the_signature_first() {
     let edited = ApprovalEnvelope::decode(&envelopes[0]).unwrap();
     let forged = ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, vault.payload(2), edited.signature().to_vec()).unwrap();
     assert_eq!(vault.verify(&config(2), &forged.encode()), Err(VerifyError::BadSignature));
-}
-
-/// `verify_strict` refuses what plain verification accepts: here a small-order key with an all-identity signature.
-#[test]
-fn weak_pinned_key_is_refused_even_where_lax_verification_accepts() {
-    let identity_point: [u8; 32] = [1u8].into_iter().chain([0; 31]).collect::<Vec<_>>().try_into().unwrap();
-    let mut vault = Vault::with_approver("verify-weak", PinnedApprover::new(SignatureAlgorithm::Ed25519, identity_point.to_vec()).unwrap());
-    let v = vault.commit_next();
-    let payload = vault.payload(v.get());
-    let signature = [identity_point, [0; 32]].concat();
-    let lax = VerifyingKey::from_bytes(&identity_point).unwrap().verify(&payload.encode(), &Signature::from_slice(&signature).unwrap());
-    assert!(lax.is_ok());
-
-    let envelope = ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, payload, signature).unwrap().encode();
-    assert_eq!(vault.verify(&config(1), &envelope), Err(VerifyError::BadSignature));
-}
-
-#[test]
-fn pinned_key_that_is_not_a_curve_point_is_refused() {
-    let approver = PinnedApprover::new(SignatureAlgorithm::Ed25519, [2u8].into_iter().chain([0; 31]).collect()).unwrap();
-    let state = ApprovalState::new_for_vault(VaultId::new_random(), approver);
-    let envelope = sign(APPROVER_SEED, ApprovalPayload::new(state.vault_id(), version(1), ConfigDigest::of(&config(1))));
-    assert_eq!(verify_approval(&state, &config(1), &envelope), Err(VerifyError::InvalidPinnedKey));
 }
 
 #[test]

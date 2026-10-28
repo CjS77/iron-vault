@@ -13,7 +13,7 @@ use crate::{OsFs, durable_replace};
 type Op = fn(&Setup, &FaultFs, &mut ApprovalState) -> Result<(), ApprovalStateError>;
 
 fn approver(seed: u8) -> PinnedApprover {
-    PinnedApprover::new(SignatureAlgorithm::Ed25519, vec![seed; 32]).unwrap()
+    PinnedApprover::ed25519(ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key()).unwrap()
 }
 
 fn version(v: u64) -> ApprovalVersion {

@@ -12,6 +12,7 @@ use std::cmp::Ordering;
 use ed25519_dalek::{Signature, VerifyingKey};
 use thiserror::Error;
 
+use super::state::ApproverKey;
 use super::{ApprovalDecodeError, ApprovalEnvelope, ApprovalState, ApprovalVersion, ConfigDigest, PinnedApprover, SignatureAlgorithm};
 
 /// A config approval that passed every check in [`verify_approval`]: the committed approval, signed by the pinned
@@ -53,9 +54,6 @@ pub enum VerifyError {
         /// The algorithm the envelope names.
         envelope: SignatureAlgorithm,
     },
-    /// The pinned public key is not a valid key for its algorithm, so no approval can verify until it is replaced.
-    #[error("the pinned approver's public key is invalid; replace the approver and approve the config again")]
-    InvalidPinnedKey,
     /// The signature does not verify against the pinned public key over the encoded payload.
     #[error("the config approval signature does not verify against the pinned approver")]
     BadSignature,
@@ -122,17 +120,14 @@ fn check_signature(approver: &PinnedApprover, envelope: &ApprovalEnvelope) -> Re
     if pinned != claimed {
         return Err(VerifyError::WrongAlgorithm { pinned, envelope: claimed });
     }
-    match pinned {
-        SignatureAlgorithm::Ed25519 => verify_ed25519(approver.public_key(), &envelope.payload().encode(), envelope.signature()),
+    match approver.key() {
+        ApproverKey::Ed25519(key) => verify_ed25519(key, &envelope.payload().encode(), envelope.signature()),
     }
 }
 
-/// Ed25519 verification with `verify_strict`, which refuses malleable signatures and small-order (weak) keys.
-///
-/// The lengths were checked when the approver and envelope were built; a mismatch here is still an error, not a crash.
-fn verify_ed25519(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(), VerifyError> {
-    let key_bytes: &[u8; 32] = public_key.try_into().map_err(|_| VerifyError::InvalidPinnedKey)?;
-    let key = VerifyingKey::from_bytes(key_bytes).map_err(|_| VerifyError::InvalidPinnedKey)?;
+/// Ed25519 verification with `verify_strict`, which refuses malleable signatures; the pinned key is already a valid,
+/// non-weak point.
+fn verify_ed25519(key: &VerifyingKey, message: &[u8], signature: &[u8]) -> Result<(), VerifyError> {
     let signature = Signature::from_slice(signature).map_err(|_| VerifyError::BadSignature)?;
     key.verify_strict(message, &signature).map_err(|_| VerifyError::BadSignature)
 }

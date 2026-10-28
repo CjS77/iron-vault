@@ -18,8 +18,8 @@ const COMMITTED: u8 = 0x01;
 pub(super) fn encode(state: &ApprovalState) -> Vec<u8> {
     let mut out = header(MAGIC, VERSION);
     out.extend_from_slice(state.vault_id.as_bytes());
-    out.push(state.approver.algorithm.id());
-    put_field(&mut out, &state.approver.public_key);
+    out.push(state.approver.algorithm().id());
+    put_field(&mut out, state.approver.public_key());
     out.extend_from_slice(&state.highest_reserved.to_be_bytes());
     match &state.committed {
         None => out.push(NOT_COMMITTED),
@@ -61,6 +61,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::approval::InvalidKeyReason;
 
     /// The documented example: vault 3f2b8c1e-…, the RFC 8032 test 1 Ed25519 public key, versions 1 and 2 reserved,
     /// version 1 committed for an empty config.
@@ -143,6 +144,31 @@ mod tests {
         assert_eq!(decode(&short), Err(ApprovalStateError::PublicKeyLength { algorithm: SignatureAlgorithm::Ed25519, len: 31 }));
         let built = PinnedApprover::new(SignatureAlgorithm::Ed25519, vec![0; 33]);
         assert_eq!(built, Err(ApprovalStateError::PublicKeyLength { algorithm: SignatureAlgorithm::Ed25519, len: 33 }));
+    }
+
+    fn ed25519(key: Vec<u8>) -> Result<PinnedApprover, ApprovalStateError> {
+        PinnedApprover::new(SignatureAlgorithm::Ed25519, key)
+    }
+
+    fn refused(reason: InvalidKeyReason) -> Result<PinnedApprover, ApprovalStateError> {
+        Err(ApprovalStateError::InvalidApproverKey { algorithm: SignatureAlgorithm::Ed25519, reason })
+    }
+
+    #[test]
+    fn approver_keys_are_validated_when_pinned() {
+        let generated = ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key();
+        assert_eq!(ed25519(generated.to_bytes().to_vec()).map(|a| a.public_key().to_vec()), Ok(generated.to_bytes().to_vec()));
+        // y = 2 has no x on the curve.
+        assert_eq!(ed25519([2u8].into_iter().chain([0; 31]).collect()), refused(InvalidKeyReason::NotAPoint));
+        // The identity point and the order-2 point (0, -1).
+        let identity = [1u8].into_iter().chain([0; 31]).collect();
+        let order_two = [0xec_u8].into_iter().chain([0xff; 30]).chain([0x7f]).collect();
+        assert_eq!(ed25519(identity), refused(InvalidKeyReason::WeakKey));
+        assert_eq!(ed25519(order_two), refused(InvalidKeyReason::WeakKey));
+        [31, 33].into_iter().for_each(|len| {
+            let error = ApprovalStateError::PublicKeyLength { algorithm: SignatureAlgorithm::Ed25519, len };
+            assert_eq!(ed25519(generated.to_bytes().iter().copied().cycle().take(len).collect()), Err(error));
+        });
     }
 
     #[test]

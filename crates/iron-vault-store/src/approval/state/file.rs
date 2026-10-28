@@ -78,7 +78,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::approval::{ApprovalVersion, ConfigDigest, PinnedApprover, SignatureAlgorithm};
+    use crate::approval::{ApprovalVersion, ConfigDigest, InvalidKeyReason, PinnedApprover, SignatureAlgorithm};
     use crate::manifest::tests::KAT_IDENTITY;
     use crate::sealed::OpenError;
 
@@ -101,7 +101,7 @@ mod tests {
 
     /// A state with a committed approval, so every payload field is present.
     fn state(vault_id: VaultId) -> ApprovalState {
-        let approver = PinnedApprover::new(SignatureAlgorithm::Ed25519, vec![0x42; 32]).unwrap();
+        let approver = PinnedApprover::ed25519(ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]).verifying_key()).unwrap();
         ApprovalState::from_parts(vault_id, approver, 3, ApprovalVersion::new(2).map(|v| (v, ConfigDigest::of(b"config")))).unwrap()
     }
 
@@ -196,6 +196,18 @@ mod tests {
         let id = VaultId::from_bytes(payload[5..21].try_into().unwrap()).unwrap();
         let file = forged(&identity, id, &payload, &identity.derive_key(APPROVAL_KEY_PERSONA));
         assert_eq!(open_approval_state(&identity, &file), Err(ApprovalStateError::CommittedNotReserved));
+    }
+
+    #[test]
+    fn a_weak_approver_key_behind_a_valid_mac_is_rejected() {
+        let identity = VaultIdentity::generate();
+        let mut payload = encoding::encode(&state(VaultId::new_random()));
+        // The public key is the 32 bytes at 30..62; the identity point is small-order.
+        payload[30..62].copy_from_slice(&[[1u8].as_slice(), &[0; 31]].concat());
+        let id = VaultId::from_bytes(payload[5..21].try_into().unwrap()).unwrap();
+        let file = forged(&identity, id, &payload, &identity.derive_key(APPROVAL_KEY_PERSONA));
+        let weak = ApprovalStateError::InvalidApproverKey { algorithm: SignatureAlgorithm::Ed25519, reason: InvalidKeyReason::WeakKey };
+        assert_eq!(open_approval_state(&identity, &file), Err(weak));
     }
 
     #[test]

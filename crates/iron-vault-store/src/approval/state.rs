@@ -16,6 +16,7 @@ mod tests;
 
 use std::io;
 
+use ed25519_dalek::VerifyingKey;
 use thiserror::Error;
 
 use super::{ApprovalDecodeError, ApprovalVersion, ConfigDigest, SignatureAlgorithm};
@@ -35,32 +36,72 @@ pub const MAX_APPROVAL_STATE_LEN: usize = 4096;
 
 /// The algorithm and public key every config approval must verify against (spec §3.9).
 ///
-/// It is kept only in the approval state, never read from the config or the signature file. The key's length is
-/// checked against the algorithm on construction; whether the bytes are a valid key is the verifier's check.
+/// It is kept only in the approval state, never read from the config or the signature file. The key is checked when it
+/// is pinned, so a held approver always has a usable key: an unusable one is refused at enrolment, not at the next
+/// reload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinnedApprover {
-    algorithm: SignatureAlgorithm,
-    public_key: Vec<u8>,
+    key: ApproverKey,
+}
+
+/// A validated public key, tagged with its algorithm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApproverKey {
+    /// An Ed25519 key that is a valid, non-weak point.
+    Ed25519(VerifyingKey),
+}
+
+/// Why a public key cannot be pinned as an approver. Carries no key bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidKeyReason {
+    /// The bytes do not decode to a point on the curve.
+    NotAPoint,
+    /// The key is a small-order point, which strict verification refuses for every signature.
+    WeakKey,
 }
 
 impl PinnedApprover {
-    /// The approver with `public_key` for `algorithm`, refusing a key of the wrong length for it.
+    /// The approver with `public_key` for `algorithm`, refusing a key of the wrong length, a non-point or a weak key.
     pub fn new(algorithm: SignatureAlgorithm, public_key: Vec<u8>) -> Result<Self, ApprovalStateError> {
-        match algorithm.accepts_public_key_len(public_key.len()) {
-            true => Ok(Self { algorithm, public_key }),
-            false => Err(ApprovalStateError::PublicKeyLength { algorithm, len: public_key.len() }),
+        let len = public_key.len();
+        let bytes: [u8; 32] = match algorithm.accepts_public_key_len(len) {
+            true => public_key.try_into().map_err(|_| ApprovalStateError::PublicKeyLength { algorithm, len })?,
+            false => return Err(ApprovalStateError::PublicKeyLength { algorithm, len }),
+        };
+        let key = VerifyingKey::from_bytes(&bytes).map_err(|_| invalid(algorithm, InvalidKeyReason::NotAPoint))?;
+        Self::ed25519(key)
+    }
+
+    /// The Ed25519 approver for `key`, refusing a small-order (weak) key.
+    pub fn ed25519(key: VerifyingKey) -> Result<Self, ApprovalStateError> {
+        match key.is_weak() {
+            true => Err(invalid(SignatureAlgorithm::Ed25519, InvalidKeyReason::WeakKey)),
+            false => Ok(Self { key: ApproverKey::Ed25519(key) }),
         }
     }
 
     /// The algorithm approvals must be signed with.
     pub fn algorithm(&self) -> SignatureAlgorithm {
-        self.algorithm
+        match self.key {
+            ApproverKey::Ed25519(_) => SignatureAlgorithm::Ed25519,
+        }
     }
 
-    /// The public key approvals must verify against.
+    /// The encoded public key approvals must verify against.
     pub fn public_key(&self) -> &[u8] {
-        &self.public_key
+        match &self.key {
+            ApproverKey::Ed25519(key) => key.as_bytes(),
+        }
     }
+
+    /// The validated key approvals must verify against.
+    pub(crate) fn key(&self) -> &ApproverKey {
+        &self.key
+    }
+}
+
+fn invalid(algorithm: SignatureAlgorithm, reason: InvalidKeyReason) -> ApprovalStateError {
+    ApprovalStateError::InvalidApproverKey { algorithm, reason }
 }
 
 /// One vault's approval state: the pinned approver, the highest reserved version and the committed approval.
@@ -104,6 +145,14 @@ pub enum ApprovalStateError {
         algorithm: SignatureAlgorithm,
         /// The key's length.
         len: usize,
+    },
+    /// The approver's public key has the right length but is not a usable key for its algorithm.
+    #[error("{algorithm:?} approver public key is unusable: {reason:?}")]
+    InvalidApproverKey {
+        /// The approver's algorithm.
+        algorithm: SignatureAlgorithm,
+        /// What is wrong with the key.
+        reason: InvalidKeyReason,
     },
     /// The byte saying whether an approval is committed is neither `00` nor `01`.
     #[error("unknown committed-approval tag {0}")]

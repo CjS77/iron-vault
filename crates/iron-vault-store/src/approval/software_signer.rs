@@ -57,7 +57,7 @@ pub struct SoftwareSignerKey(SigningKey);
 impl SoftwareSignerKey {
     /// The approver this key verifies as.
     fn pinned(&self) -> Result<PinnedApprover, SignError> {
-        PinnedApprover::new(SignatureAlgorithm::Ed25519, self.0.verifying_key().to_bytes().to_vec()).map_err(|_| SignError::KeyMismatch)
+        PinnedApprover::ed25519(self.0.verifying_key()).map_err(SignError::Unpinnable)
     }
 }
 

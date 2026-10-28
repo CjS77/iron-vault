@@ -28,7 +28,9 @@ pub use signer::{ApprovalSigner, SignError};
 pub use software_signer::{
     ApprovalPassphrase, SoftwareSigner, SoftwareSignerKey, open_signer_key, read_signer_key, seal_signer_key, write_signer_key,
 };
-pub use state::{ApprovalState, ApprovalStateError, MAX_APPROVAL_STATE_LEN, PinnedApprover, open_approval_state, seal_approval_state};
+pub use state::{
+    ApprovalState, ApprovalStateError, InvalidKeyReason, MAX_APPROVAL_STATE_LEN, PinnedApprover, open_approval_state, seal_approval_state,
+};
 pub use verify::{VerifiedApproval, VerifyError, verify_approval};
 
 /// The largest approval envelope accepted, in bytes, checked before anything else is read.
