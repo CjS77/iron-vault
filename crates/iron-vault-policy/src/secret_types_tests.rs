@@ -22,14 +22,9 @@ assert_not_impl_any!(SlotValue: Clone, Copy, Display, Serialize, Deserialize<'st
 assert_not_impl_any!(OutgoingRequest: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(CheckedRequest: Clone, Copy, Display, Serialize, Deserialize<'static>);
 
-// `Clone` is derived on the three below and is not asserted: a clone is a second buffer with the same wipe-on-drop
-// (`HeaderValue`'s `Drop`), so it adds a copy but never an unwiped one. Whether the derives can go is a separate
-// ticket; no production code clones them today.
-assert_not_impl_any!(HeaderValue: Copy, Display, Serialize, Deserialize<'static>);
-assert_not_impl_any!(OutgoingHeaders: Copy, Display, Serialize, Deserialize<'static>);
-// `UpstreamTarget` holds the filled query in a `url::Url`, which is never wiped: see the residual copies in
-// `design/secret-handling.md`.
-assert_not_impl_any!(UpstreamTarget: Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(HeaderValue: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(OutgoingHeaders: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(UpstreamTarget: Clone, Copy, Display, Serialize, Deserialize<'static>);
 
 /// Distinctive enough that a match in `Debug` output can only be the secret leaking.
 const MARKER: &str = "MARKER-secret-5d1c9e";

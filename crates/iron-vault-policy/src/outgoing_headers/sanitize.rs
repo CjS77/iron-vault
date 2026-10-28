@@ -35,13 +35,12 @@ pub enum SanitizeError {
 ///
 /// Framing is checked on the caller's list before anything is removed, so an ambiguous body length is rejected even
 /// though the framing headers themselves are dropped and the transport sets its own.
-pub fn sanitize(caller: &[(HeaderName, HeaderValue)], token_header: &HeaderName) -> Result<OutgoingHeaders, SanitizeError> {
-    check_framing(caller)?;
-    let hop_by_hop = connection_names(caller);
+pub fn sanitize(caller: Vec<(HeaderName, HeaderValue)>, token_header: &HeaderName) -> Result<OutgoingHeaders, SanitizeError> {
+    check_framing(&caller)?;
+    let hop_by_hop = connection_names(&caller);
     let entries = caller
-        .iter()
+        .into_iter()
         .filter(|(name, _)| !is_reserved(name) && name != token_header && !hop_by_hop.contains(name))
-        .cloned()
         .collect();
     Ok(OutgoingHeaders { entries })
 }
@@ -118,7 +117,7 @@ mod tests {
     }
 
     fn sanitized(pairs: &[(&str, &str)], token_header: &HeaderName) -> Vec<(String, String)> {
-        let outgoing = sanitize(&headers(pairs), token_header).unwrap();
+        let outgoing = sanitize(headers(pairs), token_header).unwrap();
         outgoing
             .iter()
             .map(|(n, v)| (n.as_str().to_owned(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
@@ -130,7 +129,7 @@ mod tests {
     }
 
     fn rejected(pairs: &[(&str, &str)]) -> SanitizeError {
-        sanitize(&headers(pairs), &proxy_authorization()).unwrap_err()
+        sanitize(headers(pairs), &proxy_authorization()).unwrap_err()
     }
 
     #[test]

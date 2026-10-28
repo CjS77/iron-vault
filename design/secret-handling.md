@@ -12,7 +12,7 @@ a passphrase, directly or through a field.
 Every secret-bearing type:
 
 - has a `Debug` that shows no secret byte, in both `{:?}` and `{:#?}`;
-- has no `Display`, `Copy`, `Clone`, `serde::Serialize` or `serde::Deserialize`, unless the table below says why;
+- has no `Display`, `Copy`, `Clone`, `serde::Serialize` or `serde::Deserialize`;
 - clears its bytes when dropped, through `secrecy`, `zeroize` or a field type that does.
 
 Each crate's `secret_types_tests` module enforces the trait rule at compile time with `static_assertions`, and checks
@@ -23,9 +23,9 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | Type | Crate | Holds | Cleared by | Allowed trait | Debug check |
 |---|---|---|---|---|---|
 | `SlotValue` | policy | the credential text for a slot | `SecretString` | none | `secret_types_tests` |
-| `HeaderValue` | policy | an outgoing header value, possibly the filled slot or a caller token | its own `Drop`, `zeroize` | `Clone`: a clone is a second buffer with the same `Drop` | `secret_types_tests` |
-| `OutgoingHeaders` | policy | `HeaderValue`s | each `HeaderValue` | `Clone`, through `HeaderValue` | `secret_types_tests` |
-| `UpstreamTarget` | policy | the upstream URL, whose query may hold a filled query slot | not cleared: see residual copies | `Clone` | `secret_types_tests` |
+| `HeaderValue` | policy | an outgoing header value, possibly the filled slot or a caller token | its own `Drop`, `zeroize` | none | `secret_types_tests` |
+| `OutgoingHeaders` | policy | `HeaderValue`s | each `HeaderValue` | none | `secret_types_tests` |
+| `UpstreamTarget` | policy | the upstream URL, whose query may hold a filled query slot | not cleared: see residual copies | none | `secret_types_tests` |
 | `OutgoingRequest` | policy | an `UpstreamTarget` and `OutgoingHeaders` | its fields | none | `secret_types_tests` |
 | `CheckedRequest` | policy | the final URL and `OutgoingHeaders` | headers by `HeaderValue`; URL not cleared | none | `secret_types_tests` |
 | `CredentialMaterial` | kinds | a static key, or a username and password | `SecretString` per field | none | `secret_types_tests` |
@@ -86,4 +86,3 @@ dropped. `secret_types_tests` checks this by scanning the store's sources, and a
 | `age`'s `StreamReader` (age 0.12.1, `primitives/stream.rs:410`) keeps the decrypted chunk in a `SecretSlice<u8>`, which is wiped. The AEAD's output `Vec` is 16 bytes larger than the plaintext (room for the tag), so converting it into a `SecretSlice` shrinks it, and the allocator may move it, leaving a freed, unwiped copy of the chunk. | `age` owns the conversion. Locked memory (K-45) keeps it out of swap; the plaintext `sealed::open` returns is in a `Zeroizing` buffer. |
 | `age`'s scrypt recipient and identity take a `SecretString` copy of the passphrase (`Passphrase::for_age`), and derive the wrapping key inside `age`. | The copy is a `SecretString` and is wiped; `age`'s internal key derivation is not audited here. Locked memory (K-45) keeps it out of swap. |
 | The `url::Url` inside `UpstreamTarget` and `CheckedRequest` holds a filled query slot and is never wiped, because `Url` owns its buffer. | The transport epic wipes or avoids it when the request is sent (`TODO(transport epic)` in `outgoing_request.rs`). |
-| `HeaderValue`, `OutgoingHeaders` and `UpstreamTarget` derive `Clone`. No production code clones them today. | A cloned `HeaderValue` is wiped on its own drop; a cloned `UpstreamTarget` is not (row above). Removing the derives is a follow-up decision, not part of this inventory. |

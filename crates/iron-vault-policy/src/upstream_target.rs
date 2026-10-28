@@ -21,7 +21,7 @@ use crate::upstream::UpstreamUrl;
 ///
 /// `Debug` omits the query: after a query slot is filled it holds the credential, and before that it may hold caller
 /// secrets.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct UpstreamTarget {
     url: Url,
 }

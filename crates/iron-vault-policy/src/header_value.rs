@@ -15,7 +15,7 @@ use thiserror::Error;
 ///
 /// Values can carry caller tokens or credentials, so `Debug` shows only the length, there is no `Display`, and the
 /// bytes are wiped when the value is dropped (spec §3.11). A clone is a second copy that is wiped on its own drop.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct HeaderValue(Vec<u8>);
 
 /// Bytes that are not a valid HTTP field value. The text names the offending byte, never the value.

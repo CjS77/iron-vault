@@ -17,7 +17,7 @@ pub use sanitize::{SanitizeError, sanitize};
 ///
 /// Order and duplicates are kept as given, because some upstreams read repeated fields in order. Every name lookup is
 /// case-insensitive through [`HeaderName`]'s equality.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct OutgoingHeaders {
     entries: Vec<(HeaderName, HeaderValue)>,
 }

@@ -234,7 +234,7 @@ struct Run {
 
 impl Case {
     fn run(&self) -> Option<Run> {
-        run(&self.target, &typed(&self.headers), &self.secret, &self.wiring, &self.permitted)
+        run(&self.target, typed(&self.headers), &self.secret, &self.wiring, &self.permitted)
     }
 }
 
@@ -242,7 +242,7 @@ impl Case {
 /// for hostile input.
 fn run(
     target: &str,
-    headers: &[(HeaderName, HeaderValue)],
+    headers: Vec<(HeaderName, HeaderValue)>,
     secret: &str,
     wiring: &Wiring,
     permitted: &BTreeSet<(Host, Port)>,
@@ -524,7 +524,7 @@ proptest! {
         wiring in wiring(),
         permitted in permitted(),
     ) {
-        let _ = run(&target, &headers, &secret, &wiring, &permitted);
+        let _ = run(&target, headers, &secret, &wiring, &permitted);
     }
 }
 
