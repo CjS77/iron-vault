@@ -153,6 +153,32 @@ Opening a MAC'd file does the cheap, key-free checks first and decrypts last:
 4. Only then is the vault ID parsed and the ciphertext opened, with the size limit also bounding the plaintext, and
    decoded. A payload naming a different vault from the header is refused.
 
+### State generation
+
+Every MAC'd file payload carries two `u64` counters right after its vault ID:
+
+- the **state generation**: the vault-wide count of MAC'd file writes at which this file was written;
+- the **peer generation**: the state generation the other MAC'd file had at that moment.
+
+Every write of the manifest or the approval state takes its state generation from one rule:
+
+```text
+state generation of the new file = max(manifest's state generation, approval state's state generation) + 1
+```
+
+So a vault's first manifest is at state generation 1, every later write of either file is exactly one above the
+latest write of both, and no two files ever share a state generation. The addition is checked: once either file is at
+`u64::MAX`, the next write of either fails before any file is touched, and the counter never wraps.
+
+A state generation is never 0, so a peer generation of 0 means "no peer". The vault is created before its approval
+state, so its first manifest, and any manifest written before the approval state exists, records 0. The approval
+state always has a manifest to name, so its peer generation is never 0.
+
+Whichever file was written last names the state generation it expects the other to hold, so restoring one of them from
+an older copy leaves a pair that disagrees. Checking that agreement when the vault opens is not yet done. Restoring
+both files together still leaves an agreeing pair; outside v0, anchoring the state generation in a TPM monotonic
+counter (specification §3.9) is what detects that.
+
 ## Manifest file v1
 
 The [vault manifest](glossary.md): the service's index of which credential records exist, in the state-directory file
@@ -187,7 +213,7 @@ MAC           57773e0c4c341207ffc71eb80ccb19c399bab8042a1d3c9f38603af1c7cc1ab2
 
 A manifest holds at most `MAX_MANIFEST_ENTRIES` (4096) entries. An entry is at most 120 bytes: a 16-byte record ID, an
 8-byte name length, a name of at most 64 bytes and a 32-byte digest. A full payload is therefore at most
-37 + 4096 × 120 = 491,557 bytes. `age` adds a header of a few hundred bytes, one 16-byte payload nonce and a 16-byte
+45 + 4096 × 120 = 491,565 bytes. `age` adds a header of a few hundred bytes, one 16-byte payload nonce and a 16-byte
 tag per 64 KiB chunk (8 chunks), and the file adds 53 bytes of header and MAC: under 492,500 bytes, less than half of
 `MAX_MANIFEST_LEN`. Building a manifest with more entries is refused, so the service can never write one it cannot
 read back.
@@ -204,9 +230,10 @@ length prefixes, lengths checked against the bytes remaining before anything is 
 | 0      | 4    | Magic: ASCII `IVMP` (`49 56 4d 50`)                                        |
 | 4      | 1    | Version: `01`                                                              |
 | 5      | 16   | Vault ID: equal to the file header's                                       |
-| 21     | 8    | Generation: `u64`                                                          |
-| 29     | 8    | Entry count: `u64`, at most 4096                                           |
-| 37     | var  | Entries, in strictly ascending order of record ID bytes (below)            |
+| 21     | 8    | State generation: `u64`, at least 1                                        |
+| 29     | 8    | Peer generation: `u64`, the approval state's; 0 if none had been written   |
+| 37     | 8    | Entry count: `u64`, at most 4096                                           |
+| 45     | var  | Entries, in strictly ascending order of record ID bytes (below)            |
 
 Each entry:
 
@@ -219,22 +246,23 @@ Each entry:
 The digest covers the record file exactly as it sits on disk, so a record file replaced by a different ciphertext,
 even one that decrypts to the same record, no longer matches its entry. Record files are named `record-<record id>.age`.
 
-A new vault's first manifest is at generation 0 with no entries, written before any record file. The generation
-increases by exactly one with every manifest the service writes, and never wraps: a manifest at generation `u64::MAX`
-cannot be followed. A reader that remembers the last generation it saw can tell a stale copy
-from the current one within one storage history; rolling the whole state directory back to an older consistent copy
-is outside what the manifest detects (specification §9).
+A new vault's first manifest is at state generation 1 with peer generation 0 and no entries, written before any record
+file and before the approval state. Every later manifest takes its state generation from the
+[vault-wide rule](#state-generation). Rolling the whole state directory back to an older consistent copy is outside
+what the manifest detects (specification §9).
 
 ### Example
 
-Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b` at generation 1, with one record `fx_key` whose file digest is 32 bytes
-of `11` (an illustrative value):
+Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b` with one record `fx_key` whose file digest is 32 bytes of `11` (an
+illustrative value). The vault's first manifest was state generation 1 and its approval state was created at 2, so
+adding `fx_key` wrote this manifest at state generation 3 with peer generation 2:
 
 ```text
 49 56 4d 50                                        magic "IVMP"
 01                                                 version 1
 3f 2b 8c 1e 5d 4a 4e 6f 9a 7b 1c 2d 3e 4f 5a 6b    vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b
-00 00 00 00 00 00 00 01                            generation 1
+00 00 00 00 00 00 00 03                            state generation 3
+00 00 00 00 00 00 00 02                            peer generation 2
 00 00 00 00 00 00 00 01                            one entry
 7c 9e 66 79 74 25 40 de 94 4b e0 7f c1 f9 0a e7    record ID 7c9e6679-7425-40de-944b-e07fc1f90ae7
 00 00 00 00 00 00 00 06  66 78 5f 6b 65 79         name "fx_key"
@@ -248,6 +276,7 @@ Entries are written in ascending record ID order, so the same manifest always en
 accepts a payload only if it is that encoding:
 
 - the vault ID and every record ID are version 4, RFC 9562 variant UUIDs;
+- the state generation is not 0;
 - record IDs are strictly ascending, so none repeats;
 - every name passes the credential name rule, and no name appears in two entries;
 - the entry count is at most 4096.
@@ -477,14 +506,15 @@ version is damaged shared state: approvals cannot be checked, so the service sto
 
 ### Size limit
 
-A payload with an Ed25519 approver is 111 bytes. `age` adds a header of at most about 400 bytes, a 16-byte payload nonce
+A payload with an Ed25519 approver is 127 bytes. `age` adds a header of at most about 400 bytes, a 16-byte payload nonce
 and a 16-byte tag, and the file adds 53 bytes of header and MAC: under 600 bytes. `MAX_APPROVAL_STATE_LEN` is 4096
 bytes, which leaves room for a later algorithm with a longer public key. The same limit bounds the decrypted payload.
 
 ### Writes
 
 The service changes the state only by durably replacing the whole file, and changes its in-memory copy only after the
-replace returns:
+replace returns. Every write takes its state generation from the [vault-wide rule](#state-generation) and records the
+manifest's current state generation as its peer generation:
 
 - **Create.** A new vault's state has nothing reserved and nothing committed. It is written only where no
   `approval.age` exists, so creating it again can never reset the counters.
@@ -510,8 +540,10 @@ The plaintext an approval state file seals. It uses the conventions of record pa
 | 0      | 4    | Magic: ASCII `IVAM` (`49 56 41 4d`)                                                  |
 | 4      | 1    | Format version: `01`                                                                 |
 | 5      | 16   | Vault ID: equal to the file header's                                                 |
-| 21     | 1    | Approver algorithm: a signature algorithm ID, as in approval envelope v1             |
-| 22     | var  | Approver public key: field; 32 bytes for Ed25519                                     |
+| 21     | 8    | State generation: `u64`, at least 1                                                  |
+| 29     | 8    | Peer generation: `u64`, the manifest's; at least 1                                   |
+| 37     | 1    | Approver algorithm: a signature algorithm ID, as in approval envelope v1             |
+| 38     | var  | Approver public key: field; 32 bytes for Ed25519                                     |
 | …      | 8    | Highest reserved version: `u64`, 0 before the first reservation                      |
 | …      | 1    | Committed tag: `00` nothing committed, `01` a committed approval follows             |
 | …      | 8    | Committed version (tag `01` only): `u64`, from 1 to the highest reserved version     |
@@ -521,12 +553,15 @@ The plaintext an approval state file seals. It uses the conventions of record pa
 
 Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b` with an Ed25519 approver (the RFC 8032 test 1 public key), versions 1 and
 2 reserved, and version 1 committed for an empty config. Version 2 was reserved for a signing attempt that never
-committed, and stays consumed.
+committed, and stays consumed. After the manifest example above (state generation 3), the state was written three
+times, reserving 1, committing 1 and reserving 2, so it is at state generation 6 with peer generation 3.
 
 ```text
 49 56 41 4d                                        magic "IVAM"
 01                                                 format version 1
 3f 2b 8c 1e 5d 4a 4e 6f 9a 7b 1c 2d 3e 4f 5a 6b    vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b
+00 00 00 00 00 00 00 06                            state generation 6
+00 00 00 00 00 00 00 03                            peer generation 3
 01                                                 approver algorithm Ed25519
 00 00 00 00 00 00 00 20                            public key length 32
 d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a    public key
@@ -538,12 +573,12 @@ d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a    public key
 d1 e5 df 47 77 8f 77 87 fa ab 45 cd f1 2f e3 a8
 ```
 
-The payload is 111 bytes. A new vault's payload is the same up to the public key, then eight zero bytes and the tag
-`00`.
+The payload is 127 bytes. A new vault's payload has the same layout up to the public key, then eight zero bytes and
+the tag `00`.
 
 ### One encoding per state
 
 Every field has one form, so the same state always encodes to the same bytes. Decoding rejects a wrong magic, an
-unknown format version, a vault ID that is not a version 4 UUID, an unknown or reserved algorithm ID, a public key of
+unknown format version, a vault ID that is not a version 4 UUID, a state or peer generation of 0, an unknown or reserved algorithm ID, a public key of
 the wrong length for its algorithm, a public key that is not a valid, non-weak key for its algorithm, a committed tag other than `00` or `01`, committed version 0, a committed version
 above the highest reserved version, truncation and trailing bytes.
