@@ -213,6 +213,15 @@ mod tests {
     }
 
     #[test]
+    fn a_peer_generation_not_below_the_state_generation_is_rejected() {
+        [(3, 3), (3, 4), (u64::MAX, u64::MAX)].into_iter().for_each(|(state, peer)| {
+            let payload = Payload::header_at(state, peer, 0);
+            assert_eq!(payload.decode(), Err(ManifestError::PeerNotOlder), "{state} {peer}");
+        });
+        assert!(Payload::header_at(4, 3, 0).decode().is_ok());
+    }
+
+    #[test]
     fn wrong_magic_and_unknown_versions_are_rejected() {
         let mut bad_magic = Payload::valid();
         bad_magic.0[0] = b'X';

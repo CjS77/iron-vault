@@ -117,7 +117,7 @@ fn initialize(dir: &Path) -> Initialized {
     let mut vault = Vault::create(&lock, &OsFs, vault_identity).unwrap();
     NAMES.iter().for_each(|name| {
         let material = CredentialMaterial::Static { key: key_of(name).into() };
-        vault.add(&lock, &OsFs, None, n(name), material, origins(name)).unwrap();
+        vault.add(&lock, &OsFs, n(name), material, origins(name)).unwrap();
     });
     Initialized {
         recovery_text: recovery.expose_secret().to_owned(),

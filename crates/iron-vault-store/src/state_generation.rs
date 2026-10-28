@@ -10,8 +10,9 @@ use std::num::NonZeroU64;
 
 /// A vault-wide count of MAC'd file writes, at which one manifest or approval state was written.
 ///
-/// Never 0, so a peer generation of 0 on disk can mean "no peer". Every write takes [`StateGeneration::next`], so no two
-/// writes share one and it never wraps.
+/// Never 0, so a peer generation of 0 on disk can mean "no peer". Every write takes [`StateGeneration::next`] of both
+/// files' state generations as they are on disk, read under the state-directory lock that makes the service the only
+/// writer, so no two writes share one; it never wraps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StateGeneration(NonZeroU64);
 
@@ -32,8 +33,8 @@ impl StateGeneration {
     /// The state generation the next MAC'd file write takes: one above the newer of the manifest's and the approval
     /// state's current ones, either `None` while that file has not been written. `None` once exhausted: it never wraps.
     ///
-    /// This is the only place a state generation is allocated, so every write of either file is one above the latest
-    /// write of both.
+    /// This is the only place a state generation is allocated. Each writer passes its own file's state generation and the
+    /// other file's read from disk, so every write of either file is one above the latest write of both.
     pub fn next(manifest: Option<Self>, approval: Option<Self>) -> Option<Self> {
         match manifest.max(approval) {
             None => Some(Self::FIRST),

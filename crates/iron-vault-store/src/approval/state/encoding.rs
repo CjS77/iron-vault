@@ -261,6 +261,18 @@ mod tests {
     }
 
     #[test]
+    fn a_peer_generation_not_below_the_state_generation_is_rejected() {
+        [6, 7, u64::MAX].into_iter().for_each(|peer| {
+            let bytes = example_with(29..37, &peer.to_be_bytes());
+            assert_eq!(decode(&bytes), Err(ApprovalStateError::PeerNotOlder), "{peer}");
+        });
+        assert_eq!(
+            decode(&example_with(29..37, &5u64.to_be_bytes())).map(|s| s.peer_generation.get()),
+            Ok(5)
+        );
+    }
+
+    #[test]
     fn wrong_magic_unknown_versions_and_invalid_vault_ids_are_rejected() {
         assert_eq!(decode(&example_with(0..1, b"X")), Err(ApprovalDecodeError::BadMagic.into()));
         assert_eq!(
@@ -305,14 +317,15 @@ mod tests {
 
         #[test]
         fn states_round_trip(
-            state in any::<u64>(),
+            state in 2..=u64::MAX,
             peer in any::<u64>(),
             highest in 0..=u64::MAX,
             committed in any::<Option<u64>>(),
             config in proptest::collection::vec(any::<u8>(), 0..64),
         ) {
             let committed = committed.and_then(|c| ApprovalVersion::new(c.min(highest))).map(|v| (v, ConfigDigest::of(&config)));
-            let (state, peer) = (generation(state.max(1)), generation(peer.max(1)));
+            // Any peer generation from 1 to one below the state generation.
+            let (state, peer) = (generation(state), generation(1 + peer % (state - 1)));
             let original = ApprovalState::from_parts(example().vault_id, state, peer, example().approver, highest, committed).unwrap();
             prop_assert_eq!(decode(&encode(&original)), Ok(original));
         }

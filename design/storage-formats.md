@@ -160,15 +160,20 @@ Every MAC'd file payload carries two `u64` counters right after its vault ID:
 - the **state generation**: the vault-wide count of MAC'd file writes at which this file was written;
 - the **peer generation**: the state generation the other MAC'd file had at that moment.
 
-Every write of the manifest or the approval state takes its state generation from one rule:
+Every write of the manifest or the approval state takes its state generation from one rule, applied to both files as
+they are on disk:
 
 ```text
 state generation of the new file = max(manifest's state generation, approval state's state generation) + 1
 ```
 
-So a vault's first manifest is at state generation 1, every later write of either file is exactly one above the
-latest write of both, and no two files ever share a state generation. The addition is checked: once either file is at
-`u64::MAX`, the next write of either fails before any file is touched, and the counter never wraps.
+Each write reads the other file from disk before it touches any file, under the state-directory lock that makes the
+service the only writer. A missing approval state counts as none; a missing manifest refuses an approval state write,
+because the vault is always created first; a file that cannot be read or opened as this vault's refuses the write as
+damaged shared state. So a vault's first manifest is at state generation 1, every later write of either file is
+exactly one above the latest write of both, and no two files share a state generation: a file's peer generation is
+always below its own state generation, and decoding refuses one that is not. The addition is checked: once either
+file is at `u64::MAX`, the next write of either fails before any file is touched, and the counter never wraps.
 
 A state generation is never 0, so a peer generation of 0 means "no peer". The vault is created before its approval
 state, so its first manifest, and any manifest written before the approval state exists, records 0. The approval
@@ -276,7 +281,7 @@ Entries are written in ascending record ID order, so the same manifest always en
 accepts a payload only if it is that encoding:
 
 - the vault ID and every record ID are version 4, RFC 9562 variant UUIDs;
-- the state generation is not 0;
+- the state generation is not 0, and the peer generation, unless 0, is below it;
 - record IDs are strictly ascending, so none repeats;
 - every name passes the credential name rule, and no name appears in two entries;
 - the entry count is at most 4096.
@@ -513,11 +518,12 @@ bytes, which leaves room for a later algorithm with a longer public key. The sam
 ### Writes
 
 The service changes the state only by durably replacing the whole file, and changes its in-memory copy only after the
-replace returns. Every write takes its state generation from the [vault-wide rule](#state-generation) and records the
-manifest's current state generation as its peer generation:
+replace returns. Every write reads the manifest from disk first and takes its state generation from the
+[vault-wide rule](#state-generation), recording the manifest's state generation as its peer generation:
 
-- **Create.** A new vault's state has nothing reserved and nothing committed. It is written only where no
-  `approval.age` exists, so creating it again can never reset the counters.
+- **Create.** A new vault's state has nothing reserved and nothing committed, and takes its vault ID from the
+  manifest, which must already exist. It is written only where no `approval.age` exists, so creating it again can never
+  reset the counters.
 - **Reserve.** Writes the highest reserved version plus one and returns it; the returned version is already durable, so
   it is never handed out twice. At `u64::MAX` it fails without writing, and nothing may be signed.
 - **Commit.** Writes a new committed approval. The version must be reserved and newer than the committed one.
@@ -578,7 +584,8 @@ the tag `00`.
 
 ### One encoding per state
 
-Every field has one form, so the same state always encodes to the same bytes. Decoding rejects a wrong magic, an
-unknown format version, a vault ID that is not a version 4 UUID, a state or peer generation of 0, an unknown or reserved algorithm ID, a public key of
-the wrong length for its algorithm, a public key that is not a valid, non-weak key for its algorithm, a committed tag other than `00` or `01`, committed version 0, a committed version
-above the highest reserved version, truncation and trailing bytes.
+Every field has one form, so the same state always encodes to the same bytes. Decoding rejects a wrong magic, an unknown
+format version, a vault ID that is not a version 4 UUID, a state or peer generation of 0, a peer generation not below
+the state generation, an unknown or reserved algorithm ID, a public key of the wrong length for its algorithm, a public
+key that is not a valid, non-weak key for its algorithm, a committed tag other than `00` or `01`, committed version 0, a
+committed version above the highest reserved version, truncation and trailing bytes.

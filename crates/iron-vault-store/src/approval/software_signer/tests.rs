@@ -4,8 +4,8 @@ use super::*;
 use crate::secret_types_tests::assert_hides;
 use crate::{
     ApprovalState, ApprovalVersion, ConfigDigest, OperationalIdentity, OsFs, Passphrase, RecipientIdentity, RecipientSet, StanzaKind,
-    StateGeneration, UnlockError, VaultId, VaultIdentity, passphrase::seal_at, stanza_kinds, test_dir::TestDir, unlock_with_passphrase,
-    verify_approval, wrap_identity, write_identity_envelope, write_passphrase_envelope,
+    UnlockError, VaultId, VaultIdentity, passphrase::seal_at, stanza_kinds, test_dir::TestDir, unlock_with_passphrase, verify_approval,
+    wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
 
 /// The work factor tests seal with, so CI does not spend 256 MiB and a second per envelope.
@@ -51,17 +51,16 @@ fn a_signed_approval_verifies_against_the_committed_state() {
     let (fs, identity) = (OsFs, VaultIdentity::generate());
     let (envelope, pinned) = sealed("approve me");
     write_signer_key(&lock, &fs, &envelope).unwrap();
-    let mut state = ApprovalState::create(&lock, &fs, &identity, StateGeneration::FIRST, VaultId::new_random(), pinned.clone()).unwrap();
-    let version = state.reserve(&lock, &fs, &identity, StateGeneration::FIRST).unwrap();
+    crate::manifest::tests::write_first_manifest(&lock, &fs, &identity);
+    let mut state = ApprovalState::create(&lock, &fs, &identity, pinned.clone()).unwrap();
+    let version = state.reserve(&lock, &fs, &identity).unwrap();
 
     let signer = open_signer_key(&read_signer_key(&lock, &fs).unwrap(), &approval_passphrase("approve me"), &pinned).unwrap();
     assert_eq!((signer.algorithm(), signer.pinned()), (SignatureAlgorithm::Ed25519, pinned));
     let signed = signer.sign(&payload(state.vault_id(), version)).unwrap();
     drop(signer);
 
-    state
-        .commit(&lock, &fs, &identity, StateGeneration::FIRST, version, ConfigDigest::of(CONFIG))
-        .unwrap();
+    state.commit(&lock, &fs, &identity, version, ConfigDigest::of(CONFIG)).unwrap();
     let verified = verify_approval(&state, CONFIG, &signed.encode()).unwrap();
     assert_eq!((verified.version(), verified.digest()), (version, ConfigDigest::of(CONFIG)));
 }

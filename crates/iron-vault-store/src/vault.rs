@@ -25,8 +25,8 @@ use iron_vault_policy::{CatalogEntry, CredentialCatalog, CredentialName};
 use thiserror::Error;
 
 use crate::{
-    CredentialRecord, MAX_MANIFEST_LEN, ManifestError, ReadError, SealError, StateDirLock, StateFileName, StoreFs, VaultIdentity,
-    VaultManifest, WriteError, open_manifest, read_state_file,
+    ApprovalStateError, CredentialRecord, MAX_MANIFEST_LEN, ManifestError, ReadError, SealError, StateDirLock, StateFileName, StoreFs,
+    VaultIdentity, VaultManifest, WriteError, open_manifest, read_state_file,
 };
 
 pub use load::MAX_RECORD_FILE_LEN;
@@ -112,6 +112,9 @@ pub enum SharedStateDamage {
     /// The file was read but did not open as a manifest of this vault.
     #[error(transparent)]
     Manifest(ManifestError),
+    /// The approval state, whose state generation every vault write records, cannot be read or opened as this vault's.
+    #[error(transparent)]
+    ApprovalState(ApprovalStateError),
 }
 
 /// An open vault: its identity, its manifest and every healthy credential record.

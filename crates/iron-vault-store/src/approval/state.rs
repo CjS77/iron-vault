@@ -6,10 +6,11 @@
 //! of that file, and memory changes only after the replace returns: a version handed out here is already durable, so it
 //! is never handed out twice. The byte layouts are in `design/storage-formats.md`.
 //!
-//! Every write also takes the next vault-wide state generation and records the manifest's current one, which the
-//! caller passes in: the vault and its approval state are separate objects, and the allocation rule lives in
-//! [`StateGeneration::next`]. Restoring the whole state directory from an older copy restores older counters too;
-//! spec §3.9 leaves protection against that outside v0.
+//! Every write also reads the manifest from disk, before touching any file, and takes the next vault-wide state
+//! generation after the manifest's and its own, recording the manifest's as its peer generation. The state-directory
+//! lock makes the service the only writer, so the file on disk is the current one and no two writes share a state
+//! generation. Restoring the whole state directory from an older copy restores older counters too; spec §3.9 leaves
+//! protection against that outside v0.
 
 mod encoding;
 mod file;
@@ -23,8 +24,8 @@ use thiserror::Error;
 
 use super::{ApprovalDecodeError, ApprovalVersion, ConfigDigest, SignatureAlgorithm};
 use crate::{
-    OpenError, ReadError, SealError, StateDirLock, StateFileName, StateGeneration, StoreFs, VaultId, VaultIdentity, WriteError, WriteStep,
-    durable_replace, read_state_file,
+    MAX_MANIFEST_LEN, ManifestError, OpenError, ReadError, SealError, StateDirLock, StateFileName, StateGeneration, StoreFs, VaultId,
+    VaultIdentity, VaultManifest, WriteError, WriteStep, durable_replace, open_manifest, read_state_file,
 };
 
 pub use file::{open_approval_state, seal_approval_state};
@@ -119,8 +120,8 @@ fn invalid(algorithm: SignatureAlgorithm, reason: InvalidKeyReason) -> ApprovalS
 /// state generation.
 ///
 /// The committed version is never above the highest reserved version, whether the state was built or decoded. The
-/// highest reserved version is 0 only in a newly created state, and no operation lowers it. Every write takes
-/// `manifest_generation`, the manifest's current state generation, and records it as the peer generation.
+/// highest reserved version is 0 only in a newly created state, and no operation lowers it. The peer generation is
+/// always below the state generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalState {
     vault_id: VaultId,
@@ -175,6 +176,17 @@ pub enum ApprovalStateError {
     /// The committed version is above the highest reserved version, which no service write produces.
     #[error("approval state commits a version that was never reserved")]
     CommittedNotReserved,
+    /// The peer generation is not below the state generation. Every write takes one above both files' state
+    /// generations, so no service write produces this, and the two files would share a state generation.
+    #[error("approval state peer generation is not below its state generation")]
+    PeerNotOlder,
+    /// The manifest, whose state generation every write needs, cannot be read; a missing manifest is refused too.
+    /// Nothing was written.
+    #[error("cannot read the vault manifest to take the next state generation: {0}")]
+    ManifestUnreadable(ReadError),
+    /// The manifest was read but did not open as this vault's manifest. Nothing was written.
+    #[error("the vault manifest is damaged, so the next state generation cannot be taken: {0}")]
+    ManifestDamaged(ManifestError),
     /// The state generation or the peer generation is 0, which no approval state is written at.
     #[error("approval state names state generation 0")]
     ZeroStateGeneration,
@@ -223,7 +235,8 @@ pub enum ApprovalStateError {
 }
 
 impl ApprovalState {
-    /// A state from its parts, refusing a committed version above the highest reserved one.
+    /// A state from its parts, refusing a committed version above the highest reserved one and a peer generation not
+    /// below the state generation.
     fn from_parts(
         vault_id: VaultId,
         state_generation: StateGeneration,
@@ -232,6 +245,9 @@ impl ApprovalState {
         highest_reserved: u64,
         committed: Option<(ApprovalVersion, ConfigDigest)>,
     ) -> Result<Self, ApprovalStateError> {
+        if peer_generation >= state_generation {
+            return Err(ApprovalStateError::PeerNotOlder);
+        }
         match committed {
             Some((version, _)) if version.get() > highest_reserved => Err(ApprovalStateError::CommittedNotReserved),
             _ => Ok(Self {
@@ -245,23 +261,23 @@ impl ApprovalState {
         }
     }
 
-    /// Writes the state of a newly created vault to `approval.age` and returns it: `approver` pinned, nothing reserved
-    /// and nothing committed, at the state generation after `manifest_generation`, the manifest's current one.
+    /// Writes the state of the vault whose manifest is in the state directory to `approval.age` and returns it:
+    /// `approver` pinned, nothing reserved and nothing committed, at the state generation after the manifest's.
     ///
-    /// Refuses with [`ApprovalStateError::AlreadyExists`] if the file exists, so the counters are never reset. The
-    /// caller has already authorized vault creation; this performs it.
+    /// Refuses a missing or damaged manifest: the vault is created first, and its manifest names the vault and the
+    /// state generation to follow. Refuses with [`ApprovalStateError::AlreadyExists`] if the file exists, so the
+    /// counters are never reset. The caller has already authorized vault creation; this performs it.
     pub fn create(
         lock: &StateDirLock,
         fs: &impl StoreFs,
         identity: &VaultIdentity,
-        manifest_generation: StateGeneration,
-        vault_id: VaultId,
         approver: PinnedApprover,
     ) -> Result<Self, ApprovalStateError> {
+        let manifest = read_manifest(lock, fs, identity)?;
         let state = Self {
-            vault_id,
-            state_generation: next_generation(manifest_generation, None)?,
-            peer_generation: manifest_generation,
+            vault_id: manifest.vault_id(),
+            state_generation: next_generation(manifest.state_generation(), None)?,
+            peer_generation: manifest.state_generation(),
             approver,
             highest_reserved: 0,
             committed: None,
@@ -326,7 +342,6 @@ impl ApprovalState {
         lock: &StateDirLock,
         fs: &impl StoreFs,
         identity: &VaultIdentity,
-        manifest_generation: StateGeneration,
     ) -> Result<ApprovalVersion, ApprovalStateError> {
         let version = self
             .highest_reserved
@@ -337,7 +352,6 @@ impl ApprovalState {
             lock,
             fs,
             identity,
-            manifest_generation,
             Self {
                 highest_reserved: version.get(),
                 ..self.clone()
@@ -355,7 +369,6 @@ impl ApprovalState {
         lock: &StateDirLock,
         fs: &impl StoreFs,
         identity: &VaultIdentity,
-        manifest_generation: StateGeneration,
         version: ApprovalVersion,
         digest: ConfigDigest,
     ) -> Result<(), ApprovalStateError> {
@@ -371,7 +384,6 @@ impl ApprovalState {
                 lock,
                 fs,
                 identity,
-                manifest_generation,
                 Self {
                     committed: Some((version, digest)),
                     ..self.clone()
@@ -390,22 +402,16 @@ impl ApprovalState {
         lock: &StateDirLock,
         fs: &impl StoreFs,
         identity: &VaultIdentity,
-        manifest_generation: StateGeneration,
         approver: PinnedApprover,
     ) -> Result<(), ApprovalStateError> {
-        self.write(lock, fs, identity, manifest_generation, Self { approver, ..self.clone() })
+        self.write(lock, fs, identity, Self { approver, ..self.clone() })
     }
 
-    /// Replaces the file with `next` at the next state generation, then makes that the state in memory. The disk check
-    /// comes first: a stale in-memory state would otherwise write lower counters over newer ones.
-    fn write(
-        &mut self,
-        lock: &StateDirLock,
-        fs: &impl StoreFs,
-        identity: &VaultIdentity,
-        manifest_generation: StateGeneration,
-        next: Self,
-    ) -> Result<(), ApprovalStateError> {
+    /// Replaces the file with `next` at the next state generation, then makes that the state in memory. The disk checks
+    /// come first: the manifest on disk gives the peer generation, and a stale in-memory state would otherwise write
+    /// lower counters over newer ones.
+    fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, next: Self) -> Result<(), ApprovalStateError> {
+        let manifest_generation = self.manifest_generation(lock, fs, identity)?;
         let next = Self {
             state_generation: next_generation(manifest_generation, Some(self.state_generation))?,
             peer_generation: manifest_generation,
@@ -418,6 +424,20 @@ impl ApprovalState {
         Ok(())
     }
 
+    /// The state generation of this vault's manifest on disk.
+    fn manifest_generation(
+        &self,
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        identity: &VaultIdentity,
+    ) -> Result<StateGeneration, ApprovalStateError> {
+        let manifest = read_manifest(lock, fs, identity)?;
+        match manifest.vault_id() == self.vault_id {
+            true => Ok(manifest.state_generation()),
+            false => Err(ApprovalStateError::ManifestDamaged(ManifestError::VaultIdMismatch)),
+        }
+    }
+
     /// Refuses with [`ApprovalStateError::ReloadRequired`] unless the state on disk is exactly this one.
     fn ensure_disk_matches(&self, lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity) -> Result<(), ApprovalStateError> {
         match Self::load(lock, fs, identity, self.vault_id) {
@@ -427,9 +447,28 @@ impl ApprovalState {
     }
 }
 
+#[cfg(test)]
+impl ApprovalState {
+    /// This state as if written at `state_generation`, which no service write can choose.
+    pub(crate) fn with_state_generation(&self, state_generation: StateGeneration) -> Self {
+        Self {
+            state_generation,
+            ..self.clone()
+        }
+    }
+}
+
 /// The state generation the next approval state write takes, given the manifest's and the approval state's current ones.
 fn next_generation(manifest: StateGeneration, approval: Option<StateGeneration>) -> Result<StateGeneration, ApprovalStateError> {
     StateGeneration::next(Some(manifest), approval).ok_or(ApprovalStateError::StateGenerationExhausted)
+}
+
+/// The manifest on disk, whose state generation every approval state write follows and records.
+fn read_manifest(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity) -> Result<VaultManifest, ApprovalStateError> {
+    // MAX_MANIFEST_LEN is 1 MiB, so it always fits in a u64.
+    let file =
+        read_state_file(lock, fs, &StateFileName::manifest(), MAX_MANIFEST_LEN as u64).map_err(ApprovalStateError::ManifestUnreadable)?;
+    open_manifest(identity, &file).map_err(ApprovalStateError::ManifestDamaged)
 }
 
 /// Refuses to create the approval state over an existing file, whatever it holds.

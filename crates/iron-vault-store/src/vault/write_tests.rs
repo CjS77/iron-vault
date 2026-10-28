@@ -14,7 +14,7 @@ use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::test_dir::TestDir;
 use crate::{
     ApprovalState, ApprovalStateError, OsFs, PermittedOrigins, PinnedApprover, RecordId, StateGeneration, WriteStep, durable_remove,
-    durable_replace, seal_manifest,
+    durable_replace, seal_approval_state, seal_manifest,
 };
 
 /// The credentials every vault under test starts with.
@@ -107,11 +107,11 @@ impl Setup {
     }
 
     fn add(&self, fs: &impl StoreFs, vault: &mut Vault, name: &str, version: u32) -> Result<(RecordId, WriteReport), VaultError> {
-        vault.add(&self.lock, fs, None, n(name), material(name, version), origins(name))
+        vault.add(&self.lock, fs, n(name), material(name, version), origins(name))
     }
 
     fn replace(&self, fs: &impl StoreFs, vault: &mut Vault, name: &str, version: u32) -> Result<(RecordId, WriteReport), VaultError> {
-        vault.replace(&self.lock, fs, None, n(name), material(name, version), origins(name))
+        vault.replace(&self.lock, fs, n(name), material(name, version), origins(name))
     }
 
     /// A fresh vault holding version 1 of each of `names`, all durable.
@@ -165,7 +165,7 @@ fn replace_target(setup: &Setup, fs: &FaultFs, vault: &mut Vault) -> Result<(), 
 }
 
 fn remove_target(setup: &Setup, fs: &FaultFs, vault: &mut Vault) -> Result<(), VaultError> {
-    vault.remove(&setup.lock, fs, None, &n("target")).map(|_| ())
+    vault.remove(&setup.lock, fs, &n("target")).map(|_| ())
 }
 
 /// Each operation, with the state it starts from and the state it commits.
@@ -197,7 +197,7 @@ fn add_replace_and_remove_work_end_to_end_on_disk() {
     assert_eq!(report, WriteReport::default());
     assert_ne!(fx_v1, fx_v2);
     assert!(!setup.record_path(fx_v1).exists() && setup.record_path(fx_v2).exists());
-    assert_eq!(vault.remove(&setup.lock, &fs, None, &n("brave")).unwrap(), WriteReport::default());
+    assert_eq!(vault.remove(&setup.lock, &fs, &n("brave")).unwrap(), WriteReport::default());
 
     let (opened, report) = setup.open(&fs).unwrap();
     assert_eq!(report, OpenReport::default());
@@ -308,7 +308,7 @@ fn replace_and_remove_refuse_an_unknown_name_and_touch_no_file() {
         VaultError::UnknownName(n("venice"))
     );
     assert_eq!(
-        vault.remove(&setup.lock, &fs, None, &n("venice")).unwrap_err(),
+        vault.remove(&setup.lock, &fs, &n("venice")).unwrap_err(),
         VaultError::UnknownName(n("venice"))
     );
     assert_eq!((fs.trace().len(), snapshot(&vault)), before);
@@ -323,9 +323,7 @@ fn invalid_material_touches_no_file() {
         username: "a:b".into(),
         password: "p".into(),
     };
-    let error = vault
-        .add(&setup.lock, &fs, None, n("basic"), material, origins("basic"))
-        .unwrap_err();
+    let error = vault.add(&setup.lock, &fs, n("basic"), material, origins("basic")).unwrap_err();
     assert!(matches!(error, VaultError::InvalidMaterial(_)), "{error}");
     assert_eq!((fs.trace().len(), snapshot(&vault)), before);
 }
@@ -511,10 +509,7 @@ fn a_stale_vault_on_the_same_lock_removes_no_record_file() {
     let calls = fs.trace().len();
     assert_eq!(setup.add(&fs, &mut stale, "other", 1).unwrap_err(), VaultError::ReopenRequired);
     assert_eq!(setup.replace(&fs, &mut stale, "target", 2).unwrap_err(), VaultError::ReopenRequired);
-    assert_eq!(
-        stale.remove(&setup.lock, &fs, None, &n("keep")).unwrap_err(),
-        VaultError::ReopenRequired
-    );
+    assert_eq!(stale.remove(&setup.lock, &fs, &n("keep")).unwrap_err(), VaultError::ReopenRequired);
     assert_eq!(mutations(&fs, calls), []);
     assert!(fs.contents(&setup.record_path(fresh)).is_some());
     let (opened, report) = setup.open(&fs).unwrap();
@@ -563,7 +558,7 @@ fn a_vault_given_another_directorys_lock_touches_no_file() {
     // `theirs` is the Setup whose lock is passed; `ours` built the vault.
     assert_eq!(theirs.add(&fs, &mut vault, "fresh", 1).unwrap_err(), wrong);
     assert_eq!(theirs.replace(&fs, &mut vault, "keep", 2).unwrap_err(), wrong);
-    assert_eq!(vault.remove(&theirs.lock, &fs, None, &n("keep")).unwrap_err(), wrong);
+    assert_eq!(vault.remove(&theirs.lock, &fs, &n("keep")).unwrap_err(), wrong);
     assert_eq!(fs.trace().len(), calls);
     assert!(fs.contents(&theirs.record_path(theirs_keep)).is_some());
     assert!(wrong.to_string().contains(&theirs.dir.path().display().to_string()), "{wrong}");
@@ -574,7 +569,7 @@ fn a_short_secret_is_written_and_warned_about_without_its_value() {
     let setup = Setup::new("write-short-secret");
     let (fs, mut vault) = setup.seeded(&SEEDED);
     let short = CredentialMaterial::Static { key: "q7z".into() };
-    let (added, events) = capture_logs(|| vault.add(&setup.lock, &fs, None, n("stripe"), short, origins("stripe")));
+    let (added, events) = capture_logs(|| vault.add(&setup.lock, &fs, n("stripe"), short, origins("stripe")));
     added.unwrap();
     let warnings: Vec<_> = events.iter().filter(|event| event.level == Level::WARN).collect();
     assert_eq!(warnings.len(), 1, "{events:?}");
@@ -591,7 +586,7 @@ fn a_short_secret_is_written_and_warned_about_without_its_value() {
         username: "long-username".into(),
         password: "z9q".into(),
     };
-    let (replaced, events) = capture_logs(|| vault.replace(&setup.lock, &fs, None, n("stripe"), password, origins("stripe")));
+    let (replaced, events) = capture_logs(|| vault.replace(&setup.lock, &fs, n("stripe"), password, origins("stripe")));
     replaced.unwrap();
     let fields: Vec<_> = events.iter().filter(|e| e.level == Level::WARN).map(|e| e.field("field")).collect();
     assert_eq!(fields, ["password"]);
@@ -625,40 +620,34 @@ fn approver() -> PinnedApprover {
     PinnedApprover::from_signing_key(&ed25519_dalek::SigningKey::from_bytes(&[1; 32]))
 }
 
+/// Durably writes `state` as the approval state, whatever its state generation, the way only a test can.
+fn plant_approval(setup: &Setup, fs: &impl StoreFs, state: &ApprovalState) {
+    durable_replace(
+        &setup.lock,
+        fs,
+        &StateFileName::approval_state(),
+        &seal_approval_state(&identity(), state).unwrap(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn interleaved_vault_and_approval_writes_take_one_state_generation_each_and_name_their_peer() {
     let setup = Setup::new("write-generations");
     let fs = FaultFs::new();
     let mut vault = Vault::create(&setup.lock, &fs, identity()).unwrap();
     let mut seen = vec![manifest_generations(&vault)];
-    let (manifest_now, vault_id) = (vault.manifest().state_generation(), vault.manifest().vault_id());
-    let mut approval = ApprovalState::create(&setup.lock, &fs, &identity(), manifest_now, vault_id, approver()).unwrap();
+    let mut approval = ApprovalState::create(&setup.lock, &fs, &identity(), approver()).unwrap();
     seen.push(approval_generations(&approval));
-    let approval_now = Some(approval.state_generation());
-    vault
-        .add(
-            &setup.lock,
-            &fs,
-            approval_now,
-            n("fx_key"),
-            material("fx_key", 1),
-            origins("fx_key"),
-        )
-        .unwrap();
+    setup.add(&fs, &mut vault, "fx_key", 1).unwrap();
     seen.push(manifest_generations(&vault));
-    let version = approval
-        .reserve(&setup.lock, &fs, &identity(), vault.manifest().state_generation())
-        .unwrap();
+    let version = approval.reserve(&setup.lock, &fs, &identity()).unwrap();
     seen.push(approval_generations(&approval));
-    let digest = crate::ConfigDigest::of(b"config");
     approval
-        .commit(&setup.lock, &fs, &identity(), vault.manifest().state_generation(), version, digest)
+        .commit(&setup.lock, &fs, &identity(), version, crate::ConfigDigest::of(b"config"))
         .unwrap();
     seen.push(approval_generations(&approval));
-    let approval_now = Some(approval.state_generation());
-    vault
-        .add(&setup.lock, &fs, approval_now, n("brave"), material("brave", 1), origins("brave"))
-        .unwrap();
+    setup.add(&fs, &mut vault, "brave", 1).unwrap();
     seen.push(manifest_generations(&vault));
 
     // 1 to 6 with no gaps; each peer is the other file's latest write before it.
@@ -666,8 +655,71 @@ fn interleaved_vault_and_approval_writes_take_one_state_generation_each_and_name
     assert_eq!(seen, expected);
     fs.crash();
     let (reopened, _) = setup.open(&fs).unwrap();
-    let reloaded = ApprovalState::load(&setup.lock, &fs, &identity(), vault_id).unwrap();
+    let reloaded = ApprovalState::load(&setup.lock, &fs, &identity(), vault.manifest().vault_id()).unwrap();
     assert_eq!((reopened.manifest(), &reloaded), (vault.manifest(), &approval));
+}
+
+/// The vault never sees the approval state's writes in memory, so each write reads it from disk: once it exists, a
+/// manifest can neither record no peer nor take the approval state's state generation.
+#[test]
+fn a_vault_write_records_the_approval_state_on_disk_as_its_peer() {
+    let setup = Setup::new("write-generation-peer");
+    let fs = FaultFs::new();
+    let mut vault = Vault::create(&setup.lock, &fs, identity()).unwrap();
+    let mut approval = ApprovalState::create(&setup.lock, &fs, &identity(), approver()).unwrap();
+    setup.add(&fs, &mut vault, "fx_key", 1).unwrap();
+    assert_eq!(manifest_generations(&vault), (3, Some(2)));
+    (0..2).for_each(|_| {
+        approval.reserve(&setup.lock, &fs, &identity()).unwrap();
+    });
+    setup.replace(&fs, &mut vault, "fx_key", 2).unwrap();
+    assert_eq!(
+        (manifest_generations(&vault), approval_generations(&approval)),
+        ((6, Some(5)), (5, Some(3)))
+    );
+    vault.remove(&setup.lock, &fs, &n("fx_key")).unwrap();
+    assert_eq!(manifest_generations(&vault), (7, Some(5)));
+}
+
+/// A label, a way to break the approval state, and the damage a vault write reports for it.
+type ApprovalBreak<'a> = (&'a str, &'a dyn Fn(&FaultFs), ApprovalStateError);
+
+#[test]
+fn a_damaged_or_foreign_approval_state_refuses_every_vault_write_and_touches_no_file() {
+    let setup = Setup::new("write-generation-damaged-peer");
+    let approval_path = setup.path(&StateFileName::approval_state());
+    let foreign = |fs: &FaultFs| {
+        let other = Setup::new("write-generation-foreign-vault");
+        let other_fs = FaultFs::new();
+        Vault::create(&other.lock, &other_fs, identity()).unwrap();
+        ApprovalState::create(&other.lock, &other_fs, &identity(), approver()).unwrap();
+        let bytes = other_fs.contents(&other.path(&StateFileName::approval_state())).unwrap();
+        durable_replace(&setup.lock, fs, &StateFileName::approval_state(), &bytes).unwrap();
+    };
+    let flip = |fs: &FaultFs| {
+        let mut bytes = fs.contents(&approval_path).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        durable_replace(&setup.lock, fs, &StateFileName::approval_state(), &bytes).unwrap();
+    };
+    let breaks: [ApprovalBreak<'_>; 2] = [
+        ("damaged", &flip, ApprovalStateError::Damaged),
+        ("foreign", &foreign, ApprovalStateError::VaultIdMismatch),
+    ];
+    breaks.into_iter().for_each(|(label, break_approval, damage)| {
+        let (fs, mut vault) = setup.seeded(&SEEDED);
+        ApprovalState::create(&setup.lock, &fs, &identity(), approver()).unwrap();
+        break_approval(&fs);
+        let refused = VaultError::SharedStateDamaged {
+            file: StateFileName::approval_state(),
+            damage: SharedStateDamage::ApprovalState(damage),
+        };
+        let (calls, before) = (fs.trace().len(), snapshot(&vault));
+        assert_eq!(setup.add(&fs, &mut vault, "fresh", 1).unwrap_err(), refused, "{label}");
+        assert_eq!(setup.replace(&fs, &mut vault, "target", 2).unwrap_err(), refused, "{label}");
+        assert_eq!(vault.remove(&setup.lock, &fs, &n("target")).unwrap_err(), refused, "{label}");
+        assert_eq!((mutations(&fs, calls), snapshot(&vault)), (vec![], before), "{label}");
+    });
 }
 
 #[test]
@@ -675,26 +727,19 @@ fn every_write_after_state_generation_u64_max_fails_and_touches_no_file() {
     let setup = Setup::new("write-generation-exhausted");
     let (fs, mut vault) = setup.seeded(&SEEDED);
     let last = StateGeneration::new(u64::MAX).unwrap();
-    let exhausted = VaultError::NextManifest(ManifestError::GenerationExhausted);
+    let exhausted = VaultError::NextManifest(ManifestError::StateGenerationExhausted);
 
     // The approval state is at u64::MAX: no vault write can follow it.
+    let approval = ApprovalState::create(&setup.lock, &fs, &identity(), approver()).unwrap();
+    plant_approval(&setup, &fs, &approval.with_state_generation(last));
     let (calls, before) = (fs.trace().len(), snapshot(&vault));
-    assert_eq!(
-        vault
-            .add(&setup.lock, &fs, Some(last), n("fresh"), material("fresh", 1), origins("fresh"))
-            .unwrap_err(),
-        exhausted
-    );
-    assert_eq!(
-        vault
-            .replace(&setup.lock, &fs, Some(last), n("target"), material("target", 2), origins("target"))
-            .unwrap_err(),
-        exhausted
-    );
-    assert_eq!(vault.remove(&setup.lock, &fs, Some(last), &n("target")).unwrap_err(), exhausted);
+    assert_eq!(setup.add(&fs, &mut vault, "fresh", 1).unwrap_err(), exhausted);
+    assert_eq!(setup.replace(&fs, &mut vault, "target", 2).unwrap_err(), exhausted);
+    assert_eq!(vault.remove(&setup.lock, &fs, &n("target")).unwrap_err(), exhausted);
     assert_eq!((mutations(&fs, calls), snapshot(&vault)), (vec![], before));
 
     // The manifest is at u64::MAX: neither file can be written again.
+    crate::durable_remove(&setup.lock, &fs, &StateFileName::approval_state()).unwrap();
     let entries = vault.manifest().entries().clone();
     let at_max = VaultManifest::new(vault.manifest().vault_id(), last, None, entries).unwrap();
     durable_replace(
@@ -707,7 +752,7 @@ fn every_write_after_state_generation_u64_max_fails_and_touches_no_file() {
     let (mut vault, _) = setup.open(&fs).unwrap();
     let calls = fs.trace().len();
     assert_eq!(setup.add(&fs, &mut vault, "fresh", 1).unwrap_err(), exhausted);
-    let created = ApprovalState::create(&setup.lock, &fs, &identity(), last, at_max.vault_id(), approver());
+    let created = ApprovalState::create(&setup.lock, &fs, &identity(), approver());
     assert_eq!(created.unwrap_err(), ApprovalStateError::StateGenerationExhausted);
     assert_eq!(mutations(&fs, calls), []);
     assert_eq!(vault.manifest(), &at_max);

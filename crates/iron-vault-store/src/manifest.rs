@@ -150,20 +150,28 @@ pub enum ManifestError {
     /// The state generation is 0, which no manifest is written at.
     #[error("vault manifest state generation is 0")]
     ZeroStateGeneration,
+    /// The peer generation is not below the state generation. Every write takes one above both files' state
+    /// generations, so no service write produces this, and the two files would share a state generation.
+    #[error("vault manifest peer generation is not below its state generation")]
+    PeerNotOlder,
     /// The manifest or the approval state is at state generation `u64::MAX`, so no later manifest can be written.
     #[error("vault state generation is exhausted")]
-    GenerationExhausted,
+    StateGenerationExhausted,
 }
 
 impl VaultManifest {
     /// A manifest of `entries` written at `state_generation` while the approval state was at `peer_generation` (`None`
-    /// before it existed), refusing a repeated name or more than [`MAX_MANIFEST_ENTRIES`].
+    /// before it existed), refusing a peer generation not below the state generation, a repeated name or more than
+    /// [`MAX_MANIFEST_ENTRIES`].
     pub fn new(
         vault_id: VaultId,
         state_generation: StateGeneration,
         peer_generation: Option<StateGeneration>,
         entries: BTreeMap<RecordId, ManifestEntry>,
     ) -> Result<Self, ManifestError> {
+        if peer_generation.is_some_and(|peer| peer >= state_generation) {
+            return Err(ManifestError::PeerNotOlder);
+        }
         if entries.len() > MAX_MANIFEST_ENTRIES {
             return Err(ManifestError::TooManyEntries {
                 limit: MAX_MANIFEST_ENTRIES,
@@ -185,7 +193,7 @@ impl VaultManifest {
 
     /// The first manifest of a new vault: no entries, at the first state generation, before any approval state.
     pub fn first(vault_id: VaultId) -> Result<Self, ManifestError> {
-        let state_generation = StateGeneration::next(None, None).ok_or(ManifestError::GenerationExhausted)?;
+        let state_generation = StateGeneration::next(None, None).ok_or(ManifestError::StateGenerationExhausted)?;
         Self::new(vault_id, state_generation, None, BTreeMap::new())
     }
 
@@ -197,7 +205,7 @@ impl VaultManifest {
         entries: BTreeMap<RecordId, ManifestEntry>,
     ) -> Result<Self, ManifestError> {
         let state_generation =
-            StateGeneration::next(Some(self.state_generation), approval_generation).ok_or(ManifestError::GenerationExhausted)?;
+            StateGeneration::next(Some(self.state_generation), approval_generation).ok_or(ManifestError::StateGenerationExhausted)?;
         Self::new(self.vault_id, state_generation, approval_generation, entries)
     }
 
@@ -265,6 +273,14 @@ pub(crate) mod tests {
     const KAT_SIGNED: &str = "49564d46013f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b6e6f74207265616c6c7920616765";
     /// The MAC of [`KAT_SIGNED`] under [`KAT_MANIFEST_KEY`].
     const KAT_TAG: &str = "57773e0c4c341207ffc71eb80ccb19c399bab8042a1d3c9f38603af1c7cc1ab2";
+
+    /// Durably writes the first manifest of a new vault, as `Vault::create` does, so approval state writes can read the
+    /// state generation they follow.
+    pub(crate) fn write_first_manifest(lock: &crate::StateDirLock, fs: &impl crate::StoreFs, identity: &VaultIdentity) {
+        let manifest = VaultManifest::first(VaultId::new_random()).unwrap();
+        let bytes = seal_manifest(identity, &manifest).unwrap();
+        crate::durable_replace(lock, fs, &crate::StateFileName::manifest(), &bytes).unwrap();
+    }
 
     fn unhex(hex: &str) -> Vec<u8> {
         (0..hex.len())
@@ -373,9 +389,9 @@ pub(crate) mod tests {
             (generation(21), Some(generation(20)))
         );
         let last = VaultManifest::new(current.vault_id(), generation(u64::MAX), None, BTreeMap::new()).unwrap();
-        assert_eq!(last.next(None, BTreeMap::new()), Err(ManifestError::GenerationExhausted));
+        assert_eq!(last.next(None, BTreeMap::new()), Err(ManifestError::StateGenerationExhausted));
         let peer_last = current.next(Some(generation(u64::MAX)), BTreeMap::new());
-        assert_eq!(peer_last, Err(ManifestError::GenerationExhausted));
+        assert_eq!(peer_last, Err(ManifestError::StateGenerationExhausted));
     }
 
     #[test]
