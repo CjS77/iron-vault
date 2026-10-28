@@ -100,23 +100,22 @@ Payload version 1 holds no provider settings or operational state. Specification
 with OAuth in product phase v1 (§4). Adding them means a new version byte with its own layout, and a reader for every
 version still on disk. A reader never guesses at a version it does not know.
 
-## Manifest file v1
+## MAC'd file frame
 
-The [vault manifest](glossary.md): the service's index of which credential records exist, in the state-directory file
-`manifest.age`. `age` does not authenticate the sender, so anyone holding the vault public key can write a record file
-that decrypts cleanly. Specification §3.10 makes the service's own index the authority on which records exist, and
-§3.3 says only the service may index record files. The manifest is sealed to the same public key, so on its own it
-would be just as forgeable; it therefore carries a MAC keyed from the private vault identity, which only the service
-holds while the vault is unlocked. Rust: `iron_vault_store::{seal_manifest, open_manifest}`.
+A [MAC'd file](glossary.md) is a control file the service alone may write. `age` does not authenticate the sender, so
+anyone holding the vault public key can write a file that decrypts cleanly. A MAC'd file is therefore sealed to the
+vault public key and then authenticated with a MAC keyed from the private vault identity, which only the service holds
+while the vault is unlocked (specification §3.10). The manifest file and the approval state file are MAC'd files; each
+fixes its own magic, version, key persona, domain tag and size limit. Rust: `MacFileKind`, crate-private.
 
 ### Layout
 
 | Offset   | Size | Content                                                                                    |
 |----------|------|--------------------------------------------------------------------------------------------|
-| 0        | 4    | Magic: ASCII `IVMF` (`49 56 4d 46`)                                                        |
+| 0        | 4    | Magic: four ASCII bytes naming the file type                                               |
 | 4        | 1    | Version: `01`                                                                              |
 | 5        | 16   | Vault ID: the 16 bytes of a version 4 UUID                                                 |
-| 21       | var  | The manifest payload v1 (below), sealed to the vault public key as binary `age`            |
+| 21       | var  | The file's payload, sealed to the vault public key as binary `age`                         |
 | end − 32 | 32   | MAC                                                                                        |
 
 The vault ID is in clear so that the MAC, which covers it, can be checked before anything is decrypted. The payload
@@ -125,19 +124,50 @@ repeats the vault ID, and a payload whose ID differs from the header's is refuse
 ### MAC
 
 ```text
-manifest key = BLAKE2b-512(personalization = "iv-manifest-v1", message = vault identity secret text)
-MAC          = BLAKE2b-256(key = manifest key, message = "iron-vault manifest file v1 mac" 00 || bytes 0 .. end − 32)
+file key = BLAKE2b-512(personalization = persona, message = vault identity secret text)
+MAC      = BLAKE2b-256(key = file key, message = domain tag || bytes 0 .. end − 32)
 ```
 
 - The **vault identity secret text** is exactly the 74 ASCII bytes of the uppercase Bech32 string `age`'s
   `Identity::to_string` gives, `AGE-SECRET-KEY-1…`, with no trailing newline; the `age` specification fixes this
   encoding. It carries the full 256-bit X25519 key. It is hashed as the message rather than used as the BLAKE2b key
   because it is 74 bytes long and a BLAKE2b key is at most 64.
-- The **personalization** `iv-manifest-v1` (14 bytes, zero-padded to BLAKE2b's 16) separates the manifest key from any
-  other key a later format derives from the same identity.
-- The 64-byte manifest key is a full-length BLAKE2b key. It lives only in a buffer that is cleared on drop.
-- The MAC message starts with the 32-byte domain tag `iron-vault manifest file v1 mac` and a zero byte, then every file
-  byte before the MAC: magic, version, vault ID and ciphertext.
+- The **personalization** (at most 16 bytes, zero-padded to BLAKE2b's 16) is the file type's own, so each file's key is
+  independent of every other key derived from the same identity, and a MAC from one file type never verifies another.
+- The 64-byte file key is a full-length BLAKE2b key. It lives only in a buffer that is cleared on drop.
+- The MAC message starts with the file type's 32-byte domain tag, which ends in a zero byte, then every file byte
+  before the MAC: magic, version, vault ID and ciphertext.
+
+A party holding only the vault public key can seal any payload, but cannot compute the MAC. A file from another vault
+fails the MAC too, because its key comes from another identity.
+
+### Reading order
+
+Opening a MAC'd file does the cheap, key-free checks first and decrypts last:
+
+1. A file longer than the file type's size limit is refused before anything else is read.
+2. A file shorter than header plus MAC is truncated. A wrong magic or unknown version is refused; the version is read
+   before the MAC because it decides how the MAC is computed.
+3. The MAC is compared in constant time. A mismatch is reported as damaged shared state: the file was altered, or was
+   not written by this vault, and specification §3.10 says the vault may need recovery.
+4. Only then is the vault ID parsed and the ciphertext opened, with the size limit also bounding the plaintext, and
+   decoded. A payload naming a different vault from the header is refused.
+
+## Manifest file v1
+
+The [vault manifest](glossary.md): the service's index of which credential records exist, in the state-directory file
+`manifest.age`. Specification §3.10 makes the service's own index the authority on which records exist, and §3.3 says
+only the service may index record files. A manifest sealed only to the vault public key would be as forgeable as the
+records it indexes, so it is a [MAC'd file](#macd-file-frame). Rust: `iron_vault_store::{seal_manifest, open_manifest}`.
+
+| Frame parameter | Value                                                                  |
+|-----------------|------------------------------------------------------------------------|
+| Magic           | ASCII `IVMF` (`49 56 4d 46`)                                           |
+| Version         | `01`                                                                   |
+| Payload         | The manifest payload v1 (below)                                        |
+| Personalization | `iv-manifest-v1` (14 bytes); the derived key is the **manifest key**   |
+| Domain tag      | `iron-vault manifest file v1 mac` followed by a zero byte              |
+| Size limit      | `MAX_MANIFEST_LEN` (1 MiB)                                             |
 
 Test vectors, checked by the store's tests. The ciphertext is a fixed stand-in, because real `age` output is
 randomized; the MAC does not care what the ciphertext bytes are.
@@ -152,20 +182,6 @@ MAC input     the domain tag, then these bytes before the MAC:
               (magic "IVMF", version 01, vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b, ciphertext "not really age")
 MAC           57773e0c4c341207ffc71eb80ccb19c399bab8042a1d3c9f38603af1c7cc1ab2
 ```
-
-A party holding only the vault public key can seal any payload, but cannot compute the MAC. A manifest from another
-vault fails the MAC too, because its key comes from another identity.
-
-### Reading order
-
-`open_manifest` does the cheap, key-free checks first and decrypts last:
-
-1. A file longer than `MAX_MANIFEST_LEN` (1 MiB) is refused before anything else is read.
-2. A file shorter than header plus MAC is truncated. A wrong magic or unknown version is refused; the version is read
-   before the MAC because it decides how the MAC is computed.
-3. The MAC is compared in constant time. A mismatch is reported as damaged shared state: the manifest was altered, or
-   was not written by this vault, and specification §3.10 says the vault may need recovery.
-4. Only then is the vault ID parsed and the ciphertext opened and decoded.
 
 ### Size limit
 
@@ -427,34 +443,20 @@ a larger signature while keeping a planted file cheap to refuse.
 
 The [approval state](glossary.md) of one vault, in the state-directory file `approval.age`: the pinned approver, the
 highest reserved version and the committed approval (specification §3.9). Versioned approval rejects an old
-`config.toml` and `config.toml.sig` pair only while these counters never go backwards, so the file is framed like the
-manifest file: sealed to the vault public key, then authenticated with a MAC keyed from the private vault identity, so
-a party holding only the public key cannot write one that opens. Rust:
+`config.toml` and `config.toml.sig` pair only while these counters never go backwards, so the file is a
+[MAC'd file](#macd-file-frame) that a party holding only the vault public key cannot write. Rust:
 `iron_vault_store::{seal_approval_state, open_approval_state, ApprovalState}`.
 
-### Layout
+| Frame parameter | Value                                                                  |
+|-----------------|------------------------------------------------------------------------|
+| Magic           | ASCII `IVAF` (`49 56 41 46`)                                           |
+| Version         | `01`                                                                   |
+| Payload         | The approval state payload v1 (below)                                  |
+| Personalization | `iv-approval-v1` (14 bytes); the derived key is the **approval key**   |
+| Domain tag      | `iron-vault approval file v1 mac` followed by a zero byte              |
+| Size limit      | `MAX_APPROVAL_STATE_LEN` (4 KiB)                                       |
 
-| Offset   | Size | Content                                                                                    |
-|----------|------|--------------------------------------------------------------------------------------------|
-| 0        | 4    | Magic: ASCII `IVAF` (`49 56 41 46`)                                                        |
-| 4        | 1    | Version: `01`                                                                              |
-| 5        | 16   | Vault ID: the 16 bytes of a version 4 UUID                                                 |
-| 21       | var  | The approval state payload v1 (below), sealed to the vault public key as binary `age`      |
-| end − 32 | 32   | MAC                                                                                        |
-
-As in the manifest file, the vault ID is in clear so the MAC that covers it can be checked before anything is
-decrypted, and a payload whose vault ID differs from the header's is refused.
-
-### MAC
-
-```text
-approval key = BLAKE2b-512(personalization = "iv-approval-v1", message = vault identity secret text)
-MAC          = BLAKE2b-256(key = approval key, message = "iron-vault approval file v1 mac" 00 || bytes 0 .. end − 32)
-```
-
-The construction is the manifest file's with its own personalization and domain tag, so the approval key is
-independent of the manifest key and a MAC from one file never verifies the other. The vault identity secret text is the
-same 74 ASCII bytes the manifest key is derived from.
+The approval key is independent of the manifest key, so a MAC from one file never verifies the other.
 
 Test vectors, checked by the store's tests, with the manifest's known-answer identity and a stand-in ciphertext:
 
@@ -469,13 +471,9 @@ MAC input     the domain tag, then these bytes before the MAC:
 MAC           432bf6223d8cfcab01ea4ba4f7e3757ed426bb724c440ccbf42d2ecdeca76e3f
 ```
 
-### Reading order
-
-`open_approval_state` checks in the manifest's order: a file longer than `MAX_APPROVAL_STATE_LEN` (4 KiB) is refused
-first; then a short file, a wrong magic or an unknown version; then the MAC, compared in constant time; only then is the
-ciphertext opened and decoded. A MAC mismatch, a payload naming another vault, or a payload whose committed version is
-above its highest reserved version is damaged shared state: approvals cannot be checked, so the service stops
-proxying (specification §3.9, §3.10).
+A MAC mismatch, a payload naming another vault, or a payload whose committed version is above its highest reserved
+version is damaged shared state: approvals cannot be checked, so the service stops proxying (specification §3.9,
+§3.10).
 
 ### Size limit
 
