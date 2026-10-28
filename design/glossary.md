@@ -45,6 +45,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Host              | An upstream host name or IP literal in its one canonical form; hosts compare exactly, never by suffix or wildcard.          | `iron-vault-policy` | `Host`    | §3.6 |
 | Kind              | The operation that turns a credential into request bytes, such as a static key, an OAuth access token, or a signature.      | `iron-vault-kinds`  |           | §1.3 |
 | Listener          | A configured endpoint, a Unix socket or TCP address, on which callers reach the request interface.                          | `iron-vault-policy` | `ListenerName`, `ListenerConfig` | §3.3, §3.4 |
+| Manifest entry    | One record in the vault manifest: a record ID mapped to its credential name and the BLAKE2b-256 digest of that record file's ciphertext bytes, so a substituted or altered record file no longer matches. | `iron-vault-store` | `ManifestEntry` | §3.3, §3.10 |
 | Marker            | An inert SDK placeholder such as `{iv:fx_key}` that Iron Vault interprets only in the selected slot, where it must name the route's own credential; it never selects a credential. | `iron-vault-policy` | `markers`, `MarkerError` | §1.3, §3.6, §8.2 |
 | Method            | An HTTP method from the allowlist a route may grant; `CONNECT` and `TRACE` are never allowed.                               | `iron-vault-policy` | `Method` | §3.3, §3.5 |
 | Normalized path   | A caller's validated request path, unreserved escapes decoded and others in uppercase hex; authorized and forwarded as is.  | `iron-vault-policy` | `NormalizedPath` | §3.3, §3.6 |
@@ -77,7 +78,9 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Upstream target   | The URL the service will send to, built from the configured upstream and the authorized request and checked to read back as exactly the authorized path and query. | `iron-vault-policy` | `UpstreamTarget` | §3.5, §3.6 |
 | Validated config  | A parsed config whose cross-references all resolve and whose listeners, token hashes, route prefixes and slots cannot conflict. | `iron-vault-policy` | `ValidatedConfig` | §3.3, §3.4, §3.5, §3.6 |
 | Vault             | The service-owned encrypted storage and protected metadata on disk.                                                         | `iron-vault-store`  |           | §1.3 |
+| Vault ID          | A vault's random version 4 GUID, generated with the vault and written into its manifest so a manifest cannot pass as another vault's. | `iron-vault-store` | `VaultId` | §3.10 |
 | Vault identity    | The generated `age` X25519 private key that decrypts individual credential files.                                           | `iron-vault-store`  | `VaultIdentity` | §1.3, §3.10 |
+| Vault manifest    | The service's index of which credential records exist: the vault ID, a generation that increases on every write, and one manifest entry per record with names unique; sealed to the vault public key and authenticated with a MAC keyed from the vault identity, so a party holding only the public key cannot forge one. | `iron-vault-store` | `VaultManifest` | §3.3, §3.10 |
 | Vault public key  | The public half of the vault identity, written as an `age1…` string; anything sealed to it only the vault identity opens, and it is safe to log. Not a recipient: a recipient unwraps the vault identity itself. | `iron-vault-store` | `VaultPublicKey` | §3.10 |
 
 Context notes for terms that span crates:
