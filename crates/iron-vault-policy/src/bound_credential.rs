@@ -15,7 +15,8 @@ use crate::slot_value::SlotValue;
 /// intended way to get one: it borrows the value it resolved and that record's own origins. This crate cannot see
 /// records, so [`BoundCredential::new`] stays public and the pairing rests on callers using the store's method.
 ///
-/// It holds only borrows and has no `Clone`, so it never copies the secret.
+/// It borrows a slot value, so it is a secret-bearing type, and the register's rule that no such type has `Clone` or
+/// `Copy` keeps the view from being duplicated beyond the one resolution it was taken from.
 #[derive(Debug)]
 pub struct BoundCredential<'a> {
     value: &'a SlotValue,

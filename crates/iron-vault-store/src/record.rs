@@ -87,8 +87,8 @@ impl CredentialRecord {
         self.source
     }
 
-    /// Resolves this record's material for `slot` and keeps it with this record's origins, the one way to build the
-    /// bound credential the final outgoing-request check takes (R-4).
+    /// Resolves this record's material for `slot` and keeps it with this record's origins, the intended way to build
+    /// the bound credential the final outgoing-request check takes (R-4).
     pub fn resolve(&self, slot: &Slot, request: &AuthorizedRequest) -> Result<ResolvedCredential<'_>, KindError> {
         iron_vault_kinds::resolve(&self.material, slot, request).map(|resolution| ResolvedCredential::new(resolution, &self.origins))
     }

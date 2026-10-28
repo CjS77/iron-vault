@@ -93,8 +93,8 @@ pub enum FinalCheckError {
 /// (§3.6).
 ///
 /// The value and origins arrive as one [`BoundCredential`], so both come from the same record. The value is borrowed
-/// and rendered here with the assembler's own functions, so the expected wire form cannot drift
-/// from what filling wrote; the rendered copies are wiped on drop. None of the arguments is trusted to belong to the
+/// and rendered here with the assembler's own functions, so the expected wire form cannot drift from what filling
+/// wrote; the rendered copies are wiped on drop. None of the arguments is trusted to belong to the
 /// others: each rule reads the request's own URL and headers and compares them with every source that constrains them.
 /// The URL's host must equal the upstream's canonical [`Host`] exactly, never by suffix. On failure the request is
 /// dropped here, which wipes its header values.
