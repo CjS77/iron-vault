@@ -14,8 +14,8 @@ use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use crate::test_dir::TestDir;
 use crate::{
-    CredentialRecord, OsFs, Passphrase, PermittedOrigins, RecipientIdentity, RecordId, RecoveryKey, RecoveryKeySecret, Source,
-    StateDirLock, Vault, VaultIdentity,
+    ApprovalPassphrase, CredentialRecord, OsFs, Passphrase, PermittedOrigins, RecipientIdentity, RecordId, RecoveryKey, RecoveryKeySecret,
+    SoftwareSigner, SoftwareSignerKey, Source, StateDirLock, Vault, VaultIdentity,
 };
 
 assert_not_impl_any!(VaultIdentity: Clone, Copy, Display, Serialize, Deserialize<'static>);
@@ -24,16 +24,19 @@ assert_not_impl_any!(CredentialRecord: Clone, Copy, Display, Serialize, Deserial
 assert_not_impl_any!(Vault: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Passphrase: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(RecoveryKeySecret: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(ApprovalPassphrase: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(SoftwareSignerKey: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(SoftwareSigner: Clone, Copy, Display, Serialize, Deserialize<'static>);
 
 // `Rc` is neither `Send` nor `Sync`, so a vault that shared its identity or a record through one would fail here.
 assert_impl_all!(Vault: Send, Sync);
 
 /// Distinctive enough that a match in `Debug` output can only be the secret leaking.
-const MARKER: &str = "MARKER-secret-5d1c9e";
+pub(crate) const MARKER: &str = "MARKER-secret-5d1c9e";
 
 /// Asserts that neither `Debug` form of `value` contains `secret`, compared case-insensitively because `age` secret
 /// keys are printed in upper case but parse in either.
-fn assert_hides(value: &impl Debug, secret: &str) {
+pub(crate) fn assert_hides(value: &impl Debug, secret: &str) {
     let secret = secret.to_ascii_lowercase();
     [format!("{value:?}"), format!("{value:#?}")]
         .iter()
@@ -68,6 +71,14 @@ fn recovery_key_secret_debug_hides_the_key() {
 fn passphrase_debug_hides_the_text() {
     assert_hides(&Passphrase::new(SecretString::from(MARKER)).unwrap(), MARKER);
 }
+
+#[test]
+fn approval_passphrase_debug_hides_the_text() {
+    assert_hides(&ApprovalPassphrase::new(SecretString::from(MARKER)).unwrap(), MARKER);
+}
+
+// `SoftwareSignerKey` and `SoftwareSigner` are built from a known seed only inside their own module, so their `Debug`
+// checks live in `approval/software_signer/tests.rs` and call `assert_hides` from there.
 
 #[test]
 fn credential_record_debug_hides_the_material() {

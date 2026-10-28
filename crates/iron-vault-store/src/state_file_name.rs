@@ -145,6 +145,7 @@ mod tests {
         assert_eq!(StateFileName::new("identity.age"), Ok(StateFileName::identity_envelope()));
         assert_eq!(StateFileName::new("operational.age"), Ok(StateFileName::passphrase_envelope()));
         assert_eq!(StateFileName::new("approval.age"), Ok(StateFileName::approval_state()));
+        assert_eq!(StateFileName::new("approver.age"), Ok(StateFileName::approver_key()));
         let id: RecordId = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();
         assert_eq!(StateFileName::record(&id).as_str(), "record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age");
         (0..32).map(|_| StateFileName::record(&RecordId::new_random())).for_each(|name| {

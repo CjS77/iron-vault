@@ -6,6 +6,7 @@ use crate::{
     UnlockError, VaultId, VaultIdentity, passphrase::seal_at, stanza_kinds, test_dir::TestDir, unlock_with_passphrase, verify_approval,
     wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
+use crate::secret_types_tests::assert_hides;
 
 /// The work factor tests seal with, so CI does not spend 256 MiB and a second per envelope.
 const TEST_WORK_FACTOR: u8 = 2;
@@ -88,14 +89,6 @@ fn the_unlock_and_approval_passphrases_are_independent() {
 }
 
 #[test]
-fn an_approver_key_sealed_with_the_unlock_passphrase_does_not_open_with_the_approval_passphrase() {
-    let (key, pinned) = SoftwareSigner::generate().unwrap();
-    let under_unlock = seal_signer_key_at(&key, &approval_passphrase("unlock"), TEST_WORK_FACTOR).unwrap();
-    let error = open_signer_key(&under_unlock, &approval_passphrase("approve"), &pinned).unwrap_err();
-    assert_eq!(error, SignError::WrongPassphrase);
-}
-
-#[test]
 fn the_passphrase_envelope_never_opens_as_an_approver_key() {
     let (operational, _) = OperationalIdentity::generate();
     let envelope = seal_at(&operational, &unlock_passphrase("same text"), TEST_WORK_FACTOR).unwrap();
@@ -156,4 +149,31 @@ fn debug_shows_no_key_bytes_or_passphrase() {
     assert!(!debug.contains(&hex) && !debug.contains(decimal_items) && !debug.contains("approve"), "{debug}");
     let public = format!("{:?}", pinned.public_key());
     assert!(!debug.contains(&public[1..public.len() - 1]), "{debug}");
+}
+
+/// A seed whose hex form is easy to spot in `Debug` output.
+const SEED: [u8; SECRET_KEY_LENGTH] = [0x5d; SECRET_KEY_LENGTH];
+
+fn seed_hex() -> String {
+    SEED.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The decimal list `{:?}` prints for the seed, without its brackets.
+fn seed_decimal() -> String {
+    let decimal = format!("{SEED:?}");
+    decimal[1..decimal.len() - 1].to_owned()
+}
+
+#[test]
+fn software_signer_key_debug_hides_a_known_seed() {
+    let key = SoftwareSignerKey(SigningKey::from_bytes(&SEED));
+    [seed_hex(), seed_decimal()].iter().for_each(|secret| assert_hides(&key, secret));
+}
+
+#[test]
+fn software_signer_debug_hides_a_known_seed() {
+    let key = SoftwareSignerKey(SigningKey::from_bytes(&SEED));
+    let pinned = key.pinned().unwrap();
+    let signer = SoftwareSigner::new(key, &pinned).unwrap();
+    [seed_hex(), seed_decimal()].iter().for_each(|secret| assert_hides(&signer, secret));
 }
