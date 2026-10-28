@@ -3,12 +3,16 @@
 //! Every fact is read back from the assembled request's own URL and headers, never taken from the inputs that built
 //! it, so a defect in URL construction or slot filling is caught here rather than repeated. The route's upstream is
 //! compared with the credential record's permitted origins too, because destinations are bound to the record and a
-//! route edit must not be able to send an existing secret elsewhere (R-4). A failure means a policy or construction
+//! route edit must not be able to send an existing secret elsewhere (R-4). The selected slot must hold the slot value
+//! as the assembler renders it, and the value must appear nowhere else, so a slot filled through the wrong route, or a
+//! caller copy left in the slot, is caught even when the slot is written exactly once. A failure means a policy or construction
 //! defect: the request is dropped unsent, and the service raises a high-severity event.
 
 use std::collections::BTreeSet;
 use std::fmt;
 
+use secrecy::ExposeSecret;
+use secrecy::zeroize::Zeroizing;
 use thiserror::Error;
 use url::{Position, Url};
 
@@ -16,11 +20,12 @@ use crate::authorization::AuthorizedRequest;
 use crate::host::Host;
 use crate::method::Method;
 use crate::outgoing_headers::OutgoingHeaders;
-use crate::outgoing_request::OutgoingRequest;
+use crate::outgoing_request::{OutgoingRequest, render_header};
 use crate::port::Port;
-use crate::query_value::decode_name;
+use crate::query_value::{decode_name, encode_query_value};
 use crate::reserved_headers::is_reserved;
-use crate::slot::{QueryParamName, Slot};
+use crate::slot::{HeaderSlot, QueryParamName, Slot};
+use crate::slot_value::SlotValue;
 use crate::upstream::UpstreamUrl;
 use crate::upstream_target::has_authorized_path;
 
@@ -74,19 +79,29 @@ pub enum FinalCheckError {
     /// The route's slot is missing or written more than once.
     #[error("final check: the slot is not present exactly once")]
     Slot,
+    /// The one entry in the route's slot is not the slot value as the assembler renders it.
+    #[error("final check: the slot does not hold the credential")]
+    SlotValue,
+    /// The slot value, as stored or query-encoded, appears in the URL or a header outside the route's slot.
+    #[error("final check: the credential appears outside the slot")]
+    CredentialOutsideSlot,
 }
 
-/// Checks `request` against the plan it was built for, the selected route's `upstream` and `slot`, and the origins
-/// its credential record `permitted`, immediately before sending (§3.6).
+/// Checks `request` against the plan it was built for, the selected route's `upstream` and `slot`, the slot `value`
+/// the route's credential produced, and the origins its credential record `permitted`, immediately before sending
+/// (§3.6).
 ///
-/// None of the arguments is trusted to belong to the others: each rule reads the request's own URL and headers and
-/// compares them with every source that constrains them. Hosts compare by exact equality after the one [`Host`]
-/// conversion, never by suffix. On failure the request is dropped here, which wipes its header values.
+/// `value` is borrowed and rendered here with the assembler's own functions, so the expected wire form cannot drift
+/// from what filling wrote; the rendered copies are wiped on drop. None of the arguments is trusted to belong to the
+/// others: each rule reads the request's own URL and headers and compares them with every source that constrains them.
+/// The URL's host must equal the upstream's canonical [`Host`] exactly, never by suffix. On failure the request is
+/// dropped here, which wipes its header values.
 pub fn final_check(
     request: OutgoingRequest,
     authorized: &AuthorizedRequest,
     upstream: &UpstreamUrl,
     slot: &Slot,
+    value: &SlotValue,
     permitted: &BTreeSet<(Host, Port)>,
 ) -> Result<CheckedRequest, FinalCheckError> {
     let (method, url, headers) = request.into_parts();
@@ -95,7 +110,7 @@ pub fn final_check(
     check_path(&url, authorized, upstream)?;
     require(method == authorized.method(), FinalCheckError::Method)?;
     check_headers(&headers)?;
-    require(slot_count(&url, &headers, slot) == 1, FinalCheckError::Slot)?;
+    check_slot(&url, &headers, slot, value)?;
     Ok(CheckedRequest { method, url, headers, host })
 }
 
@@ -148,9 +163,12 @@ fn check_form(url: &Url) -> Result<(), FinalCheckError> {
 }
 
 /// The URL's host and port must equal the upstream's, and the pair must be one the record permits; returns the host.
+///
+/// The URL's host is compared exactly with the upstream's canonical [`Host`], which is the form the URL was built
+/// with, so no second conversion can make a different spelling match.
 fn check_origin(url: &Url, upstream: &UpstreamUrl, permitted: &BTreeSet<(Host, Port)>) -> Result<Host, FinalCheckError> {
-    let host: Host = url.host_str().and_then(|raw| raw.parse().ok()).ok_or(FinalCheckError::Host)?;
-    require(host == *upstream.host(), FinalCheckError::Host)?;
+    require(url.host_str() == Some(upstream.host().as_str()), FinalCheckError::Host)?;
+    let host = upstream.host().clone();
     let port = url.port_or_known_default().and_then(|port| Port::try_from(port).ok()).ok_or(FinalCheckError::Port)?;
     require(port == upstream.port(), FinalCheckError::Port)?;
     let origin = (host, port);
@@ -173,18 +191,60 @@ fn check_headers(headers: &OutgoingHeaders) -> Result<(), FinalCheckError> {
     require(!controlled, FinalCheckError::ReservedHeader)
 }
 
-/// How many times the slot appears: query parameters by decoded name, or headers by name in any case.
-fn slot_count(url: &Url, headers: &OutgoingHeaders, slot: &Slot) -> usize {
-    match (slot, slot.header_written()) {
-        (Slot::Query(name), _) => query_param_count(url, name),
-        (_, Some(written)) => headers.iter().filter(|(name, _)| name.lowercase() == written).count(),
-        (_, None) => 0,
+/// The slot is written once and holds the rendered slot value, which appears nowhere else in the URL or headers.
+///
+/// The value is looked for as stored and in its one query encoding, the two forms a construction defect could write.
+fn check_slot(url: &Url, headers: &OutgoingHeaders, slot: &Slot, value: &SlotValue) -> Result<(), FinalCheckError> {
+    let secret = value.expose_secret();
+    let encoded = Zeroizing::new(encode_query_value(secret));
+    let forms = [secret.as_bytes(), encoded.as_bytes()];
+    match slot {
+        Slot::Query(name) => check_query_slot(url, headers, name, &encoded, &forms),
+        Slot::Header(header) => check_header_slot(url, headers, header, value, &forms),
+        Slot::Basic => check_header_slot(url, headers, &HeaderSlot::basic(), value, &forms),
     }
 }
 
-fn query_param_count(url: &Url, name: &QueryParamName) -> usize {
+/// Exactly one parameter decodes to the slot's name and its raw value is the encoded slot value; no other parameter,
+/// no part of the URL before the query and no header carries the value.
+fn check_query_slot(
+    url: &Url,
+    headers: &OutgoingHeaders,
+    name: &QueryParamName,
+    encoded: &str,
+    forms: &[&[u8]],
+) -> Result<(), FinalCheckError> {
     let params = url.query().map(|query| query.split('&')).into_iter().flatten();
-    params.filter(|param| decode_name(param).is_some_and(|decoded| decoded == name.as_str())).count()
+    let (slot_params, others): (Vec<&str>, Vec<&str>) =
+        params.partition(|param| decode_name(param).is_some_and(|decoded| decoded == name.as_str()));
+    let [param] = slot_params.as_slice() else { return Err(FinalCheckError::Slot) };
+    require(param.split_once('=').is_some_and(|(_, written)| written == encoded), FinalCheckError::SlotValue)?;
+    let before_query = [url[..Position::AfterPath].as_bytes()];
+    let outside = others.iter().map(|param| param.as_bytes()).chain(before_query).chain(headers.iter().map(|(_, value)| value.as_bytes()));
+    require(!carries_any(outside, forms), FinalCheckError::CredentialOutsideSlot)
+}
+
+/// Exactly one header has the slot's name in any case and its bytes are the rendered slot value; no other header and
+/// no part of the URL carries the value.
+fn check_header_slot(
+    url: &Url,
+    headers: &OutgoingHeaders,
+    slot: &HeaderSlot,
+    value: &SlotValue,
+    forms: &[&[u8]],
+) -> Result<(), FinalCheckError> {
+    let written = slot.name().lowercase();
+    let (entries, others): (Vec<_>, Vec<_>) = headers.iter().partition(|(name, _)| name.lowercase() == written);
+    let [(_, entry)] = entries.as_slice() else { return Err(FinalCheckError::Slot) };
+    let expected = render_header(slot, value).map_err(|_| FinalCheckError::SlotValue)?;
+    require(entry.as_bytes() == expected.as_bytes(), FinalCheckError::SlotValue)?;
+    let outside = others.iter().map(|(_, value)| value.as_bytes()).chain([url.as_str().as_bytes()]);
+    require(!carries_any(outside, forms), FinalCheckError::CredentialOutsideSlot)
+}
+
+/// Whether any of `places` contains any of `forms`; compares borrowed bytes, so no copy of the value is made.
+fn carries_any<'a>(mut places: impl Iterator<Item = &'a [u8]>, forms: &[&[u8]]) -> bool {
+    places.any(|place| forms.iter().any(|form| !form.is_empty() && place.windows(form.len()).any(|window| window == *form)))
 }
 
 #[cfg(test)]

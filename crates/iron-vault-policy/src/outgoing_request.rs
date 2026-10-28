@@ -145,7 +145,9 @@ fn fill_header(
 }
 
 /// `prefix + value + suffix`, built in a buffer that is wiped on drop and sized so it never reallocates.
-fn render_header(slot: &HeaderSlot, value: &SlotValue) -> Result<HeaderValue, AssembleError> {
+///
+/// The final check renders the expected slot value with this same function, so filling and checking cannot disagree.
+pub(crate) fn render_header(slot: &HeaderSlot, value: &SlotValue) -> Result<HeaderValue, AssembleError> {
     let secret = value.expose_secret();
     if !secret.is_ascii() {
         return Err(AssembleError::NonAsciiSlotValue);

@@ -50,6 +50,7 @@ struct Case {
     authorized: AuthorizedRequest,
     upstream: UpstreamUrl,
     slot: Slot,
+    value: SlotValue,
     permitted: BTreeSet<(Host, Port)>,
 }
 
@@ -73,10 +74,10 @@ impl Case {
         let route = &policy.config().routes()[authorized.route()];
         let slot = slot.unwrap_or_else(|| route.slot().clone());
         let built = UpstreamTarget::build(route.upstream(), &authorized).unwrap();
-        let value = SlotValue::new(SecretString::from(SECRET)).unwrap();
+        let value = secret_value(SECRET);
         let request = OutgoingRequest::assemble(&authorized, built, OutgoingHeaders::new(), &slot, route.credential(), &value).unwrap();
         let permitted = origins(route_host(route.credential().as_str()), 443);
-        Self { request, authorized, upstream: route.upstream().clone(), slot, permitted }
+        Self { request, authorized, upstream: route.upstream().clone(), slot, value, permitted }
     }
 
     fn with_url(self, change: impl FnOnce(&mut Url)) -> Self {
@@ -98,8 +99,12 @@ impl Case {
     }
 
     fn check(self) -> Result<CheckedRequest, FinalCheckError> {
-        final_check(self.request, &self.authorized, &self.upstream, &self.slot, &self.permitted)
+        final_check(self.request, &self.authorized, &self.upstream, &self.slot, &self.value, &self.permitted)
     }
+}
+
+fn secret_value(secret: &str) -> SlotValue {
+    SlotValue::new(SecretString::from(secret)).unwrap()
 }
 
 /// The case fails with `expected`, and the error's text names no secret, query or header value.
@@ -237,4 +242,48 @@ fn debug_never_shows_the_credential() {
     let brave = Case::new("/brave/res/v1/web/search").check().unwrap();
     [format!("{fx:?}"), format!("{brave:?}")].iter().for_each(|debug| assert!(!debug.contains(SECRET), "{debug}"));
     assert!(format!("{fx:?}").contains("https://api.fx.example/latest"));
+}
+
+#[test]
+fn a_slot_holding_anything_but_the_credential_is_refused() {
+    let query = Case::new("/fx/latest?base=USD").with_url(|url| url.set_query(Some("base=USD&access_key=evil")));
+    assert_refused(query, FinalCheckError::SlotValue);
+    let header = Case::new("/venice/chat/completions");
+    assert_refused(Case { value: secret_value("evil"), ..header }, FinalCheckError::SlotValue);
+    let basic = Case::basic("/brave/res/v1/web/search");
+    assert_refused(Case { value: secret_value("evil"), ..basic }, FinalCheckError::SlotValue);
+}
+
+#[test]
+fn the_credential_must_hold_its_formatted_and_encoded_form() {
+    let unformatted = Case::new("/venice/chat/completions");
+    let (method, url, mut headers) = unformatted.request.into_parts();
+    headers.remove_all(&"Authorization".parse().unwrap());
+    headers.push_unchecked("Authorization".parse().unwrap(), HeaderValue::try_from(SECRET).unwrap());
+    let unformatted = Case { request: OutgoingRequest::unchecked(method, url, headers), ..unformatted };
+    assert_refused(unformatted, FinalCheckError::SlotValue);
+
+    let fx = Case::new("/fx/latest").with_url(|url| url.set_query(Some("access_key=S3CR3T+x")));
+    assert_refused(Case { value: secret_value("S3CR3T x"), ..fx }, FinalCheckError::SlotValue);
+    let encoded = Case::new("/fx/latest").with_url(|url| url.set_query(Some("access_key=S3CR3T%20x")));
+    assert!(Case { value: secret_value("S3CR3T x"), ..encoded }.check().is_ok());
+}
+
+#[test]
+fn the_credential_outside_the_slot_is_refused() {
+    let in_param = Case::new("/fx/latest?base=USD").with_url(|url| url.set_query(Some("base=S3CR3T&access_key=S3CR3T")));
+    assert_refused(in_param, FinalCheckError::CredentialOutsideSlot);
+    let in_header = Case::new("/fx/latest").with_header("X-Custom", "x S3CR3T");
+    assert_refused(in_header, FinalCheckError::CredentialOutsideSlot);
+    let in_url = Case::new("/brave/res/v1/web/search").with_url(|url| url.set_query(Some("q=S3CR3T")));
+    assert_refused(in_url, FinalCheckError::CredentialOutsideSlot);
+    let encoded = Case::new("/fx/latest").with_url(|url| url.set_query(Some("base=S3CR3T%20x&access_key=S3CR3T%20x")));
+    assert_refused(Case { value: secret_value("S3CR3T x"), ..encoded }, FinalCheckError::CredentialOutsideSlot);
+}
+
+#[test]
+fn the_credential_in_the_wrong_route_slot_is_refused() {
+    let fx = Case::new("/fx/latest").with_header("X-Subscription-Token", "evil.example");
+    let brave_slot = Case::new("/brave/res/v1/web/search").slot;
+    assert_refused(Case { slot: brave_slot, ..fx }, FinalCheckError::SlotValue);
 }

@@ -249,7 +249,7 @@ fn run(
     let filler = POLICY.route(slot_route)?;
     let value = SlotValue::new(SecretString::from(secret)).ok()?;
     let request = OutgoingRequest::assemble(&authorized, target, outgoing, filler.slot(), filler.credential(), &value).ok()?;
-    let checked = final_check(request, &authorized, route.upstream(), route.slot(), permitted);
+    let checked = final_check(request, &authorized, route.upstream(), route.slot(), &value, permitted);
     let (own_upstream, own_slot) = (upstream_route == selected, slot_route == selected);
     Some(Run { authorized, own_upstream, own_slot, checked })
 }
@@ -370,18 +370,18 @@ fn is_control_header(lowercase: &str) -> bool {
 /// value appears nowhere else in the URL or headers. Slot filling removes every caller copy of the slot, so an honestly
 /// wired request whose origin is permitted always passes the final check rather than failing it for a second copy.
 ///
-/// Only requests filled through the selected route's own slot are checked: the final check counts the entries in the
-/// selected slot without knowing which holds the credential, so a request filled through another route's slot passes
-/// when a caller copy sits in the selected one ([`slot_filled_through_another_route_is_refused`]). K-29 makes the
-/// final check confirm the slot value; remove the `own_slot` filter here when it lands.
+/// Requests filled through another route's slot are checked too: the final check confirms that the selected slot holds
+/// the slot value, so one whose selected slot holds only a caller copy never passes
+/// ([`slot_filled_through_another_route_is_refused`]).
 fn check_single_slot(case: &Case) -> Result<(), TestCaseError> {
-    let Some(run) = case.run().filter(|run| run.own_slot) else { return Ok(()) };
+    let Some(run) = case.run() else { return Ok(()) };
     let route = selected_route(&run.authorized);
     let checked = match run.checked {
         Ok(checked) => checked,
         Err(error) => {
             let permitted = case.permitted.contains(&upstream_origin(route));
-            prop_assert!(!(run.own_upstream && permitted), "{case:?} was honestly built but failed the final check: {error}");
+            let honest = run.own_upstream && run.own_slot && permitted;
+            prop_assert!(!honest, "{case:?} was honestly built but failed the final check: {error}");
             return Ok(());
         }
     };
@@ -553,10 +553,9 @@ fn trailing_dot_spellings_are_one_origin() {
 
 /// The shrunk counterexample that keeps slot-filler miswiring out of [`check_single_slot`]: the `deep` route's request
 /// is filled through `fx`'s query slot, so the credential leaves in an `access_key` parameter the route never names,
-/// while the caller's own `X-Api-Key` header fills the slot the final check counts. The final check is not given the
-/// slot value, so it cannot tell that the one `X-Api-Key` it counts is not the credential. Un-ignore when K-29 lands.
+/// while the caller's own `X-Api-Key` header fills the slot the final check reads. The slot is written once, so only
+/// confirming that it holds the slot value refuses the request.
 #[test]
-#[ignore = "K-29: the final check does not yet confirm that the selected slot holds the slot value"]
 fn slot_filled_through_another_route_is_refused() {
     let case = Case {
         target: "/a/b".to_owned(),
