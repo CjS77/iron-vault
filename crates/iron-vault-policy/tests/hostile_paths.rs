@@ -8,18 +8,16 @@
 // run only under the test harness, where a panic is a test failure.
 #![allow(clippy::unwrap_used)]
 
-use std::collections::BTreeSet;
-use std::sync::LazyLock;
+mod common;
 
-use iron_vault_policy::{
-    ActivePolicy, AuthorizedRequest, AuthzError, Capabilities, CatalogEntry, CredentialCatalog, CredentialName, Host, Method,
-    NormalizedPath, ParsedConfig, Port, RequestTarget, ValidatedConfig, activate, authorize,
-};
+use std::collections::BTreeSet;
+
+use common::{FOLDS, POLICY, config, encoded, hostile_target, sample};
+use iron_vault_policy::{AuthorizedRequest, AuthzError, Method, NormalizedPath, RequestTarget, authorize};
 use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::sample::select;
-use proptest::strategy::ValueTree;
-use proptest::test_runner::{Config, TestCaseError, TestRunner};
+use proptest::test_runner::TestCaseError;
 
 /// Cases for each property over generated hostile targets: enough to reach every fragment kind in many combinations,
 /// small enough that the whole file runs in a few seconds.
@@ -28,184 +26,9 @@ const CASES: u32 = 4096;
 /// Cases for the panic-freedom properties, whose inputs are cheap to parse and mostly rejected at the first character.
 const PANIC_CASES: u32 = 8192;
 
-/// One caller granted every route. The routes have one- and two-segment prefixes, `/fxa` shares its first characters
-/// with `/fx` so only whole-segment matching tells them apart, and the upstream base paths are zero, one and two
-/// segments deep.
-const CONFIG: &str = r#"schema_version = 1
-
-[listeners.local]
-unix_socket = "/run/iron-vault/proxy.sock"
-
-[callers.agent]
-listener = "local"
-token_hash = "blake2b:0123456789abcdef00112233445566778899aabbccddeeff0f1e2d3c4b5a6978"
-routes = ["fx", "fxa", "venice", "deep"]
-
-[routes.fx]
-prefix = "/fx"
-upstream = "https://api.fx.example"
-credential = "fx_key"
-slot = { query = "access_key" }
-methods = ["GET"]
-paths = ["/**"]
-rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
-
-[routes.fxa]
-prefix = "/fxa"
-upstream = "https://api.fxa.example/x"
-credential = "fxa_key"
-slot = { header = "X-Api-Key" }
-methods = ["GET"]
-paths = ["/x/**"]
-rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
-
-[routes.venice]
-prefix = "/venice"
-upstream = "https://api.venice.ai/api/v1"
-credential = "venice"
-slot = { header = "Authorization", format = "Bearer {}" }
-methods = ["GET"]
-paths = ["/api/v1/chat/*", "/api/v1/models"]
-rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
-
-[routes.deep]
-prefix = "/a/b"
-upstream = "https://api.deep.example/v2/base"
-credential = "deep"
-slot = { header = "X-Api-Key" }
-methods = ["GET"]
-paths = ["/v2/base/**"]
-rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
-"#;
-
-/// The config's route prefixes, and spellings of them with unreserved characters escaped, which select the same route.
-const ROUTE_PREFIXES: &[&str] = &["fx", "fxa", "venice", "a/b", "f%78", "%66%78", "venic%65", "a/%62"];
-
-/// Look-alikes of the route prefixes that must not select a route, or must select a different one.
-const DECOY_PREFIXES: &[&str] =
-    &["fx.evil.example", "fx@evil.example", "FX", "fX", "%66%58", "fx;x", "fx%2e", "f", "a", "b", "b/a", "nothing"];
-
-/// Queries, which must never influence the path.
-const QUERIES: &[&str] = &["", "?", "?a=1", "?x=%2e%2E&y=/?%25"];
-
-/// Bytes whose escapes are traversal, a separator, a cut-short path, or a second decoding pass in waiting.
-const HOSTILE_BYTES: &[u8] = &[b'.', b'/', b'\\', 0, b'%', b'?', b'#', b';', b'\n', 0x7f];
-
-/// Bytes whose escapes are harmless: unreserved characters, sub-delimiters, and characters that stay encoded.
-const BENIGN_BYTES: &[u8] = b"Az0~-_ :@!=\"";
-
-/// Raw text that is invalid, or valid only in some positions, in a path.
-const RAW_SPECIALS: &[&str] =
-    &["\\", "\0", "\t", "\x7f", " ", ";", ";x=1", "%", "%2", "%zz", "%+f", "?", "#", "//", "\u{e9}", "\u{FF0E}", "%c3%a9", "%C0%AE"];
-
-/// Unicode look-alikes and the ASCII text an upstream that folds Unicode (NFKC or a best-fit code page) turns them into.
-const FOLDS: &[(char, &str)] = &[
-    ('\u{FF0E}', "."),
-    ('\u{2024}', "."),
-    ('\u{2025}', ".."),
-    ('\u{FE52}', "."),
-    ('\u{FF0F}', "/"),
-    ('\u{2215}', "/"),
-    ('\u{2044}', "/"),
-    ('\u{FF3C}', "\\"),
-    ('\u{FE68}', "\\"),
-    ('\u{00A5}', "\\"),
-    ('\u{FF05}', "%"),
-    ('\u{FE6A}', "%"),
-    ('\u{FF1B}', ";"),
-    ('\u{FE54}', ";"),
-];
-
 /// Rounds of decoding and folding that [`readings`] follows; the segments of an accepted path settle after one, and
 /// anything still changing after this many has already shown every reading a test needs.
 const MAX_PASSES: usize = 8;
-
-static POLICY: LazyLock<ActivePolicy> = LazyLock::new(|| {
-    let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
-    let origins = config.routes().values().map(|route| (route.upstream().host().clone(), route.upstream().port())).collect();
-    activate(&config, &Capabilities::default(), &Catalog(origins)).unwrap()
-});
-
-/// Permits every credential on every route's upstream, so each route is available.
-struct Catalog(BTreeSet<(Host, Port)>);
-
-impl CredentialCatalog for Catalog {
-    fn entry(&self, _: &CredentialName) -> CatalogEntry {
-        CatalogEntry::Usable { kind: iron_vault_policy::CredentialKind::Static, origins: self.0.clone() }
-    }
-}
-
-fn config(cases: u32) -> Config {
-    Config { cases, failure_persistence: None, ..Config::default() }
-}
-
-// Generators.
-
-/// The hex digits of `byte`, each letter in the case the matching low bit of `case` picks.
-fn hex(byte: u8, case: u8) -> String {
-    let digits = format!("{byte:02x}");
-    digits.chars().enumerate().map(|(i, c)| if case >> i & 1 == 1 { c.to_ascii_uppercase() } else { c }).collect()
-}
-
-/// `byte` percent-encoded `layers` times: `%2e`, `%252e`, `%25252e`.
-fn encoded(byte: u8, layers: usize, case: u8) -> String {
-    format!("%{}{}", "25".repeat(layers.saturating_sub(1)), hex(byte, case))
-}
-
-fn ordinary() -> impl Strategy<Value = String> {
-    "[a-zA-Z0-9_~-]{1,6}"
-}
-
-fn dots() -> impl Strategy<Value = String> {
-    select(&[".", "..", "...", ".x", "x."][..]).prop_map(String::from)
-}
-
-fn hostile_escape() -> impl Strategy<Value = String> {
-    (select(HOSTILE_BYTES), 1..=3usize, any::<u8>()).prop_map(|(byte, layers, case)| encoded(byte, layers, case))
-}
-
-fn benign_escape() -> impl Strategy<Value = String> {
-    (select(BENIGN_BYTES), any::<u8>()).prop_map(|(byte, case)| encoded(byte, 1, case))
-}
-
-/// A look-alike's UTF-8 bytes, each escaped with its own mix of hex case.
-fn look_alike() -> impl Strategy<Value = String> {
-    let chars: Vec<char> = FOLDS.iter().map(|(c, _)| *c).collect();
-    (select(chars), any::<u32>()).prop_map(|(c, case)| {
-        c.to_string().bytes().enumerate().map(|(i, byte)| encoded(byte, 1, (case >> (2 * i)) as u8)).collect()
-    })
-}
-
-fn fragment() -> impl Strategy<Value = String> {
-    prop_oneof![
-        6 => ordinary(),
-        2 => dots(),
-        3 => hostile_escape(),
-        1 => look_alike(),
-        2 => benign_escape(),
-        1 => select(RAW_SPECIALS).prop_map(String::from),
-        1 => Just(String::new()),
-    ]
-}
-
-/// One to three fragments run together, so `.` and `%2E` can meet to spell `..` and empty fragments can leave `//`.
-fn segment() -> impl Strategy<Value = String> {
-    vec(fragment(), 1..4).prop_map(|fragments| fragments.concat())
-}
-
-/// A route prefix most of the time, so that enough targets reach authorization; otherwise a decoy or none.
-fn prefix() -> impl Strategy<Value = Option<&'static str>> {
-    prop_oneof![4 => select(ROUTE_PREFIXES).prop_map(Some), 2 => select(DECOY_PREFIXES).prop_map(Some), 1 => Just(None)]
-}
-
-/// An origin-form target: an optional prefix, up to four segments, an optional trailing slash and a query.
-fn hostile_target() -> impl Strategy<Value = String> {
-    (prefix(), vec(segment(), 0..5), any::<bool>(), select(QUERIES)).prop_map(|(prefix, segments, slash, query)| {
-        let path = prefix.map(String::from).into_iter().chain(segments).collect::<Vec<_>>().join("/");
-        let trailing = if slash { "/" } else { "" };
-        format!("/{path}{trailing}{query}")
-    })
-}
 
 /// Paths dense with escapes of any byte, encoded one to three times in mixed case, between dots, separators, `;` and
 /// stray `%`, so the invariants also meet escapes that the fixed lists in [`fragment`] do not name.
@@ -385,12 +208,6 @@ proptest! {
     fn parse_never_panics_on_arbitrary_ascii(raw in "/[\\x00-\\x7f]{0,48}") {
         let _ = RequestTarget::parse(&raw);
     }
-}
-
-/// Draws `count` values from `strategy` with a fixed seed.
-fn sample(strategy: impl Strategy<Value = String>, count: usize) -> Vec<String> {
-    let mut runner = TestRunner::deterministic();
-    (0..count).map(|_| strategy.new_tree(&mut runner).unwrap().current()).collect()
 }
 
 /// The properties above are vacuous if a generator never produces an accepted or authorized target; this keeps the
