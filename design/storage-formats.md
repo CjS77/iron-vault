@@ -258,6 +258,36 @@ derived from. Rust: `iron_vault_store::{wrap_identity, unwrap_identity}`.
 - **Trust.** `age` does not authenticate the sender, so anyone who knows a recipient key can write an envelope. An
   unwrapped identity is trusted only once the vault manifest's MAC, keyed from it, verifies.
 
+## Passphrase envelope
+
+The [passphrase envelope](glossary.md), state-directory file `operational.age`, is a plain binary `age` v1 file with no
+Iron Vault framing. Its plaintext is the [operational identity](glossary.md)'s secret text: the 74 ASCII bytes of
+`AGE-SECRET-KEY-1…`, uppercase Bech32 with no trailing newline, in the same form as the identity envelope's plaintext.
+The operational identity's recipient key is an ordinary X25519 recipient of `identity.age`, so unlock goes passphrase,
+then operational identity, then vault identity. Rust: `iron_vault_store::{seal_passphrase_envelope,
+open_passphrase_envelope, unlock_with_passphrase}`.
+
+| Bytes | Content                                                                 |
+|------:|-------------------------------------------------------------------------|
+|    22 | `age-encryption.org/v1` and a newline                                   |
+|    36 | `-> scrypt <salt> <log_n>`: a 22-character base64 salt (16 bytes) and the work factor in decimal, then a newline |
+|    44 | the stanza body: the 32-byte wrapped file key in 43 base64 characters, then a newline |
+|    48 | `--- ` and the 43-character header MAC, then a newline                  |
+|   106 | the payload: a 16-byte nonce, the 74-byte secret text and a 16-byte tag |
+
+- **Stanzas.** Exactly one scrypt stanza and no other. `age` adds its random grease stanza only to files without an
+  scrypt stanza, and refuses to write an scrypt stanza beside any other, so this file never holds one. `stanza_kinds`
+  of it is `[Scrypt]`, and of `identity.age` never contains `Scrypt` (specification §3.11, §3.15).
+- **Work factor.** New envelopes are sealed at `PASSPHRASE_WORK_FACTOR` = 18 (N = 2^18, r = 8: 256 MiB and roughly
+  half a second to a second per unlock). Opening refuses a header asking for more than `MAX_PASSPHRASE_WORK_FACTOR` = 20
+  (1 GiB) before any scrypt work. The work factor must be one or two decimal digits without a leading zero.
+- **Size limit.** `MAX_PASSPHRASE_ENVELOPE_LEN` is 1 KiB; the file is about 256 bytes.
+- **Reading order.** `open_passphrase_envelope` refuses an oversized file first, then any header that is not exactly
+  one scrypt stanza, then a work factor above the maximum. Only then does it run scrypt with the passphrase, and parse
+  the plaintext as an X25519 identity. A passphrase that does not unwrap the stanza is `WrongPassphrase`.
+- **Changing the passphrase.** `reseal_passphrase_envelope` opens the file with the old passphrase and seals the same
+  operational identity to the new one. Only `operational.age` is rewritten; `identity.age` stays byte-identical.
+
 ## Approval payload v1
 
 The bytes a [config approval](glossary.md) signs (specification §3.9). It binds the fixed purpose, the vault, the
