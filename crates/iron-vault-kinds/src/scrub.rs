@@ -59,13 +59,19 @@ impl ScrubPatterns {
     /// Adds `secret` as sent, URL-encoded in both hex cases, and in standard and URL-safe base64 with and without
     /// padding. Kinds that inject a secret verbatim share this list.
     pub(crate) fn insert_encodings(&mut self, secret: &str) {
+        self.insert_url_forms(secret);
+        [STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD]
+            .iter()
+            .for_each(|engine| self.insert(Zeroizing::new(engine.encode(secret).into_bytes())));
+    }
+
+    /// Adds `secret` as sent and URL-encoded in both hex cases, the forms a value takes when an upstream echoes it in
+    /// text or in a URL.
+    pub(crate) fn insert_url_forms(&mut self, secret: &str) {
         let encoded = Zeroizing::new(encode_query_value(secret));
         self.insert(copy(secret.as_bytes()));
         self.insert(lowercase_escapes(encoded.as_bytes()));
         self.insert(copy(encoded.as_bytes()));
-        [STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD]
-            .iter()
-            .for_each(|engine| self.insert(Zeroizing::new(engine.encode(secret).into_bytes())));
     }
 }
 
@@ -78,7 +84,7 @@ impl fmt::Debug for ScrubPatterns {
 /// `bytes` in a buffer sized exactly, so the copy never reallocates and leaves no stale partial copy.
 ///
 /// Base64 needs no such care: the engine allocates its output at the exact encoded length.
-fn copy(bytes: &[u8]) -> Zeroizing<Vec<u8>> {
+pub(crate) fn copy(bytes: &[u8]) -> Zeroizing<Vec<u8>> {
     let mut out = Zeroizing::new(Vec::with_capacity(bytes.len()));
     out.extend_from_slice(bytes);
     out

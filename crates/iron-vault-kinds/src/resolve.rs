@@ -3,6 +3,7 @@
 use iron_vault_policy::{AuthorizedRequest, Slot, SlotValue, SlotValueError};
 use thiserror::Error;
 
+use crate::basic_kind::{self, BasicCredentialError};
 use crate::material::CredentialMaterial;
 use crate::scrub::ScrubPatterns;
 use crate::static_kind;
@@ -30,6 +31,10 @@ pub enum KindError {
     /// The produced value cannot be placed in a slot; the inner error names the rule, never the value.
     #[error(transparent)]
     InvalidValue(#[from] SlotValueError),
+    /// A Basic credential's username or password breaks an RFC 7617 rule; the inner error names the rule, never the
+    /// value.
+    #[error(transparent)]
+    InvalidBasic(#[from] BasicCredentialError),
 }
 
 impl Resolution {
@@ -60,6 +65,7 @@ impl Resolution {
 pub fn resolve(material: &CredentialMaterial, slot: &Slot, request: &AuthorizedRequest) -> Result<Resolution, KindError> {
     match material {
         CredentialMaterial::Static { key } => static_kind::resolve(key, slot, request),
+        CredentialMaterial::Basic { username, password } => basic_kind::resolve(username, password, slot, request),
     }
 }
 
@@ -78,6 +84,8 @@ mod tests {
         ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, CredentialName, Method, ParsedConfig, Port, RequestTarget,
         ValidatedConfig, activate, authorize,
     };
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
     use secrecy::{ExposeSecret, SecretString};
 
     use super::*;
@@ -139,12 +147,20 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
         activate(&config, &Capabilities::default(), &Catalog).unwrap()
     }
 
-    fn resolve_on(target: &str, key: &str) -> Result<Resolution, KindError> {
+    fn resolve_material(target: &str, material: &CredentialMaterial) -> Result<Resolution, KindError> {
         let policy = policy();
         let (path, query) = RequestTarget::parse(target).unwrap().into_parts();
         let request = authorize(&policy, &"agent".parse().unwrap(), &Method::Get, &path, query).unwrap();
         let slot = policy.route(request.route()).unwrap().slot();
-        resolve(&CredentialMaterial::Static { key: SecretString::from(key) }, slot, &request)
+        resolve(material, slot, &request)
+    }
+
+    fn resolve_on(target: &str, key: &str) -> Result<Resolution, KindError> {
+        resolve_material(target, &CredentialMaterial::Static { key: SecretString::from(key) })
+    }
+
+    fn basic(username: &str, password: &str) -> CredentialMaterial {
+        CredentialMaterial::Basic { username: SecretString::from(username), password: SecretString::from(password) }
     }
 
     #[test]
@@ -199,5 +215,52 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
         let resolution = resolve_on("/fx/latest", key).unwrap();
         let debug = format!("{material:?} {resolution:?} {:?}", resolution.patterns());
         assert!(!debug.chars().any(|c| key.contains(c)), "{debug}");
+    }
+
+    #[test]
+    fn rfc_7617_example_resolves_to_its_token() {
+        let resolution = resolve_material("/basic/x", &basic("Aladdin", "open sesame")).unwrap();
+        assert_eq!(resolution.value().expose_secret(), "QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
+        assert!(resolution.patterns().iter().any(|p| p == b"Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ=="));
+    }
+
+    #[test]
+    fn non_ascii_password_round_trips_as_utf8() {
+        let resolution = resolve_material("/basic/x", &basic("josé", "pässwörd ☃")).unwrap();
+        let decoded = STANDARD.decode(resolution.value().expose_secret()).unwrap();
+        assert_eq!(String::from_utf8(decoded).unwrap(), "josé:pässwörd ☃");
+    }
+
+    #[test]
+    fn invalid_basic_fields_are_refused_naming_the_rule_only() {
+        [
+            (basic("QZ:JW", "KV"), BasicCredentialError::ColonInUsername),
+            (basic("", "QZJW"), BasicCredentialError::EmptyUsername),
+            (basic("QZJW", "KV\nQX"), BasicCredentialError::ControlChar),
+        ]
+        .iter()
+        .for_each(|(material, expected)| {
+            let err = resolve_material("/basic/x", material).unwrap_err();
+            assert_eq!(err, KindError::InvalidBasic(expected.clone()));
+            let text = format!("{err} {err:?}");
+            assert!(!text.chars().any(|c| "QZJWKVX\n".contains(c)), "{text}");
+        });
+    }
+
+    #[test]
+    fn basic_credential_on_header_or_query_slot_is_a_mismatch() {
+        [("/brave/x", "header"), ("/fx/latest", "query")].iter().for_each(|(target, slot)| {
+            let err = resolve_material(target, &basic("u", "p")).unwrap_err();
+            assert_eq!(err, KindError::SlotMismatch { kind: "basic", slot });
+        });
+    }
+
+    #[test]
+    fn basic_debug_output_holds_no_secret_byte() {
+        let material = basic("QZJW", "XKVQ");
+        let resolution = resolve_material("/basic/x", &material).unwrap();
+        let debug = format!("{material:?} {resolution:?} {:?}", resolution.patterns());
+        let token = resolution.value().expose_secret();
+        assert!(["QZJW", "XKVQ", token].iter().all(|secret| !debug.contains(secret)), "{debug}");
     }
 }

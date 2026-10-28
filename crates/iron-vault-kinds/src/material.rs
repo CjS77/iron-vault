@@ -14,4 +14,11 @@ pub enum CredentialMaterial {
         /// The provider key.
         key: SecretString,
     },
+    /// A username and password sent as HTTP Basic authorization (`basic`, spec §5.2).
+    Basic {
+        /// The user-id; non-empty and without `:` (RFC 7617 §2).
+        username: SecretString,
+        /// The password; may be empty.
+        password: SecretString,
+    },
 }

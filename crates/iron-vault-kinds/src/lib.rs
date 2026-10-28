@@ -5,11 +5,13 @@
 //! encoding stay with slot filling in `iron-vault-policy`, so every kind returns bare secret text and a new kind
 //! never touches routing.
 
+mod basic_kind;
 pub mod material;
 pub mod resolve;
 pub mod scrub;
 mod static_kind;
 
+pub use basic_kind::BasicCredentialError;
 pub use material::CredentialMaterial;
 pub use resolve::{KindError, Resolution, resolve};
 pub use scrub::ScrubPatterns;
