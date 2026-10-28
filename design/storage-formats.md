@@ -236,3 +236,23 @@ accepts a payload only if it is that encoding:
 - the entry count is at most 4096.
 
 Decoding rejects a wrong magic, an unknown version, truncation, trailing bytes and any of the rule failures above.
+
+## Identity envelope
+
+The [identity envelope](glossary.md), state-directory file `identity.age`, is a plain binary `age` v1 file with no
+Iron Vault framing. Its plaintext is the vault identity's secret text: the 74 ASCII bytes of `AGE-SECRET-KEY-1…` that
+`age`'s `Identity::to_string` gives, uppercase Bech32 with no trailing newline, the same text the manifest key is
+derived from. Rust: `iron_vault_store::{wrap_identity, unwrap_identity}`.
+
+- **Stanzas.** One X25519 stanza per recipient key, plus the one random `*-grease` stanza `age` adds to every file
+  without a passphrase. Specification §3.11 forbids an scrypt stanza beside other recipients, so the envelope never
+  holds one; passphrase unlock and the recovery key each reach it through an X25519 recipient.
+- **Recipients.** Between 2 and `MAX_RECIPIENTS` (64), so a vault always has a second way in.
+- **Size limit.** `MAX_IDENTITY_ENVELOPE_LEN` is 16 KiB. An X25519 stanza is 98 bytes, the grease stanza at most about
+  220, the version and MAC lines 70, and the payload 106 (16-byte nonce, 74-byte secret text, 16-byte tag): a full set
+  of 64 recipients gives under 6,700 bytes.
+- **Reading order.** `unwrap_identity` refuses an oversized file first, then any header stanza other than X25519 or
+  grease, so a planted passphrase file never starts scrypt. Only then does it decrypt, with the recipient identity
+  alone, and parse the plaintext as an X25519 identity.
+- **Trust.** `age` does not authenticate the sender, so anyone who knows a recipient key can write an envelope. An
+  unwrapped identity is trusted only once the vault manifest's MAC, keyed from it, verifies.
