@@ -98,19 +98,56 @@ impl StoreFs for OsFs {
         Ok(names)
     }
 
-    /// Checks the entry with `lstat` before opening it, so a FIFO is never opened and an oversized file is refused
-    /// before any buffer is allocated. Only the service can write the state directory, so the entry cannot be swapped
-    /// for a FIFO between the check and the open by anyone the service does not already trust; the open handle is
-    /// still compared with the checked entry, so a swap is refused rather than read.
+    /// Checks the entry with `lstat` before opening it, so an oversized file is refused before any buffer is
+    /// allocated. An entry swapped in between the check and the open is refused by [`open_checked`] rather than
+    /// followed, blocked on or read.
     fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>> {
         let checked = regular_file_metadata(path)?;
         if checked.len() > max_len {
             return Err(too_large(max_len));
         }
-        let file = File::open(path)?;
-        ensure_same_entry(&checked, &file.metadata()?)?;
+        let file = open_checked(path, &checked)?;
         read_at_most(file, max_len, checked.len())
     }
+}
+
+/// Opens `path` for reading and refuses the handle unless it is the regular file `checked` describes.
+///
+/// On Unix the open neither follows a symlink nor waits for a FIFO writer, so an entry swapped in after the `lstat`
+/// is refused instead of followed or blocked on. `O_NONBLOCK` has no effect on reads of a regular file.
+fn open_checked(path: &Path, checked: &Metadata) -> io::Result<File> {
+    let file = open_options().open(path).map_err(symlink_as_invalid)?;
+    ensure_same_entry(checked, &file.metadata()?)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    options
+}
+
+#[cfg(not(unix))]
+fn open_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    options
+}
+
+/// `O_NOFOLLOW` reports a symlink as `ELOOP`; it is a non-regular entry like any other.
+#[cfg(unix)]
+fn symlink_as_invalid(e: io::Error) -> io::Error {
+    match e.raw_os_error() {
+        Some(libc::ELOOP) => io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"),
+        _ => e,
+    }
+}
+
+#[cfg(not(unix))]
+fn symlink_as_invalid(e: io::Error) -> io::Error {
+    e
 }
 
 /// The metadata of the entry at `path`, without following a symlink, if it is a regular file.
@@ -219,6 +256,39 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert_eq!(OsFs.read_bounded(&link, 4).unwrap_err().kind(), io::ErrorKind::InvalidInput);
         assert_eq!(OsFs.read_bounded(dir.path(), 4).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_checked_refuses_a_symlink_swapped_in_after_the_check() {
+        let dir = TestDir::new("fs-open-swap");
+        let path = dir.path().join("f");
+        let target = dir.path().join("target");
+        std::fs::write(&path, b"1234").unwrap();
+        std::fs::write(&target, b"5678").unwrap();
+        let checked = regular_file_metadata(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert_eq!(open_checked(&path, &checked).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_checked_refuses_a_fifo_without_blocking() {
+        let dir = TestDir::new("fs-open-fifo");
+        let regular = dir.path().join("f");
+        let fifo = dir.path().join("fifo");
+        std::fs::write(&regular, b"1234").unwrap();
+        let checked = regular_file_metadata(&regular).unwrap();
+        let status = std::process::Command::new("mkfifo").arg(&fifo).status().unwrap();
+        assert!(status.success(), "mkfifo failed: {status}");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        // The lstat is bypassed, so only the non-blocking open keeps a regression from hanging this thread.
+        std::thread::spawn(move || sender.send(open_checked(&fifo, &checked).map(|_| ()).map_err(|e| e.kind())));
+        let result = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("opening a FIFO blocked");
+        assert_eq!(result, Err(io::ErrorKind::InvalidInput));
     }
 
     #[cfg(unix)]

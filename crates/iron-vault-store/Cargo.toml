@@ -20,6 +20,9 @@ tracing.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [features]
 # Exposes `FaultFs`, the in-memory fault filesystem, so other crates' tests can inject faults and crashes into store
 # writes. Off by default: it is a test double and never ships in the service.
