@@ -29,6 +29,7 @@ mod test_dir;
 mod vault;
 mod vault_id;
 mod vault_identity;
+mod wire;
 
 pub use approval::{
     APPROVAL_PURPOSE, ApprovalDecodeError, ApprovalEnvelope, ApprovalPassphrase, ApprovalPayload, ApprovalSigner, ApprovalState,

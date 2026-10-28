@@ -7,6 +7,7 @@ use iron_vault_policy::CredentialName;
 use super::{MAX_MANIFEST_ENTRIES, ManifestEntry, ManifestError, VaultManifest};
 use crate::record_id::RecordId;
 use crate::vault_id::VaultId;
+use crate::wire::{Reader, WireError};
 
 /// The first bytes of every manifest payload, distinct from the file magic so neither is read as the other.
 const MAGIC: [u8; 4] = *b"IVMP";
@@ -32,23 +33,21 @@ pub(super) fn encode(manifest: &VaultManifest) -> Vec<u8> {
 
 /// The manifest a v1 payload holds, accepted only if it is that manifest's one encoding.
 pub(super) fn decode(payload: &[u8]) -> Result<VaultManifest, ManifestError> {
-    let mut reader = Reader(payload);
+    let mut reader = Reader::new(payload);
     if reader.take(MAGIC.len())? != MAGIC {
         return Err(ManifestError::BadMagic);
     }
-    match reader.array::<1>()? {
-        [VERSION] => decode_v1(&mut reader),
-        [version] => Err(ManifestError::UnknownVersion(version)),
+    match reader.u8()? {
+        VERSION => decode_v1(&mut reader),
+        version => Err(ManifestError::UnknownVersion(version)),
     }
 }
 
 fn decode_v1(reader: &mut Reader<'_>) -> Result<VaultManifest, ManifestError> {
     let vault_id = VaultId::from_bytes(reader.array()?)?;
-    let generation = u64::from_be_bytes(reader.array()?);
+    let generation = reader.u64()?;
     let entries = read_entries(reader)?;
-    if !reader.0.is_empty() {
-        return Err(ManifestError::TrailingBytes);
-    }
+    reader.finish()?;
     VaultManifest::new(vault_id, generation, entries)
 }
 
@@ -78,34 +77,18 @@ fn read_entries(reader: &mut Reader<'_>) -> Result<BTreeMap<RecordId, ManifestEn
 
 fn read_entry(reader: &mut Reader<'_>) -> Result<(RecordId, ManifestEntry), ManifestError> {
     let id = RecordId::from_bytes(reader.array()?)?;
-    let len = reader.len()?;
-    let name = std::str::from_utf8(reader.take(len)?).map_err(|_| ManifestError::NameNotUtf8)?;
+    let name = std::str::from_utf8(reader.field()?).map_err(|_| ManifestError::NameNotUtf8)?;
     let name = CredentialName::try_from(name)?;
     Ok((id, ManifestEntry::new(name, reader.array()?)))
 }
 
-/// The unread rest of a payload.
-struct Reader<'a>(&'a [u8]);
-
-impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], ManifestError> {
-        let (head, rest) = self.0.split_at_checked(n).ok_or(ManifestError::Truncated)?;
-        self.0 = rest;
-        Ok(head)
-    }
-
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], ManifestError> {
-        self.take(N)?.try_into().map_err(|_| ManifestError::Truncated)
-    }
-
-    /// A length prefix or entry count. Neither can exceed the bytes left, so a huge value fails here rather than
-    /// driving a long loop.
-    fn len(&mut self) -> Result<usize, ManifestError> {
-        let len = u64::from_be_bytes(self.array()?);
-        usize::try_from(len)
-            .ok()
-            .filter(|len| *len <= self.0.len())
-            .ok_or(ManifestError::LengthPastEnd)
+impl From<WireError> for ManifestError {
+    fn from(error: WireError) -> Self {
+        match error {
+            WireError::Truncated => ManifestError::Truncated,
+            WireError::LengthPastEnd => ManifestError::LengthPastEnd,
+            WireError::TrailingBytes => ManifestError::TrailingBytes,
+        }
     }
 }
 

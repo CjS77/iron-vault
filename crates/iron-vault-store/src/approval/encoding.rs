@@ -5,6 +5,7 @@ use super::{
     SignatureAlgorithm,
 };
 use crate::vault_id::VaultId;
+use crate::wire::{Reader, WireError};
 
 /// The first bytes of every approval payload, distinct from the envelope magic so neither is read as the other.
 const PAYLOAD_MAGIC: [u8; 4] = *b"IVAP";
@@ -27,13 +28,13 @@ pub(super) fn encode_payload(payload: &ApprovalPayload) -> Vec<u8> {
 
 /// The payload a v1 encoding holds, accepted only if it is that payload's one encoding.
 pub(super) fn decode_payload(bytes: &[u8]) -> Result<ApprovalPayload, ApprovalDecodeError> {
-    let mut reader = Reader(bytes);
-    reader.header(PAYLOAD_MAGIC, PAYLOAD_VERSION)?;
+    let mut reader = Reader::new(bytes);
+    read_header(&mut reader, PAYLOAD_MAGIC, PAYLOAD_VERSION)?;
     if reader.field()? != APPROVAL_PURPOSE.as_bytes() {
         return Err(ApprovalDecodeError::WrongPurpose);
     }
     let vault_id = VaultId::from_bytes(reader.array()?)?;
-    let version = ApprovalVersion::new(u64::from_be_bytes(reader.array()?)).ok_or(ApprovalDecodeError::ZeroVersion)?;
+    let version = ApprovalVersion::new(reader.u64()?).ok_or(ApprovalDecodeError::ZeroVersion)?;
     let digest = ConfigDigest::from_bytes(reader.array()?);
     reader.finish()?;
     Ok(ApprovalPayload::new(vault_id, version, digest))
@@ -55,10 +56,9 @@ pub(super) fn decode_envelope(bytes: &[u8]) -> Result<ApprovalEnvelope, Approval
             limit: MAX_APPROVAL_ENVELOPE_LEN,
         });
     }
-    let mut reader = Reader(bytes);
-    reader.header(ENVELOPE_MAGIC, ENVELOPE_VERSION)?;
-    let [id] = reader.array()?;
-    let algorithm = SignatureAlgorithm::from_id(id)?;
+    let mut reader = Reader::new(bytes);
+    read_header(&mut reader, ENVELOPE_MAGIC, ENVELOPE_VERSION)?;
+    let algorithm = SignatureAlgorithm::from_id(reader.u8()?)?;
     let payload = decode_payload(reader.field()?)?;
     let signature = reader.field()?.to_vec();
     reader.finish()?;
@@ -78,45 +78,23 @@ pub(super) fn put_field(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(bytes);
 }
 
-/// The unread rest of an encoding. The approval state encoding reads with it too, so it is shared within `approval`.
-pub(super) struct Reader<'a>(pub(super) &'a [u8]);
-
-impl<'a> Reader<'a> {
-    pub(super) fn take(&mut self, n: usize) -> Result<&'a [u8], ApprovalDecodeError> {
-        let (head, rest) = self.0.split_at_checked(n).ok_or(ApprovalDecodeError::Truncated)?;
-        self.0 = rest;
-        Ok(head)
+/// The magic, then the format version, which must be the one this code reads: the start of every approval encoding.
+pub(super) fn read_header(reader: &mut Reader<'_>, magic: [u8; 4], version: u8) -> Result<(), ApprovalDecodeError> {
+    if reader.array()? != magic {
+        return Err(ApprovalDecodeError::BadMagic);
     }
-
-    pub(super) fn array<const N: usize>(&mut self) -> Result<[u8; N], ApprovalDecodeError> {
-        self.take(N)?.try_into().map_err(|_| ApprovalDecodeError::Truncated)
+    match reader.u8()? {
+        found if found == version => Ok(()),
+        found => Err(ApprovalDecodeError::UnknownFormatVersion(found)),
     }
+}
 
-    /// The magic, then the format version, which must be the one this code reads.
-    pub(super) fn header(&mut self, magic: [u8; 4], version: u8) -> Result<(), ApprovalDecodeError> {
-        if self.array::<4>()? != magic {
-            return Err(ApprovalDecodeError::BadMagic);
-        }
-        match self.array()? {
-            [found] if found == version => Ok(()),
-            [found] => Err(ApprovalDecodeError::UnknownFormatVersion(found)),
-        }
-    }
-
-    /// A length-prefixed field. A length past the bytes left fails before anything is read.
-    pub(super) fn field(&mut self) -> Result<&'a [u8], ApprovalDecodeError> {
-        let len = u64::from_be_bytes(self.array()?);
-        let len = usize::try_from(len)
-            .ok()
-            .filter(|len| *len <= self.0.len())
-            .ok_or(ApprovalDecodeError::LengthPastEnd)?;
-        self.take(len)
-    }
-
-    pub(super) fn finish(&self) -> Result<(), ApprovalDecodeError> {
-        match self.0.is_empty() {
-            true => Ok(()),
-            false => Err(ApprovalDecodeError::TrailingBytes),
+impl From<WireError> for ApprovalDecodeError {
+    fn from(error: WireError) -> Self {
+        match error {
+            WireError::Truncated => ApprovalDecodeError::Truncated,
+            WireError::LengthPastEnd => ApprovalDecodeError::LengthPastEnd,
+            WireError::TrailingBytes => ApprovalDecodeError::TrailingBytes,
         }
     }
 }

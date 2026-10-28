@@ -1,9 +1,10 @@
 //! The approval state payload v1 encoding: the plaintext an approval state file seals (`design/storage-formats.md`).
 
 use super::{ApprovalState, ApprovalStateError, PinnedApprover};
-use crate::approval::encoding::{Reader, header, put_field};
+use crate::approval::encoding::{header, put_field, read_header};
 use crate::approval::{ApprovalDecodeError, ApprovalVersion, ConfigDigest, SignatureAlgorithm};
 use crate::vault_id::VaultId;
+use crate::wire::{Reader, WireError};
 
 /// The first bytes of every approval state payload, distinct from the file magic so neither is read as the other.
 const MAGIC: [u8; 4] = *b"IVAM";
@@ -34,25 +35,32 @@ pub(super) fn encode(state: &ApprovalState) -> Vec<u8> {
 
 /// The state a v1 payload holds, accepted only if it is that state's one encoding and the state's invariant holds.
 pub(super) fn decode(payload: &[u8]) -> Result<ApprovalState, ApprovalStateError> {
-    let mut reader = Reader(payload);
-    reader.header(MAGIC, VERSION)?;
+    let mut reader = Reader::new(payload);
+    read_header(&mut reader, MAGIC, VERSION)?;
     let vault_id = VaultId::from_bytes(reader.array()?).map_err(ApprovalDecodeError::from)?;
-    let [algorithm] = reader.array()?;
-    let approver = PinnedApprover::new(SignatureAlgorithm::from_id(algorithm)?, reader.field()?.to_vec())?;
-    let highest_reserved = u64::from_be_bytes(reader.array()?);
+    let algorithm = SignatureAlgorithm::from_id(reader.u8()?)?;
+    let approver = PinnedApprover::new(algorithm, reader.field()?.to_vec())?;
+    let highest_reserved = reader.u64()?;
     let committed = read_committed(&mut reader)?;
     reader.finish()?;
     ApprovalState::from_parts(vault_id, approver, highest_reserved, committed)
 }
 
 fn read_committed(reader: &mut Reader<'_>) -> Result<Option<(ApprovalVersion, ConfigDigest)>, ApprovalStateError> {
-    match reader.array()? {
-        [NOT_COMMITTED] => Ok(None),
-        [COMMITTED] => {
-            let version = ApprovalVersion::new(u64::from_be_bytes(reader.array()?)).ok_or(ApprovalDecodeError::ZeroVersion)?;
+    match reader.u8()? {
+        NOT_COMMITTED => Ok(None),
+        COMMITTED => {
+            let version = ApprovalVersion::new(reader.u64()?).ok_or(ApprovalDecodeError::ZeroVersion)?;
             Ok(Some((version, ConfigDigest::from_bytes(reader.array()?))))
         }
-        [tag] => Err(ApprovalStateError::BadCommittedTag(tag)),
+        tag => Err(ApprovalStateError::BadCommittedTag(tag)),
+    }
+}
+
+/// The payload shares the approval encodings' layout, so its framing failures are the same format errors theirs are.
+impl From<WireError> for ApprovalStateError {
+    fn from(error: WireError) -> Self {
+        ApprovalStateError::Format(error.into())
     }
 }
 

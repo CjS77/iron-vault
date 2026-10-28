@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 use super::{CredentialRecord, Source};
 use crate::permitted_origins::PermittedOrigins;
 use crate::record_id::{RecordId, RecordIdError};
+use crate::wire::{Reader, WireError};
 
 /// The first bytes of every record payload, so a payload of another type is never read as a record.
 const MAGIC: [u8; 4] = *b"IVCR";
@@ -102,7 +103,7 @@ pub fn encode(record: &CredentialRecord) -> Zeroizing<Vec<u8>> {
 
 /// The record a v1 payload holds, validated with the same value objects that build a record any other way.
 pub fn decode(payload: &[u8]) -> Result<CredentialRecord, RecordError> {
-    let mut reader = Reader(payload);
+    let mut reader = Reader::new(payload);
     if reader.take(MAGIC.len())? != MAGIC {
         return Err(RecordError::BadMagic);
     }
@@ -114,13 +115,11 @@ pub fn decode(payload: &[u8]) -> Result<CredentialRecord, RecordError> {
 
 fn decode_v1(reader: &mut Reader<'_>) -> Result<CredentialRecord, RecordError> {
     let id = RecordId::from_bytes(reader.array()?)?;
-    let name = CredentialName::try_from(reader.text("name")?)?;
+    let name = CredentialName::try_from(read_text(reader, "name")?)?;
     let material = read_material(reader)?;
     let origins = read_origins(reader)?;
     let source = read_source(reader)?;
-    if !reader.0.is_empty() {
-        return Err(RecordError::TrailingBytes);
-    }
+    reader.finish()?;
     Ok(CredentialRecord::new(id, name, material, origins, source)?)
 }
 
@@ -175,11 +174,11 @@ fn source_tag(source: Source) -> u8 {
 fn read_material(reader: &mut Reader<'_>) -> Result<CredentialMaterial, RecordError> {
     match reader.u8()? {
         TAG_STATIC => Ok(CredentialMaterial::Static {
-            key: reader.secret("key")?,
+            key: read_secret(reader, "key")?,
         }),
         TAG_BASIC => Ok(CredentialMaterial::Basic {
-            username: reader.secret("username")?,
-            password: reader.secret("password")?,
+            username: read_secret(reader, "username")?,
+            password: read_secret(reader, "password")?,
         }),
         tag => Err(RecordError::UnknownMaterialTag(tag)),
     }
@@ -204,12 +203,12 @@ fn read_origins(reader: &mut Reader<'_>) -> Result<PermittedOrigins, RecordError
 }
 
 fn read_origin(reader: &mut Reader<'_>) -> Result<(Host, Port), RecordError> {
-    let text = reader.text("host")?;
+    let text = read_text(reader, "host")?;
     let host: Host = text.parse()?;
     if host.as_str() != text {
         return Err(RecordError::NonCanonicalHost);
     }
-    let port = Port::try_from(u16::from_be_bytes(reader.array()?))?;
+    let port = Port::try_from(reader.u16()?)?;
     Ok((host, port))
 }
 
@@ -220,47 +219,23 @@ fn read_source(reader: &mut Reader<'_>) -> Result<Source, RecordError> {
     }
 }
 
-/// The unread rest of a payload. Every read borrows from the payload, so no secret byte is copied until it lands in
-/// its [`SecretString`].
-struct Reader<'a>(&'a [u8]);
+/// A length-prefixed UTF-8 field, borrowed from the payload.
+fn read_text<'a>(reader: &mut Reader<'a>, field: &'static str) -> Result<&'a str, RecordError> {
+    std::str::from_utf8(reader.field()?).map_err(|_| RecordError::NotUtf8 { field })
+}
 
-impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], RecordError> {
-        let (head, rest) = self.0.split_at_checked(n).ok_or(RecordError::Truncated)?;
-        self.0 = rest;
-        Ok(head)
-    }
+/// The field as a secret: its one owned copy is the [`SecretString`], which zeroizes it on drop.
+fn read_secret(reader: &mut Reader<'_>, field: &'static str) -> Result<SecretString, RecordError> {
+    read_text(reader, field).map(SecretString::from)
+}
 
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], RecordError> {
-        self.take(N)?.try_into().map_err(|_| RecordError::Truncated)
-    }
-
-    fn u8(&mut self) -> Result<u8, RecordError> {
-        self.array::<1>().map(|[byte]| byte)
-    }
-
-    /// A length prefix or origin count. Neither can exceed the bytes left, since a field's bytes follow its prefix and
-    /// every origin takes several bytes, so a huge value fails here rather than driving a long loop.
-    fn len(&mut self) -> Result<usize, RecordError> {
-        let len = u64::from_be_bytes(self.array()?);
-        usize::try_from(len)
-            .ok()
-            .filter(|len| *len <= self.0.len())
-            .ok_or(RecordError::LengthPastEnd)
-    }
-
-    fn field(&mut self) -> Result<&'a [u8], RecordError> {
-        let len = self.len()?;
-        self.take(len)
-    }
-
-    fn text(&mut self, field: &'static str) -> Result<&'a str, RecordError> {
-        std::str::from_utf8(self.field()?).map_err(|_| RecordError::NotUtf8 { field })
-    }
-
-    /// The field as a secret: its one owned copy is the [`SecretString`], which zeroizes it on drop.
-    fn secret(&mut self, field: &'static str) -> Result<SecretString, RecordError> {
-        self.text(field).map(SecretString::from)
+impl From<WireError> for RecordError {
+    fn from(error: WireError) -> Self {
+        match error {
+            WireError::Truncated => RecordError::Truncated,
+            WireError::LengthPastEnd => RecordError::LengthPastEnd,
+            WireError::TrailingBytes => RecordError::TrailingBytes,
+        }
     }
 }
 
