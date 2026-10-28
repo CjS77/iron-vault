@@ -153,7 +153,8 @@ mod tests {
                 _ => "api.search.brave.com",
             };
             let port = |p: &str| p.parse::<Port>().unwrap();
-            CatalogEntry::Usable { origins: [(host.parse().unwrap(), port("443")), (host.parse().unwrap(), port("8443"))].into() }
+            let origins = [(host.parse().unwrap(), port("443")), (host.parse().unwrap(), port("8443"))].into();
+            CatalogEntry::Usable { kind: crate::CredentialKind::Static, origins }
         }
     }
 

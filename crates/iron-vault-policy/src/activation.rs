@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 use crate::confirmation::Confirmation;
+use crate::credential_kind::CredentialKind;
 use crate::host::Host;
 use crate::name::{CredentialName, RouteName};
 use crate::port::Port;
@@ -41,6 +42,8 @@ pub enum CatalogEntry {
     Unusable,
     /// A record has this name and can serve requests.
     Usable {
+        /// The kind the record declares, which decides the slots its routes may use (spec §5.2).
+        kind: CredentialKind,
         /// The exact host and port pairs the record permits its secret to reach (spec §3.3).
         origins: BTreeSet<(Host, Port)>,
     },
@@ -84,6 +87,16 @@ pub enum ActivationError {
         host: Host,
         /// The route's upstream port.
         port: Port,
+    },
+    /// The route's slot cannot be filled by its credential's kind, so every request to it would fail (spec §5.2).
+    #[error("route {route} uses a {} credential, {credential}, on a slot that kind cannot fill", .kind.as_str())]
+    SlotMismatch {
+        /// The route.
+        route: RouteName,
+        /// The route's credential.
+        credential: CredentialName,
+        /// The credential's kind.
+        kind: CredentialKind,
     },
 }
 
@@ -139,14 +152,23 @@ pub fn activate(
 fn route_errors(name: &RouteName, route: &RouteConfig, capabilities: &Capabilities, entry: &CatalogEntry) -> Vec<ActivationError> {
     let touch = (route.confirm() == Confirmation::Touch && !capabilities.touch_provider)
         .then(|| ActivationError::TouchUnavailable { route: name.clone() });
-    touch.into_iter().chain(credential_error(name, route, entry)).collect()
+    touch.into_iter().chain(credential_error(name, route, entry)).chain(slot_error(name, route, entry)).collect()
+}
+
+fn slot_error(name: &RouteName, route: &RouteConfig, entry: &CatalogEntry) -> Option<ActivationError> {
+    match entry {
+        CatalogEntry::Usable { kind, .. } if !kind.fills(route.slot()) => {
+            Some(ActivationError::SlotMismatch { route: name.clone(), credential: route.credential().clone(), kind: *kind })
+        }
+        _ => None,
+    }
 }
 
 fn credential_error(name: &RouteName, route: &RouteConfig, entry: &CatalogEntry) -> Option<ActivationError> {
     let upstream = route.upstream();
     match entry {
         CatalogEntry::Unknown => Some(ActivationError::UnknownCredential { route: name.clone(), credential: route.credential().clone() }),
-        CatalogEntry::Usable { origins } if !origins.iter().any(|(h, p)| h == upstream.host() && *p == upstream.port()) => {
+        CatalogEntry::Usable { origins, .. } if !origins.iter().any(|(h, p)| h == upstream.host() && *p == upstream.port()) => {
             Some(ActivationError::OriginNotPermitted {
                 route: name.clone(),
                 credential: route.credential().clone(),
@@ -184,7 +206,8 @@ mod tests {
     }
 
     fn usable(hosts: &[(&str, u16)]) -> CatalogEntry {
-        CatalogEntry::Usable { origins: hosts.iter().map(|(h, p)| (n(h), Port::try_from(*p).unwrap())).collect() }
+        let origins = hosts.iter().map(|(h, p)| (n(h), Port::try_from(*p).unwrap())).collect();
+        CatalogEntry::Usable { kind: CredentialKind::Static, origins }
     }
 
     /// A catalog that permits each §3.3 route's upstream, with `overrides` replacing individual entries.
@@ -295,6 +318,33 @@ mod tests {
             ActivationError::UnknownCredential { route: n("brave"), credential: n("brave") },
             ActivationError::TouchUnavailable { route: n("fx") },
             ActivationError::OriginNotPermitted { route: n("fx"), credential: n("fx_key"), host: n("api.fx.example"), port: Port::HTTPS },
+        ];
+        assert_eq!(err, expected);
+    }
+
+    fn with_kind(entry: CatalogEntry, kind: CredentialKind) -> CatalogEntry {
+        match entry {
+            CatalogEntry::Usable { origins, .. } => CatalogEntry::Usable { kind, origins },
+            other => other,
+        }
+    }
+
+    #[test]
+    fn static_credential_on_basic_slot_is_refused() {
+        let basic = spec_with("slot = { query = \"access_key\" }", "slot = \"basic\"");
+        let err = activate(&basic, &NO_TOUCH, &spec_catalog(&[])).unwrap_err();
+        assert_eq!(err, [ActivationError::SlotMismatch { route: n("fx"), credential: n("fx_key"), kind: CredentialKind::Static }]);
+        assert_eq!(err[0].to_string(), "route fx uses a static credential, fx_key, on a slot that kind cannot fill");
+    }
+
+    #[test]
+    fn basic_credential_on_header_slot_is_reported_with_other_errors() {
+        let brave = with_kind(usable(&[("api.search.brave.com", 443)]), CredentialKind::Basic);
+        let catalog = spec_catalog(&[("brave", brave), ("fx_key", CatalogEntry::Unknown)]);
+        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog).unwrap_err();
+        let expected = [
+            ActivationError::SlotMismatch { route: n("brave"), credential: n("brave"), kind: CredentialKind::Basic },
+            ActivationError::UnknownCredential { route: n("fx"), credential: n("fx_key") },
         ];
         assert_eq!(err, expected);
     }

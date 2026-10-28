@@ -169,7 +169,9 @@ mod tests {
             };
             match self.0.contains(&name.as_str()) {
                 true => CatalogEntry::Unusable,
-                false => CatalogEntry::Usable { origins: [(host.parse().unwrap(), Port::HTTPS)].into() },
+                false => {
+                    CatalogEntry::Usable { kind: crate::CredentialKind::Static, origins: [(host.parse().unwrap(), Port::HTTPS)].into() }
+                }
             }
         }
     }

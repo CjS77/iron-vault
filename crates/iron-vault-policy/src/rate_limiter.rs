@@ -185,7 +185,8 @@ mod tests {
     impl CredentialCatalog for Healthy {
         fn entry(&self, _: &CredentialName) -> CatalogEntry {
             let hosts = ["api.fx.example", "api.venice.ai", "api.search.brave.com"];
-            CatalogEntry::Usable { origins: hosts.iter().map(|host| (host.parse().unwrap(), Port::HTTPS)).collect() }
+            let origins = hosts.iter().map(|host| (host.parse().unwrap(), Port::HTTPS)).collect();
+            CatalogEntry::Usable { kind: crate::CredentialKind::Static, origins }
         }
     }
 

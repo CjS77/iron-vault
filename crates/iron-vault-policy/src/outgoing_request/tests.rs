@@ -21,7 +21,7 @@ impl CredentialCatalog for Catalog {
             "venice" => "api.venice.ai",
             _ => "api.search.brave.com",
         };
-        CatalogEntry::Usable { origins: [(host.parse().unwrap(), Port::HTTPS)].into() }
+        CatalogEntry::Usable { kind: crate::CredentialKind::Static, origins: [(host.parse().unwrap(), Port::HTTPS)].into() }
     }
 }
 

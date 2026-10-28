@@ -131,7 +131,7 @@ struct Catalog(BTreeSet<(Host, Port)>);
 
 impl CredentialCatalog for Catalog {
     fn entry(&self, _: &CredentialName) -> CatalogEntry {
-        CatalogEntry::Usable { origins: self.0.clone() }
+        CatalogEntry::Usable { kind: iron_vault_policy::CredentialKind::Static, origins: self.0.clone() }
     }
 }
 

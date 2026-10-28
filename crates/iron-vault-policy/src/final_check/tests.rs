@@ -19,7 +19,7 @@ struct Catalog;
 
 impl CredentialCatalog for Catalog {
     fn entry(&self, name: &CredentialName) -> CatalogEntry {
-        CatalogEntry::Usable { origins: origins(route_host(name.as_str()), 443) }
+        CatalogEntry::Usable { kind: crate::CredentialKind::Static, origins: origins(route_host(name.as_str()), 443) }
     }
 }
 

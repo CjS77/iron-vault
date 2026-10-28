@@ -81,7 +81,8 @@ pub(crate) fn slot_kind(slot: &Slot) -> &'static str {
 #[cfg(test)]
 mod tests {
     use iron_vault_policy::{
-        ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, CredentialName, Method, ParsedConfig, Port, RequestTarget,
+        ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, Method,
+        ParsedConfig, Port, RequestTarget,
         ValidatedConfig, activate, authorize,
     };
     use base64::Engine;
@@ -129,7 +130,8 @@ paths = ["/**"]
 rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 "#;
 
-    struct Catalog;
+    /// Each credential's record, of the kind `kind` gives it, permitting its route's upstream.
+    struct Catalog(fn(&CredentialName) -> CredentialKind);
 
     impl CredentialCatalog for Catalog {
         fn entry(&self, name: &CredentialName) -> CatalogEntry {
@@ -138,13 +140,21 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
                 "brave" => "api.search.brave.com",
                 _ => "basic.example",
             };
-            CatalogEntry::Usable { origins: [(host.parse().unwrap(), Port::HTTPS)].into() }
+            CatalogEntry::Usable { kind: (self.0)(name), origins: [(host.parse().unwrap(), Port::HTTPS)].into() }
+        }
+    }
+
+    /// The kind each route's slot suits: Basic for the Basic route, static otherwise.
+    fn natural_kind(name: &CredentialName) -> CredentialKind {
+        match name.as_str() {
+            "basic" => CredentialKind::Basic,
+            _ => CredentialKind::Static,
         }
     }
 
     fn policy() -> ActivePolicy {
         let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
-        activate(&config, &Capabilities::default(), &Catalog).unwrap()
+        activate(&config, &Capabilities::default(), &Catalog(natural_kind)).unwrap()
     }
 
     fn resolve_material(target: &str, material: &CredentialMaterial) -> Result<Resolution, KindError> {
@@ -262,5 +272,36 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
         let debug = format!("{material:?} {resolution:?} {:?}", resolution.patterns());
         let token = resolution.value().expose_secret();
         assert!(["QZJW", "XKVQ", token].iter().all(|secret| !debug.contains(secret)), "{debug}");
+    }
+
+    /// Routes `activate` refuses when every credential is of `kind`.
+    fn refused_at_activation(kind: fn(&CredentialName) -> CredentialKind) -> Vec<String> {
+        let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
+        let errors = activate(&config, &Capabilities::default(), &Catalog(kind)).err().unwrap_or_default();
+        errors
+            .iter()
+            .map(|err| match err {
+                ActivationError::SlotMismatch { route, .. } => route.as_str().to_owned(),
+                other => panic!("unexpected {other}"),
+            })
+            .collect()
+    }
+
+    /// Routes `resolve` refuses for `material` with a slot mismatch.
+    fn refused_at_resolve(material: &CredentialMaterial) -> Vec<String> {
+        [("basic", "/basic/x"), ("brave", "/brave/x"), ("fx", "/fx/latest")]
+            .iter()
+            .filter(|(_, target)| matches!(resolve_material(target, material), Err(KindError::SlotMismatch { .. })))
+            .map(|(route, _)| (*route).to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn activation_refuses_exactly_the_pairings_resolve_refuses() {
+        let static_key = CredentialMaterial::Static { key: SecretString::from("k") };
+        assert_eq!(refused_at_activation(|_| CredentialKind::Static), refused_at_resolve(&static_key));
+        assert_eq!(refused_at_activation(|_| CredentialKind::Basic), refused_at_resolve(&basic("u", "p")));
+        assert_eq!(refused_at_activation(|_| CredentialKind::Static), ["basic"]);
+        assert_eq!(refused_at_activation(|_| CredentialKind::Basic), ["brave", "fx"]);
     }
 }
