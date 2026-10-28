@@ -48,7 +48,7 @@ pub(crate) fn resolve(
     validate(username, password)?;
     let user_pass = join(&[username, ":", password]);
     let value = SlotValue::new(SecretString::from(STANDARD.encode(user_pass.as_bytes())))?;
-    let patterns = scrub_patterns(value.expose_secret(), &user_pass, password);
+    let patterns = scrub_patterns(value.expose_secret(), &user_pass, username, password);
     Ok(Resolution::new(value, patterns))
 }
 
@@ -66,14 +66,19 @@ pub(crate) fn validate(username: &str, password: &str) -> Result<(), BasicCreden
 }
 
 /// Every form an upstream may echo: the token, the complete header value, the `user:pass` pair and the password. The
-/// username alone is left out: it is usually an email address or account ID, and scrubbing it would corrupt ordinary
-/// responses.
-fn scrub_patterns(token: &str, user_pass: &str, password: &str) -> ScrubPatterns {
+/// username alone is scrubbed only when the password is empty: then the username is the API key (Stripe's
+/// `sk_live_…:` is one), and an upstream error may echo it. Beside a password it is usually an email address or
+/// account ID, and scrubbing it would corrupt ordinary responses.
+fn scrub_patterns(token: &str, user_pass: &str, username: &str, password: &str) -> ScrubPatterns {
     let mut patterns = ScrubPatterns::default();
     patterns.insert(copy(token.as_bytes()));
     patterns.insert(copy(join(&[SCHEME_PREFIX, token]).as_bytes()));
     patterns.insert_url_forms(user_pass);
-    patterns.insert_url_forms(password);
+    if password.is_empty() {
+        patterns.insert_url_forms(username);
+    } else {
+        patterns.insert_url_forms(password);
+    }
     patterns
 }
 
@@ -88,9 +93,10 @@ fn join(parts: &[&str]) -> Zeroizing<String> {
 mod tests {
     use super::*;
 
-    fn patterns(user_pass: &str, password: &str) -> Vec<String> {
-        let token = STANDARD.encode(user_pass);
-        scrub_patterns(&token, user_pass, password)
+    fn patterns(username: &str, password: &str) -> Vec<String> {
+        let user_pass = join(&[username, ":", password]);
+        let token = STANDARD.encode(user_pass.as_bytes());
+        scrub_patterns(&token, &user_pass, username, password)
             .iter()
             .map(|p| String::from_utf8(p.to_vec()).unwrap())
             .collect()
@@ -132,7 +138,7 @@ mod tests {
 
     #[test]
     fn pattern_set_holds_every_form_and_not_the_username() {
-        let found = patterns("alice@example.com:p/w", "p/w");
+        let found = patterns("alice@example.com", "p/w");
         let token = "YWxpY2VAZXhhbXBsZS5jb206cC93";
         [
             token.to_owned(),
@@ -151,5 +157,19 @@ mod tests {
             !found.iter().any(|f| f == "alice@example.com" || f == "alice%40example.com"),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn empty_password_scrubs_the_username_as_the_secret() {
+        let found = patterns("sk_live/abc123", "");
+        [
+            "sk_live/abc123",
+            "sk_live%2Fabc123",
+            "sk_live%2fabc123",
+            "sk_live/abc123:",
+            "sk_live%2Fabc123%3A",
+        ]
+        .iter()
+        .for_each(|expected| assert!(found.iter().any(|f| f == expected), "{expected} missing from {found:?}"));
     }
 }
