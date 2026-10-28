@@ -556,3 +556,41 @@ fn a_vault_given_another_directorys_lock_touches_no_file() {
     assert!(fs.contents(&theirs.record_path(theirs_keep)).is_some());
     assert!(wrong.to_string().contains(&theirs.dir.path().display().to_string()), "{wrong}");
 }
+
+#[test]
+fn a_short_secret_is_written_and_warned_about_without_its_value() {
+    let setup = Setup::new("write-short-secret");
+    let (fs, mut vault) = setup.seeded(&SEEDED);
+    let short = CredentialMaterial::Static { key: "q7z".into() };
+    let (added, events) = capture_logs(|| vault.add(&setup.lock, &fs, n("stripe"), short, origins("stripe")));
+    added.unwrap();
+    let warnings: Vec<_> = events.iter().filter(|event| event.level == Level::WARN).collect();
+    assert_eq!(warnings.len(), 1, "{events:?}");
+    assert_eq!((warnings[0].field("credential"), warnings[0].field("field")), ("stripe", "API key"));
+    assert_eq!(warnings[0].field("len"), "3");
+    assert!(
+        warnings[0]
+            .field("message")
+            .contains("credential `stripe`: the API key is 3 bytes long")
+    );
+    assert!(!format!("{events:?}").contains("q7z"), "{events:?}");
+
+    let password = CredentialMaterial::Basic {
+        username: "long-username".into(),
+        password: "z9q".into(),
+    };
+    let (replaced, events) = capture_logs(|| vault.replace(&setup.lock, &fs, n("stripe"), password, origins("stripe")));
+    replaced.unwrap();
+    let fields: Vec<_> = events.iter().filter(|e| e.level == Level::WARN).map(|e| e.field("field")).collect();
+    assert_eq!(fields, ["password"]);
+    assert!(!format!("{events:?}").contains("z9q"), "{events:?}");
+}
+
+#[test]
+fn a_long_secret_logs_no_warning() {
+    let setup = Setup::new("write-long-secret");
+    let (fs, mut vault) = setup.seeded(&SEEDED);
+    let (added, events) = capture_logs(|| setup.add(&fs, &mut vault, "fx_key", 1));
+    added.unwrap();
+    assert!(events.iter().all(|event| event.level != Level::WARN), "{events:?}");
+}

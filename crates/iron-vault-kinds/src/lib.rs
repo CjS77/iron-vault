@@ -11,9 +11,11 @@ pub mod resolve;
 pub mod scrub;
 #[cfg(test)]
 mod secret_types_tests;
+pub mod short_secret;
 mod static_kind;
 
 pub use basic_kind::BasicCredentialError;
 pub use material::CredentialMaterial;
 pub use resolve::{KindError, Resolution, resolve};
 pub use scrub::ScrubPatterns;
+pub use short_secret::{SHORT_SECRET_LEN, SecretField, ShortSecret};

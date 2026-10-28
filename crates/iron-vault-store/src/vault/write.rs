@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use iron_vault_kinds::CredentialMaterial;
+use iron_vault_kinds::{CredentialMaterial, ShortSecret};
 use iron_vault_policy::CredentialName;
 
 use super::{Vault, VaultError, WriteReport, list_state_dir, unindexed_files};
@@ -51,9 +51,12 @@ impl Vault {
         if self.record_id_of(&name).is_some() {
             return Err(VaultError::NameTaken(name));
         }
+        let logged_name = name.clone();
+        let short = material.short_secrets();
         let record = new_record(name, material, origins)?;
         let id = record.id();
         let report = self.write(lock, fs, self.prepare(record.name().clone(), Some(record), None)?)?;
+        warn_short_secrets(&logged_name, &short);
         Ok((id, report))
     }
 
@@ -72,9 +75,12 @@ impl Vault {
     ) -> Result<(RecordId, WriteReport), VaultError> {
         self.ensure_same_dir(lock)?;
         let old = self.record_id_of(&name).ok_or_else(|| VaultError::UnknownName(name.clone()))?;
+        let logged_name = name.clone();
+        let short = material.short_secrets();
         let record = new_record(name, material, origins)?;
         let id = record.id();
         let report = self.write(lock, fs, self.prepare(record.name().clone(), Some(record), Some(old))?)?;
+        warn_short_secrets(&logged_name, &short);
         Ok((id, report))
     }
 
@@ -258,4 +264,20 @@ fn remove_superseded(lock: &StateDirLock, fs: &impl StoreFs, old: RecordId) -> O
             Some(file)
         }
     }
+}
+
+/// Warns once per short secret in a record just written. The write stands: a short value is allowed, but it usually
+/// means the wrong field was pasted, and scrubbing blanks every occurrence of it in responses. Only the field and its
+/// length are logged, never the value.
+fn warn_short_secrets(name: &CredentialName, short: &[ShortSecret]) {
+    short.iter().for_each(|ShortSecret { field, len }| {
+        tracing::warn!(
+            credential = %name,
+            field = %field,
+            len,
+            remediation = "check that the right field was pasted; replace the credential if not",
+            "credential `{name}`: the {field} is {len} bytes long; response scrubbing will remove every occurrence of it, \
+             and it may be the wrong field"
+        );
+    });
 }
