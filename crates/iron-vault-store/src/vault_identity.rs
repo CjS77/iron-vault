@@ -12,9 +12,6 @@ use secrecy::ExposeSecret;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-/// The BLAKE2b personalization that makes the manifest key independent of anything else derived from the identity.
-const MANIFEST_KEY_PERSONA: &[u8] = b"iv-manifest-v1";
-
 /// The vault's generated `age` X25519 private key.
 ///
 /// It has no `Display`, `Clone` or serialization so the key cannot leave service memory by accident, and its `Debug`
@@ -34,19 +31,24 @@ impl VaultIdentity {
         VaultPublicKey::from_recipient(self.secret.to_public())
     }
 
-    /// The key that MACs the vault manifest: BLAKE2b-512, personalized with `iv-manifest-v1`, of the identity's `age`
-    /// secret-key text.
+    /// A 64-byte key derived from this identity: BLAKE2b-512, personalized with `persona`, of the identity's `age`
+    /// secret-key text (the 74 ASCII bytes `Identity::to_string` gives, uppercase Bech32, no newline).
     ///
-    /// The secret is hashed as the message rather than used as the BLAKE2b key because its text form is 74 bytes, over
+    /// The secret is hashed as the message rather than used as the BLAKE2b key because its text is 74 bytes, over
     /// BLAKE2b's 64-byte key limit; it carries the full 256-bit X25519 key either way. The text form is fixed by the
-    /// `age` specification, so the key is stable across `age` releases. The 64-byte output is a full-size BLAKE2b key.
-    pub(crate) fn manifest_key(&self) -> Zeroizing<[u8; 64]> {
+    /// `age` specification, and a known-answer test pins it. Each use passes its own persona of at most 16 bytes, so
+    /// keys for different purposes are independent.
+    pub(crate) fn derive_key(&self, persona: &[u8]) -> Zeroizing<[u8; 64]> {
         let secret = self.secret.to_string();
         let mut key = Zeroizing::new([0; 64]);
-        Blake2b512::new_customized(MANIFEST_KEY_PERSONA)
-            .chain_update(secret.expose_secret())
-            .finalize_into((&mut *key).into());
+        Blake2b512::new_customized(persona).chain_update(secret.expose_secret()).finalize_into((&mut *key).into());
         key
+    }
+
+    /// The identity a literal `AGE-SECRET-KEY-1…` string encodes, so tests can pin derived keys to known answers.
+    #[cfg(test)]
+    pub(crate) fn from_secret(text: &str) -> Self {
+        Self { secret: text.parse().unwrap() }
     }
 
     /// The `age` identity, for decryption inside this crate only.
@@ -166,16 +168,21 @@ mod tests {
         assert!(keys.windows(2).all(|w| w[0].to_string() < w[1].to_string()));
     }
 
+    /// Known answer for the manifest key, computed independently with Python's `hashlib.blake2b`. A change to `age`'s
+    /// secret-key text or to the derivation fails here instead of making every existing manifest open as damaged.
     #[test]
-    fn manifest_key_is_the_personalized_hash_of_the_secret_text() {
-        use blake2::{Blake2bMac512, digest::Mac};
+    fn manifest_key_matches_its_known_answer() {
+        let identity = VaultIdentity::from_secret(crate::manifest::tests::KAT_IDENTITY);
+        let hex: String = identity.derive_key(crate::manifest::MANIFEST_KEY_PERSONA).iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, crate::manifest::tests::KAT_MANIFEST_KEY);
+        assert_eq!(identity.secret.to_string().expose_secret(), crate::manifest::tests::KAT_IDENTITY);
+    }
 
+    #[test]
+    fn derived_keys_differ_by_persona_and_identity() {
         let identity = VaultIdentity::generate();
-        let secret = identity.secret.to_string();
-        let mac = Blake2bMac512::new_with_salt_and_personal(None, &[], b"iv-manifest-v1").unwrap();
-        let expected: [u8; 64] = mac.chain_update(secret.expose_secret()).finalize().into_bytes().into();
-        assert_eq!(*identity.manifest_key(), expected);
-        assert_ne!(*VaultIdentity::generate().manifest_key(), expected);
+        assert_ne!(*identity.derive_key(b"a"), *identity.derive_key(b"b"));
+        assert_ne!(*identity.derive_key(b"a"), *VaultIdentity::generate().derive_key(b"a"));
     }
 
     #[test]

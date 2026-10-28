@@ -122,14 +122,29 @@ manifest key = BLAKE2b-512(personalization = "iv-manifest-v1", message = vault i
 MAC          = BLAKE2b-256(key = manifest key, message = "iron-vault manifest file v1 mac" 00 || bytes 0 .. end − 32)
 ```
 
-- The **vault identity secret text** is the identity's `age` encoding, `AGE-SECRET-KEY-1…`, as the `age` specification
-  fixes it. It carries the full 256-bit X25519 key. It is hashed as the message rather than used as the BLAKE2b key
+- The **vault identity secret text** is exactly the 74 ASCII bytes of the uppercase Bech32 string `age`'s
+  `Identity::to_string` gives, `AGE-SECRET-KEY-1…`, with no trailing newline; the `age` specification fixes this
+  encoding. It carries the full 256-bit X25519 key. It is hashed as the message rather than used as the BLAKE2b key
   because it is 74 bytes long and a BLAKE2b key is at most 64.
 - The **personalization** `iv-manifest-v1` (14 bytes, zero-padded to BLAKE2b's 16) separates the manifest key from any
   other key a later format derives from the same identity.
 - The 64-byte manifest key is a full-length BLAKE2b key. It lives only in a buffer that is cleared on drop.
 - The MAC message starts with the 32-byte domain tag `iron-vault manifest file v1 mac` and a zero byte, then every file
   byte before the MAC: magic, version, vault ID and ciphertext.
+
+Test vectors, checked by the store's tests. The ciphertext is a fixed stand-in, because real `age` output is
+randomized; the MAC does not care what the ciphertext bytes are.
+
+```text
+identity      AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE
+              (the X25519 key bytes 01 02 03 … 20)
+manifest key  54b3475d66332fd31a99dd0cf3632ec70381dbae5167db31dd4d13b3fb59a04f
+              3a9171433d19abd09ad7e9adaa6f1e45c87291b03a6a76546702074436e7d75e
+MAC input     the domain tag, then these bytes before the MAC:
+              49564d46013f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b6e6f74207265616c6c7920616765
+              (magic "IVMF", version 01, vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b, ciphertext "not really age")
+MAC           57773e0c4c341207ffc71eb80ccb19c399bab8042a1d3c9f38603af1c7cc1ab2
+```
 
 A party holding only the vault public key can seal any payload, but cannot compute the MAC. A manifest from another
 vault fails the MAC too, because its key comes from another identity.
@@ -149,8 +164,8 @@ vault fails the MAC too, because its key comes from another identity.
 
 A manifest holds at most `MAX_MANIFEST_ENTRIES` (4096) entries. An entry is at most 120 bytes: a 16-byte record ID, an
 8-byte name length, a name of at most 64 bytes and a 32-byte digest. A full payload is therefore at most
-37 + 4096 × 120 = 491,557 bytes. `age` adds a header of a few hundred bytes, a 16-byte nonce and a 16-byte tag per
-64 KiB chunk (8 chunks), and the file adds 53 bytes of header and MAC: under 492,500 bytes, less than half of
+37 + 4096 × 120 = 491,557 bytes. `age` adds a header of a few hundred bytes, one 16-byte payload nonce and a 16-byte
+tag per 64 KiB chunk (8 chunks), and the file adds 53 bytes of header and MAC: under 492,500 bytes, less than half of
 `MAX_MANIFEST_LEN`. Building a manifest with more entries is refused, so the service can never write one it cannot
 read back.
 

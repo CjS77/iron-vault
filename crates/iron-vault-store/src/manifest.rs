@@ -24,7 +24,8 @@ use crate::vault_identity::VaultIdentity;
 ///
 /// A full manifest holds [`MAX_MANIFEST_ENTRIES`] entries of at most 120 bytes each (16-byte record ID, 8-byte name
 /// length, 64-byte name, 32-byte digest), so its payload is under 492,000 bytes. `age` adds a few hundred header bytes
-/// and 16 bytes per 64 KiB chunk, and the file adds 53 bytes of header and MAC: a full manifest is under half this limit.
+/// plus one 16-byte payload nonce and a 16-byte tag per 64 KiB chunk, and the file adds 53 bytes of header and MAC: a
+/// full manifest is under half this limit.
 pub const MAX_MANIFEST_LEN: usize = 1 << 20;
 
 /// The most entries one manifest may hold, so every manifest the service can build also fits [`MAX_MANIFEST_LEN`].
@@ -40,6 +41,9 @@ const HEADER_LEN: usize = FILE_MAGIC.len() + 1 + 16;
 const MAC_LEN: usize = 32;
 /// Prefixed to the MAC input so a MAC under the manifest key can never be mistaken for one over other data.
 const MAC_DOMAIN_TAG: &[u8] = b"iron-vault manifest file v1 mac\0";
+/// The BLAKE2b personalization of the manifest key, which keeps it independent of any other key derived from the
+/// vault identity.
+pub(crate) const MANIFEST_KEY_PERSONA: &[u8] = b"iv-manifest-v1";
 
 /// One record the manifest vouches for: its credential name and the digest of its file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,7 +203,7 @@ pub fn open_manifest(identity: &VaultIdentity, file: &[u8]) -> Result<VaultManif
     if file.len() > MAX_MANIFEST_LEN {
         return Err(ManifestError::TooLarge { limit: MAX_MANIFEST_LEN });
     }
-    let (signed, tag) = file.split_at_checked(file.len().saturating_sub(MAC_LEN)).ok_or(ManifestError::Truncated)?;
+    let (signed, tag) = file.len().checked_sub(MAC_LEN).and_then(|at| file.split_at_checked(at)).ok_or(ManifestError::Truncated)?;
     let (header, ciphertext) = signed.split_at_checked(HEADER_LEN).ok_or(ManifestError::Truncated)?;
     let vault_id = read_header(header)?;
     mac(identity, signed).verify_slice(tag).map_err(|_| ManifestError::Damaged)?;
@@ -227,7 +231,7 @@ fn read_header(header: &[u8]) -> Result<[u8; 16], ManifestError> {
 
 /// The keyed BLAKE2b-256 MAC over the domain tag and `signed`, the file's header and ciphertext.
 fn mac(identity: &VaultIdentity, signed: &[u8]) -> Blake2bMac<U32> {
-    keyed_mac(&identity.manifest_key(), signed)
+    keyed_mac(&identity.derive_key(MANIFEST_KEY_PERSONA), signed)
 }
 
 fn keyed_mac(key: &[u8; 64], signed: &[u8]) -> Blake2bMac<U32> {
@@ -235,10 +239,29 @@ fn keyed_mac(key: &[u8; 64], signed: &[u8]) -> Blake2bMac<U32> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    /// The known-answer identity: the `age` secret-key text of the X25519 key bytes 01 02 … 20.
+    pub(crate) const KAT_IDENTITY: &str = "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE";
+    /// The manifest key of [`KAT_IDENTITY`].
+    pub(crate) const KAT_MANIFEST_KEY: &str =
+        "54b3475d66332fd31a99dd0cf3632ec70381dbae5167db31dd4d13b3fb59a04f3a9171433d19abd09ad7e9adaa6f1e45c87291b03a6a76546702074436e7d75e";
+    /// The MAC'd bytes of the known-answer file: header for vault 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b, then the stand-in
+    /// ciphertext `not really age`.
+    const KAT_SIGNED: &str = "49564d46013f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b6e6f74207265616c6c7920616765";
+    /// The MAC of [`KAT_SIGNED`] under [`KAT_MANIFEST_KEY`].
+    const KAT_TAG: &str = "57773e0c4c341207ffc71eb80ccb19c399bab8042a1d3c9f38603af1c7cc1ab2";
+
+    fn unhex(hex: &str) -> Vec<u8> {
+        (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect()
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
 
     fn entry(name: &str, digest: u8) -> ManifestEntry {
         ManifestEntry::new(name.parse().unwrap(), [digest; 32])
@@ -256,6 +279,22 @@ mod tests {
         file.extend_from_slice(&sealed::seal(&identity.public_key(), payload).unwrap());
         let tag: [u8; MAC_LEN] = keyed_mac(key, &file).finalize().into_bytes().into();
         [file, tag.to_vec()].concat()
+    }
+
+    /// Known answer computed independently with Python's `hashlib.blake2b`; age output is randomized, so the
+    /// ciphertext is a fixed stand-in.
+    #[test]
+    fn mac_matches_its_known_answer() {
+        let key: [u8; 64] = unhex(KAT_MANIFEST_KEY).try_into().unwrap();
+        let signed = unhex(KAT_SIGNED);
+        assert_eq!(&signed[..21], [&FILE_MAGIC[..], &[FILE_VERSION], &unhex("3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b")].concat());
+        assert_eq!(hex(&keyed_mac(&key, &signed).finalize().into_bytes()), KAT_TAG);
+    }
+
+    #[test]
+    fn known_answers_are_published_in_the_storage_formats() {
+        let doc: String = include_str!("../../../design/storage-formats.md").split_whitespace().collect();
+        [KAT_IDENTITY, KAT_MANIFEST_KEY, KAT_SIGNED, KAT_TAG].iter().for_each(|kat| assert!(doc.contains(kat), "{kat}"));
     }
 
     #[test]
@@ -302,12 +341,12 @@ mod tests {
         let identity = VaultIdentity::generate();
         let original = manifest(VaultId::new_random());
         let payload = encoding::encode(&original);
-        [[0; 64], [0x5a; 64], *VaultIdentity::generate().manifest_key()].iter().for_each(|key| {
+        [[0; 64], [0x5a; 64], *VaultIdentity::generate().derive_key(MANIFEST_KEY_PERSONA)].iter().for_each(|key| {
             let file = forged(&identity, original.vault_id(), &payload, key);
             assert_eq!(open_manifest(&identity, &file), Err(ManifestError::Damaged));
         });
         // The same construction under the real key opens, so the refusal above is the MAC's doing.
-        let file = forged(&identity, original.vault_id(), &payload, &identity.manifest_key());
+        let file = forged(&identity, original.vault_id(), &payload, &identity.derive_key(MANIFEST_KEY_PERSONA));
         assert_eq!(open_manifest(&identity, &file), Ok(original));
     }
 
@@ -345,7 +384,7 @@ mod tests {
         ids.sort();
         let tail = &a[53..];
         let payload = [&a[..29], &2u64.to_be_bytes(), &ids[0], tail, &ids[1], tail].concat();
-        let file = forged(&identity, id, &payload, &identity.manifest_key());
+        let file = forged(&identity, id, &payload, &identity.derive_key(MANIFEST_KEY_PERSONA));
         assert_eq!(open_manifest(&identity, &file), Err(ManifestError::DuplicateName("fx_key".parse().unwrap())));
     }
 
@@ -353,7 +392,7 @@ mod tests {
     fn a_payload_naming_another_vault_is_rejected() {
         let identity = VaultIdentity::generate();
         let payload = encoding::encode(&manifest(VaultId::new_random()));
-        let file = forged(&identity, VaultId::new_random(), &payload, &identity.manifest_key());
+        let file = forged(&identity, VaultId::new_random(), &payload, &identity.derive_key(MANIFEST_KEY_PERSONA));
         assert_eq!(open_manifest(&identity, &file), Err(ManifestError::VaultIdMismatch));
     }
 
@@ -380,8 +419,7 @@ mod tests {
     #[test]
     fn record_digest_is_blake2b_256() {
         let empty = "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8";
-        let hex: String = record_digest(b"").iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, empty);
+        assert_eq!(hex(&record_digest(b"")), empty);
     }
 
     proptest! {
