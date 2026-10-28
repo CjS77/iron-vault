@@ -18,7 +18,8 @@ mod linux;
 
 /// The most symlinks one collection follows, counted across the whole path and every target, using the kernel's limit.
 /// The count can exceed the kernel's for the same path: a relative target under a symlinked parent is walked again from
-/// `/`, so that parent is counted twice. A symlink past the limit is reported as a loop.
+/// `/`, so that parent is counted again for each relative link resolved beneath it. A symlink past the limit is
+/// reported as a loop.
 pub const MAX_SYMLINK_HOPS: usize = 40;
 
 /// Why a path's metadata could not be collected. The path is then unchecked, so callers treat it as untrusted.

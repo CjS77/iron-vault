@@ -121,18 +121,11 @@ fn open_checked(path: &Path, checked: &Metadata) -> io::Result<File> {
     Ok(file)
 }
 
-#[cfg(unix)]
 fn open_options() -> OpenOptions {
     let mut options = OpenOptions::new();
     options.read(true);
+    #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    options
-}
-
-#[cfg(not(unix))]
-fn open_options() -> OpenOptions {
-    let mut options = OpenOptions::new();
-    options.read(true);
     options
 }
 
@@ -263,12 +256,12 @@ mod tests {
     fn open_checked_refuses_a_symlink_swapped_in_after_the_check() {
         let dir = TestDir::new("fs-open-swap");
         let path = dir.path().join("f");
-        let target = dir.path().join("target");
         std::fs::write(&path, b"1234").unwrap();
-        std::fs::write(&target, b"5678").unwrap();
         let checked = regular_file_metadata(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
-        std::os::unix::fs::symlink(&target, &path).unwrap();
+        // A dangling link: following it would fail with NotFound, so ELOOP proves it was not followed.
+        std::os::unix::fs::symlink(dir.path().join("missing"), &path).unwrap();
+        assert_eq!(open_options().open(&path).unwrap_err().raw_os_error(), Some(libc::ELOOP));
         assert_eq!(open_checked(&path, &checked).unwrap_err().kind(), io::ErrorKind::InvalidInput);
     }
 
