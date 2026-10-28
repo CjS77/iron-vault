@@ -59,6 +59,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Source            | The origin of a credential imported into the vault, initially direct entry and later password-manager sync.                 | `iron-vault-store`  |           | §1.3 |
 | Token bucket      | A route's rate-limit counter: it starts empty, refills at `requests / per_seconds` up to `burst`, and spends one token per request. | `iron-vault-policy` | `TokenBucket` | §3.5, §3.12 |
 | Upstream          | The HTTPS service to which Iron Vault forwards an authorized request.                                                       | `iron-vault-policy` | `UpstreamUrl` | §1.3 |
+| Upstream target   | The URL the service will send to, built from the configured upstream and the authorized request and checked to read back as exactly the authorized path and query. | `iron-vault-policy` | `UpstreamTarget` | §3.5, §3.6 |
 | Validated config  | A parsed config whose cross-references all resolve and whose listeners, token hashes, route prefixes and slots cannot conflict. | `iron-vault-policy` | `ValidatedConfig` | §3.3, §3.4, §3.5, §3.6 |
 | Vault             | The service-owned encrypted storage and protected metadata on disk.                                                         | `iron-vault-store`  |           | §1.3 |
 | Vault identity    | The generated `age` X25519 private key that decrypts individual credential files.                                           | `iron-vault-store`  |           | §1.3 |

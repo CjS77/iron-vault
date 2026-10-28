@@ -36,6 +36,7 @@ mod spec_example;
 pub mod token_bucket;
 pub mod token_hash;
 pub mod upstream;
+pub mod upstream_target;
 pub mod validated;
 
 pub use activation::{ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
@@ -65,4 +66,5 @@ pub use slot_value::{SlotValue, SlotValueError};
 pub use token_bucket::{RetryAfter, TokenBucket};
 pub use token_hash::{TokenHash, TokenHashError};
 pub use upstream::{UpstreamUrl, UpstreamUrlError};
+pub use upstream_target::{UpstreamTarget, UpstreamTargetError};
 pub use validated::{ValidatedConfig, ValidationError};
