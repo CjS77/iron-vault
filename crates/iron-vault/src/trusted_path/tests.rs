@@ -673,9 +673,9 @@ fn opt_binary_chain(opt_owner: u32) -> Vec<PathComponent> {
     ]
 }
 
-fn caution(rule: TrustedPathRule, path: &str, uid: u32) -> PathCaution {
+fn caution(file: CautionedFile, path: &str, uid: u32) -> PathCaution {
     PathCaution {
-        rule,
+        file,
         path: PathBuf::from(path),
         uid,
         owner_name: None,
@@ -703,7 +703,7 @@ fn a_root_owned_chain_has_no_cautions() {
 
 #[test]
 fn a_service_owned_folder_above_a_protected_binary_is_cautioned() {
-    let expected = vec![caution(TrustedPathRule::Binary, "/opt/iron-vault", SERVICE)];
+    let expected = vec![caution(CautionedFile::Binary, "/opt/iron-vault", SERVICE)];
     assert_eq!(
         protected_cautions(TrustedPathRule::Binary, &opt_binary_chain(SERVICE)),
         Ok(expected)
@@ -719,7 +719,7 @@ fn a_caution_names_the_owner_when_the_adapter_resolved_it() {
     };
     let expected = PathCaution {
         owner_name: Some("iron-vault".to_string()),
-        ..caution(TrustedPathRule::Config, "/etc/iron-vault", SERVICE)
+        ..caution(CautionedFile::Config, "/etc/iron-vault", SERVICE)
     };
     assert_eq!(protected_cautions(TrustedPathRule::Config, &chain), Ok(vec![expected]));
 }
@@ -764,7 +764,7 @@ fn a_symlinked_binary_is_cautioned_on_the_target_side() {
         dir("/usr/bin", ROOT_UID, 0o755),
         link("/usr/bin/iron-vault", ROOT_UID, opt_binary_chain(SERVICE)),
     ];
-    let expected = vec![caution(TrustedPathRule::Binary, "/opt/iron-vault", SERVICE)];
+    let expected = vec![caution(CautionedFile::Binary, "/opt/iron-vault", SERVICE)];
     assert_eq!(protected_cautions(TrustedPathRule::Binary, &chain), Ok(expected));
 }
 
@@ -778,6 +778,6 @@ fn a_folder_reached_twice_through_links_is_cautioned_once() {
         link("/x/y", ROOT_UID, under_opt("/opt/y")),
         file("/x/y/iron-vault", ROOT_UID, 0o755),
     ];
-    let expected = vec![caution(TrustedPathRule::Binary, "/opt", SERVICE)];
+    let expected = vec![caution(CautionedFile::Binary, "/opt", SERVICE)];
     assert_eq!(protected_cautions(TrustedPathRule::Binary, &chain), Ok(expected));
 }

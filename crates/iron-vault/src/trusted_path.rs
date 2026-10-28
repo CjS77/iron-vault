@@ -143,6 +143,25 @@ impl TrustedPathRule {
     const fn allows_sticky_ancestor(self) -> bool {
         !matches!(self, Self::StateDir | Self::Config)
     }
+
+    /// The file this rule's path cautions are about: only the binary and config must be root's alone, while the
+    /// other rules expect the service account to own their directories.
+    pub const fn cautioned_file(self) -> Option<CautionedFile> {
+        match self {
+            Self::Binary => Some(CautionedFile::Binary),
+            Self::Config => Some(CautionedFile::Config),
+            Self::StateDir | Self::RuntimeDir | Self::StateFile => None,
+        }
+    }
+}
+
+/// The trusted file a path caution is about; no other trusted path can have one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CautionedFile {
+    /// The service executable, checked under [`TrustedPathRule::Binary`].
+    Binary,
+    /// The configuration file, checked under [`TrustedPathRule::Config`].
+    Config,
 }
 
 /// Who may own a path component.
@@ -315,8 +334,8 @@ pub fn check(rule: TrustedPathRule, profile: Profile, owner: ExpectedOwner, comp
 /// is a warning, never a refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathCaution {
-    /// The rule of the trusted path the directory sits above.
-    pub rule: TrustedPathRule,
+    /// The trusted file the directory is on the path to.
+    pub file: CautionedFile,
     /// The directory, named as the path or a symlink's resolved target names it.
     pub path: PathBuf,
     /// The owning uid.
@@ -393,6 +412,7 @@ impl Walk {
     fn component(self, component: &PathComponent, parent: Option<&PathComponent>, role: Role) -> Result<Vec<PathCaution>, UnsafePath> {
         let checked = match (&component.kind, role) {
             (ComponentKind::Symlink { target }, _) => return self.symlink(component, parent, target, role),
+            // A leaf never has a caution.
             (_, Role::Leaf) => self.leaf(component).map(|()| None),
             (_, Role::Ancestor) => self.ancestor(component),
         };
@@ -472,11 +492,9 @@ impl Walk {
     /// A passing ancestor's caution: in the protected profile, the binary and config must be root's alone, so an
     /// ancestor the service account owns lets that account replace them.
     fn caution(self, component: &PathComponent) -> Option<PathCaution> {
-        let cautioned = self.profile == Profile::Protected
-            && matches!(self.rule, TrustedPathRule::Binary | TrustedPathRule::Config)
-            && component.uid != ROOT_UID;
-        cautioned.then(|| PathCaution {
-            rule: self.rule,
+        let cautioned = self.profile == Profile::Protected && component.uid != ROOT_UID;
+        self.rule.cautioned_file().filter(|_| cautioned).map(|file| PathCaution {
+            file,
             path: component.path.clone(),
             uid: component.uid,
             owner_name: component.owner_name.clone(),
