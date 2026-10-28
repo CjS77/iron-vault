@@ -116,6 +116,11 @@ impl HeaderSlot {
     pub fn format(&self) -> &SlotFormat {
         &self.format
     }
+
+    /// The header slot a Basic slot amounts to: `Authorization` with the format `Basic {}`.
+    pub(crate) fn basic() -> Self {
+        Self { name: HeaderName::authorization(), format: SlotFormat::basic() }
+    }
 }
 
 impl QueryParamName {
@@ -326,6 +331,12 @@ mod tests {
     #[test]
     fn rejects_other_shapes() {
         [r#""Basic""#, r#""header""#, "true", "1", r#"["basic"]"#].iter().for_each(|s| assert!(parse(s).is_err(), "{s}"));
+    }
+
+    #[test]
+    fn basic_header_slot_writes_authorization_and_is_not_reserved() {
+        assert_eq!(Slot::Header(HeaderSlot::basic()), header("Authorization", "Basic {}"));
+        assert_eq!(Slot::Header(HeaderSlot::basic()).header_written(), Slot::Basic.header_written());
     }
 
     #[test]

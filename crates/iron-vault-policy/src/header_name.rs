@@ -48,6 +48,11 @@ impl HeaderName {
     pub fn lowercase(&self) -> &str {
         &self.lowercase
     }
+
+    /// `Authorization`, the header a Basic slot writes; built directly because a constant cannot fail to parse.
+    pub(crate) fn authorization() -> Self {
+        Self { spelling: "Authorization".to_owned(), lowercase: "authorization".to_owned() }
+    }
 }
 
 /// RFC 9110 §5.6.2 `tchar`.
@@ -142,6 +147,12 @@ mod tests {
         assert_eq!(name("a").cmp(&name("B")), Ordering::Less);
         let set: BTreeSet<_> = [name("Host"), name("host"), name("HOST")].into_iter().collect();
         assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn authorization_matches_its_parsed_form() {
+        let parsed = name("Authorization");
+        assert_eq!((HeaderName::authorization().as_str(), HeaderName::authorization().lowercase()), (parsed.as_str(), parsed.lowercase()));
     }
 
     #[test]

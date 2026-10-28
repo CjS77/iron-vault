@@ -58,6 +58,11 @@ impl SlotFormat {
     pub fn suffix(&self) -> &str {
         &self.suffix
     }
+
+    /// `Basic {}`, the format a Basic slot writes; built directly because a constant cannot fail to parse.
+    pub(crate) fn basic() -> Self {
+        Self { prefix: "Basic ".to_owned(), suffix: String::new() }
+    }
 }
 
 impl TryFrom<&str> for SlotFormat {
@@ -106,6 +111,11 @@ mod tests {
         assert_eq!((SlotFormat::default().prefix(), SlotFormat::default().suffix()), ("", ""));
         assert_eq!(SlotFormat::default(), "{}".parse().unwrap());
         assert_eq!(SlotFormat::default().to_string(), "{}");
+    }
+
+    #[test]
+    fn basic_matches_its_parsed_form() {
+        assert_eq!(SlotFormat::basic(), "Basic {}".parse().unwrap());
     }
 
     #[test]

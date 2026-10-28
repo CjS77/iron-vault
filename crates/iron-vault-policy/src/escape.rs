@@ -83,7 +83,8 @@ pub(crate) fn walk_escapes<E>(segment: &str, policy: impl Fn(u8) -> EscapeAction
     Ok(Walked { normalized, decoded })
 }
 
-fn push_uppercase_escape(out: &mut String, byte: u8) {
+/// Appends `%XX` for `byte`, in the uppercase hex every escape this crate writes uses.
+pub(crate) fn push_uppercase_escape(out: &mut String, byte: u8) {
     // Writing to a `String` cannot fail.
     let _ = write!(out, "%{byte:02X}");
 }
