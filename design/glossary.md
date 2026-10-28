@@ -70,7 +70,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Slot value        | The credential text a kind produces for the route's slot, before the slot's format or encoding is applied. | `iron-vault-policy` | `SlotValue` | §3.6, §3.11, §5.2 |
 | Source            | The origin of a credential imported into the vault, initially direct entry and later password-manager sync.                 | `iron-vault-store`  | `Source` | §1.3 |
 | State directory   | The service-owned directory holding vault, control and lock files; the binary resolves it from the deployment profile.    | `iron-vault-store`  |           | §3.10 |
-| State file name   | One flat file name inside the state directory: non-empty ASCII `[A-Za-z0-9._-]`, no leading `.` (which temp names use) and never `lock`. | `iron-vault-store` | `StateFileName` | §3.10 |
+| State file name   | One flat file name inside the state directory: non-empty ASCII `[A-Za-z0-9._-]`, no leading `.` (which temp names use) and never `lock` in any letter case. | `iron-vault-store` | `StateFileName` | §3.10 |
 | State-directory lock | An exclusive, non-blocking lock on `<state directory>/lock`, held for the service's lifetime; a second writer fails to start. | `iron-vault-store` | `StateDirLock` | §3.1 |
 | Token bucket      | A route's rate-limit counter: it starts empty, refills at `requests / per_seconds` up to `burst`, and spends one token per request. | `iron-vault-policy` | `TokenBucket` | §3.5, §3.12 |
 | Upstream          | The HTTPS service to which Iron Vault forwards an authorized request.                                                       | `iron-vault-policy` | `UpstreamUrl` | §1.3 |
