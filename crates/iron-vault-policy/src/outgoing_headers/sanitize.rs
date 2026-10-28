@@ -35,6 +35,8 @@ pub enum SanitizeError {
 ///
 /// Framing is checked on the caller's list before anything is removed, so an ambiguous body length is rejected even
 /// though the framing headers themselves are dropped and the transport sets its own.
+///
+/// The headers are taken by value so that kept headers are moved, not copied, and removed ones are dropped and wiped.
 pub fn sanitize(caller: Vec<(HeaderName, HeaderValue)>, token_header: &HeaderName) -> Result<OutgoingHeaders, SanitizeError> {
     check_framing(&caller)?;
     let hop_by_hop = connection_names(&caller);

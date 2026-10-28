@@ -1,8 +1,7 @@
 //! Compile-time and `Debug` checks for this crate's secret-bearing types (spec §3.11, `design/secret-handling.md`).
 //!
 //! A type that gains `Clone`, `Copy`, `Display` or a serde impl would start copying, printing or writing the secret it
-//! holds; each assertion below turns that change into a build failure. A trait a type legitimately has is left out of
-//! its assertion, with the reason beside it.
+//! holds; each assertion below turns that change into a build failure. Every type asserts the full negative set.
 
 use std::collections::BTreeSet;
 use std::fmt::Display;

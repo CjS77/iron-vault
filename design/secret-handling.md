@@ -20,26 +20,26 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 
 ## Inventory
 
-| Type | Crate | Holds | Cleared by | Allowed trait | Debug check |
-|---|---|---|---|---|---|
-| `SlotValue` | policy | the credential text for a slot | `SecretString` | none | `secret_types_tests` |
-| `HeaderValue` | policy | an outgoing header value, possibly the filled slot or a caller token | its own `Drop`, `zeroize` | none | `secret_types_tests` |
-| `OutgoingHeaders` | policy | `HeaderValue`s | each `HeaderValue` | none | `secret_types_tests` |
-| `UpstreamTarget` | policy | the upstream URL, whose query may hold a filled query slot | not cleared: see residual copies | none | `secret_types_tests` |
-| `OutgoingRequest` | policy | an `UpstreamTarget` and `OutgoingHeaders` | its fields | none | `secret_types_tests` |
-| `CheckedRequest` | policy | the final URL and `OutgoingHeaders` | headers by `HeaderValue`; URL not cleared | none | `secret_types_tests` |
-| `CredentialMaterial` | kinds | a static key, or a username and password | `SecretString` per field | none | `secret_types_tests` |
-| `ScrubPatterns` | kinds | every encoded form of the injected secret | `Zeroizing<Vec<u8>>` per pattern | none | `secret_types_tests` |
-| `Resolution` | kinds | a `SlotValue` and its `ScrubPatterns` | its fields | none | `secret_types_tests` |
-| `VaultIdentity` | store | the vault's X25519 private key | `age::x25519::Identity`, which zeroizes on drop | none | `secret_types_tests` |
-| `RecipientIdentity` | store | a recipient's X25519 private key: operational or recovery | `age::x25519::Identity` | none | `secret_types_tests` |
-| `RecoveryKeySecret` | store | the recovery key's `AGE-SECRET-KEY-1…` text | `SecretString` | none | `secret_types_tests` |
-| `Passphrase` | store | the owner's passphrase | `SecretString` | none | `secret_types_tests` |
-| `CredentialRecord` | store | a `CredentialMaterial` | its material | none | `secret_types_tests` |
-| `Vault` | store | the `VaultIdentity` and every healthy `CredentialRecord` | its fields | none | `secret_types_tests` |
-| `ApprovalPassphrase` | store | the approver's passphrase for `approver.age` | `SecretString` | none | `secret_types_tests` |
-| `SoftwareSignerKey` | store | the software signer's Ed25519 private key | the inner `ed25519_dalek::SigningKey`, which zeroizes on drop (`zeroize` feature) | none | `software_signer/tests` |
-| `SoftwareSigner` | store | the opened Ed25519 private key and its `PinnedApprover` | the inner `SigningKey` | none | `software_signer/tests` |
+| Type | Crate | Holds | Cleared by | Debug check |
+|---|---|---|---|---|
+| `SlotValue` | policy | the credential text for a slot | `SecretString` | `secret_types_tests` |
+| `HeaderValue` | policy | an outgoing header value, possibly the filled slot or a caller token | its own `Drop`, `zeroize` | `secret_types_tests` |
+| `OutgoingHeaders` | policy | `HeaderValue`s | each `HeaderValue` | `secret_types_tests` |
+| `UpstreamTarget` | policy | the upstream URL, whose query may hold a filled query slot | not cleared: see residual copies | `secret_types_tests` |
+| `OutgoingRequest` | policy | an `UpstreamTarget` and `OutgoingHeaders` | its fields | `secret_types_tests` |
+| `CheckedRequest` | policy | the final URL and `OutgoingHeaders` | headers by `HeaderValue`; URL not cleared | `secret_types_tests` |
+| `CredentialMaterial` | kinds | a static key, or a username and password | `SecretString` per field | `secret_types_tests` |
+| `ScrubPatterns` | kinds | every encoded form of the injected secret | `Zeroizing<Vec<u8>>` per pattern | `secret_types_tests` |
+| `Resolution` | kinds | a `SlotValue` and its `ScrubPatterns` | its fields | `secret_types_tests` |
+| `VaultIdentity` | store | the vault's X25519 private key | `age::x25519::Identity`, which zeroizes on drop | `secret_types_tests` |
+| `RecipientIdentity` | store | a recipient's X25519 private key: operational or recovery | `age::x25519::Identity` | `secret_types_tests` |
+| `RecoveryKeySecret` | store | the recovery key's `AGE-SECRET-KEY-1…` text | `SecretString` | `secret_types_tests` |
+| `Passphrase` | store | the owner's passphrase | `SecretString` | `secret_types_tests` |
+| `CredentialRecord` | store | a `CredentialMaterial` | its material | `secret_types_tests` |
+| `Vault` | store | the `VaultIdentity` and every healthy `CredentialRecord` | its fields | `secret_types_tests` |
+| `ApprovalPassphrase` | store | the approver's passphrase for `approver.age` | `SecretString` | `secret_types_tests` |
+| `SoftwareSignerKey` | store | the software signer's Ed25519 private key | the inner `ed25519_dalek::SigningKey`, which zeroizes on drop (`zeroize` feature) | `software_signer/tests` |
+| `SoftwareSigner` | store | the opened Ed25519 private key and its `PinnedApprover` | the inner `SigningKey` | `software_signer/tests` |
 
 `ScrubPatterns` stores each pattern in a private `ScrubPattern` newtype, which has no `Clone`, `Display` or `Debug`.
 It is private to its module, so the test module cannot name it; it is covered through `ScrubPatterns`.

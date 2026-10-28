@@ -14,7 +14,7 @@ use thiserror::Error;
 /// callers may legitimately send them, and the value is forwarded as bytes, never decoded as text.
 ///
 /// Values can carry caller tokens or credentials, so `Debug` shows only the length, there is no `Display`, and the
-/// bytes are wiped when the value is dropped (spec §3.11). A clone is a second copy that is wiped on its own drop.
+/// bytes are wiped when the value is dropped (spec §3.11).
 #[derive(PartialEq, Eq)]
 pub struct HeaderValue(Vec<u8>);
 
