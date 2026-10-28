@@ -595,16 +595,25 @@ can finish the exact committed update after restart; otherwise it stays unavaila
 ### 3.10 Vault structure and durable writes
 
 The service generates one `age` X25519 vault identity. It encrypts that identity into `identity.age` for every
-enrolled recipient. It encrypts each credential record into a separate file for the vault identity's public key.
+enrolled recipient. Every recipient of `identity.age` is an X25519 recipient key. A hardware-backed recipient (TPM,
+YubiKey, Secure Enclave) or a passphrase reaches the vault through an intermediate identity: a generated X25519
+identity whose recipient key is enrolled in `identity.age` and whose private key is kept in a separate file that only
+that device or passphrase can open. Adding or removing any recipient therefore needs only public keys, never the
+hardware or a plugin program, and `identity.age` never carries a stanza type other than X25519. It encrypts each
+credential record into a separate file for the vault identity's public key.
 The vault also contains encrypted control metadata for approved signer keys, approval counters, committed policy,
 record indexing, and transaction recovery. Corruption of one credential must not require replacing every other
 credential. Corruption of shared identity or control metadata may require recovery; the service must say so.
 
 ```mermaid
 flowchart TD
-    TPM[Machine TPM recipient] -->|can unwrap| I[identity.age]
-    Recovery[Offline recovery recipient] -->|can unwrap| I
-    Hardware[Later hardware-key recipient] -->|can unwrap| I
+    TPM[Machine TPM] -->|unseals| TI[TPM-sealed intermediate identity]
+    TI -->|can unwrap| I[identity.age]
+    Pass[Passphrase] -->|opens| OI[Operational identity]
+    OI -->|can unwrap| I
+    Recovery[Offline recovery identity] -->|can unwrap| I
+    Hardware[Later hardware key] -->|opens| HI[Hardware-sealed intermediate identity]
+    HI -->|can unwrap| I
     I -->|one unlock into service memory| Key[Vault identity]
     Key --> A[Encrypted credential A]
     Key --> B[Encrypted credential B]
@@ -614,7 +623,8 @@ flowchart TD
 ```
 
 The private vault identity remains inside service memory while unlocked. TPM or YubiKey startup requires one
-identity unwrap, not one hardware operation per credential. Public-key encryption lets the service write a new
+hardware operation to open its intermediate identity and one identity unwrap, not one hardware operation per
+credential. The service clears the intermediate identity as soon as the vault identity is unwrapped. Public-key encryption lets the service write a new
 credential without a fresh unwrap. Rewrapping the vault identity changes recipients without re-encrypting every
 credential, but it does not revoke access to previously copied ciphertext.
 
@@ -635,8 +645,8 @@ directory fsync preserve a completed replacement across power loss; an atomic re
 
 ### 3.11 Recipients, startup, and memory
 
-The primary Linux TPM recipient uses a non-exportable hardware key to unwrap the vault identity. The service stores
-credentials on disk, not in TPM NV space. `age-plugin-tpm` provides an implementation lead, not a verified dependency;
+The primary Linux TPM recipient uses a non-exportable hardware key to open a TPM-sealed intermediate identity, which
+in turn unwraps the vault identity (§3.10). The service stores credentials on disk, not in TPM NV space. `age-plugin-tpm` provides an implementation lead, not a verified dependency;
 the host adapter must demonstrate interoperable wrapping, recovery, and restart behavior before release.
 
 PCR 7 records Secure Boot policy; it does not uniquely identify the intended installed OS. It cannot by itself
@@ -1026,12 +1036,12 @@ configure `pcscd` access deliberately. The package must verify device enrollment
 separation, and interaction with other desktop smart-card applications. It must not assume that a common desktop
 PC/SC policy limits a key to Iron Vault.
 
-A hardware key may replace or accompany the TPM as a vault recipient. Any enrolled recipient can unwrap the
-identity. A TPM-plus-YubiKey installation may still start through its TPM without a touch; adding a touch-enabled
+A hardware key may replace or accompany the TPM as a vault recipient, through its own hardware-sealed intermediate
+identity (§3.10). Any enrolled recipient can unwrap the identity. A TPM-plus-YubiKey installation may still start through its TPM without a touch; adding a touch-enabled
 recipient alone does not make touch mandatory. A YubiKey-only operational profile requires PIN and touch on
 unlock and keeps the identity in service memory afterwards.
 
-Aim for PIN `once` per service session and touch `always` for identity-unwrapping operations. Do not ship a
+Aim for PIN `once` per service session and touch `always` for opening the hardware-sealed intermediate identity. Do not ship a
 protected profile with both PIN and touch disabled. Separate approval signing from unattended vault use; use a
 dedicated PIV signing key with the approved signing policy and the same versioned config envelope as the TPM.
 The service must verify the policy it actually provisioned and tell the owner when a device cannot meet it.
