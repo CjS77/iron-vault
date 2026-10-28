@@ -14,3 +14,7 @@ base64.workspace = true
 iron-vault-policy = { path = "../iron-vault-policy" }
 secrecy.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+static_assertions.workspace = true

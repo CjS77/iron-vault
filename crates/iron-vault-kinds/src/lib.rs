@@ -9,6 +9,8 @@ mod basic_kind;
 pub mod material;
 pub mod resolve;
 pub mod scrub;
+#[cfg(test)]
+mod secret_types_tests;
 mod static_kind;
 
 pub use basic_kind::BasicCredentialError;

@@ -37,6 +37,8 @@ pub mod slot;
 pub mod slot_format;
 pub mod slot_value;
 #[cfg(test)]
+mod secret_types_tests;
+#[cfg(test)]
 mod spec_example;
 pub mod token_bucket;
 pub mod token_hash;

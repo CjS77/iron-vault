@@ -15,6 +15,8 @@ mod recipient;
 mod record;
 mod recovery;
 mod record_id;
+#[cfg(test)]
+mod secret_types_tests;
 mod sealed;
 mod stale_temps;
 mod stanza;
