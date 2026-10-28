@@ -92,17 +92,52 @@ fn vault_debug_hides_the_identity_and_every_record() {
 /// dropped it. The store's production sources must use neither, so dropping a `Vault` drops its only copies.
 #[test]
 fn no_shared_or_global_owner_of_vault_secrets() {
-    const FORBIDDEN: [&str; 7] = ["Rc<", "Arc<", "OnceLock", "LazyLock", "OnceCell", "thread_local!", "static mut"];
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let offenders: Vec<String> = production_sources(&src)
-        .into_iter()
+    let sources = production_sources(&src);
+    assert!(!sources.is_empty());
+    let offenders: Vec<String> = sources
+        .iter()
         .flat_map(|path| {
-            let text = std::fs::read_to_string(&path).unwrap();
-            let production = text.split("\nmod tests {").next().unwrap_or_default().to_owned();
-            FORBIDDEN.iter().filter(move |word| production.contains(*word)).map(move |word| format!("{}: {word}", path.display()))
+            let text = std::fs::read_to_string(path).unwrap();
+            production_lines(&text)
+                .into_iter()
+                .filter(|line| is_shared_or_global(line))
+                .map(|line| format!("{}: {line}", path.display()))
+                .collect::<Vec<_>>()
         })
         .collect();
     assert!(offenders.is_empty(), "{offenders:?}");
+}
+
+/// Whether `line` names a shared owner or declares a non-`const` `static` item.
+fn is_shared_or_global(line: &str) -> bool {
+    const FORBIDDEN: [&str; 10] =
+        ["Rc<", "Rc::", "Arc<", "Arc::", "Weak<", "OnceLock", "LazyLock", "OnceCell", "thread_local!", "lazy_static!"];
+    FORBIDDEN.iter().any(|word| line.contains(word)) || line.split_whitespace().take_while(|word| *word != "=").any(|word| word == "static")
+}
+
+/// The lines of `text` outside comments and outside every item marked `#[cfg(test)]`, whatever its visibility.
+fn production_lines(text: &str) -> Vec<&str> {
+    // State: whether the next item is test-only, and the brace depth inside a test-only item being skipped.
+    let mut pending = false;
+    let mut depth = 0_i64;
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with("//"))
+        .filter(|line| {
+            if depth > 0 || pending {
+                depth += brace_balance(line);
+                pending = pending && depth == 0 && !line.ends_with(';') && !line.ends_with('}');
+                return false;
+            }
+            pending = *line == "#[cfg(test)]";
+            !pending
+        })
+        .collect()
+}
+
+fn brace_balance(line: &str) -> i64 {
+    line.chars().map(|c| i64::from(c == '{') - i64::from(c == '}')).sum()
 }
 
 /// Every `.rs` file under `dir` except test modules and test doubles.
