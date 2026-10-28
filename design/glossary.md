@@ -60,6 +60,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Route             | A caller grant and upstream mapping that selects one credential, its slot, and usage restrictions.                          | `iron-vault-policy` | `RouteName`, `RouteConfig` | §1.3, §3.3 |
 | Route prefix      | The literal leading request-path segments, such as `/fx`, that select a route; never `/` alone and never a wildcard.        | `iron-vault-policy` | `RoutePrefix` | §3.3, §3.6 |
 | Scrub patterns    | Every byte form of the secret a kind injected that response scrubbing watches for: the exact value, its URL-encoded forms in both hex cases, and its base64 encodings; for a Basic credential, the Basic token, the complete `Basic <token>` value, and `username:password` and the password with their URL-encoded forms, but never the username alone; never case-folded. | `iron-vault-kinds` | `ScrubPatterns` | §3.8 |
+| Sealed file       | Binary `age` ciphertext encrypted to the vault public key whose header holds only X25519 stanzas, besides the inert grease stanza `age` writes into every file; the on-disk form of credential records and control metadata. A file with a passphrase (scrypt) or plugin stanza is refused before any key work. | `iron-vault-store` | `seal`, `open` | §3.10 |
 | Slot              | The route's permitted credential location: a named header, a named query parameter (RFC 3986 unreserved characters only, so the URL keeps it unchanged), or Basic authorization.                 | `iron-vault-policy` | `Slot` | §1.3, §3.3 |
 | Slot format       | The fixed text around a header slot's credential, with exactly one `{}` substitution point, such as `Bearer {}`.          | `iron-vault-policy` | `SlotFormat` | §3.6 |
 | Slot value        | The credential text a kind produces for the route's slot, before the slot's format or encoding is applied. | `iron-vault-policy` | `SlotValue` | §3.6, §3.11, §5.2 |
@@ -71,7 +72,8 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Upstream target   | The URL the service will send to, built from the configured upstream and the authorized request and checked to read back as exactly the authorized path and query. | `iron-vault-policy` | `UpstreamTarget` | §3.5, §3.6 |
 | Validated config  | A parsed config whose cross-references all resolve and whose listeners, token hashes, route prefixes and slots cannot conflict. | `iron-vault-policy` | `ValidatedConfig` | §3.3, §3.4, §3.5, §3.6 |
 | Vault             | The service-owned encrypted storage and protected metadata on disk.                                                         | `iron-vault-store`  |           | §1.3 |
-| Vault identity    | The generated `age` X25519 private key that decrypts individual credential files.                                           | `iron-vault-store`  |           | §1.3 |
+| Vault identity    | The generated `age` X25519 private key that decrypts individual credential files.                                           | `iron-vault-store`  | `VaultIdentity` | §1.3, §3.10 |
+| Vault public key  | The public half of the vault identity, written as an `age1…` string; anything sealed to it only the vault identity opens, and it is safe to log. Not a recipient: a recipient unwraps the vault identity itself. | `iron-vault-store` | `VaultPublicKey` | §3.10 |
 
 Context notes for terms that span crates:
 
