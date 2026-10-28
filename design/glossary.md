@@ -28,6 +28,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Capabilities      | Facts about this service installation that activation checks routes against, such as whether a touch confirmation provider exists. | `iron-vault-policy` | `Capabilities` | §2, §8.2 |
 | Caller            | An authenticated program identity with grants to named routes.                                                              | `iron-vault-policy` | `CallerName`, `CallerConfig` | §1.3, §3.4 |
 | Caller token      | A high-entropy secret a caller presents in `Proxy-Authorization` or its listener's `token_header`; only its BLAKE2b-256 hash is stored. | `iron-vault-policy` | `TokenHash` | §3.3, §3.4 |
+| Checked request   | An outgoing request that passed the final outgoing-request check against its authorized request, its route's upstream and slot, and its credential record's permitted origins; the only form the transport accepts. | `iron-vault-policy` | `CheckedRequest` | §3.3, §3.6, §7 |
 | Config approval   | A service-generated signature binding a vault identifier, approval version, and exact configuration hash.                   | `iron-vault-store`  |           | §1.3 |
 | Confirmation      | A route's owner-confirmation policy: `none` (the default) or `touch`, which v0 parses but refuses to activate. | `iron-vault-policy` | `Confirmation` | §2, §3.3, §5.1 |
 | Credential        | A named provider secret and the rules that govern its use.                                                                  | `iron-vault-kinds`  |           | §1.3 |
