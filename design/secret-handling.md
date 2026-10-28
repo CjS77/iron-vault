@@ -25,9 +25,9 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | `SlotValue` | policy | the credential text for a slot | `SecretString` | none | `secret_types_tests` |
 | `HeaderValue` | policy | an outgoing header value, possibly the filled slot or a caller token | its own `Drop`, `zeroize` | `Clone`: a clone is a second buffer with the same `Drop` | `secret_types_tests` |
 | `OutgoingHeaders` | policy | `HeaderValue`s | each `HeaderValue` | `Clone`, through `HeaderValue` | `secret_types_tests` |
-| `UpstreamTarget` | policy | the upstream URL, whose query may hold a filled query slot | not cleared: see residual copies | `Clone` | `upstream_target` tests |
-| `OutgoingRequest` | policy | an `UpstreamTarget` and `OutgoingHeaders` | its fields | none | `outgoing_request` tests |
-| `CheckedRequest` | policy | the final URL and `OutgoingHeaders` | headers by `HeaderValue`; URL not cleared | none | `final_check` tests |
+| `UpstreamTarget` | policy | the upstream URL, whose query may hold a filled query slot | not cleared: see residual copies | `Clone` | `secret_types_tests` |
+| `OutgoingRequest` | policy | an `UpstreamTarget` and `OutgoingHeaders` | its fields | none | `secret_types_tests` |
+| `CheckedRequest` | policy | the final URL and `OutgoingHeaders` | headers by `HeaderValue`; URL not cleared | none | `secret_types_tests` |
 | `CredentialMaterial` | kinds | a static key, or a username and password | `SecretString` per field | none | `secret_types_tests` |
 | `ScrubPatterns` | kinds | every encoded form of the injected secret | `Zeroizing<Vec<u8>>` per pattern | none | `secret_types_tests` |
 | `Resolution` | kinds | a `SlotValue` and its `ScrubPatterns` | its fields | none | `secret_types_tests` |
@@ -48,9 +48,23 @@ It is private to its module, so the test module cannot name it; it is covered th
 
 ### Transient buffers
 
-Functions that build or read secret bytes return them in `Zeroizing` buffers sized before they are filled, so they
-never reallocate and leave a stale copy: `sealed::open`, `record::encode`, the Basic kind's `user:pass` join, the
-filled query in `outgoing_request`, and the query encoding in `final_check`.
+Some secrets exist only inside one function call, in a buffer that clears itself on drop. `Zeroizing` derives `Debug`
+and `Clone` whenever its contents do, so a `Zeroizing` buffer is safe only while it stays function-local: it must never
+become a field of a long-lived type or be logged. Each buffer below is created and dropped within one store or kind
+operation.
+
+| Buffer | Where | Type | Notes |
+|---|---|---|---|
+| Manifest key | `VaultIdentity::derive_key(MANIFEST_KEY_PERSONA)` in `manifest.rs` | `Zeroizing<[u8; 64]>` | Written by `finalize_into` straight into the buffer, then used as the `Blake2bMac` key. |
+| Approval-state MAC key | `VaultIdentity::derive_key(APPROVAL_KEY_PERSONA)` in `approval/state/file.rs` | `Zeroizing<[u8; 64]>` | As above. |
+| Identity secret text | `VaultIdentity::secret_text` and `RecipientIdentity::secret_text`, sealed by `envelope.rs` and `passphrase.rs`, and moved into `RecoveryKeySecret` by `RecoveryKey::generate` | `SecretString` | `SecretString` has a redacted `Debug` and no `Clone`. |
+| Decrypted plaintext | `sealed::open` | `Zeroizing<Vec<u8>>` | Sized from the ciphertext length before reading, so it never reallocates. |
+| Record payload | `record::encode` | `Zeroizing<Vec<u8>>` | Sized before filling. |
+| Basic `user:pass` | `basic_kind::join` | `Zeroizing<String>` | Sized before filling. |
+| Filled query and its encoding | `outgoing_request::filled_query`, `final_check` | `Zeroizing<String>` | Sized before filling; the `url::Url` it is copied into is a residual copy. |
+
+`blake2`'s `zeroize` feature, enabled in the workspace, clears the `Blake2b512` hasher that derives a key and the
+`Blake2bMac` state keyed with it when each is dropped. Without it, the key would survive in the dropped MAC's state.
 
 ## Clearing a vault
 
@@ -64,7 +78,7 @@ dropped. `secret_types_tests` checks this by scanning the store's sources, and a
 | Copy | Why it is accepted, or what removes it |
 |---|---|
 | `age`'s `StreamWriter` keeps its last 64 KiB plaintext chunk in a buffer it does not wipe (K-33 review). | `age` owns the buffer. Locked memory (K-45) keeps it out of swap. |
-| `age`'s `StreamReader` likewise keeps the last decrypted chunk unwiped while `sealed::open` reads a record, manifest or envelope. | As above; the plaintext itself goes into a `Zeroizing` buffer. |
+| `age`'s `StreamReader` (age 0.12.1, `primitives/stream.rs:410`) keeps the decrypted chunk in a `SecretSlice<u8>`, which is wiped. The AEAD's output `Vec` is 16 bytes larger than the plaintext (room for the tag), so converting it into a `SecretSlice` shrinks it, and the allocator may move it, leaving a freed, unwiped copy of the chunk. | `age` owns the conversion. Locked memory (K-45) keeps it out of swap; the plaintext `sealed::open` returns is in a `Zeroizing` buffer. |
 | `age`'s scrypt recipient and identity take a `SecretString` copy of the passphrase (`Passphrase::for_age`), and derive the wrapping key inside `age`. | The copy is a `SecretString` and is wiped; `age`'s internal key derivation is not audited here. Locked memory (K-45) keeps it out of swap. |
 | The `url::Url` inside `UpstreamTarget` and `CheckedRequest` holds a filled query slot and is never wiped, because `Url` owns its buffer. | The transport epic wipes or avoids it when the request is sent (`TODO(transport epic)` in `outgoing_request.rs`). |
 | `HeaderValue`, `OutgoingHeaders` and `UpstreamTarget` derive `Clone`. No production code clones them today. | A cloned `HeaderValue` is wiped on its own drop; a cloned `UpstreamTarget` is not (row above). Removing the derives is a follow-up decision, not part of this inventory. |
