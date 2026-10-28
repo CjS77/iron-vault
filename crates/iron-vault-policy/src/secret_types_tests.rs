@@ -20,6 +20,7 @@ use crate::{
 
 assert_not_impl_any!(SlotValue: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(OutgoingRequest: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(BoundCredential<'static>: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(CheckedRequest: Clone, Copy, Display, Serialize, Deserialize<'static>);
 
 assert_not_impl_any!(HeaderValue: Clone, Copy, Display, Serialize, Deserialize<'static>);
@@ -43,6 +44,13 @@ fn assert_redacted(value: &impl std::fmt::Debug) {
 #[test]
 fn slot_value_debug_hides_the_secret() {
     assert_redacted(&SlotValue::new(SecretString::from(MARKER)).unwrap());
+}
+
+#[test]
+fn bound_credential_debug_hides_the_secret() {
+    let value = SlotValue::new(SecretString::from(MARKER)).unwrap();
+    let permitted = origins(&"fx_key".parse().unwrap());
+    assert_redacted(&BoundCredential::new(&value, &permitted));
 }
 
 #[test]

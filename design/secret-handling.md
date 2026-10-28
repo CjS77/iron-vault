@@ -23,6 +23,7 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | Type | Crate | Holds | Cleared by | Debug check |
 |---|---|---|---|---|
 | `SlotValue` | policy | the credential text for a slot | `SecretString` | `secret_types_tests` |
+| `BoundCredential` | policy | a borrow of a `SlotValue` and of its record's permitted origins | not an owner: the `SlotValue` it borrows | `secret_types_tests` |
 | `HeaderValue` | policy | an outgoing header value, possibly the filled slot or a caller token | its own `Drop`, `zeroize` | `secret_types_tests` |
 | `OutgoingHeaders` | policy | `HeaderValue`s | each `HeaderValue` | `secret_types_tests` |
 | `UpstreamTarget` | policy | the upstream URL, whose query may hold a filled query slot | not cleared: see residual copies | `secret_types_tests` |
