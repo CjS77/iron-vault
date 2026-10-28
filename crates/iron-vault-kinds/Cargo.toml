@@ -8,3 +8,9 @@ rust-version.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+base64.workspace = true
+iron-vault-policy = { path = "../iron-vault-policy" }
+secrecy.workspace = true
+thiserror.workspace = true
