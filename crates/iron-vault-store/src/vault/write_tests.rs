@@ -12,7 +12,10 @@ use super::tests::{assert_no_secret_logged, capture_logs, identity, init_test_tr
 use super::*;
 use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::test_dir::TestDir;
-use crate::{OsFs, PermittedOrigins, RecordId, StateGeneration, WriteStep, durable_remove, durable_replace};
+use crate::{
+    ApprovalState, ApprovalStateError, OsFs, PermittedOrigins, PinnedApprover, RecordId, StateGeneration, WriteStep, durable_remove,
+    durable_replace, seal_manifest,
+};
 
 /// The credentials every vault under test starts with.
 const SEEDED: [&str; 2] = ["keep", "target"];
@@ -602,4 +605,110 @@ fn a_long_secret_logs_no_warning() {
     let (added, events) = capture_logs(|| setup.add(&fs, &mut vault, "fx_key", 1));
     added.unwrap();
     assert!(events.iter().all(|event| event.level != Level::WARN), "{events:?}");
+}
+
+/// The state generation and peer generation the vault's manifest was written at.
+fn manifest_generations(vault: &Vault) -> (u64, Option<u64>) {
+    let manifest = vault.manifest();
+    (
+        manifest.state_generation().get(),
+        manifest.peer_generation().map(StateGeneration::get),
+    )
+}
+
+/// The state generation and peer generation the approval state was written at.
+fn approval_generations(state: &ApprovalState) -> (u64, Option<u64>) {
+    (state.state_generation().get(), Some(state.peer_generation().get()))
+}
+
+fn approver() -> PinnedApprover {
+    PinnedApprover::from_signing_key(&ed25519_dalek::SigningKey::from_bytes(&[1; 32]))
+}
+
+#[test]
+fn interleaved_vault_and_approval_writes_take_one_state_generation_each_and_name_their_peer() {
+    let setup = Setup::new("write-generations");
+    let fs = FaultFs::new();
+    let mut vault = Vault::create(&setup.lock, &fs, identity()).unwrap();
+    let mut seen = vec![manifest_generations(&vault)];
+    let (manifest_now, vault_id) = (vault.manifest().state_generation(), vault.manifest().vault_id());
+    let mut approval = ApprovalState::create(&setup.lock, &fs, &identity(), manifest_now, vault_id, approver()).unwrap();
+    seen.push(approval_generations(&approval));
+    let approval_now = Some(approval.state_generation());
+    vault
+        .add(
+            &setup.lock,
+            &fs,
+            approval_now,
+            n("fx_key"),
+            material("fx_key", 1),
+            origins("fx_key"),
+        )
+        .unwrap();
+    seen.push(manifest_generations(&vault));
+    let version = approval
+        .reserve(&setup.lock, &fs, &identity(), vault.manifest().state_generation())
+        .unwrap();
+    seen.push(approval_generations(&approval));
+    let digest = crate::ConfigDigest::of(b"config");
+    approval
+        .commit(&setup.lock, &fs, &identity(), vault.manifest().state_generation(), version, digest)
+        .unwrap();
+    seen.push(approval_generations(&approval));
+    let approval_now = Some(approval.state_generation());
+    vault
+        .add(&setup.lock, &fs, approval_now, n("brave"), material("brave", 1), origins("brave"))
+        .unwrap();
+    seen.push(manifest_generations(&vault));
+
+    // 1 to 6 with no gaps; each peer is the other file's latest write before it.
+    let expected = [(1, None), (2, Some(1)), (3, Some(2)), (4, Some(3)), (5, Some(3)), (6, Some(5))];
+    assert_eq!(seen, expected);
+    fs.crash();
+    let (reopened, _) = setup.open(&fs).unwrap();
+    let reloaded = ApprovalState::load(&setup.lock, &fs, &identity(), vault_id).unwrap();
+    assert_eq!((reopened.manifest(), &reloaded), (vault.manifest(), &approval));
+}
+
+#[test]
+fn every_write_after_state_generation_u64_max_fails_and_touches_no_file() {
+    let setup = Setup::new("write-generation-exhausted");
+    let (fs, mut vault) = setup.seeded(&SEEDED);
+    let last = StateGeneration::new(u64::MAX).unwrap();
+    let exhausted = VaultError::NextManifest(ManifestError::GenerationExhausted);
+
+    // The approval state is at u64::MAX: no vault write can follow it.
+    let (calls, before) = (fs.trace().len(), snapshot(&vault));
+    assert_eq!(
+        vault
+            .add(&setup.lock, &fs, Some(last), n("fresh"), material("fresh", 1), origins("fresh"))
+            .unwrap_err(),
+        exhausted
+    );
+    assert_eq!(
+        vault
+            .replace(&setup.lock, &fs, Some(last), n("target"), material("target", 2), origins("target"))
+            .unwrap_err(),
+        exhausted
+    );
+    assert_eq!(vault.remove(&setup.lock, &fs, Some(last), &n("target")).unwrap_err(), exhausted);
+    assert_eq!((mutations(&fs, calls), snapshot(&vault)), (vec![], before));
+
+    // The manifest is at u64::MAX: neither file can be written again.
+    let entries = vault.manifest().entries().clone();
+    let at_max = VaultManifest::new(vault.manifest().vault_id(), last, None, entries).unwrap();
+    durable_replace(
+        &setup.lock,
+        &fs,
+        &StateFileName::manifest(),
+        &seal_manifest(&identity(), &at_max).unwrap(),
+    )
+    .unwrap();
+    let (mut vault, _) = setup.open(&fs).unwrap();
+    let calls = fs.trace().len();
+    assert_eq!(setup.add(&fs, &mut vault, "fresh", 1).unwrap_err(), exhausted);
+    let created = ApprovalState::create(&setup.lock, &fs, &identity(), last, at_max.vault_id(), approver());
+    assert_eq!(created.unwrap_err(), ApprovalStateError::StateGenerationExhausted);
+    assert_eq!(mutations(&fs, calls), []);
+    assert_eq!(vault.manifest(), &at_max);
 }
