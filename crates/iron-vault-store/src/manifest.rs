@@ -17,6 +17,7 @@ use thiserror::Error;
 use crate::mac_file::MacFileKind;
 use crate::record_id::{RecordId, RecordIdError};
 use crate::sealed::{OpenError, SealError};
+use crate::state_generation::StateGeneration;
 use crate::vault_id::{VaultId, VaultIdError};
 use crate::vault_identity::VaultIdentity;
 
@@ -73,14 +74,16 @@ impl ManifestEntry {
     }
 }
 
-/// The set of records a vault holds, at one generation.
+/// The set of records a vault holds, at one state generation.
 ///
 /// Names are unique across entries and there are at most [`MAX_MANIFEST_ENTRIES`], whether the manifest was built or
-/// decoded. The generation increases by one with every write, so a stale copy can be told from the current one.
+/// decoded. It also records the approval state's state generation when it was written, so a restore of either file
+/// alone leaves a pair that disagrees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultManifest {
     vault_id: VaultId,
-    generation: u64,
+    state_generation: StateGeneration,
+    peer_generation: Option<StateGeneration>,
     entries: BTreeMap<RecordId, ManifestEntry>,
 }
 
@@ -144,14 +147,23 @@ pub enum ManifestError {
         /// The limit that was exceeded.
         limit: usize,
     },
-    /// The generation is already `u64::MAX`, so no later manifest can be written.
-    #[error("vault manifest generation is exhausted")]
+    /// The state generation is 0, which no manifest is written at.
+    #[error("vault manifest state generation is 0")]
+    ZeroStateGeneration,
+    /// The manifest or the approval state is at state generation `u64::MAX`, so no later manifest can be written.
+    #[error("vault state generation is exhausted")]
     GenerationExhausted,
 }
 
 impl VaultManifest {
-    /// A manifest of `entries` at `generation`, refusing a repeated name or more than [`MAX_MANIFEST_ENTRIES`].
-    pub fn new(vault_id: VaultId, generation: u64, entries: BTreeMap<RecordId, ManifestEntry>) -> Result<Self, ManifestError> {
+    /// A manifest of `entries` written at `state_generation` while the approval state was at `peer_generation` (`None`
+    /// before it existed), refusing a repeated name or more than [`MAX_MANIFEST_ENTRIES`].
+    pub fn new(
+        vault_id: VaultId,
+        state_generation: StateGeneration,
+        peer_generation: Option<StateGeneration>,
+        entries: BTreeMap<RecordId, ManifestEntry>,
+    ) -> Result<Self, ManifestError> {
         if entries.len() > MAX_MANIFEST_ENTRIES {
             return Err(ManifestError::TooManyEntries {
                 limit: MAX_MANIFEST_ENTRIES,
@@ -165,15 +177,28 @@ impl VaultManifest {
             })?;
         Ok(Self {
             vault_id,
-            generation,
+            state_generation,
+            peer_generation,
             entries,
         })
     }
 
-    /// The manifest to write after this one: the same vault, the next generation, and `entries`.
-    pub fn next(&self, entries: BTreeMap<RecordId, ManifestEntry>) -> Result<Self, ManifestError> {
-        let generation = self.generation.checked_add(1).ok_or(ManifestError::GenerationExhausted)?;
-        Self::new(self.vault_id, generation, entries)
+    /// The first manifest of a new vault: no entries, at the first state generation, before any approval state.
+    pub fn first(vault_id: VaultId) -> Result<Self, ManifestError> {
+        let state_generation = StateGeneration::next(None, None).ok_or(ManifestError::GenerationExhausted)?;
+        Self::new(vault_id, state_generation, None, BTreeMap::new())
+    }
+
+    /// The manifest to write after this one: the same vault, `entries`, and the next state generation given the approval
+    /// state's current one, `approval_generation` (`None` while there is none).
+    pub fn next(
+        &self,
+        approval_generation: Option<StateGeneration>,
+        entries: BTreeMap<RecordId, ManifestEntry>,
+    ) -> Result<Self, ManifestError> {
+        let state_generation =
+            StateGeneration::next(Some(self.state_generation), approval_generation).ok_or(ManifestError::GenerationExhausted)?;
+        Self::new(self.vault_id, state_generation, approval_generation, entries)
     }
 
     /// The vault this manifest indexes.
@@ -181,9 +206,14 @@ impl VaultManifest {
         self.vault_id
     }
 
-    /// The write count this manifest was written at.
-    pub fn generation(&self) -> u64 {
-        self.generation
+    /// The state generation this manifest was written at.
+    pub fn state_generation(&self) -> StateGeneration {
+        self.state_generation
+    }
+
+    /// The approval state's state generation when this manifest was written; `None` if there was no approval state.
+    pub fn peer_generation(&self) -> Option<StateGeneration> {
+        self.peer_generation
     }
 
     /// Every record the vault holds, by record ID.
@@ -255,13 +285,17 @@ pub(crate) mod tests {
         KIND.mac(key, signed)
     }
 
+    fn generation(value: u64) -> StateGeneration {
+        StateGeneration::new(value).unwrap()
+    }
+
     fn entry(name: &str, digest: u8) -> ManifestEntry {
         ManifestEntry::new(name.parse().unwrap(), [digest; 32])
     }
 
     fn manifest(vault_id: VaultId) -> VaultManifest {
         let entries = [("fx_key", 1), ("brave", 2), ("venice", 3)].map(|(name, digest)| (RecordId::new_random(), entry(name, digest)));
-        VaultManifest::new(vault_id, 7, entries.into()).unwrap()
+        VaultManifest::new(vault_id, generation(7), Some(generation(6)), entries.into()).unwrap()
     }
 
     /// A manifest file with the given header vault ID and payload, MACed under `key`: what anyone could build who
@@ -301,18 +335,47 @@ pub(crate) mod tests {
         let opened = open_manifest(&identity, &seal_manifest(&identity, &original).unwrap()).unwrap();
         assert_eq!(opened, original);
         assert_eq!(
-            (opened.vault_id(), opened.generation(), opened.entries().len()),
-            (original.vault_id(), 7, 3)
+            (
+                opened.vault_id(),
+                opened.state_generation(),
+                opened.peer_generation(),
+                opened.entries().len()
+            ),
+            (original.vault_id(), generation(7), Some(generation(6)), 3)
         );
     }
 
     #[test]
-    fn next_increments_the_generation_and_never_wraps() {
-        let first = manifest(VaultId::new_random());
-        let second = first.next(BTreeMap::new()).unwrap();
-        assert_eq!((second.vault_id(), second.generation()), (first.vault_id(), 8));
-        let last = VaultManifest::new(first.vault_id(), u64::MAX, BTreeMap::new()).unwrap();
-        assert_eq!(last.next(BTreeMap::new()), Err(ManifestError::GenerationExhausted));
+    fn first_is_empty_at_the_first_state_generation_with_no_peer() {
+        let first = VaultManifest::first(VaultId::new_random()).unwrap();
+        assert_eq!(
+            (first.state_generation(), first.peer_generation(), first.entries().len()),
+            (StateGeneration::FIRST, None, 0)
+        );
+    }
+
+    #[test]
+    fn next_takes_one_above_the_newer_state_generation_and_never_wraps() {
+        let current = manifest(VaultId::new_random());
+        let alone = current.next(None, BTreeMap::new()).unwrap();
+        assert_eq!(
+            (alone.vault_id(), alone.state_generation(), alone.peer_generation()),
+            (current.vault_id(), generation(8), None)
+        );
+        let behind = current.next(Some(generation(5)), BTreeMap::new()).unwrap();
+        assert_eq!(
+            (behind.state_generation(), behind.peer_generation()),
+            (generation(8), Some(generation(5)))
+        );
+        let ahead = current.next(Some(generation(20)), BTreeMap::new()).unwrap();
+        assert_eq!(
+            (ahead.state_generation(), ahead.peer_generation()),
+            (generation(21), Some(generation(20)))
+        );
+        let last = VaultManifest::new(current.vault_id(), generation(u64::MAX), None, BTreeMap::new()).unwrap();
+        assert_eq!(last.next(None, BTreeMap::new()), Err(ManifestError::GenerationExhausted));
+        let peer_last = current.next(Some(generation(u64::MAX)), BTreeMap::new());
+        assert_eq!(peer_last, Err(ManifestError::GenerationExhausted));
     }
 
     #[test]
@@ -321,12 +384,12 @@ pub(crate) mod tests {
             (RecordId::new_random(), entry("fx_key", 1)),
             (RecordId::new_random(), entry("fx_key", 2)),
         ];
-        let duplicate = VaultManifest::new(VaultId::new_random(), 1, entries.into());
+        let duplicate = VaultManifest::new(VaultId::new_random(), StateGeneration::FIRST, None, entries.into());
         assert_eq!(duplicate, Err(ManifestError::DuplicateName("fx_key".parse().unwrap())));
         let many = (0..=MAX_MANIFEST_ENTRIES)
             .map(|i| (RecordId::new_random(), entry(&format!("n{i}"), 0)))
             .collect();
-        let too_many = VaultManifest::new(VaultId::new_random(), 1, many);
+        let too_many = VaultManifest::new(VaultId::new_random(), StateGeneration::FIRST, None, many);
         assert_eq!(
             too_many,
             Err(ManifestError::TooManyEntries {
@@ -342,7 +405,7 @@ pub(crate) mod tests {
         let entries = (0..MAX_MANIFEST_ENTRIES)
             .map(|i| (RecordId::new_random(), entry(&format!("n{i:063}"), 9)))
             .collect();
-        let full = VaultManifest::new(VaultId::new_random(), u64::MAX, entries).unwrap();
+        let full = VaultManifest::new(VaultId::new_random(), generation(u64::MAX), Some(generation(u64::MAX - 1)), entries).unwrap();
         let file = seal_manifest(&identity, &full).unwrap();
         assert!(file.len() <= MAX_MANIFEST_LEN / 2, "{}", file.len());
         assert_eq!(open_manifest(&identity, &file), Ok(full));
@@ -390,14 +453,17 @@ pub(crate) mod tests {
     fn duplicate_names_are_rejected_after_the_mac_passes() {
         let identity = VaultIdentity::generate();
         let id = VaultId::new_random();
-        let one = |name: &str| encoding::encode(&VaultManifest::new(id, 1, [(RecordId::new_random(), entry(name, 1))].into()).unwrap());
+        let one = |name: &str| {
+            let entries = [(RecordId::new_random(), entry(name, 1))].into();
+            encoding::encode(&VaultManifest::new(id, StateGeneration::FIRST, None, entries).unwrap())
+        };
         let (a, b) = (one("fx_key"), one("fx_key"));
         // Splice b's entry into a and set the count to 2; the record IDs differ, so only the names collide. The count
-        // starts at byte 29 and the first entry's record ID at 37 (see the payload layout).
-        let mut ids = [a[37..53].to_vec(), b[37..53].to_vec()];
+        // starts at byte 37 and the first entry's record ID at 45 (see the payload layout).
+        let mut ids = [a[45..61].to_vec(), b[45..61].to_vec()];
         ids.sort();
-        let tail = &a[53..];
-        let payload = [&a[..29], &2u64.to_be_bytes(), &ids[0], tail, &ids[1], tail].concat();
+        let tail = &a[61..];
+        let payload = [&a[..37], &2u64.to_be_bytes(), &ids[0], tail, &ids[1], tail].concat();
         let file = forged(&identity, id, &payload, &identity.derive_key(MANIFEST_KEY_PERSONA));
         assert_eq!(
             open_manifest(&identity, &file),

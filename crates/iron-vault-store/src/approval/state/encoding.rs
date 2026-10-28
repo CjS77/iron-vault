@@ -3,6 +3,7 @@
 use super::{ApprovalState, ApprovalStateError, PinnedApprover};
 use crate::approval::encoding::{header, put_field, read_header};
 use crate::approval::{ApprovalDecodeError, ApprovalVersion, ConfigDigest, SignatureAlgorithm};
+use crate::state_generation::StateGeneration;
 use crate::vault_id::VaultId;
 use crate::wire::{Reader, WireError};
 
@@ -15,10 +16,13 @@ const NOT_COMMITTED: u8 = 0x00;
 /// The committed-approval tag when a version and digest follow.
 const COMMITTED: u8 = 0x01;
 
-/// The state's v1 payload: magic, version, vault ID, approver, highest reserved version, committed approval.
+/// The state's v1 payload: magic, version, vault ID, state and peer generations, approver, highest reserved version,
+/// committed approval.
 pub(super) fn encode(state: &ApprovalState) -> Vec<u8> {
     let mut out = header(MAGIC, VERSION);
     out.extend_from_slice(state.vault_id.as_bytes());
+    out.extend_from_slice(&state.state_generation.get().to_be_bytes());
+    out.extend_from_slice(&state.peer_generation.get().to_be_bytes());
     out.push(state.approver.algorithm().id());
     put_field(&mut out, state.approver.public_key());
     out.extend_from_slice(&state.highest_reserved.to_be_bytes());
@@ -38,12 +42,19 @@ pub(super) fn decode(payload: &[u8]) -> Result<ApprovalState, ApprovalStateError
     let mut reader = Reader::new(payload);
     read_header(&mut reader, MAGIC, VERSION)?;
     let vault_id = VaultId::from_bytes(reader.array()?).map_err(ApprovalDecodeError::from)?;
+    let state_generation = read_generation(&mut reader)?;
+    let peer_generation = read_generation(&mut reader)?;
     let algorithm = SignatureAlgorithm::from_id(reader.u8()?)?;
     let approver = PinnedApprover::new(algorithm, reader.field()?.to_vec())?;
     let highest_reserved = reader.u64()?;
     let committed = read_committed(&mut reader)?;
     reader.finish()?;
-    ApprovalState::from_parts(vault_id, approver, highest_reserved, committed)
+    ApprovalState::from_parts(vault_id, state_generation, peer_generation, approver, highest_reserved, committed)
+}
+
+/// A state or peer generation; the approval state always has a manifest to name, so neither is ever 0.
+fn read_generation(reader: &mut Reader<'_>) -> Result<StateGeneration, ApprovalStateError> {
+    StateGeneration::new(reader.u64()?).ok_or(ApprovalStateError::ZeroStateGeneration)
 }
 
 fn read_committed(reader: &mut Reader<'_>) -> Result<Option<(ApprovalVersion, ConfigDigest)>, ApprovalStateError> {
@@ -71,9 +82,9 @@ mod tests {
     use super::*;
     use crate::approval::InvalidKeyReason;
 
-    /// The documented example: vault 3f2b8c1e-…, the RFC 8032 test 1 Ed25519 public key, versions 1 and 2 reserved,
-    /// version 1 committed for an empty config.
-    const EXAMPLE_HEX: &str = "4956414d 01 3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b 01 0000000000000020 \
+    /// The documented example: vault 3f2b8c1e-…, state generation 6 with peer generation 3, the RFC 8032 test 1
+    /// Ed25519 public key, versions 1 and 2 reserved, version 1 committed for an empty config.
+    const EXAMPLE_HEX: &str = "4956414d 01 3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b 0000000000000006 0000000000000003 01 0000000000000020 \
                                d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a 0000000000000002 \
                                01 0000000000000001 0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8";
 
@@ -87,11 +98,16 @@ mod tests {
             .collect()
     }
 
+    fn generation(value: u64) -> StateGeneration {
+        StateGeneration::new(value).unwrap()
+    }
+
     fn example() -> ApprovalState {
         let vault_id = VaultId::from_bytes(unhex("3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b").try_into().unwrap()).unwrap();
         let key = unhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
         let approver = PinnedApprover::new(SignatureAlgorithm::Ed25519, key).unwrap();
-        ApprovalState::from_parts(vault_id, approver, 2, Some((ApprovalVersion::FIRST, ConfigDigest::of(b"")))).unwrap()
+        let committed = Some((ApprovalVersion::FIRST, ConfigDigest::of(b"")));
+        ApprovalState::from_parts(vault_id, generation(6), generation(3), approver, 2, committed).unwrap()
     }
 
     /// The example bytes with `range` replaced by `with`, so each rejection test breaks exactly one field.
@@ -104,7 +120,7 @@ mod tests {
     #[test]
     fn documented_example_matches() {
         let bytes = unhex(EXAMPLE_HEX);
-        assert_eq!(bytes.len(), 111);
+        assert_eq!(bytes.len(), 127);
         assert_eq!(encode(&example()), bytes);
         assert_eq!(decode(&bytes), Ok(example()));
     }
@@ -125,50 +141,61 @@ mod tests {
 
     #[test]
     fn a_new_vault_encodes_with_nothing_reserved_or_committed() {
-        let new = ApprovalState::new_for_vault(example().vault_id, example().approver);
+        let new = ApprovalState {
+            highest_reserved: 0,
+            committed: None,
+            ..example()
+        };
         let bytes = encode(&new);
-        assert_eq!(bytes, [&unhex(EXAMPLE_HEX)[..62], &[0; 8], &[NOT_COMMITTED]].concat());
+        assert_eq!(bytes, [&unhex(EXAMPLE_HEX)[..78], &[0; 8], &[NOT_COMMITTED]].concat());
         assert_eq!(decode(&bytes), Ok(new));
     }
 
     #[test]
     fn a_committed_version_above_the_highest_reserved_is_rejected() {
         assert_eq!(
-            decode(&example_with(62..70, &1u64.to_be_bytes())),
+            decode(&example_with(78..86, &1u64.to_be_bytes())),
             Ok(ApprovalState {
                 highest_reserved: 1,
                 ..example()
             })
         );
         assert_eq!(
-            decode(&example_with(62..70, &0u64.to_be_bytes())),
+            decode(&example_with(78..86, &0u64.to_be_bytes())),
             Err(ApprovalStateError::CommittedNotReserved)
         );
-        let built = ApprovalState::from_parts(example().vault_id, example().approver, 0, example().committed);
+        let built = ApprovalState::from_parts(
+            example().vault_id,
+            generation(6),
+            generation(3),
+            example().approver,
+            0,
+            example().committed,
+        );
         assert_eq!(built, Err(ApprovalStateError::CommittedNotReserved));
     }
 
     #[test]
     fn bad_committed_tags_and_a_zero_committed_version_are_rejected() {
         [0x02, 0xff].into_iter().for_each(|tag| {
-            assert_eq!(decode(&example_with(70..71, &[tag])), Err(ApprovalStateError::BadCommittedTag(tag)));
+            assert_eq!(decode(&example_with(86..87, &[tag])), Err(ApprovalStateError::BadCommittedTag(tag)));
         });
         let zero = ApprovalStateError::Format(ApprovalDecodeError::ZeroVersion);
-        assert_eq!(decode(&example_with(71..79, &[0; 8])), Err(zero));
+        assert_eq!(decode(&example_with(87..95, &[0; 8])), Err(zero));
         // `00` with a version and digest after it leaves them as trailing bytes.
         let trailing = ApprovalStateError::Format(ApprovalDecodeError::TrailingBytes);
-        assert_eq!(decode(&example_with(70..71, &[NOT_COMMITTED])), Err(trailing));
+        assert_eq!(decode(&example_with(86..87, &[NOT_COMMITTED])), Err(trailing));
     }
 
     #[test]
     fn unknown_algorithms_and_wrong_key_lengths_are_rejected() {
         [0x00, 0x02, 0xff].into_iter().for_each(|id| {
             assert_eq!(
-                decode(&example_with(21..22, &[id])),
+                decode(&example_with(37..38, &[id])),
                 Err(ApprovalDecodeError::UnknownAlgorithm(id).into())
             );
         });
-        let short = example_with(22..62, &[&31u64.to_be_bytes()[..], &[0x42; 31]].concat());
+        let short = example_with(38..78, &[&31u64.to_be_bytes()[..], &[0x42; 31]].concat());
         assert_eq!(
             decode(&short),
             Err(ApprovalStateError::PublicKeyLength {
@@ -227,6 +254,13 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_state_or_peer_generation_is_rejected() {
+        [21..29, 29..37].into_iter().for_each(|range| {
+            assert_eq!(decode(&example_with(range, &[0; 8])), Err(ApprovalStateError::ZeroStateGeneration));
+        });
+    }
+
+    #[test]
     fn wrong_magic_unknown_versions_and_invalid_vault_ids_are_rejected() {
         assert_eq!(decode(&example_with(0..1, b"X")), Err(ApprovalDecodeError::BadMagic.into()));
         assert_eq!(
@@ -271,12 +305,15 @@ mod tests {
 
         #[test]
         fn states_round_trip(
+            state in any::<u64>(),
+            peer in any::<u64>(),
             highest in 0..=u64::MAX,
             committed in any::<Option<u64>>(),
             config in proptest::collection::vec(any::<u8>(), 0..64),
         ) {
             let committed = committed.and_then(|c| ApprovalVersion::new(c.min(highest))).map(|v| (v, ConfigDigest::of(&config)));
-            let original = ApprovalState::from_parts(example().vault_id, example().approver, highest, committed).unwrap();
+            let (state, peer) = (generation(state.max(1)), generation(peer.max(1)));
+            let original = ApprovalState::from_parts(example().vault_id, state, peer, example().approver, highest, committed).unwrap();
             prop_assert_eq!(decode(&encode(&original)), Ok(original));
         }
     }

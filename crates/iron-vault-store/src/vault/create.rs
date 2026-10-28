@@ -6,8 +6,8 @@ use super::{Vault, VaultError, classify_missing_manifest, list_state_dir, write:
 use crate::{StateDirLock, StateFileName, StoreFs, VaultId, VaultIdentity, VaultManifest, seal_manifest};
 
 impl Vault {
-    /// Creates an empty vault in the locked state directory: a new vault ID and a manifest at generation 0 with no
-    /// entries, written durably before any record file can exist.
+    /// Creates an empty vault in the locked state directory: a new vault ID and a manifest with no entries at the first
+    /// state generation, written durably before any record file or approval state can exist.
     ///
     /// Writing the empty manifest first is what lets a crash during the first add be told apart from a lost index:
     /// record files without a manifest open as damaged shared state, never as a new vault. For the same reason this
@@ -23,7 +23,7 @@ impl Vault {
     /// it exists. The caller has already authorized initialization; this performs it.
     pub fn create(lock: &StateDirLock, fs: &impl StoreFs, identity: VaultIdentity) -> Result<Vault, VaultError> {
         refuse_existing_vault(&list_state_dir(lock, fs)?)?;
-        let manifest = VaultManifest::new(VaultId::new_random(), 0, BTreeMap::new()).map_err(VaultError::NextManifest)?;
+        let manifest = VaultManifest::first(VaultId::new_random()).map_err(VaultError::NextManifest)?;
         commit_manifest(lock, fs, &seal_manifest(&identity, &manifest).map_err(VaultError::Seal)?)?;
         Ok(Vault {
             dir: lock.dir().to_path_buf(),

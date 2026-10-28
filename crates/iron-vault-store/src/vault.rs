@@ -71,7 +71,7 @@ pub enum VaultError {
     /// Sealing the record or the manifest failed; nothing was written.
     #[error("cannot seal the vault write: {0}")]
     Seal(SealError),
-    /// The next manifest cannot be built: the vault holds the most records allowed, or its generation is exhausted.
+    /// The next manifest cannot be built: the vault holds the most records allowed, or the state generation is exhausted.
     #[error("cannot build the next vault manifest: {0}")]
     NextManifest(ManifestError),
     /// A file step failed before the commit point. The vault on disk and in memory is unchanged, apart from at most
@@ -133,8 +133,9 @@ impl Vault {
     /// damaged record does not: it is left out, reported in the [`OpenReport`] and logged at ERROR, and the others
     /// load. Record files the manifest does not list are reported and logged at WARN, and never loaded or removed.
     ///
-    /// A stale but authentic manifest, restored from an older backup, is not detected here: telling it apart needs the
-    /// last generation the service saw, kept in protected state with the approval counters.
+    /// A stale but authentic manifest, restored from an older backup, is not detected here: telling it apart needs its
+    /// state generation compared with the approval state's peer generation, or with an anchor outside the state
+    /// directory when both files were restored together (spec §3.9).
     pub fn open(lock: &StateDirLock, fs: &impl StoreFs, identity: VaultIdentity) -> Result<(Vault, OpenReport), VaultError> {
         let files = list_state_dir(lock, fs).inspect_err(log_vault_error)?;
         let manifest = read_manifest(lock, fs, &identity, &files).inspect_err(log_vault_error)?;
@@ -183,7 +184,7 @@ impl fmt::Debug for Vault {
         f.debug_struct("Vault")
             .field("identity", &self.identity)
             .field("vault_id", &self.manifest.vault_id())
-            .field("generation", &self.manifest.generation())
+            .field("state_generation", &self.manifest.state_generation())
             .field("healthy", &self.healthy.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
     }

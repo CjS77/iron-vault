@@ -6,6 +6,7 @@ use iron_vault_policy::CredentialName;
 
 use super::{MAX_MANIFEST_ENTRIES, ManifestEntry, ManifestError, VaultManifest};
 use crate::record_id::RecordId;
+use crate::state_generation::StateGeneration;
 use crate::vault_id::VaultId;
 use crate::wire::{Reader, WireError};
 
@@ -20,7 +21,9 @@ pub(super) fn encode(manifest: &VaultManifest) -> Vec<u8> {
     out.extend_from_slice(&MAGIC);
     out.push(VERSION);
     out.extend_from_slice(manifest.vault_id.as_bytes());
-    out.extend_from_slice(&manifest.generation.to_be_bytes());
+    out.extend_from_slice(&manifest.state_generation.get().to_be_bytes());
+    // No state generation is 0, so 0 is free to mean that no approval state had been written.
+    out.extend_from_slice(&manifest.peer_generation.map_or(0, StateGeneration::get).to_be_bytes());
     put_len(&mut out, manifest.entries.len());
     manifest.entries.iter().for_each(|(id, entry)| {
         out.extend_from_slice(id.as_bytes());
@@ -45,10 +48,11 @@ pub(super) fn decode(payload: &[u8]) -> Result<VaultManifest, ManifestError> {
 
 fn decode_v1(reader: &mut Reader<'_>) -> Result<VaultManifest, ManifestError> {
     let vault_id = VaultId::from_bytes(reader.array()?)?;
-    let generation = reader.u64()?;
+    let state_generation = StateGeneration::new(reader.u64()?).ok_or(ManifestError::ZeroStateGeneration)?;
+    let peer_generation = StateGeneration::new(reader.u64()?);
     let entries = read_entries(reader)?;
     reader.finish()?;
-    VaultManifest::new(vault_id, generation, entries)
+    VaultManifest::new(vault_id, state_generation, peer_generation, entries)
 }
 
 /// Writes a length as a `u64`. `usize` is at most 64 bits on every Rust target, so the widening cast is lossless.
@@ -117,11 +121,17 @@ mod tests {
     struct Payload(Vec<u8>);
 
     impl Payload {
-        fn header(generation: u64, count: u64) -> Self {
+        /// A header at state generation 3 with peer generation 2, as in the documented example.
+        fn header(count: u64) -> Self {
+            Self::header_at(3, 2, count)
+        }
+
+        fn header_at(state_generation: u64, peer_generation: u64, count: u64) -> Self {
             let bytes = [
                 &b"IVMP\x01"[..],
                 &uuid_bytes(VAULT),
-                &generation.to_be_bytes(),
+                &state_generation.to_be_bytes(),
+                &peer_generation.to_be_bytes(),
                 &count.to_be_bytes(),
             ]
             .concat();
@@ -141,7 +151,7 @@ mod tests {
         }
 
         fn valid() -> Self {
-            Self::header(1, 1).entry(RECORD, b"fx_key", 0x11)
+            Self::header(1).entry(RECORD, b"fx_key", 0x11)
         }
 
         fn decode(&self) -> Result<VaultManifest, ManifestError> {
@@ -149,11 +159,15 @@ mod tests {
         }
     }
 
+    fn generation(value: u64) -> StateGeneration {
+        StateGeneration::new(value).unwrap()
+    }
+
     fn manifest(entries: &[(&str, &str, u8)]) -> VaultManifest {
         let entries = entries
             .iter()
             .map(|(id, name, d)| (id.parse().unwrap(), ManifestEntry::new(name.parse().unwrap(), [*d; 32])));
-        VaultManifest::new(vault_id(), 1, entries.collect()).unwrap()
+        VaultManifest::new(vault_id(), generation(3), Some(generation(2)), entries.collect()).unwrap()
     }
 
     #[test]
@@ -167,14 +181,14 @@ mod tests {
         let forward = manifest(&[(RECORD, "fx_key", 1), (LATER_RECORD, "brave", 2)]);
         let backward = manifest(&[(LATER_RECORD, "brave", 2), (RECORD, "fx_key", 1)]);
         assert_eq!(encode(&forward), encode(&backward));
-        let expected = Payload::header(1, 2).entry(RECORD, b"fx_key", 1).entry(LATER_RECORD, b"brave", 2);
+        let expected = Payload::header(2).entry(RECORD, b"fx_key", 1).entry(LATER_RECORD, b"brave", 2);
         assert_eq!(encode(&forward), expected.0);
     }
 
     /// The example in `design/storage-formats.md`, byte for byte.
     #[test]
     fn documented_example_decodes() {
-        let hex = "49564d50 01 3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b 0000000000000001 0000000000000001 \
+        let hex = "49564d50 01 3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b 0000000000000003 0000000000000002 0000000000000001 \
                    7c9e6679742540de944be07fc1f90ae7 0000000000000006 66785f6b6579 \
                    1111111111111111111111111111111111111111111111111111111111111111";
         let bytes: Vec<u8> = hex
@@ -187,6 +201,15 @@ mod tests {
             .collect();
         assert_eq!(bytes, Payload::valid().0);
         assert_eq!(encode(&decode(&bytes).unwrap()), bytes);
+    }
+
+    #[test]
+    fn a_zero_state_generation_is_rejected_and_a_zero_peer_generation_is_none() {
+        let zero = Payload::header_at(0, 0, 1).entry(RECORD, b"fx_key", 0x11);
+        assert_eq!(zero.decode(), Err(ManifestError::ZeroStateGeneration));
+        let first = Payload::header_at(1, 0, 0).decode().unwrap();
+        assert_eq!((first.state_generation(), first.peer_generation()), (StateGeneration::FIRST, None));
+        assert_eq!(encode(&first), Payload::header_at(1, 0, 0).0);
     }
 
     #[test]
@@ -214,11 +237,11 @@ mod tests {
 
     #[test]
     fn counts_and_lengths_past_the_end_are_rejected() {
-        assert_eq!(Payload::header(1, u64::MAX).decode(), Err(ManifestError::LengthPastEnd));
-        let long_name = Payload::header(1, 1).raw(&uuid_bytes(RECORD)).raw(&u64::MAX.to_be_bytes());
+        assert_eq!(Payload::header(u64::MAX).decode(), Err(ManifestError::LengthPastEnd));
+        let long_name = Payload::header(1).raw(&uuid_bytes(RECORD)).raw(&u64::MAX.to_be_bytes());
         assert_eq!(long_name.decode(), Err(ManifestError::LengthPastEnd));
         let count = MAX_MANIFEST_ENTRIES as u64 + 1;
-        let too_many = Payload::header(1, count).raw(&vec![0; MAX_MANIFEST_ENTRIES * 64]);
+        let too_many = Payload::header(count).raw(&vec![0; MAX_MANIFEST_ENTRIES * 64]);
         assert_eq!(
             too_many.decode(),
             Err(ManifestError::TooManyEntries {
@@ -233,29 +256,29 @@ mod tests {
         vault.0[5..21].fill(0);
         assert_eq!(vault.decode(), Err(ManifestError::InvalidVaultId(VaultIdError::NotVersion4)));
         let mut record = Payload::valid();
-        record.0[37..53].fill(0);
+        record.0[45..61].fill(0);
         assert_eq!(record.decode(), Err(ManifestError::InvalidRecordId(RecordIdError::NotVersion4)));
     }
 
     #[test]
     fn invalid_names_are_rejected() {
         assert!(matches!(
-            Payload::header(1, 1).entry(RECORD, b"Fx", 0).decode(),
+            Payload::header(1).entry(RECORD, b"Fx", 0).decode(),
             Err(ManifestError::InvalidName(_))
         ));
         assert_eq!(
-            Payload::header(1, 1).entry(RECORD, &[0xff], 0).decode(),
+            Payload::header(1).entry(RECORD, &[0xff], 0).decode(),
             Err(ManifestError::NameNotUtf8)
         );
     }
 
     #[test]
     fn duplicate_names_and_record_ids_and_unsorted_entries_are_rejected() {
-        let names = Payload::header(1, 2).entry(RECORD, b"fx_key", 1).entry(LATER_RECORD, b"fx_key", 2);
+        let names = Payload::header(2).entry(RECORD, b"fx_key", 1).entry(LATER_RECORD, b"fx_key", 2);
         assert_eq!(names.decode(), Err(ManifestError::DuplicateName("fx_key".parse().unwrap())));
-        let ids = Payload::header(1, 2).entry(RECORD, b"fx_key", 1).entry(RECORD, b"brave", 2);
+        let ids = Payload::header(2).entry(RECORD, b"fx_key", 1).entry(RECORD, b"brave", 2);
         assert_eq!(ids.decode(), Err(ManifestError::DuplicateRecordId));
-        let unsorted = Payload::header(1, 2).entry(LATER_RECORD, b"brave", 2).entry(RECORD, b"fx_key", 1);
+        let unsorted = Payload::header(2).entry(LATER_RECORD, b"brave", 2).entry(RECORD, b"fx_key", 1);
         assert_eq!(unsorted.decode(), Err(ManifestError::UnsortedEntries));
     }
 

@@ -23,6 +23,7 @@ mod stale_temps;
 mod stanza;
 mod state_dir;
 mod state_file_name;
+mod state_generation;
 mod store_fs;
 #[cfg(test)]
 mod test_dir;
@@ -63,6 +64,7 @@ pub use stale_temps::sweep_stale_temps;
 pub use stanza::StanzaKind;
 pub use state_dir::{LockError, StateDirLock};
 pub use state_file_name::{StateFileName, StateFileNameError};
+pub use state_generation::StateGeneration;
 pub use store_fs::{OsFs, StoreFs};
 pub use vault::{MAX_RECORD_FILE_LEN, OpenReport, RecordDamage, SharedStateDamage, Vault, VaultError, WriteReport};
 pub use vault_id::{VaultId, VaultIdError};

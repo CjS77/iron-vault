@@ -56,6 +56,7 @@ mod tests {
     use crate::mac_file::{HEADER_LEN, MAC_LEN};
     use crate::manifest::tests::KAT_IDENTITY;
     use crate::sealed::{self, OpenError};
+    use crate::state_generation::StateGeneration;
     use crate::vault_id::VaultId;
 
     const FILE_MAGIC: [u8; 4] = KIND.magic;
@@ -95,6 +96,8 @@ mod tests {
         let approver = PinnedApprover::from_signing_key(&ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]));
         ApprovalState::from_parts(
             vault_id,
+            StateGeneration::new(5).unwrap(),
+            StateGeneration::new(4).unwrap(),
             approver,
             3,
             ApprovalVersion::new(2).map(|v| (v, ConfigDigest::of(b"config"))),
@@ -186,7 +189,7 @@ mod tests {
     #[test]
     fn a_manifest_file_is_not_read_as_approval_state() {
         let identity = VaultIdentity::generate();
-        let manifest = crate::manifest::VaultManifest::new(VaultId::new_random(), 0, Default::default()).unwrap();
+        let manifest = crate::manifest::VaultManifest::first(VaultId::new_random()).unwrap();
         let file = crate::manifest::seal_manifest(&identity, &manifest).unwrap();
         assert_eq!(open_approval_state(&identity, &file), Err(ApprovalDecodeError::BadMagic.into()));
     }
@@ -217,8 +220,8 @@ mod tests {
     fn a_broken_invariant_behind_a_valid_mac_is_rejected() {
         let identity = VaultIdentity::generate();
         let mut payload = encoding::encode(&state(VaultId::new_random()));
-        // Highest reserved is the u64 at 62..70 (see the payload layout); 1 is below the committed version 2.
-        payload[62..70].copy_from_slice(&1u64.to_be_bytes());
+        // Highest reserved is the u64 at 78..86 (see the payload layout); 1 is below the committed version 2.
+        payload[78..86].copy_from_slice(&1u64.to_be_bytes());
         let id = VaultId::from_bytes(payload[5..21].try_into().unwrap()).unwrap();
         let file = forged(&identity, id, &payload, &identity.derive_key(APPROVAL_KEY_PERSONA));
         assert_eq!(open_approval_state(&identity, &file), Err(ApprovalStateError::CommittedNotReserved));
@@ -228,8 +231,8 @@ mod tests {
     fn a_weak_approver_key_behind_a_valid_mac_is_rejected() {
         let identity = VaultIdentity::generate();
         let mut payload = encoding::encode(&state(VaultId::new_random()));
-        // The public key is the 32 bytes at 30..62; the identity point is small-order.
-        payload[30..62].copy_from_slice(&[[1u8].as_slice(), &[0; 31]].concat());
+        // The public key is the 32 bytes at 46..78; the identity point is small-order.
+        payload[46..78].copy_from_slice(&[[1u8].as_slice(), &[0; 31]].concat());
         let id = VaultId::from_bytes(payload[5..21].try_into().unwrap()).unwrap();
         let file = forged(&identity, id, &payload, &identity.derive_key(APPROVAL_KEY_PERSONA));
         let weak = ApprovalStateError::InvalidApproverKey {

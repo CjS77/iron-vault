@@ -116,6 +116,7 @@ fn vault_debug_hides_the_identity_and_every_record() {
         .add(
             &lock,
             &OsFs,
+            None,
             name,
             CredentialMaterial::Static {
                 key: SecretString::from(MARKER),

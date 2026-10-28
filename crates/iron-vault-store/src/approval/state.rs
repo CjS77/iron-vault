@@ -6,8 +6,10 @@
 //! of that file, and memory changes only after the replace returns: a version handed out here is already durable, so it
 //! is never handed out twice. The byte layouts are in `design/storage-formats.md`.
 //!
-//! Restoring the whole state directory from an older copy restores older counters too; spec §3.9 leaves protection
-//! against that outside v0.
+//! Every write also takes the next vault-wide state generation and records the manifest's current one, which the
+//! caller passes in: the vault and its approval state are separate objects, and the allocation rule lives in
+//! [`StateGeneration::next`]. Restoring the whole state directory from an older copy restores older counters too;
+//! spec §3.9 leaves protection against that outside v0.
 
 mod encoding;
 mod file;
@@ -21,15 +23,15 @@ use thiserror::Error;
 
 use super::{ApprovalDecodeError, ApprovalVersion, ConfigDigest, SignatureAlgorithm};
 use crate::{
-    OpenError, ReadError, SealError, StateDirLock, StateFileName, StoreFs, VaultId, VaultIdentity, WriteError, WriteStep, durable_replace,
-    read_state_file,
+    OpenError, ReadError, SealError, StateDirLock, StateFileName, StateGeneration, StoreFs, VaultId, VaultIdentity, WriteError, WriteStep,
+    durable_replace, read_state_file,
 };
 
 pub use file::{open_approval_state, seal_approval_state};
 
 /// The largest approval state file accepted, in bytes on disk, checked before any other work; also the payload limit.
 ///
-/// A payload with an Ed25519 approver is 111 bytes. `age` adds a header of at most about 400 bytes plus a 16-byte nonce
+/// A payload with an Ed25519 approver is 127 bytes. `age` adds a header of at most about 400 bytes plus a 16-byte nonce
 /// and a 16-byte tag, and the file adds 53 bytes of header and MAC: under 600 bytes in all. The limit leaves room for a
 /// later algorithm with a longer public key while keeping a planted file cheap to refuse.
 pub const MAX_APPROVAL_STATE_LEN: usize = 4096;
@@ -113,13 +115,17 @@ fn invalid(algorithm: SignatureAlgorithm, reason: InvalidKeyReason) -> ApprovalS
     ApprovalStateError::InvalidApproverKey { algorithm, reason }
 }
 
-/// One vault's approval state: the pinned approver, the highest reserved version and the committed approval.
+/// One vault's approval state: the pinned approver, the highest reserved version and the committed approval, at one
+/// state generation.
 ///
 /// The committed version is never above the highest reserved version, whether the state was built or decoded. The
-/// highest reserved version is 0 only in a state from [`ApprovalState::new_for_vault`], and no operation lowers it.
+/// highest reserved version is 0 only in a newly created state, and no operation lowers it. Every write takes
+/// `manifest_generation`, the manifest's current state generation, and records it as the peer generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalState {
     vault_id: VaultId,
+    state_generation: StateGeneration,
+    peer_generation: StateGeneration,
     approver: PinnedApprover,
     highest_reserved: u64,
     committed: Option<(ApprovalVersion, ConfigDigest)>,
@@ -169,6 +175,12 @@ pub enum ApprovalStateError {
     /// The committed version is above the highest reserved version, which no service write produces.
     #[error("approval state commits a version that was never reserved")]
     CommittedNotReserved,
+    /// The state generation or the peer generation is 0, which no approval state is written at.
+    #[error("approval state names state generation 0")]
+    ZeroStateGeneration,
+    /// The approval state or the manifest is at state generation `u64::MAX`, so no later approval state can be written.
+    #[error("vault state generation is exhausted; the approval state cannot be written again")]
+    StateGenerationExhausted,
     /// The highest reserved version is `u64::MAX`: no version is left to reserve, and nothing may be signed.
     #[error("approval versions are exhausted; no further approval can be signed")]
     Exhausted,
@@ -211,19 +223,11 @@ pub enum ApprovalStateError {
 }
 
 impl ApprovalState {
-    /// The state of a newly created vault: `approver` pinned, nothing reserved and nothing committed.
-    pub fn new_for_vault(vault_id: VaultId, approver: PinnedApprover) -> Self {
-        Self {
-            vault_id,
-            approver,
-            highest_reserved: 0,
-            committed: None,
-        }
-    }
-
     /// A state from its parts, refusing a committed version above the highest reserved one.
     fn from_parts(
         vault_id: VaultId,
+        state_generation: StateGeneration,
+        peer_generation: StateGeneration,
         approver: PinnedApprover,
         highest_reserved: u64,
         committed: Option<(ApprovalVersion, ConfigDigest)>,
@@ -232,6 +236,8 @@ impl ApprovalState {
             Some((version, _)) if version.get() > highest_reserved => Err(ApprovalStateError::CommittedNotReserved),
             _ => Ok(Self {
                 vault_id,
+                state_generation,
+                peer_generation,
                 approver,
                 highest_reserved,
                 committed,
@@ -239,7 +245,8 @@ impl ApprovalState {
         }
     }
 
-    /// Writes the state of a newly created vault to `approval.age` and returns it.
+    /// Writes the state of a newly created vault to `approval.age` and returns it: `approver` pinned, nothing reserved
+    /// and nothing committed, at the state generation after `manifest_generation`, the manifest's current one.
     ///
     /// Refuses with [`ApprovalStateError::AlreadyExists`] if the file exists, so the counters are never reset. The
     /// caller has already authorized vault creation; this performs it.
@@ -247,10 +254,18 @@ impl ApprovalState {
         lock: &StateDirLock,
         fs: &impl StoreFs,
         identity: &VaultIdentity,
+        manifest_generation: StateGeneration,
         vault_id: VaultId,
         approver: PinnedApprover,
     ) -> Result<Self, ApprovalStateError> {
-        let state = Self::new_for_vault(vault_id, approver);
+        let state = Self {
+            vault_id,
+            state_generation: next_generation(manifest_generation, None)?,
+            peer_generation: manifest_generation,
+            approver,
+            highest_reserved: 0,
+            committed: None,
+        };
         let bytes = seal_approval_state(identity, &state).map_err(ApprovalStateError::Seal)?;
         refuse_existing(lock, fs)?;
         replace_file(lock, fs, &bytes)?;
@@ -274,6 +289,16 @@ impl ApprovalState {
     /// The vault this state belongs to.
     pub fn vault_id(&self) -> VaultId {
         self.vault_id
+    }
+
+    /// The state generation this state was written at.
+    pub fn state_generation(&self) -> StateGeneration {
+        self.state_generation
+    }
+
+    /// The manifest's state generation when this state was written.
+    pub fn peer_generation(&self) -> StateGeneration {
+        self.peer_generation
     }
 
     /// The approver every config approval must verify against.
@@ -301,6 +326,7 @@ impl ApprovalState {
         lock: &StateDirLock,
         fs: &impl StoreFs,
         identity: &VaultIdentity,
+        manifest_generation: StateGeneration,
     ) -> Result<ApprovalVersion, ApprovalStateError> {
         let version = self
             .highest_reserved
@@ -311,6 +337,7 @@ impl ApprovalState {
             lock,
             fs,
             identity,
+            manifest_generation,
             Self {
                 highest_reserved: version.get(),
                 ..self.clone()
@@ -328,6 +355,7 @@ impl ApprovalState {
         lock: &StateDirLock,
         fs: &impl StoreFs,
         identity: &VaultIdentity,
+        manifest_generation: StateGeneration,
         version: ApprovalVersion,
         digest: ConfigDigest,
     ) -> Result<(), ApprovalStateError> {
@@ -343,6 +371,7 @@ impl ApprovalState {
                 lock,
                 fs,
                 identity,
+                manifest_generation,
                 Self {
                     committed: Some((version, digest)),
                     ..self.clone()
@@ -361,14 +390,27 @@ impl ApprovalState {
         lock: &StateDirLock,
         fs: &impl StoreFs,
         identity: &VaultIdentity,
+        manifest_generation: StateGeneration,
         approver: PinnedApprover,
     ) -> Result<(), ApprovalStateError> {
-        self.write(lock, fs, identity, Self { approver, ..self.clone() })
+        self.write(lock, fs, identity, manifest_generation, Self { approver, ..self.clone() })
     }
 
-    /// Replaces the file with `next`, then makes `next` the state in memory. The disk check comes first: a stale
-    /// in-memory state would otherwise write lower counters over newer ones.
-    fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, next: Self) -> Result<(), ApprovalStateError> {
+    /// Replaces the file with `next` at the next state generation, then makes that the state in memory. The disk check
+    /// comes first: a stale in-memory state would otherwise write lower counters over newer ones.
+    fn write(
+        &mut self,
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        identity: &VaultIdentity,
+        manifest_generation: StateGeneration,
+        next: Self,
+    ) -> Result<(), ApprovalStateError> {
+        let next = Self {
+            state_generation: next_generation(manifest_generation, Some(self.state_generation))?,
+            peer_generation: manifest_generation,
+            ..next
+        };
         let bytes = seal_approval_state(identity, &next).map_err(ApprovalStateError::Seal)?;
         self.ensure_disk_matches(lock, fs, identity)?;
         replace_file(lock, fs, &bytes)?;
@@ -383,6 +425,11 @@ impl ApprovalState {
             _ => Err(ApprovalStateError::ReloadRequired),
         }
     }
+}
+
+/// The state generation the next approval state write takes, given the manifest's and the approval state's current ones.
+fn next_generation(manifest: StateGeneration, approval: Option<StateGeneration>) -> Result<StateGeneration, ApprovalStateError> {
+    StateGeneration::next(Some(manifest), approval).ok_or(ApprovalStateError::StateGenerationExhausted)
 }
 
 /// Refuses to create the approval state over an existing file, whatever it holds.

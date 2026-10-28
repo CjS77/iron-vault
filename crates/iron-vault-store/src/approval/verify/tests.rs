@@ -6,7 +6,7 @@ use super::*;
 use crate::fault_fs::FaultFs;
 use crate::manifest::tests::KAT_IDENTITY;
 use crate::test_dir::TestDir;
-use crate::{ApprovalPayload, StateDirLock, VaultId, VaultIdentity};
+use crate::{ApprovalPayload, StateDirLock, StateGeneration, VaultId, VaultIdentity};
 
 const APPROVER_SEED: [u8; 32] = [7; 32];
 
@@ -49,7 +49,15 @@ impl Vault {
         let dir = TestDir::new(label);
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         let (fs, identity) = (FaultFs::new(), VaultIdentity::from_secret(KAT_IDENTITY));
-        let state = ApprovalState::create(&lock, &fs, &identity, VaultId::new_random(), pinned(APPROVER_SEED)).unwrap();
+        let state = ApprovalState::create(
+            &lock,
+            &fs,
+            &identity,
+            StateGeneration::FIRST,
+            VaultId::new_random(),
+            pinned(APPROVER_SEED),
+        )
+        .unwrap();
         Self {
             _dir: dir,
             lock,
@@ -61,7 +69,10 @@ impl Vault {
 
     /// Reserves the next version and returns the envelope signing `config(v)` as it, without committing it.
     fn sign_next(&mut self) -> (ApprovalVersion, Vec<u8>) {
-        let v = self.state.reserve(&self.lock, &self.fs, &self.identity).unwrap();
+        let v = self
+            .state
+            .reserve(&self.lock, &self.fs, &self.identity, StateGeneration::FIRST)
+            .unwrap();
         (v, sign(APPROVER_SEED, self.payload(v.get())))
     }
 
@@ -69,7 +80,14 @@ impl Vault {
     fn approve_next(&mut self) -> Vec<u8> {
         let (v, envelope) = self.sign_next();
         self.state
-            .commit(&self.lock, &self.fs, &self.identity, v, ConfigDigest::of(&config(v.get())))
+            .commit(
+                &self.lock,
+                &self.fs,
+                &self.identity,
+                StateGeneration::FIRST,
+                v,
+                ConfigDigest::of(&config(v.get())),
+            )
             .unwrap();
         envelope
     }

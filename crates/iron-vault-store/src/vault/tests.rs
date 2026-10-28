@@ -123,7 +123,13 @@ impl Fixture {
     }
 
     fn write_manifest(&self, entries: impl IntoIterator<Item = (RecordId, ManifestEntry)>) {
-        let manifest = VaultManifest::new(VaultId::new_random(), 1, entries.into_iter().collect()).unwrap();
+        let manifest = VaultManifest::new(
+            VaultId::new_random(),
+            crate::StateGeneration::FIRST,
+            None,
+            entries.into_iter().collect(),
+        )
+        .unwrap();
         std::fs::write(
             self.path(&StateFileName::manifest()),
             seal_manifest(&identity(), &manifest).unwrap(),

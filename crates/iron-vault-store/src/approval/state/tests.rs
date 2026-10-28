@@ -20,6 +20,14 @@ fn version(v: u64) -> ApprovalVersion {
     ApprovalVersion::new(v).unwrap()
 }
 
+/// The manifest's state generation every write here names: no manifest is written alongside these tests.
+const MANIFEST: StateGeneration = StateGeneration::FIRST;
+
+/// The state generation the write after `state` takes.
+fn after(state: &ApprovalState) -> StateGeneration {
+    StateGeneration::new(state.state_generation().get() + 1).unwrap()
+}
+
 /// The digest of the config approved as version `v`.
 fn digest(v: u64) -> ConfigDigest {
     ConfigDigest::of(format!("config approved as version {v}").as_bytes())
@@ -60,7 +68,7 @@ impl Setup {
     }
 
     fn create(&self, fs: &impl StoreFs) -> Result<ApprovalState, ApprovalStateError> {
-        ApprovalState::create(&self.lock, fs, &self.identity, self.vault_id, approver(1))
+        ApprovalState::create(&self.lock, fs, &self.identity, MANIFEST, self.vault_id, approver(1))
     }
 
     fn load(&self, fs: &impl StoreFs) -> Result<ApprovalState, ApprovalStateError> {
@@ -68,15 +76,15 @@ impl Setup {
     }
 
     fn reserve(&self, fs: &impl StoreFs, state: &mut ApprovalState) -> Result<ApprovalVersion, ApprovalStateError> {
-        state.reserve(&self.lock, fs, &self.identity)
+        state.reserve(&self.lock, fs, &self.identity, MANIFEST)
     }
 
     fn commit(&self, fs: &impl StoreFs, state: &mut ApprovalState, v: u64) -> Result<(), ApprovalStateError> {
-        state.commit(&self.lock, fs, &self.identity, version(v), digest(v))
+        state.commit(&self.lock, fs, &self.identity, MANIFEST, version(v), digest(v))
     }
 
     fn replace_approver(&self, fs: &impl StoreFs, state: &mut ApprovalState, seed: u8) -> Result<(), ApprovalStateError> {
-        state.replace_approver(&self.lock, fs, &self.identity, approver(seed))
+        state.replace_approver(&self.lock, fs, &self.identity, MANIFEST, approver(seed))
     }
 
     /// Writes `state` as the durable file, whatever its counters, the way only a test can.
@@ -141,6 +149,7 @@ fn operations(setup: &Setup) -> [(&'static str, Op, ApprovalState, ApprovalState
             old.clone(),
             ApprovalState {
                 highest_reserved: 3,
+                state_generation: after(&old),
                 ..old.clone()
             },
         ),
@@ -150,6 +159,7 @@ fn operations(setup: &Setup) -> [(&'static str, Op, ApprovalState, ApprovalState
             old.clone(),
             ApprovalState {
                 committed: Some((version(2), digest(2))),
+                state_generation: after(&old),
                 ..old.clone()
             },
         ),
@@ -159,6 +169,7 @@ fn operations(setup: &Setup) -> [(&'static str, Op, ApprovalState, ApprovalState
             old.clone(),
             ApprovalState {
                 approver: approver(9),
+                state_generation: after(&old),
                 ..old
             },
         ),
@@ -251,6 +262,53 @@ fn reserve_at_u64_max_is_exhausted_and_touches_no_file() {
     // The last version can still be committed.
     setup.commit(&fs, &mut last, u64::MAX).unwrap();
     assert_eq!(setup.reserve(&fs, &mut last), Err(ApprovalStateError::Exhausted));
+}
+
+#[test]
+fn every_write_takes_the_next_state_generation_and_names_the_manifest() {
+    let setup = Setup::new("approval-generations");
+    let fs = FaultFs::new();
+    let generation = |v| StateGeneration::new(v).unwrap();
+    let mut state = ApprovalState::create(&setup.lock, &fs, &setup.identity, generation(4), setup.vault_id, approver(1)).unwrap();
+    assert_eq!((state.state_generation(), state.peer_generation()), (generation(5), generation(4)));
+    state.reserve(&setup.lock, &fs, &setup.identity, generation(4)).unwrap();
+    assert_eq!((state.state_generation(), state.peer_generation()), (generation(6), generation(4)));
+    // The manifest was written since: the next write is one above it, not above this state.
+    state
+        .commit(&setup.lock, &fs, &setup.identity, generation(9), version(1), digest(1))
+        .unwrap();
+    assert_eq!((state.state_generation(), state.peer_generation()), (generation(10), generation(9)));
+    state
+        .replace_approver(&setup.lock, &fs, &setup.identity, generation(9), approver(2))
+        .unwrap();
+    assert_eq!((state.state_generation(), state.peer_generation()), (generation(11), generation(9)));
+    assert_eq!(setup.load(&fs).unwrap(), state);
+}
+
+#[test]
+fn every_write_at_state_generation_u64_max_is_exhausted_and_touches_no_file() {
+    let setup = Setup::new("approval-generation-exhausted");
+    let (fs, state) = setup.seeded();
+    let last = StateGeneration::new(u64::MAX).unwrap();
+    let mut at_max = ApprovalState {
+        state_generation: last,
+        ..state.clone()
+    };
+    setup.plant(&fs, &at_max);
+    let (calls, before) = (fs.trace().len(), at_max.clone());
+    let exhausted = Err(ApprovalStateError::StateGenerationExhausted);
+    assert_eq!(setup.reserve(&fs, &mut at_max).map(|_| ()), exhausted);
+    assert_eq!(setup.commit(&fs, &mut at_max, 2), exhausted);
+    assert_eq!(setup.replace_approver(&fs, &mut at_max, 9), exhausted);
+    assert_eq!((fs.trace().len(), &at_max), (calls, &before));
+
+    // A manifest at u64::MAX exhausts the approval state's next write just the same.
+    setup.plant(&fs, &state);
+    let (calls, mut current) = (fs.trace().len(), state.clone());
+    assert_eq!(current.reserve(&setup.lock, &fs, &setup.identity, last).map(|_| ()), exhausted);
+    assert_eq!((fs.trace().len(), &current), (calls, &state));
+    let create = ApprovalState::create(&setup.lock, &FaultFs::new(), &setup.identity, last, setup.vault_id, approver(1));
+    assert_eq!(create, Err(ApprovalStateError::StateGenerationExhausted));
 }
 
 #[test]

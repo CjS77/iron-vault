@@ -12,7 +12,7 @@ use super::tests::{assert_no_secret_logged, capture_logs, identity, init_test_tr
 use super::*;
 use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::test_dir::TestDir;
-use crate::{OsFs, PermittedOrigins, RecordId, WriteStep, durable_remove, durable_replace};
+use crate::{OsFs, PermittedOrigins, RecordId, StateGeneration, WriteStep, durable_remove, durable_replace};
 
 /// The credentials every vault under test starts with.
 const SEEDED: [&str; 2] = ["keep", "target"];
@@ -104,11 +104,11 @@ impl Setup {
     }
 
     fn add(&self, fs: &impl StoreFs, vault: &mut Vault, name: &str, version: u32) -> Result<(RecordId, WriteReport), VaultError> {
-        vault.add(&self.lock, fs, n(name), material(name, version), origins(name))
+        vault.add(&self.lock, fs, None, n(name), material(name, version), origins(name))
     }
 
     fn replace(&self, fs: &impl StoreFs, vault: &mut Vault, name: &str, version: u32) -> Result<(RecordId, WriteReport), VaultError> {
-        vault.replace(&self.lock, fs, n(name), material(name, version), origins(name))
+        vault.replace(&self.lock, fs, None, n(name), material(name, version), origins(name))
     }
 
     /// A fresh vault holding version 1 of each of `names`, all durable.
@@ -162,7 +162,7 @@ fn replace_target(setup: &Setup, fs: &FaultFs, vault: &mut Vault) -> Result<(), 
 }
 
 fn remove_target(setup: &Setup, fs: &FaultFs, vault: &mut Vault) -> Result<(), VaultError> {
-    vault.remove(&setup.lock, fs, &n("target")).map(|_| ())
+    vault.remove(&setup.lock, fs, None, &n("target")).map(|_| ())
 }
 
 /// Each operation, with the state it starts from and the state it commits.
@@ -194,14 +194,14 @@ fn add_replace_and_remove_work_end_to_end_on_disk() {
     assert_eq!(report, WriteReport::default());
     assert_ne!(fx_v1, fx_v2);
     assert!(!setup.record_path(fx_v1).exists() && setup.record_path(fx_v2).exists());
-    assert_eq!(vault.remove(&setup.lock, &fs, &n("brave")).unwrap(), WriteReport::default());
+    assert_eq!(vault.remove(&setup.lock, &fs, None, &n("brave")).unwrap(), WriteReport::default());
 
     let (opened, report) = setup.open(&fs).unwrap();
     assert_eq!(report, OpenReport::default());
     assert_eq!(state(&opened), expected(&[("fx_key", 2)]));
     assert_eq!(state(&vault), state(&opened));
     assert_eq!(opened.manifest(), vault.manifest());
-    assert_eq!(opened.manifest().generation(), 4);
+    assert_eq!(opened.manifest().state_generation(), StateGeneration::new(5).unwrap());
     let on_disk: BTreeSet<String> = fs
         .list_dir(setup.dir.path())
         .unwrap()
@@ -215,11 +215,15 @@ fn add_replace_and_remove_work_end_to_end_on_disk() {
 }
 
 #[test]
-fn create_writes_an_empty_manifest_at_generation_zero() {
+fn create_writes_an_empty_manifest_at_the_first_state_generation() {
     let setup = Setup::new("write-create");
     let fs = FaultFs::new();
     let vault = Vault::create(&setup.lock, &fs, identity()).unwrap();
-    assert_eq!((vault.manifest().generation(), vault.manifest().entries().len()), (0, 0));
+    let manifest = vault.manifest();
+    assert_eq!(
+        (manifest.state_generation(), manifest.peer_generation(), manifest.entries().len()),
+        (StateGeneration::FIRST, None, 0)
+    );
     fs.crash();
     let (opened, report) = setup.open(&fs).unwrap();
     assert_eq!((opened.manifest(), report), (vault.manifest(), OpenReport::default()));
@@ -301,7 +305,7 @@ fn replace_and_remove_refuse_an_unknown_name_and_touch_no_file() {
         VaultError::UnknownName(n("venice"))
     );
     assert_eq!(
-        vault.remove(&setup.lock, &fs, &n("venice")).unwrap_err(),
+        vault.remove(&setup.lock, &fs, None, &n("venice")).unwrap_err(),
         VaultError::UnknownName(n("venice"))
     );
     assert_eq!((fs.trace().len(), snapshot(&vault)), before);
@@ -316,7 +320,9 @@ fn invalid_material_touches_no_file() {
         username: "a:b".into(),
         password: "p".into(),
     };
-    let error = vault.add(&setup.lock, &fs, n("basic"), material, origins("basic")).unwrap_err();
+    let error = vault
+        .add(&setup.lock, &fs, None, n("basic"), material, origins("basic"))
+        .unwrap_err();
     assert!(matches!(error, VaultError::InvalidMaterial(_)), "{error}");
     assert_eq!((fs.trace().len(), snapshot(&vault)), before);
 }
@@ -502,7 +508,10 @@ fn a_stale_vault_on_the_same_lock_removes_no_record_file() {
     let calls = fs.trace().len();
     assert_eq!(setup.add(&fs, &mut stale, "other", 1).unwrap_err(), VaultError::ReopenRequired);
     assert_eq!(setup.replace(&fs, &mut stale, "target", 2).unwrap_err(), VaultError::ReopenRequired);
-    assert_eq!(stale.remove(&setup.lock, &fs, &n("keep")).unwrap_err(), VaultError::ReopenRequired);
+    assert_eq!(
+        stale.remove(&setup.lock, &fs, None, &n("keep")).unwrap_err(),
+        VaultError::ReopenRequired
+    );
     assert_eq!(mutations(&fs, calls), []);
     assert!(fs.contents(&setup.record_path(fresh)).is_some());
     let (opened, report) = setup.open(&fs).unwrap();
@@ -551,7 +560,7 @@ fn a_vault_given_another_directorys_lock_touches_no_file() {
     // `theirs` is the Setup whose lock is passed; `ours` built the vault.
     assert_eq!(theirs.add(&fs, &mut vault, "fresh", 1).unwrap_err(), wrong);
     assert_eq!(theirs.replace(&fs, &mut vault, "keep", 2).unwrap_err(), wrong);
-    assert_eq!(vault.remove(&theirs.lock, &fs, &n("keep")).unwrap_err(), wrong);
+    assert_eq!(vault.remove(&theirs.lock, &fs, None, &n("keep")).unwrap_err(), wrong);
     assert_eq!(fs.trace().len(), calls);
     assert!(fs.contents(&theirs.record_path(theirs_keep)).is_some());
     assert!(wrong.to_string().contains(&theirs.dir.path().display().to_string()), "{wrong}");
@@ -562,7 +571,7 @@ fn a_short_secret_is_written_and_warned_about_without_its_value() {
     let setup = Setup::new("write-short-secret");
     let (fs, mut vault) = setup.seeded(&SEEDED);
     let short = CredentialMaterial::Static { key: "q7z".into() };
-    let (added, events) = capture_logs(|| vault.add(&setup.lock, &fs, n("stripe"), short, origins("stripe")));
+    let (added, events) = capture_logs(|| vault.add(&setup.lock, &fs, None, n("stripe"), short, origins("stripe")));
     added.unwrap();
     let warnings: Vec<_> = events.iter().filter(|event| event.level == Level::WARN).collect();
     assert_eq!(warnings.len(), 1, "{events:?}");
@@ -579,7 +588,7 @@ fn a_short_secret_is_written_and_warned_about_without_its_value() {
         username: "long-username".into(),
         password: "z9q".into(),
     };
-    let (replaced, events) = capture_logs(|| vault.replace(&setup.lock, &fs, n("stripe"), password, origins("stripe")));
+    let (replaced, events) = capture_logs(|| vault.replace(&setup.lock, &fs, None, n("stripe"), password, origins("stripe")));
     replaced.unwrap();
     let fields: Vec<_> = events.iter().filter(|e| e.level == Level::WARN).map(|e| e.field("field")).collect();
     assert_eq!(fields, ["password"]);

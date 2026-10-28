@@ -2,10 +2,10 @@
 //!
 //! Every write follows the same steps. Everything that can fail without the disk (validation, sealing, building the
 //! next manifest) happens first. Then the manifest on disk is checked to be the one in memory, unindexed record files
-//! are removed, the new record file is written, and the manifest is durably replaced at the next generation: that
-//! rename is the single commit point. Memory changes only
-//! after it, and the superseded record file is removed last. A crash before the commit leaves the old vault plus at
-//! most one unindexed record file; a crash after it leaves the new vault plus at most the superseded file.
+//! are removed, the new record file is written, and the manifest is durably replaced at the next state generation: that
+//! rename is the single commit point. Memory changes only after it, and the superseded record file is removed last. A
+//! crash before the commit leaves the old vault plus at most one unindexed record file; a crash after it leaves the new
+//! vault plus at most the superseded file.
 
 use std::collections::BTreeSet;
 
@@ -14,8 +14,8 @@ use iron_vault_policy::CredentialName;
 
 use super::{Vault, VaultError, WriteReport, list_state_dir, unindexed_files};
 use crate::{
-    CredentialRecord, MAX_MANIFEST_LEN, ManifestEntry, PermittedOrigins, RecordId, Source, StateDirLock, StateFileName, StoreFs,
-    VaultIdentity, VaultManifest, WriteError, WriteStep, durable_remove, durable_replace, encode, open_manifest, read_state_file,
+    CredentialRecord, MAX_MANIFEST_LEN, ManifestEntry, PermittedOrigins, RecordId, Source, StateDirLock, StateFileName, StateGeneration,
+    StoreFs, VaultIdentity, VaultManifest, WriteError, WriteStep, durable_remove, durable_replace, encode, open_manifest, read_state_file,
     record_digest, seal, seal_manifest,
 };
 
@@ -34,6 +34,8 @@ struct Prepared {
     manifest_bytes: Vec<u8>,
 }
 
+/// Every write takes `approval_generation`: the approval state's current state generation, or `None` while the vault has
+/// no approval state. The new manifest takes the next state generation after it and this vault's, and records it.
 impl Vault {
     /// Adds a credential record named `name` under a new record ID, refusing a name the manifest already lists.
     ///
@@ -43,6 +45,7 @@ impl Vault {
         &mut self,
         lock: &StateDirLock,
         fs: &impl StoreFs,
+        approval_generation: Option<StateGeneration>,
         name: CredentialName,
         material: CredentialMaterial,
         origins: PermittedOrigins,
@@ -55,7 +58,11 @@ impl Vault {
         let short = material.short_secrets();
         let record = new_record(name, material, origins)?;
         let id = record.id();
-        let report = self.write(lock, fs, self.prepare(record.name().clone(), Some(record), None)?)?;
+        let report = self.write(
+            lock,
+            fs,
+            self.prepare(approval_generation, record.name().clone(), Some(record), None)?,
+        )?;
         warn_short_secrets(&logged_name, &short);
         Ok((id, report))
     }
@@ -69,6 +76,7 @@ impl Vault {
         &mut self,
         lock: &StateDirLock,
         fs: &impl StoreFs,
+        approval_generation: Option<StateGeneration>,
         name: CredentialName,
         material: CredentialMaterial,
         origins: PermittedOrigins,
@@ -79,7 +87,11 @@ impl Vault {
         let short = material.short_secrets();
         let record = new_record(name, material, origins)?;
         let id = record.id();
-        let report = self.write(lock, fs, self.prepare(record.name().clone(), Some(record), Some(old))?)?;
+        let report = self.write(
+            lock,
+            fs,
+            self.prepare(approval_generation, record.name().clone(), Some(record), Some(old))?,
+        )?;
         warn_short_secrets(&logged_name, &short);
         Ok((id, report))
     }
@@ -88,10 +100,16 @@ impl Vault {
     ///
     /// This performs an already authorized change: the caller checks owner presence and the routes that use the
     /// credential. A later `add` of the same name gets a new record ID, so the name never silently rebinds.
-    pub fn remove(&mut self, lock: &StateDirLock, fs: &impl StoreFs, name: &CredentialName) -> Result<WriteReport, VaultError> {
+    pub fn remove(
+        &mut self,
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        approval_generation: Option<StateGeneration>,
+        name: &CredentialName,
+    ) -> Result<WriteReport, VaultError> {
         self.ensure_same_dir(lock)?;
         let old = self.record_id_of(name).ok_or_else(|| VaultError::UnknownName(name.clone()))?;
-        self.write(lock, fs, self.prepare(name.clone(), None, Some(old))?)
+        self.write(lock, fs, self.prepare(approval_generation, name.clone(), None, Some(old))?)
     }
 
     /// Refuses another state directory's lock: its files are not this vault's, and cleanup there would remove another
@@ -131,7 +149,13 @@ impl Vault {
     }
 
     /// Seals the new record and builds and seals the next manifest, touching no file.
-    fn prepare(&self, name: CredentialName, new: Option<CredentialRecord>, old: Option<RecordId>) -> Result<Prepared, VaultError> {
+    fn prepare(
+        &self,
+        approval_generation: Option<StateGeneration>,
+        name: CredentialName,
+        new: Option<CredentialRecord>,
+        old: Option<RecordId>,
+    ) -> Result<Prepared, VaultError> {
         let new = new.map(|record| seal_record(&self.identity, record)).transpose()?;
         let mut entries = self.manifest.entries().clone();
         if let Some(old) = old {
@@ -140,7 +164,7 @@ impl Vault {
         if let Some(SealedRecord { record, bytes }) = &new {
             entries.insert(record.id(), ManifestEntry::new(record.name().clone(), record_digest(bytes)));
         }
-        let manifest = self.manifest.next(entries).map_err(VaultError::NextManifest)?;
+        let manifest = self.manifest.next(approval_generation, entries).map_err(VaultError::NextManifest)?;
         let manifest_bytes = seal_manifest(&self.identity, &manifest).map_err(VaultError::Seal)?;
         Ok(Prepared {
             name,
