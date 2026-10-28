@@ -8,12 +8,15 @@ rust-version.workspace = true
 
 [dependencies]
 age.workspace = true
+iron-vault-kinds = { path = "../iron-vault-kinds" }
+iron-vault-policy = { path = "../iron-vault-policy" }
+secrecy.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-secrecy.workspace = true
 
 [lints]
 workspace = true

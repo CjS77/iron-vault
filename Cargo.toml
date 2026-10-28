@@ -19,6 +19,7 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "1"
 url = "2.5"
+uuid = { version = "1.29.0", features = ["v4"] }
 zeroize = "1.9.1"
 
 [workspace.lints.rust]
