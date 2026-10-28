@@ -27,6 +27,16 @@ pub const RESERVED_HEADERS: &[&str] = &[
     "forwarded",
     "via",
     "x-real-ip",
+    // Client-address headers set by CDNs and load balancers (Akamai/Cloudflare `True-Client-IP`, Cloudflare
+    // `CF-Connecting-IP`, `X-Client-IP`). Upstreams behind such a CDN trust them as the caller's address.
+    "true-client-ip",
+    "x-client-ip",
+    "cf-connecting-ip",
+    // Host-override headers. Some frameworks and proxies take the request's authority from these in place of `Host`,
+    // which the service controls.
+    "x-host",
+    "x-original-host",
+    "x-http-host-override",
     // Method-override headers.
     "x-http-method-override",
     "x-method-override",
@@ -79,6 +89,12 @@ mod tests {
             "X-HTTP-Method",
             "X-Original-URL",
             "X-Rewrite-URL",
+            "X-Host",
+            "X-Original-Host",
+            "X-HTTP-Host-Override",
+            "True-Client-IP",
+            "X-Client-IP",
+            "CF-Connecting-IP",
         ]
         .iter()
         .for_each(|h| assert!(reserved(h), "{h}"));

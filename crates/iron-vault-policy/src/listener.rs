@@ -286,6 +286,13 @@ mod tests {
     }
 
     #[test]
+    fn client_address_and_host_override_headers_cannot_carry_the_token() {
+        ["X-Host", "X-Original-Host", "X-HTTP-Host-Override", "True-Client-IP", "X-Client-IP", "CF-Connecting-IP"]
+            .iter()
+            .for_each(|h| rejected(&format!("address = \"127.0.0.1:7878\"\ntoken_header = \"{h}\""), "is a reserved header"));
+    }
+
+    #[test]
     fn reserved_token_headers_are_rejected() {
         ["Host", "Content-Length", "Transfer-Encoding", "Connection", "Upgrade", "Forwarded", "X-Forwarded-For", "Proxy-Authenticate"]
             .iter()

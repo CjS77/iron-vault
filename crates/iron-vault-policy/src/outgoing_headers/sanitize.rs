@@ -137,6 +137,12 @@ mod tests {
             "X-Forwarded-For",
             "X-Forwarded-Host",
             "Proxy-Authorization",
+            "X-Host",
+            "X-Original-Host",
+            "X-HTTP-Host-Override",
+            "True-Client-IP",
+            "X-Client-IP",
+            "CF-Connecting-IP",
         ]
         .iter()
         .flat_map(|h| [h.to_string(), h.to_ascii_lowercase(), h.to_ascii_uppercase()])

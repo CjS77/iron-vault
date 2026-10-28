@@ -7,8 +7,10 @@ use thiserror::Error;
 /// The bytes of one HTTP field value.
 ///
 /// CR, LF and NUL are rejected (RFC 9110 §5.5) because they split or truncate a header when the request is written.
-/// Bytes from 0x80 upwards (`obs-text`) are kept: callers may legitimately send them, and the value is forwarded as
-/// bytes, never decoded as text.
+/// Every other C0 control except HTAB, and DEL, is rejected too: RFC 9110 §5.5 forbids them, a lenient upstream may
+/// parse them differently from Iron Vault (room for request smuggling), and refusing them here gives the caller a
+/// clean `400` instead of a transport error when the request is sent. Bytes from 0x80 upwards (`obs-text`) are kept:
+/// callers may legitimately send them, and the value is forwarded as bytes, never decoded as text.
 ///
 /// Values can carry caller tokens or credentials, so `Debug` shows only the length and there is no `Display`.
 #[derive(Clone, PartialEq, Eq)]
@@ -26,6 +28,9 @@ pub enum HeaderValueError {
     /// The value contains a NUL byte.
     #[error("header value contains a NUL byte")]
     Nul,
+    /// The value contains a control character other than HTAB, CR, LF or NUL, or DEL.
+    #[error("header value contains a control character")]
+    Control,
 }
 
 impl HeaderValue {
@@ -51,6 +56,8 @@ fn forbidden_byte(bytes: &[u8]) -> Option<HeaderValueError> {
         b'\r' => Some(HeaderValueError::CarriageReturn),
         b'\n' => Some(HeaderValueError::LineFeed),
         b'\0' => Some(HeaderValueError::Nul),
+        b'\t' => None,
+        0x01..=0x1f | 0x7f => Some(HeaderValueError::Control),
         _ => None,
     })
 }
@@ -104,6 +111,23 @@ mod tests {
         assert_eq!(HeaderValue::try_from("a\nb"), Err(HeaderValueError::LineFeed));
         assert_eq!(HeaderValue::try_from("a\0b"), Err(HeaderValueError::Nul));
         assert_eq!(HeaderValue::try_from("x\r\nHost: evil.example"), Err(HeaderValueError::CarriageReturn));
+    }
+
+    #[test]
+    fn rejects_other_controls_and_del() {
+        ["a\x01b", "a\x0bb", "a\x0cb", "a\x1fb", "a\x7fb"]
+            .iter()
+            .for_each(|v| assert_eq!(HeaderValue::try_from(*v), Err(HeaderValueError::Control), "{v:?}"));
+    }
+
+    #[test]
+    fn every_c0_control_but_htab_is_rejected() {
+        (0x00u8..=0x1f)
+            .chain([0x7f])
+            .filter(|b| *b != b'\t')
+            .for_each(|b| assert!(HeaderValue::try_from([b].as_slice()).is_err(), "{b:#x}"));
+        assert!(HeaderValue::try_from("a\tb").is_ok());
+        assert!(HeaderValue::try_from(b"\x80\xff".as_slice()).is_ok());
     }
 
     #[test]

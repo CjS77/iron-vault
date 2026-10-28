@@ -267,7 +267,19 @@ mod tests {
 
     #[test]
     fn rejects_reserved_headers() {
-        ["Host", "X-Forwarded-For", "Proxy-Authorization", "transfer-encoding"].iter().for_each(|h| {
+        [
+            "Host",
+            "X-Forwarded-For",
+            "Proxy-Authorization",
+            "transfer-encoding",
+            "X-Host",
+            "x-original-host",
+            "X-HTTP-Host-Override",
+            "True-Client-IP",
+            "x-client-ip",
+            "CF-Connecting-IP",
+        ]
+        .iter().for_each(|h| {
             let error = parse(&format!(r#"{{ header = "{h}" }}"#)).unwrap_err().to_string();
             assert!(error.contains("reserved"), "{h}: {error}");
         });
