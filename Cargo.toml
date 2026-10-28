@@ -19,6 +19,8 @@ blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] 
 # key generation stay off because the service only verifies here and tests sign from fixed seeds.
 ed25519-dalek = { version = "2.2.0", default-features = false }
 proptest = { version = "1.12", default-features = false, features = ["std"] }
+# Safe syscall wrappers for process hardening in the binary: rlimits and prctl (process) and mlockall (mm) only.
+rustix = { version = "1.1.6", default-features = false, features = ["std", "process", "mm"] }
 secrecy = "0.10.3"
 serde = { version = "1", features = ["derive"] }
 # Constant-time equality for digests; std and i128 are not needed.

@@ -8,6 +8,11 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+tracing.workspace = true
+
+# Process hardening is Linux-only for now; other platforms report it as unsupported without these syscalls.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix.workspace = true
 
 [lints]
 workspace = true
