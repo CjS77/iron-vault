@@ -201,8 +201,15 @@ impl ApprovalEnvelope {
     /// An envelope for `payload` signed with `algorithm`, refusing a signature of the wrong length for it.
     pub fn new(algorithm: SignatureAlgorithm, payload: ApprovalPayload, signature: Vec<u8>) -> Result<Self, ApprovalDecodeError> {
         match algorithm.accepts_signature_len(signature.len()) {
-            true => Ok(Self { algorithm, payload, signature }),
-            false => Err(ApprovalDecodeError::SignatureLength { algorithm, len: signature.len() }),
+            true => Ok(Self {
+                algorithm,
+                payload,
+                signature,
+            }),
+            false => Err(ApprovalDecodeError::SignatureLength {
+                algorithm,
+                len: signature.len(),
+            }),
         }
     }
 
@@ -324,7 +331,10 @@ mod tests {
 
     #[test]
     fn algorithm_ids_round_trip_and_reserved_ids_are_unknown() {
-        assert_eq!(SignatureAlgorithm::from_id(SignatureAlgorithm::Ed25519.id()), Ok(SignatureAlgorithm::Ed25519));
+        assert_eq!(
+            SignatureAlgorithm::from_id(SignatureAlgorithm::Ed25519.id()),
+            Ok(SignatureAlgorithm::Ed25519)
+        );
         [0x00, RESERVED_ECDSA_P256_ID, 0xff]
             .into_iter()
             .for_each(|id| assert_eq!(SignatureAlgorithm::from_id(id), Err(ApprovalDecodeError::UnknownAlgorithm(id))));

@@ -21,15 +21,22 @@ impl CredentialCatalog for Catalog {
             "venice" => "api.venice.ai",
             _ => "api.search.brave.com",
         };
-        CatalogEntry::Usable { kind: crate::CredentialKind::Static, origins: [(host.parse().unwrap(), Port::HTTPS)].into() }
+        CatalogEntry::Usable {
+            kind: crate::CredentialKind::Static,
+            origins: [(host.parse().unwrap(), Port::HTTPS)].into(),
+        }
     }
 }
 
 /// The §3.3 example with every route opened to every path.
 fn policy() -> ActivePolicy {
-    let doc = ["[\"/latest\", \"/historical/**\"]", "[\"/api/v1/chat/completions\"]", "[\"/res/v1/web/search\"]"]
-        .iter()
-        .fold(SPEC_EXAMPLE.to_owned(), |doc, paths| doc.replace(paths, "[\"/**\"]"));
+    let doc = [
+        "[\"/latest\", \"/historical/**\"]",
+        "[\"/api/v1/chat/completions\"]",
+        "[\"/res/v1/web/search\"]",
+    ]
+    .iter()
+    .fold(SPEC_EXAMPLE.to_owned(), |doc, paths| doc.replace(paths, "[\"/**\"]"));
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
     activate(&config, &Capabilities::default(), &Catalog).unwrap()
 }
@@ -45,9 +52,20 @@ fn assemble_with(target: &str, headers: &[(&str, &str)], slot: Option<&Slot>, va
     let route = &policy.config().routes()[request.route()];
     let upstream_target = UpstreamTarget::build(route.upstream(), &request).unwrap();
     let mut outgoing = OutgoingHeaders::new();
-    headers.iter().for_each(|(name, value)| outgoing.insert(name.parse().unwrap(), HeaderValue::try_from(*value).unwrap()).unwrap());
+    headers.iter().for_each(|(name, value)| {
+        outgoing
+            .insert(name.parse().unwrap(), HeaderValue::try_from(*value).unwrap())
+            .unwrap()
+    });
     let value = SlotValue::new(SecretString::from(value)).unwrap();
-    OutgoingRequest::assemble(&request, upstream_target, outgoing, slot.unwrap_or(route.slot()), route.credential(), &value)
+    OutgoingRequest::assemble(
+        &request,
+        upstream_target,
+        outgoing,
+        slot.unwrap_or(route.slot()),
+        route.credential(),
+        &value,
+    )
 }
 
 fn assemble(target: &str, headers: &[(&str, &str)]) -> Result<OutgoingRequest, AssembleError> {
@@ -61,7 +79,11 @@ fn url(request: &OutgoingRequest) -> &str {
 /// Every header as `(spelling, value)`, in order.
 fn header_list(request: &OutgoingRequest) -> Vec<(String, String)> {
     let text = |value: &HeaderValue| String::from_utf8_lossy(value.as_bytes()).into_owned();
-    request.headers().iter().map(|(name, value)| (name.as_str().to_owned(), text(value))).collect()
+    request
+        .headers()
+        .iter()
+        .map(|(name, value)| (name.as_str().to_owned(), text(value)))
+        .collect()
 }
 
 fn pair(name: &str, value: &str) -> (String, String) {
@@ -77,8 +99,14 @@ fn fx_query_marker_is_replaced() {
 
 #[test]
 fn query_slot_is_written_once_without_a_caller_occurrence() {
-    assert_eq!(url(&assemble("/fx/latest?base=USD", &[]).unwrap()), "https://api.fx.example/latest?base=USD&access_key=S3CR3T");
-    assert_eq!(url(&assemble("/fx/latest", &[]).unwrap()), "https://api.fx.example/latest?access_key=S3CR3T");
+    assert_eq!(
+        url(&assemble("/fx/latest?base=USD", &[]).unwrap()),
+        "https://api.fx.example/latest?base=USD&access_key=S3CR3T"
+    );
+    assert_eq!(
+        url(&assemble("/fx/latest", &[]).unwrap()),
+        "https://api.fx.example/latest?access_key=S3CR3T"
+    );
 }
 
 #[test]
@@ -90,28 +118,46 @@ fn encoded_slot_names_are_removed_too() {
 #[test]
 fn other_parameters_are_kept_byte_for_byte_and_in_order() {
     let fx = assemble("/fx/latest?b=%2f/?x&ACCESS_KEY=1&&q=%7Biv:venice%7D&access_key=2&a+b=%7Biv:", &[]).unwrap();
-    assert_eq!(url(&fx), "https://api.fx.example/latest?b=%2f/?x&ACCESS_KEY=1&&q=%7Biv:venice%7D&a+b=%7Biv:&access_key=S3CR3T");
+    assert_eq!(
+        url(&fx),
+        "https://api.fx.example/latest?b=%2f/?x&ACCESS_KEY=1&&q=%7Biv:venice%7D&a+b=%7Biv:&access_key=S3CR3T"
+    );
 }
 
 #[test]
 fn query_value_parses_back_to_the_exact_value() {
     let value = "a&b=c+d%e f/?#\u{e9}\u{2028}";
     let fx = assemble_with("/fx/latest?base=USD", &[], None, value).unwrap();
-    let pairs: Vec<(String, String)> = fx.target().as_url().query_pairs().map(|(n, v)| (n.into_owned(), v.into_owned())).collect();
+    let pairs: Vec<(String, String)> = fx
+        .target()
+        .as_url()
+        .query_pairs()
+        .map(|(n, v)| (n.into_owned(), v.into_owned()))
+        .collect();
     assert_eq!(pairs, [pair("base", "USD"), pair("access_key", value)]);
 }
 
 #[test]
 fn brave_duplicate_placeholders_become_one_header() {
-    let headers = [("x-subscription-token", "placeholder"), ("Accept", "application/json"), ("X-Subscription-Token", "placeholder")];
+    let headers = [
+        ("x-subscription-token", "placeholder"),
+        ("Accept", "application/json"),
+        ("X-Subscription-Token", "placeholder"),
+    ];
     let brave = assemble("/brave/res/v1/web/search?q=rust", &headers).unwrap();
-    assert_eq!(header_list(&brave), [pair("Accept", "application/json"), pair("X-Subscription-Token", SECRET)]);
+    assert_eq!(
+        header_list(&brave),
+        [pair("Accept", "application/json"), pair("X-Subscription-Token", SECRET)]
+    );
     assert_eq!(url(&brave), "https://api.search.brave.com/res/v1/web/search?q=rust");
 }
 
 #[test]
 fn header_slot_is_written_once_without_a_caller_occurrence() {
-    assert_eq!(header_list(&assemble("/brave/res/v1/web/search", &[]).unwrap()), [pair("X-Subscription-Token", SECRET)]);
+    assert_eq!(
+        header_list(&assemble("/brave/res/v1/web/search", &[]).unwrap()),
+        [pair("X-Subscription-Token", SECRET)]
+    );
 }
 
 #[test]
@@ -123,7 +169,11 @@ fn venice_marker_is_replaced_through_the_format() {
 
 #[test]
 fn basic_slot_replaces_every_authorization_header() {
-    let headers = [("Authorization", "Basic {iv:brave}"), ("authorization", "Bearer x"), ("Accept", "*/*")];
+    let headers = [
+        ("Authorization", "Basic {iv:brave}"),
+        ("authorization", "Bearer x"),
+        ("Accept", "*/*"),
+    ];
     let basic = assemble_with("/brave/res/v1/web/search", &headers, Some(&Slot::Basic), "dTpw").unwrap();
     assert_eq!(header_list(&basic), [pair("Accept", "*/*"), pair("Authorization", "Basic dTpw")]);
 }
@@ -132,10 +182,24 @@ fn basic_slot_replaces_every_authorization_header() {
 fn foreign_marker_in_the_slot_is_refused() {
     let foreign = Err(AssembleError::ForeignMarker);
     assert_eq!(assemble("/fx/latest?access_key=%7Biv:venice%7D", &[]).map(|_| ()), foreign);
-    assert_eq!(assemble("/fx/latest?access%5Fkey=%7Biv:venice%7D&access_key=%7Biv:fx_key%7D", &[]).map(|_| ()), foreign);
-    assert_eq!(assemble("/brave/res/v1/web/search", &[("X-Subscription-Token", "{iv:fx_key}")]).map(|_| ()), foreign);
-    assert_eq!(assemble("/venice/chat/completions", &[("Authorization", "Bearer {iv:venice}{iv:brave}")]).map(|_| ()), foreign);
-    let basic = assemble_with("/brave/res/v1/web/search", &[("authorization", "Basic {iv:venice}")], Some(&Slot::Basic), "dTpw");
+    assert_eq!(
+        assemble("/fx/latest?access%5Fkey=%7Biv:venice%7D&access_key=%7Biv:fx_key%7D", &[]).map(|_| ()),
+        foreign
+    );
+    assert_eq!(
+        assemble("/brave/res/v1/web/search", &[("X-Subscription-Token", "{iv:fx_key}")]).map(|_| ()),
+        foreign
+    );
+    assert_eq!(
+        assemble("/venice/chat/completions", &[("Authorization", "Bearer {iv:venice}{iv:brave}")]).map(|_| ()),
+        foreign
+    );
+    let basic = assemble_with(
+        "/brave/res/v1/web/search",
+        &[("authorization", "Basic {iv:venice}")],
+        Some(&Slot::Basic),
+        "dTpw",
+    );
     assert_eq!(basic.map(|_| ()), foreign);
 }
 
@@ -145,15 +209,30 @@ fn malformed_marker_in_the_slot_is_refused() {
     assert_eq!(assemble("/fx/latest?access_key=%7Biv:", &[]).map(|_| ()), malformed);
     assert_eq!(assemble("/fx/latest?access_key=%7Biv:FX%7D", &[]).map(|_| ()), malformed);
     ["{iv:Brave}", "{iv:brave", "{iv:}"].iter().for_each(|value| {
-        assert_eq!(assemble("/brave/res/v1/web/search", &[("X-Subscription-Token", value)]).map(|_| ()), malformed, "{value}");
+        assert_eq!(
+            assemble("/brave/res/v1/web/search", &[("X-Subscription-Token", value)]).map(|_| ()),
+            malformed,
+            "{value}"
+        );
     });
 }
 
 #[test]
 fn markers_outside_the_slot_stay_inert() {
-    let headers = [("X-Other", "{iv:fx_key}"), ("X-Broken", "{iv:"), ("X-Subscription-Token", "{iv:brave}")];
+    let headers = [
+        ("X-Other", "{iv:fx_key}"),
+        ("X-Broken", "{iv:"),
+        ("X-Subscription-Token", "{iv:brave}"),
+    ];
     let brave = assemble("/brave/res/v1/web/search?title=%7Biv:venice%7D", &headers).unwrap();
-    assert_eq!(header_list(&brave), [pair("X-Other", "{iv:fx_key}"), pair("X-Broken", "{iv:"), pair("X-Subscription-Token", SECRET)]);
+    assert_eq!(
+        header_list(&brave),
+        [
+            pair("X-Other", "{iv:fx_key}"),
+            pair("X-Broken", "{iv:"),
+            pair("X-Subscription-Token", SECRET)
+        ]
+    );
     assert_eq!(url(&brave), "https://api.search.brave.com/res/v1/web/search?title=%7Biv:venice%7D");
 }
 
@@ -172,7 +251,9 @@ fn non_ascii_values_are_refused_for_header_and_basic_slots() {
 fn debug_never_shows_the_credential() {
     let fx = assemble("/fx/latest?base=USD", &[]).unwrap();
     let brave = assemble("/brave/res/v1/web/search", &[]).unwrap();
-    [format!("{fx:?}"), format!("{brave:?}")].iter().for_each(|debug| assert!(!debug.contains(SECRET), "{debug}"));
+    [format!("{fx:?}"), format!("{brave:?}")]
+        .iter()
+        .for_each(|debug| assert!(!debug.contains(SECRET), "{debug}"));
 }
 
 #[test]

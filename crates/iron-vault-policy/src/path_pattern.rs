@@ -99,15 +99,23 @@ pub struct PathPattern {
 impl PathPattern {
     /// Parses and validates a pattern.
     pub fn parse(text: &str) -> Result<Self, PathPatternError> {
-        let rest = text.strip_prefix('/').ok_or_else(|| PathPatternError::NotAbsolute { pattern: text.to_owned() })?;
+        let rest = text
+            .strip_prefix('/')
+            .ok_or_else(|| PathPatternError::NotAbsolute { pattern: text.to_owned() })?;
         if let Some(character) = text.chars().find(|c| !is_pattern_char(*c)) {
-            return Err(PathPatternError::DisallowedCharacter { pattern: text.to_owned(), character });
+            return Err(PathPatternError::DisallowedCharacter {
+                pattern: text.to_owned(),
+                character,
+            });
         }
         let segments = match rest {
             "" => Vec::new(),
             _ => rest.split('/').map(|raw| parse_segment(text, raw)).collect::<Result<_, _>>()?,
         };
-        Ok(Self { text: text.to_owned(), segments })
+        Ok(Self {
+            text: text.to_owned(),
+            segments,
+        })
     }
 
     /// The pattern as written in configuration.
@@ -189,11 +197,18 @@ fn is_pattern_char(c: char) -> bool {
 /// Parses one `/`-separated piece of `pattern`.
 fn parse_segment(pattern: &str, raw: &str) -> Result<Segment, PathPatternError> {
     match raw {
-        "" => Err(PathPatternError::EmptySegment { pattern: pattern.to_owned() }),
-        "." | ".." => Err(PathPatternError::DotSegment { pattern: pattern.to_owned() }),
+        "" => Err(PathPatternError::EmptySegment {
+            pattern: pattern.to_owned(),
+        }),
+        "." | ".." => Err(PathPatternError::DotSegment {
+            pattern: pattern.to_owned(),
+        }),
         "*" => Ok(Segment::One),
         "**" => Ok(Segment::Any),
-        _ if raw.contains('*') => Err(PathPatternError::PartialWildcard { pattern: pattern.to_owned(), segment: raw.to_owned() }),
+        _ if raw.contains('*') => Err(PathPatternError::PartialWildcard {
+            pattern: pattern.to_owned(),
+            segment: raw.to_owned(),
+        }),
         _ => Ok(Segment::Literal(raw.to_owned())),
     }
 }
@@ -212,9 +227,14 @@ impl PathPatterns {
         if patterns.is_empty() {
             return Err(PathPatternError::EmptyList);
         }
-        let duplicate = patterns.iter().enumerate().find(|(i, p)| patterns.iter().take(*i).any(|earlier| earlier == *p));
+        let duplicate = patterns
+            .iter()
+            .enumerate()
+            .find(|(i, p)| patterns.iter().take(*i).any(|earlier| earlier == *p));
         match duplicate {
-            Some((_, pattern)) => Err(PathPatternError::Duplicate { pattern: pattern.text.clone() }),
+            Some((_, pattern)) => Err(PathPatternError::Duplicate {
+                pattern: pattern.text.clone(),
+            }),
             None => Ok(Self(patterns)),
         }
     }
@@ -234,7 +254,11 @@ impl TryFrom<Vec<String>> for PathPatterns {
     type Error = PathPatternError;
 
     fn try_from(texts: Vec<String>) -> Result<Self, Self::Error> {
-        texts.into_iter().map(PathPattern::try_from).collect::<Result<Vec<_>, _>>().and_then(Self::new)
+        texts
+            .into_iter()
+            .map(PathPattern::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(Self::new)
     }
 }
 
@@ -267,7 +291,9 @@ mod tests {
 
     #[test]
     fn trailing_double_star_matches_zero_or_more() {
-        ["/historical", "/historical/2024", "/historical/2024/01"].iter().for_each(|p| assert!(matches("/historical/**", p)));
+        ["/historical", "/historical/2024", "/historical/2024/01"]
+            .iter()
+            .for_each(|p| assert!(matches("/historical/**", p)));
         assert!(!matches("/historical/**", "/"));
         assert!(!matches("/historical/**", "/historicalx"));
         assert!(!matches("/historical/**", "/latest/historical"));
@@ -324,7 +350,9 @@ mod tests {
         match pattern.split_first() {
             None => path.is_empty(),
             Some((Segment::Any, rest)) => (0..=path.len()).any(|k| reference(rest, &path[k..])),
-            Some((seg, rest)) => path.split_first().is_some_and(|(head, tail)| seg.matches_one(head) && reference(rest, tail)),
+            Some((seg, rest)) => path
+                .split_first()
+                .is_some_and(|(head, tail)| seg.matches_one(head) && reference(rest, tail)),
         }
     }
 
@@ -332,7 +360,9 @@ mod tests {
     fn sequences<'a>(alphabet: &[&'a str], max: usize) -> Vec<Vec<&'a str>> {
         (0..max).fold(vec![Vec::new()], |acc, _| {
             let longer = acc.iter().filter(|s| s.len() == acc.last().map_or(0, Vec::len)).flat_map(|s| {
-                alphabet.iter().map(move |a| s.iter().copied().chain(std::iter::once(*a)).collect::<Vec<_>>())
+                alphabet
+                    .iter()
+                    .map(move |a| s.iter().copied().chain(std::iter::once(*a)).collect::<Vec<_>>())
             });
             acc.iter().cloned().chain(longer.collect::<Vec<_>>()).collect()
         })
@@ -345,7 +375,9 @@ mod tests {
         assert_eq!((patterns.len(), paths.len()), (341, 63));
         patterns.iter().for_each(|segs| {
             let pat = pattern(&format!("/{}", segs.join("/")));
-            paths.iter().for_each(|path| assert_eq!(pat.matches(path), reference(&pat.segments, path), "{pat} vs {path:?}"));
+            paths
+                .iter()
+                .for_each(|path| assert_eq!(pat.matches(path), reference(&pat.segments, path), "{pat} vs {path:?}"));
         });
     }
 
@@ -388,7 +420,10 @@ mod tests {
         assert!(list.matches(&["latest"]));
         assert!(list.matches(&["historical", "2024"]));
         assert!(!list.matches(&["other"]));
-        assert_eq!(list.iter().map(PathPattern::as_str).collect::<Vec<_>>(), ["/latest", "/historical/**"]);
+        assert_eq!(
+            list.iter().map(PathPattern::as_str).collect::<Vec<_>>(),
+            ["/latest", "/historical/**"]
+        );
     }
 
     #[test]
@@ -407,7 +442,10 @@ mod tests {
     fn deserializes_from_toml() {
         let route: Route = toml::from_str(r#"paths = ["/latest", "/historical/**"]"#).unwrap();
         assert!(route.paths.matches(&["historical"]));
-        assert_eq!(route.paths.iter().map(ToString::to_string).collect::<Vec<_>>(), ["/latest", "/historical/**"]);
+        assert_eq!(
+            route.paths.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["/latest", "/historical/**"]
+        );
     }
 
     #[test]

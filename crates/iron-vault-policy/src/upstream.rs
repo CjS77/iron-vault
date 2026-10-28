@@ -119,7 +119,12 @@ impl FromStr for UpstreamUrl {
         let (host, port) = parse_authority(authority)?;
         let base_segments = parse_base_path(path)?;
         let url = check_url_fixed_point(&canonical(&host, port, &base_segments))?;
-        Ok(UpstreamUrl { host, port, base_segments, url })
+        Ok(UpstreamUrl {
+            host,
+            port,
+            base_segments,
+            url,
+        })
     }
 }
 
@@ -187,7 +192,10 @@ fn split_host_port(authority: &str) -> Result<(&str, Option<&str>), UpstreamUrlE
     let (host, after) = authority.split_at(host_end);
     match after {
         "" => Ok((host, None)),
-        _ => after.strip_prefix(':').map(|port| (host, Some(port))).ok_or(UpstreamUrlError::MalformedAuthority),
+        _ => after
+            .strip_prefix(':')
+            .map(|port| (host, Some(port)))
+            .ok_or(UpstreamUrlError::MalformedAuthority),
     }
 }
 
@@ -213,7 +221,10 @@ fn parse_segment(segment: &str) -> Result<String, UpstreamUrlError> {
 
 /// Anything outside [`is_path_char`] would be percent-encoded by a URL serializer and so change meaning.
 fn check_path_characters(segment: &str) -> Result<(), UpstreamUrlError> {
-    segment.chars().find(|c| !is_path_char(*c)).map_or(Ok(()), |c| Err(UpstreamUrlError::ForbiddenPathCharacter(c)))
+    segment
+        .chars()
+        .find(|c| !is_path_char(*c))
+        .map_or(Ok(()), |c| Err(UpstreamUrlError::ForbiddenPathCharacter(c)))
 }
 
 /// Uppercases escape hex digits and checks each escape, then requires the decoded segment to be UTF-8 so overlong
@@ -255,7 +266,10 @@ mod tests {
     #[test]
     fn spec_example_upstreams_are_accepted() {
         let fx = upstream("https://api.fx.example");
-        assert_eq!((fx.host().as_str(), fx.port(), fx.base_segments()), ("api.fx.example", Port::HTTPS, &[][..]));
+        assert_eq!(
+            (fx.host().as_str(), fx.port(), fx.base_segments()),
+            ("api.fx.example", Port::HTTPS, &[][..])
+        );
         let venice = upstream("https://api.venice.ai/api/v1");
         assert_eq!((venice.host().as_str(), venice.port()), ("api.venice.ai", Port::HTTPS));
         assert_eq!(venice.base_segments(), ["api", "v1"]);
@@ -264,9 +278,15 @@ mod tests {
 
     #[test]
     fn display_is_canonical() {
-        assert_eq!(upstream("https://API.Venice.AI./api/v1/").to_string(), "https://api.venice.ai/api/v1");
+        assert_eq!(
+            upstream("https://API.Venice.AI./api/v1/").to_string(),
+            "https://api.venice.ai/api/v1"
+        );
         assert_eq!(upstream("https://api.fx.example").to_string(), "https://api.fx.example/");
-        assert_eq!(upstream("https://api.fx.example:8443/x").to_string(), "https://api.fx.example:8443/x");
+        assert_eq!(
+            upstream("https://api.fx.example:8443/x").to_string(),
+            "https://api.fx.example:8443/x"
+        );
         assert_eq!(upstream("https://[2001:DB8::1]:443/").to_string(), "https://[2001:db8::1]/");
     }
 
@@ -285,23 +305,39 @@ mod tests {
     #[test]
     fn ipv6_upstreams_split_host_and_port() {
         let ip = upstream("https://[::1]:8443/base");
-        assert_eq!((ip.host().as_str(), ip.port().get(), ip.base_segments()), ("[::1]", 8443, &["base".to_owned()][..]));
+        assert_eq!(
+            (ip.host().as_str(), ip.port().get(), ip.base_segments()),
+            ("[::1]", 8443, &["base".to_owned()][..])
+        );
         assert_eq!(reject("https://[::1]x"), UpstreamUrlError::MalformedAuthority);
         assert_eq!(reject("https://[::1"), UpstreamUrlError::Host(HostError::InvalidIpv6));
     }
 
     #[test]
     fn non_https_schemes_are_rejected() {
-        ["http://api.fx.example", "HTTPS://api.fx.example", "https:api.fx.example", "https:/api.fx.example", "ftp://h", "//h", "h"]
-            .into_iter()
-            .for_each(|raw| assert_eq!(reject(raw), UpstreamUrlError::NotHttps, "{raw}"));
+        [
+            "http://api.fx.example",
+            "HTTPS://api.fx.example",
+            "https:api.fx.example",
+            "https:/api.fx.example",
+            "ftp://h",
+            "//h",
+            "h",
+        ]
+        .into_iter()
+        .for_each(|raw| assert_eq!(reject(raw), UpstreamUrlError::NotHttps, "{raw}"));
     }
 
     #[test]
     fn user_info_is_rejected() {
-        ["https://user@host.example", "https://user:pw@host.example", "https://host.example:443@evil.example", "https://@host.example"]
-            .into_iter()
-            .for_each(|raw| assert_eq!(reject(raw), UpstreamUrlError::UserInfo, "{raw}"));
+        [
+            "https://user@host.example",
+            "https://user:pw@host.example",
+            "https://host.example:443@evil.example",
+            "https://@host.example",
+        ]
+        .into_iter()
+        .for_each(|raw| assert_eq!(reject(raw), UpstreamUrlError::UserInfo, "{raw}"));
     }
 
     #[test]
@@ -321,9 +357,15 @@ mod tests {
     #[test]
     fn bad_ports_are_rejected() {
         assert_eq!(reject("https://host:0"), UpstreamUrlError::Port(PortError::Zero));
-        ["https://host:", "https://host:0443", "https://host:65536", "https://host:+1", "https://host:1:2"]
-            .into_iter()
-            .for_each(|raw| assert_eq!(reject(raw), UpstreamUrlError::Port(PortError::NotCanonical), "{raw}"));
+        [
+            "https://host:",
+            "https://host:0443",
+            "https://host:65536",
+            "https://host:+1",
+            "https://host:1:2",
+        ]
+        .into_iter()
+        .for_each(|raw| assert_eq!(reject(raw), UpstreamUrlError::Port(PortError::NotCanonical), "{raw}"));
     }
 
     #[test]
@@ -331,15 +373,24 @@ mod tests {
         assert_eq!(reject("https://"), UpstreamUrlError::Host(HostError::Empty));
         assert_eq!(reject("https:///path"), UpstreamUrlError::Host(HostError::Empty));
         assert_eq!(reject("https://:443"), UpstreamUrlError::Host(HostError::Empty));
-        assert_eq!(reject("https://*.example.com"), UpstreamUrlError::Host(HostError::ForbiddenCharacter('*')));
-        assert_eq!(reject("https://ho%73t.example"), UpstreamUrlError::Host(HostError::ForbiddenCharacter('%')));
+        assert_eq!(
+            reject("https://*.example.com"),
+            UpstreamUrlError::Host(HostError::ForbiddenCharacter('*'))
+        );
+        assert_eq!(
+            reject("https://ho%73t.example"),
+            UpstreamUrlError::Host(HostError::ForbiddenCharacter('%'))
+        );
         assert_eq!(reject("https://127.1"), UpstreamUrlError::Host(HostError::NonCanonicalIp));
     }
 
     #[test]
     fn stripped_or_reinterpreted_characters_are_rejected() {
         assert_eq!(reject("https://host.example/a\\b"), UpstreamUrlError::ForbiddenCharacter('\\'));
-        assert_eq!(reject("https://evil.example\\@host.example"), UpstreamUrlError::ForbiddenCharacter('\\'));
+        assert_eq!(
+            reject("https://evil.example\\@host.example"),
+            UpstreamUrlError::ForbiddenCharacter('\\')
+        );
         assert_eq!(reject("https://host.example/a\tb"), UpstreamUrlError::ForbiddenCharacter('\t'));
         assert_eq!(reject("https://ho\nst.example"), UpstreamUrlError::ForbiddenCharacter('\n'));
         assert_eq!(reject(" https://host.example"), UpstreamUrlError::ForbiddenCharacter(' '));
@@ -364,32 +415,58 @@ mod tests {
     #[test]
     fn encoded_dots_and_separators_are_rejected_in_every_case_mix() {
         let encodings = ["%2e", "%2E", "%2f", "%2F", "%5c", "%5C", "%25", "%00", "%7f", "%7F", "%41", "%7e"];
-        let shapes = ["https://host/{}", "https://host/a/{}/b", "https://host/{}{}", "https://host/.{}", "https://host/a{}b"];
-        shapes.iter().flat_map(|shape| encodings.iter().map(move |enc| shape.replace("{}", enc))).for_each(|raw| {
-            assert!(matches!(reject(&raw), UpstreamUrlError::ForbiddenEscape(_)), "{raw}");
-        });
+        let shapes = [
+            "https://host/{}",
+            "https://host/a/{}/b",
+            "https://host/{}{}",
+            "https://host/.{}",
+            "https://host/a{}b",
+        ];
+        shapes
+            .iter()
+            .flat_map(|shape| encodings.iter().map(move |enc| shape.replace("{}", enc)))
+            .for_each(|raw| {
+                assert!(matches!(reject(&raw), UpstreamUrlError::ForbiddenEscape(_)), "{raw}");
+            });
     }
 
     #[test]
     fn double_encoded_traversal_is_rejected() {
-        ["https://host/%252e%252e", "https://host/%252E", "https://host/a/%252f/b", "https://host/%255c"]
-            .into_iter()
-            .for_each(|raw| assert!(matches!(reject(raw), UpstreamUrlError::ForbiddenEscape(_)), "{raw}"));
+        [
+            "https://host/%252e%252e",
+            "https://host/%252E",
+            "https://host/a/%252f/b",
+            "https://host/%255c",
+        ]
+        .into_iter()
+        .for_each(|raw| assert!(matches!(reject(raw), UpstreamUrlError::ForbiddenEscape(_)), "{raw}"));
     }
 
     #[test]
     fn overlong_and_invalid_utf8_escapes_are_rejected() {
-        ["https://host/%C0%AE", "https://host/%c0%ae%c0%ae", "https://host/%E0%80%AE", "https://host/%FF", "https://host/%C3"]
-            .into_iter()
-            .for_each(|raw| assert!(matches!(reject(raw), UpstreamUrlError::ForbiddenEscape(_)), "{raw}"));
+        [
+            "https://host/%C0%AE",
+            "https://host/%c0%ae%c0%ae",
+            "https://host/%E0%80%AE",
+            "https://host/%FF",
+            "https://host/%C3",
+        ]
+        .into_iter()
+        .for_each(|raw| assert!(matches!(reject(raw), UpstreamUrlError::ForbiddenEscape(_)), "{raw}"));
         assert_eq!(segments("https://host/caf%c3%a9"), ["caf%C3%A9"]);
     }
 
     #[test]
     fn malformed_escapes_are_rejected() {
-        ["https://host/%", "https://host/%2", "https://host/%zz", "https://host/%+f", "https://host/a%"]
-            .into_iter()
-            .for_each(|raw| assert!(matches!(reject(raw), UpstreamUrlError::MalformedEscape(_)), "{raw}"));
+        [
+            "https://host/%",
+            "https://host/%2",
+            "https://host/%zz",
+            "https://host/%+f",
+            "https://host/a%",
+        ]
+        .into_iter()
+        .for_each(|raw| assert!(matches!(reject(raw), UpstreamUrlError::MalformedEscape(_)), "{raw}"));
     }
 
     #[test]
@@ -400,24 +477,38 @@ mod tests {
 
     #[test]
     fn unencoded_non_path_characters_are_rejected() {
-        ["https://host/a\"b", "https://host/a<b", "https://host/a{b", "https://host/a^b", "https://host/é", "https://host/a|b"]
-            .into_iter()
-            .for_each(|raw| assert!(matches!(reject(raw), UpstreamUrlError::ForbiddenPathCharacter(_)), "{raw}"));
+        [
+            "https://host/a\"b",
+            "https://host/a<b",
+            "https://host/a{b",
+            "https://host/a^b",
+            "https://host/é",
+            "https://host/a|b",
+        ]
+        .into_iter()
+        .for_each(|raw| assert!(matches!(reject(raw), UpstreamUrlError::ForbiddenPathCharacter(_)), "{raw}"));
         assert_eq!(reject("https://host/a b"), UpstreamUrlError::ForbiddenCharacter(' '));
     }
 
     #[test]
     fn rfc3986_path_characters_are_accepted() {
-        assert_eq!(segments("https://host/a-b_c~d.e/f:g@h/!$&'()*+,;="), ["a-b_c~d.e", "f:g@h", "!$&'()*+,;="]);
+        assert_eq!(
+            segments("https://host/a-b_c~d.e/f:g@h/!$&'()*+,;="),
+            ["a-b_c~d.e", "f:g@h", "!$&'()*+,;="]
+        );
         assert_eq!(segments("https://host/...").len(), 1);
     }
 
     #[test]
     fn canonical_display_is_a_fixed_point() {
-        ["https://API.example.com./v1/", "https://[::ffff:192.0.2.1]:8443/a%3a", "https://bücher.example/x"]
-            .into_iter()
-            .map(upstream)
-            .for_each(|u| assert_eq!(upstream(&u.to_string()), u));
+        [
+            "https://API.example.com./v1/",
+            "https://[::ffff:192.0.2.1]:8443/a%3a",
+            "https://bücher.example/x",
+        ]
+        .into_iter()
+        .map(upstream)
+        .for_each(|u| assert_eq!(upstream(&u.to_string()), u));
     }
 
     #[test]
@@ -426,7 +517,10 @@ mod tests {
         use serde::de::value::{Error, StringDeserializer};
 
         let ok: StringDeserializer<Error> = "https://api.venice.ai/api/v1".to_owned().into_deserializer();
-        assert_eq!(UpstreamUrl::deserialize(ok).map(|u| u.to_string()), Ok("https://api.venice.ai/api/v1".to_owned()));
+        assert_eq!(
+            UpstreamUrl::deserialize(ok).map(|u| u.to_string()),
+            Ok("https://api.venice.ai/api/v1".to_owned())
+        );
         let bad: StringDeserializer<Error> = "http://api.venice.ai".to_owned().into_deserializer();
         assert!(UpstreamUrl::deserialize(bad).is_err());
     }

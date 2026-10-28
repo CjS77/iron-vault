@@ -45,8 +45,17 @@ pub(crate) fn assert_hides(value: &impl Debug, secret: &str) {
 
 fn record(name: &str) -> CredentialRecord {
     let origins = PermittedOrigins::new([("api.example.com".parse().unwrap(), Port::HTTPS)].into()).unwrap();
-    let material = CredentialMaterial::Static { key: SecretString::from(MARKER) };
-    CredentialRecord::new(RecordId::new_random(), name.parse().unwrap(), material, origins, Source::DirectEntry).unwrap()
+    let material = CredentialMaterial::Static {
+        key: SecretString::from(MARKER),
+    };
+    CredentialRecord::new(
+        RecordId::new_random(),
+        name.parse().unwrap(),
+        material,
+        origins,
+        Source::DirectEntry,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -94,7 +103,17 @@ fn vault_debug_hides_the_identity_and_every_record() {
     let mut vault = Vault::create(&lock, &OsFs, identity).unwrap();
     let name: CredentialName = "fx_key".parse().unwrap();
     let origins = record("fx_key").origins().clone();
-    vault.add(&lock, &OsFs, name, CredentialMaterial::Static { key: SecretString::from(MARKER) }, origins).unwrap();
+    vault
+        .add(
+            &lock,
+            &OsFs,
+            name,
+            CredentialMaterial::Static {
+                key: SecretString::from(MARKER),
+            },
+            origins,
+        )
+        .unwrap();
     assert_hides(&vault, MARKER);
     assert_hides(&vault, identity_secret.expose_secret());
 }
@@ -122,8 +141,18 @@ fn no_shared_or_global_owner_of_vault_secrets() {
 
 /// Whether `line` names a shared owner or declares a non-`const` `static` item.
 fn is_shared_or_global(line: &str) -> bool {
-    const FORBIDDEN: [&str; 10] =
-        ["Rc<", "Rc::", "Arc<", "Arc::", "Weak<", "OnceLock", "LazyLock", "OnceCell", "thread_local!", "lazy_static!"];
+    const FORBIDDEN: [&str; 10] = [
+        "Rc<",
+        "Rc::",
+        "Arc<",
+        "Arc::",
+        "Weak<",
+        "OnceLock",
+        "LazyLock",
+        "OnceCell",
+        "thread_local!",
+        "lazy_static!",
+    ];
     FORBIDDEN.iter().any(|word| line.contains(word)) || line.split_whitespace().take_while(|word| *word != "=").any(|word| word == "static")
 }
 

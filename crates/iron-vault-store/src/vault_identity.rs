@@ -23,7 +23,9 @@ pub struct VaultIdentity {
 impl VaultIdentity {
     /// Generates a fresh vault identity from the operating system's random source.
     pub fn generate() -> Self {
-        Self { secret: x25519::Identity::generate() }
+        Self {
+            secret: x25519::Identity::generate(),
+        }
     }
 
     /// The public half of this identity, which anything can be sealed to.
@@ -41,7 +43,9 @@ impl VaultIdentity {
     pub(crate) fn derive_key(&self, persona: &[u8]) -> Zeroizing<[u8; 64]> {
         let secret = self.secret.to_string();
         let mut key = Zeroizing::new([0; 64]);
-        Blake2b512::new_customized(persona).chain_update(secret.expose_secret()).finalize_into((&mut *key).into());
+        Blake2b512::new_customized(persona)
+            .chain_update(secret.expose_secret())
+            .finalize_into((&mut *key).into());
         key
     }
 
@@ -62,7 +66,9 @@ impl VaultIdentity {
     /// The identity a literal `AGE-SECRET-KEY-1…` string encodes, so tests can pin derived keys to known answers.
     #[cfg(test)]
     pub(crate) fn from_secret(text: &str) -> Self {
-        Self { secret: text.parse().unwrap() }
+        Self {
+            secret: text.parse().unwrap(),
+        }
     }
 
     /// The `age` identity, for decryption inside this crate only.
@@ -73,7 +79,9 @@ impl VaultIdentity {
 
 impl fmt::Debug for VaultIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("VaultIdentity").field("public_key", &self.public_key()).finish_non_exhaustive()
+        f.debug_struct("VaultIdentity")
+            .field("public_key", &self.public_key())
+            .finish_non_exhaustive()
     }
 }
 
@@ -89,7 +97,10 @@ pub struct VaultPublicKey {
 
 impl VaultPublicKey {
     fn from_recipient(recipient: x25519::Recipient) -> Self {
-        Self { encoded: recipient.to_string(), recipient }
+        Self {
+            encoded: recipient.to_string(),
+            recipient,
+        }
     }
 
     /// The `age` recipient, for encryption inside this crate only.
@@ -107,7 +118,9 @@ impl FromStr for VaultPublicKey {
     type Err = ParseVaultPublicKeyError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.parse::<x25519::Recipient>().map(Self::from_recipient).map_err(|_| ParseVaultPublicKeyError)
+        s.parse::<x25519::Recipient>()
+            .map(Self::from_recipient)
+            .map_err(|_| ParseVaultPublicKeyError)
     }
 }
 
@@ -187,7 +200,11 @@ mod tests {
     #[test]
     fn manifest_key_matches_its_known_answer() {
         let identity = VaultIdentity::from_secret(crate::manifest::tests::KAT_IDENTITY);
-        let hex: String = identity.derive_key(crate::manifest::MANIFEST_KEY_PERSONA).iter().map(|b| format!("{b:02x}")).collect();
+        let hex: String = identity
+            .derive_key(crate::manifest::MANIFEST_KEY_PERSONA)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         assert_eq!(hex, crate::manifest::tests::KAT_MANIFEST_KEY);
         assert_eq!(identity.secret.to_string().expose_secret(), crate::manifest::tests::KAT_IDENTITY);
     }
@@ -209,7 +226,12 @@ mod tests {
         assert!(!debug.to_uppercase().contains("AGE-SECRET-KEY"));
         // Any eight-character run of the key's data part would be a partial leak.
         let chars: Vec<char> = data.chars().collect();
-        assert!(chars.windows(8).map(String::from_iter).all(|part| !debug.to_uppercase().contains(&part)));
+        assert!(
+            chars
+                .windows(8)
+                .map(String::from_iter)
+                .all(|part| !debug.to_uppercase().contains(&part))
+        );
         assert!(debug.contains(&identity.public_key().to_string()));
     }
 }

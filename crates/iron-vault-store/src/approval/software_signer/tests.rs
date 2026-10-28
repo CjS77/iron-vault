@@ -1,12 +1,12 @@
 //! The software signer: generate, seal, open against the pinned approver, sign, and verify with `verify_approval`.
 
 use super::*;
+use crate::secret_types_tests::assert_hides;
 use crate::{
     ApprovalState, ApprovalVersion, ConfigDigest, OperationalIdentity, OsFs, Passphrase, RecipientIdentity, RecipientSet, StanzaKind,
     UnlockError, VaultId, VaultIdentity, passphrase::seal_at, stanza_kinds, test_dir::TestDir, unlock_with_passphrase, verify_approval,
     wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
-use crate::secret_types_tests::assert_hides;
 
 /// The work factor tests seal with, so CI does not spend 256 MiB and a second per envelope.
 const TEST_WORK_FACTOR: u8 = 2;
@@ -24,7 +24,10 @@ fn unlock_passphrase(text: &str) -> Passphrase {
 /// A fresh key sealed to `text` at the test work factor, with the approver to pin for it.
 fn sealed(text: &str) -> (Vec<u8>, PinnedApprover) {
     let (key, pinned) = SoftwareSigner::generate().unwrap();
-    (seal_signer_key_at(&key, &approval_passphrase(text), TEST_WORK_FACTOR).unwrap(), pinned)
+    (
+        seal_signer_key_at(&key, &approval_passphrase(text), TEST_WORK_FACTOR).unwrap(),
+        pinned,
+    )
 }
 
 fn payload(vault_id: VaultId, version: ApprovalVersion) -> ApprovalPayload {
@@ -78,14 +81,22 @@ fn the_unlock_and_approval_passphrases_are_independent() {
     let (operational, operational_key) = OperationalIdentity::generate();
     let set = RecipientSet::new([operational_key, RecipientIdentity::generate().recipient_key()]).unwrap();
     write_identity_envelope(&lock, &OsFs, &wrap_identity(&vault, &set).unwrap()).unwrap();
-    write_passphrase_envelope(&lock, &OsFs, &seal_at(&operational, &unlock_passphrase("unlock"), TEST_WORK_FACTOR).unwrap()).unwrap();
+    write_passphrase_envelope(
+        &lock,
+        &OsFs,
+        &seal_at(&operational, &unlock_passphrase("unlock"), TEST_WORK_FACTOR).unwrap(),
+    )
+    .unwrap();
     let (envelope, pinned) = sealed("approve");
 
     assert!(unlock_with_passphrase(&lock, &OsFs, &unlock_passphrase("unlock")).is_ok());
     assert!(open_signer_key(&envelope, &approval_passphrase("approve"), &pinned).is_ok());
     let error = open_signer_key(&envelope, &approval_passphrase("unlock"), &pinned).unwrap_err();
     assert_eq!(error, SignError::WrongPassphrase);
-    assert_eq!(unlock_with_passphrase(&lock, &OsFs, &unlock_passphrase("approve")).unwrap_err(), UnlockError::WrongPassphrase);
+    assert_eq!(
+        unlock_with_passphrase(&lock, &OsFs, &unlock_passphrase("approve")).unwrap_err(),
+        UnlockError::WrongPassphrase
+    );
 }
 
 #[test]
@@ -146,7 +157,10 @@ fn debug_shows_no_key_bytes_or_passphrase() {
     let hex: String = secret.iter().map(|b| format!("{b:02x}")).collect();
     let decimal = format!("{secret:?}");
     let decimal_items = &decimal[1..decimal.len() - 1];
-    assert!(!debug.contains(&hex) && !debug.contains(decimal_items) && !debug.contains("approve"), "{debug}");
+    assert!(
+        !debug.contains(&hex) && !debug.contains(decimal_items) && !debug.contains("approve"),
+        "{debug}"
+    );
     let public = format!("{:?}", pinned.public_key());
     assert!(!debug.contains(&public[1..public.len() - 1]), "{debug}");
 }

@@ -111,7 +111,12 @@ pub fn final_check(
     require(method == authorized.method(), FinalCheckError::Method)?;
     check_headers(&headers)?;
     check_slot(&url, &headers, slot, value)?;
-    Ok(CheckedRequest { method, url, headers, host })
+    Ok(CheckedRequest {
+        method,
+        url,
+        headers,
+        host,
+    })
 }
 
 impl CheckedRequest {
@@ -169,7 +174,10 @@ fn check_form(url: &Url) -> Result<(), FinalCheckError> {
 fn check_origin(url: &Url, upstream: &UpstreamUrl, permitted: &BTreeSet<(Host, Port)>) -> Result<Host, FinalCheckError> {
     require(url.host_str() == Some(upstream.host().as_str()), FinalCheckError::Host)?;
     let host = upstream.host().clone();
-    let port = url.port_or_known_default().and_then(|port| Port::try_from(port).ok()).ok_or(FinalCheckError::Port)?;
+    let port = url
+        .port_or_known_default()
+        .and_then(|port| Port::try_from(port).ok())
+        .ok_or(FinalCheckError::Port)?;
     require(port == upstream.port(), FinalCheckError::Port)?;
     let origin = (host, port);
     require(permitted.contains(&origin), FinalCheckError::Origin)?;
@@ -179,9 +187,9 @@ fn check_origin(url: &Url, upstream: &UpstreamUrl, permitted: &BTreeSet<(Host, P
 /// The path must start with this upstream's base segments and be exactly the authorized upstream path. The base check
 /// stands on its own, so a plan authorized on another route cannot pass by matching itself.
 fn check_path(url: &Url, authorized: &AuthorizedRequest, upstream: &UpstreamUrl) -> Result<(), FinalCheckError> {
-    let in_base = url.path_segments().is_some_and(|mut segments| {
-        upstream.base_segments().iter().all(|base| segments.next() == Some(base.as_str()))
-    });
+    let in_base = url
+        .path_segments()
+        .is_some_and(|mut segments| upstream.base_segments().iter().all(|base| segments.next() == Some(base.as_str())));
     require(in_base && has_authorized_path(url, authorized), FinalCheckError::Path)
 }
 
@@ -217,10 +225,19 @@ fn check_query_slot(
     let params = url.query().map(|query| query.split('&')).into_iter().flatten();
     let (slot_params, others): (Vec<&str>, Vec<&str>) =
         params.partition(|param| decode_name(param).is_some_and(|decoded| decoded == name.as_str()));
-    let [param] = slot_params.as_slice() else { return Err(FinalCheckError::Slot) };
-    require(param.split_once('=').is_some_and(|(_, written)| written == encoded), FinalCheckError::SlotValue)?;
+    let [param] = slot_params.as_slice() else {
+        return Err(FinalCheckError::Slot);
+    };
+    require(
+        param.split_once('=').is_some_and(|(_, written)| written == encoded),
+        FinalCheckError::SlotValue,
+    )?;
     let before_query = [url[..Position::AfterPath].as_bytes()];
-    let outside = others.iter().map(|param| param.as_bytes()).chain(before_query).chain(headers.iter().map(|(_, value)| value.as_bytes()));
+    let outside = others
+        .iter()
+        .map(|param| param.as_bytes())
+        .chain(before_query)
+        .chain(headers.iter().map(|(_, value)| value.as_bytes()));
     require(!carries_any(outside, forms), FinalCheckError::CredentialOutsideSlot)
 }
 
@@ -235,7 +252,9 @@ fn check_header_slot(
 ) -> Result<(), FinalCheckError> {
     let written = slot.name().lowercase();
     let (entries, others): (Vec<_>, Vec<_>) = headers.iter().partition(|(name, _)| name.lowercase() == written);
-    let [(_, entry)] = entries.as_slice() else { return Err(FinalCheckError::Slot) };
+    let [(_, entry)] = entries.as_slice() else {
+        return Err(FinalCheckError::Slot);
+    };
     let expected = render_header(slot, value).map_err(|_| FinalCheckError::SlotValue)?;
     require(entry.as_bytes() == expected.as_bytes(), FinalCheckError::SlotValue)?;
     let outside = others.iter().map(|(_, value)| value.as_bytes()).chain([url.as_str().as_bytes()]);
@@ -244,7 +263,11 @@ fn check_header_slot(
 
 /// Whether any of `places` contains any of `forms`; compares borrowed bytes, so no copy of the value is made.
 fn carries_any<'a>(mut places: impl Iterator<Item = &'a [u8]>, forms: &[&[u8]]) -> bool {
-    places.any(|place| forms.iter().any(|form| !form.is_empty() && place.windows(form.len()).any(|window| window == *form)))
+    places.any(|place| {
+        forms
+            .iter()
+            .any(|form| !form.is_empty() && place.windows(form.len()).any(|window| window == *form))
+    })
 }
 
 #[cfg(test)]

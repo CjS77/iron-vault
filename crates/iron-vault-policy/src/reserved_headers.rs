@@ -109,8 +109,15 @@ mod tests {
 
     #[test]
     fn credential_headers_are_not_reserved() {
-        ["Authorization", "X-Subscription-Token", "X-Api-Key", "X-Forwarded", "Hostname", "Content-Type"]
-            .iter()
-            .for_each(|h| assert!(!reserved(h), "{h}"));
+        [
+            "Authorization",
+            "X-Subscription-Token",
+            "X-Api-Key",
+            "X-Forwarded",
+            "Hostname",
+            "Content-Type",
+        ]
+        .iter()
+        .for_each(|h| assert!(!reserved(h), "{h}"));
     }
 }

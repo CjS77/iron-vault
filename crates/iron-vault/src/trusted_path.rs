@@ -247,10 +247,16 @@ impl fmt::Display for UnsafePath {
         let path = self.path.display();
         match &self.problem {
             Problem::NoComponents => write!(f, "{path}: no path components were supplied to check; this is a bug in Iron Vault"),
-            Problem::NotFromRoot => write!(f, "{path}: the path components supplied do not start at `/`; this is a bug in Iron Vault"),
+            Problem::NotFromRoot => write!(
+                f,
+                "{path}: the path components supplied do not start at `/`; this is a bug in Iron Vault"
+            ),
             Problem::WrongOwner { found, expected } => {
                 let target = expected.chown_target();
-                write!(f, "{path} is owned by uid {found} but must be owned by {expected}; run `chown {target} {path}`")
+                write!(
+                    f,
+                    "{path} is owned by uid {found} but must be owned by {expected}; run `chown {target} {path}`"
+                )
             }
             Problem::WritableByGroup { gid, name } => {
                 let group = name.as_ref().map_or_else(|| gid.to_string(), |name| format!("'{name}'"));
@@ -263,11 +269,17 @@ impl fmt::Display for UnsafePath {
                  rather than changing its permissions"
             ),
             Problem::WrongMode { found, expected } => {
-                write!(f, "{path} has mode {found} but must have mode {expected}; run `chmod {expected} {path}`")
+                write!(
+                    f,
+                    "{path} has mode {found} but must have mode {expected}; run `chmod {expected} {path}`"
+                )
             }
             Problem::NotADirectory => write!(f, "{path} is not a directory; replace it with a directory"),
             Problem::NotARegularFile => {
-                write!(f, "{path} is not a regular file; replace it with a regular file, not a symlink or special file")
+                write!(
+                    f,
+                    "{path} is not a regular file; replace it with a regular file, not a symlink or special file"
+                )
             }
             Problem::UntrustedSymlink => write!(
                 f,
@@ -290,7 +302,13 @@ impl std::error::Error for UnsafePath {}
 /// resolved target is checked as a trusted path of its own, playing the symlink's part: the leaf rule when the
 /// symlink is the leaf, the ancestor rule otherwise.
 pub fn check(rule: TrustedPathRule, profile: Profile, owner: ExpectedOwner, components: &[PathComponent]) -> Result<(), UnsafePath> {
-    Walk { rule, profile, owner, depth: 0 }.chain(components, Role::Leaf, Path::new(""))
+    Walk {
+        rule,
+        profile,
+        owner,
+        depth: 0,
+    }
+    .chain(components, Role::Leaf, Path::new(""))
 }
 
 /// Whether a component is the end of the path being checked or a directory above it.
@@ -313,10 +331,16 @@ impl Walk {
     /// Checks a chain whose last component plays `role`; `origin` names the chain when it is empty.
     fn chain(self, components: &[PathComponent], role: Role, origin: &Path) -> Result<(), UnsafePath> {
         if components.is_empty() {
-            return Err(UnsafePath { path: origin.to_path_buf(), problem: Problem::NoComponents });
+            return Err(UnsafePath {
+                path: origin.to_path_buf(),
+                problem: Problem::NoComponents,
+            });
         }
         if let Some(first) = components.first().filter(|first| first.path != Path::new("/")) {
-            return Err(UnsafePath { path: first.path.clone(), problem: Problem::NotFromRoot });
+            return Err(UnsafePath {
+                path: first.path.clone(),
+                problem: Problem::NotFromRoot,
+            });
         }
         let last = components.len() - 1;
         components.iter().enumerate().try_for_each(|(index, component)| {
@@ -332,11 +356,19 @@ impl Walk {
             (_, Role::Leaf) => self.leaf(component),
             (_, Role::Ancestor) => self.ancestor(component),
         };
-        checked.map_err(|problem| UnsafePath { path: component.path.clone(), problem })
+        checked.map_err(|problem| UnsafePath {
+            path: component.path.clone(),
+            problem,
+        })
     }
 
     fn symlink(self, link: &PathComponent, parent: Option<&PathComponent>, target: &SymlinkTarget, role: Role) -> Result<(), UnsafePath> {
-        let unsafe_link = |problem| Err(UnsafePath { path: link.path.clone(), problem });
+        let unsafe_link = |problem| {
+            Err(UnsafePath {
+                path: link.path.clone(),
+                problem,
+            })
+        };
         if role == Role::Leaf && self.rule == TrustedPathRule::StateFile {
             return unsafe_link(Problem::NotARegularFile);
         }
@@ -344,9 +376,11 @@ impl Walk {
             return unsafe_link(Problem::UntrustedSymlink);
         }
         match target {
-            SymlinkTarget::Resolved(chain) if self.depth < MAX_SYMLINK_DEPTH => {
-                Walk { depth: self.depth + 1, ..self }.chain(chain, role, &link.path)
+            SymlinkTarget::Resolved(chain) if self.depth < MAX_SYMLINK_DEPTH => Walk {
+                depth: self.depth + 1,
+                ..self
             }
+            .chain(chain, role, &link.path),
             SymlinkTarget::Resolved(_) | SymlinkTarget::Loop => unsafe_link(Problem::SymlinkLoop),
         }
     }
@@ -414,14 +448,20 @@ fn require_regular_file(component: &PathComponent) -> Result<(), Problem> {
 fn require_owner(component: &PathComponent, expected: OwnerRequirement) -> Result<(), Problem> {
     match expected.allows(component.uid) {
         true => Ok(()),
-        false => Err(Problem::WrongOwner { found: component.uid, expected }),
+        false => Err(Problem::WrongOwner {
+            found: component.uid,
+            expected,
+        }),
     }
 }
 
 fn require_mode(component: &PathComponent, expected: Mode) -> Result<(), Problem> {
     match component.mode == expected {
         true => Ok(()),
-        false => Err(Problem::WrongMode { found: component.mode, expected }),
+        false => Err(Problem::WrongMode {
+            found: component.mode,
+            expected,
+        }),
     }
 }
 
@@ -429,8 +469,12 @@ fn require_mode(component: &PathComponent, expected: Mode) -> Result<(), Problem
 /// followed through nested links. A loop or an empty resolution stands for nothing.
 fn resolved(component: &PathComponent) -> Option<&PathComponent> {
     match &component.kind {
-        ComponentKind::Symlink { target: SymlinkTarget::Resolved(chain) } => chain.last().and_then(resolved),
-        ComponentKind::Symlink { target: SymlinkTarget::Loop } => None,
+        ComponentKind::Symlink {
+            target: SymlinkTarget::Resolved(chain),
+        } => chain.last().and_then(resolved),
+        ComponentKind::Symlink {
+            target: SymlinkTarget::Loop,
+        } => None,
         _ => Some(component),
     }
 }
@@ -445,7 +489,10 @@ const fn is_shared_sticky(component: &PathComponent) -> bool {
 fn require_not_writable(component: &PathComponent) -> Result<(), Problem> {
     let mode = component.mode;
     if mode.group_writable() {
-        return Err(Problem::WritableByGroup { gid: component.gid, name: component.group_name.clone() });
+        return Err(Problem::WritableByGroup {
+            gid: component.gid,
+            name: component.group_name.clone(),
+        });
     }
     match mode.others_writable() {
         true => Err(Problem::WritableByOthers),

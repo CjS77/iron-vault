@@ -137,13 +137,28 @@ pub fn activate(
     catalog: &impl CredentialCatalog,
 ) -> Result<ActivePolicy, Vec<ActivationError>> {
     let credentials: BTreeSet<_> = config.routes().values().map(RouteConfig::credential).collect();
-    let entries: BTreeMap<_, _> = credentials.into_iter().map(|credential| (credential, catalog.entry(credential))).collect();
-    let routes = config.routes().iter().filter_map(|(name, route)| entries.get(route.credential()).map(|entry| (name, route, entry)));
-    let errors: Vec<_> = routes.clone().flat_map(|(name, route, entry)| route_errors(name, route, capabilities, entry)).collect();
+    let entries: BTreeMap<_, _> = credentials
+        .into_iter()
+        .map(|credential| (credential, catalog.entry(credential)))
+        .collect();
+    let routes = config
+        .routes()
+        .iter()
+        .filter_map(|(name, route)| entries.get(route.credential()).map(|entry| (name, route, entry)));
+    let errors: Vec<_> = routes
+        .clone()
+        .flat_map(|(name, route, entry)| route_errors(name, route, capabilities, entry))
+        .collect();
     match errors.is_empty() {
         true => {
-            let unavailable = routes.filter(|(_, _, entry)| !is_usable(entry)).map(|(name, _, _)| name.clone()).collect();
-            Ok(ActivePolicy { config: config.clone(), unavailable })
+            let unavailable = routes
+                .filter(|(_, _, entry)| !is_usable(entry))
+                .map(|(name, _, _)| name.clone())
+                .collect();
+            Ok(ActivePolicy {
+                config: config.clone(),
+                unavailable,
+            })
         }
         false => Err(errors),
     }
@@ -152,14 +167,20 @@ pub fn activate(
 fn route_errors(name: &RouteName, route: &RouteConfig, capabilities: &Capabilities, entry: &CatalogEntry) -> Vec<ActivationError> {
     let touch = (route.confirm() == Confirmation::Touch && !capabilities.touch_provider)
         .then(|| ActivationError::TouchUnavailable { route: name.clone() });
-    touch.into_iter().chain(credential_error(name, route, entry)).chain(slot_error(name, route, entry)).collect()
+    touch
+        .into_iter()
+        .chain(credential_error(name, route, entry))
+        .chain(slot_error(name, route, entry))
+        .collect()
 }
 
 fn slot_error(name: &RouteName, route: &RouteConfig, entry: &CatalogEntry) -> Option<ActivationError> {
     match entry {
-        CatalogEntry::Usable { kind, .. } if !kind.fills(route.slot()) => {
-            Some(ActivationError::SlotMismatch { route: name.clone(), credential: route.credential().clone(), kind: *kind })
-        }
+        CatalogEntry::Usable { kind, .. } if !kind.fills(route.slot()) => Some(ActivationError::SlotMismatch {
+            route: name.clone(),
+            credential: route.credential().clone(),
+            kind: *kind,
+        }),
         _ => None,
     }
 }
@@ -167,7 +188,10 @@ fn slot_error(name: &RouteName, route: &RouteConfig, entry: &CatalogEntry) -> Op
 fn credential_error(name: &RouteName, route: &RouteConfig, entry: &CatalogEntry) -> Option<ActivationError> {
     let upstream = route.upstream();
     match entry {
-        CatalogEntry::Unknown => Some(ActivationError::UnknownCredential { route: name.clone(), credential: route.credential().clone() }),
+        CatalogEntry::Unknown => Some(ActivationError::UnknownCredential {
+            route: name.clone(),
+            credential: route.credential().clone(),
+        }),
         CatalogEntry::Usable { origins, .. } if !origins.iter().any(|(h, p)| h == upstream.host() && *p == upstream.port()) => {
             Some(ActivationError::OriginNotPermitted {
                 route: name.clone(),
@@ -207,12 +231,19 @@ mod tests {
 
     fn usable(hosts: &[(&str, u16)]) -> CatalogEntry {
         let origins = hosts.iter().map(|(h, p)| (n(h), Port::try_from(*p).unwrap())).collect();
-        CatalogEntry::Usable { kind: CredentialKind::Static, origins }
+        CatalogEntry::Usable {
+            kind: CredentialKind::Static,
+            origins,
+        }
     }
 
     /// A catalog that permits each §3.3 route's upstream, with `overrides` replacing individual entries.
     fn spec_catalog(overrides: &[(&str, CatalogEntry)]) -> FakeCatalog {
-        let healthy = [("fx_key", "api.fx.example"), ("venice", "api.venice.ai"), ("brave", "api.search.brave.com")];
+        let healthy = [
+            ("fx_key", "api.fx.example"),
+            ("venice", "api.venice.ai"),
+            ("brave", "api.search.brave.com"),
+        ];
         let mut entries: BTreeMap<_, _> = healthy.iter().map(|(name, host)| (n(name), usable(&[(host, 443)]))).collect();
         entries.extend(overrides.iter().map(|(name, entry)| (n(name), entry.clone())));
         FakeCatalog(entries)
@@ -243,7 +274,10 @@ mod tests {
         let shared = config(&SPEC_EXAMPLE.replace("credential = \"brave\"", "credential = \"venice\""));
         let catalog = CountingCatalog(std::cell::RefCell::default());
         assert!(activate(&shared, &NO_TOUCH, &catalog).is_ok());
-        assert_eq!(catalog.0.borrow().iter().map(CredentialName::as_str).collect::<Vec<_>>(), ["fx_key", "venice"]);
+        assert_eq!(
+            catalog.0.borrow().iter().map(CredentialName::as_str).collect::<Vec<_>>(),
+            ["fx_key", "venice"]
+        );
     }
 
     #[test]
@@ -267,14 +301,23 @@ mod tests {
     fn unknown_credential_is_refused() {
         let catalog = spec_catalog(&[("brave", CatalogEntry::Unknown)]);
         let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog).unwrap_err();
-        assert_eq!(err, [ActivationError::UnknownCredential { route: n("brave"), credential: n("brave") }]);
+        assert_eq!(
+            err,
+            [ActivationError::UnknownCredential {
+                route: n("brave"),
+                credential: n("brave")
+            }]
+        );
     }
 
     #[test]
     fn damaged_credential_disables_only_its_route() {
         let catalog = spec_catalog(&[("venice", CatalogEntry::Unusable)]);
         let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog).unwrap();
-        assert_eq!(policy.unavailable_routes().iter().map(RouteName::as_str).collect::<Vec<_>>(), ["venice"]);
+        assert_eq!(
+            policy.unavailable_routes().iter().map(RouteName::as_str).collect::<Vec<_>>(),
+            ["venice"]
+        );
         assert!(!policy.is_available(&n("venice")));
         assert!(policy.is_available(&n("fx")) && policy.is_available(&n("brave")));
     }
@@ -295,16 +338,27 @@ mod tests {
         let evil = spec_with("https://api.fx.example", "https://api.fx.example.evil.com");
         let err = activate(&evil, &NO_TOUCH, &spec_catalog(&[])).unwrap_err();
         let host = n("api.fx.example.evil.com");
-        let expected = ActivationError::OriginNotPermitted { route: n("fx"), credential: n("fx_key"), host, port: Port::HTTPS };
+        let expected = ActivationError::OriginNotPermitted {
+            route: n("fx"),
+            credential: n("fx_key"),
+            host,
+            port: Port::HTTPS,
+        };
         assert_eq!(err, [expected]);
-        assert_eq!(err[0].to_string(), "route fx sends credential fx_key to api.fx.example.evil.com:443, which its record does not permit");
+        assert_eq!(
+            err[0].to_string(),
+            "route fx sends credential fx_key to api.fx.example.evil.com:443, which its record does not permit"
+        );
     }
 
     #[test]
     fn upstream_port_must_be_permitted() {
         let other_port = spec_with("https://api.fx.example", "https://api.fx.example:8443");
         let err = activate(&other_port, &NO_TOUCH, &spec_catalog(&[])).unwrap_err();
-        assert!(matches!(&err[..], [ActivationError::OriginNotPermitted { port, .. }] if port.get() == 8443), "{err:?}");
+        assert!(
+            matches!(&err[..], [ActivationError::OriginNotPermitted { port, .. }] if port.get() == 8443),
+            "{err:?}"
+        );
         let catalog = spec_catalog(&[("fx_key", usable(&[("api.fx.example", 443), ("api.fx.example", 8443)]))]);
         assert!(activate(&other_port, &NO_TOUCH, &catalog).is_ok());
     }
@@ -315,9 +369,17 @@ mod tests {
         let catalog = spec_catalog(&[("brave", CatalogEntry::Unknown), ("fx_key", usable(&[("api.fx.example", 8443)]))]);
         let err = activate(&touch, &NO_TOUCH, &catalog).unwrap_err();
         let expected = [
-            ActivationError::UnknownCredential { route: n("brave"), credential: n("brave") },
+            ActivationError::UnknownCredential {
+                route: n("brave"),
+                credential: n("brave"),
+            },
             ActivationError::TouchUnavailable { route: n("fx") },
-            ActivationError::OriginNotPermitted { route: n("fx"), credential: n("fx_key"), host: n("api.fx.example"), port: Port::HTTPS },
+            ActivationError::OriginNotPermitted {
+                route: n("fx"),
+                credential: n("fx_key"),
+                host: n("api.fx.example"),
+                port: Port::HTTPS,
+            },
         ];
         assert_eq!(err, expected);
     }
@@ -333,8 +395,18 @@ mod tests {
     fn static_credential_on_basic_slot_is_refused() {
         let basic = spec_with("slot = { query = \"access_key\" }", "slot = \"basic\"");
         let err = activate(&basic, &NO_TOUCH, &spec_catalog(&[])).unwrap_err();
-        assert_eq!(err, [ActivationError::SlotMismatch { route: n("fx"), credential: n("fx_key"), kind: CredentialKind::Static }]);
-        assert_eq!(err[0].to_string(), "route fx uses a static credential, fx_key, on a slot that kind cannot fill");
+        assert_eq!(
+            err,
+            [ActivationError::SlotMismatch {
+                route: n("fx"),
+                credential: n("fx_key"),
+                kind: CredentialKind::Static
+            }]
+        );
+        assert_eq!(
+            err[0].to_string(),
+            "route fx uses a static credential, fx_key, on a slot that kind cannot fill"
+        );
     }
 
     #[test]
@@ -343,8 +415,15 @@ mod tests {
         let catalog = spec_catalog(&[("brave", brave), ("fx_key", CatalogEntry::Unknown)]);
         let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog).unwrap_err();
         let expected = [
-            ActivationError::SlotMismatch { route: n("brave"), credential: n("brave"), kind: CredentialKind::Basic },
-            ActivationError::UnknownCredential { route: n("fx"), credential: n("fx_key") },
+            ActivationError::SlotMismatch {
+                route: n("brave"),
+                credential: n("brave"),
+                kind: CredentialKind::Basic,
+            },
+            ActivationError::UnknownCredential {
+                route: n("fx"),
+                credential: n("fx_key"),
+            },
         ];
         assert_eq!(err, expected);
     }

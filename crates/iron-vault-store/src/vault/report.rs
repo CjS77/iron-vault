@@ -83,7 +83,10 @@ pub struct WriteReport {
 
 impl WriteReport {
     pub(super) fn new(removed_unindexed: BTreeSet<StateFileName>, left_unindexed: Option<StateFileName>) -> Self {
-        Self { removed_unindexed, left_unindexed }
+        Self {
+            removed_unindexed,
+            left_unindexed,
+        }
     }
 
     /// The unindexed record files the write removed before it changed anything: left by an interrupted write, or planted.

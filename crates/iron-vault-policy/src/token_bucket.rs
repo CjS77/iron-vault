@@ -112,7 +112,9 @@ impl RetryAfter {
     fn for_deficit(deficit: u128, requests: u128) -> Self {
         let nanos = deficit.div_ceil(requests.max(1));
         let secs = nanos.div_ceil(NANOS_PER_SEC).max(1);
-        Self { secs: u64::try_from(secs).unwrap_or(u64::MAX) }
+        Self {
+            secs: u64::try_from(secs).unwrap_or(u64::MAX),
+        }
     }
 
     /// The wait in whole seconds; always at least 1.

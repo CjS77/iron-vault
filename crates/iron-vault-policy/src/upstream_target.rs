@@ -126,7 +126,9 @@ pub(crate) fn has_authorized_path(url: &Url, request: &AuthorizedRequest) -> boo
 }
 
 fn check_query(url: &Url, request: &AuthorizedRequest) -> Result<(), UpstreamTargetError> {
-    (url.query() == request.query().map(|query| query.as_str())).then_some(()).ok_or(UpstreamTargetError::Query)
+    (url.query() == request.query().map(|query| query.as_str()))
+        .then_some(())
+        .ok_or(UpstreamTargetError::Query)
 }
 
 #[cfg(test)]
@@ -154,15 +156,22 @@ mod tests {
             };
             let port = |p: &str| p.parse::<Port>().unwrap();
             let origins = [(host.parse().unwrap(), port("443")), (host.parse().unwrap(), port("8443"))].into();
-            CatalogEntry::Usable { kind: crate::CredentialKind::Static, origins }
+            CatalogEntry::Usable {
+                kind: crate::CredentialKind::Static,
+                origins,
+            }
         }
     }
 
     /// The §3.3 example with every route opened to every path, so any request target can be built.
     fn open_example() -> String {
-        ["[\"/latest\", \"/historical/**\"]", "[\"/api/v1/chat/completions\"]", "[\"/res/v1/web/search\"]"]
-            .iter()
-            .fold(SPEC_EXAMPLE.to_owned(), |doc, paths| doc.replace(paths, "[\"/**\"]"))
+        [
+            "[\"/latest\", \"/historical/**\"]",
+            "[\"/api/v1/chat/completions\"]",
+            "[\"/res/v1/web/search\"]",
+        ]
+        .iter()
+        .fold(SPEC_EXAMPLE.to_owned(), |doc, paths| doc.replace(paths, "[\"/**\"]"))
     }
 
     fn policy(doc: &str) -> ActivePolicy {
@@ -185,7 +194,12 @@ mod tests {
     fn assert_round_trip(built: &UpstreamTarget, request: &AuthorizedRequest) {
         let segments: Vec<&str> = built.as_url().path_segments().unwrap().collect();
         let trailing = request.upstream_segments().is_empty() || request.has_trailing_slash();
-        let expected: Vec<&str> = request.upstream_segments().iter().map(String::as_str).chain(trailing.then_some("")).collect();
+        let expected: Vec<&str> = request
+            .upstream_segments()
+            .iter()
+            .map(String::as_str)
+            .chain(trailing.then_some(""))
+            .collect();
         assert_eq!(segments, expected);
         assert_eq!(built.query(), request.query().map(|q| q.as_str()));
     }
@@ -223,8 +237,14 @@ mod tests {
 
     #[test]
     fn query_is_kept_exactly() {
-        assert_eq!(url(Method::Get, "/fx/latest?a=1&b=%2f/?x&a=2"), "https://api.fx.example/latest?a=1&b=%2f/?x&a=2");
-        assert_eq!(url(Method::Get, "/fx/latest?k=%7B%22v%22%7D"), "https://api.fx.example/latest?k=%7B%22v%22%7D");
+        assert_eq!(
+            url(Method::Get, "/fx/latest?a=1&b=%2f/?x&a=2"),
+            "https://api.fx.example/latest?a=1&b=%2f/?x&a=2"
+        );
+        assert_eq!(
+            url(Method::Get, "/fx/latest?k=%7B%22v%22%7D"),
+            "https://api.fx.example/latest?k=%7B%22v%22%7D"
+        );
     }
 
     #[test]
@@ -234,7 +254,10 @@ mod tests {
         assert_eq!(fx.as_url().as_str(), "https://api.fx.example:8443/latest");
         assert_eq!(fx.as_url().port(), Some(8443));
         let doc = open_example().replace("https://api.fx.example", "https://api.fx.example:443");
-        assert_eq!(build_in(&doc, Method::Get, "/fx/latest").as_url().as_str(), "https://api.fx.example/latest");
+        assert_eq!(
+            build_in(&doc, Method::Get, "/fx/latest").as_url().as_str(),
+            "https://api.fx.example/latest"
+        );
     }
 
     fn fx_request(target: &str) -> AuthorizedRequest {
@@ -278,15 +301,29 @@ mod tests {
         let target = build_in(&open_example(), Method::Get, "/fx/latest?access_key=SECRET");
         let debug = format!("{target:?}");
         assert!(!debug.contains("SECRET"), "{debug}");
-        assert!(debug.contains("https://api.fx.example/latest") && debug.contains("<redacted>"), "{debug}");
+        assert!(
+            debug.contains("https://api.fx.example/latest") && debug.contains("<redacted>"),
+            "{debug}"
+        );
     }
 
     #[test]
     fn a_changed_origin_is_an_origin_error() {
         let upstream: UpstreamUrl = "https://api.fx.example".parse().unwrap();
-        ["http://api.fx.example/", "https://api.fx.example:8443/", "https://evil.example/", "https://u@api.fx.example/"]
-            .into_iter()
-            .for_each(|raw| assert_eq!(check_origin(&Url::parse(raw).unwrap(), &upstream), Err(UpstreamTargetError::Origin), "{raw}"));
+        [
+            "http://api.fx.example/",
+            "https://api.fx.example:8443/",
+            "https://evil.example/",
+            "https://u@api.fx.example/",
+        ]
+        .into_iter()
+        .for_each(|raw| {
+            assert_eq!(
+                check_origin(&Url::parse(raw).unwrap(), &upstream),
+                Err(UpstreamTargetError::Origin),
+                "{raw}"
+            )
+        });
         assert_eq!(check_origin(&Url::parse("https://api.fx.example:443/").unwrap(), &upstream), Ok(()));
         let ipv6: UpstreamUrl = "https://[::1]:8443".parse().unwrap();
         assert_eq!(check_origin(&Url::parse("https://[::1]:8443/").unwrap(), &ipv6), Ok(()));

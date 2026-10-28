@@ -24,7 +24,10 @@ pub(crate) fn is_path_char(c: char) -> bool {
 
 /// Two ASCII hex digits; `u8::from_str_radix` alone would also accept a leading `+`.
 pub(crate) fn decode_hex_pair(hex: &str) -> Option<u8> {
-    hex.bytes().all(|b| b.is_ascii_hexdigit()).then(|| u8::from_str_radix(hex, 16).ok()).flatten()
+    hex.bytes()
+        .all(|b| b.is_ascii_hexdigit())
+        .then(|| u8::from_str_radix(hex, 16).ok())
+        .flatten()
 }
 
 /// What a parser wants done with one escaped byte.
@@ -104,31 +107,59 @@ mod tests {
     #[test]
     fn segment_without_escapes_is_unchanged() {
         let walked = walk("a;b=c", keep_all);
-        assert_eq!(walked, Ok(Walked { normalized: "a;b=c".to_owned(), decoded: "a;b=c".to_owned() }));
+        assert_eq!(
+            walked,
+            Ok(Walked {
+                normalized: "a;b=c".to_owned(),
+                decoded: "a;b=c".to_owned()
+            })
+        );
     }
 
     #[test]
     fn kept_escapes_get_uppercase_hex() {
         let walked = walk("x%3a%c3%a9y", keep_all);
-        assert_eq!(walked, Ok(Walked { normalized: "x%3A%C3%A9y".to_owned(), decoded: "x:\u{e9}y".to_owned() }));
+        assert_eq!(
+            walked,
+            Ok(Walked {
+                normalized: "x%3A%C3%A9y".to_owned(),
+                decoded: "x:\u{e9}y".to_owned()
+            })
+        );
     }
 
     #[test]
     fn decoded_escapes_become_characters_but_non_ascii_bytes_stay_encoded() {
         let walked = walk("%41%c3%a9", |_| EscapeAction::Decode);
-        assert_eq!(walked, Ok(Walked { normalized: "A%C3%A9".to_owned(), decoded: "A\u{e9}".to_owned() }));
+        assert_eq!(
+            walked,
+            Ok(Walked {
+                normalized: "A%C3%A9".to_owned(),
+                decoded: "A\u{e9}".to_owned()
+            })
+        );
     }
 
     #[test]
     fn rejected_byte_ends_the_walk() {
-        let policy = |byte: u8| if byte == b'.' { EscapeAction::Reject(()) } else { EscapeAction::Keep };
+        let policy = |byte: u8| {
+            if byte == b'.' {
+                EscapeAction::Reject(())
+            } else {
+                EscapeAction::Keep
+            }
+        };
         assert_eq!(walk("a%20%2e", policy), Err(EscapeError::Rejected(())));
     }
 
     #[test]
     fn malformed_escapes_are_reported_before_the_policy_sees_them() {
         ["%", "a%", "%2", "%zz", "%+f", "%2g"].into_iter().for_each(|segment| {
-            assert_eq!(walk(segment, |_| EscapeAction::Reject(())), Err(EscapeError::Malformed), "{segment}");
+            assert_eq!(
+                walk(segment, |_| EscapeAction::Reject(())),
+                Err(EscapeError::Malformed),
+                "{segment}"
+            );
         });
     }
 

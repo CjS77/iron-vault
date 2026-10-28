@@ -77,11 +77,18 @@ fn privatize_shared_ancestors(root: &Path, chain: Vec<PathComponent>) -> Vec<Pat
     chain
         .into_iter()
         .map(|component| match component.kind {
-            ComponentKind::Symlink { target: SymlinkTarget::Resolved(target) } => PathComponent {
-                kind: ComponentKind::Symlink { target: SymlinkTarget::Resolved(privatize_shared_ancestors(root, target)) },
+            ComponentKind::Symlink {
+                target: SymlinkTarget::Resolved(target),
+            } => PathComponent {
+                kind: ComponentKind::Symlink {
+                    target: SymlinkTarget::Resolved(privatize_shared_ancestors(root, target)),
+                },
                 ..component
             },
-            _ if is_shared_ancestor(root, &component) => PathComponent { mode: Mode::new(0o755), ..component },
+            _ if is_shared_ancestor(root, &component) => PathComponent {
+                mode: Mode::new(0o755),
+                ..component
+            },
             _ => component,
         })
         .collect()
@@ -112,7 +119,10 @@ fn a_safe_tree_passes() {
     assert_eq!(check_real(TrustedPathRule::RuntimeDir, &tree.path("run")), Ok(()));
     assert_eq!(check_real(TrustedPathRule::StateFile, &tree.path("state/lock")), Ok(()));
     assert_eq!(check_beside_tmp(&tree, TrustedPathRule::StateDir, &tree.path("state")), Ok(()));
-    assert_eq!(check_beside_tmp(&tree, TrustedPathRule::Config, &tree.path("etc/config.toml")), Ok(()));
+    assert_eq!(
+        check_beside_tmp(&tree, TrustedPathRule::Config, &tree.path("etc/config.toml")),
+        Ok(())
+    );
 }
 
 #[test]
@@ -131,10 +141,18 @@ fn a_group_writable_ancestor_fails_naming_it() {
     let tree = Tree::new("group-writable");
     dir(&tree.path("shared"), 0o775);
     state_tree(&tree.path("shared/state"), 0o600);
-    let gid = fs::metadata(tree.path("shared")).map(|m| std::os::unix::fs::MetadataExt::gid(&m)).unwrap();
+    let gid = fs::metadata(tree.path("shared"))
+        .map(|m| std::os::unix::fs::MetadataExt::gid(&m))
+        .unwrap();
     let expected = unsafe_at(tree.path("shared"), Problem::WritableByGroup { gid, name: None });
-    assert_eq!(check_real(TrustedPathRule::StateFile, &tree.path("shared/state/lock")), expected.clone().map_err(PathFailure::from));
-    assert_eq!(check_beside_tmp(&tree, TrustedPathRule::StateDir, &tree.path("shared/state")), expected);
+    assert_eq!(
+        check_real(TrustedPathRule::StateFile, &tree.path("shared/state/lock")),
+        expected.clone().map_err(PathFailure::from)
+    );
+    assert_eq!(
+        check_beside_tmp(&tree, TrustedPathRule::StateDir, &tree.path("shared/state")),
+        expected
+    );
 }
 
 #[test]
@@ -144,7 +162,10 @@ fn a_user_owned_symlink_to_the_state_dir_is_untrusted() {
     symlink("real-state", tree.path("state")).unwrap();
     let expected = unsafe_at(tree.path("state"), Problem::UntrustedSymlink);
     assert_eq!(check_beside_tmp(&tree, TrustedPathRule::StateDir, &tree.path("state")), expected);
-    assert_eq!(check_real(TrustedPathRule::StateFile, &tree.path("state/lock")), expected.map_err(PathFailure::from));
+    assert_eq!(
+        check_real(TrustedPathRule::StateFile, &tree.path("state/lock")),
+        expected.map_err(PathFailure::from)
+    );
 }
 
 #[test]
@@ -161,7 +182,10 @@ fn a_lock_file_replaced_by_a_symlink_fails() {
 fn a_lock_file_readable_by_others_fails() {
     let tree = Tree::new("lock-mode");
     state_tree(&tree.path("state"), 0o644);
-    let problem = Problem::WrongMode { found: Mode::new(0o644), expected: Mode::new(0o600) };
+    let problem = Problem::WrongMode {
+        found: Mode::new(0o644),
+        expected: Mode::new(0o600),
+    };
     let expected = unsafe_at(tree.path("state/lock"), problem).map_err(PathFailure::from);
     assert_eq!(check_real(TrustedPathRule::StateFile, &tree.path("state/lock")), expected);
 }
@@ -176,13 +200,25 @@ fn components_below_a_symlink_are_named_under_the_link() {
 
     let names: Vec<&Path> = chain.iter().map(|c| c.path.as_path()).collect();
     assert_eq!(names.first(), Some(&Path::new("/")));
-    assert_eq!(names[names.len() - 2..], [tree.path("link").as_path(), tree.path("link/config.toml").as_path()]);
-    let ComponentKind::Symlink { target: SymlinkTarget::Resolved(target) } = &chain[chain.len() - 2].kind else {
+    assert_eq!(
+        names[names.len() - 2..],
+        [tree.path("link").as_path(), tree.path("link/config.toml").as_path()]
+    );
+    let ComponentKind::Symlink {
+        target: SymlinkTarget::Resolved(target),
+    } = &chain[chain.len() - 2].kind
+    else {
         panic!("the link was not collected as a symlink: {:?}", chain[chain.len() - 2]);
     };
     assert_eq!(target.first().map(|c| c.path.as_path()), Some(Path::new("/")));
-    assert_eq!(target.last().map(|c| (c.path.clone(), c.kind.clone())), Some((tree.path("real"), ComponentKind::Directory)));
-    assert_eq!(chain.last().map(|c| (c.kind.clone(), c.mode)), Some((ComponentKind::RegularFile, Mode::new(0o644))));
+    assert_eq!(
+        target.last().map(|c| (c.path.clone(), c.kind.clone())),
+        Some((tree.path("real"), ComponentKind::Directory))
+    );
+    assert_eq!(
+        chain.last().map(|c| (c.kind.clone(), c.mode)),
+        Some((ComponentKind::RegularFile, Mode::new(0o644)))
+    );
 }
 
 #[test]
@@ -198,7 +234,9 @@ fn a_symlink_loop_is_reported_after_the_hop_limit() {
 /// Follows a symlink component through each resolved chain's last component, counting the links passed.
 fn follow_links(component: &PathComponent) -> (usize, &SymlinkTarget) {
     match &component.kind {
-        ComponentKind::Symlink { target: SymlinkTarget::Resolved(chain) } => {
+        ComponentKind::Symlink {
+            target: SymlinkTarget::Resolved(chain),
+        } => {
             let (links, innermost) = follow_links(chain.last().unwrap());
             (links + 1, innermost)
         }
@@ -246,5 +284,13 @@ fn a_report_without_a_runtime_dir_omits_it() {
         runtime_dir: None,
     };
     let rules: Vec<TrustedPathRule> = TrustedPathReport::check(&paths).entries.iter().map(|e| e.rule).collect();
-    assert_eq!(rules, [TrustedPathRule::Binary, TrustedPathRule::Config, TrustedPathRule::StateDir, TrustedPathRule::StateFile]);
+    assert_eq!(
+        rules,
+        [
+            TrustedPathRule::Binary,
+            TrustedPathRule::Config,
+            TrustedPathRule::StateDir,
+            TrustedPathRule::StateFile
+        ]
+    );
 }

@@ -61,7 +61,9 @@ fn put_len(out: &mut Vec<u8>, len: usize) {
 fn read_entries(reader: &mut Reader<'_>) -> Result<BTreeMap<RecordId, ManifestEntry>, ManifestError> {
     let count = reader.len()?;
     if count > MAX_MANIFEST_ENTRIES {
-        return Err(ManifestError::TooManyEntries { limit: MAX_MANIFEST_ENTRIES });
+        return Err(ManifestError::TooManyEntries {
+            limit: MAX_MANIFEST_ENTRIES,
+        });
     }
     (0..count).try_fold(BTreeMap::new(), |mut entries, _| {
         let (id, entry) = read_entry(reader)?;
@@ -100,7 +102,10 @@ impl<'a> Reader<'a> {
     /// driving a long loop.
     fn len(&mut self) -> Result<usize, ManifestError> {
         let len = u64::from_be_bytes(self.array()?);
-        usize::try_from(len).ok().filter(|len| *len <= self.0.len()).ok_or(ManifestError::LengthPastEnd)
+        usize::try_from(len)
+            .ok()
+            .filter(|len| *len <= self.0.len())
+            .ok_or(ManifestError::LengthPastEnd)
     }
 }
 
@@ -130,7 +135,13 @@ mod tests {
 
     impl Payload {
         fn header(generation: u64, count: u64) -> Self {
-            let bytes = [&b"IVMP\x01"[..], &uuid_bytes(VAULT), &generation.to_be_bytes(), &count.to_be_bytes()].concat();
+            let bytes = [
+                &b"IVMP\x01"[..],
+                &uuid_bytes(VAULT),
+                &generation.to_be_bytes(),
+                &count.to_be_bytes(),
+            ]
+            .concat();
             Payload(bytes)
         }
 
@@ -140,7 +151,10 @@ mod tests {
         }
 
         fn entry(self, id: &str, name: &[u8], digest: u8) -> Self {
-            self.raw(&uuid_bytes(id)).raw(&(name.len() as u64).to_be_bytes()).raw(name).raw(&[digest; 32])
+            self.raw(&uuid_bytes(id))
+                .raw(&(name.len() as u64).to_be_bytes())
+                .raw(name)
+                .raw(&[digest; 32])
         }
 
         fn valid() -> Self {
@@ -153,7 +167,9 @@ mod tests {
     }
 
     fn manifest(entries: &[(&str, &str, u8)]) -> VaultManifest {
-        let entries = entries.iter().map(|(id, name, d)| (id.parse().unwrap(), ManifestEntry::new(name.parse().unwrap(), [*d; 32])));
+        let entries = entries
+            .iter()
+            .map(|(id, name, d)| (id.parse().unwrap(), ManifestEntry::new(name.parse().unwrap(), [*d; 32])));
         VaultManifest::new(vault_id(), 1, entries.collect()).unwrap()
     }
 
@@ -180,7 +196,11 @@ mod tests {
                    1111111111111111111111111111111111111111111111111111111111111111";
         let bytes: Vec<u8> = hex
             .split_whitespace()
-            .flat_map(|group| (0..group.len()).step_by(2).map(move |i| u8::from_str_radix(&group[i..i + 2], 16).unwrap()))
+            .flat_map(|group| {
+                (0..group.len())
+                    .step_by(2)
+                    .map(move |i| u8::from_str_radix(&group[i..i + 2], 16).unwrap())
+            })
             .collect();
         assert_eq!(bytes, Payload::valid().0);
         assert_eq!(encode(&decode(&bytes).unwrap()), bytes);
@@ -201,7 +221,10 @@ mod tests {
         let full = Payload::valid().0;
         (0..full.len()).for_each(|len| {
             let err = decode(&full[..len]);
-            assert!(matches!(err, Err(ManifestError::Truncated | ManifestError::LengthPastEnd)), "{len}: {err:?}");
+            assert!(
+                matches!(err, Err(ManifestError::Truncated | ManifestError::LengthPastEnd)),
+                "{len}: {err:?}"
+            );
         });
         assert_eq!(Payload::valid().raw(&[0]).decode(), Err(ManifestError::TrailingBytes));
     }
@@ -213,7 +236,12 @@ mod tests {
         assert_eq!(long_name.decode(), Err(ManifestError::LengthPastEnd));
         let count = MAX_MANIFEST_ENTRIES as u64 + 1;
         let too_many = Payload::header(1, count).raw(&vec![0; MAX_MANIFEST_ENTRIES * 64]);
-        assert_eq!(too_many.decode(), Err(ManifestError::TooManyEntries { limit: MAX_MANIFEST_ENTRIES }));
+        assert_eq!(
+            too_many.decode(),
+            Err(ManifestError::TooManyEntries {
+                limit: MAX_MANIFEST_ENTRIES
+            })
+        );
     }
 
     #[test]
@@ -228,8 +256,14 @@ mod tests {
 
     #[test]
     fn invalid_names_are_rejected() {
-        assert!(matches!(Payload::header(1, 1).entry(RECORD, b"Fx", 0).decode(), Err(ManifestError::InvalidName(_))));
-        assert_eq!(Payload::header(1, 1).entry(RECORD, &[0xff], 0).decode(), Err(ManifestError::NameNotUtf8));
+        assert!(matches!(
+            Payload::header(1, 1).entry(RECORD, b"Fx", 0).decode(),
+            Err(ManifestError::InvalidName(_))
+        ));
+        assert_eq!(
+            Payload::header(1, 1).entry(RECORD, &[0xff], 0).decode(),
+            Err(ManifestError::NameNotUtf8)
+        );
     }
 
     #[test]

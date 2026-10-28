@@ -125,13 +125,18 @@ mod tests {
     #[test]
     fn url_safe_base64_differs_where_the_alphabet_does() {
         let found = patterns("??>");
-        ["Pz8+", "Pz8-"].iter().for_each(|expected| assert!(found.contains(&(*expected).to_owned()), "{found:?}"));
+        ["Pz8+", "Pz8-"]
+            .iter()
+            .for_each(|expected| assert!(found.contains(&(*expected).to_owned()), "{found:?}"));
     }
 
     #[test]
     fn unescaped_letters_keep_their_case() {
         let found = patterns("AbC/");
-        assert!(found.contains(&"AbC%2f".to_owned()) && found.contains(&"AbC%2F".to_owned()), "{found:?}");
+        assert!(
+            found.contains(&"AbC%2f".to_owned()) && found.contains(&"AbC%2F".to_owned()),
+            "{found:?}"
+        );
         assert!(!found.iter().any(|f| f.starts_with("abc") || f.starts_with("ABC")), "{found:?}");
     }
 

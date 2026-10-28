@@ -80,13 +80,12 @@ pub(crate) fn slot_kind(slot: &Slot) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use iron_vault_policy::{
-        ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, Method,
-        ParsedConfig, Port, RequestTarget,
-        ValidatedConfig, activate, authorize,
-    };
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
+    use iron_vault_policy::{
+        ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, Method, ParsedConfig,
+        Port, RequestTarget, ValidatedConfig, activate, authorize,
+    };
     use secrecy::{ExposeSecret, SecretString};
 
     use super::*;
@@ -140,7 +139,10 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
                 "brave" => "api.search.brave.com",
                 _ => "basic.example",
             };
-            CatalogEntry::Usable { kind: (self.0)(name), origins: [(host.parse().unwrap(), Port::HTTPS)].into() }
+            CatalogEntry::Usable {
+                kind: (self.0)(name),
+                origins: [(host.parse().unwrap(), Port::HTTPS)].into(),
+            }
         }
     }
 
@@ -166,11 +168,19 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
     }
 
     fn resolve_on(target: &str, key: &str) -> Result<Resolution, KindError> {
-        resolve_material(target, &CredentialMaterial::Static { key: SecretString::from(key) })
+        resolve_material(
+            target,
+            &CredentialMaterial::Static {
+                key: SecretString::from(key),
+            },
+        )
     }
 
     fn basic(username: &str, password: &str) -> CredentialMaterial {
-        CredentialMaterial::Basic { username: SecretString::from(username), password: SecretString::from(password) }
+        CredentialMaterial::Basic {
+            username: SecretString::from(username),
+            password: SecretString::from(password),
+        }
     }
 
     #[test]
@@ -190,7 +200,13 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
     #[test]
     fn static_key_on_basic_slot_is_a_mismatch() {
         let err = resolve_on("/basic/x", "k").unwrap_err();
-        assert_eq!(err, KindError::SlotMismatch { kind: "static", slot: "basic" });
+        assert_eq!(
+            err,
+            KindError::SlotMismatch {
+                kind: "static",
+                slot: "basic"
+            }
+        );
         assert_eq!(err.to_string(), "a static credential cannot fill a basic slot");
     }
 
@@ -206,7 +222,10 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 
     #[test]
     fn empty_key_is_refused() {
-        assert_eq!(resolve_on("/fx/latest", "").unwrap_err(), KindError::InvalidValue(SlotValueError::Empty));
+        assert_eq!(
+            resolve_on("/fx/latest", "").unwrap_err(),
+            KindError::InvalidValue(SlotValueError::Empty)
+        );
     }
 
     #[test]
@@ -221,7 +240,9 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
     #[test]
     fn debug_output_holds_no_secret_byte() {
         let key = "QZJWX";
-        let material = CredentialMaterial::Static { key: SecretString::from(key) };
+        let material = CredentialMaterial::Static {
+            key: SecretString::from(key),
+        };
         let resolution = resolve_on("/fx/latest", key).unwrap();
         let debug = format!("{material:?} {resolution:?} {:?}", resolution.patterns());
         assert!(!debug.chars().any(|c| key.contains(c)), "{debug}");
@@ -277,7 +298,9 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
     /// Routes `activate` refuses when every credential is of `kind`.
     fn refused_at_activation(kind: fn(&CredentialName) -> CredentialKind) -> Vec<String> {
         let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
-        let errors = activate(&config, &Capabilities::default(), &Catalog(kind)).err().unwrap_or_default();
+        let errors = activate(&config, &Capabilities::default(), &Catalog(kind))
+            .err()
+            .unwrap_or_default();
         errors
             .iter()
             .map(|err| match err {
@@ -298,9 +321,14 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 
     #[test]
     fn activation_refuses_exactly_the_pairings_resolve_refuses() {
-        let static_key = CredentialMaterial::Static { key: SecretString::from("k") };
+        let static_key = CredentialMaterial::Static {
+            key: SecretString::from("k"),
+        };
         assert_eq!(refused_at_activation(|_| CredentialKind::Static), refused_at_resolve(&static_key));
-        assert_eq!(refused_at_activation(|_| CredentialKind::Basic), refused_at_resolve(&basic("u", "p")));
+        assert_eq!(
+            refused_at_activation(|_| CredentialKind::Basic),
+            refused_at_resolve(&basic("u", "p"))
+        );
         assert_eq!(refused_at_activation(|_| CredentialKind::Static), ["basic"]);
         assert_eq!(refused_at_activation(|_| CredentialKind::Basic), ["brave", "fx"]);
     }

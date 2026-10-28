@@ -93,7 +93,11 @@ impl OutgoingRequest {
             Slot::Basic => fill_header(&mut headers, &HeaderSlot::basic(), credential, value).map(|()| target)?,
             Slot::Query(name) => fill_query(target, name, credential, value)?,
         };
-        Ok(Self { method: request.method(), target, headers })
+        Ok(Self {
+            method: request.method(),
+            target,
+            headers,
+        })
     }
 
     /// The authorized method.
@@ -119,7 +123,11 @@ impl OutgoingRequest {
     /// Combines parts without assembling them, so final-check tests can build requests `assemble` would refuse.
     #[cfg(test)]
     pub(crate) fn unchecked(method: Method, url: Url, headers: OutgoingHeaders) -> Self {
-        Self { method, target: UpstreamTarget::unchecked(url), headers }
+        Self {
+            method,
+            target: UpstreamTarget::unchecked(url),
+            headers,
+        }
     }
 }
 
@@ -138,7 +146,9 @@ fn fill_header(
     credential: &CredentialName,
     value: &SlotValue,
 ) -> Result<(), AssembleError> {
-    headers.get_all(slot.name()).try_for_each(|caller| check_markers(&String::from_utf8_lossy(caller.as_bytes()), credential))?;
+    headers
+        .get_all(slot.name())
+        .try_for_each(|caller| check_markers(&String::from_utf8_lossy(caller.as_bytes()), credential))?;
     let rendered = render_header(slot, value)?;
     headers.remove_all(slot.name());
     Ok(headers.insert(slot.name().clone(), rendered)?)
@@ -167,7 +177,10 @@ fn fill_query(
 ) -> Result<UpstreamTarget, AssembleError> {
     let params: Vec<&str> = target.query().map_or_else(Vec::new, |query| query.split('&').collect());
     let (slot_params, kept): (Vec<&str>, Vec<&str>) = params.into_iter().partition(|param| is_slot_param(param, name));
-    slot_params.iter().filter_map(|param| decode_param(param)).try_for_each(|(_, caller)| check_markers(&caller, credential))?;
+    slot_params
+        .iter()
+        .filter_map(|param| decode_param(param))
+        .try_for_each(|(_, caller)| check_markers(&caller, credential))?;
     let query = filled_query(&kept, name, value);
     Ok(target.with_query(&query)?)
 }

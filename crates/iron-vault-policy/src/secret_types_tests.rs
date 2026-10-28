@@ -40,7 +40,9 @@ fn debug_forms(value: &impl std::fmt::Debug) -> [String; 2] {
 }
 
 fn assert_redacted(value: &impl std::fmt::Debug) {
-    debug_forms(value).iter().for_each(|debug| assert!(!debug.contains(MARKER), "{debug}"));
+    debug_forms(value)
+        .iter()
+        .for_each(|debug| assert!(!debug.contains(MARKER), "{debug}"));
 }
 
 #[test]
@@ -56,7 +58,12 @@ fn header_value_debug_hides_the_secret() {
 #[test]
 fn outgoing_headers_debug_hides_every_value() {
     let mut headers = OutgoingHeaders::new();
-    headers.insert("Authorization".parse::<HeaderName>().unwrap(), HeaderValue::try_from(MARKER).unwrap()).unwrap();
+    headers
+        .insert(
+            "Authorization".parse::<HeaderName>().unwrap(),
+            HeaderValue::try_from(MARKER).unwrap(),
+        )
+        .unwrap();
     assert_redacted(&headers);
 }
 
@@ -65,7 +72,10 @@ struct Catalog;
 
 impl CredentialCatalog for Catalog {
     fn entry(&self, name: &CredentialName) -> CatalogEntry {
-        CatalogEntry::Usable { kind: CredentialKind::Static, origins: origins(name) }
+        CatalogEntry::Usable {
+            kind: CredentialKind::Static,
+            origins: origins(name),
+        }
     }
 }
 
@@ -108,21 +118,38 @@ impl Pipeline {
 
     fn assembled(&self, value: &SlotValue) -> OutgoingRequest {
         let route = &self.policy.config().routes()[self.authorized.route()];
-        OutgoingRequest::assemble(&self.authorized, self.target(), OutgoingHeaders::new(), route.slot(), route.credential(), value)
-            .unwrap()
+        OutgoingRequest::assemble(
+            &self.authorized,
+            self.target(),
+            OutgoingHeaders::new(),
+            route.slot(),
+            route.credential(),
+            value,
+        )
+        .unwrap()
     }
 
     fn checked(&self) -> CheckedRequest {
         let route = &self.policy.config().routes()[self.authorized.route()];
         let value = SlotValue::new(SecretString::from(MARKER)).unwrap();
-        final_check(self.assembled(&value), &self.authorized, route.upstream(), self.slot(), &value, &origins(route.credential()))
-            .unwrap()
+        final_check(
+            self.assembled(&value),
+            &self.authorized,
+            route.upstream(),
+            self.slot(),
+            &value,
+            &origins(route.credential()),
+        )
+        .unwrap()
     }
 }
 
 /// The fx route fills a query slot; the brave route fills a header slot.
 fn pipelines() -> [Pipeline; 2] {
-    [Pipeline::new("fx-mcp", "/fx/latest?base=USD"), Pipeline::new("naomi-backoffice", "/brave/res/v1/web/search")]
+    [
+        Pipeline::new("fx-mcp", "/fx/latest?base=USD"),
+        Pipeline::new("naomi-backoffice", "/brave/res/v1/web/search"),
+    ]
 }
 
 #[test]

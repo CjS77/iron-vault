@@ -13,7 +13,10 @@ const KIND: &str = "static";
 /// key does not have.
 pub(crate) fn resolve(key: &SecretString, slot: &Slot, _request: &AuthorizedRequest) -> Result<Resolution, KindError> {
     if matches!(slot, Slot::Basic) {
-        return Err(KindError::SlotMismatch { kind: KIND, slot: slot_kind(slot) });
+        return Err(KindError::SlotMismatch {
+            kind: KIND,
+            slot: slot_kind(slot),
+        });
     }
     let value = SlotValue::new(SecretString::from(key.expose_secret()))?;
     let mut patterns = ScrubPatterns::default();

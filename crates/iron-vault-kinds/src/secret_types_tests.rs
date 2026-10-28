@@ -20,7 +20,9 @@ assert_not_impl_any!(Resolution: Clone, Copy, Display, Serialize, Deserialize<'s
 const MARKER: &str = "MARKER-secret-5d1c9e";
 
 fn assert_redacted(value: &impl Debug) {
-    [format!("{value:?}"), format!("{value:#?}")].iter().for_each(|debug| assert!(!debug.contains(MARKER), "{debug}"));
+    [format!("{value:?}"), format!("{value:#?}")]
+        .iter()
+        .for_each(|debug| assert!(!debug.contains(MARKER), "{debug}"));
 }
 
 fn patterns() -> ScrubPatterns {
@@ -31,8 +33,13 @@ fn patterns() -> ScrubPatterns {
 
 #[test]
 fn credential_material_debug_hides_every_field() {
-    assert_redacted(&CredentialMaterial::Static { key: SecretString::from(MARKER) });
-    assert_redacted(&CredentialMaterial::Basic { username: SecretString::from(MARKER), password: SecretString::from(MARKER) });
+    assert_redacted(&CredentialMaterial::Static {
+        key: SecretString::from(MARKER),
+    });
+    assert_redacted(&CredentialMaterial::Basic {
+        username: SecretString::from(MARKER),
+        password: SecretString::from(MARKER),
+    });
 }
 
 #[test]

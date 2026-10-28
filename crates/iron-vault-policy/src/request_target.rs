@@ -36,57 +36,57 @@ use crate::escape::{EscapeAction, EscapeError, decode_hex_pair, is_path_char, is
 /// code pages map to `\`, and the fraction and division slashes, which Windows best-fit tables map to `/`.
 const LOOK_ALIKES: &[char] = &[
     // NFKC.
-    '\u{037E}', // GREEK QUESTION MARK
-    '\u{2024}', // ONE DOT LEADER
-    '\u{2025}', // TWO DOT LEADER
-    '\u{2026}', // HORIZONTAL ELLIPSIS
-    '\u{2047}', // DOUBLE QUESTION MARK
-    '\u{2048}', // QUESTION EXCLAMATION MARK
-    '\u{2049}', // EXCLAMATION QUESTION MARK
-    '\u{2100}', // ACCOUNT OF
-    '\u{2101}', // ADDRESSED TO THE SUBJECT
-    '\u{2105}', // CARE OF
-    '\u{2106}', // CADA UNA
-    '\u{2488}', // DIGIT ONE FULL STOP
-    '\u{2489}', // DIGIT TWO FULL STOP
-    '\u{248A}', // DIGIT THREE FULL STOP
-    '\u{248B}', // DIGIT FOUR FULL STOP
-    '\u{248C}', // DIGIT FIVE FULL STOP
-    '\u{248D}', // DIGIT SIX FULL STOP
-    '\u{248E}', // DIGIT SEVEN FULL STOP
-    '\u{248F}', // DIGIT EIGHT FULL STOP
-    '\u{2490}', // DIGIT NINE FULL STOP
-    '\u{2491}', // NUMBER TEN FULL STOP
-    '\u{2492}', // NUMBER ELEVEN FULL STOP
-    '\u{2493}', // NUMBER TWELVE FULL STOP
-    '\u{2494}', // NUMBER THIRTEEN FULL STOP
-    '\u{2495}', // NUMBER FOURTEEN FULL STOP
-    '\u{2496}', // NUMBER FIFTEEN FULL STOP
-    '\u{2497}', // NUMBER SIXTEEN FULL STOP
-    '\u{2498}', // NUMBER SEVENTEEN FULL STOP
-    '\u{2499}', // NUMBER EIGHTEEN FULL STOP
-    '\u{249A}', // NUMBER NINETEEN FULL STOP
-    '\u{249B}', // NUMBER TWENTY FULL STOP
-    '\u{33C2}', // SQUARE AM
-    '\u{33C7}', // SQUARE CO
-    '\u{33D8}', // SQUARE PM
-    '\u{FE14}', // PRESENTATION FORM FOR VERTICAL SEMICOLON
-    '\u{FE16}', // PRESENTATION FORM FOR VERTICAL QUESTION MARK
-    '\u{FE19}', // PRESENTATION FORM FOR VERTICAL HORIZONTAL ELLIPSIS
-    '\u{FE30}', // PRESENTATION FORM FOR VERTICAL TWO DOT LEADER
-    '\u{FE52}', // SMALL FULL STOP
-    '\u{FE54}', // SMALL SEMICOLON
-    '\u{FE56}', // SMALL QUESTION MARK
-    '\u{FE5F}', // SMALL NUMBER SIGN
-    '\u{FE68}', // SMALL REVERSE SOLIDUS
-    '\u{FE6A}', // SMALL PERCENT SIGN
-    '\u{FF03}', // FULLWIDTH NUMBER SIGN
-    '\u{FF05}', // FULLWIDTH PERCENT SIGN
-    '\u{FF0E}', // FULLWIDTH FULL STOP
-    '\u{FF0F}', // FULLWIDTH SOLIDUS
-    '\u{FF1B}', // FULLWIDTH SEMICOLON
-    '\u{FF1F}', // FULLWIDTH QUESTION MARK
-    '\u{FF3C}', // FULLWIDTH REVERSE SOLIDUS
+    '\u{037E}',  // GREEK QUESTION MARK
+    '\u{2024}',  // ONE DOT LEADER
+    '\u{2025}',  // TWO DOT LEADER
+    '\u{2026}',  // HORIZONTAL ELLIPSIS
+    '\u{2047}',  // DOUBLE QUESTION MARK
+    '\u{2048}',  // QUESTION EXCLAMATION MARK
+    '\u{2049}',  // EXCLAMATION QUESTION MARK
+    '\u{2100}',  // ACCOUNT OF
+    '\u{2101}',  // ADDRESSED TO THE SUBJECT
+    '\u{2105}',  // CARE OF
+    '\u{2106}',  // CADA UNA
+    '\u{2488}',  // DIGIT ONE FULL STOP
+    '\u{2489}',  // DIGIT TWO FULL STOP
+    '\u{248A}',  // DIGIT THREE FULL STOP
+    '\u{248B}',  // DIGIT FOUR FULL STOP
+    '\u{248C}',  // DIGIT FIVE FULL STOP
+    '\u{248D}',  // DIGIT SIX FULL STOP
+    '\u{248E}',  // DIGIT SEVEN FULL STOP
+    '\u{248F}',  // DIGIT EIGHT FULL STOP
+    '\u{2490}',  // DIGIT NINE FULL STOP
+    '\u{2491}',  // NUMBER TEN FULL STOP
+    '\u{2492}',  // NUMBER ELEVEN FULL STOP
+    '\u{2493}',  // NUMBER TWELVE FULL STOP
+    '\u{2494}',  // NUMBER THIRTEEN FULL STOP
+    '\u{2495}',  // NUMBER FOURTEEN FULL STOP
+    '\u{2496}',  // NUMBER FIFTEEN FULL STOP
+    '\u{2497}',  // NUMBER SIXTEEN FULL STOP
+    '\u{2498}',  // NUMBER SEVENTEEN FULL STOP
+    '\u{2499}',  // NUMBER EIGHTEEN FULL STOP
+    '\u{249A}',  // NUMBER NINETEEN FULL STOP
+    '\u{249B}',  // NUMBER TWENTY FULL STOP
+    '\u{33C2}',  // SQUARE AM
+    '\u{33C7}',  // SQUARE CO
+    '\u{33D8}',  // SQUARE PM
+    '\u{FE14}',  // PRESENTATION FORM FOR VERTICAL SEMICOLON
+    '\u{FE16}',  // PRESENTATION FORM FOR VERTICAL QUESTION MARK
+    '\u{FE19}',  // PRESENTATION FORM FOR VERTICAL HORIZONTAL ELLIPSIS
+    '\u{FE30}',  // PRESENTATION FORM FOR VERTICAL TWO DOT LEADER
+    '\u{FE52}',  // SMALL FULL STOP
+    '\u{FE54}',  // SMALL SEMICOLON
+    '\u{FE56}',  // SMALL QUESTION MARK
+    '\u{FE5F}',  // SMALL NUMBER SIGN
+    '\u{FE68}',  // SMALL REVERSE SOLIDUS
+    '\u{FE6A}',  // SMALL PERCENT SIGN
+    '\u{FF03}',  // FULLWIDTH NUMBER SIGN
+    '\u{FF05}',  // FULLWIDTH PERCENT SIGN
+    '\u{FF0E}',  // FULLWIDTH FULL STOP
+    '\u{FF0F}',  // FULLWIDTH SOLIDUS
+    '\u{FF1B}',  // FULLWIDTH SEMICOLON
+    '\u{FF1F}',  // FULLWIDTH QUESTION MARK
+    '\u{FF3C}',  // FULLWIDTH REVERSE SOLIDUS
     '\u{1F100}', // DIGIT ZERO FULL STOP
     // Best fit, not NFKC.
     '\u{00A5}', // YEN SIGN
@@ -173,7 +173,10 @@ impl RequestTarget {
         raw.chars().try_for_each(check_target_char)?;
         let (path, query) = raw.split_once('?').map_or((raw, None), |(path, query)| (path, Some(query)));
         let query = query.filter(|q| !q.is_empty()).map(RawQuery::parse).transpose()?;
-        Ok(Self { path: NormalizedPath::parse(path)?, query })
+        Ok(Self {
+            path: NormalizedPath::parse(path)?,
+            query,
+        })
     }
 
     /// The normalized path.
@@ -233,7 +236,10 @@ impl NormalizedPath {
         }
         let body = path.strip_prefix('/').ok_or(TargetError::NotOriginForm)?;
         if body.is_empty() {
-            return Ok(Self { segments: Vec::new(), trailing_slash: false });
+            return Ok(Self {
+                segments: Vec::new(),
+                trailing_slash: false,
+            });
         }
         let (body, trailing_slash) = body.strip_suffix('/').map_or((body, false), |trimmed| (trimmed, true));
         let segments = body.split('/').map(normalize_segment).collect::<Result<_, _>>()?;
@@ -269,10 +275,13 @@ impl RawQuery {
         if !query.chars().all(is_query_char) {
             return Err(TargetError::ForbiddenQueryCharacter);
         }
-        query.split('%').skip(1).try_for_each(|part| match part.get(..2).and_then(decode_hex_pair) {
-            Some(_) => Ok(()),
-            None => Err(TargetError::MalformedEscape),
-        })?;
+        query
+            .split('%')
+            .skip(1)
+            .try_for_each(|part| match part.get(..2).and_then(decode_hex_pair) {
+                Some(_) => Ok(()),
+                None => Err(TargetError::MalformedEscape),
+            })?;
         Ok(Self(query.to_owned()))
     }
 }
@@ -408,21 +417,39 @@ mod tests {
 
     #[test]
     fn rfc3986_path_characters_are_accepted() {
-        assert_eq!(segments("/a-b_c~d.e/f:g@h/!$&'()*+,;=/.../.x/x."), ["a-b_c~d.e", "f:g@h", "!$&'()*+,;=", "...", ".x", "x."]);
+        assert_eq!(
+            segments("/a-b_c~d.e/f:g@h/!$&'()*+,;=/.../.x/x."),
+            ["a-b_c~d.e", "f:g@h", "!$&'()*+,;=", "...", ".x", "x."]
+        );
         assert_eq!(segments("/cars;color=red"), ["cars;color=red"]);
     }
 
     #[test]
     fn rendering_round_trips() {
-        ["/", "/fx/latest", "/fx/latest/", "/fx/latest?base=USD", "/a/%41b", "/a/%c3%a9/", "/x;y=%3b?a=b?c", "/*"]
-            .into_iter()
-            .map(parse)
-            .for_each(|target| assert_eq!(parse(&target.to_string()), target));
+        [
+            "/",
+            "/fx/latest",
+            "/fx/latest/",
+            "/fx/latest?base=USD",
+            "/a/%41b",
+            "/a/%c3%a9/",
+            "/x;y=%3b?a=b?c",
+            "/*",
+        ]
+        .into_iter()
+        .map(parse)
+        .for_each(|target| assert_eq!(parse(&target.to_string()), target));
     }
 
     #[test]
     fn rendering_is_a_fixed_point_of_the_url_parser() {
-        let targets = ["/fx/latest/", "/a/%c3%a9", "/!$&'()*+,;=:@/x", "/a%20b?q=%20&r=/?", "/x?a=!$&()*+,;=:@-._~%27%2e"];
+        let targets = [
+            "/fx/latest/",
+            "/a/%c3%a9",
+            "/!$&'()*+,;=:@/x",
+            "/a%20b?q=%20&r=/?",
+            "/x?a=!$&()*+,;=:@-._~%27%2e",
+        ];
         targets.into_iter().map(parse).for_each(|target| {
             assert_eq!(forwarded_by_url(&target.to_string()), target.to_string());
         });
@@ -438,7 +465,9 @@ mod tests {
     fn every_accepted_ascii_character_is_forwarded_unchanged() {
         let targets = (0u8..0x80).map(char::from).flat_map(|c| [format!("/a{c}b"), format!("/x?a{c}b")]);
         let accepted: Vec<_> = targets.filter_map(|raw| RequestTarget::parse(&raw).ok()).collect();
-        accepted.iter().for_each(|target| assert_eq!(forwarded_by_url(&target.to_string()), target.to_string()));
+        accepted
+            .iter()
+            .for_each(|target| assert_eq!(forwarded_by_url(&target.to_string()), target.to_string()));
         // Path: 66 unreserved, 11 sub-delims, ':', '@' and '/', plus `/a?b` as a path and query. Query: the same 80 with
         // '?' in place of '\''.
         assert_eq!(accepted.len(), 161);
@@ -454,7 +483,10 @@ mod tests {
     #[test]
     fn into_parts_returns_path_and_query() {
         let (path, query) = parse("/fx?a=1").into_parts();
-        assert_eq!((path.to_string(), query.map(|q| q.to_string())), ("/fx".to_owned(), Some("a=1".to_owned())));
+        assert_eq!(
+            (path.to_string(), query.map(|q| q.to_string())),
+            ("/fx".to_owned(), Some("a=1".to_owned()))
+        );
     }
 
     #[test]
@@ -485,7 +517,9 @@ mod tests {
 
     #[test]
     fn rejects_trailing_dot_segments() {
-        ["/fx/..", "/fx/.", "/fx/../", "/..", "/./"].into_iter().for_each(|raw| assert_eq!(reject(raw), TargetError::DotSegment, "{raw}"));
+        ["/fx/..", "/fx/.", "/fx/../", "/..", "/./"]
+            .into_iter()
+            .for_each(|raw| assert_eq!(reject(raw), TargetError::DotSegment, "{raw}"));
     }
 
     #[test]
@@ -530,7 +564,9 @@ mod tests {
     #[test]
     fn rejects_empty_interior_segment() {
         assert_eq!(reject("/fx//x"), TargetError::EmptySegment);
-        ["//", "//x", "/fx//", "/fx///"].into_iter().for_each(|raw| assert_eq!(reject(raw), TargetError::EmptySegment, "{raw}"));
+        ["//", "//x", "/fx//", "/fx///"]
+            .into_iter()
+            .for_each(|raw| assert_eq!(reject(raw), TargetError::EmptySegment, "{raw}"));
     }
 
     #[test]
@@ -574,9 +610,17 @@ mod tests {
 
     #[test]
     fn rejects_non_rfc3986_query_characters() {
-        ["/fx?a=\"", "/fx?a[]=1", "/fx?a=<b>", "/fx?a=|", "/fx?a=`", "/fx?a='", "/fx?name=o'brien&x=1"]
-            .into_iter()
-            .for_each(|raw| assert_eq!(reject(raw), TargetError::ForbiddenQueryCharacter, "{raw}"));
+        [
+            "/fx?a=\"",
+            "/fx?a[]=1",
+            "/fx?a=<b>",
+            "/fx?a=|",
+            "/fx?a=`",
+            "/fx?a='",
+            "/fx?name=o'brien&x=1",
+        ]
+        .into_iter()
+        .for_each(|raw| assert_eq!(reject(raw), TargetError::ForbiddenQueryCharacter, "{raw}"));
         assert_eq!(reject("/fx?a=\\"), TargetError::Backslash);
     }
 
@@ -596,7 +640,9 @@ mod tests {
 
     #[test]
     fn rejects_path_parameter_only_segments() {
-        ["/fx/;/x", "/fx/;x", "/fx/%3B"].into_iter().for_each(|raw| assert_eq!(reject(raw), TargetError::EmptySegment, "{raw}"));
+        ["/fx/;/x", "/fx/;x", "/fx/%3B"]
+            .into_iter()
+            .for_each(|raw| assert_eq!(reject(raw), TargetError::EmptySegment, "{raw}"));
     }
 
     /// Uppercase and lowercase percent-encodings of a character's UTF-8 bytes.
@@ -607,25 +653,53 @@ mod tests {
 
     #[test]
     fn rejects_every_unicode_look_alike() {
-        LOOK_ALIKES.iter().flat_map(|&c| escapes_of(c)).flat_map(|e| [format!("/fx/{e}"), format!("/fx/a{e}b")]).for_each(|raw| {
-            assert_eq!(reject(&raw), TargetError::LookAlike, "{raw}");
-        });
+        LOOK_ALIKES
+            .iter()
+            .flat_map(|&c| escapes_of(c))
+            .flat_map(|e| [format!("/fx/{e}"), format!("/fx/a{e}b")])
+            .for_each(|raw| {
+                assert_eq!(reject(&raw), TargetError::LookAlike, "{raw}");
+            });
     }
 
     #[test]
     fn rejects_look_alikes_named_by_their_escapes() {
         let escapes = [
-            "%E2%80%A4", "%E2%80%A5", "%EF%B9%92", "%EF%BC%8E", "%E2%81%84", "%E2%88%95", "%EF%BC%8F", "%EF%B9%A8", "%EF%BC%BC",
-            "%EF%B9%AA", "%EF%BC%85", "%EF%B8%B0", "%E2%84%80", "%E2%84%81", "%E2%84%85", "%E2%84%86", "%C2%A5", "%E2%82%A9",
+            "%E2%80%A4",
+            "%E2%80%A5",
+            "%EF%B9%92",
+            "%EF%BC%8E",
+            "%E2%81%84",
+            "%E2%88%95",
+            "%EF%BC%8F",
+            "%EF%B9%A8",
+            "%EF%BC%BC",
+            "%EF%B9%AA",
+            "%EF%BC%85",
+            "%EF%B8%B0",
+            "%E2%84%80",
+            "%E2%84%81",
+            "%E2%84%85",
+            "%E2%84%86",
+            "%C2%A5",
+            "%E2%82%A9",
         ];
-        escapes.iter().for_each(|e| assert_eq!(reject(&format!("/fx/{e}/x")), TargetError::LookAlike, "{e}"));
+        escapes
+            .iter()
+            .for_each(|e| assert_eq!(reject(&format!("/fx/{e}/x")), TargetError::LookAlike, "{e}"));
     }
 
     #[test]
     fn rejects_look_alikes_of_semicolon_and_question_mark() {
-        ["/fx/..%EF%BC%9B/x", "/fx/..%CD%BE/x", "/fx/..%EF%B9%94/x", "/fx/..%ef%b9%94/x", "/admin%EF%BC%9F/public"]
-            .iter()
-            .for_each(|raw| assert_eq!(reject(raw), TargetError::LookAlike, "{raw}"));
+        [
+            "/fx/..%EF%BC%9B/x",
+            "/fx/..%CD%BE/x",
+            "/fx/..%EF%B9%94/x",
+            "/fx/..%ef%b9%94/x",
+            "/admin%EF%BC%9F/public",
+        ]
+        .iter()
+        .for_each(|raw| assert_eq!(reject(raw), TargetError::LookAlike, "{raw}"));
     }
 
     #[test]
@@ -637,24 +711,36 @@ mod tests {
 
     #[test]
     fn rejects_overlong_and_invalid_utf8() {
-        ["/fx/%C0%AE", "/fx/%c0%af", "/fx/%E0%80%AE", "/fx/%C0%AE%C0%AE", "/fx/%FF", "/fx/%C3"]
-            .into_iter()
-            .for_each(|raw| assert_eq!(reject(raw), TargetError::InvalidUtf8, "{raw}"));
+        [
+            "/fx/%C0%AE",
+            "/fx/%c0%af",
+            "/fx/%E0%80%AE",
+            "/fx/%C0%AE%C0%AE",
+            "/fx/%FF",
+            "/fx/%C3",
+        ]
+        .into_iter()
+        .for_each(|raw| assert_eq!(reject(raw), TargetError::InvalidUtf8, "{raw}"));
     }
 
     #[test]
     fn errors_do_not_echo_the_target() {
-        ["/secret\0", "/secret/%2e", "/secret/../x", "http://secret/", "/secret?k=%zz"].into_iter().for_each(|raw| {
-            let message = reject(raw).to_string();
-            assert!(!message.contains("secret"), "{message}");
-        });
+        ["/secret\0", "/secret/%2e", "/secret/../x", "http://secret/", "/secret?k=%zz"]
+            .into_iter()
+            .for_each(|raw| {
+                let message = reject(raw).to_string();
+                assert!(!message.contains("secret"), "{message}");
+            });
     }
 
     #[test]
     fn normalized_segments_never_hold_separators_or_dot_segments() {
         ["/%41/%2d.%7e", "/a;b/x.y", "/.../..x"].into_iter().map(parse).for_each(|target| {
             target.path().segments().iter().for_each(|segment| {
-                assert!(!segment.is_empty() && !segment.contains('/') && segment != "." && segment != "..", "{segment}");
+                assert!(
+                    !segment.is_empty() && !segment.contains('/') && segment != "." && segment != "..",
+                    "{segment}"
+                );
             });
         });
     }

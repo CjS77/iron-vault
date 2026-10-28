@@ -127,7 +127,11 @@ pub fn durable_remove(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileNa
     ensure_dir_sync_supported(name)?;
     fs.remove_file(&lock.dir().join(name.as_str())).map_err(|e| match e.kind() {
         io::ErrorKind::NotFound => WriteError::NotFound { file: name.clone() },
-        kind => WriteError::Io { step: WriteStep::Remove, file: name.clone(), kind },
+        kind => WriteError::Io {
+            step: WriteStep::Remove,
+            file: name.clone(),
+            kind,
+        },
     })?;
     fs.sync_dir(lock.dir()).map_err(io_error(WriteStep::SyncDir, name))
 }
@@ -144,11 +148,15 @@ pub const MAX_STATE_FILE_LEN: u64 = 1 << 20;
 /// the service and a device cannot feed it without end.
 pub fn read_state_file(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileName, max_len: u64) -> Result<Vec<u8>, ReadError> {
     let max_len = max_len.min(MAX_STATE_FILE_LEN);
-    fs.read_bounded(&lock.dir().join(name.as_str()), max_len).map_err(|e| match e.kind() {
-        io::ErrorKind::FileTooLarge => ReadError::TooLarge { file: name.clone(), max_len },
-        io::ErrorKind::InvalidInput => ReadError::NotARegularFile { file: name.clone() },
-        kind => ReadError::Io { file: name.clone(), kind },
-    })
+    fs.read_bounded(&lock.dir().join(name.as_str()), max_len)
+        .map_err(|e| match e.kind() {
+            io::ErrorKind::FileTooLarge => ReadError::TooLarge {
+                file: name.clone(),
+                max_len,
+            },
+            io::ErrorKind::InvalidInput => ReadError::NotARegularFile { file: name.clone() },
+            kind => ReadError::Io { file: name.clone(), kind },
+        })
 }
 
 /// Writes and fsyncs the temporary file, closes it, then renames it over the destination.
@@ -172,12 +180,20 @@ pub(crate) fn ensure_dir_sync_supported(name: &StateFileName) -> Result<(), Writ
     if cfg!(unix) {
         Ok(())
     } else {
-        Err(WriteError::Io { step: WriteStep::SyncDir, file: name.clone(), kind: io::ErrorKind::Unsupported })
+        Err(WriteError::Io {
+            step: WriteStep::SyncDir,
+            file: name.clone(),
+            kind: io::ErrorKind::Unsupported,
+        })
     }
 }
 
 pub(crate) fn io_error(step: WriteStep, file: &StateFileName) -> impl Fn(io::Error) -> WriteError + '_ {
-    move |e| WriteError::Io { step, file: file.clone(), kind: e.kind() }
+    move |e| WriteError::Io {
+        step,
+        file: file.clone(),
+        kind: e.kind(),
+    }
 }
 
 #[cfg(test)]
@@ -235,7 +251,14 @@ mod tests {
         std::fs::write(dir.path().join("rec"), b"old").unwrap();
         std::fs::write(dir.path().join(".rec.tmp"), b"stale").unwrap();
         let err = durable_replace(&lock, &OsFs, &name("rec"), b"new").unwrap_err();
-        assert_eq!(err, WriteError::Io { step: WriteStep::CreateTemp, file: name("rec"), kind: io::ErrorKind::AlreadyExists });
+        assert_eq!(
+            err,
+            WriteError::Io {
+                step: WriteStep::CreateTemp,
+                file: name("rec"),
+                kind: io::ErrorKind::AlreadyExists
+            }
+        );
         assert_eq!(std::fs::read(dir.path().join("rec")).unwrap(), b"old");
         assert_eq!(std::fs::read(dir.path().join(".rec.tmp")).unwrap(), b"stale");
     }
@@ -248,14 +271,24 @@ mod tests {
         std::fs::create_dir(dir.path().join("rec")).unwrap();
         std::fs::write(dir.path().join("rec").join("inner"), b"keep").unwrap();
         let err = durable_replace(&lock, &OsFs, &name("rec"), b"new").unwrap_err();
-        assert!(matches!(err, WriteError::Io { step: WriteStep::Rename, .. }));
+        assert!(matches!(
+            err,
+            WriteError::Io {
+                step: WriteStep::Rename,
+                ..
+            }
+        ));
         assert!(temp_files(dir.path()).is_empty());
         assert_eq!(std::fs::read(dir.path().join("rec").join("inner")).unwrap(), b"keep");
     }
 
     #[test]
     fn error_names_step_and_file_but_not_contents() {
-        let err = WriteError::Io { step: WriteStep::SyncDir, file: name("rec"), kind: io::ErrorKind::Unsupported };
+        let err = WriteError::Io {
+            step: WriteStep::SyncDir,
+            file: name("rec"),
+            kind: io::ErrorKind::Unsupported,
+        };
         let text = err.to_string();
         assert!(text.contains("rec") && text.contains("fsync directory"), "{text}");
     }
@@ -273,7 +306,10 @@ mod tests {
     fn removing_a_missing_file_is_not_found() {
         let dir = TestDir::new("dur-remove-missing");
         let lock = StateDirLock::acquire(dir.path()).unwrap();
-        assert_eq!(durable_remove(&lock, &OsFs, &name("rec")), Err(WriteError::NotFound { file: name("rec") }));
+        assert_eq!(
+            durable_remove(&lock, &OsFs, &name("rec")),
+            Err(WriteError::NotFound { file: name("rec") })
+        );
     }
 
     #[test]
@@ -289,7 +325,13 @@ mod tests {
         let dir = TestDir::new("dur-read-big");
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         durable_replace(&lock, &OsFs, &name("rec"), b"12345").unwrap();
-        assert_eq!(read_state_file(&lock, &OsFs, &name("rec"), 4), Err(ReadError::TooLarge { file: name("rec"), max_len: 4 }));
+        assert_eq!(
+            read_state_file(&lock, &OsFs, &name("rec"), 4),
+            Err(ReadError::TooLarge {
+                file: name("rec"),
+                max_len: 4
+            })
+        );
     }
 
     #[test]
@@ -297,9 +339,18 @@ mod tests {
         let dir = TestDir::new("dur-read-cap");
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         // Sparse: the length is past the cap, but no block is written and nothing may be read.
-        std::fs::File::create(dir.path().join("rec")).unwrap().set_len(MAX_STATE_FILE_LEN + 1).unwrap();
+        std::fs::File::create(dir.path().join("rec"))
+            .unwrap()
+            .set_len(MAX_STATE_FILE_LEN + 1)
+            .unwrap();
         let err = read_state_file(&lock, &OsFs, &name("rec"), u64::MAX).unwrap_err();
-        assert_eq!(err, ReadError::TooLarge { file: name("rec"), max_len: MAX_STATE_FILE_LEN });
+        assert_eq!(
+            err,
+            ReadError::TooLarge {
+                file: name("rec"),
+                max_len: MAX_STATE_FILE_LEN
+            }
+        );
     }
 
     #[test]
@@ -309,7 +360,13 @@ mod tests {
         // A sparse 1 TiB file: reading or buffering it would exhaust memory, so passing proves it was refused unread.
         std::fs::File::create(dir.path().join("rec")).unwrap().set_len(1 << 40).unwrap();
         let err = read_state_file(&lock, &OsFs, &name("rec"), 4).unwrap_err();
-        assert_eq!(err, ReadError::TooLarge { file: name("rec"), max_len: 4 });
+        assert_eq!(
+            err,
+            ReadError::TooLarge {
+                file: name("rec"),
+                max_len: 4
+            }
+        );
     }
 
     #[cfg(unix)]
@@ -322,7 +379,9 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel();
         // Opening a FIFO for reading blocks until a writer appears, so a regression hangs this thread, not the suite.
         std::thread::spawn(move || sender.send(read_state_file(&lock, &OsFs, &name("rec"), 4)));
-        let result = receiver.recv_timeout(std::time::Duration::from_secs(5)).expect("reading a FIFO blocked");
+        let result = receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("reading a FIFO blocked");
         assert_eq!(result, Err(ReadError::NotARegularFile { file: name("rec") }));
     }
 
@@ -333,7 +392,10 @@ mod tests {
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         std::fs::write(dir.path().join("real"), b"1234").unwrap();
         std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("rec")).unwrap();
-        assert_eq!(read_state_file(&lock, &OsFs, &name("rec"), 4), Err(ReadError::NotARegularFile { file: name("rec") }));
+        assert_eq!(
+            read_state_file(&lock, &OsFs, &name("rec"), 4),
+            Err(ReadError::NotARegularFile { file: name("rec") })
+        );
     }
 
     #[test]
@@ -341,6 +403,12 @@ mod tests {
         let dir = TestDir::new("dur-read-missing");
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         let err = read_state_file(&lock, &OsFs, &name("rec"), 4).unwrap_err();
-        assert_eq!(err, ReadError::Io { file: name("rec"), kind: io::ErrorKind::NotFound });
+        assert_eq!(
+            err,
+            ReadError::Io {
+                file: name("rec"),
+                kind: io::ErrorKind::NotFound
+            }
+        );
     }
 }

@@ -121,7 +121,10 @@ impl HeaderSlot {
 
     /// The header slot a Basic slot amounts to: `Authorization` with the format `Basic {}`.
     pub(crate) fn basic() -> Self {
-        Self { name: HeaderName::authorization(), format: SlotFormat::basic() }
+        Self {
+            name: HeaderName::authorization(),
+            format: SlotFormat::basic(),
+        }
     }
 }
 
@@ -249,9 +252,18 @@ mod tests {
 
     #[test]
     fn specification_examples_parse() {
-        assert_eq!(parse(r#"{ query = "access_key" }"#).unwrap(), Slot::Query("access_key".parse().unwrap()));
-        assert_eq!(parse(r#"{ header = "Authorization", format = "Bearer {}" }"#).unwrap(), header("Authorization", "Bearer {}"));
-        assert_eq!(parse(r#"{ header = "X-Subscription-Token" }"#).unwrap(), header("X-Subscription-Token", "{}"));
+        assert_eq!(
+            parse(r#"{ query = "access_key" }"#).unwrap(),
+            Slot::Query("access_key".parse().unwrap())
+        );
+        assert_eq!(
+            parse(r#"{ header = "Authorization", format = "Bearer {}" }"#).unwrap(),
+            header("Authorization", "Bearer {}")
+        );
+        assert_eq!(
+            parse(r#"{ header = "X-Subscription-Token" }"#).unwrap(),
+            header("X-Subscription-Token", "{}")
+        );
         assert_eq!(parse(r#""basic""#).unwrap(), Slot::Basic);
     }
 
@@ -266,9 +278,13 @@ mod tests {
 
     #[test]
     fn rejects_bad_formats() {
-        let error = parse(r#"{ header = "Authorization", format = "Bearer {} {}" }"#).unwrap_err().to_string();
+        let error = parse(r#"{ header = "Authorization", format = "Bearer {} {}" }"#)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("exactly one {}"), "{error}");
-        let error = parse(r#"{ header = "Authorization", format = "x\r\ny: {}" }"#).unwrap_err().to_string();
+        let error = parse(r#"{ header = "Authorization", format = "x\r\ny: {}" }"#)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("only printable ASCII"), "{error}");
     }
 
@@ -286,7 +302,8 @@ mod tests {
             "x-client-ip",
             "CF-Connecting-IP",
         ]
-        .iter().for_each(|h| {
+        .iter()
+        .for_each(|h| {
             let error = parse(&format!(r#"{{ header = "{h}" }}"#)).unwrap_err().to_string();
             assert!(error.contains("reserved"), "{h}: {error}");
         });
@@ -301,7 +318,13 @@ mod tests {
 
     #[test]
     fn query_name_rules() {
-        assert_eq!(QueryParamName::try_from("a&b"), Err(SlotError::InvalidQueryChar { name: "\"a&b\"".into(), found: '&' }));
+        assert_eq!(
+            QueryParamName::try_from("a&b"),
+            Err(SlotError::InvalidQueryChar {
+                name: "\"a&b\"".into(),
+                found: '&'
+            })
+        );
         assert_eq!(QueryParamName::try_from(""), Err(SlotError::EmptyQueryName));
         assert_eq!(QueryParamName::try_from("api-key.v2").unwrap().as_str(), "api-key.v2");
     }
@@ -319,18 +342,33 @@ mod tests {
             assert!(parse(&format!(r#"{{ query = "{q}" }}"#)).is_err(), "{q:?}");
         });
         let replacement = "a\u{FFFD}b";
-        let expected = SlotError::InvalidQueryChar { name: quoted(replacement), found: '\u{FFFD}' };
+        let expected = SlotError::InvalidQueryChar {
+            name: quoted(replacement),
+            found: '\u{FFFD}',
+        };
         assert_eq!(QueryParamName::try_from(replacement), Err(expected));
     }
 
     #[test]
     fn rejects_percent_escapes_in_query_names() {
-        assert_eq!(QueryParamName::try_from("api%5Fkey"), Err(SlotError::InvalidQueryChar { name: "\"api%5Fkey\"".into(), found: '%' }));
+        assert_eq!(
+            QueryParamName::try_from("api%5Fkey"),
+            Err(SlotError::InvalidQueryChar {
+                name: "\"api%5Fkey\"".into(),
+                found: '%'
+            })
+        );
     }
 
     #[test]
     fn rejects_plus_in_query_names() {
-        assert_eq!(QueryParamName::try_from("api+key"), Err(SlotError::InvalidQueryChar { name: "\"api+key\"".into(), found: '+' }));
+        assert_eq!(
+            QueryParamName::try_from("api+key"),
+            Err(SlotError::InvalidQueryChar {
+                name: "\"api+key\"".into(),
+                found: '+'
+            })
+        );
     }
 
     #[test]
@@ -349,7 +387,9 @@ mod tests {
 
     #[test]
     fn rejects_other_shapes() {
-        [r#""Basic""#, r#""header""#, "true", "1", r#"["basic"]"#].iter().for_each(|s| assert!(parse(s).is_err(), "{s}"));
+        [r#""Basic""#, r#""header""#, "true", "1", r#"["basic"]"#]
+            .iter()
+            .for_each(|s| assert!(parse(s).is_err(), "{s}"));
     }
 
     #[test]

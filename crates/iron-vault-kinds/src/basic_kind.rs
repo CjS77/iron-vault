@@ -39,7 +39,10 @@ pub(crate) fn resolve(
     _request: &AuthorizedRequest,
 ) -> Result<Resolution, KindError> {
     if !matches!(slot, Slot::Basic) {
-        return Err(KindError::SlotMismatch { kind: KIND, slot: slot_kind(slot) });
+        return Err(KindError::SlotMismatch {
+            kind: KIND,
+            slot: slot_kind(slot),
+        });
     }
     let (username, password) = (username.expose_secret(), password.expose_secret());
     validate(username, password)?;
@@ -87,12 +90,18 @@ mod tests {
 
     fn patterns(user_pass: &str, password: &str) -> Vec<String> {
         let token = STANDARD.encode(user_pass);
-        scrub_patterns(&token, user_pass, password).iter().map(|p| String::from_utf8(p.to_vec()).unwrap()).collect()
+        scrub_patterns(&token, user_pass, password)
+            .iter()
+            .map(|p| String::from_utf8(p.to_vec()).unwrap())
+            .collect()
     }
 
     #[test]
     fn rfc_7617_example_token() {
-        assert_eq!(STANDARD.encode(join(&["Aladdin", ":", "open sesame"]).as_bytes()), "QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
+        assert_eq!(
+            STANDARD.encode(join(&["Aladdin", ":", "open sesame"]).as_bytes()),
+            "QWxhZGRpbjpvcGVuIHNlc2FtZQ=="
+        );
     }
 
     #[test]
@@ -103,9 +112,16 @@ mod tests {
 
     #[test]
     fn control_characters_are_refused_in_either_field() {
-        [("QZ\nJW", "x"), ("u", "QZ\nJW"), ("u", "QZ\rJW"), ("u", "QZ\0JW"), ("u\t", "p"), ("u", "\u{85}")]
-            .iter()
-            .for_each(|(username, password)| assert_eq!(validate(username, password), Err(BasicCredentialError::ControlChar)));
+        [
+            ("QZ\nJW", "x"),
+            ("u", "QZ\nJW"),
+            ("u", "QZ\rJW"),
+            ("u", "QZ\0JW"),
+            ("u\t", "p"),
+            ("u", "\u{85}"),
+        ]
+        .iter()
+        .for_each(|(username, password)| assert_eq!(validate(username, password), Err(BasicCredentialError::ControlChar)));
     }
 
     #[test]
@@ -131,6 +147,9 @@ mod tests {
         .iter()
         .for_each(|expected| assert!(found.contains(expected), "{expected} missing from {found:?}"));
         assert_eq!(found.len(), 8, "{found:?}");
-        assert!(!found.iter().any(|f| f == "alice@example.com" || f == "alice%40example.com"), "{found:?}");
+        assert!(
+            !found.iter().any(|f| f == "alice@example.com" || f == "alice%40example.com"),
+            "{found:?}"
+        );
     }
 }

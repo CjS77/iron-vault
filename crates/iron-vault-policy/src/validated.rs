@@ -142,8 +142,14 @@ pub enum ValidationError {
 type Check = fn(&ParsedConfig) -> Vec<ValidationError>;
 
 /// The checks in report order.
-const CHECKS: [Check; 6] =
-    [check_references, check_caller_limits, check_listener_auth, check_token_hashes, check_prefixes, check_token_headers];
+const CHECKS: [Check; 6] = [
+    check_references,
+    check_caller_limits,
+    check_listener_auth,
+    check_token_hashes,
+    check_prefixes,
+    check_token_headers,
+];
 
 impl TryFrom<ParsedConfig> for ValidatedConfig {
     type Error = Vec<ValidationError>;
@@ -182,17 +188,26 @@ impl ValidatedConfig {
 
 /// Every caller's listener and granted routes exist.
 fn check_references(config: &ParsedConfig) -> Vec<ValidationError> {
-    config.callers().iter().flat_map(|(name, caller)| caller_references(config, name, caller)).collect()
+    config
+        .callers()
+        .iter()
+        .flat_map(|(name, caller)| caller_references(config, name, caller))
+        .collect()
 }
 
 fn caller_references(config: &ParsedConfig, name: &CallerName, caller: &CallerConfig) -> Vec<ValidationError> {
-    let listener = (!config.listeners().contains_key(caller.listener()))
-        .then(|| ValidationError::UnknownListener { caller: name.clone(), listener: caller.listener().clone() });
+    let listener = (!config.listeners().contains_key(caller.listener())).then(|| ValidationError::UnknownListener {
+        caller: name.clone(),
+        listener: caller.listener().clone(),
+    });
     let routes = caller
         .routes()
         .iter()
         .filter(|route| !config.routes().contains_key(*route))
-        .map(|route| ValidationError::UnknownRoute { caller: name.clone(), route: route.clone() });
+        .map(|route| ValidationError::UnknownRoute {
+            caller: name.clone(),
+            route: route.clone(),
+        });
     listener.into_iter().chain(routes).collect()
 }
 
@@ -210,10 +225,14 @@ fn check_caller_limits(config: &ParsedConfig) -> Vec<ValidationError> {
 }
 
 fn looser_limits(caller: &CallerName, route: &RouteName, limit: RateLimit, route_limit: RateLimit) -> Vec<ValidationError> {
-    let rate = higher_rate(limit, route_limit)
-        .then(|| ValidationError::CallerRateLooser { caller: caller.clone(), route: route.clone() });
-    let burst = (limit.burst() > route_limit.burst())
-        .then(|| ValidationError::CallerBurstLooser { caller: caller.clone(), route: route.clone() });
+    let rate = higher_rate(limit, route_limit).then(|| ValidationError::CallerRateLooser {
+        caller: caller.clone(),
+        route: route.clone(),
+    });
+    let burst = (limit.burst() > route_limit.burst()).then(|| ValidationError::CallerBurstLooser {
+        caller: caller.clone(),
+        route: route.clone(),
+    });
     rate.into_iter().chain(burst).collect()
 }
 
@@ -228,28 +247,44 @@ fn higher_rate(a: RateLimit, b: RateLimit) -> bool {
 /// own network; a `socket` caller needs a Unix socket whose permissions admit only it. Either way a second caller on
 /// the listener would be indistinguishable.
 fn check_listener_auth(config: &ParsedConfig) -> Vec<ValidationError> {
-    config.callers().iter().flat_map(|(name, caller)| listener_auth(config, name, caller)).collect()
+    config
+        .callers()
+        .iter()
+        .flat_map(|(name, caller)| listener_auth(config, name, caller))
+        .collect()
 }
 
 fn listener_auth(config: &ParsedConfig, name: &CallerName, caller: &CallerConfig) -> Vec<ValidationError> {
-    let Some(listener) = config.listeners().get(caller.listener()) else { return Vec::new() };
+    let Some(listener) = config.listeners().get(caller.listener()) else {
+        return Vec::new();
+    };
     let (auth, fault) = match caller.auth() {
         CallerAuth::Token(_) => return Vec::new(),
         CallerAuth::IsolatedNetwork => ("isolated-network", isolated_network_fault(name, caller.listener(), listener)),
         CallerAuth::Socket => ("socket", socket_fault(name, caller.listener(), listener)),
     };
-    let others: Vec<_> = callers_on(config, caller.listener()).map(|(other, _)| other).filter(|other| *other != name).cloned().collect();
-    let shared = (!others.is_empty())
-        .then(|| ValidationError::SharedListener { caller: name.clone(), auth, listener: caller.listener().clone(), others });
+    let others: Vec<_> = callers_on(config, caller.listener())
+        .map(|(other, _)| other)
+        .filter(|other| *other != name)
+        .cloned()
+        .collect();
+    let shared = (!others.is_empty()).then(|| ValidationError::SharedListener {
+        caller: name.clone(),
+        auth,
+        listener: caller.listener().clone(),
+        others,
+    });
     fault.into_iter().chain(shared).collect()
 }
 
 /// Why `listener` cannot identify an `isolated-network` caller, if it cannot.
 fn isolated_network_fault(caller: &CallerName, name: &ListenerName, listener: &ListenerConfig) -> Option<ValidationError> {
     match listener.endpoint() {
-        Endpoint::Tcp { address, tls: Some(_) } if !is_dedicated(address.ip()) => {
-            Some(ValidationError::UndedicatedAddress { caller: caller.clone(), listener: name.clone(), address: *address })
-        }
+        Endpoint::Tcp { address, tls: Some(_) } if !is_dedicated(address.ip()) => Some(ValidationError::UndedicatedAddress {
+            caller: caller.clone(),
+            listener: name.clone(),
+            address: *address,
+        }),
         Endpoint::Tcp { tls: Some(_), .. } => None,
         Endpoint::Tcp { tls: None, .. } | Endpoint::UnixSocket(_) => {
             Some(wrong_kind(caller, "isolated-network", name, "an address listener with TLS"))
@@ -263,7 +298,12 @@ fn socket_fault(caller: &CallerName, name: &ListenerName, listener: &ListenerCon
 }
 
 fn wrong_kind(caller: &CallerName, auth: &'static str, listener: &ListenerName, required: &'static str) -> ValidationError {
-    ValidationError::WrongListenerKind { caller: caller.clone(), auth, listener: listener.clone(), required }
+    ValidationError::WrongListenerKind {
+        caller: caller.clone(),
+        auth,
+        listener: listener.clone(),
+        required,
+    }
 }
 
 /// Whether a bind on `ip` admits only the hosts of one network: it is neither loopback (every local process) nor
@@ -285,14 +325,20 @@ fn check_token_hashes(config: &ParsedConfig) -> Vec<ValidationError> {
             CallerAuth::Token(hash) => Some(((caller.listener(), hash.digest()), name)),
             CallerAuth::IsolatedNetwork | CallerAuth::Socket => None,
         })
-        .fold(BTreeMap::<(&ListenerName, &[u8; TOKEN_DIGEST_LEN]), Vec<CallerName>>::new(), |mut groups, (key, name)| {
-            groups.entry(key).or_default().push(name.clone());
-            groups
-        });
+        .fold(
+            BTreeMap::<(&ListenerName, &[u8; TOKEN_DIGEST_LEN]), Vec<CallerName>>::new(),
+            |mut groups, (key, name)| {
+                groups.entry(key).or_default().push(name.clone());
+                groups
+            },
+        );
     groups
         .into_iter()
         .filter(|(_, callers)| callers.len() > 1)
-        .map(|((listener, _), callers)| ValidationError::SharedTokenHash { listener: listener.clone(), callers })
+        .map(|((listener, _), callers)| ValidationError::SharedTokenHash {
+            listener: listener.clone(),
+            callers,
+        })
         .collect()
 }
 
@@ -337,8 +383,17 @@ fn token_header_collisions(config: &ParsedConfig, listener: &ListenerName, heade
     let reachable: BTreeSet<_> = callers_on(config, listener).flat_map(|(_, caller)| caller.routes()).collect();
     reachable
         .into_iter()
-        .filter(|route| config.routes().get(*route).is_some_and(|r| r.slot().header_written() == Some(header.lowercase())))
-        .map(|route| ValidationError::TokenHeaderIsSlot { listener: listener.clone(), header: header.clone(), route: route.clone() })
+        .filter(|route| {
+            config
+                .routes()
+                .get(*route)
+                .is_some_and(|r| r.slot().header_written() == Some(header.lowercase()))
+        })
+        .map(|route| ValidationError::TokenHeaderIsSlot {
+            listener: listener.clone(),
+            header: header.clone(),
+            route: route.clone(),
+        })
         .collect()
 }
 
@@ -395,7 +450,10 @@ mod tests {
     }
 
     fn token_caller(name: &str, listener: &str, digit: char, routes: &str) -> String {
-        format!("[callers.{name}]\nlistener = \"{listener}\"\ntoken_hash = \"{}\"\nroutes = [{routes}]\n", hash(digit))
+        format!(
+            "[callers.{name}]\nlistener = \"{listener}\"\ntoken_hash = \"{}\"\nroutes = [{routes}]\n",
+            hash(digit)
+        )
     }
 
     fn caller(name: &str, listener: &str, auth: &str) -> String {
@@ -403,7 +461,10 @@ mod tests {
     }
 
     fn limited_caller(limit: &str) -> String {
-        format!("{}[callers.a.rate_limits]\nfx = {limit}\n", token_caller("a", "local", '1', "\"fx\""))
+        format!(
+            "{}[callers.a.rate_limits]\nfx = {limit}\n",
+            token_caller("a", "local", '1', "\"fx\"")
+        )
     }
 
     #[test]
@@ -424,30 +485,50 @@ mod tests {
     #[test]
     fn unknown_listener_is_rejected() {
         let err = errors(&[LOCAL, &fx(), &token_caller("a", "missing", '1', "\"fx\"")]);
-        assert_eq!(err, [ValidationError::UnknownListener { caller: n("a"), listener: n("missing") }]);
+        assert_eq!(
+            err,
+            [ValidationError::UnknownListener {
+                caller: n("a"),
+                listener: n("missing")
+            }]
+        );
     }
 
     #[test]
     fn unknown_routes_are_rejected() {
         let err = errors(&[LOCAL, &fx(), &token_caller("a", "local", '1', "\"fx\", \"gone\", \"lost\"")]);
-        let unknown = |route: &str| ValidationError::UnknownRoute { caller: n("a"), route: n(route) };
+        let unknown = |route: &str| ValidationError::UnknownRoute {
+            caller: n("a"),
+            route: n(route),
+        };
         assert_eq!(err, [unknown("gone"), unknown("lost")]);
     }
 
     #[test]
     fn caller_limit_must_be_no_looser_than_route_limit() {
-        ["{ requests = 60, per_seconds = 60, burst = 10 }", "{ requests = 1, per_seconds = 2, burst = 1 }"]
-            .iter()
-            .for_each(|limit| assert!(validate(&doc(&[LOCAL, &fx(), &limited_caller(limit)])).is_ok(), "{limit}"));
-        let rate = ValidationError::CallerRateLooser { caller: n("a"), route: n("fx") };
-        let burst = ValidationError::CallerBurstLooser { caller: n("a"), route: n("fx") };
+        [
+            "{ requests = 60, per_seconds = 60, burst = 10 }",
+            "{ requests = 1, per_seconds = 2, burst = 1 }",
+        ]
+        .iter()
+        .for_each(|limit| assert!(validate(&doc(&[LOCAL, &fx(), &limited_caller(limit)])).is_ok(), "{limit}"));
+        let rate = ValidationError::CallerRateLooser {
+            caller: n("a"),
+            route: n("fx"),
+        };
+        let burst = ValidationError::CallerBurstLooser {
+            caller: n("a"),
+            route: n("fx"),
+        };
         let cases = [
             ("{ requests = 61, per_seconds = 60, burst = 10 }", vec![rate.clone()]),
             ("{ requests = 2, per_seconds = 1, burst = 10 }", vec![rate.clone()]),
             ("{ requests = 60, per_seconds = 60, burst = 11 }", vec![burst.clone()]),
             ("{ requests = 4294967295, per_seconds = 1, burst = 4294967295 }", vec![rate, burst]),
         ];
-        cases.into_iter().for_each(|(limit, expected)| assert_eq!(errors(&[LOCAL, &fx(), &limited_caller(limit)]), expected, "{limit}"));
+        cases
+            .into_iter()
+            .for_each(|(limit, expected)| assert_eq!(errors(&[LOCAL, &fx(), &limited_caller(limit)]), expected, "{limit}"));
     }
 
     #[test]
@@ -455,22 +536,48 @@ mod tests {
         assert!(validate(&doc(&[NET, &fx(), &caller("a", "net", "isolated-network")])).is_ok());
         [(LOCAL, "local"), (LOOPBACK, "lo")].iter().for_each(|(listener, name)| {
             let err = errors(&[listener, &fx(), &caller("a", name, "isolated-network")]);
-            assert!(matches!(&err[..], [ValidationError::WrongListenerKind { auth: "isolated-network", .. }]), "{err:?}");
+            assert!(
+                matches!(
+                    &err[..],
+                    [ValidationError::WrongListenerKind {
+                        auth: "isolated-network",
+                        ..
+                    }]
+                ),
+                "{err:?}"
+            );
         });
     }
 
     #[test]
     fn isolated_network_caller_needs_a_dedicated_address() {
-        ["127.0.0.1:7878", "[::1]:7878", "0.0.0.0:7878", "[::]:7878", "[::ffff:127.0.0.1]:7878", "[::ffff:0.0.0.0]:7878"].iter().for_each(
-            |address| {
-                let listener = NET.replace("10.20.0.2:7878", address);
-                let err = errors(&[&listener, &fx(), &caller("a", "net", "isolated-network")]);
-                let expected = ValidationError::UndedicatedAddress { caller: n("a"), listener: n("net"), address: n(address) };
-                assert_eq!(err, [expected], "{address}");
-            },
-        );
+        [
+            "127.0.0.1:7878",
+            "[::1]:7878",
+            "0.0.0.0:7878",
+            "[::]:7878",
+            "[::ffff:127.0.0.1]:7878",
+            "[::ffff:0.0.0.0]:7878",
+        ]
+        .iter()
+        .for_each(|address| {
+            let listener = NET.replace("10.20.0.2:7878", address);
+            let err = errors(&[&listener, &fx(), &caller("a", "net", "isolated-network")]);
+            let expected = ValidationError::UndedicatedAddress {
+                caller: n("a"),
+                listener: n("net"),
+                address: n(address),
+            };
+            assert_eq!(err, [expected], "{address}");
+        });
         let err = errors(&[&NET.replace("10.20.0.2", "0.0.0.0"), &fx(), &caller("a", "net", "isolated-network")]);
-        assert!(err[0].to_string().contains("must bind a dedicated non-loopback, non-wildcard address; 0.0.0.0:7878"), "{}", err[0]);
+        assert!(
+            err[0]
+                .to_string()
+                .contains("must bind a dedicated non-loopback, non-wildcard address; 0.0.0.0:7878"),
+            "{}",
+            err[0]
+        );
     }
 
     #[test]
@@ -478,15 +585,27 @@ mod tests {
         assert!(validate(&doc(&[LOCAL, &fx(), &caller("a", "local", "socket")])).is_ok());
         [(NET, "net"), (LOOPBACK, "lo")].iter().for_each(|(listener, name)| {
             let err = errors(&[listener, &fx(), &caller("a", name, "socket")]);
-            assert!(matches!(&err[..], [ValidationError::WrongListenerKind { auth: "socket", .. }]), "{err:?}");
+            assert!(
+                matches!(&err[..], [ValidationError::WrongListenerKind { auth: "socket", .. }]),
+                "{err:?}"
+            );
         });
     }
 
     #[test]
     fn listener_identified_callers_must_not_share_their_listener() {
-        let err = errors(&[NET, &fx(), &caller("a", "net", "isolated-network"), &token_caller("b", "net", '1', "\"fx\"")]);
-        let expected =
-            ValidationError::SharedListener { caller: n("a"), auth: "isolated-network", listener: n("net"), others: vec![n("b")] };
+        let err = errors(&[
+            NET,
+            &fx(),
+            &caller("a", "net", "isolated-network"),
+            &token_caller("b", "net", '1', "\"fx\""),
+        ]);
+        let expected = ValidationError::SharedListener {
+            caller: n("a"),
+            auth: "isolated-network",
+            listener: n("net"),
+            others: vec![n("b")],
+        };
         assert_eq!(err, [expected]);
         let err = errors(&[LOCAL, &fx(), &caller("a", "local", "socket"), &caller("b", "local", "socket")]);
         let shared = |caller: &str, other: &str| ValidationError::SharedListener {
@@ -496,7 +615,11 @@ mod tests {
             others: vec![n(other)],
         };
         assert_eq!(err, [shared("a", "b"), shared("b", "a")]);
-        assert!(err[0].to_string().contains("callers that share a listener must use tokens"), "{}", err[0]);
+        assert!(
+            err[0].to_string().contains("callers that share a listener must use tokens"),
+            "{}",
+            err[0]
+        );
     }
 
     #[test]
@@ -509,9 +632,27 @@ mod tests {
     fn token_callers_on_one_listener_must_not_share_a_hash() {
         let callers = ["a", "b", "c"].map(|name| token_caller(name, "local", '1', "\"fx\""));
         let err = errors(&[LOCAL, &fx(), &callers[0], &callers[1], &callers[2]]);
-        assert_eq!(err, [ValidationError::SharedTokenHash { listener: n("local"), callers: vec![n("a"), n("b"), n("c")] }]);
-        assert!(err[0].to_string().starts_with("callers a, b, c on listener local share a token_hash"), "{}", err[0]);
-        let other_listener = [LOCAL, LOOPBACK, &fx(), &token_caller("a", "local", '1', "\"fx\""), &token_caller("b", "lo", '1', "\"fx\"")];
+        assert_eq!(
+            err,
+            [ValidationError::SharedTokenHash {
+                listener: n("local"),
+                callers: vec![n("a"), n("b"), n("c")]
+            }]
+        );
+        assert!(
+            err[0]
+                .to_string()
+                .starts_with("callers a, b, c on listener local share a token_hash"),
+            "{}",
+            err[0]
+        );
+        let other_listener = [
+            LOCAL,
+            LOOPBACK,
+            &fx(),
+            &token_caller("a", "local", '1', "\"fx\""),
+            &token_caller("b", "lo", '1', "\"fx\""),
+        ];
         assert!(validate(&doc(&other_listener)).is_ok());
     }
 
@@ -519,8 +660,12 @@ mod tests {
     fn overlapping_prefixes_are_rejected() {
         let v2 = route("fxtwo", "/fx/v2", "{ query = \"access_key\" }");
         let err = errors(&[LOCAL, &fx(), &v2, &token_caller("a", "local", '1', "\"fx\"")]);
-        let expected =
-            ValidationError::AmbiguousPrefix { route: n("fx"), prefix: n("/fx"), other: n("fxtwo"), other_prefix: n("/fx/v2") };
+        let expected = ValidationError::AmbiguousPrefix {
+            route: n("fx"),
+            prefix: n("/fx"),
+            other: n("fxtwo"),
+            other_prefix: n("/fx/v2"),
+        };
         assert_eq!(err, [expected]);
         let same = route("again", "/fx", "{ query = \"access_key\" }");
         let err = errors(&[LOCAL, &fx(), &same, &token_caller("a", "local", '1', "\"fx\"")]);
@@ -540,7 +685,14 @@ mod tests {
         let keyed = route("keyed", "/keyed", "{ header = \"X-API-Key\" }");
         let caller = token_caller("a", "local", '1', "\"fx\", \"keyed\"");
         let err = errors(&[&listener, &fx(), &keyed, &caller]);
-        assert_eq!(err, [ValidationError::TokenHeaderIsSlot { listener: n("local"), header: n("x-api-key"), route: n("keyed") }]);
+        assert_eq!(
+            err,
+            [ValidationError::TokenHeaderIsSlot {
+                listener: n("local"),
+                header: n("x-api-key"),
+                route: n("keyed")
+            }]
+        );
         let unreachable = token_caller("a", "local", '1', "\"fx\"");
         assert!(validate(&doc(&[&listener, &fx(), &keyed, &unreachable])).is_ok());
     }
@@ -550,7 +702,13 @@ mod tests {
         let listener = format!("{LOCAL}token_header = \"Authorization\"\n");
         let basic = route("basic", "/basic", "\"basic\"");
         let bearer = route("bearer", "/bearer", "{ header = \"authorization\", format = \"Bearer {}\" }");
-        let err = errors(&[&listener, &fx(), &basic, &bearer, &token_caller("a", "local", '1', "\"basic\", \"bearer\", \"fx\"")]);
+        let err = errors(&[
+            &listener,
+            &fx(),
+            &basic,
+            &bearer,
+            &token_caller("a", "local", '1', "\"basic\", \"bearer\", \"fx\""),
+        ]);
         let routes: Vec<_> = err
             .iter()
             .map(|e| match e {
@@ -569,8 +727,18 @@ mod tests {
         let first = format!("{}{limit}", token_caller("a", "local", '1', "\"fx\", \"keyed\", \"gone\""));
         let (second, third) = (token_caller("b", "local", '1', "\"fx\""), caller("c", "nowhere", "socket"));
         let err = errors(&[&listener, &fx(), &keyed, &first, &second, &third]);
-        let kinds: Vec<_> = err.iter().map(|e| format!("{e:?}").split([' ', '{']).next().unwrap().to_owned()).collect();
-        let expected = ["UnknownRoute", "UnknownListener", "CallerRateLooser", "SharedTokenHash", "AmbiguousPrefix", "TokenHeaderIsSlot"];
+        let kinds: Vec<_> = err
+            .iter()
+            .map(|e| format!("{e:?}").split([' ', '{']).next().unwrap().to_owned())
+            .collect();
+        let expected = [
+            "UnknownRoute",
+            "UnknownListener",
+            "CallerRateLooser",
+            "SharedTokenHash",
+            "AmbiguousPrefix",
+            "TokenHeaderIsSlot",
+        ];
         assert_eq!(kinds, expected);
         assert_eq!(validate(&doc(&[&listener, &fx(), &keyed, &first])).unwrap_err().len(), 4);
     }

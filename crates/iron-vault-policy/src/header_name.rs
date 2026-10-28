@@ -51,7 +51,10 @@ impl HeaderName {
 
     /// `Authorization`, the header a Basic slot writes; built directly because a constant cannot fail to parse.
     pub(crate) fn authorization() -> Self {
-        Self { spelling: "Authorization".to_owned(), lowercase: "authorization".to_owned() }
+        Self {
+            spelling: "Authorization".to_owned(),
+            lowercase: "authorization".to_owned(),
+        }
     }
 }
 
@@ -69,7 +72,10 @@ impl TryFrom<&str> for HeaderName {
         }
         match s.chars().find(|c| !is_tchar(*c)) {
             Some(found) => Err(HeaderNameError::InvalidChar { name: quoted(s), found }),
-            None => Ok(Self { spelling: s.to_owned(), lowercase: s.to_ascii_lowercase() }),
+            None => Ok(Self {
+                spelling: s.to_owned(),
+                lowercase: s.to_ascii_lowercase(),
+            }),
         }
     }
 }
@@ -152,7 +158,10 @@ mod tests {
     #[test]
     fn authorization_matches_its_parsed_form() {
         let parsed = name("Authorization");
-        assert_eq!((HeaderName::authorization().as_str(), HeaderName::authorization().lowercase()), (parsed.as_str(), parsed.lowercase()));
+        assert_eq!(
+            (HeaderName::authorization().as_str(), HeaderName::authorization().lowercase()),
+            (parsed.as_str(), parsed.lowercase())
+        );
     }
 
     #[test]
@@ -164,7 +173,12 @@ mod tests {
     fn rejects_non_token_characters() {
         ["X Token", "X:Token", ":authority", "X\r\nY", "X\0", "Tök", "(x)", "a/b", "a\"b"]
             .iter()
-            .for_each(|s| assert!(matches!(HeaderName::try_from(*s), Err(HeaderNameError::InvalidChar { .. })), "{s:?}"));
+            .for_each(|s| {
+                assert!(
+                    matches!(HeaderName::try_from(*s), Err(HeaderNameError::InvalidChar { .. })),
+                    "{s:?}"
+                )
+            });
     }
 
     #[test]

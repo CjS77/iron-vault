@@ -22,7 +22,11 @@ pub struct RateLimit {
 impl RateLimit {
     /// Builds a rate limit; the non-zero types make every combination valid.
     pub fn new(requests: NonZeroU32, per_seconds: NonZeroU32, burst: NonZeroU32) -> Self {
-        Self { requests, per_seconds, burst }
+        Self {
+            requests,
+            per_seconds,
+            burst,
+        }
     }
 
     /// Tokens added per refill period.
@@ -59,7 +63,10 @@ mod tests {
         let fx = parse("rate_limit = { requests = 60, per_seconds = 60, burst = 10 }").unwrap();
         assert_eq!((fx.requests().get(), fx.per_seconds().get(), fx.burst().get()), (60, 60, 10));
         let venice = parse("rate_limit = { requests = 120, per_seconds = 60, burst = 20 }").unwrap();
-        assert_eq!((venice.requests().get(), venice.per_seconds().get(), venice.burst().get()), (120, 60, 20));
+        assert_eq!(
+            (venice.requests().get(), venice.per_seconds().get(), venice.burst().get()),
+            (120, 60, 20)
+        );
     }
 
     #[test]

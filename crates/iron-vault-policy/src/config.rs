@@ -87,7 +87,12 @@ impl ParsedConfig {
         let text = std::str::from_utf8(bytes).map_err(|e| not_utf8(bytes, e.valid_up_to()))?;
         check_schema_version(text)?;
         let raw: RawConfig = toml::from_str(text).map_err(|e| invalid(text, &e))?;
-        Ok(Self { listeners: raw.listeners, callers: raw.callers, routes: raw.routes, limits: raw.limits })
+        Ok(Self {
+            listeners: raw.listeners,
+            callers: raw.callers,
+            routes: raw.routes,
+            limits: raw.limits,
+        })
     }
 
     /// The schema version the document declared, which is always [`SCHEMA_VERSION`].
@@ -174,22 +179,30 @@ struct SchemaProbe {
 fn check_schema_version(text: &str) -> Result<(), ConfigError> {
     let probe: SchemaProbe = toml::from_str(text).map_err(|e| invalid(text, &e))?;
     match probe.schema_version {
-        None => Err(ConfigError::MissingSchemaVersion { location: Location::new(text, 0..0) }),
+        None => Err(ConfigError::MissingSchemaVersion {
+            location: Location::new(text, 0..0),
+        }),
         Some(version) if *version.get_ref() == SCHEMA_VERSION => Ok(()),
-        Some(version) => {
-            Err(ConfigError::UnsupportedSchemaVersion { version: *version.get_ref(), location: Location::new(text, version.span()) })
-        }
+        Some(version) => Err(ConfigError::UnsupportedSchemaVersion {
+            version: *version.get_ref(),
+            location: Location::new(text, version.span()),
+        }),
     }
 }
 
 fn not_utf8(bytes: &[u8], valid_up_to: usize) -> ConfigError {
     let valid = bytes.get(..valid_up_to).map(String::from_utf8_lossy).unwrap_or_default();
-    ConfigError::NotUtf8 { location: Location::new(&valid, valid.len()..valid.len() + 1) }
+    ConfigError::NotUtf8 {
+        location: Location::new(&valid, valid.len()..valid.len() + 1),
+    }
 }
 
 /// Keeps the parser's message and position but not its rendering of the input line.
 fn invalid(text: &str, err: &toml::de::Error) -> ConfigError {
-    ConfigError::Invalid { message: escaped(err.message().trim_end()), location: err.span().map(|span| Location::new(text, span)) }
+    ConfigError::Invalid {
+        message: escaped(err.message().trim_end()),
+        location: err.span().map(|span| Location::new(text, span)),
+    }
 }
 
 /// " at <location>", or nothing when the parser gave no position.
@@ -231,7 +244,10 @@ mod tests {
     /// Asserts that `doc` is rejected as invalid on the line holding `needle`, with a message containing `expected`.
     fn invalid(doc: &str, needle: &str, expected: &str) {
         let err = located(doc, line_of(doc, needle));
-        assert!(matches!(err, ConfigError::Invalid { .. }) && err.to_string().contains(expected), "{err}");
+        assert!(
+            matches!(err, ConfigError::Invalid { .. }) && err.to_string().contains(expected),
+            "{err}"
+        );
     }
 
     /// The spec example with the `key = ...` line removed from the `[routes.fx]` table only.
@@ -281,12 +297,24 @@ mod tests {
 
     #[test]
     fn other_schema_versions_are_rejected_before_other_checks() {
-        let v2 = format!("{}\nfuture_section = true\n", SPEC_EXAMPLE.replace("schema_version = 1", "schema_version = 2"));
+        let v2 = format!(
+            "{}\nfuture_section = true\n",
+            SPEC_EXAMPLE.replace("schema_version = 1", "schema_version = 2")
+        );
         let err = located(&v2, 1);
         assert!(matches!(err, ConfigError::UnsupportedSchemaVersion { version: 2, .. }), "{err}");
-        assert_eq!(err.to_string(), "unsupported schema version 2 at line 1, column 18; this release reads schema_version = 1");
+        assert_eq!(
+            err.to_string(),
+            "unsupported schema version 2 at line 1, column 18; this release reads schema_version = 1"
+        );
         ["0", "-1"].iter().for_each(|v| {
-            assert!(matches!(parse(&format!("schema_version = {v}")), Err(ConfigError::UnsupportedSchemaVersion { .. })), "{v}");
+            assert!(
+                matches!(
+                    parse(&format!("schema_version = {v}")),
+                    Err(ConfigError::UnsupportedSchemaVersion { .. })
+                ),
+                "{v}"
+            );
         });
         invalid("schema_version = \"1\"", "schema_version", "invalid type");
     }
@@ -299,7 +327,11 @@ mod tests {
             ("[listeners.local]\n", "[listeners.local]\nbacklog = 5\n", "backlog"),
             ("routes = [\"fx\"]", "routes = [\"fx\"]\nrole = \"admin\"", "role"),
             ("prefix = \"/fx\"", "prefix = \"/fx\"\nhosts = []", "hosts"),
-            ("slot = { query = \"access_key\" }", "slot = { query = \"access_key\", x = 1 }", "x = 1"),
+            (
+                "slot = { query = \"access_key\" }",
+                "slot = { query = \"access_key\", x = 1 }",
+                "x = 1",
+            ),
             ("burst = 10 }\n\n[routes.venice]", "burst = 10, y = 1 }\n\n[routes.venice]", "y = 1"),
         ];
         cases.iter().for_each(|(from, to, needle)| {
@@ -320,10 +352,12 @@ mod tests {
 
     #[test]
     fn bad_prefixes_are_located() {
-        [("/", "must not be \"/\""), ("/fx/", "trailing slash"), ("/fx/*", "wildcard")].iter().for_each(|(prefix, expected)| {
-            let line = format!("prefix = \"{prefix}\"");
-            invalid(&SPEC_EXAMPLE.replace("prefix = \"/fx\"", &line), &line, expected);
-        });
+        [("/", "must not be \"/\""), ("/fx/", "trailing slash"), ("/fx/*", "wildcard")]
+            .iter()
+            .for_each(|(prefix, expected)| {
+                let line = format!("prefix = \"{prefix}\"");
+                invalid(&SPEC_EXAMPLE.replace("prefix = \"/fx\"", &line), &line, expected);
+            });
     }
 
     #[test]
@@ -335,7 +369,9 @@ mod tests {
 
     #[test]
     fn control_characters_are_escaped() {
-        let err = parse("schema_version = 1\n[routes.fx]\nprefix = \"/a\\u001b[31m\"\n").unwrap_err().to_string();
+        let err = parse("schema_version = 1\n[routes.fx]\nprefix = \"/a\\u001b[31m\"\n")
+            .unwrap_err()
+            .to_string();
         assert!(!err.chars().any(char::is_control), "{err}");
     }
 

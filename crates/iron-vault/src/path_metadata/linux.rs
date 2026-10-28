@@ -52,7 +52,9 @@ impl Collector {
     fn kind(&self, path: &Path, metadata: &Metadata) -> Result<ComponentKind, CollectError> {
         let file_type = metadata.file_type();
         Ok(if file_type.is_symlink() {
-            ComponentKind::Symlink { target: self.resolve(path)? }
+            ComponentKind::Symlink {
+                target: self.resolve(path)?,
+            }
         } else if file_type.is_dir() {
             ComponentKind::Directory
         } else if file_type.is_file() {
@@ -93,11 +95,19 @@ fn prefixes(path: &Path) -> Result<Vec<PathBuf>, CollectError> {
 }
 
 fn is_loop(component: &PathComponent) -> bool {
-    matches!(component.kind, ComponentKind::Symlink { target: SymlinkTarget::Loop })
+    matches!(
+        component.kind,
+        ComponentKind::Symlink {
+            target: SymlinkTarget::Loop
+        }
+    )
 }
 
 fn io_error(path: &Path) -> impl Fn(io::Error) -> CollectError + '_ {
-    move |e| CollectError::Io { path: path.to_path_buf(), kind: e.kind() }
+    move |e| CollectError::Io {
+        path: path.to_path_buf(),
+        kind: e.kind(),
+    }
 }
 
 /// Compares the file at `path` with the one the kernel says this process was started from.
@@ -116,7 +126,10 @@ struct FileId {
 
 impl FileId {
     fn of(metadata: &Metadata) -> Self {
-        Self { dev: metadata.dev(), ino: metadata.ino() }
+        Self {
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        }
     }
 }
 
@@ -144,7 +157,10 @@ mod tests {
     #[test]
     fn a_deleted_binary_is_replaced() {
         let path = Path::new("/usr/bin/iron-vault (deleted)");
-        assert_eq!(binary_status(path, RUNNING, Some(RUNNING)), Err(CollectError::BinaryReplaced { path: path.to_path_buf() }));
+        assert_eq!(
+            binary_status(path, RUNNING, Some(RUNNING)),
+            Err(CollectError::BinaryReplaced { path: path.to_path_buf() })
+        );
     }
 
     #[test]
@@ -152,7 +168,10 @@ mod tests {
         let path = Path::new("/usr/bin/iron-vault");
         let other = FileId { ino: 78, ..RUNNING };
         [Some(other), None].into_iter().for_each(|on_disk| {
-            assert_eq!(binary_status(path, RUNNING, on_disk), Err(CollectError::BinaryReplaced { path: path.to_path_buf() }));
+            assert_eq!(
+                binary_status(path, RUNNING, on_disk),
+                Err(CollectError::BinaryReplaced { path: path.to_path_buf() })
+            );
         });
     }
 
@@ -170,13 +189,24 @@ mod tests {
 
     #[test]
     fn a_relative_path_is_refused() {
-        assert_eq!(collect(Path::new("etc/iron-vault")), Err(CollectError::NotAbsolute { path: PathBuf::from("etc/iron-vault") }));
+        assert_eq!(
+            collect(Path::new("etc/iron-vault")),
+            Err(CollectError::NotAbsolute {
+                path: PathBuf::from("etc/iron-vault")
+            })
+        );
     }
 
     #[test]
     fn a_missing_component_names_itself() {
         let err = collect(Path::new("/proc/self/no-such-entry")).unwrap_err();
-        assert_eq!(err, CollectError::Io { path: PathBuf::from("/proc/self/no-such-entry"), kind: io::ErrorKind::NotFound });
+        assert_eq!(
+            err,
+            CollectError::Io {
+                path: PathBuf::from("/proc/self/no-such-entry"),
+                kind: io::ErrorKind::NotFound
+            }
+        );
     }
 
     #[test]

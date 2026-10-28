@@ -57,10 +57,15 @@ impl TryFrom<&str> for RoutePrefix {
     type Error = RoutePrefixError;
 
     fn try_from(text: &str) -> Result<Self, Self::Error> {
-        let segments = PathPattern::parse(text)?.literal_segments().ok_or_else(|| RoutePrefixError::Wildcard { prefix: quoted(text) })?;
+        let segments = PathPattern::parse(text)?
+            .literal_segments()
+            .ok_or_else(|| RoutePrefixError::Wildcard { prefix: quoted(text) })?;
         match segments.is_empty() {
             true => Err(RoutePrefixError::Root),
-            false => Ok(Self { text: text.to_owned(), segments }),
+            false => Ok(Self {
+                text: text.to_owned(),
+                segments,
+            }),
         }
     }
 }
@@ -116,13 +121,42 @@ mod tests {
     fn segment_rules_are_shared_with_path_patterns() {
         let cases = [
             ("fx", PathPatternError::NotAbsolute { pattern: "fx".to_owned() }),
-            ("/fx/", PathPatternError::EmptySegment { pattern: "/fx/".to_owned() }),
-            ("/fx//a", PathPatternError::EmptySegment { pattern: "/fx//a".to_owned() }),
-            ("/fx/..", PathPatternError::DotSegment { pattern: "/fx/..".to_owned() }),
-            ("/f%78", PathPatternError::DisallowedCharacter { pattern: "/f%78".to_owned(), character: '%' }),
-            ("/fx*", PathPatternError::PartialWildcard { pattern: "/fx*".to_owned(), segment: "fx*".to_owned() }),
+            (
+                "/fx/",
+                PathPatternError::EmptySegment {
+                    pattern: "/fx/".to_owned(),
+                },
+            ),
+            (
+                "/fx//a",
+                PathPatternError::EmptySegment {
+                    pattern: "/fx//a".to_owned(),
+                },
+            ),
+            (
+                "/fx/..",
+                PathPatternError::DotSegment {
+                    pattern: "/fx/..".to_owned(),
+                },
+            ),
+            (
+                "/f%78",
+                PathPatternError::DisallowedCharacter {
+                    pattern: "/f%78".to_owned(),
+                    character: '%',
+                },
+            ),
+            (
+                "/fx*",
+                PathPatternError::PartialWildcard {
+                    pattern: "/fx*".to_owned(),
+                    segment: "fx*".to_owned(),
+                },
+            ),
         ];
-        cases.into_iter().for_each(|(s, err)| assert_eq!(s.parse::<RoutePrefix>(), Err(RoutePrefixError::Segment(err)), "{s}"));
+        cases
+            .into_iter()
+            .for_each(|(s, err)| assert_eq!(s.parse::<RoutePrefix>(), Err(RoutePrefixError::Segment(err)), "{s}"));
     }
 
     #[test]

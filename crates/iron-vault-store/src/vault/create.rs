@@ -19,16 +19,27 @@ impl Vault {
         refuse_existing_vault(&list_state_dir(lock, fs)?)?;
         let manifest = VaultManifest::new(VaultId::new_random(), 0, BTreeMap::new()).map_err(VaultError::NextManifest)?;
         commit_manifest(lock, fs, &seal_manifest(&identity, &manifest).map_err(VaultError::Seal)?)?;
-        Ok(Vault { dir: lock.dir().to_path_buf(), identity, manifest, healthy: BTreeMap::new() })
+        Ok(Vault {
+            dir: lock.dir().to_path_buf(),
+            identity,
+            manifest,
+            healthy: BTreeMap::new(),
+        })
     }
 }
 
 /// Refuses a state directory that holds a manifest, or record files whose manifest is gone.
 fn refuse_existing_vault(files: &[String]) -> Result<(), VaultError> {
     let manifest = StateFileName::manifest();
-    match (files.iter().any(|f| f == manifest.as_str()), files.iter().any(|f| is_record_file_name(f))) {
+    match (
+        files.iter().any(|f| f == manifest.as_str()),
+        files.iter().any(|f| is_record_file_name(f)),
+    ) {
         (true, _) => Err(VaultError::AlreadyInitialized),
-        (false, true) => Err(VaultError::SharedStateDamaged { file: manifest, damage: SharedStateDamage::MissingWithRecords }),
+        (false, true) => Err(VaultError::SharedStateDamaged {
+            file: manifest,
+            damage: SharedStateDamage::MissingWithRecords,
+        }),
         (false, false) => Ok(()),
     }
 }

@@ -51,7 +51,9 @@ pub(super) fn encode_envelope(envelope: &ApprovalEnvelope) -> Vec<u8> {
 /// The envelope a v1 encoding holds, after the size limit, accepted only if it is that envelope's one encoding.
 pub(super) fn decode_envelope(bytes: &[u8]) -> Result<ApprovalEnvelope, ApprovalDecodeError> {
     if bytes.len() > MAX_APPROVAL_ENVELOPE_LEN {
-        return Err(ApprovalDecodeError::TooLarge { limit: MAX_APPROVAL_ENVELOPE_LEN });
+        return Err(ApprovalDecodeError::TooLarge {
+            limit: MAX_APPROVAL_ENVELOPE_LEN,
+        });
     }
     let mut reader = Reader(bytes);
     reader.header(ENVELOPE_MAGIC, ENVELOPE_VERSION)?;
@@ -104,7 +106,10 @@ impl<'a> Reader<'a> {
     /// A length-prefixed field. A length past the bytes left fails before anything is read.
     pub(super) fn field(&mut self) -> Result<&'a [u8], ApprovalDecodeError> {
         let len = u64::from_be_bytes(self.array()?);
-        let len = usize::try_from(len).ok().filter(|len| *len <= self.0.len()).ok_or(ApprovalDecodeError::LengthPastEnd)?;
+        let len = usize::try_from(len)
+            .ok()
+            .filter(|len| *len <= self.0.len())
+            .ok_or(ApprovalDecodeError::LengthPastEnd)?;
         self.take(len)
     }
 
@@ -131,7 +136,11 @@ mod tests {
 
     fn unhex(hex: &str) -> Vec<u8> {
         hex.split_whitespace()
-            .flat_map(|group| (0..group.len()).step_by(2).map(move |i| u8::from_str_radix(&group[i..i + 2], 16).unwrap()))
+            .flat_map(|group| {
+                (0..group.len())
+                    .step_by(2)
+                    .map(move |i| u8::from_str_radix(&group[i..i + 2], 16).unwrap())
+            })
             .collect()
     }
 
@@ -191,17 +200,32 @@ mod tests {
 
     #[test]
     fn version_zero_and_invalid_vault_ids_are_rejected() {
-        assert_eq!(ApprovalPayload::decode(&payload_with(49..57, &[0; 8])), Err(ApprovalDecodeError::ZeroVersion));
-        assert!(matches!(ApprovalPayload::decode(&payload_with(33..49, &[0; 16])), Err(ApprovalDecodeError::InvalidVaultId(_))));
+        assert_eq!(
+            ApprovalPayload::decode(&payload_with(49..57, &[0; 8])),
+            Err(ApprovalDecodeError::ZeroVersion)
+        );
+        assert!(matches!(
+            ApprovalPayload::decode(&payload_with(33..49, &[0; 16])),
+            Err(ApprovalDecodeError::InvalidVaultId(_))
+        ));
     }
 
     #[test]
     fn wrong_magic_and_unknown_format_versions_are_rejected() {
-        assert_eq!(ApprovalPayload::decode(&payload_with(0..1, b"X")), Err(ApprovalDecodeError::BadMagic));
-        assert_eq!(ApprovalPayload::decode(&payload_with(4..5, &[2])), Err(ApprovalDecodeError::UnknownFormatVersion(2)));
+        assert_eq!(
+            ApprovalPayload::decode(&payload_with(0..1, b"X")),
+            Err(ApprovalDecodeError::BadMagic)
+        );
+        assert_eq!(
+            ApprovalPayload::decode(&payload_with(4..5, &[2])),
+            Err(ApprovalDecodeError::UnknownFormatVersion(2))
+        );
         let mut envelope = envelope().encode();
         envelope[4] = 2;
-        assert_eq!(ApprovalEnvelope::decode(&envelope), Err(ApprovalDecodeError::UnknownFormatVersion(2)));
+        assert_eq!(
+            ApprovalEnvelope::decode(&envelope),
+            Err(ApprovalDecodeError::UnknownFormatVersion(2))
+        );
         envelope[0] = b'X';
         assert_eq!(ApprovalEnvelope::decode(&envelope), Err(ApprovalDecodeError::BadMagic));
         assert_eq!(ApprovalEnvelope::decode(&unhex(PAYLOAD_HEX)), Err(ApprovalDecodeError::BadMagic));
@@ -215,7 +239,13 @@ mod tests {
             assert_eq!(decoded, Err(ApprovalDecodeError::UnknownAlgorithm(id)));
         });
         let short = ApprovalEnvelope::decode(&envelope_bytes(1, &payload, &[0x5a; 63]));
-        assert_eq!(short, Err(ApprovalDecodeError::SignatureLength { algorithm: SignatureAlgorithm::Ed25519, len: 63 }));
+        assert_eq!(
+            short,
+            Err(ApprovalDecodeError::SignatureLength {
+                algorithm: SignatureAlgorithm::Ed25519,
+                len: 63
+            })
+        );
     }
 
     #[test]
@@ -223,15 +253,27 @@ mod tests {
         let payload = unhex(PAYLOAD_HEX);
         (0..payload.len()).for_each(|len| {
             let err = ApprovalPayload::decode(&payload[..len]);
-            assert!(matches!(err, Err(ApprovalDecodeError::Truncated | ApprovalDecodeError::LengthPastEnd)), "{len}: {err:?}");
+            assert!(
+                matches!(err, Err(ApprovalDecodeError::Truncated | ApprovalDecodeError::LengthPastEnd)),
+                "{len}: {err:?}"
+            );
         });
         let envelope = envelope().encode();
         (0..envelope.len()).for_each(|len| {
             let err = ApprovalEnvelope::decode(&envelope[..len]);
-            assert!(matches!(err, Err(ApprovalDecodeError::Truncated | ApprovalDecodeError::LengthPastEnd)), "{len}: {err:?}");
+            assert!(
+                matches!(err, Err(ApprovalDecodeError::Truncated | ApprovalDecodeError::LengthPastEnd)),
+                "{len}: {err:?}"
+            );
         });
-        assert_eq!(ApprovalPayload::decode(&[&payload[..], &[0]].concat()), Err(ApprovalDecodeError::TrailingBytes));
-        assert_eq!(ApprovalEnvelope::decode(&[&envelope[..], &[0]].concat()), Err(ApprovalDecodeError::TrailingBytes));
+        assert_eq!(
+            ApprovalPayload::decode(&[&payload[..], &[0]].concat()),
+            Err(ApprovalDecodeError::TrailingBytes)
+        );
+        assert_eq!(
+            ApprovalEnvelope::decode(&[&envelope[..], &[0]].concat()),
+            Err(ApprovalDecodeError::TrailingBytes)
+        );
         let padded_payload = envelope_bytes(1, &[&payload[..], &[0]].concat(), &[0x5a; 64]);
         assert_eq!(ApprovalEnvelope::decode(&padded_payload), Err(ApprovalDecodeError::TrailingBytes));
     }
@@ -239,8 +281,17 @@ mod tests {
     #[test]
     fn oversized_envelopes_are_refused_before_parsing() {
         let huge = vec![0; MAX_APPROVAL_ENVELOPE_LEN + 1];
-        assert_eq!(ApprovalEnvelope::decode(&huge), Err(ApprovalDecodeError::TooLarge { limit: MAX_APPROVAL_ENVELOPE_LEN }));
-        let length_past_end = envelope_bytes(1, &[], &[]).into_iter().take(6).chain(u64::MAX.to_be_bytes()).collect::<Vec<_>>();
+        assert_eq!(
+            ApprovalEnvelope::decode(&huge),
+            Err(ApprovalDecodeError::TooLarge {
+                limit: MAX_APPROVAL_ENVELOPE_LEN
+            })
+        );
+        let length_past_end = envelope_bytes(1, &[], &[])
+            .into_iter()
+            .take(6)
+            .chain(u64::MAX.to_be_bytes())
+            .collect::<Vec<_>>();
         assert_eq!(ApprovalEnvelope::decode(&length_past_end), Err(ApprovalDecodeError::LengthPastEnd));
     }
 

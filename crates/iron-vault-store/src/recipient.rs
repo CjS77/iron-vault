@@ -25,7 +25,10 @@ pub struct RecipientKey {
 
 impl RecipientKey {
     fn from_recipient(recipient: x25519::Recipient) -> Self {
-        Self { encoded: recipient.to_string(), recipient }
+        Self {
+            encoded: recipient.to_string(),
+            recipient,
+        }
     }
 
     /// The `age` recipient, for encryption inside this crate only.
@@ -43,7 +46,9 @@ impl FromStr for RecipientKey {
     type Err = ParseRecipientKeyError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.parse::<x25519::Recipient>().map(Self::from_recipient).map_err(|_| ParseRecipientKeyError)
+        s.parse::<x25519::Recipient>()
+            .map(Self::from_recipient)
+            .map_err(|_| ParseRecipientKeyError)
     }
 }
 
@@ -96,7 +101,10 @@ pub struct RecipientIdentity {
 impl RecipientIdentity {
     /// Parses an `AGE-SECRET-KEY-1…` string. The text stays in the caller's [`SecretString`]; nothing here copies it.
     pub fn parse(text: &SecretString) -> Result<Self, ParseRecipientIdentityError> {
-        text.expose_secret().parse().map(|secret| Self { secret }).map_err(|_| ParseRecipientIdentityError)
+        text.expose_secret()
+            .parse()
+            .map(|secret| Self { secret })
+            .map_err(|_| ParseRecipientIdentityError)
     }
 
     /// The public key this identity unwraps for.
@@ -111,7 +119,9 @@ impl RecipientIdentity {
 
     /// A fresh identity from the operating system's random source.
     pub(crate) fn generate() -> Self {
-        Self { secret: x25519::Identity::generate() }
+        Self {
+            secret: x25519::Identity::generate(),
+        }
     }
 
     /// The identity's `age` secret-key text, `AGE-SECRET-KEY-1…`, in a buffer cleared on drop; the passphrase
@@ -131,7 +141,9 @@ impl RecipientIdentity {
 
 impl fmt::Debug for RecipientIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RecipientIdentity").field("recipient_key", &self.recipient_key()).finish_non_exhaustive()
+        f.debug_struct("RecipientIdentity")
+            .field("recipient_key", &self.recipient_key())
+            .finish_non_exhaustive()
     }
 }
 
@@ -225,9 +237,12 @@ mod tests {
         let secret = x25519::Identity::generate();
         let identity = RecipientIdentity::parse(&secret.to_string()).unwrap();
         assert_eq!(identity.recipient_key().to_string(), secret.to_public().to_string());
-        ["", "age1qqqq", "AGE-SECRET-KEY-1"]
-            .iter()
-            .for_each(|s| assert_eq!(RecipientIdentity::parse(&SecretString::from(*s)).unwrap_err(), ParseRecipientIdentityError));
+        ["", "age1qqqq", "AGE-SECRET-KEY-1"].iter().for_each(|s| {
+            assert_eq!(
+                RecipientIdentity::parse(&SecretString::from(*s)).unwrap_err(),
+                ParseRecipientIdentityError
+            )
+        });
     }
 
     #[test]
@@ -246,7 +261,10 @@ mod tests {
         let [a, b] = <[RecipientKey; 2]>::try_from(keys(2)).unwrap();
         assert_eq!(RecipientSet::new([]), Err(RecipientSetError::TooFew { count: 0 }));
         assert_eq!(RecipientSet::new([a.clone()]), Err(RecipientSetError::TooFew { count: 1 }));
-        assert_eq!(RecipientSet::new([a.clone(), a.clone()]), Err(RecipientSetError::TooFew { count: 1 }));
+        assert_eq!(
+            RecipientSet::new([a.clone(), a.clone()]),
+            Err(RecipientSetError::TooFew { count: 1 })
+        );
         let set = RecipientSet::new([b.clone(), a.clone(), b.clone()]).unwrap();
         assert_eq!(set.len(), 2);
         assert!(set.contains(&a) && set.contains(&b));
@@ -255,7 +273,10 @@ mod tests {
     #[test]
     fn a_set_holds_at_most_the_maximum() {
         assert_eq!(RecipientSet::new(keys(MAX_RECIPIENTS)).map(|set| set.len()), Ok(MAX_RECIPIENTS));
-        assert_eq!(RecipientSet::new(keys(MAX_RECIPIENTS + 1)), Err(RecipientSetError::TooMany { count: MAX_RECIPIENTS + 1 }));
+        assert_eq!(
+            RecipientSet::new(keys(MAX_RECIPIENTS + 1)),
+            Err(RecipientSetError::TooMany { count: MAX_RECIPIENTS + 1 })
+        );
     }
 
     #[test]

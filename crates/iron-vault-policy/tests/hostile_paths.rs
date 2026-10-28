@@ -74,7 +74,10 @@ fn fold(input: &[u8]) -> Vec<u8> {
 }
 
 fn fold_char(c: char) -> String {
-    FOLDS.iter().find(|(look_alike, _)| *look_alike == c).map_or_else(|| c.to_string(), |(_, ascii)| (*ascii).to_owned())
+    FOLDS
+        .iter()
+        .find(|(look_alike, _)| *look_alike == c)
+        .map_or_else(|| c.to_string(), |(_, ascii)| (*ascii).to_owned())
 }
 
 /// The segment as written plus every text reachable from it by percent-decoding and Unicode folding, in any order.
@@ -101,7 +104,10 @@ fn is_inert(reading: &[u8]) -> bool {
 fn check_segments_inert(raw: &str) -> Result<(), TestCaseError> {
     let Ok(target) = RequestTarget::parse(raw) else { return Ok(()) };
     target.path().segments().iter().try_for_each(|segment| {
-        let bad = readings(segment).into_iter().find(|r| !is_inert(r)).map(|r| String::from_utf8_lossy(&r).into_owned());
+        let bad = readings(segment)
+            .into_iter()
+            .find(|r| !is_inert(r))
+            .map(|r| String::from_utf8_lossy(&r).into_owned());
         prop_assert!(bad.is_none(), "{raw:?} kept segment {segment:?}, which reads as {bad:?}");
         Ok(())
     })
@@ -129,12 +135,23 @@ fn check_stays_under_base(raw: &str) -> Result<(), TestCaseError> {
     let Ok(authorized) = request(path) else { return Ok(()) };
     let route = POLICY.route(authorized.route()).unwrap();
     let (prefix, base) = (route.prefix().segments(), route.upstream().base_segments());
-    prop_assert!(path.segments().starts_with(prefix), "{raw:?} selected {} without its whole-segment prefix", authorized.route());
+    prop_assert!(
+        path.segments().starts_with(prefix),
+        "{raw:?} selected {} without its whole-segment prefix",
+        authorized.route()
+    );
     let upstream = authorized.upstream_segments();
-    prop_assert!(upstream.starts_with(base), "{raw:?} left the base path of {}: {upstream:?}", authorized.route());
+    prop_assert!(
+        upstream.starts_with(base),
+        "{raw:?} left the base path of {}: {upstream:?}",
+        authorized.route()
+    );
     let remainder = &upstream[base.len()..];
     prop_assert_eq!(remainder, &path.segments()[prefix.len()..]);
-    prop_assert!(remainder.iter().flat_map(|s| readings(s)).all(|r| is_inert(&r)), "{raw:?} forwards {remainder:?}");
+    prop_assert!(
+        remainder.iter().flat_map(|s| readings(s)).all(|r| is_inert(&r)),
+        "{raw:?} forwards {remainder:?}"
+    );
     prop_assert_eq!(authorized.has_trailing_slash(), path.has_trailing_slash() && !upstream.is_empty());
     Ok(())
 }
@@ -143,7 +160,12 @@ fn check_stays_under_base(raw: &str) -> Result<(), TestCaseError> {
 fn check_route_selection(raw: &str) -> Result<(), TestCaseError> {
     let Ok(target) = RequestTarget::parse(raw) else { return Ok(()) };
     let path = target.path();
-    let matching: Vec<_> = POLICY.config().routes().iter().filter(|(_, r)| path.segments().starts_with(r.prefix().segments())).collect();
+    let matching: Vec<_> = POLICY
+        .config()
+        .routes()
+        .iter()
+        .filter(|(_, r)| path.segments().starts_with(r.prefix().segments()))
+        .collect();
     let selected = match request(path) {
         Ok(authorized) => Some(authorized.route().clone()),
         Err(AuthzError::Forbidden { route, .. } | AuthzError::Unavailable { route }) => Some(route),
@@ -224,7 +246,10 @@ fn hostile_targets_reach_acceptance_and_authorization() {
 #[test]
 fn escape_soup_reaches_accepted_escapes() {
     let samples = sample(escape_soup(), 2000);
-    let accepted = samples.iter().filter(|raw| raw.contains('%') && RequestTarget::parse(raw).is_ok()).count();
+    let accepted = samples
+        .iter()
+        .filter(|raw| raw.contains('%') && RequestTarget::parse(raw).is_ok())
+        .count();
     assert!(accepted >= 100, "only {accepted} of 2000 accepted with an escape");
 }
 
@@ -233,9 +258,25 @@ fn escape_soup_reaches_accepted_escapes() {
 /// rather than segments, and a segment empty before its `;` parameter. Each must keep every invariant.
 #[test]
 fn shrunk_counterexamples_keep_every_invariant() {
-    ["/fx/%252e", "/a/b/%252e/~", "/%2f", "/fx/..", "/fx/%ef%bc%8e", "/fx.evil.example", "/fx/;", "/%20/;"].into_iter().for_each(|raw| {
-        [check_segments_inert, check_idempotent, check_stays_under_base, check_route_selection]
-            .into_iter()
-            .for_each(|check| check(raw).unwrap_or_else(|e| panic!("{raw:?}: {e}")));
+    [
+        "/fx/%252e",
+        "/a/b/%252e/~",
+        "/%2f",
+        "/fx/..",
+        "/fx/%ef%bc%8e",
+        "/fx.evil.example",
+        "/fx/;",
+        "/%20/;",
+    ]
+    .into_iter()
+    .for_each(|raw| {
+        [
+            check_segments_inert,
+            check_idempotent,
+            check_stays_under_base,
+            check_route_selection,
+        ]
+        .into_iter()
+        .for_each(|check| check(raw).unwrap_or_else(|e| panic!("{raw:?}: {e}")));
     });
 }

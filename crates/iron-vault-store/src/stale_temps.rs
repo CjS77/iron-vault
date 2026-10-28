@@ -16,12 +16,19 @@ use crate::{StateDirLock, StateFileName, StoreFs, WriteError, WriteStep};
 pub fn sweep_stale_temps(lock: &StateDirLock, fs: &impl StoreFs) -> Result<Vec<StateFileName>, WriteError> {
     let dir = lock.dir();
     let entries = fs.list_dir(dir).map_err(|e| WriteError::ListStateDir { kind: e.kind() })?;
-    let stale: Vec<StateFileName> = entries.iter().filter_map(|n| n.to_str()).filter_map(StateFileName::from_temp_name).collect();
+    let stale: Vec<StateFileName> = entries
+        .iter()
+        .filter_map(|n| n.to_str())
+        .filter_map(StateFileName::from_temp_name)
+        .collect();
     let Some(first) = stale.first() else {
         return Ok(stale);
     };
     ensure_dir_sync_supported(first)?;
-    stale.iter().try_for_each(|name| fs.remove_file(&dir.join(name.temp_name())).map_err(io_error(WriteStep::Remove, name)))?;
+    stale.iter().try_for_each(|name| {
+        fs.remove_file(&dir.join(name.temp_name()))
+            .map_err(io_error(WriteStep::Remove, name))
+    })?;
     fs.sync_dir(dir).map_err(io_error(WriteStep::SyncDir, first))?;
     Ok(stale)
 }
@@ -45,18 +52,33 @@ mod tests {
     }
 
     /// Entries a sweep must never touch: the lock, state files, other dotfiles and near-miss temp names.
-    const BYSTANDERS: [&str; 9] = ["rec", "a.tmp", ".hidden", ".tmp", "..tmp", ".lock.tmp", ".LOCK.tmp", ".a.TMP", ".a.tmp~"];
+    const BYSTANDERS: [&str; 9] = [
+        "rec",
+        "a.tmp",
+        ".hidden",
+        ".tmp",
+        "..tmp",
+        ".lock.tmp",
+        ".LOCK.tmp",
+        ".a.TMP",
+        ".a.tmp~",
+    ];
 
     #[test]
     fn removes_stale_temps_and_nothing_else() {
         let dir = TestDir::new("sweep-mixed");
         let lock = StateDirLock::acquire(dir.path()).unwrap();
-        BYSTANDERS.iter().chain(&[".rec.tmp", ".a.tmp.tmp"]).for_each(|n| std::fs::write(dir.path().join(n), n).unwrap());
+        BYSTANDERS
+            .iter()
+            .chain(&[".rec.tmp", ".a.tmp.tmp"])
+            .for_each(|n| std::fs::write(dir.path().join(n), n).unwrap());
         assert_eq!(sweep_stale_temps(&lock, &OsFs).unwrap(), [name("a.tmp"), name("rec")]);
         let mut expected: Vec<_> = BYSTANDERS.iter().chain(&["lock"]).map(|n| n.to_string()).collect();
         expected.sort();
         assert_eq!(entries(dir.path()), expected);
-        BYSTANDERS.iter().for_each(|n| assert_eq!(std::fs::read(dir.path().join(n)).unwrap(), n.as_bytes()));
+        BYSTANDERS
+            .iter()
+            .for_each(|n| assert_eq!(std::fs::read(dir.path().join(n)).unwrap(), n.as_bytes()));
     }
 
     #[test]
@@ -98,9 +120,28 @@ mod tests {
         let dir = TestDir::new("sweep-faults");
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         let cases = [
-            (FsOp::ListDir, WriteError::ListStateDir { kind: io::ErrorKind::PermissionDenied }),
-            (FsOp::RemoveFile, WriteError::Io { step: WriteStep::Remove, file: name("rec"), kind: io::ErrorKind::PermissionDenied }),
-            (FsOp::SyncDir, WriteError::Io { step: WriteStep::SyncDir, file: name("rec"), kind: io::ErrorKind::PermissionDenied }),
+            (
+                FsOp::ListDir,
+                WriteError::ListStateDir {
+                    kind: io::ErrorKind::PermissionDenied,
+                },
+            ),
+            (
+                FsOp::RemoveFile,
+                WriteError::Io {
+                    step: WriteStep::Remove,
+                    file: name("rec"),
+                    kind: io::ErrorKind::PermissionDenied,
+                },
+            ),
+            (
+                FsOp::SyncDir,
+                WriteError::Io {
+                    step: WriteStep::SyncDir,
+                    file: name("rec"),
+                    kind: io::ErrorKind::PermissionDenied,
+                },
+            ),
         ];
         cases.into_iter().for_each(|(op, expected)| {
             let fs = FaultFs::new().with_durable_file(&dir.path().join(".rec.tmp"), b"stale");

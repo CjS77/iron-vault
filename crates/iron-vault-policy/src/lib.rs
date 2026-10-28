@@ -33,11 +33,11 @@ pub mod request_target;
 pub mod reserved_headers;
 pub mod route;
 pub mod route_prefix;
+#[cfg(test)]
+mod secret_types_tests;
 pub mod slot;
 pub mod slot_format;
 pub mod slot_value;
-#[cfg(test)]
-mod secret_types_tests;
 #[cfg(test)]
 mod spec_example;
 pub mod token_bucket;

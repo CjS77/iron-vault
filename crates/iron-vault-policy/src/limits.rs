@@ -212,7 +212,10 @@ mod tests {
 
     #[test]
     fn zero_is_rejected_naming_the_field() {
-        assert_eq!(pick("max_header_count", Some(0), 100, 1_000), Err(LimitsError::Zero { field: "max_header_count" }));
+        assert_eq!(
+            pick("max_header_count", Some(0), 100, 1_000),
+            Err(LimitsError::Zero { field: "max_header_count" })
+        );
         let err = parse("[limits]\nmax_header_count = 0").unwrap_err();
         assert!(err.to_string().contains("limits.max_header_count must not be zero"), "{err}");
     }
@@ -222,7 +225,10 @@ mod tests {
         let l = parse("[limits]\nupstream_timeout_secs = 600\nrequest_timeout_secs = 600").unwrap();
         assert_eq!(l.upstream_timeout_secs(), 600);
         let err = parse("[limits]\nupstream_timeout_secs = 601").unwrap_err();
-        assert!(err.to_string().contains("limits.upstream_timeout_secs is 601; the maximum is 600"), "{err}");
+        assert!(
+            err.to_string().contains("limits.upstream_timeout_secs is 601; the maximum is 600"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -230,7 +236,11 @@ mod tests {
         let d = Limits::default();
         assert_eq!(d.upstream_timeout_secs(), d.request_timeout_secs());
         let err = parse("[limits]\nrequest_timeout_secs = 120").unwrap_err();
-        assert!(err.to_string().contains("limits.upstream_timeout_secs (300) must not exceed limits.request_timeout_secs (120)"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("limits.upstream_timeout_secs (300) must not exceed limits.request_timeout_secs (120)"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -8,12 +8,23 @@ use super::{CoreDumps, LockPlan, LockUnavailable, MemoryProtection, memory_lock_
 /// Zeroes the core-size limit and clears the dumpable flag, attempting both even when one fails.
 pub(super) fn disable_core_dumps() -> CoreDumps {
     let failures: Vec<String> = [zero_core_limit(), clear_dumpable()].into_iter().filter_map(Result::err).collect();
-    if failures.is_empty() { CoreDumps::Disabled } else { CoreDumps::Failed(failures.join("; ")) }
+    if failures.is_empty() {
+        CoreDumps::Disabled
+    } else {
+        CoreDumps::Failed(failures.join("; "))
+    }
 }
 
 /// Sets both limits to 0, so nothing in this process can raise the soft limit again, then reads the soft limit back.
 fn zero_core_limit() -> Result<(), String> {
-    setrlimit(Resource::Core, Rlimit { current: Some(0), maximum: Some(0) }).map_err(|e| format!("setting RLIMIT_CORE failed: {e}"))?;
+    setrlimit(
+        Resource::Core,
+        Rlimit {
+            current: Some(0),
+            maximum: Some(0),
+        },
+    )
+    .map_err(|e| format!("setting RLIMIT_CORE failed: {e}"))?;
     match getrlimit(Resource::Core).current {
         Some(0) => Ok(()),
         other => Err(format!("RLIMIT_CORE reads back as {other:?}")),
@@ -63,7 +74,14 @@ mod tests {
         }
         let hard = getrlimit(Resource::Memlock).maximum;
         let soft = hard.map_or(CHILD_MEMLOCK, |hard| hard.min(CHILD_MEMLOCK));
-        setrlimit(Resource::Memlock, Rlimit { current: Some(soft), maximum: hard }).unwrap();
+        setrlimit(
+            Resource::Memlock,
+            Rlimit {
+                current: Some(soft),
+                maximum: hard,
+            },
+        )
+        .unwrap();
         let report = harden_process();
         // The leading newline keeps the first value off the harness's "test ... " line.
         println!();
@@ -80,12 +98,19 @@ mod tests {
             .output()
             .unwrap();
         let stdout = String::from_utf8(output.stdout).unwrap();
-        assert!(output.status.success(), "child failed:\n{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "child failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         stdout
     }
 
     fn field<'a>(stdout: &'a str, key: &str) -> &'a str {
-        stdout.lines().find_map(|line| line.strip_prefix(key)).unwrap_or_else(|| panic!("no {key} in child output:\n{stdout}"))
+        stdout
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .unwrap_or_else(|| panic!("no {key} in child output:\n{stdout}"))
     }
 
     #[test]

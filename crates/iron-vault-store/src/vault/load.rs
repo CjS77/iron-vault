@@ -32,7 +32,10 @@ struct Damage {
 
 impl Damage {
     fn new(damage: RecordDamage, cause: impl fmt::Display) -> Self {
-        Self { damage, cause: cause.to_string() }
+        Self {
+            damage,
+            cause: cause.to_string(),
+        }
     }
 }
 
@@ -43,19 +46,25 @@ pub(super) fn load_records(
     identity: &VaultIdentity,
     manifest: &VaultManifest,
 ) -> (BTreeMap<CredentialName, CredentialRecord>, BTreeMap<CredentialName, RecordDamage>) {
-    let outcomes = manifest.entries().iter().map(|(id, entry)| (*id, entry, load_record(lock, fs, identity, *id, entry)));
-    outcomes.fold((BTreeMap::new(), BTreeMap::new()), |(mut healthy, mut damaged), (id, entry, outcome)| {
-        match outcome {
-            Ok(record) => {
-                healthy.insert(entry.name().clone(), record);
+    let outcomes = manifest
+        .entries()
+        .iter()
+        .map(|(id, entry)| (*id, entry, load_record(lock, fs, identity, *id, entry)));
+    outcomes.fold(
+        (BTreeMap::new(), BTreeMap::new()),
+        |(mut healthy, mut damaged), (id, entry, outcome)| {
+            match outcome {
+                Ok(record) => {
+                    healthy.insert(entry.name().clone(), record);
+                }
+                Err(damage) => {
+                    log_damage(id, entry, &damage);
+                    damaged.insert(entry.name().clone(), damage.damage);
+                }
             }
-            Err(damage) => {
-                log_damage(id, entry, &damage);
-                damaged.insert(entry.name().clone(), damage.damage);
-            }
-        }
-        (healthy, damaged)
-    })
+            (healthy, damaged)
+        },
+    )
 }
 
 /// Reads the record file `entry` vouches for, checks its digest, and only then decrypts, decodes and checks it is the
@@ -75,21 +84,38 @@ fn load_record(
 ) -> Result<CredentialRecord, Damage> {
     let bytes = read_state_file(lock, fs, &StateFileName::record(&id), MAX_RECORD_FILE_LEN).map_err(read_damage)?;
     if record_digest(&bytes) != *entry.file_digest() {
-        return Err(Damage::new(RecordDamage::Substituted, "the file's digest differs from its manifest entry"));
+        return Err(Damage::new(
+            RecordDamage::Substituted,
+            "the file's digest differs from its manifest entry",
+        ));
     }
-    let payload = open(identity, &bytes, MAX_RECORD_PLAINTEXT)
-        .map_err(|e| Damage::new(RecordDamage::Unreadable, format_args!("the file matches its digest but does not decrypt: {e}")))?;
-    let record = decode(&payload)
-        .map_err(|e| Damage::new(RecordDamage::Unreadable, format_args!("the file matches its digest but does not decode: {e}")))?;
+    let payload = open(identity, &bytes, MAX_RECORD_PLAINTEXT).map_err(|e| {
+        Damage::new(
+            RecordDamage::Unreadable,
+            format_args!("the file matches its digest but does not decrypt: {e}"),
+        )
+    })?;
+    let record = decode(&payload).map_err(|e| {
+        Damage::new(
+            RecordDamage::Unreadable,
+            format_args!("the file matches its digest but does not decode: {e}"),
+        )
+    })?;
     match record.id() == id && record.name() == entry.name() {
         true => Ok(record),
-        false => Err(Damage::new(RecordDamage::Substituted, format_args!("the file holds record {} named {}", record.id(), record.name()))),
+        false => Err(Damage::new(
+            RecordDamage::Substituted,
+            format_args!("the file holds record {} named {}", record.id(), record.name()),
+        )),
     }
 }
 
 fn read_damage(error: ReadError) -> Damage {
     match error {
-        ReadError::Io { kind: io::ErrorKind::NotFound, .. } => Damage::new(RecordDamage::Missing, "the file does not exist"),
+        ReadError::Io {
+            kind: io::ErrorKind::NotFound,
+            ..
+        } => Damage::new(RecordDamage::Missing, "the file does not exist"),
         other => Damage::new(RecordDamage::Unreadable, other),
     }
 }

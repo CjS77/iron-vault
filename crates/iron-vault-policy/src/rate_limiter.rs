@@ -100,7 +100,10 @@ impl RateLimiter {
     /// match the configuration needs no rebuild rule of its own.
     pub fn new(policy: &ActivePolicy, now: Instant) -> Self {
         let config = policy.config();
-        let routes = config.routes().iter().map(|(name, route)| (name.clone(), Mutex::new(RouteBuckets::new(config, name, route, now))));
+        let routes = config
+            .routes()
+            .iter()
+            .map(|(name, route)| (name.clone(), Mutex::new(RouteBuckets::new(config, name, route, now))));
         Self { routes: routes.collect() }
     }
 
@@ -110,7 +113,10 @@ impl RateLimiter {
     /// Safe to call from many threads at once: the check and the take happen under the route's lock, so concurrent
     /// requests can never overspend a bucket.
     pub fn charge(&self, caller: &CallerName, route: &RouteName, now: Instant) -> Result<(), ChargeError> {
-        let buckets = self.routes.get(route).ok_or_else(|| ChargeError::UnknownRoute { route: route.clone() })?;
+        let buckets = self
+            .routes
+            .get(route)
+            .ok_or_else(|| ChargeError::UnknownRoute { route: route.clone() })?;
         // A panic elsewhere while holding the lock cannot leave the buckets inconsistent: they are plain numbers
         // updated in single assignments, so the guard is safe to reuse.
         let mut buckets = buckets.lock().unwrap_or_else(PoisonError::into_inner);
@@ -125,14 +131,25 @@ impl RouteBuckets {
             .callers()
             .iter()
             .filter(|(_, caller)| caller.routes().contains(name))
-            .map(|(caller_name, caller)| (caller_name.clone(), caller.rate_limits().get(name).map(|limit| TokenBucket::new(*limit, now))))
+            .map(|(caller_name, caller)| {
+                (
+                    caller_name.clone(),
+                    caller.rate_limits().get(name).map(|limit| TokenBucket::new(*limit, now)),
+                )
+            })
             .collect();
-        Self { route: TokenBucket::new(route.rate_limit(), now), callers }
+        Self {
+            route: TokenBucket::new(route.rate_limit(), now),
+            callers,
+        }
     }
 
     /// Checks both of `caller`'s buckets on this route (`route` names it for errors), then spends from both or neither.
     fn charge(&mut self, caller: &CallerName, route: &RouteName, now: Instant) -> Result<(), ChargeError> {
-        let not_granted = || ChargeError::NotGranted { caller: caller.clone(), route: route.clone() };
+        let not_granted = || ChargeError::NotGranted {
+            caller: caller.clone(),
+            route: route.clone(),
+        };
         let caller_bucket = self.callers.get_mut(caller).ok_or_else(not_granted)?;
         let route_wait = self.route.refill_and_check(now).err();
         let caller_wait = caller_bucket.as_mut().and_then(|bucket| bucket.refill_and_check(now).err());
@@ -186,7 +203,10 @@ mod tests {
         fn entry(&self, _: &CredentialName) -> CatalogEntry {
             let hosts = ["api.fx.example", "api.venice.ai", "api.search.brave.com"];
             let origins = hosts.iter().map(|host| (host.parse().unwrap(), Port::HTTPS)).collect();
-            CatalogEntry::Usable { kind: crate::CredentialKind::Static, origins }
+            CatalogEntry::Usable {
+                kind: crate::CredentialKind::Static,
+                origins,
+            }
         }
     }
 
@@ -246,7 +266,10 @@ routes = ["fx"]
                 .map(|thread| {
                     scope.spawn(move || {
                         start.wait();
-                        (thread..100).step_by(THREADS).filter(|_| limiter.charge(caller, route, now).is_ok()).count()
+                        (thread..100)
+                            .step_by(THREADS)
+                            .filter(|_| limiter.charge(caller, route, now).is_ok())
+                            .count()
                     })
                 })
                 .collect();
@@ -258,7 +281,10 @@ routes = ["fx"]
     fn buckets_start_empty() {
         let t0 = Instant::now();
         let limiter = limiter(SPEC_EXAMPLE, t0);
-        assert_eq!(limiter.routes.keys().map(RouteName::as_str).collect::<Vec<_>>(), ["brave", "fx", "venice"]);
+        assert_eq!(
+            limiter.routes.keys().map(RouteName::as_str).collect::<Vec<_>>(),
+            ["brave", "fx", "venice"]
+        );
         let refused = limited(limiter.charge(&n("fx-mcp"), &n("fx"), t0));
         assert_eq!((refused.limit(), refused.retry_after().as_secs()), (ExhaustedLimit::Route, 1));
     }
@@ -285,7 +311,10 @@ routes = ["fx"]
         let refused = limited(limiter.charge(&n("fx-mcp"), &n("fx"), now));
         assert_eq!((refused.limit(), refused.retry_after().as_secs()), (ExhaustedLimit::Caller, 60));
         assert_eq!(charge_n(&limiter, "fx-other", "fx", now, 10), 7);
-        assert_eq!(limited(limiter.charge(&n("fx-other"), &n("fx"), now)).limit(), ExhaustedLimit::Route);
+        assert_eq!(
+            limited(limiter.charge(&n("fx-other"), &n("fx"), now)).limit(),
+            ExhaustedLimit::Route
+        );
     }
 
     #[test]
@@ -318,10 +347,22 @@ routes = ["fx"]
         let t0 = Instant::now();
         let limiter = limiter(SPEC_EXAMPLE, t0);
         let now = t0 + Duration::from_secs(600);
-        assert_eq!(limiter.charge(&n("fx-mcp"), &n("missing"), now), Err(ChargeError::UnknownRoute { route: n("missing") }));
-        let not_granted = ChargeError::NotGranted { caller: n("naomi-backoffice"), route: n("fx") };
+        assert_eq!(
+            limiter.charge(&n("fx-mcp"), &n("missing"), now),
+            Err(ChargeError::UnknownRoute { route: n("missing") })
+        );
+        let not_granted = ChargeError::NotGranted {
+            caller: n("naomi-backoffice"),
+            route: n("fx"),
+        };
         assert_eq!(limiter.charge(&n("naomi-backoffice"), &n("fx"), now), Err(not_granted));
-        assert_eq!(limiter.charge(&n("nobody"), &n("fx"), now), Err(ChargeError::NotGranted { caller: n("nobody"), route: n("fx") }));
+        assert_eq!(
+            limiter.charge(&n("nobody"), &n("fx"), now),
+            Err(ChargeError::NotGranted {
+                caller: n("nobody"),
+                route: n("fx")
+            })
+        );
         assert_eq!(route_level(&limiter, "fx", now), 10);
     }
 

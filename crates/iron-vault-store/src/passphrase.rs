@@ -185,7 +185,9 @@ pub(crate) fn seal_scrypt_file(secret: &[u8], passphrase: SecretString, log_n: u
     let mut recipient = scrypt::Recipient::new(passphrase);
     recipient.set_work_factor(log_n);
     let encryptor = Encryptor::with_recipients(iter::once(&recipient as &dyn age::Recipient)).map_err(|_| EnvelopeError::Encryption)?;
-    let mut writer = encryptor.wrap_output(Vec::with_capacity(MAX_PASSPHRASE_ENVELOPE_LEN)).map_err(|_| EnvelopeError::Encryption)?;
+    let mut writer = encryptor
+        .wrap_output(Vec::with_capacity(MAX_PASSPHRASE_ENVELOPE_LEN))
+        .map_err(|_| EnvelopeError::Encryption)?;
     std::io::Write::write_all(&mut writer, secret).map_err(|_| EnvelopeError::Encryption)?;
     writer.finish().map_err(|_| EnvelopeError::Encryption)
 }
@@ -208,13 +210,17 @@ pub(crate) fn open_scrypt_file(
     // Belt and braces: `age` enforces the same bound if the header check above were ever loosened.
     identity.set_max_work_factor(MAX_PASSPHRASE_WORK_FACTOR);
     let decryptor = Decryptor::new_buffered(envelope).map_err(map_decrypt_error)?;
-    let reader = decryptor.decrypt(iter::once(&identity as &dyn age::Identity)).map_err(map_decrypt_error)?;
+    let reader = decryptor
+        .decrypt(iter::once(&identity as &dyn age::Identity))
+        .map_err(map_decrypt_error)?;
     read_bounded(reader, max_plaintext, envelope.len()).map_err(|_| EnvelopeError::Malformed)
 }
 
 /// Refuses, from the header alone, anything but one scrypt stanza at an accepted work factor.
 fn check_header(envelope: &[u8]) -> Result<(), EnvelopeError> {
-    let header = parse_header(envelope).filter(|header| header.complete).ok_or(EnvelopeError::Malformed)?;
+    let header = parse_header(envelope)
+        .filter(|header| header.complete)
+        .ok_or(EnvelopeError::Malformed)?;
     if let Some(other) = header.kinds.iter().find(|kind| **kind != StanzaKind::Scrypt) {
         return Err(EnvelopeError::UnexpectedStanza(other.clone()));
     }
@@ -319,7 +325,10 @@ mod tests {
     fn a_wrong_passphrase_is_wrong_passphrase() {
         let (_, envelope) = sealed("correct horse");
         ["correct horsE", "correct horse ", "x"].iter().for_each(|wrong| {
-            assert_eq!(open_passphrase_envelope(&envelope, &passphrase(wrong)).unwrap_err(), EnvelopeError::WrongPassphrase);
+            assert_eq!(
+                open_passphrase_envelope(&envelope, &passphrase(wrong)).unwrap_err(),
+                EnvelopeError::WrongPassphrase
+            );
         });
     }
 
@@ -350,7 +359,11 @@ mod tests {
         let (_, envelope) = sealed("correct horse");
         ["02", "100", "x"].iter().for_each(|log_n| {
             let planted = with_work_factor(&envelope, log_n);
-            assert_eq!(open_passphrase_envelope(&planted, &passphrase("correct horse")).unwrap_err(), EnvelopeError::Malformed, "{log_n}");
+            assert_eq!(
+                open_passphrase_envelope(&planted, &passphrase("correct horse")).unwrap_err(),
+                EnvelopeError::Malformed,
+                "{log_n}"
+            );
         });
     }
 
@@ -358,7 +371,10 @@ mod tests {
     fn an_x25519_file_is_refused_as_an_unexpected_stanza() {
         let keys = [RecipientIdentity::generate().recipient_key()];
         let file = seal_to(keys.iter().map(RecipientKey::as_age), b"not a passphrase file").unwrap();
-        assert_eq!(open_passphrase_envelope(&file, &passphrase("x")).unwrap_err(), EnvelopeError::UnexpectedStanza(StanzaKind::X25519));
+        assert_eq!(
+            open_passphrase_envelope(&file, &passphrase("x")).unwrap_err(),
+            EnvelopeError::UnexpectedStanza(StanzaKind::X25519)
+        );
     }
 
     #[test]
@@ -366,23 +382,43 @@ mod tests {
         let (_, envelope) = sealed("correct horse");
         let mac = envelope.windows(5).position(|w| w == b"\n--- ").unwrap() + 1;
         let planted = [&envelope[..mac], b"-> scrypt AAAAAAAAAAAAAAAAAAAAAA 2\nAAAA\n", &envelope[mac..]].concat();
-        assert_eq!(open_passphrase_envelope(&planted, &passphrase("correct horse")).unwrap_err(), EnvelopeError::Malformed);
+        assert_eq!(
+            open_passphrase_envelope(&planted, &passphrase("correct horse")).unwrap_err(),
+            EnvelopeError::Malformed
+        );
         let planted = [&envelope[..mac], b"-> piv-p256 AAAA\nAAAA\n", &envelope[mac..]].concat();
         let other = StanzaKind::Other("piv-p256".to_owned());
-        assert_eq!(open_passphrase_envelope(&planted, &passphrase("correct horse")).unwrap_err(), EnvelopeError::UnexpectedStanza(other));
+        assert_eq!(
+            open_passphrase_envelope(&planted, &passphrase("correct horse")).unwrap_err(),
+            EnvelopeError::UnexpectedStanza(other)
+        );
     }
 
     #[test]
     fn an_oversized_envelope_is_refused_unread() {
         let (_, envelope) = sealed("correct horse");
         let padded = [envelope.as_slice(), &vec![0; MAX_PASSPHRASE_ENVELOPE_LEN + 1 - envelope.len()]].concat();
-        assert_eq!(open_passphrase_envelope(&padded, &passphrase("correct horse")).unwrap_err(), EnvelopeError::TooLarge);
+        assert_eq!(
+            open_passphrase_envelope(&padded, &passphrase("correct horse")).unwrap_err(),
+            EnvelopeError::TooLarge
+        );
     }
 
     #[test]
     fn non_age_input_is_malformed() {
-        [&b""[..], b"hello\n", b"age-encryption.org/v1\n", b"age-encryption.org/v1\n--- AAAA\n"].iter().for_each(|input| {
-            assert_eq!(open_passphrase_envelope(input, &passphrase("x")).unwrap_err(), EnvelopeError::Malformed, "{input:?}");
+        [
+            &b""[..],
+            b"hello\n",
+            b"age-encryption.org/v1\n",
+            b"age-encryption.org/v1\n--- AAAA\n",
+        ]
+        .iter()
+        .for_each(|input| {
+            assert_eq!(
+                open_passphrase_envelope(input, &passphrase("x")).unwrap_err(),
+                EnvelopeError::Malformed,
+                "{input:?}"
+            );
         });
     }
 
@@ -400,14 +436,21 @@ mod tests {
         assert!(dir.path().join("operational.age").is_file());
         let unlocked = unlock_with_passphrase(&lock, &OsFs, &passphrase("correct horse")).unwrap();
         assert_eq!(unlocked.public_key(), vault.public_key());
-        assert!(!stanza_kinds(&read_identity_envelope(&lock, &OsFs).unwrap()).unwrap().contains(&StanzaKind::Scrypt));
+        assert!(
+            !stanza_kinds(&read_identity_envelope(&lock, &OsFs).unwrap())
+                .unwrap()
+                .contains(&StanzaKind::Scrypt)
+        );
     }
 
     #[test]
     fn unlock_with_a_wrong_passphrase_is_wrong_passphrase() {
         let dir = TestDir::new("passphrase-wrong");
         let (lock, _) = vault_on_disk(&dir, "correct horse");
-        assert_eq!(unlock_with_passphrase(&lock, &OsFs, &passphrase("battery staple")).unwrap_err(), UnlockError::WrongPassphrase);
+        assert_eq!(
+            unlock_with_passphrase(&lock, &OsFs, &passphrase("battery staple")).unwrap_err(),
+            UnlockError::WrongPassphrase
+        );
     }
 
     #[test]
@@ -424,7 +467,10 @@ mod tests {
     fn unlock_without_a_passphrase_envelope_is_a_read_error() {
         let dir = TestDir::new("passphrase-missing");
         let lock = StateDirLock::acquire(dir.path()).unwrap();
-        assert!(matches!(unlock_with_passphrase(&lock, &OsFs, &passphrase("x")), Err(UnlockError::Read(ReadError::Io { .. }))));
+        assert!(matches!(
+            unlock_with_passphrase(&lock, &OsFs, &passphrase("x")),
+            Err(UnlockError::Read(ReadError::Io { .. }))
+        ));
     }
 
     #[test]
@@ -437,7 +483,10 @@ mod tests {
         write_passphrase_envelope(&lock, &OsFs, &resealed).unwrap();
         assert_eq!(read_identity_envelope(&lock, &OsFs).unwrap(), identity_before);
         assert_eq!(unlock_with_passphrase(&lock, &OsFs, &new).unwrap().public_key(), vault.public_key());
-        assert_eq!(unlock_with_passphrase(&lock, &OsFs, &old).unwrap_err(), UnlockError::WrongPassphrase);
+        assert_eq!(
+            unlock_with_passphrase(&lock, &OsFs, &old).unwrap_err(),
+            UnlockError::WrongPassphrase
+        );
     }
 
     #[test]

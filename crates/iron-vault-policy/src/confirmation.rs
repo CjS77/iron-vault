@@ -44,6 +44,8 @@ mod tests {
 
     #[test]
     fn unknown_values_are_rejected() {
-        ["\"Touch\"", "\"pin\"", "\"\"", "true"].iter().for_each(|v| assert!(parse(&format!("confirm = {v}")).is_err(), "{v}"));
+        ["\"Touch\"", "\"pin\"", "\"\"", "true"]
+            .iter()
+            .for_each(|v| assert!(parse(&format!("confirm = {v}")).is_err(), "{v}"));
     }
 }

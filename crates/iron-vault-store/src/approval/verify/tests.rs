@@ -30,7 +30,9 @@ fn pinned(seed: [u8; 32]) -> PinnedApprover {
 /// The `config.toml.sig` bytes for `payload`, signed by the key with `seed`.
 fn sign(seed: [u8; 32], payload: ApprovalPayload) -> Vec<u8> {
     let signature = signing_key(seed).sign(&payload.encode()).to_bytes().to_vec();
-    ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, payload, signature).unwrap().encode()
+    ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, payload, signature)
+        .unwrap()
+        .encode()
 }
 
 /// An approval state in a real state directory on an in-memory file system, changed only through its own operations.
@@ -48,7 +50,13 @@ impl Vault {
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         let (fs, identity) = (FaultFs::new(), VaultIdentity::from_secret(KAT_IDENTITY));
         let state = ApprovalState::create(&lock, &fs, &identity, VaultId::new_random(), pinned(APPROVER_SEED)).unwrap();
-        Self { _dir: dir, lock, fs, identity, state }
+        Self {
+            _dir: dir,
+            lock,
+            fs,
+            identity,
+            state,
+        }
     }
 
     /// Reserves the next version and returns the envelope signing `config(v)` as it, without committing it.
@@ -60,7 +68,9 @@ impl Vault {
     /// Reserves, signs and commits the next version, returning its envelope: one completed approval.
     fn approve_next(&mut self) -> Vec<u8> {
         let (v, envelope) = self.sign_next();
-        self.state.commit(&self.lock, &self.fs, &self.identity, v, ConfigDigest::of(&config(v.get()))).unwrap();
+        self.state
+            .commit(&self.lock, &self.fs, &self.identity, v, ConfigDigest::of(&config(v.get())))
+            .unwrap();
         envelope
     }
 
@@ -107,7 +117,9 @@ fn wrong_algorithm_byte_is_refused() {
     envelope[5] = crate::RESERVED_ECDSA_P256_ID;
     assert_eq!(
         vault.verify(&config(1), &envelope),
-        Err(VerifyError::Malformed(ApprovalDecodeError::UnknownAlgorithm(crate::RESERVED_ECDSA_P256_ID)))
+        Err(VerifyError::Malformed(ApprovalDecodeError::UnknownAlgorithm(
+            crate::RESERVED_ECDSA_P256_ID
+        )))
     );
 }
 
@@ -142,7 +154,10 @@ fn edited_payload_fails_on_the_signature_first() {
 fn approval_for_another_vault_is_refused() {
     let (vault, _) = Vault::approved("verify-vault", 1);
     let payload = ApprovalPayload::new(VaultId::new_random(), version(1), ConfigDigest::of(&config(1)));
-    assert_eq!(vault.verify(&config(1), &sign(APPROVER_SEED, payload)), Err(VerifyError::WrongVault));
+    assert_eq!(
+        vault.verify(&config(1), &sign(APPROVER_SEED, payload)),
+        Err(VerifyError::WrongVault)
+    );
 }
 
 #[test]
@@ -159,14 +174,23 @@ fn any_changed_config_byte_is_refused() {
 fn nothing_committed_is_refused() {
     let mut vault = Vault::new("verify-nothing");
     let (_, envelope) = vault.sign_next();
-    assert_eq!(vault.verify(&config(1), &envelope), Err(VerifyError::NothingCommitted { version: version(1) }));
+    assert_eq!(
+        vault.verify(&config(1), &envelope),
+        Err(VerifyError::NothingCommitted { version: version(1) })
+    );
 }
 
 #[test]
 fn superseded_pair_is_refused() {
     let (vault, envelopes) = Vault::approved("verify-superseded", 5);
     let refused = vault.verify(&config(3), &envelopes[2]);
-    assert_eq!(refused, Err(VerifyError::Superseded { version: version(3), committed: version(5) }));
+    assert_eq!(
+        refused,
+        Err(VerifyError::Superseded {
+            version: version(3),
+            committed: version(5)
+        })
+    );
     assert!(refused.unwrap_err().to_string().contains("version 3, but version 5 is committed"));
 }
 
@@ -175,7 +199,13 @@ fn signed_but_uncommitted_pair_is_refused() {
     let (mut vault, _) = Vault::approved("verify-uncommitted", 5);
     let (v, envelope) = vault.sign_next();
     assert_eq!(v, version(6));
-    assert_eq!(vault.verify(&config(6), &envelope), Err(VerifyError::Uncommitted { version: version(6), committed: version(5) }));
+    assert_eq!(
+        vault.verify(&config(6), &envelope),
+        Err(VerifyError::Uncommitted {
+            version: version(6),
+            committed: version(5)
+        })
+    );
 }
 
 /// Only a misbehaving signer signs one version twice, but the committed digest still decides.
@@ -183,8 +213,14 @@ fn signed_but_uncommitted_pair_is_refused() {
 fn committed_version_with_another_digest_is_refused() {
     let (vault, _) = Vault::approved("verify-digest", 1);
     let other = b"a config signed as version 1 but never committed";
-    let envelope = sign(APPROVER_SEED, ApprovalPayload::new(vault.state.vault_id(), version(1), ConfigDigest::of(other)));
-    assert_eq!(vault.verify(other, &envelope), Err(VerifyError::DigestNotCommitted { version: version(1) }));
+    let envelope = sign(
+        APPROVER_SEED,
+        ApprovalPayload::new(vault.state.vault_id(), version(1), ConfigDigest::of(other)),
+    );
+    assert_eq!(
+        vault.verify(other, &envelope),
+        Err(VerifyError::DigestNotCommitted { version: version(1) })
+    );
 }
 
 /// The release check (spec §3.15): after approving v2, putting v1's config and signature back fails.
@@ -195,7 +231,13 @@ fn restored_older_config_and_signature_fail_after_a_newer_approval() {
     assert!(vault.verify(&config(1), &v1).is_ok());
     let v2 = vault.approve_next();
     assert!(vault.verify(&config(2), &v2).is_ok());
-    assert_eq!(vault.verify(&config(1), &v1), Err(VerifyError::Superseded { version: version(1), committed: version(2) }));
+    assert_eq!(
+        vault.verify(&config(1), &v1),
+        Err(VerifyError::Superseded {
+            version: version(1),
+            committed: version(2)
+        })
+    );
 }
 
 #[test]

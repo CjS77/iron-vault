@@ -61,14 +61,21 @@ mod tests {
     #[test]
     fn display_is_lowercase_hyphenated() {
         let bytes = *Uuid::parse_str("7c9e6679-7425-40de-944b-e07fc1f90ae7").unwrap().as_bytes();
-        assert_eq!(VaultId::from_bytes(bytes).unwrap().to_string(), "7c9e6679-7425-40de-944b-e07fc1f90ae7");
+        assert_eq!(
+            VaultId::from_bytes(bytes).unwrap().to_string(),
+            "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+        );
     }
 
     #[test]
     fn non_random_uuids_are_rejected() {
-        ["00000000-0000-0000-0000-000000000000", "7c9e6679-7425-10de-944b-e07fc1f90ae7", "7c9e6679-7425-40de-c44b-e07fc1f90ae7"]
-            .into_iter()
-            .map(|text| *Uuid::parse_str(text).unwrap().as_bytes())
-            .for_each(|bytes| assert_eq!(VaultId::from_bytes(bytes), Err(VaultIdError::NotVersion4)));
+        [
+            "00000000-0000-0000-0000-000000000000",
+            "7c9e6679-7425-10de-944b-e07fc1f90ae7",
+            "7c9e6679-7425-40de-c44b-e07fc1f90ae7",
+        ]
+        .into_iter()
+        .map(|text| *Uuid::parse_str(text).unwrap().as_bytes())
+        .for_each(|bytes| assert_eq!(VaultId::from_bytes(bytes), Err(VaultIdError::NotVersion4)));
     }
 }

@@ -17,5 +17,8 @@ fn reports_missing_swap_protection_on_stderr() {
         .lines()
         .find(|line| line.contains("ERROR") && line.contains("swap protection is not in effect"))
         .unwrap_or_else(|| panic!("no swap protection ERROR line in stderr: {stderr}"));
-    assert!(error_line.contains("LimitMEMLOCK=infinity"), "line does not name the fix: {error_line}");
+    assert!(
+        error_line.contains("LimitMEMLOCK=infinity"),
+        "line does not name the fix: {error_line}"
+    );
 }

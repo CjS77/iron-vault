@@ -70,7 +70,9 @@ impl TrustedPathReport {
             rule,
             path,
         });
-        Self { entries: std::iter::once(binary_entry(paths.profile, paths.owner)).chain(entries).collect() }
+        Self {
+            entries: std::iter::once(binary_entry(paths.profile, paths.owner)).chain(entries).collect(),
+        }
     }
 }
 
@@ -91,8 +93,15 @@ fn binary_entry(profile: Profile, owner: ExpectedOwner) -> TrustedPathEntry {
             TrustedPathEntry { rule, path, outcome }
         }
         Err(e) => {
-            let outcome = Err(PathFailure::Uncollected(CollectError::Io { path: PathBuf::new(), kind: e.kind() }));
-            TrustedPathEntry { rule, path: PathBuf::new(), outcome }
+            let outcome = Err(PathFailure::Uncollected(CollectError::Io {
+                path: PathBuf::new(),
+                kind: e.kind(),
+            }));
+            TrustedPathEntry {
+                rule,
+                path: PathBuf::new(),
+                outcome,
+            }
         }
     }
 }

@@ -96,7 +96,10 @@ pub fn unwrap_identity(envelope: &[u8], recipient: &RecipientIdentity) -> Result
 ///
 /// A file that is not `age` v1, or whose header is cut off before its MAC line, is [`EnvelopeError::Malformed`].
 pub fn stanza_kinds(file: &[u8]) -> Result<Vec<StanzaKind>, EnvelopeError> {
-    parse_header(file).filter(|header| header.complete).map(|header| header.kinds).ok_or(EnvelopeError::Malformed)
+    parse_header(file)
+        .filter(|header| header.complete)
+        .map(|header| header.kinds)
+        .ok_or(EnvelopeError::Malformed)
 }
 
 /// Durably replaces `identity.age` with `envelope`.
@@ -111,7 +114,10 @@ pub fn read_identity_envelope(lock: &StateDirLock, fs: &impl StoreFs) -> Result<
 
 /// Refuses the first stanza that is neither X25519 nor `age`'s inert grease stanza.
 fn check_x25519_only(kinds: &[StanzaKind]) -> Result<(), EnvelopeError> {
-    kinds.iter().find(|kind| !kind.is_x25519_or_grease()).map_or(Ok(()), |kind| Err(EnvelopeError::UnexpectedStanza(kind.clone())))
+    kinds
+        .iter()
+        .find(|kind| !kind.is_x25519_or_grease())
+        .map_or(Ok(()), |kind| Err(EnvelopeError::UnexpectedStanza(kind.clone())))
 }
 
 /// Maps a sealed-file failure onto the envelope's errors. Plaintext longer than a secret text is not an identity.
@@ -179,7 +185,10 @@ mod tests {
     #[test]
     fn an_unlisted_recipient_is_not_a_recipient() {
         let (_, _, envelope) = wrapped(2);
-        assert_eq!(unwrap_identity(&envelope, &RecipientIdentity::generate()).unwrap_err(), EnvelopeError::NotARecipient);
+        assert_eq!(
+            unwrap_identity(&envelope, &RecipientIdentity::generate()).unwrap_err(),
+            EnvelopeError::NotARecipient
+        );
     }
 
     #[test]
@@ -226,7 +235,10 @@ mod tests {
     fn a_scrypt_stanza_beside_x25519_is_refused() {
         let (_, recipients, envelope) = wrapped(2);
         let planted = with_stanza(&envelope, b"-> scrypt AAAAAAAAAAAAAAAAAAAAAA 30\nAAAA\n");
-        assert_eq!(unwrap_identity(&planted, &recipients[0]).unwrap_err(), EnvelopeError::UnexpectedStanza(StanzaKind::Scrypt));
+        assert_eq!(
+            unwrap_identity(&planted, &recipients[0]).unwrap_err(),
+            EnvelopeError::UnexpectedStanza(StanzaKind::Scrypt)
+        );
     }
 
     #[test]
@@ -234,7 +246,10 @@ mod tests {
         let (_, recipients, envelope) = wrapped(2);
         let planted = with_stanza(&envelope, b"-> piv-p256 AAAA\nAAAA\n");
         let other = StanzaKind::Other("piv-p256".to_owned());
-        assert_eq!(unwrap_identity(&planted, &recipients[0]).unwrap_err(), EnvelopeError::UnexpectedStanza(other));
+        assert_eq!(
+            unwrap_identity(&planted, &recipients[0]).unwrap_err(),
+            EnvelopeError::UnexpectedStanza(other)
+        );
     }
 
     #[test]
@@ -247,8 +262,18 @@ mod tests {
     #[test]
     fn an_envelope_of_something_other_than_an_identity_is_malformed() {
         let recipients = [RecipientIdentity::generate(), RecipientIdentity::generate()];
-        let keys = recipients.iter().map(RecipientIdentity::recipient_key).collect::<Vec<RecipientKey>>();
-        [&b""[..], b"AGE-SECRET-KEY-1", &[b'A'; SECRET_TEXT_LEN], &[b'A'; SECRET_TEXT_LEN + 1]].iter().for_each(|plaintext| {
+        let keys = recipients
+            .iter()
+            .map(RecipientIdentity::recipient_key)
+            .collect::<Vec<RecipientKey>>();
+        [
+            &b""[..],
+            b"AGE-SECRET-KEY-1",
+            &[b'A'; SECRET_TEXT_LEN],
+            &[b'A'; SECRET_TEXT_LEN + 1],
+        ]
+        .iter()
+        .for_each(|plaintext| {
             let envelope = seal_to(keys.iter().map(RecipientKey::as_age), plaintext).unwrap();
             assert_eq!(unwrap_identity(&envelope, &recipients[0]).unwrap_err(), EnvelopeError::Malformed);
         });
@@ -257,9 +282,20 @@ mod tests {
     #[test]
     fn non_age_input_is_malformed() {
         let recipient = RecipientIdentity::generate();
-        [&b""[..], b"hello\n", b"age-encryption.org/v1\n", b"-----BEGIN AGE ENCRYPTED FILE-----\n"].iter().for_each(|input| {
+        [
+            &b""[..],
+            b"hello\n",
+            b"age-encryption.org/v1\n",
+            b"-----BEGIN AGE ENCRYPTED FILE-----\n",
+        ]
+        .iter()
+        .for_each(|input| {
             assert_eq!(stanza_kinds(input), Err(EnvelopeError::Malformed), "{input:?}");
-            assert_eq!(unwrap_identity(input, &recipient).unwrap_err(), EnvelopeError::Malformed, "{input:?}");
+            assert_eq!(
+                unwrap_identity(input, &recipient).unwrap_err(),
+                EnvelopeError::Malformed,
+                "{input:?}"
+            );
         });
     }
 

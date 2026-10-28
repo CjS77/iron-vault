@@ -103,9 +103,13 @@ mod tests {
 
     #[test]
     fn non_random_uuids_are_rejected() {
-        ["00000000-0000-0000-0000-000000000000", "7c9e6679-7425-10de-944b-e07fc1f90ae7", "7c9e6679-7425-40de-c44b-e07fc1f90ae7"]
-            .into_iter()
-            .for_each(|text| assert_eq!(text.parse::<RecordId>(), Err(RecordIdError::NotVersion4), "{text:?}"));
+        [
+            "00000000-0000-0000-0000-000000000000",
+            "7c9e6679-7425-10de-944b-e07fc1f90ae7",
+            "7c9e6679-7425-40de-c44b-e07fc1f90ae7",
+        ]
+        .into_iter()
+        .for_each(|text| assert_eq!(text.parse::<RecordId>(), Err(RecordIdError::NotVersion4), "{text:?}"));
         assert_eq!(RecordId::from_bytes([0; 16]), Err(RecordIdError::NotVersion4));
     }
 }

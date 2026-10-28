@@ -152,7 +152,10 @@ fn check_methods(methods: &[Method]) -> Result<(), RouteError> {
         return Err(RouteError::NoMethods);
     }
     let mut seen = BTreeSet::new();
-    methods.iter().find(|method| !seen.insert(**method)).map_or(Ok(()), |method| Err(RouteError::DuplicateMethod { method: *method }))
+    methods
+        .iter()
+        .find(|method| !seen.insert(**method))
+        .map_or(Ok(()), |method| Err(RouteError::DuplicateMethod { method: *method }))
 }
 
 #[cfg(test)]
@@ -179,7 +182,10 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
     }
 
     fn without(key: &str) -> String {
-        FX.lines().filter(|line| !line.starts_with(&format!("{key} ="))).collect::<Vec<_>>().join("\n")
+        FX.lines()
+            .filter(|line| !line.starts_with(&format!("{key} =")))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[test]
@@ -218,7 +224,10 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
     #[test]
     fn methods_must_be_non_empty_and_unique() {
         rejected(&format!("{}\nmethods = []", without("methods")), "at least one method");
-        rejected(&format!("{}\nmethods = [\"GET\", \"POST\", \"GET\"]", without("methods")), "method GET more than once");
+        rejected(
+            &format!("{}\nmethods = [\"GET\", \"POST\", \"GET\"]", without("methods")),
+            "method GET more than once",
+        );
         rejected(&format!("{}\nmethods = [\"CONNECT\"]", without("methods")), "CONNECT");
     }
 

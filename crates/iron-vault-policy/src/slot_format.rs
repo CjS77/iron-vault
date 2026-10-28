@@ -61,7 +61,10 @@ impl SlotFormat {
 
     /// `Basic {}`, the format a Basic slot writes; built directly because a constant cannot fail to parse.
     pub(crate) fn basic() -> Self {
-        Self { prefix: "Basic ".to_owned(), suffix: String::new() }
+        Self {
+            prefix: "Basic ".to_owned(),
+            suffix: String::new(),
+        }
     }
 }
 
@@ -72,11 +75,16 @@ impl TryFrom<&str> for SlotFormat {
         if let Some(found) = s.chars().find(|c| !(' '..='~').contains(c)) {
             return Err(SlotFormatError::InvalidChar { format: quoted(s), found });
         }
-        let (prefix, suffix) = s.split_once(PLACEHOLDER).ok_or_else(|| SlotFormatError::MissingPlaceholder(quoted(s)))?;
+        let (prefix, suffix) = s
+            .split_once(PLACEHOLDER)
+            .ok_or_else(|| SlotFormatError::MissingPlaceholder(quoted(s)))?;
         if prefix.contains(['{', '}']) || suffix.contains(['{', '}']) {
             return Err(SlotFormatError::ExtraBrace(quoted(s)));
         }
-        Ok(Self { prefix: prefix.to_owned(), suffix: suffix.to_owned() })
+        Ok(Self {
+            prefix: prefix.to_owned(),
+            suffix: suffix.to_owned(),
+        })
     }
 }
 
@@ -129,9 +137,12 @@ mod tests {
 
     #[test]
     fn rejects_missing_placeholder() {
-        ["", "Bearer", "Bearer { }"]
-            .iter()
-            .for_each(|s| assert!(matches!(SlotFormat::try_from(*s), Err(SlotFormatError::MissingPlaceholder(_))), "{s:?}"));
+        ["", "Bearer", "Bearer { }"].iter().for_each(|s| {
+            assert!(
+                matches!(SlotFormat::try_from(*s), Err(SlotFormatError::MissingPlaceholder(_))),
+                "{s:?}"
+            )
+        });
     }
 
     #[test]
@@ -143,9 +154,22 @@ mod tests {
 
     #[test]
     fn rejects_control_and_non_ascii_characters() {
-        ["x\r\ny: {}", "Bearer {}\n", "Bearer\t{}", "Bearer {}\0", "{}\u{7f}", "{}\u{85}", "Bé {}"]
-            .iter()
-            .for_each(|s| assert!(matches!(SlotFormat::try_from(*s), Err(SlotFormatError::InvalidChar { .. })), "{s:?}"));
+        [
+            "x\r\ny: {}",
+            "Bearer {}\n",
+            "Bearer\t{}",
+            "Bearer {}\0",
+            "{}\u{7f}",
+            "{}\u{85}",
+            "Bé {}",
+        ]
+        .iter()
+        .for_each(|s| {
+            assert!(
+                matches!(SlotFormat::try_from(*s), Err(SlotFormatError::InvalidChar { .. })),
+                "{s:?}"
+            )
+        });
     }
 
     #[test]

@@ -91,9 +91,14 @@ mod tests {
 
     #[test]
     fn spec_examples_parse() {
-        ["/run/iron-vault/proxy.sock", "/etc/iron-vault/tls/server.crt", "/etc/iron-vault/tls/server.key", "/"]
-            .iter()
-            .for_each(|s| assert_eq!(s.parse::<ConfigPath>().unwrap().as_path(), Path::new(s)));
+        [
+            "/run/iron-vault/proxy.sock",
+            "/etc/iron-vault/tls/server.crt",
+            "/etc/iron-vault/tls/server.key",
+            "/",
+        ]
+        .iter()
+        .for_each(|s| assert_eq!(s.parse::<ConfigPath>().unwrap().as_path(), Path::new(s)));
     }
 
     #[test]
@@ -105,9 +110,12 @@ mod tests {
 
     #[test]
     fn parent_components_are_rejected() {
-        ["/etc/iron-vault/../shadow", "/..", "/run/iron-vault/.."]
-            .iter()
-            .for_each(|s| assert!(matches!(ConfigPath::try_from(*s), Err(ConfigPathError::ParentComponent { .. })), "{s:?}"));
+        ["/etc/iron-vault/../shadow", "/..", "/run/iron-vault/.."].iter().for_each(|s| {
+            assert!(
+                matches!(ConfigPath::try_from(*s), Err(ConfigPathError::ParentComponent { .. })),
+                "{s:?}"
+            )
+        });
     }
 
     #[test]

@@ -111,7 +111,10 @@ pub fn verify_approval(state: &ApprovalState, config: &[u8], envelope: &[u8]) ->
         return Err(VerifyError::ConfigChanged);
     }
     check_committed(state.committed(), payload.version(), payload.digest())?;
-    Ok(VerifiedApproval { version: payload.version(), digest: payload.digest() })
+    Ok(VerifiedApproval {
+        version: payload.version(),
+        digest: payload.digest(),
+    })
 }
 
 /// Checks the envelope's algorithm and signature against `approver`, never against anything in the envelope itself.

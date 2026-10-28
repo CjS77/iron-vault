@@ -141,12 +141,18 @@ impl FaultFs {
 
     /// Makes call number `n` (counting from 0) fail with `kind`.
     pub fn fail_call(&self, n: usize, kind: io::ErrorKind) {
-        self.state.borrow_mut().faults.push(Fault { trigger: Trigger::Call(n), kind });
+        self.state.borrow_mut().faults.push(Fault {
+            trigger: Trigger::Call(n),
+            kind,
+        });
     }
 
     /// Makes the first call to `op` from now on fail with `kind`.
     pub fn fail_first(&self, op: FsOp, kind: io::ErrorKind) {
-        self.state.borrow_mut().faults.push(Fault { trigger: Trigger::FirstOf(op), kind });
+        self.state.borrow_mut().faults.push(Fault {
+            trigger: Trigger::FirstOf(op),
+            kind,
+        });
     }
 
     /// Cuts the power after `k` calls: call number `k` and every later one fails and changes nothing, until
@@ -207,12 +213,18 @@ impl State {
     }
 
     fn inode_at(&self, path: &Path) -> io::Result<usize> {
-        self.visible.get(path).copied().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))
+        self.visible
+            .get(path)
+            .copied()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))
     }
 
     fn data_at(&self, path: &Path) -> io::Result<&[u8]> {
         let inode = self.inode_at(path)?;
-        self.inodes.get(inode).map(|i| i.data.as_slice()).ok_or_else(|| io::Error::other("unknown file handle"))
+        self.inodes
+            .get(inode)
+            .map(|i| i.data.as_slice())
+            .ok_or_else(|| io::Error::other("unknown file handle"))
     }
 
     fn inode_mut(&mut self, inode: usize) -> io::Result<&mut Inode> {
@@ -230,7 +242,10 @@ impl StoreFs for FaultFs {
             }
             let inode = st.new_inode(Vec::new(), Vec::new());
             st.visible.insert(path.to_path_buf(), inode);
-            Ok(FaultFile { inode, path: path.to_path_buf() })
+            Ok(FaultFile {
+                inode,
+                path: path.to_path_buf(),
+            })
         })
     }
 
@@ -250,12 +265,18 @@ impl StoreFs for FaultFs {
     }
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        self.call(FsCall::Rename { from: from.to_path_buf(), to: to.to_path_buf() }, |st| {
-            let inode = st.inode_at(from)?;
-            st.visible.remove(from);
-            st.visible.insert(to.to_path_buf(), inode);
-            Ok(())
-        })
+        self.call(
+            FsCall::Rename {
+                from: from.to_path_buf(),
+                to: to.to_path_buf(),
+            },
+            |st| {
+                let inode = st.inode_at(from)?;
+                st.visible.remove(from);
+                st.visible.insert(to.to_path_buf(), inode);
+                Ok(())
+            },
+        )
     }
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
@@ -269,7 +290,12 @@ impl StoreFs for FaultFs {
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         self.call(FsCall::SyncDir(dir.to_path_buf()), |st| {
             st.durable.retain(|path, _| path.parent() != Some(dir));
-            let entries: Vec<_> = st.visible.iter().filter(|(path, _)| path.parent() == Some(dir)).map(|(p, &i)| (p.clone(), i)).collect();
+            let entries: Vec<_> = st
+                .visible
+                .iter()
+                .filter(|(path, _)| path.parent() == Some(dir))
+                .map(|(p, &i)| (p.clone(), i))
+                .collect();
             st.durable.extend(entries);
             Ok(())
         })
@@ -288,7 +314,10 @@ impl StoreFs for FaultFs {
             let data = st.data_at(path)?;
             match u64::try_from(data.len()) {
                 Ok(len) if len <= max_len => Ok(data.to_vec()),
-                _ => Err(io::Error::new(io::ErrorKind::FileTooLarge, format!("file is longer than {max_len} bytes"))),
+                _ => Err(io::Error::new(
+                    io::ErrorKind::FileTooLarge,
+                    format!("file is longer than {max_len} bytes"),
+                )),
             }
         })
     }
@@ -314,7 +343,9 @@ mod tests {
 
     #[test]
     fn rename_without_dir_sync_is_undone_by_crash() {
-        let fs = FaultFs::new().with_durable_file(&p("/d/a"), b"old").with_durable_file(&p("/d/b"), b"new");
+        let fs = FaultFs::new()
+            .with_durable_file(&p("/d/a"), b"old")
+            .with_durable_file(&p("/d/b"), b"new");
         fs.rename(&p("/d/b"), &p("/d/a")).unwrap();
         assert_eq!(fs.contents(&p("/d/a")).unwrap(), b"new");
         fs.crash();
@@ -369,7 +400,10 @@ mod tests {
 
     #[test]
     fn list_dir_is_sorted_and_flat() {
-        let fs = FaultFs::new().with_durable_file(&p("/d/c"), b"").with_durable_file(&p("/d/a"), b"").with_durable_file(&p("/e/b"), b"");
+        let fs = FaultFs::new()
+            .with_durable_file(&p("/d/c"), b"")
+            .with_durable_file(&p("/d/a"), b"")
+            .with_durable_file(&p("/e/b"), b"");
         assert_eq!(fs.list_dir(&p("/d")).unwrap(), ["a", "c"]);
     }
 

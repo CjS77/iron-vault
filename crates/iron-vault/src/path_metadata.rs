@@ -82,7 +82,9 @@ pub fn ensure_running_binary(_path: &Path) -> Result<(), CollectError> {
 /// The invoking user, who is the expected owner in a development deployment.
 #[cfg(target_os = "linux")]
 pub fn invoking_user() -> Result<ExpectedOwner, CollectError> {
-    Ok(ExpectedOwner { uid: rustix::process::getuid().as_raw() })
+    Ok(ExpectedOwner {
+        uid: rustix::process::getuid().as_raw(),
+    })
 }
 
 /// Reports that this platform cannot name the invoking user yet.

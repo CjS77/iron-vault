@@ -118,7 +118,10 @@ mod tests {
         assert_eq!(HeaderValue::try_from("a\rb"), Err(HeaderValueError::CarriageReturn));
         assert_eq!(HeaderValue::try_from("a\nb"), Err(HeaderValueError::LineFeed));
         assert_eq!(HeaderValue::try_from("a\0b"), Err(HeaderValueError::Nul));
-        assert_eq!(HeaderValue::try_from("x\r\nHost: evil.example"), Err(HeaderValueError::CarriageReturn));
+        assert_eq!(
+            HeaderValue::try_from("x\r\nHost: evil.example"),
+            Err(HeaderValueError::CarriageReturn)
+        );
     }
 
     #[test]

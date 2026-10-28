@@ -18,7 +18,9 @@ const KIND: MacFileKind<ApprovalStateError> = MacFileKind {
     persona: b"iv-approval-v1",
     domain_tag: b"iron-vault approval file v1 mac\0",
     max_len: MAX_APPROVAL_STATE_LEN,
-    too_large: ApprovalStateError::TooLarge { limit: MAX_APPROVAL_STATE_LEN },
+    too_large: ApprovalStateError::TooLarge {
+        limit: MAX_APPROVAL_STATE_LEN,
+    },
     truncated: ApprovalStateError::Format(ApprovalDecodeError::Truncated),
     bad_magic: ApprovalStateError::Format(ApprovalDecodeError::BadMagic),
     unknown_version: |version| ApprovalDecodeError::UnknownFormatVersion(version).into(),
@@ -70,7 +72,10 @@ mod tests {
     const KAT_TAG: &str = "432bf6223d8cfcab01ea4ba4f7e3757ed426bb724c440ccbf42d2ecdeca76e3f";
 
     fn unhex(hex: &str) -> Vec<u8> {
-        (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect()
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     fn hex(bytes: &[u8]) -> String {
@@ -88,9 +93,14 @@ mod tests {
     /// A state with a committed approval, so every payload field is present.
     fn state(vault_id: VaultId) -> ApprovalState {
         let approver = PinnedApprover::from_signing_key(&ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]));
-        ApprovalState::from_parts(vault_id, approver, 3, ApprovalVersion::new(2).map(|v| (v, ConfigDigest::of(b"config")))).unwrap()
+        ApprovalState::from_parts(
+            vault_id,
+            approver,
+            3,
+            ApprovalVersion::new(2).map(|v| (v, ConfigDigest::of(b"config"))),
+        )
+        .unwrap()
     }
-
 
     /// A file with the given header vault ID and payload, MACed under `key`: what anyone could build who holds the
     /// vault public key, plus whatever key they claim.
@@ -109,14 +119,21 @@ mod tests {
         assert_eq!(hex(&*identity.derive_key(APPROVAL_KEY_PERSONA)), KAT_APPROVAL_KEY);
         let key: [u8; 64] = unhex(KAT_APPROVAL_KEY).try_into().unwrap();
         let signed = unhex(KAT_SIGNED);
-        assert_eq!(&signed[..HEADER_LEN], [&FILE_MAGIC[..], &[FILE_VERSION], &unhex("3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b")].concat());
+        assert_eq!(
+            &signed[..HEADER_LEN],
+            [&FILE_MAGIC[..], &[FILE_VERSION], &unhex("3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b")].concat()
+        );
         assert_eq!(hex(&keyed_mac(&key, &signed).finalize().into_bytes()), KAT_TAG);
     }
 
     #[test]
     fn known_answers_are_published_in_the_storage_formats() {
-        let doc: String = include_str!("../../../../../design/storage-formats.md").split_whitespace().collect();
-        [KAT_APPROVAL_KEY, KAT_SIGNED, KAT_TAG].iter().for_each(|kat| assert!(doc.contains(kat), "{kat}"));
+        let doc: String = include_str!("../../../../../design/storage-formats.md")
+            .split_whitespace()
+            .collect();
+        [KAT_APPROVAL_KEY, KAT_SIGNED, KAT_TAG]
+            .iter()
+            .for_each(|kat| assert!(doc.contains(kat), "{kat}"));
     }
 
     #[test]
@@ -134,7 +151,14 @@ mod tests {
         let original = state(VaultId::new_random());
         let payload = encoding::encode(&original);
         let manifest_key = identity.derive_key(crate::manifest::MANIFEST_KEY_PERSONA);
-        [[0; 64], [0x5a; 64], *VaultIdentity::generate().derive_key(APPROVAL_KEY_PERSONA), *manifest_key].iter().for_each(|key| {
+        [
+            [0; 64],
+            [0x5a; 64],
+            *VaultIdentity::generate().derive_key(APPROVAL_KEY_PERSONA),
+            *manifest_key,
+        ]
+        .iter()
+        .for_each(|key| {
             let file = forged(&identity, original.vault_id(), &payload, key);
             assert_eq!(open_approval_state(&identity, &file), Err(ApprovalStateError::Damaged));
         });
@@ -170,14 +194,22 @@ mod tests {
     #[test]
     fn a_state_from_another_vault_identity_is_damaged() {
         let file = seal_approval_state(&VaultIdentity::generate(), &state(VaultId::new_random())).unwrap();
-        assert_eq!(open_approval_state(&VaultIdentity::generate(), &file), Err(ApprovalStateError::Damaged));
+        assert_eq!(
+            open_approval_state(&VaultIdentity::generate(), &file),
+            Err(ApprovalStateError::Damaged)
+        );
     }
 
     #[test]
     fn a_payload_naming_another_vault_is_rejected() {
         let identity = VaultIdentity::generate();
         let payload = encoding::encode(&state(VaultId::new_random()));
-        let file = forged(&identity, VaultId::new_random(), &payload, &identity.derive_key(APPROVAL_KEY_PERSONA));
+        let file = forged(
+            &identity,
+            VaultId::new_random(),
+            &payload,
+            &identity.derive_key(APPROVAL_KEY_PERSONA),
+        );
         assert_eq!(open_approval_state(&identity, &file), Err(ApprovalStateError::VaultIdMismatch));
     }
 
@@ -200,7 +232,10 @@ mod tests {
         payload[30..62].copy_from_slice(&[[1u8].as_slice(), &[0; 31]].concat());
         let id = VaultId::from_bytes(payload[5..21].try_into().unwrap()).unwrap();
         let file = forged(&identity, id, &payload, &identity.derive_key(APPROVAL_KEY_PERSONA));
-        let weak = ApprovalStateError::InvalidApproverKey { algorithm: SignatureAlgorithm::Ed25519, reason: InvalidKeyReason::WeakKey };
+        let weak = ApprovalStateError::InvalidApproverKey {
+            algorithm: SignatureAlgorithm::Ed25519,
+            reason: InvalidKeyReason::WeakKey,
+        };
         assert_eq!(open_approval_state(&identity, &file), Err(weak));
     }
 
@@ -210,14 +245,22 @@ mod tests {
         let mut file = [&FILE_MAGIC[..], &[FILE_VERSION], VaultId::new_random().as_bytes(), b"not age"].concat();
         let tag: [u8; MAC_LEN] = mac(&identity, &file).finalize().into_bytes().into();
         file.extend_from_slice(&tag);
-        assert_eq!(open_approval_state(&identity, &file), Err(ApprovalStateError::Sealed(OpenError::Malformed)));
+        assert_eq!(
+            open_approval_state(&identity, &file),
+            Err(ApprovalStateError::Sealed(OpenError::Malformed))
+        );
     }
 
     #[test]
     fn oversized_and_short_files_are_rejected_before_any_key_work() {
         let identity = VaultIdentity::generate();
         let huge = vec![0; MAX_APPROVAL_STATE_LEN + 1];
-        assert_eq!(open_approval_state(&identity, &huge), Err(ApprovalStateError::TooLarge { limit: MAX_APPROVAL_STATE_LEN }));
+        assert_eq!(
+            open_approval_state(&identity, &huge),
+            Err(ApprovalStateError::TooLarge {
+                limit: MAX_APPROVAL_STATE_LEN
+            })
+        );
         let truncated = ApprovalStateError::Format(ApprovalDecodeError::Truncated);
         (0..HEADER_LEN + MAC_LEN)
             .map(|len| [&FILE_MAGIC[..], &[FILE_VERSION], &[0; 64]].concat()[..len].to_vec())

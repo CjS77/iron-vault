@@ -48,7 +48,13 @@ pub(crate) struct MacFileKind<E> {
 impl<E: Clone + From<OpenError>> MacFileKind<E> {
     /// The file's bytes: header, `payload` sealed to the vault public key, then the MAC.
     pub(crate) fn seal(&self, identity: &VaultIdentity, vault_id: VaultId, payload: &[u8]) -> Result<Vec<u8>, SealError> {
-        let signed = [&self.magic[..], &[self.version], vault_id.as_bytes(), &sealed::seal(&identity.public_key(), payload)?].concat();
+        let signed = [
+            &self.magic[..],
+            &[self.version],
+            vault_id.as_bytes(),
+            &sealed::seal(&identity.public_key(), payload)?,
+        ]
+        .concat();
         let tag = self.mac(&identity.derive_key(self.persona), &signed).finalize().into_bytes();
         Ok([&signed[..], &tag].concat())
     }
@@ -59,11 +65,20 @@ impl<E: Clone + From<OpenError>> MacFileKind<E> {
         if file.len() > self.max_len {
             return Err(self.too_large.clone());
         }
-        let (signed, tag) = file.len().checked_sub(MAC_LEN).and_then(|at| file.split_at_checked(at)).ok_or_else(|| self.truncated.clone())?;
+        let (signed, tag) = file
+            .len()
+            .checked_sub(MAC_LEN)
+            .and_then(|at| file.split_at_checked(at))
+            .ok_or_else(|| self.truncated.clone())?;
         let (header, ciphertext) = signed.split_first_chunk::<HEADER_LEN>().ok_or_else(|| self.truncated.clone())?;
         let vault_id = self.read_header(header)?;
-        self.mac(&identity.derive_key(self.persona), signed).verify_slice(tag).map_err(|_| self.damaged.clone())?;
-        Ok((VaultId::from_bytes(vault_id).map_err(self.invalid_vault_id)?, sealed::open(identity, ciphertext, self.max_len)?))
+        self.mac(&identity.derive_key(self.persona), signed)
+            .verify_slice(tag)
+            .map_err(|_| self.damaged.clone())?;
+        Ok((
+            VaultId::from_bytes(vault_id).map_err(self.invalid_vault_id)?,
+            sealed::open(identity, ciphertext, self.max_len)?,
+        ))
     }
 
     /// The header's vault ID bytes, after its magic and version. The version is read before the MAC is checked because
@@ -82,6 +97,8 @@ impl<E: Clone + From<OpenError>> MacFileKind<E> {
     /// The keyed BLAKE2b-256 MAC over the domain tag and `signed`, the file's header and ciphertext. `verify_slice`
     /// compares in constant time.
     pub(crate) fn mac(&self, key: &[u8; 64], signed: &[u8]) -> Blake2bMac<U32> {
-        <Blake2bMac<U32> as KeyInit>::new(key.into()).chain_update(self.domain_tag).chain_update(signed)
+        <Blake2bMac<U32> as KeyInit>::new(key.into())
+            .chain_update(self.domain_tag)
+            .chain_update(signed)
     }
 }

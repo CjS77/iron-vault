@@ -133,7 +133,12 @@ impl TryFrom<RawCaller> for CallerConfig {
         let auth = caller_auth(raw.auth, raw.token_hash)?;
         check_routes(&raw.routes)?;
         check_rate_limit_routes(&raw.routes, &raw.rate_limits)?;
-        Ok(Self { listener: raw.listener, auth, routes: raw.routes, rate_limits: raw.rate_limits })
+        Ok(Self {
+            listener: raw.listener,
+            auth,
+            routes: raw.routes,
+            rate_limits: raw.rate_limits,
+        })
     }
 }
 
@@ -155,15 +160,17 @@ fn check_routes(routes: &[RouteName]) -> Result<(), CallerError> {
         return Err(CallerError::NoRoutes);
     }
     let mut seen = BTreeSet::new();
-    routes.iter().find(|route| !seen.insert(*route)).map_or(Ok(()), |route| Err(CallerError::DuplicateRoute { route: route.clone() }))
+    routes
+        .iter()
+        .find(|route| !seen.insert(*route))
+        .map_or(Ok(()), |route| Err(CallerError::DuplicateRoute { route: route.clone() }))
 }
 
 /// Rejects a per-caller limit for a route the caller cannot use, which would be a silent no-op.
 fn check_rate_limit_routes(routes: &[RouteName], rate_limits: &BTreeMap<RouteName, RateLimit>) -> Result<(), CallerError> {
-    rate_limits
-        .keys()
-        .find(|route| !routes.contains(route))
-        .map_or(Ok(()), |route| Err(CallerError::RateLimitForUngrantedRoute { route: route.clone() }))
+    rate_limits.keys().find(|route| !routes.contains(route)).map_or(Ok(()), |route| {
+        Err(CallerError::RateLimitForUngrantedRoute { route: route.clone() })
+    })
 }
 
 #[cfg(test)]
@@ -231,13 +238,19 @@ mod tests {
             "#
         );
         let config: Config = toml::from_str(&toml).unwrap();
-        assert_eq!(config.listeners.keys().map(ListenerName::as_str).collect::<Vec<_>>(), ["local", "naomi-backoffice"]);
+        assert_eq!(
+            config.listeners.keys().map(ListenerName::as_str).collect::<Vec<_>>(),
+            ["local", "naomi-backoffice"]
+        );
         assert_eq!(config.callers.len(), 2);
     }
 
     #[test]
     fn socket_caller_parses() {
-        assert_eq!(parse("listener = \"local\"\nauth = \"socket\"\nroutes = [\"fx\"]").unwrap().auth(), &CallerAuth::Socket);
+        assert_eq!(
+            parse("listener = \"local\"\nauth = \"socket\"\nroutes = [\"fx\"]").unwrap().auth(),
+            &CallerAuth::Socket
+        );
     }
 
     #[test]
@@ -253,29 +266,53 @@ mod tests {
     fn token_hash_is_required_iff_token_auth() {
         rejected("listener = \"local\"\nroutes = [\"fx\"]", "has no token_hash");
         rejected("listener = \"local\"\nauth = \"token\"\nroutes = [\"fx\"]", "has no token_hash");
-        rejected(&format!("listener = \"local\"\nauth = \"socket\"\ntoken_hash = \"{HASH}\"\nroutes = [\"fx\"]"), "auth = \"socket\"");
-        rejected(&format!("listener = \"n\"\nauth = \"isolated-network\"\ntoken_hash = \"{HASH}\"\nroutes = [\"fx\"]"), "isolated-network");
+        rejected(
+            &format!("listener = \"local\"\nauth = \"socket\"\ntoken_hash = \"{HASH}\"\nroutes = [\"fx\"]"),
+            "auth = \"socket\"",
+        );
+        rejected(
+            &format!("listener = \"n\"\nauth = \"isolated-network\"\ntoken_hash = \"{HASH}\"\nroutes = [\"fx\"]"),
+            "isolated-network",
+        );
     }
 
     #[test]
     fn bad_token_hashes_are_rejected() {
-        rejected("listener = \"local\"\ntoken_hash = \"blake2b:...\"\nroutes = [\"fx\"]", "must be 64 lowercase hex digits");
-        rejected(&format!("listener = \"local\"\ntoken_hash = \"{}\"\nroutes = [\"fx\"]", HASH.to_ascii_uppercase()), "must start with");
+        rejected(
+            "listener = \"local\"\ntoken_hash = \"blake2b:...\"\nroutes = [\"fx\"]",
+            "must be 64 lowercase hex digits",
+        );
+        rejected(
+            &format!(
+                "listener = \"local\"\ntoken_hash = \"{}\"\nroutes = [\"fx\"]",
+                HASH.to_ascii_uppercase()
+            ),
+            "must start with",
+        );
         let upper = format!("blake2b:{}", HASH[8..].to_ascii_uppercase());
-        rejected(&format!("listener = \"local\"\ntoken_hash = \"{upper}\"\nroutes = [\"fx\"]"), "other than 0-9 or a-f");
+        rejected(
+            &format!("listener = \"local\"\ntoken_hash = \"{upper}\"\nroutes = [\"fx\"]"),
+            "other than 0-9 or a-f",
+        );
     }
 
     #[test]
     fn unknown_auth_is_rejected() {
-        ["\"Token\"", "\"isolated_network\"", "\"peer\"", "\"\""]
-            .iter()
-            .for_each(|a| assert!(parse(&format!("listener = \"local\"\nauth = {a}\nroutes = [\"fx\"]")).is_err(), "{a}"));
+        ["\"Token\"", "\"isolated_network\"", "\"peer\"", "\"\""].iter().for_each(|a| {
+            assert!(
+                parse(&format!("listener = \"local\"\nauth = {a}\nroutes = [\"fx\"]")).is_err(),
+                "{a}"
+            )
+        });
     }
 
     #[test]
     fn routes_must_be_non_empty_and_unique() {
         rejected("listener = \"local\"\nauth = \"socket\"\nroutes = []", "at least one route");
-        rejected("listener = \"local\"\nauth = \"socket\"\nroutes = [\"fx\", \"brave\", \"fx\"]", "lists route fx more than once");
+        rejected(
+            "listener = \"local\"\nauth = \"socket\"\nroutes = [\"fx\", \"brave\", \"fx\"]",
+            "lists route fx more than once",
+        );
         rejected("listener = \"local\"\nauth = \"socket\"", "missing field `routes`");
         rejected("listener = \"local\"\nauth = \"socket\"\nroutes = [\"Fx\"]", "invalid route name");
     }
@@ -290,11 +327,17 @@ mod tests {
     #[test]
     fn listener_is_required_and_validated() {
         rejected("auth = \"socket\"\nroutes = [\"fx\"]", "missing field `listener`");
-        rejected("listener = \"Local\"\nauth = \"socket\"\nroutes = [\"fx\"]", "invalid listener name");
+        rejected(
+            "listener = \"Local\"\nauth = \"socket\"\nroutes = [\"fx\"]",
+            "invalid listener name",
+        );
     }
 
     #[test]
     fn unknown_fields_are_rejected() {
-        rejected("listener = \"local\"\nauth = \"socket\"\nroutes = [\"fx\"]\ntoken = \"x\"", "unknown field");
+        rejected(
+            "listener = \"local\"\nauth = \"socket\"\nroutes = [\"fx\"]\ntoken = \"x\"",
+            "unknown field",
+        );
     }
 }

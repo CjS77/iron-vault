@@ -153,13 +153,21 @@ impl VaultManifest {
     /// A manifest of `entries` at `generation`, refusing a repeated name or more than [`MAX_MANIFEST_ENTRIES`].
     pub fn new(vault_id: VaultId, generation: u64, entries: BTreeMap<RecordId, ManifestEntry>) -> Result<Self, ManifestError> {
         if entries.len() > MAX_MANIFEST_ENTRIES {
-            return Err(ManifestError::TooManyEntries { limit: MAX_MANIFEST_ENTRIES });
+            return Err(ManifestError::TooManyEntries {
+                limit: MAX_MANIFEST_ENTRIES,
+            });
         }
-        entries.values().try_fold(BTreeSet::new(), |mut names, entry| match names.insert(&entry.name) {
-            true => Ok(names),
-            false => Err(ManifestError::DuplicateName(entry.name.clone())),
-        })?;
-        Ok(Self { vault_id, generation, entries })
+        entries
+            .values()
+            .try_fold(BTreeSet::new(), |mut names, entry| match names.insert(&entry.name) {
+                true => Ok(names),
+                false => Err(ManifestError::DuplicateName(entry.name.clone())),
+            })?;
+        Ok(Self {
+            vault_id,
+            generation,
+            entries,
+        })
     }
 
     /// The manifest to write after this one: the same vault, the next generation, and `entries`.
@@ -229,7 +237,10 @@ pub(crate) mod tests {
     const KAT_TAG: &str = "57773e0c4c341207ffc71eb80ccb19c399bab8042a1d3c9f38603af1c7cc1ab2";
 
     fn unhex(hex: &str) -> Vec<u8> {
-        (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect()
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     fn hex(bytes: &[u8]) -> String {
@@ -268,14 +279,19 @@ pub(crate) mod tests {
     fn mac_matches_its_known_answer() {
         let key: [u8; 64] = unhex(KAT_MANIFEST_KEY).try_into().unwrap();
         let signed = unhex(KAT_SIGNED);
-        assert_eq!(&signed[..21], [&FILE_MAGIC[..], &[FILE_VERSION], &unhex("3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b")].concat());
+        assert_eq!(
+            &signed[..21],
+            [&FILE_MAGIC[..], &[FILE_VERSION], &unhex("3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b")].concat()
+        );
         assert_eq!(hex(&keyed_mac(&key, &signed).finalize().into_bytes()), KAT_TAG);
     }
 
     #[test]
     fn known_answers_are_published_in_the_storage_formats() {
         let doc: String = include_str!("../../../design/storage-formats.md").split_whitespace().collect();
-        [KAT_IDENTITY, KAT_MANIFEST_KEY, KAT_SIGNED, KAT_TAG].iter().for_each(|kat| assert!(doc.contains(kat), "{kat}"));
+        [KAT_IDENTITY, KAT_MANIFEST_KEY, KAT_SIGNED, KAT_TAG]
+            .iter()
+            .for_each(|kat| assert!(doc.contains(kat), "{kat}"));
     }
 
     #[test]
@@ -284,7 +300,10 @@ pub(crate) mod tests {
         let original = manifest(VaultId::new_random());
         let opened = open_manifest(&identity, &seal_manifest(&identity, &original).unwrap()).unwrap();
         assert_eq!(opened, original);
-        assert_eq!((opened.vault_id(), opened.generation(), opened.entries().len()), (original.vault_id(), 7, 3));
+        assert_eq!(
+            (opened.vault_id(), opened.generation(), opened.entries().len()),
+            (original.vault_id(), 7, 3)
+        );
     }
 
     #[test]
@@ -298,19 +317,31 @@ pub(crate) mod tests {
 
     #[test]
     fn construction_rejects_duplicate_names_and_too_many_entries() {
-        let entries = [(RecordId::new_random(), entry("fx_key", 1)), (RecordId::new_random(), entry("fx_key", 2))];
+        let entries = [
+            (RecordId::new_random(), entry("fx_key", 1)),
+            (RecordId::new_random(), entry("fx_key", 2)),
+        ];
         let duplicate = VaultManifest::new(VaultId::new_random(), 1, entries.into());
         assert_eq!(duplicate, Err(ManifestError::DuplicateName("fx_key".parse().unwrap())));
-        let many = (0..=MAX_MANIFEST_ENTRIES).map(|i| (RecordId::new_random(), entry(&format!("n{i}"), 0))).collect();
+        let many = (0..=MAX_MANIFEST_ENTRIES)
+            .map(|i| (RecordId::new_random(), entry(&format!("n{i}"), 0)))
+            .collect();
         let too_many = VaultManifest::new(VaultId::new_random(), 1, many);
-        assert_eq!(too_many, Err(ManifestError::TooManyEntries { limit: MAX_MANIFEST_ENTRIES }));
+        assert_eq!(
+            too_many,
+            Err(ManifestError::TooManyEntries {
+                limit: MAX_MANIFEST_ENTRIES
+            })
+        );
     }
 
     #[test]
     fn a_full_manifest_fits_the_size_limit() {
         let identity = VaultIdentity::generate();
         // 64 bytes is the longest credential name.
-        let entries = (0..MAX_MANIFEST_ENTRIES).map(|i| (RecordId::new_random(), entry(&format!("n{i:063}"), 9))).collect();
+        let entries = (0..MAX_MANIFEST_ENTRIES)
+            .map(|i| (RecordId::new_random(), entry(&format!("n{i:063}"), 9)))
+            .collect();
         let full = VaultManifest::new(VaultId::new_random(), u64::MAX, entries).unwrap();
         let file = seal_manifest(&identity, &full).unwrap();
         assert!(file.len() <= MAX_MANIFEST_LEN / 2, "{}", file.len());
@@ -322,10 +353,12 @@ pub(crate) mod tests {
         let identity = VaultIdentity::generate();
         let original = manifest(VaultId::new_random());
         let payload = encoding::encode(&original);
-        [[0; 64], [0x5a; 64], *VaultIdentity::generate().derive_key(MANIFEST_KEY_PERSONA)].iter().for_each(|key| {
-            let file = forged(&identity, original.vault_id(), &payload, key);
-            assert_eq!(open_manifest(&identity, &file), Err(ManifestError::Damaged));
-        });
+        [[0; 64], [0x5a; 64], *VaultIdentity::generate().derive_key(MANIFEST_KEY_PERSONA)]
+            .iter()
+            .for_each(|key| {
+                let file = forged(&identity, original.vault_id(), &payload, key);
+                assert_eq!(open_manifest(&identity, &file), Err(ManifestError::Damaged));
+            });
         // The same construction under the real key opens, so the refusal above is the MAC's doing.
         let file = forged(&identity, original.vault_id(), &payload, &identity.derive_key(MANIFEST_KEY_PERSONA));
         assert_eq!(open_manifest(&identity, &file), Ok(original));
@@ -366,14 +399,22 @@ pub(crate) mod tests {
         let tail = &a[53..];
         let payload = [&a[..29], &2u64.to_be_bytes(), &ids[0], tail, &ids[1], tail].concat();
         let file = forged(&identity, id, &payload, &identity.derive_key(MANIFEST_KEY_PERSONA));
-        assert_eq!(open_manifest(&identity, &file), Err(ManifestError::DuplicateName("fx_key".parse().unwrap())));
+        assert_eq!(
+            open_manifest(&identity, &file),
+            Err(ManifestError::DuplicateName("fx_key".parse().unwrap()))
+        );
     }
 
     #[test]
     fn a_payload_naming_another_vault_is_rejected() {
         let identity = VaultIdentity::generate();
         let payload = encoding::encode(&manifest(VaultId::new_random()));
-        let file = forged(&identity, VaultId::new_random(), &payload, &identity.derive_key(MANIFEST_KEY_PERSONA));
+        let file = forged(
+            &identity,
+            VaultId::new_random(),
+            &payload,
+            &identity.derive_key(MANIFEST_KEY_PERSONA),
+        );
         assert_eq!(open_manifest(&identity, &file), Err(ManifestError::VaultIdMismatch));
     }
 
@@ -391,7 +432,10 @@ pub(crate) mod tests {
     fn oversized_and_short_files_are_rejected_before_any_key_work() {
         let identity = VaultIdentity::generate();
         let huge = vec![0; MAX_MANIFEST_LEN + 1];
-        assert_eq!(open_manifest(&identity, &huge), Err(ManifestError::TooLarge { limit: MAX_MANIFEST_LEN }));
+        assert_eq!(
+            open_manifest(&identity, &huge),
+            Err(ManifestError::TooLarge { limit: MAX_MANIFEST_LEN })
+        );
         (0..HEADER_LEN + MAC_LEN)
             .map(|len| [&FILE_MAGIC[..], &[FILE_VERSION], &[0; 64]].concat()[..len].to_vec())
             .for_each(|short| assert_eq!(open_manifest(&identity, &short), Err(ManifestError::Truncated), "{}", short.len()));

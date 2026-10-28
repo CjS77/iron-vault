@@ -138,7 +138,15 @@ impl Vault {
         let unindexed = unindexed_files(&manifest, &files);
         unindexed.iter().for_each(load::log_unindexed);
         let dir = lock.dir().to_path_buf();
-        Ok((Vault { dir, identity, manifest, healthy }, OpenReport::new(damaged, unindexed)))
+        Ok((
+            Vault {
+                dir,
+                identity,
+                manifest,
+                healthy,
+            },
+            OpenReport::new(damaged, unindexed),
+        ))
     }
 
     /// The manifest the vault was opened with.
@@ -155,7 +163,10 @@ impl Vault {
 impl CredentialCatalog for Vault {
     fn entry(&self, name: &CredentialName) -> CatalogEntry {
         match self.healthy.get(name) {
-            Some(record) => CatalogEntry::Usable { kind: record.kind(), origins: record.origins().as_set().clone() },
+            Some(record) => CatalogEntry::Usable {
+                kind: record.kind(),
+                origins: record.origins().as_set().clone(),
+            },
             None if self.manifest.entries().values().any(|entry| entry.name() == name) => CatalogEntry::Unusable,
             None => CatalogEntry::Unknown,
         }
@@ -182,13 +193,20 @@ fn list_state_dir(lock: &StateDirLock, fs: &impl StoreFs) -> Result<Vec<String>,
 
 fn read_manifest(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, files: &[String]) -> Result<VaultManifest, VaultError> {
     let file = StateFileName::manifest();
-    let damaged = |damage| VaultError::SharedStateDamaged { file: file.clone(), damage };
+    let damaged = |damage| VaultError::SharedStateDamaged {
+        file: file.clone(),
+        damage,
+    };
     // MAX_MANIFEST_LEN is 1 MiB, so it always fits in a u64.
     match read_state_file(lock, fs, &file, MAX_MANIFEST_LEN as u64) {
-        Err(ReadError::Io { kind: io::ErrorKind::NotFound, .. }) if !files.iter().any(|f| is_record_file_name(f)) => {
-            Err(VaultError::NotInitialized)
-        }
-        Err(ReadError::Io { kind: io::ErrorKind::NotFound, .. }) => Err(damaged(SharedStateDamage::MissingWithRecords)),
+        Err(ReadError::Io {
+            kind: io::ErrorKind::NotFound,
+            ..
+        }) if !files.iter().any(|f| is_record_file_name(f)) => Err(VaultError::NotInitialized),
+        Err(ReadError::Io {
+            kind: io::ErrorKind::NotFound,
+            ..
+        }) => Err(damaged(SharedStateDamage::MissingWithRecords)),
         Err(e) => Err(damaged(SharedStateDamage::Read(e))),
         Ok(bytes) => open_manifest(identity, &bytes).map_err(|e| damaged(SharedStateDamage::Manifest(e))),
     }
@@ -198,7 +216,10 @@ fn read_manifest(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentit
 /// service could neither have written it nor remove it.
 fn unindexed_files(manifest: &VaultManifest, files: &[String]) -> BTreeSet<StateFileName> {
     let indexed: BTreeSet<StateFileName> = manifest.entries().keys().map(StateFileName::record).collect();
-    let candidates = files.iter().filter(|f| is_record_file_name(f)).filter_map(|f| StateFileName::new(f).ok());
+    let candidates = files
+        .iter()
+        .filter(|f| is_record_file_name(f))
+        .filter_map(|f| StateFileName::new(f).ok());
     candidates.filter(|name| !indexed.contains(name)).collect()
 }
 

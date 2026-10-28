@@ -124,7 +124,11 @@ impl Fixture {
 
     fn write_manifest(&self, entries: impl IntoIterator<Item = (RecordId, ManifestEntry)>) {
         let manifest = VaultManifest::new(VaultId::new_random(), 1, entries.into_iter().collect()).unwrap();
-        std::fs::write(self.path(&StateFileName::manifest()), seal_manifest(&identity(), &manifest).unwrap()).unwrap();
+        std::fs::write(
+            self.path(&StateFileName::manifest()),
+            seal_manifest(&identity(), &manifest).unwrap(),
+        )
+        .unwrap();
     }
 
     /// A vault holding one record per name; returns the records' IDs by name.
@@ -149,7 +153,10 @@ pub(super) struct Captured {
 
 impl Captured {
     pub(super) fn field(&self, name: &str) -> &str {
-        self.fields.get(name).map(String::as_str).unwrap_or_else(|| panic!("no field {name} in {self:?}"))
+        self.fields
+            .get(name)
+            .map(String::as_str)
+            .unwrap_or_else(|| panic!("no field {name} in {self:?}"))
     }
 }
 
@@ -186,7 +193,10 @@ impl Subscriber for Capture {
     fn event(&self, event: &Event<'_>) {
         let mut fields = BTreeMap::new();
         event.record(&mut Fields(&mut fields));
-        self.0.lock().unwrap().push(Captured { level: *event.metadata().level(), fields });
+        self.0.lock().unwrap().push(Captured {
+            level: *event.metadata().level(),
+            fields,
+        });
     }
 
     fn enter(&self, _: &span::Id) {}
@@ -245,7 +255,9 @@ pub(super) fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, Vec<Captured>) {
 
 pub(super) fn assert_no_secret_logged(events: &[Captured], names: &[&str]) {
     let text = format!("{events:?}");
-    names.iter().for_each(|name| assert!(!text.contains(&secret(name)), "{name}'s secret was logged: {text}"));
+    names
+        .iter()
+        .for_each(|name| assert!(!text.contains(&secret(name)), "{name}'s secret was logged: {text}"));
 }
 
 fn damage(pairs: &[(&str, RecordDamage)]) -> BTreeMap<CredentialName, RecordDamage> {
@@ -260,7 +272,13 @@ fn a_healthy_vault_loads_every_record() {
     assert_eq!(report, OpenReport::default());
     assert!(events.is_empty(), "{events:?}");
     let origins = [(n("api.fx-key.example"), Port::HTTPS)].into();
-    assert_eq!(vault.entry(&n("fx_key")), CatalogEntry::Usable { kind: CredentialKind::Static, origins });
+    assert_eq!(
+        vault.entry(&n("fx_key")),
+        CatalogEntry::Usable {
+            kind: CredentialKind::Static,
+            origins
+        }
+    );
     assert!(matches!(vault.material(&n("brave")), Some(CredentialMaterial::Static { .. })));
     assert_eq!(vault.entry(&n("venice")), CatalogEntry::Unknown);
     assert!(vault.material(&n("venice")).is_none());
@@ -281,7 +299,11 @@ fn each_damaged_record_takes_down_only_itself() {
 
     let (opened, events) = fixture.open();
     let (vault, report) = opened.unwrap();
-    let expected = [("deleted", RecordDamage::Missing), ("flipped", RecordDamage::Substituted), ("swapped", RecordDamage::Substituted)];
+    let expected = [
+        ("deleted", RecordDamage::Missing),
+        ("flipped", RecordDamage::Substituted),
+        ("swapped", RecordDamage::Substituted),
+    ];
     assert_eq!(report.damaged(), &damage(&expected));
     assert!(report.unindexed().is_empty());
     assert!(matches!(vault.entry(&n("keep")), CatalogEntry::Usable { .. }));
@@ -314,7 +336,11 @@ fn substitution_is_caught_by_digest_record_id_or_name() {
     // The manifest vouches for these files' exact bytes, but they hold another record ID or another name.
     let other_id = fixture.write_file(RecordId::new_random(), "other_id", &sealed(&record("other_id")));
     let renamed_id = RecordId::new_random();
-    let renamed = fixture.write_file(renamed_id, "renamed", &sealed(&record_with_id(renamed_id, "impostor", "api.example")));
+    let renamed = fixture.write_file(
+        renamed_id,
+        "renamed",
+        &sealed(&record_with_id(renamed_id, "impostor", "api.example")),
+    );
     fixture.write_manifest([(resealed.id(), stale_entry), other_id, renamed]);
 
     let (opened, events) = fixture.open();
@@ -398,7 +424,13 @@ fn a_corrupt_manifest_fails_the_whole_open() {
     let (opened, events) = fixture.open();
     let error = opened.unwrap_err();
     let expected = SharedStateDamage::Manifest(ManifestError::Damaged);
-    assert_eq!(error, VaultError::SharedStateDamaged { file: StateFileName::manifest(), damage: expected });
+    assert_eq!(
+        error,
+        VaultError::SharedStateDamaged {
+            file: StateFileName::manifest(),
+            damage: expected
+        }
+    );
     assert!(error.to_string().contains("may require recovery"), "{error}");
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!((events[0].level, events[0].field("file")), (Level::ERROR, "manifest.age"));
@@ -417,7 +449,13 @@ fn a_missing_manifest_is_uninitialized_only_without_records() {
     std::fs::remove_file(orphaned.path(&StateFileName::manifest())).unwrap();
     let (opened, events) = orphaned.open();
     let damage = SharedStateDamage::MissingWithRecords;
-    assert_eq!(opened.unwrap_err(), VaultError::SharedStateDamaged { file: StateFileName::manifest(), damage });
+    assert_eq!(
+        opened.unwrap_err(),
+        VaultError::SharedStateDamaged {
+            file: StateFileName::manifest(),
+            damage
+        }
+    );
     assert_eq!(events[0].level, Level::ERROR);
 }
 
@@ -482,8 +520,12 @@ fn an_oversized_record_is_unreadable_and_never_read_in_full() {
 #[test]
 fn a_missing_record_makes_only_its_routes_unavailable() {
     let fixture = Fixture::new("vault-activate");
-    let records = [("fx_key", "api.fx.example"), ("venice", "api.venice.ai"), ("brave", "api.search.brave.com")]
-        .map(|(name, host)| record_with_id(RecordId::new_random(), name, host));
+    let records = [
+        ("fx_key", "api.fx.example"),
+        ("venice", "api.venice.ai"),
+        ("brave", "api.search.brave.com"),
+    ]
+    .map(|(name, host)| record_with_id(RecordId::new_random(), name, host));
     fixture.write_manifest(records.iter().map(|r| fixture.write_record(r)));
     std::fs::remove_file(fixture.record_path(records[1].id())).unwrap();
 
@@ -503,5 +545,8 @@ fn debug_output_holds_no_secret() {
     let (vault, report) = opened.unwrap();
     let debug = format!("{vault:?} {report:?}");
     assert!(!debug.contains(&secret("fx_key")) && !debug.contains("SECRET"), "{debug}");
-    assert!(debug.contains("fx_key") && debug.contains("broken") && debug.contains("Missing"), "{debug}");
+    assert!(
+        debug.contains("fx_key") && debug.contains("broken") && debug.contains("Missing"),
+        "{debug}"
+    );
 }

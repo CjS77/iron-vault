@@ -259,7 +259,10 @@ mod tests {
     fn ipv6_with_embedded_ipv4_uses_the_url_serialization() {
         let mapped = host("[::ffff:192.0.2.1]");
         assert_eq!(mapped.as_str(), "[::ffff:c000:201]");
-        assert_eq!(url::Url::parse(&format!("https://{mapped}/")).map(|u| u.host_str().map(str::to_owned)), Ok(Some(mapped.to_string())));
+        assert_eq!(
+            url::Url::parse(&format!("https://{mapped}/")).map(|u| u.host_str().map(str::to_owned)),
+            Ok(Some(mapped.to_string()))
+        );
     }
 
     #[test]

@@ -83,11 +83,27 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 "#;
 
 /// The config's route prefixes, and spellings of them with unreserved characters escaped, which select the same route.
-pub const ROUTE_PREFIXES: &[&str] = &["fx", "fxa", "venice", "a/b", "basic", "f%78", "%66%78", "venic%65", "a/%62", "b%61sic"];
+pub const ROUTE_PREFIXES: &[&str] = &[
+    "fx", "fxa", "venice", "a/b", "basic", "f%78", "%66%78", "venic%65", "a/%62", "b%61sic",
+];
 
 /// Look-alikes of the route prefixes that must not select a route, or must select a different one.
-pub const DECOY_PREFIXES: &[&str] =
-    &["fx.evil.example", "fx@evil.example", "FX", "fX", "%66%58", "fx;x", "fx%2e", "f", "a", "b", "b/a", "nothing", "basic.", "BASIC"];
+pub const DECOY_PREFIXES: &[&str] = &[
+    "fx.evil.example",
+    "fx@evil.example",
+    "FX",
+    "fX",
+    "%66%58",
+    "fx;x",
+    "fx%2e",
+    "f",
+    "a",
+    "b",
+    "b/a",
+    "nothing",
+    "basic.",
+    "BASIC",
+];
 
 /// Queries, which must never influence the path.
 pub const QUERIES: &[&str] = &["", "?", "?a=1", "?x=%2e%2E&y=/?%25"];
@@ -99,8 +115,9 @@ pub const HOSTILE_BYTES: &[u8] = &[b'.', b'/', b'\\', 0, b'%', b'?', b'#', b';',
 pub const BENIGN_BYTES: &[u8] = b"Az0~-_ :@!=\"";
 
 /// Raw text that is invalid, or valid only in some positions, in a path.
-pub const RAW_SPECIALS: &[&str] =
-    &["\\", "\0", "\t", "\x7f", " ", ";", ";x=1", "%", "%2", "%zz", "%+f", "?", "#", "//", "\u{e9}", "\u{FF0E}", "%c3%a9", "%C0%AE"];
+pub const RAW_SPECIALS: &[&str] = &[
+    "\\", "\0", "\t", "\x7f", " ", ";", ";x=1", "%", "%2", "%zz", "%+f", "?", "#", "//", "\u{e9}", "\u{FF0E}", "%c3%a9", "%C0%AE",
+];
 
 /// Unicode look-alikes and the ASCII text an upstream that folds Unicode (NFKC or a best-fit code page) turns them into.
 pub const FOLDS: &[(char, &str)] = &[
@@ -128,7 +145,11 @@ pub static POLICY: LazyLock<ActivePolicy> = LazyLock::new(|| {
 
 /// Every route upstream's host and port pair.
 pub fn route_origins(config: &ValidatedConfig) -> BTreeSet<(Host, Port)> {
-    config.routes().values().map(|route| (route.upstream().host().clone(), route.upstream().port())).collect()
+    config
+        .routes()
+        .values()
+        .map(|route| (route.upstream().host().clone(), route.upstream().port()))
+        .collect()
 }
 
 /// The one credential of the Basic kind, used by the `basic` route's Basic slot.
@@ -139,14 +160,25 @@ struct Catalog(BTreeSet<(Host, Port)>);
 
 impl CredentialCatalog for Catalog {
     fn entry(&self, name: &CredentialName) -> CatalogEntry {
-        let kind = if name.as_str() == BASIC_CREDENTIAL { CredentialKind::Basic } else { CredentialKind::Static };
-        CatalogEntry::Usable { kind, origins: self.0.clone() }
+        let kind = if name.as_str() == BASIC_CREDENTIAL {
+            CredentialKind::Basic
+        } else {
+            CredentialKind::Static
+        };
+        CatalogEntry::Usable {
+            kind,
+            origins: self.0.clone(),
+        }
     }
 }
 
 /// A runner config with `cases` cases and no failure files, so CI runs are reproducible from the seed alone.
 pub fn config(cases: u32) -> Config {
-    Config { cases, failure_persistence: None, ..Config::default() }
+    Config {
+        cases,
+        failure_persistence: None,
+        ..Config::default()
+    }
 }
 
 /// Draws `count` values from `strategy` with a fixed seed.
@@ -158,7 +190,11 @@ pub fn sample<T>(strategy: impl Strategy<Value = T>, count: usize) -> Vec<T> {
 /// The hex digits of `byte`, each letter in the case the matching low bit of `case` picks.
 pub fn hex(byte: u8, case: u8) -> String {
     let digits = format!("{byte:02x}");
-    digits.chars().enumerate().map(|(i, c)| if case >> i & 1 == 1 { c.to_ascii_uppercase() } else { c }).collect()
+    digits
+        .chars()
+        .enumerate()
+        .map(|(i, c)| if case >> i & 1 == 1 { c.to_ascii_uppercase() } else { c })
+        .collect()
 }
 
 /// `byte` percent-encoded `layers` times: `%2e`, `%252e`, `%25252e`.
@@ -186,7 +222,11 @@ pub fn benign_escape() -> impl Strategy<Value = String> {
 pub fn look_alike() -> impl Strategy<Value = String> {
     let chars: Vec<char> = FOLDS.iter().map(|(c, _)| *c).collect();
     (select(chars), any::<u32>()).prop_map(|(c, case)| {
-        c.to_string().bytes().enumerate().map(|(i, byte)| encoded(byte, 1, (case >> (2 * i)) as u8)).collect()
+        c.to_string()
+            .bytes()
+            .enumerate()
+            .map(|(i, byte)| encoded(byte, 1, (case >> (2 * i)) as u8))
+            .collect()
     })
 }
 

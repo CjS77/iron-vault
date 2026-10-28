@@ -186,7 +186,9 @@ fn is_loopback(ip: IpAddr) -> bool {
 /// one exception: it is the default token header, so naming it explicitly changes nothing.
 fn check_token_header(header: HeaderName) -> Result<HeaderName, ListenerError> {
     match is_reserved(&header) && header.lowercase() != DEFAULT_TOKEN_HEADER {
-        true => Err(ListenerError::ReservedTokenHeader { header: header.as_str().to_owned() }),
+        true => Err(ListenerError::ReservedTokenHeader {
+            header: header.as_str().to_owned(),
+        }),
         false => Ok(header),
     }
 }
@@ -224,7 +226,9 @@ mod tests {
     fn spec_tls_example_parses() {
         let l = parse(&format!("address = \"10.20.0.2:7878\"\n{TLS}")).unwrap();
         assert_eq!(tcp(&l), ("10.20.0.2:7878".parse().unwrap(), true));
-        let Endpoint::Tcp { tls: Some(tls), .. } = l.endpoint() else { panic!("expected TLS") };
+        let Endpoint::Tcp { tls: Some(tls), .. } = l.endpoint() else {
+            panic!("expected TLS")
+        };
         assert_eq!(tls.certificate().to_string(), "/etc/iron-vault/tls/server.crt");
         assert_eq!(tls.key().to_string(), "/etc/iron-vault/tls/server.key");
     }
@@ -238,40 +242,77 @@ mod tests {
 
     #[test]
     fn non_loopback_without_tls_is_rejected() {
-        ["10.20.0.2:7878", "0.0.0.0:7878", "[::]:7878", "192.168.1.5:7878", "[::ffff:127.0.0.1]:7878", "[fe80::1]:7878"]
-            .iter()
-            .for_each(|a| rejected(&format!("address = \"{a}\""), "is not loopback, so tls_certificate and tls_key are required"));
+        [
+            "10.20.0.2:7878",
+            "0.0.0.0:7878",
+            "[::]:7878",
+            "192.168.1.5:7878",
+            "[::ffff:127.0.0.1]:7878",
+            "[fe80::1]:7878",
+        ]
+        .iter()
+        .for_each(|a| {
+            rejected(
+                &format!("address = \"{a}\""),
+                "is not loopback, so tls_certificate and tls_key are required",
+            )
+        });
     }
 
     #[test]
     fn non_loopback_with_tls_is_accepted() {
-        ["0.0.0.0:7878", "[::]:7878"].iter().for_each(|a| assert!(tcp(&parse(&format!("address = \"{a}\"\n{TLS}")).unwrap()).1));
+        ["0.0.0.0:7878", "[::]:7878"]
+            .iter()
+            .for_each(|a| assert!(tcp(&parse(&format!("address = \"{a}\"\n{TLS}")).unwrap()).1));
     }
 
     #[test]
     fn endpoint_must_be_exactly_one() {
         rejected("", "neither is set");
-        rejected("unix_socket = \"/run/iron-vault/proxy.sock\"\naddress = \"127.0.0.1:7878\"", "both are set");
+        rejected(
+            "unix_socket = \"/run/iron-vault/proxy.sock\"\naddress = \"127.0.0.1:7878\"",
+            "both are set",
+        );
     }
 
     #[test]
     fn tls_needs_both_files_and_a_tcp_listener() {
-        rejected("address = \"10.20.0.2:7878\"\ntls_certificate = \"/etc/iron-vault/tls/server.crt\"", "set both or neither");
-        rejected("address = \"127.0.0.1:7878\"\ntls_key = \"/etc/iron-vault/tls/server.key\"", "set both or neither");
-        rejected(&format!("unix_socket = \"/run/iron-vault/proxy.sock\"\n{TLS}"), "apply only to an address listener");
+        rejected(
+            "address = \"10.20.0.2:7878\"\ntls_certificate = \"/etc/iron-vault/tls/server.crt\"",
+            "set both or neither",
+        );
+        rejected(
+            "address = \"127.0.0.1:7878\"\ntls_key = \"/etc/iron-vault/tls/server.key\"",
+            "set both or neither",
+        );
+        rejected(
+            &format!("unix_socket = \"/run/iron-vault/proxy.sock\"\n{TLS}"),
+            "apply only to an address listener",
+        );
     }
 
     #[test]
     fn relative_paths_are_rejected() {
-        rejected("address = \"10.20.0.2:7878\"\ntls_certificate = \"tls/server.crt\"\ntls_key = \"/etc/k\"", "must be absolute");
+        rejected(
+            "address = \"10.20.0.2:7878\"\ntls_certificate = \"tls/server.crt\"\ntls_key = \"/etc/k\"",
+            "must be absolute",
+        );
         rejected("unix_socket = \"proxy.sock\"", "must be absolute");
     }
 
     #[test]
     fn bad_addresses_are_rejected() {
-        ["localhost:7878", "127.0.0.1", "::1:7878", "127.0.0.1:65536", "127.0.0.1:-1", "", "127.0.0.1:7878\n"]
-            .iter()
-            .for_each(|a| rejected(&format!("address = {a:?}"), "is not an IP address and port"));
+        [
+            "localhost:7878",
+            "127.0.0.1",
+            "::1:7878",
+            "127.0.0.1:65536",
+            "127.0.0.1:-1",
+            "",
+            "127.0.0.1:7878\n",
+        ]
+        .iter()
+        .for_each(|a| rejected(&format!("address = {a:?}"), "is not an IP address and port"));
         rejected("address = \"127.0.0.1:0\"", "uses port 0");
         assert!(!parse("address = \"\\u001b[31m:1\"").unwrap_err().to_string().contains('\u{1b}'));
     }
@@ -282,21 +323,50 @@ mod tests {
         assert_eq!(l.token_header().map(HeaderName::as_str), Some("X-Iron-Vault-Token"));
         let explicit = parse("address = \"127.0.0.1:7878\"\ntoken_header = \"Proxy-Authorization\"").unwrap();
         assert_eq!(explicit.token_header().map(HeaderName::lowercase), Some(DEFAULT_TOKEN_HEADER));
-        rejected("address = \"127.0.0.1:7878\"\ntoken_header = \"X Token\"", "not allowed in an HTTP token");
+        rejected(
+            "address = \"127.0.0.1:7878\"\ntoken_header = \"X Token\"",
+            "not allowed in an HTTP token",
+        );
     }
 
     #[test]
     fn client_address_and_host_override_headers_cannot_carry_the_token() {
-        ["X-Host", "X-Original-Host", "X-HTTP-Host-Override", "True-Client-IP", "X-Client-IP", "CF-Connecting-IP"]
-            .iter()
-            .for_each(|h| rejected(&format!("address = \"127.0.0.1:7878\"\ntoken_header = \"{h}\""), "is a reserved header"));
+        [
+            "X-Host",
+            "X-Original-Host",
+            "X-HTTP-Host-Override",
+            "True-Client-IP",
+            "X-Client-IP",
+            "CF-Connecting-IP",
+        ]
+        .iter()
+        .for_each(|h| {
+            rejected(
+                &format!("address = \"127.0.0.1:7878\"\ntoken_header = \"{h}\""),
+                "is a reserved header",
+            )
+        });
     }
 
     #[test]
     fn reserved_token_headers_are_rejected() {
-        ["Host", "Content-Length", "Transfer-Encoding", "Connection", "Upgrade", "Forwarded", "X-Forwarded-For", "Proxy-Authenticate"]
-            .iter()
-            .for_each(|h| rejected(&format!("address = \"127.0.0.1:7878\"\ntoken_header = \"{h}\""), "is a reserved header"));
+        [
+            "Host",
+            "Content-Length",
+            "Transfer-Encoding",
+            "Connection",
+            "Upgrade",
+            "Forwarded",
+            "X-Forwarded-For",
+            "Proxy-Authenticate",
+        ]
+        .iter()
+        .for_each(|h| {
+            rejected(
+                &format!("address = \"127.0.0.1:7878\"\ntoken_header = \"{h}\""),
+                "is a reserved header",
+            )
+        });
     }
 
     #[test]

@@ -127,9 +127,7 @@ fn decode_v1(reader: &mut Reader<'_>) -> Result<CredentialRecord, RecordError> {
 fn encoded_len(record: &CredentialRecord) -> usize {
     let material = match &record.material {
         CredentialMaterial::Static { key } => LEN_WIDTH + key.expose_secret().len(),
-        CredentialMaterial::Basic { username, password } => {
-            2 * LEN_WIDTH + username.expose_secret().len() + password.expose_secret().len()
-        }
+        CredentialMaterial::Basic { username, password } => 2 * LEN_WIDTH + username.expose_secret().len() + password.expose_secret().len(),
     };
     let origins: usize = record.origins.iter().map(|(host, _)| LEN_WIDTH + host.as_str().len() + 2).sum();
     MAGIC.len() + 1 + 16 + LEN_WIDTH + record.name.as_str().len() + 1 + material + LEN_WIDTH + origins + 1
@@ -176,8 +174,13 @@ fn source_tag(source: Source) -> u8 {
 
 fn read_material(reader: &mut Reader<'_>) -> Result<CredentialMaterial, RecordError> {
     match reader.u8()? {
-        TAG_STATIC => Ok(CredentialMaterial::Static { key: reader.secret("key")? }),
-        TAG_BASIC => Ok(CredentialMaterial::Basic { username: reader.secret("username")?, password: reader.secret("password")? }),
+        TAG_STATIC => Ok(CredentialMaterial::Static {
+            key: reader.secret("key")?,
+        }),
+        TAG_BASIC => Ok(CredentialMaterial::Basic {
+            username: reader.secret("username")?,
+            password: reader.secret("password")?,
+        }),
         tag => Err(RecordError::UnknownMaterialTag(tag)),
     }
 }
@@ -240,7 +243,10 @@ impl<'a> Reader<'a> {
     /// every origin takes several bytes, so a huge value fails here rather than driving a long loop.
     fn len(&mut self) -> Result<usize, RecordError> {
         let len = u64::from_be_bytes(self.array()?);
-        usize::try_from(len).ok().filter(|len| *len <= self.0.len()).ok_or(RecordError::LengthPastEnd)
+        usize::try_from(len)
+            .ok()
+            .filter(|len| *len <= self.0.len())
+            .ok_or(RecordError::LengthPastEnd)
     }
 
     fn field(&mut self) -> Result<&'a [u8], RecordError> {
@@ -267,12 +273,22 @@ mod tests {
     const ID: &str = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
 
     fn origins(pairs: &[(&str, u16)]) -> PermittedOrigins {
-        let set = pairs.iter().map(|(host, port)| (host.parse().unwrap(), Port::try_from(*port).unwrap())).collect();
+        let set = pairs
+            .iter()
+            .map(|(host, port)| (host.parse().unwrap(), Port::try_from(*port).unwrap()))
+            .collect();
         PermittedOrigins::new(set).unwrap()
     }
 
     fn record(material: CredentialMaterial, pairs: &[(&str, u16)]) -> CredentialRecord {
-        CredentialRecord::new(ID.parse().unwrap(), "fx_key".parse().unwrap(), material, origins(pairs), Source::DirectEntry).unwrap()
+        CredentialRecord::new(
+            ID.parse().unwrap(),
+            "fx_key".parse().unwrap(),
+            material,
+            origins(pairs),
+            Source::DirectEntry,
+        )
+        .unwrap()
     }
 
     fn static_record() -> CredentialRecord {
@@ -280,7 +296,10 @@ mod tests {
     }
 
     fn basic_record() -> CredentialRecord {
-        let material = CredentialMaterial::Basic { username: "alice".into(), password: "".into() };
+        let material = CredentialMaterial::Basic {
+            username: "alice".into(),
+            password: "".into(),
+        };
         record(material, &[("b.example", 443), ("a.example", 8443)])
     }
 
@@ -321,7 +340,11 @@ mod tests {
         }
 
         fn with_origins(origins: &[(&str, u16)]) -> Self {
-            origins.iter().fold(Self::static_key(b"k").len(origins.len() as u64), |p, (host, port)| p.origin(host, *port))
+            origins
+                .iter()
+                .fold(Self::static_key(b"k").len(origins.len() as u64), |p, (host, port)| {
+                    p.origin(host, *port)
+                })
         }
 
         fn valid() -> Self {
@@ -387,7 +410,11 @@ mod tests {
                    0000000000000001 000000000000000b 6170692e6578616d706c65 01bb 01";
         let bytes: Vec<u8> = hex
             .split_whitespace()
-            .flat_map(|group| (0..group.len()).step_by(2).map(move |i| u8::from_str_radix(&group[i..i + 2], 16).unwrap()))
+            .flat_map(|group| {
+                (0..group.len())
+                    .step_by(2)
+                    .map(move |i| u8::from_str_radix(&group[i..i + 2], 16).unwrap())
+            })
             .collect();
         assert_eq!(bytes, Payload::valid().0);
         assert_eq!(*encode(&decode(&bytes).unwrap()), bytes);
@@ -409,7 +436,10 @@ mod tests {
         let full = Payload::valid().0;
         (0..full.len()).for_each(|len| {
             let err = decode(&full[..len]).err();
-            assert!(matches!(err, Some(RecordError::Truncated | RecordError::LengthPastEnd)), "{len}: {err:?}");
+            assert!(
+                matches!(err, Some(RecordError::Truncated | RecordError::LengthPastEnd)),
+                "{len}: {err:?}"
+            );
         });
     }
 
@@ -420,9 +450,15 @@ mod tests {
 
     #[test]
     fn lengths_past_the_end_are_rejected() {
-        assert_eq!(Payload::header().len(7).raw(b"fx_key").decode().err(), Some(RecordError::LengthPastEnd));
+        assert_eq!(
+            Payload::header().len(7).raw(b"fx_key").decode().err(),
+            Some(RecordError::LengthPastEnd)
+        );
         assert_eq!(Payload::header().len(u64::MAX).decode().err(), Some(RecordError::LengthPastEnd));
-        assert_eq!(Payload::static_key(b"k").len(u64::MAX).decode().err(), Some(RecordError::LengthPastEnd));
+        assert_eq!(
+            Payload::static_key(b"k").len(u64::MAX).decode().err(),
+            Some(RecordError::LengthPastEnd)
+        );
     }
 
     #[test]
@@ -434,7 +470,12 @@ mod tests {
 
     #[test]
     fn invalid_names_are_rejected() {
-        let payload = Payload::named("Fx").raw(&[TAG_STATIC]).field(b"k").len(1).origin("api.example", 443).raw(&[1]);
+        let payload = Payload::named("Fx")
+            .raw(&[TAG_STATIC])
+            .field(b"k")
+            .len(1)
+            .origin("api.example", 443)
+            .raw(&[1]);
         assert!(matches!(payload.decode().err(), Some(RecordError::InvalidName(_))));
         let payload = Payload::header().field(&[0xff]);
         assert_eq!(payload.decode().err(), Some(RecordError::NotUtf8 { field: "name" }));
@@ -443,7 +484,10 @@ mod tests {
     #[test]
     fn invalid_and_non_canonical_hosts_are_rejected() {
         let invalid = Payload::with_origins(&[("*.example", 443)]).raw(&[1]);
-        assert_eq!(invalid.decode().err(), Some(RecordError::InvalidHost(HostError::ForbiddenCharacter('*'))));
+        assert_eq!(
+            invalid.decode().err(),
+            Some(RecordError::InvalidHost(HostError::ForbiddenCharacter('*')))
+        );
         let upper = Payload::with_origins(&[("API.example", 443)]).raw(&[1]);
         assert_eq!(upper.decode().err(), Some(RecordError::NonCanonicalHost));
     }
@@ -467,21 +511,33 @@ mod tests {
     fn material_failing_its_kind_rules_is_rejected() {
         let tail = |p: Payload| p.len(1).origin("api.example", 443).raw(&[TAG_DIRECT_ENTRY]);
         let colon = tail(Payload::named("fx_key").raw(&[TAG_BASIC]).field(b"QZ:JW").field(b"p"));
-        assert_eq!(colon.decode().err(), Some(RecordError::InvalidMaterial(KindError::InvalidBasic(
-            iron_vault_kinds::BasicCredentialError::ColonInUsername
-        ))));
+        assert_eq!(
+            colon.decode().err(),
+            Some(RecordError::InvalidMaterial(KindError::InvalidBasic(
+                iron_vault_kinds::BasicCredentialError::ColonInUsername
+            )))
+        );
         let empty_key = tail(Payload::static_key(b""));
-        assert_eq!(empty_key.decode().err(), Some(RecordError::InvalidMaterial(KindError::InvalidValue(
-            iron_vault_policy::SlotValueError::Empty
-        ))));
+        assert_eq!(
+            empty_key.decode().err(),
+            Some(RecordError::InvalidMaterial(KindError::InvalidValue(
+                iron_vault_policy::SlotValueError::Empty
+            )))
+        );
         let not_utf8 = tail(Payload::static_key(&[0xc3]));
         assert_eq!(not_utf8.decode().err(), Some(RecordError::NotUtf8 { field: "key" }));
     }
 
     #[test]
     fn unknown_tags_are_rejected() {
-        assert_eq!(Payload::named("fx_key").raw(&[9]).decode().err(), Some(RecordError::UnknownMaterialTag(9)));
-        assert_eq!(Payload::with_origins(&[("api.example", 443)]).raw(&[0]).decode().err(), Some(RecordError::UnknownSourceTag(0)));
+        assert_eq!(
+            Payload::named("fx_key").raw(&[9]).decode().err(),
+            Some(RecordError::UnknownMaterialTag(9))
+        );
+        assert_eq!(
+            Payload::with_origins(&[("api.example", 443)]).raw(&[0]).decode().err(),
+            Some(RecordError::UnknownSourceTag(0))
+        );
     }
 
     #[test]

@@ -78,9 +78,12 @@ fn check_name(s: &str) -> Result<(), NameRule> {
     if !first.is_ascii_lowercase() {
         return Err(NameRule::BadStart { found: escaped(first) });
     }
-    s.char_indices()
-        .find(|&(_, c)| !is_name_char(c))
-        .map_or(Ok(()), |(position, c)| Err(NameRule::BadChar { found: escaped(c), position }))
+    s.char_indices().find(|&(_, c)| !is_name_char(c)).map_or(Ok(()), |(position, c)| {
+        Err(NameRule::BadChar {
+            found: escaped(c),
+            position,
+        })
+    })
 }
 
 /// Defines a distinct name newtype so one kind of name cannot be passed where another is expected.
@@ -167,10 +170,18 @@ mod tests {
 
     #[test]
     fn spec_examples_parse() {
-        ["fx-mcp", "naomi-backoffice"].iter().for_each(|s| assert_eq!(CallerName::try_from(*s).unwrap().as_str(), *s));
-        ["fx", "venice", "brave"].iter().for_each(|s| assert_eq!(s.parse::<RouteName>().unwrap().as_str(), *s));
-        ["local", "naomi-backoffice"].iter().for_each(|s| assert_eq!(ListenerName::try_from(*s).unwrap().as_str(), *s));
-        ["fx_key", "venice", "brave"].iter().for_each(|s| assert_eq!(CredentialName::try_from(*s).unwrap().as_str(), *s));
+        ["fx-mcp", "naomi-backoffice"]
+            .iter()
+            .for_each(|s| assert_eq!(CallerName::try_from(*s).unwrap().as_str(), *s));
+        ["fx", "venice", "brave"]
+            .iter()
+            .for_each(|s| assert_eq!(s.parse::<RouteName>().unwrap().as_str(), *s));
+        ["local", "naomi-backoffice"]
+            .iter()
+            .for_each(|s| assert_eq!(ListenerName::try_from(*s).unwrap().as_str(), *s));
+        ["fx_key", "venice", "brave"]
+            .iter()
+            .for_each(|s| assert_eq!(CredentialName::try_from(*s).unwrap().as_str(), *s));
     }
 
     #[test]
@@ -187,30 +198,52 @@ mod tests {
 
     #[test]
     fn leading_non_letter_is_rejected() {
-        ["1fx", "-fx", "_fx", "Fx"].iter().for_each(|s| assert!(matches!(rule_of(s), NameRule::BadStart { .. }), "{s}"));
+        ["1fx", "-fx", "_fx", "Fx"]
+            .iter()
+            .for_each(|s| assert!(matches!(rule_of(s), NameRule::BadStart { .. }), "{s}"));
     }
 
     #[test]
     fn uppercase_is_rejected() {
-        assert_eq!(rule_of("fxKey"), NameRule::BadChar { found: "'K'".into(), position: 2 });
+        assert_eq!(
+            rule_of("fxKey"),
+            NameRule::BadChar {
+                found: "'K'".into(),
+                position: 2
+            }
+        );
     }
 
     #[test]
     fn whitespace_is_rejected() {
-        ["fx key", "fx\tkey", "fx\n", " fx"].iter().for_each(|s| assert!(CallerName::try_from(*s).is_err(), "{s:?}"));
+        ["fx key", "fx\tkey", "fx\n", " fx"]
+            .iter()
+            .for_each(|s| assert!(CallerName::try_from(*s).is_err(), "{s:?}"));
     }
 
     #[test]
     fn control_characters_are_rejected_and_escaped() {
         let err = CallerName::try_from("fx\u{1b}[31m").unwrap_err();
-        assert_eq!(err.rule(), &NameRule::BadChar { found: "'\\u{1b}'".into(), position: 2 });
+        assert_eq!(
+            err.rule(),
+            &NameRule::BadChar {
+                found: "'\\u{1b}'".into(),
+                position: 2
+            }
+        );
         assert!(!err.to_string().chars().any(char::is_control));
         assert!(!CallerName::try_from("fx\nkey").unwrap_err().to_string().contains('\n'));
     }
 
     #[test]
     fn non_ascii_is_rejected() {
-        assert_eq!(rule_of("fxé"), NameRule::BadChar { found: "'\\u{e9}'".into(), position: 2 });
+        assert_eq!(
+            rule_of("fxé"),
+            NameRule::BadChar {
+                found: "'\\u{e9}'".into(),
+                position: 2
+            }
+        );
         assert!(matches!(rule_of("éfx"), NameRule::BadStart { .. }));
     }
 

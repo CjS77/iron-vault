@@ -91,7 +91,10 @@ fn anything_else_is_rejected_without_echoing_the_input() {
 fn debug_shows_nothing_of_the_secret() {
     let (secret, _) = RecoveryKey::generate();
     let debug = format!("{secret:?} {secret:#?}");
-    assert!(!debug.contains(&secret.expose_secret()[16..]) && !debug.contains("AGE-SECRET"), "{debug}");
+    assert!(
+        !debug.contains(&secret.expose_secret()[16..]) && !debug.contains("AGE-SECRET"),
+        "{debug}"
+    );
 }
 
 /// The secrets the owner holds after initialization: the recovery key on paper and the passphrase in memory. The
@@ -160,19 +163,29 @@ fn assert_no_mixed_recipients(files: &[(String, Vec<u8>)]) {
     assert_eq!(age_files.len(), 5, "{:?}", files.iter().map(|(name, _)| name).collect::<Vec<_>>());
     age_files.iter().for_each(|(name, bytes)| {
         let kinds = stanza_kinds(age_part(name, bytes)).unwrap();
-        assert!(!(kinds.contains(&StanzaKind::Scrypt) && kinds.contains(&StanzaKind::X25519)), "{name}: {kinds:?}");
+        assert!(
+            !(kinds.contains(&StanzaKind::Scrypt) && kinds.contains(&StanzaKind::X25519)),
+            "{name}: {kinds:?}"
+        );
         match name == operational.as_str() {
             true => assert_eq!(kinds, [StanzaKind::Scrypt], "{name}"),
             false => {
                 assert!(kinds.contains(&StanzaKind::X25519), "{name}: {kinds:?}");
                 assert!(kinds.iter().all(StanzaKind::is_x25519_or_grease), "{name}: {kinds:?}");
-                assert!(kinds.iter().filter(|kind| **kind == StanzaKind::Grease).count() <= 1, "{name}: {kinds:?}");
+                assert!(
+                    kinds.iter().filter(|kind| **kind == StanzaKind::Grease).count() <= 1,
+                    "{name}: {kinds:?}"
+                );
             }
         }
     });
     let identity = StateFileName::identity_envelope();
     let identity_kinds = stanza_kinds(&files.iter().find(|(name, _)| name == identity.as_str()).unwrap().1).unwrap();
-    assert_eq!(identity_kinds.iter().filter(|kind| **kind == StanzaKind::X25519).count(), 2, "{identity_kinds:?}");
+    assert_eq!(
+        identity_kinds.iter().filter(|kind| **kind == StanzaKind::X25519).count(),
+        2,
+        "{identity_kinds:?}"
+    );
 }
 
 /// Neither private key's text appears in any file, in either case.
@@ -180,7 +193,10 @@ fn assert_no_key_text(files: &[(String, Vec<u8>)], keys: &[&str]) {
     let needles: Vec<String> = keys.iter().flat_map(|key| [key.to_string(), key.to_lowercase()]).collect();
     files.iter().for_each(|(name, bytes)| {
         needles.iter().for_each(|needle| {
-            assert!(!bytes.windows(needle.len()).any(|window| window == needle.as_bytes()), "a private key's text is in {name}");
+            assert!(
+                !bytes.windows(needle.len()).any(|window| window == needle.as_bytes()),
+                "a private key's text is in {name}"
+            );
         });
     });
 }
@@ -199,7 +215,10 @@ fn recovery_opens_the_vault_independently_of_the_passphrase() {
 
     std::fs::remove_file(dir.path().join(StateFileName::passphrase_envelope().as_str())).unwrap();
     let lock = StateDirLock::acquire(dir.path()).unwrap();
-    assert!(matches!(unlock_with_passphrase(&lock, &OsFs, &passphrase()), Err(UnlockError::Read(_))));
+    assert!(matches!(
+        unlock_with_passphrase(&lock, &OsFs, &passphrase()),
+        Err(UnlockError::Read(_))
+    ));
     let recovery = RecoveryKeySecret::parse(SecretString::from(owner.recovery_text.as_str())).unwrap();
     let identity = unwrap_identity(&read_identity_envelope(&lock, &OsFs).unwrap(), &recovery).unwrap();
     assert_both_records_healthy(&lock, identity);

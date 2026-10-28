@@ -55,7 +55,11 @@ mod tests {
             .into_iter()
             .map(|(host, port)| (host.parse().unwrap(), Port::try_from(port).unwrap()))
             .collect();
-        let ordered: Vec<_> = PermittedOrigins::new(origins).unwrap().iter().map(|(h, p)| format!("{h}:{p}")).collect();
+        let ordered: Vec<_> = PermittedOrigins::new(origins)
+            .unwrap()
+            .iter()
+            .map(|(h, p)| format!("{h}:{p}"))
+            .collect();
         assert_eq!(ordered, ["a.example:443", "a.example:8443", "b.example:443"]);
     }
 }

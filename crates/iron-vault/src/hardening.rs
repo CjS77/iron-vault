@@ -72,7 +72,9 @@ enum LockPlan {
 /// limit the service would fail allocations, and abort, as soon as it grew past it. Locking only when the limit is
 /// unlimited avoids that. The Linux package grants `LimitMEMLOCK=infinity`.
 fn memory_lock_plan(memlock_soft_limit: Option<u64>) -> LockPlan {
-    memlock_soft_limit.map_or(LockPlan::LockAll, |limit_bytes| LockPlan::Skip(LockUnavailable::LimitTooLow { limit_bytes }))
+    memlock_soft_limit.map_or(LockPlan::LockAll, |limit_bytes| {
+        LockPlan::Skip(LockUnavailable::LimitTooLow { limit_bytes })
+    })
 }
 
 /// Disables core dumps and locks memory where it is safe to, then reports what took effect.
@@ -80,13 +82,19 @@ fn memory_lock_plan(memlock_soft_limit: Option<u64>) -> LockPlan {
 /// Call it first in `main`, before any secret exists, so nothing secret is ever dumpable or swappable.
 #[cfg(target_os = "linux")]
 pub fn harden_process() -> HardeningReport {
-    HardeningReport { core_dumps: linux::disable_core_dumps(), memory: linux::lock_memory() }
+    HardeningReport {
+        core_dumps: linux::disable_core_dumps(),
+        memory: linux::lock_memory(),
+    }
 }
 
 /// Reports that this platform has no hardening adapter yet, rather than claiming protection it lacks.
 #[cfg(not(target_os = "linux"))]
 pub fn harden_process() -> HardeningReport {
-    HardeningReport { core_dumps: CoreDumps::Failed("unsupported platform".to_owned()), memory: MemoryProtection::Unsupported }
+    HardeningReport {
+        core_dumps: CoreDumps::Failed("unsupported platform".to_owned()),
+        memory: MemoryProtection::Unsupported,
+    }
 }
 
 /// Logs the report: each missing protection at ERROR with its fix, and full success at INFO.
@@ -103,7 +111,10 @@ pub fn log_report(report: &HardeningReport) {
             report.memory
         ),
         MemoryProtection::Unsupported => {
-            tracing::error!("{}; swap protection is not in effect. Use encrypted swap as the install guide describes", report.memory)
+            tracing::error!(
+                "{}; swap protection is not in effect. Use encrypted swap as the install guide describes",
+                report.memory
+            )
         }
     }
 }
@@ -147,7 +158,9 @@ mod tests {
     fn unprotected() -> [MemoryProtection; 3] {
         [
             MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 }),
-            MemoryProtection::Unavailable(LockUnavailable::LockFailed { error: "Cannot allocate memory".to_owned() }),
+            MemoryProtection::Unavailable(LockUnavailable::LockFailed {
+                error: "Cannot allocate memory".to_owned(),
+            }),
             MemoryProtection::Unsupported,
         ]
     }
@@ -160,14 +173,19 @@ mod tests {
     #[test]
     fn finite_memlock_skips_locking_and_names_the_limit() {
         [0, 65_536, u64::MAX - 1].into_iter().for_each(|limit_bytes| {
-            assert_eq!(memory_lock_plan(Some(limit_bytes)), LockPlan::Skip(LockUnavailable::LimitTooLow { limit_bytes }));
+            assert_eq!(
+                memory_lock_plan(Some(limit_bytes)),
+                LockPlan::Skip(LockUnavailable::LimitTooLow { limit_bytes })
+            );
         });
     }
 
     #[test]
     fn only_locked_memory_displays_as_locked() {
         assert_eq!(MemoryProtection::Locked.to_string(), "memory: locked against swap");
-        unprotected().iter().for_each(|memory| assert!(!memory.to_string().to_lowercase().contains("locked"), "{memory}"));
+        unprotected()
+            .iter()
+            .for_each(|memory| assert!(!memory.to_string().to_lowercase().contains("locked"), "{memory}"));
     }
 
     #[test]
@@ -180,8 +198,10 @@ mod tests {
             report.to_string(),
             "core dumps: disabled; memory: swap protection unavailable (RLIMIT_MEMLOCK soft limit is 8388608 bytes, not unlimited)"
         );
-        let failed =
-            HardeningReport { core_dumps: CoreDumps::Failed("unsupported platform".to_owned()), memory: MemoryProtection::Unsupported };
+        let failed = HardeningReport {
+            core_dumps: CoreDumps::Failed("unsupported platform".to_owned()),
+            memory: MemoryProtection::Unsupported,
+        };
         assert_eq!(
             failed.to_string(),
             "core dumps: NOT disabled (unsupported platform); memory: swap protection unsupported on this platform"

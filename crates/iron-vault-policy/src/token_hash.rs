@@ -75,7 +75,10 @@ fn decode_digest(hex: &str) -> Result<[u8; TOKEN_DIGEST_LEN], TokenHashError> {
         .map(|(position, b)| hex_value(b).ok_or(TokenHashError::NotLowercaseHex { position }))
         .collect::<Result<Vec<u8>, _>>()?;
     let mut digest = [0u8; TOKEN_DIGEST_LEN];
-    digest.iter_mut().zip(nibbles.as_chunks::<2>().0).for_each(|(byte, [high, low])| *byte = (high << 4) | low);
+    digest
+        .iter_mut()
+        .zip(nibbles.as_chunks::<2>().0)
+        .for_each(|(byte, [high, low])| *byte = (high << 4) | low);
     Ok(digest)
 }
 
@@ -131,9 +134,14 @@ mod tests {
 
     #[test]
     fn wrong_prefix_is_rejected() {
-        [DIGEST.to_owned(), format!("sha256:{DIGEST}"), format!("BLAKE2B:{DIGEST}"), format!("blake2b {DIGEST}")]
-            .iter()
-            .for_each(|s| assert_eq!(s.parse::<TokenHash>(), Err(TokenHashError::MissingPrefix), "{s}"));
+        [
+            DIGEST.to_owned(),
+            format!("sha256:{DIGEST}"),
+            format!("BLAKE2B:{DIGEST}"),
+            format!("blake2b {DIGEST}"),
+        ]
+        .iter()
+        .for_each(|s| assert_eq!(s.parse::<TokenHash>(), Err(TokenHashError::MissingPrefix), "{s}"));
     }
 
     #[test]
@@ -151,9 +159,14 @@ mod tests {
 
     #[test]
     fn wrong_length_is_rejected() {
-        ["blake2b:", "blake2b:...", &format!("blake2b:{}", &DIGEST[1..]), &format!("blake2b:{DIGEST}00")]
-            .iter()
-            .for_each(|s| assert!(matches!(s.parse::<TokenHash>(), Err(TokenHashError::WrongLength { .. })), "{s}"));
+        [
+            "blake2b:",
+            "blake2b:...",
+            &format!("blake2b:{}", &DIGEST[1..]),
+            &format!("blake2b:{DIGEST}00"),
+        ]
+        .iter()
+        .for_each(|s| assert!(matches!(s.parse::<TokenHash>(), Err(TokenHashError::WrongLength { .. })), "{s}"));
         let doubled = format!("blake2b:{DIGEST}{DIGEST}");
         assert_eq!(doubled.parse::<TokenHash>(), Err(TokenHashError::WrongLength { len: 128 }));
     }

@@ -28,7 +28,11 @@ fn digest(v: u64) -> ConfigDigest {
 /// The calls since call `from` that changed a directory entry: created, renamed or removed a file.
 fn mutations(fs: &FaultFs, from: usize) -> Vec<FsCall> {
     let changes = [FsOp::CreatePrivate, FsOp::Rename, FsOp::RemoveFile];
-    fs.trace().split_off(from).into_iter().filter(|call| changes.contains(&call.op())).collect()
+    fs.trace()
+        .split_off(from)
+        .into_iter()
+        .filter(|call| changes.contains(&call.op()))
+        .collect()
 }
 
 /// A locked state directory whose files live in a [`FaultFs`] under the same path, and the vault's identity and ID.
@@ -43,7 +47,12 @@ impl Setup {
     fn new(label: &str) -> Self {
         let dir = TestDir::new(label);
         let lock = StateDirLock::acquire(dir.path()).unwrap();
-        Self { dir, lock, identity: VaultIdentity::from_secret(KAT_IDENTITY), vault_id: VaultId::new_random() }
+        Self {
+            dir,
+            lock,
+            identity: VaultIdentity::from_secret(KAT_IDENTITY),
+            vault_id: VaultId::new_random(),
+        }
     }
 
     fn path(&self) -> PathBuf {
@@ -72,7 +81,13 @@ impl Setup {
 
     /// Writes `state` as the durable file, whatever its counters, the way only a test can.
     fn plant(&self, fs: &impl StoreFs, state: &ApprovalState) {
-        durable_replace(&self.lock, fs, &StateFileName::approval_state(), &seal_approval_state(&self.identity, state).unwrap()).unwrap();
+        durable_replace(
+            &self.lock,
+            fs,
+            &StateFileName::approval_state(),
+            &seal_approval_state(&self.identity, state).unwrap(),
+        )
+        .unwrap();
     }
 
     /// A created state with versions 1 and 2 reserved and version 1 committed, all durable.
@@ -120,9 +135,33 @@ fn replace_with_nine(setup: &Setup, fs: &FaultFs, state: &mut ApprovalState) -> 
 fn operations(setup: &Setup) -> [(&'static str, Op, ApprovalState, ApprovalState); 3] {
     let (_, old) = setup.seeded();
     [
-        ("reserve", reserve_next as Op, old.clone(), ApprovalState { highest_reserved: 3, ..old.clone() }),
-        ("commit", commit_two, old.clone(), ApprovalState { committed: Some((version(2), digest(2))), ..old.clone() }),
-        ("replace approver", replace_with_nine, old.clone(), ApprovalState { approver: approver(9), ..old }),
+        (
+            "reserve",
+            reserve_next as Op,
+            old.clone(),
+            ApprovalState {
+                highest_reserved: 3,
+                ..old.clone()
+            },
+        ),
+        (
+            "commit",
+            commit_two,
+            old.clone(),
+            ApprovalState {
+                committed: Some((version(2), digest(2))),
+                ..old.clone()
+            },
+        ),
+        (
+            "replace approver",
+            replace_with_nine,
+            old.clone(),
+            ApprovalState {
+                approver: approver(9),
+                ..old
+            },
+        ),
     ]
 }
 
@@ -131,7 +170,10 @@ fn reserve_counts_up_from_one_across_reopen_and_never_resets() {
     let setup = Setup::new("approval-count");
     let fs = FaultFs::new();
     let created = setup.create(&fs).unwrap();
-    assert_eq!((created.highest_reserved(), created.committed(), created.approver()), (0, None, &approver(1)));
+    assert_eq!(
+        (created.highest_reserved(), created.committed(), created.approver()),
+        (0, None, &approver(1))
+    );
     (1..=3).for_each(|expected| {
         fs.crash();
         let mut state = setup.load(&fs).unwrap();
@@ -159,7 +201,10 @@ fn reserve_commit_and_replace_approver_work_end_to_end_on_disk() {
 
     let reloaded = setup.load(&fs).unwrap();
     assert_eq!(reloaded, state);
-    assert_eq!((reloaded.highest_reserved(), reloaded.committed(), reloaded.approver()), (3, Some((version(3), digest(3))), &approver(9)));
+    assert_eq!(
+        (reloaded.highest_reserved(), reloaded.committed(), reloaded.approver()),
+        (3, Some((version(3), digest(3))), &approver(9))
+    );
 }
 
 #[test]
@@ -169,7 +214,10 @@ fn replace_approver_keeps_both_counters_across_reopen() {
     setup.replace_approver(&fs, &mut state, 9).unwrap();
     fs.crash();
     let mut reloaded = setup.load(&fs).unwrap();
-    assert_eq!((reloaded.highest_reserved(), reloaded.committed(), reloaded.approver()), (2, Some((version(1), digest(1))), &approver(9)));
+    assert_eq!(
+        (reloaded.highest_reserved(), reloaded.committed(), reloaded.approver()),
+        (2, Some((version(1), digest(1))), &approver(9))
+    );
     assert_eq!(setup.reserve(&fs, &mut reloaded).unwrap().get(), 3);
 }
 
@@ -191,7 +239,10 @@ fn create_refuses_an_existing_file_and_never_resets_the_counter() {
 fn reserve_at_u64_max_is_exhausted_and_touches_no_file() {
     let setup = Setup::new("approval-exhausted");
     let (fs, state) = setup.seeded();
-    let mut last = ApprovalState { highest_reserved: u64::MAX, ..state };
+    let mut last = ApprovalState {
+        highest_reserved: u64::MAX,
+        ..state
+    };
     setup.plant(&fs, &last);
     let (calls, before) = (fs.trace().len(), last.clone());
     assert_eq!(setup.reserve(&fs, &mut last), Err(ApprovalStateError::Exhausted));
@@ -208,17 +259,49 @@ fn commit_refuses_unreserved_and_not_newer_versions_and_touches_no_file() {
     let (fs, mut state) = setup.seeded();
     let (calls, before) = (fs.trace().len(), state.clone());
     let refusals = [
-        (3, ApprovalStateError::NotReserved { version: version(3), highest_reserved: 2 }),
-        (u64::MAX, ApprovalStateError::NotReserved { version: version(u64::MAX), highest_reserved: 2 }),
-        (1, ApprovalStateError::NotNewer { version: version(1), committed: version(1) }),
+        (
+            3,
+            ApprovalStateError::NotReserved {
+                version: version(3),
+                highest_reserved: 2,
+            },
+        ),
+        (
+            u64::MAX,
+            ApprovalStateError::NotReserved {
+                version: version(u64::MAX),
+                highest_reserved: 2,
+            },
+        ),
+        (
+            1,
+            ApprovalStateError::NotNewer {
+                version: version(1),
+                committed: version(1),
+            },
+        ),
     ];
-    refusals.into_iter().for_each(|(v, error)| assert_eq!(setup.commit(&fs, &mut state, v), Err(error), "{v}"));
+    refusals
+        .into_iter()
+        .for_each(|(v, error)| assert_eq!(setup.commit(&fs, &mut state, v), Err(error), "{v}"));
     assert_eq!((fs.trace().len(), &state), (calls, &before));
 
     // A newer reserved version commits, and then the one it replaced is refused as not newer.
     setup.commit(&fs, &mut state, 2).unwrap();
-    assert_eq!(setup.commit(&fs, &mut state, 2), Err(ApprovalStateError::NotNewer { version: version(2), committed: version(2) }));
-    assert_eq!(setup.commit(&fs, &mut state, 1), Err(ApprovalStateError::NotNewer { version: version(1), committed: version(2) }));
+    assert_eq!(
+        setup.commit(&fs, &mut state, 2),
+        Err(ApprovalStateError::NotNewer {
+            version: version(2),
+            committed: version(2)
+        })
+    );
+    assert_eq!(
+        setup.commit(&fs, &mut state, 1),
+        Err(ApprovalStateError::NotNewer {
+            version: version(1),
+            committed: version(2)
+        })
+    );
 }
 
 #[test]
@@ -226,7 +309,13 @@ fn the_first_commit_may_skip_versions_whose_signing_failed() {
     let setup = Setup::new("approval-first-commit");
     let fs = FaultFs::new();
     let mut state = setup.create(&fs).unwrap();
-    assert_eq!(setup.commit(&fs, &mut state, 1), Err(ApprovalStateError::NotReserved { version: version(1), highest_reserved: 0 }));
+    assert_eq!(
+        setup.commit(&fs, &mut state, 1),
+        Err(ApprovalStateError::NotReserved {
+            version: version(1),
+            highest_reserved: 0
+        })
+    );
     (0..3).for_each(|_| {
         setup.reserve(&fs, &mut state).unwrap();
     });
@@ -265,10 +354,17 @@ fn a_missing_or_damaged_file_blocks_writes_and_loads() {
             }
         }
         let calls = fs.trace().len();
-        assert_eq!(setup.reserve(&fs, &mut state), Err(ApprovalStateError::ReloadRequired), "gone: {gone}");
+        assert_eq!(
+            setup.reserve(&fs, &mut state),
+            Err(ApprovalStateError::ReloadRequired),
+            "gone: {gone}"
+        );
         assert_eq!(mutations(&fs, calls), [], "gone: {gone}");
         let loaded = setup.load(&fs);
-        assert!(matches!(loaded, Err(ApprovalStateError::Read(_) | ApprovalStateError::Damaged)), "gone: {gone}: {loaded:?}");
+        assert!(
+            matches!(loaded, Err(ApprovalStateError::Read(_) | ApprovalStateError::Damaged)),
+            "gone: {gone}: {loaded:?}"
+        );
     });
 }
 
@@ -287,7 +383,16 @@ fn an_uncertain_write_leaves_memory_unchanged_and_blocks_writes_until_reload() {
         let (fs, mut state) = setup.seeded();
         fs.fail_call(fs.trace().len() + setup.op_len(op) - 1, io::ErrorKind::StorageFull);
         let result = op(&setup, &fs, &mut state);
-        assert!(matches!(result, Err(ApprovalStateError::WriteUncertain(WriteError::Io { step: WriteStep::SyncDir, .. }))), "{label}");
+        assert!(
+            matches!(
+                result,
+                Err(ApprovalStateError::WriteUncertain(WriteError::Io {
+                    step: WriteStep::SyncDir,
+                    ..
+                }))
+            ),
+            "{label}"
+        );
         assert_eq!(state, old, "{label}");
         let calls = fs.trace().len();
         assert_eq!(setup.reserve(&fs, &mut state), Err(ApprovalStateError::ReloadRequired), "{label}");
@@ -332,7 +437,10 @@ fn a_crash_at_every_point_leaves_the_old_or_the_new_state() {
             fs.crash();
             let reloaded = setup.reload_working(&fs, &context);
             assert!(reloaded == old || reloaded == new, "{context}: {reloaded:?}");
-            assert!(result.is_err() || reloaded == new, "{context}: an operation that returned Ok was lost");
+            assert!(
+                result.is_err() || reloaded == new,
+                "{context}: an operation that returned Ok was lost"
+            );
         });
     });
 }
@@ -363,7 +471,10 @@ fn the_state_is_written_only_by_one_durable_replace_per_operation() {
         let base = fs.trace().len();
         op(&setup, &fs, &mut state).unwrap();
         let renames: Vec<FsCall> = fs.trace().split_off(base).into_iter().filter(|c| c.op() == FsOp::Rename).collect();
-        assert!(matches!(renames.as_slice(), [FsCall::Rename { to, .. }] if *to == path), "{label}: {renames:?}");
+        assert!(
+            matches!(renames.as_slice(), [FsCall::Rename { to, .. }] if *to == path),
+            "{label}: {renames:?}"
+        );
         assert_eq!(fs.trace().last().map(FsCall::op), Some(FsOp::SyncDir), "{label}");
     });
 }

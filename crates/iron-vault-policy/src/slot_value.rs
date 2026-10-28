@@ -77,12 +77,14 @@ mod tests {
 
     #[test]
     fn rejects_control_characters_without_echoing_input() {
-        ["a\r\nX-Evil: 1", "a\nb", "a\rb", "a\0b", "a\u{85}b", "a\tb", "a\u{7f}b"].iter().for_each(|input| {
-            let err = make(input).unwrap_err();
-            assert_eq!(err, SlotValueError::ControlChar, "{input:?}");
-            let text = format!("{err} {err:?}");
-            assert!(!text.contains("Evil") && !text.contains(" 1") && !text.contains("a\n"), "{text}");
-        });
+        ["a\r\nX-Evil: 1", "a\nb", "a\rb", "a\0b", "a\u{85}b", "a\tb", "a\u{7f}b"]
+            .iter()
+            .for_each(|input| {
+                let err = make(input).unwrap_err();
+                assert_eq!(err, SlotValueError::ControlChar, "{input:?}");
+                let text = format!("{err} {err:?}");
+                assert!(!text.contains("Evil") && !text.contains(" 1") && !text.contains("a\n"), "{text}");
+            });
     }
 
     #[test]

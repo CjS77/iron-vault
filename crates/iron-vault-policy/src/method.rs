@@ -45,7 +45,15 @@ pub enum MethodError {
     ),
 }
 
-const ALL: [Method; 7] = [Method::Get, Method::Head, Method::Post, Method::Put, Method::Patch, Method::Delete, Method::Options];
+const ALL: [Method; 7] = [
+    Method::Get,
+    Method::Head,
+    Method::Post,
+    Method::Put,
+    Method::Patch,
+    Method::Delete,
+    Method::Options,
+];
 
 const FORBIDDEN: [&str; 2] = ["CONNECT", "TRACE"];
 

@@ -43,7 +43,13 @@ impl CredentialRecord {
         source: Source,
     ) -> Result<Self, KindError> {
         material.validate()?;
-        Ok(Self { id, name, material, origins, source })
+        Ok(Self {
+            id,
+            name,
+            material,
+            origins,
+            source,
+        })
     }
 
     /// The record's GUID.
@@ -103,27 +109,52 @@ mod tests {
 
     fn record(material: CredentialMaterial) -> Result<CredentialRecord, KindError> {
         let origins = PermittedOrigins::new([("api.example".parse().unwrap(), Port::HTTPS)].into()).unwrap();
-        CredentialRecord::new(RecordId::new_random(), "fx_key".parse().unwrap(), material, origins, Source::DirectEntry)
+        CredentialRecord::new(
+            RecordId::new_random(),
+            "fx_key".parse().unwrap(),
+            material,
+            origins,
+            Source::DirectEntry,
+        )
     }
 
     #[test]
     fn kind_follows_the_material() {
-        let basic = CredentialMaterial::Basic { username: "u".into(), password: "p".into() };
-        assert_eq!(record(CredentialMaterial::Static { key: "k".into() }).unwrap().kind(), CredentialKind::Static);
+        let basic = CredentialMaterial::Basic {
+            username: "u".into(),
+            password: "p".into(),
+        };
+        assert_eq!(
+            record(CredentialMaterial::Static { key: "k".into() }).unwrap().kind(),
+            CredentialKind::Static
+        );
         assert_eq!(record(basic).unwrap().kind(), CredentialKind::Basic);
     }
 
     #[test]
     fn invalid_material_is_refused() {
-        let material = CredentialMaterial::Basic { username: "u:v".into(), password: "p".into() };
-        assert_eq!(record(material).err(), Some(KindError::InvalidBasic(BasicCredentialError::ColonInUsername)));
+        let material = CredentialMaterial::Basic {
+            username: "u:v".into(),
+            password: "p".into(),
+        };
+        assert_eq!(
+            record(material).err(),
+            Some(KindError::InvalidBasic(BasicCredentialError::ColonInUsername))
+        );
     }
 
     #[test]
     fn debug_hides_the_secret() {
-        let record = record(CredentialMaterial::Basic { username: "QZJW-user".into(), password: "QZJW-pw".into() }).unwrap();
+        let record = record(CredentialMaterial::Basic {
+            username: "QZJW-user".into(),
+            password: "QZJW-pw".into(),
+        })
+        .unwrap();
         let debug = format!("{record:?}");
         assert!(!debug.contains("QZJW"), "{debug}");
-        assert!(debug.contains("Basic") && debug.contains("fx_key") && debug.contains("api.example"), "{debug}");
+        assert!(
+            debug.contains("Basic") && debug.contains("fx_key") && debug.contains("api.example"),
+            "{debug}"
+        );
     }
 }

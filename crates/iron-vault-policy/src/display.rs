@@ -10,5 +10,13 @@ pub(crate) fn quoted(s: &str) -> String {
 /// Non-ASCII is escaped as well as control characters so that format characters such as U+202E (right-to-left
 /// override) cannot reorder what a log reader sees.
 pub(crate) fn escaped(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() || !c.is_ascii() { c.escape_default().to_string() } else { c.to_string() }).collect()
+    s.chars()
+        .map(|c| {
+            if c.is_control() || !c.is_ascii() {
+                c.escape_default().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
 }

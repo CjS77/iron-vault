@@ -48,7 +48,9 @@ pub fn sanitize(caller: &[(HeaderName, HeaderValue)], token_header: &HeaderName)
 
 /// Rejects framing that the HTTP stack and the upstream could read differently.
 fn check_framing(caller: &[(HeaderName, HeaderValue)]) -> Result<(), SanitizeError> {
-    let lengths = values_of(caller, "content-length").map(content_length).collect::<Result<Vec<_>, _>>()?;
+    let lengths = values_of(caller, "content-length")
+        .map(content_length)
+        .collect::<Result<Vec<_>, _>>()?;
     let Some(first) = lengths.first() else {
         return Ok(());
     };
@@ -63,7 +65,10 @@ fn check_framing(caller: &[(HeaderName, HeaderValue)]) -> Result<(), SanitizeErr
 
 /// Every value of the headers whose lowercase name is `lowercase`.
 fn values_of<'a>(caller: &'a [(HeaderName, HeaderValue)], lowercase: &'a str) -> impl Iterator<Item = &'a [u8]> {
-    caller.iter().filter(move |(name, _)| name.lowercase() == lowercase).map(|(_, value)| value.as_bytes())
+    caller
+        .iter()
+        .filter(move |(name, _)| name.lowercase() == lowercase)
+        .map(|(_, value)| value.as_bytes())
 }
 
 /// A `Content-Length` value as a number: ASCII digits only, so signs, lists and whitespace inside are rejected.
@@ -114,7 +119,10 @@ mod tests {
 
     fn sanitized(pairs: &[(&str, &str)], token_header: &HeaderName) -> Vec<(String, String)> {
         let outgoing = sanitize(&headers(pairs), token_header).unwrap();
-        outgoing.iter().map(|(n, v)| (n.as_str().to_owned(), String::from_utf8_lossy(v.as_bytes()).into_owned())).collect()
+        outgoing
+            .iter()
+            .map(|(n, v)| (n.as_str().to_owned(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
+            .collect()
     }
 
     fn names(pairs: &[(&str, &str)], token_header: &HeaderName) -> Vec<String> {
@@ -170,19 +178,31 @@ mod tests {
 
     #[test]
     fn caller_host_never_reaches_the_output() {
-        assert_eq!(names(&[("Host", "evil.example"), ("HOST", "evil.example")], &proxy_authorization()), Vec::<String>::new());
+        assert_eq!(
+            names(&[("Host", "evil.example"), ("HOST", "evil.example")], &proxy_authorization()),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
     fn unrelated_headers_pass_through_in_order_with_duplicates() {
-        let pairs = [("Accept", "a"), ("User-Agent", "u"), ("X-Custom", "1"), ("Accept", "b"), ("X-Custom", "2")];
+        let pairs = [
+            ("Accept", "a"),
+            ("User-Agent", "u"),
+            ("X-Custom", "1"),
+            ("Accept", "b"),
+            ("X-Custom", "2"),
+        ];
         let expected: Vec<_> = pairs.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect();
         assert_eq!(sanitized(&pairs, &proxy_authorization()), expected);
     }
 
     #[test]
     fn rejects_ambiguous_framing() {
-        assert_eq!(rejected(&[("Content-Length", "5"), ("content-length", "6")]), SanitizeError::ConflictingContentLength);
+        assert_eq!(
+            rejected(&[("Content-Length", "5"), ("content-length", "6")]),
+            SanitizeError::ConflictingContentLength
+        );
         assert_eq!(
             rejected(&[("Content-Length", "5"), ("Transfer-Encoding", "chunked")]),
             SanitizeError::ContentLengthWithTransferEncoding
@@ -200,7 +220,10 @@ mod tests {
 
     #[test]
     fn transfer_encoding_alone_is_stripped() {
-        assert_eq!(names(&[("Transfer-Encoding", "chunked"), ("Accept", "a")], &proxy_authorization()), ["Accept"]);
+        assert_eq!(
+            names(&[("Transfer-Encoding", "chunked"), ("Accept", "a")], &proxy_authorization()),
+            ["Accept"]
+        );
     }
 
     #[test]

@@ -91,7 +91,10 @@ impl SoftwareSigner {
     /// The signer for `key`, refusing it unless its public key is `pinned`'s.
     fn new(key: SoftwareSignerKey, pinned: &PinnedApprover) -> Result<Self, SignError> {
         match key.pinned() == *pinned {
-            true => Ok(Self { key: key.0, pinned: pinned.clone() }),
+            true => Ok(Self {
+                key: key.0,
+                pinned: pinned.clone(),
+            }),
             false => Err(SignError::KeyMismatch),
         }
     }
@@ -114,7 +117,9 @@ impl ApprovalSigner for SoftwareSigner {
 
 impl fmt::Debug for SoftwareSigner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SoftwareSigner").field("algorithm", &SignatureAlgorithm::Ed25519).finish_non_exhaustive()
+        f.debug_struct("SoftwareSigner")
+            .field("algorithm", &SignatureAlgorithm::Ed25519)
+            .finish_non_exhaustive()
     }
 }
 
@@ -153,7 +158,9 @@ fn seal_signer_key_at(key: &SoftwareSignerKey, passphrase: &ApprovalPassphrase, 
 /// other plaintext never opens as a signing key.
 fn open_key(envelope: &[u8], passphrase: &ApprovalPassphrase) -> Result<SoftwareSignerKey, SignError> {
     let plaintext = open_scrypt_file(envelope, passphrase.for_age(), SECRET_KEY_LENGTH)?;
-    let seed: &[u8; SECRET_KEY_LENGTH] =
-        plaintext.as_slice().try_into().map_err(|_| SignError::Envelope(EnvelopeError::Malformed))?;
+    let seed: &[u8; SECRET_KEY_LENGTH] = plaintext
+        .as_slice()
+        .try_into()
+        .map_err(|_| SignError::Envelope(EnvelopeError::Malformed))?;
     Ok(SoftwareSignerKey(SigningKey::from_bytes(seed)))
 }

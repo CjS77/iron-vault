@@ -135,7 +135,9 @@ mod tests {
 
     #[test]
     fn rejects_lock() {
-        ["lock", "LOCK", "Lock"].iter().for_each(|n| assert_eq!(StateFileName::new(n), Err(StateFileNameError::Lock)));
+        ["lock", "LOCK", "Lock"]
+            .iter()
+            .for_each(|n| assert_eq!(StateFileName::new(n), Err(StateFileNameError::Lock)));
         assert!(StateFileName::new("lock2").is_ok());
     }
 
@@ -147,7 +149,10 @@ mod tests {
         assert_eq!(StateFileName::new("approval.age"), Ok(StateFileName::approval_state()));
         assert_eq!(StateFileName::new("approver.age"), Ok(StateFileName::approver_key()));
         let id: RecordId = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();
-        assert_eq!(StateFileName::record(&id).as_str(), "record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age");
+        assert_eq!(
+            StateFileName::record(&id).as_str(),
+            "record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age"
+        );
         (0..32).map(|_| StateFileName::record(&RecordId::new_random())).for_each(|name| {
             assert_eq!(StateFileName::new(name.as_str()).as_ref(), Ok(&name));
         });
@@ -170,8 +175,21 @@ mod tests {
 
     #[test]
     fn from_temp_name_rejects_everything_else() {
-        [".tmp", "..tmp", "...tmp", ".lock.tmp", ".LOCK.tmp", ".a/b.tmp", "a.tmp", ".a.tmp~", ".a.TMP", ".hidden", ". .tmp", ""]
-            .iter()
-            .for_each(|n| assert_eq!(StateFileName::from_temp_name(n), None, "{n:?}"));
+        [
+            ".tmp",
+            "..tmp",
+            "...tmp",
+            ".lock.tmp",
+            ".LOCK.tmp",
+            ".a/b.tmp",
+            "a.tmp",
+            ".a.tmp~",
+            ".a.TMP",
+            ".hidden",
+            ". .tmp",
+            "",
+        ]
+        .iter()
+        .for_each(|n| assert_eq!(StateFileName::from_temp_name(n), None, "{n:?}"));
     }
 }

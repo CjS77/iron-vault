@@ -58,7 +58,9 @@ mod tests {
 
     #[test]
     fn text_without_markers_yields_nothing() {
-        ["", "placeholder", "{}", "{iv}", "{IV:fx_key}", "iv:fx_key}", "{ iv:fx_key}"].iter().for_each(|t| assert_eq!(scan(t), [], "{t}"));
+        ["", "placeholder", "{}", "{iv}", "{IV:fx_key}", "iv:fx_key}", "{ iv:fx_key}"]
+            .iter()
+            .for_each(|t| assert_eq!(scan(t), [], "{t}"));
     }
 
     #[test]

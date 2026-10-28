@@ -93,7 +93,10 @@ impl Vault {
     fn ensure_same_dir(&self, lock: &StateDirLock) -> Result<(), VaultError> {
         match lock.dir() == self.dir {
             true => Ok(()),
-            false => Err(VaultError::WrongStateDir { vault_dir: self.dir.clone(), lock_dir: lock.dir().to_path_buf() }),
+            false => Err(VaultError::WrongStateDir {
+                vault_dir: self.dir.clone(),
+                lock_dir: lock.dir().to_path_buf(),
+            }),
         }
     }
 
@@ -104,7 +107,8 @@ impl Vault {
     /// on disk, so this also stops every write after one until the vault is reopened.
     fn ensure_disk_manifest_matches(&self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<(), VaultError> {
         // MAX_MANIFEST_LEN is 1 MiB, so it always fits in a u64.
-        let bytes = read_state_file(lock, fs, &StateFileName::manifest(), MAX_MANIFEST_LEN as u64).map_err(|_| VaultError::ReopenRequired)?;
+        let bytes =
+            read_state_file(lock, fs, &StateFileName::manifest(), MAX_MANIFEST_LEN as u64).map_err(|_| VaultError::ReopenRequired)?;
         match open_manifest(&self.identity, &bytes) {
             Ok(on_disk) if on_disk == self.manifest => Ok(()),
             _ => Err(VaultError::ReopenRequired),
@@ -113,7 +117,11 @@ impl Vault {
 
     /// The record ID the manifest lists under `name`, whether its record is healthy or damaged.
     pub(super) fn record_id_of(&self, name: &CredentialName) -> Option<RecordId> {
-        self.manifest.entries().iter().find(|(_, entry)| entry.name() == name).map(|(id, _)| *id)
+        self.manifest
+            .entries()
+            .iter()
+            .find(|(_, entry)| entry.name() == name)
+            .map(|(id, _)| *id)
     }
 
     /// Seals the new record and builds and seals the next manifest, touching no file.
@@ -128,7 +136,13 @@ impl Vault {
         }
         let manifest = self.manifest.next(entries).map_err(VaultError::NextManifest)?;
         let manifest_bytes = seal_manifest(&self.identity, &manifest).map_err(VaultError::Seal)?;
-        Ok(Prepared { name, new, old, manifest, manifest_bytes })
+        Ok(Prepared {
+            name,
+            new,
+            old,
+            manifest,
+            manifest_bytes,
+        })
     }
 
     /// Runs the file steps of a prepared write, then updates memory once the manifest has committed.
@@ -139,7 +153,9 @@ impl Vault {
             write_record_file(lock, fs, new)?;
         }
         commit_manifest(lock, fs, &prepared.manifest_bytes).inspect_err(|error| after_failed_commit(lock, fs, &prepared, error))?;
-        let Prepared { name, new, old, manifest, .. } = prepared;
+        let Prepared {
+            name, new, old, manifest, ..
+        } = prepared;
         self.manifest = manifest;
         match new {
             Some(new) => self.healthy.insert(name, new.record),
@@ -174,7 +190,9 @@ fn after_failed_commit(lock: &StateDirLock, fs: &impl StoreFs, prepared: &Prepar
 /// [`VaultError::CommitUncertain`], never "unchanged".
 pub(super) fn commit_manifest(lock: &StateDirLock, fs: &impl StoreFs, bytes: &[u8]) -> Result<(), VaultError> {
     durable_replace(lock, fs, &StateFileName::manifest(), bytes).map_err(|error| match error {
-        WriteError::Io { step: WriteStep::SyncDir, .. } => {
+        WriteError::Io {
+            step: WriteStep::SyncDir, ..
+        } => {
             tracing::error!(
                 error = %error,
                 remediation = "reopen the vault: the write committed only if the reopened vault shows it",

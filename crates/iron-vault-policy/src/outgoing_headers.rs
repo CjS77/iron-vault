@@ -85,8 +85,20 @@ mod tests {
     #[test]
     fn insert_rejects_reserved_headers() {
         let mut headers = OutgoingHeaders::new();
-        ["Host", "X-Forwarded-For", "content-length", "Transfer-Encoding", "Proxy-Authorization"].iter().for_each(|h| {
-            assert_eq!(headers.insert(name(h), value("x")), Err(OutgoingHeadersError::Reserved { name: name(h) }), "{h}");
+        [
+            "Host",
+            "X-Forwarded-For",
+            "content-length",
+            "Transfer-Encoding",
+            "Proxy-Authorization",
+        ]
+        .iter()
+        .for_each(|h| {
+            assert_eq!(
+                headers.insert(name(h), value("x")),
+                Err(OutgoingHeadersError::Reserved { name: name(h) }),
+                "{h}"
+            );
         });
         assert_eq!(headers, OutgoingHeaders::new());
     }
@@ -108,6 +120,9 @@ mod tests {
     #[test]
     fn error_names_the_header() {
         let error = OutgoingHeaders::new().insert(name("Host"), value("evil.example")).unwrap_err();
-        assert_eq!(error.to_string(), "Host is a reserved header and cannot be added to an outgoing request");
+        assert_eq!(
+            error.to_string(),
+            "Host is a reserved header and cannot be added to an outgoing request"
+        );
     }
 }

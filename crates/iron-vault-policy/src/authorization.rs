@@ -106,7 +106,10 @@ pub fn authorize(
     query: Option<RawQuery>,
 ) -> Result<AuthorizedRequest, AuthzError> {
     let name = select_route(policy, path).ok_or(AuthzError::NotFound)?;
-    let forbidden = |reason| AuthzError::Forbidden { route: name.clone(), reason };
+    let forbidden = |reason| AuthzError::Forbidden {
+        route: name.clone(),
+        reason,
+    };
     if !is_granted(policy, caller, name) {
         return Err(forbidden(Refusal::NotGranted));
     }
@@ -128,12 +131,19 @@ pub fn authorize(
 /// Validation guarantees that no two prefixes overlap, so at most one route matches.
 fn select_route<'a>(policy: &'a ActivePolicy, path: &NormalizedPath) -> Option<&'a RouteName> {
     let routes = policy.config().routes().iter();
-    routes.filter(|(_, route)| path.segments().starts_with(route.prefix().segments())).map(|(name, _)| name).next()
+    routes
+        .filter(|(_, route)| path.segments().starts_with(route.prefix().segments()))
+        .map(|(name, _)| name)
+        .next()
 }
 
 /// Whether `caller` lists `route` among its grants; an unknown caller has none.
 fn is_granted(policy: &ActivePolicy, caller: &CallerName, route: &RouteName) -> bool {
-    policy.config().callers().get(caller).is_some_and(|config| config.routes().contains(route))
+    policy
+        .config()
+        .callers()
+        .get(caller)
+        .is_some_and(|config| config.routes().contains(route))
 }
 
 /// Builds the plan for `path` on `route`: the upstream base segments, then the request segments after the prefix.
@@ -143,7 +153,13 @@ fn plan(name: &RouteName, method: Method, route: &RouteConfig, path: &Normalized
     let remainder = path.segments().iter().skip(route.prefix().segments().len());
     let upstream_segments: Vec<String> = route.upstream().base_segments().iter().chain(remainder).cloned().collect();
     let trailing_slash = path.has_trailing_slash() && !upstream_segments.is_empty();
-    AuthorizedRequest { route: name.clone(), method, upstream_segments, trailing_slash, query }
+    AuthorizedRequest {
+        route: name.clone(),
+        method,
+        upstream_segments,
+        trailing_slash,
+        query,
+    }
 }
 
 #[cfg(test)]
@@ -169,9 +185,10 @@ mod tests {
             };
             match self.0.contains(&name.as_str()) {
                 true => CatalogEntry::Unusable,
-                false => {
-                    CatalogEntry::Usable { kind: crate::CredentialKind::Static, origins: [(host.parse().unwrap(), Port::HTTPS)].into() }
-                }
+                false => CatalogEntry::Usable {
+                    kind: crate::CredentialKind::Static,
+                    origins: [(host.parse().unwrap(), Port::HTTPS)].into(),
+                },
             }
         }
     }
@@ -222,17 +239,33 @@ mod tests {
     #[test]
     fn method_and_path_restrictions_apply() {
         let p = policy(&[]);
-        assert_eq!(upstream_path(&request(&p, "fx-mcp", Method::Get, "/fx/historical/2024/01").unwrap()), "/historical/2024/01");
-        assert_eq!(request(&p, "fx-mcp", Method::Get, "/fx/convert"), Err(forbidden("fx", Refusal::Path)));
-        assert_eq!(request(&p, "fx-mcp", Method::Post, "/fx/latest"), Err(forbidden("fx", Refusal::Method)));
+        assert_eq!(
+            upstream_path(&request(&p, "fx-mcp", Method::Get, "/fx/historical/2024/01").unwrap()),
+            "/historical/2024/01"
+        );
+        assert_eq!(
+            request(&p, "fx-mcp", Method::Get, "/fx/convert"),
+            Err(forbidden("fx", Refusal::Path))
+        );
+        assert_eq!(
+            request(&p, "fx-mcp", Method::Post, "/fx/latest"),
+            Err(forbidden("fx", Refusal::Method))
+        );
     }
 
     #[test]
     fn prefixes_match_complete_segments_only() {
         let p = policy(&[]);
-        ["/fx.evil.example/latest", "/fx@evil.example", "/fxlatest", "/nothing", "/", "/FX/latest"]
-            .iter()
-            .for_each(|target| assert_eq!(request(&p, "fx-mcp", Method::Get, target), Err(AuthzError::NotFound), "{target}"));
+        [
+            "/fx.evil.example/latest",
+            "/fx@evil.example",
+            "/fxlatest",
+            "/nothing",
+            "/",
+            "/FX/latest",
+        ]
+        .iter()
+        .for_each(|target| assert_eq!(request(&p, "fx-mcp", Method::Get, target), Err(AuthzError::NotFound), "{target}"));
     }
 
     #[test]
@@ -244,16 +277,28 @@ mod tests {
     #[test]
     fn ungranted_route_is_forbidden() {
         let p = policy(&[]);
-        assert_eq!(request(&p, "fx-mcp", Method::Get, "/brave/res/v1/web/search"), Err(forbidden("brave", Refusal::NotGranted)));
-        assert_eq!(request(&p, "naomi-backoffice", Method::Get, "/fx/latest"), Err(forbidden("fx", Refusal::NotGranted)));
-        assert_eq!(request(&p, "nobody", Method::Get, "/fx/latest"), Err(forbidden("fx", Refusal::NotGranted)));
+        assert_eq!(
+            request(&p, "fx-mcp", Method::Get, "/brave/res/v1/web/search"),
+            Err(forbidden("brave", Refusal::NotGranted))
+        );
+        assert_eq!(
+            request(&p, "naomi-backoffice", Method::Get, "/fx/latest"),
+            Err(forbidden("fx", Refusal::NotGranted))
+        );
+        assert_eq!(
+            request(&p, "nobody", Method::Get, "/fx/latest"),
+            Err(forbidden("fx", Refusal::NotGranted))
+        );
     }
 
     #[test]
     fn unavailable_route_answers_503_and_others_still_serve() {
         let p = policy(&["venice"]);
         let unavailable = Err(AuthzError::Unavailable { route: n("venice") });
-        assert_eq!(request(&p, "naomi-backoffice", Method::Post, "/venice/chat/completions"), unavailable);
+        assert_eq!(
+            request(&p, "naomi-backoffice", Method::Post, "/venice/chat/completions"),
+            unavailable
+        );
         assert!(request(&p, "naomi-backoffice", Method::Get, "/brave/res/v1/web/search").is_ok());
         assert!(request(&p, "fx-mcp", Method::Get, "/fx/latest").is_ok());
     }
@@ -261,7 +306,10 @@ mod tests {
     #[test]
     fn ungranted_caller_never_learns_a_route_is_unavailable() {
         let p = policy(&["venice"]);
-        assert_eq!(request(&p, "fx-mcp", Method::Post, "/venice/chat/completions"), Err(forbidden("venice", Refusal::NotGranted)));
+        assert_eq!(
+            request(&p, "fx-mcp", Method::Post, "/venice/chat/completions"),
+            Err(forbidden("venice", Refusal::NotGranted))
+        );
     }
 
     #[test]

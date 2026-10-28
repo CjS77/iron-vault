@@ -65,13 +65,16 @@ impl PinnedApprover {
     pub fn new(algorithm: SignatureAlgorithm, public_key: Vec<u8>) -> Result<Self, ApprovalStateError> {
         match algorithm {
             SignatureAlgorithm::Ed25519 => {
-                let bytes: [u8; 32] =
-                    public_key.try_into().map_err(|key: Vec<u8>| ApprovalStateError::PublicKeyLength { algorithm, len: key.len() })?;
+                let bytes: [u8; 32] = public_key
+                    .try_into()
+                    .map_err(|key: Vec<u8>| ApprovalStateError::PublicKeyLength { algorithm, len: key.len() })?;
                 let key = VerifyingKey::from_bytes(&bytes).map_err(|_| invalid(algorithm, InvalidKeyReason::NotAPoint))?;
                 if key.is_weak() {
                     return Err(invalid(algorithm, InvalidKeyReason::WeakKey));
                 }
-                Ok(Self { key: ApproverKey::Ed25519(key) })
+                Ok(Self {
+                    key: ApproverKey::Ed25519(key),
+                })
             }
         }
     }
@@ -81,7 +84,9 @@ impl PinnedApprover {
     /// Infallible because an Ed25519 public key is a clamped scalar times the basepoint: clamping makes the scalar a
     /// multiple of the cofactor and the basepoint has prime order, so the result is never a small-order point.
     pub(crate) fn from_signing_key(signing_key: &SigningKey) -> Self {
-        Self { key: ApproverKey::Ed25519(signing_key.verifying_key()) }
+        Self {
+            key: ApproverKey::Ed25519(signing_key.verifying_key()),
+        }
     }
 
     /// The algorithm approvals must be signed with.
@@ -208,7 +213,12 @@ pub enum ApprovalStateError {
 impl ApprovalState {
     /// The state of a newly created vault: `approver` pinned, nothing reserved and nothing committed.
     pub fn new_for_vault(vault_id: VaultId, approver: PinnedApprover) -> Self {
-        Self { vault_id, approver, highest_reserved: 0, committed: None }
+        Self {
+            vault_id,
+            approver,
+            highest_reserved: 0,
+            committed: None,
+        }
     }
 
     /// A state from its parts, refusing a committed version above the highest reserved one.
@@ -220,7 +230,12 @@ impl ApprovalState {
     ) -> Result<Self, ApprovalStateError> {
         match committed {
             Some((version, _)) if version.get() > highest_reserved => Err(ApprovalStateError::CommittedNotReserved),
-            _ => Ok(Self { vault_id, approver, highest_reserved, committed }),
+            _ => Ok(Self {
+                vault_id,
+                approver,
+                highest_reserved,
+                committed,
+            }),
         }
     }
 
@@ -247,8 +262,8 @@ impl ApprovalState {
     /// Any error is damaged shared state (spec §3.10): approvals cannot be checked, so the service must not proxy.
     pub fn load(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, vault_id: VaultId) -> Result<Self, ApprovalStateError> {
         // MAX_APPROVAL_STATE_LEN is 4 KiB, so it always fits in a u64.
-        let file = read_state_file(lock, fs, &StateFileName::approval_state(), MAX_APPROVAL_STATE_LEN as u64)
-            .map_err(ApprovalStateError::Read)?;
+        let file =
+            read_state_file(lock, fs, &StateFileName::approval_state(), MAX_APPROVAL_STATE_LEN as u64).map_err(ApprovalStateError::Read)?;
         let state = open_approval_state(identity, &file)?;
         match state.vault_id == vault_id {
             true => Ok(state),
@@ -287,8 +302,20 @@ impl ApprovalState {
         fs: &impl StoreFs,
         identity: &VaultIdentity,
     ) -> Result<ApprovalVersion, ApprovalStateError> {
-        let version = self.highest_reserved.checked_add(1).and_then(ApprovalVersion::new).ok_or(ApprovalStateError::Exhausted)?;
-        self.write(lock, fs, identity, Self { highest_reserved: version.get(), ..self.clone() })?;
+        let version = self
+            .highest_reserved
+            .checked_add(1)
+            .and_then(ApprovalVersion::new)
+            .ok_or(ApprovalStateError::Exhausted)?;
+        self.write(
+            lock,
+            fs,
+            identity,
+            Self {
+                highest_reserved: version.get(),
+                ..self.clone()
+            },
+        )?;
         Ok(version)
     }
 
@@ -305,11 +332,22 @@ impl ApprovalState {
         digest: ConfigDigest,
     ) -> Result<(), ApprovalStateError> {
         if version.get() > self.highest_reserved {
-            return Err(ApprovalStateError::NotReserved { version, highest_reserved: self.highest_reserved });
+            return Err(ApprovalStateError::NotReserved {
+                version,
+                highest_reserved: self.highest_reserved,
+            });
         }
         match self.committed {
             Some((committed, _)) if version <= committed => Err(ApprovalStateError::NotNewer { version, committed }),
-            _ => self.write(lock, fs, identity, Self { committed: Some((version, digest)), ..self.clone() }),
+            _ => self.write(
+                lock,
+                fs,
+                identity,
+                Self {
+                    committed: Some((version, digest)),
+                    ..self.clone()
+                },
+            ),
         }
     }
 
@@ -350,7 +388,10 @@ impl ApprovalState {
 /// Refuses to create the approval state over an existing file, whatever it holds.
 fn refuse_existing(lock: &StateDirLock, fs: &impl StoreFs) -> Result<(), ApprovalStateError> {
     match read_state_file(lock, fs, &StateFileName::approval_state(), MAX_APPROVAL_STATE_LEN as u64) {
-        Err(ReadError::Io { kind: io::ErrorKind::NotFound, .. }) => Ok(()),
+        Err(ReadError::Io {
+            kind: io::ErrorKind::NotFound,
+            ..
+        }) => Ok(()),
         Ok(_) | Err(ReadError::TooLarge { .. }) => Err(ApprovalStateError::AlreadyExists),
         Err(other) => Err(ApprovalStateError::Read(other)),
     }
@@ -360,7 +401,9 @@ fn refuse_existing(lock: &StateDirLock, fs: &impl StoreFs) -> Result<(), Approva
 /// hold the new state; that is [`ApprovalStateError::WriteUncertain`], never "unchanged".
 fn replace_file(lock: &StateDirLock, fs: &impl StoreFs, bytes: &[u8]) -> Result<(), ApprovalStateError> {
     durable_replace(lock, fs, &StateFileName::approval_state(), bytes).map_err(|error| match error {
-        WriteError::Io { step: WriteStep::SyncDir, .. } => {
+        WriteError::Io {
+            step: WriteStep::SyncDir, ..
+        } => {
             tracing::error!(
                 error = %error,
                 remediation = "reload the approval state: the change took effect only if the reloaded state shows it",

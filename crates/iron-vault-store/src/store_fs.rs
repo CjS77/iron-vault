@@ -84,11 +84,16 @@ impl StoreFs for OsFs {
     /// they fail closed; a direct caller of this method has already renamed or unlinked by the time it fails.
     #[cfg(not(unix))]
     fn sync_dir(&self, _dir: &Path) -> io::Result<()> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "directory fsync is not supported on this platform"))
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "directory fsync is not supported on this platform",
+        ))
     }
 
     fn list_dir(&self, dir: &Path) -> io::Result<Vec<OsString>> {
-        let mut names = std::fs::read_dir(dir)?.map(|entry| entry.map(|e| e.file_name())).collect::<io::Result<Vec<_>>>()?;
+        let mut names = std::fs::read_dir(dir)?
+            .map(|entry| entry.map(|e| e.file_name()))
+            .collect::<io::Result<Vec<_>>>()?;
         names.sort();
         Ok(names)
     }
@@ -184,7 +189,9 @@ mod tests {
     #[test]
     fn list_dir_is_sorted() {
         let dir = TestDir::new("fs-list");
-        ["c", "a", "b"].iter().for_each(|n| std::fs::write(dir.path().join(n), b"").unwrap());
+        ["c", "a", "b"]
+            .iter()
+            .for_each(|n| std::fs::write(dir.path().join(n), b"").unwrap());
         assert_eq!(OsFs.list_dir(dir.path()).unwrap(), ["a", "b", "c"]);
     }
 

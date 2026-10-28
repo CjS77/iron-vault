@@ -87,8 +87,16 @@ pub(crate) fn parse_header(file: &[u8]) -> Option<Header> {
         .filter_map(|line| line.strip_prefix(STANZA_PREFIX))
         .collect();
     let kinds = stanzas.iter().map(|rest| StanzaKind::from_tag(stanza_tag(rest))).collect();
-    let scrypt_work_factors = stanzas.iter().filter(|rest| stanza_tag(rest) == SCRYPT_TAG).map(|rest| scrypt_work_factor(rest)).collect();
-    Some(Header { kinds, complete, scrypt_work_factors })
+    let scrypt_work_factors = stanzas
+        .iter()
+        .filter(|rest| stanza_tag(rest) == SCRYPT_TAG)
+        .map(|rest| scrypt_work_factor(rest))
+        .collect();
+    Some(Header {
+        kinds,
+        complete,
+        scrypt_work_factors,
+    })
 }
 
 /// The newline-terminated lines of `bytes`, without their terminators; an unterminated final line is dropped.
@@ -145,7 +153,14 @@ mod tests {
         let file = b"age-encryption.org/v1\n-> scrypt c2FsdA 18\nAAAA\n-> scrypt c2FsdA 018\n\n-> scrypt s 7 x\n\n-> X25519 a 9\n\n--- M\n";
         let header = parse_header(file).unwrap();
         assert_eq!(header.scrypt_work_factors, [Some(18), None, Some(7)]);
-        let odd = [&b"-> scrypt s"[..], b"-> scrypt s -1", b"-> scrypt s 1a", b"-> scrypt s ", b"-> scrypt s 0", b"-> scrypt s 100"];
+        let odd = [
+            &b"-> scrypt s"[..],
+            b"-> scrypt s -1",
+            b"-> scrypt s 1a",
+            b"-> scrypt s ",
+            b"-> scrypt s 0",
+            b"-> scrypt s 100",
+        ];
         odd.iter().for_each(|line| {
             let file = [&b"age-encryption.org/v1\n"[..], line, b"\n\n--- M\n"].concat();
             assert_eq!(parse_header(&file).unwrap().scrypt_work_factors, [None], "{line:?}");
@@ -154,8 +169,13 @@ mod tests {
 
     #[test]
     fn non_age_input_has_no_header() {
-        [&b""[..], b"age-encryption.org/v1", b"hello\n", b"-----BEGIN AGE ENCRYPTED FILE-----\n"]
-            .iter()
-            .for_each(|file| assert!(parse_header(file).is_none(), "{file:?}"));
+        [
+            &b""[..],
+            b"age-encryption.org/v1",
+            b"hello\n",
+            b"-----BEGIN AGE ENCRYPTED FILE-----\n",
+        ]
+        .iter()
+        .for_each(|file| assert!(parse_header(file).is_none(), "{file:?}"));
     }
 }

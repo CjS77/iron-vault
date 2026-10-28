@@ -186,8 +186,16 @@ const OTHER_ORIGINS: &[(&str, u16)] = &[
 
 /// Lowercase names of headers that would let a caller choose the authority, the forwarded-for chain, the URL or the
 /// method the upstream acts on; none may be in a checked request.
-const CONTROL_HEADERS: &[&str] =
-    &["host", "x-forwarded-host", "x-forwarded-for", "forwarded", "x-host", "x-original-url", "x-rewrite-url", "x-http-method-override"];
+const CONTROL_HEADERS: &[&str] = &[
+    "host",
+    "x-forwarded-host",
+    "x-forwarded-for",
+    "forwarded",
+    "x-host",
+    "x-original-url",
+    "x-rewrite-url",
+    "x-http-method-override",
+];
 
 /// The listener's caller-token header; the default when a listener names none.
 const TOKEN_HEADER: &str = "Proxy-Authorization";
@@ -251,7 +259,12 @@ fn run(
     let request = OutgoingRequest::assemble(&authorized, target, outgoing, filler.slot(), filler.credential(), &value).ok()?;
     let checked = final_check(request, &authorized, route.upstream(), route.slot(), &value, permitted);
     let (own_upstream, own_slot) = (upstream_route == selected, slot_route == selected);
-    Some(Run { authorized, own_upstream, own_slot, checked })
+    Some(Run {
+        authorized,
+        own_upstream,
+        own_slot,
+        checked,
+    })
 }
 
 fn wired<'a>(wiring: &'a Option<RouteName>, selected: &'a RouteName) -> &'a RouteName {
@@ -326,15 +339,30 @@ fn wiring() -> impl Strategy<Value = Wiring> {
 
 /// Every route's origin and every other origin, each kept with probability three in four.
 fn permitted() -> impl Strategy<Value = BTreeSet<(Host, Port)>> {
-    let others = OTHER_ORIGINS.iter().map(|(host, port)| (host.parse().unwrap(), Port::try_from(*port).unwrap()));
+    let others = OTHER_ORIGINS
+        .iter()
+        .map(|(host, port)| (host.parse().unwrap(), Port::try_from(*port).unwrap()));
     let universe: Vec<(Host, Port)> = route_origins(POLICY.config()).into_iter().chain(others).collect();
-    vec(weighted(0.75), universe.len())
-        .prop_map(move |keep| universe.iter().zip(keep).filter(|(_, keep)| *keep).map(|(origin, _)| origin.clone()).collect())
+    vec(weighted(0.75), universe.len()).prop_map(move |keep| {
+        universe
+            .iter()
+            .zip(keep)
+            .filter(|(_, keep)| *keep)
+            .map(|(origin, _)| origin.clone())
+            .collect()
+    })
 }
 
 fn case() -> impl Strategy<Value = Case> {
-    (destination_target(), caller_headers(), secret(), wiring(), permitted())
-        .prop_map(|(target, headers, secret, wiring, permitted)| Case { target, headers, secret, wiring, permitted })
+    (destination_target(), caller_headers(), secret(), wiring(), permitted()).prop_map(|(target, headers, secret, wiring, permitted)| {
+        Case {
+            target,
+            headers,
+            secret,
+            wiring,
+            permitted,
+        }
+    })
 }
 
 // Properties, shared by the property tests and the regression examples.
@@ -343,7 +371,14 @@ fn case() -> impl Strategy<Value = Case> {
 /// which the record permits, and its path starts with the upstream base segments. No header can redirect it: none is
 /// an authority, forwarding, URL-rewrite or method-override header, and none is a pseudo-header such as `:authority`.
 fn check_destination(case: &Case) -> Result<(), TestCaseError> {
-    let Some(Run { authorized, checked: Ok(checked), .. }) = case.run() else { return Ok(()) };
+    let Some(Run {
+        authorized,
+        checked: Ok(checked),
+        ..
+    }) = case.run()
+    else {
+        return Ok(());
+    };
     let upstream = selected_route(&authorized).upstream();
     let url = checked.url();
     prop_assert_eq!(url.scheme(), "https", "{:?}", case);
@@ -353,11 +388,18 @@ fn check_destination(case: &Case) -> Result<(), TestCaseError> {
     prop_assert_eq!(url.port_or_known_default(), Some(upstream.port().get()), "{:?}", case);
     let port = url.port_or_known_default().and_then(|port| Port::try_from(port).ok());
     let origin = url.host_str().and_then(|host| host.parse::<Host>().ok()).zip(port);
-    prop_assert!(origin.is_some_and(|origin| case.permitted.contains(&origin)), "{case:?} went to an origin the record does not permit");
+    prop_assert!(
+        origin.is_some_and(|origin| case.permitted.contains(&origin)),
+        "{case:?} went to an origin the record does not permit"
+    );
     let segments: Vec<&str> = url.path_segments().map(Iterator::collect).unwrap_or_default();
     let base: Vec<&str> = upstream.base_segments().iter().map(String::as_str).collect();
     prop_assert!(segments.starts_with(&base), "{case:?} left the base path: {segments:?}");
-    let control = checked.headers().iter().map(|(name, _)| name).find(|name| is_control_header(name.lowercase()));
+    let control = checked
+        .headers()
+        .iter()
+        .map(|(name, _)| name)
+        .find(|name| is_control_header(name.lowercase()));
     prop_assert!(control.is_none(), "{case:?} forwarded {control:?}");
     Ok(())
 }
@@ -385,9 +427,20 @@ fn check_single_slot(case: &Case) -> Result<(), TestCaseError> {
             return Ok(());
         }
     };
-    prop_assert_eq!(slot_entries(&checked, route.slot()), vec![rendered(route.slot(), &case.secret)], "{:?}", case);
-    let headers = checked.headers().iter().map(|(_, value)| String::from_utf8_lossy(value.as_bytes()).into_owned());
-    let copies: usize = headers.chain([checked.url().to_string()]).map(|text| text.matches(SECRET_MARK).count()).sum();
+    prop_assert_eq!(
+        slot_entries(&checked, route.slot()),
+        vec![rendered(route.slot(), &case.secret)],
+        "{:?}",
+        case
+    );
+    let headers = checked
+        .headers()
+        .iter()
+        .map(|(_, value)| String::from_utf8_lossy(value.as_bytes()).into_owned());
+    let copies: usize = headers
+        .chain([checked.url().to_string()])
+        .map(|text| text.matches(SECRET_MARK).count())
+        .sum();
     prop_assert_eq!(copies, 1, "{:?} holds the slot value {} times", case, copies);
     Ok(())
 }
@@ -402,7 +455,9 @@ fn slot_entries(checked: &CheckedRequest, slot: &Slot) -> Vec<String> {
         Slot::Header(_) | Slot::Basic => {
             let written = slot.header_written().unwrap_or_default();
             let values = checked.headers().iter().filter(|(name, _)| name.lowercase() == written);
-            values.map(|(_, value)| String::from_utf8_lossy(value.as_bytes()).into_owned()).collect()
+            values
+                .map(|(_, value)| String::from_utf8_lossy(value.as_bytes()).into_owned())
+                .collect()
         }
     }
 }
@@ -420,7 +475,10 @@ fn rendered(slot: &Slot, secret: &str) -> String {
 fn check_permitted_origins(case: &Case) -> Result<(), TestCaseError> {
     let Some(run) = case.run() else { return Ok(()) };
     let permitted = case.permitted.contains(&upstream_origin(selected_route(&run.authorized)));
-    prop_assert!(permitted || run.checked.is_err(), "{case:?} produced a checked request for an origin the record omits");
+    prop_assert!(
+        permitted || run.checked.is_err(),
+        "{case:?} produced a checked request for an origin the record omits"
+    );
     Ok(())
 }
 
@@ -447,7 +505,10 @@ proptest! {
 fn arbitrary_headers() -> impl Strategy<Value = Vec<(HeaderName, HeaderValue)>> {
     let header = (any::<String>(), vec(any::<u8>(), 0..24));
     vec(header, 0..6).prop_map(|headers| {
-        headers.into_iter().filter_map(|(name, value)| Some((name.parse().ok()?, HeaderValue::try_from(value).ok()?))).collect()
+        headers
+            .into_iter()
+            .filter_map(|(name, value)| Some((name.parse().ok()?, HeaderValue::try_from(value).ok()?)))
+            .collect()
     })
 }
 
@@ -468,14 +529,20 @@ proptest! {
 }
 
 fn typed(headers: &[(&str, &str)]) -> Vec<(HeaderName, HeaderValue)> {
-    headers.iter().map(|(name, value)| (name.parse().unwrap(), HeaderValue::try_from(*value).unwrap())).collect()
+    headers
+        .iter()
+        .map(|(name, value)| (name.parse().unwrap(), HeaderValue::try_from(*value).unwrap()))
+        .collect()
 }
 
 /// The properties above are vacuous if few cases reach a checked request; this keeps the generators honest as the
 /// policy's rules change. Each slot shape, miswired cases and omitted origins must all reach the final check.
 #[test]
 fn generated_cases_reach_the_final_check() {
-    let runs: Vec<(Case, Run)> = sample(case(), 2000).into_iter().filter_map(|case| case.run().map(|run| (case, run))).collect();
+    let runs: Vec<(Case, Run)> = sample(case(), 2000)
+        .into_iter()
+        .filter_map(|case| case.run().map(|run| (case, run)))
+        .collect();
     let checked: Vec<&Run> = runs.iter().map(|(_, run)| run).filter(|run| run.checked.is_ok()).collect();
     let shape = |run: &&Run| match selected_route(&run.authorized).slot() {
         Slot::Query(_) => 0,
@@ -484,12 +551,20 @@ fn generated_cases_reach_the_final_check() {
     };
     let shapes: Vec<usize> = (0..3).map(|n| checked.iter().filter(|run| shape(run) == n).count()).collect();
     let miswired = runs.iter().filter(|(_, run)| !run.own_upstream).count();
-    let omitted = runs.iter().filter(|(case, run)| !case.permitted.contains(&upstream_origin(selected_route(&run.authorized)))).count();
+    let omitted = runs
+        .iter()
+        .filter(|(case, run)| !case.permitted.contains(&upstream_origin(selected_route(&run.authorized))))
+        .count();
     assert!(runs.len() >= 200, "only {} of 2000 reached the final check", runs.len());
-    assert!(shapes.iter().all(|&count| count >= 20), "checked requests per slot shape (query, header, Basic): {shapes:?}");
-    assert!(miswired >= 25 && omitted >= 25, "{miswired} miswired and {omitted} omitted-origin cases reached the final check");
+    assert!(
+        shapes.iter().all(|&count| count >= 20),
+        "checked requests per slot shape (query, header, Basic): {shapes:?}"
+    );
+    assert!(
+        miswired >= 25 && omitted >= 25,
+        "{miswired} miswired and {omitted} omitted-origin cases reached the final check"
+    );
 }
-
 
 fn origin(host: &str, port: u16) -> (Host, Port) {
     (host.parse().unwrap(), Port::try_from(port).unwrap())
@@ -500,12 +575,27 @@ fn route(name: &str) -> Option<RouteName> {
 }
 
 fn honest(target: &str, headers: &[(&'static str, &'static str)], permitted: (Host, Port)) -> Case {
-    let wiring = Wiring { upstream: None, slot: None };
-    Case { target: target.to_owned(), headers: headers.to_vec(), secret: "IVs3cr3ta".to_owned(), wiring, permitted: [permitted].into() }
+    let wiring = Wiring {
+        upstream: None,
+        slot: None,
+    };
+    Case {
+        target: target.to_owned(),
+        headers: headers.to_vec(),
+        secret: "IVs3cr3ta".to_owned(),
+        wiring,
+        permitted: [permitted].into(),
+    }
 }
 
 fn built_upstream_from(name: &str, target: &str, permitted: (Host, Port)) -> Case {
-    Case { wiring: Wiring { upstream: route(name), slot: None }, ..honest(target, &[], permitted) }
+    Case {
+        wiring: Wiring {
+            upstream: route(name),
+            slot: None,
+        },
+        ..honest(target, &[], permitted)
+    }
 }
 
 /// Minimal counterexamples the properties shrank to when one rule was deliberately weakened: the final check's host
@@ -538,7 +628,10 @@ fn caller_host_header_keeps_every_property() {
     [check_destination, check_single_slot, check_permitted_origins]
         .into_iter()
         .for_each(|check| check(&case).unwrap_or_else(|e| panic!("{case:?}: {e}")));
-    assert!(case.run().is_some_and(|run| run.checked.is_ok()), "{case:?} did not reach a checked request");
+    assert!(
+        case.run().is_some_and(|run| run.checked.is_ok()),
+        "{case:?} did not reach a checked request"
+    );
 }
 
 /// A record that spells the `basic` route's host with a trailing dot, as its upstream does, permits that route: both
@@ -561,8 +654,14 @@ fn slot_filled_through_another_route_is_refused() {
         target: "/a/b".to_owned(),
         headers: vec![("X-Api-Key", "evil.example")],
         secret: "IVs3cr3ta".to_owned(),
-        wiring: Wiring { upstream: None, slot: route("fx") },
+        wiring: Wiring {
+            upstream: None,
+            slot: route("fx"),
+        },
         permitted: [origin("api.deep.example", 443)].into(),
     };
-    assert!(case.run().is_some_and(|run| run.checked.is_err()), "{case:?} passed the final check");
+    assert!(
+        case.run().is_some_and(|run| run.checked.is_err()),
+        "{case:?} passed the final check"
+    );
 }

@@ -40,13 +40,19 @@ impl StateDirLock {
     /// Takes the exclusive lock on `dir`, failing at once if another instance holds it.
     pub fn acquire(dir: &Path) -> Result<Self, LockError> {
         let path = dir.join(LOCK_FILE);
-        let io_err = |e: io::Error| LockError::Io { path: path.clone(), kind: e.kind() };
+        let io_err = |e: io::Error| LockError::Io {
+            path: path.clone(),
+            kind: e.kind(),
+        };
         let file = open_lock_file(&path).map_err(io_err)?;
         file.try_lock().map_err(|e| match e {
             TryLockError::WouldBlock => LockError::Held { path: path.clone() },
             TryLockError::Error(e) => io_err(e),
         })?;
-        Ok(Self { dir: dir.to_path_buf(), _file: file })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            _file: file,
+        })
     }
 
     /// The locked state directory; later writes resolve their paths through it.
@@ -96,7 +102,13 @@ mod tests {
     fn missing_directory_is_io_error() {
         let dir = TestDir::new("lock-missing");
         let err = StateDirLock::acquire(&dir.path().join("absent")).unwrap_err();
-        assert!(matches!(err, LockError::Io { kind: io::ErrorKind::NotFound, .. }));
+        assert!(matches!(
+            err,
+            LockError::Io {
+                kind: io::ErrorKind::NotFound,
+                ..
+            }
+        ));
     }
 
     #[cfg(unix)]

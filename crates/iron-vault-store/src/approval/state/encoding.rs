@@ -71,7 +71,11 @@ mod tests {
 
     fn unhex(hex: &str) -> Vec<u8> {
         hex.split_whitespace()
-            .flat_map(|group| (0..group.len()).step_by(2).map(move |i| u8::from_str_radix(&group[i..i + 2], 16).unwrap()))
+            .flat_map(|group| {
+                (0..group.len())
+                    .step_by(2)
+                    .map(move |i| u8::from_str_radix(&group[i..i + 2], 16).unwrap())
+            })
             .collect()
     }
 
@@ -103,7 +107,11 @@ mod tests {
         let doc = include_str!("../../../../../design/storage-formats.md");
         let section = doc.split("## Approval state payload v1").nth(1).unwrap();
         let block = section.split("```text\n").nth(1).unwrap().split("```").next().unwrap();
-        let hex: String = block.lines().flat_map(|line| line.chars().take(48)).filter(|c| !c.is_whitespace()).collect();
+        let hex: String = block
+            .lines()
+            .flat_map(|line| line.chars().take(48))
+            .filter(|c| !c.is_whitespace())
+            .collect();
         assert_eq!(hex, EXAMPLE_HEX.split_whitespace().collect::<String>());
     }
 
@@ -117,8 +125,17 @@ mod tests {
 
     #[test]
     fn a_committed_version_above_the_highest_reserved_is_rejected() {
-        assert_eq!(decode(&example_with(62..70, &1u64.to_be_bytes())), Ok(ApprovalState { highest_reserved: 1, ..example() }));
-        assert_eq!(decode(&example_with(62..70, &0u64.to_be_bytes())), Err(ApprovalStateError::CommittedNotReserved));
+        assert_eq!(
+            decode(&example_with(62..70, &1u64.to_be_bytes())),
+            Ok(ApprovalState {
+                highest_reserved: 1,
+                ..example()
+            })
+        );
+        assert_eq!(
+            decode(&example_with(62..70, &0u64.to_be_bytes())),
+            Err(ApprovalStateError::CommittedNotReserved)
+        );
         let built = ApprovalState::from_parts(example().vault_id, example().approver, 0, example().committed);
         assert_eq!(built, Err(ApprovalStateError::CommittedNotReserved));
     }
@@ -138,12 +155,27 @@ mod tests {
     #[test]
     fn unknown_algorithms_and_wrong_key_lengths_are_rejected() {
         [0x00, 0x02, 0xff].into_iter().for_each(|id| {
-            assert_eq!(decode(&example_with(21..22, &[id])), Err(ApprovalDecodeError::UnknownAlgorithm(id).into()));
+            assert_eq!(
+                decode(&example_with(21..22, &[id])),
+                Err(ApprovalDecodeError::UnknownAlgorithm(id).into())
+            );
         });
         let short = example_with(22..62, &[&31u64.to_be_bytes()[..], &[0x42; 31]].concat());
-        assert_eq!(decode(&short), Err(ApprovalStateError::PublicKeyLength { algorithm: SignatureAlgorithm::Ed25519, len: 31 }));
+        assert_eq!(
+            decode(&short),
+            Err(ApprovalStateError::PublicKeyLength {
+                algorithm: SignatureAlgorithm::Ed25519,
+                len: 31
+            })
+        );
         let built = PinnedApprover::new(SignatureAlgorithm::Ed25519, vec![0; 33]);
-        assert_eq!(built, Err(ApprovalStateError::PublicKeyLength { algorithm: SignatureAlgorithm::Ed25519, len: 33 }));
+        assert_eq!(
+            built,
+            Err(ApprovalStateError::PublicKeyLength {
+                algorithm: SignatureAlgorithm::Ed25519,
+                len: 33
+            })
+        );
     }
 
     fn ed25519(key: Vec<u8>) -> Result<PinnedApprover, ApprovalStateError> {
@@ -151,31 +183,52 @@ mod tests {
     }
 
     fn refused(reason: InvalidKeyReason) -> Result<PinnedApprover, ApprovalStateError> {
-        Err(ApprovalStateError::InvalidApproverKey { algorithm: SignatureAlgorithm::Ed25519, reason })
+        Err(ApprovalStateError::InvalidApproverKey {
+            algorithm: SignatureAlgorithm::Ed25519,
+            reason,
+        })
     }
 
     #[test]
     fn approver_keys_are_validated_when_pinned() {
         let generated = ed25519_dalek::SigningKey::from_bytes(&[7; 32]).verifying_key();
-        assert_eq!(ed25519(generated.to_bytes().to_vec()).map(|a| a.public_key().to_vec()), Ok(generated.to_bytes().to_vec()));
+        assert_eq!(
+            ed25519(generated.to_bytes().to_vec()).map(|a| a.public_key().to_vec()),
+            Ok(generated.to_bytes().to_vec())
+        );
         // y = 2 has no x on the curve.
-        assert_eq!(ed25519([2u8].into_iter().chain([0; 31]).collect()), refused(InvalidKeyReason::NotAPoint));
+        assert_eq!(
+            ed25519([2u8].into_iter().chain([0; 31]).collect()),
+            refused(InvalidKeyReason::NotAPoint)
+        );
         // The identity point and the order-2 point (0, -1).
         let identity = [1u8].into_iter().chain([0; 31]).collect();
         let order_two = [0xec_u8].into_iter().chain([0xff; 30]).chain([0x7f]).collect();
         assert_eq!(ed25519(identity), refused(InvalidKeyReason::WeakKey));
         assert_eq!(ed25519(order_two), refused(InvalidKeyReason::WeakKey));
         [31, 33].into_iter().for_each(|len| {
-            let error = ApprovalStateError::PublicKeyLength { algorithm: SignatureAlgorithm::Ed25519, len };
-            assert_eq!(ed25519(generated.to_bytes().iter().copied().cycle().take(len).collect()), Err(error));
+            let error = ApprovalStateError::PublicKeyLength {
+                algorithm: SignatureAlgorithm::Ed25519,
+                len,
+            };
+            assert_eq!(
+                ed25519(generated.to_bytes().iter().copied().cycle().take(len).collect()),
+                Err(error)
+            );
         });
     }
 
     #[test]
     fn wrong_magic_unknown_versions_and_invalid_vault_ids_are_rejected() {
         assert_eq!(decode(&example_with(0..1, b"X")), Err(ApprovalDecodeError::BadMagic.into()));
-        assert_eq!(decode(&example_with(4..5, &[2])), Err(ApprovalDecodeError::UnknownFormatVersion(2).into()));
-        assert!(matches!(decode(&example_with(5..21, &[0; 16])), Err(ApprovalStateError::Format(ApprovalDecodeError::InvalidVaultId(_)))));
+        assert_eq!(
+            decode(&example_with(4..5, &[2])),
+            Err(ApprovalDecodeError::UnknownFormatVersion(2).into())
+        );
+        assert!(matches!(
+            decode(&example_with(5..21, &[0; 16])),
+            Err(ApprovalStateError::Format(ApprovalDecodeError::InvalidVaultId(_)))
+        ));
     }
 
     #[test]
@@ -183,7 +236,12 @@ mod tests {
         let full = unhex(EXAMPLE_HEX);
         (0..full.len()).for_each(|len| {
             let err = decode(&full[..len]);
-            let short = matches!(err, Err(ApprovalStateError::Format(ApprovalDecodeError::Truncated | ApprovalDecodeError::LengthPastEnd)));
+            let short = matches!(
+                err,
+                Err(ApprovalStateError::Format(
+                    ApprovalDecodeError::Truncated | ApprovalDecodeError::LengthPastEnd
+                ))
+            );
             assert!(short, "{len}: {err:?}");
         });
         assert_eq!(decode(&[&full[..], &[0]].concat()), Err(ApprovalDecodeError::TrailingBytes.into()));

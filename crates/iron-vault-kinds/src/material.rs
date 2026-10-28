@@ -48,13 +48,19 @@ mod tests {
     use crate::BasicCredentialError;
 
     fn basic(username: &str, password: &str) -> CredentialMaterial {
-        CredentialMaterial::Basic { username: username.into(), password: password.into() }
+        CredentialMaterial::Basic {
+            username: username.into(),
+            password: password.into(),
+        }
     }
 
     #[test]
     fn static_keys_follow_the_slot_value_rules() {
         assert_eq!(CredentialMaterial::Static { key: "k".into() }.validate(), Ok(()));
-        assert_eq!(CredentialMaterial::Static { key: "".into() }.validate(), Err(KindError::InvalidValue(SlotValueError::Empty)));
+        assert_eq!(
+            CredentialMaterial::Static { key: "".into() }.validate(),
+            Err(KindError::InvalidValue(SlotValueError::Empty))
+        );
         assert_eq!(
             CredentialMaterial::Static { key: "a\nb".into() }.validate(),
             Err(KindError::InvalidValue(SlotValueError::ControlChar))
@@ -64,7 +70,13 @@ mod tests {
     #[test]
     fn basic_credentials_follow_rfc_7617() {
         assert_eq!(basic("u", "").validate(), Ok(()));
-        assert_eq!(basic("u:v", "p").validate(), Err(KindError::InvalidBasic(BasicCredentialError::ColonInUsername)));
-        assert_eq!(basic("", "p").validate(), Err(KindError::InvalidBasic(BasicCredentialError::EmptyUsername)));
+        assert_eq!(
+            basic("u:v", "p").validate(),
+            Err(KindError::InvalidBasic(BasicCredentialError::ColonInUsername))
+        );
+        assert_eq!(
+            basic("", "p").validate(),
+            Err(KindError::InvalidBasic(BasicCredentialError::EmptyUsername))
+        );
     }
 }

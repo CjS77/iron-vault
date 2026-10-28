@@ -56,7 +56,9 @@ pub fn seal(key: &VaultPublicKey, plaintext: &[u8]) -> Result<Vec<u8>, SealError
 /// Taking only X25519 recipients means no caller can put a passphrase stanza beside them (specification §3.11).
 pub(crate) fn seal_to<'a>(keys: impl Iterator<Item = &'a x25519::Recipient>, plaintext: &[u8]) -> Result<Vec<u8>, SealError> {
     let encryptor = Encryptor::with_recipients(keys.map(|key| key as &dyn age::Recipient)).map_err(|_| SealError::Encryption)?;
-    let mut writer = encryptor.wrap_output(Vec::with_capacity(plaintext.len())).map_err(|_| SealError::Encryption)?;
+    let mut writer = encryptor
+        .wrap_output(Vec::with_capacity(plaintext.len()))
+        .map_err(|_| SealError::Encryption)?;
     writer.write_all(plaintext).map_err(|_| SealError::Encryption)?;
     writer.finish().map_err(|_| SealError::Encryption)
 }
@@ -77,7 +79,9 @@ pub(crate) fn open_as(identity: &x25519::Identity, ciphertext: &[u8], max_plaint
     if decryptor.is_scrypt() {
         return Err(OpenError::UnexpectedStanza);
     }
-    let reader = decryptor.decrypt(iter::once(identity as &dyn age::Identity)).map_err(map_decrypt_error)?;
+    let reader = decryptor
+        .decrypt(iter::once(identity as &dyn age::Identity))
+        .map_err(map_decrypt_error)?;
     read_bounded(reader, max_plaintext, ciphertext.len())
 }
 
@@ -157,10 +161,12 @@ mod tests {
 
     #[test]
     fn seal_then_open_round_trips() {
-        [&b""[..], b"x", b"sk-live-0123456789", &[7u8; 200_000]].iter().for_each(|plaintext| {
-            let (identity, ciphertext) = sealed(plaintext);
-            assert_eq!(open(&identity, &ciphertext, LIMIT).unwrap().as_slice(), *plaintext);
-        });
+        [&b""[..], b"x", b"sk-live-0123456789", &[7u8; 200_000]]
+            .iter()
+            .for_each(|plaintext| {
+                let (identity, ciphertext) = sealed(plaintext);
+                assert_eq!(open(&identity, &ciphertext, LIMIT).unwrap().as_slice(), *plaintext);
+            });
     }
 
     #[test]
@@ -173,7 +179,10 @@ mod tests {
     #[test]
     fn another_identity_is_refused() {
         let (_, ciphertext) = sealed(b"secret");
-        assert_eq!(open(&VaultIdentity::generate(), &ciphertext, LIMIT), Err(OpenError::NotForThisIdentity));
+        assert_eq!(
+            open(&VaultIdentity::generate(), &ciphertext, LIMIT),
+            Err(OpenError::NotForThisIdentity)
+        );
     }
 
     #[test]
@@ -195,7 +204,10 @@ mod tests {
 
     #[test]
     fn scrypt_file_is_an_unexpected_stanza() {
-        assert_eq!(open(&VaultIdentity::generate(), &scrypt_file(), LIMIT), Err(OpenError::UnexpectedStanza));
+        assert_eq!(
+            open(&VaultIdentity::generate(), &scrypt_file(), LIMIT),
+            Err(OpenError::UnexpectedStanza)
+        );
     }
 
     #[test]
@@ -216,16 +228,26 @@ mod tests {
     #[test]
     fn non_age_input_is_malformed() {
         let identity = VaultIdentity::generate();
-        [&b""[..], b"\n", b"hello", b"age-encryption.org/v1\n", b"-----BEGIN AGE ENCRYPTED FILE-----\n"]
-            .iter()
-            .for_each(|input| assert_eq!(open(&identity, input, LIMIT), Err(OpenError::Malformed), "{input:?}"));
+        [
+            &b""[..],
+            b"\n",
+            b"hello",
+            b"age-encryption.org/v1\n",
+            b"-----BEGIN AGE ENCRYPTED FILE-----\n",
+        ]
+        .iter()
+        .for_each(|input| assert_eq!(open(&identity, input, LIMIT), Err(OpenError::Malformed), "{input:?}"));
     }
 
     #[test]
     fn every_truncation_is_malformed() {
         let (identity, ciphertext) = sealed(b"a short credential record");
         (0..ciphertext.len()).for_each(|len| {
-            assert_eq!(open(&identity, &ciphertext[..len], LIMIT), Err(OpenError::Malformed), "truncated to {len}");
+            assert_eq!(
+                open(&identity, &ciphertext[..len], LIMIT),
+                Err(OpenError::Malformed),
+                "truncated to {len}"
+            );
         });
     }
 
