@@ -184,6 +184,11 @@ const OTHER_ORIGINS: &[(&str, u16)] = &[
     ("fx.example", 443),
 ];
 
+/// Lowercase names of headers that would let a caller choose the authority, the forwarded-for chain, the URL or the
+/// method the upstream acts on; none may be in a checked request.
+const CONTROL_HEADERS: &[&str] =
+    &["host", "x-forwarded-host", "x-forwarded-for", "forwarded", "x-host", "x-original-url", "x-rewrite-url", "x-http-method-override"];
+
 /// The listener's caller-token header; the default when a listener names none.
 const TOKEN_HEADER: &str = "Proxy-Authorization";
 
@@ -335,7 +340,8 @@ fn case() -> impl Strategy<Value = Case> {
 // Properties, shared by the property tests and the regression examples.
 
 /// Property 1: a checked request goes over `https`, without user-info, to the selected route upstream's host and port,
-/// which the record permits, and its path starts with the upstream base segments.
+/// which the record permits, and its path starts with the upstream base segments. No header can redirect it: none is
+/// an authority, forwarding, URL-rewrite or method-override header, and none is a pseudo-header such as `:authority`.
 fn check_destination(case: &Case) -> Result<(), TestCaseError> {
     let Some(Run { authorized, checked: Ok(checked), .. }) = case.run() else { return Ok(()) };
     let upstream = selected_route(&authorized).upstream();
@@ -351,7 +357,13 @@ fn check_destination(case: &Case) -> Result<(), TestCaseError> {
     let segments: Vec<&str> = url.path_segments().map(Iterator::collect).unwrap_or_default();
     let base: Vec<&str> = upstream.base_segments().iter().map(String::as_str).collect();
     prop_assert!(segments.starts_with(&base), "{case:?} left the base path: {segments:?}");
+    let control = checked.headers().iter().map(|(name, _)| name).find(|name| is_control_header(name.lowercase()));
+    prop_assert!(control.is_none(), "{case:?} forwarded {control:?}");
     Ok(())
+}
+
+fn is_control_header(lowercase: &str) -> bool {
+    CONTROL_HEADERS.contains(&lowercase) || lowercase.starts_with(':')
 }
 
 /// Property 2: a checked request writes the selected route's slot once, holding the rendered slot value, and the slot
@@ -360,7 +372,8 @@ fn check_destination(case: &Case) -> Result<(), TestCaseError> {
 ///
 /// Only requests filled through the selected route's own slot are checked: the final check counts the entries in the
 /// selected slot without knowing which holds the credential, so a request filled through another route's slot passes
-/// when a caller copy sits in the selected one ([`slot_filled_through_another_route_is_refused`]).
+/// when a caller copy sits in the selected one ([`slot_filled_through_another_route_is_refused`]). K-29 makes the
+/// final check confirm the slot value; remove the `own_slot` filter here when it lands.
 fn check_single_slot(case: &Case) -> Result<(), TestCaseError> {
     let Some(run) = case.run().filter(|run| run.own_slot) else { return Ok(()) };
     let route = selected_route(&run.authorized);
@@ -516,6 +529,18 @@ fn shrunk_counterexamples_keep_every_property() {
     });
 }
 
+/// The minimal counterexample property 1 shrank to when both header defences were deliberately disabled, the strip of
+/// reserved headers in sanitizing and the final check's reserved-header rule: a caller `Host` header naming another
+/// host on an honestly built `fx` request. It must keep every property.
+#[test]
+fn caller_host_header_keeps_every_property() {
+    let case = honest("/fx", &[("Host", "evil.example")], origin("api.fx.example", 443));
+    [check_destination, check_single_slot, check_permitted_origins]
+        .into_iter()
+        .for_each(|check| check(&case).unwrap_or_else(|e| panic!("{case:?}: {e}")));
+    assert!(case.run().is_some_and(|run| run.checked.is_ok()), "{case:?} did not reach a checked request");
+}
+
 /// A record that spells the `basic` route's host with a trailing dot, as its upstream does, permits that route: both
 /// spellings convert to one host, and the URL carries the converted form.
 #[test]
@@ -529,9 +554,9 @@ fn trailing_dot_spellings_are_one_origin() {
 /// The shrunk counterexample that keeps slot-filler miswiring out of [`check_single_slot`]: the `deep` route's request
 /// is filled through `fx`'s query slot, so the credential leaves in an `access_key` parameter the route never names,
 /// while the caller's own `X-Api-Key` header fills the slot the final check counts. The final check is not given the
-/// slot value, so it cannot tell that the one `X-Api-Key` it counts is not the credential.
+/// slot value, so it cannot tell that the one `X-Api-Key` it counts is not the credential. Un-ignore when K-29 lands.
 #[test]
-#[ignore = "the final check does not yet confirm that the selected slot holds the slot value"]
+#[ignore = "K-29: the final check does not yet confirm that the selected slot holds the slot value"]
 fn slot_filled_through_another_route_is_refused() {
     let case = Case {
         target: "/a/b".to_owned(),
