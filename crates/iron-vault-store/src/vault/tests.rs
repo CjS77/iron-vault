@@ -2,11 +2,12 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 use iron_vault_policy::{Capabilities, CredentialKind, ParsedConfig, Port, RouteName, ValidatedConfig, activate};
 use tracing::field::{Field, Visit};
-use tracing::{Event, Level, Metadata, Subscriber, span};
+use tracing::subscriber::Interest;
+use tracing::{Dispatch, Event, Level, Metadata, Subscriber, span};
 
 use super::*;
 use crate::manifest::tests::KAT_IDENTITY;
@@ -62,16 +63,16 @@ paths = ["/res/v1/web/search"]
 rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 "#;
 
-fn identity() -> VaultIdentity {
+pub(super) fn identity() -> VaultIdentity {
     VaultIdentity::from_secret(KAT_IDENTITY)
 }
 
-fn n<T: std::str::FromStr<Err: Debug>>(s: &str) -> T {
+pub(super) fn n<T: std::str::FromStr<Err: Debug>>(s: &str) -> T {
     s.parse().unwrap()
 }
 
 /// The secret every test record named `name` holds, distinctive enough to search logs for.
-fn secret(name: &str) -> String {
+pub(super) fn secret(name: &str) -> String {
     format!("SECRET-{name}-7f3a")
 }
 
@@ -81,11 +82,11 @@ fn record_with_id(id: RecordId, name: &str, host: &str) -> CredentialRecord {
     CredentialRecord::new(id, n(name), material, origins, Source::DirectEntry).unwrap()
 }
 
-fn record(name: &str) -> CredentialRecord {
+pub(super) fn record(name: &str) -> CredentialRecord {
     record_with_id(RecordId::new_random(), name, &format!("api.{}.example", name.replace('_', "-")))
 }
 
-fn sealed(record: &CredentialRecord) -> Vec<u8> {
+pub(super) fn sealed(record: &CredentialRecord) -> Vec<u8> {
     seal(&identity().public_key(), &encode(record)).unwrap()
 }
 
@@ -97,6 +98,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str) -> Self {
+        init_test_tracing();
         let dir = TestDir::new(name);
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         Self { dir, lock }
@@ -140,13 +142,13 @@ impl Fixture {
 
 /// One event a [`Capture`] saw.
 #[derive(Debug)]
-struct Captured {
-    level: Level,
+pub(super) struct Captured {
+    pub(super) level: Level,
     fields: BTreeMap<&'static str, String>,
 }
 
 impl Captured {
-    fn field(&self, name: &str) -> &str {
+    pub(super) fn field(&self, name: &str) -> &str {
         self.fields.get(name).map(String::as_str).unwrap_or_else(|| panic!("no field {name} in {self:?}"))
     }
 }
@@ -192,14 +194,56 @@ impl Subscriber for Capture {
     fn exit(&self, _: &span::Id) {}
 }
 
-fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, Vec<Captured>) {
+/// The global subscriber of the test binary: it drops every event, but marks every callsite's interest "sometimes".
+///
+/// `tracing` caches each callsite's interest globally when the callsite is first hit. Hit on a thread with no
+/// subscriber while no subscriber exists anywhere, it is cached as "never", and a [`Capture`] on another thread then
+/// misses its events. With this as the global default, interest is never "never", so each event asks the subscriber
+/// current on its own thread.
+struct PerEvent;
+
+impl Subscriber for PerEvent {
+    fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
+        Interest::sometimes()
+    }
+
+    fn enabled(&self, _: &Metadata<'_>) -> bool {
+        false
+    }
+
+    fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
+        span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
+
+    fn event(&self, _: &Event<'_>) {}
+
+    fn enter(&self, _: &span::Id) {}
+
+    fn exit(&self, _: &span::Id) {}
+}
+
+/// Installs [`PerEvent`] once; every vault test calls it before its first vault call, so no callsite is hit first.
+pub(super) fn init_test_tracing() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        // Only this function sets a global default in this test binary, so the call cannot fail.
+        let _ = tracing::dispatcher::set_global_default(Dispatch::new(PerEvent));
+    });
+}
+
+pub(super) fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, Vec<Captured>) {
+    init_test_tracing();
     let capture = Capture::default();
     let out = tracing::subscriber::with_default(capture.clone(), f);
     let events = std::mem::take(&mut *capture.0.lock().unwrap());
     (out, events)
 }
 
-fn assert_no_secret_logged(events: &[Captured], names: &[&str]) {
+pub(super) fn assert_no_secret_logged(events: &[Captured], names: &[&str]) {
     let text = format!("{events:?}");
     names.iter().for_each(|name| assert!(!text.contains(&secret(name)), "{name}'s secret was logged: {text}"));
 }

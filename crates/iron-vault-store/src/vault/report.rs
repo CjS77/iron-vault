@@ -71,3 +71,28 @@ impl OpenReport {
         &self.unindexed
     }
 }
+
+/// What a vault write did besides its change, for the audit log.
+///
+/// It holds file names only, so `Debug` is safe to log.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WriteReport {
+    removed_unindexed: BTreeSet<StateFileName>,
+    left_unindexed: Option<StateFileName>,
+}
+
+impl WriteReport {
+    pub(super) fn new(removed_unindexed: BTreeSet<StateFileName>, left_unindexed: Option<StateFileName>) -> Self {
+        Self { removed_unindexed, left_unindexed }
+    }
+
+    /// The unindexed record files the write removed before it changed anything: left by an interrupted write, or planted.
+    pub fn removed_unindexed(&self) -> &BTreeSet<StateFileName> {
+        &self.removed_unindexed
+    }
+
+    /// The superseded record file the write could not remove after its commit; the next write removes it.
+    pub fn left_unindexed(&self) -> Option<&StateFileName> {
+        self.left_unindexed.as_ref()
+    }
+}

@@ -2,33 +2,40 @@
 //!
 //! The manifest is shared state: if it cannot be trusted, no record can be told from a planted one, so the whole vault
 //! is unavailable. A record is not shared: a damaged one takes down only the routes that use it, and the others load.
+//!
+//! Vault writes (spec §3.3, §3.10) make the durable replace of the manifest their single commit point: a new record file
+//! is written before it and a superseded one removed after it, so a crash at any step leaves the old or the new vault.
 
+mod create;
 mod load;
 mod report;
 #[cfg(test)]
 mod tests;
+mod write;
+#[cfg(test)]
+mod write_tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io;
 
-use iron_vault_kinds::CredentialMaterial;
+use iron_vault_kinds::{CredentialMaterial, KindError};
 use iron_vault_policy::{CatalogEntry, CredentialCatalog, CredentialName};
 use thiserror::Error;
 
 use crate::{
-    CredentialRecord, MAX_MANIFEST_LEN, ManifestError, ReadError, StateDirLock, StateFileName, StoreFs, VaultIdentity, VaultManifest,
-    open_manifest, read_state_file,
+    CredentialRecord, MAX_MANIFEST_LEN, ManifestError, ReadError, SealError, StateDirLock, StateFileName, StoreFs, VaultIdentity,
+    VaultManifest, WriteError, open_manifest, read_state_file,
 };
 
 pub use load::MAX_RECORD_FILE_LEN;
-pub use report::{OpenReport, RecordDamage};
+pub use report::{OpenReport, RecordDamage, WriteReport};
 
 /// What the administrator should do about damaged shared state; recovery commands arrive with spec §3.13.
 const SHARED_STATE_REMEDIATION: &str = "restore the state directory from a backup taken by this vault, or recover the vault; \
      do not delete or re-initialize the state directory, which would orphan every credential record";
 
-/// The vault cannot be opened at all. No variant carries file contents or key material.
+/// The vault cannot be opened, created or written. No variant carries file contents or key material.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum VaultError {
     /// There is no manifest and no record file: no vault has been created in this state directory.
@@ -48,6 +55,36 @@ pub enum VaultError {
         /// The underlying error kind.
         kind: io::ErrorKind,
     },
+    /// A vault cannot be created where a manifest already exists.
+    #[error("the vault is already initialized: the state directory holds a manifest")]
+    AlreadyInitialized,
+    /// `add` refuses a name the manifest already lists, whether its record is healthy or damaged (spec §3.3).
+    #[error("credential {0} already exists; replacing it requires an explicit replace")]
+    NameTaken(CredentialName),
+    /// `replace` and `remove` need a name the manifest lists.
+    #[error("credential {0} does not exist")]
+    UnknownName(CredentialName),
+    /// The material breaks its kind's rules, so no record was built.
+    #[error("the credential material is invalid: {0}")]
+    InvalidMaterial(KindError),
+    /// Sealing the record or the manifest failed; nothing was written.
+    #[error("cannot seal the vault write: {0}")]
+    Seal(SealError),
+    /// The next manifest cannot be built: the vault holds the most records allowed, or its generation is exhausted.
+    #[error("cannot build the next vault manifest: {0}")]
+    NextManifest(ManifestError),
+    /// A file step failed before the commit point. The vault on disk and in memory is unchanged, apart from at most
+    /// one unindexed record file that the next write removes.
+    #[error("the vault write failed and changed nothing: {0}")]
+    Write(WriteError),
+    /// The new manifest was renamed into place but the state directory fsync failed, so the commit may not survive
+    /// power loss. Disk may now hold the new vault while memory holds the old one: reopen the vault before using it.
+    #[error("the vault write may or may not have committed ({0}); reopen the vault to see which")]
+    CommitUncertain(WriteError),
+    /// An earlier write ended in [`VaultError::CommitUncertain`], so this `Vault` no longer matches disk and refuses
+    /// every write until the vault is reopened.
+    #[error("the vault must be reopened after an uncertain commit before it can be written")]
+    ReopenRequired,
 }
 
 /// Why a shared state file cannot be trusted.
@@ -72,6 +109,9 @@ pub struct Vault {
     identity: VaultIdentity,
     manifest: VaultManifest,
     healthy: BTreeMap<CredentialName, CredentialRecord>,
+    /// Set by an uncertain commit: the manifest on disk may be newer than `manifest`, so a write computed from it could
+    /// remove a record file the disk manifest lists.
+    needs_reopen: bool,
 }
 
 impl Vault {
@@ -89,7 +129,7 @@ impl Vault {
         let (healthy, damaged) = load::load_records(lock, fs, &identity, &manifest);
         let unindexed = unindexed_files(&manifest, &files);
         unindexed.iter().for_each(load::log_unindexed);
-        Ok((Vault { identity, manifest, healthy }, OpenReport::new(damaged, unindexed)))
+        Ok((Vault { identity, manifest, healthy, needs_reopen: false }, OpenReport::new(damaged, unindexed)))
     }
 
     /// The manifest the vault was opened with.
@@ -161,7 +201,6 @@ fn is_record_file_name(name: &str) -> bool {
 /// Logs a failed open loudly. A missing vault is not damage, so the caller decides how to report it.
 fn log_vault_error(error: &VaultError) {
     match error {
-        VaultError::NotInitialized => {}
         VaultError::SharedStateDamaged { file, damage } => tracing::error!(
             file = %file,
             damage = %damage,
@@ -173,5 +212,7 @@ fn log_vault_error(error: &VaultError) {
             remediation = "check that the state directory exists and that the service account can read it",
             "cannot list the state directory; the vault is unavailable"
         ),
+        // NotInitialized is not damage, and the write variants go to the caller of the write, which audits them.
+        _ => {}
     }
 }

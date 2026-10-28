@@ -203,8 +203,9 @@ Each entry:
 The digest covers the record file exactly as it sits on disk, so a record file replaced by a different ciphertext,
 even one that decrypts to the same record, no longer matches its entry. Record files are named `record-<record id>.age`.
 
-The generation increases by exactly one with every manifest the service writes, and never wraps: a manifest at
-generation `u64::MAX` cannot be followed. A reader that remembers the last generation it saw can tell a stale copy
+A new vault's first manifest is at generation 0 with no entries, written before any record file. The generation
+increases by exactly one with every manifest the service writes, and never wraps: a manifest at generation `u64::MAX`
+cannot be followed. A reader that remembers the last generation it saw can tell a stale copy
 from the current one within one storage history; rolling the whole state directory back to an older consistent copy
 is outside what the manifest detects (specification §9).
 
