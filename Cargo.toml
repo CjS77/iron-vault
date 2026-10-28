@@ -20,6 +20,8 @@ secrecy = "0.10.3"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "1"
+# A logging facade only: the binary installs the subscriber. Default features would pull in the attribute macros.
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 url = "2.5"
 uuid = { version = "1.29.0", features = ["v4"] }
 zeroize = "1.9.1"

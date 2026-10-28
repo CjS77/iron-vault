@@ -13,6 +13,7 @@ iron-vault-kinds = { path = "../iron-vault-kinds" }
 iron-vault-policy = { path = "../iron-vault-policy" }
 secrecy.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 

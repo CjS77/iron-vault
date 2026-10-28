@@ -87,6 +87,13 @@ is accepted only if it is the encoding of the record it decodes to:
 Decoding rejects a wrong magic, an unknown version, an unknown material or source tag, truncation, trailing bytes and
 any of the rule failures above. Its errors name the rule or field that failed, never a secret byte.
 
+### Size limit
+
+A record file, `record-<record id>.age`, is at most `MAX_RECORD_FILE_LEN` (64 KiB) on disk, and its payload at most
+64 KiB. A v0 record is a name of at most 64 bytes, a few origins of at most 263 bytes each and a key or username and
+password, so it is a few KiB even with dozens of origins; the limit leaves room for later kinds' keys and certificates.
+A longer file is a damaged record and is never read in full.
+
 ### Versions
 
 Payload version 1 holds no provider settings or operational state. Specification §3.3 lists both, and both arrive
