@@ -17,8 +17,16 @@ pub enum CredentialKind {
 impl CredentialKind {
     /// Whether a credential of this kind can fill `slot`: a static key fills a header or query slot, and a Basic
     /// credential only a Basic slot, since anywhere else its token would travel without its scheme.
+    ///
+    /// The match is exhaustive on purpose, with every kind and slot named: a new kind (an HMAC or signing secret, say)
+    /// must not fall into a plain header or query slot by default, so it does not compile until it has its own rule.
     pub fn fills(self, slot: &Slot) -> bool {
-        matches!(slot, Slot::Basic) == (self == CredentialKind::Basic)
+        match (self, slot) {
+            (CredentialKind::Static, Slot::Header(_) | Slot::Query(_)) => true,
+            (CredentialKind::Static, Slot::Basic) => false,
+            (CredentialKind::Basic, Slot::Basic) => true,
+            (CredentialKind::Basic, Slot::Header(_) | Slot::Query(_)) => false,
+        }
     }
 
     /// The kind's name as a record declares it.
@@ -39,5 +47,22 @@ mod tests {
         let query = Slot::Query("k".parse().unwrap());
         assert!(CredentialKind::Static.fills(&query) && !CredentialKind::Static.fills(&Slot::Basic));
         assert!(CredentialKind::Basic.fills(&Slot::Basic) && !CredentialKind::Basic.fills(&query));
+    }
+
+    #[test]
+    fn every_kind_and_slot_pair_has_its_rule() {
+        let header = Slot::Header(crate::slot::HeaderSlot::new("x-api-key".parse().unwrap(), "{}".parse().unwrap()).unwrap());
+        let query = Slot::Query("k".parse().unwrap());
+        let table = [
+            (CredentialKind::Static, &header, true),
+            (CredentialKind::Static, &query, true),
+            (CredentialKind::Static, &Slot::Basic, false),
+            (CredentialKind::Basic, &header, false),
+            (CredentialKind::Basic, &query, false),
+            (CredentialKind::Basic, &Slot::Basic, true),
+        ];
+        table
+            .iter()
+            .for_each(|(kind, slot, want)| assert_eq!(kind.fills(slot), *want, "{kind:?} in {slot:?}"));
     }
 }
