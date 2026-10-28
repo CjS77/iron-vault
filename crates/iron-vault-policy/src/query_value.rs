@@ -42,6 +42,18 @@ pub(crate) fn decode_param(param: &str) -> Option<(Cow<'_, str>, Cow<'_, str>)> 
     form_urlencoded::parse(param.as_bytes()).next()
 }
 
+/// The name of one `name=value` query parameter, decoded as [`decode_param`] decodes it.
+///
+/// Only the text before the first `=` is decoded, so counting slot parameters in a filled query never makes an
+/// unwiped decoded copy of the credential.
+pub(crate) fn decode_name(param: &str) -> Option<Cow<'_, str>> {
+    let name = param.split('=').next().unwrap_or_default();
+    match decode_param(name) {
+        Some((name, _)) => Some(name),
+        None => (!param.is_empty()).then_some(Cow::Borrowed("")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +87,12 @@ mod tests {
         assert_eq!(decoded("access%5Fkey=a+b%2B"), Some(("access_key".to_owned(), "a b+".to_owned())));
         assert_eq!(decoded("flag"), Some(("flag".to_owned(), String::new())));
         assert_eq!(decoded(""), None);
+    }
+
+    #[test]
+    fn decode_name_matches_decode_param() {
+        ["access%5Fkey=a+b%2B", "a+b=c=d", "flag", "=v", ""].iter().for_each(|param| {
+            assert_eq!(decode_name(param), decode_param(param).map(|(name, _)| name), "{param}");
+        });
     }
 }

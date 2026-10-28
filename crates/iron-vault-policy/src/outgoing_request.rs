@@ -8,6 +8,7 @@
 use secrecy::ExposeSecret;
 use secrecy::zeroize::Zeroizing;
 use thiserror::Error;
+use url::Url;
 
 use crate::authorization::AuthorizedRequest;
 use crate::header_value::{HeaderValue, HeaderValueError};
@@ -108,6 +109,17 @@ impl OutgoingRequest {
     /// The headers to send, with a header or Basic slot filled.
     pub fn headers(&self) -> &OutgoingHeaders {
         &self.headers
+    }
+
+    /// The method, URL and headers, for the final check to inspect and then own.
+    pub(crate) fn into_parts(self) -> (Method, Url, OutgoingHeaders) {
+        (self.method, self.target.into_url(), self.headers)
+    }
+
+    /// Combines parts without assembling them, so final-check tests can build requests `assemble` would refuse.
+    #[cfg(test)]
+    pub(crate) fn unchecked(method: Method, url: Url, headers: OutgoingHeaders) -> Self {
+        Self { method, target: UpstreamTarget::unchecked(url), headers }
     }
 }
 

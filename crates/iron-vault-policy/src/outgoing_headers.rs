@@ -62,6 +62,12 @@ impl OutgoingHeaders {
     pub fn iter(&self) -> impl Iterator<Item = (&HeaderName, &HeaderValue)> {
         self.entries.iter().map(|(n, v)| (n, v))
     }
+
+    /// Appends a field even if it is reserved, so final-check tests can build headers `insert` would refuse.
+    #[cfg(test)]
+    pub(crate) fn push_unchecked(&mut self, name: HeaderName, value: HeaderValue) {
+        self.entries.push((name, value));
+    }
 }
 
 #[cfg(test)]
