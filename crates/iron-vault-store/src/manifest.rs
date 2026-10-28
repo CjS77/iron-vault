@@ -10,13 +10,13 @@ mod encoding;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use blake2::digest::{KeyInit, Mac, consts::U32};
-use blake2::{Blake2b256, Blake2bMac, Digest};
+use blake2::{Blake2b256, Digest};
 use iron_vault_policy::{CredentialName, NameError};
 use thiserror::Error;
 
+use crate::mac_file::MacFileKind;
 use crate::record_id::{RecordId, RecordIdError};
-use crate::sealed::{self, OpenError, SealError};
+use crate::sealed::{OpenError, SealError};
 use crate::vault_id::{VaultId, VaultIdError};
 use crate::vault_identity::VaultIdentity;
 
@@ -31,19 +31,23 @@ pub const MAX_MANIFEST_LEN: usize = 1 << 20;
 /// The most entries one manifest may hold, so every manifest the service can build also fits [`MAX_MANIFEST_LEN`].
 pub const MAX_MANIFEST_ENTRIES: usize = 4096;
 
-/// The first bytes of every manifest file, so a file of another type is never read as a manifest.
-const FILE_MAGIC: [u8; 4] = *b"IVMF";
-/// The manifest file version this code writes and the only one it reads; it fixes the MAC construction.
-const FILE_VERSION: u8 = 1;
-/// Magic, version and vault ID, in clear and covered by the MAC.
-pub(crate) const HEADER_LEN: usize = FILE_MAGIC.len() + 1 + 16;
-/// The length of the trailing MAC.
-const MAC_LEN: usize = 32;
-/// Prefixed to the MAC input so a MAC under the manifest key can never be mistaken for one over other data.
-const MAC_DOMAIN_TAG: &[u8] = b"iron-vault manifest file v1 mac\0";
 /// The BLAKE2b personalization of the manifest key, which keeps it independent of any other key derived from the
 /// vault identity.
 pub(crate) const MANIFEST_KEY_PERSONA: &[u8] = b"iv-manifest-v1";
+/// The manifest's MAC'd file frame: magic `IVMF`, version 1, its own key persona and domain tag.
+const KIND: MacFileKind<ManifestError> = MacFileKind {
+    magic: *b"IVMF",
+    version: 1,
+    persona: MANIFEST_KEY_PERSONA,
+    domain_tag: b"iron-vault manifest file v1 mac\0",
+    max_len: MAX_MANIFEST_LEN,
+    too_large: ManifestError::TooLarge { limit: MAX_MANIFEST_LEN },
+    truncated: ManifestError::Truncated,
+    bad_magic: ManifestError::BadMagic,
+    unknown_version: ManifestError::UnknownVersion,
+    damaged: ManifestError::Damaged,
+    invalid_vault_id: ManifestError::InvalidVaultId,
+};
 
 /// One record the manifest vouches for: its credential name and the digest of its file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,62 +191,28 @@ pub fn record_digest(ciphertext: &[u8]) -> [u8; 32] {
 
 /// The manifest file's bytes: header, the payload sealed to the vault public key, then the MAC.
 pub fn seal_manifest(identity: &VaultIdentity, manifest: &VaultManifest) -> Result<Vec<u8>, SealError> {
-    let ciphertext = sealed::seal(&identity.public_key(), &encoding::encode(manifest))?;
-    let mut file = Vec::with_capacity(HEADER_LEN + ciphertext.len() + MAC_LEN);
-    file.extend_from_slice(&FILE_MAGIC);
-    file.push(FILE_VERSION);
-    file.extend_from_slice(manifest.vault_id.as_bytes());
-    file.extend_from_slice(&ciphertext);
-    let tag: [u8; MAC_LEN] = mac(identity, &file).finalize().into_bytes().into();
-    file.extend_from_slice(&tag);
-    Ok(file)
+    KIND.seal(identity, manifest.vault_id, &encoding::encode(manifest))
 }
 
 /// The manifest a file holds, after its size, header and MAC are checked and before anything is decrypted.
 pub fn open_manifest(identity: &VaultIdentity, file: &[u8]) -> Result<VaultManifest, ManifestError> {
-    if file.len() > MAX_MANIFEST_LEN {
-        return Err(ManifestError::TooLarge { limit: MAX_MANIFEST_LEN });
-    }
-    let (signed, tag) = file.len().checked_sub(MAC_LEN).and_then(|at| file.split_at_checked(at)).ok_or(ManifestError::Truncated)?;
-    let (header, ciphertext) = signed.split_at_checked(HEADER_LEN).ok_or(ManifestError::Truncated)?;
-    let vault_id = read_header(header)?;
-    mac(identity, signed).verify_slice(tag).map_err(|_| ManifestError::Damaged)?;
-    let vault_id = VaultId::from_bytes(vault_id)?;
-    let manifest = encoding::decode(&sealed::open(identity, ciphertext, MAX_MANIFEST_LEN)?)?;
-    match manifest.vault_id == vault_id {
-        true => Ok(manifest),
-        false => Err(ManifestError::VaultIdMismatch),
-    }
-}
-
-/// The header's vault ID bytes, after its magic and version. The version is read before the MAC is checked because it
-/// decides how the MAC is computed; the ID is not trusted until the MAC passes.
-fn read_header(header: &[u8]) -> Result<[u8; 16], ManifestError> {
-    let (magic, rest) = header.split_at_checked(FILE_MAGIC.len()).ok_or(ManifestError::Truncated)?;
-    if magic != FILE_MAGIC {
-        return Err(ManifestError::BadMagic);
-    }
-    match rest {
-        [FILE_VERSION, id @ ..] => id.try_into().map_err(|_| ManifestError::Truncated),
-        [version, ..] => Err(ManifestError::UnknownVersion(*version)),
-        [] => Err(ManifestError::Truncated),
-    }
-}
-
-/// The keyed BLAKE2b-256 MAC over the domain tag and `signed`, the file's header and ciphertext.
-fn mac(identity: &VaultIdentity, signed: &[u8]) -> Blake2bMac<U32> {
-    keyed_mac(&identity.derive_key(MANIFEST_KEY_PERSONA), signed)
-}
-
-fn keyed_mac(key: &[u8; 64], signed: &[u8]) -> Blake2bMac<U32> {
-    <Blake2bMac<U32> as KeyInit>::new(key.into()).chain_update(MAC_DOMAIN_TAG).chain_update(signed)
+    let (vault_id, payload) = KIND.open(identity, file)?;
+    let manifest = encoding::decode(&payload)?;
+    (manifest.vault_id == vault_id).then_some(manifest).ok_or(ManifestError::VaultIdMismatch)
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use blake2::Blake2bMac;
+    use blake2::digest::{Mac, consts::U32};
     use proptest::prelude::*;
 
     use super::*;
+    use crate::mac_file::{HEADER_LEN, MAC_LEN};
+    use crate::sealed;
+
+    const FILE_MAGIC: [u8; 4] = KIND.magic;
+    const FILE_VERSION: u8 = KIND.version;
 
     /// The known-answer identity: the `age` secret-key text of the X25519 key bytes 01 02 … 20.
     pub(crate) const KAT_IDENTITY: &str = "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE";
@@ -261,6 +231,14 @@ pub(crate) mod tests {
 
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn mac(identity: &VaultIdentity, signed: &[u8]) -> Blake2bMac<U32> {
+        keyed_mac(&identity.derive_key(MANIFEST_KEY_PERSONA), signed)
+    }
+
+    fn keyed_mac(key: &[u8; 64], signed: &[u8]) -> Blake2bMac<U32> {
+        KIND.mac(key, signed)
     }
 
     fn entry(name: &str, digest: u8) -> ManifestEntry {

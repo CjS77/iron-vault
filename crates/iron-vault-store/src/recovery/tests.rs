@@ -7,7 +7,7 @@ use iron_vault_policy::{CredentialName, Port};
 use super::*;
 use crate::{
     EnvelopeError, OperationalIdentity, OsFs, Passphrase, PermittedOrigins, RecipientSet, StanzaKind, StateDirLock, StateFileName,
-    UnlockError, Vault, VaultIdentity, manifest::HEADER_LEN as MANIFEST_HEADER_LEN, passphrase::seal_at, read_identity_envelope,
+    UnlockError, Vault, VaultIdentity, mac_file::HEADER_LEN as MANIFEST_HEADER_LEN, passphrase::seal_at, read_identity_envelope,
     stanza_kinds, test_dir::TestDir, unlock_with_passphrase, unwrap_identity, wrap_identity, write_identity_envelope,
     write_passphrase_envelope,
 };

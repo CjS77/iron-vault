@@ -1,86 +1,61 @@
 //! The approval state file v1: a clear header, the payload sealed to the vault public key, then a MAC
 //! (`design/storage-formats.md`).
 //!
-//! It is framed like the manifest file but with its own magic, MAC key persona and domain tag, so a MAC from one file
-//! never verifies the other.
-
-use blake2::Blake2bMac;
-use blake2::digest::{KeyInit, Mac, consts::U32};
+//! It is a MAC'd file like the manifest file (`crate::mac_file`), with its own magic, MAC key persona and domain tag, so
+//! a MAC from one file never verifies the other.
 
 use super::{ApprovalState, ApprovalStateError, MAX_APPROVAL_STATE_LEN, encoding};
 use crate::approval::ApprovalDecodeError;
-use crate::approval::encoding::Reader;
-use crate::sealed::{self, SealError};
-use crate::vault_id::VaultId;
+use crate::mac_file::MacFileKind;
+use crate::sealed::SealError;
 use crate::vault_identity::VaultIdentity;
 
-/// The first bytes of every approval state file.
-const FILE_MAGIC: [u8; 4] = *b"IVAF";
-/// The file version this code writes and the only one it reads; it fixes the MAC construction.
-const FILE_VERSION: u8 = 1;
-/// Magic, version and vault ID, in clear and covered by the MAC.
-const HEADER_LEN: usize = FILE_MAGIC.len() + 1 + 16;
-/// The length of the trailing MAC.
-const MAC_LEN: usize = 32;
-/// Prefixed to the MAC input so a MAC under the approval key can never be mistaken for one over other data.
-const MAC_DOMAIN_TAG: &[u8] = b"iron-vault approval file v1 mac\0";
-/// The BLAKE2b personalization of the approval key, which keeps it independent of the manifest key and any other key
-/// derived from the vault identity.
-const APPROVAL_KEY_PERSONA: &[u8] = b"iv-approval-v1";
+/// The approval state's MAC'd file frame: magic `IVAF`, version 1, and a key persona and domain tag of its own, so a
+/// MAC from the manifest never verifies here.
+const KIND: MacFileKind<ApprovalStateError> = MacFileKind {
+    magic: *b"IVAF",
+    version: 1,
+    persona: b"iv-approval-v1",
+    domain_tag: b"iron-vault approval file v1 mac\0",
+    max_len: MAX_APPROVAL_STATE_LEN,
+    too_large: ApprovalStateError::TooLarge { limit: MAX_APPROVAL_STATE_LEN },
+    truncated: ApprovalStateError::Format(ApprovalDecodeError::Truncated),
+    bad_magic: ApprovalStateError::Format(ApprovalDecodeError::BadMagic),
+    unknown_version: |version| ApprovalDecodeError::UnknownFormatVersion(version).into(),
+    damaged: ApprovalStateError::Damaged,
+    invalid_vault_id: |error| ApprovalDecodeError::InvalidVaultId(error).into(),
+};
 
 /// The approval state file's bytes: header, the payload sealed to the vault public key, then the MAC.
 pub fn seal_approval_state(identity: &VaultIdentity, state: &ApprovalState) -> Result<Vec<u8>, SealError> {
-    let ciphertext = sealed::seal(&identity.public_key(), &encoding::encode(state))?;
-    let mut file = [&FILE_MAGIC[..], &[FILE_VERSION], state.vault_id.as_bytes(), &ciphertext].concat();
-    let tag: [u8; MAC_LEN] = mac(identity, &file).finalize().into_bytes().into();
-    file.extend_from_slice(&tag);
-    Ok(file)
+    KIND.seal(identity, state.vault_id, &encoding::encode(state))
 }
 
 /// The approval state a file holds, after its size, header and MAC are checked and before anything is decrypted.
 ///
 /// A MAC mismatch, a payload for another vault or a broken invariant is damaged shared state (spec §3.10).
 pub fn open_approval_state(identity: &VaultIdentity, file: &[u8]) -> Result<ApprovalState, ApprovalStateError> {
-    if file.len() > MAX_APPROVAL_STATE_LEN {
-        return Err(ApprovalStateError::TooLarge { limit: MAX_APPROVAL_STATE_LEN });
-    }
-    let (signed, tag) = file.len().checked_sub(MAC_LEN).and_then(|at| file.split_at_checked(at)).ok_or(ApprovalDecodeError::Truncated)?;
-    let (header, ciphertext) = signed.split_at_checked(HEADER_LEN).ok_or(ApprovalDecodeError::Truncated)?;
-    let vault_id = read_header(header)?;
-    mac(identity, signed).verify_slice(tag).map_err(|_| ApprovalStateError::Damaged)?;
-    let vault_id = VaultId::from_bytes(vault_id).map_err(ApprovalDecodeError::from)?;
-    let state = encoding::decode(&sealed::open(identity, ciphertext, MAX_APPROVAL_STATE_LEN)?)?;
-    match state.vault_id == vault_id {
-        true => Ok(state),
-        false => Err(ApprovalStateError::VaultIdMismatch),
-    }
-}
-
-/// The header's vault ID bytes, after its magic and version. The version is read before the MAC is checked because it
-/// decides how the MAC is computed; the ID is not trusted until the MAC passes.
-fn read_header(header: &[u8]) -> Result<[u8; 16], ApprovalDecodeError> {
-    let mut reader = Reader(header);
-    reader.header(FILE_MAGIC, FILE_VERSION)?;
-    reader.array()
-}
-
-/// The keyed BLAKE2b-256 MAC over the domain tag and `signed`, the file's header and ciphertext.
-fn mac(identity: &VaultIdentity, signed: &[u8]) -> Blake2bMac<U32> {
-    keyed_mac(&identity.derive_key(APPROVAL_KEY_PERSONA), signed)
-}
-
-fn keyed_mac(key: &[u8; 64], signed: &[u8]) -> Blake2bMac<U32> {
-    <Blake2bMac<U32> as KeyInit>::new(key.into()).chain_update(MAC_DOMAIN_TAG).chain_update(signed)
+    let (vault_id, payload) = KIND.open(identity, file)?;
+    let state = encoding::decode(&payload)?;
+    (state.vault_id == vault_id).then_some(state).ok_or(ApprovalStateError::VaultIdMismatch)
 }
 
 #[cfg(test)]
 mod tests {
+    use blake2::Blake2bMac;
+    use blake2::digest::{Mac, consts::U32};
     use proptest::prelude::*;
 
     use super::*;
     use crate::approval::{ApprovalVersion, ConfigDigest, InvalidKeyReason, PinnedApprover, SignatureAlgorithm};
+    use crate::mac_file::{HEADER_LEN, MAC_LEN};
     use crate::manifest::tests::KAT_IDENTITY;
-    use crate::sealed::OpenError;
+    use crate::sealed::{self, OpenError};
+    use crate::vault_id::VaultId;
+
+    const FILE_MAGIC: [u8; 4] = KIND.magic;
+    const FILE_VERSION: u8 = KIND.version;
+    const APPROVAL_KEY_PERSONA: &[u8] = KIND.persona;
 
     /// The approval key of [`KAT_IDENTITY`].
     const KAT_APPROVAL_KEY: &str =
@@ -97,6 +72,14 @@ mod tests {
 
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn mac(identity: &VaultIdentity, signed: &[u8]) -> Blake2bMac<U32> {
+        keyed_mac(&identity.derive_key(APPROVAL_KEY_PERSONA), signed)
+    }
+
+    fn keyed_mac(key: &[u8; 64], signed: &[u8]) -> Blake2bMac<U32> {
+        KIND.mac(key, signed)
     }
 
     /// A state with a committed approval, so every payload field is present.

@@ -8,6 +8,7 @@ mod durable_faults;
 mod envelope;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fault_fs;
+mod mac_file;
 mod manifest;
 mod passphrase;
 mod permitted_origins;
