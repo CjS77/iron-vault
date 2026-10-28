@@ -547,5 +547,5 @@ The payload is 111 bytes. A new vault's payload is the same up to the public key
 
 Every field has one form, so the same state always encodes to the same bytes. Decoding rejects a wrong magic, an
 unknown format version, a vault ID that is not a version 4 UUID, an unknown or reserved algorithm ID, a public key of
-the wrong length for its algorithm, a committed tag other than `00` or `01`, committed version 0, a committed version
+the wrong length for its algorithm, a public key that is not a valid, non-weak key for its algorithm, a committed tag other than `00` or `01`, committed version 0, a committed version
 above the highest reserved version, truncation and trailing bytes.

@@ -56,8 +56,8 @@ pub struct SoftwareSignerKey(SigningKey);
 
 impl SoftwareSignerKey {
     /// The approver this key verifies as.
-    fn pinned(&self) -> Result<PinnedApprover, SignError> {
-        PinnedApprover::ed25519(self.0.verifying_key()).map_err(SignError::Unpinnable)
+    fn pinned(&self) -> PinnedApprover {
+        PinnedApprover::from_signing_key(&self.0)
     }
 }
 
@@ -84,13 +84,13 @@ impl SoftwareSigner {
         let mut seed = Zeroizing::new([0u8; SECRET_KEY_LENGTH]);
         getrandom::fill(seed.as_mut_slice()).map_err(|_| SignError::Randomness)?;
         let key = SoftwareSignerKey(SigningKey::from_bytes(&seed));
-        let pinned = key.pinned()?;
+        let pinned = key.pinned();
         Ok((key, pinned))
     }
 
     /// The signer for `key`, refusing it unless its public key is `pinned`'s.
     fn new(key: SoftwareSignerKey, pinned: &PinnedApprover) -> Result<Self, SignError> {
-        match key.pinned()? == *pinned {
+        match key.pinned() == *pinned {
             true => Ok(Self { key: key.0, pinned: pinned.clone() }),
             false => Err(SignError::KeyMismatch),
         }

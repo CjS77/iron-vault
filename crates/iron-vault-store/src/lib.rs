@@ -31,8 +31,8 @@ mod vault_identity;
 
 pub use approval::{
     APPROVAL_PURPOSE, ApprovalDecodeError, ApprovalEnvelope, ApprovalPassphrase, ApprovalPayload, ApprovalSigner, ApprovalState,
-    ApprovalStateError, InvalidKeyReason, ApprovalVersion, ConfigDigest, MAX_APPROVAL_ENVELOPE_LEN, MAX_APPROVAL_STATE_LEN, PinnedApprover,
-    RESERVED_ECDSA_P256_ID, SignError, SignatureAlgorithm, SoftwareSigner, SoftwareSignerKey, VerifiedApproval, VerifyError,
+    ApprovalStateError, ApprovalVersion, ConfigDigest, InvalidKeyReason, MAX_APPROVAL_ENVELOPE_LEN, MAX_APPROVAL_STATE_LEN,
+    PinnedApprover, RESERVED_ECDSA_P256_ID, SignError, SignatureAlgorithm, SoftwareSigner, SoftwareSignerKey, VerifiedApproval, VerifyError,
     open_approval_state, open_signer_key, read_signer_key, seal_approval_state, seal_signer_key, verify_approval, write_signer_key,
 };
 pub use durable::{MAX_STATE_FILE_LEN, ReadError, WriteError, WriteStep, durable_remove, durable_replace, read_state_file};

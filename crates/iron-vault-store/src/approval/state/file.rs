@@ -101,7 +101,7 @@ mod tests {
 
     /// A state with a committed approval, so every payload field is present.
     fn state(vault_id: VaultId) -> ApprovalState {
-        let approver = PinnedApprover::ed25519(ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]).verifying_key()).unwrap();
+        let approver = PinnedApprover::from_signing_key(&ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]));
         ApprovalState::from_parts(vault_id, approver, 3, ApprovalVersion::new(2).map(|v| (v, ConfigDigest::of(b"config")))).unwrap()
     }
 

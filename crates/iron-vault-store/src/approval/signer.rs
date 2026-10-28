@@ -6,7 +6,7 @@
 
 use thiserror::Error;
 
-use super::{ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, ApprovalStateError, PinnedApprover, SignatureAlgorithm};
+use super::{ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, PinnedApprover, SignatureAlgorithm};
 use crate::EnvelopeError;
 
 /// Signs config approvals for one pinned approver.
@@ -33,9 +33,6 @@ pub enum SignError {
     /// The decrypted signing key is not the pinned approver's key, so nothing may be signed with it.
     #[error("the approver key does not match the pinned approver")]
     KeyMismatch,
-    /// The signing key's public key cannot be pinned as an approver.
-    #[error("the approver key cannot be pinned: {0}")]
-    Unpinnable(ApprovalStateError),
     /// The approver key envelope is damaged, oversized or not an approver key envelope.
     #[error("the approver key envelope cannot be opened: {0}")]
     Envelope(EnvelopeError),

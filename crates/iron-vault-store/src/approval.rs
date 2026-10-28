@@ -140,13 +140,6 @@ impl SignatureAlgorithm {
             Self::Ed25519 => len == 64,
         }
     }
-
-    /// Whether `len` is a valid public key length for this algorithm.
-    fn accepts_public_key_len(self, len: usize) -> bool {
-        match self {
-            Self::Ed25519 => len == 32,
-        }
-    }
 }
 
 /// What a config approval signs: this vault, a reserved version and the digest of the reviewed config.

@@ -16,7 +16,7 @@ mod tests;
 
 use std::io;
 
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use thiserror::Error;
 
 use super::{ApprovalDecodeError, ApprovalVersion, ConfigDigest, SignatureAlgorithm};
@@ -63,21 +63,25 @@ pub enum InvalidKeyReason {
 impl PinnedApprover {
     /// The approver with `public_key` for `algorithm`, refusing a key of the wrong length, a non-point or a weak key.
     pub fn new(algorithm: SignatureAlgorithm, public_key: Vec<u8>) -> Result<Self, ApprovalStateError> {
-        let len = public_key.len();
-        let bytes: [u8; 32] = match algorithm.accepts_public_key_len(len) {
-            true => public_key.try_into().map_err(|_| ApprovalStateError::PublicKeyLength { algorithm, len })?,
-            false => return Err(ApprovalStateError::PublicKeyLength { algorithm, len }),
-        };
-        let key = VerifyingKey::from_bytes(&bytes).map_err(|_| invalid(algorithm, InvalidKeyReason::NotAPoint))?;
-        Self::ed25519(key)
+        match algorithm {
+            SignatureAlgorithm::Ed25519 => {
+                let bytes: [u8; 32] =
+                    public_key.try_into().map_err(|key: Vec<u8>| ApprovalStateError::PublicKeyLength { algorithm, len: key.len() })?;
+                let key = VerifyingKey::from_bytes(&bytes).map_err(|_| invalid(algorithm, InvalidKeyReason::NotAPoint))?;
+                if key.is_weak() {
+                    return Err(invalid(algorithm, InvalidKeyReason::WeakKey));
+                }
+                Ok(Self { key: ApproverKey::Ed25519(key) })
+            }
+        }
     }
 
-    /// The Ed25519 approver for `key`, refusing a small-order (weak) key.
-    pub fn ed25519(key: VerifyingKey) -> Result<Self, ApprovalStateError> {
-        match key.is_weak() {
-            true => Err(invalid(SignatureAlgorithm::Ed25519, InvalidKeyReason::WeakKey)),
-            false => Ok(Self { key: ApproverKey::Ed25519(key) }),
-        }
+    /// The Ed25519 approver for `signing_key`.
+    ///
+    /// Infallible because an Ed25519 public key is a clamped scalar times the basepoint: clamping makes the scalar a
+    /// multiple of the cofactor and the basepoint has prime order, so the result is never a small-order point.
+    pub(crate) fn from_signing_key(signing_key: &SigningKey) -> Self {
+        Self { key: ApproverKey::Ed25519(signing_key.verifying_key()) }
     }
 
     /// The algorithm approvals must be signed with.
