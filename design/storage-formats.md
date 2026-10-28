@@ -395,3 +395,130 @@ for its algorithm, truncation and trailing bytes.
 `MAX_APPROVAL_ENVELOPE_LEN` is 4096 bytes, checked before anything else is read. A v1 envelope is 175 bytes with an
 Ed25519 signature and at most 183 with a DER-encoded ECDSA P-256 one; the limit leaves room for a later algorithm with
 a larger signature while keeping a planted file cheap to refuse.
+
+## Approval state file v1
+
+The [approval state](glossary.md) of one vault, in the state-directory file `approval.age`: the pinned approver, the
+highest reserved version and the committed approval (specification §3.9). Versioned approval rejects an old
+`config.toml` and `config.toml.sig` pair only while these counters never go backwards, so the file is framed like the
+manifest file: sealed to the vault public key, then authenticated with a MAC keyed from the private vault identity, so
+a party holding only the public key cannot write one that opens. Rust:
+`iron_vault_store::{seal_approval_state, open_approval_state, ApprovalState}`.
+
+### Layout
+
+| Offset   | Size | Content                                                                                    |
+|----------|------|--------------------------------------------------------------------------------------------|
+| 0        | 4    | Magic: ASCII `IVAF` (`49 56 41 46`)                                                        |
+| 4        | 1    | Version: `01`                                                                              |
+| 5        | 16   | Vault ID: the 16 bytes of a version 4 UUID                                                 |
+| 21       | var  | The approval state payload v1 (below), sealed to the vault public key as binary `age`      |
+| end − 32 | 32   | MAC                                                                                        |
+
+As in the manifest file, the vault ID is in clear so the MAC that covers it can be checked before anything is
+decrypted, and a payload whose vault ID differs from the header's is refused.
+
+### MAC
+
+```text
+approval key = BLAKE2b-512(personalization = "iv-approval-v1", message = vault identity secret text)
+MAC          = BLAKE2b-256(key = approval key, message = "iron-vault approval file v1 mac" 00 || bytes 0 .. end − 32)
+```
+
+The construction is the manifest file's with its own personalization and domain tag, so the approval key is
+independent of the manifest key and a MAC from one file never verifies the other. The vault identity secret text is the
+same 74 ASCII bytes the manifest key is derived from.
+
+Test vectors, checked by the store's tests, with the manifest's known-answer identity and a stand-in ciphertext:
+
+```text
+identity      AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE
+              (the X25519 key bytes 01 02 03 … 20)
+approval key  16774b3a8005def61dba01300f8d95323135bdc40e911fadd247058656d40372
+              dc06a4d9099da2e01ddec5c2c017772f903cf6083fb0f38d1ca5fbac6b8df64c
+MAC input     the domain tag, then these bytes before the MAC:
+              49564146013f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b6e6f74207265616c6c7920616765
+              (magic "IVAF", version 01, vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b, ciphertext "not really age")
+MAC           432bf6223d8cfcab01ea4ba4f7e3757ed426bb724c440ccbf42d2ecdeca76e3f
+```
+
+### Reading order
+
+`open_approval_state` checks in the manifest's order: a file longer than `MAX_APPROVAL_STATE_LEN` (4 KiB) is refused
+first; then a short file, a wrong magic or an unknown version; then the MAC, compared in constant time; only then is the
+ciphertext opened and decoded. A MAC mismatch, a payload naming another vault, or a payload whose committed version is
+above its highest reserved version is damaged shared state: approvals cannot be checked, so the service stops
+proxying (specification §3.9, §3.10).
+
+### Size limit
+
+A payload with an Ed25519 approver is 111 bytes. `age` adds a header of at most about 400 bytes, a 16-byte payload nonce
+and a 16-byte tag, and the file adds 53 bytes of header and MAC: under 600 bytes. `MAX_APPROVAL_STATE_LEN` is 4096
+bytes, which leaves room for a later algorithm with a longer public key. The same limit bounds the decrypted payload.
+
+### Writes
+
+The service changes the state only by durably replacing the whole file, and changes its in-memory copy only after the
+replace returns:
+
+- **Create.** A new vault's state has nothing reserved and nothing committed. It is written only where no
+  `approval.age` exists, so creating it again can never reset the counters.
+- **Reserve.** Writes the highest reserved version plus one and returns it; the returned version is already durable, so
+  it is never handed out twice. At `u64::MAX` it fails without writing, and nothing may be signed.
+- **Commit.** Writes a new committed approval. The version must be reserved and newer than the committed one.
+- **Replace approver.** Writes a new pinned approver and keeps both counters, so the active signature stops verifying
+  until the config is approved again at a new version.
+
+Before each write the service reads the file back and requires it to equal its in-memory state, so a stale copy can
+never write lower counters over newer ones. Restoring the whole state directory from an older copy restores older
+counters too; specification §3.9 leaves that outside v0.
+
+## Approval state payload v1
+
+The plaintext an approval state file seals. It uses the conventions of record payload v1: big-endian unsigned integers,
+`u64` length prefixes, lengths checked against the bytes remaining before anything is read, and no trailing bytes.
+
+### Layout
+
+| Offset | Size | Content                                                                              |
+|--------|------|--------------------------------------------------------------------------------------|
+| 0      | 4    | Magic: ASCII `IVAM` (`49 56 41 4d`)                                                  |
+| 4      | 1    | Format version: `01`                                                                 |
+| 5      | 16   | Vault ID: equal to the file header's                                                 |
+| 21     | 1    | Approver algorithm: a signature algorithm ID, as in approval envelope v1             |
+| 22     | var  | Approver public key: field; 32 bytes for Ed25519                                     |
+| …      | 8    | Highest reserved version: `u64`, 0 before the first reservation                      |
+| …      | 1    | Committed tag: `00` nothing committed, `01` a committed approval follows             |
+| …      | 8    | Committed version (tag `01` only): `u64`, from 1 to the highest reserved version     |
+| …      | 32   | Committed config digest (tag `01` only): BLAKE2b-256 of the approved config          |
+
+### Example
+
+Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b` with an Ed25519 approver (the RFC 8032 test 1 public key), versions 1 and
+2 reserved, and version 1 committed for an empty config. Version 2 was reserved for a signing attempt that never
+committed, and stays consumed.
+
+```text
+49 56 41 4d                                        magic "IVAM"
+01                                                 format version 1
+3f 2b 8c 1e 5d 4a 4e 6f 9a 7b 1c 2d 3e 4f 5a 6b    vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b
+01                                                 approver algorithm Ed25519
+00 00 00 00 00 00 00 20                            public key length 32
+d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a    public key
+0e e1 72 f3 da a6 23 25 af 02 1a 68 f7 07 51 1a
+00 00 00 00 00 00 00 02                            highest reserved version 2
+01                                                 an approval is committed
+00 00 00 00 00 00 00 01                            committed version 1
+0e 57 51 c0 26 e5 43 b2 e8 ab 2e b0 60 99 da a1    committed config digest
+d1 e5 df 47 77 8f 77 87 fa ab 45 cd f1 2f e3 a8
+```
+
+The payload is 111 bytes. A new vault's payload is the same up to the public key, then eight zero bytes and the tag
+`00`.
+
+### One encoding per state
+
+Every field has one form, so the same state always encodes to the same bytes. Decoding rejects a wrong magic, an
+unknown format version, a vault ID that is not a version 4 UUID, an unknown or reserved algorithm ID, a public key of
+the wrong length for its algorithm, a committed tag other than `00` or `01`, committed version 0, a committed version
+above the highest reserved version, truncation and trailing bytes.
