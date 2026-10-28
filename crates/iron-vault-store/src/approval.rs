@@ -5,10 +5,12 @@
 //! later YubiKey signers all produce the same envelope, so it is verified one way. Both byte layouts are in
 //! `design/storage-formats.md`.
 //!
-//! The approval state, which pins the approver and holds the version counters, is in [`state`].
+//! The approval state, which pins the approver and holds the version counters, is in [`state`]; checking an approval
+//! against it is in [`verify`].
 
 mod encoding;
 mod state;
+mod verify;
 
 use std::fmt;
 use std::num::NonZeroU64;
@@ -20,6 +22,7 @@ use thiserror::Error;
 use crate::vault_id::{VaultId, VaultIdError};
 
 pub use state::{ApprovalState, ApprovalStateError, MAX_APPROVAL_STATE_LEN, PinnedApprover, open_approval_state, seal_approval_state};
+pub use verify::{VerifiedApproval, VerifyError, verify_approval};
 
 /// The largest approval envelope accepted, in bytes, checked before anything else is read.
 ///

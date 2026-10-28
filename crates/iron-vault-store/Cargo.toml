@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 age.workspace = true
 blake2.workspace = true
+ed25519-dalek.workspace = true
 iron-vault-kinds = { path = "../iron-vault-kinds" }
 iron-vault-policy = { path = "../iron-vault-policy" }
 secrecy.workspace = true

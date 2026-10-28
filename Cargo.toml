@@ -15,6 +15,9 @@ anyhow = "1"
 base64 = "0.23.1"
 # zeroize clears hasher state on drop, so the manifest key does not outlive its use; alloc is not needed.
 blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+# Approval signature verification with verify_strict, which needs no optional feature; std, fast tables, zeroize and
+# key generation stay off because the service only verifies here and tests sign from fixed seeds.
+ed25519-dalek = { version = "2.2.0", default-features = false }
 proptest = { version = "1.12", default-features = false, features = ["std"] }
 secrecy = "0.10.3"
 serde = { version = "1", features = ["derive"] }

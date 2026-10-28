@@ -30,7 +30,7 @@ mod vault_identity;
 pub use approval::{
     APPROVAL_PURPOSE, ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, ApprovalState, ApprovalStateError, ApprovalVersion,
     ConfigDigest, MAX_APPROVAL_ENVELOPE_LEN, MAX_APPROVAL_STATE_LEN, PinnedApprover, RESERVED_ECDSA_P256_ID, SignatureAlgorithm,
-    open_approval_state, seal_approval_state,
+    VerifiedApproval, VerifyError, open_approval_state, seal_approval_state, verify_approval,
 };
 pub use durable::{ReadError, WriteError, WriteStep, durable_remove, durable_replace, read_state_file};
 pub use envelope::{
