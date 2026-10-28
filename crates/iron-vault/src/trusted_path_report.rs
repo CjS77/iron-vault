@@ -83,18 +83,22 @@ pub fn check_path(rule: TrustedPathRule, profile: Profile, owner: ExpectedOwner,
 }
 
 /// Logs each path caution of the report's trusted paths once, at WARN, with what it allows and how to fix it.
+///
+/// For startup only: every warning ends by saying the service is starting anyway, which is wrong anywhere else,
+/// such as in `status` output.
 pub fn log_cautions(report: &TrustedPathReport) {
     report
         .entries
         .iter()
         .filter_map(|entry| entry.outcome.as_ref().ok().map(|cautions| (entry, cautions)))
-        .flat_map(|(entry, cautions)| cautions.iter().map(|caution| caution_warning(caution, &entry.path)))
+        .flat_map(|(entry, cautions)| cautions.iter().filter_map(|caution| caution_warning(caution, &entry.path)))
         .for_each(|warning| tracing::warn!("{warning}"));
 }
 
 /// The plain-language warning for a caution above `trusted`: the folder and its owner, the risk, the fix, and that
-/// the service starts anyway. It names only paths and accounts, never anything from the vault.
-fn caution_warning(caution: &PathCaution, trusted: &Path) -> String {
+/// the service starts anyway. It names only paths and accounts, never anything from the vault. Only the binary and
+/// config rules have cautions, so any other rule has no text.
+fn caution_warning(caution: &PathCaution, trusted: &Path) -> Option<String> {
     let folder = caution.path.display();
     let trusted = trusted.display();
     let account = caution
@@ -107,18 +111,19 @@ fn caution_warning(caution: &PathCaution, trusted: &Path) -> String {
             "run that program",
             "or install the binary to /usr/bin (package) or /usr/local/bin (manual install)",
         ),
-        _ => (
+        TrustedPathRule::Config => (
             "configuration file",
             "load that configuration",
-            "or keep the configuration under /etc/iron-vault",
+            "or move the configuration into a directory owned by root all the way up from /",
         ),
+        TrustedPathRule::StateDir | TrustedPathRule::RuntimeDir | TrustedPathRule::StateFile => return None,
     };
-    format!(
-        "{folder} is owned by {account}, not root, and holds the {file} {trusted}. Anything running as {account} can \
+    Some(format!(
+        "{folder} is owned by {account}, not root, and is on the path to the {file} {trusted}. Anything running as {account} can \
          rename the {file} out of the way and put its own in its place; the next service start would {effect} with \
          the vault unlocked. To fix this, run `chown root:root {folder}` and `chmod go-w {folder}`, {install}. \
          The service is starting anyway."
-    )
+    ))
 }
 
 /// The running binary's entry: it must still be the file the process started from, and pass the binary rule.
@@ -211,7 +216,7 @@ mod tests {
         [
             "WARN",
             "/opt/iron-vault is owned by 'iron-vault' (uid 997), not root",
-            "service binary /opt/iron-vault/iron-vault",
+            "is on the path to the service binary /opt/iron-vault/iron-vault",
             "with the vault unlocked",
             "`chown root:root /opt/iron-vault`",
             "`chmod go-w /opt/iron-vault`",
@@ -224,8 +229,29 @@ mod tests {
 
     #[test]
     fn an_unnamed_owner_is_shown_by_uid() {
-        let warning = caution_warning(&opt_caution(None), Path::new("/opt/iron-vault/iron-vault"));
+        let warning = caution_warning(&opt_caution(None), Path::new("/opt/iron-vault/iron-vault")).unwrap();
         assert!(warning.starts_with("/opt/iron-vault is owned by uid 997, not root"), "{warning}");
+    }
+
+    #[test]
+    fn a_config_caution_names_the_config_and_a_root_owned_directory() {
+        let caution = PathCaution {
+            rule: TrustedPathRule::Config,
+            path: PathBuf::from("/etc/iron-vault"),
+            ..opt_caution(None)
+        };
+        let warning = caution_warning(&caution, Path::new("/etc/iron-vault/config.toml")).unwrap();
+        [
+            "/etc/iron-vault is owned by uid 997, not root",
+            "is on the path to the configuration file /etc/iron-vault/config.toml",
+            "the next service start would load that configuration with the vault unlocked",
+            "`chown root:root /etc/iron-vault`",
+            "or move the configuration into a directory owned by root all the way up from /",
+            "starting anyway",
+        ]
+        .into_iter()
+        .for_each(|expected| assert!(warning.contains(expected), "missing {expected:?} in {warning}"));
+        assert!(!warning.contains("/usr/bin"), "{warning}");
     }
 
     #[test]

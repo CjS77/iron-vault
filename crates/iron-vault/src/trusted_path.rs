@@ -305,13 +305,47 @@ impl std::error::Error for UnsafePath {}
 /// resolved target is checked as a trusted path of its own, playing the symlink's part: the leaf rule when the
 /// symlink is the leaf, the ancestor rule otherwise.
 pub fn check(rule: TrustedPathRule, profile: Profile, owner: ExpectedOwner, components: &[PathComponent]) -> Result<(), UnsafePath> {
-    Walk {
+    check_with_cautions(rule, profile, owner, components).map(|_| ())
+}
+
+/// A directory above the binary or config that passes its rule but is not owned by root.
+///
+/// Anything running as the owning account can rename the trusted file out of the way and put its own in its place,
+/// and the next service start would run or load it with the vault unlocked. That is safe enough to start on, so it
+/// is a warning, never a refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathCaution {
+    /// The rule of the trusted path the directory sits above.
+    pub rule: TrustedPathRule,
+    /// The directory, named as the path or a symlink's resolved target names it.
+    pub path: PathBuf,
+    /// The owning uid.
+    pub uid: u32,
+    /// The owning user's name, when the adapter resolved one.
+    pub owner_name: Option<String>,
+}
+
+/// Checks a trusted path as [`check`] does and, when it passes, returns its path cautions from `/` down, each folder
+/// once.
+///
+/// Only the protected profile's binary and config have cautions: development already reports that it gives no
+/// isolation, and the other rules expect the service account to own their directories. A refused path has its
+/// refusal only.
+pub fn check_with_cautions(
+    rule: TrustedPathRule,
+    profile: Profile,
+    owner: ExpectedOwner,
+    components: &[PathComponent],
+) -> Result<Vec<PathCaution>, UnsafePath> {
+    let walk = Walk {
         rule,
         profile,
         owner,
         depth: 0,
-    }
-    .chain(components, Role::Leaf, Path::new(""))
+    };
+    let mut seen = BTreeSet::new();
+    let cautions = walk.chain(components, Role::Leaf, Path::new(""))?;
+    Ok(cautions.into_iter().filter(|caution| seen.insert(caution.path.clone())).collect())
 }
 
 /// Whether a component is the end of the path being checked or a directory above it.
@@ -332,7 +366,7 @@ struct Walk {
 
 impl Walk {
     /// Checks a chain whose last component plays `role`; `origin` names the chain when it is empty.
-    fn chain(self, components: &[PathComponent], role: Role, origin: &Path) -> Result<(), UnsafePath> {
+    fn chain(self, components: &[PathComponent], role: Role, origin: &Path) -> Result<Vec<PathCaution>, UnsafePath> {
         if components.is_empty() {
             return Err(UnsafePath {
                 path: origin.to_path_buf(),
@@ -346,26 +380,35 @@ impl Walk {
             });
         }
         let last = components.len() - 1;
-        components.iter().enumerate().try_for_each(|(index, component)| {
+        let per_component = components.iter().enumerate().map(|(index, component)| {
             let parent = index.checked_sub(1).and_then(|before| components.get(before)).and_then(resolved);
             let role = if index == last { role } else { Role::Ancestor };
             self.component(component, parent, role)
-        })
+        });
+        // Collecting stops at the first error, so the report still names the first unsafe component from `/` down.
+        let cautions: Vec<Vec<PathCaution>> = per_component.collect::<Result<_, _>>()?;
+        Ok(cautions.into_iter().flatten().collect())
     }
 
-    fn component(self, component: &PathComponent, parent: Option<&PathComponent>, role: Role) -> Result<(), UnsafePath> {
+    fn component(self, component: &PathComponent, parent: Option<&PathComponent>, role: Role) -> Result<Vec<PathCaution>, UnsafePath> {
         let checked = match (&component.kind, role) {
             (ComponentKind::Symlink { target }, _) => return self.symlink(component, parent, target, role),
-            (_, Role::Leaf) => self.leaf(component),
+            (_, Role::Leaf) => self.leaf(component).map(|()| None),
             (_, Role::Ancestor) => self.ancestor(component),
         };
-        checked.map_err(|problem| UnsafePath {
+        checked.map(Vec::from_iter).map_err(|problem| UnsafePath {
             path: component.path.clone(),
             problem,
         })
     }
 
-    fn symlink(self, link: &PathComponent, parent: Option<&PathComponent>, target: &SymlinkTarget, role: Role) -> Result<(), UnsafePath> {
+    fn symlink(
+        self,
+        link: &PathComponent,
+        parent: Option<&PathComponent>,
+        target: &SymlinkTarget,
+        role: Role,
+    ) -> Result<Vec<PathCaution>, UnsafePath> {
         let unsafe_link = |problem| {
             Err(UnsafePath {
                 path: link.path.clone(),
@@ -414,14 +457,30 @@ impl Walk {
         }
     }
 
-    fn ancestor(self, component: &PathComponent) -> Result<(), Problem> {
+    /// Checks an ancestor directory and returns its caution, if it has one.
+    fn ancestor(self, component: &PathComponent) -> Result<Option<PathCaution>, Problem> {
         require_directory(component)?;
         require_owner(component, OwnerRequirement::root_or(self.owner.uid))?;
         match is_shared_sticky(component) {
             true if self.rule.allows_sticky_ancestor() => Ok(()),
             true => Err(Problem::SharedStickyAncestor),
             false => require_not_writable(component),
-        }
+        }?;
+        Ok(self.caution(component))
+    }
+
+    /// A passing ancestor's caution: in the protected profile, the binary and config must be root's alone, so an
+    /// ancestor the service account owns lets that account replace them.
+    fn caution(self, component: &PathComponent) -> Option<PathCaution> {
+        let cautioned = self.profile == Profile::Protected
+            && matches!(self.rule, TrustedPathRule::Binary | TrustedPathRule::Config)
+            && component.uid != ROOT_UID;
+        cautioned.then(|| PathCaution {
+            rule: self.rule,
+            path: component.path.clone(),
+            uid: component.uid,
+            owner_name: component.owner_name.clone(),
+        })
     }
 
     /// Who may own the binary and config. Development also accepts root: a root-owned file is beyond the invoking
@@ -500,78 +559,6 @@ fn require_not_writable(component: &PathComponent) -> Result<(), Problem> {
     match mode.others_writable() {
         true => Err(Problem::WritableByOthers),
         false => Ok(()),
-    }
-}
-
-/// A directory above the binary or config that passes its rule but is not owned by root.
-///
-/// Anything running as the owning account can rename the trusted file out of the way and put its own in its place,
-/// and the next service start would run or load it with the vault unlocked. That is safe enough to start on, so it
-/// is a warning, never a refusal.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathCaution {
-    /// The rule of the trusted path the directory sits above.
-    pub rule: TrustedPathRule,
-    /// The directory, as the service names it; for a symlinked path, a directory on the resolved side.
-    pub path: PathBuf,
-    /// The owning uid.
-    pub uid: u32,
-    /// The owning user's name, when the adapter resolved one.
-    pub owner_name: Option<String>,
-}
-
-/// Checks a trusted path as [`check`] does and, when it passes, returns its path cautions from `/` down.
-///
-/// Only the protected profile's binary and config have cautions: development already reports that it gives no
-/// isolation, and the other rules expect the service account to own their directories. A refused path has its
-/// refusal only.
-pub fn check_with_cautions(
-    rule: TrustedPathRule,
-    profile: Profile,
-    owner: ExpectedOwner,
-    components: &[PathComponent],
-) -> Result<Vec<PathCaution>, UnsafePath> {
-    check(rule, profile, owner, components)?;
-    let cautioned = profile == Profile::Protected && matches!(rule, TrustedPathRule::Binary | TrustedPathRule::Config);
-    let mut seen = BTreeSet::new();
-    Ok(match cautioned {
-        true => chain_cautions(rule, components, Role::Leaf)
-            .into_iter()
-            .filter(|caution| seen.insert(caution.path.clone()))
-            .collect(),
-        false => Vec::new(),
-    })
-}
-
-/// The non-root ancestors of a chain whose last component plays `role`, following resolved symlinks the way
-/// [`check`] does. Only call it on a chain `check` accepted, which bounds the symlink nesting.
-fn chain_cautions(rule: TrustedPathRule, components: &[PathComponent], role: Role) -> Vec<PathCaution> {
-    let last = components.len().saturating_sub(1);
-    components
-        .iter()
-        .enumerate()
-        .flat_map(|(index, component)| {
-            let role = if index == last { role } else { Role::Ancestor };
-            component_cautions(rule, component, role)
-        })
-        .collect()
-}
-
-fn component_cautions(rule: TrustedPathRule, component: &PathComponent, role: Role) -> Vec<PathCaution> {
-    match (&component.kind, role) {
-        (
-            ComponentKind::Symlink {
-                target: SymlinkTarget::Resolved(chain),
-            },
-            _,
-        ) => chain_cautions(rule, chain, role),
-        (ComponentKind::Directory, Role::Ancestor) if component.uid != ROOT_UID => vec![PathCaution {
-            rule,
-            path: component.path.clone(),
-            uid: component.uid,
-            owner_name: component.owner_name.clone(),
-        }],
-        _ => Vec::new(),
     }
 }
 
