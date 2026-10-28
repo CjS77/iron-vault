@@ -65,10 +65,12 @@ pub struct HeaderSlot {
     format: SlotFormat,
 }
 
-/// A query parameter name: non-empty, with no `&`, `=`, `#`, `%`, `+`, whitespace or control characters.
+/// A query parameter name: non-empty, made only of RFC 3986 unreserved characters (`A–Z a–z 0–9 - . _ ~`).
 ///
-/// Those characters would end the name, start the value or fragment, or read differently after decoding (`%` starts an
-/// escape, `+` decodes to a space), so the parameter the policy removes could differ from the one the upstream reads.
+/// Unreserved characters are the ones a URL serializer keeps unchanged, so the name the policy appends is the name the
+/// upstream reads. Any other character either ends the name, starts the value or fragment, reads differently after
+/// decoding (`%` starts an escape, `+` decodes to a space), or is re-encoded by the serializer, which would leave a
+/// route that refuses every request instead of failing at config load.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub struct QueryParamName(String);
@@ -82,8 +84,8 @@ pub enum SlotError {
     /// The query parameter name is empty.
     #[error("query parameter name is empty")]
     EmptyQueryName,
-    /// The query parameter name contains a delimiter, decoding character, whitespace or control character.
-    #[error("query parameter name {name} contains {found:?}")]
+    /// The query parameter name contains a character outside the RFC 3986 unreserved set.
+    #[error("query parameter name {name} contains {found:?}; only A-Z a-z 0-9 - . _ ~ are allowed")]
     InvalidQueryChar {
         /// The rejected name, escaped so control characters never reach a log raw.
         name: String,
@@ -131,7 +133,7 @@ impl QueryParamName {
 }
 
 fn is_forbidden_query_char(c: char) -> bool {
-    matches!(c, '&' | '=' | '#' | '%' | '+') || c.is_whitespace() || c.is_control()
+    !(c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
 }
 
 impl TryFrom<&str> for QueryParamName {
@@ -302,6 +304,23 @@ mod tests {
         assert_eq!(QueryParamName::try_from("a&b"), Err(SlotError::InvalidQueryChar { name: "\"a&b\"".into(), found: '&' }));
         assert_eq!(QueryParamName::try_from(""), Err(SlotError::EmptyQueryName));
         assert_eq!(QueryParamName::try_from("api-key.v2").unwrap().as_str(), "api-key.v2");
+    }
+
+    #[test]
+    fn accepts_unreserved_query_names() {
+        ["access_key", "api-key", "key.v2", "k~1"].iter().for_each(|q| {
+            assert!(parse(&format!(r#"{{ query = "{q}" }}"#)).is_ok(), "{q:?}");
+        });
+    }
+
+    #[test]
+    fn rejects_reserved_and_non_ascii_query_names() {
+        ["a'b", "a\\\"b", "a<b", "naïve", "a b", "a\\uFFFDb"].iter().for_each(|q| {
+            assert!(parse(&format!(r#"{{ query = "{q}" }}"#)).is_err(), "{q:?}");
+        });
+        let replacement = "a\u{FFFD}b";
+        let expected = SlotError::InvalidQueryChar { name: quoted(replacement), found: '\u{FFFD}' };
+        assert_eq!(QueryParamName::try_from(replacement), Err(expected));
     }
 
     #[test]

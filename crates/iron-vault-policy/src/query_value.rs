@@ -36,8 +36,8 @@ fn push_encoded(out: &mut String, byte: u8) {
 /// One `name=value` query parameter, percent-decoded with `+` read as a space, as upstream form parsers read it.
 ///
 /// Comparing decoded names is what stops `access%5Fkey` from surviving beside `access_key` when both decode to the
-/// slot name. `None` for an empty parameter, as between `&&`. Invalid UTF-8 decodes to U+FFFD, which no slot name
-/// contains, so a lossy decode can never make a name match.
+/// slot name. `None` for an empty parameter, as between `&&`. Invalid UTF-8 decodes to U+FFFD, which a slot name
+/// cannot contain (slot names are ASCII unreserved characters), so a lossy decode can never make a name match.
 pub(crate) fn decode_param(param: &str) -> Option<(Cow<'_, str>, Cow<'_, str>)> {
     form_urlencoded::parse(param.as_bytes()).next()
 }
