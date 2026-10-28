@@ -248,6 +248,9 @@ dependencies = [
 [[package]]
 name = "iron-vault-store"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "libc"
