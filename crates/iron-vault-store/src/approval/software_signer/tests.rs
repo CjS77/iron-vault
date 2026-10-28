@@ -180,13 +180,13 @@ fn seed_decimal() -> String {
 
 #[test]
 fn software_signer_key_debug_hides_a_known_seed() {
-    let key = SoftwareSignerKey(SigningKey::from_bytes(&SEED));
+    let key = SoftwareSignerKey::from_seed(&SEED);
     [seed_hex(), seed_decimal()].iter().for_each(|secret| assert_hides(&key, secret));
 }
 
 #[test]
 fn software_signer_debug_hides_a_known_seed() {
-    let key = SoftwareSignerKey(SigningKey::from_bytes(&SEED));
+    let key = SoftwareSignerKey::from_seed(&SEED);
     let pinned = key.pinned();
     let signer = SoftwareSigner::new(key, &pinned).unwrap();
     [seed_hex(), seed_decimal()].iter().for_each(|secret| assert_hides(&signer, secret));

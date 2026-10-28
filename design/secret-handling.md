@@ -38,7 +38,7 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | `CredentialRecord` | store | a `CredentialMaterial` | its material | `secret_types_tests` |
 | `Vault` | store | the `VaultIdentity` and every healthy `CredentialRecord` | its fields | `secret_types_tests` |
 | `ApprovalPassphrase` | store | the approver's passphrase for `approver.age` | `SecretString` | `secret_types_tests` |
-| `SoftwareSignerKey` | store | the software signer's Ed25519 private key | the inner `ed25519_dalek::SigningKey`, which zeroizes on drop (`zeroize` feature) | `software_signer/tests` |
+| `SoftwareSignerKey` | store | the software signer's Ed25519 private key | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop (`zeroize` feature); built once into its box, so moves copy only the pointer | `software_signer/tests` |
 | `SoftwareSigner` | store | the opened Ed25519 private key and its `PinnedApprover` | the inner `SigningKey` | `software_signer/tests` |
 
 `ScrubPatterns` stores each pattern in a private `ScrubPattern` newtype, which has no `Clone`, `Display` or `Debug`.
@@ -47,7 +47,7 @@ It is private to its module, so the test module cannot name it; it is covered th
 `OperationalIdentity` holds nothing: it only generates a `RecipientIdentity`.
 
 `SoftwareSignerKey` and `SoftwareSigner` do not carry the `ZeroizeOnDrop` marker themselves; only the inner
-`SigningKey` does, and dropping the wrapper drops it. Their `Debug` checks build them from a known seed, which only
+boxed `SigningKey` does, and dropping the wrapper drops it. Their `Debug` checks build them from a known seed, which only
 their own module can do, so they live in `approval/software_signer/tests.rs`; their trait assertions are in
 `secret_types_tests` with the rest.
 

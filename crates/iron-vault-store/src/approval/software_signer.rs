@@ -52,9 +52,18 @@ impl fmt::Debug for ApprovalPassphrase {
 /// A software signer's Ed25519 private key, between generation and sealing into `approver.age`.
 ///
 /// The key is cleared when it is dropped; it has no `Clone` and its `Debug` shows nothing of it.
-pub struct SoftwareSignerKey(SigningKey);
+pub struct SoftwareSignerKey(Box<SigningKey>);
 
 impl SoftwareSignerKey {
+    /// The key for `seed`, built straight into its heap box.
+    ///
+    /// Every move of the key after this is a move of the box pointer, so the key bytes are never copied around the
+    /// stack and left there unwiped. `SigningKey::from_bytes` returns by value, so its result may sit on the stack for
+    /// a moment before `Box::new` moves it in; this is the one place that temporary exists.
+    fn from_seed(seed: &[u8; SECRET_KEY_LENGTH]) -> Self {
+        Self(Box::new(SigningKey::from_bytes(seed)))
+    }
+
     /// The approver this key verifies as.
     fn pinned(&self) -> PinnedApprover {
         PinnedApprover::from_signing_key(&self.0)
@@ -72,7 +81,7 @@ impl fmt::Debug for SoftwareSignerKey {
 /// Open one with [`open_signer_key`] for a single approval and drop it once that approval is signed. Its key is cleared
 /// on drop, and it has no `Clone`, so the decrypted key lives no longer than the approval that needed it.
 pub struct SoftwareSigner {
-    key: SigningKey,
+    key: Box<SigningKey>,
     pinned: PinnedApprover,
 }
 
@@ -83,7 +92,7 @@ impl SoftwareSigner {
     pub fn generate() -> Result<(SoftwareSignerKey, PinnedApprover), SignError> {
         let mut seed = Zeroizing::new([0u8; SECRET_KEY_LENGTH]);
         getrandom::fill(seed.as_mut_slice()).map_err(|_| SignError::Randomness)?;
-        let key = SoftwareSignerKey(SigningKey::from_bytes(&seed));
+        let key = SoftwareSignerKey::from_seed(&seed);
         let pinned = key.pinned();
         Ok((key, pinned))
     }
@@ -162,5 +171,5 @@ fn open_key(envelope: &[u8], passphrase: &ApprovalPassphrase) -> Result<Software
         .as_slice()
         .try_into()
         .map_err(|_| SignError::Envelope(EnvelopeError::Malformed))?;
-    Ok(SoftwareSignerKey(SigningKey::from_bytes(seed)))
+    Ok(SoftwareSignerKey::from_seed(seed))
 }
