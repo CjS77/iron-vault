@@ -18,6 +18,8 @@ blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] 
 proptest = { version = "1.12", default-features = false, features = ["std"] }
 secrecy = "0.10.3"
 serde = { version = "1", features = ["derive"] }
+# Constant-time equality for digests; std and i128 are not needed.
+subtle = { version = "2.6.1", default-features = false }
 thiserror = "2"
 toml = "1"
 # A logging facade only: the binary installs the subscriber. Default features would pull in the attribute macros.

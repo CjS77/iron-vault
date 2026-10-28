@@ -1,6 +1,7 @@
 //! Vault identity, recipient envelopes, record files, manifests, approval metadata, durable transactions,
 //! recovery, and connector storage.
 
+mod approval;
 mod durable;
 #[cfg(test)]
 mod durable_faults;
@@ -24,6 +25,10 @@ mod vault;
 mod vault_id;
 mod vault_identity;
 
+pub use approval::{
+    APPROVAL_PURPOSE, ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, ApprovalVersion, ConfigDigest, MAX_APPROVAL_ENVELOPE_LEN,
+    RESERVED_ECDSA_P256_ID, SignatureAlgorithm,
+};
 pub use durable::{ReadError, WriteError, WriteStep, durable_remove, durable_replace, read_state_file};
 pub use envelope::{
     EnvelopeError, MAX_IDENTITY_ENVELOPE_LEN, read_identity_envelope, stanza_kinds, unwrap_identity, wrap_identity, write_identity_envelope,
