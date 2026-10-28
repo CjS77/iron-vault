@@ -32,9 +32,6 @@ pub struct UpstreamTarget {
 /// defect, so the request must be refused. Variants carry no URL text, because the query may hold caller secrets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum UpstreamTargetError {
-    /// The configured upstream's canonical form did not parse as a URL.
-    #[error("the configured upstream does not parse as a URL")]
-    Upstream,
     /// The built URL's scheme, host or port differs from the configured upstream.
     #[error("the built URL's origin differs from the configured upstream")]
     Origin,
@@ -53,7 +50,7 @@ impl UpstreamTarget {
     /// they reach the URL through `Url::set_path`, which keeps existing escapes; `path_segments_mut().push` would encode
     /// `%` again and turn `a%20b` into `a%2520b`.
     pub fn build(upstream: &UpstreamUrl, request: &AuthorizedRequest) -> Result<Self, UpstreamTargetError> {
-        let mut url = Url::parse(&upstream.to_string()).map_err(|_| UpstreamTargetError::Upstream)?;
+        let mut url = upstream.as_url().clone();
         url.set_path(&authorized_path(request));
         url.set_query(request.query().map(|query| query.as_str()));
         check_origin(&url, upstream)?;
@@ -78,6 +75,17 @@ impl UpstreamTarget {
     pub(crate) fn with_query(mut self, query: &str) -> Result<Self, UpstreamTargetError> {
         self.url.set_query(Some(query));
         (self.url.query() == Some(query)).then_some(self).ok_or(UpstreamTargetError::Query)
+    }
+
+    /// The URL, for the final check to own once the request is assembled.
+    pub(crate) fn into_url(self) -> Url {
+        self.url
+    }
+
+    /// Wraps any URL without checks, so final-check tests can build requests that `build` would refuse.
+    #[cfg(test)]
+    pub(crate) fn unchecked(url: Url) -> Self {
+        Self { url }
     }
 }
 
@@ -105,14 +113,16 @@ fn check_origin(url: &Url, upstream: &UpstreamUrl) -> Result<(), UpstreamTargetE
     same.then_some(()).ok_or(UpstreamTargetError::Origin)
 }
 
-/// The segments `url` reports: the authorized ones, then an empty one for a trailing slash; the root path is one
-/// empty segment.
 fn check_path(url: &Url, request: &AuthorizedRequest) -> Result<(), UpstreamTargetError> {
+    has_authorized_path(url, request).then_some(()).ok_or(UpstreamTargetError::Path)
+}
+
+/// Whether `url` reports exactly the authorized segments, then an empty one for a trailing slash; the root path is
+/// one empty segment.
+pub(crate) fn has_authorized_path(url: &Url, request: &AuthorizedRequest) -> bool {
     let segments = request.upstream_segments().iter().map(String::as_str);
     let empty = (request.upstream_segments().is_empty() || request.has_trailing_slash()).then_some("");
-    let expected: Vec<&str> = segments.chain(empty).collect();
-    let actual: Option<Vec<&str>> = url.path_segments().map(Iterator::collect);
-    (actual.as_ref() == Some(&expected)).then_some(()).ok_or(UpstreamTargetError::Path)
+    url.path_segments().is_some_and(|actual| actual.eq(segments.chain(empty)))
 }
 
 fn check_query(url: &Url, request: &AuthorizedRequest) -> Result<(), UpstreamTargetError> {

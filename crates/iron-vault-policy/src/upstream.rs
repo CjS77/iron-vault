@@ -10,6 +10,7 @@ use std::str::FromStr;
 
 use serde::Deserialize;
 use thiserror::Error;
+use url::Url;
 
 use crate::escape::{EscapeAction, EscapeError, is_path_char, is_unreserved, walk_escapes};
 use crate::host::{Host, HostError};
@@ -22,12 +23,16 @@ const SCHEME_PREFIX: &str = "https://";
 /// The scheme is always `https`; there is no user-info, query or fragment. The port is explicit ([`Port::HTTPS`] when
 /// omitted). The base path is a list of validated segments, still percent-encoded as written but with escape hex
 /// digits uppercased; `https://h/a/` and `https://h/a` are the same upstream, as are `https://h/` and `https://h`.
+///
+/// The canonical form's parsed `url::Url` is kept, so every request URL starts from the one parse that was checked
+/// to be a fixed point rather than parsing the upstream again (§3.6).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub struct UpstreamUrl {
     host: Host,
     port: Port,
     base_segments: Vec<String>,
+    url: Url,
 }
 
 /// Why an upstream URL was rejected.
@@ -96,6 +101,11 @@ impl UpstreamUrl {
     pub fn base_segments(&self) -> &[String] {
         &self.base_segments
     }
+
+    /// The canonical form parsed as a URL: the base for every request URL on this upstream.
+    pub fn as_url(&self) -> &Url {
+        &self.url
+    }
 }
 
 impl FromStr for UpstreamUrl {
@@ -107,7 +117,9 @@ impl FromStr for UpstreamUrl {
         check_no_query_or_fragment(rest)?;
         let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
         let (host, port) = parse_authority(authority)?;
-        check_url_fixed_point(UpstreamUrl { host, port, base_segments: parse_base_path(path)? })
+        let base_segments = parse_base_path(path)?;
+        let url = check_url_fixed_point(&canonical(&host, port, &base_segments))?;
+        Ok(UpstreamUrl { host, port, base_segments, url })
     }
 }
 
@@ -123,19 +135,22 @@ impl TryFrom<String> for UpstreamUrl {
 /// trailing slash (`/` for a root base path).
 impl fmt::Display for UpstreamUrl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{SCHEME_PREFIX}{}", self.host)?;
-        if self.port != Port::HTTPS {
-            write!(f, ":{}", self.port)?;
-        }
-        write!(f, "/{}", self.base_segments.join("/"))
+        f.write_str(&canonical(&self.host, self.port, &self.base_segments))
+    }
+}
+
+fn canonical(host: &Host, port: Port, base_segments: &[String]) -> String {
+    let path = base_segments.join("/");
+    match port {
+        Port::HTTPS => format!("{SCHEME_PREFIX}{host}/{path}"),
+        _ => format!("{SCHEME_PREFIX}{host}:{port}/{path}"),
     }
 }
 
 /// The raw-text checks should already exclude anything the `url` crate rewrites; this makes that a guarantee.
-fn check_url_fixed_point(upstream: UpstreamUrl) -> Result<UpstreamUrl, UpstreamUrlError> {
-    let canonical = upstream.to_string();
-    match url::Url::parse(&canonical) {
-        Ok(parsed) if parsed.as_str() == canonical => Ok(upstream),
+fn check_url_fixed_point(canonical: &str) -> Result<Url, UpstreamUrlError> {
+    match Url::parse(canonical) {
+        Ok(parsed) if parsed.as_str() == canonical => Ok(parsed),
         _ => Err(UpstreamUrlError::Reinterpreted),
     }
 }
