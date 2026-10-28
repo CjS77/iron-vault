@@ -92,3 +92,125 @@ any of the rule failures above. Its errors name the rule or field that failed, n
 Payload version 1 holds no provider settings or operational state. Specification §3.3 lists both, and both arrive
 with OAuth in product phase v1 (§4). Adding them means a new version byte with its own layout, and a reader for every
 version still on disk. A reader never guesses at a version it does not know.
+
+## Manifest file v1
+
+The [vault manifest](glossary.md): the service's index of which credential records exist, in the state-directory file
+`manifest.age`. `age` does not authenticate the sender, so anyone holding the vault public key can write a record file
+that decrypts cleanly. Specification §3.10 makes the service's own index the authority on which records exist, and
+§3.3 says only the service may index record files. The manifest is sealed to the same public key, so on its own it
+would be just as forgeable; it therefore carries a MAC keyed from the private vault identity, which only the service
+holds while the vault is unlocked. Rust: `iron_vault_store::{seal_manifest, open_manifest}`.
+
+### Layout
+
+| Offset   | Size | Content                                                                                    |
+|----------|------|--------------------------------------------------------------------------------------------|
+| 0        | 4    | Magic: ASCII `IVMF` (`49 56 4d 46`)                                                        |
+| 4        | 1    | Version: `01`                                                                              |
+| 5        | 16   | Vault ID: the 16 bytes of a version 4 UUID                                                 |
+| 21       | var  | The manifest payload v1 (below), sealed to the vault public key as binary `age`            |
+| end − 32 | 32   | MAC                                                                                        |
+
+The vault ID is in clear so that the MAC, which covers it, can be checked before anything is decrypted. The payload
+repeats the vault ID, and a payload whose ID differs from the header's is refused.
+
+### MAC
+
+```text
+manifest key = BLAKE2b-512(personalization = "iv-manifest-v1", message = vault identity secret text)
+MAC          = BLAKE2b-256(key = manifest key, message = "iron-vault manifest file v1 mac" 00 || bytes 0 .. end − 32)
+```
+
+- The **vault identity secret text** is the identity's `age` encoding, `AGE-SECRET-KEY-1…`, as the `age` specification
+  fixes it. It carries the full 256-bit X25519 key. It is hashed as the message rather than used as the BLAKE2b key
+  because it is 74 bytes long and a BLAKE2b key is at most 64.
+- The **personalization** `iv-manifest-v1` (14 bytes, zero-padded to BLAKE2b's 16) separates the manifest key from any
+  other key a later format derives from the same identity.
+- The 64-byte manifest key is a full-length BLAKE2b key. It lives only in a buffer that is cleared on drop.
+- The MAC message starts with the 32-byte domain tag `iron-vault manifest file v1 mac` and a zero byte, then every file
+  byte before the MAC: magic, version, vault ID and ciphertext.
+
+A party holding only the vault public key can seal any payload, but cannot compute the MAC. A manifest from another
+vault fails the MAC too, because its key comes from another identity.
+
+### Reading order
+
+`open_manifest` does the cheap, key-free checks first and decrypts last:
+
+1. A file longer than `MAX_MANIFEST_LEN` (1 MiB) is refused before anything else is read.
+2. A file shorter than header plus MAC is truncated. A wrong magic or unknown version is refused; the version is read
+   before the MAC because it decides how the MAC is computed.
+3. The MAC is compared in constant time. A mismatch is reported as damaged shared state: the manifest was altered, or
+   was not written by this vault, and specification §3.10 says the vault may need recovery.
+4. Only then is the vault ID parsed and the ciphertext opened and decoded.
+
+### Size limit
+
+A manifest holds at most `MAX_MANIFEST_ENTRIES` (4096) entries. An entry is at most 120 bytes: a 16-byte record ID, an
+8-byte name length, a name of at most 64 bytes and a 32-byte digest. A full payload is therefore at most
+37 + 4096 × 120 = 491,557 bytes. `age` adds a header of a few hundred bytes, a 16-byte nonce and a 16-byte tag per
+64 KiB chunk (8 chunks), and the file adds 53 bytes of header and MAC: under 492,500 bytes, less than half of
+`MAX_MANIFEST_LEN`. Building a manifest with more entries is refused, so the service can never write one it cannot
+read back.
+
+## Manifest payload v1
+
+The plaintext a manifest file seals. It uses the conventions of record payload v1: big-endian unsigned integers, `u64`
+length prefixes, lengths checked against the bytes remaining before anything is read, and no trailing bytes.
+
+### Layout
+
+| Offset | Size | Content                                                                    |
+|--------|------|----------------------------------------------------------------------------|
+| 0      | 4    | Magic: ASCII `IVMP` (`49 56 4d 50`)                                        |
+| 4      | 1    | Version: `01`                                                              |
+| 5      | 16   | Vault ID: equal to the file header's                                       |
+| 21     | 8    | Generation: `u64`                                                          |
+| 29     | 8    | Entry count: `u64`, at most 4096                                           |
+| 37     | var  | Entries, in strictly ascending order of record ID bytes (below)            |
+
+Each entry:
+
+| Size | Content                                                                                 |
+|------|-----------------------------------------------------------------------------------------|
+| 16   | Record ID: the 16 bytes of a version 4 UUID                                             |
+| var  | Name: field holding the credential name                                                 |
+| 32   | File digest: BLAKE2b-256 (unkeyed, 32-byte output) of the record file's ciphertext bytes |
+
+The digest covers the record file exactly as it sits on disk, so a record file replaced by a different ciphertext,
+even one that decrypts to the same record, no longer matches its entry. Record files are named `record-<record id>.age`.
+
+The generation increases by exactly one with every manifest the service writes, and never wraps: a manifest at
+generation `u64::MAX` cannot be followed. A reader that remembers the last generation it saw can tell a stale copy
+from the current one within one storage history; rolling the whole state directory back to an older consistent copy
+is outside what the manifest detects (specification §9).
+
+### Example
+
+Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b` at generation 1, with one record `fx_key` whose file digest is 32 bytes
+of `11` (an illustrative value):
+
+```text
+49 56 4d 50                                        magic "IVMP"
+01                                                 version 1
+3f 2b 8c 1e 5d 4a 4e 6f 9a 7b 1c 2d 3e 4f 5a 6b    vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b
+00 00 00 00 00 00 00 01                            generation 1
+00 00 00 00 00 00 00 01                            one entry
+7c 9e 66 79 74 25 40 de 94 4b e0 7f c1 f9 0a e7    record ID 7c9e6679-7425-40de-944b-e07fc1f90ae7
+00 00 00 00 00 00 00 06  66 78 5f 6b 65 79         name "fx_key"
+11 11 11 11 11 11 11 11  11 11 11 11 11 11 11 11   file digest
+11 11 11 11 11 11 11 11  11 11 11 11 11 11 11 11
+```
+
+### One encoding per manifest
+
+Entries are written in ascending record ID order, so the same manifest always encodes to the same bytes. Decoding
+accepts a payload only if it is that encoding:
+
+- the vault ID and every record ID are version 4, RFC 9562 variant UUIDs;
+- record IDs are strictly ascending, so none repeats;
+- every name passes the credential name rule, and no name appears in two entries;
+- the entry count is at most 4096.
+
+Decoding rejects a wrong magic, an unknown version, truncation, trailing bytes and any of the rule failures above.
