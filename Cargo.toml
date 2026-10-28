@@ -13,6 +13,8 @@ rust-version = "1.98.0"
 age = { version = "0.12.1", default-features = false }
 anyhow = "1"
 base64 = "0.23.1"
+# zeroize clears hasher state on drop, so the manifest key does not outlive its use; alloc is not needed.
+blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
 proptest = { version = "1.12", default-features = false, features = ["std"] }
 secrecy = "0.10.3"
 serde = { version = "1", features = ["derive"] }

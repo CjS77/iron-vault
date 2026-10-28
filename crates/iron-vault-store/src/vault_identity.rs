@@ -7,7 +7,13 @@
 use std::{cmp::Ordering, fmt, hash, str::FromStr};
 
 use age::x25519;
+use blake2::{Blake2b512, Digest, digest::CustomizedInit};
+use secrecy::ExposeSecret;
 use thiserror::Error;
+use zeroize::Zeroizing;
+
+/// The BLAKE2b personalization that makes the manifest key independent of anything else derived from the identity.
+const MANIFEST_KEY_PERSONA: &[u8] = b"iv-manifest-v1";
 
 /// The vault's generated `age` X25519 private key.
 ///
@@ -26,6 +32,21 @@ impl VaultIdentity {
     /// The public half of this identity, which anything can be sealed to.
     pub fn public_key(&self) -> VaultPublicKey {
         VaultPublicKey::from_recipient(self.secret.to_public())
+    }
+
+    /// The key that MACs the vault manifest: BLAKE2b-512, personalized with `iv-manifest-v1`, of the identity's `age`
+    /// secret-key text.
+    ///
+    /// The secret is hashed as the message rather than used as the BLAKE2b key because its text form is 74 bytes, over
+    /// BLAKE2b's 64-byte key limit; it carries the full 256-bit X25519 key either way. The text form is fixed by the
+    /// `age` specification, so the key is stable across `age` releases. The 64-byte output is a full-size BLAKE2b key.
+    pub(crate) fn manifest_key(&self) -> Zeroizing<[u8; 64]> {
+        let secret = self.secret.to_string();
+        let mut key = Zeroizing::new([0; 64]);
+        Blake2b512::new_customized(MANIFEST_KEY_PERSONA)
+            .chain_update(secret.expose_secret())
+            .finalize_into((&mut *key).into());
+        key
     }
 
     /// The `age` identity, for decryption inside this crate only.
@@ -114,8 +135,6 @@ impl hash::Hash for VaultPublicKey {
 
 #[cfg(test)]
 mod tests {
-    use secrecy::ExposeSecret;
-
     use super::*;
 
     #[test]
@@ -145,6 +164,18 @@ mod tests {
         let mut keys: Vec<VaultPublicKey> = (0..8).map(|_| VaultIdentity::generate().public_key()).collect();
         keys.sort();
         assert!(keys.windows(2).all(|w| w[0].to_string() < w[1].to_string()));
+    }
+
+    #[test]
+    fn manifest_key_is_the_personalized_hash_of_the_secret_text() {
+        use blake2::{Blake2bMac512, digest::Mac};
+
+        let identity = VaultIdentity::generate();
+        let secret = identity.secret.to_string();
+        let mac = Blake2bMac512::new_with_salt_and_personal(None, &[], b"iv-manifest-v1").unwrap();
+        let expected: [u8; 64] = mac.chain_update(secret.expose_secret()).finalize().into_bytes().into();
+        assert_eq!(*identity.manifest_key(), expected);
+        assert_ne!(*VaultIdentity::generate().manifest_key(), expected);
     }
 
     #[test]

@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::record_id::RecordId;
+
 /// Name of the lock file, which no store write may touch in any letter case.
 const LOCK_NAME: &str = "lock";
 
@@ -40,6 +42,17 @@ impl StateFileName {
             _ if name.starts_with('.') => Err(StateFileNameError::LeadingDot(name.to_owned())),
             _ => Ok(Self(name.to_owned())),
         }
+    }
+
+    /// The vault manifest's file, `manifest.age`.
+    pub fn manifest() -> Self {
+        Self("manifest.age".to_owned())
+    }
+
+    /// The file of the credential record with ID `id`: `record-<id>.age`. A record ID's text uses only `[0-9a-f-]`, so
+    /// the name always passes [`StateFileName::new`].
+    pub fn record(id: &RecordId) -> Self {
+        Self(format!("record-{id}.age"))
     }
 
     /// The name as a string.
@@ -97,6 +110,16 @@ mod tests {
     fn rejects_lock() {
         ["lock", "LOCK", "Lock"].iter().for_each(|n| assert_eq!(StateFileName::new(n), Err(StateFileNameError::Lock)));
         assert!(StateFileName::new("lock2").is_ok());
+    }
+
+    #[test]
+    fn manifest_and_record_names_are_valid_state_file_names() {
+        assert_eq!(StateFileName::new("manifest.age"), Ok(StateFileName::manifest()));
+        let id: RecordId = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();
+        assert_eq!(StateFileName::record(&id).as_str(), "record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age");
+        (0..32).map(|_| StateFileName::record(&RecordId::new_random())).for_each(|name| {
+            assert_eq!(StateFileName::new(name.as_str()).as_ref(), Ok(&name));
+        });
     }
 
     #[test]
