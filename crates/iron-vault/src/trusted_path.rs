@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 /// The uid of root, which is trusted for every ancestor directory and owns protected binaries and config.
 const ROOT_UID: u32 = 0;
 
-/// How many symlinks one trusted path may pass through, matching the Linux kernel's `ELOOP` limit.
+/// How deeply symlink resolutions may nest: a link whose target chain holds a link, and so on.
+///
+/// This bounds nesting depth, not the total number of links on a path; the kernel's total limit of 40 links is
+/// enforced by the adapter, which reports a path past it as [`SymlinkTarget::Loop`].
 pub const MAX_SYMLINK_DEPTH: usize = 40;
 
 /// Permission bits of a path component: the low twelve bits of `st_mode`, without the file-type bits.
@@ -53,8 +56,13 @@ impl fmt::Display for Mode {
 
 /// One component of a trusted path, from `/` down to the leaf, as the platform adapter reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Components are named by the path as the service will open it, not by where symlinks lead. Below an ancestor
+/// symlink, the adapter names each component under the link's path: with `/etc/iron-vault -> /opt/iron-vault`,
+/// the config is `/etc/iron-vault/config.toml`, and its metadata is that of the file the link leads to. The
+/// directory holding such a component is the last component of the link's resolved chain, `/opt/iron-vault`.
 pub struct PathComponent {
-    /// The component's absolute path.
+    /// The component's absolute path, as the service names it; the first component of a chain is `/`.
     pub path: PathBuf,
     /// The owning uid.
     pub uid: u32,
@@ -89,7 +97,8 @@ pub enum ComponentKind {
 pub enum SymlinkTarget {
     /// The full component chain of the target, from `/` down.
     Resolved(Vec<PathComponent>),
-    /// The adapter stopped following links: the chain loops or is longer than [`MAX_SYMLINK_DEPTH`].
+    /// The adapter stopped following links: they loop, or the path passes through more links than the kernel's
+    /// limit of 40 allows.
     Loop,
 }
 
@@ -185,6 +194,8 @@ impl fmt::Display for OwnerRequirement {
 pub enum Problem {
     /// The adapter supplied no components for a path or a symlink target.
     NoComponents,
+    /// The adapter supplied a chain that does not start at `/`, so the directories above it went unchecked.
+    NotFromRoot,
     /// Someone other than the allowed owners owns the component.
     WrongOwner {
         /// The owning uid.
@@ -201,6 +212,9 @@ pub enum Problem {
     },
     /// Any user can write the component.
     WritableByOthers,
+    /// A root-owned, sticky directory that other users can write, such as `/tmp`, above a state directory or config;
+    /// other users can create entries there, so neither may live under it.
+    SharedStickyAncestor,
     /// The component's mode is not the exact mode its rule requires.
     WrongMode {
         /// The mode found.
@@ -214,7 +228,8 @@ pub enum Problem {
     NotARegularFile,
     /// A symlink that root does not control: the link or the directory holding it is not root-owned.
     UntrustedSymlink,
-    /// The path passes through a symlink loop or more than [`MAX_SYMLINK_DEPTH`] symlinks.
+    /// The path passes through a symlink loop, more links than the kernel allows, or symlink resolutions nested
+    /// deeper than [`MAX_SYMLINK_DEPTH`].
     SymlinkLoop,
 }
 
@@ -232,6 +247,7 @@ impl fmt::Display for UnsafePath {
         let path = self.path.display();
         match &self.problem {
             Problem::NoComponents => write!(f, "{path}: no path components were supplied to check; this is a bug in Iron Vault"),
+            Problem::NotFromRoot => write!(f, "{path}: the path components supplied do not start at `/`; this is a bug in Iron Vault"),
             Problem::WrongOwner { found, expected } => {
                 let target = expected.chown_target();
                 write!(f, "{path} is owned by uid {found} but must be owned by {expected}; run `chown {target} {path}`")
@@ -241,6 +257,11 @@ impl fmt::Display for UnsafePath {
                 write!(f, "{path} is writable by group {group}; run `chmod g-w {path}`")
             }
             Problem::WritableByOthers => write!(f, "{path} is writable by all users; run `chmod o-w {path}`"),
+            Problem::SharedStickyAncestor => write!(
+                f,
+                "{path} is a shared directory other users can write; move the state directory or config out of {path} \
+                 rather than changing its permissions"
+            ),
             Problem::WrongMode { found, expected } => {
                 write!(f, "{path} has mode {found} but must have mode {expected}; run `chmod {expected} {path}`")
             }
@@ -294,9 +315,12 @@ impl Walk {
         if components.is_empty() {
             return Err(UnsafePath { path: origin.to_path_buf(), problem: Problem::NoComponents });
         }
+        if let Some(first) = components.first().filter(|first| first.path != Path::new("/")) {
+            return Err(UnsafePath { path: first.path.clone(), problem: Problem::NotFromRoot });
+        }
         let last = components.len() - 1;
         components.iter().enumerate().try_for_each(|(index, component)| {
-            let parent = index.checked_sub(1).and_then(|before| components.get(before));
+            let parent = index.checked_sub(1).and_then(|before| components.get(before)).and_then(resolved);
             let role = if index == last { role } else { Role::Ancestor };
             self.component(component, parent, role)
         })
@@ -333,7 +357,7 @@ impl Walk {
             TrustedPathRule::Binary | TrustedPathRule::Config => {
                 require_regular_file(component)?;
                 require_owner(component, self.installed_owner())?;
-                require_not_writable(component, false)
+                require_not_writable(component)
             }
             TrustedPathRule::StateDir => {
                 require_directory(component)?;
@@ -343,7 +367,7 @@ impl Walk {
             TrustedPathRule::RuntimeDir => {
                 require_directory(component)?;
                 require_owner(component, service)?;
-                require_not_writable(component, false)
+                require_not_writable(component)
             }
             TrustedPathRule::StateFile => {
                 require_regular_file(component)?;
@@ -356,7 +380,11 @@ impl Walk {
     fn ancestor(self, component: &PathComponent) -> Result<(), Problem> {
         require_directory(component)?;
         require_owner(component, OwnerRequirement::root_or(self.owner.uid))?;
-        require_not_writable(component, self.rule.allows_sticky_ancestor())
+        match is_shared_sticky(component) {
+            true if self.rule.allows_sticky_ancestor() => Ok(()),
+            true => Err(Problem::SharedStickyAncestor),
+            false => require_not_writable(component),
+        }
     }
 
     /// Who may own the binary and config. Development also accepts root: a root-owned file is beyond the invoking
@@ -397,13 +425,25 @@ fn require_mode(component: &PathComponent, expected: Mode) -> Result<(), Problem
     }
 }
 
-/// Rejects group and world write access, except on a root-owned sticky directory when `sticky_exempt` is set: there
-/// other users can add entries but cannot rename or remove the ones that lead to the trusted path.
-fn require_not_writable(component: &PathComponent, sticky_exempt: bool) -> Result<(), Problem> {
-    let mode = component.mode;
-    if sticky_exempt && mode.sticky() && component.uid == ROOT_UID {
-        return Ok(());
+/// The real entry a component stands for: itself, or for a symlink the last component of its resolved chain,
+/// followed through nested links. A loop or an empty resolution stands for nothing.
+fn resolved(component: &PathComponent) -> Option<&PathComponent> {
+    match &component.kind {
+        ComponentKind::Symlink { target: SymlinkTarget::Resolved(chain) } => chain.last().and_then(resolved),
+        ComponentKind::Symlink { target: SymlinkTarget::Loop } => None,
+        _ => Some(component),
     }
+}
+
+/// Whether a directory is shared like `/tmp`: root-owned, sticky and writable by other users. The sticky bit stops
+/// those users renaming or removing the entries that lead to a trusted path, but not creating new ones.
+const fn is_shared_sticky(component: &PathComponent) -> bool {
+    let mode = component.mode;
+    component.uid == ROOT_UID && mode.sticky() && (mode.group_writable() || mode.others_writable())
+}
+
+fn require_not_writable(component: &PathComponent) -> Result<(), Problem> {
+    let mode = component.mode;
     if mode.group_writable() {
         return Err(Problem::WritableByGroup { gid: component.gid, name: component.group_name.clone() });
     }

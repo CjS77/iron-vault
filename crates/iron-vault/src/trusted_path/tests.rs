@@ -177,13 +177,13 @@ fn ancestor_cases() -> Vec<Case> {
             "sticky /tmp ancestor of a state dir",
             StateDir,
             tmp_chain(dir("/tmp/iron-vault", SERVICE, 0o700)),
-            unsafe_at("/tmp", Problem::WritableByGroup { gid: 0, name: None }),
+            unsafe_at("/tmp", Problem::SharedStickyAncestor),
         ),
         case(
             "sticky /tmp ancestor of a config",
             Config,
             tmp_chain(file("/tmp/config.toml", ROOT_UID, 0o644)),
-            unsafe_at("/tmp", Problem::WritableByGroup { gid: 0, name: None }),
+            unsafe_at("/tmp", Problem::SharedStickyAncestor),
         ),
         case("sticky /tmp ancestor of a runtime dir", RuntimeDir, tmp_chain(dir("/tmp/iron-vault", SERVICE, 0o755)), Ok(())),
         case(
@@ -276,7 +276,19 @@ fn symlink_cases() -> Vec<Case> {
     let leaf_link = |target| vec![dir("/", ROOT_UID, 0o755), link("/config.toml", ROOT_UID, target)];
     let looped = vec![dir("/", ROOT_UID, 0o755), entry("/loop", ROOT_UID, 0o777, ComponentKind::Symlink { target: SymlinkTarget::Loop })];
     let state_link = vec![dir("/", ROOT_UID, 0o755), link("/state", ROOT_UID, state_chain(state_dir(0o750)))];
+    let link_in_linked_dir = |real_uid| {
+        let mut chain = to_config(real_dir(dir("/opt/iron-vault", real_uid, 0o755)));
+        chain.push(link("/etc/iron-vault/config.toml", ROOT_UID, config_chain(config_file())));
+        chain
+    };
     vec![
+        case("symlink in a root-owned directory reached through a link", Config, link_in_linked_dir(ROOT_UID), Ok(())),
+        case(
+            "symlink in a service-owned directory reached through a root link",
+            Config,
+            link_in_linked_dir(SERVICE),
+            unsafe_at("/etc/iron-vault/config.toml", Problem::UntrustedSymlink),
+        ),
         case("root-controlled leaf symlink", Config, leaf_link(config_chain(config_file())), Ok(())),
         case(
             "leaf symlink to an unsafe file",
@@ -310,6 +322,13 @@ fn symlink_cases() -> Vec<Case> {
         case("forty nested symlinks", Config, nested_links(MAX_SYMLINK_DEPTH), Ok(())),
         case("forty-one nested symlinks", Config, nested_links(MAX_SYMLINK_DEPTH + 1), unsafe_at("/link0", Problem::SymlinkLoop)),
         case("empty path", Config, vec![], unsafe_at("", Problem::NoComponents)),
+        case("path not from the root", Config, vec![dir("/etc", ROOT_UID, 0o755), config_file()], unsafe_at("/etc", Problem::NotFromRoot)),
+        case(
+            "symlink target not from the root",
+            Config,
+            leaf_link(vec![config_file()]),
+            unsafe_at("/etc/iron-vault/config.toml", Problem::NotFromRoot),
+        ),
     ]
 }
 
@@ -360,13 +379,18 @@ fn messages_name_the_path_and_the_fix() {
             "/etc/iron-vault is owned by uid 0 but must be owned by uid 997; run `chown 997 /etc/iron-vault`",
         ),
         (Problem::NotADirectory, "/etc/iron-vault is not a directory; replace it with a directory"),
+        (
+            Problem::SharedStickyAncestor,
+            "/etc/iron-vault is a shared directory other users can write; move the state directory or config out of \
+             /etc/iron-vault rather than changing its permissions",
+        ),
     ];
     expected.into_iter().for_each(|(problem, message)| assert_eq!(at(problem), message));
 }
 
 #[test]
 fn messages_cover_every_problem() {
-    let problems = [Problem::NoComponents, Problem::NotARegularFile, Problem::UntrustedSymlink, Problem::SymlinkLoop];
+    let problems = [Problem::NoComponents, Problem::NotFromRoot, Problem::NotARegularFile, Problem::UntrustedSymlink, Problem::SymlinkLoop];
     problems.into_iter().for_each(|problem| {
         let message = UnsafePath { path: PathBuf::from("/x"), problem }.to_string();
         assert!(message.contains("/x") && message.contains("; "), "{message}");
@@ -380,11 +404,22 @@ fn root_as_expected_owner_is_named_once() {
     assert_eq!(result, unsafe_at("/srv", wrong_owner(STRANGER, OwnerRequirement::Root)));
 }
 
+/// Words that name an I/O module in a `use` declaration, grouped or not.
+const IO_MODULES: [&str; 5] = ["fs", "io", "net", "process", "env"];
+
+/// Path and std calls that touch the filesystem or the environment.
+const IO_CALLS: [&str; 15] = [
+    "std::fs", "std::io", "std::net", "std::process", "std::env", "fs::", ".exists(", ".try_exists(", ".metadata(",
+    ".symlink_metadata(", ".canonicalize(", ".read_dir(", ".read_link(", ".is_dir(", ".is_file(",
+];
+
 /// The module must stay pure: the platform adapter reads metadata, and these rules only judge it.
 #[test]
 fn module_performs_no_io() {
     let source = include_str!("../trusted_path.rs");
-    ["std::fs", "std::io", "std::net", "std::process", "std::env", "fs::"]
-        .into_iter()
-        .for_each(|forbidden| assert!(!source.contains(forbidden), "trusted_path.rs mentions {forbidden}"));
+    IO_CALLS.into_iter().for_each(|forbidden| assert!(!source.contains(forbidden), "trusted_path.rs calls {forbidden}"));
+    source.lines().filter(|line| line.trim_start().starts_with("use ")).for_each(|line| {
+        let named = line.split(|c: char| !(c.is_alphanumeric() || c == '_')).find(|word| IO_MODULES.contains(word));
+        assert!(named.is_none(), "trusted_path.rs imports an I/O module: {line}");
+    });
 }
