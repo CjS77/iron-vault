@@ -13,13 +13,15 @@ use serde::{Deserialize, Serialize};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use crate::test_dir::TestDir;
+use crate::test_request::{HOST, header_request};
 use crate::{
     ApprovalPassphrase, CredentialRecord, OsFs, Passphrase, PermittedOrigins, RecipientIdentity, RecordId, RecoveryKey, RecoveryKeySecret,
-    SoftwareSigner, SoftwareSignerKey, Source, StateDirLock, Vault, VaultIdentity,
+    ResolvedCredential, SoftwareSigner, SoftwareSignerKey, Source, StateDirLock, Vault, VaultIdentity,
 };
 
 assert_not_impl_any!(VaultIdentity: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(RecipientIdentity: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(ResolvedCredential<'static>: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(CredentialRecord: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Vault: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Passphrase: Clone, Copy, Display, Serialize, Deserialize<'static>);
@@ -44,7 +46,7 @@ pub(crate) fn assert_hides(value: &impl Debug, secret: &str) {
 }
 
 fn record(name: &str) -> CredentialRecord {
-    let origins = PermittedOrigins::new([("api.example.com".parse().unwrap(), Port::HTTPS)].into()).unwrap();
+    let origins = PermittedOrigins::new([(HOST.parse().unwrap(), Port::HTTPS)].into()).unwrap();
     let material = CredentialMaterial::Static {
         key: SecretString::from(MARKER),
     };
@@ -92,6 +94,13 @@ fn approval_passphrase_debug_hides_the_text() {
 #[test]
 fn credential_record_debug_hides_the_material() {
     assert_hides(&record("fx_key"), MARKER);
+}
+
+#[test]
+fn resolved_credential_debug_hides_the_value_and_patterns() {
+    let record = record("fx_key");
+    let (slot, request) = header_request();
+    assert_hides(&record.resolve(&slot, &request).unwrap(), MARKER);
 }
 
 #[test]
@@ -182,7 +191,7 @@ fn brace_balance(line: &str) -> i64 {
 
 /// Every `.rs` file under `dir` except test modules and test doubles.
 fn production_sources(dir: &Path) -> Vec<std::path::PathBuf> {
-    const TEST_ONLY: [&str; 3] = ["fault_fs.rs", "test_dir.rs", "durable_faults.rs"];
+    const TEST_ONLY: [&str; 4] = ["fault_fs.rs", "test_dir.rs", "test_request.rs", "durable_faults.rs"];
     std::fs::read_dir(dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())

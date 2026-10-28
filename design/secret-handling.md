@@ -36,6 +36,7 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | `RecoveryKeySecret` | store | the recovery key's `AGE-SECRET-KEY-1…` text | `SecretString` | `secret_types_tests` |
 | `Passphrase` | store | the owner's passphrase | `SecretString` | `secret_types_tests` |
 | `CredentialRecord` | store | a `CredentialMaterial` | its material | `secret_types_tests` |
+| `ResolvedCredential` | store | a `Resolution`, and a borrow of its record's `PermittedOrigins` | its resolution | `secret_types_tests` |
 | `Vault` | store | the `VaultIdentity` and every healthy `CredentialRecord` | its fields | `secret_types_tests` |
 | `ApprovalPassphrase` | store | the approver's passphrase for `approver.age` | `SecretString` | `secret_types_tests` |
 | `SoftwareSignerKey` | store | the software signer's Ed25519 private key | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop (`zeroize` feature); built once into its box, so moves copy only the pointer | `software_signer/tests` |

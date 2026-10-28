@@ -26,6 +26,8 @@ mod state_file_name;
 mod store_fs;
 #[cfg(test)]
 mod test_dir;
+#[cfg(test)]
+mod test_request;
 mod vault;
 mod vault_id;
 mod vault_identity;
@@ -53,7 +55,7 @@ pub use permitted_origins::{PermittedOrigins, PermittedOriginsError};
 pub use recipient::{
     MAX_RECIPIENTS, ParseRecipientIdentityError, ParseRecipientKeyError, RecipientIdentity, RecipientKey, RecipientSet, RecipientSetError,
 };
-pub use record::{CredentialRecord, RecordError, Source, decode, encode};
+pub use record::{CredentialRecord, RecordError, ResolvedCredential, Source, decode, encode};
 pub use record_id::{RecordId, RecordIdError};
 pub use recovery::{RecoveryError, RecoveryKey, RecoveryKeySecret};
 pub use sealed::{OpenError, SealError, open, seal};
