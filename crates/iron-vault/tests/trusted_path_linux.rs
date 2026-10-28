@@ -63,8 +63,9 @@ fn me() -> ExpectedOwner {
     invoking_user().unwrap()
 }
 
+/// Checks a real path in development, which never has path cautions.
 fn check_real(rule: TrustedPathRule, path: &Path) -> Result<(), PathFailure> {
-    check_path(rule, Profile::Development, me(), path)
+    check_path(rule, Profile::Development, me(), path).map(|cautions| assert_eq!(cautions, []))
 }
 
 /// Checks `path` as if the shared sticky directory above `tree` were a private `0755` directory.
@@ -270,8 +271,8 @@ fn the_report_lists_every_path_in_a_fixed_order() {
         (TrustedPathRule::RuntimeDir, tree.path("run")),
     ];
     assert_eq!(listed, expected);
-    assert_eq!(report.entries[3].outcome, Ok(()));
-    assert_eq!(report.entries[4].outcome, Ok(()));
+    assert_eq!(report.entries[3].outcome, Ok(vec![]));
+    assert_eq!(report.entries[4].outcome, Ok(vec![]));
 }
 
 #[test]
