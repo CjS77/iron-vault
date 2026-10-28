@@ -968,6 +968,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "rustix",
+ "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
 ]

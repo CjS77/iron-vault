@@ -8,10 +8,12 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-# Process hardening is Linux-only for now; other platforms report it as unsupported without these syscalls.
+# Process hardening and the getuid call for trusted-path checks are Linux-only for now; other platforms report them as
+# unsupported without these syscalls.
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true
 
