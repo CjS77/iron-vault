@@ -19,7 +19,7 @@ impl Vault {
         refuse_existing_vault(&list_state_dir(lock, fs)?)?;
         let manifest = VaultManifest::new(VaultId::new_random(), 0, BTreeMap::new()).map_err(VaultError::NextManifest)?;
         commit_manifest(lock, fs, &seal_manifest(&identity, &manifest).map_err(VaultError::Seal)?)?;
-        Ok(Vault { identity, manifest, healthy: BTreeMap::new(), needs_reopen: false })
+        Ok(Vault { dir: lock.dir().to_path_buf(), identity, manifest, healthy: BTreeMap::new() })
     }
 }
 

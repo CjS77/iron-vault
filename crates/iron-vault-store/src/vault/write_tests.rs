@@ -12,7 +12,7 @@ use super::tests::{assert_no_secret_logged, capture_logs, identity, init_test_tr
 use super::*;
 use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::test_dir::TestDir;
-use crate::{OsFs, PermittedOrigins, RecordId, WriteStep};
+use crate::{OsFs, PermittedOrigins, RecordId, WriteStep, durable_remove, durable_replace};
 
 /// The credentials every vault under test starts with.
 const SEEDED: [&str; 2] = ["keep", "target"];
@@ -50,8 +50,14 @@ fn expected(pairs: &[(&str, u32)]) -> State {
 }
 
 /// Everything a failed write must leave exactly as it was.
-fn snapshot(vault: &Vault) -> (VaultManifest, State, bool) {
-    (vault.manifest.clone(), state(vault), vault.needs_reopen)
+fn snapshot(vault: &Vault) -> (VaultManifest, State) {
+    (vault.manifest.clone(), state(vault))
+}
+
+/// The calls since call `from` that changed a directory entry: created, renamed or removed a file.
+fn mutations(fs: &FaultFs, from: usize) -> Vec<FsCall> {
+    let changes = [FsOp::CreatePrivate, FsOp::Rename, FsOp::RemoveFile];
+    fs.trace().split_off(from).into_iter().filter(|call| changes.contains(&call.op())).collect()
 }
 
 /// A locked state directory whose files live in a [`FaultFs`] under the same path.
@@ -307,10 +313,10 @@ fn an_uncertain_commit_leaves_memory_unchanged_and_blocks_writes_until_reopen() 
         let (result, events) = capture_logs(|| op(&setup, &fs, &mut vault));
         assert!(matches!(result, Err(VaultError::CommitUncertain(WriteError::Io { step: WriteStep::SyncDir, .. }))), "{label}");
         assert_eq!(events.iter().filter(|e| e.level == Level::ERROR).count(), 1, "{label}: {events:?}");
-        assert_eq!(snapshot(&vault), (before.0, old, true), "{label}");
+        assert_eq!(snapshot(&vault), (before.0, old), "{label}");
         let calls = fs.trace().len();
         assert_eq!(setup.add(&fs, &mut vault, "other", 1).unwrap_err(), VaultError::ReopenRequired, "{label}");
-        assert_eq!(fs.trace().len(), calls, "{label}");
+        assert_eq!(mutations(&fs, calls), [], "{label}");
         // The rename happened, so a reopen without a crash sees the new vault.
         assert_eq!(setup.reopen_whole(&fs, label), new, "{label}");
     });
@@ -332,7 +338,7 @@ fn a_failure_at_every_step_leaves_the_old_or_the_new_vault() {
                     &new
                 }
                 Err(VaultError::CommitUncertain(_)) => {
-                    assert_eq!(snapshot(&vault), (before.0, old.clone(), true), "{context}");
+                    assert_eq!(snapshot(&vault), (before.0.clone(), old.clone()), "{context}");
                     &new
                 }
                 Err(_) => {
@@ -405,4 +411,63 @@ fn record_files_are_written_before_the_commit_and_removed_after_it() {
             _ => {}
         });
     });
+}
+
+#[test]
+fn a_stale_vault_on_the_same_lock_removes_no_record_file() {
+    let setup = Setup::new("write-stale");
+    let (fs, mut current) = setup.seeded(&SEEDED);
+    let (mut stale, _) = setup.open(&fs).unwrap();
+    let (fresh, _) = setup.add(&fs, &mut current, "fresh", 1).unwrap();
+
+    // The stale vault's manifest does not list `fresh`, so without the disk check its cleanup would remove it.
+    let calls = fs.trace().len();
+    assert_eq!(setup.add(&fs, &mut stale, "other", 1).unwrap_err(), VaultError::ReopenRequired);
+    assert_eq!(setup.replace(&fs, &mut stale, "target", 2).unwrap_err(), VaultError::ReopenRequired);
+    assert_eq!(stale.remove(&setup.lock, &fs, &n("keep")).unwrap_err(), VaultError::ReopenRequired);
+    assert_eq!(mutations(&fs, calls), []);
+    assert!(fs.contents(&setup.record_path(fresh)).is_some());
+    let (opened, report) = setup.open(&fs).unwrap();
+    assert_eq!(report, OpenReport::default());
+    assert_eq!(state(&opened), expected(&[("fresh", 1), ("keep", 1), ("target", 1)]));
+}
+
+#[test]
+fn a_write_refuses_when_the_disk_manifest_is_gone_or_damaged() {
+    let setup = Setup::new("write-disk-manifest");
+    let manifest = StateFileName::manifest();
+    [true, false].into_iter().for_each(|gone| {
+        let (fs, mut vault) = setup.seeded(&SEEDED);
+        match gone {
+            true => durable_remove(&setup.lock, &fs, &manifest).unwrap(),
+            false => {
+                let mut bytes = fs.contents(&setup.manifest_path()).unwrap();
+                let last = bytes.len() - 1;
+                bytes[last] ^= 1;
+                durable_replace(&setup.lock, &fs, &manifest, &bytes).unwrap();
+            }
+        }
+        let calls = fs.trace().len();
+        assert_eq!(setup.add(&fs, &mut vault, "fresh", 1).unwrap_err(), VaultError::ReopenRequired, "gone: {gone}");
+        assert_eq!(mutations(&fs, calls), [], "gone: {gone}");
+    });
+}
+
+#[test]
+fn a_vault_given_another_directorys_lock_touches_no_file() {
+    let (ours, theirs) = (Setup::new("write-dir-ours"), Setup::new("write-dir-theirs"));
+    let fs = FaultFs::new();
+    let mut vault = Vault::create(&ours.lock, &fs, identity()).unwrap();
+    let mut other = Vault::create(&theirs.lock, &fs, identity()).unwrap();
+    let (theirs_keep, _) = theirs.add(&fs, &mut other, "keep", 1).unwrap();
+
+    let calls = fs.trace().len();
+    let wrong = VaultError::WrongStateDir { vault_dir: ours.dir.path().to_path_buf(), lock_dir: theirs.dir.path().to_path_buf() };
+    // `theirs` is the Setup whose lock is passed; `ours` built the vault.
+    assert_eq!(theirs.add(&fs, &mut vault, "fresh", 1).unwrap_err(), wrong);
+    assert_eq!(theirs.replace(&fs, &mut vault, "keep", 2).unwrap_err(), wrong);
+    assert_eq!(vault.remove(&theirs.lock, &fs, &n("keep")).unwrap_err(), wrong);
+    assert_eq!(fs.trace().len(), calls);
+    assert!(fs.contents(&theirs.record_path(theirs_keep)).is_some());
+    assert!(wrong.to_string().contains(&theirs.dir.path().display().to_string()), "{wrong}");
 }

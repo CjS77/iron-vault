@@ -18,6 +18,7 @@ mod write_tests;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io;
+use std::path::PathBuf;
 
 use iron_vault_kinds::{CredentialMaterial, KindError};
 use iron_vault_policy::{CatalogEntry, CredentialCatalog, CredentialName};
@@ -81,10 +82,18 @@ pub enum VaultError {
     /// power loss. Disk may now hold the new vault while memory holds the old one: reopen the vault before using it.
     #[error("the vault write may or may not have committed ({0}); reopen the vault to see which")]
     CommitUncertain(WriteError),
-    /// An earlier write ended in [`VaultError::CommitUncertain`], so this `Vault` no longer matches disk and refuses
-    /// every write until the vault is reopened.
-    #[error("the vault must be reopened after an uncertain commit before it can be written")]
+    /// The manifest on disk is not the one this `Vault` holds, or cannot be read: another writer committed, an earlier
+    /// commit was uncertain, or the manifest is gone or damaged. Nothing was written; reopen the vault.
+    #[error("the vault manifest on disk differs from the open vault's; reopen the vault before writing")]
     ReopenRequired,
+    /// A write was given the lock of a state directory other than the one this vault was opened or created in.
+    #[error("the state directory lock is for {}, but the vault is in {}", .lock_dir.display(), .vault_dir.display())]
+    WrongStateDir {
+        /// The state directory the vault was opened or created in.
+        vault_dir: PathBuf,
+        /// The state directory the given lock holds.
+        lock_dir: PathBuf,
+    },
 }
 
 /// Why a shared state file cannot be trusted.
@@ -106,12 +115,11 @@ pub enum SharedStateDamage {
 /// Records the manifest lists but that failed to load are known by name only, so their routes can be refused rather
 /// than reported as unknown. `Debug` shows credential names, never material.
 pub struct Vault {
+    /// The state directory the vault was opened or created in; a write refuses any other directory's lock.
+    dir: PathBuf,
     identity: VaultIdentity,
     manifest: VaultManifest,
     healthy: BTreeMap<CredentialName, CredentialRecord>,
-    /// Set by an uncertain commit: the manifest on disk may be newer than `manifest`, so a write computed from it could
-    /// remove a record file the disk manifest lists.
-    needs_reopen: bool,
 }
 
 impl Vault {
@@ -129,7 +137,8 @@ impl Vault {
         let (healthy, damaged) = load::load_records(lock, fs, &identity, &manifest);
         let unindexed = unindexed_files(&manifest, &files);
         unindexed.iter().for_each(load::log_unindexed);
-        Ok((Vault { identity, manifest, healthy, needs_reopen: false }, OpenReport::new(damaged, unindexed)))
+        let dir = lock.dir().to_path_buf();
+        Ok((Vault { dir, identity, manifest, healthy }, OpenReport::new(damaged, unindexed)))
     }
 
     /// The manifest the vault was opened with.
@@ -212,7 +221,17 @@ fn log_vault_error(error: &VaultError) {
             remediation = "check that the state directory exists and that the service account can read it",
             "cannot list the state directory; the vault is unavailable"
         ),
-        // NotInitialized is not damage, and the write variants go to the caller of the write, which audits them.
-        _ => {}
+        // A missing vault is not damage, and the write variants go to the caller of the write, which audits them.
+        VaultError::NotInitialized
+        | VaultError::AlreadyInitialized
+        | VaultError::NameTaken(_)
+        | VaultError::UnknownName(_)
+        | VaultError::InvalidMaterial(_)
+        | VaultError::Seal(_)
+        | VaultError::NextManifest(_)
+        | VaultError::Write(_)
+        | VaultError::CommitUncertain(_)
+        | VaultError::ReopenRequired
+        | VaultError::WrongStateDir { .. } => {}
     }
 }

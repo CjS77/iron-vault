@@ -1,8 +1,9 @@
 //! Vault writes: add, replace and remove one credential record (spec §3.3, §3.10).
 //!
 //! Every write follows the same steps. Everything that can fail without the disk (validation, sealing, building the
-//! next manifest) happens first. Then unindexed record files are removed, the new record file is written, and the
-//! manifest is durably replaced at the next generation: that rename is the single commit point. Memory changes only
+//! next manifest) happens first. Then the manifest on disk is checked to be the one in memory, unindexed record files
+//! are removed, the new record file is written, and the manifest is durably replaced at the next generation: that
+//! rename is the single commit point. Memory changes only
 //! after it, and the superseded record file is removed last. A crash before the commit leaves the old vault plus at
 //! most one unindexed record file; a crash after it leaves the new vault plus at most the superseded file.
 
@@ -13,8 +14,9 @@ use iron_vault_policy::CredentialName;
 
 use super::{Vault, VaultError, WriteReport, list_state_dir, unindexed_files};
 use crate::{
-    CredentialRecord, ManifestEntry, PermittedOrigins, RecordId, Source, StateDirLock, StateFileName, StoreFs, VaultIdentity,
-    VaultManifest, WriteError, WriteStep, durable_remove, durable_replace, encode, record_digest, seal, seal_manifest,
+    CredentialRecord, MAX_MANIFEST_LEN, ManifestEntry, PermittedOrigins, RecordId, Source, StateDirLock, StateFileName, StoreFs,
+    VaultIdentity, VaultManifest, WriteError, WriteStep, durable_remove, durable_replace, encode, open_manifest, read_state_file,
+    record_digest, seal, seal_manifest,
 };
 
 /// A record and the sealed bytes of its file, which its manifest entry's digest covers.
@@ -45,7 +47,7 @@ impl Vault {
         material: CredentialMaterial,
         origins: PermittedOrigins,
     ) -> Result<(RecordId, WriteReport), VaultError> {
-        self.ensure_writable()?;
+        self.ensure_same_dir(lock)?;
         if self.record_id_of(&name).is_some() {
             return Err(VaultError::NameTaken(name));
         }
@@ -68,7 +70,7 @@ impl Vault {
         material: CredentialMaterial,
         origins: PermittedOrigins,
     ) -> Result<(RecordId, WriteReport), VaultError> {
-        self.ensure_writable()?;
+        self.ensure_same_dir(lock)?;
         let old = self.record_id_of(&name).ok_or_else(|| VaultError::UnknownName(name.clone()))?;
         let record = new_record(name, material, origins)?;
         let id = record.id();
@@ -81,15 +83,31 @@ impl Vault {
     /// This performs an already authorized change: the caller checks owner presence and the routes that use the
     /// credential. A later `add` of the same name gets a new record ID, so the name never silently rebinds.
     pub fn remove(&mut self, lock: &StateDirLock, fs: &impl StoreFs, name: &CredentialName) -> Result<WriteReport, VaultError> {
-        self.ensure_writable()?;
+        self.ensure_same_dir(lock)?;
         let old = self.record_id_of(name).ok_or_else(|| VaultError::UnknownName(name.clone()))?;
         self.write(lock, fs, self.prepare(name.clone(), None, Some(old))?)
     }
 
-    fn ensure_writable(&self) -> Result<(), VaultError> {
-        match self.needs_reopen {
-            true => Err(VaultError::ReopenRequired),
-            false => Ok(()),
+    /// Refuses another state directory's lock: its files are not this vault's, and cleanup there would remove another
+    /// vault's records.
+    fn ensure_same_dir(&self, lock: &StateDirLock) -> Result<(), VaultError> {
+        match lock.dir() == self.dir {
+            true => Ok(()),
+            false => Err(VaultError::WrongStateDir { vault_dir: self.dir.clone(), lock_dir: lock.dir().to_path_buf() }),
+        }
+    }
+
+    /// Refuses with [`VaultError::ReopenRequired`] unless the manifest on disk is exactly the one in memory.
+    ///
+    /// Cleanup removes every record file the in-memory manifest leaves out, so a stale `Vault` would remove records
+    /// another writer committed, and its commit would overwrite theirs. An uncertain commit leaves the new manifest
+    /// on disk, so this also stops every write after one until the vault is reopened.
+    fn ensure_disk_manifest_matches(&self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<(), VaultError> {
+        // MAX_MANIFEST_LEN is 1 MiB, so it always fits in a u64.
+        let bytes = read_state_file(lock, fs, &StateFileName::manifest(), MAX_MANIFEST_LEN as u64).map_err(|_| VaultError::ReopenRequired)?;
+        match open_manifest(&self.identity, &bytes) {
+            Ok(on_disk) if on_disk == self.manifest => Ok(()),
+            _ => Err(VaultError::ReopenRequired),
         }
     }
 
@@ -115,11 +133,12 @@ impl Vault {
 
     /// Runs the file steps of a prepared write, then updates memory once the manifest has committed.
     fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, prepared: Prepared) -> Result<WriteReport, VaultError> {
+        self.ensure_disk_manifest_matches(lock, fs)?;
         let removed = self.remove_unindexed(lock, fs)?;
         if let Some(new) = &prepared.new {
             write_record_file(lock, fs, new)?;
         }
-        commit_manifest(lock, fs, &prepared.manifest_bytes).inspect_err(|error| self.after_failed_commit(lock, fs, &prepared, error))?;
+        commit_manifest(lock, fs, &prepared.manifest_bytes).inspect_err(|error| after_failed_commit(lock, fs, &prepared, error))?;
         let Prepared { name, new, old, manifest, .. } = prepared;
         self.manifest = manifest;
         match new {
@@ -131,22 +150,21 @@ impl Vault {
 
     /// Durably removes every record file the manifest does not list, so no interrupted write's file outlives the next one.
     ///
-    /// Only names the manifest leaves out are touched, and memory matches the disk manifest whenever this runs (an
-    /// uncertain commit blocks every later write), so no indexed record file is ever removed.
+    /// Only names the manifest leaves out are touched, and the write has just checked that the disk manifest is the one
+    /// in memory, so no indexed record file is ever removed.
     fn remove_unindexed(&self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<BTreeSet<StateFileName>, VaultError> {
         let unindexed = unindexed_files(&self.manifest, &list_state_dir(lock, fs)?);
         unindexed.iter().try_for_each(|file| remove_unindexed_file(lock, fs, file))?;
         Ok(unindexed)
     }
+}
 
-    /// After an uncertain commit the disk may hold the new manifest, so the new file stays and writes stop until a
-    /// reopen; after any other failure the manifest is unchanged, so the new file is unindexed and can go now.
-    fn after_failed_commit(&mut self, lock: &StateDirLock, fs: &impl StoreFs, prepared: &Prepared, error: &VaultError) {
-        match (error, &prepared.new) {
-            (VaultError::CommitUncertain(_), _) => self.needs_reopen = true,
-            (_, Some(new)) => discard(lock, fs, new.record.id()),
-            (_, None) => {}
-        }
+/// After an uncertain commit the disk may hold the new manifest, which lists the new file, so it stays; after any other
+/// failure the manifest is unchanged, so the new file is unindexed and can go now.
+fn after_failed_commit(lock: &StateDirLock, fs: &impl StoreFs, prepared: &Prepared, error: &VaultError) {
+    match (error, &prepared.new) {
+        (VaultError::CommitUncertain(_), _) | (_, None) => {}
+        (_, Some(new)) => discard(lock, fs, new.record.id()),
     }
 }
 
