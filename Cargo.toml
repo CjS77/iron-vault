@@ -9,6 +9,8 @@ license = "Apache-2.0"
 rust-version = "1.98.0"
 
 [workspace.dependencies]
+# Default features are empty: X25519 and scrypt are always built; armor, plugin, ssh, async and CLI stay off.
+age = { version = "0.12.1", default-features = false }
 anyhow = "1"
 base64 = "0.23.1"
 proptest = { version = "1.12", default-features = false, features = ["std"] }
@@ -17,6 +19,7 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "1"
 url = "2.5"
+zeroize = "1.9.1"
 
 [workspace.lints.rust]
 missing_docs = "warn"
