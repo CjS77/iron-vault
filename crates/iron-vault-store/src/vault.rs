@@ -102,6 +102,10 @@ pub enum SharedStateDamage {
     /// The manifest is gone but record files remain, so the vault exists and has lost its index.
     #[error("it is missing, but credential record files exist")]
     MissingWithRecords,
+    /// The manifest is gone but another vault's approval state remains, so a vault existed here and was damaged or
+    /// half removed; creating a new one would reset its approval counters (spec §3.9).
+    #[error("it is missing, but {0} from an earlier vault remains; recover or reset the vault rather than initialize")]
+    MissingWithLeftoverState(StateFileName),
     /// The file could not be read, or is over its size limit.
     #[error(transparent)]
     Read(ReadError),

@@ -246,6 +246,19 @@ fn create_refuses_a_state_directory_with_a_manifest_or_record_files() {
 }
 
 #[test]
+fn create_refuses_a_state_directory_with_leftover_approval_state() {
+    let setup = Setup::new("write-create-approval");
+    let approval = setup.dir.path().join(StateFileName::approval_state().as_str());
+    let fs = FaultFs::new().with_durable_file(&approval, b"leftover");
+    let refused = VaultError::SharedStateDamaged {
+        file: StateFileName::manifest(),
+        damage: SharedStateDamage::MissingWithLeftoverState(StateFileName::approval_state()),
+    };
+    assert_eq!(Vault::create(&setup.lock, &fs, identity()).unwrap_err(), refused);
+    assert!(fs.trace().iter().all(|call| call.op() == FsOp::ListDir), "{:?}", fs.trace());
+}
+
+#[test]
 fn adding_an_existing_name_fails_and_touches_no_file() {
     let setup = Setup::new("write-name-taken");
     let (fs, mut vault) = setup.seeded(&SEEDED);

@@ -13,6 +13,12 @@ impl Vault {
     /// record files without a manifest open as damaged shared state, never as a new vault. For the same reason this
     /// refuses a state directory that already holds a manifest or any record file, and never overwrites either.
     ///
+    /// It also refuses `approval.age` without a manifest: approval counters start at zero only when a vault is created
+    /// and are never reset (spec §3.9), so a new vault ID beside an earlier vault's counters would be a reset. The
+    /// envelope files `identity.age`, `operational.age` and `approver.age` do not block creation, because
+    /// initialization writes them around this call: `identity.age` must be durable before the first record is sealed
+    /// (EP-24).
+    ///
     /// A [`VaultError::CommitUncertain`] means the manifest may not survive power loss: open the vault to see whether
     /// it exists. The caller has already authorized initialization; this performs it.
     pub fn create(lock: &StateDirLock, fs: &impl StoreFs, identity: VaultIdentity) -> Result<Vault, VaultError> {
@@ -28,18 +34,16 @@ impl Vault {
     }
 }
 
-/// Refuses a state directory that holds a manifest, or record files whose manifest is gone.
+/// Refuses a state directory that holds a manifest, or record files or approval state whose manifest is gone.
 fn refuse_existing_vault(files: &[String]) -> Result<(), VaultError> {
     let manifest = StateFileName::manifest();
-    match (
-        files.iter().any(|f| f == manifest.as_str()),
-        files.iter().any(|f| is_record_file_name(f)),
-    ) {
-        (true, _) => Err(VaultError::AlreadyInitialized),
-        (false, true) => Err(VaultError::SharedStateDamaged {
-            file: manifest,
-            damage: SharedStateDamage::MissingWithRecords,
-        }),
-        (false, false) => Ok(()),
-    }
+    let approval = StateFileName::approval_state();
+    let holds = |name: &StateFileName| files.iter().any(|f| f == name.as_str());
+    let damage = match (holds(&manifest), files.iter().any(|f| is_record_file_name(f)), holds(&approval)) {
+        (true, _, _) => return Err(VaultError::AlreadyInitialized),
+        (false, true, _) => SharedStateDamage::MissingWithRecords,
+        (false, false, true) => SharedStateDamage::MissingWithLeftoverState(approval),
+        (false, false, false) => return Ok(()),
+    };
+    Err(VaultError::SharedStateDamaged { file: manifest, damage })
 }
