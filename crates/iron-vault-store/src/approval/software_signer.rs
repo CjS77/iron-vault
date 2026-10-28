@@ -59,7 +59,8 @@ impl SoftwareSignerKey {
     ///
     /// Every move of the key after this is a move of the box pointer, so the key bytes are never copied around the
     /// stack and left there unwiped. `SigningKey::from_bytes` returns by value, so its result may sit on the stack for
-    /// a moment before `Box::new` moves it in; this is the one place that temporary exists.
+    /// a moment before `Box::new` moves it in, since `Box::new` does not guarantee in-place construction; this is the
+    /// one place that temporary exists.
     fn from_seed(seed: &[u8; SECRET_KEY_LENGTH]) -> Self {
         Self(Box::new(SigningKey::from_bytes(seed)))
     }
