@@ -56,7 +56,9 @@ impl<E: Clone + From<OpenError>> MacFileKind<E> {
     /// The header's vault ID and the decrypted payload, after the size, header and MAC are checked in that order. The
     /// caller decodes the payload and checks that it names the same vault.
     pub(crate) fn open(&self, identity: &VaultIdentity, file: &[u8]) -> Result<(VaultId, Zeroizing<Vec<u8>>), E> {
-        let file = Some(file).filter(|file| file.len() <= self.max_len).ok_or_else(|| self.too_large.clone())?;
+        if file.len() > self.max_len {
+            return Err(self.too_large.clone());
+        }
         let (signed, tag) = file.len().checked_sub(MAC_LEN).and_then(|at| file.split_at_checked(at)).ok_or_else(|| self.truncated.clone())?;
         let (header, ciphertext) = signed.split_first_chunk::<HEADER_LEN>().ok_or_else(|| self.truncated.clone())?;
         let vault_id = self.read_header(header)?;
@@ -68,11 +70,13 @@ impl<E: Clone + From<OpenError>> MacFileKind<E> {
     /// it decides how the MAC is computed; the ID is not trusted until the MAC passes.
     fn read_header(&self, header: &[u8; HEADER_LEN]) -> Result<[u8; 16], E> {
         let [m0, m1, m2, m3, version, id @ ..] = *header;
-        match ([m0, m1, m2, m3] == self.magic, version == self.version) {
-            (false, _) => Err(self.bad_magic.clone()),
-            (true, false) => Err((self.unknown_version)(version)),
-            (true, true) => Ok(id),
+        if [m0, m1, m2, m3] != self.magic {
+            return Err(self.bad_magic.clone());
         }
+        if version != self.version {
+            return Err((self.unknown_version)(version));
+        }
+        Ok(id)
     }
 
     /// The keyed BLAKE2b-256 MAC over the domain tag and `signed`, the file's header and ciphertext. `verify_slice`

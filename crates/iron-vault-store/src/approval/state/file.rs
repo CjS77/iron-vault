@@ -37,7 +37,10 @@ pub fn seal_approval_state(identity: &VaultIdentity, state: &ApprovalState) -> R
 pub fn open_approval_state(identity: &VaultIdentity, file: &[u8]) -> Result<ApprovalState, ApprovalStateError> {
     let (vault_id, payload) = KIND.open(identity, file)?;
     let state = encoding::decode(&payload)?;
-    (state.vault_id == vault_id).then_some(state).ok_or(ApprovalStateError::VaultIdMismatch)
+    if state.vault_id != vault_id {
+        return Err(ApprovalStateError::VaultIdMismatch);
+    }
+    Ok(state)
 }
 
 #[cfg(test)]
@@ -154,6 +157,14 @@ mod tests {
             };
             assert_eq!(open_approval_state(&identity, &flipped), Err(expected), "bit {bit}");
         });
+    }
+
+    #[test]
+    fn a_manifest_file_is_not_read_as_approval_state() {
+        let identity = VaultIdentity::generate();
+        let manifest = crate::manifest::VaultManifest::new(VaultId::new_random(), 0, Default::default()).unwrap();
+        let file = crate::manifest::seal_manifest(&identity, &manifest).unwrap();
+        assert_eq!(open_approval_state(&identity, &file), Err(ApprovalDecodeError::BadMagic.into()));
     }
 
     #[test]

@@ -198,7 +198,10 @@ pub fn seal_manifest(identity: &VaultIdentity, manifest: &VaultManifest) -> Resu
 pub fn open_manifest(identity: &VaultIdentity, file: &[u8]) -> Result<VaultManifest, ManifestError> {
     let (vault_id, payload) = KIND.open(identity, file)?;
     let manifest = encoding::decode(&payload)?;
-    (manifest.vault_id == vault_id).then_some(manifest).ok_or(ManifestError::VaultIdMismatch)
+    if manifest.vault_id != vault_id {
+        return Err(ManifestError::VaultIdMismatch);
+    }
+    Ok(manifest)
 }
 
 #[cfg(test)]
