@@ -35,7 +35,7 @@ pub use approval::{
     RESERVED_ECDSA_P256_ID, SignError, SignatureAlgorithm, SoftwareSigner, SoftwareSignerKey, VerifiedApproval, VerifyError,
     open_approval_state, open_signer_key, read_signer_key, seal_approval_state, seal_signer_key, verify_approval, write_signer_key,
 };
-pub use durable::{ReadError, WriteError, WriteStep, durable_remove, durable_replace, read_state_file};
+pub use durable::{MAX_STATE_FILE_LEN, ReadError, WriteError, WriteStep, durable_remove, durable_replace, read_state_file};
 pub use envelope::{
     EnvelopeError, MAX_IDENTITY_ENVELOPE_LEN, read_identity_envelope, stanza_kinds, unwrap_identity, wrap_identity, write_identity_envelope,
 };

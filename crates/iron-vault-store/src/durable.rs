@@ -81,6 +81,12 @@ pub enum ReadError {
         /// The caller's limit.
         max_len: u64,
     },
+    /// The entry is a symlink, directory, FIFO, socket or device, so it was not read.
+    #[error("state file {file} is not a regular file")]
+    NotARegularFile {
+        /// The file that was to be read.
+        file: StateFileName,
+    },
     /// Opening or reading the file failed.
     #[error("cannot read state file {file}: {kind}")]
     Io {
@@ -126,10 +132,21 @@ pub fn durable_remove(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileNa
     fs.sync_dir(lock.dir()).map_err(io_error(WriteStep::SyncDir, name))
 }
 
-/// Reads the state file `name`, refusing one longer than `max_len` bytes without reading it whole.
+/// The most any state file read may return: 1 MiB, the manifest's own limit and the largest state file.
+///
+/// A caller's larger limit is lowered to this, so no read of the state directory buffers more.
+pub const MAX_STATE_FILE_LEN: u64 = 1 << 20;
+
+/// Reads the regular state file `name`, refusing one longer than `max_len` bytes, or than [`MAX_STATE_FILE_LEN`],
+/// without reading it whole.
+///
+/// A symlink, FIFO, device or other non-regular entry is refused before it is opened, so a planted FIFO cannot block
+/// the service and a device cannot feed it without end.
 pub fn read_state_file(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileName, max_len: u64) -> Result<Vec<u8>, ReadError> {
+    let max_len = max_len.min(MAX_STATE_FILE_LEN);
     fs.read_bounded(&lock.dir().join(name.as_str()), max_len).map_err(|e| match e.kind() {
         io::ErrorKind::FileTooLarge => ReadError::TooLarge { file: name.clone(), max_len },
+        io::ErrorKind::InvalidInput => ReadError::NotARegularFile { file: name.clone() },
         kind => ReadError::Io { file: name.clone(), kind },
     })
 }
@@ -273,6 +290,50 @@ mod tests {
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         durable_replace(&lock, &OsFs, &name("rec"), b"12345").unwrap();
         assert_eq!(read_state_file(&lock, &OsFs, &name("rec"), 4), Err(ReadError::TooLarge { file: name("rec"), max_len: 4 }));
+    }
+
+    #[test]
+    fn a_caller_limit_above_the_cap_is_lowered_to_it() {
+        let dir = TestDir::new("dur-read-cap");
+        let lock = StateDirLock::acquire(dir.path()).unwrap();
+        // Sparse: the length is past the cap, but no block is written and nothing may be read.
+        std::fs::File::create(dir.path().join("rec")).unwrap().set_len(MAX_STATE_FILE_LEN + 1).unwrap();
+        let err = read_state_file(&lock, &OsFs, &name("rec"), u64::MAX).unwrap_err();
+        assert_eq!(err, ReadError::TooLarge { file: name("rec"), max_len: MAX_STATE_FILE_LEN });
+    }
+
+    #[test]
+    fn a_huge_file_is_refused_before_it_is_read() {
+        let dir = TestDir::new("dur-read-huge");
+        let lock = StateDirLock::acquire(dir.path()).unwrap();
+        // A sparse 1 TiB file: reading or buffering it would exhaust memory, so passing proves it was refused unread.
+        std::fs::File::create(dir.path().join("rec")).unwrap().set_len(1 << 40).unwrap();
+        let err = read_state_file(&lock, &OsFs, &name("rec"), 4).unwrap_err();
+        assert_eq!(err, ReadError::TooLarge { file: name("rec"), max_len: 4 });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_is_refused_without_blocking() {
+        let dir = TestDir::new("dur-read-fifo");
+        let lock = StateDirLock::acquire(dir.path()).unwrap();
+        let status = std::process::Command::new("mkfifo").arg(dir.path().join("rec")).status().unwrap();
+        assert!(status.success(), "mkfifo failed: {status}");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        // Opening a FIFO for reading blocks until a writer appears, so a regression hangs this thread, not the suite.
+        std::thread::spawn(move || sender.send(read_state_file(&lock, &OsFs, &name("rec"), 4)));
+        let result = receiver.recv_timeout(std::time::Duration::from_secs(5)).expect("reading a FIFO blocked");
+        assert_eq!(result, Err(ReadError::NotARegularFile { file: name("rec") }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_state_file_is_refused() {
+        let dir = TestDir::new("dur-read-link");
+        let lock = StateDirLock::acquire(dir.path()).unwrap();
+        std::fs::write(dir.path().join("real"), b"1234").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("rec")).unwrap();
+        assert_eq!(read_state_file(&lock, &OsFs, &name("rec"), 4), Err(ReadError::NotARegularFile { file: name("rec") }));
     }
 
     #[test]

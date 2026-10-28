@@ -1,7 +1,7 @@
 //! The filesystem seam under every store write: one method per durable-write step.
 
 use std::ffi::OsString;
-use std::fs::{File, OpenOptions};
+use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::Path;
 
@@ -36,8 +36,11 @@ pub trait StoreFs {
     /// The names of the entries in `dir`, sorted so callers act on them in a deterministic order.
     fn list_dir(&self, dir: &Path) -> io::Result<Vec<OsString>>;
 
-    /// Reads the file at `path`, failing with [`io::ErrorKind::FileTooLarge`] after at most `max_len + 1` bytes if
-    /// it is longer than `max_len`.
+    /// Reads the regular file at `path`, failing with [`io::ErrorKind::FileTooLarge`] after at most `max_len + 1` bytes
+    /// if it is longer than `max_len`.
+    ///
+    /// A symlink, directory, FIFO, socket or device at `path` fails with [`io::ErrorKind::InvalidInput`] before it is
+    /// opened: opening a FIFO blocks until a writer appears, and a device can be read without end.
     fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>>;
 }
 
@@ -90,18 +93,65 @@ impl StoreFs for OsFs {
         Ok(names)
     }
 
+    /// Checks the entry with `lstat` before opening it, so a FIFO is never opened and an oversized file is refused
+    /// before any buffer is allocated. Only the service can write the state directory, so the entry cannot be swapped
+    /// for a FIFO between the check and the open by anyone the service does not already trust; the open handle is
+    /// still compared with the checked entry, so a swap is refused rather than read.
     fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>> {
-        read_at_most(File::open(path)?, max_len)
+        let checked = regular_file_metadata(path)?;
+        if checked.len() > max_len {
+            return Err(too_large(max_len));
+        }
+        let file = File::open(path)?;
+        ensure_same_entry(&checked, &file.metadata()?)?;
+        read_at_most(file, max_len, checked.len())
     }
 }
 
+/// The metadata of the entry at `path`, without following a symlink, if it is a regular file.
+fn regular_file_metadata(path: &Path) -> io::Result<Metadata> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    match metadata.is_file() {
+        true => Ok(metadata),
+        false => Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file")),
+    }
+}
+
+/// Refuses an open file that is not the regular file checked before opening it.
+fn ensure_same_entry(checked: &Metadata, opened: &Metadata) -> io::Result<()> {
+    match opened.is_file() && same_inode(checked, opened) {
+        true => Ok(()),
+        false => Err(io::Error::new(io::ErrorKind::InvalidInput, "the file changed while it was opened")),
+    }
+}
+
+#[cfg(unix)]
+fn same_inode(checked: &Metadata, opened: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    checked.dev() == opened.dev() && checked.ino() == opened.ino()
+}
+
+/// No inode identity is exposed here; the regular-file check on the open handle is all that applies.
+#[cfg(not(unix))]
+fn same_inode(_checked: &Metadata, _opened: &Metadata) -> bool {
+    true
+}
+
+fn too_large(max_len: u64) -> io::Error {
+    io::Error::new(io::ErrorKind::FileTooLarge, format!("file is longer than {max_len} bytes"))
+}
+
 /// Reads `reader` to its end, stopping after `max_len + 1` bytes so an oversized file is never read whole.
-fn read_at_most(reader: impl Read, max_len: u64) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
+///
+/// The buffer is sized for `expected_len` bytes, capped at `max_len`, plus one byte to detect growth, so reading a
+/// file whose length was checked never reallocates past the cap.
+fn read_at_most(reader: impl Read, max_len: u64, expected_len: u64) -> io::Result<Vec<u8>> {
+    let capacity = usize::try_from(expected_len.min(max_len).saturating_add(1)).map_err(|_| too_large(max_len))?;
+    let mut bytes = Vec::with_capacity(capacity);
     reader.take(max_len.saturating_add(1)).read_to_end(&mut bytes)?;
     match u64::try_from(bytes.len()) {
         Ok(len) if len <= max_len => Ok(bytes),
-        _ => Err(io::Error::new(io::ErrorKind::FileTooLarge, format!("file is longer than {max_len} bytes"))),
+        _ => Err(too_large(max_len)),
     }
 }
 
@@ -149,7 +199,19 @@ mod tests {
 
     #[test]
     fn read_at_most_stops_on_an_endless_source() {
-        assert_eq!(read_at_most(io::repeat(7), 16).unwrap_err().kind(), io::ErrorKind::FileTooLarge);
+        assert_eq!(read_at_most(io::repeat(7), 16, 0).unwrap_err().kind(), io::ErrorKind::FileTooLarge);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_bounded_refuses_a_symlink_and_a_directory() {
+        let dir = TestDir::new("fs-read-kinds");
+        let target = dir.path().join("target");
+        let link = dir.path().join("link");
+        std::fs::write(&target, b"1234").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert_eq!(OsFs.read_bounded(&link, 4).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(OsFs.read_bounded(dir.path(), 4).unwrap_err().kind(), io::ErrorKind::InvalidInput);
     }
 
     #[cfg(unix)]
