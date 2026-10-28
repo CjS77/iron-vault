@@ -30,25 +30,35 @@ pub const MAX_IDENTITY_ENVELOPE_LEN: usize = 16 * 1024;
 /// The length of the envelope's plaintext: the `AGE-SECRET-KEY-1…` text of an X25519 identity.
 const SECRET_TEXT_LEN: usize = 74;
 
-/// Wrapping or unwrapping the identity envelope failed. No variant carries key material or `age` error text.
+/// Sealing or opening the identity envelope or the passphrase envelope failed. No variant carries key material,
+/// passphrase text or `age` error text.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum EnvelopeError {
-    /// `age` refused to encrypt to the recipient keys.
-    #[error("could not wrap the vault identity for its recipients")]
+    /// `age` refused to encrypt to the recipient keys or the passphrase.
+    #[error("could not seal the envelope")]
     Encryption,
-    /// The envelope is longer than [`MAX_IDENTITY_ENVELOPE_LEN`]; nothing in it was parsed.
-    #[error("the identity envelope exceeds the {MAX_IDENTITY_ENVELOPE_LEN}-byte limit")]
+    /// The envelope is longer than its file's limit, [`MAX_IDENTITY_ENVELOPE_LEN`] or
+    /// [`crate::MAX_PASSPHRASE_ENVELOPE_LEN`]; nothing in it was parsed.
+    #[error("the envelope exceeds its size limit")]
     TooLarge,
-    /// The envelope is not a well-formed, authentic `age` file holding a vault identity.
-    #[error("the identity envelope is malformed or has been altered")]
+    /// The envelope is not a well-formed, authentic `age` file holding an X25519 identity.
+    #[error("the envelope is malformed or has been altered")]
     Malformed,
-    /// The header holds a stanza other than X25519, such as a passphrase (scrypt) or plugin stanza.
-    #[error("the identity envelope has a {0} stanza; it may hold only X25519 recipients")]
+    /// The header holds a stanza the envelope may not: anything but X25519 in the identity envelope, anything but its
+    /// one scrypt stanza in the passphrase envelope.
+    #[error("the envelope has an unexpected {0} stanza")]
     UnexpectedStanza(StanzaKind),
     /// No stanza unwraps with the recipient identity: its key is not listed, or its stanza is damaged, which `age`
     /// cannot tell apart from a stanza for another key.
     #[error("the identity envelope is not wrapped for this recipient")]
     NotARecipient,
+    /// The passphrase envelope's scrypt stanza asks for more work than [`crate::MAX_PASSPHRASE_WORK_FACTOR`]; it was
+    /// refused before any scrypt work.
+    #[error("the passphrase envelope's scrypt work factor is above the accepted maximum")]
+    WorkFactorTooHigh,
+    /// The passphrase does not open the passphrase envelope. A damaged scrypt stanza looks the same to `age`.
+    #[error("wrong passphrase")]
+    WrongPassphrase,
 }
 
 /// Encrypts the vault identity's secret text as an `age` file with one X25519 stanza per key in `recipients`.

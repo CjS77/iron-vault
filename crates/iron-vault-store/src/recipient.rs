@@ -109,10 +109,23 @@ impl RecipientIdentity {
         &self.secret
     }
 
-    /// A fresh identity, for tests that need recipients.
-    #[cfg(test)]
+    /// A fresh identity from the operating system's random source.
     pub(crate) fn generate() -> Self {
         Self { secret: x25519::Identity::generate() }
+    }
+
+    /// The identity's `age` secret-key text, `AGE-SECRET-KEY-1…`, in a buffer cleared on drop; the passphrase
+    /// envelope's plaintext.
+    pub(crate) fn secret_text(&self) -> SecretString {
+        self.secret.to_string()
+    }
+
+    /// The identity whose `age` secret-key text is `text`, or `None` when `text` is not one.
+    ///
+    /// `text` is borrowed from the caller's cleared buffer and parsed in place, so no uncleared copy of it is made here.
+    pub(crate) fn from_secret_text(text: &[u8]) -> Option<Self> {
+        let secret = std::str::from_utf8(text).ok()?.parse().ok()?;
+        Some(Self { secret })
     }
 }
 

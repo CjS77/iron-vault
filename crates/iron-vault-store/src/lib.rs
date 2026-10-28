@@ -9,6 +9,7 @@ mod envelope;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fault_fs;
 mod manifest;
+mod passphrase;
 mod permitted_origins;
 mod recipient;
 mod record;
@@ -35,6 +36,11 @@ pub use envelope::{
 };
 pub use manifest::{
     MAX_MANIFEST_ENTRIES, MAX_MANIFEST_LEN, ManifestEntry, ManifestError, VaultManifest, open_manifest, record_digest, seal_manifest,
+};
+pub use passphrase::{
+    MAX_PASSPHRASE_ENVELOPE_LEN, MAX_PASSPHRASE_WORK_FACTOR, OperationalIdentity, PASSPHRASE_WORK_FACTOR, Passphrase, PassphraseError,
+    UnlockError, open_passphrase_envelope, read_passphrase_envelope, reseal_passphrase_envelope, seal_passphrase_envelope,
+    unlock_with_passphrase, write_passphrase_envelope,
 };
 pub use permitted_origins::{PermittedOrigins, PermittedOriginsError};
 pub use recipient::{

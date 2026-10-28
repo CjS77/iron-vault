@@ -49,6 +49,11 @@ impl StateFileName {
         Self("identity.age".to_owned())
     }
 
+    /// The passphrase envelope's file, `operational.age`.
+    pub fn passphrase_envelope() -> Self {
+        Self("operational.age".to_owned())
+    }
+
     /// The vault manifest's file, `manifest.age`.
     pub fn manifest() -> Self {
         Self("manifest.age".to_owned())
@@ -128,6 +133,7 @@ mod tests {
     fn fixed_and_record_names_are_valid_state_file_names() {
         assert_eq!(StateFileName::new("manifest.age"), Ok(StateFileName::manifest()));
         assert_eq!(StateFileName::new("identity.age"), Ok(StateFileName::identity_envelope()));
+        assert_eq!(StateFileName::new("operational.age"), Ok(StateFileName::passphrase_envelope()));
         let id: RecordId = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();
         assert_eq!(StateFileName::record(&id).as_str(), "record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age");
         (0..32).map(|_| StateFileName::record(&RecordId::new_random())).for_each(|name| {

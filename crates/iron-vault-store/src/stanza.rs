@@ -64,6 +64,9 @@ pub(crate) struct Header {
     pub(crate) kinds: Vec<StanzaKind>,
     /// Whether the header's closing MAC line was found; a truncated file has no MAC line.
     pub(crate) complete: bool,
+    /// The work factor argument of each scrypt stanza, in header order: `Some(log_n)` when it is one or two decimal
+    /// digits, `None` when it is anything else. Read so a caller can refuse a costly file before `age` runs scrypt.
+    pub(crate) scrypt_work_factors: Vec<Option<u8>>,
 }
 
 /// The stanza kinds of `file`'s `age` v1 header, or `None` when the file does not start with the `age` v1 version line.
@@ -76,21 +79,31 @@ pub(crate) fn parse_header(file: &[u8]) -> Option<Header> {
         return None;
     }
     let mut complete = false;
-    let kinds = lines
+    let stanzas: Vec<&[u8]> = lines
         .take_while(|line| {
             complete = line.starts_with(MAC_PREFIX);
             !complete
         })
         .filter_map(|line| line.strip_prefix(STANZA_PREFIX))
-        .map(|rest| StanzaKind::from_tag(stanza_tag(rest)))
         .collect();
-    Some(Header { kinds, complete })
+    let kinds = stanzas.iter().map(|rest| StanzaKind::from_tag(stanza_tag(rest))).collect();
+    let scrypt_work_factors = stanzas.iter().filter(|rest| stanza_tag(rest) == SCRYPT_TAG).map(|rest| scrypt_work_factor(rest)).collect();
+    Some(Header { kinds, complete, scrypt_work_factors })
 }
 
 /// The newline-terminated lines of `bytes`, without their terminators; an unterminated final line is dropped.
 fn complete_lines(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
     let terminated = bytes.iter().rposition(|&b| b == b'\n').map_or(&[][..], |end| &bytes[..end]);
     terminated.split(|&b| b == b'\n')
+}
+
+/// The work factor of an scrypt stanza line, given the text after its `-> ` prefix: the third space-separated field
+/// (`scrypt <salt> <log_n>`) as one or two decimal digits without a leading zero. `age` refuses a leading zero too, and
+/// any value of three digits is far beyond every work factor the store accepts, so refusing it as unreadable is safe.
+fn scrypt_work_factor(rest: &[u8]) -> Option<u8> {
+    let field = rest.split(|&b| b == b' ').nth(2)?;
+    let digits = (1..=2).contains(&field.len()) && field.iter().all(u8::is_ascii_digit) && field[0] != b'0';
+    digits.then(|| field.iter().fold(0, |n, d| n * 10 + (d - b'0')))
 }
 
 /// The tag of a stanza line, given the text after its `-> ` prefix.
@@ -125,6 +138,18 @@ mod tests {
         let header = parse_header(b"age-encryption.org/v1\n-> X25519 AAAA\nAAAA\n-> scr").unwrap();
         assert_eq!(header.kinds, [StanzaKind::X25519]);
         assert!(!header.complete);
+    }
+
+    #[test]
+    fn scrypt_work_factors_are_read_from_the_third_field() {
+        let file = b"age-encryption.org/v1\n-> scrypt c2FsdA 18\nAAAA\n-> scrypt c2FsdA 018\n\n-> scrypt s 7 x\n\n-> X25519 a 9\n\n--- M\n";
+        let header = parse_header(file).unwrap();
+        assert_eq!(header.scrypt_work_factors, [Some(18), None, Some(7)]);
+        let odd = [&b"-> scrypt s"[..], b"-> scrypt s -1", b"-> scrypt s 1a", b"-> scrypt s ", b"-> scrypt s 0", b"-> scrypt s 100"];
+        odd.iter().for_each(|line| {
+            let file = [&b"age-encryption.org/v1\n"[..], line, b"\n\n--- M\n"].concat();
+            assert_eq!(parse_header(&file).unwrap().scrypt_work_factors, [None], "{line:?}");
+        });
     }
 
     #[test]

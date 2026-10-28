@@ -1,7 +1,8 @@
 //! Sealed files: binary `age` ciphertext encrypted to the vault public key (specification §3.10).
 //!
-//! [`seal`] and [`open`] are the only way the store encrypts and decrypts with `age`, so `age` types and error text stay
-//! inside this crate. Plaintext comes back in a buffer that is cleared on drop (specification §3.11).
+//! [`seal`] and [`open`] are the only way the store encrypts and decrypts with an X25519 key, so `age` types and error
+//! text stay inside this crate; the passphrase envelope's scrypt use lives in `passphrase`. Plaintext comes back in a
+//! buffer that is cleared on drop (specification §3.11).
 
 use std::{
     io::{self, Read, Write},
@@ -104,7 +105,7 @@ fn map_decrypt_error(error: DecryptError) -> OpenError {
 ///
 /// The buffer is sized up front from the ciphertext length, which always exceeds the plaintext length, so it never
 /// reallocates and leaves no uncleared copy behind.
-fn read_bounded(reader: impl Read, max: usize, ciphertext_len: usize) -> Result<Zeroizing<Vec<u8>>, OpenError> {
+pub(crate) fn read_bounded(reader: impl Read, max: usize, ciphertext_len: usize) -> Result<Zeroizing<Vec<u8>>, OpenError> {
     let limit = max.saturating_add(1);
     let mut plaintext = Zeroizing::new(Vec::with_capacity(limit.min(ciphertext_len)));
     reader
