@@ -66,42 +66,36 @@ fn open_lock_file(path: &Path) -> io::Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("iv-lock-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::test_dir::TestDir;
 
     #[test]
     fn second_acquire_is_held_and_names_path() {
-        let dir = temp_dir("held");
-        let _first = StateDirLock::acquire(&dir).unwrap();
-        let err = StateDirLock::acquire(&dir).unwrap_err();
+        let dir = TestDir::new("lock-held");
+        let _first = StateDirLock::acquire(dir.path()).unwrap();
+        let err = StateDirLock::acquire(dir.path()).unwrap_err();
         assert!(matches!(err, LockError::Held { .. }));
-        assert!(err.to_string().contains(&dir.join("lock").display().to_string()));
+        assert!(err.to_string().contains(&dir.path().join("lock").display().to_string()));
     }
 
     #[test]
     fn drop_releases_lock() {
-        let dir = temp_dir("drop");
-        drop(StateDirLock::acquire(&dir).unwrap());
-        let lock = StateDirLock::acquire(&dir).unwrap();
-        assert_eq!(lock.dir(), dir);
+        let dir = TestDir::new("lock-drop");
+        drop(StateDirLock::acquire(dir.path()).unwrap());
+        let lock = StateDirLock::acquire(dir.path()).unwrap();
+        assert_eq!(lock.dir(), dir.path());
     }
 
     #[test]
     fn different_directories_do_not_conflict() {
-        let (a, b) = (temp_dir("a"), temp_dir("b"));
-        let _la = StateDirLock::acquire(&a).unwrap();
-        assert!(StateDirLock::acquire(&b).is_ok());
+        let (a, b) = (TestDir::new("lock-a"), TestDir::new("lock-b"));
+        let _la = StateDirLock::acquire(a.path()).unwrap();
+        assert!(StateDirLock::acquire(b.path()).is_ok());
     }
 
     #[test]
     fn missing_directory_is_io_error() {
-        let dir = temp_dir("missing").join("absent");
-        let err = StateDirLock::acquire(&dir).unwrap_err();
+        let dir = TestDir::new("lock-missing");
+        let err = StateDirLock::acquire(&dir.path().join("absent")).unwrap_err();
         assert!(matches!(err, LockError::Io { kind: io::ErrorKind::NotFound, .. }));
     }
 
@@ -109,9 +103,9 @@ mod tests {
     #[test]
     fn lock_file_is_0600() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = temp_dir("mode");
-        let _lock = StateDirLock::acquire(&dir).unwrap();
-        let mode = std::fs::metadata(dir.join("lock")).unwrap().permissions().mode();
+        let dir = TestDir::new("lock-mode");
+        let _lock = StateDirLock::acquire(dir.path()).unwrap();
+        let mode = std::fs::metadata(dir.path().join("lock")).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
     }
 }

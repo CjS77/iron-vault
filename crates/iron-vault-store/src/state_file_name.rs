@@ -1,0 +1,107 @@
+//! The name of one file in the state directory.
+
+use std::fmt;
+
+/// Name of the lock file, which no store write may touch.
+const LOCK_NAME: &str = "lock";
+
+/// One flat file name inside the state directory, valid on construction.
+///
+/// Store files sit directly in the state directory, so a durable write only ever fsyncs that one directory. A name
+/// never starts with `.`, which keeps it distinct from every temporary name, and is never the lock file.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StateFileName(String);
+
+/// Why a string is not a valid state file name.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum StateFileNameError {
+    /// The name is empty.
+    #[error("state file name is empty")]
+    Empty,
+    /// The name has a character outside ASCII `[A-Za-z0-9._-]`, such as a path separator.
+    #[error("state file name {0:?} may contain only ASCII letters, digits, '.', '_' and '-'")]
+    BadCharacter(String),
+    /// The name starts with `.`, which temporary names use.
+    #[error("state file name {0:?} must not start with '.'")]
+    LeadingDot(String),
+    /// The name is the state-directory lock file.
+    #[error("state file name must not be {LOCK_NAME:?}")]
+    Lock,
+}
+
+impl StateFileName {
+    /// Validates `name` as a flat state file name.
+    pub fn new(name: &str) -> Result<Self, StateFileNameError> {
+        match name {
+            "" => Err(StateFileNameError::Empty),
+            LOCK_NAME => Err(StateFileNameError::Lock),
+            _ if !name.bytes().all(is_name_byte) => Err(StateFileNameError::BadCharacter(name.to_owned())),
+            _ if name.starts_with('.') => Err(StateFileNameError::LeadingDot(name.to_owned())),
+            _ => Ok(Self(name.to_owned())),
+        }
+    }
+
+    /// The name as a string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The temporary name a durable replace of this file writes first: `.<name>.tmp`.
+    pub(crate) fn temp_name(&self) -> String {
+        format!(".{}.tmp", self.0)
+    }
+}
+
+impl fmt::Display for StateFileName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+fn is_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_flat_ascii_names() {
+        ["identity.age", "manifest", "rec-01_a.age", "a..b"].iter().for_each(|n| {
+            assert_eq!(StateFileName::new(n).unwrap().as_str(), *n);
+        });
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert_eq!(StateFileName::new(""), Err(StateFileNameError::Empty));
+    }
+
+    #[test]
+    fn rejects_paths_and_non_ascii() {
+        ["../x", "a/b", "a\\b", "café", "a b", "a\0b", ".."].iter().for_each(|n| {
+            assert!(StateFileName::new(n).is_err(), "{n:?} accepted");
+        });
+        assert!(matches!(StateFileName::new("../x"), Err(StateFileNameError::BadCharacter(_))));
+        assert!(matches!(StateFileName::new("café"), Err(StateFileNameError::BadCharacter(_))));
+    }
+
+    #[test]
+    fn rejects_leading_dot() {
+        assert!(matches!(StateFileName::new(".hidden"), Err(StateFileNameError::LeadingDot(_))));
+    }
+
+    #[test]
+    fn rejects_lock() {
+        assert_eq!(StateFileName::new("lock"), Err(StateFileNameError::Lock));
+        assert!(StateFileName::new("lock2").is_ok());
+    }
+
+    #[test]
+    fn temp_name_is_hidden_and_never_a_state_file_name() {
+        let temp = StateFileName::new("vault").unwrap().temp_name();
+        assert_eq!(temp, ".vault.tmp");
+        assert!(StateFileName::new(&temp).is_err());
+    }
+}
