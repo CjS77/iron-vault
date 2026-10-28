@@ -45,7 +45,8 @@ pub enum EnvelopeError {
     /// The header holds a stanza other than X25519, such as a passphrase (scrypt) or plugin stanza.
     #[error("the identity envelope has a {0} stanza; it may hold only X25519 recipients")]
     UnexpectedStanza(StanzaKind),
-    /// The recipient identity's key is not listed in the envelope.
+    /// No stanza unwraps with the recipient identity: its key is not listed, or its stanza is damaged, which `age`
+    /// cannot tell apart from a stanza for another key.
     #[error("the identity envelope is not wrapped for this recipient")]
     NotARecipient,
 }
@@ -71,12 +72,17 @@ pub fn unwrap_identity(envelope: &[u8], recipient: &RecipientIdentity) -> Result
     if envelope.len() > MAX_IDENTITY_ENVELOPE_LEN {
         return Err(EnvelopeError::TooLarge);
     }
+    // The header is read here and again by `age` inside `open_as`. This read is the one that refuses an scrypt or
+    // plugin stanza before any key work; `age`'s parse is the one that authenticates the header. Neither replaces the other.
     check_x25519_only(&stanza_kinds(envelope)?)?;
     let secret = open_as(recipient.as_age(), envelope, SECRET_TEXT_LEN).map_err(map_open_error)?;
     VaultIdentity::from_secret_text(&secret).ok_or(EnvelopeError::Malformed)
 }
 
 /// The kinds of the stanzas in an `age` file's header, in header order, read without decrypting anything.
+///
+/// The list includes the grease stanza `age` adds to every file without a passphrase, so an envelope wrapped for `n`
+/// recipients lists `n` [`StanzaKind::X25519`] and one [`StanzaKind::Grease`].
 ///
 /// A file that is not `age` v1, or whose header is cut off before its MAC line, is [`EnvelopeError::Malformed`].
 pub fn stanza_kinds(file: &[u8]) -> Result<Vec<StanzaKind>, EnvelopeError> {
@@ -167,13 +173,14 @@ mod tests {
     }
 
     #[test]
-    fn stanza_kinds_lists_one_x25519_per_recipient_and_at_most_one_grease() {
+    fn stanza_kinds_lists_one_x25519_per_recipient_and_one_grease() {
         [2, 3, 7].into_iter().for_each(|n| {
             let (_, _, envelope) = wrapped(n);
             let kinds = stanza_kinds(&envelope).unwrap();
             assert_eq!(kinds.iter().filter(|kind| **kind == StanzaKind::X25519).count(), n);
-            assert!(kinds.iter().filter(|kind| **kind == StanzaKind::Grease).count() <= 1);
-            assert!(kinds.iter().all(StanzaKind::is_x25519_or_grease), "{kinds:?}");
+            // age 0.12 adds exactly one grease stanza to every file without a passphrase stanza.
+            assert_eq!(kinds.iter().filter(|kind| **kind == StanzaKind::Grease).count(), 1);
+            assert_eq!(kinds.len(), n + 1, "{kinds:?}");
         });
     }
 
@@ -275,14 +282,13 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
         #[test]
-        fn bit_flips_never_unwrap_a_different_identity(offset in any::<prop::sample::Index>(), bit in 0u8..8) {
-            let (vault, recipients, mut envelope) = wrapped(2);
+        fn every_bit_flip_fails_to_unwrap(offset in any::<prop::sample::Index>(), bit in 0u8..8) {
+            let (_, recipients, mut envelope) = wrapped(2);
             let at = offset.index(envelope.len());
             envelope[at] ^= 1 << bit;
-            // A flip inside the other recipient's stanza leaves this recipient's path intact; anything else must fail.
-            if let Ok(identity) = unwrap_identity(&envelope, &recipients[0]) {
-                prop_assert_eq!(identity.public_key(), vault.public_key());
-            }
+            // The header MAC authenticates every stanza, age refuses non-canonical base64, and the payload is AEAD
+            // protected, so a flip anywhere, even in another recipient's stanza, must fail.
+            prop_assert!(unwrap_identity(&envelope, &recipients[0]).is_err(), "flip at {at} bit {bit} unwrapped");
         }
     }
 }

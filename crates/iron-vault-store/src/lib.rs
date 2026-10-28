@@ -2,9 +2,9 @@
 //! recovery, and connector storage.
 
 mod durable;
-mod envelope;
 #[cfg(test)]
 mod durable_faults;
+mod envelope;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fault_fs;
 mod manifest;
@@ -13,8 +13,8 @@ mod recipient;
 mod record;
 mod record_id;
 mod sealed;
-mod stanza;
 mod stale_temps;
+mod stanza;
 mod state_dir;
 mod state_file_name;
 mod store_fs;
@@ -38,8 +38,8 @@ pub use recipient::{
 pub use record::{CredentialRecord, RecordError, Source, decode, encode};
 pub use record_id::{RecordId, RecordIdError};
 pub use sealed::{OpenError, SealError, open, seal};
-pub use stanza::StanzaKind;
 pub use stale_temps::sweep_stale_temps;
+pub use stanza::StanzaKind;
 pub use state_dir::{LockError, StateDirLock};
 pub use state_file_name::{StateFileName, StateFileNameError};
 pub use store_fs::{OsFs, StoreFs};
