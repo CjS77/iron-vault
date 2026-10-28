@@ -17,8 +17,7 @@ Keep domain logic pure, with I/O at the edges.
 
 - Edition 2024; toolchain pinned in `rust-toolchain.toml`; one Cargo workspace with dependency versions held in
   `[workspace.dependencies]`.
-- Formatting follows `rustfmt.toml`: max width 140, 4-space indents, no tabs. **Do not run `cargo fmt` before
-  committing.**
+- Formatting follows `rustfmt.toml`: max width 140, 4-space indents, no tabs.
 - Use functional programming (iterators > for loops) where possible.
 - Use inline format arguments: `format!("bad split {guid}")`.
 - Keep functions short and doing one thing; split long ones into named helpers.
@@ -26,6 +25,7 @@ Keep domain logic pure, with I/O at the edges.
 - No `unwrap`, `expect` or `panic!` outside tests. A malformed file is an error, never a crash.
 - Public items have doc comments. Comments say *why*, not what.
 - Output must be deterministic: no `HashMap` iteration order in anything that is written to disk or the wire.
+- Run `cargo fmt` before committing.
 
 ## Specification
 
