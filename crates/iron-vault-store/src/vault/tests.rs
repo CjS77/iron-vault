@@ -459,6 +459,18 @@ fn a_missing_manifest_is_uninitialized_only_without_records() {
     assert_eq!(events[0].level, Level::ERROR);
 }
 
+#[test]
+fn a_missing_manifest_with_approval_state_is_damaged() {
+    let leftover = Fixture::new("vault-leftover-approval");
+    std::fs::write(leftover.path(&StateFileName::approval_state()), b"leftover").unwrap();
+    let (opened, _) = leftover.open();
+    let expected = VaultError::SharedStateDamaged {
+        file: StateFileName::manifest(),
+        damage: SharedStateDamage::MissingWithApprovalState,
+    };
+    assert_eq!(opened.unwrap_err(), expected);
+}
+
 /// Records the limit of every bounded read, and otherwise is the real filesystem.
 #[derive(Default)]
 struct BoundSpy(Mutex<Vec<(PathBuf, u64)>>);

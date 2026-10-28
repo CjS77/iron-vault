@@ -39,7 +39,7 @@ const SHARED_STATE_REMEDIATION: &str = "restore the state directory from a backu
 /// The vault cannot be opened, created or written. No variant carries file contents or key material.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum VaultError {
-    /// There is no manifest and no record file: no vault has been created in this state directory.
+    /// There is no manifest, no record file and no approval state: no vault has been created in this state directory.
     #[error("the vault is not initialized: the state directory holds no manifest and no credential records")]
     NotInitialized,
     /// Shared state cannot be trusted, so the whole vault is unavailable (spec §3.10, §3.12).
@@ -102,10 +102,10 @@ pub enum SharedStateDamage {
     /// The manifest is gone but record files remain, so the vault exists and has lost its index.
     #[error("it is missing, but credential record files exist")]
     MissingWithRecords,
-    /// The manifest is gone but another vault's approval state remains, so a vault existed here and was damaged or
-    /// half removed; creating a new one would reset its approval counters (spec §3.9).
-    #[error("it is missing, but {0} from an earlier vault remains; recover or reset the vault rather than initialize")]
-    MissingWithLeftoverState(StateFileName),
+    /// The manifest is gone but approval state remains, so a vault existed here and was damaged or half removed;
+    /// creating a new one would reset its approval counters (spec §3.9).
+    #[error("it is missing, but approval.age from an earlier vault remains; recover or reset the vault rather than initialize")]
+    MissingWithApprovalState,
     /// The file could not be read, or is over its size limit.
     #[error(transparent)]
     Read(ReadError),
@@ -206,13 +206,21 @@ fn read_manifest(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentit
         Err(ReadError::Io {
             kind: io::ErrorKind::NotFound,
             ..
-        }) if !files.iter().any(|f| is_record_file_name(f)) => Err(VaultError::NotInitialized),
-        Err(ReadError::Io {
-            kind: io::ErrorKind::NotFound,
-            ..
-        }) => Err(damaged(SharedStateDamage::MissingWithRecords)),
+        }) => Err(classify_missing_manifest(files).map_or(VaultError::NotInitialized, damaged)),
         Err(e) => Err(damaged(SharedStateDamage::Read(e))),
         Ok(bytes) => open_manifest(identity, &bytes).map_err(|e| damaged(SharedStateDamage::Manifest(e))),
+    }
+}
+
+/// Why a state directory without a manifest is damaged shared state, or `None` when it holds no vault at all.
+fn classify_missing_manifest(files: &[String]) -> Option<SharedStateDamage> {
+    let approval = StateFileName::approval_state();
+    if files.iter().any(|f| is_record_file_name(f)) {
+        Some(SharedStateDamage::MissingWithRecords)
+    } else if files.iter().any(|f| f == approval.as_str()) {
+        Some(SharedStateDamage::MissingWithApprovalState)
+    } else {
+        None
     }
 }
 

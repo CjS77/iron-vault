@@ -252,7 +252,7 @@ fn create_refuses_a_state_directory_with_leftover_approval_state() {
     let fs = FaultFs::new().with_durable_file(&approval, b"leftover");
     let refused = VaultError::SharedStateDamaged {
         file: StateFileName::manifest(),
-        damage: SharedStateDamage::MissingWithLeftoverState(StateFileName::approval_state()),
+        damage: SharedStateDamage::MissingWithApprovalState,
     };
     assert_eq!(Vault::create(&setup.lock, &fs, identity()).unwrap_err(), refused);
     assert!(fs.trace().iter().all(|call| call.op() == FsOp::ListDir), "{:?}", fs.trace());
