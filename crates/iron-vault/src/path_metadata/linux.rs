@@ -43,6 +43,7 @@ impl Collector {
             path: path.to_path_buf(),
             uid: metadata.uid(),
             gid: metadata.gid(),
+            owner_name: None,
             group_name: None,
             mode: Mode::new(metadata.mode()),
             kind,

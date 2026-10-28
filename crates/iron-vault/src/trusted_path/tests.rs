@@ -13,6 +13,7 @@ fn entry(path: &str, uid: u32, mode: u32, kind: ComponentKind) -> PathComponent 
         path: PathBuf::from(path),
         uid,
         gid: uid,
+        owner_name: None,
         group_name: None,
         mode: Mode::new(mode),
         kind,
@@ -660,4 +661,123 @@ fn module_performs_no_io() {
                 .find(|word| IO_MODULES.contains(word));
             assert!(named.is_none(), "trusted_path.rs imports an I/O module: {line}");
         });
+}
+
+/// A protected binary installed as `/opt/iron-vault/iron-vault`, with `/opt/iron-vault` owned by `opt_owner`.
+fn opt_binary_chain(opt_owner: u32) -> Vec<PathComponent> {
+    vec![
+        dir("/", ROOT_UID, 0o755),
+        dir("/opt", ROOT_UID, 0o755),
+        dir("/opt/iron-vault", opt_owner, 0o755),
+        file("/opt/iron-vault/iron-vault", ROOT_UID, 0o755),
+    ]
+}
+
+fn caution(rule: TrustedPathRule, path: &str, uid: u32) -> PathCaution {
+    PathCaution {
+        rule,
+        path: PathBuf::from(path),
+        uid,
+        owner_name: None,
+    }
+}
+
+fn protected_cautions(rule: TrustedPathRule, chain: &[PathComponent]) -> Result<Vec<PathCaution>, UnsafePath> {
+    check_with_cautions(rule, Profile::Protected, SERVICE_OWNER, chain)
+}
+
+#[test]
+fn a_root_owned_chain_has_no_cautions() {
+    let bin = vec![
+        dir("/", ROOT_UID, 0o755),
+        dir("/usr", ROOT_UID, 0o755),
+        dir("/usr/bin", ROOT_UID, 0o755),
+        file("/usr/bin/iron-vault", ROOT_UID, 0o755),
+    ];
+    assert_eq!(protected_cautions(TrustedPathRule::Binary, &bin), Ok(vec![]));
+    assert_eq!(
+        protected_cautions(TrustedPathRule::Config, &config_chain(config_file())),
+        Ok(vec![])
+    );
+}
+
+#[test]
+fn a_service_owned_folder_above_a_protected_binary_is_cautioned() {
+    let expected = vec![caution(TrustedPathRule::Binary, "/opt/iron-vault", SERVICE)];
+    assert_eq!(
+        protected_cautions(TrustedPathRule::Binary, &opt_binary_chain(SERVICE)),
+        Ok(expected)
+    );
+}
+
+#[test]
+fn a_caution_names_the_owner_when_the_adapter_resolved_it() {
+    let mut chain = config_chain(config_file());
+    chain[2] = PathComponent {
+        owner_name: Some("iron-vault".to_string()),
+        ..dir("/etc/iron-vault", SERVICE, 0o755)
+    };
+    let expected = PathCaution {
+        owner_name: Some("iron-vault".to_string()),
+        ..caution(TrustedPathRule::Config, "/etc/iron-vault", SERVICE)
+    };
+    assert_eq!(protected_cautions(TrustedPathRule::Config, &chain), Ok(vec![expected]));
+}
+
+#[test]
+fn development_has_no_cautions() {
+    let chain = opt_binary_chain(USER);
+    assert_eq!(
+        check_with_cautions(TrustedPathRule::Binary, Profile::Development, USER_OWNER, &chain),
+        Ok(vec![])
+    );
+}
+
+#[test]
+fn a_service_owned_folder_above_the_state_dir_is_not_cautioned() {
+    let chain = vec![
+        dir("/", ROOT_UID, 0o755),
+        dir("/srv", SERVICE, 0o755),
+        dir("/srv/iron-vault", SERVICE, 0o700),
+    ];
+    assert_eq!(protected_cautions(TrustedPathRule::StateDir, &chain), Ok(vec![]));
+}
+
+#[test]
+fn a_refused_path_has_only_its_refusal() {
+    let mut chain = opt_binary_chain(SERVICE);
+    chain[3] = file("/opt/iron-vault/iron-vault", SERVICE, 0o755);
+    assert_eq!(
+        protected_cautions(TrustedPathRule::Binary, &chain),
+        Err(UnsafePath {
+            path: PathBuf::from("/opt/iron-vault/iron-vault"),
+            problem: wrong_owner(SERVICE, OwnerRequirement::Root),
+        })
+    );
+}
+
+#[test]
+fn a_symlinked_binary_is_cautioned_on_the_target_side() {
+    let chain = vec![
+        dir("/", ROOT_UID, 0o755),
+        dir("/usr", ROOT_UID, 0o755),
+        dir("/usr/bin", ROOT_UID, 0o755),
+        link("/usr/bin/iron-vault", ROOT_UID, opt_binary_chain(SERVICE)),
+    ];
+    let expected = vec![caution(TrustedPathRule::Binary, "/opt/iron-vault", SERVICE)];
+    assert_eq!(protected_cautions(TrustedPathRule::Binary, &chain), Ok(expected));
+}
+
+#[test]
+fn a_folder_reached_twice_through_links_is_cautioned_once() {
+    let opt = || vec![dir("/", ROOT_UID, 0o755), dir("/opt", SERVICE, 0o755)];
+    let under_opt = |path: &str| [opt(), vec![dir(path, ROOT_UID, 0o755)]].concat();
+    let chain = vec![
+        dir("/", ROOT_UID, 0o755),
+        link("/x", ROOT_UID, under_opt("/opt/x")),
+        link("/x/y", ROOT_UID, under_opt("/opt/y")),
+        file("/x/y/iron-vault", ROOT_UID, 0o755),
+    ];
+    let expected = vec![caution(TrustedPathRule::Binary, "/opt", SERVICE)];
+    assert_eq!(protected_cautions(TrustedPathRule::Binary, &chain), Ok(expected));
 }
