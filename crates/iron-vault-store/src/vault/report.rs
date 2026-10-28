@@ -12,9 +12,10 @@ use crate::StateFileName;
 pub enum RecordDamage {
     /// The record file does not exist.
     Missing,
-    /// The file opens as a record but is not the one the manifest vouches for: its digest, record ID or name differs.
+    /// The file is not the one the manifest vouches for: its digest differs (it is then never decrypted), or it decrypts
+    /// to a record with another record ID or name.
     Substituted,
-    /// The file is too large, or does not decrypt or decode.
+    /// The file could not be read or is too large, or its digest matches but it does not decrypt or decode.
     Unreadable,
 }
 
@@ -28,8 +29,9 @@ impl RecordDamage {
                  with `iron-vault replace` and investigate who can write to the state directory"
             }
             Self::Unreadable => {
-                "the file is corrupt or too large; restore it from a backup of this vault, or re-enter the credential with \
-                 `iron-vault replace`"
+                "the file could not be read, is too large, or matches its manifest entry yet does not open, which points to a \
+                 damaged vault identity or an Iron Vault bug; check the file's permissions and the vault identity, then restore \
+                 the file from a backup of this vault or re-enter the credential with `iron-vault replace`"
             }
         }
     }

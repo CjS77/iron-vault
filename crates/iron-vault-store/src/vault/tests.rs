@@ -237,7 +237,7 @@ fn each_damaged_record_takes_down_only_itself() {
 
     let (opened, events) = fixture.open();
     let (vault, report) = opened.unwrap();
-    let expected = [("deleted", RecordDamage::Missing), ("flipped", RecordDamage::Unreadable), ("swapped", RecordDamage::Substituted)];
+    let expected = [("deleted", RecordDamage::Missing), ("flipped", RecordDamage::Substituted), ("swapped", RecordDamage::Substituted)];
     assert_eq!(report.damaged(), &damage(&expected));
     assert!(report.unindexed().is_empty());
     assert!(matches!(vault.entry(&n("keep")), CatalogEntry::Usable { .. }));
@@ -279,6 +279,48 @@ fn substitution_is_caught_by_digest_record_id_or_name() {
     assert_eq!(report.damaged(), &damage(&substituted));
     assert_eq!(events.iter().filter(|e| e.level == Level::ERROR).count(), 3);
     assert_no_secret_logged(&events, &["resealed", "other_id", "impostor"]);
+}
+
+#[test]
+fn a_foreign_record_under_a_listed_id_is_substituted() {
+    let fixture = Fixture::new("vault-foreign");
+    let genuine = record("fx_key");
+    let entry = fixture.write_record(&genuine);
+    fixture.write_manifest([entry]);
+    // Encrypted to the vault key with the same record ID and name, but not the bytes the vault wrote.
+    std::fs::write(fixture.record_path(genuine.id()), sealed(&genuine)).unwrap();
+
+    let (opened, events) = fixture.open();
+    let (_, report) = opened.unwrap();
+    assert_eq!(report.damaged(), &damage(&[("fx_key", RecordDamage::Substituted)]));
+    assert_no_secret_logged(&events, &["fx_key"]);
+}
+
+#[test]
+fn a_file_whose_digest_differs_is_never_decrypted() {
+    let fixture = Fixture::new("vault-never-decrypted");
+    let id = RecordId::new_random();
+    let (_, entry) = fixture.write_file(id, "fx_key", &sealed(&record_with_id(id, "fx_key", "api.fx.example")));
+    fixture.write_manifest([(id, entry)]);
+    // Not an age file at all: decrypting it would fail, so a digest cause shows the check ran first and decryption never did.
+    std::fs::write(fixture.record_path(id), b"not an age file").unwrap();
+
+    let (opened, events) = fixture.open();
+    let (_, report) = opened.unwrap();
+    assert_eq!(report.damaged(), &damage(&[("fx_key", RecordDamage::Substituted)]));
+    assert_eq!(events[0].field("cause"), "the file's digest differs from its manifest entry");
+}
+
+#[test]
+fn a_file_matching_its_digest_that_does_not_open_is_unreadable() {
+    let fixture = Fixture::new("vault-matching-garbage");
+    let garbage = fixture.write_file(RecordId::new_random(), "fx_key", b"not an age file");
+    fixture.write_manifest([garbage]);
+
+    let (opened, events) = fixture.open();
+    let (_, report) = opened.unwrap();
+    assert_eq!(report.damaged(), &damage(&[("fx_key", RecordDamage::Unreadable)]));
+    assert!(events[0].field("cause").contains("does not decrypt"), "{events:?}");
 }
 
 #[test]

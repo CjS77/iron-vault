@@ -58,11 +58,14 @@ pub(super) fn load_records(
     })
 }
 
-/// Reads, decrypts and decodes the record `entry` vouches for, then checks it is the record the entry names.
+/// Reads the record file `entry` vouches for, checks its digest, and only then decrypts, decodes and checks it is the
+/// record the entry names.
 ///
-/// A file whose digest differs is still decrypted before it is classified: a file that does not open is reported as
-/// unreadable corruption, and one that opens as a well-formed record is reported as substituted. Either way it is
-/// never loaded. Decrypting it is safe because [`open`] refuses non-X25519 headers and bounds the plaintext.
+/// Anyone with the vault's public key can write a well-formed, validly encrypted record file, so the manifest digest is
+/// the only proof that a file is the one the vault wrote. A file whose digest differs is reported as substituted and is
+/// never decrypted or decoded: its contents may be hostile, and refusing it unread keeps them away from `age` and the
+/// decoder. A file whose digest matches but still does not open is unreadable, which only a bug or a damaged vault
+/// identity can cause.
 fn load_record(
     lock: &StateDirLock,
     fs: &impl StoreFs,
@@ -71,11 +74,13 @@ fn load_record(
     entry: &ManifestEntry,
 ) -> Result<CredentialRecord, Damage> {
     let bytes = read_state_file(lock, fs, &StateFileName::record(&id), MAX_RECORD_FILE_LEN).map_err(read_damage)?;
-    let payload = open(identity, &bytes, MAX_RECORD_PLAINTEXT).map_err(|e| Damage::new(RecordDamage::Unreadable, e))?;
-    let record = decode(&payload).map_err(|e| Damage::new(RecordDamage::Unreadable, e))?;
     if record_digest(&bytes) != *entry.file_digest() {
         return Err(Damage::new(RecordDamage::Substituted, "the file's digest differs from its manifest entry"));
     }
+    let payload = open(identity, &bytes, MAX_RECORD_PLAINTEXT)
+        .map_err(|e| Damage::new(RecordDamage::Unreadable, format_args!("the file matches its digest but does not decrypt: {e}")))?;
+    let record = decode(&payload)
+        .map_err(|e| Damage::new(RecordDamage::Unreadable, format_args!("the file matches its digest but does not decode: {e}")))?;
     match record.id() == id && record.name() == entry.name() {
         true => Ok(record),
         false => Err(Damage::new(RecordDamage::Substituted, format_args!("the file holds record {} named {}", record.id(), record.name()))),
