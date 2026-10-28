@@ -15,9 +15,12 @@ anyhow = "1"
 base64 = "0.23.1"
 # zeroize clears hasher state on drop, so the manifest key does not outlive its use; alloc is not needed.
 blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
-# Approval signature verification with verify_strict, which needs no optional feature; std, fast tables, zeroize and
-# key generation stay off because the service only verifies here and tests sign from fixed seeds.
-ed25519-dalek = { version = "2.2.0", default-features = false }
+# Approval signing and verification. zeroize clears the software signer's private key and its expanded form on drop;
+# std, fast tables and rand_core stay off: verify_strict needs no feature, and key generation fills the seed from
+# getrandom directly.
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["zeroize"] }
+# The operating system's random source for the software signer's private key; the same version uuid already uses.
+getrandom = { version = "0.4.3", default-features = false }
 proptest = { version = "1.12", default-features = false, features = ["std"] }
 # Safe syscall wrappers for process hardening in the binary: rlimits and prctl (process) and mlockall (mm) only.
 rustix = { version = "1.1.6", default-features = false, features = ["std", "process", "mm"] }

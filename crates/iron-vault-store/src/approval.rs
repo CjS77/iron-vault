@@ -6,9 +6,12 @@
 //! `design/storage-formats.md`.
 //!
 //! The approval state, which pins the approver and holds the version counters, is in [`state`]; checking an approval
-//! against it is in [`verify`].
+//! against it is in [`verify`]. The signer that produces approvals is [`signer`], with the software signer in
+//! [`software_signer`].
 
 mod encoding;
+mod signer;
+mod software_signer;
 mod state;
 mod verify;
 
@@ -21,6 +24,10 @@ use thiserror::Error;
 
 use crate::vault_id::{VaultId, VaultIdError};
 
+pub use signer::{ApprovalSigner, SignError};
+pub use software_signer::{
+    ApprovalPassphrase, SoftwareSigner, SoftwareSignerKey, open_signer_key, read_signer_key, seal_signer_key, write_signer_key,
+};
 pub use state::{ApprovalState, ApprovalStateError, MAX_APPROVAL_STATE_LEN, PinnedApprover, open_approval_state, seal_approval_state};
 pub use verify::{VerifiedApproval, VerifyError, verify_approval};
 

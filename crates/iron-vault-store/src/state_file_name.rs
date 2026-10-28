@@ -64,6 +64,11 @@ impl StateFileName {
         Self("approval.age".to_owned())
     }
 
+    /// The approver key envelope's file, `approver.age`.
+    pub fn approver_key() -> Self {
+        Self("approver.age".to_owned())
+    }
+
     /// The file of the credential record with ID `id`: `record-<id>.age`. A record ID's text uses only `[0-9a-f-]`, so
     /// the name always passes [`StateFileName::new`].
     pub fn record(id: &RecordId) -> Self {
