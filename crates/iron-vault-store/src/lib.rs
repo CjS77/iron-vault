@@ -13,6 +13,7 @@ mod passphrase;
 mod permitted_origins;
 mod recipient;
 mod record;
+mod recovery;
 mod record_id;
 mod sealed;
 mod stale_temps;
@@ -46,6 +47,7 @@ pub use permitted_origins::{PermittedOrigins, PermittedOriginsError};
 pub use recipient::{
     MAX_RECIPIENTS, ParseRecipientIdentityError, ParseRecipientKeyError, RecipientIdentity, RecipientKey, RecipientSet, RecipientSetError,
 };
+pub use recovery::{RecoveryError, RecoveryKey, RecoveryKeySecret};
 pub use record::{CredentialRecord, RecordError, Source, decode, encode};
 pub use record_id::{RecordId, RecordIdError};
 pub use sealed::{OpenError, SealError, open, seal};

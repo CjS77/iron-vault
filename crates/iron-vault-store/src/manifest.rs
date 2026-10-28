@@ -36,7 +36,7 @@ const FILE_MAGIC: [u8; 4] = *b"IVMF";
 /// The manifest file version this code writes and the only one it reads; it fixes the MAC construction.
 const FILE_VERSION: u8 = 1;
 /// Magic, version and vault ID, in clear and covered by the MAC.
-const HEADER_LEN: usize = FILE_MAGIC.len() + 1 + 16;
+pub(crate) const HEADER_LEN: usize = FILE_MAGIC.len() + 1 + 16;
 /// The length of the trailing MAC.
 const MAC_LEN: usize = 32;
 /// Prefixed to the MAC input so a MAC under the manifest key can never be mistaken for one over other data.

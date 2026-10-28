@@ -183,7 +183,7 @@ fn reseal_at(envelope: &[u8], old: &Passphrase, new: &Passphrase, log_n: u8) -> 
 }
 
 /// [`seal_passphrase_envelope`] at work factor `log_n`, which must be in `1..64`.
-fn seal_at(identity: &RecipientIdentity, passphrase: &Passphrase, log_n: u8) -> Result<Vec<u8>, EnvelopeError> {
+pub(crate) fn seal_at(identity: &RecipientIdentity, passphrase: &Passphrase, log_n: u8) -> Result<Vec<u8>, EnvelopeError> {
     let mut recipient = scrypt::Recipient::new(passphrase.for_age());
     recipient.set_work_factor(log_n);
     let secret = identity.secret_text();
