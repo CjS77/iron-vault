@@ -17,6 +17,7 @@ use thiserror::Error;
 use url::{Position, Url};
 
 use crate::authorization::AuthorizedRequest;
+use crate::bound_credential::BoundCredential;
 use crate::host::Host;
 use crate::method::Method;
 use crate::outgoing_headers::OutgoingHeaders;
@@ -87,11 +88,12 @@ pub enum FinalCheckError {
     CredentialOutsideSlot,
 }
 
-/// Checks `request` against the plan it was built for, the selected route's `upstream` and `slot`, the slot `value`
-/// the route's credential produced, and the origins its credential record `permitted`, immediately before sending
+/// Checks `request` against the plan it was built for, the selected route's `upstream` and `slot`, and the route's
+/// `credential`: the slot value it produced and the origins its credential record permits, immediately before sending
 /// (§3.6).
 ///
-/// `value` is borrowed and rendered here with the assembler's own functions, so the expected wire form cannot drift
+/// The value and origins arrive as one [`BoundCredential`], so both come from the same record. The value is borrowed
+/// and rendered here with the assembler's own functions, so the expected wire form cannot drift
 /// from what filling wrote; the rendered copies are wiped on drop. None of the arguments is trusted to belong to the
 /// others: each rule reads the request's own URL and headers and compares them with every source that constrains them.
 /// The URL's host must equal the upstream's canonical [`Host`] exactly, never by suffix. On failure the request is
@@ -101,16 +103,15 @@ pub fn final_check(
     authorized: &AuthorizedRequest,
     upstream: &UpstreamUrl,
     slot: &Slot,
-    value: &SlotValue,
-    permitted: &BTreeSet<(Host, Port)>,
+    credential: &BoundCredential<'_>,
 ) -> Result<CheckedRequest, FinalCheckError> {
     let (method, url, headers) = request.into_parts();
     check_form(&url)?;
-    let host = check_origin(&url, upstream, permitted)?;
+    let host = check_origin(&url, upstream, credential.permitted())?;
     check_path(&url, authorized, upstream)?;
     require(method == authorized.method(), FinalCheckError::Method)?;
     check_headers(&headers)?;
-    check_slot(&url, &headers, slot, value)?;
+    check_slot(&url, &headers, slot, credential.value())?;
     Ok(CheckedRequest {
         method,
         url,

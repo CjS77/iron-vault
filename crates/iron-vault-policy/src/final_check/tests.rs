@@ -127,8 +127,7 @@ impl Case {
             &self.authorized,
             &self.upstream,
             &self.slot,
-            &self.value,
-            &self.permitted,
+            &BoundCredential::new(&self.value, &self.permitted),
         )
     }
 }

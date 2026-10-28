@@ -20,8 +20,8 @@ use std::collections::BTreeSet;
 
 use common::{POLICY, QUERIES, config, fragment, join_path, prefix, route_origins, sample};
 use iron_vault_policy::{
-    AuthorizedRequest, CheckedRequest, FinalCheckError, HeaderName, HeaderValue, Host, Method, OutgoingRequest, Port, RequestTarget,
-    RouteConfig, RouteName, Slot, SlotValue, UpstreamTarget, authorize, final_check, sanitize,
+    AuthorizedRequest, BoundCredential, CheckedRequest, FinalCheckError, HeaderName, HeaderValue, Host, Method, OutgoingRequest, Port,
+    RequestTarget, RouteConfig, RouteName, Slot, SlotValue, UpstreamTarget, authorize, final_check, sanitize,
 };
 use proptest::bool::weighted;
 use proptest::collection::vec;
@@ -257,7 +257,13 @@ fn run(
     let filler = POLICY.route(slot_route)?;
     let value = SlotValue::new(SecretString::from(secret)).ok()?;
     let request = OutgoingRequest::assemble(&authorized, target, outgoing, filler.slot(), filler.credential(), &value).ok()?;
-    let checked = final_check(request, &authorized, route.upstream(), route.slot(), &value, permitted);
+    let checked = final_check(
+        request,
+        &authorized,
+        route.upstream(),
+        route.slot(),
+        &BoundCredential::new(&value, permitted),
+    );
     let (own_upstream, own_slot) = (upstream_route == selected, slot_route == selected);
     Some(Run {
         authorized,

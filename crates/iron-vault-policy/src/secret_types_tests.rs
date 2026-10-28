@@ -13,8 +13,9 @@ use static_assertions::assert_not_impl_any;
 use crate::activation::{ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
 use crate::spec_example::SPEC_EXAMPLE;
 use crate::{
-    AuthorizedRequest, CheckedRequest, CredentialKind, CredentialName, HeaderName, HeaderValue, Host, Method, OutgoingHeaders,
-    OutgoingRequest, ParsedConfig, Port, RequestTarget, Slot, SlotValue, UpstreamTarget, ValidatedConfig, authorize, final_check,
+    AuthorizedRequest, BoundCredential, CheckedRequest, CredentialKind, CredentialName, HeaderName, HeaderValue, Host, Method,
+    OutgoingHeaders, OutgoingRequest, ParsedConfig, Port, RequestTarget, Slot, SlotValue, UpstreamTarget, ValidatedConfig, authorize,
+    final_check,
 };
 
 assert_not_impl_any!(SlotValue: Clone, Copy, Display, Serialize, Deserialize<'static>);
@@ -131,8 +132,7 @@ impl Pipeline {
             &self.authorized,
             route.upstream(),
             self.slot(),
-            &value,
-            &origins(route.credential()),
+            &BoundCredential::new(&value, &origins(route.credential())),
         )
         .unwrap()
     }
