@@ -2,6 +2,8 @@
 //! recovery, and connector storage.
 
 mod durable;
+#[cfg(test)]
+mod durable_faults;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fault_fs;
 mod manifest;
