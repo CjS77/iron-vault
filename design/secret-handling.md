@@ -1,0 +1,70 @@
+# Secret handling in memory
+
+Spec §3.11 requires the service to hold secret values in types that suppress debugging and clear their buffers on
+release, to minimize copies, and to clear cached values on lock or replacement. This document lists every type that
+holds secret bytes, how each one is cleared, and the copies the code knows about but cannot yet avoid.
+
+A **secret-bearing type** is any type whose value contains provider credential bytes, a caller token, a private key or
+a passphrase, directly or through a field.
+
+## Rules
+
+Every secret-bearing type:
+
+- has a `Debug` that shows no secret byte, in both `{:?}` and `{:#?}`;
+- has no `Display`, `Copy`, `Clone`, `serde::Serialize` or `serde::Deserialize`, unless the table below says why;
+- clears its bytes when dropped, through `secrecy`, `zeroize` or a field type that does.
+
+Each crate's `secret_types_tests` module enforces the trait rule at compile time with `static_assertions`, and checks
+the `Debug` rule with a marker secret. Adding a type to this table means adding it to that module.
+
+## Inventory
+
+| Type | Crate | Holds | Cleared by | Allowed trait | Debug check |
+|---|---|---|---|---|---|
+| `SlotValue` | policy | the credential text for a slot | `SecretString` | none | `secret_types_tests` |
+| `HeaderValue` | policy | an outgoing header value, possibly the filled slot or a caller token | its own `Drop`, `zeroize` | `Clone`: a clone is a second buffer with the same `Drop` | `secret_types_tests` |
+| `OutgoingHeaders` | policy | `HeaderValue`s | each `HeaderValue` | `Clone`, through `HeaderValue` | `secret_types_tests` |
+| `UpstreamTarget` | policy | the upstream URL, whose query may hold a filled query slot | not cleared: see residual copies | `Clone` | `upstream_target` tests |
+| `OutgoingRequest` | policy | an `UpstreamTarget` and `OutgoingHeaders` | its fields | none | `outgoing_request` tests |
+| `CheckedRequest` | policy | the final URL and `OutgoingHeaders` | headers by `HeaderValue`; URL not cleared | none | `final_check` tests |
+| `CredentialMaterial` | kinds | a static key, or a username and password | `SecretString` per field | none | `secret_types_tests` |
+| `ScrubPatterns` | kinds | every encoded form of the injected secret | `Zeroizing<Vec<u8>>` per pattern | none | `secret_types_tests` |
+| `Resolution` | kinds | a `SlotValue` and its `ScrubPatterns` | its fields | none | `secret_types_tests` |
+| `VaultIdentity` | store | the vault's X25519 private key | `age::x25519::Identity`, which zeroizes on drop | none | `secret_types_tests` |
+| `RecipientIdentity` | store | a recipient's X25519 private key: operational or recovery | `age::x25519::Identity` | none | `secret_types_tests` |
+| `RecoveryKeySecret` | store | the recovery key's `AGE-SECRET-KEY-1…` text | `SecretString` | none | `secret_types_tests` |
+| `Passphrase` | store | the owner's passphrase | `SecretString` | none | `secret_types_tests` |
+| `CredentialRecord` | store | a `CredentialMaterial` | its material | none | `secret_types_tests` |
+| `Vault` | store | the `VaultIdentity` and every healthy `CredentialRecord` | its fields | none | `secret_types_tests` |
+
+`ScrubPatterns` stores each pattern in a private `ScrubPattern` newtype, which has no `Clone`, `Display` or `Debug`.
+It is private to its module, so the test module cannot name it; it is covered through `ScrubPatterns`.
+
+`OperationalIdentity` holds nothing: it only generates a `RecipientIdentity`.
+
+**Still to add:** the approval signer key (K-44) is secret-bearing and joins this table, with its assertions and
+`Debug` check, when it lands.
+
+### Transient buffers
+
+Functions that build or read secret bytes return them in `Zeroizing` buffers sized before they are filled, so they
+never reallocate and leave a stale copy: `sealed::open`, `record::encode`, the Basic kind's `user:pass` join, the
+filled query in `outgoing_request`, and the query encoding in `final_check`.
+
+## Clearing a vault
+
+`Vault` owns its identity and records by value. The store's production code uses no `Rc`, `Arc`, `OnceLock`,
+`LazyLock`, `OnceCell`, `thread_local!` or `static mut`, so no other owner can keep a copy alive after the `Vault` is
+dropped. `secret_types_tests` checks this by scanning the store's sources, and asserts `Vault: Send + Sync`, which
+`Rc` would break. The lock state machine that decides when to drop it is EP-23.
+
+## Known residual copies
+
+| Copy | Why it is accepted, or what removes it |
+|---|---|
+| `age`'s `StreamWriter` keeps its last 64 KiB plaintext chunk in a buffer it does not wipe (K-33 review). | `age` owns the buffer. Locked memory (K-45) keeps it out of swap. |
+| `age`'s `StreamReader` likewise keeps the last decrypted chunk unwiped while `sealed::open` reads a record, manifest or envelope. | As above; the plaintext itself goes into a `Zeroizing` buffer. |
+| `age`'s scrypt recipient and identity take a `SecretString` copy of the passphrase (`Passphrase::for_age`), and derive the wrapping key inside `age`. | The copy is a `SecretString` and is wiped; `age`'s internal key derivation is not audited here. Locked memory (K-45) keeps it out of swap. |
+| The `url::Url` inside `UpstreamTarget` and `CheckedRequest` holds a filled query slot and is never wiped, because `Url` owns its buffer. | The transport epic wipes or avoids it when the request is sent (`TODO(transport epic)` in `outgoing_request.rs`). |
+| `HeaderValue`, `OutgoingHeaders` and `UpstreamTarget` derive `Clone`. No production code clones them today. | A cloned `HeaderValue` is wiped on its own drop; a cloned `UpstreamTarget` is not (row above). Removing the derives is a follow-up decision, not part of this inventory. |
