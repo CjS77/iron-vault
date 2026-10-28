@@ -32,6 +32,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Confirmation      | A route's owner-confirmation policy: `none` (the default) or `touch`, which v0 parses but refuses to activate. | `iron-vault-policy` | `Confirmation` | §2, §3.3, §5.1 |
 | Credential        | A named provider secret and the rules that govern its use.                                                                  | `iron-vault-kinds`  |           | §1.3 |
 | Credential catalog | The service's view of the vault for activation: per credential name, unknown, unusable (damaged or needing login), or usable with its permitted host and port pairs. | `iron-vault-policy` | `CredentialCatalog`, `CatalogEntry` | §3.3, §3.9 |
+| Credential material | The decrypted secret fields of one credential record, in the shape its kind consumes; the store maps a record into it, and a kind never reads records itself. | `iron-vault-kinds` | `CredentialMaterial` | §3.3, §5.2 |
 | Credential record | The encrypted record containing a credential's secret, kind, permitted origins, and provider settings.                      | `iron-vault-store`  |           | §1.3 |
 | Hardware key      | A removable device, initially a YubiKey, that protects keys and supports PIN and touch policies.                            | `iron-vault-store`  |           | §1.3 |
 | Header value      | The bytes of one HTTP field value; never contains CR, LF or NUL, may contain obs-text, and is never rendered in logs or errors. | `iron-vault-policy` | `HeaderValue` | §3.6 |
@@ -54,6 +55,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Reserved header   | A caller-authentication or transport-control header that is stripped before forwarding and can never be a slot.         | `iron-vault-policy` | `reserved_headers` | §3.6 |
 | Route             | A caller grant and upstream mapping that selects one credential, its slot, and usage restrictions.                          | `iron-vault-policy` | `RouteName`, `RouteConfig` | §1.3, §3.3 |
 | Route prefix      | The literal leading request-path segments, such as `/fx`, that select a route; never `/` alone and never a wildcard.        | `iron-vault-policy` | `RoutePrefix` | §3.3, §3.6 |
+| Scrub patterns    | Every byte form of the secret a kind injected that response scrubbing watches for: the exact value, its URL-encoded forms in both hex cases, and its base64 encodings; never case-folded. | `iron-vault-kinds` | `ScrubPatterns` | §3.8 |
 | Slot              | The route's permitted credential location: a named header, a named query parameter, or Basic authorization.                 | `iron-vault-policy` | `Slot` | §1.3, §3.3 |
 | Slot format       | The fixed text around a header slot's credential, with exactly one `{}` substitution point, such as `Bearer {}`.          | `iron-vault-policy` | `SlotFormat` | §3.6 |
 | Slot value        | The credential text a kind produces for the route's slot, before the slot's format or encoding is applied. | `iron-vault-policy` | `SlotValue` | §3.6, §3.11, §5.2 |
