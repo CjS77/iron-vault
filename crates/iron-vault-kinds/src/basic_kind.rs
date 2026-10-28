@@ -49,7 +49,8 @@ pub(crate) fn resolve(
     Ok(Resolution::new(value, patterns))
 }
 
-fn validate(username: &str, password: &str) -> Result<(), BasicCredentialError> {
+/// Checks a username and password against RFC 7617 §2 without building a token.
+pub(crate) fn validate(username: &str, password: &str) -> Result<(), BasicCredentialError> {
     if username.is_empty() {
         Err(BasicCredentialError::EmptyUsername)
     } else if username.contains(':') {

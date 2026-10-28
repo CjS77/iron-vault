@@ -28,13 +28,18 @@ pub enum SlotValueError {
 impl SlotValue {
     /// Accepts `secret` if it is non-empty and free of control characters, so it is safe to place in a header.
     pub fn new(secret: SecretString) -> Result<Self, SlotValueError> {
-        let text = secret.expose_secret();
+        Self::validate(secret.expose_secret()).map(|()| Self(secret))
+    }
+
+    /// Checks `text` against the slot-value rules without taking ownership, so a stored secret can be validated where
+    /// it lies instead of being copied into a new [`SecretString`] first.
+    pub fn validate(text: &str) -> Result<(), SlotValueError> {
         if text.is_empty() {
             Err(SlotValueError::Empty)
         } else if text.chars().any(char::is_control) {
             Err(SlotValueError::ControlChar)
         } else {
-            Ok(Self(secret))
+            Ok(())
         }
     }
 }
