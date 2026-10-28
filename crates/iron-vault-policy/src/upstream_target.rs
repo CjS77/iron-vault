@@ -5,8 +5,10 @@
 //! see. The `url` crate rewrites some input silently, so every built URL is read back and compared with what was
 //! authorized; a mismatch is a construction error rather than a request to a different path.
 
+use std::fmt;
+
 use thiserror::Error;
-use url::Url;
+use url::{Position, Url};
 
 use crate::authorization::AuthorizedRequest;
 use crate::upstream::UpstreamUrl;
@@ -16,7 +18,10 @@ use crate::upstream::UpstreamUrl;
 ///
 /// Only [`UpstreamTarget::build`] creates one, and nothing changes its scheme, host or port afterwards, so the URL always
 /// has the upstream's origin and the authorized path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` omits the query: after a query slot is filled it holds the credential, and before that it may hold caller
+/// secrets.
+#[derive(Clone, PartialEq, Eq)]
 pub struct UpstreamTarget {
     url: Url,
 }
@@ -65,6 +70,23 @@ impl UpstreamTarget {
     /// The query without its leading `?`, for the query slot filler to rebuild; `None` when there is no query.
     pub fn query(&self) -> Option<&str> {
         self.url.query()
+    }
+
+    /// The same target with its query replaced by `query`, read back to confirm the URL holds exactly that text.
+    ///
+    /// Crate-private so that only slot filling, which keeps every caller parameter but the slot's, rewrites a query.
+    pub(crate) fn with_query(mut self, query: &str) -> Result<Self, UpstreamTargetError> {
+        self.url.set_query(Some(query));
+        (self.url.query() == Some(query)).then_some(self).ok_or(UpstreamTargetError::Query)
+    }
+}
+
+impl fmt::Debug for UpstreamTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UpstreamTarget")
+            .field("url", &&self.url[..Position::AfterPath])
+            .field("query", &self.url.query().map(|_| "<redacted>"))
+            .finish()
     }
 }
 
@@ -225,6 +247,27 @@ mod tests {
         assert_eq!(check_query(&changed, &request), Err(UpstreamTargetError::Query));
         let dropped = Url::parse("https://api.fx.example/latest").unwrap();
         assert_eq!(check_query(&dropped, &request), Err(UpstreamTargetError::Query));
+    }
+
+    #[test]
+    fn with_query_replaces_the_query_and_keeps_the_rest() {
+        let target = build_in(&open_example(), Method::Get, "/fx/latest?a=1");
+        let replaced = target.with_query("a=1&access_key=k%20v").unwrap();
+        assert_eq!(replaced.as_url().as_str(), "https://api.fx.example/latest?a=1&access_key=k%20v");
+    }
+
+    #[test]
+    fn with_query_refuses_text_the_url_rewrites() {
+        let target = build_in(&open_example(), Method::Get, "/fx/latest");
+        assert_eq!(target.with_query("k=a b#c"), Err(UpstreamTargetError::Query));
+    }
+
+    #[test]
+    fn debug_omits_the_query() {
+        let target = build_in(&open_example(), Method::Get, "/fx/latest?access_key=SECRET");
+        let debug = format!("{target:?}");
+        assert!(!debug.contains("SECRET"), "{debug}");
+        assert!(debug.contains("https://api.fx.example/latest") && debug.contains("<redacted>"), "{debug}");
     }
 
     #[test]

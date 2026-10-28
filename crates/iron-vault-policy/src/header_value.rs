@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use secrecy::zeroize::Zeroize;
 use thiserror::Error;
 
 /// The bytes of one HTTP field value.
@@ -12,7 +13,8 @@ use thiserror::Error;
 /// clean `400` instead of a transport error when the request is sent. Bytes from 0x80 upwards (`obs-text`) are kept:
 /// callers may legitimately send them, and the value is forwarded as bytes, never decoded as text.
 ///
-/// Values can carry caller tokens or credentials, so `Debug` shows only the length and there is no `Display`.
+/// Values can carry caller tokens or credentials, so `Debug` shows only the length, there is no `Display`, and the
+/// bytes are wiped when the value is dropped (spec §3.11). A clone is a second copy that is wiped on its own drop.
 #[derive(Clone, PartialEq, Eq)]
 pub struct HeaderValue(Vec<u8>);
 
@@ -83,6 +85,12 @@ impl TryFrom<&str> for HeaderValue {
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         Self::try_from(s.as_bytes())
+    }
+}
+
+impl Drop for HeaderValue {
+    fn drop(&mut self) {
+        self.0.zeroize();
     }
 }
 
