@@ -14,6 +14,7 @@ use std::{fmt, iter};
 use age::{DecryptError, Decryptor, Encryptor, scrypt};
 use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::{
     EnvelopeError, StateDirLock, StateFileName, StoreFs,
@@ -39,11 +40,11 @@ pub const PASSPHRASE_WORK_FACTOR: u8 = 18;
 /// scrypt run: a higher factor is refused from the header, before any scrypt work.
 pub const MAX_PASSPHRASE_WORK_FACTOR: u8 = 20;
 
-/// The largest passphrase envelope the store reads.
+/// The largest passphrase envelope, and the largest approver key envelope, the store reads.
 ///
-/// The envelope is about 256 bytes: the 22-byte version line, a 36-byte scrypt stanza line and its 44-byte body, the
-/// 48-byte MAC line, and a 106-byte payload (16-byte nonce, 74-byte secret text, 16-byte tag). 1 KiB bounds what a
-/// planted file can make unlock read.
+/// The passphrase envelope is about 256 bytes: the 22-byte version line, a 36-byte scrypt stanza line and its 44-byte
+/// body, the 48-byte MAC line, and a 106-byte payload (16-byte nonce, 74-byte secret text, 16-byte tag). The approver
+/// key envelope has a 64-byte payload instead, 214 bytes in all. 1 KiB bounds what a planted file can make an open read.
 pub const MAX_PASSPHRASE_ENVELOPE_LEN: usize = 1024;
 
 /// The length of the envelope's plaintext: the `AGE-SECRET-KEY-1…` text of an X25519 identity.
@@ -117,16 +118,7 @@ pub fn seal_passphrase_envelope(identity: &RecipientIdentity, passphrase: &Passp
 /// stanza, then that its work factor is at most [`MAX_PASSPHRASE_WORK_FACTOR`]. Only then does scrypt run. A wrong
 /// passphrase is [`EnvelopeError::WrongPassphrase`] and nothing more.
 pub fn open_passphrase_envelope(envelope: &[u8], passphrase: &Passphrase) -> Result<RecipientIdentity, EnvelopeError> {
-    if envelope.len() > MAX_PASSPHRASE_ENVELOPE_LEN {
-        return Err(EnvelopeError::TooLarge);
-    }
-    check_header(envelope)?;
-    let mut identity = scrypt::Identity::new(passphrase.for_age());
-    // Belt and braces: `age` enforces the same bound if the header check above were ever loosened.
-    identity.set_max_work_factor(MAX_PASSPHRASE_WORK_FACTOR);
-    let decryptor = Decryptor::new_buffered(envelope).map_err(map_decrypt_error)?;
-    let reader = decryptor.decrypt(iter::once(&identity as &dyn age::Identity)).map_err(map_decrypt_error)?;
-    let secret = read_bounded(reader, SECRET_TEXT_LEN, envelope.len()).map_err(|_| EnvelopeError::Malformed)?;
+    let secret = open_scrypt_file(envelope, passphrase.for_age(), SECRET_TEXT_LEN)?;
     RecipientIdentity::from_secret_text(&secret).ok_or(EnvelopeError::Malformed)
 }
 
@@ -184,13 +176,40 @@ fn reseal_at(envelope: &[u8], old: &Passphrase, new: &Passphrase, log_n: u8) -> 
 
 /// [`seal_passphrase_envelope`] at work factor `log_n`, which must be in `1..64`.
 pub(crate) fn seal_at(identity: &RecipientIdentity, passphrase: &Passphrase, log_n: u8) -> Result<Vec<u8>, EnvelopeError> {
-    let mut recipient = scrypt::Recipient::new(passphrase.for_age());
+    seal_scrypt_file(identity.secret_text().expose_secret().as_bytes(), passphrase.for_age(), log_n)
+}
+
+/// Encrypts `secret` as an `age` file with one scrypt stanza for `passphrase` at work factor `log_n`, which must be in
+/// `1..64`; the shared sealing path of every passphrase-protected state file.
+pub(crate) fn seal_scrypt_file(secret: &[u8], passphrase: SecretString, log_n: u8) -> Result<Vec<u8>, EnvelopeError> {
+    let mut recipient = scrypt::Recipient::new(passphrase);
     recipient.set_work_factor(log_n);
-    let secret = identity.secret_text();
     let encryptor = Encryptor::with_recipients(iter::once(&recipient as &dyn age::Recipient)).map_err(|_| EnvelopeError::Encryption)?;
     let mut writer = encryptor.wrap_output(Vec::with_capacity(MAX_PASSPHRASE_ENVELOPE_LEN)).map_err(|_| EnvelopeError::Encryption)?;
-    std::io::Write::write_all(&mut writer, secret.expose_secret().as_bytes()).map_err(|_| EnvelopeError::Encryption)?;
+    std::io::Write::write_all(&mut writer, secret).map_err(|_| EnvelopeError::Encryption)?;
     writer.finish().map_err(|_| EnvelopeError::Encryption)
+}
+
+/// Decrypts an `age` file with exactly one scrypt stanza, returning at most `max_plaintext` bytes in a buffer cleared
+/// on drop; the shared opening path of every passphrase-protected state file.
+///
+/// Every check that needs no passphrase runs first: the size bound, then that the header holds exactly one scrypt
+/// stanza, then that its work factor is at most [`MAX_PASSPHRASE_WORK_FACTOR`]. Only then does scrypt run.
+pub(crate) fn open_scrypt_file(
+    envelope: &[u8],
+    passphrase: SecretString,
+    max_plaintext: usize,
+) -> Result<Zeroizing<Vec<u8>>, EnvelopeError> {
+    if envelope.len() > MAX_PASSPHRASE_ENVELOPE_LEN {
+        return Err(EnvelopeError::TooLarge);
+    }
+    check_header(envelope)?;
+    let mut identity = scrypt::Identity::new(passphrase);
+    // Belt and braces: `age` enforces the same bound if the header check above were ever loosened.
+    identity.set_max_work_factor(MAX_PASSPHRASE_WORK_FACTOR);
+    let decryptor = Decryptor::new_buffered(envelope).map_err(map_decrypt_error)?;
+    let reader = decryptor.decrypt(iter::once(&identity as &dyn age::Identity)).map_err(map_decrypt_error)?;
+    read_bounded(reader, max_plaintext, envelope.len()).map_err(|_| EnvelopeError::Malformed)
 }
 
 /// Refuses, from the header alone, anything but one scrypt stanza at an accepted work factor.
