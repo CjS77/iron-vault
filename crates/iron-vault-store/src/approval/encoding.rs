@@ -63,34 +63,35 @@ pub(super) fn decode_envelope(bytes: &[u8]) -> Result<ApprovalEnvelope, Approval
     ApprovalEnvelope::new(algorithm, payload, signature)
 }
 
-fn header(magic: [u8; 4], version: u8) -> Vec<u8> {
+/// The magic, then the format version: the start of every approval encoding.
+pub(super) fn header(magic: [u8; 4], version: u8) -> Vec<u8> {
     let mut out = magic.to_vec();
     out.push(version);
     out
 }
 
 /// Writes a `u64` length, then the bytes. `usize` is at most 64 bits on every Rust target, so the cast is lossless.
-fn put_field(out: &mut Vec<u8>, bytes: &[u8]) {
+pub(super) fn put_field(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
     out.extend_from_slice(bytes);
 }
 
-/// The unread rest of an encoding.
-struct Reader<'a>(&'a [u8]);
+/// The unread rest of an encoding. The approval state encoding reads with it too, so it is shared within `approval`.
+pub(super) struct Reader<'a>(pub(super) &'a [u8]);
 
 impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], ApprovalDecodeError> {
+    pub(super) fn take(&mut self, n: usize) -> Result<&'a [u8], ApprovalDecodeError> {
         let (head, rest) = self.0.split_at_checked(n).ok_or(ApprovalDecodeError::Truncated)?;
         self.0 = rest;
         Ok(head)
     }
 
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], ApprovalDecodeError> {
+    pub(super) fn array<const N: usize>(&mut self) -> Result<[u8; N], ApprovalDecodeError> {
         self.take(N)?.try_into().map_err(|_| ApprovalDecodeError::Truncated)
     }
 
     /// The magic, then the format version, which must be the one this code reads.
-    fn header(&mut self, magic: [u8; 4], version: u8) -> Result<(), ApprovalDecodeError> {
+    pub(super) fn header(&mut self, magic: [u8; 4], version: u8) -> Result<(), ApprovalDecodeError> {
         if self.array::<4>()? != magic {
             return Err(ApprovalDecodeError::BadMagic);
         }
@@ -101,13 +102,13 @@ impl<'a> Reader<'a> {
     }
 
     /// A length-prefixed field. A length past the bytes left fails before anything is read.
-    fn field(&mut self) -> Result<&'a [u8], ApprovalDecodeError> {
+    pub(super) fn field(&mut self) -> Result<&'a [u8], ApprovalDecodeError> {
         let len = u64::from_be_bytes(self.array()?);
         let len = usize::try_from(len).ok().filter(|len| *len <= self.0.len()).ok_or(ApprovalDecodeError::LengthPastEnd)?;
         self.take(len)
     }
 
-    fn finish(&self) -> Result<(), ApprovalDecodeError> {
+    pub(super) fn finish(&self) -> Result<(), ApprovalDecodeError> {
         match self.0.is_empty() {
             true => Ok(()),
             false => Err(ApprovalDecodeError::TrailingBytes),

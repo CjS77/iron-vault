@@ -59,6 +59,11 @@ impl StateFileName {
         Self("manifest.age".to_owned())
     }
 
+    /// The approval state's file, `approval.age`.
+    pub fn approval_state() -> Self {
+        Self("approval.age".to_owned())
+    }
+
     /// The file of the credential record with ID `id`: `record-<id>.age`. A record ID's text uses only `[0-9a-f-]`, so
     /// the name always passes [`StateFileName::new`].
     pub fn record(id: &RecordId) -> Self {
@@ -134,6 +139,7 @@ mod tests {
         assert_eq!(StateFileName::new("manifest.age"), Ok(StateFileName::manifest()));
         assert_eq!(StateFileName::new("identity.age"), Ok(StateFileName::identity_envelope()));
         assert_eq!(StateFileName::new("operational.age"), Ok(StateFileName::passphrase_envelope()));
+        assert_eq!(StateFileName::new("approval.age"), Ok(StateFileName::approval_state()));
         let id: RecordId = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();
         assert_eq!(StateFileName::record(&id).as_str(), "record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age");
         (0..32).map(|_| StateFileName::record(&RecordId::new_random())).for_each(|name| {

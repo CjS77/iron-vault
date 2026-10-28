@@ -1,0 +1,320 @@
+//! The approval state: the pinned approver and the approval version counters (spec §3.9, §3.10).
+//!
+//! Versioned approval stops an old `config.toml` and `config.toml.sig` pair from becoming valid again only if the
+//! counters never go backwards. The state lives in `approval.age`, sealed to the vault public key and authenticated with
+//! a MAC keyed from the vault identity, so only the service can write one that opens. Every change is one durable replace
+//! of that file, and memory changes only after the replace returns: a version handed out here is already durable, so it
+//! is never handed out twice. The byte layouts are in `design/storage-formats.md`.
+//!
+//! Restoring the whole state directory from an older copy restores older counters too; spec §3.9 leaves protection
+//! against that outside v0.
+
+mod encoding;
+mod file;
+#[cfg(test)]
+mod tests;
+
+use std::io;
+
+use thiserror::Error;
+
+use super::{ApprovalDecodeError, ApprovalVersion, ConfigDigest, SignatureAlgorithm};
+use crate::{
+    OpenError, ReadError, SealError, StateDirLock, StateFileName, StoreFs, VaultId, VaultIdentity, WriteError, WriteStep, durable_replace,
+    read_state_file,
+};
+
+pub use file::{open_approval_state, seal_approval_state};
+
+/// The largest approval state file accepted, in bytes on disk, checked before any other work; also the payload limit.
+///
+/// A payload with an Ed25519 approver is 111 bytes. `age` adds a header of at most about 400 bytes plus a 16-byte nonce
+/// and a 16-byte tag, and the file adds 53 bytes of header and MAC: under 600 bytes in all. The limit leaves room for a
+/// later algorithm with a longer public key while keeping a planted file cheap to refuse.
+pub const MAX_APPROVAL_STATE_LEN: usize = 4096;
+
+/// The algorithm and public key every config approval must verify against (spec §3.9).
+///
+/// It is kept only in the approval state, never read from the config or the signature file. The key's length is
+/// checked against the algorithm on construction; whether the bytes are a valid key is the verifier's check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedApprover {
+    algorithm: SignatureAlgorithm,
+    public_key: Vec<u8>,
+}
+
+impl PinnedApprover {
+    /// The approver with `public_key` for `algorithm`, refusing a key of the wrong length for it.
+    pub fn new(algorithm: SignatureAlgorithm, public_key: Vec<u8>) -> Result<Self, ApprovalStateError> {
+        match algorithm.accepts_public_key_len(public_key.len()) {
+            true => Ok(Self { algorithm, public_key }),
+            false => Err(ApprovalStateError::PublicKeyLength { algorithm, len: public_key.len() }),
+        }
+    }
+
+    /// The algorithm approvals must be signed with.
+    pub fn algorithm(&self) -> SignatureAlgorithm {
+        self.algorithm
+    }
+
+    /// The public key approvals must verify against.
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+}
+
+/// One vault's approval state: the pinned approver, the highest reserved version and the committed approval.
+///
+/// The committed version is never above the highest reserved version, whether the state was built or decoded. The
+/// highest reserved version is 0 only in a state from [`ApprovalState::new_for_vault`], and no operation lowers it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalState {
+    vault_id: VaultId,
+    approver: PinnedApprover,
+    highest_reserved: u64,
+    committed: Option<(ApprovalVersion, ConfigDigest)>,
+}
+
+/// The approval state cannot be built, opened or changed. No variant carries key material or MAC bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ApprovalStateError {
+    /// The file is larger than [`MAX_APPROVAL_STATE_LEN`]; nothing else was read.
+    #[error("approval state exceeds the {limit}-byte limit")]
+    TooLarge {
+        /// The limit that was exceeded.
+        limit: usize,
+    },
+    /// The file header or the payload is not a well-formed v1 encoding.
+    #[error("approval state is malformed: {0}")]
+    Format(#[from] ApprovalDecodeError),
+    /// The MAC does not match: the file was altered, or written by someone without this vault's identity.
+    #[error("approval state failed its integrity check; it is damaged or was not written by this vault, and the vault may need recovery")]
+    Damaged,
+    /// The MAC matched but the ciphertext did not open.
+    #[error("approval state ciphertext cannot be opened: {0}")]
+    Sealed(#[from] OpenError),
+    /// The payload names a different vault from the file header, or the file is for a different vault from the one
+    /// being opened.
+    #[error("approval state belongs to a different vault")]
+    VaultIdMismatch,
+    /// The approver's public key has the wrong length for its algorithm.
+    #[error("{algorithm:?} approver public key is {len} bytes")]
+    PublicKeyLength {
+        /// The approver's algorithm.
+        algorithm: SignatureAlgorithm,
+        /// The key's length.
+        len: usize,
+    },
+    /// The byte saying whether an approval is committed is neither `00` nor `01`.
+    #[error("unknown committed-approval tag {0}")]
+    BadCommittedTag(u8),
+    /// The committed version is above the highest reserved version, which no service write produces.
+    #[error("approval state commits a version that was never reserved")]
+    CommittedNotReserved,
+    /// The highest reserved version is `u64::MAX`: no version is left to reserve, and nothing may be signed.
+    #[error("approval versions are exhausted; no further approval can be signed")]
+    Exhausted,
+    /// `commit` named a version above the highest reserved version.
+    #[error("approval version {version} was never reserved; the highest reserved version is {highest_reserved}")]
+    NotReserved {
+        /// The version the caller tried to commit.
+        version: ApprovalVersion,
+        /// The highest version reserved so far.
+        highest_reserved: u64,
+    },
+    /// `commit` named a version that is not newer than the committed one.
+    #[error("approval version {version} is not newer than the committed version {committed}")]
+    NotNewer {
+        /// The version the caller tried to commit.
+        version: ApprovalVersion,
+        /// The version already committed.
+        committed: ApprovalVersion,
+    },
+    /// `create` found an approval state file already in the state directory; creating would reset its counters.
+    #[error("the approval state already exists; creating it again would reset its version counters")]
+    AlreadyExists,
+    /// The approval state file could not be read, or is over its size limit.
+    #[error(transparent)]
+    Read(ReadError),
+    /// Sealing the new state failed; nothing was written.
+    #[error("cannot seal the approval state: {0}")]
+    Seal(SealError),
+    /// A file step failed before the rename. The state on disk and in memory is unchanged.
+    #[error("the approval state write failed and changed nothing: {0}")]
+    Write(WriteError),
+    /// The new state was renamed into place but the state directory fsync failed, so it may not survive power loss.
+    /// Disk may hold the new state while memory holds the old: reload before using it.
+    #[error("the approval state write may or may not have committed ({0}); reload the approval state to see which")]
+    WriteUncertain(WriteError),
+    /// The state on disk is not the one in memory, or cannot be read: another writer changed it, an earlier write was
+    /// uncertain, or the file is gone or damaged. Nothing was written; reload the approval state.
+    #[error("the approval state on disk differs from the one in memory; reload it before changing it")]
+    ReloadRequired,
+}
+
+impl ApprovalState {
+    /// The state of a newly created vault: `approver` pinned, nothing reserved and nothing committed.
+    pub fn new_for_vault(vault_id: VaultId, approver: PinnedApprover) -> Self {
+        Self { vault_id, approver, highest_reserved: 0, committed: None }
+    }
+
+    /// A state from its parts, refusing a committed version above the highest reserved one.
+    fn from_parts(
+        vault_id: VaultId,
+        approver: PinnedApprover,
+        highest_reserved: u64,
+        committed: Option<(ApprovalVersion, ConfigDigest)>,
+    ) -> Result<Self, ApprovalStateError> {
+        match committed {
+            Some((version, _)) if version.get() > highest_reserved => Err(ApprovalStateError::CommittedNotReserved),
+            _ => Ok(Self { vault_id, approver, highest_reserved, committed }),
+        }
+    }
+
+    /// Writes the state of a newly created vault to `approval.age` and returns it.
+    ///
+    /// Refuses with [`ApprovalStateError::AlreadyExists`] if the file exists, so the counters are never reset. The
+    /// caller has already authorized vault creation; this performs it.
+    pub fn create(
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        identity: &VaultIdentity,
+        vault_id: VaultId,
+        approver: PinnedApprover,
+    ) -> Result<Self, ApprovalStateError> {
+        let state = Self::new_for_vault(vault_id, approver);
+        let bytes = seal_approval_state(identity, &state).map_err(ApprovalStateError::Seal)?;
+        refuse_existing(lock, fs)?;
+        replace_file(lock, fs, &bytes)?;
+        Ok(state)
+    }
+
+    /// Reads `approval.age` and opens it as the approval state of vault `vault_id`.
+    ///
+    /// Any error is damaged shared state (spec §3.10): approvals cannot be checked, so the service must not proxy.
+    pub fn load(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, vault_id: VaultId) -> Result<Self, ApprovalStateError> {
+        // MAX_APPROVAL_STATE_LEN is 4 KiB, so it always fits in a u64.
+        let file = read_state_file(lock, fs, &StateFileName::approval_state(), MAX_APPROVAL_STATE_LEN as u64)
+            .map_err(ApprovalStateError::Read)?;
+        let state = open_approval_state(identity, &file)?;
+        match state.vault_id == vault_id {
+            true => Ok(state),
+            false => Err(ApprovalStateError::VaultIdMismatch),
+        }
+    }
+
+    /// The vault this state belongs to.
+    pub fn vault_id(&self) -> VaultId {
+        self.vault_id
+    }
+
+    /// The approver every config approval must verify against.
+    pub fn approver(&self) -> &PinnedApprover {
+        &self.approver
+    }
+
+    /// The highest version reserved so far; 0 before the first reservation.
+    pub fn highest_reserved(&self) -> u64 {
+        self.highest_reserved
+    }
+
+    /// The committed approval version and config digest, if any approval has been committed.
+    pub fn committed(&self) -> Option<(ApprovalVersion, ConfigDigest)> {
+        self.committed
+    }
+
+    /// Durably reserves the next approval version and returns it, before anything is signed (spec §3.9).
+    ///
+    /// The version is consumed whether or not signing succeeds. At `u64::MAX` this returns
+    /// [`ApprovalStateError::Exhausted`] and touches no file, and the caller must not sign. Only an `Ok` version may
+    /// be signed: any error means the reservation may not be durable.
+    pub fn reserve(
+        &mut self,
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        identity: &VaultIdentity,
+    ) -> Result<ApprovalVersion, ApprovalStateError> {
+        let version = self.highest_reserved.checked_add(1).and_then(ApprovalVersion::new).ok_or(ApprovalStateError::Exhausted)?;
+        self.write(lock, fs, identity, Self { highest_reserved: version.get(), ..self.clone() })?;
+        Ok(version)
+    }
+
+    /// Durably makes `(version, digest)` the committed approval: the commit point of an approval (spec §3.9, step 5).
+    ///
+    /// `version` must be reserved and newer than the committed version; anything else is refused before any file is
+    /// touched. The caller has already checked the signature over this version and digest.
+    pub fn commit(
+        &mut self,
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        identity: &VaultIdentity,
+        version: ApprovalVersion,
+        digest: ConfigDigest,
+    ) -> Result<(), ApprovalStateError> {
+        if version.get() > self.highest_reserved {
+            return Err(ApprovalStateError::NotReserved { version, highest_reserved: self.highest_reserved });
+        }
+        match self.committed {
+            Some((committed, _)) if version <= committed => Err(ApprovalStateError::NotNewer { version, committed }),
+            _ => self.write(lock, fs, identity, Self { committed: Some((version, digest)), ..self.clone() }),
+        }
+    }
+
+    /// Durably pins `approver` in place of the current one, keeping both counters (spec §3.9).
+    ///
+    /// The active signature stops verifying because the key changed, until the owner approves the config again at a
+    /// new version. This performs an already authorized change: the caller checks administrator or existing-owner
+    /// authorization.
+    pub fn replace_approver(
+        &mut self,
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        identity: &VaultIdentity,
+        approver: PinnedApprover,
+    ) -> Result<(), ApprovalStateError> {
+        self.write(lock, fs, identity, Self { approver, ..self.clone() })
+    }
+
+    /// Replaces the file with `next`, then makes `next` the state in memory. The disk check comes first: a stale
+    /// in-memory state would otherwise write lower counters over newer ones.
+    fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, next: Self) -> Result<(), ApprovalStateError> {
+        let bytes = seal_approval_state(identity, &next).map_err(ApprovalStateError::Seal)?;
+        self.ensure_disk_matches(lock, fs, identity)?;
+        replace_file(lock, fs, &bytes)?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Refuses with [`ApprovalStateError::ReloadRequired`] unless the state on disk is exactly this one.
+    fn ensure_disk_matches(&self, lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity) -> Result<(), ApprovalStateError> {
+        match Self::load(lock, fs, identity, self.vault_id) {
+            Ok(on_disk) if on_disk == *self => Ok(()),
+            _ => Err(ApprovalStateError::ReloadRequired),
+        }
+    }
+}
+
+/// Refuses to create the approval state over an existing file, whatever it holds.
+fn refuse_existing(lock: &StateDirLock, fs: &impl StoreFs) -> Result<(), ApprovalStateError> {
+    match read_state_file(lock, fs, &StateFileName::approval_state(), MAX_APPROVAL_STATE_LEN as u64) {
+        Err(ReadError::Io { kind: io::ErrorKind::NotFound, .. }) => Ok(()),
+        Ok(_) | Err(ReadError::TooLarge { .. }) => Err(ApprovalStateError::AlreadyExists),
+        Err(other) => Err(ApprovalStateError::Read(other)),
+    }
+}
+
+/// Durably replaces `approval.age`. A failure at the directory fsync comes after the rename, so the disk may already
+/// hold the new state; that is [`ApprovalStateError::WriteUncertain`], never "unchanged".
+fn replace_file(lock: &StateDirLock, fs: &impl StoreFs, bytes: &[u8]) -> Result<(), ApprovalStateError> {
+    durable_replace(lock, fs, &StateFileName::approval_state(), bytes).map_err(|error| match error {
+        WriteError::Io { step: WriteStep::SyncDir, .. } => {
+            tracing::error!(
+                error = %error,
+                remediation = "reload the approval state: the change took effect only if the reloaded state shows it",
+                "approval state was replaced but the state directory fsync failed; the change may not survive power loss"
+            );
+            ApprovalStateError::WriteUncertain(error)
+        }
+        other => ApprovalStateError::Write(other),
+    })
+}

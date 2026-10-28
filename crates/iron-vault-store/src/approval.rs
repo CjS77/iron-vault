@@ -4,8 +4,11 @@
 //! config cannot be paired with a newer signature and an old approval's version cannot be edited. Software, TPM and
 //! later YubiKey signers all produce the same envelope, so it is verified one way. Both byte layouts are in
 //! `design/storage-formats.md`.
+//!
+//! The approval state, which pins the approver and holds the version counters, is in [`state`].
 
 mod encoding;
+mod state;
 
 use std::fmt;
 use std::num::NonZeroU64;
@@ -15,6 +18,8 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 use crate::vault_id::{VaultId, VaultIdError};
+
+pub use state::{ApprovalState, ApprovalStateError, MAX_APPROVAL_STATE_LEN, PinnedApprover, open_approval_state, seal_approval_state};
 
 /// The largest approval envelope accepted, in bytes, checked before anything else is read.
 ///
@@ -121,6 +126,13 @@ impl SignatureAlgorithm {
     fn accepts_signature_len(self, len: usize) -> bool {
         match self {
             Self::Ed25519 => len == 64,
+        }
+    }
+
+    /// Whether `len` is a valid public key length for this algorithm.
+    fn accepts_public_key_len(self, len: usize) -> bool {
+        match self {
+            Self::Ed25519 => len == 32,
         }
     }
 }
