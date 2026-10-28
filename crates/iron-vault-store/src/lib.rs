@@ -2,15 +2,18 @@
 //! recovery, and connector storage.
 
 mod durable;
+mod envelope;
 #[cfg(test)]
 mod durable_faults;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fault_fs;
 mod manifest;
 mod permitted_origins;
+mod recipient;
 mod record;
 mod record_id;
 mod sealed;
+mod stanza;
 mod stale_temps;
 mod state_dir;
 mod state_file_name;
@@ -22,13 +25,20 @@ mod vault_id;
 mod vault_identity;
 
 pub use durable::{ReadError, WriteError, WriteStep, durable_remove, durable_replace, read_state_file};
+pub use envelope::{
+    EnvelopeError, MAX_IDENTITY_ENVELOPE_LEN, read_identity_envelope, stanza_kinds, unwrap_identity, wrap_identity, write_identity_envelope,
+};
 pub use manifest::{
     MAX_MANIFEST_ENTRIES, MAX_MANIFEST_LEN, ManifestEntry, ManifestError, VaultManifest, open_manifest, record_digest, seal_manifest,
 };
 pub use permitted_origins::{PermittedOrigins, PermittedOriginsError};
+pub use recipient::{
+    MAX_RECIPIENTS, ParseRecipientIdentityError, ParseRecipientKeyError, RecipientIdentity, RecipientKey, RecipientSet, RecipientSetError,
+};
 pub use record::{CredentialRecord, RecordError, Source, decode, encode};
 pub use record_id::{RecordId, RecordIdError};
 pub use sealed::{OpenError, SealError, open, seal};
+pub use stanza::StanzaKind;
 pub use stale_temps::sweep_stale_temps;
 pub use state_dir::{LockError, StateDirLock};
 pub use state_file_name::{StateFileName, StateFileNameError};

@@ -8,7 +8,7 @@ use std::{cmp::Ordering, fmt, hash, str::FromStr};
 
 use age::x25519;
 use blake2::{Blake2b512, Digest, digest::CustomizedInit};
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -43,6 +43,20 @@ impl VaultIdentity {
         let mut key = Zeroizing::new([0; 64]);
         Blake2b512::new_customized(persona).chain_update(secret.expose_secret()).finalize_into((&mut *key).into());
         key
+    }
+
+    /// The identity's `age` secret-key text, `AGE-SECRET-KEY-1…`, in a buffer cleared on drop; the identity envelope's
+    /// plaintext.
+    pub(crate) fn secret_text(&self) -> SecretString {
+        self.secret.to_string()
+    }
+
+    /// The identity whose `age` secret-key text is `text`, or `None` when `text` is not one.
+    ///
+    /// `text` is borrowed from the caller's cleared buffer and parsed in place, so no uncleared copy of it is made here.
+    pub(crate) fn from_secret_text(text: &[u8]) -> Option<Self> {
+        let secret = std::str::from_utf8(text).ok()?.parse().ok()?;
+        Some(Self { secret })
     }
 
     /// The identity a literal `AGE-SECRET-KEY-1…` string encodes, so tests can pin derived keys to known answers.

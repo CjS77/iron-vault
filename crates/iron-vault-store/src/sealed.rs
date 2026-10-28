@@ -8,22 +8,14 @@ use std::{
     iter,
 };
 
-use age::{DecryptError, Decryptor, Encryptor};
+use age::{DecryptError, Decryptor, Encryptor, x25519};
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-use crate::vault_identity::{VaultIdentity, VaultPublicKey};
-
-/// The first header line of every `age` v1 file.
-const VERSION_LINE: &[u8] = b"age-encryption.org/v1";
-/// The start of a recipient stanza line in an `age` header.
-const STANZA_PREFIX: &[u8] = b"-> ";
-/// The start of the header's closing MAC line; neither a stanza line nor a base64 body line can begin this way.
-const MAC_PREFIX: &[u8] = b"---";
-/// The tag of the stanzas the vault identity unwraps.
-const X25519_TAG: &[u8] = b"X25519";
-/// The tag suffix of the random "grease" stanza `age` adds to every file it writes; nothing ever unwraps it.
-const GREASE_SUFFIX: &[u8] = b"-grease";
+use crate::{
+    stanza::parse_header,
+    vault_identity::{VaultIdentity, VaultPublicKey},
+};
 
 /// Sealing failed. The cause is not carried: it could only come from `age`, whose text is not passed through.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -55,7 +47,14 @@ pub enum OpenError {
 
 /// Encrypts `plaintext` to `key` as binary (unarmored) `age` output.
 pub fn seal(key: &VaultPublicKey, plaintext: &[u8]) -> Result<Vec<u8>, SealError> {
-    let encryptor = Encryptor::with_recipients(iter::once(key.as_age() as &dyn age::Recipient)).map_err(|_| SealError::Encryption)?;
+    seal_to(iter::once(key.as_age()), plaintext)
+}
+
+/// Encrypts `plaintext` as binary `age` output with one X25519 stanza per key in `keys`.
+///
+/// Taking only X25519 recipients means no caller can put a passphrase stanza beside them (specification §3.11).
+pub(crate) fn seal_to<'a>(keys: impl Iterator<Item = &'a x25519::Recipient>, plaintext: &[u8]) -> Result<Vec<u8>, SealError> {
+    let encryptor = Encryptor::with_recipients(keys.map(|key| key as &dyn age::Recipient)).map_err(|_| SealError::Encryption)?;
     let mut writer = encryptor.wrap_output(Vec::with_capacity(plaintext.len())).map_err(|_| SealError::Encryption)?;
     writer.write_all(plaintext).map_err(|_| SealError::Encryption)?;
     writer.finish().map_err(|_| SealError::Encryption)
@@ -67,48 +66,28 @@ pub fn seal(key: &VaultPublicKey, plaintext: &[u8]) -> Result<Vec<u8>, SealError
 /// [`OpenError::UnexpectedStanza`], so a planted passphrase file cannot start an scrypt run on the record path. Only
 /// the X25519 identity is ever offered to `age`, so even a header this check missed could not run scrypt or a plugin.
 pub fn open(identity: &VaultIdentity, ciphertext: &[u8], max_plaintext: usize) -> Result<Zeroizing<Vec<u8>>, OpenError> {
+    open_as(identity.as_age(), ciphertext, max_plaintext)
+}
+
+/// [`open`] with any X25519 identity, under the same header check and plaintext bound.
+pub(crate) fn open_as(identity: &x25519::Identity, ciphertext: &[u8], max_plaintext: usize) -> Result<Zeroizing<Vec<u8>>, OpenError> {
     check_stanzas(ciphertext)?;
     let decryptor = Decryptor::new_buffered(ciphertext).map_err(map_decrypt_error)?;
     if decryptor.is_scrypt() {
         return Err(OpenError::UnexpectedStanza);
     }
-    let reader = decryptor.decrypt(iter::once(identity.as_age() as &dyn age::Identity)).map_err(map_decrypt_error)?;
+    let reader = decryptor.decrypt(iter::once(identity as &dyn age::Identity)).map_err(map_decrypt_error)?;
     read_bounded(reader, max_plaintext, ciphertext.len())
 }
 
 /// Refuses a header with any stanza other than X25519 or `age`'s grease stanza.
 ///
-/// `age` keeps its parsed header private, so this reads the header's text form (c2sp.org/age) directly. A file that is
-/// not `age` v1 at all passes here and is refused by `age` as malformed. Only newline-terminated lines are read, so a
-/// truncated file never shows a cut-off tag that would be mistaken for a foreign stanza.
+/// A file that is not `age` v1 at all passes here and is refused by `age` as malformed.
 fn check_stanzas(ciphertext: &[u8]) -> Result<(), OpenError> {
-    let mut lines = complete_lines(ciphertext);
-    if lines.next() != Some(VERSION_LINE) {
-        return Ok(());
-    }
-    lines
-        .take_while(|line| !line.starts_with(MAC_PREFIX))
-        .filter_map(|line| line.strip_prefix(STANZA_PREFIX))
-        .map(stanza_tag)
-        .all(is_accepted_tag)
+    parse_header(ciphertext)
+        .is_none_or(|header| header.kinds.iter().all(|kind| kind.is_x25519_or_grease()))
         .then_some(())
         .ok_or(OpenError::UnexpectedStanza)
-}
-
-/// The newline-terminated lines of `bytes`, without their terminators; an unterminated final line is dropped.
-fn complete_lines(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
-    let terminated = bytes.iter().rposition(|&b| b == b'\n').map_or(&[][..], |end| &bytes[..end]);
-    terminated.split(|&b| b == b'\n')
-}
-
-/// The tag of a stanza line, given the text after its `-> ` prefix.
-fn stanza_tag(rest: &[u8]) -> &[u8] {
-    rest.split(|&b| b == b' ').next().unwrap_or(rest)
-}
-
-/// Grease stanzas are accepted because `age` writes one into every file it seals; the X25519 identity ignores them.
-fn is_accepted_tag(tag: &[u8]) -> bool {
-    tag == X25519_TAG || (tag.len() > GREASE_SUFFIX.len() && tag.ends_with(GREASE_SUFFIX))
 }
 
 /// Maps `age`'s decryption errors onto [`OpenError`] without keeping their text.
