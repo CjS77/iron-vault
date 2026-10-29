@@ -12,6 +12,8 @@ mod create;
 mod load;
 mod report;
 #[cfg(test)]
+mod restore_tests;
+#[cfg(test)]
 mod tests;
 mod write;
 #[cfg(test)]

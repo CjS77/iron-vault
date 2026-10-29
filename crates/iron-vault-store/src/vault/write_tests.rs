@@ -31,13 +31,13 @@ fn key(name: &str, version: u32) -> String {
     format!("{}-v{version}", secret(name))
 }
 
-fn material(name: &str, version: u32) -> CredentialMaterial {
+pub(super) fn material(name: &str, version: u32) -> CredentialMaterial {
     CredentialMaterial::Static {
         key: key(name, version).into(),
     }
 }
 
-fn origins(name: &str) -> PermittedOrigins {
+pub(super) fn origins(name: &str) -> PermittedOrigins {
     let host = format!("api.{}.example", name.replace('_', "-"));
     PermittedOrigins::new([(n(&host), Port::HTTPS)].into()).unwrap()
 }
@@ -67,7 +67,7 @@ fn snapshot(vault: &Vault) -> (VaultManifest, State) {
 }
 
 /// The calls since call `from` that changed a directory entry: created, renamed or removed a file.
-fn mutations(fs: &FaultFs, from: usize) -> Vec<FsCall> {
+pub(super) fn mutations(fs: &FaultFs, from: usize) -> Vec<FsCall> {
     let changes = [FsOp::CreatePrivate, FsOp::Rename, FsOp::RemoveFile];
     fs.trace()
         .split_off(from)
