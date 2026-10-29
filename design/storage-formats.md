@@ -168,21 +168,40 @@ state generation of the new file = max(manifest's state generation, approval sta
 ```
 
 Each write reads the other file from disk before it touches any file, under the state-directory lock that makes the
-service the only writer. A missing approval state counts as none; a missing manifest refuses an approval state write,
-because the vault is always created first; a file that cannot be read or opened as this vault's refuses the write as
-damaged shared state. So a vault's first manifest is at state generation 1, every later write of either file is
-exactly one above the latest write of both, and no two files share a state generation: a file's peer generation is
-always below its own state generation, and decoding refuses one that is not. The addition is checked: once either
-file is at `u64::MAX`, the next write of either fails before any file is touched, and the counter never wraps.
+service the only writer. A missing approval state counts as none before one has been written; a missing manifest refuses
+an approval state write, because the vault is always created first; a file that cannot be read or opened as this vault's
+refuses the write as damaged shared state. So a vault's first manifest is at state generation 1, every later write of
+either file is exactly one above the latest write of both, and no two files share a state generation: a file's peer
+generation is always below its own state generation, and decoding refuses one that is not. The addition is checked: once
+either file is at `u64::MAX`, the next write of either fails before any file is touched, and the counter never wraps.
 
 A state generation is never 0, so a peer generation of 0 means "no peer". The vault is created before its approval
 state, so its first manifest, and any manifest written before the approval state exists, records 0. The approval
 state always has a manifest to name, so its peer generation is never 0.
 
-Whichever file was written last names the state generation it expects the other to hold, so restoring one of them from
-an older copy leaves a pair that disagrees. Checking that agreement when the vault opens is not yet done. Restoring
-both files together still leaves an agreeing pair; outside v0, anchoring the state generation in a TPM monotonic
-counter (specification §3.9) is what detects that.
+Whichever file was written last names the state generation it expects the other to hold. Only one file changes per
+write, so the file with the higher state generation was written last, and its peer generation must be exactly the
+other file's state generation:
+
+| Files on disk                        | Accepted when                                                           |
+|--------------------------------------|-------------------------------------------------------------------------|
+| Manifest only, no `approval.age`     | the manifest's peer generation is 0                                     |
+| Both, the manifest's is higher       | the manifest's peer generation is the approval state's state generation |
+| Both, the approval state's is higher | the approval state's peer generation is the manifest's state generation |
+| Both at the same state generation    | never: no write produces it                                             |
+
+Any other pair is a [partial restore](glossary.md): one file was restored from an older copy, or `approval.age` was
+deleted after the manifest recorded it. A crash cannot produce one, because each write is one atomic replace of one
+file and both the old and the new file agree with the other. Opening the vault and loading the approval state both
+refuse a partial restore as damaged shared state, naming the file that is behind with the state generation expected
+and the one found, and every write of either file refuses it before touching any file: writing over it would record
+the restored file as the peer and make the pair agree again. Creating the approval state is refused once the manifest
+records one, since that would reset its counters. A partial restore is never repaired automatically (specification
+§3.9); the owner recovers the vault with the recovery key or resets it.
+
+The check cannot tell a pair that was once on disk together from the current one. That covers restoring both files
+together, the whole-storage rollback of specification §3.9, and restoring one file to a copy that the other file's
+latest write already saw. Outside v0, anchoring the state generation in a TPM monotonic counter is what detects those.
 
 ## Manifest file v1
 
@@ -522,8 +541,8 @@ replace returns. Every write reads the manifest from disk first and takes its st
 [vault-wide rule](#state-generation), recording the manifest's state generation as its peer generation:
 
 - **Create.** A new vault's state has nothing reserved and nothing committed, and takes its vault ID from the
-  manifest, which must already exist. It is written only where no `approval.age` exists, so creating it again can never
-  reset the counters.
+  manifest, which must already exist. It is written only where no `approval.age` exists and the manifest records no
+  approval state, so creating it again can never reset the counters.
 - **Reserve.** Writes the highest reserved version plus one and returns it; the returned version is already durable, so
   it is never handed out twice. At `u64::MAX` it fails without writing, and nothing may be signed.
 - **Commit.** Writes a new committed approval. The version must be reserved and newer than the committed one.
