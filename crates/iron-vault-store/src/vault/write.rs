@@ -127,13 +127,13 @@ impl Vault {
     /// The state generation of this vault's approval state on disk, or `None` while none has been written. An approval
     /// state that cannot be read or opened is damaged shared state, and the write is refused.
     ///
-    /// A missing `approval.age` after the manifest recorded one is a partial restore, and the write is refused too:
-    /// recording no peer would make the deletion look like a vault that was never approved.
+    /// A partial restore is refused too, never written over: the next manifest would record the restored approval state
+    /// as its peer, or record no peer after a deletion, and the pair would agree again and hide the restore (spec §3.9).
+    /// The caller has checked that the manifest in memory is the one on disk.
     fn approval_generation(&self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<Option<StateGeneration>, VaultError> {
-        match approval_generations(lock, fs, &self.identity, &self.manifest)? {
-            Some((state, _)) => Ok(Some(state)),
-            None => refuse_partial_restore(&self.manifest, None).map(|()| None),
-        }
+        let approval = approval_generations(lock, fs, &self.identity, &self.manifest)?;
+        refuse_partial_restore(&self.manifest, approval)?;
+        Ok(approval.map(|(state, _)| state))
     }
 
     /// The record ID the manifest lists under `name`, whether its record is healthy or damaged.
@@ -145,8 +145,8 @@ impl Vault {
             .map(|(id, _)| *id)
     }
 
-    /// Reads the approval state's state generation, then seals the new record and builds and seals the next manifest.
-    /// Writes no file.
+    /// Checks the manifest on disk is the one in memory and reads the approval state's state generation, then seals the
+    /// new record and builds and seals the next manifest. Writes no file.
     fn prepare(
         &self,
         lock: &StateDirLock,
@@ -155,6 +155,7 @@ impl Vault {
         new: Option<CredentialRecord>,
         old: Option<RecordId>,
     ) -> Result<Prepared, VaultError> {
+        self.ensure_disk_manifest_matches(lock, fs)?;
         let approval_generation = self.approval_generation(lock, fs)?;
         let new = new.map(|record| seal_record(&self.identity, record)).transpose()?;
         let mut entries = self.manifest.entries().clone();
@@ -177,7 +178,6 @@ impl Vault {
 
     /// Runs the file steps of a prepared write, then updates memory once the manifest has committed.
     fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, prepared: Prepared) -> Result<WriteReport, VaultError> {
-        self.ensure_disk_manifest_matches(lock, fs)?;
         let removed = self.remove_unindexed(lock, fs)?;
         if let Some(new) = &prepared.new {
             write_record_file(lock, fs, new)?;

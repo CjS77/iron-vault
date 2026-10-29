@@ -217,8 +217,8 @@ pub enum ApprovalStateError {
     #[error("the approval state already exists; creating it again would reset its version counters")]
     AlreadyExists,
     /// The approval state and the manifest are not a pair any sequence of writes leaves: one was restored from an older
-    /// copy or deleted. `load` refuses such a pair, and `create` refuses a manifest that records an approval state,
-    /// because creating one again would reset its counters (spec §3.9). Nothing was written.
+    /// copy or deleted. `load` and every write refuse such a pair, and `create` refuses a manifest that records an
+    /// approval state, because creating one again would reset its counters (spec §3.9). Nothing was written.
     #[error(transparent)]
     PartialRestore(PartialRestore),
     /// The approval state file could not be read, or is over its size limit.
@@ -438,17 +438,19 @@ impl ApprovalState {
     }
 
     /// Replaces the file with `next` at the next state generation, then makes that the state in memory. The disk checks
-    /// come first: the manifest on disk gives the peer generation, and a stale in-memory state would otherwise write
-    /// lower counters over newer ones.
+    /// come first: a stale in-memory state would otherwise write lower counters over newer ones, and the manifest on
+    /// disk gives the peer generation. A partial restore is refused rather than written over: recording the restored
+    /// manifest as the peer would make the pair agree again and hide the restore (spec §3.9).
     fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, next: Self) -> Result<(), ApprovalStateError> {
-        let manifest_generation = read_vault_manifest(lock, fs, identity, self.vault_id)?.state_generation();
+        self.ensure_disk_matches(lock, fs, identity)?;
+        let manifest = read_vault_manifest(lock, fs, identity, self.vault_id)?;
+        check_control_generations(manifest.generations(), Some(self.generations())).map_err(ApprovalStateError::PartialRestore)?;
         let next = Self {
-            state_generation: next_generation(manifest_generation, Some(self.state_generation))?,
-            peer_generation: manifest_generation,
+            state_generation: next_generation(manifest.state_generation(), Some(self.state_generation))?,
+            peer_generation: manifest.state_generation(),
             ..next
         };
         let bytes = seal_approval_state(identity, &next).map_err(ApprovalStateError::Seal)?;
-        self.ensure_disk_matches(lock, fs, identity)?;
         replace_file(lock, fs, &bytes)?;
         *self = next;
         Ok(())
@@ -456,7 +458,7 @@ impl ApprovalState {
 
     /// Refuses with [`ApprovalStateError::ReloadRequired`] unless the state on disk is exactly this one.
     fn ensure_disk_matches(&self, lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity) -> Result<(), ApprovalStateError> {
-        match Self::load(lock, fs, identity, self.vault_id) {
+        match Self::read(lock, fs, identity, self.vault_id) {
             Ok(on_disk) if on_disk == *self => Ok(()),
             _ => Err(ApprovalStateError::ReloadRequired),
         }
