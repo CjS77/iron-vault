@@ -7,9 +7,9 @@
 //! file, so the disk holds the old file or the new one, and either agrees with the other file. A pair that disagrees
 //! means one file was restored from an older copy, or deleted.
 //!
-//! Restoring both files together, or restoring the file written last to the copy just before it, leaves a pair that
-//! once existed on disk, which this check cannot tell from the current one; outside v0, a TPM monotonic counter
-//! anchoring the state generation is what detects that.
+//! Restoring both files together, or restoring one file to a copy that was on disk beside the other file's current
+//! copy, leaves a pair that once existed, which this check cannot tell from the current one; outside v0, a TPM
+//! monotonic counter anchoring the state generation is what detects that.
 
 use std::fmt;
 
