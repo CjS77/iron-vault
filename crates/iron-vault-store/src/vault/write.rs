@@ -1,4 +1,4 @@
-//! Vault writes: add, replace and remove one credential record (spec §3.3, §3.10).
+//! Vault writes: add, replace and remove one credential record, or record the approval state (spec §3.3, §3.9, §3.10).
 //!
 //! Every write follows the same steps. Everything that can fail without writing a file happens first: validation,
 //! reading the approval state's state generation from disk, sealing and building the next manifest, which takes the
@@ -17,9 +17,9 @@ use iron_vault_policy::CredentialName;
 
 use super::{Vault, VaultError, WriteReport, approval_generations, list_state_dir, refuse_partial_restore, unindexed_files};
 use crate::{
-    CredentialRecord, MAX_MANIFEST_LEN, ManifestEntry, PermittedOrigins, RecordId, Source, StateDirLock, StateFileName, StateGeneration,
-    StoreFs, VaultIdentity, VaultManifest, WriteError, WriteStep, durable_remove, durable_replace, encode, open_manifest, read_state_file,
-    record_digest, seal, seal_manifest,
+    ApprovalState, CredentialRecord, MAX_MANIFEST_LEN, ManifestEntry, PermittedOrigins, PinnedApprover, RecordId, Source, StateDirLock,
+    StateFileName, StateGeneration, StoreFs, VaultIdentity, VaultManifest, WriteError, WriteStep, durable_remove, durable_replace, encode,
+    open_manifest, read_state_file, record_digest, seal, seal_manifest,
 };
 
 /// A record and the sealed bytes of its file, which its manifest entry's digest covers.
@@ -30,7 +30,8 @@ struct SealedRecord {
 
 /// One write with all its disk-free work done: the record to write, the record it supersedes and the manifest to commit.
 struct Prepared {
-    name: CredentialName,
+    /// The credential the write changes; `None` for a manifest-only write.
+    name: Option<CredentialName>,
     new: Option<SealedRecord>,
     old: Option<RecordId>,
     manifest: VaultManifest,
@@ -58,7 +59,7 @@ impl Vault {
         let short = material.short_secrets();
         let record = new_record(name, material, origins)?;
         let id = record.id();
-        let report = self.write(lock, fs, self.prepare(lock, fs, record.name().clone(), Some(record), None)?)?;
+        let report = self.write(lock, fs, self.prepare(lock, fs, Some(record.name().clone()), Some(record), None)?)?;
         warn_short_secrets(&logged_name, &short);
         Ok((id, report))
     }
@@ -82,7 +83,11 @@ impl Vault {
         let short = material.short_secrets();
         let record = new_record(name, material, origins)?;
         let id = record.id();
-        let report = self.write(lock, fs, self.prepare(lock, fs, record.name().clone(), Some(record), Some(old))?)?;
+        let report = self.write(
+            lock,
+            fs,
+            self.prepare(lock, fs, Some(record.name().clone()), Some(record), Some(old))?,
+        )?;
         warn_short_secrets(&logged_name, &short);
         Ok((id, report))
     }
@@ -94,7 +99,42 @@ impl Vault {
     pub fn remove(&mut self, lock: &StateDirLock, fs: &impl StoreFs, name: &CredentialName) -> Result<WriteReport, VaultError> {
         self.ensure_same_dir(lock)?;
         let old = self.record_id_of(name).ok_or_else(|| VaultError::UnknownName(name.clone()))?;
-        self.write(lock, fs, self.prepare(lock, fs, name.clone(), None, Some(old))?)
+        self.write(lock, fs, self.prepare(lock, fs, Some(name.clone()), None, Some(old))?)
+    }
+
+    /// Writes a manifest with unchanged entries that records the approval state's current state generation as its peer.
+    ///
+    /// Until a manifest records the approval state, deleting `approval.age` leaves a pair the partial restore check
+    /// accepts, and creating the approval state again would reset its counters (spec §3.9). Refuses with
+    /// [`VaultError::NoApprovalState`] when there is none. Changes no record file.
+    pub fn record_approval_state(&mut self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<WriteReport, VaultError> {
+        self.ensure_same_dir(lock)?;
+        let prepared = self.prepare(lock, fs, None, None, None)?;
+        match prepared.manifest.peer_generation() {
+            Some(_) => self.write(lock, fs, prepared),
+            None => Err(VaultError::NoApprovalState),
+        }
+    }
+
+    /// Creates the approval state with `approver` pinned, then records it in the manifest, so a later deletion of
+    /// `approval.age` is refused as a partial restore.
+    ///
+    /// If the approval state was written but the manifest write then failed, returns
+    /// [`VaultError::ApprovalStateUnrecorded`] and leaves the approval state in place: creating it again would be
+    /// refused, and [`Vault::record_approval_state`] finishes the job. The caller has already authorized this.
+    pub fn create_approval_state(
+        &mut self,
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        approver: PinnedApprover,
+    ) -> Result<(ApprovalState, WriteReport), VaultError> {
+        self.ensure_same_dir(lock)?;
+        self.ensure_disk_manifest_matches(lock, fs)?;
+        let state = ApprovalState::create(lock, fs, &self.identity, approver).map_err(VaultError::ApprovalState)?;
+        let report = self
+            .record_approval_state(lock, fs)
+            .map_err(|error| VaultError::ApprovalStateUnrecorded(Box::new(error)))?;
+        Ok((state, report))
     }
 
     /// Refuses another state directory's lock: its files are not this vault's, and cleanup there would remove another
@@ -151,7 +191,7 @@ impl Vault {
         &self,
         lock: &StateDirLock,
         fs: &impl StoreFs,
-        name: CredentialName,
+        name: Option<CredentialName>,
         new: Option<CredentialRecord>,
         old: Option<RecordId>,
     ) -> Result<Prepared, VaultError> {
@@ -187,9 +227,10 @@ impl Vault {
             name, new, old, manifest, ..
         } = prepared;
         self.manifest = manifest;
-        match new {
-            Some(new) => self.healthy.insert(name, new.record),
-            None => self.healthy.remove(&name),
+        match (name, new) {
+            (Some(name), Some(new)) => _ = self.healthy.insert(name, new.record),
+            (Some(name), None) => _ = self.healthy.remove(&name),
+            (None, _) => {}
         };
         Ok(WriteReport::new(removed, old.and_then(|old| remove_superseded(lock, fs, old))))
     }

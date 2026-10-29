@@ -54,11 +54,26 @@ impl fmt::Display for RecordDamage {
 pub struct OpenReport {
     damaged: BTreeMap<CredentialName, RecordDamage>,
     unindexed: BTreeSet<StateFileName>,
+    approval_state_unrecorded: bool,
 }
 
 impl OpenReport {
-    pub(super) fn new(damaged: BTreeMap<CredentialName, RecordDamage>, unindexed: BTreeSet<StateFileName>) -> Self {
-        Self { damaged, unindexed }
+    pub(super) fn new(
+        damaged: BTreeMap<CredentialName, RecordDamage>,
+        unindexed: BTreeSet<StateFileName>,
+        approval_state_unrecorded: bool,
+    ) -> Self {
+        Self {
+            damaged,
+            unindexed,
+            approval_state_unrecorded,
+        }
+    }
+
+    /// Whether `approval.age` exists but the manifest does not record it: an approval state creation was interrupted
+    /// before its manifest write. The service finishes it with `Vault::record_approval_state`.
+    pub fn approval_state_unrecorded(&self) -> bool {
+        self.approval_state_unrecorded
     }
 
     /// Each record the manifest lists that did not load, by credential name.

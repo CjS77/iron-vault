@@ -274,7 +274,9 @@ impl ApprovalState {
     /// state generation to follow. Refuses with [`ApprovalStateError::AlreadyExists`] if the file exists, and with
     /// [`ApprovalStateError::PartialRestore`] if the manifest records an approval state that is now missing, so the
     /// counters are never reset. The caller has already authorized vault creation; this performs it.
-    pub fn create(
+    ///
+    /// Only [`crate::Vault::create_approval_state`] calls this, so the manifest write that records the new state follows.
+    pub(crate) fn create(
         lock: &StateDirLock,
         fs: &impl StoreFs,
         identity: &VaultIdentity,

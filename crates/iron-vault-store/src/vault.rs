@@ -92,6 +92,16 @@ pub enum VaultError {
     /// commit was uncertain, or the manifest is gone or damaged. Nothing was written; reopen the vault.
     #[error("the vault manifest on disk differs from the open vault's; reopen the vault before writing")]
     ReopenRequired,
+    /// `record_approval_state` found no approval state to record.
+    #[error("there is no approval state to record in the vault manifest")]
+    NoApprovalState,
+    /// The approval state could not be created; nothing was written.
+    #[error("cannot create the approval state: {0}")]
+    ApprovalState(ApprovalStateError),
+    /// The approval state was created, but the manifest write that records it failed. The approval state stands and
+    /// must not be created again; reopen the vault and finish with `record_approval_state`.
+    #[error("the approval state exists but the vault manifest does not yet record it ({0}); reopen the vault and record it")]
+    ApprovalStateUnrecorded(Box<VaultError>),
     /// A write was given the lock of a state directory other than the one this vault was opened or created in.
     #[error("the state directory lock is for {}, but the vault is in {}", .lock_dir.display(), .vault_dir.display())]
     WrongStateDir {
@@ -150,6 +160,9 @@ impl Vault {
     /// approval state restored alone from an older copy, or an approval state deleted, fails the open as a partial
     /// restore before any record is read. Restoring both together is not detected here: that needs an anchor outside
     /// the state directory (spec §3.9).
+    ///
+    /// An approval state the manifest does not yet record, left by a crash inside [`Vault::create_approval_state`], is
+    /// a valid pair: the open succeeds, flags it in the [`OpenReport`] and logs it at WARN, and writes nothing.
     pub fn open(lock: &StateDirLock, fs: &impl StoreFs, identity: VaultIdentity) -> Result<(Vault, OpenReport), VaultError> {
         let files = list_state_dir(lock, fs).inspect_err(log_vault_error)?;
         let manifest = read_manifest(lock, fs, &identity, &files).inspect_err(log_vault_error)?;
@@ -158,6 +171,7 @@ impl Vault {
         let (healthy, damaged) = load::load_records(lock, fs, &identity, &manifest);
         let unindexed = unindexed_files(&manifest, &files);
         unindexed.iter().for_each(load::log_unindexed);
+        let unrecorded = approval_state_unrecorded(&manifest, approval);
         let dir = lock.dir().to_path_buf();
         Ok((
             Vault {
@@ -166,7 +180,7 @@ impl Vault {
                 manifest,
                 healthy,
             },
-            OpenReport::new(damaged, unindexed),
+            OpenReport::new(damaged, unindexed, unrecorded),
         ))
     }
 
@@ -259,6 +273,19 @@ fn refuse_partial_restore(manifest: &VaultManifest, approval: Option<(StateGener
     })
 }
 
+/// Whether an approval state exists that the manifest does not record, which only an interrupted
+/// [`Vault::create_approval_state`] leaves; until it is recorded, deleting `approval.age` cannot be detected.
+fn approval_state_unrecorded(manifest: &VaultManifest, approval: Option<(StateGeneration, StateGeneration)>) -> bool {
+    let unrecorded = approval.is_some() && manifest.peer_generation().is_none();
+    if unrecorded {
+        tracing::warn!(
+            remediation = "record the approval state with `record_approval_state`",
+            "the approval state exists but the vault manifest does not record it; its deletion cannot be detected until it is recorded"
+        );
+    }
+    unrecorded
+}
+
 /// Why a state directory without a manifest is damaged shared state, or `None` when it holds no vault at all.
 fn classify_missing_manifest(files: &[String]) -> Option<SharedStateDamage> {
     let approval = StateFileName::approval_state();
@@ -312,6 +339,9 @@ fn log_vault_error(error: &VaultError) {
         | VaultError::Write(_)
         | VaultError::CommitUncertain(_)
         | VaultError::ReopenRequired
+        | VaultError::NoApprovalState
+        | VaultError::ApprovalState(_)
+        | VaultError::ApprovalStateUnrecorded(_)
         | VaultError::WrongStateDir { .. } => {}
     }
 }
