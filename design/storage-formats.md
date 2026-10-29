@@ -179,6 +179,15 @@ A state generation is never 0, so a peer generation of 0 means "no peer". The va
 state, so its first manifest, and any manifest written before the approval state exists, records 0. The approval
 state always has a manifest to name, so its peer generation is never 0.
 
+Creating the approval state is followed at once by a manifest-only write with unchanged entries that records it as the
+peer (`Vault::create_approval_state`, then `Vault::record_approval_state`). Approvals never write the manifest, so
+without that write a vault whose credentials do not change would keep peer generation 0 for good, and a deleted
+`approval.age` would go unnoticed. With it, a manifest with peer generation 0 beside a missing `approval.age` means no
+approval state was ever created. The one exception is a crash between the two writes: it leaves `approval.age` beside a
+manifest with peer generation 0, a pair the table accepts. Opening the vault flags that pair in its open report and logs
+it at WARN, and the service finishes the creation with `Vault::record_approval_state`; until it does, deleting
+`approval.age` is not detected.
+
 Whichever file was written last names the state generation it expects the other to hold. Only one file changes per
 write, so the file with the higher state generation was written last, and its peer generation must be exactly the
 other file's state generation:
@@ -542,7 +551,10 @@ replace returns. Every write reads the manifest from disk first and takes its st
 
 - **Create.** A new vault's state has nothing reserved and nothing committed, and takes its vault ID from the
   manifest, which must already exist. It is written only where no `approval.age` exists and the manifest records no
-  approval state, so creating it again can never reset the counters.
+  approval state, and the vault then writes a manifest that records it, so once that write lands, deleting the state
+  and creating it again is refused and can never reset the counters. If that manifest write fails, the approval state
+  stands, the error says it is not yet recorded, and the open report flags it until `Vault::record_approval_state`
+  records it.
 - **Reserve.** Writes the highest reserved version plus one and returns it; the returned version is already durable, so
   it is never handed out twice. At `u64::MAX` it fails without writing, and nothing may be signed.
 - **Commit.** Writes a new committed approval. The version must be reserved and newer than the committed one.
