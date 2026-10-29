@@ -11,16 +11,15 @@
 //! vault plus at most the superseded file.
 
 use std::collections::BTreeSet;
-use std::io;
 
 use iron_vault_kinds::{CredentialMaterial, ShortSecret};
 use iron_vault_policy::CredentialName;
 
-use super::{SharedStateDamage, Vault, VaultError, WriteReport, list_state_dir, unindexed_files};
+use super::{Vault, VaultError, WriteReport, approval_generations, list_state_dir, refuse_partial_restore, unindexed_files};
 use crate::{
-    ApprovalState, ApprovalStateError, CredentialRecord, MAX_MANIFEST_LEN, ManifestEntry, PermittedOrigins, ReadError, RecordId, Source,
-    StateDirLock, StateFileName, StateGeneration, StoreFs, VaultIdentity, VaultManifest, WriteError, WriteStep, durable_remove,
-    durable_replace, encode, open_manifest, read_state_file, record_digest, seal, seal_manifest,
+    CredentialRecord, MAX_MANIFEST_LEN, ManifestEntry, PermittedOrigins, RecordId, Source, StateDirLock, StateFileName, StateGeneration,
+    StoreFs, VaultIdentity, VaultManifest, WriteError, WriteStep, durable_remove, durable_replace, encode, open_manifest, read_state_file,
+    record_digest, seal, seal_manifest,
 };
 
 /// A record and the sealed bytes of its file, which its manifest entry's digest covers.
@@ -125,19 +124,15 @@ impl Vault {
         }
     }
 
-    /// The state generation of this vault's approval state on disk, or `None` while it has none. An approval state that
-    /// cannot be read or opened is damaged shared state, and the write is refused.
+    /// The state generation of this vault's approval state on disk, or `None` while none has been written. An approval
+    /// state that cannot be read or opened is damaged shared state, and the write is refused.
+    ///
+    /// A missing `approval.age` after the manifest recorded one is a partial restore, and the write is refused too:
+    /// recording no peer would make the deletion look like a vault that was never approved.
     fn approval_generation(&self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<Option<StateGeneration>, VaultError> {
-        match ApprovalState::load(lock, fs, &self.identity, self.manifest.vault_id()) {
-            Ok(state) => Ok(Some(state.state_generation())),
-            Err(ApprovalStateError::Read(ReadError::Io {
-                kind: io::ErrorKind::NotFound,
-                ..
-            })) => Ok(None),
-            Err(error) => Err(VaultError::SharedStateDamaged {
-                file: StateFileName::approval_state(),
-                damage: SharedStateDamage::ApprovalState(error),
-            }),
+        match approval_generations(lock, fs, &self.identity, &self.manifest)? {
+            Some((state, _)) => Ok(Some(state)),
+            None => refuse_partial_restore(&self.manifest, None).map(|()| None),
         }
     }
 

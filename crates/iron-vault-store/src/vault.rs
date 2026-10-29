@@ -1,7 +1,9 @@
 //! Opening the vault: the manifest, then every record it lists, with damaged records isolated (spec §3.10, §3.12).
 //!
 //! The manifest is shared state: if it cannot be trusted, no record can be told from a planted one, so the whole vault
-//! is unavailable. A record is not shared: a damaged one takes down only the routes that use it, and the others load.
+//! is unavailable. So is the approval state, whose state generation the manifest records: a pair of the two that no
+//! sequence of writes leaves together is a partial restore, and refused. A record is not shared: a damaged one takes
+//! down only the routes that use it, and the others load.
 //!
 //! Vault writes (spec §3.3, §3.10) make the durable replace of the manifest their single commit point: a new record file
 //! is written before it and a superseded one removed after it, so a crash at any step leaves the old or the new vault.
@@ -25,8 +27,9 @@ use iron_vault_policy::{CatalogEntry, CredentialCatalog, CredentialName};
 use thiserror::Error;
 
 use crate::{
-    ApprovalStateError, CredentialRecord, MAX_MANIFEST_LEN, ManifestError, ReadError, SealError, StateDirLock, StateFileName, StoreFs,
-    VaultIdentity, VaultManifest, WriteError, open_manifest, read_state_file,
+    ApprovalState, ApprovalStateError, CredentialRecord, MAX_MANIFEST_LEN, ManifestError, PartialRestore, ReadError, SealError,
+    StateDirLock, StateFileName, StateGeneration, StoreFs, VaultIdentity, VaultManifest, WriteError, open_manifest,
+    partial_restore::check_control_generations, read_state_file,
 };
 
 pub use load::MAX_RECORD_FILE_LEN;
@@ -42,7 +45,8 @@ pub enum VaultError {
     /// There is no manifest, no record file and no approval state: no vault has been created in this state directory.
     #[error("the vault is not initialized: the state directory holds no manifest and no credential records")]
     NotInitialized,
-    /// Shared state cannot be trusted, so the whole vault is unavailable (spec §3.10, §3.12).
+    /// Shared state cannot be trusted (spec §3.10, §3.12). An open refuses the whole vault, and a write refuses to change
+    /// it and touches no file.
     #[error("vault shared state file {file} is damaged ({damage}); the vault is unavailable and may require recovery")]
     SharedStateDamaged {
         /// The damaged file.
@@ -115,6 +119,10 @@ pub enum SharedStateDamage {
     /// The approval state, whose state generation every vault write records, cannot be read or opened as this vault's.
     #[error(transparent)]
     ApprovalState(ApprovalStateError),
+    /// The manifest and the approval state are not a pair any sequence of writes leaves: the named file was restored
+    /// from an older copy or deleted. It is never repaired automatically (spec §3.9); the owner recovers or resets.
+    #[error(transparent)]
+    PartialRestore(PartialRestore),
 }
 
 /// An open vault: its identity, its manifest and every healthy credential record.
@@ -136,12 +144,15 @@ impl Vault {
     /// damaged record does not: it is left out, reported in the [`OpenReport`] and logged at ERROR, and the others
     /// load. Record files the manifest does not list are reported and logged at WARN, and never loaded or removed.
     ///
-    /// A stale but authentic manifest, restored from an older backup, is not detected here: telling it apart needs its
-    /// state generation compared with the approval state's peer generation, or with an anchor outside the state
-    /// directory when both files were restored together (spec §3.9).
+    /// The manifest and the approval state must be a pair some sequence of writes leaves together: a manifest or
+    /// approval state restored alone from an older copy, or an approval state deleted, fails the open as a partial
+    /// restore before any record is read. Restoring both together is not detected here: that needs an anchor outside
+    /// the state directory (spec §3.9).
     pub fn open(lock: &StateDirLock, fs: &impl StoreFs, identity: VaultIdentity) -> Result<(Vault, OpenReport), VaultError> {
         let files = list_state_dir(lock, fs).inspect_err(log_vault_error)?;
         let manifest = read_manifest(lock, fs, &identity, &files).inspect_err(log_vault_error)?;
+        let approval = approval_generations(lock, fs, &identity, &manifest).inspect_err(log_vault_error)?;
+        refuse_partial_restore(&manifest, approval).inspect_err(log_vault_error)?;
         let (healthy, damaged) = load::load_records(lock, fs, &identity, &manifest);
         let unindexed = unindexed_files(&manifest, &files);
         unindexed.iter().for_each(load::log_unindexed);
@@ -214,6 +225,36 @@ fn read_manifest(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentit
         Err(e) => Err(damaged(SharedStateDamage::Read(e))),
         Ok(bytes) => open_manifest(identity, &bytes).map_err(|e| damaged(SharedStateDamage::Manifest(e))),
     }
+}
+
+/// The approval state's state generation and peer generation on disk, or `None` while `approval.age` does not exist.
+/// An approval state that cannot be read or opened as this vault's is damaged shared state.
+fn approval_generations(
+    lock: &StateDirLock,
+    fs: &impl StoreFs,
+    identity: &VaultIdentity,
+    manifest: &VaultManifest,
+) -> Result<Option<(StateGeneration, StateGeneration)>, VaultError> {
+    match ApprovalState::read(lock, fs, identity, manifest.vault_id()) {
+        Ok(state) => Ok(Some(state.generations())),
+        Err(ApprovalStateError::Read(ReadError::Io {
+            kind: io::ErrorKind::NotFound,
+            ..
+        })) => Ok(None),
+        Err(error) => Err(VaultError::SharedStateDamaged {
+            file: StateFileName::approval_state(),
+            damage: SharedStateDamage::ApprovalState(error),
+        }),
+    }
+}
+
+/// Refuses `manifest` beside an approval state at `approval` (`None` if missing) when no sequence of writes leaves the
+/// two together, naming the file that is behind.
+fn refuse_partial_restore(manifest: &VaultManifest, approval: Option<(StateGeneration, StateGeneration)>) -> Result<(), VaultError> {
+    check_control_generations(manifest.generations(), approval).map_err(|restore| VaultError::SharedStateDamaged {
+        file: restore.file(),
+        damage: SharedStateDamage::PartialRestore(restore),
+    })
 }
 
 /// Why a state directory without a manifest is damaged shared state, or `None` when it holds no vault at all.

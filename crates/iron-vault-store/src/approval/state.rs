@@ -24,8 +24,9 @@ use thiserror::Error;
 
 use super::{ApprovalDecodeError, ApprovalVersion, ConfigDigest, SignatureAlgorithm};
 use crate::{
-    MAX_MANIFEST_LEN, ManifestError, OpenError, ReadError, SealError, StateDirLock, StateFileName, StateGeneration, StoreFs, VaultId,
-    VaultIdentity, VaultManifest, WriteError, WriteStep, durable_replace, open_manifest, read_state_file,
+    MAX_MANIFEST_LEN, ManifestError, OpenError, PartialRestore, ReadError, SealError, StateDirLock, StateFileName, StateGeneration,
+    StoreFs, VaultId, VaultIdentity, VaultManifest, WriteError, WriteStep, durable_replace, open_manifest,
+    partial_restore::check_control_generations, read_state_file,
 };
 
 pub use file::{open_approval_state, seal_approval_state};
@@ -215,6 +216,11 @@ pub enum ApprovalStateError {
     /// `create` found an approval state file already in the state directory; creating would reset its counters.
     #[error("the approval state already exists; creating it again would reset its version counters")]
     AlreadyExists,
+    /// The approval state and the manifest are not a pair any sequence of writes leaves: one was restored from an older
+    /// copy or deleted. `load` refuses such a pair, and `create` refuses a manifest that records an approval state,
+    /// because creating one again would reset its counters (spec §3.9). Nothing was written.
+    #[error(transparent)]
+    PartialRestore(PartialRestore),
     /// The approval state file could not be read, or is over its size limit.
     #[error(transparent)]
     Read(ReadError),
@@ -265,7 +271,8 @@ impl ApprovalState {
     /// `approver` pinned, nothing reserved and nothing committed, at the state generation after the manifest's.
     ///
     /// Refuses a missing or damaged manifest: the vault is created first, and its manifest names the vault and the
-    /// state generation to follow. Refuses with [`ApprovalStateError::AlreadyExists`] if the file exists, so the
+    /// state generation to follow. Refuses with [`ApprovalStateError::AlreadyExists`] if the file exists, and with
+    /// [`ApprovalStateError::PartialRestore`] if the manifest records an approval state that is now missing, so the
     /// counters are never reset. The caller has already authorized vault creation; this performs it.
     pub fn create(
         lock: &StateDirLock,
@@ -284,14 +291,32 @@ impl ApprovalState {
         };
         let bytes = seal_approval_state(identity, &state).map_err(ApprovalStateError::Seal)?;
         refuse_existing(lock, fs)?;
+        check_control_generations(manifest.generations(), None).map_err(ApprovalStateError::PartialRestore)?;
         replace_file(lock, fs, &bytes)?;
         Ok(state)
     }
 
-    /// Reads `approval.age` and opens it as the approval state of vault `vault_id`.
+    /// Reads `approval.age` and opens it as the approval state of vault `vault_id`, refusing it unless it and this
+    /// vault's manifest on disk are a pair some sequence of writes leaves together.
     ///
-    /// Any error is damaged shared state (spec §3.10): approvals cannot be checked, so the service must not proxy.
+    /// Any error is damaged shared state (spec §3.10): approvals cannot be checked, so the service must not proxy. A
+    /// [`ApprovalStateError::PartialRestore`] means one of the two files was restored from an older copy, so the
+    /// counters may have gone backwards; it is never repaired here (spec §3.9).
     pub fn load(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, vault_id: VaultId) -> Result<Self, ApprovalStateError> {
+        let state = Self::read(lock, fs, identity, vault_id)?;
+        let manifest = read_vault_manifest(lock, fs, identity, vault_id)?;
+        check_control_generations(manifest.generations(), Some(state.generations())).map_err(ApprovalStateError::PartialRestore)?;
+        Ok(state)
+    }
+
+    /// Reads `approval.age` and opens it as the approval state of vault `vault_id`, without comparing it with the
+    /// manifest: for a caller that holds the manifest already and runs that check itself.
+    pub(crate) fn read(
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        identity: &VaultIdentity,
+        vault_id: VaultId,
+    ) -> Result<Self, ApprovalStateError> {
         // MAX_APPROVAL_STATE_LEN is 4 KiB, so it always fits in a u64.
         let file =
             read_state_file(lock, fs, &StateFileName::approval_state(), MAX_APPROVAL_STATE_LEN as u64).map_err(ApprovalStateError::Read)?;
@@ -315,6 +340,11 @@ impl ApprovalState {
     /// The manifest's state generation when this state was written.
     pub fn peer_generation(&self) -> StateGeneration {
         self.peer_generation
+    }
+
+    /// The state generation and the peer generation, as the partial restore check takes them.
+    pub(crate) fn generations(&self) -> (StateGeneration, StateGeneration) {
+        (self.state_generation, self.peer_generation)
     }
 
     /// The approver every config approval must verify against.
@@ -411,7 +441,7 @@ impl ApprovalState {
     /// come first: the manifest on disk gives the peer generation, and a stale in-memory state would otherwise write
     /// lower counters over newer ones.
     fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, next: Self) -> Result<(), ApprovalStateError> {
-        let manifest_generation = self.manifest_generation(lock, fs, identity)?;
+        let manifest_generation = read_vault_manifest(lock, fs, identity, self.vault_id)?.state_generation();
         let next = Self {
             state_generation: next_generation(manifest_generation, Some(self.state_generation))?,
             peer_generation: manifest_generation,
@@ -422,20 +452,6 @@ impl ApprovalState {
         replace_file(lock, fs, &bytes)?;
         *self = next;
         Ok(())
-    }
-
-    /// The state generation of this vault's manifest on disk.
-    fn manifest_generation(
-        &self,
-        lock: &StateDirLock,
-        fs: &impl StoreFs,
-        identity: &VaultIdentity,
-    ) -> Result<StateGeneration, ApprovalStateError> {
-        let manifest = read_manifest(lock, fs, identity)?;
-        match manifest.vault_id() == self.vault_id {
-            true => Ok(manifest.state_generation()),
-            false => Err(ApprovalStateError::ManifestDamaged(ManifestError::VaultIdMismatch)),
-        }
     }
 
     /// Refuses with [`ApprovalStateError::ReloadRequired`] unless the state on disk is exactly this one.
@@ -469,6 +485,20 @@ fn read_manifest(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentit
     let file =
         read_state_file(lock, fs, &StateFileName::manifest(), MAX_MANIFEST_LEN as u64).map_err(ApprovalStateError::ManifestUnreadable)?;
     open_manifest(identity, &file).map_err(ApprovalStateError::ManifestDamaged)
+}
+
+/// The manifest of vault `vault_id` on disk, refusing another vault's.
+fn read_vault_manifest(
+    lock: &StateDirLock,
+    fs: &impl StoreFs,
+    identity: &VaultIdentity,
+    vault_id: VaultId,
+) -> Result<VaultManifest, ApprovalStateError> {
+    let manifest = read_manifest(lock, fs, identity)?;
+    match manifest.vault_id() == vault_id {
+        true => Ok(manifest),
+        false => Err(ApprovalStateError::ManifestDamaged(ManifestError::VaultIdMismatch)),
+    }
 }
 
 /// Refuses to create the approval state over an existing file, whatever it holds.

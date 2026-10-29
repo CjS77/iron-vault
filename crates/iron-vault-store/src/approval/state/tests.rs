@@ -75,20 +75,20 @@ impl Setup {
         self.dir.path().join(StateFileName::manifest().as_str())
     }
 
-    /// The sealed manifest of this vault at `state_generation`, with no records.
-    fn manifest(&self, state_generation: StateGeneration) -> Vec<u8> {
-        let manifest = VaultManifest::new(self.vault_id, state_generation, None, Default::default()).unwrap();
+    /// The sealed manifest of this vault at `state_generation` recording `peer`, with no records.
+    fn manifest(&self, state_generation: StateGeneration, peer: Option<StateGeneration>) -> Vec<u8> {
+        let manifest = VaultManifest::new(self.vault_id, state_generation, peer, Default::default()).unwrap();
         crate::seal_manifest(&self.identity, &manifest).unwrap()
     }
 
     /// A file system holding this vault's manifest at [`MANIFEST`], as `Vault::create` leaves it.
     fn fs(&self) -> FaultFs {
-        FaultFs::new().with_durable_file(&self.manifest_path(), &self.manifest(MANIFEST))
+        FaultFs::new().with_durable_file(&self.manifest_path(), &self.manifest(MANIFEST, None))
     }
 
-    /// Durably writes this vault's manifest at `state_generation`, as a vault write would.
-    fn plant_manifest(&self, fs: &impl StoreFs, state_generation: StateGeneration) {
-        durable_replace(&self.lock, fs, &StateFileName::manifest(), &self.manifest(state_generation)).unwrap();
+    /// Durably writes this vault's manifest at `state_generation` recording `peer`, as a vault write would.
+    fn plant_manifest(&self, fs: &impl StoreFs, state_generation: StateGeneration, peer: Option<StateGeneration>) {
+        durable_replace(&self.lock, fs, &StateFileName::manifest(), &self.manifest(state_generation, peer)).unwrap();
     }
 
     fn create(&self, fs: &impl StoreFs) -> Result<ApprovalState, ApprovalStateError> {
@@ -222,7 +222,7 @@ fn reserve_counts_up_from_one_across_reopen_and_never_resets() {
 fn reserve_commit_and_replace_approver_work_end_to_end_on_disk() {
     let setup = Setup::new("approval-e2e");
     let fs = OsFs;
-    setup.plant_manifest(&fs, MANIFEST);
+    setup.plant_manifest(&fs, MANIFEST, None);
     let mut state = setup.create(&fs).unwrap();
     assert_eq!(setup.reserve(&fs, &mut state).unwrap(), ApprovalVersion::FIRST);
     setup.commit(&fs, &mut state, 1).unwrap();
@@ -295,7 +295,7 @@ fn reserve_at_u64_max_is_exhausted_and_touches_no_file() {
 fn every_write_takes_the_next_state_generation_and_records_the_manifest_on_disk() {
     let setup = Setup::new("approval-generations");
     let fs = FaultFs::new();
-    setup.plant_manifest(&fs, generation(4));
+    setup.plant_manifest(&fs, generation(4), None);
     let mut state = setup.create(&fs).unwrap();
     assert_eq!(
         (state.vault_id(), state.state_generation(), state.peer_generation()),
@@ -304,7 +304,7 @@ fn every_write_takes_the_next_state_generation_and_records_the_manifest_on_disk(
     setup.reserve(&fs, &mut state).unwrap();
     assert_eq!((state.state_generation(), state.peer_generation()), (generation(6), generation(4)));
     // A vault write since: the next write is one above the manifest, not above this state, and records it.
-    setup.plant_manifest(&fs, generation(9));
+    setup.plant_manifest(&fs, generation(9), Some(generation(6)));
     setup.commit(&fs, &mut state, 1).unwrap();
     assert_eq!((state.state_generation(), state.peer_generation()), (generation(10), generation(9)));
     setup.replace_approver(&fs, &mut state, 2).unwrap();
@@ -358,7 +358,9 @@ fn a_missing_damaged_or_foreign_manifest_refuses_every_write_and_touches_no_file
         ];
         errors.iter().for_each(|error| assert!(expected(error), "{label}: {error:?}"));
         assert_eq!((mutations(&fs, calls), &state), (vec![], &before), "{label}");
-        assert_eq!(setup.load(&fs).unwrap(), before, "{label}");
+        // `load` refuses without a manifest of this vault to check against, so read the file alone.
+        let on_disk = ApprovalState::read(&setup.lock, &fs, &setup.identity, setup.vault_id).unwrap();
+        assert_eq!(on_disk, before, "{label}");
     });
     let created = ApprovalState::create(&setup.lock, &FaultFs::new(), &setup.identity, approver(1));
     assert!(created.as_ref().is_err_and(not_found), "{created:?}");
@@ -383,11 +385,11 @@ fn every_write_at_state_generation_u64_max_is_exhausted_and_touches_no_file() {
 
     // A manifest at u64::MAX exhausts the approval state's next write and its creation just the same.
     setup.plant(&fs, &state);
-    setup.plant_manifest(&fs, last);
+    setup.plant_manifest(&fs, last, Some(state.state_generation()));
     let (calls, mut current) = (fs.trace().len(), state.clone());
     assert_eq!(setup.reserve(&fs, &mut current).map(|_| ()), exhausted);
     assert_eq!((mutations(&fs, calls), &current), (vec![], &state));
-    let fresh = FaultFs::new().with_durable_file(&setup.manifest_path(), &setup.manifest(last));
+    let fresh = FaultFs::new().with_durable_file(&setup.manifest_path(), &setup.manifest(last, None));
     assert_eq!(setup.create(&fresh).map(|_| ()), exhausted);
     assert_eq!(mutations(&fresh, 0), []);
 }

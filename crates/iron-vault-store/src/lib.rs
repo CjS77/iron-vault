@@ -10,6 +10,7 @@ mod envelope;
 pub mod fault_fs;
 mod mac_file;
 mod manifest;
+mod partial_restore;
 mod passphrase;
 mod permitted_origins;
 mod recipient;
@@ -47,6 +48,7 @@ pub use envelope::{
 pub use manifest::{
     MAX_MANIFEST_ENTRIES, MAX_MANIFEST_LEN, ManifestEntry, ManifestError, VaultManifest, open_manifest, record_digest, seal_manifest,
 };
+pub use partial_restore::PartialRestore;
 pub use passphrase::{
     MAX_PASSPHRASE_ENVELOPE_LEN, MAX_PASSPHRASE_WORK_FACTOR, OperationalIdentity, PASSPHRASE_WORK_FACTOR, Passphrase, PassphraseError,
     UnlockError, open_passphrase_envelope, read_passphrase_envelope, reseal_passphrase_envelope, seal_passphrase_envelope,

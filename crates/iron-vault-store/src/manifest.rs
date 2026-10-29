@@ -224,6 +224,11 @@ impl VaultManifest {
         self.peer_generation
     }
 
+    /// The state generation and the peer generation, as the partial restore check takes them.
+    pub(crate) fn generations(&self) -> (StateGeneration, Option<StateGeneration>) {
+        (self.state_generation, self.peer_generation)
+    }
+
     /// Every record the vault holds, by record ID.
     pub fn entries(&self) -> &BTreeMap<RecordId, ManifestEntry> {
         &self.entries
