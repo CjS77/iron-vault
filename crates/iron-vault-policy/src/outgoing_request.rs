@@ -29,7 +29,9 @@ use crate::upstream_target::{UpstreamTarget, UpstreamTargetError};
 /// length, so neither the filled query nor the filled header is printed.
 ///
 /// The filled header's bytes are wiped when the request is dropped. The URL's copy of a filled query is not, because
-/// `url::Url` owns its buffer. TODO(transport epic): wipe or avoid the URL's copy when the request is sent.
+/// `url::Url` owns its buffer. The URL is never cloned: it moves into the [`CheckedRequest`](crate::CheckedRequest)
+/// and, through [`into_parts`](crate::CheckedRequest::into_parts), into the upstream client's HTTP library, whose own
+/// copies are the residual recorded in `design/secret-handling.md`.
 #[derive(Debug)]
 pub struct OutgoingRequest {
     method: Method,

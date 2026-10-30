@@ -143,6 +143,15 @@ impl CheckedRequest {
     pub fn host(&self) -> &Host {
         &self.host
     }
+
+    /// The method, URL and headers, moved out so the transport hands them to its HTTP library without copying them.
+    ///
+    /// The URL may hold a filled query slot and `url::Url` cannot be wiped, so moving it rather than cloning it leaves
+    /// the HTTP library's own copies as the only ones. Taking the parts consumes the checked request, so they are
+    /// exactly what was checked; they carry no proof of the check themselves, so the transport sends them at once.
+    pub fn into_parts(self) -> (Method, Url, OutgoingHeaders) {
+        (self.method, self.url, self.headers)
+    }
 }
 
 impl fmt::Debug for CheckedRequest {

@@ -14,9 +14,10 @@ fn request() -> CheckedRequest {
 #[test]
 fn the_reqwest_request_carries_the_checked_method_url_and_headers_only() {
     let checked = request();
-    let built = to_reqwest(&checked).unwrap();
+    let url = checked.url().clone();
+    let built = to_reqwest(checked).unwrap();
     assert_eq!(built.method(), reqwest::Method::GET);
-    assert_eq!(built.url(), checked.url());
+    assert_eq!(built.url(), &url);
     let names: Vec<&str> = built.headers().keys().map(|name| name.as_str()).collect();
     assert_eq!(names, ["accept", "x-custom", "x-api-key"]);
     assert!(built.body().is_none());
@@ -24,7 +25,7 @@ fn the_reqwest_request_carries_the_checked_method_url_and_headers_only() {
 
 #[test]
 fn every_outgoing_header_value_is_sensitive() {
-    let built = to_reqwest(&request()).unwrap();
+    let built = to_reqwest(request()).unwrap();
     assert!(built.headers().values().all(header::HeaderValue::is_sensitive));
     assert!(!format!("{:?}", built.headers()).contains(SECRET));
 }

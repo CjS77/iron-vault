@@ -177,6 +177,18 @@ fn spec_example_routes_pass() {
 }
 
 #[test]
+fn the_parts_are_the_checked_method_url_and_headers() {
+    let checked = Case::new("/venice/chat/completions").check().unwrap();
+    let expected = (checked.method(), checked.url().clone(), header_list(&checked));
+    let (method, url, headers) = checked.into_parts();
+    let headers: Vec<_> = headers
+        .iter()
+        .map(|(name, value)| (name.as_str().to_owned(), value.as_bytes().to_vec()))
+        .collect();
+    assert_eq!((method, url, headers), expected);
+}
+
+#[test]
 fn basic_slot_passes() {
     let basic = Case::basic("/brave/res/v1/web/search").check().unwrap();
     assert_eq!(header_list(&basic), [("Authorization".to_owned(), b"Basic S3CR3T".to_vec())]);

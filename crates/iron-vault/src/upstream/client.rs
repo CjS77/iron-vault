@@ -7,6 +7,7 @@
 //! sends exactly that request's method, URL and headers.
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -30,8 +31,9 @@ const ALPN_PROTOCOLS: [&[u8]; 2] = [b"h2", b"http/1.1"];
 pub struct TransportLimits {
     /// The time allowed to open the TCP connection and complete the TLS handshake.
     pub connect: Duration,
-    /// The time allowed from sending the request until the response headers arrive. It does not bound the body, so a
-    /// long streamed response is never cut off.
+    /// The time allowed from starting to send the request until the response headers arrive, including connecting and
+    /// the TLS handshake when no pooled connection is free. It does not bound the body, so a long streamed response is
+    /// never cut off.
     pub response_headers: Duration,
 }
 
@@ -101,7 +103,7 @@ impl UpstreamClient {
     ///
     /// It must run on a tokio runtime with its timer enabled, which both deadlines use.
     pub async fn send(&self, request: CheckedRequest) -> Result<UpstreamResponse, TransportError> {
-        let request = to_reqwest(&request)?;
+        let request = to_reqwest(request)?;
         let response = tokio::time::timeout(self.limits.response_headers, self.client.execute(request))
             .await
             .map_err(|_| TransportError::Timeout)?
@@ -146,17 +148,21 @@ impl fmt::Debug for UpstreamResponse {
 
 /// `trust`'s rustls config with ALPN set; reqwest leaves a preconfigured config's ALPN as it is.
 fn tls_config(trust: &UpstreamTrust) -> Result<ClientConfig, ClientConfigError> {
-    let mut config = std::sync::Arc::unwrap_or_clone(trust.client_config()?);
+    let mut config = Arc::unwrap_or_clone(trust.client_config()?);
     config.alpn_protocols = ALPN_PROTOCOLS.iter().map(|protocol| protocol.to_vec()).collect();
     Ok(config)
 }
 
 /// The reqwest request for `checked`: its method, URL and headers, with no body.
-fn to_reqwest(checked: &CheckedRequest) -> Result<Request, TransportError> {
-    let mut request = Request::new(method(checked.method()), checked.url().clone());
-    let headers = request.headers_mut();
-    checked.headers().iter().try_for_each(|(name, value)| {
-        headers.append(header_name(name)?, sensitive_value(value)?);
+///
+/// The URL is moved, not cloned, because it may hold a filled query slot that `url::Url` cannot wipe. The policy's
+/// header values are wiped when `headers` drops at the end of this function, leaving reqwest's copies.
+fn to_reqwest(checked: CheckedRequest) -> Result<Request, TransportError> {
+    let (checked_method, url, headers) = checked.into_parts();
+    let mut request = Request::new(method(checked_method), url);
+    let outgoing = request.headers_mut();
+    headers.iter().try_for_each(|(name, value)| {
+        outgoing.append(header_name(name)?, sensitive_value(value)?);
         Ok(())
     })?;
     Ok(request)
