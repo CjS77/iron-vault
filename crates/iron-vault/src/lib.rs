@@ -7,6 +7,9 @@ pub mod deployment;
 pub mod logging;
 pub mod path_metadata;
 pub mod peer;
+// The request socket accepts on tokio, which this crate depends on only on Linux.
+#[cfg(target_os = "linux")]
+pub mod request_socket;
 // Binding socket files uses rustix, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
 pub mod socket_file;
