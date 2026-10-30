@@ -8,6 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 pub mod checked;
+pub mod h2_refusal;
 pub mod hpack_fields;
 pub mod mock_upstream;
 pub mod mock_upstream_h2;

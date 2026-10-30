@@ -2,7 +2,8 @@
 //! §3.7, §3.12).
 //!
 //! The HTTP/1.1 tests in `upstream_client.rs` cover the rest of the client; these cover what only HTTP/2 has:
-//! `:authority`, HPACK's never-indexed literals, and failures signalled by RST_STREAM and GOAWAY.
+//! `:authority`, HPACK's never-indexed literals, failures signalled by RST_STREAM and GOAWAY, and that a request the
+//! upstream refused unprocessed is not re-sent (§7).
 //!
 //! Linux only: the test upstream terminates TLS with `tokio-rustls`, which this crate depends on only on Linux.
 
@@ -13,6 +14,7 @@
 mod common;
 
 use common::checked::checked;
+use common::h2_refusal::Refusal;
 use common::hpack_fields::{FieldName, Representation};
 use common::mock_upstream::{TestCa, UPSTREAM_HOST};
 use common::mock_upstream_h2::{H2Reply, MockH2Upstream, RecordedH2Request};
@@ -208,4 +210,24 @@ async fn goaway_for_a_protocol_error_is_a_safe_502() {
 
     assert_safe_502(error);
     assert_eq!(upstream.requests().len(), 1);
+}
+
+/// The client sends a refused request once and reports the refusal, however safe reqwest would judge a re-send.
+/// `reqwest_retry_control.rs` shows that reqwest's default policy does re-send both refusals.
+async fn assert_sent_once(refusal: Refusal) {
+    let (error, upstream) = failure(H2Reply::Refuse(refusal)).await;
+
+    assert_safe_502(error);
+    assert_eq!(upstream.connections(), 1, "a retry over a new connection");
+    assert!(upstream.request_heads() <= 1, "{} request heads", upstream.request_heads());
+}
+
+#[tokio::test]
+async fn a_refused_stream_is_not_retried() {
+    assert_sent_once(Refusal::RefusedStream).await;
+}
+
+#[tokio::test]
+async fn goaway_before_the_request_was_processed_is_not_retried() {
+    assert_sent_once(Refusal::GoAwayUnprocessed).await;
 }

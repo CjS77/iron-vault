@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 /// The one file that may name reqwest's client types: the upstream client's constructor lives there.
 const CONSTRUCTOR_FILE: &str = "crates/iron-vault/src/upstream/client.rs";
 
+/// The one test file that may build a reqwest client: it shows reqwest's default retry policy, which the constructor
+/// replaces, so it cannot go through the constructor.
+const RETRY_CONTROL_FILE: &str = "crates/iron-vault/tests/reqwest_retry_control.rs";
+
 /// Constructions clippy cannot refuse, which no file may contain.
 const REFUSED_EVERYWHERE: [&str; 2] = ["Client::default", "ClientBuilder::default"];
 
@@ -47,7 +51,7 @@ fn violations() -> Vec<String> {
         .flat_map(|path| {
             let relative = path.strip_prefix(&root).unwrap().to_string_lossy().into_owned();
             let text = fs::read_to_string(&path).unwrap();
-            let constructor = relative == CONSTRUCTOR_FILE;
+            let constructor = relative == CONSTRUCTOR_FILE || relative == RETRY_CONTROL_FILE;
             text.lines()
                 .enumerate()
                 .filter(|(_, line)| refused(line, constructor))

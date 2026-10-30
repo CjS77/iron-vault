@@ -20,6 +20,7 @@ use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
 
+use super::h2_refusal::{Refusal, refuse};
 use super::hpack_fields::{Field, first_header_fields};
 use super::mock_upstream::{TestCa, UPSTREAM_HOST};
 
@@ -37,6 +38,10 @@ pub enum H2Reply {
     Reset(Reason),
     /// Sends GOAWAY with this error code before any response, then closes the connection.
     GoAway(Reason),
+    /// Refuses every request before processing it, as reqwest's default retry policy treats as safe to re-send. The
+    /// server answers in raw frames rather than through `h2`, so it records no [`RecordedH2Request`], only each request
+    /// head in [`MockH2Upstream::request_heads`].
+    Refuse(Refusal),
 }
 
 impl H2Reply {
@@ -83,6 +88,7 @@ pub struct MockH2Upstream {
     port: u16,
     requests: Arc<Mutex<Vec<RecordedH2Request>>>,
     connections: Arc<AtomicUsize>,
+    heads: Arc<AtomicUsize>,
     task: JoinHandle<()>,
 }
 
@@ -95,17 +101,20 @@ impl MockH2Upstream {
         let port = listener.local_addr().unwrap().port();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let connections = Arc::new(AtomicUsize::new(0));
+        let heads = Arc::new(AtomicUsize::new(0));
         let server = Server {
             acceptor: TlsAcceptor::from(Arc::new(config)),
             reply: Arc::new(reply),
             requests: Arc::clone(&requests),
             connections: Arc::clone(&connections),
+            heads: Arc::clone(&heads),
         };
         let task = tokio::spawn(server.run(listener));
         Self {
             port,
             requests,
             connections,
+            heads,
             task,
         }
     }
@@ -129,6 +138,12 @@ impl MockH2Upstream {
     pub fn connections(&self) -> usize {
         self.connections.load(Ordering::SeqCst)
     }
+
+    /// How many request heads the server has received: each recorded request, plus each one a [`H2Reply::Refuse`]
+    /// refused.
+    pub fn request_heads(&self) -> usize {
+        self.heads.load(Ordering::SeqCst)
+    }
 }
 
 impl Drop for MockH2Upstream {
@@ -143,6 +158,7 @@ struct Server {
     reply: Arc<H2Reply>,
     requests: Arc<Mutex<Vec<RecordedH2Request>>>,
     connections: Arc<AtomicUsize>,
+    heads: Arc<AtomicUsize>,
 }
 
 type H2Connection = Connection<Recording<TlsStream<TcpStream>>, Bytes>;
@@ -163,6 +179,9 @@ impl Server {
         let Ok(tls) = self.acceptor.accept(stream).await else {
             return;
         };
+        if let H2Reply::Refuse(refusal) = *self.reply {
+            return refuse(tls, refusal, &self.heads).await;
+        }
         let session = tls.get_ref().1;
         let server_name = session.server_name().map(str::to_owned);
         let alpn = session.alpn_protocol().map(<[u8]>::to_vec);
@@ -179,6 +198,7 @@ impl Server {
         };
         // The request's HEADERS frame has been read in full by now, so `received` holds it.
         let fields = first_header_fields(&received.lock().unwrap());
+        self.heads.fetch_add(1, Ordering::SeqCst);
         let recorded = record(server_name, alpn, &request, fields);
         self.requests.lock().unwrap().push(recorded);
         reply(&self.reply, connection, respond).await;
@@ -220,6 +240,7 @@ async fn reply(reply: &H2Reply, mut connection: H2Connection, mut respond: SendR
         }
         H2Reply::Reset(reason) => respond.send_reset(*reason),
         H2Reply::GoAway(reason) => connection.abrupt_shutdown(*reason),
+        H2Reply::Refuse(_) => unreachable!("a refusing server never accepts a stream through h2"),
     }
     while let Some(Ok(_)) = connection.accept().await {}
 }
