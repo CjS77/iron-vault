@@ -1,3 +1,17 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
+
+# Specification §3.7: the service must offer no way to disable certificate or hostname verification. rustls's
+# `dangerous()` builders are the only way to replace its WebPKI verifier, so no code may call them.
+disallowed-methods = [
+    { path = "rustls::ConfigBuilder::dangerous", reason = "replaces certificate verification; §3.7 forbids disabling it", allow-invalid = true },
+    { path = "rustls::ClientConfig::dangerous", reason = "replaces certificate verification; §3.7 forbids disabling it", allow-invalid = true },
+]
+
+# A custom verifier is how verification gets switched off, so no code may name the verifier trait: clippy refuses
+# importing it, `dyn ServerCertVerifier` and trait bounds on it. It does not catch an `impl` that spells out the
+# trait's full path without importing it, so review must still refuse one.
+disallowed-types = [
+    { path = "rustls::client::danger::ServerCertVerifier", reason = "a custom verifier can skip certificate checks; §3.7 forbids disabling them", allow-invalid = true },
+]
