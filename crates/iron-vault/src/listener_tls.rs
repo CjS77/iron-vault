@@ -271,8 +271,10 @@ impl Source<'_> {
 
     /// Loads the key into the provider's signing key and checks it against the leaf certificate.
     ///
-    /// The key is moved into the provider because ring's key provider wraps the DER it receives in `Zeroizing`, so
-    /// it is wiped as soon as the signing key is built; `PrivateKeyDer` does not wipe itself on drop.
+    /// The key is moved into the provider because ring's key provider wraps the `PrivateKeyDer` it receives in
+    /// `Zeroizing`, so that buffer is wiped once loading returns; `PrivateKeyDer` does not wipe itself on drop. The
+    /// loader still makes unwiped intermediate copies of a SEC1 key while converting it to PKCS#8 (see the residual
+    /// copies in `design/secret-handling.md`).
     fn certified_key(
         &self,
         provider: &CryptoProvider,
