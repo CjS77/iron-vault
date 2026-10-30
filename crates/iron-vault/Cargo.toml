@@ -31,6 +31,8 @@ rustix.workspace = true
 tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "signal", "macros"] }
 
 [dev-dependencies]
+# Checks that no `log` backend is installed, so dependency `log` records are discarded.
+log.workspace = true
 proptest.workspace = true
 secrecy.workspace = true
 serde.workspace = true

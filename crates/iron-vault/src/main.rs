@@ -63,13 +63,8 @@ fn warn_development(env: &ProfileEnv, accounts: &Accounts) -> anyhow::Result<()>
     Ok(())
 }
 
-/// Installs a human-readable subscriber on stderr at INFO and above, without colour codes, because systemd and Docker
-/// capture stderr. EP-26 replaces this with the configurable audit and logging design.
+/// Installs the service's log subscriber with the HTTP and TLS dependency caps. EP-26 replaces the global level with the
+/// configurable audit and logging design.
 fn init_logging() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .try_init()
-        .map_err(|e| anyhow::anyhow!("could not install the log subscriber: {e}"))
+    iron_vault::logging::init().map_err(|e| anyhow::anyhow!("could not install the log subscriber: {e}"))
 }

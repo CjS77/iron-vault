@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod caller_token;
 pub mod deployment;
+pub mod logging;
 pub mod path_metadata;
 pub mod trusted_path;
 pub mod trusted_path_report;

@@ -1025,6 +1025,7 @@ dependencies = [
  "anyhow",
  "clap",
  "iron-vault-policy",
+ "log",
  "proptest",
  "rand_core 0.6.4",
  "rustix",
