@@ -169,3 +169,34 @@ fn refusal_names_the_unit_to_add() {
     let message = NotActivated { listener: name("local") }.to_string();
     assert!(message.contains("add a .socket unit for listener local"), "{message}");
 }
+
+/// The listeners `local` and `backoffice` as a parsed config holds them.
+fn configured() -> BTreeMap<ListenerName, iron_vault_policy::ListenerConfig> {
+    let toml = "schema_version = 1\n[listeners.local]\nunix_socket = \"/run/iron-vault/proxy.sock\"\n\
+                [listeners.backoffice]\naddress = \"127.0.0.1:7878\"\n";
+    iron_vault_policy::ParsedConfig::from_toml(toml.as_bytes())
+        .unwrap()
+        .listeners()
+        .clone()
+}
+
+#[test]
+fn adopt_takes_nothing_when_the_variables_are_not_for_this_process() {
+    let owner = crate::trusted_path::ExpectedOwner { uid: 997 };
+    [env(None, Some("1"), Some("local")), env(Some("4243"), Some("1"), Some("local"))]
+        .iter()
+        .for_each(|env| assert!(adopt(env, PID, &configured(), owner).unwrap().is_empty()));
+}
+
+#[test]
+fn adopt_refuses_variables_that_disagree_with_the_config_before_taking_any_fd() {
+    let owner = crate::trusted_path::ExpectedOwner { uid: 997 };
+    let refused = adopt(&env(Some("4242"), Some("1"), Some("other")), PID, &configured(), owner).unwrap_err();
+    assert_eq!(
+        refused,
+        AdoptError::Activation(ActivationError::UnknownName {
+            fd: FIRST_FD,
+            name: "\"other\"".to_string()
+        })
+    );
+}

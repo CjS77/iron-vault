@@ -17,7 +17,7 @@ use listenfd::ListenFd;
 use rustix::io::FdFlags;
 use rustix::net::{AddressFamily, SocketAddrAny, SocketAddrUnix, SocketType, sockopt};
 
-use super::{ActivationError, FIRST_FD};
+use super::{ActivationEnv, ActivationError, FIRST_FD, Inheritance, inheritance};
 use crate::request_socket::{self, DirFault};
 use crate::socket_file;
 use crate::trusted_path::ExpectedOwner;
@@ -124,11 +124,26 @@ pub enum AdoptError {
     },
 }
 
-/// Takes the sockets systemd passed, in fd order as `inherited` names them, and checks each against its listener.
+/// Takes the sockets systemd passed to the process `pid`, as `env` describes them, and checks each against its
+/// listener in `listeners`. Variables meant for another process, or none at all, give an empty map.
 ///
-/// Every adopted fd is close-on-exec. Call it at most once, before the service starts any thread: `listenfd` removes
-/// `LISTEN_PID` and `LISTEN_FDS` from the environment as it takes the fds.
+/// Every adopted fd is close-on-exec. Call it at most once, before the service starts any thread or async runtime:
+/// `listenfd` removes `LISTEN_PID` and `LISTEN_FDS` from the environment as it takes the fds.
 pub fn adopt(
+    env: &ActivationEnv,
+    pid: u32,
+    listeners: &BTreeMap<ListenerName, ListenerConfig>,
+    owner: ExpectedOwner,
+) -> Result<BTreeMap<ListenerName, AdoptedSocket>, AdoptError> {
+    let known = listeners.keys().cloned().collect();
+    match inheritance(env, pid, &known)? {
+        Inheritance::Listeners(inherited) => adopt_inherited(&inherited, listeners, owner),
+        Inheritance::Nothing | Inheritance::OtherProcess { .. } => Ok(BTreeMap::new()),
+    }
+}
+
+/// Takes the sockets in fd order as `inherited` names them, and checks each against its listener.
+fn adopt_inherited(
     inherited: &[ListenerName],
     listeners: &BTreeMap<ListenerName, ListenerConfig>,
     owner: ExpectedOwner,

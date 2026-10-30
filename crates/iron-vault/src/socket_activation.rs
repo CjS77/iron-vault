@@ -8,12 +8,12 @@
 //! systemd describes the sockets it passes in three variables: `LISTEN_PID` (the process they are for), `LISTEN_FDS`
 //! (how many, from fd 3 up) and `LISTEN_FDNAMES` (each socket's `FileDescriptorName=`, `:`-separated). The service
 //! reads them once at startup into an [`ActivationEnv`], and [`inheritance`] decides from that value alone which
-//! listener each fd belongs to, so the protocol rules are tested without systemd. [`adopt`] then takes the fds and
-//! checks each one against its listener's configured endpoint before anything uses it.
+//! listener each fd belongs to, so the protocol rules are tested without systemd. [`adopt`] asks it, then takes the fds
+//! and checks each one against its listener's configured endpoint before anything uses it.
 //!
 //! The service never removes the variables itself: removing one needs `remove_var`, which is unsafe in edition 2024.
 //! `listenfd`, which takes ownership of the fds, removes `LISTEN_PID` and `LISTEN_FDS` as it does so, so adoption must
-//! run before the service starts any thread. `LISTEN_FDNAMES` stays set; the service starts no child process, so
+//! run before the service starts any thread, its async runtime included. `LISTEN_FDNAMES` stays set; the service starts no child process, so
 //! nothing inherits it.
 //!
 //! An end-to-end run under `systemd-socket-activate` is EP-34's release test.
