@@ -38,10 +38,15 @@ pub fn run(paths: &ServicePaths) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Creates the runtime directory at mode `0700` when it is missing. In a packaged install the service manager has
+/// Creates the runtime directory at mode `0711` when it is missing. In a packaged install the service manager has
 /// already created it; a development install has nothing else to make it.
+///
+/// Other accounts may search the directory, so they can reach a request socket inside it, but never list or write it,
+/// so none can put its own socket there (§3.4). The admin socket in it stays `0600` and peer-checked. In development
+/// the directory sits in the user's `0700` `$XDG_RUNTIME_DIR`, so other accounts still cannot reach it; development
+/// gives no isolation from other accounts' callers anyway.
 fn create_runtime_dir(dir: &Path) -> anyhow::Result<()> {
-    match DirBuilder::new().mode(0o700).create(dir) {
+    match DirBuilder::new().mode(0o711).create(dir) {
         Err(e) if e.kind() != io::ErrorKind::AlreadyExists => {
             Err(e).with_context(|| format!("cannot create the runtime directory {}", dir.display()))
         }
