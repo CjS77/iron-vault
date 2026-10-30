@@ -6,15 +6,11 @@
 //! (R-6) is the directory: it must pass the runtime-directory rule, so only the service account can write it.
 
 use std::fs;
-use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
 
-use tokio::net::{UnixListener, UnixStream};
-
 use crate::deployment::DeploymentProfile;
-use crate::peer::{PeerIdentity, peer_identity};
 use crate::socket_file::{self, SocketRole, SocketSpec};
 pub use crate::socket_file::{BindError, SocketFile};
 use crate::trusted_path::{ExpectedOwner, TrustedPathRule};
@@ -63,13 +59,6 @@ pub struct RequestSocket {
     file: SocketFile,
 }
 
-/// A request socket accepting connections on the async runtime, each with the peer identity the kernel reports.
-#[derive(Debug)]
-pub struct RequestListener {
-    listener: UnixListener,
-    file: SocketFile,
-}
-
 impl RequestSocket {
     /// Binds a request socket at `path` for the service account `owner`, replacing a stale socket that account owns.
     ///
@@ -98,42 +87,6 @@ impl RequestSocket {
     /// The listening socket and the socket file it owns, for a caller that registers the socket itself.
     pub(crate) fn into_parts(self) -> (StdUnixListener, SocketFile) {
         (self.listener, self.file)
-    }
-
-    /// Hands the listener to the async runtime this is called within.
-    pub fn into_listener(self) -> io::Result<RequestListener> {
-        Ok(RequestListener {
-            listener: UnixListener::from_std(self.listener)?,
-            file: self.file,
-        })
-    }
-}
-
-impl RequestListener {
-    /// The socket file's path.
-    pub fn path(&self) -> &Path {
-        self.file.path()
-    }
-
-    /// The next connection and its peer identity.
-    ///
-    /// A connection whose peer credentials cannot be read is closed and logged, and accepting goes on: without them a
-    /// peer caller cannot be told apart from any other account, so it is never served. An error is a failed accept,
-    /// such as running out of file descriptors; the caller should pause before accepting again.
-    pub async fn accept(&self) -> io::Result<(UnixStream, PeerIdentity)> {
-        loop {
-            let (stream, _) = self.listener.accept().await?;
-            match peer_identity(&stream) {
-                Ok(peer) => return Ok((stream, peer)),
-                Err(e) => tracing::warn!("request connection closed: cannot read its peer credentials: {e}"),
-            }
-        }
-    }
-
-    /// Stops listening and removes the socket file, reporting a failure that dropping would only log.
-    pub fn close(self) -> io::Result<()> {
-        drop(self.listener);
-        self.file.remove()
     }
 }
 

@@ -1,5 +1,5 @@
-//! A request socket end to end, as the unprivileged test user: binding at `0666` in a trusted directory, stale and
-//! foreign files at the path, the admin socket's path, and the peer identity of each connection. The service account
+//! Binding a request socket end to end, as the unprivileged test user: binding at `0666` in a trusted directory,
+//! stale and foreign files at the path, and the admin socket's path. The service account
 //! is the test's own uid.
 
 #![cfg(target_os = "linux")]
@@ -7,11 +7,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;
-use std::io;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt, symlink};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
 
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::path_metadata::invoking_user;
@@ -143,19 +141,4 @@ fn dropping_the_socket_removes_its_file() {
     assert!(dir.socket().exists());
     drop(socket);
     assert!(fs::symlink_metadata(dir.socket()).is_err(), "the socket file was left behind");
-}
-
-#[tokio::test]
-async fn a_connection_reports_the_connecting_processs_uid() {
-    let dir = RuntimeDir::new();
-    let listener = dir.bind().unwrap().into_listener().unwrap();
-    let _client = tokio::net::UnixStream::connect(listener.path()).await.unwrap();
-    let (_stream, peer) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
-        .await
-        .expect("a connection arrives")
-        .unwrap();
-    assert_eq!(peer.uid(), rustix::process::getuid().as_raw());
-    assert_eq!(peer.pid(), std::process::id());
-    listener.close().unwrap();
-    assert_eq!(fs::symlink_metadata(dir.socket()).unwrap_err().kind(), io::ErrorKind::NotFound);
 }
