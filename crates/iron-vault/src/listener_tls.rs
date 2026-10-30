@@ -177,7 +177,7 @@ impl ListenerTls {
     }
 
     /// [`open`](Self::open) with the file reader passed in, so loading is testable without trusted paths on disk.
-    fn open_with(
+    pub(crate) fn open_with(
         listener: &ListenerName,
         files: &TlsFiles,
         handshake_timeout: Duration,

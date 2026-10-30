@@ -95,6 +95,11 @@ impl RequestSocket {
         self.file.path()
     }
 
+    /// The listening socket and the socket file it owns, for a caller that registers the socket itself.
+    pub(crate) fn into_parts(self) -> (StdUnixListener, SocketFile) {
+        (self.listener, self.file)
+    }
+
     /// Hands the listener to the async runtime this is called within.
     pub fn into_listener(self) -> io::Result<RequestListener> {
         Ok(RequestListener {
