@@ -9,8 +9,17 @@ unix_socket = "/run/iron-vault/proxy.sock"
 
 [callers.fx-mcp]
 listener = "local"
-token_hash = "blake2b:0123456789abcdef00112233445566778899aabbccddeeff0f1e2d3c4b5a6978"
+auth = "peer"
+user = "fx-mcp"
 routes = ["fx"]
+
+[listeners.loopback]
+address = "127.0.0.1:7878"
+
+[callers.brave-cli]
+listener = "loopback"
+token_hash = "blake2b:0123456789abcdef00112233445566778899aabbccddeeff0f1e2d3c4b5a6978"
+routes = ["brave"]
 
 [callers.naomi-backoffice]
 listener = "naomi-backoffice"

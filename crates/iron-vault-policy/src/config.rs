@@ -262,8 +262,8 @@ mod tests {
     fn spec_example_parses() {
         let config = parse(SPEC_EXAMPLE).unwrap();
         assert_eq!(config.schema_version(), 1);
-        assert_eq!(names(config.listeners()), ["local", "naomi-backoffice"]);
-        assert_eq!(names(config.callers()), ["fx-mcp", "naomi-backoffice"]);
+        assert_eq!(names(config.listeners()), ["local", "loopback", "naomi-backoffice"]);
+        assert_eq!(names(config.callers()), ["brave-cli", "fx-mcp", "naomi-backoffice"]);
         assert_eq!(names(config.routes()), ["brave", "fx", "venice"]);
         assert_eq!(config.limits(), &Limits::default());
         let venice = config.routes().values().find(|r| r.prefix().as_str() == "/venice").unwrap();

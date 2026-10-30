@@ -560,8 +560,8 @@ mod tests {
     fn spec_example_validates() {
         let config = validate(SPEC_EXAMPLE).unwrap();
         assert_eq!(config.routes().len(), 3);
-        assert_eq!(config.callers().len(), 2);
-        assert_eq!(config.listeners().len(), 2);
+        assert_eq!(config.callers().len(), 3);
+        assert_eq!(config.listeners().len(), 3);
         assert_eq!(config.limits(), &Limits::default());
     }
 

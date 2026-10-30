@@ -217,7 +217,8 @@ fx = { requests = 1, per_seconds = 60, burst = 3 }
 
 [callers.fx-other]
 listener = "local"
-token_hash = "blake2b:1111111111111111111111111111111111111111111111111111111111111111"
+auth = "peer"
+user = "fx-other"
 routes = ["fx"]
 "#;
 
