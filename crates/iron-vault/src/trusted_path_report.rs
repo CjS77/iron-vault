@@ -5,8 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::deployment::DeploymentProfile;
 use crate::path_metadata::{self, CollectError};
-use crate::trusted_path::{self, CautionedFile, ExpectedOwner, PathCaution, Profile, TrustedPathRule, UnsafePath};
+use crate::trusted_path::{self, CautionedFile, ExpectedOwner, PathCaution, TrustedPathRule, UnsafePath};
 
 /// The name of the state-directory lock file inside the state directory.
 const STATE_LOCK_FILE: &str = "lock";
@@ -16,7 +17,7 @@ const STATE_LOCK_FILE: &str = "lock";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServicePaths {
     /// Who may own the binary.
-    pub profile: Profile,
+    pub profile: DeploymentProfile,
     /// Who must own the config, the state and runtime directories and the state files.
     pub owner: ExpectedOwner,
     /// The configuration file. Its directory is checked as the config path's last ancestor.
@@ -77,7 +78,12 @@ impl TrustedPathReport {
 }
 
 /// Collects `path`'s metadata and checks it against `rule`, returning its path cautions when it is trusted.
-pub fn check_path(rule: TrustedPathRule, profile: Profile, owner: ExpectedOwner, path: &Path) -> Result<Vec<PathCaution>, PathFailure> {
+pub fn check_path(
+    rule: TrustedPathRule,
+    profile: DeploymentProfile,
+    owner: ExpectedOwner,
+    path: &Path,
+) -> Result<Vec<PathCaution>, PathFailure> {
     let components = path_metadata::collect(path)?;
     Ok(trusted_path::check_with_cautions(rule, profile, owner, &components)?)
 }
@@ -120,7 +126,7 @@ fn caution_warning(caution: &PathCaution, trusted: &Path) -> String {
 }
 
 /// The running binary's entry: it must still be the file the process started from, and pass the binary rule.
-fn binary_entry(profile: Profile, owner: ExpectedOwner) -> TrustedPathEntry {
+fn binary_entry(profile: DeploymentProfile, owner: ExpectedOwner) -> TrustedPathEntry {
     let rule = TrustedPathRule::Binary;
     match std::env::current_exe() {
         Ok(path) => {

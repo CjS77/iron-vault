@@ -16,9 +16,10 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::{self, MAX_SYMLINK_HOPS, invoking_user};
 use iron_vault::trusted_path::{
-    self, ComponentKind, ExpectedOwner, Mode, PathComponent, Problem, Profile, SymlinkTarget, TrustedPathRule, UnsafePath,
+    self, ComponentKind, ExpectedOwner, Mode, PathComponent, Problem, SymlinkTarget, TrustedPathRule, UnsafePath,
 };
 use iron_vault::trusted_path_report::{PathFailure, ServicePaths, TrustedPathReport, check_path};
 
@@ -65,13 +66,13 @@ fn me() -> ExpectedOwner {
 
 /// Checks a real path in development, which never has path cautions.
 fn check_real(rule: TrustedPathRule, path: &Path) -> Result<(), PathFailure> {
-    check_path(rule, Profile::Development, me(), path).map(|cautions| assert_eq!(cautions, []))
+    check_path(rule, DeploymentProfile::Development, me(), path).map(|cautions| assert_eq!(cautions, []))
 }
 
 /// Checks `path` as if the shared sticky directory above `tree` were a private `0755` directory.
 fn check_beside_tmp(tree: &Tree, rule: TrustedPathRule, path: &Path) -> Result<(), UnsafePath> {
     let chain = privatize_shared_ancestors(&tree.0, path_metadata::collect(path).unwrap());
-    trusted_path::check(rule, Profile::Development, me(), &chain)
+    trusted_path::check(rule, DeploymentProfile::Development, me(), &chain)
 }
 
 fn privatize_shared_ancestors(root: &Path, chain: Vec<PathComponent>) -> Vec<PathComponent> {
@@ -254,7 +255,7 @@ fn the_report_lists_every_path_in_a_fixed_order() {
     state_tree(&tree.path("state"), 0o600);
     dir(&tree.path("run"), 0o755);
     let paths = ServicePaths {
-        profile: Profile::Development,
+        profile: DeploymentProfile::Development,
         owner: me(),
         config: tree.path("etc/config.toml"),
         state_dir: tree.path("state"),
@@ -278,7 +279,7 @@ fn the_report_lists_every_path_in_a_fixed_order() {
 #[test]
 fn a_report_without_a_runtime_dir_omits_it() {
     let paths = ServicePaths {
-        profile: Profile::Protected,
+        profile: DeploymentProfile::Protected,
         owner: me(),
         config: PathBuf::from("/nonexistent/config.toml"),
         state_dir: PathBuf::from("/nonexistent/state"),

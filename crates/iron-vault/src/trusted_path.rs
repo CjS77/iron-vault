@@ -11,6 +11,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::deployment::DeploymentProfile;
+
 /// The uid of root, which is trusted for every ancestor directory and owns protected binaries.
 const ROOT_UID: u32 = 0;
 
@@ -110,17 +112,6 @@ pub enum SymlinkTarget {
 pub struct ExpectedOwner {
     /// The expected uid.
     pub uid: u32,
-}
-
-/// The deployment profile, which decides only who may own the binary and whether its path has cautions.
-///
-/// EP-14 owns the full deployment profile and replaces this enum with it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Profile {
-    /// A supported protected installation: root owns the binary.
-    Protected,
-    /// A user-level installation with no isolation from that user's malware: the invoking user may own the binary.
-    Development,
 }
 
 /// Which trusted path is being checked; each kind has its own rule for the leaf.
@@ -321,7 +312,12 @@ impl std::error::Error for UnsafePath {}
 /// Returns the first unsafe component in that order, so the same metadata always gives the same report. A symlink's
 /// resolved target is checked as a trusted path of its own, playing the symlink's part: the leaf rule when the
 /// symlink is the leaf, the ancestor rule otherwise.
-pub fn check(rule: TrustedPathRule, profile: Profile, owner: ExpectedOwner, components: &[PathComponent]) -> Result<(), UnsafePath> {
+pub fn check(
+    rule: TrustedPathRule,
+    profile: DeploymentProfile,
+    owner: ExpectedOwner,
+    components: &[PathComponent],
+) -> Result<(), UnsafePath> {
     check_with_cautions(rule, profile, owner, components).map(|_| ())
 }
 
@@ -350,7 +346,7 @@ pub struct PathCaution {
 /// refusal only.
 pub fn check_with_cautions(
     rule: TrustedPathRule,
-    profile: Profile,
+    profile: DeploymentProfile,
     owner: ExpectedOwner,
     components: &[PathComponent],
 ) -> Result<Vec<PathCaution>, UnsafePath> {
@@ -376,7 +372,7 @@ enum Role {
 #[derive(Debug, Clone, Copy)]
 struct Walk {
     rule: TrustedPathRule,
-    profile: Profile,
+    profile: DeploymentProfile,
     owner: ExpectedOwner,
     depth: usize,
 }
@@ -491,7 +487,7 @@ impl Walk {
     /// A passing ancestor's caution: in the protected profile, the binary must be root's alone, so an ancestor the
     /// service account owns lets that account replace it.
     fn caution(self, component: &PathComponent) -> Option<PathCaution> {
-        let cautioned = self.profile == Profile::Protected && component.uid != ROOT_UID;
+        let cautioned = self.profile == DeploymentProfile::Protected && component.uid != ROOT_UID;
         self.rule.cautioned_file().filter(|_| cautioned).map(|file| PathCaution {
             file,
             path: component.path.clone(),
@@ -504,8 +500,8 @@ impl Walk {
     /// reach, so it is never less safe than one the user owns.
     const fn binary_owner(self) -> OwnerRequirement {
         match self.profile {
-            Profile::Protected => OwnerRequirement::Root,
-            Profile::Development => OwnerRequirement::root_or(self.owner.uid),
+            DeploymentProfile::Protected => OwnerRequirement::Root,
+            DeploymentProfile::Development => OwnerRequirement::root_or(self.owner.uid),
         }
     }
 }

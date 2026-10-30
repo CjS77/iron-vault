@@ -1,4 +1,5 @@
-//! Checks that the service binary prints its startup hardening report on stderr.
+//! Checks that the service binary prints its startup hardening report on stderr. The process may then stop on a
+//! missing install account, which `deployment_profile.rs` covers.
 
 #![cfg(target_os = "linux")]
 
@@ -12,7 +13,6 @@ fn reports_missing_swap_protection_on_stderr() {
         .output()
         .expect("spawn iron-vault through sh");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "exit status {:?}, stderr: {stderr}", output.status);
     let error_line = stderr
         .lines()
         .find(|line| line.contains("ERROR") && line.contains("swap protection is not in effect"))

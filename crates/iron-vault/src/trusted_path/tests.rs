@@ -118,7 +118,7 @@ fn nested_links(levels: usize) -> Vec<PathComponent> {
 struct Case {
     name: &'static str,
     rule: TrustedPathRule,
-    profile: Profile,
+    profile: DeploymentProfile,
     owner: ExpectedOwner,
     chain: Vec<PathComponent>,
     expected: Result<(), UnsafePath>,
@@ -128,7 +128,7 @@ fn case(name: &'static str, rule: TrustedPathRule, chain: Vec<PathComponent>, ex
     Case {
         name,
         rule,
-        profile: Profile::Protected,
+        profile: DeploymentProfile::Protected,
         owner: SERVICE_OWNER,
         chain,
         expected,
@@ -137,7 +137,7 @@ fn case(name: &'static str, rule: TrustedPathRule, chain: Vec<PathComponent>, ex
 
 fn dev_case(name: &'static str, rule: TrustedPathRule, chain: Vec<PathComponent>, expected: Result<(), UnsafePath>) -> Case {
     Case {
-        profile: Profile::Development,
+        profile: DeploymentProfile::Development,
         owner: USER_OWNER,
         ..case(name, rule, chain, expected)
     }
@@ -655,7 +655,7 @@ fn root_as_expected_owner_is_named_once() {
     ];
     let result = check(
         TrustedPathRule::RuntimeDir,
-        Profile::Protected,
+        DeploymentProfile::Protected,
         ExpectedOwner { uid: ROOT_UID },
         &chain,
     );
@@ -722,7 +722,7 @@ fn caution(file: CautionedFile, path: &str, uid: u32) -> PathCaution {
 }
 
 fn protected_cautions(rule: TrustedPathRule, chain: &[PathComponent]) -> Result<Vec<PathCaution>, UnsafePath> {
-    check_with_cautions(rule, Profile::Protected, SERVICE_OWNER, chain)
+    check_with_cautions(rule, DeploymentProfile::Protected, SERVICE_OWNER, chain)
 }
 
 #[test]
@@ -774,7 +774,7 @@ fn a_caution_names_the_owner_when_the_adapter_resolved_it() {
 fn development_has_no_cautions() {
     let chain = opt_binary_chain(USER);
     assert_eq!(
-        check_with_cautions(TrustedPathRule::Binary, Profile::Development, USER_OWNER, &chain),
+        check_with_cautions(TrustedPathRule::Binary, DeploymentProfile::Development, USER_OWNER, &chain),
         Ok(vec![])
     );
 }

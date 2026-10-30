@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# Builds the Development deployment profile: the invoking user runs the service, with no isolation from that user's
+# malware. Never enable it in a packaged build; CI refuses a release build whose `--version` names it.
+dev-mode = []
+
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
