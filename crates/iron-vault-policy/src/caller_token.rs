@@ -51,6 +51,10 @@ pub enum CallerTokenError {
         /// Byte offset of the offending byte within the whole token.
         position: usize,
     },
+    /// The last character sets bits beyond the 256 the token encodes, so it is not the canonical encoding of any
+    /// 32 bytes. 43 base64url characters carry 258 bits; the last must be one of `AEIMQUYcgkosw048`.
+    #[error("caller token's last character is not a canonical base64url ending")]
+    NonCanonicalEnding,
 }
 
 impl CallerToken {
@@ -62,7 +66,7 @@ impl CallerToken {
     pub fn from_random<R: CryptoRngCore + ?Sized>(rng: &mut R) -> Result<Self, rand_core::Error> {
         let mut bytes = Zeroizing::new([0u8; CALLER_TOKEN_BYTES]);
         rng.try_fill_bytes(bytes.as_mut_slice())?;
-        Ok(Self::from_bytes(*bytes))
+        Ok(Self::encode(&bytes))
     }
 
     /// Encodes the given bytes as a token.
@@ -70,7 +74,11 @@ impl CallerToken {
     /// This promises no randomness: the caller is responsible for the bytes being fresh and unpredictable. New tokens
     /// come from [`CallerToken::from_random`].
     pub fn from_bytes(bytes: [u8; CALLER_TOKEN_BYTES]) -> Self {
-        let bytes = Zeroizing::new(bytes);
+        Self::encode(&Zeroizing::new(bytes))
+    }
+
+    /// Encodes bytes the caller already holds in a wiped buffer, so neither constructor copies them out of it.
+    fn encode(bytes: &[u8; CALLER_TOKEN_BYTES]) -> Self {
         // Sized exactly, so neither encoding nor the conversion to a boxed `str` reallocates and strands a copy.
         let mut text = String::with_capacity(CALLER_TOKEN_LEN);
         text.push_str(CALLER_TOKEN_PREFIX);
@@ -78,7 +86,11 @@ impl CallerToken {
         Self(SecretString::from(text))
     }
 
-    /// Reads a presented token, checking its prefix, its length and that every following byte is base64url.
+    /// Reads a presented token, checking its prefix, its length, that every following byte is base64url, and that the
+    /// last character is one of `AEIMQUYcgkosw048`.
+    ///
+    /// The last check keeps the text canonical: 43 base64url characters carry 258 bits, so the last character's low
+    /// two bits must be zero for the text to be the one encoding of its 32 bytes.
     pub fn parse(presented: &[u8]) -> Result<Self, CallerTokenError> {
         let encoded = presented
             .strip_prefix(CALLER_TOKEN_PREFIX.as_bytes())
@@ -91,7 +103,11 @@ impl CallerToken {
                 position: CALLER_TOKEN_PREFIX.len() + offset,
             });
         }
-        // Every byte is ASCII by now, so this conversion cannot fail; it borrows instead of copying.
+        if !encoded.last().is_some_and(|b| is_canonical_ending(*b)) {
+            return Err(CallerTokenError::NonCanonicalEnding);
+        }
+        // Every byte is ASCII by now, so this conversion cannot fail. The error is still mapped rather than unwrapped
+        // because library code never panics. It borrows instead of copying.
         let text = std::str::from_utf8(presented).map_err(|e| CallerTokenError::BadCharacter { position: e.valid_up_to() })?;
         Ok(Self(SecretString::from(text)))
     }
@@ -110,6 +126,11 @@ impl CallerToken {
 /// Whether `b` is in the URL-safe base64 alphabet (RFC 4648 §5).
 fn is_base64url(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
+}
+
+/// Whether `b` is a base64url character whose alphabet index is divisible by 4, so its low two bits are zero.
+fn is_canonical_ending(b: u8) -> bool {
+    b"AEIMQUYcgkosw048".contains(&b)
 }
 
 impl fmt::Debug for CallerToken {

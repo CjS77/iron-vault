@@ -195,6 +195,18 @@ fn parse_errors_never_echo_the_input() {
         });
 }
 
+#[test]
+fn parse_refuses_a_non_canonical_last_character() {
+    ["9", "-", "_"].iter().for_each(|last| {
+        let presented = format!("{}{last}", &KAT_TOKEN[..46]);
+        let error = CallerToken::parse(presented.as_bytes()).unwrap_err();
+        assert_eq!(error, CallerTokenError::NonCanonicalEnding, "{last}");
+        [error.to_string(), format!("{error:?}")]
+            .iter()
+            .for_each(|message| assert!(!message.contains("AAECAwQF"), "{message}"));
+    });
+}
+
 proptest! {
     #[test]
     fn from_bytes_then_parse_round_trips(bytes in any::<[u8; CALLER_TOKEN_BYTES]>()) {
