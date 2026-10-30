@@ -5,13 +5,11 @@
 //! config or flag, and without that feature the development code paths are not compiled in.
 //!
 //! Resolution is pure: [`ServicePaths::for_profile`] takes what it needs from the process as a [`ProfileEnv`] value,
-//! and only [`ProfileEnv::from_process`] and [`Accounts::read`] touch the system. Library crates take the resolved
+//! and only [`ProfileEnv::from_process`], [`Accounts::read`] and [`PasswdDirectory::new`] touch the system. Library crates take the resolved
 //! paths as inputs and never see the profile.
 
 use std::io;
-#[cfg(feature = "dev-mode")]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use iron_vault_policy::{AccountDirectory, AccountName};
 
@@ -24,6 +22,12 @@ pub const SERVICE_ACCOUNT: &str = "iron-vault";
 
 /// Where the local accounts are listed. Package-created system accounts are always here, so no NSS lookup is needed.
 const PASSWD: &str = "/etc/passwd";
+
+/// Where Linux publishes the uid it reports for a peer whose uid has no mapping in this process's user namespace.
+pub const OVERFLOW_UID_FILE: &str = "/proc/sys/kernel/overflowuid";
+
+/// The kernel's overflow uid when [`OVERFLOW_UID_FILE`] does not exist: Linux's built-in default, `nobody`.
+pub const DEFAULT_OVERFLOW_UID: u32 = 65534;
 
 /// The protected config sits in its own service-owned directory so the service can write `config.toml.pending` and
 /// `config.toml.sig` beside it, and the vault's files stay alone in the state directory.
@@ -90,6 +94,21 @@ pub enum ProfileError {
         /// The underlying error kind.
         kind: io::ErrorKind,
     },
+    /// The kernel's overflow uid file exists but could not be read.
+    #[error("cannot read {}: {kind}", .path.display())]
+    OverflowUidUnreadable {
+        /// The file.
+        path: PathBuf,
+        /// The underlying error kind.
+        kind: io::ErrorKind,
+    },
+    /// The kernel's overflow uid file does not hold a uid. Its contents are not echoed, and no uid is guessed: a wrong
+    /// guess would let `nobody` be a peer account.
+    #[error("{} does not hold a uid", .path.display())]
+    OverflowUidMalformed {
+        /// The file.
+        path: PathBuf,
+    },
     /// The invoking user could not be identified.
     #[error(transparent)]
     InvokingUser(#[from] CollectError),
@@ -132,18 +151,37 @@ impl Accounts {
 pub struct PasswdDirectory {
     accounts: Accounts,
     service_account_uid: u32,
+    overflow_uid: u32,
 }
 
 impl PasswdDirectory {
-    /// Resolves names against `accounts`, with the owner of `paths` as the service account.
+    /// Resolves names against `accounts`, with the owner of `paths` as the service account and the overflow uid read
+    /// once from `overflow_uid_file`, which is [`OVERFLOW_UID_FILE`] outside tests.
     ///
     /// The owner is the account the service runs as in every profile: the `iron-vault` account in a protected install,
-    /// the invoking user in development.
-    pub fn new(accounts: Accounts, paths: &ServicePaths) -> Self {
-        Self {
+    /// the invoking user in development. A missing overflow uid file, which happens only off Linux or without `/proc`,
+    /// means [`DEFAULT_OVERFLOW_UID`].
+    pub fn new(accounts: Accounts, paths: &ServicePaths, overflow_uid_file: &Path) -> Result<Self, ProfileError> {
+        Ok(Self {
             accounts,
             service_account_uid: paths.owner.uid,
-        }
+            overflow_uid: read_overflow_uid(overflow_uid_file)?,
+        })
+    }
+}
+
+/// The uid in `path`, or [`DEFAULT_OVERFLOW_UID`] when it does not exist.
+fn read_overflow_uid(path: &Path) -> Result<u32, ProfileError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => text
+            .trim()
+            .parse()
+            .map_err(|_| ProfileError::OverflowUidMalformed { path: path.to_path_buf() }),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(DEFAULT_OVERFLOW_UID),
+        Err(e) => Err(ProfileError::OverflowUidUnreadable {
+            path: path.to_path_buf(),
+            kind: e.kind(),
+        }),
     }
 }
 
@@ -154,6 +192,10 @@ impl AccountDirectory for PasswdDirectory {
 
     fn service_account_uid(&self) -> u32 {
         self.service_account_uid
+    }
+
+    fn overflow_uid(&self) -> u32 {
+        self.overflow_uid
     }
 }
 

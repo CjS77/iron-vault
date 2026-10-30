@@ -14,18 +14,17 @@ const ROOT_UID: u32 = 0;
 /// A peer caller whose account resolved to an acceptable uid.
 type Resolved<'a> = (&'a CallerName, &'a ListenerName, u32);
 
-/// Every peer caller's uid, or every reason one cannot be used: unknown and privileged accounts in caller name order,
+/// Every peer caller's uid, or every reason one cannot be used: unknown, privileged and overflow accounts in caller name order,
 /// then uids shared on one listener in listener and uid order.
 pub(super) fn resolve(
     config: &ValidatedConfig,
     accounts: &impl AccountDirectory,
 ) -> Result<BTreeMap<CallerName, u32>, Vec<ActivationError>> {
-    let service = accounts.service_account_uid();
     let (resolved, refused): (Vec<_>, Vec<_>) = config
         .callers()
         .iter()
         .filter_map(|(name, caller)| match caller.auth() {
-            CallerAuth::Peer(user) => Some(resolve_caller(name, user, accounts, service).map(|uid| (name, caller.listener(), uid))),
+            CallerAuth::Peer(user) => Some(resolve_caller(name, user, accounts).map(|uid| (name, caller.listener(), uid))),
             CallerAuth::Token(_) | CallerAuth::IsolatedNetwork => None,
         })
         .partition(Result::is_ok);
@@ -37,18 +36,17 @@ pub(super) fn resolve(
     }
 }
 
-/// The uid of `caller`'s account `user`, unless the account is missing, root or the service account.
-fn resolve_caller(caller: &CallerName, user: &AccountName, accounts: &impl AccountDirectory, service: u32) -> Result<u32, ActivationError> {
+/// The uid of `caller`'s account `user`, unless the account is missing, privileged or the overflow uid.
+fn resolve_caller(caller: &CallerName, user: &AccountName, accounts: &impl AccountDirectory) -> Result<u32, ActivationError> {
     let uid = accounts.uid(user).ok_or_else(|| ActivationError::UnknownAccount {
         caller: caller.clone(),
         user: user.clone(),
     })?;
-    match uid == ROOT_UID || uid == service {
-        true => Err(ActivationError::PrivilegedAccount {
-            caller: caller.clone(),
-            user: user.clone(),
-        }),
-        false => Ok(uid),
+    let (caller, user) = (caller.clone(), user.clone());
+    match uid {
+        _ if uid == ROOT_UID || uid == accounts.service_account_uid() => Err(ActivationError::PrivilegedAccount { caller, user }),
+        _ if uid == accounts.overflow_uid() => Err(ActivationError::OverflowAccount { caller, user }),
+        _ => Ok(uid),
     }
 }
 

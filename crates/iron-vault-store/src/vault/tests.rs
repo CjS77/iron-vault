@@ -27,6 +27,10 @@ impl AccountDirectory for NoAccounts {
     fn service_account_uid(&self) -> u32 {
         990
     }
+
+    fn overflow_uid(&self) -> u32 {
+        65534
+    }
 }
 
 /// The §3.3 example, with a real digest standing in for its `blake2b:...` placeholder.

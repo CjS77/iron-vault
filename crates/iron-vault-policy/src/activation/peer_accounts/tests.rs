@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use super::*;
 use crate::config::ParsedConfig;
-use crate::test_accounts::{FakeAccounts, SERVICE_UID};
+use crate::test_accounts::{DEFAULT_OVERFLOW_UID, FakeAccounts, SERVICE_UID};
 
 /// Two request sockets, `a` and `b`, one token caller, and the route every caller is granted.
 const BASE: &str = r#"schema_version = 1
@@ -110,6 +110,48 @@ fn the_service_account_is_refused_by_name_and_by_uid() {
 }
 
 #[test]
+fn the_default_overflow_uid_is_refused() {
+    let err = resolved(&[("cli", "a", "nobody")], &FakeAccounts::host()).unwrap_err();
+    assert_eq!(
+        err,
+        [ActivationError::OverflowAccount {
+            caller: n("cli"),
+            user: n("nobody")
+        }]
+    );
+}
+
+#[test]
+fn a_configured_overflow_uid_is_refused_and_the_default_then_accepted() {
+    let accounts = FakeAccounts::with(&[("squashed", 65000)]).overflowing_to(65000);
+    let err = resolved(&[("cli", "a", "squashed")], &accounts).unwrap_err();
+    assert!(matches!(err[..], [ActivationError::OverflowAccount { .. }]), "{err:?}");
+    let map = resolved(&[("cli", "a", "nobody")], &accounts).unwrap();
+    assert_eq!(uids(&map), [("cli", DEFAULT_OVERFLOW_UID)]);
+}
+
+#[test]
+fn the_overflow_refusal_names_the_caller_and_user_and_says_why() {
+    let err = resolved(&[("cli", "a", "nobody")], &FakeAccounts::host()).unwrap_err();
+    let text = err[0].to_string();
+    assert_eq!(
+        text,
+        "caller cli names user nobody, the overflow uid; the kernel reports this uid for processes outside this user namespace"
+    );
+    assert!(!text.chars().any(char::is_control), "{text:?}");
+}
+
+#[test]
+fn an_overflow_account_is_not_also_reported_as_shared() {
+    let accounts = FakeAccounts::with(&[("nobody-alias", DEFAULT_OVERFLOW_UID)]);
+    let err = resolved(&[("cli", "a", "nobody"), ("cli2", "a", "nobody-alias")], &accounts).unwrap_err();
+    assert!(
+        err.iter().all(|e| matches!(e, ActivationError::OverflowAccount { .. })) && err.len() == 2,
+        "{err:?}"
+    );
+}
+
+#[test]
 fn two_names_for_one_uid_on_a_listener_are_refused() {
     let accounts = FakeAccounts::with(&[("code-alias", 1000)]);
     let err = resolved(&[("cli", "a", "code"), ("cli2", "a", "code-alias")], &accounts).unwrap_err();
@@ -192,6 +234,10 @@ impl AccountDirectory for Recording {
 
     fn service_account_uid(&self) -> u32 {
         SERVICE_UID
+    }
+
+    fn overflow_uid(&self) -> u32 {
+        DEFAULT_OVERFLOW_UID
     }
 }
 

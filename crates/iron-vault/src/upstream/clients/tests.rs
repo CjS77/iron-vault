@@ -109,6 +109,10 @@ impl AccountDirectory for NoAccounts {
     fn service_account_uid(&self) -> u32 {
         990
     }
+
+    fn overflow_uid(&self) -> u32 {
+        65534
+    }
 }
 
 fn policy() -> ActivePolicy {

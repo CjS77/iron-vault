@@ -183,9 +183,21 @@ iron-vault:x:997:997::/var/lib/iron-vault:/usr/sbin/nologin\n\
 code:x:1000:1000:Code:/home/code:/bin/bash\n\
 code-alias:x:1000:1000::/home/code:/bin/bash\n";
 
-fn directory() -> PasswdDirectory {
+/// A fresh file under the system temp directory holding `contents`, named for the test that writes it.
+fn overflow_fixture(test: &str, contents: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("iv-overflowuid-{test}-{}", std::process::id()));
+    std::fs::write(&path, contents).unwrap();
+    path
+}
+
+/// [`PASSWD`] with the overflow uid read from `overflow_uid_file`.
+fn directory_with(overflow_uid_file: &Path) -> Result<PasswdDirectory, ProfileError> {
     let paths = ServicePaths::for_profile(DeploymentProfile::Protected, &env()).unwrap();
-    PasswdDirectory::new(Accounts::parse(PASSWD), &paths)
+    PasswdDirectory::new(Accounts::parse(PASSWD), &paths, overflow_uid_file)
+}
+
+fn directory() -> PasswdDirectory {
+    directory_with(Path::new("/nonexistent/overflowuid")).unwrap()
 }
 
 fn account(name: &str) -> AccountName {
@@ -209,6 +221,30 @@ fn an_account_missing_from_passwd_is_unknown() {
 #[test]
 fn the_service_account_is_the_owner_of_the_service_paths() {
     assert_eq!(directory().service_account_uid(), SERVICE);
+}
+
+#[test]
+fn the_overflow_uid_is_read_from_the_kernel_file() {
+    let file = overflow_fixture("read", "65000\n");
+    let directory = directory_with(&file);
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(directory.unwrap().overflow_uid(), 65000);
+}
+
+#[test]
+fn a_missing_overflow_uid_file_means_the_kernel_default() {
+    assert_eq!(directory().overflow_uid(), 65534);
+}
+
+#[test]
+fn a_malformed_overflow_uid_file_is_an_error_naming_the_file_but_not_its_contents() {
+    let file = overflow_fixture("garbage", "not-a-uid\n");
+    let err = directory_with(&file).unwrap_err();
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(err, ProfileError::OverflowUidMalformed { path: file.clone() });
+    let text = err.to_string();
+    assert_eq!(text, format!("{} does not hold a uid", file.display()));
+    assert!(!text.contains("not-a-uid"), "{text}");
 }
 
 #[test]

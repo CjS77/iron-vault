@@ -140,6 +140,10 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
         fn service_account_uid(&self) -> u32 {
             990
         }
+
+        fn overflow_uid(&self) -> u32 {
+            65534
+        }
     }
 
     /// Each credential's record, of the kind `kind` gives it, permitting its route's upstream.

@@ -43,6 +43,10 @@ pub trait AccountDirectory {
 
     /// The uid the service runs as, which no peer caller may name.
     fn service_account_uid(&self) -> u32;
+
+    /// The uid the kernel reports for a peer whose uid has no mapping in the service's user namespace, which no peer
+    /// caller may name: every unmapped process shares it, so it cannot identify one account.
+    fn overflow_uid(&self) -> u32;
 }
 
 /// One credential name's standing in the vault.
@@ -69,8 +73,8 @@ pub enum CatalogEntry {
 /// are unavailable; every other route may serve requests.
 ///
 /// Each peer caller's account is resolved to a uid once, here, so identifying a caller is a uid comparison and a
-/// missing or privileged account refuses the config rather than a request. The uids are a snapshot: an account renamed,
-/// deleted or recreated with another uid takes effect at the next activation, which a reload performs.
+/// missing, privileged or overflow account refuses the config rather than a request. The uids are a snapshot: an
+/// account renamed, deleted or recreated with another uid takes effect at the next activation, which a reload performs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivePolicy {
     config: ValidatedConfig,
@@ -133,6 +137,17 @@ pub enum ActivationError {
     /// its privileges.
     #[error("caller {caller} names user {user}, which is root or the service account; neither may be a peer account")]
     PrivilegedAccount {
+        /// The peer caller.
+        caller: CallerName,
+        /// The account it names.
+        user: AccountName,
+    },
+    /// The peer caller's `user` resolves to the kernel's overflow uid, `nobody` by default (spec §3.4).
+    ///
+    /// The kernel reports that uid for every peer whose uid has no mapping in the service's user namespace, so in a
+    /// container or sandbox it would match many unrelated processes rather than one account.
+    #[error("caller {caller} names user {user}, the overflow uid; the kernel reports this uid for processes outside this user namespace")]
+    OverflowAccount {
         /// The peer caller.
         caller: CallerName,
         /// The account it names.
