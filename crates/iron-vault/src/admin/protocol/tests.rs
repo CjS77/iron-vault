@@ -3,6 +3,7 @@ use zeroize::Zeroizing;
 
 use super::fields::FIELD_HEADER_LEN;
 use super::*;
+use crate::deployment::DeploymentProfile;
 use crate::secret_types_tests::MARKER;
 
 /// The longest prompt label: the body bound less two field headers and the one-byte secret flag.
@@ -92,6 +93,8 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::MalformedFrame),
         Just(ErrorCode::UnknownCommand),
         Just(ErrorCode::UnexpectedFrame),
+        Just(ErrorCode::NotAdminPrincipal),
+        Just(ErrorCode::Busy),
     ]
 }
 
@@ -108,6 +111,8 @@ fn any_frame() -> impl Strategy<Value = Frame> {
         (text(MAX_LABEL), any::<bool>()).prop_map(|(label, secret)| Frame::Prompt(Prompt { label, secret })),
         owner_bytes().prop_map(|bytes| owner_input(&bytes)),
         Just(AdminResponse::Success).prop_map(Frame::Response),
+        prop_oneof![Just(DeploymentProfile::Protected), Just(DeploymentProfile::Development)]
+            .prop_map(|profile| Frame::Response(AdminResponse::Ping { profile })),
         (error_code(), text(MAX_MESSAGE)).prop_map(|(code, message)| Frame::Response(AdminResponse::Error { code, message })),
     ]
 }
@@ -167,6 +172,56 @@ fn every_frame_kind_round_trips_with_its_kind_byte() {
 fn ping_has_the_documented_encoding() {
     let expected = [0, 1, 1, 0, 0, 0, 8, 0, 1, 0, 0, 0, 2, 0, 1];
     assert_eq!(encoded(&Frame::Request(AdminRequest::Ping)), expected);
+}
+
+#[test]
+fn ping_result_has_the_documented_encoding() {
+    let protected = [0, 1, 4, 0, 0, 0, 15, 0, 1, 0, 0, 0, 2, 0, 1, 0, 2, 0, 0, 0, 1, 1];
+    assert_eq!(
+        encoded(&Frame::Response(AdminResponse::Ping {
+            profile: DeploymentProfile::Protected
+        })),
+        protected
+    );
+    let (development, _) = decoded(&raw(1, 4, &body(&[field(1, &[0, 1]), field(2, &[2])])));
+    assert!(same(
+        &development,
+        &Frame::Response(AdminResponse::Ping {
+            profile: DeploymentProfile::Development
+        })
+    ));
+}
+
+#[test]
+fn a_success_result_must_name_a_command_with_a_result_and_a_known_profile() {
+    let no_command = field(2, &[1]);
+    assert_eq!(decode_err(&raw(1, 4, &no_command)), FrameError::MissingField(1));
+    let unknown = body(&[field(1, &[0, 9]), field(2, &[1])]);
+    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(9));
+    let without_profile = field(1, &[0, 1]);
+    assert_eq!(decode_err(&raw(1, 4, &without_profile)), FrameError::MissingField(2));
+    [&[][..], &[0], &[3], &[1, 1]].into_iter().for_each(|profile| {
+        let bad = body(&[field(1, &[0, 1]), field(2, profile)]);
+        assert_eq!(decode_err(&raw(1, 4, &bad)), FrameError::InvalidValue(2));
+    });
+}
+
+#[test]
+fn frame_errors_map_to_the_codes_the_service_answers_with() {
+    assert_eq!(
+        ErrorCode::for_frame_error(FrameError::UnsupportedVersion(2)),
+        ErrorCode::UnsupportedVersion
+    );
+    assert_eq!(ErrorCode::for_frame_error(FrameError::UnknownCommand(9)), ErrorCode::UnknownCommand);
+    [FrameError::BodyTooLong, FrameError::UnknownKind(9), FrameError::MissingField(1)]
+        .into_iter()
+        .for_each(|error| assert_eq!(ErrorCode::for_frame_error(error), ErrorCode::MalformedFrame));
+}
+
+#[test]
+fn a_request_names_its_command() {
+    assert_eq!(AdminRequest::Ping.command(), AdminCommand::Ping);
+    assert_eq!(AdminCommand::Ping.name(), "ping");
 }
 
 #[test]
@@ -244,7 +299,8 @@ fn unknown_tags_are_refused() {
     assert_eq!(decode_err(&raw(1, 1, &request)), FrameError::UnknownTag(2));
     let prompt = body(&[field(1, b"label"), field(2, &[1]), field(3, b"")]);
     assert_eq!(decode_err(&raw(1, 2, &prompt)), FrameError::UnknownTag(3));
-    assert_eq!(decode_err(&raw(1, 4, &field(1, b""))), FrameError::UnknownTag(1));
+    let ping_result = body(&[field(1, &[0, 1]), field(2, &[1]), field(3, b"")]);
+    assert_eq!(decode_err(&raw(1, 4, &ping_result)), FrameError::UnknownTag(3));
     let error = body(&[field(0, b""), field(1, &[0, 1]), field(2, b"m")]);
     assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::UnknownTag(0));
 }
@@ -292,7 +348,7 @@ fn malformed_fixed_width_values_and_flags_are_refused() {
 
 #[test]
 fn unknown_error_codes_are_refused() {
-    [0, 5, 0xffff].into_iter().for_each(|code: u16| {
+    [0, 7, 0xffff].into_iter().for_each(|code: u16| {
         let error = body(&[field(1, &code.to_be_bytes()), field(2, b"m")]);
         assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::UnknownErrorCode(code));
     });

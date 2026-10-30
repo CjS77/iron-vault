@@ -11,6 +11,8 @@ use std::fmt;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
+use crate::deployment::DeploymentProfile;
+
 /// The protocol version this code writes and the only one it reads.
 pub const PROTOCOL_VERSION: u16 = 1;
 /// The largest body a frame may carry; a declared length above it is refused before any body byte is read.
@@ -21,8 +23,33 @@ pub const HEADER_LEN: usize = 7;
 /// One command with its arguments, sent by the CLI as the first frame of an exchange.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdminRequest {
-    /// Does nothing; the service answers with success. Command ID 1.
+    /// Changes nothing; the service answers with its deployment profile. Command ID 1.
     Ping,
+}
+
+impl AdminRequest {
+    /// The command this request names, without its arguments.
+    pub const fn command(&self) -> AdminCommand {
+        match self {
+            Self::Ping => AdminCommand::Ping,
+        }
+    }
+}
+
+/// What an admin request asks the service to do; the value is the command ID on the wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AdminCommand {
+    /// `ping`.
+    Ping = 1,
+}
+
+impl AdminCommand {
+    /// The command's name as the CLI spells it, for logs.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Ping => "ping",
+        }
+    }
 }
 
 /// The service asking the CLI to collect one value from the owner.
@@ -61,8 +88,13 @@ impl fmt::Debug for OwnerInput {
 /// The final frame of an exchange.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AdminResponse {
-    /// The command completed.
+    /// The command completed, and it has no result.
     Success,
+    /// `ping` completed: the service runs this deployment profile. Its protocol version is the frame header's.
+    Ping {
+        /// The service's deployment profile.
+        profile: DeploymentProfile,
+    },
     /// The command failed. The message is the service's own text and never contains owner input.
     Error {
         /// The stable code scripts act on.
@@ -83,6 +115,21 @@ pub enum ErrorCode {
     UnknownCommand = 3,
     /// A well-formed frame arrived out of turn in the exchange.
     UnexpectedFrame = 4,
+    /// The connecting account is not an admin principal; nothing it sent was read.
+    NotAdminPrincipal = 5,
+    /// The service is already serving as many admin connections as it allows.
+    Busy = 6,
+}
+
+impl ErrorCode {
+    /// The code a frame the service could not decode is answered with.
+    pub const fn for_frame_error(error: FrameError) -> Self {
+        match error {
+            FrameError::UnsupportedVersion(_) => Self::UnsupportedVersion,
+            FrameError::UnknownCommand(_) => Self::UnknownCommand,
+            _ => Self::MalformedFrame,
+        }
+    }
 }
 
 /// One message of the admin protocol. It holds owner input when it is an owner-input frame, so it is secret-bearing
@@ -182,6 +229,7 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Prompt(prompt) => put_frame(out, FrameKind::Prompt, &body::encode_prompt(prompt)),
         Frame::OwnerInput(input) => put_frame(out, FrameKind::OwnerInput, input.expose_secret()),
         Frame::Response(AdminResponse::Success) => put_frame(out, FrameKind::Success, &[]),
+        Frame::Response(AdminResponse::Ping { profile }) => put_frame(out, FrameKind::Success, &body::encode_ping_result(*profile)),
         Frame::Response(AdminResponse::Error { code, message }) => put_frame(out, FrameKind::Error, &body::encode_error(*code, message)),
     }
 }

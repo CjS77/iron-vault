@@ -18,15 +18,32 @@ use thiserror::Error;
 use crate::deployment::DeploymentProfile;
 
 /// What the kernel reported about the process at the other end of a Unix socket.
+///
+/// Its fields are private and only the platform adapter behind [`peer_identity`] builds one, so a peer identity always
+/// comes from the kernel, never from something the peer sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeerIdentity {
+    uid: u32,
+    gid: u32,
+    pid: u32,
+}
+
+impl PeerIdentity {
     /// The peer's effective uid when it connected; the only field that decides admission.
-    pub uid: u32,
+    pub const fn uid(&self) -> u32 {
+        self.uid
+    }
+
     /// The peer's effective gid when it connected.
-    pub gid: u32,
+    pub const fn gid(&self) -> u32 {
+        self.gid
+    }
+
     /// The peer's process ID, for the audit log only. It is never used to look up an executable: `/proc/<pid>/exe`
     /// cannot tell the owner from malware running as the same account (§3.4), and the pid may already be reused.
-    pub pid: u32,
+    pub const fn pid(&self) -> u32 {
+        self.pid
+    }
 }
 
 /// A peer the admin principal check accepted.
