@@ -240,7 +240,7 @@ after the last frame does not hide it.
 | `1` | the service answered with an error response |
 | `2` | usage error |
 | `3` | no admin response: no socket or nothing listening, permission denied, the exchange failed or timed out, or a prompt got no value |
-| `130` | SIGINT while the CLI had the terminal open for prompting |
+| `128 + n` | signal `n` while the CLI had the terminal open for prompting: `130` for SIGINT, `131` for SIGQUIT, `143` for SIGTERM |
 
 A `not-admin-principal` response or a permission-denied connect tells the owner that a protected install needs `sudo`.
 Diagnostics name the socket path, the error code and the service's message, never the request's arguments.
@@ -266,9 +266,15 @@ never prompts for touches neither the terminal nor stdin. No argument ever carri
 - **Stdin is a terminal:** the CLI opens `/dev/tty`, writes the label to it followed by `: `, and reads one line from
   it. For a secret prompt it turns echo off for the read with `tcsetattr`: `ECHO` off and `ECHONL` on, so the owner's
   Enter still moves to a new line, applied with `TCSAFLUSH` so anything typed before the prompt is discarded. A guard
-  restores the saved settings on every path out of the read, errors included. The CLI also registers a SIGINT handler
-  before the first read: on SIGINT a watcher thread restores the saved settings if echo is off and exits with status
-  130. If echo cannot be turned off, nothing is read and the command is cancelled.
+  restores the saved settings on every path out of the read, errors included. The CLI also registers handlers for
+  SIGINT, SIGQUIT and SIGTERM before the first read: on any of them a watcher thread restores the saved settings if
+  echo is off and exits with status 128 plus the signal number. Turning echo off and the watcher's restore are
+  serialised, and the watcher holds off further prompts until the process exits, so a signal never leaves echo off.
+  If echo cannot be turned off, nothing is read and the command is cancelled.
+- **The terminal's line limit:** in canonical mode Linux keeps at most 4095 bytes of a line and silently discards the
+  rest up to the newline, so a longer pasted value would arrive cut short. The CLI refuses a terminal line of 4095
+  bytes or more, counted with its line ending, as possibly cut short, without sending or showing it, and says to pipe
+  longer values through stdin. A value typed at the terminal is therefore at most 4093 bytes.
 - **Stdin is not a terminal:** each value is the next line of stdin, so `pass show fx | sudo iron-vault add fx` works
   from an interactive shell as well as from a script, and several prompts read consecutive lines. The label goes to
   stderr, and only when stderr is a terminal; it never goes to stdout.
@@ -279,7 +285,7 @@ terminal. Every line follows the same rules:
 - Exactly one trailing `\n` is stripped, and one `\r` before it. A last line without `\n` is still a value; an empty
   line is an empty value.
 - Input that ends before any byte is no value. A value longer than the 64 KiB body bound is refused without being sent
-  or shown; the CLI stops reading at the first byte past the bound.
+  or shown; the CLI stops reading at the first byte past the bound. A terminal line has the tighter limit above.
 - A refused or missing value cancels the command: the CLI reports why on stderr, naming no typed byte, and closes the
   connection, so the service cancels too. The CLI exits with code 3.
 

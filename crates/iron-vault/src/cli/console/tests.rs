@@ -194,6 +194,38 @@ fn a_secret_that_ends_early_or_runs_long_still_restores_the_terminal() {
 }
 
 #[test]
+fn a_terminal_line_just_under_the_terminal_limit_is_a_value() {
+    let value = vec![b'a'; TERMINAL_LINE_LIMIT - 2];
+    let (mut console, _) = terminal(Some(&[&value[..], b"\n"].concat()), false);
+    assert_eq!(console.collect(&prompt("Passphrase", true)).unwrap().expose_secret(), value);
+}
+
+#[test]
+fn a_terminal_line_that_may_have_been_cut_short_is_refused_and_the_terminal_restored() {
+    let marker = b"MARKER-secret-5d1c9e";
+    let long = marker.repeat(TERMINAL_LINE_LIMIT / marker.len() + 1);
+    // Counted with the line ending: lines of exactly the limit, ended by `\n`, by `\r\n` and by nothing (Ctrl-D), and
+    // a line of 4095 bytes and its `\n`, which is what a line Linux cut short arrives as.
+    [
+        (TERMINAL_LINE_LIMIT - 1, &b"\n"[..]),
+        (TERMINAL_LINE_LIMIT - 2, b"\r\n"),
+        (TERMINAL_LINE_LIMIT, b""),
+        (TERMINAL_LINE_LIMIT, b"\n"),
+    ]
+    .into_iter()
+    .map(|(len, ending)| [&long[..len], ending].concat())
+    .for_each(|input| {
+        let (mut console, events) = terminal(Some(&input), false);
+        let error = console.collect(&prompt("Passphrase", true)).unwrap_err();
+        assert!(matches!(error, InputError::TerminalLineTooLong), "{} bytes: {error:?}", input.len());
+        assert_eq!(steps(&events), ["echo off", "read", "restore"]);
+        let message = error.to_string();
+        assert!(message.contains("pipe longer values through stdin"), "{message}");
+        assert!(!message.contains("MARKER"), "{message}");
+    });
+}
+
+#[test]
 fn a_secret_is_not_read_when_echo_cannot_be_turned_off() {
     let (mut console, events) = terminal(Some(b"s3cret\n"), true);
     assert!(matches!(console.collect(&prompt("Passphrase", true)), Err(InputError::Terminal(_))));

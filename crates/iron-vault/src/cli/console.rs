@@ -16,6 +16,11 @@ use zeroize::Zeroizing;
 /// The longest line a value may arrive in: the longest value, then `\r\n`.
 const LINE_CAPACITY: usize = MAX_BODY_LEN + 2;
 
+/// The shortest terminal line, line ending included, that Linux may have cut short. In canonical mode the terminal keeps
+/// at most 4095 bytes of a line and silently discards the rest up to the newline, so a line that reaches this length
+/// may not be what the owner typed.
+const TERMINAL_LINE_LIMIT: usize = 4095;
+
 /// Why no owner input was collected. The messages never hold what was typed.
 #[derive(Debug, thiserror::Error)]
 pub enum InputError {
@@ -25,6 +30,12 @@ pub enum InputError {
     /// The value is longer than a frame body may be.
     #[error("the value is longer than {MAX_BODY_LEN} bytes, so it was not sent")]
     TooLong,
+    /// The line typed at the terminal reached the terminal's line limit, so it may have been cut short.
+    #[error(
+        "the value typed at the terminal reached the terminal's limit of {TERMINAL_LINE_LIMIT} bytes a line, so it may \
+         have been cut short and was not sent; pipe longer values through stdin"
+    )]
+    TerminalLineTooLong,
     /// The terminal could not be opened, written or switched.
     #[error("cannot use the terminal: {0}")]
     Terminal(io::Error),
@@ -139,11 +150,14 @@ impl<T: Read + Write, E: EchoControl> OwnerConsole for Terminal<T, E> {
             .map_err(InputError::Terminal)?;
         let line = if prompt.secret {
             let _echo_off = EchoOff::new(&self.echo)?;
-            read_line(&mut self.tty)
+            read_raw_line(&mut self.tty)
         } else {
-            read_line(&mut self.tty)
-        };
-        line.map(OwnerInput::new)
+            read_raw_line(&mut self.tty)
+        }?;
+        if line.len() >= TERMINAL_LINE_LIMIT {
+            return Err(InputError::TerminalLineTooLong);
+        }
+        strip_ending(line).map(OwnerInput::new)
     }
 }
 
@@ -154,24 +168,30 @@ fn printable(label: &str) -> String {
 
 /// Reads one line and strips one trailing `\n` and a `\r` before it. A last line without `\n` is still a value; input
 /// that ends before any byte is not.
+fn read_line(input: &mut impl Read) -> Result<Zeroizing<Vec<u8>>, InputError> {
+    read_raw_line(input).and_then(strip_ending)
+}
+
+/// Reads one line, keeping its line ending.
 ///
 /// Bytes are read one at a time straight into a clearing buffer sized for the longest line, so nothing past the line is
 /// consumed, no other buffer holds the value, and the buffer never reallocates and leaves a copy behind.
-fn read_line(input: &mut impl Read) -> Result<Zeroizing<Vec<u8>>, InputError> {
+fn read_raw_line(input: &mut impl Read) -> Result<Zeroizing<Vec<u8>>, InputError> {
     let mut line = Zeroizing::new(Vec::with_capacity(LINE_CAPACITY));
-    let ended = loop {
+    loop {
         match read_byte(input, &mut line)? {
-            None => break false,
-            Some(b'\n') => break true,
+            None if line.is_empty() => return Err(InputError::NoInput),
+            None | Some(b'\n') => return Ok(line),
             // Without its `\n` the line already holds more than the longest value and a `\r`.
             Some(_) if line.len() >= LINE_CAPACITY => return Err(InputError::TooLong),
             Some(_) => {}
         }
-    };
-    if !ended && line.is_empty() {
-        return Err(InputError::NoInput);
     }
-    if ended {
+}
+
+/// Strips one trailing `\n` and a `\r` before it, in place, and refuses a value longer than a frame body may be.
+fn strip_ending(mut line: Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>, InputError> {
+    if line.last() == Some(&b'\n') {
         line.pop();
         if line.last() == Some(&b'\r') {
             line.pop();
