@@ -7,6 +7,7 @@ use crate::activation::{Capabilities, CatalogEntry, CredentialCatalog, activate}
 use crate::caller_token::CALLER_TOKEN_BYTES;
 use crate::config::ParsedConfig;
 use crate::name::CredentialName;
+use crate::test_accounts::{FakeAccounts, SERVICE_UID};
 use crate::token_hash::TokenHash;
 use crate::validated::ValidatedConfig;
 
@@ -37,7 +38,8 @@ const GAMMA: u8 = 3;
 const DELTA: u8 = 4;
 const UNKNOWN: u8 = 9;
 
-/// One listener per mechanism: `sock` (a peer caller), `net` (isolated network), `local` (two token callers on
+/// One listener per mechanism: `sock` (peer caller `cli`, account `code`), `ops-sock` (peer caller `ops`, account
+/// `fx-other`), `net` (isolated network), `local` (two token callers on
 /// `Proxy-Authorization`), `dedicated` (a token caller on `X-Iron-Vault-Token`), `explicit` (a token caller whose
 /// listener names `Proxy-Authorization` as its `token_header`), and `empty` (no callers).
 fn policy() -> ActivePolicy {
@@ -46,6 +48,9 @@ fn policy() -> ActivePolicy {
 
 [listeners.sock]
 unix_socket = "/run/iron-vault/cli.sock"
+
+[listeners.ops-sock]
+unix_socket = "/run/iron-vault/ops.sock"
 
 [listeners.net]
 address = "10.20.0.2:7878"
@@ -70,6 +75,12 @@ address = "127.0.0.1:7880"
 listener = "sock"
 auth = "peer"
 user = "code"
+routes = ["fx"]
+
+[callers.ops]
+listener = "ops-sock"
+auth = "peer"
+user = "fx-other"
 routes = ["fx"]
 
 [callers.naomi]
@@ -112,7 +123,7 @@ rate_limit = {{ requests = 60, per_seconds = 60, burst = 10 }}
         hash(DELTA),
     );
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-    activate(&config, &Capabilities::default(), &NoCredentials).unwrap()
+    activate(&config, &Capabilities::default(), &NoCredentials, &FakeAccounts::host()).unwrap()
 }
 
 fn headers(fields: &[(&str, &str)]) -> Vec<(HeaderName, HeaderValue)> {
@@ -122,8 +133,13 @@ fn headers(fields: &[(&str, &str)]) -> Vec<(HeaderName, HeaderValue)> {
         .collect()
 }
 
+/// Identifies a caller connecting over a transport that reports no peer uid, as TCP does.
 fn identify(listener: &str, fields: &[(&str, &str)]) -> Result<CallerName, Unauthenticated> {
-    identify_caller(&policy(), &listener.parse().unwrap(), &headers(fields))
+    identify_from(listener, None, fields)
+}
+
+fn identify_from(listener: &str, peer_uid: Option<u32>, fields: &[(&str, &str)]) -> Result<CallerName, Unauthenticated> {
+    identify_caller(&policy(), &listener.parse().unwrap(), peer_uid, &headers(fields))
 }
 
 fn identified(listener: &str, fields: &[(&str, &str)]) -> String {
@@ -134,10 +150,50 @@ fn bearer(byte: u8) -> String {
     format!("Bearer {}", token(byte))
 }
 
+/// The uids [`FakeAccounts::host`] gives `code` (caller `cli`), `fx-other` (caller `ops`) and an unconfigured account.
+const CODE_UID: u32 = 1000;
+const FX_OTHER_UID: u32 = 1002;
+const UNCONFIGURED_UID: u32 = 1001;
+
 #[test]
-fn a_peer_listener_identifies_no_one_until_peer_accounts_are_matched() {
-    assert_eq!(identify("sock", &[]), Err(Unauthenticated));
-    assert_eq!(identify("sock", &[("Proxy-Authorization", &bearer(ALPHA))]), Err(Unauthenticated));
+fn a_peer_uid_names_its_caller() {
+    assert_eq!(identify_from("sock", Some(CODE_UID), &[]).unwrap().as_str(), "cli");
+    assert_eq!(identify_from("ops-sock", Some(FX_OTHER_UID), &[]).unwrap().as_str(), "ops");
+}
+
+#[test]
+fn another_listeners_peer_uid_is_refused() {
+    assert_eq!(identify_from("sock", Some(FX_OTHER_UID), &[]), Err(Unauthenticated));
+    assert_eq!(identify_from("ops-sock", Some(CODE_UID), &[]), Err(Unauthenticated));
+}
+
+#[test]
+fn an_unconfigured_or_missing_peer_uid_is_refused() {
+    [Some(UNCONFIGURED_UID), Some(0), Some(SERVICE_UID), None]
+        .iter()
+        .for_each(|uid| assert_eq!(identify_from("sock", *uid, &[]), Err(Unauthenticated), "{uid:?}"));
+}
+
+#[test]
+fn a_token_on_a_peer_listener_is_not_checked() {
+    let alpha = bearer(ALPHA);
+    let fields = [("Proxy-Authorization", alpha.as_str())];
+    assert_eq!(identify_from("sock", Some(UNCONFIGURED_UID), &fields), Err(Unauthenticated));
+    assert_eq!(identify_from("sock", None, &fields), Err(Unauthenticated));
+    assert_eq!(identify_from("sock", Some(CODE_UID), &fields).unwrap().as_str(), "cli");
+}
+
+#[test]
+fn a_peer_uid_does_not_identify_on_other_listeners() {
+    assert_eq!(identify_from("local", Some(CODE_UID), &[]), Err(Unauthenticated));
+    let alpha = bearer(ALPHA);
+    assert_eq!(
+        identify_from("local", Some(CODE_UID), &[("Proxy-Authorization", &alpha)])
+            .unwrap()
+            .as_str(),
+        "alpha"
+    );
+    assert_eq!(identify_from("net", Some(CODE_UID), &[]).unwrap().as_str(), "naomi");
 }
 
 #[test]

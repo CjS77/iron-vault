@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::account_name::AccountName;
 use crate::caller::{CallerAuth, CallerConfig};
 use crate::config::ParsedConfig;
+use crate::display::joined;
 use crate::header_name::HeaderName;
 use crate::limits::Limits;
 use crate::listener::{Endpoint, ListenerConfig};
@@ -489,11 +490,6 @@ fn token_header_collisions(config: &ParsedConfig, listener: &ListenerName, heade
 /// The callers configured on `listener`, in name order.
 fn callers_on<'a>(config: &'a ParsedConfig, listener: &'a ListenerName) -> impl Iterator<Item = (&'a CallerName, &'a CallerConfig)> {
     config.callers().iter().filter(move |(_, caller)| caller.listener() == listener)
-}
-
-/// Names separated by ", ", for error messages.
-fn joined(names: &[CallerName]) -> String {
-    names.iter().map(CallerName::as_str).collect::<Vec<_>>().join(", ")
 }
 
 #[cfg(test)]

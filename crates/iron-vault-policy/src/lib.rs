@@ -44,6 +44,8 @@ pub mod slot_format;
 pub mod slot_value;
 #[cfg(test)]
 mod spec_example;
+#[cfg(test)]
+mod test_accounts;
 pub mod token_bucket;
 pub mod token_hash;
 pub mod upstream;
@@ -51,7 +53,7 @@ pub mod upstream_target;
 pub mod validated;
 
 pub use account_name::{AccountName, AccountNameError};
-pub use activation::{ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
+pub use activation::{AccountDirectory, ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
 pub use authorization::{AuthorizedRequest, AuthzError, Refusal, authorize};
 pub use bound_credential::BoundCredential;
 pub use caller::{CallerAuth, CallerConfig, CallerError};

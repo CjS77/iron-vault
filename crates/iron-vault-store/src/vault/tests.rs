@@ -4,7 +4,9 @@ use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Once};
 
-use iron_vault_policy::{Capabilities, CredentialKind, ParsedConfig, Port, RouteName, ValidatedConfig, activate};
+use iron_vault_policy::{
+    AccountDirectory, AccountName, Capabilities, CredentialKind, ParsedConfig, Port, RouteName, ValidatedConfig, activate,
+};
 use tracing::field::{Field, Visit};
 use tracing::subscriber::Interest;
 use tracing::{Dispatch, Event, Level, Metadata, Subscriber, span};
@@ -13,6 +15,19 @@ use super::*;
 use crate::manifest::tests::KAT_IDENTITY;
 use crate::test_dir::TestDir;
 use crate::{ManifestEntry, OsFs, PermittedOrigins, RecordId, Source, VaultId, encode, record_digest, seal, seal_manifest};
+
+/// A host with no accounts: this config has no peer callers, so activation never looks one up.
+struct NoAccounts;
+
+impl AccountDirectory for NoAccounts {
+    fn uid(&self, _: &AccountName) -> Option<u32> {
+        None
+    }
+
+    fn service_account_uid(&self) -> u32 {
+        990
+    }
+}
 
 /// The §3.3 example, with a real digest standing in for its `blake2b:...` placeholder.
 const SPEC_EXAMPLE: &str = r#"schema_version = 1
@@ -550,7 +565,7 @@ fn a_missing_record_makes_only_its_routes_unavailable() {
     let (opened, _) = fixture.open();
     let (vault, _) = opened.unwrap();
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(SPEC_EXAMPLE.as_bytes()).unwrap()).unwrap();
-    let policy = activate(&config, &Capabilities::default(), &vault).unwrap();
+    let policy = activate(&config, &Capabilities::default(), &vault, &NoAccounts).unwrap();
     assert_eq!(policy.unavailable_routes(), &[n::<RouteName>("venice")].into());
     assert!(policy.is_available(&n("fx")) && policy.is_available(&n("brave")));
 }

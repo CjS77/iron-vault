@@ -1,4 +1,6 @@
-//! Rendering rejected configuration text inside error messages.
+//! Rendering rejected configuration text and caller names inside error messages.
+
+use crate::name::CallerName;
 
 /// `s` in double quotes with control and non-ASCII characters escaped, so a rejected value never reaches a log raw.
 pub(crate) fn quoted(s: &str) -> String {
@@ -19,4 +21,9 @@ pub(crate) fn escaped(s: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Names separated by ", ", for error messages.
+pub(crate) fn joined(names: &[CallerName]) -> String {
+    names.iter().map(CallerName::as_str).collect::<Vec<_>>().join(", ")
 }

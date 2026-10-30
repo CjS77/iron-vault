@@ -12,8 +12,8 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use iron_vault_policy::{
-    ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, Host, ParsedConfig, Port, ValidatedConfig,
-    activate,
+    AccountDirectory, AccountName, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, Host,
+    ParsedConfig, Port, ValidatedConfig, activate,
 };
 use proptest::collection::vec;
 use proptest::prelude::*;
@@ -137,10 +137,23 @@ pub const FOLDS: &[(char, &str)] = &[
     ('\u{FE54}', ";"),
 ];
 
+/// A host with no accounts: this config has no peer callers, so activation never looks one up.
+struct NoAccounts;
+
+impl AccountDirectory for NoAccounts {
+    fn uid(&self, _: &AccountName) -> Option<u32> {
+        None
+    }
+
+    fn service_account_uid(&self) -> u32 {
+        990
+    }
+}
+
 /// [`CONFIG`] activated with every credential permitted on every route's upstream, so each route is available.
 pub static POLICY: LazyLock<ActivePolicy> = LazyLock::new(|| {
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
-    activate(&config, &Capabilities::default(), &Catalog(route_origins(&config))).unwrap()
+    activate(&config, &Capabilities::default(), &Catalog(route_origins(&config)), &NoAccounts).unwrap()
 });
 
 /// Every route upstream's host and port pair.

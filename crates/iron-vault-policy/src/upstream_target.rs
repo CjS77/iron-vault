@@ -142,6 +142,7 @@ mod tests {
     use crate::port::Port;
     use crate::request_target::RequestTarget;
     use crate::spec_example::SPEC_EXAMPLE;
+    use crate::test_accounts::FakeAccounts;
     use crate::validated::ValidatedConfig;
 
     /// Permits every §3.3 credential on its route's host, on both 443 and 8443.
@@ -176,7 +177,7 @@ mod tests {
 
     fn policy(doc: &str) -> ActivePolicy {
         let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-        activate(&config, &Capabilities::default(), &Catalog).unwrap()
+        activate(&config, &Capabilities::default(), &Catalog, &FakeAccounts::host()).unwrap()
     }
 
     /// Authorizes `target` for the caller granted its route, builds the target, and checks the round trip.

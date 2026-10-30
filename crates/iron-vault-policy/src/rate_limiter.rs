@@ -195,6 +195,7 @@ mod tests {
     use crate::port::Port;
     use crate::rate_limit::RateLimit;
     use crate::spec_example::SPEC_EXAMPLE;
+    use crate::test_accounts::FakeAccounts;
 
     /// A vault where every §3.3 credential is usable at its route's upstream.
     struct Healthy;
@@ -228,7 +229,10 @@ routes = ["fx"]
 
     fn limiter(doc: &str, now: Instant) -> RateLimiter {
         let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-        RateLimiter::new(&activate(&config, &Capabilities::default(), &Healthy).unwrap(), now)
+        RateLimiter::new(
+            &activate(&config, &Capabilities::default(), &Healthy, &FakeAccounts::host()).unwrap(),
+            now,
+        )
     }
 
     fn two_callers(now: Instant) -> RateLimiter {

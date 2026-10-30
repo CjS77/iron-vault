@@ -171,6 +171,7 @@ mod tests {
     use crate::port::Port;
     use crate::request_target::RequestTarget;
     use crate::spec_example::SPEC_EXAMPLE;
+    use crate::test_accounts::FakeAccounts;
     use crate::validated::ValidatedConfig;
 
     /// Permits every §3.3 credential on its route's upstream, except those named as unusable.
@@ -199,7 +200,7 @@ mod tests {
 
     fn policy_from(doc: &str, unusable: &'static [&'static str]) -> ActivePolicy {
         let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-        activate(&config, &Capabilities::default(), &Catalog(unusable)).unwrap()
+        activate(&config, &Capabilities::default(), &Catalog(unusable), &FakeAccounts::host()).unwrap()
     }
 
     fn policy(unusable: &'static [&'static str]) -> ActivePolicy {

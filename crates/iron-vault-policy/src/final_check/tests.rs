@@ -9,6 +9,7 @@ use crate::name::CredentialName;
 use crate::request_target::RequestTarget;
 use crate::slot_value::SlotValue;
 use crate::spec_example::SPEC_EXAMPLE;
+use crate::test_accounts::FakeAccounts;
 use crate::upstream_target::UpstreamTarget;
 use crate::validated::ValidatedConfig;
 
@@ -48,7 +49,7 @@ fn policy() -> ActivePolicy {
     .iter()
     .fold(SPEC_EXAMPLE.to_owned(), |doc, paths| doc.replace(paths, "[\"/**\"]"));
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-    activate(&config, &Capabilities::default(), &Catalog).unwrap()
+    activate(&config, &Capabilities::default(), &Catalog, &FakeAccounts::host()).unwrap()
 }
 
 /// Everything `final_check` takes, starting from a valid assembled request; tests change exactly one fact.

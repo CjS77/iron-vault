@@ -1,8 +1,8 @@
 //! An authorized request and its route's slot, for tests that resolve a credential record.
 
 use iron_vault_policy::{
-    ActivePolicy, AuthorizedRequest, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, Method, ParsedConfig,
-    Port, RequestTarget, Slot, ValidatedConfig, activate, authorize,
+    AccountDirectory, AccountName, ActivePolicy, AuthorizedRequest, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind,
+    CredentialName, Method, ParsedConfig, Port, RequestTarget, Slot, ValidatedConfig, activate, authorize,
 };
 
 /// One caller and one static-key route to `https://api.example.com` with a header slot.
@@ -29,6 +29,19 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 /// The route's upstream, the one origin a record must permit for the route to activate.
 pub(crate) const HOST: &str = "api.example.com";
 
+/// A host with no accounts: this config has no peer callers, so activation never looks one up.
+struct NoAccounts;
+
+impl AccountDirectory for NoAccounts {
+    fn uid(&self, _: &AccountName) -> Option<u32> {
+        None
+    }
+
+    fn service_account_uid(&self) -> u32 {
+        990
+    }
+}
+
 /// Every credential is a static key permitting [`HOST`].
 struct Catalog;
 
@@ -44,7 +57,7 @@ impl CredentialCatalog for Catalog {
 /// The `fx` route's header slot and an authorized `GET /fx/latest` on it.
 pub(crate) fn header_request() -> (Slot, AuthorizedRequest) {
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
-    let policy: ActivePolicy = activate(&config, &Capabilities::default(), &Catalog).unwrap();
+    let policy: ActivePolicy = activate(&config, &Capabilities::default(), &Catalog, &NoAccounts).unwrap();
     let (path, query) = RequestTarget::parse("/fx/latest").unwrap().into_parts();
     let request = authorize(&policy, &"agent".parse().unwrap(), &Method::Get, &path, query).unwrap();
     let slot = policy.route(request.route()).unwrap().slot().clone();

@@ -1,10 +1,11 @@
-//! Caller identification: which caller a request comes from, decided from the listener it arrived on and, on a token
-//! listener, the caller token it presents (spec §3.4, §3.5 step 3, §3.12).
+//! Caller identification: which caller a request comes from, decided from the listener it arrived on and, on a peer
+//! listener, the connecting process's uid or, on a token listener, the caller token it presents (spec §3.4, §3.5 step
+//! 3, §3.12).
 //!
 //! Validation leaves each listener with one mechanism. An `isolated-network` listener has exactly one caller, so the
-//! listener alone names it. A peer listener holds only peer callers, each naming its own account, so the connecting
-//! process's peer account names at most one. A token listener's caller is the one on that listener whose token hash
-//! the presented token matches; validation guarantees at most one does.
+//! listener alone names it. A peer listener holds only peer callers, and activation resolves their accounts to distinct
+//! uids, so the connecting process's uid names at most one. A token listener's caller is the one on that listener whose
+//! token hash the presented token matches; validation guarantees at most one does.
 //!
 //! Nothing here reaches the admin interface. The admin socket is a separate socket that accepts an admin principal by
 //! its peer credentials alone (§3.2), so neither a caller token nor a listener identity is ever an admin credential.
@@ -32,19 +33,24 @@ const BEARER: &[u8] = b"Bearer ";
 #[error("the caller could not be authenticated")]
 pub struct Unauthenticated;
 
-/// Identifies the caller of a request that arrived on `listener` with the caller's `headers`.
+/// Identifies the caller of a request that arrived on `listener`, from a process running as `peer_uid`, with the
+/// caller's `headers`.
 ///
-/// `listener` must come from the socket or address that accepted the connection, never from the request. On a token
-/// listener the token is read from the listener's `token_header`, whose whole value is the token, or else from
-/// `Proxy-Authorization` as `Bearer <token>`. A missing, repeated or malformed header, an unknown token, or a listener
-/// with no callers is [`Unauthenticated`].
+/// `listener` and `peer_uid` must both come from the accepted connection, never from the request: the listener from
+/// the socket or address that accepted it, and `peer_uid` from the uid in that socket's peer identity, or none when the
+/// transport reports no account, as TCP does.
 ///
-/// A token sent to an `isolated-network` listener is ignored rather than checked: the listener already names the
-/// caller, and the header is reserved, so it is stripped before forwarding. A peer listener identifies no one yet, even
-/// when a valid token is presented, because tokens never identify a caller there.
+/// On a peer listener the caller is the one whose account resolved to `peer_uid` at activation; no match, or no uid,
+/// is [`Unauthenticated`]. On a token listener the token is read from the listener's `token_header`, whose whole value
+/// is the token, or else from `Proxy-Authorization` as `Bearer <token>`. A missing, repeated or malformed header, an
+/// unknown token, or a listener with no callers is [`Unauthenticated`].
+///
+/// A token sent to an `isolated-network` or peer listener is ignored rather than checked: the listener or the peer uid
+/// already decides the caller, and the header is reserved, so it is stripped before forwarding.
 pub fn identify_caller(
     policy: &ActivePolicy,
     listener: &ListenerName,
+    peer_uid: Option<u32>,
     headers: &[(HeaderName, HeaderValue)],
 ) -> Result<CallerName, Unauthenticated> {
     let config = policy.config();
@@ -54,9 +60,8 @@ pub fn identify_caller(
         .filter(|(_, caller)| caller.listener() == listener)
         .collect();
     if callers.iter().any(|(_, caller)| matches!(caller.auth(), CallerAuth::Peer(_))) {
-        // K-81 matches the connecting process's peer uid against each caller's resolved account. Until then a peer
-        // listener fails closed: it must never reach the sole-caller or token arms below.
-        return Err(Unauthenticated);
+        // A peer listener must never reach the sole-caller or token arms below: only the peer uid identifies there.
+        return peer_holder(policy, &callers, peer_uid).cloned().ok_or(Unauthenticated);
     }
     match callers.as_slice() {
         [(name, caller)] if matches!(caller.auth(), CallerAuth::IsolatedNetwork) => Ok((*name).clone()),
@@ -66,6 +71,19 @@ pub fn identify_caller(
             token_holder(&callers, &token).cloned().ok_or(Unauthenticated)
         }
     }
+}
+
+/// The peer caller in `callers` whose account resolved to `peer_uid` when `policy` was activated.
+///
+/// A uid is not secret, since any local account can list them all in `/etc/passwd`, so a plain comparison that stops
+/// at the first match is fine; unlike [`token_holder`], timing here reveals nothing worth hiding. Activation refuses two
+/// callers on one listener with the same uid, so at most one matches.
+fn peer_holder<'a>(policy: &ActivePolicy, callers: &[(&'a CallerName, &'a CallerConfig)], peer_uid: Option<u32>) -> Option<&'a CallerName> {
+    let uid = peer_uid?;
+    callers
+        .iter()
+        .map(|(name, _)| *name)
+        .find(|name| policy.peer_uids().get(*name) == Some(&uid))
 }
 
 /// The caller token presented in the listener's token header, if exactly one well-formed one is.

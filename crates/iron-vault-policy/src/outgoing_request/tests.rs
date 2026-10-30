@@ -7,6 +7,7 @@ use crate::config::ParsedConfig;
 use crate::port::Port;
 use crate::request_target::RequestTarget;
 use crate::spec_example::SPEC_EXAMPLE;
+use crate::test_accounts::FakeAccounts;
 use crate::validated::ValidatedConfig;
 
 const SECRET: &str = "S3CR3T";
@@ -38,7 +39,7 @@ fn policy() -> ActivePolicy {
     .iter()
     .fold(SPEC_EXAMPLE.to_owned(), |doc, paths| doc.replace(paths, "[\"/**\"]"));
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-    activate(&config, &Capabilities::default(), &Catalog).unwrap()
+    activate(&config, &Capabilities::default(), &Catalog, &FakeAccounts::host()).unwrap()
 }
 
 /// Authorizes `target` for the caller granted its route and assembles it with the caller's `headers`, filling the

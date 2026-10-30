@@ -1,17 +1,20 @@
-//! Activation: checking a validated config against facts only the running service knows (spec §2, §3.3, §3.9).
+//! Activation: checking a validated config against facts only the running service knows (spec §2, §3.3, §3.4, §3.9).
 //!
-//! The configuration cannot know which credential records exist, which hosts they permit, or whether this machine
-//! can confirm a touch. The service supplies those facts as [`Capabilities`] and a [`CredentialCatalog`]; activation
-//! then either refuses the whole configuration or produces the [`ActivePolicy`] that requests are served under.
+//! The configuration cannot know which credential records exist, which hosts they permit, whether this machine can
+//! confirm a touch, or which uid each peer account has. The service supplies those facts as [`Capabilities`], a
+//! [`CredentialCatalog`] and an [`AccountDirectory`]; activation then either refuses the whole configuration or
+//! produces the [`ActivePolicy`] that requests are served under.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 
+use crate::account_name::AccountName;
 use crate::confirmation::Confirmation;
 use crate::credential_kind::CredentialKind;
+use crate::display::joined;
 use crate::host::Host;
-use crate::name::{CredentialName, RouteName};
+use crate::name::{CallerName, CredentialName, ListenerName, RouteName};
 use crate::port::Port;
 use crate::route::RouteConfig;
 use crate::validated::ValidatedConfig;
@@ -29,6 +32,17 @@ pub struct Capabilities {
 pub trait CredentialCatalog {
     /// What the vault holds under `name`.
     fn entry(&self, name: &CredentialName) -> CatalogEntry;
+}
+
+/// The host's local accounts, as activation needs them to resolve each peer caller's `user` (spec §3.4).
+///
+/// The service implements this over the host's account database, so this crate resolves accounts without reading it.
+pub trait AccountDirectory {
+    /// The uid of the account named `name`, or none when no such account exists.
+    fn uid(&self, name: &AccountName) -> Option<u32>;
+
+    /// The uid the service runs as, which no peer caller may name.
+    fn service_account_uid(&self) -> u32;
 }
 
 /// One credential name's standing in the vault.
@@ -49,14 +63,19 @@ pub enum CatalogEntry {
     },
 }
 
-/// A validated config activated against the service's capabilities and credential catalog.
+/// A validated config activated against the service's capabilities, credential catalog and account directory.
 ///
 /// Only [`activate`] builds one. Routes whose record is unusable stay listed so the service can answer for them, but
 /// are unavailable; every other route may serve requests.
+///
+/// Each peer caller's account is resolved to a uid once, here, so identifying a caller is a uid comparison and a
+/// missing or privileged account refuses the config rather than a request. The uids are a snapshot: an account renamed,
+/// deleted or recreated with another uid takes effect at the next activation, which a reload performs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivePolicy {
     config: ValidatedConfig,
     unavailable: BTreeSet<RouteName>,
+    peer_uids: BTreeMap<CallerName, u32>,
 }
 
 /// Why a validated config cannot be activated.
@@ -98,6 +117,38 @@ pub enum ActivationError {
         /// The credential's kind.
         kind: CredentialKind,
     },
+    /// The peer caller's `user` names no account on this host (spec §3.4).
+    #[error("caller {caller} names user {user}, which is not an account on this host")]
+    UnknownAccount {
+        /// The peer caller.
+        caller: CallerName,
+        /// The account it names.
+        user: AccountName,
+    },
+    /// The peer caller's `user` resolves to root or to the service account, which are never peer accounts (spec §3.4).
+    ///
+    /// Root is already a host administrator, outside the threat model (spec §1.2), so it needs no caller identity;
+    /// a program run as root to use a route holds far more than that route. The service account connecting to its own
+    /// request socket is never legitimate: a process doing so is the service misbehaving or something running with
+    /// its privileges.
+    #[error("caller {caller} names user {user}, which is root or the service account; neither may be a peer account")]
+    PrivilegedAccount {
+        /// The peer caller.
+        caller: CallerName,
+        /// The account it names.
+        user: AccountName,
+    },
+    /// Peer callers on one listener name accounts with the same uid, as `passwd` aliases can, so a connection from that
+    /// uid would identify more than one caller (spec §3.4).
+    #[error("callers {} on listener {listener} name accounts with uid {uid}, so one account would identify more than one caller", joined(.callers))]
+    SharedPeerAccount {
+        /// The listener.
+        listener: ListenerName,
+        /// The uid the accounts share.
+        uid: u32,
+        /// The callers whose accounts have it, in name order.
+        callers: Vec<CallerName>,
+    },
 }
 
 impl ActivePolicy {
@@ -125,16 +176,22 @@ impl ActivePolicy {
     pub fn is_available(&self, route: &RouteName) -> bool {
         self.route(route).is_some()
     }
+
+    /// The uid each peer caller's account had when this policy was activated, in caller name order.
+    pub fn peer_uids(&self) -> &BTreeMap<CallerName, u32> {
+        &self.peer_uids
+    }
 }
 
-/// Activates `config`, or returns every reason it cannot be, in route name order.
+/// Activates `config`, or returns every reason it cannot be: route errors in route name order, then peer account errors.
 ///
 /// The catalog is asked once per credential. An unusable record makes only its routes unavailable; activation runs
-/// again once the record is repaired, and checks its origins then.
+/// again once the record is repaired, and checks its origins then. The directory is asked once per peer caller.
 pub fn activate(
     config: &ValidatedConfig,
     capabilities: &Capabilities,
     catalog: &impl CredentialCatalog,
+    accounts: &impl AccountDirectory,
 ) -> Result<ActivePolicy, Vec<ActivationError>> {
     let credentials: BTreeSet<_> = config.routes().values().map(RouteConfig::credential).collect();
     let entries: BTreeMap<_, _> = credentials
@@ -149,8 +206,8 @@ pub fn activate(
         .clone()
         .flat_map(|(name, route, entry)| route_errors(name, route, capabilities, entry))
         .collect();
-    match errors.is_empty() {
-        true => {
+    match (errors.is_empty(), peer_accounts::resolve(config, accounts)) {
+        (true, Ok(peer_uids)) => {
             let unavailable = routes
                 .filter(|(_, _, entry)| !is_usable(entry))
                 .map(|(name, _, _)| name.clone())
@@ -158,9 +215,10 @@ pub fn activate(
             Ok(ActivePolicy {
                 config: config.clone(),
                 unavailable,
+                peer_uids,
             })
         }
-        false => Err(errors),
+        (_, peer_uids) => Err(errors.into_iter().chain(peer_uids.err().into_iter().flatten()).collect()),
     }
 }
 
@@ -208,11 +266,14 @@ fn is_usable(entry: &CatalogEntry) -> bool {
     matches!(entry, CatalogEntry::Usable { .. })
 }
 
+mod peer_accounts;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::ParsedConfig;
     use crate::spec_example::SPEC_EXAMPLE;
+    use crate::test_accounts::{FakeAccounts, SERVICE_UID};
 
     const NO_TOUCH: Capabilities = Capabilities { touch_provider: false };
 
@@ -273,7 +334,7 @@ mod tests {
     fn each_credential_is_looked_up_once() {
         let shared = config(&SPEC_EXAMPLE.replace("credential = \"brave\"", "credential = \"venice\""));
         let catalog = CountingCatalog(std::cell::RefCell::default());
-        assert!(activate(&shared, &NO_TOUCH, &catalog).is_ok());
+        assert!(activate(&shared, &NO_TOUCH, &catalog, &FakeAccounts::host()).is_ok());
         assert_eq!(
             catalog.0.borrow().iter().map(CredentialName::as_str).collect::<Vec<_>>(),
             ["fx_key", "venice"]
@@ -282,7 +343,7 @@ mod tests {
 
     #[test]
     fn spec_example_activates() {
-        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &spec_catalog(&[])).unwrap();
+        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap();
         assert!(policy.unavailable_routes().is_empty());
         assert!(["fx", "venice", "brave"].iter().all(|route| policy.is_available(&n(route))));
         assert!(!policy.is_available(&n("missing")));
@@ -290,17 +351,57 @@ mod tests {
     }
 
     #[test]
+    fn the_policy_holds_each_peer_callers_uid() {
+        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap();
+        assert_eq!(policy.peer_uids(), &[(n("fx-mcp"), 1001)].into());
+    }
+
+    #[test]
+    fn peer_account_errors_follow_route_errors() {
+        let catalog = spec_catalog(&[("brave", CatalogEntry::Unknown)]);
+        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::with(&[("fx-mcp", 0)])).unwrap_err();
+        let expected = [
+            ActivationError::UnknownCredential {
+                route: n("brave"),
+                credential: n("brave"),
+            },
+            ActivationError::PrivilegedAccount {
+                caller: n("fx-mcp"),
+                user: n("fx-mcp"),
+            },
+        ];
+        assert_eq!(err, expected);
+    }
+
+    #[test]
+    fn a_peer_account_error_alone_refuses_the_config() {
+        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::with(&[])).map(|_| ());
+        assert_eq!(err, Ok(()));
+        let accounts = FakeAccounts::with(&[("fx-mcp", SERVICE_UID)]);
+        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &spec_catalog(&[]), &accounts).unwrap_err();
+        assert!(matches!(&err[..], [ActivationError::PrivilegedAccount { .. }]), "{err:?}");
+    }
+
+    #[test]
     fn touch_route_is_refused_without_a_provider() {
         let touch = spec_with("credential = \"fx_key\"", "credential = \"fx_key\"\nconfirm = \"touch\"");
-        let err = activate(&touch, &NO_TOUCH, &spec_catalog(&[])).unwrap_err();
+        let err = activate(&touch, &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap_err();
         assert_eq!(err, [ActivationError::TouchUnavailable { route: n("fx") }]);
-        assert!(activate(&touch, &Capabilities { touch_provider: true }, &spec_catalog(&[])).is_ok());
+        assert!(
+            activate(
+                &touch,
+                &Capabilities { touch_provider: true },
+                &spec_catalog(&[]),
+                &FakeAccounts::host()
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn unknown_credential_is_refused() {
         let catalog = spec_catalog(&[("brave", CatalogEntry::Unknown)]);
-        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog).unwrap_err();
+        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap_err();
         assert_eq!(
             err,
             [ActivationError::UnknownCredential {
@@ -313,7 +414,7 @@ mod tests {
     #[test]
     fn damaged_credential_disables_only_its_route() {
         let catalog = spec_catalog(&[("venice", CatalogEntry::Unusable)]);
-        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog).unwrap();
+        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap();
         assert_eq!(
             policy.unavailable_routes().iter().map(RouteName::as_str).collect::<Vec<_>>(),
             ["venice"]
@@ -325,7 +426,7 @@ mod tests {
     #[test]
     fn route_lookup_omits_unavailable_and_missing_routes() {
         let catalog = spec_catalog(&[("venice", CatalogEntry::Unusable)]);
-        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog).unwrap();
+        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap();
         assert_eq!(policy.route(&n("fx")), policy.config().routes().get(&n("fx")));
         assert!(policy.route(&n("fx")).is_some() && policy.route(&n("brave")).is_some());
         assert_eq!(policy.route(&n("venice")), None);
@@ -336,7 +437,7 @@ mod tests {
     #[test]
     fn upstream_host_must_be_permitted_exactly() {
         let evil = spec_with("https://api.fx.example", "https://api.fx.example.evil.com");
-        let err = activate(&evil, &NO_TOUCH, &spec_catalog(&[])).unwrap_err();
+        let err = activate(&evil, &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap_err();
         let host = n("api.fx.example.evil.com");
         let expected = ActivationError::OriginNotPermitted {
             route: n("fx"),
@@ -354,20 +455,20 @@ mod tests {
     #[test]
     fn upstream_port_must_be_permitted() {
         let other_port = spec_with("https://api.fx.example", "https://api.fx.example:8443");
-        let err = activate(&other_port, &NO_TOUCH, &spec_catalog(&[])).unwrap_err();
+        let err = activate(&other_port, &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap_err();
         assert!(
             matches!(&err[..], [ActivationError::OriginNotPermitted { port, .. }] if port.get() == 8443),
             "{err:?}"
         );
         let catalog = spec_catalog(&[("fx_key", usable(&[("api.fx.example", 443), ("api.fx.example", 8443)]))]);
-        assert!(activate(&other_port, &NO_TOUCH, &catalog).is_ok());
+        assert!(activate(&other_port, &NO_TOUCH, &catalog, &FakeAccounts::host()).is_ok());
     }
 
     #[test]
     fn every_error_is_reported_in_route_order() {
         let touch = spec_with("credential = \"fx_key\"", "credential = \"fx_key\"\nconfirm = \"touch\"");
         let catalog = spec_catalog(&[("brave", CatalogEntry::Unknown), ("fx_key", usable(&[("api.fx.example", 8443)]))]);
-        let err = activate(&touch, &NO_TOUCH, &catalog).unwrap_err();
+        let err = activate(&touch, &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap_err();
         let expected = [
             ActivationError::UnknownCredential {
                 route: n("brave"),
@@ -394,7 +495,7 @@ mod tests {
     #[test]
     fn static_credential_on_basic_slot_is_refused() {
         let basic = spec_with("slot = { query = \"access_key\" }", "slot = \"basic\"");
-        let err = activate(&basic, &NO_TOUCH, &spec_catalog(&[])).unwrap_err();
+        let err = activate(&basic, &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap_err();
         assert_eq!(
             err,
             [ActivationError::SlotMismatch {
@@ -413,7 +514,7 @@ mod tests {
     fn basic_credential_on_header_slot_is_reported_with_other_errors() {
         let brave = with_kind(usable(&[("api.search.brave.com", 443)]), CredentialKind::Basic);
         let catalog = spec_catalog(&[("brave", brave), ("fx_key", CatalogEntry::Unknown)]);
-        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog).unwrap_err();
+        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap_err();
         let expected = [
             ActivationError::SlotMismatch {
                 route: n("brave"),

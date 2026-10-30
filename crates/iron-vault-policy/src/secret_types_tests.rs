@@ -12,6 +12,7 @@ use static_assertions::assert_not_impl_any;
 
 use crate::activation::{ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
 use crate::spec_example::SPEC_EXAMPLE;
+use crate::test_accounts::FakeAccounts;
 use crate::{
     AuthorizedRequest, BoundCredential, CallerToken, CheckedRequest, CredentialKind, CredentialName, HeaderName, HeaderValue, Host, Method,
     OutgoingHeaders, OutgoingRequest, ParsedConfig, Port, RequestTarget, Slot, SlotValue, UpstreamTarget, ValidatedConfig, authorize,
@@ -104,7 +105,7 @@ fn origins(credential: &CredentialName) -> BTreeSet<(Host, Port)> {
 
 fn policy() -> ActivePolicy {
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(SPEC_EXAMPLE.as_bytes()).unwrap()).unwrap();
-    activate(&config, &Capabilities::default(), &Catalog).unwrap()
+    activate(&config, &Capabilities::default(), &Catalog, &FakeAccounts::host()).unwrap()
 }
 
 /// One §3.3 request through every stage that holds the marker: `target` is authorized for `caller`, built, assembled
