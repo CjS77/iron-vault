@@ -21,16 +21,20 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 zeroize.workspace = true
 
-# Process hardening, the getuid call for trusted-path checks and the admin socket's peer credentials are Linux-only for
-# now; other platforms report them as unsupported without these syscalls.
+# Process hardening, the getuid call for trusted-path checks, the admin socket and its peer credentials are Linux-only
+# for now; other platforms report them as unsupported without these syscalls.
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true
+# The admin server: a current-thread runtime, Unix sockets, request deadlines and the stop signals.
+tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "signal", "macros"] }
 
 [dev-dependencies]
 proptest.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 static_assertions.workspace = true
+# The admin server tests stop the server on demand through a oneshot channel.
+tokio = { workspace = true, features = ["rt", "macros", "sync"] }
 
 [lints]
 workspace = true

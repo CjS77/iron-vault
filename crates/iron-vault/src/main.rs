@@ -2,13 +2,17 @@
 //! scrubbing, logging, and notifications.
 
 mod hardening;
+#[cfg(target_os = "linux")]
+mod serve;
 
 use iron_vault::deployment::{self, Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::trusted_path_report::ServicePaths;
 
 fn main() -> anyhow::Result<()> {
+    // The CLI's argument parser replaces this check of the first argument.
+    let command = std::env::args_os().nth(1);
     // `--version` needs no install path, so a release check can run it on a machine with no installation.
-    if std::env::args_os().nth(1).is_some_and(|arg| arg == "--version") {
+    if command.as_ref().is_some_and(|arg| arg == "--version") {
         println!("{}", deployment::version_line());
         return Ok(());
     }
@@ -20,8 +24,22 @@ fn main() -> anyhow::Result<()> {
     let env = ProfileEnv::from_process(&accounts)?;
     #[cfg(feature = "dev-mode")]
     warn_development(&env, &accounts)?;
-    let _paths = ServicePaths::for_profile(DeploymentProfile::current(), &env)?;
-    Ok(())
+    let paths = ServicePaths::for_profile(DeploymentProfile::current(), &env)?;
+    match command {
+        Some(arg) if arg == "serve" => serve(&paths),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn serve(paths: &ServicePaths) -> anyhow::Result<()> {
+    serve::run(paths)
+}
+
+/// The admin socket needs a peer-credential adapter, which only Linux has so far.
+#[cfg(not(target_os = "linux"))]
+fn serve(_paths: &ServicePaths) -> anyhow::Result<()> {
+    anyhow::bail!("`iron-vault serve` is not supported on this platform yet")
 }
 
 /// Refuses a development build run as root, and otherwise warns that it gives no isolation from the user's malware.

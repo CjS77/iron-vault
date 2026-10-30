@@ -37,6 +37,9 @@ static_assertions = "=1.1.0"
 # Constant-time equality for digests; std and i128 are not needed.
 subtle = { version = "2.6.1", default-features = false }
 thiserror = "2"
+# The binary's async runtime for its sockets; each crate enables only the features it uses. The policy crate's dependency
+# guard keeps it out of iron-vault-policy.
+tokio = { version = "1.54.1", default-features = false }
 toml = "1"
 # A logging facade only: the binary installs the subscriber. Default features would pull in the attribute macros.
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
