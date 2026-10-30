@@ -8,7 +8,8 @@
 //! systemd describes the sockets it passes in three variables: `LISTEN_PID` (the process they are for), `LISTEN_FDS`
 //! (how many, from fd 3 up) and `LISTEN_FDNAMES` (each socket's `FileDescriptorName=`, `:`-separated). The service
 //! reads them once at startup into an [`ActivationEnv`], and [`inheritance`] decides from that value alone which
-//! listener each fd belongs to, so the protocol rules are tested without systemd.
+//! listener each fd belongs to, so the protocol rules are tested without systemd. [`adopt`] then takes the fds and
+//! checks each one against its listener's configured endpoint before anything uses it.
 //!
 //! The service never removes the variables itself: removing one needs `remove_var`, which is unsafe in edition 2024.
 //! `listenfd`, which takes ownership of the fds, removes `LISTEN_PID` and `LISTEN_FDS` as it does so, so adoption must
@@ -23,6 +24,9 @@ use std::os::fd::RawFd;
 use iron_vault_policy::{Endpoint, ListenerName};
 
 use crate::deployment::DeploymentProfile;
+
+mod adopt;
+pub use adopt::{AdoptError, AdoptedSocket, adopt, verify};
 
 /// The first fd systemd passes; the rest follow in order.
 pub const FIRST_FD: RawFd = 3;

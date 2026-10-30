@@ -26,6 +26,9 @@ ed25519-dalek = { version = "2.2.0", default-features = false, features = ["zero
 getrandom = { version = "0.4.3", default-features = false }
 # Open-flag constants (O_NOFOLLOW, O_NONBLOCK, ELOOP) for state-file reads on Unix; already in the lock tree.
 libc = { version = "0.2.191", default-features = false }
+# Takes ownership of the sockets systemd passes by socket activation; `from_raw_fd` is unsafe, which this workspace
+# forbids. Its only Unix dependency is libc, already in the lock tree.
+listenfd = "1.0.2"
 proptest = { version = "1.12", default-features = false, features = ["std"] }
 # Test certificates for the upstream-trust tests. Default features are off so aws-lc-rs and its C build stay out; ring
 # signs, as it does for rustls, and pem writes the PEM files the pinned-CA loader reads.

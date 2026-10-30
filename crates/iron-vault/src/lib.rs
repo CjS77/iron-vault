@@ -10,7 +10,7 @@ pub mod peer;
 // The request socket accepts on tokio, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
 pub mod request_socket;
-// Socket activation is systemd's, so this crate reads its variables only on Linux.
+// Adopting activated sockets uses listenfd and rustix, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
 pub mod socket_activation;
 // Binding socket files uses rustix, which this crate depends on only on Linux.

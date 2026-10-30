@@ -132,17 +132,43 @@ impl RequestListener {
     }
 }
 
+/// Why the directory holding a request socket is not trusted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DirFault {
+    /// The path has no directory part.
+    NoDirectory,
+    /// The directory fails the runtime-directory rule.
+    Untrusted {
+        /// The directory holding the socket.
+        dir: PathBuf,
+        /// Why it is not trusted.
+        reason: PathFailure,
+    },
+}
+
 /// Refuses `path` unless the directory holding it passes the runtime-directory rule.
 fn check_dir(path: &Path, owner: ExpectedOwner) -> Result<(), RequestBindError> {
+    check_socket_dir(path, owner).map_err(|fault| match fault {
+        DirFault::NoDirectory => RequestBindError::NoDirectory { path: path.to_path_buf() },
+        DirFault::Untrusted { dir, reason } => RequestBindError::UntrustedDirectory {
+            path: path.to_path_buf(),
+            dir,
+            reason,
+        },
+    })
+}
+
+/// Checks the directory holding the request socket `path` against the runtime-directory rule, whether the service
+/// binds the socket or systemd passed it.
+pub(crate) fn check_socket_dir(path: &Path, owner: ExpectedOwner) -> Result<(), DirFault> {
     let dir = path
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
-        .ok_or_else(|| RequestBindError::NoDirectory { path: path.to_path_buf() })?;
+        .ok_or(DirFault::NoDirectory)?;
     // The runtime-directory rule is the same in both profiles; the profile only decides who may own the binary.
     trusted_path_report::check_path(TrustedPathRule::RuntimeDir, DeploymentProfile::Protected, owner, dir)
         .map(|_| ())
-        .map_err(|reason| RequestBindError::UntrustedDirectory {
-            path: path.to_path_buf(),
+        .map_err(|reason| DirFault::Untrusted {
             dir: dir.to_path_buf(),
             reason,
         })

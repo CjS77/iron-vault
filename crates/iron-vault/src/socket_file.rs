@@ -227,7 +227,7 @@ fn verify(spec: SocketSpec<'_>) -> Result<Metadata, BindError> {
 }
 
 /// "a socket owned by uid 1000 with mode 0644", for error messages.
-fn describe(metadata: &Metadata) -> String {
+pub(crate) fn describe(metadata: &Metadata) -> String {
     let file_type = metadata.file_type();
     let kind = if file_type.is_socket() {
         "a socket"

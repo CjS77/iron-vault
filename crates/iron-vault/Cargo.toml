@@ -29,6 +29,8 @@ zeroize.workspace = true
 # Process hardening, the getuid call for trusted-path checks, the admin socket and its peer credentials, and the CLI's
 # terminal handling are Linux-only for now; other platforms report them as unsupported without these syscalls.
 [target.'cfg(target_os = "linux")'.dependencies]
+# Adopting request listeners from systemd socket activation.
+listenfd.workspace = true
 rustix.workspace = true
 # The admin server: a current-thread runtime, Unix sockets, request deadlines and the stop signals. The CLI uses the
 # signal support too, to restore the terminal on SIGINT.
