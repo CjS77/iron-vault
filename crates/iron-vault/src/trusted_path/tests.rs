@@ -57,7 +57,7 @@ fn config_chain(leaf: PathComponent) -> Vec<PathComponent> {
 }
 
 fn config_file() -> PathComponent {
-    file("/etc/iron-vault/config.toml", ROOT_UID, 0o644)
+    file("/etc/iron-vault/config.toml", SERVICE, 0o600)
 }
 
 fn state_chain(leaf: PathComponent) -> Vec<PathComponent> {
@@ -143,8 +143,8 @@ fn dev_case(name: &'static str, rule: TrustedPathRule, chain: Vec<PathComponent>
     }
 }
 
-fn binary_and_config_cases() -> Vec<Case> {
-    use TrustedPathRule::{Binary, Config};
+fn binary_cases() -> Vec<Case> {
+    use TrustedPathRule::Binary;
     let bin = |uid, mode| {
         vec![
             dir("/", ROOT_UID, 0o755),
@@ -152,7 +152,6 @@ fn binary_and_config_cases() -> Vec<Case> {
             file("/usr/bin/iron-vault", uid, mode),
         ]
     };
-    let user_config = |uid| config_chain(file("/etc/iron-vault/config.toml", uid, 0o600));
     vec![
         case("root-owned binary", Binary, bin(ROOT_UID, 0o755), Ok(())),
         case(
@@ -181,25 +180,64 @@ fn binary_and_config_cases() -> Vec<Case> {
             bin(STRANGER, 0o755),
             unsafe_at("/usr/bin/iron-vault", wrong_owner(STRANGER, OwnerRequirement::RootOr(USER))),
         ),
-        case("root-owned config", Config, config_chain(config_file()), Ok(())),
+    ]
+}
+
+fn config_cases() -> Vec<Case> {
+    use TrustedPathRule::Config;
+    let config = |uid, mode| config_chain(file("/etc/iron-vault/config.toml", uid, mode));
+    let refused = |problem| unsafe_at("/etc/iron-vault/config.toml", problem);
+    let service_only = OwnerRequirement::Uid(SERVICE);
+    vec![
+        case("service-owned 0600 config", Config, config(SERVICE, 0o600), Ok(())),
+        case(
+            "root-owned config when protected",
+            Config,
+            config(ROOT_UID, 0o600),
+            refused(wrong_owner(ROOT_UID, service_only)),
+        ),
         case(
             "user-owned config when protected",
             Config,
-            user_config(USER),
-            unsafe_at("/etc/iron-vault/config.toml", wrong_owner(USER, OwnerRequirement::Root)),
+            config(USER, 0o600),
+            refused(wrong_owner(USER, service_only)),
         ),
-        dev_case("user-owned config in development", Config, user_config(USER), Ok(())),
+        case(
+            "group-readable config",
+            Config,
+            config(SERVICE, 0o640),
+            refused(wrong_mode(0o640, 0o600)),
+        ),
+        case(
+            "world-readable config",
+            Config,
+            config(SERVICE, 0o644),
+            refused(wrong_mode(0o644, 0o600)),
+        ),
+        case(
+            "read-only config",
+            Config,
+            config(SERVICE, 0o400),
+            refused(wrong_mode(0o400, 0o600)),
+        ),
+        dev_case("user-owned 0600 config in development", Config, config(USER, 0o600), Ok(())),
+        dev_case(
+            "root-owned config in development",
+            Config,
+            config(ROOT_UID, 0o600),
+            refused(wrong_owner(ROOT_UID, OwnerRequirement::Uid(USER))),
+        ),
         case(
             "config that is a directory",
             Config,
-            config_chain(dir("/etc/iron-vault/config.toml", ROOT_UID, 0o755)),
-            unsafe_at("/etc/iron-vault/config.toml", Problem::NotARegularFile),
+            config_chain(dir("/etc/iron-vault/config.toml", SERVICE, 0o700)),
+            refused(Problem::NotARegularFile),
         ),
         case(
             "config that is a device",
             Config,
-            config_chain(entry("/etc/iron-vault/config.toml", ROOT_UID, 0o644, ComponentKind::Other)),
-            unsafe_at("/etc/iron-vault/config.toml", Problem::NotARegularFile),
+            config_chain(entry("/etc/iron-vault/config.toml", SERVICE, 0o600, ComponentKind::Other)),
+            refused(Problem::NotARegularFile),
         ),
     ]
 }
@@ -247,7 +285,7 @@ fn ancestor_cases() -> Vec<Case> {
         case(
             "sticky /tmp ancestor of a config",
             Config,
-            tmp_chain(file("/tmp/config.toml", ROOT_UID, 0o644)),
+            tmp_chain(file("/tmp/config.toml", SERVICE, 0o600)),
             unsafe_at("/tmp", Problem::SharedStickyAncestor),
         ),
         case(
@@ -429,8 +467,8 @@ fn symlink_cases() -> Vec<Case> {
         case(
             "leaf symlink to an unsafe file",
             Config,
-            leaf_link(config_chain(file("/etc/iron-vault/config.toml", ROOT_UID, 0o666))),
-            unsafe_at("/etc/iron-vault/config.toml", Problem::WritableByGroup { gid: 0, name: None }),
+            leaf_link(config_chain(file("/etc/iron-vault/config.toml", SERVICE, 0o666))),
+            unsafe_at("/etc/iron-vault/config.toml", wrong_mode(0o666, 0o600)),
         ),
         case("root-controlled ancestor symlink", Config, via_dir_link, Ok(())),
         case(
@@ -511,7 +549,8 @@ fn ordering_cases() -> Vec<Case> {
 #[test]
 fn every_rule_and_problem() {
     [
-        binary_and_config_cases(),
+        binary_cases(),
+        config_cases(),
         ancestor_cases(),
         state_and_runtime_cases(),
         symlink_cases(),
@@ -711,17 +750,24 @@ fn a_service_owned_folder_above_a_protected_binary_is_cautioned() {
 }
 
 #[test]
-fn a_caution_names_the_owner_when_the_adapter_resolved_it() {
+fn a_service_owned_folder_above_the_config_is_not_cautioned() {
     let mut chain = config_chain(config_file());
+    chain[2] = dir("/etc/iron-vault", SERVICE, 0o700);
+    assert_eq!(protected_cautions(TrustedPathRule::Config, &chain), Ok(vec![]));
+}
+
+#[test]
+fn a_caution_names_the_owner_when_the_adapter_resolved_it() {
+    let mut chain = opt_binary_chain(SERVICE);
     chain[2] = PathComponent {
         owner_name: Some("iron-vault".to_string()),
-        ..dir("/etc/iron-vault", SERVICE, 0o755)
+        ..chain[2].clone()
     };
     let expected = PathCaution {
         owner_name: Some("iron-vault".to_string()),
-        ..caution(CautionedFile::Config, "/etc/iron-vault", SERVICE)
+        ..caution(CautionedFile::Binary, "/opt/iron-vault", SERVICE)
     };
-    assert_eq!(protected_cautions(TrustedPathRule::Config, &chain), Ok(vec![expected]));
+    assert_eq!(protected_cautions(TrustedPathRule::Binary, &chain), Ok(vec![expected]));
 }
 
 #[test]

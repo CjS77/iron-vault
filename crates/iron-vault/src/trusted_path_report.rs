@@ -15,9 +15,9 @@ const STATE_LOCK_FILE: &str = "lock";
 /// is found from the process itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServicePaths {
-    /// Who may own the binary and config.
+    /// Who may own the binary.
     pub profile: Profile,
-    /// Who must own the state and runtime directories and the state files.
+    /// Who must own the config, the state and runtime directories and the state files.
     pub owner: ExpectedOwner,
     /// The configuration file. Its directory is checked as the config path's last ancestor.
     pub config: PathBuf,
@@ -109,11 +109,6 @@ fn caution_warning(caution: &PathCaution, trusted: &Path) -> String {
             "service binary",
             "run that program",
             "or install the binary to /usr/bin (package) or /usr/local/bin (manual install)",
-        ),
-        CautionedFile::Config => (
-            "configuration file",
-            "load that configuration",
-            "or move the configuration into a directory owned by root all the way up from /",
         ),
     };
     format!(
@@ -229,27 +224,6 @@ mod tests {
     fn an_unnamed_owner_is_shown_by_uid() {
         let warning = caution_warning(&opt_caution(None), Path::new("/opt/iron-vault/iron-vault"));
         assert!(warning.starts_with("/opt/iron-vault is owned by uid 997, not root"), "{warning}");
-    }
-
-    #[test]
-    fn a_config_caution_names_the_config_and_a_root_owned_directory() {
-        let caution = PathCaution {
-            file: CautionedFile::Config,
-            path: PathBuf::from("/etc/iron-vault"),
-            ..opt_caution(None)
-        };
-        let warning = caution_warning(&caution, Path::new("/etc/iron-vault/config.toml"));
-        [
-            "/etc/iron-vault is owned by uid 997, not root",
-            "is on the path to the configuration file /etc/iron-vault/config.toml",
-            "the next service start would load that configuration with the vault unlocked",
-            "`chown root:root /etc/iron-vault`",
-            "or move the configuration into a directory owned by root all the way up from /",
-            "starting anyway",
-        ]
-        .into_iter()
-        .for_each(|expected| assert!(warning.contains(expected), "missing {expected:?} in {warning}"));
-        assert!(!warning.contains("/usr/bin"), "{warning}");
     }
 
     #[test]

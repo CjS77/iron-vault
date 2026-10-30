@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// The uid of root, which is trusted for every ancestor directory and owns protected binaries and config.
+/// The uid of root, which is trusted for every ancestor directory and owns protected binaries.
 const ROOT_UID: u32 = 0;
 
 /// How deeply symlink resolutions may nest: a link whose target chain holds a link, and so on.
@@ -112,14 +112,14 @@ pub struct ExpectedOwner {
     pub uid: u32,
 }
 
-/// The deployment profile, which decides only who may own the binary and config.
+/// The deployment profile, which decides only who may own the binary and whether its path has cautions.
 ///
 /// EP-14 owns the full deployment profile and replaces this enum with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
-    /// A supported protected installation: root owns the binary and config.
+    /// A supported protected installation: root owns the binary.
     Protected,
-    /// A user-level installation with no isolation from that user's malware: the invoking user may own them.
+    /// A user-level installation with no isolation from that user's malware: the invoking user may own the binary.
     Development,
 }
 
@@ -128,7 +128,8 @@ pub enum Profile {
 pub enum TrustedPathRule {
     /// The service executable.
     Binary,
-    /// The configuration file.
+    /// The configuration file, which the service writes itself when it publishes an approved config, so it is the
+    /// expected owner's with mode `0600`.
     Config,
     /// The state directory, which must be the expected owner's alone.
     StateDir,
@@ -144,13 +145,12 @@ impl TrustedPathRule {
         !matches!(self, Self::StateDir | Self::Config)
     }
 
-    /// The file this rule's path cautions are about: only the binary and config must be root's alone, while the
-    /// other rules expect the service account to own their directories.
+    /// The file this rule's path cautions are about: only the binary must be root's alone, while the other rules
+    /// expect the service account to own their files or directories.
     pub const fn cautioned_file(self) -> Option<CautionedFile> {
         match self {
             Self::Binary => Some(CautionedFile::Binary),
-            Self::Config => Some(CautionedFile::Config),
-            Self::StateDir | Self::RuntimeDir | Self::StateFile => None,
+            Self::Config | Self::StateDir | Self::RuntimeDir | Self::StateFile => None,
         }
     }
 }
@@ -160,8 +160,6 @@ impl TrustedPathRule {
 pub enum CautionedFile {
     /// The service executable, checked under [`TrustedPathRule::Binary`].
     Binary,
-    /// The configuration file, checked under [`TrustedPathRule::Config`].
-    Config,
 }
 
 /// Who may own a path component.
@@ -327,10 +325,10 @@ pub fn check(rule: TrustedPathRule, profile: Profile, owner: ExpectedOwner, comp
     check_with_cautions(rule, profile, owner, components).map(|_| ())
 }
 
-/// A directory above the binary or config that passes its rule but is not owned by root.
+/// A directory above the binary that passes its rule but is not owned by root.
 ///
-/// Anything running as the owning account can rename the trusted file out of the way and put its own in its place,
-/// and the next service start would run or load it with the vault unlocked. That is safe enough to start on, so it
+/// Anything running as the owning account can rename the binary out of the way and put its own in its place, and the
+/// next service start would run it with the vault unlocked. That is safe enough to start on, so it
 /// is a warning, never a refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathCaution {
@@ -347,8 +345,8 @@ pub struct PathCaution {
 /// Checks a trusted path as [`check`] does and, when it passes, returns its path cautions from `/` down, each folder
 /// once.
 ///
-/// Only the protected profile's binary and config have cautions: development already reports that it gives no
-/// isolation, and the other rules expect the service account to own their directories. A refused path has its
+/// Only the protected profile's binary has cautions: development already reports that it gives no isolation, and the
+/// other rules expect the service account to own their directories. A refused path has its
 /// refusal only.
 pub fn check_with_cautions(
     rule: TrustedPathRule,
@@ -454,9 +452,9 @@ impl Walk {
     fn leaf(self, component: &PathComponent) -> Result<(), Problem> {
         let service = OwnerRequirement::Uid(self.owner.uid);
         match self.rule {
-            TrustedPathRule::Binary | TrustedPathRule::Config => {
+            TrustedPathRule::Binary => {
                 require_regular_file(component)?;
-                require_owner(component, self.installed_owner())?;
+                require_owner(component, self.binary_owner())?;
                 require_not_writable(component)
             }
             TrustedPathRule::StateDir => {
@@ -469,7 +467,8 @@ impl Walk {
                 require_owner(component, service)?;
                 require_not_writable(component)
             }
-            TrustedPathRule::StateFile => {
+            // The service writes both, so root cannot own them, and no other account may read them.
+            TrustedPathRule::Config | TrustedPathRule::StateFile => {
                 require_regular_file(component)?;
                 require_owner(component, service)?;
                 require_mode(component, Mode::new(0o600))
@@ -489,8 +488,8 @@ impl Walk {
         Ok(self.caution(component))
     }
 
-    /// A passing ancestor's caution: in the protected profile, the binary and config must be root's alone, so an
-    /// ancestor the service account owns lets that account replace them.
+    /// A passing ancestor's caution: in the protected profile, the binary must be root's alone, so an ancestor the
+    /// service account owns lets that account replace it.
     fn caution(self, component: &PathComponent) -> Option<PathCaution> {
         let cautioned = self.profile == Profile::Protected && component.uid != ROOT_UID;
         self.rule.cautioned_file().filter(|_| cautioned).map(|file| PathCaution {
@@ -501,9 +500,9 @@ impl Walk {
         })
     }
 
-    /// Who may own the binary and config. Development also accepts root: a root-owned file is beyond the invoking
-    /// user's reach, so it is never less safe than one the user owns.
-    const fn installed_owner(self) -> OwnerRequirement {
+    /// Who may own the binary. Development also accepts root: a root-owned binary is beyond the invoking user's
+    /// reach, so it is never less safe than one the user owns.
+    const fn binary_owner(self) -> OwnerRequirement {
         match self.profile {
             Profile::Protected => OwnerRequirement::Root,
             Profile::Development => OwnerRequirement::root_or(self.owner.uid),

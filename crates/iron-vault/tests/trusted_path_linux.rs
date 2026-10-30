@@ -113,7 +113,7 @@ fn state_tree(state: &Path, lock_mode: u32) {
 fn a_safe_tree_passes() {
     let tree = Tree::new("safe");
     dir(&tree.path("etc"), 0o755);
-    file(&tree.path("etc/config.toml"), 0o644);
+    file(&tree.path("etc/config.toml"), 0o600);
     state_tree(&tree.path("state"), 0o600);
     dir(&tree.path("run"), 0o755);
 
@@ -250,7 +250,7 @@ fn follow_links(component: &PathComponent) -> (usize, &SymlinkTarget) {
 fn the_report_lists_every_path_in_a_fixed_order() {
     let tree = Tree::new("report");
     dir(&tree.path("etc"), 0o755);
-    file(&tree.path("etc/config.toml"), 0o644);
+    file(&tree.path("etc/config.toml"), 0o600);
     state_tree(&tree.path("state"), 0o600);
     dir(&tree.path("run"), 0o755);
     let paths = ServicePaths {
