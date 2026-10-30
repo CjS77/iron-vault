@@ -27,8 +27,9 @@ proptest = { version = "1.12", default-features = false, features = ["std"] }
 # Random-number traits for caller-token generation; the version age 0.12 and the RustCrypto stack already use, so no second
 # rand_core or getrandom enters the build. Only the binary enables the getrandom feature for OsRng.
 rand_core = { version = "0.6.4", default-features = false }
-# Safe syscall wrappers for process hardening in the binary: rlimits and prctl (process) and mlockall (mm) only.
-rustix = { version = "1.1.6", default-features = false, features = ["std", "process", "mm"] }
+# Safe syscall wrappers in the binary: rlimits and prctl (process) and mlockall (mm) for process hardening, and
+# SO_PEERCRED (net) so the admin socket can judge its peer without unsafe code.
+rustix = { version = "1.1.6", default-features = false, features = ["std", "process", "mm", "net"] }
 secrecy = "0.10.3"
 serde = { version = "1", features = ["derive"] }
 # Compile-time trait checks in tests: secret-bearing types must not gain Clone, Display or serde impls.
