@@ -71,7 +71,7 @@ pub enum PinnedCaError {
 }
 
 /// Why the outbound client config could not be built.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ClientConfigError {
     /// The crypto provider cannot serve rustls's default protocol versions.
     #[error("the TLS crypto provider cannot serve the default protocol versions: {0}")]
@@ -89,6 +89,17 @@ impl UpstreamTrust {
     pub fn pinned(path: &Path, profile: DeploymentProfile, owner: ExpectedOwner) -> Result<Self, PinnedCaError> {
         let pem = admin_file::read(AdminFile::Certificate, profile, owner, path)?;
         PinnedCa::from_pem(path, &pem).map(Self::Pinned)
+    }
+
+    /// Parses a pinned CA from PEM bytes, applying every check [`pinned`](Self::pinned) applies to the file's contents
+    /// but not its trusted-path rule; `path` only names the file in errors.
+    ///
+    /// Integration tests use it to pin a test CA from a temporary tree that the rule rightly refuses. The service
+    /// reads pinned CA files only through [`pinned`](Self::pinned), and the `test-support` feature that exposes this
+    /// is enabled only by this crate's own dev-dependency.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn pinned_from_pem(path: &Path, pem: &[u8]) -> Result<Self, PinnedCaError> {
+        PinnedCa::from_pem(path, pem).map(Self::Pinned)
     }
 
     /// The outbound rustls config: the default protocol versions (TLS 1.2 and 1.3) and a WebPKI verifier over exactly

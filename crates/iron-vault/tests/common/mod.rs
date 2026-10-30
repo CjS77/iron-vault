@@ -1,0 +1,11 @@
+//! Shared helpers for the upstream client's integration tests: a recording TLS test upstream and checked requests
+//! built through the public policy API.
+
+// Each test binary compiles its own copy of this module and uses a different part of it.
+#![allow(dead_code)]
+// Workspace lints deny these outside tests, and clippy treats only `#[test]` functions as tests; these helpers run only
+// under the test harness, where a panic is a test failure.
+#![allow(clippy::unwrap_used, clippy::panic)]
+
+pub mod checked;
+pub mod mock_upstream;

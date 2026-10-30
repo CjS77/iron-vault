@@ -10,17 +10,26 @@ rust-version.workspace = true
 # Builds the Development deployment profile: the invoking user runs the service, with no isolation from that user's
 # malware. Never enable it in a packaged build; CI refuses a release build whose `--version` names it.
 dev-mode = []
+# Lets integration tests pin a test CA from PEM bytes (`UpstreamTrust::pinned_from_pem`), skipping the trusted-path rule
+# that a test tree under a group-writable directory cannot pass. Only this crate's own dev-dependency enables it.
+test-support = []
 
 [dependencies]
 anyhow.workspace = true
+# The upstream client's response body chunks.
+bytes.workspace = true
 clap.workspace = true
 iron-vault-policy = { path = "../iron-vault-policy" }
 # OsRng for caller-token generation; only the binary reaches for the operating system's random source.
 rand_core = { workspace = true, features = ["getrandom"] }
+# The upstream client: the one outbound HTTP client, over the rustls config from the route's upstream trust.
+reqwest.workspace = true
 # Upstream trust: the outbound client's rustls config over the built-in roots or a route's pinned CA.
 rustls.workspace = true
 rustls-pki-types.workspace = true
 thiserror.workspace = true
+# The upstream client's deadline for response headers; reqwest itself runs on tokio on every platform.
+tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 webpki-roots.workspace = true
@@ -39,6 +48,8 @@ tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "signal"
 tokio-rustls.workspace = true
 
 [dev-dependencies]
+# This crate with `test-support`, so the integration tests can pin a test CA.
+iron-vault = { path = ".", features = ["test-support"] }
 # Checks that no `log` backend is installed, so dependency `log` records are discarded.
 log.workspace = true
 proptest.workspace = true

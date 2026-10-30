@@ -15,6 +15,8 @@ anyhow = "1"
 base64 = "0.23.1"
 # zeroize clears hasher state on drop, so the manifest key does not outlive its use; alloc is not needed.
 blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+# The response body chunks the upstream client hands on; the version hyper and reqwest already use.
+bytes = "1.12.1"
 # The binary's argument parser. Default features are off: colour, suggestions and terminal-width detection are not
 # needed, and leaving them out keeps their dependencies out of the build.
 clap = { version = "4.6", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
@@ -36,6 +38,13 @@ rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pe
 # Random-number traits for caller-token generation; the version age 0.12 and the RustCrypto stack already use, so no second
 # rand_core or getrandom enters the build. Only the binary enables the getrandom feature for OsRng.
 rand_core = { version = "0.6.4", default-features = false }
+# The upstream client. Default features are off. `rustls-tls-no-provider` brings rustls with no crypto provider, no root
+# store and no platform verifier: the client takes the config built from its upstream trust, so neither the environment
+# nor a desktop store can add a root. 0.12 rather than 0.13, whose provider-free rustls feature still pulls in
+# rustls-platform-verifier. HTTP/1.1 is always built; `http2` adds HTTP/2. No compression feature: response
+# decompression is the service's own, so `Content-Encoding` stays visible to the scrubber. No cookies, json, blocking,
+# socks or system-proxy.
+reqwest = { version = "0.12.28", default-features = false, features = ["http2", "rustls-tls-no-provider"] }
 # Safe syscall wrappers in the binary: rlimits and prctl (process) and mlockall (mm) for process hardening, SO_PEERCRED
 # (net) so the admin socket can judge its peer without unsafe code, and tcgetattr/tcsetattr (termios) so the CLI turns
 # terminal echo off for a secret prompt.
