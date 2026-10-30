@@ -29,3 +29,17 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --workspace --locked
+      - name: Test development mode
+        run: cargo test -p iron-vault --features dev-mode --locked
+      - name: Clippy development mode
+        run: cargo clippy -p iron-vault --all-targets --features dev-mode --locked -- -D warnings
+      # A packaged binary must never contain development mode; --version lists every enabled build feature.
+      - name: Release build has no development mode
+        run: |
+          cargo build --release -p iron-vault --locked
+          version="$(target/release/iron-vault --version)"
+          echo "$version"
+          if printf '%s' "$version" | grep -q 'dev-mode'; then
+            echo "release build lists dev-mode" >&2
+            exit 1
+          fi
