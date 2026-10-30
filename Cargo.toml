@@ -24,6 +24,11 @@ clap = { version = "4.6", default-features = false, features = ["derive", "std",
 # std, fast tables and rand_core stay off: verify_strict needs no feature, and key generation fills the seed from
 # getrandom directly.
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["zeroize"] }
+# The HTTP/2 test upstream's server half, so the upstream client's HTTP/2 path is tested end to end; dev-only, and the
+# version reqwest's `http2` feature already brings.
+h2 = { version = "0.4.20", default-features = false }
+# The request and response types the HTTP/2 test upstream exchanges with `h2`; dev-only, already in the lock tree.
+http = { version = "1.5.0", default-features = false, features = ["std"] }
 # The operating system's random source for the software signer's private key; the same version uuid already uses.
 getrandom = { version = "0.4.3", default-features = false }
 # Open-flag constants (O_NOFOLLOW, O_NONBLOCK, ELOOP) for state-file reads on Unix; already in the lock tree.

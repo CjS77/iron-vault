@@ -1251,6 +1251,8 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "h2",
+ "http",
  "iron-vault",
  "iron-vault-policy",
  "listenfd",

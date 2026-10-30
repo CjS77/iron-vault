@@ -1,5 +1,5 @@
-//! Shared helpers for the upstream client's integration tests: a recording TLS test upstream and checked requests
-//! built through the public policy API.
+//! Shared helpers for the upstream client's integration tests: a recording TLS test upstream, in HTTP/1.1 and HTTP/2
+//! modes, and checked requests built through the public policy API.
 
 // Each test binary compiles its own copy of this module and uses a different part of it.
 #![allow(dead_code)]
@@ -8,4 +8,6 @@
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 pub mod checked;
+pub mod hpack_fields;
 pub mod mock_upstream;
+pub mod mock_upstream_h2;
