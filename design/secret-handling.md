@@ -22,6 +22,7 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 
 | Type | Crate | Holds | Cleared by | Debug check |
 |---|---|---|---|---|
+| `CallerToken` | policy | a caller token's text, `ivt_` and its base64url body | `SecretString` | `secret_types_tests` |
 | `SlotValue` | policy | the credential text for a slot | `SecretString` | `secret_types_tests` |
 | `BoundCredential` | policy | a borrow of a `SlotValue` and of its record's permitted origins | not an owner: the `SlotValue` it borrows | `secret_types_tests` |
 | `HeaderValue` | policy | an outgoing header value, possibly the filled slot or a caller token | its own `Drop`, `zeroize` | `secret_types_tests` |
@@ -94,4 +95,5 @@ dropped. `secret_types_tests` checks this by scanning the store's sources, and a
 | `age`'s `StreamWriter` keeps its last 64 KiB plaintext chunk in a buffer it does not wipe (K-33 review). | `age` owns the buffer. Locked memory (K-45) keeps it out of swap. |
 | `age`'s `StreamReader` (age 0.12.1, `primitives/stream.rs:410`) keeps the decrypted chunk in a `SecretSlice<u8>`, which is wiped. The AEAD's output `Vec` is 16 bytes larger than the plaintext (room for the tag), so converting it into a `SecretSlice` shrinks it, and the allocator may move it, leaving a freed, unwiped copy of the chunk. | `age` owns the conversion. Locked memory (K-45) keeps it out of swap; the plaintext `sealed::open` returns is in a `Zeroizing` buffer. |
 | `age`'s scrypt recipient and identity take a `SecretString` copy of the passphrase (`Passphrase::for_age`), and derive the wrapping key inside `age`. | The copy is a `SecretString` and is wiped; `age`'s internal key derivation is not audited here. Locked memory (K-45) keeps it out of swap. |
+| `base64`'s `encode_string`, used by `CallerToken::from_bytes`, encodes through a 1 KiB stack buffer it does not wipe, leaving a copy of the token's body in a dead stack frame. | The next calls on that thread overwrite it; locked memory (K-45) keeps it out of swap. The 32 raw bytes are held in `Zeroizing` buffers. |
 | The `url::Url` inside `UpstreamTarget` and `CheckedRequest` holds a filled query slot and is never wiped, because `Url` owns its buffer. | The transport epic wipes or avoids it when the request is sent (`TODO(transport epic)` in `outgoing_request.rs`). |

@@ -967,8 +967,11 @@ name = "iron-vault"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "iron-vault-policy",
  "proptest",
+ "rand_core 0.6.4",
  "rustix",
+ "secrecy",
  "serde",
  "static_assertions",
  "thiserror 2.0.21",
@@ -993,10 +996,14 @@ dependencies = [
 name = "iron-vault-policy"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
+ "blake2",
  "proptest",
+ "rand_core 0.6.4",
  "secrecy",
  "serde",
  "static_assertions",
+ "subtle",
  "thiserror 2.0.21",
  "toml 1.1.8+spec-1.1.0",
  "url",

@@ -8,6 +8,7 @@ pub mod activation;
 pub mod authorization;
 pub mod bound_credential;
 pub mod caller;
+pub mod caller_token;
 pub mod config;
 pub mod config_path;
 pub mod confirmation;
@@ -51,6 +52,7 @@ pub use activation::{ActivationError, ActivePolicy, Capabilities, CatalogEntry, 
 pub use authorization::{AuthorizedRequest, AuthzError, Refusal, authorize};
 pub use bound_credential::BoundCredential;
 pub use caller::{CallerAuth, CallerConfig, CallerError};
+pub use caller_token::{CallerToken, CallerTokenError};
 pub use config::{ConfigError, Location, ParsedConfig, SCHEMA_VERSION};
 pub use config_path::{ConfigPath, ConfigPathError};
 pub use confirmation::Confirmation;

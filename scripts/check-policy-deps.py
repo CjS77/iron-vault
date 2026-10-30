@@ -23,6 +23,10 @@ ALLOWED_DIRECT = {
     "thiserror",  # K-3, K-4, K-5, K-6: typed errors
     "serde",  # K-3, K-4, K-5, K-6: configuration and policy model deserialization
     "url",  # K-4: destination URL parsing
+    "blake2",  # K-76: TokenHash::of hashes a caller token; pure computation
+    "subtle",  # K-76: TokenHash::matches compares digests in constant time; pure computation
+    "base64",  # K-76: encodes a caller token's random bytes; pure computation
+    "rand_core",  # K-76: CallerToken::from_random takes a CryptoRngCore; traits only, the getrandom feature stays off here
     "toml",  # K-10: config document parsing; it parses bytes the caller already holds and opens no files or sockets
 }
 

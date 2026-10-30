@@ -3,15 +3,19 @@
 use std::fmt;
 use std::str::FromStr;
 
+use blake2::{Blake2b256, Digest};
 use serde::Deserialize;
+use subtle::ConstantTimeEq;
 use thiserror::Error;
+
+use crate::CallerToken;
 
 /// The text that starts every stored token hash and names its algorithm.
 pub const TOKEN_HASH_PREFIX: &str = "blake2b:";
 
 /// Digest length in bytes: BLAKE2b with a 256-bit output.
 ///
-/// Token enrollment (EP-15) must hash caller tokens with BLAKE2b-256 and write exactly this many bytes, as
+/// [`TokenHash::of`] hashes a caller token with BLAKE2b-256 into exactly this many bytes, written as
 /// `2 * TOKEN_DIGEST_LEN` lowercase hex digits. 256 bits leaves no practical preimage or collision attack against a
 /// high-entropy token while keeping the configuration line short.
 pub const TOKEN_DIGEST_LEN: usize = 32;
@@ -19,8 +23,7 @@ pub const TOKEN_DIGEST_LEN: usize = 32;
 /// A BLAKE2b-256 digest of a caller token, written `blake2b:` followed by 64 lowercase hex digits.
 ///
 /// Only the digest is ever held; the plaintext token never enters configuration. One spelling per digest (lowercase
-/// only) means two configurations that grant the same token compare equal as text and as values. Verifying a
-/// presented token compares digests in constant time, which is the request path's job, not this type's.
+/// only) means two configurations that grant the same token compare equal as text and as values.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub struct TokenHash([u8; TOKEN_DIGEST_LEN]);
@@ -49,6 +52,19 @@ pub enum TokenHashError {
 }
 
 impl TokenHash {
+    /// The unkeyed BLAKE2b-256 digest of the token's full text, prefix included.
+    ///
+    /// No key or salt is needed: a caller token carries 256 random bits, so its digest cannot be reversed by guessing.
+    pub fn of(token: &CallerToken) -> Self {
+        Self(Blake2b256::digest(token.text().as_bytes()).into())
+    }
+
+    /// Whether `token` hashes to this digest, compared in constant time so that response timing does not reveal how
+    /// many leading bytes of a guess's digest were right (spec §3.4).
+    pub fn matches(&self, token: &CallerToken) -> bool {
+        self.0.as_slice().ct_eq(Self::of(token).0.as_slice()).into()
+    }
+
     /// The raw digest bytes.
     pub fn digest(&self) -> &[u8; TOKEN_DIGEST_LEN] {
         &self.0
@@ -117,6 +133,11 @@ impl fmt::Display for TokenHash {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::caller_token::tests::{KAT_BYTES, KAT_TOKEN};
+
+    /// BLAKE2b-256 of `KAT_TOKEN`'s text, computed independently with `printf '%s' "$KAT_TOKEN" | b2sum -l 256` and
+    /// confirmed with Python's `hashlib.blake2b(token, digest_size=32)`.
+    const KAT_HASH: &str = "blake2b:1ab69d873c36df86f5479ae9070aedf3c0ee702e851610d232b9421921615ed0";
 
     const DIGEST: &str = "0123456789abcdef00112233445566778899aabbccddeeff0f1e2d3c4b5a6978";
 
@@ -178,5 +199,45 @@ mod tests {
             let message = s.parse::<TokenHash>().unwrap_err().to_string();
             assert!(!message.contains("secret"), "{message}");
         });
+    }
+
+    #[test]
+    fn known_token_gives_the_known_hash() {
+        let token = CallerToken::from_bytes(KAT_BYTES);
+        assert_eq!(TokenHash::of(&token).to_string(), KAT_HASH);
+        assert_eq!(
+            TokenHash::of(&CallerToken::parse(KAT_TOKEN.as_bytes()).unwrap()).to_string(),
+            KAT_HASH
+        );
+    }
+
+    #[test]
+    fn display_parses_back() {
+        let hash = TokenHash::of(&CallerToken::from_bytes(KAT_BYTES));
+        assert_eq!(hash.to_string().parse::<TokenHash>().unwrap(), hash);
+    }
+
+    #[test]
+    fn a_token_matches_its_own_hash() {
+        let token = CallerToken::from_bytes(KAT_BYTES);
+        assert!(TokenHash::of(&token).matches(&token));
+        assert!(KAT_HASH.parse::<TokenHash>().unwrap().matches(&token));
+    }
+
+    #[test]
+    fn a_hash_differing_in_any_one_byte_does_not_match() {
+        let token = CallerToken::from_bytes(KAT_BYTES);
+        let own = TokenHash::of(&token);
+        (0..TOKEN_DIGEST_LEN).for_each(|position| {
+            let mut digest = *own.digest();
+            digest[position] ^= 0x01;
+            assert!(!TokenHash(digest).matches(&token), "byte {position}");
+        });
+    }
+
+    #[test]
+    fn a_different_token_does_not_match() {
+        let other = CallerToken::from_bytes([0xff; TOKEN_DIGEST_LEN]);
+        assert!(!KAT_HASH.parse::<TokenHash>().unwrap().matches(&other));
     }
 }

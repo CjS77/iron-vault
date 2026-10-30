@@ -24,6 +24,9 @@ getrandom = { version = "0.4.3", default-features = false }
 # Open-flag constants (O_NOFOLLOW, O_NONBLOCK, ELOOP) for state-file reads on Unix; already in the lock tree.
 libc = { version = "0.2.191", default-features = false }
 proptest = { version = "1.12", default-features = false, features = ["std"] }
+# Random-number traits for caller-token generation; the version age 0.12 and the RustCrypto stack already use, so no second
+# rand_core or getrandom enters the build. Only the binary enables the getrandom feature for OsRng.
+rand_core = { version = "0.6.4", default-features = false }
 # Safe syscall wrappers for process hardening in the binary: rlimits and prctl (process) and mlockall (mm) only.
 rustix = { version = "1.1.6", default-features = false, features = ["std", "process", "mm"] }
 secrecy = "0.10.3"

@@ -13,11 +13,12 @@ use static_assertions::assert_not_impl_any;
 use crate::activation::{ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
 use crate::spec_example::SPEC_EXAMPLE;
 use crate::{
-    AuthorizedRequest, BoundCredential, CheckedRequest, CredentialKind, CredentialName, HeaderName, HeaderValue, Host, Method,
+    AuthorizedRequest, BoundCredential, CallerToken, CheckedRequest, CredentialKind, CredentialName, HeaderName, HeaderValue, Host, Method,
     OutgoingHeaders, OutgoingRequest, ParsedConfig, Port, RequestTarget, Slot, SlotValue, UpstreamTarget, ValidatedConfig, authorize,
     final_check,
 };
 
+assert_not_impl_any!(CallerToken: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(SlotValue: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(OutgoingRequest: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(BoundCredential<'static>: Clone, Copy, Display, Serialize, Deserialize<'static>);
@@ -39,6 +40,16 @@ fn assert_redacted(value: &impl std::fmt::Debug) {
     debug_forms(value)
         .iter()
         .for_each(|debug| assert!(!debug.contains(MARKER), "{debug}"));
+}
+
+#[test]
+fn caller_token_debug_hides_the_token() {
+    let token = CallerToken::from_bytes([0x5d; 32]);
+    let encoded_run = "XV1dXV1d";
+    debug_forms(&token).iter().for_each(|debug| {
+        assert!(!debug.contains("ivt_"), "{debug}");
+        assert!(!debug.contains(encoded_run), "{debug}");
+    });
 }
 
 #[test]
