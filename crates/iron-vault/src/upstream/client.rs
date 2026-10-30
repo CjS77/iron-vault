@@ -1,8 +1,8 @@
 //! The upstream client: the only way the service reaches an upstream (specification §3.5 step 9, §3.7, §7).
 //!
 //! [`UpstreamClient::new`] is the one constructor. It hands reqwest the rustls config built from an [`UpstreamTrust`],
-//! turns off proxies, redirects and the `Referer` header, and refuses cleartext. `clippy.toml` refuses every other way
-//! to build a reqwest client, to add a proxy or to switch certificate checks off. [`UpstreamClient::send`] takes only
+//! turns off proxies, redirects, retries and the `Referer` header, and refuses cleartext. `clippy.toml` refuses every
+//! other way to build a reqwest client, to add a proxy, to set a retry policy or to switch certificate checks off. [`UpstreamClient::send`] takes only
 //! a [`CheckedRequest`], so nothing reaches the network without passing the final outgoing-request check, and it
 //! sends exactly that request's method, URL and headers.
 
@@ -14,6 +14,7 @@ use bytes::Bytes;
 use iron_vault_policy::{CheckedRequest, HeaderName, HeaderValue, Method};
 use reqwest::header::{self, HeaderMap};
 use reqwest::redirect::Policy;
+use reqwest::retry;
 use reqwest::{Client, Request, Response, StatusCode};
 use rustls::ClientConfig;
 
@@ -79,13 +80,21 @@ impl UpstreamClient {
     /// The client offers HTTP/2 and HTTP/1.1 through ALPN, verifies the upstream against exactly `trust`, uses no
     /// proxy (which also stops reqwest reading system proxy settings), never follows a redirect, refuses any scheme
     /// but `https`, never adds `Referer`, keeps no cookies and adds no default header of its own choosing.
-    // clippy.toml refuses `Client::builder` everywhere else; this is the one constructor it exists to protect.
+    ///
+    /// It never retries: one checked request is one send. reqwest's default policy would re-send a request an HTTP/2
+    /// upstream refused with `GOAWAY` or `REFUSED_STREAM`, which the final check (§7) and rate limits (§3.5) never see,
+    /// and which repeats a non-idempotent request the upstream may have acted on. Whether to try again is the caller's
+    /// call. `never()` alone still lets reqwest clone every request, credential included, for a retry it will not make;
+    /// a limit of zero retries stops that copy too.
+    // clippy.toml refuses `Client::builder` and `ClientBuilder::retry` everywhere else; this is the one constructor it
+    // exists to protect.
     #[allow(clippy::disallowed_methods)]
     pub fn new(trust: &UpstreamTrust, limits: TransportLimits) -> Result<Self, ClientBuildError> {
         let client = Client::builder()
             .use_preconfigured_tls(tls_config(trust)?)
             .no_proxy()
             .redirect(Policy::none())
+            .retry(retry::never().max_retries_per_request(0))
             .https_only(true)
             .referer(false)
             .connect_timeout(limits.connect)

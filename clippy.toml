@@ -16,6 +16,8 @@ disallowed-methods = [
     { path = "reqwest::get", reason = "builds a client with ambient proxies and redirects; use UpstreamClient (§7)" },
     { path = "reqwest::ClientBuilder::danger_accept_invalid_certs", reason = "disables certificate verification; §3.7 forbids it" },
     { path = "reqwest::ClientBuilder::danger_accept_invalid_hostnames", reason = "disables hostname verification; §3.7 forbids it" },
+    # §7: one checked request is one send. `UpstreamClient::new` turns retries off; any other policy re-sends a request.
+    { path = "reqwest::ClientBuilder::retry", reason = "a retry re-sends a checked request; only UpstreamClient::new sets the policy (§7)" },
     { path = "reqwest::ClientBuilder::proxy", reason = "sends credentialed requests through a proxy; §3.7 allows none" },
     { path = "reqwest::Proxy::all", reason = "a proxy can intercept credentialed requests; §3.7 allows none" },
     { path = "reqwest::Proxy::http", reason = "a proxy can intercept credentialed requests; §3.7 allows none" },
