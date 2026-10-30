@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::account_name::AccountName;
 use crate::name::{ListenerName, RouteName};
 use crate::rate_limit::RateLimit;
 use crate::token_hash::TokenHash;
@@ -16,11 +17,17 @@ use crate::token_hash::TokenHash;
 /// ```toml
 /// [callers.fx-mcp]
 /// listener = "local"
-/// token_hash = "blake2b:<64 lowercase hex digits>"
+/// auth = "peer"
+/// user = "fx-mcp"
 /// routes = ["fx"]
 ///
 /// [callers.fx-mcp.rate_limits]
 /// fx = { requests = 10, per_seconds = 60, burst = 2 }
+///
+/// [callers.brave-cli]
+/// listener = "loopback"
+/// token_hash = "blake2b:<64 lowercase hex digits>"
+/// routes = ["brave"]
 ///
 /// [callers.naomi-backoffice]
 /// listener = "naomi-backoffice"
@@ -29,9 +36,9 @@ use crate::token_hash::TokenHash;
 /// ```
 ///
 /// Only rules local to the section are checked here. That `listener` and every route exist, that a per-caller rate
-/// limit is no looser than its route's, and that the listener suits the caller's `auth` (a TLS TCP listener for
-/// `isolated-network`, a Unix socket for `socket`, a sole caller for either) need the whole configuration and are
-/// checked by [`ValidatedConfig`](crate::ValidatedConfig).
+/// limit is no looser than its route's, and that the listener suits the caller's `auth` (a sole caller on a TLS TCP
+/// listener for `isolated-network`; a Unix socket shared only with peer callers of other accounts for `peer`) need the
+/// whole configuration and are checked by [`ValidatedConfig`](crate::ValidatedConfig).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawCaller")]
 pub struct CallerConfig {
@@ -48,8 +55,10 @@ pub enum CallerAuth {
     Token(TokenHash),
     /// The listener's address identifies the caller's isolated Docker network.
     IsolatedNetwork,
-    /// Permission to open the listener's Unix socket identifies the caller.
-    Socket,
+    /// The OS account the kernel reports for the process connecting to the listener's Unix socket identifies the
+    /// caller. It proves which account connected, never which program, so every process of that account shares the
+    /// caller's routes.
+    Peer(AccountName),
 }
 
 /// Why a caller section was rejected.
@@ -61,6 +70,15 @@ pub enum CallerError {
     /// A `token_hash` on a caller that does not authenticate by token, where it would never be checked.
     #[error("caller sets token_hash but uses auth = \"{auth}\"; token_hash applies only to auth = \"token\"")]
     UnusedTokenHash {
+        /// The configured `auth` value.
+        auth: &'static str,
+    },
+    /// `auth = "peer"` without a `user`.
+    #[error("caller uses auth = \"peer\" but has no user")]
+    MissingUser,
+    /// A `user` on a caller that is not identified by its peer account, where it would never be checked.
+    #[error("caller sets user but uses auth = \"{auth}\"; user applies only to auth = \"peer\"")]
+    UnusedUser {
         /// The configured `auth` value.
         auth: &'static str,
     },
@@ -110,7 +128,7 @@ enum AuthKind {
     #[default]
     Token,
     IsolatedNetwork,
-    Socket,
+    Peer,
 }
 
 /// The `[callers.<name>]` table as written.
@@ -121,6 +139,7 @@ struct RawCaller {
     #[serde(default)]
     auth: AuthKind,
     token_hash: Option<TokenHash>,
+    user: Option<AccountName>,
     routes: Vec<RouteName>,
     #[serde(default)]
     rate_limits: BTreeMap<RouteName, RateLimit>,
@@ -130,7 +149,7 @@ impl TryFrom<RawCaller> for CallerConfig {
     type Error = CallerError;
 
     fn try_from(raw: RawCaller) -> Result<Self, Self::Error> {
-        let auth = caller_auth(raw.auth, raw.token_hash)?;
+        let auth = caller_auth(raw.auth, raw.token_hash, raw.user)?;
         check_routes(&raw.routes)?;
         check_rate_limit_routes(&raw.routes, &raw.rate_limits)?;
         Ok(Self {
@@ -142,16 +161,31 @@ impl TryFrom<RawCaller> for CallerConfig {
     }
 }
 
-/// Pairs `auth` with `token_hash`, which is required for token authentication and refused otherwise.
-fn caller_auth(kind: AuthKind, token_hash: Option<TokenHash>) -> Result<CallerAuth, CallerError> {
-    match (kind, token_hash) {
-        (AuthKind::Token, Some(hash)) => Ok(CallerAuth::Token(hash)),
-        (AuthKind::Token, None) => Err(CallerError::MissingTokenHash),
-        (AuthKind::IsolatedNetwork, None) => Ok(CallerAuth::IsolatedNetwork),
-        (AuthKind::Socket, None) => Ok(CallerAuth::Socket),
-        (AuthKind::IsolatedNetwork, Some(_)) => Err(CallerError::UnusedTokenHash { auth: "isolated-network" }),
-        (AuthKind::Socket, Some(_)) => Err(CallerError::UnusedTokenHash { auth: "socket" }),
+/// Pairs `auth` with the one key it needs: `token_hash` for token authentication, `user` for `peer`. A key that the
+/// `auth` value never checks is refused rather than ignored, so a typo in `auth` cannot silently drop it.
+fn caller_auth(kind: AuthKind, token_hash: Option<TokenHash>, user: Option<AccountName>) -> Result<CallerAuth, CallerError> {
+    match kind {
+        AuthKind::Token => {
+            refuse_user(user, "token")?;
+            token_hash.map(CallerAuth::Token).ok_or(CallerError::MissingTokenHash)
+        }
+        AuthKind::IsolatedNetwork => {
+            refuse_token_hash(token_hash, "isolated-network")?;
+            refuse_user(user, "isolated-network").map(|()| CallerAuth::IsolatedNetwork)
+        }
+        AuthKind::Peer => {
+            refuse_token_hash(token_hash, "peer")?;
+            user.map(CallerAuth::Peer).ok_or(CallerError::MissingUser)
+        }
     }
+}
+
+fn refuse_token_hash(token_hash: Option<TokenHash>, auth: &'static str) -> Result<(), CallerError> {
+    token_hash.map_or(Ok(()), |_| Err(CallerError::UnusedTokenHash { auth }))
+}
+
+fn refuse_user(user: Option<AccountName>, auth: &'static str) -> Result<(), CallerError> {
+    user.map_or(Ok(()), |_| Err(CallerError::UnusedUser { auth }))
 }
 
 /// Rejects an empty grant list or a route listed twice.
@@ -176,6 +210,9 @@ fn check_rate_limit_routes(routes: &[RouteName], rate_limits: &BTreeMap<RouteNam
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A minimal peer caller; tests append keys to it.
+    const PEER: &str = "listener = \"local\"\nauth = \"peer\"\nuser = \"code\"\nroutes = [\"fx\"]";
 
     const HASH: &str = "blake2b:0123456789abcdef00112233445566778899aabbccddeeff0f1e2d3c4b5a6978";
 
@@ -246,10 +283,43 @@ mod tests {
     }
 
     #[test]
-    fn socket_caller_parses() {
+    fn peer_caller_parses() {
         assert_eq!(
-            parse("listener = \"local\"\nauth = \"socket\"\nroutes = [\"fx\"]").unwrap().auth(),
-            &CallerAuth::Socket
+            parse(PEER).unwrap().auth(),
+            &CallerAuth::Peer(AccountName::try_from("code").unwrap())
+        );
+    }
+
+    #[test]
+    fn peer_needs_a_user_and_no_token_hash() {
+        rejected(
+            "listener = \"local\"\nauth = \"peer\"\nroutes = [\"fx\"]",
+            "auth = \"peer\" but has no user",
+        );
+        rejected(
+            &format!("{PEER}\ntoken_hash = \"{HASH}\""),
+            "token_hash applies only to auth = \"token\"",
+        );
+        rejected(&PEER.replace("\"code\"", "\"Code\""), "invalid account name \"Code\"");
+    }
+
+    #[test]
+    fn user_is_refused_without_peer_auth() {
+        rejected(
+            &format!("listener = \"local\"\ntoken_hash = \"{HASH}\"\nuser = \"code\"\nroutes = [\"fx\"]"),
+            "user applies only to auth = \"peer\"",
+        );
+        rejected(
+            "listener = \"n\"\nauth = \"isolated-network\"\nuser = \"code\"\nroutes = [\"fx\"]",
+            "uses auth = \"isolated-network\"",
+        );
+    }
+
+    #[test]
+    fn socket_auth_is_an_unknown_variant() {
+        rejected(
+            "listener = \"local\"\nauth = \"socket\"\nroutes = [\"fx\"]",
+            "unknown variant `socket`",
         );
     }
 
@@ -266,10 +336,6 @@ mod tests {
     fn token_hash_is_required_iff_token_auth() {
         rejected("listener = \"local\"\nroutes = [\"fx\"]", "has no token_hash");
         rejected("listener = \"local\"\nauth = \"token\"\nroutes = [\"fx\"]", "has no token_hash");
-        rejected(
-            &format!("listener = \"local\"\nauth = \"socket\"\ntoken_hash = \"{HASH}\"\nroutes = [\"fx\"]"),
-            "auth = \"socket\"",
-        );
         rejected(
             &format!("listener = \"n\"\nauth = \"isolated-network\"\ntoken_hash = \"{HASH}\"\nroutes = [\"fx\"]"),
             "isolated-network",
@@ -298,37 +364,45 @@ mod tests {
 
     #[test]
     fn unknown_auth_is_rejected() {
-        ["\"Token\"", "\"isolated_network\"", "\"peer\"", "\"\""].iter().for_each(|a| {
-            assert!(
-                parse(&format!("listener = \"local\"\nauth = {a}\nroutes = [\"fx\"]")).is_err(),
-                "{a}"
-            )
-        });
+        ["\"Token\"", "\"isolated_network\"", "\"Peer\"", "\"socket\"", "\"\""]
+            .iter()
+            .for_each(|a| {
+                assert!(
+                    parse(&format!("listener = \"local\"\nauth = {a}\nroutes = [\"fx\"]")).is_err(),
+                    "{a}"
+                )
+            });
     }
 
     #[test]
     fn routes_must_be_non_empty_and_unique() {
-        rejected("listener = \"local\"\nauth = \"socket\"\nroutes = []", "at least one route");
         rejected(
-            "listener = \"local\"\nauth = \"socket\"\nroutes = [\"fx\", \"brave\", \"fx\"]",
+            "listener = \"local\"\nauth = \"peer\"\nuser = \"code\"\nroutes = []",
+            "at least one route",
+        );
+        rejected(
+            "listener = \"local\"\nauth = \"peer\"\nuser = \"code\"\nroutes = [\"fx\", \"brave\", \"fx\"]",
             "lists route fx more than once",
         );
-        rejected("listener = \"local\"\nauth = \"socket\"", "missing field `routes`");
-        rejected("listener = \"local\"\nauth = \"socket\"\nroutes = [\"Fx\"]", "invalid route name");
+        rejected("listener = \"local\"\nauth = \"peer\"\nuser = \"code\"", "missing field `routes`");
+        rejected(
+            "listener = \"local\"\nauth = \"peer\"\nuser = \"code\"\nroutes = [\"Fx\"]",
+            "invalid route name",
+        );
     }
 
     #[test]
     fn rate_limit_must_name_a_granted_route() {
         let limit = "[rate_limits]\nbrave = { requests = 1, per_seconds = 1, burst = 1 }";
-        let s = &format!("listener = \"local\"\nauth = \"socket\"\nroutes = [\"fx\"]\n{limit}");
+        let s = &format!("listener = \"local\"\nauth = \"peer\"\nuser = \"code\"\nroutes = [\"fx\"]\n{limit}");
         rejected(s, "rate limit for route brave, which is not in its routes");
     }
 
     #[test]
     fn listener_is_required_and_validated() {
-        rejected("auth = \"socket\"\nroutes = [\"fx\"]", "missing field `listener`");
+        rejected("auth = \"peer\"\nuser = \"code\"\nroutes = [\"fx\"]", "missing field `listener`");
         rejected(
-            "listener = \"Local\"\nauth = \"socket\"\nroutes = [\"fx\"]",
+            "listener = \"Local\"\nauth = \"peer\"\nuser = \"code\"\nroutes = [\"fx\"]",
             "invalid listener name",
         );
     }
@@ -336,7 +410,7 @@ mod tests {
     #[test]
     fn unknown_fields_are_rejected() {
         rejected(
-            "listener = \"local\"\nauth = \"socket\"\nroutes = [\"fx\"]\ntoken = \"x\"",
+            "listener = \"local\"\nauth = \"peer\"\nuser = \"code\"\nroutes = [\"fx\"]\ntoken = \"x\"",
             "unknown field",
         );
     }

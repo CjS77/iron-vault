@@ -1,9 +1,10 @@
 //! Caller identification: which caller a request comes from, decided from the listener it arrived on and, on a token
 //! listener, the caller token it presents (spec §3.4, §3.5 step 3, §3.12).
 //!
-//! The three mechanisms of §3.4 reduce to one rule. A `socket` or `isolated-network` listener has exactly one caller,
-//! which validation guarantees, so the listener alone names it. A token listener's caller is the one on that listener
-//! whose token hash the presented token matches; validation guarantees at most one does.
+//! Validation leaves each listener with one mechanism. An `isolated-network` listener has exactly one caller, so the
+//! listener alone names it. A peer listener holds only peer callers, each naming its own account, so the connecting
+//! process's peer account names at most one. A token listener's caller is the one on that listener whose token hash
+//! the presented token matches; validation guarantees at most one does.
 //!
 //! Nothing here reaches the admin interface. The admin socket is a separate socket that accepts an admin principal by
 //! its peer credentials alone (§3.2), so neither a caller token nor a listener identity is ever an admin credential.
@@ -38,8 +39,9 @@ pub struct Unauthenticated;
 /// `Proxy-Authorization` as `Bearer <token>`. A missing, repeated or malformed header, an unknown token, or a listener
 /// with no callers is [`Unauthenticated`].
 ///
-/// A token sent to a `socket` or `isolated-network` listener is ignored rather than checked: the listener already
-/// names the caller, and the header is reserved, so it is stripped before forwarding.
+/// A token sent to an `isolated-network` listener is ignored rather than checked: the listener already names the
+/// caller, and the header is reserved, so it is stripped before forwarding. A peer listener identifies no one yet, even
+/// when a valid token is presented, because tokens never identify a caller there.
 pub fn identify_caller(
     policy: &ActivePolicy,
     listener: &ListenerName,
@@ -51,8 +53,13 @@ pub fn identify_caller(
         .iter()
         .filter(|(_, caller)| caller.listener() == listener)
         .collect();
+    if callers.iter().any(|(_, caller)| matches!(caller.auth(), CallerAuth::Peer(_))) {
+        // K-81 matches the connecting process's peer uid against each caller's resolved account. Until then a peer
+        // listener fails closed: it must never reach the sole-caller or token arms below.
+        return Err(Unauthenticated);
+    }
     match callers.as_slice() {
-        [(name, caller)] if !matches!(caller.auth(), CallerAuth::Token(_)) => Ok((*name).clone()),
+        [(name, caller)] if matches!(caller.auth(), CallerAuth::IsolatedNetwork) => Ok((*name).clone()),
         _ => {
             let listener = config.listeners().get(listener).ok_or(Unauthenticated)?;
             let token = presented_token(listener, headers).ok_or(Unauthenticated)?;
@@ -97,7 +104,7 @@ fn bearer_token(value: &[u8]) -> Option<&[u8]> {
 fn token_holder<'a>(callers: &[(&'a CallerName, &'a CallerConfig)], token: &CallerToken) -> Option<&'a CallerName> {
     let comparisons = callers.iter().filter_map(|(name, caller)| match caller.auth() {
         CallerAuth::Token(hash) => Some((*name, hash.matches(token))),
-        CallerAuth::IsolatedNetwork | CallerAuth::Socket => None,
+        CallerAuth::IsolatedNetwork | CallerAuth::Peer(_) => None,
     });
     sole_match(comparisons)
 }

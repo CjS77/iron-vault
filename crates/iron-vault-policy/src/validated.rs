@@ -9,6 +9,7 @@ use std::net::{IpAddr, SocketAddr};
 
 use thiserror::Error;
 
+use crate::account_name::AccountName;
 use crate::caller::{CallerAuth, CallerConfig};
 use crate::config::ParsedConfig;
 use crate::header_name::HeaderName;
@@ -90,10 +91,10 @@ pub enum ValidationError {
         /// The listener's address.
         address: SocketAddr,
     },
-    /// A caller identified by its listener shares that listener, so the listener no longer identifies it.
+    /// An `isolated-network` caller shares its listener, so the listener no longer identifies it.
     #[error(
         "caller {caller} uses auth = \"{auth}\", so it must be the only caller on listener {listener}, which {} also use; \
-         callers that share a listener must use tokens",
+         callers that share a TCP listener must use tokens",
         joined(.others)
     )]
     SharedListener {
@@ -105,6 +106,30 @@ pub enum ValidationError {
         listener: ListenerName,
         /// The other callers on the listener, in name order.
         others: Vec<CallerName>,
+    },
+    /// A listener holds peer callers and callers identified some other way.
+    ///
+    /// Peer callers share a socket only with other peer callers. If peer accounts and tokens mixed on one socket, which
+    /// identity wins for an account that also presents a token would become a rule the operator has to remember.
+    #[error(
+        "listener {listener} has peer callers, so every caller on it must use auth = \"peer\"; {} do not",
+        joined(.callers)
+    )]
+    MixedListener {
+        /// The listener.
+        listener: ListenerName,
+        /// The callers on it that are not peer callers, in name order.
+        callers: Vec<CallerName>,
+    },
+    /// Peer callers on one listener name the same account, so a connection from it would identify more than one caller.
+    #[error("callers {} on listener {listener} share user {user}, so one account would identify more than one caller", joined(.callers))]
+    SharedPeerAccount {
+        /// The listener.
+        listener: ListenerName,
+        /// The shared account.
+        user: AccountName,
+        /// The callers naming it, in name order.
+        callers: Vec<CallerName>,
     },
     /// Callers on one listener share a token hash, so one token would resolve to several identities.
     #[error("callers {} on listener {listener} share a token_hash, so one token would identify more than one caller", joined(.callers))]
@@ -142,10 +167,11 @@ pub enum ValidationError {
 type Check = fn(&ParsedConfig) -> Vec<ValidationError>;
 
 /// The checks in report order.
-const CHECKS: [Check; 6] = [
+const CHECKS: [Check; 7] = [
     check_references,
     check_caller_limits,
     check_listener_auth,
+    check_peer_listeners,
     check_token_hashes,
     check_prefixes,
     check_token_headers,
@@ -241,11 +267,12 @@ fn higher_rate(a: RateLimit, b: RateLimit) -> bool {
     u64::from(a.requests().get()) * u64::from(b.per_seconds().get()) > u64::from(b.requests().get()) * u64::from(a.per_seconds().get())
 }
 
-/// Callers identified by their listener use the right kind of listener and are its only caller (spec §3.4).
+/// Callers identified by their connection use the right kind of listener (spec §3.4).
 ///
 /// An `isolated-network` caller needs a TLS listener on a dedicated, non-loopback, non-wildcard address, bound to its
-/// own network; a `socket` caller needs a Unix socket whose permissions admit only it. Either way a second caller on
-/// the listener would be indistinguishable.
+/// own network, and must be the listener's only caller, since a second caller there would be indistinguishable. A
+/// `peer` caller needs a Unix socket, because TCP reports no account; who it may share the socket with is checked by
+/// [`check_peer_listeners`].
 fn check_listener_auth(config: &ParsedConfig) -> Vec<ValidationError> {
     config
         .callers()
@@ -258,23 +285,32 @@ fn listener_auth(config: &ParsedConfig, name: &CallerName, caller: &CallerConfig
     let Some(listener) = config.listeners().get(caller.listener()) else {
         return Vec::new();
     };
-    let (auth, fault) = match caller.auth() {
-        CallerAuth::Token(_) => return Vec::new(),
-        CallerAuth::IsolatedNetwork => ("isolated-network", isolated_network_fault(name, caller.listener(), listener)),
-        CallerAuth::Socket => ("socket", socket_fault(name, caller.listener(), listener)),
-    };
-    let others: Vec<_> = callers_on(config, caller.listener())
+    match caller.auth() {
+        CallerAuth::Token(_) => Vec::new(),
+        CallerAuth::Peer(_) => peer_fault(name, caller.listener(), listener).into_iter().collect(),
+        CallerAuth::IsolatedNetwork => {
+            let fault = isolated_network_fault(name, caller.listener(), listener);
+            fault
+                .into_iter()
+                .chain(sole_caller_fault(config, name, caller.listener()))
+                .collect()
+        }
+    }
+}
+
+/// Why `caller` is not the only caller on `listener`, if it is not.
+fn sole_caller_fault(config: &ParsedConfig, caller: &CallerName, listener: &ListenerName) -> Option<ValidationError> {
+    let others: Vec<_> = callers_on(config, listener)
         .map(|(other, _)| other)
-        .filter(|other| *other != name)
+        .filter(|other| *other != caller)
         .cloned()
         .collect();
-    let shared = (!others.is_empty()).then(|| ValidationError::SharedListener {
-        caller: name.clone(),
-        auth,
-        listener: caller.listener().clone(),
+    (!others.is_empty()).then(|| ValidationError::SharedListener {
+        caller: caller.clone(),
+        auth: "isolated-network",
+        listener: listener.clone(),
         others,
-    });
-    fault.into_iter().chain(shared).collect()
+    })
 }
 
 /// Why `listener` cannot identify an `isolated-network` caller, if it cannot.
@@ -292,9 +328,9 @@ fn isolated_network_fault(caller: &CallerName, name: &ListenerName, listener: &L
     }
 }
 
-/// Why `listener` cannot identify a `socket` caller, if it cannot.
-fn socket_fault(caller: &CallerName, name: &ListenerName, listener: &ListenerConfig) -> Option<ValidationError> {
-    (!matches!(listener.endpoint(), Endpoint::UnixSocket(_))).then(|| wrong_kind(caller, "socket", name, "a unix_socket listener"))
+/// Why `listener` cannot identify a `peer` caller, if it cannot.
+fn peer_fault(caller: &CallerName, name: &ListenerName, listener: &ListenerConfig) -> Option<ValidationError> {
+    (!matches!(listener.endpoint(), Endpoint::UnixSocket(_))).then(|| wrong_kind(caller, "peer", name, "a unix_socket listener"))
 }
 
 fn wrong_kind(caller: &CallerName, auth: &'static str, listener: &ListenerName, required: &'static str) -> ValidationError {
@@ -316,6 +352,55 @@ fn is_dedicated(ip: IpAddr) -> bool {
     !ip.is_loopback() && !ip.is_unspecified()
 }
 
+/// A listener with any peer caller holds only peer callers, each naming its own account (spec §3.4).
+fn check_peer_listeners(config: &ParsedConfig) -> Vec<ValidationError> {
+    config
+        .listeners()
+        .keys()
+        .flat_map(|listener| peer_listener_faults(config, listener))
+        .collect()
+}
+
+fn peer_listener_faults(config: &ParsedConfig, listener: &ListenerName) -> Vec<ValidationError> {
+    let (peers, others): (Vec<_>, Vec<_>) = callers_on(config, listener).partition(|(_, caller)| peer_account(caller).is_some());
+    if peers.is_empty() {
+        return Vec::new();
+    }
+    let mixed = (!others.is_empty()).then(|| ValidationError::MixedListener {
+        listener: listener.clone(),
+        callers: others.into_iter().map(|(name, _)| name.clone()).collect(),
+    });
+    mixed.into_iter().chain(shared_accounts(listener, &peers)).collect()
+}
+
+/// One error per account that more than one of `peers` names, in account order.
+fn shared_accounts(listener: &ListenerName, peers: &[(&CallerName, &CallerConfig)]) -> Vec<ValidationError> {
+    let by_user = peers
+        .iter()
+        .filter_map(|(name, caller)| peer_account(caller).map(|user| (user, *name)))
+        .fold(BTreeMap::<&AccountName, Vec<CallerName>>::new(), |mut groups, (user, name)| {
+            groups.entry(user).or_default().push(name.clone());
+            groups
+        });
+    by_user
+        .into_iter()
+        .filter(|(_, callers)| callers.len() > 1)
+        .map(|(user, callers)| ValidationError::SharedPeerAccount {
+            listener: listener.clone(),
+            user: user.clone(),
+            callers,
+        })
+        .collect()
+}
+
+/// The account a peer caller must connect as; none for any other caller.
+fn peer_account(caller: &CallerConfig) -> Option<&AccountName> {
+    match caller.auth() {
+        CallerAuth::Peer(user) => Some(user),
+        CallerAuth::Token(_) | CallerAuth::IsolatedNetwork => None,
+    }
+}
+
 /// No two token callers on one listener share a token hash.
 fn check_token_hashes(config: &ParsedConfig) -> Vec<ValidationError> {
     let groups = config
@@ -323,7 +408,7 @@ fn check_token_hashes(config: &ParsedConfig) -> Vec<ValidationError> {
         .iter()
         .filter_map(|(name, caller)| match caller.auth() {
             CallerAuth::Token(hash) => Some(((caller.listener(), hash.digest()), name)),
-            CallerAuth::IsolatedNetwork | CallerAuth::Socket => None,
+            CallerAuth::IsolatedNetwork | CallerAuth::Peer(_) => None,
         })
         .fold(
             BTreeMap::<(&ListenerName, &[u8; TOKEN_DIGEST_LEN]), Vec<CallerName>>::new(),
@@ -460,6 +545,10 @@ mod tests {
         format!("[callers.{name}]\nlistener = \"{listener}\"\nauth = \"{auth}\"\nroutes = [\"fx\"]\n")
     }
 
+    fn peer_caller(name: &str, listener: &str, user: &str) -> String {
+        format!("[callers.{name}]\nlistener = \"{listener}\"\nauth = \"peer\"\nuser = \"{user}\"\nroutes = [\"fx\"]\n")
+    }
+
     fn limited_caller(limit: &str) -> String {
         format!(
             "{}[callers.a.rate_limits]\nfx = {limit}\n",
@@ -581,15 +670,75 @@ mod tests {
     }
 
     #[test]
-    fn socket_caller_needs_a_unix_socket_listener() {
-        assert!(validate(&doc(&[LOCAL, &fx(), &caller("a", "local", "socket")])).is_ok());
+    fn peer_caller_needs_a_unix_socket_listener() {
+        assert!(validate(&doc(&[LOCAL, &fx(), &peer_caller("a", "local", "code")])).is_ok());
         [(NET, "net"), (LOOPBACK, "lo")].iter().for_each(|(listener, name)| {
-            let err = errors(&[listener, &fx(), &caller("a", name, "socket")]);
-            assert!(
-                matches!(&err[..], [ValidationError::WrongListenerKind { auth: "socket", .. }]),
-                "{err:?}"
-            );
+            let err = errors(&[listener, &fx(), &peer_caller("a", name, "code")]);
+            let expected = ValidationError::WrongListenerKind {
+                caller: n("a"),
+                auth: "peer",
+                listener: n(name),
+                required: "a unix_socket listener",
+            };
+            assert_eq!(err, [expected], "{name}");
         });
+    }
+
+    #[test]
+    fn peer_callers_must_not_share_a_listener_with_other_callers() {
+        let err = errors(&[
+            LOCAL,
+            &fx(),
+            &peer_caller("a", "local", "code"),
+            &token_caller("b", "local", '1', "\"fx\""),
+            &token_caller("c", "local", '2', "\"fx\""),
+        ]);
+        let expected = ValidationError::MixedListener {
+            listener: n("local"),
+            callers: vec![n("b"), n("c")],
+        };
+        assert_eq!(err, [expected]);
+        assert!(
+            err[0]
+                .to_string()
+                .starts_with("listener local has peer callers, so every caller on it must use auth = \"peer\"; b, c do not"),
+            "{}",
+            err[0]
+        );
+    }
+
+    #[test]
+    fn peer_callers_with_different_users_may_share_a_listener() {
+        let callers = [peer_caller("a", "local", "code"), peer_caller("b", "local", "trading")];
+        assert!(validate(&doc(&[LOCAL, &fx(), &callers[0], &callers[1]])).is_ok());
+    }
+
+    #[test]
+    fn peer_callers_on_one_listener_must_not_share_a_user() {
+        let callers = [
+            peer_caller("a", "local", "code"),
+            peer_caller("b", "local", "trading"),
+            peer_caller("c", "local", "code"),
+        ];
+        let err = errors(&[LOCAL, &fx(), &callers[0], &callers[1], &callers[2]]);
+        let expected = ValidationError::SharedPeerAccount {
+            listener: n("local"),
+            user: n("code"),
+            callers: vec![n("a"), n("c")],
+        };
+        assert_eq!(err, [expected]);
+        assert!(
+            err[0].to_string().starts_with("callers a, c on listener local share user code"),
+            "{}",
+            err[0]
+        );
+    }
+
+    #[test]
+    fn peer_callers_on_different_listeners_may_share_a_user() {
+        let other = "[listeners.other]\nunix_socket = \"/run/iron-vault/other.sock\"\n";
+        let callers = [peer_caller("a", "local", "code"), peer_caller("b", "other", "code")];
+        assert!(validate(&doc(&[LOCAL, other, &fx(), &callers[0], &callers[1]])).is_ok());
     }
 
     #[test]
@@ -607,16 +756,8 @@ mod tests {
             others: vec![n("b")],
         };
         assert_eq!(err, [expected]);
-        let err = errors(&[LOCAL, &fx(), &caller("a", "local", "socket"), &caller("b", "local", "socket")]);
-        let shared = |caller: &str, other: &str| ValidationError::SharedListener {
-            caller: n(caller),
-            auth: "socket",
-            listener: n("local"),
-            others: vec![n(other)],
-        };
-        assert_eq!(err, [shared("a", "b"), shared("b", "a")]);
         assert!(
-            err[0].to_string().contains("callers that share a listener must use tokens"),
+            err[0].to_string().contains("callers that share a TCP listener must use tokens"),
             "{}",
             err[0]
         );
@@ -725,8 +866,9 @@ mod tests {
         let keyed = route("keyed", "/fx/keyed", "{ header = \"X-Key\" }");
         let limit = "[callers.a.rate_limits]\nfx = { requests = 61, per_seconds = 60, burst = 10 }\n";
         let first = format!("{}{limit}", token_caller("a", "local", '1', "\"fx\", \"keyed\", \"gone\""));
-        let (second, third) = (token_caller("b", "local", '1', "\"fx\""), caller("c", "nowhere", "socket"));
-        let err = errors(&[&listener, &fx(), &keyed, &first, &second, &third]);
+        let (second, third) = (token_caller("b", "local", '1', "\"fx\""), peer_caller("c", "nowhere", "code"));
+        let fourth = peer_caller("d", "local", "code");
+        let err = errors(&[&listener, &fx(), &keyed, &first, &second, &third, &fourth]);
         let kinds: Vec<_> = err
             .iter()
             .map(|e| format!("{e:?}").split([' ', '{']).next().unwrap().to_owned())
@@ -735,6 +877,7 @@ mod tests {
             "UnknownRoute",
             "UnknownListener",
             "CallerRateLooser",
+            "MixedListener",
             "SharedTokenHash",
             "AmbiguousPrefix",
             "TokenHeaderIsSlot",

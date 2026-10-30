@@ -37,7 +37,7 @@ const GAMMA: u8 = 3;
 const DELTA: u8 = 4;
 const UNKNOWN: u8 = 9;
 
-/// One listener per mechanism: `sock` (socket), `net` (isolated network), `local` (two token callers on
+/// One listener per mechanism: `sock` (a peer caller), `net` (isolated network), `local` (two token callers on
 /// `Proxy-Authorization`), `dedicated` (a token caller on `X-Iron-Vault-Token`), `explicit` (a token caller whose
 /// listener names `Proxy-Authorization` as its `token_header`), and `empty` (no callers).
 fn policy() -> ActivePolicy {
@@ -68,7 +68,8 @@ address = "127.0.0.1:7880"
 
 [callers.cli]
 listener = "sock"
-auth = "socket"
+auth = "peer"
+user = "code"
 routes = ["fx"]
 
 [callers.naomi]
@@ -134,8 +135,9 @@ fn bearer(byte: u8) -> String {
 }
 
 #[test]
-fn a_socket_listener_names_its_caller() {
-    assert_eq!(identified("sock", &[]), "cli");
+fn a_peer_listener_identifies_no_one_until_peer_accounts_are_matched() {
+    assert_eq!(identify("sock", &[]), Err(Unauthenticated));
+    assert_eq!(identify("sock", &[("Proxy-Authorization", &bearer(ALPHA))]), Err(Unauthenticated));
 }
 
 #[test]
@@ -144,8 +146,7 @@ fn an_isolated_network_listener_names_its_caller() {
 }
 
 #[test]
-fn a_token_on_a_listener_identified_caller_is_not_checked() {
-    assert_eq!(identified("sock", &[("Proxy-Authorization", "Bearer nonsense")]), "cli");
+fn a_token_on_an_isolated_network_listener_is_not_checked() {
     assert_eq!(identified("net", &[("Proxy-Authorization", &bearer(ALPHA))]), "naomi");
 }
 
