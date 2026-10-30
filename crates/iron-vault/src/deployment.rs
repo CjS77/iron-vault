@@ -13,6 +13,8 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+use iron_vault_policy::{AccountDirectory, AccountName};
+
 use crate::path_metadata::{self, CollectError};
 use crate::trusted_path::ExpectedOwner;
 use crate::trusted_path_report::ServicePaths;
@@ -118,6 +120,40 @@ impl Accounts {
     /// The name of the first account with `uid`.
     pub fn name(&self, uid: u32) -> Option<&str> {
         self.0.iter().find(|&&(_, id)| id == uid).map(|(name, _)| name.as_str())
+    }
+}
+
+/// The local accounts that activation resolves peer callers against, and the account the service runs as (spec §3.4).
+///
+/// Accounts come from `/etc/passwd`, the same list the service account is found in. Package-created and `useradd`
+/// accounts are always there, so no NSS lookup is needed; an account that exists only in a directory service such as
+/// LDAP or SSSD is not, so a peer caller naming one is refused as unknown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswdDirectory {
+    accounts: Accounts,
+    service_account_uid: u32,
+}
+
+impl PasswdDirectory {
+    /// Resolves names against `accounts`, with the owner of `paths` as the service account.
+    ///
+    /// The owner is the account the service runs as in every profile: the `iron-vault` account in a protected install,
+    /// the invoking user in development.
+    pub fn new(accounts: Accounts, paths: &ServicePaths) -> Self {
+        Self {
+            accounts,
+            service_account_uid: paths.owner.uid,
+        }
+    }
+}
+
+impl AccountDirectory for PasswdDirectory {
+    fn uid(&self, name: &AccountName) -> Option<u32> {
+        self.accounts.uid(name.as_str())
+    }
+
+    fn service_account_uid(&self) -> u32 {
+        self.service_account_uid
     }
 }
 

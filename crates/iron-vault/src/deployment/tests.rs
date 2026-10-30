@@ -177,6 +177,40 @@ fn passwd_lines_give_names_and_uids() {
     assert_eq!(accounts.name(1000), None);
 }
 
+/// A host with root, the service account, one login account and an alias sharing its uid.
+const PASSWD: &str = "root:x:0:0:root:/root:/bin/sh\n\
+iron-vault:x:997:997::/var/lib/iron-vault:/usr/sbin/nologin\n\
+code:x:1000:1000:Code:/home/code:/bin/bash\n\
+code-alias:x:1000:1000::/home/code:/bin/bash\n";
+
+fn directory() -> PasswdDirectory {
+    let paths = ServicePaths::for_profile(DeploymentProfile::Protected, &env()).unwrap();
+    PasswdDirectory::new(Accounts::parse(PASSWD), &paths)
+}
+
+fn account(name: &str) -> AccountName {
+    name.parse().unwrap()
+}
+
+#[test]
+fn the_directory_resolves_passwd_accounts() {
+    let directory = directory();
+    assert_eq!(directory.uid(&account("code")), Some(1000));
+    assert_eq!(directory.uid(&account("code-alias")), Some(1000));
+    assert_eq!(directory.uid(&account("root")), Some(0));
+    assert_eq!(directory.uid(&account("iron-vault")), Some(997));
+}
+
+#[test]
+fn an_account_missing_from_passwd_is_unknown() {
+    assert_eq!(directory().uid(&account("ldap-user")), None);
+}
+
+#[test]
+fn the_service_account_is_the_owner_of_the_service_paths() {
+    assert_eq!(directory().service_account_uid(), SERVICE);
+}
+
 #[test]
 fn the_version_names_the_enabled_features() {
     let features = if cfg!(feature = "dev-mode") { "dev-mode" } else { "none" };
