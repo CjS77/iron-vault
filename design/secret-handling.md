@@ -42,9 +42,16 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | `ApprovalPassphrase` | store | the approver's passphrase for `approver.age` | `SecretString` | `secret_types_tests` |
 | `SoftwareSignerKey` | store | the software signer's Ed25519 private key | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop (`zeroize` feature); built once into its box, so moves copy only the pointer | `software_signer/tests` |
 | `SoftwareSigner` | store | the opened Ed25519 private key and its `PinnedApprover` | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop; `SoftwareSigner::new` takes the box from `SoftwareSignerKey` by pointer | `software_signer/tests` |
+| `OwnerInput` | iron-vault | the bytes the owner typed in answer to a prompt | `Zeroizing<Vec<u8>>`, a private field: the type has no `Clone` and a `Debug` that shows no byte | `secret_types_tests` |
+| `Frame` | iron-vault | an `OwnerInput` when it is an owner-input frame | its `OwnerInput` | `secret_types_tests` |
+| `Decoded` | iron-vault | a decoded `Frame` | its `Frame` | `secret_types_tests` |
 
 `ScrubPatterns` stores each pattern in a private `ScrubPattern` newtype, which has no `Clone`, `Display` or `Debug`.
 It is private to its module, so the test module cannot name it; it is covered through `ScrubPatterns`.
+
+`OwnerInput` is decoded by copying the frame body once, straight into its clearing buffer; it never passes through
+the admin protocol's field decoder or `serde` (`design/admin-protocol.md`). Its encoded frame holds the value too, so
+`encode` writes into a buffer the caller supplies, and a caller sending owner input passes a `Zeroizing<Vec<u8>>`.
 
 `OperationalIdentity` holds nothing: it only generates a `RecipientIdentity`.
 
