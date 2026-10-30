@@ -1,4 +1,4 @@
-//! Caller grants, routes, slots, markers, path and method rules, confirmation requirements, and the final
+//! Caller identification and grants, routes, slots, markers, path and method rules, confirmation requirements, and the final
 //! outgoing-request decision.
 //!
 //! This crate performs no I/O: every decision is a pure function of its inputs, so policy can be tested exhaustively
@@ -8,6 +8,7 @@ pub mod activation;
 pub mod authorization;
 pub mod bound_credential;
 pub mod caller;
+pub mod caller_identity;
 pub mod caller_token;
 pub mod config;
 pub mod config_path;
@@ -52,6 +53,7 @@ pub use activation::{ActivationError, ActivePolicy, Capabilities, CatalogEntry, 
 pub use authorization::{AuthorizedRequest, AuthzError, Refusal, authorize};
 pub use bound_credential::BoundCredential;
 pub use caller::{CallerAuth, CallerConfig, CallerError};
+pub use caller_identity::{Unauthenticated, identify_caller};
 pub use caller_token::{CallerToken, CallerTokenError};
 pub use config::{ConfigError, Location, ParsedConfig, SCHEMA_VERSION};
 pub use config_path::{ConfigPath, ConfigPathError};
