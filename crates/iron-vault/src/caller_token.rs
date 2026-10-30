@@ -7,6 +7,8 @@ use thiserror::Error;
 /// The operating system's random source failed, so no caller token was made.
 ///
 /// There is no fallback source: a token drawn from anything weaker would be guessable.
+// The inner error is in the message, not marked `#[source]`: `rand_core` 0.6 implements `std::error::Error` only with
+// its `std` feature, which the workspace leaves off.
 #[derive(Debug, Error)]
 #[error("the operating system's random source failed: {0}")]
 pub struct RandomSourceError(rand_core::Error);

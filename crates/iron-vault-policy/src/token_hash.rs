@@ -133,6 +133,7 @@ impl fmt::Display for TokenHash {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::caller_token::CALLER_TOKEN_BYTES;
     use crate::caller_token::tests::{KAT_BYTES, KAT_TOKEN};
 
     /// BLAKE2b-256 of `KAT_TOKEN`'s text, computed independently with `printf '%s' "$KAT_TOKEN" | b2sum -l 256` and
@@ -237,7 +238,7 @@ mod tests {
 
     #[test]
     fn a_different_token_does_not_match() {
-        let other = CallerToken::from_bytes([0xff; TOKEN_DIGEST_LEN]);
+        let other = CallerToken::from_bytes([0xff; CALLER_TOKEN_BYTES]);
         assert!(!KAT_HASH.parse::<TokenHash>().unwrap().matches(&other));
     }
 }
