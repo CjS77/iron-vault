@@ -15,6 +15,7 @@ pub mod request_socket;
 pub mod socket_file;
 pub mod trusted_path;
 pub mod trusted_path_report;
+pub mod upstream;
 
 #[cfg(test)]
 mod secret_types_tests;

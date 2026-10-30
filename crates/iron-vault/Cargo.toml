@@ -17,9 +17,13 @@ clap.workspace = true
 iron-vault-policy = { path = "../iron-vault-policy" }
 # OsRng for caller-token generation; only the binary reaches for the operating system's random source.
 rand_core = { workspace = true, features = ["getrandom"] }
+# Upstream trust: the outbound client's rustls config over the built-in roots or a route's pinned CA.
+rustls.workspace = true
+rustls-pki-types.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+webpki-roots.workspace = true
 zeroize.workspace = true
 
 # Process hardening, the getuid call for trusted-path checks, the admin socket and its peer credentials, and the CLI's
@@ -34,6 +38,8 @@ tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "signal"
 # Checks that no `log` backend is installed, so dependency `log` records are discarded.
 log.workspace = true
 proptest.workspace = true
+# A CA and leaf certificates for the upstream-trust tests, generated offline.
+rcgen.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 static_assertions.workspace = true
