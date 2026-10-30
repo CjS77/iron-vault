@@ -62,10 +62,24 @@ pub enum BindError {
 }
 
 /// The admin socket, bound at mode `0600` and listening. The listener is non-blocking, ready for the async server.
+///
+/// It owns its socket file: dropping it removes the file, so no exit after binding leaves one behind.
 #[derive(Debug)]
 pub struct AdminSocket {
     listener: UnixListener,
+    file: SocketFile,
+}
+
+/// The socket file this process bound, removed on drop or by [`SocketFile::remove`].
+///
+/// The file is removed only while the path still names the same device and inode as when it was bound, so a file
+/// someone else has since put at the path is never deleted.
+#[derive(Debug)]
+pub struct SocketFile {
     path: PathBuf,
+    dev: u64,
+    ino: u64,
+    removed: bool,
 }
 
 impl AdminSocket {
@@ -75,24 +89,69 @@ impl AdminSocket {
         remove_stale(&path, owner)?;
         let fd = bound_socket(&path)?;
         fs::set_permissions(&path, fs::Permissions::from_mode(SOCKET_MODE)).map_err(failed(&path, "set the mode of"))?;
-        verify(&path, owner)?;
+        let bound = verify(&path, owner)?;
         rustix::net::listen(&fd, BACKLOG)
             .map_err(io::Error::from)
             .map_err(failed(&path, "listen on"))?;
+        // Only now does the file become ours to remove: a socket that failed verification or `listen` stays at the path,
+        // never connectable, and the next start replaces it as stale.
         Ok(Self {
             listener: UnixListener::from(fd),
-            path,
+            file: SocketFile {
+                path,
+                dev: bound.dev(),
+                ino: bound.ino(),
+                removed: false,
+            },
         })
     }
 
     /// The socket file's path.
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.file.path
     }
 
-    /// The listener and the path to remove when the server stops.
-    pub fn into_parts(self) -> (UnixListener, PathBuf) {
-        (self.listener, self.path)
+    /// The listener and the socket file, which the server holds until it stops.
+    pub fn into_parts(self) -> (UnixListener, SocketFile) {
+        (self.listener, self.file)
+    }
+}
+
+impl SocketFile {
+    /// Removes the socket file now, reporting a failure that dropping would only log.
+    pub fn remove(mut self) -> io::Result<()> {
+        self.removed = true;
+        self.remove_if_ours()
+    }
+
+    /// Removes the path when it still names the socket this process bound; a missing file is already gone.
+    fn remove_if_ours(&self) -> io::Result<()> {
+        match fs::symlink_metadata(&self.path) {
+            Ok(now) if (now.dev(), now.ino()) == (self.dev, self.ino) => match fs::remove_file(&self.path) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            },
+            Ok(_) => {
+                tracing::warn!(
+                    "leaving {}: it is no longer the admin socket this service bound",
+                    self.path.display()
+                );
+                Ok(())
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl Drop for SocketFile {
+    fn drop(&mut self) {
+        if self.removed {
+            return;
+        }
+        if let Err(e) = self.remove_if_ours() {
+            tracing::warn!("cannot remove the admin socket {}: {e}", self.path.display());
+        }
     }
 }
 
@@ -125,12 +184,12 @@ fn remove_stale(path: &Path, owner: ExpectedOwner) -> Result<(), BindError> {
     fs::remove_file(path).map_err(failed(path, "remove the stale"))
 }
 
-/// Checks with `lstat` that `path` is a socket the service account owns with mode `0600`.
-fn verify(path: &Path, owner: ExpectedOwner) -> Result<(), BindError> {
+/// Checks with `lstat` that `path` is a socket the service account owns with mode `0600`, and returns what `lstat` saw.
+fn verify(path: &Path, owner: ExpectedOwner) -> Result<Metadata, BindError> {
     let metadata = fs::symlink_metadata(path).map_err(failed(path, "inspect"))?;
     let as_made = metadata.file_type().is_socket() && metadata.uid() == owner.uid && metadata.mode() & 0o7777 == SOCKET_MODE;
     match as_made {
-        true => Ok(()),
+        true => Ok(metadata),
         false => Err(BindError::Unverified {
             path: path.to_path_buf(),
             found: describe(&metadata),

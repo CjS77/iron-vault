@@ -221,7 +221,10 @@ reads frames into is allocated once at the largest frame size, clears itself on 
 because it holds owner input before decoding.
 
 **Shutdown.** On SIGTERM or SIGINT the service stops accepting, gives open exchanges up to 5 seconds to finish,
-abandons any still open, and removes the socket file.
+abandons any still open, and removes the socket file. Once the socket is listening, the service removes the file on
+every exit, an early error included, but only while `lstat` still shows the device and inode it bound, so a file
+someone else has since put at the path is left alone. A socket that fails the check or `listen` while binding stays at
+the path, never connectable, until the next start replaces it as stale.
 
 ## CLI client
 

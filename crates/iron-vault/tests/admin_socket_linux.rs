@@ -335,6 +335,28 @@ async fn shutdown_abandons_an_exchange_still_open_after_the_grace() {
     assert!(!dir.socket().exists());
 }
 
+/// Dropping the socket's parts is what every early exit after binding does, such as `UnixListener::from_std` failing in
+/// `AdminServer::serve`: the `?` drops the socket file the server holds.
+#[test]
+fn an_exit_after_binding_but_before_serving_removes_the_socket_file() {
+    let dir = RuntimeDir::new();
+    let (listener, file) = AdminSocket::bind(&dir.0, me()).unwrap().into_parts();
+    assert!(dir.socket().exists());
+    drop(listener);
+    drop(file);
+    assert!(fs::symlink_metadata(dir.socket()).is_err(), "the socket file was left behind");
+}
+
+#[test]
+fn a_file_put_at_the_path_after_binding_is_never_removed() {
+    let dir = RuntimeDir::new();
+    let socket = AdminSocket::bind(&dir.0, me()).unwrap();
+    fs::remove_file(dir.socket()).unwrap();
+    fs::write(dir.socket(), b"someone else's").unwrap();
+    drop(socket);
+    assert_eq!(fs::read(dir.socket()).unwrap(), b"someone else's");
+}
+
 #[test]
 fn the_bound_socket_is_the_service_accounts_with_mode_0600() {
     let dir = RuntimeDir::new();

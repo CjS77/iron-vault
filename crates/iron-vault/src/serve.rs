@@ -22,15 +22,18 @@ pub fn run(paths: &ServicePaths) -> anyhow::Result<()> {
         .context("this deployment names no runtime directory for the admin socket")?;
     create_runtime_dir(runtime_dir)?;
     check_trusted_paths(paths)?;
-    let socket = AdminSocket::bind(runtime_dir, paths.owner)?;
-    tracing::info!("admin socket listening at {}", socket.path().display());
+    // Everything that can fail or be interrupted comes before binding, so once the socket file exists the server owns
+    // it and removes it on every exit.
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let stop = {
+        let _context = runtime.enter();
+        stop_signal()?
+    };
     let principals = AdminPrincipals::new(paths.profile, paths.owner.uid);
     let server = AdminServer::new(principals, Handlers::standard(paths.profile), Limits::default());
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    runtime.block_on(async {
-        let stop = stop_signal()?;
-        server.serve(socket, stop).await
-    })?;
+    let socket = AdminSocket::bind(runtime_dir, paths.owner)?;
+    tracing::info!("admin socket listening at {}", socket.path().display());
+    runtime.block_on(server.serve(socket, stop))?;
     tracing::info!("stopped");
     Ok(())
 }

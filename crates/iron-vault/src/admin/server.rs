@@ -6,7 +6,6 @@
 
 use std::future::Future;
 use std::io;
-use std::path::Path;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -70,9 +69,9 @@ impl AdminServer {
     }
 
     /// Serves `socket` until `shutdown` completes. Then it stops accepting, gives open exchanges the shutdown grace to
-    /// finish, abandons the rest and removes the socket file.
+    /// finish, abandons the rest and removes the socket file. The socket file is removed on an early error too.
     pub async fn serve(&self, socket: AdminSocket, shutdown: impl Future<Output = ()>) -> io::Result<()> {
-        let (listener, path) = socket.into_parts();
+        let (listener, file) = socket.into_parts();
         let listener = UnixListener::from_std(listener)?;
         let mut open = JoinSet::new();
         let mut shutdown = pin!(shutdown);
@@ -90,7 +89,7 @@ impl AdminServer {
         }
         drop(listener);
         self.drain(open).await;
-        remove_socket_file(&path)
+        file.remove()
     }
 
     /// Serves one connection: the peer check, then one request, its handler and the response.
@@ -343,13 +342,5 @@ fn error(code: ErrorCode, message: &str) -> AdminResponse {
     AdminResponse::Error {
         code,
         message: message.to_owned(),
-    }
-}
-
-/// Removes the socket file, so no client finds a dead socket at the path.
-fn remove_socket_file(path: &Path) -> io::Result<()> {
-    match std::fs::remove_file(path) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
-        _ => Ok(()),
     }
 }
