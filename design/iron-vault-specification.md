@@ -318,8 +318,10 @@ The service supports these caller identities:
 Loopback alone does not authenticate a caller: TCP reports no account, so a TCP caller presents a caller token or
 arrives on its own isolated-network listener. On a Unix socket, callers that need different grants run as different
 OS accounts (`auth = "peer"`) or present caller tokens. Peer callers share a socket only with other peer callers, one
-caller per account; the service resolves each `user` to a uid when policy activates and refuses root and the service
-account. Any local account may connect to a request socket; its peer account or token decides what it may use.
+caller per account; the service resolves each `user` to a uid when policy activates and refuses root, the service
+account, and the kernel's overflow uid, which the kernel reports for every peer whose uid has no mapping in the
+service's user namespace and so cannot identify one account. Any local account may connect to a request socket; its
+peer account or token decides what it may use.
 OS peer credentials can enforce account boundaries but must not prove trust in a named executable.
 Inspecting `/proc/<pid>/exe` or launching the real application does not distinguish the owner from malware.
 [`multiuser-linux.md`](multiuser-linux.md) walks through a workstation that separates work by OS account.
