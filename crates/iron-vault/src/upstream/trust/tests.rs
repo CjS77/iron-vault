@@ -7,6 +7,7 @@ use rustls::{CertificateError, ClientConnection, Connection, ServerConfig, Serve
 use rustls_pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
 
 use super::*;
+use crate::tls::provider;
 
 const UPSTREAM: &str = "upstream.test";
 const CA_PATH: &str = "/etc/iron-vault/ca/upstream.pem";

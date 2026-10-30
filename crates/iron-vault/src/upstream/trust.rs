@@ -14,17 +14,11 @@ use rustls::client::{VerifierBuilderError, WebPkiServerVerifier};
 use rustls::crypto::CryptoProvider;
 use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::CertificateDer;
-use rustls_pki_types::pem::PemObject;
 
 use crate::admin_file::{self, AdminFile, AdminFileError};
 use crate::deployment::DeploymentProfile;
+use crate::tls::{self, CertificatePemError};
 use crate::trusted_path::ExpectedOwner;
-
-/// What starts every PEM item, whatever its label.
-const PEM_BEGIN: &[u8] = b"-----BEGIN ";
-
-/// The start of the only PEM item a pinned CA file may hold.
-const CERTIFICATE_BEGIN: &[u8] = b"-----BEGIN CERTIFICATE-----";
 
 /// The trust anchors an upstream's certificate must chain to.
 #[derive(Debug, Clone)]
@@ -103,7 +97,7 @@ impl UpstreamTrust {
     /// It presents no client certificate, and its key log stays rustls's default, which logs nothing, so
     /// `SSLKEYLOGFILE` never takes effect. ALPN is left for the HTTP client to set.
     pub fn client_config(&self) -> Result<Arc<ClientConfig>, ClientConfigError> {
-        let provider = provider();
+        let provider = tls::provider();
         let verifier = self.verifier(&provider)?;
         let config = ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
@@ -138,20 +132,14 @@ impl PinnedCa {
     ///
     /// Every PEM item is checked to be a certificate before any is decoded, so a private key's body is never decoded.
     fn from_pem(path: &Path, pem: &[u8]) -> Result<Self, PinnedCaError> {
-        let starts = item_starts(pem);
-        if !starts.iter().all(|line| line.trim_ascii() == CERTIFICATE_BEGIN) {
-            return Err(PinnedCaError::NotOnlyCertificates { path: path.to_path_buf() });
-        }
-        let certificates = CertificateDer::pem_slice_iter(pem)
-            .collect::<Result<Vec<_>, _>>()
-            .ok()
-            // A start line the decoder did not honour, such as an indented one or one inside another item, means the
-            // file is not what it appears to be.
-            .filter(|certificates| certificates.len() == starts.len())
-            .ok_or_else(|| PinnedCaError::MalformedPem { path: path.to_path_buf() })?;
-        if certificates.is_empty() {
-            return Err(PinnedCaError::NoCertificates { path: path.to_path_buf() });
-        }
+        let certificates = tls::certificates(pem).map_err(|e| {
+            let path = path.to_path_buf();
+            match e {
+                CertificatePemError::Malformed => PinnedCaError::MalformedPem { path },
+                CertificatePemError::NotOnlyCertificates => PinnedCaError::NotOnlyCertificates { path },
+                CertificatePemError::NoCertificates => PinnedCaError::NoCertificates { path },
+            }
+        })?;
         Ok(Self {
             path: path.to_path_buf(),
             roots: Arc::new(trust_anchors(path, certificates)?),
@@ -173,19 +161,6 @@ fn select<E>(route: &RouteConfig, load_pinned: impl FnOnce(&Path) -> Result<Upst
     route
         .ca_file()
         .map_or(Ok(UpstreamTrust::BuiltIn), |ca_file| load_pinned(ca_file.as_path()))
-}
-
-/// The outbound client's TLS crypto provider. It is passed to each config explicitly rather than installed as the
-/// process default, so the provider never depends on what other code installs.
-fn provider() -> Arc<CryptoProvider> {
-    Arc::new(rustls::crypto::ring::default_provider())
-}
-
-/// Every line that could start a PEM item, including indented ones, which the decoder would skip as text.
-fn item_starts(pem: &[u8]) -> Vec<&[u8]> {
-    pem.split(|byte| matches!(byte, b'\n' | b'\r'))
-        .filter(|line| line.trim_ascii_start().starts_with(PEM_BEGIN))
-        .collect()
 }
 
 /// Converts each certificate to a trust anchor, naming the first that does not convert.

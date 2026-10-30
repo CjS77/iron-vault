@@ -16,6 +16,7 @@ pub mod socket_activation;
 // Binding socket files uses rustix, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
 pub mod socket_file;
+mod tls;
 pub mod trusted_path;
 pub mod trusted_path_report;
 pub mod upstream;
