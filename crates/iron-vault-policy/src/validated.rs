@@ -352,12 +352,16 @@ fn is_dedicated(ip: IpAddr) -> bool {
     !ip.is_loopback() && !ip.is_unspecified()
 }
 
-/// A listener with any peer caller holds only peer callers, each naming its own account (spec §3.4).
+/// A socket listener with any peer caller holds only peer callers, each naming its own account (spec §3.4).
+///
+/// Address listeners are skipped: a peer caller on one already fails with `WrongListenerKind`, and a second error
+/// about its neighbours would only contradict that.
 fn check_peer_listeners(config: &ParsedConfig) -> Vec<ValidationError> {
     config
         .listeners()
-        .keys()
-        .flat_map(|listener| peer_listener_faults(config, listener))
+        .iter()
+        .filter(|(_, listener)| matches!(listener.endpoint(), Endpoint::UnixSocket(_)))
+        .flat_map(|(name, _)| peer_listener_faults(config, name))
         .collect()
 }
 
@@ -705,6 +709,23 @@ mod tests {
             "{}",
             err[0]
         );
+    }
+
+    #[test]
+    fn peer_caller_on_an_address_listener_reports_only_the_listener_kind() {
+        let err = errors(&[
+            NET,
+            &fx(),
+            &peer_caller("a", "net", "code"),
+            &token_caller("b", "net", '1', "\"fx\""),
+        ]);
+        let expected = ValidationError::WrongListenerKind {
+            caller: n("a"),
+            auth: "peer",
+            listener: n("net"),
+            required: "a unix_socket listener",
+        };
+        assert_eq!(err, [expected]);
     }
 
     #[test]
