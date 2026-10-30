@@ -18,11 +18,22 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | `iron-vault-store`  | Vault identity, recipient envelopes, record files, approval metadata, durable transactions and recovery |
 | `iron-vault`        | Service binary, HTTP/admin interfaces, CLI client, config loading, deployment adapters and scrubbing    |
 
+## Actor disambiguation
+
+| Term | Meaning | Protected install | Development |
+|---|---|---|---|
+| **Owner** | The person at the end of the authority chain | Alice, but only by passing `sudo` | Alice |
+| **Service account** | The OS account that runs the service and owns its config (0600), vault and runtime directory. The code's `ExpectedOwner` is this account's uid. | `iron-vault` | Alice's login account |
+| **Admin principal** | An OS account the admin socket accepts, checked from the socket's peer credentials | root or the service account | the invoking user |
+| **Login account** | The owner's everyday OS account | `alice`, which has no authority | the same account as the service account |
+| **Host administrator** | Anyone who can become root, e.g. through `sudo`. Outside the threat model (§1.2). | Alice, if she's in sudoers | not applicable |
+
 ## Terms
 
 | Term              | Definition                                                                                                                  | Context             | Rust type | Spec |
 |-------------------|-----------------------------------------------------------------------------------------------------------------------------|---------------------|-----------|------|
 | Active policy     | A validated config activated against this service's capabilities and credential catalog: the routes it may serve, with routes whose credential record is unusable marked unavailable. | `iron-vault-policy` | `ActivePolicy` | §3.3, §3.9 |
+| Admin principal   | An OS account the admin socket accepts, checked from the socket's peer credentials: root or the service account in a protected install, the invoking user in development; never the owner's login account in a protected install. | `iron-vault` | | §3.2 |
 | Approval envelope | The byte format of `config.toml.sig`: a format version, the signature algorithm, the approval payload and the signature over that payload's exact encoding. It carries no public key; the approver's key is pinned in protected vault metadata. | `iron-vault-store` | `ApprovalEnvelope` | §3.9, §8.2 |
 | Approval passphrase | The owner's non-empty secret that opens the approver key envelope, and nothing else. It is a separate concept and type from the vault-unlock passphrase, and is never derived from it or interchangeable with it: unlocking the vault must never imply authority to approve a config. Held in memory cleared on drop and never displayed. | `iron-vault-store` | `ApprovalPassphrase` | §3.9 |
 | Approval payload  | The bytes a config approval signs: the fixed purpose `iron-vault-config-v1`, the vault ID, the approval version and the config digest, in one deterministic, versioned encoding. | `iron-vault-store` | `ApprovalPayload` | §3.9 |
@@ -50,15 +61,17 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Destination invariant | A credential leaves only for its route upstream's host and port, only when its credential record permits that pair, only inside the upstream base path, and only in the route's slot; property-tested from request parsing to the final outgoing-request check. | `iron-vault-policy` | | §3.6, §8 |
 | Durable remove    | Unlinking a state file, then fsyncing the state directory, so the deletion survives power loss. | `iron-vault-store` | `durable_remove` | §3.10, §3.15 |
 | Durable replace   | Writing a state file's new bytes to a private `.<name>.tmp` in the state directory, fsyncing it, renaming it over the file and fsyncing the directory; the file holds the old bytes or the new ones, never a mix. | `iron-vault-store` | `durable_replace` | §3.10, §3.15 |
-| Expected owner    | The uid that must own a trusted path's service-owned parts: the service account in a protected deployment, the invoking user in development. Root is always also trusted for ancestors. Not to be confused with the *owner*, who is a person. | `iron-vault` | `ExpectedOwner` | §3.1 |
+| Expected owner    | The service account's uid, which must own a trusted path's service-owned parts: `iron-vault` in a protected deployment, the invoking user in development. Root is always also trusted for ancestors. Not to be confused with the *owner*, who is a person. | `iron-vault` | `ExpectedOwner` | §3.1 |
 | Fault filesystem  | A test-only, in-memory `StoreFs` that records every call, fails chosen calls with a chosen error, and models power loss: file contents survive a crash only once fsynced, and directory entry changes only once the directory is fsynced. | `iron-vault-store` | `FaultFs` | §3.10, §8 |
 | Hardware key      | A removable device, initially a YubiKey, that protects keys and supports PIN and touch policies.                            | `iron-vault-store`  |           | §1.3 |
 | Header value      | The bytes of one HTTP field value; never contains CR, LF or NUL, may contain obs-text, and is never rendered in logs or errors. | `iron-vault-policy` | `HeaderValue` | §3.6 |
 | Host              | An upstream host name or IP literal in its one canonical form; hosts compare exactly, never by suffix or wildcard.          | `iron-vault-policy` | `Host`    | §3.6 |
+| Host administrator | Anyone who can become root, e.g. through `sudo`; outside the threat model, and the only way the owner reaches the admin socket in a protected install. | `iron-vault` | | §1.2, §3.2 |
 | Identity envelope | The state-directory file `identity.age`: the vault identity's secret text as a plain `age` file with one X25519 stanza per recipient key and no scrypt stanza, so every enrolled recipient opens it independently. | `iron-vault-store` | `wrap_identity`, `unwrap_identity` | §3.10, §3.11 |
 | Intermediate identity | A generated X25519 recipient identity whose recipient key is enrolled in the identity envelope and whose secret text is kept in a separate file that only one device or passphrase can open, so a hardware key or passphrase reaches the vault without any stanza but X25519 in the identity envelope. The operational identity is the passphrase case. | `iron-vault-store` | | §3.10, §3.11, §5.1 |
 | Kind              | The operation that turns a credential into request bytes, such as a static key, an OAuth access token, or a signature.      | `iron-vault-kinds`  |           | §1.3 |
 | Listener          | A configured endpoint, a Unix socket or TCP address, on which callers reach the request interface.                          | `iron-vault-policy` | `ListenerName`, `ListenerConfig` | §3.3, §3.4 |
+| Login account     | The owner's everyday OS account; it has no authority in a protected install, and is the service account in development. | `iron-vault` | | §3.1, §3.2 |
 | MAC'd file        | A sealed file framed by a clear header (magic, format version, vault ID) and a trailing BLAKE2b MAC keyed from the vault identity with a per-file persona and domain tag; the MAC is checked before anything is decrypted, so only the service can write one that opens. The vault manifest and the approval state are MAC'd files. | `iron-vault-store` | `MacFileKind` | §3.10 |
 | Manifest entry    | One record in the vault manifest: a record ID mapped to its credential name and the BLAKE2b-256 digest of that record file's ciphertext bytes, so a substituted or altered record file no longer matches. | `iron-vault-store` | `ManifestEntry` | §3.3, §3.10 |
 | Marker            | An inert SDK placeholder such as `{iv:fx_key}` that Iron Vault interprets only in the selected slot, where it must name the route's own credential; it never selects a credential. | `iron-vault-policy` | `markers`, `MarkerError` | §1.3, §3.6, §8.2 |
@@ -70,7 +83,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Operational limits | Service-wide bounds on request head and body size, decompressed response size, timeouts, and concurrent connections. | `iron-vault-policy` | `Limits` | §9 |
 | Outgoing headers  | The ordered header list an upstream request carries; built from sanitized caller headers and never holding a reserved header. | `iron-vault-policy` | `OutgoingHeaders` | §3.6 |
 | Outgoing request  | The request about to leave the service: the authorized method, the upstream target and the outgoing headers, with the route's slot filled exactly once; the input to the final outgoing-request check. | `iron-vault-policy` | `OutgoingRequest` | §3.5, §3.6 |
-| Owner             | The person authorized to enroll credentials, approve policy, recover the vault, and authorize destructive changes.          | `iron-vault`        |           | §1.3 |
+| Owner             | The person at the end of the authority chain, authorized to enroll credentials, approve policy, recover the vault, and authorize destructive changes; never an OS account, and acts on the service only through an admin principal. | `iron-vault`        |           | §1.3, §3.2 |
 | Parsed config     | A configuration document whose listeners, callers, routes and limits each passed their own validation, before cross-references are checked. | `iron-vault-policy` | `ParsedConfig` | §3.3 |
 | Partial restore   | A manifest and approval state that no sequence of writes leaves on disk together: the file written last does not record the other's current state generation as its peer, or `approval.age` is missing although the manifest records one. It means a MAC'd file was restored from an older copy or deleted, so the vault refuses to open, the approval state to load and either file to be written, until the owner recovers or resets the vault; it is never repaired automatically. | `iron-vault-store` | `PartialRestore` | §3.9, §3.10 |
 | Passphrase        | The owner's non-empty vault-unlock secret for the passphrase envelope, distinct from the approval passphrase; held in memory cleared on drop and never displayed. Strength rules are set at vault initialization. | `iron-vault-store` | `Passphrase` | §3.11, §3.12 |
@@ -105,6 +118,7 @@ From specification §7. Each crate owns its model; crates do not reach into each
 | Slot value        | The credential text a kind produces for the route's slot, before the slot's format or encoding is applied. | `iron-vault-policy` | `SlotValue` | §3.6, §3.11, §5.2 |
 | Software signer   | The approval signer for machines without a TPM: an Ed25519 key whose private half is kept in the approver key envelope and decrypted only inside the service, for one approval, then dropped. It signs only when the decrypted key matches the pinned approver. | `iron-vault-store` | `SoftwareSigner`, `SoftwareSignerKey` | §3.9, §3.11 |
 | Source            | The origin of a credential imported into the vault, initially direct entry and later password-manager sync.                 | `iron-vault-store`  | `Source` | §1.3 |
+| Service account   | The OS account that runs the service and owns its config (0600), vault and runtime directory: `iron-vault` in a protected install, the owner's login account in development. | `iron-vault` | `ExpectedOwner` (its uid) | §3.1, §3.9 |
 | Service paths     | The trusted paths a deployment names (config file, state directory, optional runtime directory) with its profile and expected owner; the running binary is found from the process itself. | `iron-vault` | `ServicePaths` | §3.1 |
 | Stale temp file   | A `.<name>.tmp` left in the state directory, for a valid state file name, by a durable replace that never finished; the stale temp sweep durably removes every one under the state-directory lock at startup. | `iron-vault-store` | `sweep_stale_temps` | §3.10 |
 | Stanza kind       | The type of one recipient stanza in an `age` header, read from its tag without decrypting: X25519, scrypt, `age`'s inert grease stanza, or any other tag by name. | `iron-vault-store` | `StanzaKind` | §3.11, §3.15 |
@@ -132,6 +146,7 @@ Context notes for terms that span crates:
 
 - **Credential:** `iron-vault-kinds` owns resolving a credential into request bytes; its encrypted form is the
   credential record in `iron-vault-store`.
-- **Owner:** the binary's admin interface authenticates the owner; store and policy only act on approved changes.
+- **Owner:** the binary's admin interface authenticates an admin principal, never the owner directly; store and policy
+  only act on approved changes. See [Actor disambiguation](#actor-disambiguation).
 - **Hardware key, Source:** `iron-vault-store` holds recipient envelopes and connector storage, so it owns both.
 - **Upstream:** `iron-vault-policy` decides whether a request may go to an upstream; the binary performs transport.

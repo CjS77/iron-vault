@@ -154,9 +154,20 @@ Host administrators remain outside this protection.
 ### 3.2 Service and CLI boundary
 
 The service exposes separate request and administrative interfaces. Request authorization never grants access to
-administrative operations. The local admin socket authenticates the connecting OS principal and restricts management
-to the configured owner or administrator; destructive and policy-changing operations also require owner approval.
-Source ports, executable names, and caller-supplied identity headers do not establish administrative identity.
+administrative operations. The local admin socket authenticates the connecting OS account from its peer credentials
+and accepts only an admin principal: root or the service account in a protected installation, and the invoking user
+in a development installation. The admin principals are fixed by the deployment profile, not configured. The admin
+socket is owned by the service account with mode `0600`, in a directory other accounts cannot write, so other accounts
+cannot connect to it; the peer-credential check refuses them even if those permissions are wrong. A connection
+forwarded over SSH is judged by the account it arrives as on the service host. Destructive and policy-changing
+operations also require owner approval. Source ports, executable names, and caller-supplied identity headers do not
+establish administrative identity.
+
+The owner's login account is never an admin principal in a protected installation, so malware running as the owner
+cannot reach the admin socket. The owner acts only by becoming a host administrator, for example through `sudo`, and
+that step is only as strong as the host's privilege-escalation settings. Installation guidance must recommend
+per-terminal credential caching or none, and a second factor such as a hardware key where the platform supports it.
+Owner approval remains a separate barrier: a borrowed administrator session alone cannot approve a configuration.
 
 The CLI sends commands to the service. The service reads staged configuration bytes, computes hashes, reserves
 versions, signs approvals, updates state, and later owns OAuth login and refresh. The CLI may hold values that the
