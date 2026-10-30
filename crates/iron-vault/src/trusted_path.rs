@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::deployment::DeploymentProfile;
+use crate::deployment::{DeploymentProfile, SERVICE_ACCOUNT};
 
 /// The uid of root, which is trusted for every ancestor directory and owns protected binaries.
 const ROOT_UID: u32 = 0;
@@ -44,6 +44,10 @@ impl Mode {
 
     const fn others_writable(self) -> bool {
         self.0 & 0o002 != 0
+    }
+
+    const fn group_or_other_access(self) -> bool {
+        self.0 & 0o077 != 0
     }
 
     const fn sticky(self) -> bool {
@@ -79,6 +83,17 @@ pub struct PathComponent {
     pub mode: Mode,
     /// What kind of filesystem entry it is.
     pub kind: ComponentKind,
+    /// The device and inode of the entry, so a file opened after the walk can be matched to the one the walk checked.
+    pub id: FileId,
+}
+
+/// The identity of a file on this host: its device and inode numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileId {
+    /// The device holding the file.
+    pub dev: u64,
+    /// The inode number on that device.
+    pub ino: u64,
 }
 
 /// The kind of filesystem entry a path component is, without following a symlink.
@@ -128,12 +143,28 @@ pub enum TrustedPathRule {
     RuntimeDir,
     /// A file inside the state directory, such as its lock file.
     StateFile,
+    /// An administrator-installed certificate: a TLS listener's certificate chain or a route's pinned CA file. Whoever
+    /// can write one can impersonate Iron Vault to TLS callers or point a route at an interceptor, so only root or the
+    /// service account may own it and nobody else may write it.
+    AdminCertificate,
+    /// An administrator-installed private key for a TLS listener.
+    ///
+    /// The service account must own it, not root: the service runs unprivileged and must read the key, and a
+    /// root-owned `0640` file shared through a group would make every member of that group a key reader. So the key
+    /// is the service account's, with no group or other permission bits.
+    AdminPrivateKey,
 }
 
 impl TrustedPathRule {
     /// Whether a root-owned sticky ancestor such as `/tmp` may be group- or world-writable on this path.
     const fn allows_sticky_ancestor(self) -> bool {
-        !matches!(self, Self::StateDir | Self::Config)
+        !matches!(self, Self::StateDir | Self::Config | Self::AdminCertificate | Self::AdminPrivateKey)
+    }
+
+    /// Whether the leaf must be the file itself rather than a symlink to it. These files are opened with
+    /// `O_NOFOLLOW`, so a symlinked leaf could never be read.
+    const fn refuses_leaf_symlink(self) -> bool {
+        matches!(self, Self::StateFile | Self::AdminCertificate | Self::AdminPrivateKey)
     }
 
     /// The file this rule's path cautions are about: only the binary must be root's alone, while the other rules
@@ -141,7 +172,7 @@ impl TrustedPathRule {
     pub const fn cautioned_file(self) -> Option<CautionedFile> {
         match self {
             Self::Binary => Some(CautionedFile::Binary),
-            Self::Config | Self::StateDir | Self::RuntimeDir | Self::StateFile => None,
+            Self::Config | Self::StateDir | Self::RuntimeDir | Self::StateFile | Self::AdminCertificate | Self::AdminPrivateKey => None,
         }
     }
 }
@@ -237,6 +268,16 @@ pub enum Problem {
     NotADirectory,
     /// The component must be a regular file, not a symlink or special file.
     NotARegularFile,
+    /// A private key that an account other than the service account owns, or that has group or other permission
+    /// bits, so another account can read it or change who can.
+    ExposedPrivateKey {
+        /// The owning uid.
+        found: u32,
+        /// The key's mode.
+        mode: Mode,
+        /// The account `chown` should set: the service account's name when protected, the invoking uid in development.
+        account: String,
+    },
     /// A symlink that root does not control: the link or the directory holding it is not root-owned.
     UntrustedSymlink,
     /// The path passes through a symlink loop, more links than the kernel allows, or symlink resolutions nested
@@ -276,8 +317,8 @@ impl fmt::Display for UnsafePath {
             Problem::WritableByOthers => write!(f, "{path} is writable by all users; run `chmod o-w {path}`"),
             Problem::SharedStickyAncestor => write!(
                 f,
-                "{path} is a shared directory other users can write; move the state directory or config out of {path} \
-                 rather than changing its permissions"
+                "{path} is a shared directory other users can write; move the state directory, config, \
+                 TLS key or certificate out of {path} rather than changing its permissions"
             ),
             Problem::WrongMode { found, expected } => {
                 write!(
@@ -292,6 +333,11 @@ impl fmt::Display for UnsafePath {
                     "{path} is not a regular file; replace it with a regular file, not a symlink or special file"
                 )
             }
+            Problem::ExposedPrivateKey { found, mode, account } => write!(
+                f,
+                "{path} is a private key owned by uid {found} with mode {mode}; only the service account may own or read \
+                 it; run `chown {account}: {path} && chmod 600 {path}`"
+            ),
             Problem::UntrustedSymlink => write!(
                 f,
                 "{path} is a symlink not controlled by root; the link and its directory must be owned by root, \
@@ -429,7 +475,7 @@ impl Walk {
                 problem,
             })
         };
-        if role == Role::Leaf && self.rule == TrustedPathRule::StateFile {
+        if role == Role::Leaf && self.rule.refuses_leaf_symlink() {
             return unsafe_link(Problem::NotARegularFile);
         }
         if link.uid != ROOT_UID || parent.is_none_or(|parent| parent.uid != ROOT_UID) {
@@ -469,6 +515,35 @@ impl Walk {
                 require_owner(component, service)?;
                 require_mode(component, Mode::new(0o600))
             }
+            TrustedPathRule::AdminCertificate => {
+                require_regular_file(component)?;
+                require_owner(component, OwnerRequirement::root_or(self.owner.uid))?;
+                require_not_writable(component)
+            }
+            TrustedPathRule::AdminPrivateKey => {
+                require_regular_file(component)?;
+                self.require_private_key(component)
+            }
+        }
+    }
+
+    /// Refuses a key another account owns or has any permission bit on, naming the account that should own it.
+    fn require_private_key(self, component: &PathComponent) -> Result<(), Problem> {
+        match component.uid == self.owner.uid && !component.mode.group_or_other_access() {
+            true => Ok(()),
+            false => Err(Problem::ExposedPrivateKey {
+                found: component.uid,
+                mode: component.mode,
+                account: self.service_account_name(),
+            }),
+        }
+    }
+
+    /// The account the service runs as: the packaged service account, or the invoking user's uid in development.
+    fn service_account_name(self) -> String {
+        match self.profile {
+            DeploymentProfile::Protected => SERVICE_ACCOUNT.to_string(),
+            DeploymentProfile::Development => self.owner.uid.to_string(),
         }
     }
 

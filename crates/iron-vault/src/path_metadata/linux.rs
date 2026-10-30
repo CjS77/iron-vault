@@ -7,7 +7,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use super::{CollectError, MAX_SYMLINK_HOPS};
-use crate::trusted_path::{ComponentKind, Mode, PathComponent, SymlinkTarget};
+use crate::trusted_path::{ComponentKind, FileId, Mode, PathComponent, SymlinkTarget};
 
 /// The kernel's name for the binary this process is running; it stays valid after the file is deleted or replaced.
 const PROC_SELF_EXE: &str = "/proc/self/exe";
@@ -47,6 +47,7 @@ impl Collector {
             group_name: None,
             mode: Mode::new(metadata.mode()),
             kind,
+            id: file_id(&metadata),
         })
     }
 
@@ -114,23 +115,15 @@ fn io_error(path: &Path) -> impl Fn(io::Error) -> CollectError + '_ {
 /// Compares the file at `path` with the one the kernel says this process was started from.
 pub(super) fn ensure_running_binary(path: &Path) -> Result<(), CollectError> {
     let running = fs::metadata(PROC_SELF_EXE).map_err(io_error(Path::new(PROC_SELF_EXE)))?;
-    let on_disk = fs::metadata(path).ok().map(|metadata| FileId::of(&metadata));
-    binary_status(path, FileId::of(&running), on_disk)
+    let on_disk = fs::metadata(path).ok().map(|metadata| file_id(&metadata));
+    binary_status(path, file_id(&running), on_disk)
 }
 
-/// The identity of a file on this host: its device and inode numbers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FileId {
-    dev: u64,
-    ino: u64,
-}
-
-impl FileId {
-    fn of(metadata: &Metadata) -> Self {
-        Self {
-            dev: metadata.dev(),
-            ino: metadata.ino(),
-        }
+/// The device and inode `metadata` describes.
+pub(super) fn file_id(metadata: &Metadata) -> FileId {
+    FileId {
+        dev: metadata.dev(),
+        ino: metadata.ino(),
     }
 }
 

@@ -17,6 +17,7 @@ fn entry(path: &str, uid: u32, mode: u32, kind: ComponentKind) -> PathComponent 
         group_name: None,
         mode: Mode::new(mode),
         kind,
+        id: FileId { dev: 0, ino: 0 },
     }
 }
 
@@ -531,6 +532,138 @@ fn symlink_cases() -> Vec<Case> {
     ]
 }
 
+fn tls_chain(leaf: PathComponent) -> Vec<PathComponent> {
+    let mut chain = config_chain(dir("/etc/iron-vault/tls", ROOT_UID, 0o755));
+    chain.push(leaf);
+    chain
+}
+
+fn tls_link(path: &str, uid: u32, mode: u32) -> PathComponent {
+    link(path, ROOT_UID, tls_chain(file("/etc/iron-vault/tls/real", uid, mode)))
+}
+
+const CERT: &str = "/etc/iron-vault/tls/server.crt";
+const KEY: &str = "/etc/iron-vault/tls/server.key";
+
+fn certificate_cases() -> Vec<Case> {
+    use TrustedPathRule::AdminCertificate;
+    let cert = |uid, mode| tls_chain(file(CERT, uid, mode));
+    let accepted = [
+        ("root-owned 0644 certificate", ROOT_UID),
+        ("service-owned 0644 certificate", SERVICE),
+    ];
+    let refused = [
+        (
+            "group-writable certificate",
+            cert(ROOT_UID, 0o664),
+            Problem::WritableByGroup { gid: 0, name: None },
+        ),
+        ("world-writable certificate", cert(ROOT_UID, 0o646), Problem::WritableByOthers),
+        (
+            "certificate owned by another user",
+            cert(STRANGER, 0o644),
+            wrong_owner(STRANGER, OwnerRequirement::RootOr(SERVICE)),
+        ),
+        (
+            "certificate that is a symlink",
+            tls_chain(tls_link(CERT, ROOT_UID, 0o644)),
+            Problem::NotARegularFile,
+        ),
+        (
+            "certificate that is a directory",
+            tls_chain(dir(CERT, ROOT_UID, 0o755)),
+            Problem::NotARegularFile,
+        ),
+    ];
+    let ancestors = [
+        (
+            "certificate under a directory another user can write",
+            tls_chain_under(dir("/etc/iron-vault/tls", STRANGER, 0o755)),
+            "/etc/iron-vault/tls",
+            wrong_owner(STRANGER, OwnerRequirement::RootOr(SERVICE)),
+        ),
+        (
+            "certificate under a staff-writable directory",
+            tls_chain_under(staff_writable("/etc/iron-vault/tls")),
+            "/etc/iron-vault/tls",
+            staff_problem(),
+        ),
+        (
+            "certificate under sticky /tmp",
+            tmp_chain(file("/tmp/server.crt", ROOT_UID, 0o644)),
+            "/tmp",
+            Problem::SharedStickyAncestor,
+        ),
+    ];
+    let accepted = accepted.map(|(name, uid)| case(name, AdminCertificate, cert(uid, 0o644), Ok(())));
+    let refused = refused.map(|(name, chain, problem)| case(name, AdminCertificate, chain, unsafe_at(CERT, problem)));
+    let ancestors = ancestors.map(|(name, chain, at, problem)| case(name, AdminCertificate, chain, unsafe_at(at, problem)));
+    accepted.into_iter().chain(refused).chain(ancestors).collect()
+}
+
+/// A TLS chain whose directory is `tls_dir`, holding a safe certificate.
+fn tls_chain_under(tls_dir: PathComponent) -> Vec<PathComponent> {
+    let mut chain = config_chain(tls_dir);
+    chain.push(file(CERT, ROOT_UID, 0o644));
+    chain
+}
+
+fn exposed_key(found: u32, mode: u32, account: &str) -> Problem {
+    Problem::ExposedPrivateKey {
+        found,
+        mode: Mode::new(mode),
+        account: account.to_string(),
+    }
+}
+
+fn private_key_cases() -> Vec<Case> {
+    use TrustedPathRule::AdminPrivateKey;
+    let key = |uid, mode| tls_chain(file(KEY, uid, mode));
+    let accepted = [0o600, 0o400].map(|mode| case("service-owned private key", AdminPrivateKey, key(SERVICE, mode), Ok(())));
+    let refused = [
+        ("group-readable key", SERVICE, 0o640),
+        ("world-readable key", SERVICE, 0o604),
+        ("root-owned key", ROOT_UID, 0o600),
+        ("key owned by another user", STRANGER, 0o600),
+    ]
+    .map(|(name, uid, mode)| {
+        case(
+            name,
+            AdminPrivateKey,
+            key(uid, mode),
+            unsafe_at(KEY, exposed_key(uid, mode, "iron-vault")),
+        )
+    });
+    let others = [
+        case(
+            "key that is a symlink",
+            AdminPrivateKey,
+            tls_chain(tls_link(KEY, SERVICE, 0o600)),
+            unsafe_at(KEY, Problem::NotARegularFile),
+        ),
+        case(
+            "key under sticky /tmp",
+            AdminPrivateKey,
+            tmp_chain(file("/tmp/server.key", SERVICE, 0o600)),
+            unsafe_at("/tmp", Problem::SharedStickyAncestor),
+        ),
+        dev_case("invoking user's key in development", AdminPrivateKey, key(USER, 0o600), Ok(())),
+        dev_case(
+            "service-owned key in development",
+            AdminPrivateKey,
+            key(SERVICE, 0o600),
+            unsafe_at(KEY, exposed_key(SERVICE, 0o600, "1000")),
+        ),
+        dev_case(
+            "invoking user's certificate in development",
+            TrustedPathRule::AdminCertificate,
+            tls_chain(file(CERT, USER, 0o644)),
+            Ok(()),
+        ),
+    ];
+    accepted.into_iter().chain(refused).chain(others).collect()
+}
+
 fn ordering_cases() -> Vec<Case> {
     let both_bad = vec![
         dir("/", ROOT_UID, 0o755),
@@ -554,6 +687,8 @@ fn every_rule_and_problem() {
         ancestor_cases(),
         state_and_runtime_cases(),
         symlink_cases(),
+        certificate_cases(),
+        private_key_cases(),
         ordering_cases(),
     ]
     .into_iter()
@@ -619,9 +754,14 @@ fn messages_name_the_path_and_the_fix() {
             "/etc/iron-vault is not a directory; replace it with a directory",
         ),
         (
+            exposed_key(ROOT_UID, 0o640, "iron-vault"),
+            "/etc/iron-vault is a private key owned by uid 0 with mode 0640; only the service account may own or read it; \
+             run `chown iron-vault: /etc/iron-vault && chmod 600 /etc/iron-vault`",
+        ),
+        (
             Problem::SharedStickyAncestor,
-            "/etc/iron-vault is a shared directory other users can write; move the state directory or config out of \
-             /etc/iron-vault rather than changing its permissions",
+            "/etc/iron-vault is a shared directory other users can write; move the state directory, config, TLS key or \
+             certificate out of /etc/iron-vault rather than changing its permissions",
         ),
     ];
     expected.into_iter().for_each(|(problem, message)| assert_eq!(at(problem), message));
