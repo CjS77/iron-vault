@@ -4,6 +4,7 @@
 //! This crate performs no I/O: every decision is a pure function of its inputs, so policy can be tested exhaustively
 //! and cannot be bypassed by an adapter.
 
+pub mod account_name;
 pub mod activation;
 pub mod authorization;
 pub mod bound_credential;
@@ -49,6 +50,7 @@ pub mod upstream;
 pub mod upstream_target;
 pub mod validated;
 
+pub use account_name::{AccountName, AccountNameError};
 pub use activation::{ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
 pub use authorization::{AuthorizedRequest, AuthzError, Refusal, authorize};
 pub use bound_credential::BoundCredential;
