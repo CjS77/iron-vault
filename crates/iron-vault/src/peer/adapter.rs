@@ -19,11 +19,11 @@ pub fn peer_identity(stream: impl AsFd) -> io::Result<PeerIdentity> {
     })
 }
 
-/// No peer-credential adapter exists for this platform yet, so every admin connection is refused.
+/// No peer-credential adapter exists for this platform yet, so every connection that needs one is refused.
 #[cfg(not(target_os = "linux"))]
 pub fn peer_identity(_stream: impl AsFd) -> io::Result<PeerIdentity> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "admin socket peer credentials are not supported on this platform",
+        "Unix socket peer credentials are not supported on this platform",
     ))
 }

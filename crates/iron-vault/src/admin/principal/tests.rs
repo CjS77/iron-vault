@@ -4,7 +4,7 @@ const SERVICE: u32 = 997;
 const OTHER: u32 = 1000;
 
 fn peer(uid: u32) -> PeerIdentity {
-    PeerIdentity { uid, gid: 50, pid: 4242 }
+    PeerIdentity::for_test(uid, 50, 4242)
 }
 
 fn accepts(profile: DeploymentProfile, service_uid: u32, uid: u32) -> Result<AdminPrincipal, NotAnAdminPrincipal> {
@@ -52,27 +52,6 @@ fn development_refuses_root_even_as_the_service_account() {
 #[test]
 fn only_the_uid_decides() {
     let principals = AdminPrincipals::new(DeploymentProfile::Protected, SERVICE);
-    let root_gid_peer = PeerIdentity {
-        uid: OTHER,
-        gid: 0,
-        pid: 1,
-    };
+    let root_gid_peer = PeerIdentity::for_test(OTHER, 0, 1);
     assert!(principals.accepts(root_gid_peer).is_err());
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn a_socket_pair_reports_this_process() {
-    let (ours, _theirs) = std::os::unix::net::UnixStream::pair().unwrap();
-    let identity = peer_identity(&ours).unwrap();
-    assert_eq!(identity.uid, rustix::process::getuid().as_raw());
-    assert_eq!(identity.gid, rustix::process::getgid().as_raw());
-    assert_eq!(identity.pid, std::process::id());
-}
-
-#[cfg(not(target_os = "linux"))]
-#[test]
-fn other_platforms_refuse_every_connection() {
-    let (ours, _theirs) = std::os::unix::net::UnixStream::pair().unwrap();
-    assert_eq!(peer_identity(&ours).unwrap_err().kind(), std::io::ErrorKind::Unsupported);
 }

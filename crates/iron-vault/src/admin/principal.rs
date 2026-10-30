@@ -5,46 +5,15 @@
 //! wrong. It is the only admin identity check, so nothing the client sends, no source port and no executable name takes
 //! part. The rule is pure: [`peer_identity`] is the only part that asks the kernel.
 
-// Windows has no Unix-socket peer credentials in std; its admin transport gets its own adapter.
-#[cfg(unix)]
-mod peer;
 #[cfg(test)]
 mod tests;
 
+pub use crate::peer::PeerIdentity;
 #[cfg(unix)]
-pub use peer::peer_identity;
+pub use crate::peer::peer_identity;
 use thiserror::Error;
 
 use crate::deployment::DeploymentProfile;
-
-/// What the kernel reported about the process at the other end of a Unix socket.
-///
-/// Its fields are private and only the platform adapter behind [`peer_identity`] builds one, so a peer identity always
-/// comes from the kernel, never from something the peer sent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PeerIdentity {
-    uid: u32,
-    gid: u32,
-    pid: u32,
-}
-
-impl PeerIdentity {
-    /// The peer's effective uid when it connected; the only field that decides admission.
-    pub const fn uid(&self) -> u32 {
-        self.uid
-    }
-
-    /// The peer's effective gid when it connected.
-    pub const fn gid(&self) -> u32 {
-        self.gid
-    }
-
-    /// The peer's process ID, for the audit log only. It is never used to look up an executable: `/proc/<pid>/exe`
-    /// cannot tell the owner from malware running as the same account (§3.4), and the pid may already be reused.
-    pub const fn pid(&self) -> u32 {
-        self.pid
-    }
-}
 
 /// A peer the admin principal check accepted.
 ///
@@ -86,10 +55,10 @@ impl AdminPrincipals {
     /// the service account in development, never root, because a development build refuses to run as root.
     pub fn accepts(&self, peer: PeerIdentity) -> Result<AdminPrincipal, NotAnAdminPrincipal> {
         match self.profile {
-            DeploymentProfile::Protected if peer.uid == 0 || peer.uid == self.service_uid => Ok(AdminPrincipal { peer }),
-            DeploymentProfile::Development if peer.uid != 0 && peer.uid == self.service_uid => Ok(AdminPrincipal { peer }),
-            DeploymentProfile::Protected => Err(NotAnAdminPrincipal::Protected { uid: peer.uid }),
-            DeploymentProfile::Development => Err(NotAnAdminPrincipal::Development { uid: peer.uid }),
+            DeploymentProfile::Protected if peer.uid() == 0 || peer.uid() == self.service_uid => Ok(AdminPrincipal { peer }),
+            DeploymentProfile::Development if peer.uid() != 0 && peer.uid() == self.service_uid => Ok(AdminPrincipal { peer }),
+            DeploymentProfile::Protected => Err(NotAnAdminPrincipal::Protected { uid: peer.uid() }),
+            DeploymentProfile::Development => Err(NotAnAdminPrincipal::Development { uid: peer.uid() }),
         }
     }
 }
