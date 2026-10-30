@@ -209,3 +209,24 @@ because it holds owner input before decoding.
 
 **Shutdown.** On SIGTERM or SIGINT the service stops accepting, gives open exchanges up to 5 seconds to finish,
 abandons any still open, and removes the socket file.
+
+## CLI client
+
+The CLI (`iron-vault`, module `cli`) runs one exchange per command over a blocking Unix stream. It connects to
+`admin.sock` in its deployment profile's runtime directory, or to the path `--admin-socket` names, such as a socket
+forwarded over SSH; the service judges whoever arrives either way.
+
+A refused or `busy` connection is answered and closed without the service reading the request, so the CLI's write
+may fail with a reset or broken pipe while the answer is already waiting. The CLI always reads for the admin response
+and reports a failed write only when no response arrives. It reads no more bytes than the decoder asks for, so a reset
+after the last frame does not hide it.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | the command succeeded |
+| `1` | the service answered with an error response |
+| `2` | usage error |
+| `3` | no admin response: no socket or nothing listening, permission denied, or the exchange failed |
+
+A `not-admin-principal` response or a permission-denied connect tells the owner that a protected install needs `sudo`.
+Diagnostics name the socket path, the error code and the service's message, never the request's arguments.
