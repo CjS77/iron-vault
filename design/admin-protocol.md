@@ -2,7 +2,8 @@
 
 The CLI and the service talk only over the admin socket (spec §3.2). This document specifies the bytes they exchange:
 the **admin protocol**. Terms are defined in the [glossary](glossary.md). The codec is `iron_vault::admin::protocol`;
-it is pure and does no I/O. Sockets, peer-credential checks and the server loop are specified elsewhere.
+it is pure and does no I/O. The [admin socket](#admin-socket) section specifies the service's transport:
+binding, the peer check and the server loop (`iron_vault::admin::socket` and `iron_vault::admin::server`).
 
 Three properties drive the design:
 
@@ -95,12 +96,13 @@ Every body except owner input is a sequence of **fields**:
 A command's arguments, when it has any, follow at tags 2 and up, defined with the command. An unknown command ID is
 an error.
 
-| Command ID | Command | Arguments |
-|---|---|---|
-| `1` | `ping` | none |
+| Command ID | Command | Arguments | Result |
+|---|---|---|---|
+| `1` | `ping` | none | the deployment profile |
 
-`ping` does nothing; the service answers it with a success response. It gives the transport something to send before
-the real commands exist.
+`ping` changes nothing; the service answers it with a success response naming its deployment profile. The response's
+frame header already carries the service's protocol version, so the result does not repeat it. `ping` lets the CLI
+check that the service is up and which profile it runs before the real commands exist.
 
 ### Prompt (kind 2)
 
@@ -121,7 +123,22 @@ buffer. The transport that reads frames off the socket clears its read buffer fo
 
 ### Admin response: success (kind 4)
 
-The body is empty: success carries no fields. A command whose result needs fields defines them with the command.
+A command without a result answers with an empty body. A command with a result answers with fields:
+
+| Tag | Field | Value |
+|---|---|---|
+| 1 | command | `u16` ID of the command this answers |
+| 2 and up | result | defined with the command |
+
+Naming the command keeps the codec context-free: a success body decodes on its own, without knowing which request it
+answers, and the CLI can check that it answers the request it sent. A body that names a command without a result, or
+an unknown command, is an error.
+
+`ping`'s result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | deployment profile | `u8`: `1` protected, `2` development |
 
 ### Admin response: error (kind 5)
 
@@ -139,6 +156,8 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `2` | `malformed-frame` | the frame broke a rule in this document |
 | `3` | `unknown-command` | the command ID is not one the service knows |
 | `4` | `unexpected-frame` | a well-formed frame arrived out of turn in the exchange |
+| `5` | `not-admin-principal` | the connecting account is not an admin principal; nothing it sent was read |
+| `6` | `busy` | the service is already serving as many admin connections as it allows; try again |
 
 ## Versions
 
@@ -157,3 +176,36 @@ Only the service sends responses, so the version rule is asymmetric:
 
 Decoding errors are typed (`FrameError`). They name protocol numbers, such as a version, frame kind, tag or command
 ID, and never contain body bytes, so no error can carry owner input into a log or a response message.
+
+## Admin socket
+
+The service serves the admin protocol on `admin.sock` in its runtime directory (spec §3.2, §3.4).
+
+**Binding.** A leftover file at the path is removed only when `lstat` shows a socket owned by the service account;
+a regular file, a symlink, or a socket another account owns stops startup with an error naming the path. The service
+creates the socket and binds it, sets the path's mode to `0600` while the socket is not yet listening, and only then
+listens. The kernel refuses a connection to a socket that is not listening, so the socket is never connectable at the
+mode it was created with. The process umask is never changed: it is process-wide and would race with other threads.
+The result is checked with `lstat`: a socket owned by the service account with mode `0600`, or startup fails.
+
+**One exchange per connection**, in this order:
+
+1. Over the connection cap (4 open exchanges), the service answers `busy` and closes.
+2. The service reads the peer identity the kernel recorded at connect and checks it against the admin principals
+   before reading a single byte. A refused peer gets one `not-admin-principal` error response and the connection
+   closes; the refusal is logged at WARN with the peer's uid and pid.
+3. It reads one admin request within a deadline of 30 seconds. A connection that sends no complete frame in time,
+   or closes first, is closed without a response. Prompts get their own, longer deadline with the commands that
+   need them.
+4. It dispatches the request to the handler registered for its command, with the admin principal and the exchange,
+   through which a handler will later send prompts. A frame that does not decode gets the error response its fault
+   maps to (`unsupported-version`, `unknown-command`, or `malformed-frame`); a well-formed frame of another kind gets
+   `unexpected-frame`.
+5. It writes the admin response and closes.
+
+The log names the accepted principal's uid and the command at INFO, and never a frame body. The buffer the service
+reads frames into is allocated once at the largest frame size, clears itself on drop, and is cleared after each frame,
+because it holds owner input before decoding.
+
+**Shutdown.** On SIGTERM or SIGINT the service stops accepting, gives open exchanges up to 5 seconds to finish,
+abandons any still open, and removes the socket file.
