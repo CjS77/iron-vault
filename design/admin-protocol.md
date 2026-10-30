@@ -249,7 +249,10 @@ Diagnostics name the socket path, the error code and the service's message, neve
 forwarded socket ends the command with exit code 3 instead of hanging it. The timeout bounds socket calls only. While
 the owner types, the CLI is reading the terminal or stdin, not the socket, so time at a prompt never counts against it;
 the service's prompt deadline bounds that wait on the other side. 60 seconds is longer than the request deadline,
-within which the service writes every prompt and response.
+within which the service writes every prompt and response once it starts writing. It does not bound the handler's own
+work after an owner input arrives: that time, until the next frame, counts against the client's 60 seconds. Commands
+whose steps after a prompt can be slow, such as scrypt, a TPM, a touch or OAuth, will need a longer client timeout or
+a progress frame.
 
 **Hardening.** Before connecting, a client command disables core dumps: `RLIMIT_CORE` 0, and `PR_SET_DUMPABLE` 0,
 which also keeps other processes of the same account from attaching with `ptrace` and reading what the owner typed. A

@@ -20,8 +20,10 @@ use super::console::{InputError, OwnerConsole, ProcessConsole};
 
 /// How long one read or write on the admin socket may wait, so a wedged service or a stalled forwarded socket ends the
 /// command instead of hanging it. It bounds only socket calls: while the owner types, the CLI is not waiting on the
-/// socket, so the time spent at a prompt never counts. It is longer than the service's request deadline, within which
-/// the service writes every frame it sends.
+/// socket, so the time spent at a prompt never counts. It is longer than the service's request deadline, which bounds
+/// each frame's write once it starts, but not the handler's own work between an owner input and its next frame: that
+/// counts here, so a command with a slow step after a prompt (scrypt, a TPM, a touch, OAuth) will need a longer timeout
+/// or a progress frame.
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// In a protected install only root and the service account are admin principals (§3.2), so the owner reaches the
