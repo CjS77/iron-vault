@@ -74,6 +74,11 @@ async fn the_upstream_receives_exactly_the_checked_method_target_and_headers() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body(response).await, b"hello");
     let received = only_request(&upstream);
+    assert_eq!(
+        received.server_name.as_deref(),
+        Some(UPSTREAM_HOST),
+        "SNI names the checked upstream"
+    );
     assert_eq!(received.request_line(), "GET /v1/rates?base=USD HTTP/1.1");
     let host = format!("{UPSTREAM_HOST}:{}", upstream.port());
     assert_eq!(

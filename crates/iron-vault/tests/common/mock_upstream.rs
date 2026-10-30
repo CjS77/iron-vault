@@ -113,6 +113,8 @@ impl Reply {
 /// One request head exactly as the test upstream received it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedRequest {
+    /// The server name the client sent in the TLS handshake (SNI), if any.
+    pub server_name: Option<String>,
     /// The request line and header lines, without the blank line that ends them.
     pub head: String,
 }
@@ -226,7 +228,8 @@ impl Server {
         let Some(head) = read_head(&mut tls).await else {
             return;
         };
-        self.requests.lock().unwrap().push(RecordedRequest { head });
+        let server_name = tls.get_ref().1.server_name().map(str::to_owned);
+        self.requests.lock().unwrap().push(RecordedRequest { server_name, head });
         match &*self.reply {
             Reply::Stall => tokio::time::sleep(Duration::from_secs(3600)).await,
             Reply::Respond { status, headers, body } => {
