@@ -117,9 +117,14 @@ fn listener() -> ListenerName {
 
 /// The listener's `TlsFiles`, taken from a parsed config section as the service would.
 fn tls_files() -> TlsFiles {
+    tls_files_at(CERTIFICATE_PATH, KEY_PATH)
+}
+
+/// The listener's `TlsFiles` naming `certificate` and `key`.
+fn tls_files_at(certificate: &str, key: &str) -> TlsFiles {
     let toml = format!(
         "schema_version = 1\n[listeners.{LISTENER}]\naddress = \"10.20.0.2:7878\"\n\
-         tls_certificate = \"{CERTIFICATE_PATH}\"\ntls_key = \"{KEY_PATH}\"\n"
+         tls_certificate = \"{certificate}\"\ntls_key = \"{key}\"\n"
     );
     let config = ParsedConfig::from_toml(toml.as_bytes()).unwrap();
     match config.listeners().values().next().unwrap().endpoint() {
@@ -134,6 +139,31 @@ fn working_listener(timeout: Duration) -> (TestCa, ListenerTls) {
     let (leaf, key) = ca.leaf();
     let tls = Disk::new(&leaf.pem(), &key.serialize_pem()).open(timeout).unwrap();
     (ca, tls)
+}
+
+/// A fresh directory directly under `/tmp`, a shared sticky directory, removed on drop.
+struct TmpDir(PathBuf);
+
+impl TmpDir {
+    fn new() -> Self {
+        let dir = PathBuf::from(format!("/tmp/iv-listener-tls-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        Self(dir)
+    }
+
+    /// Writes `contents` to a new file in the directory and returns its path.
+    fn file(&self, name: &str, contents: &str) -> String {
+        let path = self.0.join(name);
+        std::fs::write(&path, contents).unwrap();
+        path.to_str().unwrap().to_string()
+    }
+}
+
+impl Drop for TmpDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn certificate_path() -> PathBuf {
@@ -290,15 +320,28 @@ mod loading {
 
     #[test]
     fn open_reads_the_files_through_their_trusted_path_rules() {
+        let ca = TestCa::new();
+        let (leaf, key) = ca.leaf();
+        let dir = TmpDir::new();
+        let (certificate, key) = (dir.file("server.crt", &leaf.pem()), dir.file("server.key", &key.serialize_pem()));
         let refused = ListenerTls::open(
             &listener(),
-            &tls_files(),
+            &tls_files_at(&certificate, &key),
             DeploymentProfile::Protected,
-            ExpectedOwner { uid: 0 },
+            ExpectedOwner {
+                uid: rustix::process::getuid().as_raw(),
+            },
             DEFAULT_HANDSHAKE_TIMEOUT,
         )
         .unwrap_err();
-        assert!(matches!(refused, ListenerTlsError::Unreadable { .. }), "{refused:?}");
+        let ListenerTlsError::Unreadable {
+            source: AdminFileError::Unsafe(UnsafePath { path, problem }),
+            ..
+        } = refused
+        else {
+            panic!("expected an unsafe certificate path, got {refused:?}");
+        };
+        assert_eq!((path, problem), (PathBuf::from("/tmp"), Problem::SharedStickyAncestor));
     }
 
     #[test]
@@ -324,9 +367,13 @@ mod loading {
 
     #[test]
     fn debug_shows_no_key() {
-        let (_, tls) = working_listener(DEFAULT_HANDSHAKE_TIMEOUT);
+        let ca = TestCa::new();
+        let (leaf, key) = ca.leaf();
+        let key_pem = key.serialize_pem();
+        let key_body = key_pem.lines().nth(1).unwrap();
+        let tls = Disk::new(&leaf.pem(), &key_pem).open(DEFAULT_HANDSHAKE_TIMEOUT).unwrap();
         let shown = format!("{tls:?}");
-        assert!(shown.contains(LISTENER) && !shown.contains("SigningKey"), "{shown}");
+        assert!(shown.contains(LISTENER) && !shown.contains(key_body), "{shown}");
     }
 }
 
