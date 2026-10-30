@@ -1,0 +1,151 @@
+//! The upstream clients for one active policy: one per upstream trust its routes use (specification §3.7).
+//!
+//! Built once when a policy is activated, so a request never builds a client or reads a CA file. Routes with the
+//! built-in roots share one client, and routes that pin the same CA file share that file's client.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use iron_vault_policy::{ActivePolicy, RouteName};
+
+use super::client::{ClientBuildError, TransportLimits, UpstreamClient};
+use super::trust::{PinnedCaError, UpstreamTrust};
+use crate::deployment::DeploymentProfile;
+use crate::trusted_path::ExpectedOwner;
+
+/// Each available route's upstream client, keyed in name and path order so building them is deterministic.
+#[derive(Debug)]
+pub struct UpstreamClients {
+    built_in: UpstreamClient,
+    pinned: BTreeMap<PathBuf, UpstreamClient>,
+    /// Each available route's pinned CA path, `None` for the built-in roots, or why that CA's client failed.
+    routes: BTreeMap<RouteName, Result<Option<PathBuf>, PinnedClientError>>,
+}
+
+/// Why a route's pinned CA gave no client.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum PinnedClientError {
+    /// The pinned CA file could not be loaded.
+    #[error(transparent)]
+    Ca(#[from] PinnedCaError),
+    /// The client over the pinned CA could not be built.
+    #[error(transparent)]
+    Build(#[from] ClientBuildError),
+}
+
+/// Why [`UpstreamClients::for_route`] has no client for a route.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum RouteClientError {
+    /// The route is not an available route of the policy the clients were built for.
+    #[error("route {0} is not available in the active policy")]
+    NotAvailable(RouteName),
+    /// The route's pinned CA gave no client.
+    #[error("route {route} has no upstream client: {source}")]
+    PinnedCa {
+        /// The route.
+        route: RouteName,
+        /// Why its pinned CA gave no client.
+        source: PinnedClientError,
+    },
+}
+
+impl UpstreamClients {
+    /// Builds the clients for `policy`'s available routes, reading each distinct pinned CA file once through its
+    /// trusted-path rule.
+    ///
+    /// Only the built-in client failing is an error here, since no route could then be served. A pinned CA that fails
+    /// gives its routes a [`RouteClientError::PinnedCa`] and leaves every other route its client; whether that
+    /// disables only those routes or refuses the whole policy is the activation step's decision (EP-22), which
+    /// [`unusable_routes`](Self::unusable_routes) reports to.
+    pub fn new(
+        policy: &ActivePolicy,
+        profile: DeploymentProfile,
+        owner: ExpectedOwner,
+        limits: TransportLimits,
+    ) -> Result<Self, ClientBuildError> {
+        Self::build(policy, limits, |path| UpstreamTrust::pinned(path, profile, owner))
+    }
+
+    /// The client for `route`.
+    pub fn for_route(&self, route: &RouteName) -> Result<&UpstreamClient, RouteClientError> {
+        match self.routes.get(route) {
+            None => Err(RouteClientError::NotAvailable(route.clone())),
+            Some(Err(source)) => Err(RouteClientError::PinnedCa {
+                route: route.clone(),
+                source: source.clone(),
+            }),
+            Some(Ok(None)) => Ok(&self.built_in),
+            Some(Ok(Some(path))) => self.pinned.get(path).ok_or_else(|| RouteClientError::NotAvailable(route.clone())),
+        }
+    }
+
+    /// The routes whose pinned CA gave no client, in name order, with the reason.
+    pub fn unusable_routes(&self) -> impl Iterator<Item = (&RouteName, &PinnedClientError)> {
+        self.routes
+            .iter()
+            .filter_map(|(route, client)| client.as_ref().err().map(|error| (route, error)))
+    }
+
+    /// [`new`](Self::new) with the pinned-CA loader passed in, so it is testable without a trusted path on disk.
+    fn build(
+        policy: &ActivePolicy,
+        limits: TransportLimits,
+        load_pinned: impl Fn(&Path) -> Result<UpstreamTrust, PinnedCaError>,
+    ) -> Result<Self, ClientBuildError> {
+        let built_in = UpstreamClient::new(&UpstreamTrust::BuiltIn, limits)?;
+        let ca_files = route_ca_files(policy);
+        let loaded: BTreeMap<PathBuf, Result<UpstreamClient, PinnedClientError>> = ca_files
+            .values()
+            .flatten()
+            .copied()
+            .collect::<BTreeSet<&Path>>()
+            .into_iter()
+            .map(|path| (path.to_path_buf(), pinned_client(path, limits, &load_pinned)))
+            .collect();
+        let routes = ca_files
+            .into_iter()
+            .map(|(route, path)| (route.clone(), route_entry(path, &loaded)))
+            .collect();
+        let pinned = loaded
+            .into_iter()
+            .filter_map(|(path, client)| client.ok().map(|client| (path, client)))
+            .collect();
+        Ok(Self { built_in, pinned, routes })
+    }
+}
+
+/// Each available route's pinned CA path, `None` for the built-in roots.
+fn route_ca_files(policy: &ActivePolicy) -> BTreeMap<&RouteName, Option<&Path>> {
+    policy
+        .config()
+        .routes()
+        .iter()
+        .filter(|(name, _)| policy.is_available(name))
+        .map(|(name, route)| (name, route.ca_file().map(|ca_file| ca_file.as_path())))
+        .collect()
+}
+
+fn pinned_client(
+    path: &Path,
+    limits: TransportLimits,
+    load_pinned: impl Fn(&Path) -> Result<UpstreamTrust, PinnedCaError>,
+) -> Result<UpstreamClient, PinnedClientError> {
+    let trust = load_pinned(path)?;
+    Ok(UpstreamClient::new(&trust, limits)?)
+}
+
+/// A route's entry: its CA path, or a copy of the error its CA's client failed with. A pinned route never falls back
+/// to the built-in roots.
+fn route_entry(
+    path: Option<&Path>,
+    loaded: &BTreeMap<PathBuf, Result<UpstreamClient, PinnedClientError>>,
+) -> Result<Option<PathBuf>, PinnedClientError> {
+    path.map(|path| match loaded.get(path) {
+        Some(Err(error)) => Err(error.clone()),
+        _ => Ok(path.to_path_buf()),
+    })
+    .transpose()
+}
+
+#[cfg(test)]
+mod tests;
