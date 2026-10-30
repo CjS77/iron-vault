@@ -7,16 +7,20 @@ use std::pin::Pin;
 
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode};
-use super::server::Exchange;
+use super::server::{Exchange, ExchangeError};
 use crate::deployment::DeploymentProfile;
 
-/// The future a handler returns: the exchange's admin response.
-pub type HandlerFuture<'a> = Pin<Box<dyn Future<Output = AdminResponse> + Send + 'a>>;
+/// The future a handler returns: the exchange's admin response, or the error that cancelled its command when a prompt
+/// got no owner input.
+pub type HandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<AdminResponse, ExchangeError>> + Send + 'a>>;
 
 /// Serves one admin command.
 ///
 /// A handler only ever runs for a peer the admin principal check accepted: it receives the [`AdminPrincipal`] that
 /// proves it. It may send prompts through the exchange, and returns the response the server sends before closing.
+///
+/// A prompt that fails ends the exchange: the handler returns its [`ExchangeError`], typically with `?`, before it
+/// changes anything, and the server closes with the error response the fault calls for, or none when the CLI has gone.
 pub trait AdminHandler: Send + Sync {
     /// Answers `request` for `principal`.
     fn handle<'a>(&'a self, principal: AdminPrincipal, request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a>;
@@ -39,13 +43,18 @@ impl Handlers {
     }
 
     /// Runs the handler for `request`'s command.
-    pub(crate) async fn dispatch(&self, principal: AdminPrincipal, request: AdminRequest, exchange: &mut Exchange) -> AdminResponse {
+    pub(crate) async fn dispatch(
+        &self,
+        principal: AdminPrincipal,
+        request: AdminRequest,
+        exchange: &mut Exchange,
+    ) -> Result<AdminResponse, ExchangeError> {
         match self.0.get(&request.command()) {
             Some(handler) => handler.handle(principal, request, exchange).await,
-            None => AdminResponse::Error {
+            None => Ok(AdminResponse::Error {
                 code: ErrorCode::UnknownCommand,
                 message: format!("this service has no `{}` command", request.command().name()),
-            },
+            }),
         }
     }
 }
@@ -57,6 +66,6 @@ struct Ping {
 
 impl AdminHandler for Ping {
     fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
-        Box::pin(future::ready(AdminResponse::Ping { profile: self.profile }))
+        Box::pin(future::ready(Ok(AdminResponse::Ping { profile: self.profile })))
     }
 }

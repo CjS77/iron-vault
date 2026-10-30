@@ -17,16 +17,17 @@ use std::time::Duration;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
-use iron_vault::admin::protocol::{self, AdminCommand, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame};
-use iron_vault::admin::server::{AdminServer, Exchange, Limits};
+use iron_vault::admin::protocol::{self, AdminCommand, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, OwnerInput, Prompt};
+use iron_vault::admin::server::{AdminServer, Exchange, ExchangeError, Limits};
 use iron_vault::admin::socket::{AdminSocket, BindError};
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::trusted_path::ExpectedOwner;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
+use zeroize::Zeroizing;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
@@ -105,6 +106,7 @@ fn limits(request_deadline: Duration, max_connections: usize) -> Limits {
         request_deadline,
         max_connections,
         shutdown_grace: Duration::from_millis(200),
+        ..Limits::default()
     }
 }
 
@@ -123,18 +125,22 @@ fn raw(version: u16, kind: u8, len: u32, body: &[u8]) -> Vec<u8> {
     [&version.to_be_bytes()[..], &[kind], &len.to_be_bytes(), body].concat()
 }
 
-/// Reads one response frame. The read stops at the frame, because a peer the server closed on with unread input may
-/// see a reset after it.
+/// Reads one response frame.
 async fn read_response(stream: &mut UnixStream) -> AdminResponse {
+    match read_frame(stream).await {
+        Frame::Response(response) => response,
+        frame => panic!("expected a response, got {frame:?}"),
+    }
+}
+
+/// Reads one frame. The read stops at the frame, because a peer the server closed on with unread input may see a reset
+/// after it.
+async fn read_frame(stream: &mut UnixStream) -> Frame {
     let read = async {
         let mut bytes = Vec::new();
         loop {
             match protocol::decode(&bytes).unwrap() {
-                Decoded::Frame {
-                    frame: Frame::Response(response),
-                    ..
-                } => return response,
-                Decoded::Frame { frame, .. } => panic!("expected a response, got {frame:?}"),
+                Decoded::Frame { frame, .. } => return frame,
                 Decoded::NeedMore(n) => {
                     let mut more = vec![0; n];
                     let read = stream.read(&mut more).await.unwrap();
@@ -144,7 +150,7 @@ async fn read_response(stream: &mut UnixStream) -> AdminResponse {
             }
         }
     };
-    tokio::time::timeout(PATIENCE, read).await.expect("a response arrives")
+    tokio::time::timeout(PATIENCE, read).await.expect("a frame arrives")
 }
 
 /// Asserts the server has closed the connection: the next read sees the end of the stream.
@@ -264,7 +270,7 @@ struct Recording(Arc<AtomicBool>);
 impl AdminHandler for Recording {
     fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
         self.0.store(true, Ordering::SeqCst);
-        Box::pin(future::ready(AdminResponse::Success))
+        Box::pin(future::ready(Ok(AdminResponse::Success)))
     }
 }
 
@@ -400,4 +406,113 @@ fn a_socket_the_service_account_does_not_own_after_binding_never_listens() {
     assert!(matches!(refused, BindError::Unverified { .. }), "{refused:?}");
     let connect = std::os::unix::net::UnixStream::connect(dir.socket()).unwrap_err();
     assert_eq!(connect.kind(), io::ErrorKind::ConnectionRefused);
+}
+
+/// What a prompting handler got: the owner input's bytes, or the `Debug` form of the exchange error.
+type Answer = Result<Vec<u8>, String>;
+
+/// A ping handler that prompts for one secret value and reports what it got.
+struct Prompting(mpsc::UnboundedSender<Answer>);
+
+fn secret_prompt() -> Prompt {
+    Prompt {
+        label: "Passphrase".to_owned(),
+        secret: true,
+    }
+}
+
+impl AdminHandler for Prompting {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let answer = exchange.prompt(&secret_prompt()).await;
+            let _ = self.0.send(
+                answer
+                    .as_ref()
+                    .map(|input| input.expose_secret().to_vec())
+                    .map_err(|e| format!("{e:?}")),
+            );
+            answer.map(|_| AdminResponse::Success)
+        })
+    }
+}
+
+/// Serves one connection with the prompting handler under `prompt_deadline`; returns the CLI's end, the handler's
+/// answers and the served connection.
+fn serve_prompting(prompt_deadline: Duration) -> (UnixStream, mpsc::UnboundedReceiver<Answer>, JoinHandle<()>) {
+    let (answers, received) = mpsc::unbounded_channel();
+    let handlers = Handlers::default().with(AdminCommand::Ping, Prompting(answers));
+    let principals = AdminPrincipals::new(DeploymentProfile::Protected, me().uid);
+    let limits = Limits {
+        prompt_deadline,
+        ..Limits::default()
+    };
+    let server = AdminServer::new(principals, handlers, limits);
+    let (ours, theirs) = UnixStream::pair().unwrap();
+    let served = tokio::spawn(async move { server.serve_connection(ours).await });
+    (theirs, received, served)
+}
+
+/// Sends `ping` and reads the prompt it is answered with.
+async fn ping_until_prompted(stream: &mut UnixStream) {
+    stream.write_all(&ping()).await.unwrap();
+    match read_frame(stream).await {
+        Frame::Prompt(prompt) => assert_eq!(prompt, secret_prompt()),
+        other => panic!("expected a prompt, got {other:?}"),
+    }
+}
+
+async fn handler_answer(received: &mut mpsc::UnboundedReceiver<Answer>) -> Answer {
+    tokio::time::timeout(PATIENCE, received.recv()).await.unwrap().unwrap()
+}
+
+#[tokio::test]
+async fn a_prompt_returns_the_owner_input_to_its_handler() {
+    let (mut cli, mut received, served) = serve_prompting(PATIENCE);
+    ping_until_prompted(&mut cli).await;
+    let input = Frame::OwnerInput(OwnerInput::new(Zeroizing::new(b"typed value".to_vec())));
+    cli.write_all(&frame_bytes(&input)).await.unwrap();
+    assert_eq!(read_response(&mut cli).await, AdminResponse::Success);
+    assert_eq!(handler_answer(&mut received).await, Ok(b"typed value".to_vec()));
+    assert_closed(&mut cli).await;
+    served.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_prompt_past_its_deadline_cancels_the_command_without_a_response() {
+    let (mut cli, mut received, served) = serve_prompting(Duration::from_millis(100));
+    ping_until_prompted(&mut cli).await;
+    let answer = handler_answer(&mut received).await;
+    assert_eq!(answer, Err(format!("{:?}", ExchangeError::TimedOut)));
+    assert_closed(&mut cli).await;
+    served.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cli_that_closes_at_a_prompt_cancels_the_command() {
+    let (mut cli, mut received, served) = serve_prompting(PATIENCE);
+    ping_until_prompted(&mut cli).await;
+    cli.shutdown().await.unwrap();
+    assert_eq!(handler_answer(&mut received).await, Err(format!("{:?}", ExchangeError::Closed)));
+    assert_closed(&mut cli).await;
+    served.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_prompt_answered_out_of_turn_is_answered_unexpected_frame() {
+    let (mut cli, mut received, served) = serve_prompting(PATIENCE);
+    ping_until_prompted(&mut cli).await;
+    cli.write_all(&ping()).await.unwrap();
+    assert_eq!(error_code(&read_response(&mut cli).await), ErrorCode::UnexpectedFrame);
+    assert_eq!(handler_answer(&mut received).await, Err(format!("{:?}", ExchangeError::Unexpected)));
+    served.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_prompt_answered_with_a_malformed_frame_is_answered_malformed_frame() {
+    let (mut cli, mut received, served) = serve_prompting(PATIENCE);
+    ping_until_prompted(&mut cli).await;
+    cli.write_all(&raw(1, 9, 0, &[])).await.unwrap();
+    assert_eq!(error_code(&read_response(&mut cli).await), ErrorCode::MalformedFrame);
+    assert!(handler_answer(&mut received).await.unwrap_err().starts_with("Malformed"));
+    served.await.unwrap();
 }

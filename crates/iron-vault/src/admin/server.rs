@@ -18,7 +18,9 @@ use zeroize::{Zeroize, Zeroizing};
 
 use super::dispatch::Handlers;
 use super::principal::{AdminPrincipal, AdminPrincipals, peer_identity};
-use super::protocol::{self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN};
+use super::protocol::{
+    self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, OwnerInput, Prompt,
+};
 use super::socket::AdminSocket;
 
 /// How long the server pauses after a failed accept, such as running out of file descriptors, so the loop cannot spin.
@@ -27,8 +29,11 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 /// The server's bounds on time and connections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
-    /// How long a peer has to send its whole admin request, and the server to write its response.
+    /// How long a peer has to send its whole admin request, and the server to write a prompt or its response.
     pub request_deadline: Duration,
+    /// How long the server waits for owner input after sending a prompt: a person is typing, so it is longer than the
+    /// request deadline.
+    pub prompt_deadline: Duration,
     /// How many exchanges may be open at once; one more is answered `busy`.
     pub max_connections: usize,
     /// How long open exchanges may run on after shutdown begins before they are abandoned.
@@ -39,6 +44,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             request_deadline: Duration::from_secs(30),
+            prompt_deadline: Duration::from_secs(5 * 60),
             max_connections: 4,
             shutdown_grace: Duration::from_secs(5),
         }
@@ -92,12 +98,21 @@ impl AdminServer {
         let Some(principal) = self.check_peer(&mut stream).await else {
             return;
         };
-        let mut exchange = Exchange::new(stream, self.limits.request_deadline);
+        let mut exchange = Exchange::new(stream, self.limits);
         let response = match exchange.read_request().await {
             Ok(request) => {
                 let (uid, command) = (principal.peer().uid(), request.command().name());
                 tracing::info!("admin command `{command}` from uid {uid}");
-                self.handlers.dispatch(principal, request, &mut exchange).await
+                match self.handlers.dispatch(principal, request, &mut exchange).await {
+                    Ok(response) => response,
+                    Err(cancelled) => {
+                        tracing::warn!("admin command `{command}` cancelled: {cancelled}");
+                        let Some(response) = cancelled.response() else {
+                            return;
+                        };
+                        response
+                    }
+                }
             }
             Err(NoRequest::Unanswered) => return,
             Err(NoRequest::Answer(response)) => response,
@@ -112,7 +127,7 @@ impl AdminServer {
             tracing::warn!("admin connection refused: {} exchanges are already open", open.len());
             let busy = error(ErrorCode::Busy, "the service is busy with other admin commands; try again");
             // A short frame fits the empty send buffer of a new connection, so it is written without waiting.
-            let _ = stream.try_write(&encoded(&busy));
+            let _ = stream.try_write(&encoded(&Frame::Response(busy)));
             return;
         }
         let server = self.clone();
@@ -158,7 +173,41 @@ pub struct Exchange {
     /// Frames are read here before decoding, so it holds owner input: it is sized once for the largest frame, never
     /// reallocated, cleared after each frame and on drop.
     buffer: Zeroizing<Vec<u8>>,
-    deadline: Duration,
+    limits: Limits,
+}
+
+/// Why a prompt got no owner input. The exchange is over: the handler returns the error, which cancels its command
+/// before it changes anything. The messages never hold frame bodies, so none can carry owner input.
+#[derive(Debug, thiserror::Error)]
+pub enum ExchangeError {
+    /// The CLI closed the connection instead of answering.
+    #[error("the CLI closed the connection before sending owner input")]
+    Closed,
+    /// No owner input arrived within the prompt deadline, or the prompt could not be written within the request
+    /// deadline.
+    #[error("no owner input arrived before the deadline")]
+    TimedOut,
+    /// The connection failed.
+    #[error("the admin connection failed: {0}")]
+    Io(io::Error),
+    /// The CLI answered with a frame that does not decode.
+    #[error("the CLI answered a prompt with a malformed frame: {0}")]
+    Malformed(FrameError),
+    /// The CLI answered with a well-formed frame other than owner input.
+    #[error("the CLI answered a prompt with a frame other than owner input")]
+    Unexpected,
+}
+
+impl ExchangeError {
+    /// The error response a cancelled exchange ends with, or `None` when the CLI has gone or stopped answering and the
+    /// connection is closed without one, as when no admin request arrives.
+    fn response(&self) -> Option<AdminResponse> {
+        match self {
+            Self::Closed | Self::TimedOut | Self::Io(_) => None,
+            Self::Malformed(e) => Some(error(ErrorCode::for_frame_error(*e), &e.to_string())),
+            Self::Unexpected => Some(error(ErrorCode::UnexpectedFrame, "a prompt must be answered with owner input")),
+        }
+    }
 }
 
 /// Why no admin request was read.
@@ -177,17 +226,36 @@ enum ReadError {
 }
 
 impl Exchange {
-    fn new(stream: UnixStream, deadline: Duration) -> Self {
+    fn new(stream: UnixStream, limits: Limits) -> Self {
         Self {
             stream,
             buffer: Zeroizing::new(vec![0; HEADER_LEN + MAX_BODY_LEN]),
-            deadline,
+            limits,
+        }
+    }
+
+    /// Asks the owner for one value: sends `prompt` within the request deadline, then waits for the CLI's owner input
+    /// within the prompt deadline. On an error the handler returns it, so its command is cancelled.
+    pub async fn prompt(&mut self, prompt: &Prompt) -> Result<OwnerInput, ExchangeError> {
+        let bytes = encoded(&Frame::Prompt(prompt.clone()));
+        match tokio::time::timeout(self.limits.request_deadline, self.stream.write_all(&bytes)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(ExchangeError::Io(e)),
+            Err(_) => return Err(ExchangeError::TimedOut),
+        }
+        match tokio::time::timeout(self.limits.prompt_deadline, self.read_frame()).await {
+            Ok(Ok(Frame::OwnerInput(input))) => Ok(input),
+            Ok(Ok(_)) => Err(ExchangeError::Unexpected),
+            Ok(Err(ReadError::Closed)) => Err(ExchangeError::Closed),
+            Ok(Err(ReadError::Io(e))) => Err(ExchangeError::Io(e)),
+            Ok(Err(ReadError::Frame(e))) => Err(ExchangeError::Malformed(e)),
+            Err(_) => Err(ExchangeError::TimedOut),
         }
     }
 
     /// The exchange's first frame, which must be an admin request, read within the request deadline.
     async fn read_request(&mut self) -> Result<AdminRequest, NoRequest> {
-        let read = tokio::time::timeout(self.deadline, self.read_frame()).await;
+        let read = tokio::time::timeout(self.limits.request_deadline, self.read_frame()).await;
         let unanswered = |reason: &str| {
             tracing::warn!("admin connection closed without a response: {reason}");
             NoRequest::Unanswered
@@ -245,7 +313,7 @@ impl Exchange {
     /// Sends the exchange's admin response within the request deadline and closes; a peer that has gone is not an
     /// error.
     async fn respond(&mut self, response: &AdminResponse) {
-        let sent = tokio::time::timeout(self.deadline, write_and_close(&mut self.stream, response)).await;
+        let sent = tokio::time::timeout(self.limits.request_deadline, write_and_close(&mut self.stream, response)).await;
         if !matches!(sent, Ok(Ok(()))) {
             tracing::warn!("the admin response could not be delivered");
         }
@@ -254,18 +322,18 @@ impl Exchange {
 
 /// Writes `response` and shuts down the writing half, so the peer reads the end of the exchange.
 async fn write_and_close(stream: &mut UnixStream, response: &AdminResponse) -> io::Result<()> {
-    stream.write_all(&encoded(response)).await?;
+    stream.write_all(&encoded(&Frame::Response(response.clone()))).await?;
     stream.shutdown().await
 }
 
-/// A response frame's bytes. Responses never hold owner input, so an ordinary buffer is enough.
-fn encoded(response: &AdminResponse) -> Vec<u8> {
+/// The bytes of a frame the service sends: a prompt or a response. Neither holds owner input, so an ordinary buffer is
+/// enough.
+fn encoded(frame: &Frame) -> Vec<u8> {
     let mut out = Vec::new();
-    let frame = Frame::Response(response.clone());
-    if let Err(e) = protocol::encode(&frame, &mut out) {
-        // Only an oversized message fails, and the service writes every message itself, so this is a bug; the peer
-        // then sees the connection close.
-        tracing::error!("cannot encode an admin response: {e}");
+    if let Err(e) = protocol::encode(frame, &mut out) {
+        // Only an oversized label or message fails, and the service writes every one itself, so this is a bug; the
+        // peer then sees the connection close.
+        tracing::error!("cannot encode an admin frame: {e}");
         out.clear();
     }
     out
