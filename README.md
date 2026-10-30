@@ -35,6 +35,7 @@ release checks.
 |---|---|
 | AI agents and MCP servers | Use FX, Brave, Venice, and other configured APIs without real keys in agent-readable configuration or environment variables |
 | Naomi back-office applications | Share installation credentials through isolated routes; add Google consent and token refresh in the OAuth phase |
+| Shared Linux workstations | Give each OS account only its own routes, recognised from the connecting account, with no keys in any home directory ([guide](design/multiuser-linux.md)) |
 | Server and Compose applications | Keep credentials in one protected service while application containers receive only the proxy access they need |
 | Developer CLI tools | Avoid provider credentials in application files where a tested base-URL integration supports the complete workflow |
 

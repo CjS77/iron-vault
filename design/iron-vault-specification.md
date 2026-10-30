@@ -242,8 +242,17 @@ unix_socket = "/run/iron-vault/proxy.sock"
 
 [callers.fx-mcp]
 listener = "local"
-token_hash = "blake2b:..."
+auth = "peer"
+user = "fx-mcp"
 routes = ["fx"]
+
+[listeners.loopback]
+address = "127.0.0.1:7878"
+
+[callers.brave-cli]
+listener = "loopback"
+token_hash = "blake2b:..."
+routes = ["brave"]
 
 [callers.naomi-backoffice]
 listener = "naomi-backoffice"
@@ -302,19 +311,29 @@ The service supports these caller identities:
 
 | Mechanism               | Identity rule                                                                                        | Limits                                                                     |
 |-------------------------|------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------|
-| Unix socket permissions | A dedicated socket's ACL grants a caller or caller group its configured routes                       | Every process that can open that socket can use those routes               |
+| Unix peer account       | The OS account the kernel reports for the process connecting to a Unix socket is the caller's `user` | Every process running as that account can use its routes; Unix sockets only |
 | Caller token            | A high-entropy token in `Proxy-Authorization` or a configured dedicated header matches a stored hash | Same-user malware can steal caller tokens; tokens never grant admin access |
 | Isolated Docker network | A dedicated listener address identifies one caller network                                           | Requires one internal network per caller and no shared caller bridge       |
 
-Loopback alone does not authenticate a caller. A shared Unix socket requires caller tokens when callers have
-different grants. OS peer credentials can enforce account boundaries but must not prove trust in a named executable.
+Loopback alone does not authenticate a caller: TCP reports no account, so a TCP caller presents a caller token or
+arrives on its own isolated-network listener. On a Unix socket, callers that need different grants run as different
+OS accounts (`auth = "peer"`) or present caller tokens. Peer callers share a socket only with other peer callers, one
+caller per account; the service resolves each `user` to a uid when policy activates and refuses root and the service
+account. Any local account may connect to a request socket; its peer account or token decides what it may use.
+OS peer credentials can enforce account boundaries but must not prove trust in a named executable.
 Inspecting `/proc/<pid>/exe` or launching the real application does not distinguish the owner from malware.
+[`multiuser-linux.md`](multiuser-linux.md) walks through a workstation that separates work by OS account.
+
+**Attack mitigated (R-1).** Peer-account identity bounds malware in one account to that account's granted routes,
+without a token file for it to steal.
 
 Token enrollment returns a fresh caller token once to the authorized owner. Revocation and rotation take effect
 through an approved policy update; they never require a provider-credential rotation. The service compares token
 hashes in constant time.
 
 Default to a request socket under `/run/iron-vault`, plus a separate admin socket in that service-owned directory.
+Other accounts may search that directory but never write to it, so they can reach a request socket but cannot
+replace one.
 For TCP on Linux, use systemd socket activation so the manager holds the port from boot and across restarts.
 Supported TCP packages on other platforms must provide equivalent listener ownership or an authenticated transport
 that prevents a replacement local process from impersonating Iron Vault. Privileged port numbers alone do not solve
