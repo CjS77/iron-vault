@@ -11,11 +11,17 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+zeroize.workspace = true
 
 # Process hardening and the getuid call for trusted-path checks are Linux-only for now; other platforms report them as
 # unsupported without these syscalls.
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde.workspace = true
+static_assertions.workspace = true
 
 [lints]
 workspace = true

@@ -967,10 +967,14 @@ name = "iron-vault"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "proptest",
  "rustix",
+ "serde",
+ "static_assertions",
  "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
