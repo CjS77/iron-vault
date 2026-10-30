@@ -25,6 +25,9 @@ Keep domain logic pure, with I/O at the edges.
 - No `unwrap`, `expect` or `panic!` outside tests. A malformed file is an error, never a crash.
 - Public items have doc comments. Comments say *why*, not what.
 - Output must be deterministic: no `HashMap` iteration order in anything that is written to disk or the wire.
+- Try hard to depend on a single version of `rand`, `rand_core` and `getrandom`. A second copy doubles the random-source
+  code to audit, and its traits don't interoperate. Before adding or bumping one, check `Cargo.lock`; when an upstream
+  crate forces a second version, say which crate in the ticket.
 - Run `cargo fmt` before committing.
 
 ## Specification
