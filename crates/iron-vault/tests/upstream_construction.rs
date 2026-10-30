@@ -34,6 +34,10 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
 
 /// Each `(file, line)` in the workspace's crates that contains a refused form. A file other than the constructor's
 /// may not name a reqwest client type at all, so a `Default::default()` typed as one is caught where it is named.
+///
+/// The search reads one line at a time, so it is a backstop, not a proof. It misses `let c: Client = Default::default()`
+/// in the constructor's own file, which names `Client` freely, and in any file that imports the type over several
+/// lines (`use reqwest::{` on one line, `Client,` on the next).
 fn violations() -> Vec<String> {
     let root = workspace_root();
     let this_file = Path::new(file!()).file_name().unwrap();

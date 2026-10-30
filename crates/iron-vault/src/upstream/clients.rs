@@ -75,6 +75,8 @@ impl UpstreamClients {
                 source: source.clone(),
             }),
             Some(Ok(None)) => Ok(&self.built_in),
+            // Unreachable by construction: `build` records `Ok(Some(path))` only for a path whose client it loaded into
+            // `pinned`; a path that failed to load is recorded as the error above.
             Some(Ok(Some(path))) => self.pinned.get(path).ok_or_else(|| RouteClientError::NotAvailable(route.clone())),
         }
     }

@@ -63,6 +63,8 @@ impl TransportError {
 /// tokio-rustls wraps a handshake failure in an `io::Error`, and hyper wraps that in another; an `io::Error`'s
 /// `source` skips the error it wraps, so the walk steps into each one instead.
 fn has_tls_source(error: &(dyn Error + 'static)) -> bool {
+    // `is` matches only this crate's rustls, which is reqwest's while the workspace has one rustls version. If they
+    // split, a TLS failure is classified as `Connect`, which is still a 502.
     std::iter::successors(Some(error), |&error| next_cause(error)).any(|error| error.is::<rustls::Error>())
 }
 
