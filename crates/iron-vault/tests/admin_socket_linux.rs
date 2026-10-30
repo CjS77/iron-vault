@@ -14,11 +14,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
+use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
 use iron_vault::admin::protocol::{self, AdminCommand, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame};
 use iron_vault::admin::server::{AdminServer, Exchange, Limits};
-use iron_vault::admin::socket::{ADMIN_SOCKET_NAME, AdminSocket, BindError};
+use iron_vault::admin::socket::{AdminSocket, BindError};
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::trusted_path::ExpectedOwner;

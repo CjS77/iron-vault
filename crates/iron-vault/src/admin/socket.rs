@@ -14,10 +14,8 @@ use std::path::{Path, PathBuf};
 
 use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
 
+use super::ADMIN_SOCKET_NAME;
 use crate::trusted_path::ExpectedOwner;
-
-/// The admin socket's file name in the runtime directory.
-pub const ADMIN_SOCKET_NAME: &str = "admin.sock";
 
 /// The only mode the admin socket may have: the service account alone can connect.
 const SOCKET_MODE: u32 = 0o600;

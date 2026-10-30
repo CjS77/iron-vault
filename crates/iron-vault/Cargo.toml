@@ -13,6 +13,7 @@ dev-mode = []
 
 [dependencies]
 anyhow.workspace = true
+clap.workspace = true
 iron-vault-policy = { path = "../iron-vault-policy" }
 # OsRng for caller-token generation; only the binary reaches for the operating system's random source.
 rand_core = { workspace = true, features = ["getrandom"] }

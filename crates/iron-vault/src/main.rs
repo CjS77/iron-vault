@@ -1,21 +1,28 @@
 //! Iron Vault service binary: HTTP and admin interfaces, CLI client, config loading, deployment adapters, response
 //! scrubbing, logging, and notifications.
 
+mod cli;
 mod hardening;
 #[cfg(target_os = "linux")]
 mod serve;
 
-use iron_vault::deployment::{self, Accounts, DeploymentProfile, ProfileEnv};
+use std::process::ExitCode;
+
+use cli::{Cli, Command};
+use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::trusted_path_report::ServicePaths;
 
-fn main() -> anyhow::Result<()> {
-    // The CLI's argument parser replaces this check of the first argument.
-    let command = std::env::args_os().nth(1);
-    // `--version` needs no install path, so a release check can run it on a machine with no installation.
-    if command.as_ref().is_some_and(|arg| arg == "--version") {
-        println!("{}", deployment::version_line());
-        return Ok(());
+fn main() -> anyhow::Result<ExitCode> {
+    let cli = Cli::parse_args();
+    match cli.command {
+        Command::Serve => run_service().map(|()| ExitCode::SUCCESS),
+        // Client commands log nothing: what they report is their output.
+        Command::Ping => Ok(cli::ping(cli.admin_socket.as_deref())),
     }
+}
+
+/// `iron-vault serve`: logging and process hardening first, then the deployment's paths, then the service.
+fn run_service() -> anyhow::Result<()> {
     init_logging()?;
     // Hardening comes before anything that could hold a secret, so no secret is ever dumpable or swappable.
     let report = hardening::harden_process();
@@ -25,10 +32,7 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "dev-mode")]
     warn_development(&env, &accounts)?;
     let paths = ServicePaths::for_profile(DeploymentProfile::current(), &env)?;
-    match command {
-        Some(arg) if arg == "serve" => serve(&paths),
-        _ => Ok(()),
-    }
+    serve(&paths)
 }
 
 #[cfg(target_os = "linux")]
@@ -47,7 +51,7 @@ fn serve(_paths: &ServicePaths) -> anyhow::Result<()> {
 fn warn_development(env: &ProfileEnv, accounts: &Accounts) -> anyhow::Result<()> {
     let uid = env.invoking_uid;
     let user = accounts.name(uid).map_or_else(|| format!("uid {uid}"), str::to_string);
-    tracing::warn!("{}", deployment::development_banner(uid, &user)?);
+    tracing::warn!("{}", iron_vault::deployment::development_banner(uid, &user)?);
     Ok(())
 }
 

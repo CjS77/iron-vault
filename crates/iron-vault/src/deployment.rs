@@ -235,15 +235,15 @@ pub fn development_banner(uid: u32, user: &str) -> Result<String, ProfileError> 
     }
 }
 
-/// `iron-vault <version> (features: <list>)`, naming every enabled build feature so a release check can refuse a
-/// build that has development mode.
-pub fn version_line() -> String {
+/// `<version> (features: <list>)`, naming every enabled build feature so a release check can refuse a build that has
+/// development mode. `--version` prints it after the binary's name.
+pub fn version() -> String {
     let features = if BUILD_FEATURES.is_empty() {
         "none".to_string()
     } else {
         BUILD_FEATURES.join(", ")
     };
-    format!("{} {} (features: {features})", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+    format!("{} (features: {features})", env!("CARGO_PKG_VERSION"))
 }
 
 /// The enabled Cargo features of this build.

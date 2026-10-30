@@ -178,10 +178,7 @@ fn passwd_lines_give_names_and_uids() {
 }
 
 #[test]
-fn the_version_line_names_the_enabled_features() {
+fn the_version_names_the_enabled_features() {
     let features = if cfg!(feature = "dev-mode") { "dev-mode" } else { "none" };
-    assert_eq!(
-        version_line(),
-        format!("iron-vault {} (features: {features})", env!("CARGO_PKG_VERSION"))
-    );
+    assert_eq!(version(), format!("{} (features: {features})", env!("CARGO_PKG_VERSION")));
 }

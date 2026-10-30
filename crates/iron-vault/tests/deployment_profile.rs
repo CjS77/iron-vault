@@ -29,7 +29,7 @@ fn a_protected_build_without_the_service_account_names_it() {
     if passwd.lines().any(|line| line.starts_with("iron-vault:")) {
         return;
     }
-    let output = run(&[]);
+    let output = run(&["serve"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "stderr: {stderr}");
     assert!(stderr.contains("the service account `iron-vault` does not exist"), "{stderr}");
@@ -38,16 +38,17 @@ fn a_protected_build_without_the_service_account_names_it() {
 #[cfg(feature = "dev-mode")]
 #[test]
 fn a_development_build_warns_that_it_gives_no_isolation() {
+    // The runtime directory's parent does not exist, so the service stops right after the warning instead of serving.
     let output = Command::new(env!("CARGO_BIN_EXE_iron-vault"))
-        .env("XDG_RUNTIME_DIR", "/run/user/test")
+        .arg("serve")
+        .env("XDG_RUNTIME_DIR", "/nonexistent/iron-vault-test")
         .output()
         .expect("spawn iron-vault");
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr: {stderr}");
     if rustix::process::getuid().is_root() {
-        assert!(!output.status.success(), "stderr: {stderr}");
         assert!(stderr.contains("must never be installed as the system service"), "{stderr}");
     } else {
-        assert!(output.status.success(), "stderr: {stderr}");
         assert!(
             stderr.contains("development mode: no isolation from malware running as "),
             "{stderr}"

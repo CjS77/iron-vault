@@ -122,6 +122,18 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
+    /// The code's name in `design/admin-protocol.md`, for the CLI to show beside its number.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::UnsupportedVersion => "unsupported-version",
+            Self::MalformedFrame => "malformed-frame",
+            Self::UnknownCommand => "unknown-command",
+            Self::UnexpectedFrame => "unexpected-frame",
+            Self::NotAdminPrincipal => "not-admin-principal",
+            Self::Busy => "busy",
+        }
+    }
+
     /// The code a frame the service could not decode is answered with.
     pub const fn for_frame_error(error: FrameError) -> Self {
         match error {
