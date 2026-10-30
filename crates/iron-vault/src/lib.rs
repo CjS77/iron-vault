@@ -4,6 +4,9 @@ pub mod admin;
 pub mod admin_file;
 pub mod caller_token;
 pub mod deployment;
+// The TLS acceptor runs on tokio and tokio-rustls, which this crate depends on only on Linux.
+#[cfg(target_os = "linux")]
+pub mod listener_tls;
 pub mod logging;
 pub mod path_metadata;
 pub mod peer;

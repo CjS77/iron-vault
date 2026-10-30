@@ -35,6 +35,8 @@ rustix.workspace = true
 # The admin server: a current-thread runtime, Unix sockets, request deadlines and the stop signals. The CLI uses the
 # signal support too, to restore the terminal on SIGINT.
 tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "signal", "macros"] }
+# TLS listeners: the acceptor that terminates TLS on an accepted TCP connection.
+tokio-rustls.workspace = true
 
 [dev-dependencies]
 # Checks that no `log` backend is installed, so dependency `log` records are discarded.

@@ -14,6 +14,8 @@ use crate::admin::protocol::{Decoded, Frame, OwnerInput};
 assert_not_impl_any!(OwnerInput: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Frame: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Decoded: Clone, Copy, Display, Serialize, Deserialize<'static>);
+#[cfg(target_os = "linux")]
+assert_not_impl_any!(crate::listener_tls::ListenerTls: Clone, Copy, Display, Serialize, Deserialize<'static>);
 
 /// Distinctive enough that a match in `Debug` output can only be the secret leaking.
 pub(crate) const MARKER: &str = "MARKER-secret-5d1c9e";

@@ -1,5 +1,5 @@
-//! The service's one TLS stack: the crypto provider and the PEM rules for administrator-installed certificate files,
-//! used by the outbound client's trust ([`crate::upstream::trust`]).
+//! The service's one TLS stack: the crypto provider and the PEM rules shared by the outbound client's trust
+//! ([`crate::upstream::trust`]) and the TLS listeners (`listener_tls`).
 
 use std::sync::Arc;
 
