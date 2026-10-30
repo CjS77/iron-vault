@@ -41,7 +41,8 @@ pub struct ListenerConfig {
 /// Where a listener accepts connections.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Endpoint {
-    /// A Unix domain socket; file permissions decide who can connect.
+    /// A Unix domain socket. Any local account may connect; the caller's peer account (`auth = "peer"`) or caller
+    /// token decides what it may use (spec §3.4).
     UnixSocket(ConfigPath),
     /// A TCP address, with TLS required unless the address is loopback.
     Tcp {
