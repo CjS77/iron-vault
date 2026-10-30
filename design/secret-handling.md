@@ -43,7 +43,7 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | `ApprovalPassphrase` | store | the approver's passphrase for `approver.age` | `SecretString` | `secret_types_tests` |
 | `SoftwareSignerKey` | store | the software signer's Ed25519 private key | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop (`zeroize` feature); built once into its box, so moves copy only the pointer | `software_signer/tests` |
 | `SoftwareSigner` | store | the opened Ed25519 private key and its `PinnedApprover` | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop; `SoftwareSigner::new` takes the box from `SoftwareSignerKey` by pointer | `software_signer/tests` |
-| `OwnerInput` | iron-vault | the bytes the owner typed in answer to a prompt | `Zeroizing<Vec<u8>>`, a private field: the type has no `Clone` and a `Debug` that shows no byte | `secret_types_tests` |
+| `OwnerInput` | iron-vault | the bytes the owner typed in answer to a prompt, in the CLI from the owner console until sent, and in the service from decoding until its handler is done | `Zeroizing<Vec<u8>>`, a private field: the type has no `Clone` and a `Debug` that shows no byte | `secret_types_tests` |
 | `Frame` | iron-vault | an `OwnerInput` when it is an owner-input frame | its `OwnerInput` | `secret_types_tests` |
 | `Decoded` | iron-vault | a decoded `Frame` | its `Frame` | `secret_types_tests` |
 
@@ -77,6 +77,8 @@ operation.
 | Record payload | `record::encode` | `Zeroizing<Vec<u8>>` | Sized before filling. |
 | Basic `user:pass` | `basic_kind::join` | `Zeroizing<String>` | Sized before filling. |
 | Filled query and its encoding | `outgoing_request::filled_query`, `final_check` | `Zeroizing<String>` | Sized before filling; the `url::Url` it is copied into is a residual copy. |
+| CLI line buffer | `read_line` in `cli/console.rs` | `Zeroizing<Vec<u8>>` | Holds the line the owner types, filled one byte at a time and sized once for the longest line, so it never reallocates. With its line ending stripped it becomes the `OwnerInput`. Stdin is read through a duplicate of its descriptor, bypassing `io::Stdin`'s buffer, which is never cleared. |
+| CLI owner-input frame | `send_input` in `cli/client.rs` | `Zeroizing<Vec<u8>>` | The encoded frame, sized for it before encoding; dropped with the `OwnerInput` as soon as it is written to the socket. |
 | Admin read buffer | `Exchange` in `admin/server.rs` | `Zeroizing<Vec<u8>>` | Holds each frame, owner input included, before decoding. Sized once for the largest frame and never reallocated; the bytes of each frame are cleared once it is decoded. It is a field of the per-connection `Exchange`, which has no `Debug` or `Clone` and is dropped when the connection closes. |
 
 `blake2`'s `zeroize` feature, enabled in the workspace, clears the `Blake2b512` hasher that derives a key and the
@@ -97,4 +99,6 @@ dropped. `secret_types_tests` checks this by scanning the store's sources, and a
 | `age`'s `StreamReader` (age 0.12.1, `primitives/stream.rs:410`) keeps the decrypted chunk in a `SecretSlice<u8>`, which is wiped. The AEAD's output `Vec` is 16 bytes larger than the plaintext (room for the tag), so converting it into a `SecretSlice` shrinks it, and the allocator may move it, leaving a freed, unwiped copy of the chunk. | `age` owns the conversion. Locked memory (K-45) keeps it out of swap; the plaintext `sealed::open` returns is in a `Zeroizing` buffer. |
 | `age`'s scrypt recipient and identity take a `SecretString` copy of the passphrase (`Passphrase::for_age`), and derive the wrapping key inside `age`. | The copy is a `SecretString` and is wiped; `age`'s internal key derivation is not audited here. Locked memory (K-45) keeps it out of swap. |
 | `base64`'s `encode_string`, used by both `CallerToken` constructors, encodes through a 1 KiB stack buffer it does not wipe, leaving a copy of the token's body in a dead stack frame. | The next calls on that thread overwrite it; locked memory (K-45) keeps it out of swap. The 32 raw bytes are held in `Zeroizing` buffers. |
+| The kernel holds owner input outside the CLI: in the terminal's line buffer while the owner types, in the pipe buffer when it is piped, and in the admin socket's buffers in transit. | Outside any process's control. Each buffer is drained by the read that empties it. |
+| The CLI's memory is not locked, so an owner-input buffer could be swapped out while it lives. | It lives only from the read until the frame is written. The CLI disables core dumps and same-account `ptrace` before connecting; encrypted swap, which the install guide requires, covers the rest. |
 | The `url::Url` inside `UpstreamTarget` and `CheckedRequest` holds a filled query slot and is never wiped, because `Url` owns its buffer. | The transport epic wipes or avoids it when the request is sent (`TODO(transport epic)` in `outgoing_request.rs`). |

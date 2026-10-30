@@ -194,14 +194,27 @@ The result is checked with `lstat`: a socket owned by the service account with m
 2. The service reads the peer identity the kernel recorded at connect and checks it against the admin principals
    before reading a single byte. A refused peer gets one `not-admin-principal` error response and the connection
    closes; the refusal is logged at WARN with the peer's uid and pid.
-3. It reads one admin request within a deadline of 30 seconds. A connection that sends no complete frame in time,
-   or closes first, is closed without a response. Prompts get their own, longer deadline with the commands that
-   need them.
+3. It reads one admin request within the request deadline of 30 seconds. A connection that sends no complete frame
+   in time, or closes first, is closed without a response.
 4. It dispatches the request to the handler registered for its command, with the admin principal and the exchange,
-   through which a handler will later send prompts. A frame that does not decode gets the error response its fault
-   maps to (`unsupported-version`, `unknown-command`, or `malformed-frame`); a well-formed frame of another kind gets
+   through which the handler sends prompts. A frame that does not decode gets the error response its fault maps to
+   (`unsupported-version`, `unknown-command`, or `malformed-frame`); a well-formed frame of another kind gets
    `unexpected-frame`.
 5. It writes the admin response and closes.
+
+**Prompts.** A handler asks the owner for a value with `Exchange::prompt`. The service writes the prompt within the
+request deadline, then waits for the owner input under the prompt deadline of 5 minutes, longer than the request
+deadline because a person is typing. A prompt that gets no owner input cancels the command: `prompt` returns an
+`ExchangeError`, and the handler returns it, typically with `?`, before it changes anything. How the exchange ends
+depends on why:
+
+| What happened at the prompt | The exchange ends |
+|---|---|
+| The CLI closed, the connection failed, or the prompt deadline passed | closed without a response, as when no admin request arrives |
+| The answer does not decode | with the error response its fault maps to, as for a request |
+| The answer is a well-formed frame other than owner input | with `unexpected-frame` |
+
+Each cancellation is logged at WARN with the command's name and the reason, which never holds a frame body.
 
 The log names the accepted principal's uid and the command at INFO, and never a frame body. The buffer the service
 reads frames into is allocated once at the largest frame size, clears itself on drop, and is cleared after each frame,
@@ -226,7 +239,53 @@ after the last frame does not hide it.
 | `0` | the command succeeded |
 | `1` | the service answered with an error response |
 | `2` | usage error |
-| `3` | no admin response: no socket or nothing listening, permission denied, or the exchange failed |
+| `3` | no admin response: no socket or nothing listening, permission denied, the exchange failed or timed out, or a prompt got no value |
+| `130` | SIGINT while the CLI had the terminal open for prompting |
 
 A `not-admin-principal` response or a permission-denied connect tells the owner that a protected install needs `sudo`.
 Diagnostics name the socket path, the error code and the service's message, never the request's arguments.
+
+**Timeout.** Each read and write on the admin socket gives up after 60 seconds, so a wedged service or a stalled
+forwarded socket ends the command with exit code 3 instead of hanging it. The timeout bounds socket calls only. While
+the owner types, the CLI is reading the terminal or stdin, not the socket, so time at a prompt never counts against it;
+the service's prompt deadline bounds that wait on the other side. 60 seconds is longer than the request deadline,
+within which the service writes every prompt and response.
+
+**Hardening.** Before connecting, a client command disables core dumps: `RLIMIT_CORE` 0, and `PR_SET_DUMPABLE` 0,
+which also keeps other processes of the same account from attaching with `ptrace` and reading what the owner typed. A
+failure is reported on stderr as a warning and the command goes on, because it would hold only what the owner is about
+to type. The CLI does not lock memory: it holds a value only until the value is sent, and `mlockall` with future
+mappings would make its allocations fail under a finite `RLIMIT_MEMLOCK`. The client is Linux-only for now, like the
+service.
+
+### Owner input
+
+The CLI collects each prompted value from its **owner console**, opened at the first prompt, so a command the service
+never prompts for touches neither the terminal nor stdin. No argument ever carries a value (§3.2, §3.13).
+
+- **Stdin is a terminal:** the CLI opens `/dev/tty`, writes the label to it followed by `: `, and reads one line from
+  it. For a secret prompt it turns echo off for the read with `tcsetattr`: `ECHO` off and `ECHONL` on, so the owner's
+  Enter still moves to a new line, applied with `TCSAFLUSH` so anything typed before the prompt is discarded. A guard
+  restores the saved settings on every path out of the read, errors included. The CLI also registers a SIGINT handler
+  before the first read: on SIGINT a watcher thread restores the saved settings if echo is off and exits with status
+  130. If echo cannot be turned off, nothing is read and the command is cancelled.
+- **Stdin is not a terminal:** each value is the next line of stdin, so `pass show fx | sudo iron-vault add fx` works
+  from an interactive shell as well as from a script, and several prompts read consecutive lines. The label goes to
+  stderr, and only when stderr is a terminal; it never goes to stdout.
+
+The label is the service's text with control characters removed, so a label cannot move the cursor or reprogram the
+terminal. Every line follows the same rules:
+
+- Exactly one trailing `\n` is stripped, and one `\r` before it. A last line without `\n` is still a value; an empty
+  line is an empty value.
+- Input that ends before any byte is no value. A value longer than the 64 KiB body bound is refused without being sent
+  or shown; the CLI stops reading at the first byte past the bound.
+- A refused or missing value cancels the command: the CLI reports why on stderr, naming no typed byte, and closes the
+  connection, so the service cancels too. The CLI exits with code 3.
+
+**Where the CLI's copies live.** Bytes are read one at a time, straight into a buffer that clears itself on drop
+(`Zeroizing<Vec<u8>>`), sized once for the longest line so it never reallocates and leaves a copy behind; reading one
+byte at a time also means nothing after the line is consumed. Stdin is read through a duplicate of its descriptor,
+never through `io::Stdin`, whose buffer is never cleared. The buffer becomes the `OwnerInput`, which is encoded into a
+second clearing buffer sized for the frame. Both are dropped, and so cleared, as soon as the frame is written. The
+value never passes through `String`, formatting, `Debug` or a log call, and no CLI error names a byte of it.
