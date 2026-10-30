@@ -59,7 +59,7 @@ log = "0.4.34"
 tokio = { version = "1.54.1", default-features = false }
 # Async TLS over tokio sockets with the same rustls build as the outbound client. Default features are off: they would
 # select aws-lc-rs, whose build needs cmake, and turn on rustls's `logging`; ring and tls12 match the rustls entry.
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 toml = "1"
 # A logging facade only: the binary installs the subscriber. Default features would pull in the attribute macros.
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
