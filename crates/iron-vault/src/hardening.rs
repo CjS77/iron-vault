@@ -97,6 +97,22 @@ pub fn harden_process() -> HardeningReport {
     }
 }
 
+/// Disables core dumps and nothing else: the CLI's hardening, before it collects owner input.
+///
+/// On Linux, clearing the dumpable flag also stops processes of the same account attaching with `ptrace` and reading
+/// what the owner typed. The CLI does not lock memory: it holds a value only until it is sent, and `mlockall` with
+/// future mappings would make its allocations fail under a finite `RLIMIT_MEMLOCK`.
+#[cfg(target_os = "linux")]
+pub fn disable_core_dumps() -> CoreDumps {
+    linux::disable_core_dumps()
+}
+
+/// Reports that this platform has no hardening adapter yet.
+#[cfg(not(target_os = "linux"))]
+pub fn disable_core_dumps() -> CoreDumps {
+    CoreDumps::Failed("unsupported platform".to_owned())
+}
+
 /// Logs the report: each missing protection at ERROR with its fix, and full success at INFO.
 pub fn log_report(report: &HardeningReport) {
     if let CoreDumps::Failed(reason) = &report.core_dumps {

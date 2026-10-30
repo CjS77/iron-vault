@@ -6,17 +6,20 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iron_vault::admin::ADMIN_SOCKET_NAME;
-use iron_vault::admin::dispatch::Handlers;
-use iron_vault::admin::principal::AdminPrincipals;
-use iron_vault::admin::server::{AdminServer, Limits};
+use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
+use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
+use iron_vault::admin::protocol::{AdminCommand, AdminRequest, AdminResponse, Prompt};
+use iron_vault::admin::server::{AdminServer, Exchange, Limits};
 use iron_vault::admin::socket::AdminSocket;
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
@@ -49,9 +52,25 @@ impl Drop for TempDir {
     }
 }
 
-/// Runs the binary off the runtime thread, so the in-process server keeps serving while the CLI waits for it.
+/// Runs the binary off the runtime thread, so the in-process server keeps serving while the CLI waits for it. Its stdin
+/// is empty, so it never touches a terminal.
 async fn run_cli(args: Vec<String>) -> Output {
-    let run = tokio::task::spawn_blocking(move || Command::new(env!("CARGO_BIN_EXE_iron-vault")).args(args).output());
+    run_cli_with_input(args, Vec::new()).await
+}
+
+/// Runs the binary with `input` piped to its stdin.
+async fn run_cli_with_input(args: Vec<String>, input: Vec<u8>) -> Output {
+    let run = tokio::task::spawn_blocking(move || {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_iron-vault"))
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        // A CLI that stops reading early closes the pipe, so a failed write is not the test's failure.
+        let _ = child.stdin.take().map(|mut stdin| stdin.write_all(&input));
+        child.wait_with_output()
+    });
     tokio::time::timeout(Duration::from_secs(10), run)
         .await
         .expect("the CLI finishes")
@@ -66,10 +85,16 @@ fn ping_args(socket: &Path) -> Vec<String> {
 /// Serves `ping` on `dir`'s admin socket to the admin principals of a protected install run by `service_uid`, runs
 /// `iron-vault ping` against it, then stops the server.
 async fn ping_server_as(dir: &TempDir, service_uid: u32) -> Output {
+    serve_and_run(dir, service_uid, Handlers::standard(DeploymentProfile::Protected), Vec::new()).await
+}
+
+/// Serves `handlers` on `dir`'s admin socket, runs `iron-vault ping` against it with `input` on stdin, then stops the
+/// server.
+async fn serve_and_run(dir: &TempDir, service_uid: u32, handlers: Handlers, input: Vec<u8>) -> Output {
     let me = invoking_user().unwrap();
     let socket = AdminSocket::bind(&dir.0, me).unwrap();
     let principals = AdminPrincipals::new(DeploymentProfile::Protected, service_uid);
-    let server = AdminServer::new(principals, Handlers::standard(DeploymentProfile::Protected), Limits::default());
+    let server = AdminServer::new(principals, handlers, Limits::default());
     let (stop, stopped) = oneshot::channel::<()>();
     let served = tokio::spawn(async move {
         server
@@ -78,7 +103,7 @@ async fn ping_server_as(dir: &TempDir, service_uid: u32) -> Output {
             })
             .await
     });
-    let output = run_cli(ping_args(&dir.socket())).await;
+    let output = run_cli_with_input(ping_args(&dir.socket()), input).await;
     let _ = stop.send(());
     served.await.unwrap().unwrap();
     output
@@ -146,4 +171,59 @@ async fn a_socket_this_account_may_not_open_gives_the_sudo_hint() {
     assert_eq!(output.status.code(), Some(3), "stderr: {stderr}");
     assert!(stderr.contains("permission denied"), "{stderr}");
     assert!(stderr.contains("run the command with sudo"), "{stderr}");
+}
+
+/// A test-only `ping` handler that prompts for a secret and a plain value, records them, and answers as `ping` does.
+struct PromptingPing(Arc<Mutex<Vec<Vec<u8>>>>);
+
+impl AdminHandler for PromptingPing {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            for (label, secret) in [("Secret", true), ("Plain", false)] {
+                let prompt = Prompt {
+                    label: label.to_owned(),
+                    secret,
+                };
+                let input = exchange.prompt(&prompt).await?;
+                self.0.lock().unwrap().push(input.expose_secret().to_vec());
+            }
+            Ok(AdminResponse::Ping {
+                profile: DeploymentProfile::Protected,
+            })
+        })
+    }
+}
+
+async fn prompted_ping(input: &[u8]) -> (Output, Vec<Vec<u8>>) {
+    let dir = TempDir::new();
+    let values = Arc::default();
+    let handlers = Handlers::default().with(AdminCommand::Ping, PromptingPing(Arc::clone(&values)));
+    let output = serve_and_run(&dir, invoking_user().unwrap().uid, handlers, input.to_vec()).await;
+    let values = std::mem::take(&mut *values.lock().unwrap());
+    (output, values)
+}
+
+const MARKER: &str = "MARKER-secret-5d1c9e";
+
+#[tokio::test]
+async fn piped_lines_answer_the_services_prompts() {
+    let (output, values) = prompted_ping(format!("{MARKER}\r\nplain\n").as_bytes()).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(values, [MARKER.as_bytes().to_vec(), b"plain".to_vec()]);
+    assert_eq!(stdout, "the service is running: protected profile, admin protocol version 1\n");
+    assert_eq!(stderr, "", "labels go to stderr only when it is a terminal");
+}
+
+#[tokio::test]
+async fn piped_input_that_ends_early_cancels_the_command() {
+    let (output, values) = prompted_ping(MARKER.as_bytes()).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(3), "stderr: {stderr}");
+    assert_eq!(values, [MARKER.as_bytes().to_vec()]);
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        "iron-vault: the command was cancelled: the input ended before a value was given\n"
+    );
 }

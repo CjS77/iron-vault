@@ -4,14 +4,25 @@
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Context;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
-use iron_vault::admin::protocol::{self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, PROTOCOL_VERSION};
+use iron_vault::admin::protocol::{
+    self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, OwnerInput, PROTOCOL_VERSION,
+};
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::trusted_path_report::ServicePaths;
+use zeroize::Zeroizing;
 
 use super::Exit;
+use super::console::{InputError, OwnerConsole, ProcessConsole};
+
+/// How long one read or write on the admin socket may wait, so a wedged service or a stalled forwarded socket ends the
+/// command instead of hanging it. It bounds only socket calls: while the owner types, the CLI is not waiting on the
+/// socket, so the time spent at a prompt never counts. It is longer than the service's request deadline, within which
+/// the service writes every frame it sends.
+const SOCKET_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// In a protected install only root and the service account are admin principals (§3.2), so the owner reaches the
 /// admin socket through `sudo`.
@@ -52,12 +63,24 @@ pub enum ClientError {
     /// The service sent a frame that does not decode.
     #[error("the service sent a malformed frame: {0}")]
     Malformed(FrameError),
-    /// The service asked the owner for input, which this CLI cannot collect.
-    #[error("the service asked for input, which this version of the CLI cannot collect")]
-    Prompted,
+    /// Nothing arrived from the service, or it took nothing, for the socket timeout.
+    #[error("the service stopped answering: nothing moved on the admin socket for {} seconds", SOCKET_TIMEOUT.as_secs())]
+    TimedOut,
+    /// The owner input for a prompt was not collected, so the command was cancelled.
+    #[error("the command was cancelled: {0}")]
+    Input(InputError),
     /// The service sent a frame only the CLI sends, or a result for another command.
     #[error("the service sent an answer that does not fit the request")]
     Unexpected,
+}
+
+impl From<io::Error> for ClientError {
+    fn from(error: io::Error) -> Self {
+        match error.kind() {
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => Self::TimedOut,
+            _ => Self::Io(error),
+        }
+    }
 }
 
 impl From<FrameError> for ClientError {
@@ -75,7 +98,7 @@ pub fn ping(socket: Option<&Path>) -> Exit {
         Ok(path) => path,
         Err(e) => return fail(Exit::Unreachable, &format!("{e:#}")),
     };
-    match exchange(&path, AdminRequest::Ping) {
+    match exchange(&path, AdminRequest::Ping, &mut ProcessConsole::default()) {
         Ok(AdminResponse::Ping { profile }) => {
             println!(
                 "the service is running: {} profile, admin protocol version {PROTOCOL_VERSION}",
@@ -89,15 +112,31 @@ pub fn ping(socket: Option<&Path>) -> Exit {
     }
 }
 
-/// Sends `request` to the admin socket at `path` and returns the service's admin response.
-pub fn exchange(path: &Path, request: AdminRequest) -> Result<AdminResponse, ClientError> {
+/// Sends `request` to the admin socket at `path`, answers the service's prompts from `console`, and returns the
+/// service's admin response.
+pub fn exchange(path: &Path, request: AdminRequest, console: &mut impl OwnerConsole) -> Result<AdminResponse, ClientError> {
     let mut stream = connect(path)?;
-    let sent = send(&mut stream, request);
-    // A refusing or busy service writes its answer and closes without reading, so the write may fail with a reset or
-    // broken pipe while the answer waits to be read. The write error is reported only when no answer arrives.
-    match (read_response(&mut stream), sent) {
-        (Err(ClientError::Closed | ClientError::Io(_)), Err(e)) => Err(ClientError::Io(e)),
-        (received, _) => received,
+    stream.set_read_timeout(Some(SOCKET_TIMEOUT))?;
+    stream.set_write_timeout(Some(SOCKET_TIMEOUT))?;
+    converse(&mut stream, request, console)
+}
+
+/// The exchange on a connected stream: the request, one owner input for each prompt, then the admin response.
+fn converse(stream: &mut UnixStream, request: AdminRequest, console: &mut impl OwnerConsole) -> Result<AdminResponse, ClientError> {
+    let mut sent = send_request(stream, request);
+    loop {
+        // A refusing or busy service writes its answer and closes without reading, and a service whose prompt deadline
+        // passed closes while the owner types, so a write may fail with a reset or broken pipe while an answer waits to
+        // be read. The write error is reported only when nothing arrives.
+        let frame = match (read_frame(stream), sent) {
+            (Err(ClientError::Closed | ClientError::Io(_)), Err(e)) => return Err(e.into()),
+            (received, _) => received?,
+        };
+        sent = match frame {
+            Frame::Response(response) => return Ok(response),
+            Frame::Prompt(prompt) => send_input(stream, console.collect(&prompt).map_err(ClientError::Input)?),
+            Frame::Request(_) | Frame::OwnerInput(_) => return Err(ClientError::Unexpected),
+        };
     }
 }
 
@@ -123,23 +162,23 @@ fn connect(path: &Path) -> Result<UnixStream, ClientError> {
     })
 }
 
-fn send(stream: &mut UnixStream, request: AdminRequest) -> io::Result<()> {
+fn send_request(stream: &mut UnixStream, request: AdminRequest) -> io::Result<()> {
     let mut bytes = Vec::new();
     protocol::encode(&Frame::Request(request), &mut bytes).map_err(io::Error::other)?;
     stream.write_all(&bytes)
 }
 
-/// The exchange's admin response, the only frame the service may send while the CLI collects no owner input.
-fn read_response(stream: &mut UnixStream) -> Result<AdminResponse, ClientError> {
-    match read_frame(stream)? {
-        Frame::Response(response) => Ok(response),
-        Frame::Prompt(_) => Err(ClientError::Prompted),
-        Frame::Request(_) | Frame::OwnerInput(_) => Err(ClientError::Unexpected),
-    }
+/// Sends `input` as one owner-input frame. The frame holds the value, so it is built in a clearing buffer sized for it
+/// up front, which never reallocates.
+fn send_input(stream: &mut UnixStream, input: OwnerInput) -> io::Result<()> {
+    let mut bytes = Zeroizing::new(Vec::with_capacity(HEADER_LEN + input.expose_secret().len()));
+    protocol::encode(&Frame::OwnerInput(input), &mut bytes).map_err(io::Error::other)?;
+    stream.write_all(&bytes)
 }
 
 /// Reads one frame, asking the socket for no more bytes than the decoder needs: a service that closed on unsent
-/// input may reset the connection after its last frame.
+/// input may reset the connection after its last frame. Frames from the service never hold owner input, so an ordinary
+/// buffer is enough.
 fn read_frame(stream: &mut impl Read) -> Result<Frame, ClientError> {
     let mut bytes = Vec::new();
     loop {
@@ -148,7 +187,7 @@ fn read_frame(stream: &mut impl Read) -> Result<Frame, ClientError> {
             Decoded::NeedMore(needed) => needed,
         };
         let limit = u64::try_from(needed).unwrap_or(u64::MAX);
-        let read = stream.take(limit).read_to_end(&mut bytes).map_err(ClientError::Io)?;
+        let read = stream.take(limit).read_to_end(&mut bytes)?;
         if read < needed {
             return Err(ClientError::Closed);
         }
@@ -181,3 +220,6 @@ fn fail(exit: Exit, message: &str) -> Exit {
     eprintln!("iron-vault: {message}");
     exit
 }
+
+#[cfg(test)]
+mod tests;

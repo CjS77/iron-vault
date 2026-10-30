@@ -6,10 +6,14 @@
 //!
 //! **No argument ever takes a secret value.** Arguments end up in shell history, process listings and diagnostics,
 //! where a prompted value must never appear (§3.2). A command that needs a secret has the service prompt for it over
-//! the admin protocol, and the CLI reads it from the terminal. Diagnostics never echo a request's arguments either.
+//! the admin protocol, and the CLI reads it from the terminal or stdin. Diagnostics never echo a request's arguments
+//! either.
 
-#[cfg(unix)]
+// The client's terminal handling uses rustix and tokio, which this crate depends on only on Linux.
+#[cfg(target_os = "linux")]
 mod client;
+#[cfg(target_os = "linux")]
+mod console;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -29,7 +33,8 @@ Exit codes:
   0  success
   1  the service answered with an error
   2  usage error
-  3  no answer from the service: it is not running, this account may not connect, or the exchange failed";
+  3  no answer from the service: it is not running, this account may not connect, the exchange failed, or a prompt
+     got no value";
 
 /// The exit statuses listed in [`EXIT_CODES`]. Usage errors exit through clap, with its status 2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,13 +105,13 @@ impl Cli {
 }
 
 /// `iron-vault ping`: sends `ping` to the admin socket at `socket`, or this installation's, and shows the answer.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub fn ping(socket: Option<&Path>) -> ExitCode {
     client::ping(socket).into()
 }
 
-/// The client needs Unix sockets.
-#[cfg(not(unix))]
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
 pub fn ping(_socket: Option<&Path>) -> ExitCode {
     eprintln!("iron-vault: client commands are not supported on this platform yet");
     Exit::Unreachable.into()

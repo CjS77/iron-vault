@@ -17,8 +17,16 @@ fn main() -> anyhow::Result<ExitCode> {
     match cli.command {
         Command::Serve => run_service().map(|()| ExitCode::SUCCESS),
         // Client commands log nothing: what they report is their output.
-        Command::Ping => Ok(cli::ping(cli.admin_socket.as_deref())),
+        Command::Ping => Ok(run_client(|| cli::ping(cli.admin_socket.as_deref()))),
     }
+}
+
+/// Runs a client command after disabling core dumps, because the CLI may hold what the owner types for a prompt.
+fn run_client(command: impl FnOnce() -> ExitCode) -> ExitCode {
+    if let hardening::CoreDumps::Failed(reason) = hardening::disable_core_dumps() {
+        eprintln!("iron-vault: warning: core dumps are not disabled ({reason}); a crash could write typed values to disk");
+    }
+    command()
 }
 
 /// `iron-vault serve`: logging and process hardening first, then the deployment's paths, then the service.
