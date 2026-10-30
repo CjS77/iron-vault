@@ -77,6 +77,7 @@ operation.
 | Record payload | `record::encode` | `Zeroizing<Vec<u8>>` | Sized before filling. |
 | Basic `user:pass` | `basic_kind::join` | `Zeroizing<String>` | Sized before filling. |
 | Filled query and its encoding | `outgoing_request::filled_query`, `final_check` | `Zeroizing<String>` | Sized before filling; the `url::Url` it is copied into is a residual copy. |
+| Admin read buffer | `Exchange` in `admin/server.rs` | `Zeroizing<Vec<u8>>` | Holds each frame, owner input included, before decoding. Sized once for the largest frame and never reallocated; the bytes of each frame are cleared once it is decoded. It is a field of the per-connection `Exchange`, which has no `Debug` or `Clone` and is dropped when the connection closes. |
 
 `blake2`'s `zeroize` feature, enabled in the workspace, clears the `Blake2b512` hasher that derives a key and the
 `Blake2bMac` state keyed with it when each is dropped. Without it, the key would survive in the dropped MAC's state.

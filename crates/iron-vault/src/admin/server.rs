@@ -11,7 +11,7 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::task::JoinSet;
 use zeroize::{Zeroize, Zeroizing};
@@ -88,8 +88,8 @@ impl AdminServer {
     }
 
     /// Serves one connection: the peer check, then one request, its handler and the response.
-    pub async fn serve_connection(&self, stream: UnixStream) {
-        let Some(principal) = self.check_peer(&stream).await else {
+    pub async fn serve_connection(&self, mut stream: UnixStream) {
+        let Some(principal) = self.check_peer(&mut stream).await else {
             return;
         };
         let mut exchange = Exchange::new(stream, self.limits.request_deadline);
@@ -120,8 +120,8 @@ impl AdminServer {
     }
 
     /// Accepts the peer when the kernel reports an admin principal; otherwise answers `not-admin-principal`.
-    async fn check_peer(&self, stream: &UnixStream) -> Option<AdminPrincipal> {
-        let peer = match peer_identity(stream) {
+    async fn check_peer(&self, stream: &mut UnixStream) -> Option<AdminPrincipal> {
+        let peer = match peer_identity(&*stream) {
             Ok(peer) => peer,
             Err(e) => {
                 tracing::warn!("admin connection closed: cannot read its peer credentials: {e}");
@@ -244,8 +244,8 @@ impl Exchange {
 
     /// Sends the exchange's admin response within the request deadline and closes; a peer that has gone is not an
     /// error.
-    async fn respond(&self, response: &AdminResponse) {
-        let sent = tokio::time::timeout(self.deadline, write_and_close(&self.stream, response)).await;
+    async fn respond(&mut self, response: &AdminResponse) {
+        let sent = tokio::time::timeout(self.deadline, write_and_close(&mut self.stream, response)).await;
         if !matches!(sent, Ok(Ok(()))) {
             tracing::warn!("the admin response could not be delivered");
         }
@@ -253,18 +253,9 @@ impl Exchange {
 }
 
 /// Writes `response` and shuts down the writing half, so the peer reads the end of the exchange.
-async fn write_and_close(stream: &UnixStream, response: &AdminResponse) -> io::Result<()> {
-    let bytes = encoded(response);
-    let mut written = 0;
-    while let Some(rest) = bytes.get(written..).filter(|rest| !rest.is_empty()) {
-        stream.writable().await?;
-        match stream.try_write(rest) {
-            Ok(n) => written += n,
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
-            Err(e) => return Err(e),
-        }
-    }
-    rustix::net::shutdown(stream, rustix::net::Shutdown::Write).map_err(io::Error::from)
+async fn write_and_close(stream: &mut UnixStream, response: &AdminResponse) -> io::Result<()> {
+    stream.write_all(&encoded(response)).await?;
+    stream.shutdown().await
 }
 
 /// A response frame's bytes. Responses never hold owner input, so an ordinary buffer is enough.
