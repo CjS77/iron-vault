@@ -100,11 +100,45 @@ fn other_origins_pass_through() {
         "http://api.svc.example/v1/a",
         "https://other.example/v1/a",
         "https://api.svc.example.evil/v1/a",
-        "//other.example/v1/a",
-        "http:foo",
+        "HTTP://other.example",
+        "mailto://other.example/x",
     ]
     .into_iter()
     .for_each(|location| expect(SVC, SVC_REQUEST, location, &LocationRewrite::PassThrough));
+}
+
+#[test]
+fn other_origins_without_an_absolute_url_are_refused() {
+    [
+        "//other.example/v1/a",
+        "//api.svc.example:8443/v1/a",
+        "http:foo",
+        "http:/other/x",
+        "http:other.example/x",
+    ]
+    .into_iter()
+    .for_each(|location| {
+        expect(
+            SVC,
+            SVC_REQUEST,
+            location,
+            &LocationRewrite::Refused(LocationRefusal::RelativeCrossOrigin),
+        )
+    });
+}
+
+#[test]
+fn backslashes_are_refused_anywhere() {
+    [
+        "\\other.example/x",
+        "/\\other.example/x",
+        "https://other.example\\@api.svc.example/",
+        "/v1/a\\b",
+        "/\\api.svc.example/v1/a",
+        "/v1/a?q=\\",
+    ]
+    .into_iter()
+    .for_each(|location| expect(SVC, SVC_REQUEST, location, &LocationRewrite::Refused(LocationRefusal::Malformed)));
 }
 
 #[test]
@@ -130,8 +164,6 @@ fn ambiguous_paths_inside_the_base_are_refused() {
         "/v1/%2E%2E/v2",
         "/v1/.%2e/x",
         "/v1/a%5Cb",
-        "/v1/a\\b",
-        "/\\api.svc.example/v1/a",
         "/v1/a//b",
         "/v1/..;x",
         "/v1/a%00",
@@ -195,6 +227,7 @@ fn refusals_hold_no_input_bytes() {
         LocationRefusal::UserInfo,
         LocationRefusal::OutOfBase,
         LocationRefusal::AmbiguousPath,
+        LocationRefusal::RelativeCrossOrigin,
     ]
     .into_iter()
     .flat_map(|refusal| {
@@ -243,6 +276,7 @@ const PIECES: &[&str] = &[
     "https:",
     "http:",
     "https://",
+    "http://",
     "api.fx.example",
     "api.svc.example",
     "API.FX.EXAMPLE.",
@@ -250,9 +284,14 @@ const PIECES: &[&str] = &[
     "other.example",
 ];
 
+/// Schemes for values written as `scheme://...`, the only shape that may pass through.
+const SCHEMES: &[&str] = &["https:", "http:", "HTTPS:", "ftp:", "x-y.z+1:"];
+
 fn location_bytes() -> impl Strategy<Value = Vec<u8>> {
+    let pieces = || proptest::collection::vec(proptest::sample::select(PIECES), 0..12).prop_map(|pieces| pieces.concat());
     prop_oneof![
-        proptest::collection::vec(proptest::sample::select(PIECES), 0..12).prop_map(|pieces| pieces.concat().into_bytes()),
+        pieces().prop_map(String::into_bytes),
+        (proptest::sample::select(SCHEMES), pieces()).prop_map(|(scheme, rest)| format!("{scheme}//{rest}").into_bytes()),
         proptest::collection::vec(any::<u8>(), 0..48),
     ]
 }
@@ -274,6 +313,9 @@ fn starts_on_prefix_boundary(value: &str, prefix: &str) -> bool {
 }
 
 proptest! {
+    // Most arbitrary values are refused, so more cases are needed to reach enough rewrites and pass-throughs.
+    #![proptest_config(ProptestConfig::with_cases(1024))]
+
     #[test]
     fn rewritten_values_hold_no_secret_and_start_with_the_prefix(
         location in location_bytes(),
@@ -284,6 +326,20 @@ proptest! {
         if let Some(value) = rewritten_text(&outcome) {
             prop_assert!(!value.contains(SECRET), "{value}");
             prop_assert!(starts_on_prefix_boundary(&value, route.prefix().as_str()), "{value}");
+        }
+    }
+
+    #[test]
+    fn passed_through_values_mean_the_same_against_any_base(
+        location in location_bytes(),
+        (route_text, request) in request_url(),
+    ) {
+        let request = url(&request);
+        if rewrite_location(&route(route_text), &request, &location) == LocationRewrite::PassThrough {
+            let text = std::str::from_utf8(&location).unwrap();
+            let absolute = Url::parse(text).unwrap();
+            prop_assert_eq!(&request.join(text).unwrap(), &absolute);
+            prop_assert_eq!(&url("http://127.0.0.1:8080/fx/a/b").join(text).unwrap(), &absolute);
         }
     }
 }

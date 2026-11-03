@@ -98,10 +98,18 @@ impl fmt::Debug for UpstreamTarget {
     }
 }
 
-/// `/`, the segments joined by `/`, and the trailing slash when the request had one.
+/// The authorized upstream path, for `Url::set_path`.
 fn authorized_path(request: &AuthorizedRequest) -> String {
-    let trailing = if request.has_trailing_slash() { "/" } else { "" };
-    format!("/{}{trailing}", request.upstream_segments().join("/"))
+    segments_path(request.upstream_segments(), request.has_trailing_slash())
+}
+
+/// `/`, the percent-encoded segments joined by `/`, and the trailing slash when there is one.
+///
+/// Crate-visible so that every path this crate builds through `Url::set_path` is read back by [`has_path`] the same way.
+pub(crate) fn segments_path<S: AsRef<str>>(segments: &[S], trailing_slash: bool) -> String {
+    let trailing = if trailing_slash { "/" } else { "" };
+    let joined = segments.iter().map(AsRef::as_ref).collect::<Vec<_>>().join("/");
+    format!("/{joined}{trailing}")
 }
 
 fn check_origin(url: &Url, upstream: &UpstreamUrl) -> Result<(), UpstreamTargetError> {
@@ -117,12 +125,16 @@ fn check_path(url: &Url, request: &AuthorizedRequest) -> Result<(), UpstreamTarg
     has_authorized_path(url, request).then_some(()).ok_or(UpstreamTargetError::Path)
 }
 
-/// Whether `url` reports exactly the authorized segments, then an empty one for a trailing slash; the root path is
-/// one empty segment.
+/// Whether `url` reports exactly the authorized upstream path.
 pub(crate) fn has_authorized_path(url: &Url, request: &AuthorizedRequest) -> bool {
-    let segments = request.upstream_segments().iter().map(String::as_str);
-    let empty = (request.upstream_segments().is_empty() || request.has_trailing_slash()).then_some("");
-    url.path_segments().is_some_and(|actual| actual.eq(segments.chain(empty)))
+    has_path(url, request.upstream_segments(), request.has_trailing_slash())
+}
+
+/// Whether `url` reports exactly `segments`, then an empty one for a trailing slash; the root path is one empty segment.
+pub(crate) fn has_path<S: AsRef<str>>(url: &Url, segments: &[S], trailing_slash: bool) -> bool {
+    let expected = segments.iter().map(AsRef::as_ref);
+    let empty = (segments.is_empty() || trailing_slash).then_some("");
+    url.path_segments().is_some_and(|actual| actual.eq(expected.chain(empty)))
 }
 
 fn check_query(url: &Url, request: &AuthorizedRequest) -> Result<(), UpstreamTargetError> {

@@ -7,8 +7,11 @@
 //!   because the service does not know which listener origin the caller used;
 //! - a same-origin destination outside the base path, an out-of-base redirect, is refused, so it cannot land in another
 //!   local route;
-//! - a destination on any other origin, `http` on the upstream's host included, passes through untouched; response
-//!   header scrubbing still applies to it.
+//! - a destination on any other origin, `http` on the upstream's host included, passes through untouched when it is
+//!   written as an absolute `scheme://authority` URL; response header scrubbing still applies to it. Written any other
+//!   way (`//host/x`, `http:/x`), it is a relative cross-origin redirect and is refused: the caller resolves those bytes
+//!   against the proxy listener's URL, possibly `http`, where they could land in another local route or fall back to
+//!   cleartext.
 //!
 //! An empty or fragment-only `Location` inherits the request's query, and a query slot's credential is in that query,
 //! so every parameter that decodes to the slot's name is removed from a rewritten value.
@@ -26,6 +29,7 @@ use crate::request_target::normalize_segment;
 use crate::route::RouteConfig;
 use crate::slot::Slot;
 use crate::upstream::UpstreamUrl;
+use crate::upstream_target::{has_path, segments_path};
 
 /// What the caller sees of an upstream `Location`.
 #[derive(Debug, PartialEq, Eq)]
@@ -33,7 +37,8 @@ pub enum LocationRewrite {
     /// A same-origin destination inside the upstream base path, as an absolute path under the route prefix (`/fx/...`)
     /// with any query slot parameter removed.
     Rewritten(HeaderValue),
-    /// A cross-origin destination: return the upstream's value byte for byte, subject to header scrubbing.
+    /// A cross-origin destination written as an absolute `scheme://authority` URL, which means the same against any
+    /// base: return the upstream's value byte for byte, subject to header scrubbing.
     PassThrough,
     /// The `Location` must not reach the caller.
     Refused(LocationRefusal),
@@ -44,7 +49,7 @@ pub enum LocationRewrite {
 /// Variants carry nothing: the `Location` and the request URL it resolves against may both hold the credential.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum LocationRefusal {
-    /// The value is not visible ASCII, does not parse as a URI reference, or did not rebuild exactly.
+    /// The value is not visible ASCII, holds a `\`, does not parse as a URI reference, or did not rebuild exactly.
     #[error("upstream Location is not a valid URI reference")]
     Malformed,
     /// A same-origin destination carries user-info.
@@ -56,6 +61,9 @@ pub enum LocationRefusal {
     /// A same-origin path breaks a request-target path rule (§3.6), or would be reinterpreted when rebuilt.
     #[error("upstream Location has an ambiguous path")]
     AmbiguousPath,
+    /// A cross-origin destination not written as an absolute `scheme://authority` URL: a relative cross-origin redirect.
+    #[error("upstream Location reaches another origin without an absolute URL")]
+    RelativeCrossOrigin,
 }
 
 /// A rewritten path below the upstream base, in [`NormalizedPath`](crate::NormalizedPath) form.
@@ -78,10 +86,10 @@ pub fn rewrite_location(route: &RouteConfig, request_url: &Url, location: &[u8])
 
 /// The rewritten value, `None` to pass the value through, or the refusal.
 fn decide(route: &RouteConfig, request_url: &Url, location: &[u8]) -> Result<Option<HeaderValue>, LocationRefusal> {
-    let text = visible_ascii(location)?;
+    let text = uri_characters(location)?;
     let resolved = request_url.join(text).map_err(|_| LocationRefusal::Malformed)?;
     if !is_same_origin(&resolved, route.upstream()) {
-        return Ok(None);
+        return require(has_scheme_and_authority(text), LocationRefusal::RelativeCrossOrigin).map(|()| None);
     }
     require(
         resolved.username().is_empty() && resolved.password().is_none(),
@@ -97,12 +105,16 @@ fn require(holds: bool, refusal: LocationRefusal) -> Result<(), LocationRefusal>
     holds.then_some(()).ok_or(refusal)
 }
 
-/// Visible ASCII only: a URI reference has no spaces, controls or raw non-ASCII bytes, and the `url` crate would strip
-/// or encode them rather than refuse them.
-fn visible_ascii(bytes: &[u8]) -> Result<&str, LocationRefusal> {
+/// Visible ASCII other than `\`: a URI reference has no spaces, controls or raw non-ASCII bytes, which the `url` crate
+/// would strip or encode rather than refuse.
+///
+/// `\` is refused anywhere in the text, not only in the path. RFC 3986 allows it nowhere, and the `url` crate reads it
+/// as `/` in the authority too, so `https://other.example\@api.svc.example/` names one host to this resolver and another
+/// to an RFC 3986 parser, whether the value is rewritten or passed through.
+fn uri_characters(bytes: &[u8]) -> Result<&str, LocationRefusal> {
     bytes
         .iter()
-        .all(u8::is_ascii_graphic)
+        .all(|byte| byte.is_ascii_graphic() && *byte != b'\\')
         .then(|| str::from_utf8(bytes).ok())
         .flatten()
         .ok_or(LocationRefusal::Malformed)
@@ -115,15 +127,14 @@ fn is_same_origin(url: &Url, upstream: &UpstreamUrl) -> bool {
         && url.port_or_known_default() == Some(upstream.port().get())
 }
 
-/// Checks the path as the upstream wrote it, because resolution turns `\` into `/` and `%2e` into a dot segment, which
-/// would erase exactly the evidence the request-target rules refuse.
+/// Checks the path as the upstream wrote it, because resolution turns `%2e` into a dot segment, which would erase
+/// exactly the evidence the request-target rules refuse; [`uri_characters`] already refused `\`.
 ///
 /// Literal `.` and `..` segments are allowed here: they are ordinary relative-reference syntax, which RFC 3986 §5.2.4
 /// resolves one way for every client, and the resolved path is checked again in full.
 fn check_raw_path(text: &str) -> Result<(), LocationRefusal> {
     let path = raw_path(text);
-    let plain = !text.contains('\\') && path.chars().all(|c| is_path_char(c) || c == '/');
-    require(plain, LocationRefusal::AmbiguousPath)?;
+    require(path.chars().all(|c| is_path_char(c) || c == '/'), LocationRefusal::AmbiguousPath)?;
     path.split('/')
         .filter(|segment| !matches!(*segment, "" | "." | ".."))
         .try_for_each(|segment| normalize_segment(segment).map(drop))
@@ -141,6 +152,12 @@ fn raw_path(text: &str) -> &str {
         Some(authority) => authority.find('/').and_then(|start| authority.get(start..)).unwrap_or_default(),
         None => after_scheme,
     }
+}
+
+/// `scheme://`: an absolute URL with an authority, which resolves to the same URL against every base.
+fn has_scheme_and_authority(text: &str) -> bool {
+    text.split_once(':')
+        .is_some_and(|(scheme, rest)| is_scheme(scheme) && rest.starts_with("//"))
 }
 
 /// RFC 3986 `scheme`: a letter, then letters, digits, `+`, `-` or `.`.
@@ -203,14 +220,11 @@ fn rewritten(
         .chain(&remaining.segments)
         .map(String::as_str)
         .collect();
-    let trailing = if remaining.trailing_slash { "/" } else { "" };
     let mut url = route.upstream().as_url().clone();
-    url.set_path(&format!("/{}{trailing}", segments.join("/")));
+    url.set_path(&segments_path(&segments, remaining.trailing_slash));
     url.set_query(query);
     url.set_fragment(fragment);
-    let expected = segments.iter().copied().chain(remaining.trailing_slash.then_some(""));
-    let same_path = url.path_segments().is_some_and(|actual| actual.eq(expected));
-    require(same_path, LocationRefusal::AmbiguousPath)?;
+    require(has_path(&url, &segments, remaining.trailing_slash), LocationRefusal::AmbiguousPath)?;
     require(url.query() == query && url.fragment() == fragment, LocationRefusal::Malformed)?;
     HeaderValue::try_from(url[Position::BeforePath..].as_bytes()).map_err(|_| LocationRefusal::Malformed)
 }
