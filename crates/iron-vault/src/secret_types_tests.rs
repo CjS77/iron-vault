@@ -10,6 +10,7 @@ use static_assertions::{assert_impl_all, assert_not_impl_any};
 use zeroize::Zeroizing;
 
 use crate::admin::protocol::{Decoded, Frame, OwnerInput};
+use crate::pipeline::{Prepared, RequestHead};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder};
 
 assert_not_impl_any!(OwnerInput: Clone, Copy, Display, Serialize, Deserialize<'static>);
@@ -17,6 +18,8 @@ assert_not_impl_any!(Frame: Clone, Copy, Display, Serialize, Deserialize<'static
 assert_not_impl_any!(Decoded: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(ServingSnapshot: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_impl_all!(ServingSnapshot: Send, Sync);
+assert_not_impl_any!(RequestHead: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(Prepared: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(SnapshotHolder: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(crate::scrub::Scrubber<'static>: Clone, Copy, Display, Serialize, Deserialize<'static>);
 #[cfg(target_os = "linux")]

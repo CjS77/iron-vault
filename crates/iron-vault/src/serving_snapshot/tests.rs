@@ -55,10 +55,10 @@ impl AccountDirectory for NoAccounts {
 }
 
 /// A scratch state directory, removed on drop.
-struct Scratch(PathBuf);
+pub(crate) struct Scratch(pub(crate) PathBuf);
 
 impl Scratch {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!(
             "iv-snapshot-{}-{}",

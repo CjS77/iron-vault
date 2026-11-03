@@ -49,6 +49,8 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | `Scrubber` | iron-vault | a borrow of a request's `ScrubPatterns`, and the bytes held back between chunks, which may be a secret prefix | `Zeroizing<Vec<u8>>` for the held bytes, sized once for the longest pattern so it never reallocates; the patterns are borrowed, never copied | `secret_types_tests` |
 | `ServingSnapshot` | iron-vault | the `Vault`, so every healthy `CredentialRecord` | its `Vault`; shared through an `Arc`, so the vault is cleared when the last request holding the snapshot ends | `secret_types_tests`, `serving_snapshot/tests` |
 | `SnapshotHolder` | iron-vault | the current `ServingSnapshot` | the snapshot, once no request holds it | `secret_types_tests`, `serving_snapshot/tests` |
+| `RequestHead` | iron-vault | the caller's `HeaderValue`s, which may hold a caller token | each `HeaderValue`; its target text, whose query may hold caller secrets, is not cleared | `secret_types_tests`, `pipeline/tests` (its `Debug` shows the method and header names only) |
+| `Prepared` | iron-vault | the `CheckedRequest` and the request's `ScrubPatterns` | its fields | `secret_types_tests`, `pipeline/tests` |
 | `ListenerTls` | iron-vault | a TLS listener's signing key, inside its rustls `ServerConfig` | not cleared: see residual copies | `listener_tls/tests` (its `Debug` shows only the listener name and handshake timeout) |
 
 `ScrubPatterns` stores each pattern in a private `ScrubPattern` newtype, which has no `Clone`, `Display` or `Debug`.

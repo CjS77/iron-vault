@@ -10,6 +10,7 @@ pub mod listener_tls;
 pub mod logging;
 pub mod path_metadata;
 pub mod peer;
+pub mod pipeline;
 // The request listeners accept on tokio, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
 pub mod request_listeners;
