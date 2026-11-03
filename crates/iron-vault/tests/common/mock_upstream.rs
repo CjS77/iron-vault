@@ -117,11 +117,14 @@ pub enum Step {
     Wait(Arc<tokio::sync::Notify>),
 }
 
+/// Chooses a script's steps from the request target.
+type Plan = Arc<dyn Fn(&str) -> Vec<Step> + Send + Sync>;
+
 /// A chunked `200` reply whose steps may depend on the request target.
 #[derive(Clone)]
 pub struct Script {
     content_type: String,
-    plan: Arc<dyn Fn(&str) -> Vec<Step> + Send + Sync>,
+    plan: Plan,
     /// When each chunk was handed to the socket, in order, for measuring relay latency.
     pub sent: Arc<Mutex<Vec<Instant>>>,
 }
