@@ -204,9 +204,12 @@ mod headers {
     use super::*;
 
     const SECRET: &[u8] = b"sk-secret-key-123";
+    // The patterns for a second secret, `sk/secret+key=123`, in the URL-encoded forms the pattern set holds in both hex cases.
+    const ENCODED_UPPER: &[u8] = b"sk%2Fsecret%2Bkey%3D123";
+    const ENCODED_LOWER: &[u8] = b"sk%2fsecret%2bkey%3d123";
 
     fn scrubbed(headers: &mut HeaderMap) -> u64 {
-        scrub_header_values(headers, || Scrubber::with_patterns([SECRET, b"sk-secret%2Dkey" as &[u8]]))
+        scrub_header_values(headers, || Scrubber::with_patterns([SECRET, ENCODED_UPPER, ENCODED_LOWER]))
     }
 
     fn map(pairs: &[(&'static str, &[u8])]) -> HeaderMap {
@@ -224,16 +227,18 @@ mod headers {
         let mut headers = map(&[
             ("x-debug", b"key=sk-secret-key-123"),
             ("www-authenticate", b"Bearer error_description=\"bad sk-secret-key-123\""),
-            ("location", b"/next?k=sk-secret%2Dkey&a=1"),
+            ("location", b"/next?k=sk%2Fsecret%2Bkey%3D123&a=1"),
+            ("x-redirect", b"/next?k=sk%2fsecret%2bkey%3d123"),
             ("content-type", b"application/json"),
         ]);
-        assert_eq!(scrubbed(&mut headers), 3);
+        assert_eq!(scrubbed(&mut headers), 4);
         assert_eq!(headers["x-debug"], format!("key={R}").as_str());
         assert_eq!(
             headers["www-authenticate"],
             format!("Bearer error_description=\"bad {R}\"").as_str()
         );
         assert_eq!(headers["location"], format!("/next?k={R}&a=1").as_str());
+        assert_eq!(headers["x-redirect"], format!("/next?k={R}").as_str());
         assert_eq!(headers["content-type"], "application/json");
     }
 
@@ -255,6 +260,13 @@ mod headers {
         assert_eq!(scrubbed(&mut headers), 2);
         let values: Vec<&[u8]> = headers.get_all("x-echo").iter().map(HeaderValue::as_bytes).collect();
         assert_eq!(values, [R.as_bytes(), b"ok", format!("a {R}").as_bytes()]);
+    }
+
+    #[test]
+    fn counts_matches_not_values() {
+        let mut headers = map(&[("x-echo", b"sk-secret-key-123 sk-secret-key-123"), ("x-one", b"sk-secret-key-123")]);
+        assert_eq!(scrubbed(&mut headers), 3);
+        assert_eq!(headers["x-echo"], format!("{R} {R}").as_str());
     }
 
     #[test]

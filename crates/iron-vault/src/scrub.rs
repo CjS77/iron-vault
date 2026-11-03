@@ -16,7 +16,10 @@ mod tests;
 
 /// The scrub replacement, written in place of every match whatever its length, so the output shows neither the length
 /// nor the position of the secret it replaced.
-pub const SCRUB_REPLACEMENT: &[u8] = b"[iron-vault:scrubbed]";
+pub const SCRUB_REPLACEMENT: &[u8] = REPLACEMENT_TEXT.as_bytes();
+
+/// [`SCRUB_REPLACEMENT`] as text, so the header fallback can be a `&'static str` without repeating the literal.
+const REPLACEMENT_TEXT: &str = "[iron-vault:scrubbed]";
 
 /// The per-response streaming matcher for one request's scrub patterns.
 ///
@@ -160,7 +163,7 @@ impl fmt::Debug for Scrubber<'_> {
     }
 }
 
-/// Scrubs every response header value in place and returns how many values held a match (spec §3.8).
+/// Scrubs every response header value in place and returns how many matches were replaced across all values (spec §3.8).
 ///
 /// Each value is scrubbed whole and one-shot through the same [`Scrubber`] as the body, so headers and body share one
 /// matching rule. Header names are not scrubbed: a secret in a name is implausible, and rewriting names would change
@@ -176,23 +179,23 @@ pub(crate) fn scrub_header_values<'p>(headers: &mut HeaderMap, scrubber: impl Fn
     headers
         .values_mut()
         .map(|value| match scrub_value(scrubber(), value.as_bytes()) {
-            Some(scrubbed) => {
+            Some((scrubbed, matches)) => {
                 let sensitive = value.is_sensitive();
                 *value = scrubbed;
                 value.set_sensitive(sensitive);
-                1
+                matches
             }
             None => 0,
         })
         .sum()
 }
 
-/// The scrubbed value if `value` held a match, else `None` so an unmatched value stays byte-identical.
-fn scrub_value(mut scrubber: Scrubber<'_>, value: &[u8]) -> Option<HeaderValue> {
+/// The scrubbed value and its match count if `value` held a match, else `None` so an unmatched value stays byte-identical.
+fn scrub_value(mut scrubber: Scrubber<'_>, value: &[u8]) -> Option<(HeaderValue, u64)> {
     let mut out = Zeroizing::new(scrubber.push(value).to_vec());
     let finished = scrubber.finish();
     out.extend_from_slice(&finished.tail);
-    (finished.matches > 0).then(|| header_value(&out))
+    (finished.matches > 0).then(|| (header_value(&out), finished.matches))
 }
 
 /// A header value from scrubbed bytes. The replacement is ASCII and the rest came from a valid header value, so this
@@ -200,6 +203,6 @@ fn scrub_value(mut scrubber: Scrubber<'_>, value: &[u8]) -> Option<HeaderValue> 
 fn header_value(bytes: &[u8]) -> HeaderValue {
     HeaderValue::from_bytes(bytes).unwrap_or_else(|_| {
         debug_assert!(false, "scrubbed header value is not a valid header value");
-        HeaderValue::from_static("[iron-vault:scrubbed]")
+        HeaderValue::from_static(REPLACEMENT_TEXT)
     })
 }
