@@ -21,12 +21,40 @@ fn scrub_chunks(patterns: &[&[u8]], chunks: &[&[u8]]) -> (Vec<u8>, u64) {
             released
         })
         .collect();
-    out.extend(scrubber.finish());
-    (out, scrubber.matches())
+    let finished = scrubber.finish();
+    out.extend(finished.tail);
+    (out, finished.matches)
 }
 
 fn one_shot(patterns: &[&[u8]], input: &[u8]) -> (Vec<u8>, u64) {
     scrub_chunks(patterns, &[input])
+}
+
+/// Leftmost-longest scrubbing written independently of the scrubber: at each position, replace the longest pattern that
+/// starts there, or else copy one byte.
+fn naive(patterns: &[Vec<u8>], input: &[u8]) -> (Vec<u8>, u64) {
+    let mut out = Vec::new();
+    let mut matches = 0;
+    let mut at = 0;
+    while at < input.len() {
+        let longest = patterns
+            .iter()
+            .filter(|pattern| !pattern.is_empty() && input[at..].starts_with(pattern))
+            .map(Vec::len)
+            .max();
+        match longest {
+            Some(len) => {
+                out.extend_from_slice(R.as_bytes());
+                matches += 1;
+                at += len;
+            }
+            None => {
+                out.push(input[at]);
+                at += 1;
+            }
+        }
+    }
+    (out, matches)
 }
 
 fn scrubbed(patterns: &[&[u8]], input: &str) -> String {
@@ -70,6 +98,11 @@ proptest! {
     fn any_chunking_matches_one_shot((patterns, input) in patterns_and_input(), cuts in prop::collection::vec(any::<usize>(), 0..8)) {
         let whole = scrub_owned_chunks(&patterns, std::slice::from_ref(&input));
         prop_assert_eq!(scrub_owned_chunks(&patterns, &chunked(&input, &cuts)), whole);
+    }
+
+    #[test]
+    fn any_chunking_matches_the_naive_scan((patterns, input) in patterns_and_input(), cuts in prop::collection::vec(any::<usize>(), 0..8)) {
+        prop_assert_eq!(scrub_owned_chunks(&patterns, &chunked(&input, &cuts)), naive(&patterns, &input));
     }
 
     #[test]
@@ -132,15 +165,17 @@ fn a_match_that_could_still_grow_is_held_until_the_end() {
     assert_eq!(&scrubber.push(b"x ab")[..], b"x ");
     assert_eq!(&scrubber.push(b"c")[..], R.as_bytes());
     assert_eq!(&scrubber.push(b" ab")[..], b" ");
-    assert_eq!(&scrubber.finish()[..], R.as_bytes());
-    assert_eq!(scrubber.matches(), 2);
+    assert_eq!(scrubber.matches(), 1);
+    let finished = scrubber.finish();
+    assert_eq!(&finished.tail[..], R.as_bytes());
+    assert_eq!(finished.matches, 2);
 }
 
 #[test]
 fn a_whole_sse_event_is_released_at_once() {
     let mut scrubber = Scrubber::with_patterns([b"data-secret".as_slice(), b"hi there"]);
     assert_eq!(&scrubber.push(b"data: hi\n\n")[..], b"data: hi\n\n");
-    assert_eq!(&scrubber.finish()[..], b"");
+    assert_eq!(&scrubber.finish().tail[..], b"");
 }
 
 #[test]

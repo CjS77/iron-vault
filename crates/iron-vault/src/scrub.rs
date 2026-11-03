@@ -25,12 +25,23 @@ pub const SCRUB_REPLACEMENT: &[u8] = b"[iron-vault:scrubbed]";
 /// at once, so an SSE event is never delayed until the next one. The held bytes are at most one less than the longest
 /// pattern (§3.8) and are wiped when the scrubber is dropped.
 ///
-/// Call [`finish`](Self::finish) at the end of the body. Dropping the scrubber without it releases nothing further,
-/// which is the path for a body that fails partway: the held bytes may be a secret prefix and are never sent.
+/// Call [`finish`](Self::finish) at the end of the body. It consumes the scrubber, so no chunk can be pushed after the
+/// held bytes are released, and it returns the body's total match count. Dropping the scrubber without it releases
+/// nothing further, which is the path for a body that fails partway: the held bytes may be a secret prefix and are never
+/// sent.
 pub struct Scrubber<'p> {
     patterns: Vec<&'p [u8]>,
     held: Zeroizing<Vec<u8>>,
     matches: u64,
+}
+
+/// The end of a scrubbed body, from [`Scrubber::finish`].
+#[derive(Debug)]
+pub struct Finished {
+    /// The held bytes, scrubbed: the last of the body's output.
+    pub tail: Bytes,
+    /// How many matches were replaced in the whole body, including any the tail completed.
+    pub matches: u64,
 }
 
 /// What the scan does at one position of the pending bytes.
@@ -68,14 +79,19 @@ impl<'p> Scrubber<'p> {
         self.scan(&pending, false)
     }
 
-    /// Ends the body and returns the held bytes, scrubbed: no further byte can complete a match. Afterwards nothing is
-    /// held and [`matches`](Self::matches) counts every match in the body.
-    pub fn finish(&mut self) -> Bytes {
+    /// Ends the body and returns the held bytes, scrubbed, since no further byte can complete a match, with the total
+    /// match count.
+    pub fn finish(mut self) -> Finished {
         let pending = self.pending(&[]);
-        self.scan(&pending, true)
+        let tail = self.scan(&pending, true);
+        Finished {
+            tail,
+            matches: self.matches,
+        }
     }
 
-    /// How many matches have been replaced so far.
+    /// How many matches have been replaced so far; a match the held bytes complete at the end of the body is counted only
+    /// in the total from [`finish`](Self::finish).
     pub fn matches(&self) -> u64 {
         self.matches
     }
