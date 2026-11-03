@@ -124,6 +124,8 @@ type Plan = Arc<dyn Fn(&str) -> Vec<Step> + Send + Sync>;
 #[derive(Clone)]
 pub struct Script {
     content_type: String,
+    /// The `Content-Encoding` of the body, when the chunks are already coded.
+    content_encoding: Option<String>,
     plan: Plan,
     /// When each chunk was handed to the socket, in order, for measuring relay latency.
     pub sent: Arc<Mutex<Vec<Instant>>>,
@@ -139,15 +141,26 @@ impl Script {
     pub fn by_target(content_type: &str, plan: impl Fn(&str) -> Vec<Step> + Send + Sync + 'static) -> Self {
         Self {
             content_type: content_type.to_owned(),
+            content_encoding: None,
             plan: Arc::new(plan),
             sent: Arc::default(),
         }
     }
 
+    /// The same script with a `Content-Encoding` header, for chunks the test has already coded.
+    pub fn encoded(mut self, coding: &str) -> Self {
+        self.content_encoding = Some(coding.to_owned());
+        self
+    }
+
     /// Sends the head, then each step in order, then the last chunk.
     async fn play(&self, tls: &mut (impl AsyncWriteExt + Unpin), target: &str) {
+        let encoding = self
+            .content_encoding
+            .as_ref()
+            .map_or_else(String::new, |coding| format!("content-encoding: {coding}\r\n"));
         let head = format!(
-            "HTTP/1.1 200 Test\r\ncontent-type: {}\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+            "HTTP/1.1 200 Test\r\ncontent-type: {}\r\n{encoding}transfer-encoding: chunked\r\nconnection: close\r\n\r\n",
             self.content_type
         );
         let _ = tls.write_all(head.as_bytes()).await;
