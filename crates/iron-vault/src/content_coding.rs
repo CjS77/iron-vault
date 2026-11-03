@@ -29,6 +29,7 @@
 
 mod br;
 mod budget;
+mod encoder;
 mod gzip;
 
 use std::fmt;
@@ -38,6 +39,7 @@ use flate2::{Decompress, FlushDecompress};
 use zeroize::Zeroizing;
 
 pub use budget::{BudgetExceeded, DecompressionBudget};
+pub use encoder::{EncodeError, ResponseEncoder};
 
 #[cfg(test)]
 mod tests;
