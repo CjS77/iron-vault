@@ -4,6 +4,8 @@
 //! accepts. A TLS listener's certificate and key cannot: their rules refuse a shared sticky ancestor such as `/tmp`,
 //! and the worktree's own ancestors are group-writable. So the TLS files come from a fake disk that runs the real
 //! trusted-path check on each file's mode, with root-owned `0755` directories above it.
+//!
+//! The request server's tests open their listeners through [`ThreeListeners`] too.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -68,7 +70,7 @@ fn me() -> ExpectedOwner {
     invoking_user().unwrap()
 }
 
-fn name(s: &str) -> ListenerName {
+pub(crate) fn name(s: &str) -> ListenerName {
     ListenerName::try_from(s).unwrap()
 }
 
@@ -78,14 +80,14 @@ fn free_address() -> SocketAddr {
 }
 
 /// A test CA, its leaf certificate for `localhost` and the leaf's key.
-struct TestCa {
+pub(crate) struct TestCa {
     certificate: Certificate,
     leaf: Certificate,
     key: KeyPair,
 }
 
 impl TestCa {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let ca_key = KeyPair::generate().unwrap();
         let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -101,7 +103,7 @@ impl TestCa {
     }
 
     /// A client that trusts only this CA.
-    fn client(&self) -> TlsConnector {
+    pub(crate) fn client(&self) -> TlsConnector {
         let mut roots = RootCertStore::empty();
         roots.add(self.certificate.der().clone()).unwrap();
         let config = ClientConfig::builder_with_provider(crate::tls::provider())
@@ -158,15 +160,15 @@ fn components(path: &Path, mode: Mode) -> Vec<PathComponent> {
 }
 
 /// Three listeners, in name order: a Unix socket, plain loopback TCP and TLS on loopback.
-struct ThreeListeners {
+pub(crate) struct ThreeListeners {
     dir: RuntimeDir,
-    tcp: SocketAddr,
-    tls: SocketAddr,
+    pub(crate) tcp: SocketAddr,
+    pub(crate) tls: SocketAddr,
     config: BTreeMap<ListenerName, ListenerConfig>,
 }
 
 impl ThreeListeners {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let dir = RuntimeDir::new();
         let (tcp, tls) = (free_address(), free_address());
         let toml = format!(
@@ -180,13 +182,13 @@ impl ThreeListeners {
         Self { dir, tcp, tls, config }
     }
 
-    fn open(&self, ca: &TestCa, key_mode: u32) -> Result<RequestListeners, OpenError> {
+    pub(crate) fn open(&self, ca: &TestCa, key_mode: u32) -> Result<RequestListeners, OpenError> {
         let profile = DeploymentProfile::Development;
         let disk = ca.disk(key_mode);
         RequestListeners::open_with(&self.config, &self.dir.paths(profile), BTreeMap::new(), read_from(&disk, profile))
     }
 
-    fn unix_path(&self) -> PathBuf {
+    pub(crate) fn unix_path(&self) -> PathBuf {
         self.dir.socket("proxy.sock")
     }
 }

@@ -4,9 +4,9 @@
 //! Caller identification takes the listener name and the peer uid from here and never from the request, so an
 //! [`IncomingConnection`]'s tags are its only inputs besides the request headers.
 //!
-//! `serve` does not open these yet: it has no active policy to serve until the request pipeline (EP-18) and policy
-//! activation at startup (EP-22) land. EP-18 calls [`RequestListeners::open`] and runs the accept loop on
-//! [`RequestListeners::accept`].
+//! [`RequestServer::serve`](crate::request_server::RequestServer::serve) runs the accept loop on
+//! [`RequestListeners::accept`]. `serve` does not open these yet: it has no active policy to serve until policy
+//! activation at startup (EP-22) lands.
 //!
 //! Startup order matters. [`adopt`](crate::socket_activation::adopt) runs first, before the async runtime or any
 //! other thread exists, because `listenfd` edits the environment as it takes the fds. [`RequestListeners::open`] runs
@@ -327,5 +327,6 @@ fn registering(name: &ListenerName) -> impl FnOnce(io::Error) -> OpenError + '_ 
     }
 }
 
+// The request server's tests reuse its listener setup.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -42,12 +42,16 @@ zeroize.workspace = true
 # Process hardening, the getuid call for trusted-path checks, the admin socket and its peer credentials, and the CLI's
 # terminal handling are Linux-only for now; other platforms report them as unsupported without these syscalls.
 [target.'cfg(target_os = "linux")'.dependencies]
+# The request server: hyper serves HTTP/1.1 on each request stream; HTTP/2 from callers is not offered.
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
 # Adopting request listeners from systemd socket activation.
 listenfd.workspace = true
 rustix.workspace = true
 # The admin server: a current-thread runtime, Unix sockets, request deadlines and the stop signals. The CLI uses the
-# signal support too, to restore the terminal on SIGINT.
-tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "signal", "macros"] }
+# signal support too, to restore the terminal on SIGINT. The request server's connection limit is a semaphore (sync).
+tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "signal", "macros", "sync"] }
 # TLS listeners: the acceptor that terminates TLS on an accepted TCP connection.
 tokio-rustls.workspace = true
 
@@ -65,8 +69,8 @@ rcgen.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 static_assertions.workspace = true
-# The admin server tests stop the server on demand through a oneshot channel.
-tokio = { workspace = true, features = ["rt", "macros", "sync"] }
+# The admin server tests stop the server on demand through a oneshot channel; the request server tests pause time.
+tokio = { workspace = true, features = ["rt", "macros", "sync", "test-util"] }
 
 [lints]
 workspace = true
