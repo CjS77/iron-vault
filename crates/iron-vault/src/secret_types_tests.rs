@@ -10,10 +10,13 @@ use static_assertions::assert_not_impl_any;
 use zeroize::Zeroizing;
 
 use crate::admin::protocol::{Decoded, Frame, OwnerInput};
+use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder};
 
 assert_not_impl_any!(OwnerInput: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Frame: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Decoded: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(ServingSnapshot: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(SnapshotHolder: Clone, Copy, Display, Serialize, Deserialize<'static>);
 #[cfg(target_os = "linux")]
 assert_not_impl_any!(crate::listener_tls::ListenerTls: Clone, Copy, Display, Serialize, Deserialize<'static>);
 

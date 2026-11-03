@@ -19,7 +19,11 @@ anyhow.workspace = true
 # The upstream client's response body chunks.
 bytes.workspace = true
 clap.workspace = true
+# Credential kinds, the serving snapshot's resolver half: the pipeline resolves a record's material through them.
+iron-vault-kinds = { path = "../iron-vault-kinds" }
 iron-vault-policy = { path = "../iron-vault-policy" }
+# The vault whose healthy credential records a serving snapshot holds.
+iron-vault-store = { path = "../iron-vault-store" }
 # OsRng for caller-token generation; only the binary reaches for the operating system's random source.
 rand_core = { workspace = true, features = ["getrandom"] }
 # The upstream client: the one outbound HTTP client, over the rustls config from the route's upstream trust.

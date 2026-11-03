@@ -16,6 +16,7 @@ pub mod request_listeners;
 // The request socket accepts on tokio, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
 pub mod request_socket;
+pub mod serving_snapshot;
 // Adopting activated sockets uses listenfd and rustix, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
 pub mod socket_activation;
