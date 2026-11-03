@@ -18,6 +18,8 @@ use crate::trusted_path::ExpectedOwner;
 use crate::upstream::client::TransportLimits;
 use crate::upstream::clients::UpstreamClients;
 
+mod refusal;
+
 const FX_SECRET: &str = "fx-secret-4f1a";
 /// The marker secret, so the `Debug` check can look for it in every form.
 const BRAVE_SECRET: &str = MARKER;

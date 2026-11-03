@@ -184,13 +184,27 @@ fn run(sources: &impl Sources, tags: &ConnectionTags, head: RequestHead, now: In
     let headers = sanitize(headers, &token_header(policy, tags.listener())?)?;
     // Looked up before the charge, so nothing that can fail runs after it except resolution onward.
     let route = selected_route(policy, &authorized)?;
+    charge_and_build(sources, &caller, route, &authorized, headers, now)
+        .inspect_err(|refusal| refusal.report(authorized.route(), route.credential()))
+}
+
+/// Steps 5-8: charge, resolve, assemble and check. A defect here raises its high-severity event in the caller, where
+/// the route and credential are known.
+fn charge_and_build(
+    sources: &impl Sources,
+    caller: &CallerName,
+    route: &RouteConfig,
+    authorized: &AuthorizedRequest,
+    headers: OutgoingHeaders,
+    now: Instant,
+) -> Result<Prepared, PipelineRefusal> {
     // §3.5 step 5 also obtains owner confirmation, which needs no code in v0: activation refuses a route with
     // `confirm = "touch"` unless `Capabilities::touch_provider` is set, and v0 never sets it (§2, §8.2 "Touch policy
     // without a device"). A confirmation provider must add its check here, after the charge and before resolution.
-    sources.limiter().charge(&caller, authorized.route(), now)?;
-    let resolved = resolve(sources, route, &authorized)?;
-    let outgoing = assemble(route, &authorized, headers, &resolved)?;
-    let request = final_check(outgoing, &authorized, route.upstream(), route.slot(), &resolved.bound())?;
+    sources.limiter().charge(caller, authorized.route(), now)?;
+    let resolved = resolve(sources, route, authorized)?;
+    let outgoing = assemble(route, authorized, headers, &resolved)?;
+    let request = final_check(outgoing, authorized, route.upstream(), route.slot(), &resolved.bound())?;
     Ok(Prepared {
         request,
         patterns: resolved.into_patterns(),
@@ -253,6 +267,9 @@ fn assemble(
         resolved.bound().value(),
     )
 }
+
+mod refusal;
+pub use refusal::RefusalResponse;
 
 #[cfg(test)]
 mod tests;
