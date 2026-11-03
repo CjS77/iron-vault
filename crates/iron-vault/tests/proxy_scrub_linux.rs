@@ -66,7 +66,8 @@ async fn start(ca: &TestCa, upstream: &MockUpstream, route: &str) -> Proxy {
     .await
 }
 
-/// The caller's `method target`, asking for gzip, so a test can see the upstream is not asked for it.
+/// The caller's `method target`, asking for gzip, so a test can see the upstream is asked for the service's codings
+/// instead.
 async fn send(proxy: &Proxy, method: &str, target: &str) -> Response {
     let request = CallerRequest::new(method, target)
         .header("Accept-Encoding", "gzip")
@@ -143,7 +144,7 @@ async fn the_secret_its_basic_token_and_its_url_encoded_form_are_all_replaced() 
         .for_each(|form| assert!(!raw.contains(form.as_str()), "{form} reached the caller: {raw}"));
 }
 
-/// Answers `502` with the fixed body, and the upstream was not asked for a compressed reply.
+/// Answers `502` with the fixed body, and the upstream was asked for the service's codings, not the caller's.
 async fn assert_refused(reply: Reply) {
     let ca = TestCa::new("scrub test CA");
     let upstream = MockUpstream::start(&ca, reply).await;
@@ -154,19 +155,19 @@ async fn assert_refused(reply: Reply) {
     assert_eq!((response.status, response.body.as_str()), (502, "bad gateway"));
     assert_eq!(response.header("content-encoding"), None);
     let sent = upstream.requests()[0].headers();
-    assert!(sent.iter().all(|(name, _)| name != "accept-encoding"), "{sent:?}");
+    let asked: Vec<_> = sent
+        .iter()
+        .filter(|(name, _)| name == "accept-encoding")
+        .map(|(_, value)| value)
+        .collect();
+    assert_eq!(asked, ["gzip, deflate, br"], "{sent:?}");
 }
 
 #[tokio::test]
-async fn a_gzip_reply_is_502_and_its_body_is_not_returned() {
-    assert_refused(reply(&[("content-encoding", "gzip")], b"\x1f\x8b\x08\x00upstream-body")).await;
-}
-
-#[tokio::test]
-async fn a_content_coding_that_connection_names_is_still_502() {
+async fn an_unsupported_content_coding_that_connection_names_is_still_502() {
     // Stripping drops every header `Connection` names, so the coding must be judged before it.
-    let headers = [("connection", "content-encoding"), ("content-encoding", "gzip")];
-    assert_refused(reply(&headers, b"\x1f\x8b\x08\x00upstream-body")).await;
+    let headers = [("connection", "content-encoding"), ("content-encoding", "zstd")];
+    assert_refused(reply(&headers, b"\x28\xb5\x2f\xfdupstream-body")).await;
 }
 
 #[tokio::test]
@@ -178,12 +179,11 @@ async fn a_transfer_coding_other_than_chunked_is_502() {
 }
 
 #[tokio::test]
-async fn a_reply_without_the_secret_comes_back_unchanged_but_for_its_framing_and_integrity_headers() {
+async fn a_reply_without_the_secret_comes_back_unchanged_but_for_its_framing_integrity_and_etag_headers() {
     let ca = TestCa::new("scrub test CA");
     let body = "{\"rates\":{\"EUR\":0.91},\"note\":\"pa/ss but not the password; Basic realm\"}\n\u{e9}\u{1f600}";
     let kept = [
         ("content-type", "application/json; charset=utf-8"),
-        ("etag", "\"v1\""),
         ("cache-control", "max-age=60"),
         ("x-request-id", "req-77"),
     ];
@@ -192,7 +192,7 @@ async fn a_reply_without_the_secret_comes_back_unchanged_but_for_its_framing_and
         ("repr-digest", "sha-256=:AAAA:"),
         ("digest", "SHA-256=AAAA"),
     ];
-    let headers: Vec<_> = kept.iter().chain(&removed).copied().collect();
+    let headers: Vec<_> = kept.iter().chain(&removed).chain(&[("etag", "\"v1\"")]).copied().collect();
     let upstream = MockUpstream::start(&ca, reply(&headers, body.as_bytes())).await;
     let proxy = start(&ca, &upstream, "fx").await;
 
@@ -202,8 +202,10 @@ async fn a_reply_without_the_secret_comes_back_unchanged_but_for_its_framing_and
     assert_eq!(dechunked(&response.body).unwrap(), body);
     kept.iter()
         .for_each(|(name, value)| assert_eq!(response.header(name), Some(*value), "{name}"));
-    // Besides the kept headers, only the request server's own framing and date headers.
-    let own = ["transfer-encoding", "connection", "date"];
+    // A scrub may replace bytes, so the strong `ETag` no longer promises byte identity.
+    assert_eq!(response.header("etag"), Some("W/\"v1\""));
+    // Besides the kept headers and the `ETag`, only the request server's own framing and date headers.
+    let own = ["etag", "transfer-encoding", "connection", "date"];
     response
         .headers
         .iter()
@@ -212,7 +214,8 @@ async fn a_reply_without_the_secret_comes_back_unchanged_but_for_its_framing_and
 }
 
 #[tokio::test]
-async fn a_head_response_keeps_its_content_length() {
+async fn a_head_response_has_the_headers_of_its_get_so_no_content_length() {
+    // The `GET` body is scrubbed, which may change its length, so it is sent chunked without one.
     let ca = TestCa::new("scrub test CA");
     let upstream = MockUpstream::start(&ca, Reply::ok("hello")).await;
     let proxy = start(&ca, &upstream, "fx").await;
@@ -220,7 +223,7 @@ async fn a_head_response_keeps_its_content_length() {
     let response = send(&proxy, "HEAD", "/fx/latest").await;
 
     assert_eq!(response.status, 200);
-    assert_eq!(response.header("content-length"), Some("5"));
+    assert_eq!(response.header("content-length"), None);
     assert_eq!(response.header("transfer-encoding"), None);
     assert!(response.body.is_empty());
 }

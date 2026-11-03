@@ -296,7 +296,7 @@ fn a_header_slot_holds_the_credential_and_nothing_else_does() {
 }
 
 #[test]
-fn accept_encoding_is_removed_and_other_caller_headers_kept() {
+fn the_callers_accept_encoding_is_replaced_by_the_services_and_other_caller_headers_kept() {
     let sources = TestSources::new();
     let extra = [
         ("Accept-Encoding", "gzip, br"),
@@ -305,9 +305,14 @@ fn accept_encoding_is_removed_and_other_caller_headers_kept() {
     ];
     let prepared = sources.run(&loopback(), brave_search("placeholder", &extra)).unwrap();
 
-    let names: Vec<String> = headers(&prepared).into_iter().map(|(n, _)| n.to_ascii_lowercase()).collect();
-    assert!(!names.contains(&"accept-encoding".to_owned()), "{names:?}");
-    assert!(names.contains(&"accept".to_owned()), "{names:?}");
+    let sent = headers(&prepared);
+    let accept_encoding: Vec<_> = sent
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("accept-encoding"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(accept_encoding, ["gzip, deflate, br"], "{sent:?}");
+    assert!(sent.iter().any(|(name, _)| name.eq_ignore_ascii_case("accept")), "{sent:?}");
 }
 
 #[test]
@@ -331,7 +336,11 @@ fn a_basic_slot_holds_the_credential_and_nothing_else_does() {
 
     let token = "YWxpY2U6czNjcmV0"; // base64("alice:s3cret")
     assert_eq!(holders(&prepared, token), ["Authorization"]);
-    assert_eq!(headers(&prepared), [("Authorization".to_owned(), format!("Basic {token}"))]);
+    let expected = [
+        ("Accept-Encoding".to_owned(), "gzip, deflate, br".to_owned()),
+        ("Authorization".to_owned(), format!("Basic {token}")),
+    ];
+    assert_eq!(headers(&prepared), expected);
 }
 
 #[test]

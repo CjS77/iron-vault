@@ -294,11 +294,16 @@ impl Endpoints {
 
     /// Sends `request` on a fresh connection over `via`; the whole response once the connection closes.
     pub async fn send(&self, via: Via, request: &CallerRequest) -> Response {
-        let raw = match via {
+        Response::parse(&String::from_utf8(self.send_raw(via, request).await).unwrap())
+    }
+
+    /// Sends `request` on a fresh connection over `via`; every byte of the response once the connection closes, for a
+    /// body that is not text.
+    pub async fn send_raw(&self, via: Via, request: &CallerRequest) -> Vec<u8> {
+        match via {
             Via::Unix => exchange(self.connect().await, request).await,
             Via::Tcp => exchange(TcpStream::connect(("127.0.0.1", self.tcp_port.unwrap())).await.unwrap(), request).await,
-        };
-        Response::parse(&String::from_utf8(raw).unwrap())
+        }
     }
 }
 

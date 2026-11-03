@@ -1,40 +1,35 @@
 //! Relaying an upstream response to the caller (specification §3.5 step 10, §3.8): its status, its headers without
-//! connection-scoped or caller-authentication headers and scrubbed, and its body scrubbed chunk by chunk.
-//!
-//! The stages run in this order, each on what the one before left: coding check, header stripping, `Location`
-//! rewrite, header scrub, length and integrity header removal. The rewrite precedes the scrub so the scrub is the last
-//! transform on every emitted byte and the rewrite never parses scrub replacement text; the scrub still covers a
-//! `Location` passed through or rewritten. The body is scrubbed as it streams ([`RelayedBody`]).
+//! connection-scoped or caller-authentication headers and scrubbed, and its body decoded, scrubbed and, when the caller
+//! requires it, re-encoded chunk by chunk.
 //!
 //! Every response passes through the scrubber with the scrub patterns of the credential injected for its request; no
-//! path relays a response without it. One it cannot screen, because a content or transfer coding hides the bytes, is
-//! refused with `502` before anything is sent (§3.8: no coding is forwarded opaquely).
+//! path relays a response without it. A response the scrubber cannot see through, because its content coding is not
+//! one the service decodes or a transfer coding besides `chunked` hides the bytes, is refused with `502` before
+//! anything is sent (§3.8: no coding is forwarded opaquely). The order of the stages is set out once, on
+//! [`RelayedBody`].
 
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures_core::Stream;
 use http_body_util::BodyExt;
 use hyper::body::{Body, Frame};
-use hyper::header::{
-    CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, HeaderMap, HeaderName as HttpHeaderName, HeaderValue as HttpHeaderValue, LOCATION,
-    TRANSFER_ENCODING,
-};
+use hyper::header::{CONNECTION, HeaderMap, HeaderName as HttpHeaderName, HeaderValue as HttpHeaderValue, LOCATION, TRANSFER_ENCODING};
 use hyper::{Response, StatusCode};
 use iron_vault_kinds::ScrubPatterns;
 use iron_vault_policy::reserved_headers::HOP_BY_HOP_HEADERS;
-use iron_vault_policy::{CredentialName, HeaderName, LocationRewrite, Method, RouteConfig, RouteName, rewrite_location};
+use iron_vault_policy::{CredentialName, HeaderName, Limits, LocationRewrite, Method, RouteConfig, RouteName, rewrite_location};
 use url::Url;
 
+use crate::content_coding::{
+    BudgetExceeded, ContentCoding, DecodeError, DecompressionBudget, EncodeError, ResponseDecoder, ResponseEncoder, choose_emitted,
+    parse_content_encoding, rewrite_headers,
+};
 use crate::pipeline::RefusalResponse;
 use crate::request_server::{BoxError, ResponseBody};
 use crate::scrub::{Scrubber, scrub_headers};
 use crate::upstream::client::{ResponseChunks, UpstreamResponse};
-use crate::upstream::transport_error::TransportError;
-
-/// Integrity headers computed over the upstream's bytes, which a scrub may change, so they would no longer verify.
-const INTEGRITY_HEADERS: &[&str] = &["content-md5", "digest", "repr-digest", "content-digest"];
 
 /// What the response stage takes from the request the pipeline accepted.
 pub(crate) struct ResponseContext {
@@ -42,17 +37,21 @@ pub(crate) struct ResponseContext {
     pub(crate) method: Method,
     /// The forms of the injected secret to scrub; the response body owns them until it ends.
     pub(crate) patterns: ScrubPatterns,
-    /// The route the request was authorized on, for the scrub event.
+    /// The route the request was authorized on, for the scrub and failure events.
     pub(crate) route: RouteName,
     /// The credential injected, for the scrub event.
     pub(crate) credential: CredentialName,
+    /// The caller's own `Accept-Encoding`, which was never forwarded, for choosing the coding the caller gets.
+    pub(crate) accept_encoding: Option<HttpHeaderValue>,
+    /// The operational limits, for the decompression budget.
+    pub(crate) limits: Limits,
 }
 
 /// The caller's response for `upstream`: the upstream's status, its headers less those [`strip_headers`] removes, with
-/// `Location` rewritten and then scrubbed, and its body as a [`RelayedBody`]. `token_header` is the caller-token header
-/// of the listener the request arrived on. `route` and `request_url` (the URL actually sent, which may hold the secret)
-/// decide the `Location`. A response with a content coding, or a `Location` that must not reach the caller, is refused
-/// with `502` and its body dropped unread.
+/// `Location` rewritten, then scrubbed, then rewritten to describe the emitted body, and its body as a [`RelayedBody`].
+/// `token_header` is the caller-token header of the listener the request arrived on. `route` and `request_url` (the URL
+/// actually sent, which may hold the secret) decide the `Location`. A response whose coding the service cannot screen,
+/// or a `Location` that must not reach the caller, is refused with `502` and its body dropped unread.
 pub(super) fn relay(
     upstream: UpstreamResponse,
     token_header: Option<HeaderName>,
@@ -61,17 +60,46 @@ pub(super) fn relay(
     request_url: &Url,
 ) -> Result<Response<ResponseBody>, RefusalResponse> {
     let (status, mut headers, chunks) = upstream.into_parts();
-    // Judged before stripping, which drops `Transfer-Encoding` and every header `Connection` names, `Content-Encoding`
-    // included: a coding hidden that way would still reach the caller.
-    if !is_screenable(&headers) {
-        return Err(RefusalResponse::fixed(StatusCode::BAD_GATEWAY.as_u16()));
-    }
+    let coding = upstream_coding(&headers, status)?;
     strip_headers(&mut headers, token_header.as_ref());
-    // Before the scrub, which must stay the last transform on every emitted byte.
     rewrite_location_header(&mut headers, &context.route, route, request_url)?;
     let header_matches = scrub_headers(&mut headers, &context.patterns);
-    reframe(&mut headers, has_no_body(context.method, status), !context.patterns.is_empty());
-    Ok(response(status, headers, RelayedBody::new(chunks, context, header_matches)))
+    let emitted = choose_emitted(context.accept_encoding.as_ref());
+    // A scrub may replace bytes, so a scrubbed body is changed even when no coding is: its length and integrity headers
+    // could no longer be trusted, and its strong `ETag` no longer promises byte identity.
+    let body_changed = coding.is_some() || emitted.is_some() || !context.patterns.is_empty();
+    // A response with no body gets the headers its `GET` would, so `Content-Encoding` and `Content-Length` describe that
+    // body; with nothing to decode or encode it needs neither a decoder nor an encoder.
+    rewrite_headers(&mut headers, emitted, body_changed);
+    let codings = match has_no_body(context.method, status) {
+        true => BodyCodings::default(),
+        false => BodyCodings { upstream: coding, emitted },
+    };
+    Ok(response(
+        status,
+        headers,
+        RelayedBody::new(chunks, context, codings, header_matches),
+    ))
+}
+
+/// The coding the upstream applied to the body, or `502` when the scrubber could not see through it: a content coding
+/// [`parse_content_encoding`] refuses, a transfer coding besides `chunked` (the only one hyper removes, so `gzip, chunked`
+/// would reach the scrubber still coded), or a coded `206`.
+///
+/// Judged before stripping, which drops `Transfer-Encoding` and every header `Connection` names, `Content-Encoding`
+/// included: a coding hidden that way would still be in the body.
+fn upstream_coding(headers: &HeaderMap, status: StatusCode) -> Result<Option<ContentCoding>, RefusalResponse> {
+    let refused = || RefusalResponse::fixed(StatusCode::BAD_GATEWAY.as_u16());
+    if !transfer_codings(headers).all(|coding| coding.eq_ignore_ascii_case(b"chunked")) {
+        return Err(refused());
+    }
+    let coding = parse_content_encoding(headers).map_err(|_| refused())?;
+    // A byte range of a coded body starts mid-stream, without the coding's header and the window state before it, so it
+    // cannot be decoded on its own and the scrubber could not screen it.
+    if status == StatusCode::PARTIAL_CONTENT && coding.is_some() {
+        return Err(refused());
+    }
+    Ok(coding)
 }
 
 /// Applies [`rewrite_location`] to the response's `Location`, on any status. Several `Location` headers are ambiguous
@@ -126,21 +154,10 @@ fn strip_headers(headers: &mut HeaderMap, token_header: Option<&HeaderName>) {
         });
 }
 
-/// Whether the body the scrubber sees is the upstream's bytes as meant: no content coding but `identity`, and no
-/// transfer coding but `chunked`, the only one hyper removes. Any other transfer coding, as in `gzip, chunked`, would
-/// reach the scrubber still coded.
-///
-/// EP-20 replaces the content-coding half, and the pipeline's removal of `Accept-Encoding`, by decoding the body before
-/// the scrubber.
-fn is_screenable(headers: &HeaderMap) -> bool {
-    codings(headers, CONTENT_ENCODING).all(|coding| coding.eq_ignore_ascii_case(b"identity"))
-        && codings(headers, TRANSFER_ENCODING).all(|coding| coding.eq_ignore_ascii_case(b"chunked"))
-}
-
-/// Every coding the `name` headers list, trimmed, empty list members skipped.
-fn codings(headers: &HeaderMap, name: HttpHeaderName) -> impl Iterator<Item = &[u8]> {
+/// Every transfer coding the `Transfer-Encoding` headers list, trimmed, empty list members skipped.
+fn transfer_codings(headers: &HeaderMap) -> impl Iterator<Item = &[u8]> {
     headers
-        .get_all(name)
+        .get_all(TRANSFER_ENCODING)
         .into_iter()
         .flat_map(|value| value.as_bytes().split(|b| *b == b','))
         .map(<[u8]>::trim_ascii)
@@ -150,21 +167,6 @@ fn codings(headers: &HeaderMap, name: HttpHeaderName) -> impl Iterator<Item = &[
 /// Whether the response has no body whatever its headers say (RFC 9110 §6.4.1): one to `HEAD`, a `204` or a `304`.
 fn has_no_body(method: Method, status: StatusCode) -> bool {
     method == Method::Head || matches!(status, StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
-}
-
-/// Removes the headers a scrub may falsify. Scrubbing can change the body's length, so `Content-Length` goes and the
-/// request server frames the body itself, chunked; a body that ends short then still never looks complete, because the
-/// caller's connection is aborted before the last chunk. A response with no body keeps its `Content-Length`, which
-/// there describes the representation, not bytes sent. Integrity headers go whenever there is anything to scrub.
-fn reframe(headers: &mut HeaderMap, no_body: bool, scrubbing: bool) {
-    if !no_body {
-        headers.remove(CONTENT_LENGTH);
-    }
-    if scrubbing {
-        INTEGRITY_HEADERS.iter().for_each(|name| {
-            headers.remove(*name);
-        });
-    }
 }
 
 fn response(status: StatusCode, headers: HeaderMap, body: RelayedBody) -> Response<ResponseBody> {
@@ -179,39 +181,183 @@ fn response(status: StatusCode, headers: HeaderMap, body: RelayedBody) -> Respon
 pub struct ResponseOutcome {
     /// Whether any scrub pattern matched in the response's headers or body.
     pub scrubbed: bool,
+    /// The bytes the scrubber screened: the body after decoding, or as received when it had no content coding.
+    pub decoded_bytes: u64,
 }
 
-/// An upstream response body on its way to the caller, each chunk scrubbed and passed on as it arrives, never buffered
-/// to the end. Only bytes that could still begin a secret are held back between chunks.
+/// Why a relayed body failed after its head was sent. Each names only the kind of failure, never a byte or the URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RelayFailure {
+    /// The body is not valid for its content coding, or continues after the coded stream ended.
+    #[error("corrupt")]
+    Corrupt,
+    /// The body ended before its coded stream did.
+    #[error("truncated")]
+    Truncated,
+    /// The decoded body passed `max_decompressed_response_bytes`.
+    #[error("size limit")]
+    SizeLimit,
+    /// The decoded body grew faster than `max_decompression_ratio` allows.
+    #[error("ratio limit")]
+    RatioLimit,
+    /// The scrubbed body could not be re-encoded.
+    #[error("encode error")]
+    Encode,
+    /// The upstream body stopped before its end.
+    #[error("upstream body error")]
+    Upstream,
+}
+
+impl From<DecodeError> for RelayFailure {
+    fn from(error: DecodeError) -> Self {
+        match error {
+            DecodeError::Truncated => Self::Truncated,
+            DecodeError::Corrupt | DecodeError::TrailingData | DecodeError::Abandoned => Self::Corrupt,
+        }
+    }
+}
+
+impl From<EncodeError> for RelayFailure {
+    fn from(_: EncodeError) -> Self {
+        Self::Encode
+    }
+}
+
+impl From<BudgetExceeded> for RelayFailure {
+    fn from(error: BudgetExceeded) -> Self {
+        match error {
+            BudgetExceeded::TooLarge { .. } => Self::SizeLimit,
+            BudgetExceeded::RatioExceeded { .. } => Self::RatioLimit,
+        }
+    }
+}
+
+/// The codings around the scrubber: the one to decode from, and the one to encode into. Both are `None` for identity,
+/// and for a response with no body, which has nothing to decode or encode.
+#[derive(Debug, Clone, Copy, Default)]
+struct BodyCodings {
+    upstream: Option<ContentCoding>,
+    emitted: Option<ContentCoding>,
+}
+
+/// An upstream response body on its way to the caller, each chunk passed through the body stages and on as it arrives,
+/// never buffered to the end. Only bytes that could still begin a secret are held back between chunks.
 ///
-/// It owns the request's scrub patterns: they and the held bytes are wiped when the body ends, fails or is dropped.
-/// Decompression ahead of the scrubber (EP-20) attaches here too.
+/// The response stages run in this order, each on what the one before left:
 ///
-/// A failure is returned as an error, never as the end of the body. The held bytes are dropped unreleased, since they
-/// may be a secret prefix, and the request server's HTTP stack aborts the caller's connection instead of finishing the
-/// response, so a truncated body never looks complete.
+/// - headers: coding check, header stripping, `Location` rewrite, header scrub, content-coding header rewrite. The
+///   rewrite precedes the scrub so the scrub covers a `Location` passed through or rewritten, and the rewrite never
+///   parses scrub replacement text;
+/// - body: decode, then the [decompression budget](DecompressionBudget) per decoded piece, then scrub, then encode when
+///   the caller's `Accept-Encoding` rules identity out. Decoding first lets the scrubber see the plaintext; encoding last
+///   means nothing the scrubber has not screened is ever compressed into the output.
+///
+/// It owns the request's scrub patterns: they, the held bytes and the decoder's window are wiped when the body ends,
+/// fails or is dropped.
+///
+/// A failure is returned as an error, never as the end of the body: a decode error, a truncated coded stream, an
+/// exceeded budget or an upstream body error. The held bytes are dropped unreleased, since they may be a secret prefix,
+/// the failure is logged with the route and its [kind](RelayFailure), and the request server's HTTP stack aborts the
+/// caller's connection instead of finishing the response, so a cut-off body never looks complete.
 ///
 /// Dropping it raises the scrub event if any pattern matched: drop is the one point every response reaches, whether it
 /// ended, failed or the caller went away, so the event is raised exactly once.
 pub struct RelayedBody {
     chunks: ResponseChunks,
     /// `None` once the body has ended or failed, so the patterns are gone with the response.
-    scrubber: Option<Scrubber<'static>>,
+    stages: Option<Stages>,
     route: RouteName,
     credential: CredentialName,
-    /// Matches replaced in the headers, and in the body once the scrubber is gone.
+    /// Matches replaced in the headers, and in the body once the stages are gone.
     matches: u64,
+    /// Bytes the scrubber screened, once the body has ended.
+    decoded: u64,
     ended: bool,
 }
 
+/// The body stages of one response.
+struct Stages {
+    /// `None` for an identity body.
+    decoder: Option<ResponseDecoder>,
+    budget: DecompressionBudget,
+    scrubber: Scrubber<'static>,
+    /// `None` unless the caller is sent a coding.
+    encoder: Option<ResponseEncoder>,
+    decoded: u64,
+}
+
+impl Stages {
+    fn new(patterns: ScrubPatterns, limits: &Limits, codings: BodyCodings) -> Self {
+        let budget = match codings.upstream {
+            Some(_) => DecompressionBudget::new(limits),
+            None => DecompressionBudget::identity(limits),
+        };
+        Self {
+            decoder: codings.upstream.map(ResponseDecoder::new),
+            budget,
+            scrubber: Scrubber::owning(patterns),
+            encoder: codings.emitted.map(ResponseEncoder::new),
+            decoded: 0,
+        }
+    }
+
+    /// Runs one upstream chunk through every stage and returns the bytes to send now, which may be none.
+    ///
+    /// One chunk's output is gathered before it is sent, so a chunk that decodes to many pieces is held in memory whole,
+    /// but no more than the budget allows: each piece is counted before it is scrubbed, and the first over the budget
+    /// fails the body.
+    fn push(&mut self, chunk: &[u8]) -> Result<Bytes, RelayFailure> {
+        let scrubbed = match self.decoder.as_mut() {
+            None => {
+                Self::count(&mut self.budget, &mut self.decoded, 0, chunk)?;
+                self.scrubber.push(chunk)
+            }
+            Some(decoder) => {
+                let (budget, decoded, scrubber) = (&mut self.budget, &mut self.decoded, &mut self.scrubber);
+                // The chunk's compressed size is counted with its first piece, or alone if it yields none.
+                let mut compressed = len(chunk);
+                let out = decoder.push(chunk).try_fold(BytesMut::new(), |mut out, piece| {
+                    let piece = piece?;
+                    Self::count(budget, decoded, std::mem::take(&mut compressed), &piece)?;
+                    out.extend_from_slice(&scrubber.push(&piece));
+                    Ok::<_, RelayFailure>(out)
+                })?;
+                budget.record(compressed, 0)?;
+                out.freeze()
+            }
+        };
+        self.encode(&scrubbed)
+    }
+
+    /// Records `piece` against the budget, with the compressed bytes consumed since the last record.
+    fn count(budget: &mut DecompressionBudget, decoded: &mut u64, compressed: u64, piece: &[u8]) -> Result<(), RelayFailure> {
+        budget.record(compressed, len(piece))?;
+        *decoded = decoded.saturating_add(len(piece));
+        Ok(())
+    }
+
+    fn encode(&mut self, scrubbed: &[u8]) -> Result<Bytes, RelayFailure> {
+        match self.encoder.as_mut() {
+            None => Ok(Bytes::copy_from_slice(scrubbed)),
+            Some(encoder) => Ok(encoder.push(scrubbed)?),
+        }
+    }
+}
+
+/// A length as the budget counts it; a slice never holds more than `u64::MAX` bytes.
+fn len(bytes: &[u8]) -> u64 {
+    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+}
+
 impl RelayedBody {
-    fn new(chunks: ResponseChunks, context: ResponseContext, header_matches: u64) -> Self {
+    fn new(chunks: ResponseChunks, context: ResponseContext, codings: BodyCodings, header_matches: u64) -> Self {
         Self {
             chunks,
-            scrubber: Some(Scrubber::owning(context.patterns)),
+            stages: Some(Stages::new(context.patterns, &context.limits, codings)),
             route: context.route,
             credential: context.credential,
             matches: header_matches,
+            decoded: 0,
             ended: false,
         }
     }
@@ -220,52 +366,76 @@ impl RelayedBody {
     pub fn outcome(&self) -> Option<ResponseOutcome> {
         self.ended.then_some(ResponseOutcome {
             scrubbed: self.matches > 0,
+            decoded_bytes: self.decoded,
         })
     }
 
     /// Every match replaced so far, in the headers and the body.
     fn total_matches(&self) -> u64 {
-        self.matches + self.scrubber.as_ref().map_or(0, Scrubber::matches)
+        self.matches + self.stages.as_ref().map_or(0, |stages| stages.scrubber.matches())
     }
 
-    /// Ends the body: releases the held bytes, scrubbed, unless there are none.
-    fn end(&mut self) -> Option<Bytes> {
-        let finished = self.scrubber.take()?.finish();
+    /// Ends the body in stage order: the decoder must have reached the end of its coded stream, then the scrubber
+    /// releases its held bytes, then the encoder writes its trailer. Returns the bytes left to send, which may be none.
+    fn end(&mut self) -> Result<Bytes, RelayFailure> {
+        // On failure the stages are kept, so `fail` drops the scrubber unfinished.
+        if let Some(decoder) = self.stages.as_mut().and_then(|stages| stages.decoder.take()) {
+            decoder.finish()?;
+        }
+        let Some(Stages {
+            scrubber,
+            encoder,
+            decoded,
+            ..
+        }) = self.stages.take()
+        else {
+            return Ok(Bytes::new());
+        };
+        let finished = scrubber.finish();
         self.matches += finished.matches;
+        let tail = match encoder {
+            None => finished.tail,
+            Some(mut encoder) => {
+                let mut out = BytesMut::from(encoder.push(&finished.tail)?.as_ref());
+                out.extend_from_slice(&encoder.finish()?);
+                out.freeze()
+            }
+        };
+        self.decoded = decoded;
         self.ended = true;
-        Some(finished.tail).filter(|tail| !tail.is_empty())
+        Ok(tail)
     }
 
-    /// Drops the scrubber without releasing its held bytes, keeping its match count for the scrub event.
-    fn fail(&mut self) {
+    /// Drops the stages without releasing the scrubber's held bytes, keeping its match count for the scrub event, and
+    /// logs the failure. Returns `failure` for the caller to pass on.
+    fn fail(&mut self, failure: RelayFailure) -> RelayFailure {
+        tracing::warn!(route = %self.route, reason = %failure, "aborted a response body after its head was sent");
         self.matches = self.total_matches();
-        self.scrubber = None;
+        self.stages = None;
+        failure
     }
 }
 
 impl Body for RelayedBody {
     type Data = Bytes;
-    type Error = TransportError;
+    type Error = RelayFailure;
 
-    fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, TransportError>>> {
+    fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, RelayFailure>>> {
         let this = self.get_mut();
         loop {
-            let Some(scrubber) = this.scrubber.as_mut() else {
+            let Some(stages) = this.stages.as_mut() else {
                 return Poll::Ready(None);
             };
-            match ready!(Pin::new(&mut this.chunks).poll_next(cx)) {
-                Some(Ok(chunk)) => {
-                    // A chunk wholly held back yields nothing; the next one is read rather than sending an empty frame.
-                    let released = scrubber.push(&chunk);
-                    if !released.is_empty() {
-                        return Poll::Ready(Some(Ok(Frame::data(released))));
-                    }
-                }
-                Some(Err(error)) => {
-                    this.fail();
-                    return Poll::Ready(Some(Err(error)));
-                }
-                None => return Poll::Ready(this.end().map(|tail| Ok(Frame::data(tail)))),
+            let out = match ready!(Pin::new(&mut this.chunks).poll_next(cx)) {
+                Some(Ok(chunk)) => stages.push(&chunk),
+                Some(Err(_)) => Err(RelayFailure::Upstream),
+                None => this.end(),
+            };
+            match out {
+                Err(failure) => return Poll::Ready(Some(Err(this.fail(failure)))),
+                // A chunk wholly held back yields nothing; the next one is read rather than sending an empty frame.
+                Ok(out) if out.is_empty() => {}
+                Ok(out) => return Poll::Ready(Some(Ok(Frame::data(out)))),
             }
         }
     }
@@ -288,26 +458,135 @@ mod tests {
 
     use super::*;
 
-    /// A relayed body over `chunks` with no scrub patterns, after `header_matches` matches in the headers.
-    fn body(chunks: &[&'static [u8]], header_matches: u64) -> RelayedBody {
+    /// A relayed body over `chunks` in `codings` with no scrub patterns, after `header_matches` matches in the headers.
+    fn coded_body(chunks: Vec<Bytes>, codings: BodyCodings, limits: Limits) -> RelayedBody {
         let context = ResponseContext {
             method: Method::Get,
             patterns: ScrubPatterns::default(),
             route: "fx".parse().unwrap(),
             credential: "fx_key".parse().unwrap(),
+            accept_encoding: None,
+            limits,
         };
-        let chunks = ResponseChunks::of(chunks.iter().copied().map(Bytes::from_static).collect());
-        RelayedBody::new(chunks, context, header_matches)
+        RelayedBody::new(ResponseChunks::of(chunks), context, codings, 0)
     }
 
-    /// Every frame of `body`, each of which must be data and not empty; the chunks are all ready, so nothing waits.
-    fn drain(body: &mut RelayedBody) -> Vec<Bytes> {
+    /// A relayed identity body over `chunks` with no scrub patterns, after `header_matches` matches in the headers.
+    fn body(chunks: &[&'static [u8]], header_matches: u64) -> RelayedBody {
+        let chunks = chunks.iter().copied().map(Bytes::from_static).collect();
+        let mut relayed = coded_body(chunks, BodyCodings::default(), Limits::default());
+        relayed.matches = header_matches;
+        relayed
+    }
+
+    /// Every frame of `body` up to its end or first error; the chunks are all ready, so nothing waits.
+    fn frames(body: &mut RelayedBody) -> Vec<Result<Bytes, RelayFailure>> {
         let mut cx = Context::from_waker(Waker::noop());
-        std::iter::from_fn(|| match Pin::new(&mut *body).poll_frame(&mut cx) {
-            Poll::Ready(Some(frame)) => Some(frame.unwrap().into_data().unwrap()),
-            Poll::Ready(None) | Poll::Pending => None,
+        let mut failed = false;
+        std::iter::from_fn(|| match (failed, Pin::new(&mut *body).poll_frame(&mut cx)) {
+            (false, Poll::Ready(Some(frame))) => {
+                failed = frame.is_err();
+                Some(frame.map(|frame| frame.into_data().unwrap()))
+            }
+            _ => None,
         })
         .collect()
+    }
+
+    /// Every frame of `body`, each of which must be data and not empty.
+    fn drain(body: &mut RelayedBody) -> Vec<Bytes> {
+        frames(body).into_iter().map(Result::unwrap).collect()
+    }
+
+    fn gzip(data: &[u8]) -> Bytes {
+        let mut encoder = ResponseEncoder::new(ContentCoding::Gzip);
+        [encoder.push(data).unwrap(), encoder.finish().unwrap()].concat().into()
+    }
+
+    fn gunzip(data: &[u8]) -> Vec<u8> {
+        let mut decoder = ResponseDecoder::new(ContentCoding::Gzip);
+        let out = decoder.push(data).map(Result::unwrap).collect::<Vec<_>>().concat();
+        decoder.finish().unwrap();
+        out
+    }
+
+    fn limits(toml: &str) -> Limits {
+        #[derive(serde::Deserialize)]
+        struct Config {
+            limits: Limits,
+        }
+        toml::from_str::<Config>(toml).unwrap().limits
+    }
+
+    const GZIP: BodyCodings = BodyCodings {
+        upstream: Some(ContentCoding::Gzip),
+        emitted: None,
+    };
+
+    #[test]
+    fn a_gzip_body_split_anywhere_is_decoded_and_counted() {
+        let coded = gzip(b"hello, decoded world");
+        let chunks = vec![coded.slice(..3), coded.slice(3..15), coded.slice(15..)];
+        let mut relayed = coded_body(chunks, GZIP, Limits::default());
+        assert_eq!(drain(&mut relayed).concat(), b"hello, decoded world");
+        let outcome = relayed.outcome().unwrap();
+        assert_eq!((outcome.scrubbed, outcome.decoded_bytes), (false, 20));
+    }
+
+    #[test]
+    fn an_identity_body_is_re_encoded_when_the_caller_needs_a_coding() {
+        let codings = BodyCodings {
+            upstream: None,
+            emitted: Some(ContentCoding::Gzip),
+        };
+        let chunks = vec![Bytes::from_static(b"first "), Bytes::from_static(b"second")];
+        let mut relayed = coded_body(chunks, codings, Limits::default());
+        assert_eq!(gunzip(&drain(&mut relayed).concat()), b"first second");
+        assert_eq!(relayed.outcome().map(|outcome| outcome.decoded_bytes), Some(12));
+    }
+
+    #[test]
+    fn each_failure_after_the_head_is_an_error_of_its_kind_and_no_outcome() {
+        let coded = gzip(&[b'a'; 4096]);
+        let cases = [
+            (vec![coded.slice(..coded.len() - 1)], Limits::default(), RelayFailure::Truncated),
+            (vec![Bytes::from_static(b"not gzip")], Limits::default(), RelayFailure::Corrupt),
+            (
+                vec![coded.clone(), Bytes::from_static(b"x")],
+                Limits::default(),
+                RelayFailure::Corrupt,
+            ),
+            (
+                vec![coded],
+                limits("[limits]\nmax_decompressed_response_bytes = 1000"),
+                RelayFailure::SizeLimit,
+            ),
+            (vec![gzip(&[0; 4 << 20])], Limits::default(), RelayFailure::RatioLimit),
+        ];
+        cases.into_iter().for_each(|(chunks, limits, expected)| {
+            let mut relayed = coded_body(chunks, GZIP, limits);
+            assert_eq!(frames(&mut relayed).pop(), Some(Err(expected)));
+            assert!(relayed.stages.is_none() && relayed.outcome().is_none(), "{expected:?}");
+        });
+    }
+
+    #[test]
+    fn a_body_over_the_size_limit_fails_even_without_a_coding() {
+        let chunks = vec![Bytes::from(vec![b'a'; 1001])];
+        let mut relayed = coded_body(
+            chunks,
+            BodyCodings::default(),
+            limits("[limits]\nmax_decompressed_response_bytes = 1000"),
+        );
+        assert_eq!(frames(&mut relayed), [Err(RelayFailure::SizeLimit)]);
+    }
+
+    #[test]
+    fn a_response_without_a_body_needs_no_decoder() {
+        // Its headers say gzip, but `relay` gives a response with no body empty codings, so its empty body ends cleanly.
+        let mut relayed = coded_body(Vec::new(), BodyCodings::default(), Limits::default());
+        assert!(drain(&mut relayed).is_empty());
+        assert!(relayed.outcome().is_some());
     }
 
     #[test]
@@ -315,14 +594,20 @@ mod tests {
         let mut relayed = body(&[b"a", b"", b"b"], 0);
         assert_eq!(relayed.outcome(), None);
         assert_eq!(drain(&mut relayed), [Bytes::from_static(b"a"), Bytes::from_static(b"b")]);
-        assert_eq!(relayed.outcome(), Some(ResponseOutcome { scrubbed: false }));
+        assert_eq!(
+            relayed.outcome(),
+            Some(ResponseOutcome {
+                scrubbed: false,
+                decoded_bytes: 2
+            })
+        );
     }
 
     #[test]
     fn a_match_in_the_headers_alone_marks_the_response_scrubbed() {
         let mut relayed = body(&[], 2);
         assert!(drain(&mut relayed).is_empty());
-        assert_eq!(relayed.outcome(), Some(ResponseOutcome { scrubbed: true }));
+        assert_eq!(relayed.outcome().map(|outcome| outcome.scrubbed), Some(true));
     }
 
     fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
@@ -364,55 +649,33 @@ mod tests {
     }
 
     #[test]
-    fn only_identity_content_and_chunked_transfer_codings_are_relayed() {
+    fn only_decodable_content_codings_and_chunked_transfer_codings_are_relayed() {
+        let ok = StatusCode::OK;
         [
-            &[][..],
-            &[("content-encoding", "identity")],
-            &[("content-encoding", " Identity , ")],
-            &[("transfer-encoding", "chunked")],
-            &[("transfer-encoding", "Chunked"), ("content-encoding", "identity")],
+            (&[][..], ok, None),
+            (&[("content-encoding", "identity")], ok, None),
+            (&[("content-encoding", "gzip")], ok, Some(ContentCoding::Gzip)),
+            (
+                &[("content-encoding", "br"), ("transfer-encoding", "Chunked")],
+                ok,
+                Some(ContentCoding::Br),
+            ),
+            (&[("transfer-encoding", "chunked")], StatusCode::PARTIAL_CONTENT, None),
         ]
         .iter()
-        .for_each(|pairs| assert!(is_screenable(&headers(pairs)), "{pairs:?}"));
+        .for_each(|(pairs, status, expected)| assert_eq!(upstream_coding(&headers(pairs), *status).ok(), Some(*expected), "{pairs:?}"));
         [
-            &[("content-encoding", "gzip")][..],
-            &[("content-encoding", "identity, br")],
-            &[("content-encoding", "identity"), ("content-encoding", "zstd")],
-            &[("content-encoding", "x-unknown")],
-            &[("transfer-encoding", "gzip, chunked")],
-            &[("transfer-encoding", "gzip"), ("transfer-encoding", "chunked")],
-            &[("transfer-encoding", "identity")],
+            (&[("content-encoding", "zstd")][..], ok),
+            (&[("content-encoding", "gzip, br")], ok),
+            (&[("content-encoding", "identity, br")], ok),
+            (&[("content-encoding", "gzip"), ("content-encoding", "gzip")], ok),
+            (&[("content-encoding", "gzip")], StatusCode::PARTIAL_CONTENT),
+            (&[("transfer-encoding", "gzip, chunked")], ok),
+            (&[("transfer-encoding", "gzip"), ("transfer-encoding", "chunked")], ok),
+            (&[("transfer-encoding", "identity")], ok),
         ]
         .iter()
-        .for_each(|pairs| assert!(!is_screenable(&headers(pairs)), "{pairs:?}"));
-    }
-
-    #[test]
-    fn a_body_loses_its_length_and_integrity_headers_when_scrubbed() {
-        let all = [
-            ("content-length", "5"),
-            ("content-md5", "x"),
-            ("digest", "sha-256=x"),
-            ("repr-digest", "sha-256=:x:"),
-            ("content-digest", "sha-256=:x:"),
-            ("etag", "\"1\""),
-        ];
-        let mut map = headers(&all);
-        reframe(&mut map, false, true);
-        assert_eq!(names(&map), ["etag"]);
-
-        let mut map = headers(&all);
-        reframe(&mut map, false, false);
-        let mut left = names(&map);
-        left.sort_unstable();
-        assert_eq!(left, ["content-digest", "content-md5", "digest", "etag", "repr-digest"]);
-    }
-
-    #[test]
-    fn a_response_without_a_body_keeps_its_length() {
-        let mut map = headers(&[("content-length", "5"), ("digest", "sha-256=x")]);
-        reframe(&mut map, true, true);
-        assert_eq!(names(&map), ["content-length"]);
+        .for_each(|(pairs, status)| assert!(upstream_coding(&headers(pairs), *status).is_err(), "{pairs:?} {status}"));
     }
 
     #[test]

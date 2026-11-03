@@ -57,8 +57,8 @@ impl HeaderName {
         }
     }
 
-    /// `Accept-Encoding`, which the request pipeline removes from outgoing requests until compressed responses are
-    /// decoded before scrubbing; built directly because a constant cannot fail to parse.
+    /// `Accept-Encoding`, which the request pipeline sets on every outgoing request in place of the caller's; built
+    /// directly because a constant cannot fail to parse.
     pub fn accept_encoding() -> Self {
         Self {
             spelling: "Accept-Encoding".to_owned(),

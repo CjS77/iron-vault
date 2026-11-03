@@ -2,7 +2,8 @@
 //!
 //! Per request it loads the serving snapshot once and uses only that, runs the request pipeline (§3.5 steps 3-8),
 //! sends the checked request with the caller's body through the route's upstream client (step 9), and relays the
-//! response through the scrubber with the injected credential's scrub patterns (step 10, §3.8). Each failure gets one
+//! response, decoded, through the scrubber with the injected credential's scrub patterns and re-encoded when the caller
+//! requires it (step 10, §3.8). Each failure gets one
 //! fixed answer, and none formats a library error (§3.15):
 //!
 //! | Failure | Answer |
@@ -11,9 +12,9 @@
 //! | The route has no upstream client | `503` |
 //! | The upstream exchange fails | [`TransportError::status`]: `502`, or `504` for a timeout |
 //! | No response headers by the request deadline | `504` |
-//! | The response has a content coding, or a transfer coding besides `chunked`, which the scrubber cannot see through | `502` |
+//! | The response has a content coding the service does not decode, a coded `206`, or a transfer coding besides `chunked` | `502` |
 //! | The response's `Location` leaves the route's upstream base or is ambiguous, or it has several (§3.8) | `502` |
-//! | The response body fails after its head was sent | The caller's connection is aborted |
+//! | The response body fails after its head was sent: upstream error, decode error, truncated coding, decompression budget | The caller's connection is aborted |
 //!
 //! The request deadline bounds the body as well: the request server fails a response body still streaming at it.
 
@@ -24,8 +25,9 @@ use std::task::{Context, Poll, ready};
 use bytes::Bytes;
 use futures_core::Stream;
 use http_body_util::{BodyExt, Full};
+use hyper::HeaderMap;
 use hyper::body::Body;
-use hyper::header::{CONTENT_LENGTH, HeaderValue as HttpHeaderValue};
+use hyper::header::{ACCEPT_ENCODING, CONTENT_LENGTH, HeaderValue as HttpHeaderValue};
 use hyper::http::request::Parts;
 use hyper::{Request, Response, StatusCode};
 use iron_vault_policy::{HeaderName, HeaderValue, ListenerConfig};
@@ -39,7 +41,7 @@ use crate::upstream::transport_error::TransportError;
 
 mod relay;
 pub(crate) use relay::ResponseContext;
-pub use relay::{RelayedBody, ResponseOutcome};
+pub use relay::{RelayFailure, RelayedBody, ResponseOutcome};
 
 /// The request handler that serves every request from the current serving snapshot.
 #[derive(Debug)]
@@ -100,6 +102,8 @@ async fn proxy(
         patterns,
         route,
         credential,
+        accept_encoding: accept_encoding(&parts.headers),
+        limits: *snapshot.policy().config().limits(),
     };
     let send = client.send(request, upstream_body(&parts, body));
     let response = tokio::time::timeout_at(deadline, send)
@@ -131,6 +135,15 @@ fn request_head(parts: &Parts) -> Option<RequestHead> {
         target: target.to_owned(),
         headers,
     })
+}
+
+/// The caller's `Accept-Encoding`, its repeated headers joined into one list as RFC 9110 §5.3 allows; `None` when it
+/// sent none, or when the joined list is not a valid value, which `choose_emitted` would treat as absent too.
+fn accept_encoding(headers: &HeaderMap) -> Option<HttpHeaderValue> {
+    let values: Vec<&[u8]> = headers.get_all(ACCEPT_ENCODING).iter().map(HttpHeaderValue::as_bytes).collect();
+    (!values.is_empty())
+        .then(|| values.join(&b", "[..]))
+        .and_then(|joined| HttpHeaderValue::from_bytes(&joined).ok())
 }
 
 /// The caller's body as the upstream body: none when the caller sent none, else streamed with its declared length.

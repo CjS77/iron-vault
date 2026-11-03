@@ -5,7 +5,8 @@
 //!
 //! 1. identify the caller from the connection's listener and peer uid and the caller-token header (step 3);
 //! 2. parse the request target and method, then authorize them against the caller's grants (step 4);
-//! 3. sanitize the caller's headers with the listener's caller-token header;
+//! 3. sanitize the caller's headers with the listener's caller-token header, and ask for only the codings the
+//!    response stage decodes;
 //! 4. charge the route's and the caller's rate limits (step 5);
 //! 5. look up the route's credential record and resolve it for the route's slot (step 6);
 //! 6. build the upstream target and assemble the outgoing request, filling the slot once (step 7);
@@ -39,6 +40,7 @@ use iron_vault_policy::{
 use iron_vault_store::{CredentialRecord, ResolvedCredential};
 
 use crate::connection_tags::ConnectionTags;
+use crate::content_coding::UPSTREAM_ACCEPT_ENCODING;
 use crate::serving_snapshot::ServingSnapshot;
 
 /// The parts of a caller's request the pipeline reads: the method text, the raw request target and the header pairs.
@@ -188,14 +190,25 @@ fn run(sources: &impl Sources, tags: &ConnectionTags, head: RequestHead, now: In
     let caller = identify_caller(policy, tags.listener(), tags.peer_uid(), &headers)?;
     let authorized = authorize_request(policy, &caller, &method, &target)?;
     let mut headers = sanitize(headers, &token_header(policy, tags.listener())?)?;
-    // EP-20 replaces this and the response stage's refusal of any content coding: until compressed responses are decoded
-    // before scrubbing, asking for none keeps compliant upstreams from compressing. It does not meet §3.8 on its own;
-    // the refusal does.
-    headers.remove_all(&HeaderName::accept_encoding());
+    ask_for_decodable_codings(&mut headers);
     // Looked up before the charge, so nothing that can fail runs after it except resolution onward.
     let route = selected_route(policy, &authorized)?;
     charge_and_build(sources, &caller, route, &authorized, headers, now)
         .inspect_err(|refusal| refusal.report(authorized.route(), route.credential()))
+}
+
+/// Replaces the caller's `Accept-Encoding` with [`UPSTREAM_ACCEPT_ENCODING`], the codings the response stage decodes
+/// (§3.8), so an upstream never answers in one the service must refuse. The caller's value is never forwarded; the
+/// request handler reads it from the caller's request to choose the coding it emits.
+///
+/// Neither step can fail, since the constant is a valid value and `Accept-Encoding` is not reserved; if one did, the
+/// request would go without the header, which only asks for an uncompressed reply.
+fn ask_for_decodable_codings(headers: &mut OutgoingHeaders) {
+    headers.remove_all(&HeaderName::accept_encoding());
+    let inserted = HeaderValue::try_from(UPSTREAM_ACCEPT_ENCODING.as_bytes())
+        .ok()
+        .and_then(|value| headers.insert(HeaderName::accept_encoding(), value).ok());
+    debug_assert!(inserted.is_some(), "the service's Accept-Encoding could not be set");
 }
 
 /// Steps 5-8: charge, resolve, assemble and check. A defect here raises its high-severity event in the caller, where
