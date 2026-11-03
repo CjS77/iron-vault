@@ -12,6 +12,7 @@
 //! | The upstream exchange fails | [`TransportError::status`]: `502`, or `504` for a timeout |
 //! | No response headers by the request deadline | `504` |
 //! | The response has a content coding, or a transfer coding besides `chunked`, which the scrubber cannot see through | `502` |
+//! | The response's `Location` leaves the route's upstream base or is ambiguous, or it has several (§3.8) | `502` |
 //! | The response body fails after its head was sent | The caller's connection is aborted |
 //!
 //! The request deadline bounds the body as well: the request server fails a response body still streaming at it.
@@ -87,7 +88,13 @@ async fn proxy(
         .for_route(prepared.route())
         .map_err(|_| RefusalResponse::fixed(StatusCode::SERVICE_UNAVAILABLE.as_u16()))?;
     let (route, credential) = (prepared.route().clone(), prepared.credential().clone());
+    let route_config = snapshot
+        .policy()
+        .route(&route)
+        .ok_or_else(|| RefusalResponse::fixed(StatusCode::SERVICE_UNAVAILABLE.as_u16()))?;
     let (request, patterns) = prepared.into_parts();
+    // The URL actually sent, which holds a query slot's secret: kept only until the response head is decided.
+    let request_url = request.url().clone();
     let context = ResponseContext {
         method: request.method(),
         patterns,
@@ -99,7 +106,7 @@ async fn proxy(
         .await
         .unwrap_or(Err(TransportError::Timeout))
         .map_err(|error| RefusalResponse::fixed(error.status().as_u16()))?;
-    relay::relay(response, token_header(snapshot, tags), context)
+    relay::relay(response, token_header(snapshot, tags), context, route_config, &request_url)
 }
 
 /// The request head the pipeline reads, or `None` if a header does not convert, which hyper's parser should never let

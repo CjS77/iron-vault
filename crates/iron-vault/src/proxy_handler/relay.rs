@@ -1,6 +1,11 @@
 //! Relaying an upstream response to the caller (specification §3.5 step 10, §3.8): its status, its headers without
 //! connection-scoped or caller-authentication headers and scrubbed, and its body scrubbed chunk by chunk.
 //!
+//! The stages run in this order, each on what the one before left: coding check, header stripping, `Location`
+//! rewrite, header scrub, length and integrity header removal. The rewrite precedes the scrub so the scrub is the last
+//! transform on every emitted byte and the rewrite never parses scrub replacement text; the scrub still covers a
+//! `Location` passed through or rewritten. The body is scrubbed as it streams ([`RelayedBody`]).
+//!
 //! Every response passes through the scrubber with the scrub patterns of the credential injected for its request; no
 //! path relays a response without it. One it cannot screen, because a content or transfer coding hides the bytes, is
 //! refused with `502` before anything is sent (§3.8: no coding is forwarded opaquely).
@@ -12,11 +17,15 @@ use bytes::Bytes;
 use futures_core::Stream;
 use http_body_util::BodyExt;
 use hyper::body::{Body, Frame};
-use hyper::header::{CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, HeaderMap, HeaderName as HttpHeaderName, TRANSFER_ENCODING};
+use hyper::header::{
+    CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, HeaderMap, HeaderName as HttpHeaderName, HeaderValue as HttpHeaderValue, LOCATION,
+    TRANSFER_ENCODING,
+};
 use hyper::{Response, StatusCode};
 use iron_vault_kinds::ScrubPatterns;
 use iron_vault_policy::reserved_headers::HOP_BY_HOP_HEADERS;
-use iron_vault_policy::{CredentialName, HeaderName, Method, RouteName};
+use iron_vault_policy::{CredentialName, HeaderName, LocationRewrite, Method, RouteConfig, RouteName, rewrite_location};
+use url::Url;
 
 use crate::pipeline::RefusalResponse;
 use crate::request_server::{BoxError, ResponseBody};
@@ -39,13 +48,17 @@ pub(crate) struct ResponseContext {
     pub(crate) credential: CredentialName,
 }
 
-/// The caller's response for `upstream`: the upstream's status, its headers less those [`strip_headers`] removes and
-/// scrubbed, and its body as a [`RelayedBody`]. `token_header` is the caller-token header of the listener the request
-/// arrived on. A response with a content coding is refused with `502`.
+/// The caller's response for `upstream`: the upstream's status, its headers less those [`strip_headers`] removes, with
+/// `Location` rewritten and then scrubbed, and its body as a [`RelayedBody`]. `token_header` is the caller-token header
+/// of the listener the request arrived on. `route` and `request_url` (the URL actually sent, which may hold the secret)
+/// decide the `Location`. A response with a content coding, or a `Location` that must not reach the caller, is refused
+/// with `502` and its body dropped unread.
 pub(super) fn relay(
     upstream: UpstreamResponse,
     token_header: Option<HeaderName>,
     context: ResponseContext,
+    route: &RouteConfig,
+    request_url: &Url,
 ) -> Result<Response<ResponseBody>, RefusalResponse> {
     let (status, mut headers, chunks) = upstream.into_parts();
     // Judged before stripping, which drops `Transfer-Encoding` and every header `Connection` names, `Content-Encoding`
@@ -54,11 +67,41 @@ pub(super) fn relay(
         return Err(RefusalResponse::fixed(StatusCode::BAD_GATEWAY.as_u16()));
     }
     strip_headers(&mut headers, token_header.as_ref());
+    // Before the scrub, which must stay the last transform on every emitted byte.
+    rewrite_location_header(&mut headers, &context.route, route, request_url)?;
     let header_matches = scrub_headers(&mut headers, &context.patterns);
-    // EP-21: rewrite an eligible `Location` back under the route's prefix here, after the scrub; until then it passes
-    // through scrubbed but otherwise unchanged. Redirects are never followed: the upstream client refuses them.
     reframe(&mut headers, has_no_body(context.method, status), !context.patterns.is_empty());
     Ok(response(status, headers, RelayedBody::new(chunks, context, header_matches)))
+}
+
+/// Applies [`rewrite_location`] to the response's `Location`, on any status. Several `Location` headers are ambiguous
+/// and refused like an out-of-base one. The warning names the route and the refusal kind, never the value or a URL.
+fn rewrite_location_header(
+    headers: &mut HeaderMap,
+    name: &RouteName,
+    route: &RouteConfig,
+    request_url: &Url,
+) -> Result<(), RefusalResponse> {
+    let refused = |reason: &dyn std::fmt::Display| {
+        tracing::warn!(route = %name, %reason, "refused an upstream redirect");
+        RefusalResponse::fixed(StatusCode::BAD_GATEWAY.as_u16())
+    };
+    let mut values = headers.get_all(LOCATION).iter();
+    let Some(location) = values.next() else {
+        return Ok(());
+    };
+    if values.next().is_some() {
+        return Err(refused(&"more than one Location header"));
+    }
+    match rewrite_location(route, request_url, location.as_bytes()) {
+        LocationRewrite::PassThrough => Ok(()),
+        LocationRewrite::Refused(reason) => Err(refused(&reason)),
+        LocationRewrite::Rewritten(value) => {
+            let value = HttpHeaderValue::from_bytes(value.as_bytes()).map_err(|_| refused(&"unrepresentable rewritten Location"))?;
+            headers.insert(LOCATION, value);
+            Ok(())
+        }
+    }
 }
 
 /// Removes the headers that must not reach the caller: the hop-by-hop headers and every header a `Connection` header

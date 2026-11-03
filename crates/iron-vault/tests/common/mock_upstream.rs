@@ -263,7 +263,10 @@ impl Server {
         match &*self.reply {
             Reply::Stall => tokio::time::sleep(Duration::from_secs(3600)).await,
             Reply::Respond { status, headers, body } => {
-                let _ = tls.write_all(&response(*status, headers, body)).await;
+                // A header value may name the upstream's own origin, whose port is known only once it runs.
+                let origin = format!("https://localhost:{}", tls.get_ref().0.local_addr().map_or(0, |addr| addr.port()));
+                let headers: Vec<_> = headers.iter().map(|(n, v)| (n.clone(), v.replace("{origin}", &origin))).collect();
+                let _ = tls.write_all(&response(*status, &headers, body)).await;
                 let _ = tls.shutdown().await;
             }
             Reply::TwoChunks { first, second, gate } => {

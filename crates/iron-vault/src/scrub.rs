@@ -213,7 +213,7 @@ impl fmt::Debug for Scrubber<'_> {
 /// matching rule. Header names are not scrubbed: a secret in a name is implausible, and rewriting names would change
 /// semantics. A value that is not UTF-8 is scrubbed as bytes. `Location` is scrubbed like any other header.
 ///
-/// Note for EP-21: its `Location` rewriting must run after this call, on the scrubbed value.
+/// The relay rewrites `Location` before this call, so the scrub is the last transform on every emitted byte.
 pub fn scrub_headers(headers: &mut HeaderMap, patterns: &ScrubPatterns) -> u64 {
     scrub_header_values(headers, || Scrubber::new(patterns))
 }
