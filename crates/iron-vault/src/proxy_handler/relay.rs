@@ -62,7 +62,7 @@ fn response(status: StatusCode, headers: HeaderMap, body: RelayedBody) -> Respon
 /// An upstream response body on its way to the caller, each chunk passed on as it arrives, never buffered to the end.
 ///
 /// This is the one place the response body passes through, so the later response-body stages attach here: secret
-/// scrubbing (EP-19), decompression ahead of it (EP-20), and, with the `Location` rewrite beside [`relay`]'s headers,
+/// scrubbing (EP-19), decompression ahead of it (EP-20), and, with the `Location` rewrite beside the relayed headers,
 /// redirect handling (EP-21). For now it passes bytes unchanged.
 ///
 /// A failure is returned as an error, never as the end of the body. The request server's HTTP stack then aborts the

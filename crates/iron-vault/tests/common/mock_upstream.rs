@@ -88,6 +88,22 @@ pub enum Reply {
     },
     /// Never answers, holding the connection open.
     Stall,
+    /// Answers `200` with a chunked body: `first`, then `second` once `gate` is notified, so a test can prove the
+    /// first chunk was relayed before the second existed.
+    TwoChunks {
+        /// The first chunk, sent with the head.
+        first: String,
+        /// The second chunk, sent after the gate opens.
+        second: String,
+        /// Opened by the test once it has seen the first chunk.
+        gate: Arc<tokio::sync::Notify>,
+    },
+    /// Answers `200` with a chunked body, sends the one chunk `sent`, then closes the connection without the last
+    /// chunk, so the body fails rather than ends.
+    Truncated {
+        /// The only chunk sent.
+        sent: String,
+    },
 }
 
 impl Reply {
@@ -250,6 +266,19 @@ impl Server {
                 let _ = tls.write_all(&response(*status, headers, body)).await;
                 let _ = tls.shutdown().await;
             }
+            Reply::TwoChunks { first, second, gate } => {
+                let head = "HTTP/1.1 200 Test\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
+                let _ = tls.write_all(format!("{head}{}", chunk(first)).as_bytes()).await;
+                let _ = tls.flush().await;
+                gate.notified().await;
+                let _ = tls.write_all(format!("{}0\r\n\r\n", chunk(second)).as_bytes()).await;
+                let _ = tls.shutdown().await;
+            }
+            Reply::Truncated { sent } => {
+                let head = "HTTP/1.1 200 Test\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
+                let _ = tls.write_all(format!("{head}{}", chunk(sent)).as_bytes()).await;
+                let _ = tls.shutdown().await;
+            }
         }
     }
 }
@@ -321,6 +350,11 @@ async fn read_line(stream: &mut (impl AsyncReadExt + Unpin)) -> Option<String> {
         line.push(byte[0]);
     }
     Some(String::from_utf8(line).ok()?.trim_end().to_owned())
+}
+
+/// `data` as one chunk of a chunked body.
+fn chunk(data: &str) -> String {
+    format!("{:x}\r\n{data}\r\n", data.len())
 }
 
 fn response(status: u16, headers: &[(String, String)], body: &[u8]) -> Vec<u8> {
