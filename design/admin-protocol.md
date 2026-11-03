@@ -19,8 +19,8 @@ Three properties drive the design:
 One connection carries one exchange:
 
 1. The CLI sends one **admin request**: a command and its arguments.
-2. The service sends zero or more **prompts**. The CLI answers each with exactly one **owner input** frame before the
-   service sends anything else.
+2. The service sends zero or more **prompts** and **notices**, in any order. The CLI answers each prompt with exactly
+   one **owner input** frame before the service sends anything else. A notice is shown to the owner and never answered.
 3. The service sends exactly one **admin response**, success or error, and closes the connection.
 
 The service, not the CLI, decides what to prompt for: the service owns the operation (§3.2), so a modified CLI cannot
@@ -33,8 +33,12 @@ sequenceDiagram
     participant Service
     CLI->>Service: admin request
     loop zero or more times
-        Service->>CLI: prompt (label, secret?)
-        CLI->>Service: owner input
+        alt prompt
+            Service->>CLI: prompt (label, secret?)
+            CLI->>Service: owner input
+        else notice
+            Service->>CLI: notice (text)
+        end
     end
     Service->>CLI: admin response (success or error)
     Note over Service: closes the connection
@@ -58,6 +62,7 @@ Every frame is a 7-byte header followed by its body. Integers are big-endian.
 | `3` | owner input | CLI | the value itself |
 | `4` | admin response: success | service | no fields (empty) |
 | `5` | admin response: error | service | fields |
+| `6` | notice | service | fields |
 
 The body bound is 64 KiB (65 536 bytes). It is far above any label, message or typed value an operation needs, and
 small enough that a hostile length costs nothing. A body length above the bound is refused as soon as the header is
@@ -86,6 +91,8 @@ Every body except owner input is a sequence of **fields**:
 - Integer values have a fixed width; any other length is an error.
 - Text values are UTF-8, checked on decode.
 - A flag is one byte, `0` (false) or `1` (true); any other byte is an error.
+- A byte value is taken as is. The codec checks only its length, against the limit its field defines, and never
+  interprets, normalizes or re-encodes it, so the bytes decoded are the bytes sent.
 
 ### Admin request (kind 1)
 
@@ -99,10 +106,72 @@ an error.
 | Command ID | Command | Arguments | Result |
 |---|---|---|---|
 | `1` | `ping` | none | the deployment profile |
+| `2` | `config approve` | the proposed config bytes | the committed version, the config digest and the summary headline |
+
+**No command accepts an external signature** (§3.2). The service signs only the pending config of its own approval
+transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
+input. Normal loading verifies only the `config.toml.sig` the service itself published. A later command that would
+take any of these is out of bounds for this protocol, whatever it is for.
 
 `ping` changes nothing; the service answers it with a success response naming its deployment profile. The response's
 frame header already carries the service's protocol version, so the result does not repeat it. `ping` lets the CLI
 check that the service is up and which profile it runs before the real commands exist.
+
+#### config approve
+
+Runs the approval transaction (spec §3.9; [config-approval.md](config-approval.md#the-transaction)) on the bytes the
+owner proposes.
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | config | byte value: the exact proposed config, at most `MAX_CONFIG_LEN` (61,440) bytes |
+
+The decoder refuses a longer config as `malformed-frame`, so a request body is never above 61,454 bytes, inside the
+frame bound. The bytes are a byte value, not text: the service's config parser reports a non-UTF-8 config as an
+invalid config, with its own message, and the digest covers the bytes exactly as sent.
+
+The exchange, after the request:
+
+1. The service writes the pending config and validates it. An invalid config ends the exchange with `config-invalid`
+   before any prompt.
+2. **Summary.** The service sends the approval summary as one or more notices: the header (vault ID, the version this
+   approval will commit, the config digest, the committed version), then the sections in their fixed order. A notice
+   ends at a line boundary, so a summary longer than one frame body is split across several notices, never inside a
+   line.
+3. **Confirmation.** A prompt, not secret: `Approve this config as version <n>? Type yes to approve`. Any answer other
+   than exactly `yes` ends the exchange with `declined`. No version is reserved.
+4. **Approval passphrase.** A prompt, secret: `Approval passphrase`. The service opens the approver key with it. A
+   wrong passphrase ends the exchange with `approval-denied`, still before any reservation. There is no second try in
+   the same exchange.
+5. The service runs steps 2 to 6 of the transaction and answers with the result, or an error below.
+
+A prompt that gets no owner input cancels the command, as for every command, before a version is reserved. The service
+answers within the CLI's 60-second timeout after the passphrase: scrypt, three durable replaces, two renames, a
+directory fsync and a signature check take a few seconds.
+
+The success result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | committed version | `u64` |
+| 3 | config digest | byte value, exactly 32 bytes: BLAKE2b-256 of the approved config |
+| 4 | summary headline | UTF-8 text: one line of counts per summary section |
+
+The full summary was already shown as notices before the confirmation, and goes to the audit log. The result carries
+only the headline, which is bounded whatever the config's size, so the response always fits in one frame. The CLI
+prints `approved version <n> (blake2b:<64 hex>)` and the headline to stdout.
+
+Errors specific to `config approve`:
+
+| Code | When | Version consumed |
+|---|---|---|
+| `busy` | another approval, vault write or reload holds the service-wide lock | no |
+| `config-invalid` | the proposed config fails parsing, validation or activation; the message names the rule and the configured names involved, escaped, and never quotes other config bytes | no |
+| `declined` | the owner did not answer the confirmation with `yes` | no |
+| `approval-denied` | the approval passphrase did not open the approver key, or the key it opened is not the pinned approver | no |
+| `approval-unavailable` | the service cannot approve now: the vault is locked, the approval state is damaged, or the version counter is exhausted; the message says which | no |
+| `approval-failed` | the transaction failed after its reservation and before its commit; the active policy is unchanged | yes; the message names it |
+| `committed-not-active` | the commit landed, but publishing or activating failed; the service is unavailable until a reload or restart finishes the transaction | yes; the message names the committed version |
 
 ### Prompt (kind 2)
 
@@ -110,6 +179,17 @@ check that the service is up and which profile it runs before the real commands 
 |---|---|---|
 | 1 | label | UTF-8 text the CLI shows the owner |
 | 2 | secret | flag: when `1`, the CLI turns terminal echo off while the owner types |
+
+### Notice (kind 6)
+
+| Tag | Field | Value |
+|---|---|---|
+| 1 | text | UTF-8 text the CLI shows the owner; lines end with `\n` |
+
+A notice carries text the service needs the owner to read before a prompt, such as an approval summary. It is never
+answered. Unlike a prompt label, it may hold many lines, and a command may send as many notices as it needs, so text
+of any length reaches the owner without changing the frame bound. A single prompt label could not carry it: a label is
+one line, because the CLI removes control characters from it, newlines included.
 
 ### Owner input (kind 3)
 
@@ -129,6 +209,8 @@ A command without a result answers with an empty body. A command with a result a
 |---|---|---|
 | 1 | command | `u16` ID of the command this answers |
 | 2 and up | result | defined with the command |
+
+`config approve`'s result is defined [with the command](#config-approve).
 
 Naming the command keeps the codec context-free: a success body decodes on its own, without knowing which request it
 answers, and the CLI can check that it answers the request it sent. A body that names a command without a result, or
@@ -157,12 +239,19 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `3` | `unknown-command` | the command ID is not one the service knows |
 | `4` | `unexpected-frame` | a well-formed frame arrived out of turn in the exchange |
 | `5` | `not-admin-principal` | the connecting account is not an admin principal; nothing it sent was read |
-| `6` | `busy` | the service is already serving as many admin connections as it allows; try again |
+| `6` | `busy` | the service is already serving as many admin connections as it allows, or another operation holds the lock a command needs; try again |
+| `7` | `config-invalid` | `config approve`: the proposed config is invalid |
+| `8` | `declined` | the owner declined at a confirmation prompt |
+| `9` | `approval-denied` | `config approve`: the approval passphrase was wrong |
+| `10` | `approval-unavailable` | `config approve`: the service cannot run an approval now |
+| `11` | `approval-failed` | `config approve`: failed after reserving a version, before committing it |
+| `12` | `committed-not-active` | `config approve`: committed, but not yet published or active |
 
 ## Versions
 
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
-is refused before its kind or length is read.
+is refused before its kind or length is read. Version 1 has not been released, so the notice frame, byte values and
+`config approve` join it rather than starting version 2.
 
 Only the service sends responses, so the version rule is asymmetric:
 
@@ -264,10 +353,18 @@ to type. The CLI does not lock memory: it holds a value only until the value is 
 mappings would make its allocations fail under a finite `RLIMIT_MEMLOCK`. The client is Linux-only for now, like the
 service.
 
+### config approve
+
+`iron-vault config approve <file>` reads the file and sends its bytes. The file is required, and `-` is not accepted:
+when stdin is not a terminal, it carries the owner's answers to the prompts, so it cannot also carry the config. The
+config is not a secret, but the CLI never echoes its bytes in a diagnostic. A file longer than `MAX_CONFIG_LEN` is
+refused before anything is sent, with exit code 2. The CLI never computes a summary or a digest of its own: it shows
+the service's notices and result.
+
 ### Owner input
 
-The CLI collects each prompted value from its **owner console**, opened at the first prompt, so a command the service
-never prompts for touches neither the terminal nor stdin. No argument ever carries a value (§3.2, §3.13).
+The CLI collects each prompted value from its **owner console**, opened at the first prompt or notice, so a command
+the service never prompts for touches neither the terminal nor stdin. No argument ever carries a value (§3.2, §3.13).
 
 - **Stdin is a terminal:** the CLI opens `/dev/tty`, writes the label to it followed by `: `, and reads one line from
   it. For a secret prompt it turns echo off for the read with `tcsetattr`: `ECHO` off and `ECHONL` on, so the owner's
@@ -286,7 +383,9 @@ never prompts for touches neither the terminal nor stdin. No argument ever carri
   stderr, and only when stderr is a terminal; it never goes to stdout.
 
 The label is the service's text with control characters removed, so a label cannot move the cursor or reprogram the
-terminal. Every line follows the same rules:
+terminal. A notice's text has every control character except `\n` removed, for the same reason. It is written to
+`/dev/tty` when stdin is a terminal, and otherwise to stderr, whether or not stderr is a terminal, so a scripted
+approval still records the summary it approved. It never goes to stdout. Every line follows the same rules:
 
 - Exactly one trailing `\n` is stripped, and one `\r` before it. A last line without `\n` is still a value; an empty
   line is an empty value.

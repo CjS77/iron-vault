@@ -117,7 +117,7 @@ approval waits for it.
 | Step | What the service does | Durable change |
 |---|---|---|
 | 1 | Writes the proposed bytes as `config.toml.pending`. Then parses, validates and activates them against the credential catalog, capabilities and account directory, using the one owned buffer it wrote. Never reads the file back to do this. | `config.toml.pending` |
-| 2 | Shows the approval summary, then takes the approval passphrase and opens the approver key with it (the owner's authorization, as in the §3.9 sequence diagram). Then reserves the next version. | `approval.age`: highest reserved version + 1 |
+| 2 | Shows the approval summary and asks the owner to confirm it. Then takes the approval passphrase and opens the approver key with it (the owner's authorization, as in the §3.9 sequence diagram). Then reserves the next version. | `approval.age`: highest reserved version + 1 |
 | 3 | Signs the approval payload (purpose, vault ID, the reserved version, the digest of the buffer) and drops the signer. | none |
 | 4 | Writes the envelope as `config.toml.sig.staged`. Then builds the candidate serving snapshot from the step 1 activation: upstream clients and a new rate limiter. | `config.toml.sig.staged` |
 | 5 | **Admission pause starts.** Commits `(version, digest)`. | `approval.age`: the committed approval |
