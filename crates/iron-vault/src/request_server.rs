@@ -8,6 +8,7 @@
 //!
 //! | Limit | Enforced by | Answer |
 //! |---|---|---|
+//! | Request form (§3.5 step 2) | [`check_form`], first, before the body limit and the handler | `400` |
 //! | `max_connections` | A semaphore permit taken before the TLS handshake | Closed unread |
 //! | `max_header_bytes` | hyper's `max_header_size`, which counts the request line and headers on the wire exactly | `431` |
 //! | `max_header_count` | hyper's `max_headers` | `431` |
@@ -31,9 +32,9 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::combinators::UnsyncBoxBody;
-use http_body_util::{BodyExt, Empty};
+use http_body_util::{BodyExt, Empty, Full};
 use hyper::body::{Body, Incoming};
-use hyper::header::{CONNECTION, HeaderValue};
+use hyper::header::{CONNECTION, CONTENT_TYPE, HeaderValue};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
@@ -46,8 +47,10 @@ use tokio::time::Instant;
 use crate::request_listeners::{IncomingConnection, RequestListeners};
 
 mod body;
+mod form;
 use body::{Deadline, Overflow};
 pub use body::{RequestBody, RequestBodyError};
+pub use form::{FormViolation, check_form};
 
 /// The longest a connection may take to send a request's headers, so a client that trickles them (slowloris) cannot
 /// hold a connection slot. It matches the TLS listener's handshake timeout.
@@ -176,6 +179,9 @@ async fn respond<H: RequestHandler>(
     request: Request<Incoming>,
 ) -> Result<Response<ResponseBody>, Infallible> {
     let deadline = Instant::now() + request_timeout(&limits);
+    if let Err(violation) = check_form(request.method(), request.uri(), request.version(), request.headers()) {
+        return Ok(form_refusal(violation));
+    }
     let max_body = limits.max_request_body_bytes();
     if request.body().size_hint().lower() > max_body {
         return Ok(refusal(StatusCode::PAYLOAD_TOO_LARGE));
@@ -201,6 +207,18 @@ fn refusal(status: StatusCode) -> Response<ResponseBody> {
     let mut response = Response::new(Empty::new().map_err(|never| match never {}).boxed_unsync());
     *response.status_mut() = status;
     response.headers_mut().insert(CONNECTION, HeaderValue::from_static("close"));
+    response
+}
+
+/// A `400` that closes the connection, with the rule broken as its body; the body never repeats the target.
+fn form_refusal(violation: FormViolation) -> Response<ResponseBody> {
+    let mut response = refusal(StatusCode::BAD_REQUEST);
+    *response.body_mut() = Full::new(Bytes::from(violation.to_string()))
+        .map_err(|never| match never {})
+        .boxed_unsync();
+    response
+        .headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"));
     response
 }
 

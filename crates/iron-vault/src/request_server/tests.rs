@@ -247,3 +247,69 @@ async fn the_handler_sees_the_listener_and_peer_uid_of_each_connection() {
     let uid = rustix::process::getuid().as_raw();
     assert_eq!(seen, [(name("a-unix"), Some(uid)), (name("b-tcp"), None), (name("c-tls"), None)]);
 }
+
+/// The status and body of the response `request` gets on a fresh Unix connection.
+async fn response_of(running: &Running, request: &[u8]) -> (Option<u16>, String) {
+    status_and_rest(&mut running.unix().await, request).await
+}
+
+async fn status_and_rest(stream: &mut (impl AsyncRead + AsyncWrite + Unpin), request: &[u8]) -> (Option<u16>, String) {
+    stream.write_all(request).await.unwrap();
+    let mut raw = Vec::new();
+    let _ = tokio::time::timeout(WAIT, stream.read_to_end(&mut raw)).await.unwrap();
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    let code = text
+        .strip_prefix("HTTP/1.1 ")
+        .and_then(|rest| rest.get(..3))
+        .and_then(|code| code.parse().ok());
+    (code, text)
+}
+
+#[tokio::test]
+async fn a_request_outside_origin_form_gets_400_and_never_reaches_the_handler() {
+    let running = Running::start("", Stub::default());
+    let refused: [&[u8]; 8] = [
+        b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n",
+        b"GET https://evil.example/secret?k=SECRET HTTP/1.1\r\nHost: x\r\n\r\n",
+        b"GET http://evil.example/ HTTP/1.1\r\nHost: x\r\n\r\n",
+        b"OPTIONS * HTTP/1.1\r\nHost: x\r\n\r\n",
+        b"GET /?k=SECRET HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+        b"GET /?k=SECRET HTTP/1.1\r\nHost: x\r\nUpgrade: h2c\r\nConnection: Upgrade, HTTP2-Settings\r\n\r\n",
+        b"GET /?k=SECRET HTTP/1.1\r\nHost: x\r\nConnection: keep-alive, upgrade\r\n\r\n",
+        b"GET /?k=SECRET HTTP/1.1\r\nHost: x\r\nUpgrade: foo\r\n\r\n",
+    ];
+    for request in refused {
+        let (status, text) = response_of(&running, request).await;
+        let shown = String::from_utf8_lossy(request);
+        assert_eq!(status, Some(400), "{shown}");
+        assert!(
+            !text.contains("SECRET") && !text.contains("evil"),
+            "the 400 repeats the target: {text}"
+        );
+    }
+    assert_eq!(running.calls(), 0);
+}
+
+#[tokio::test]
+async fn the_400_body_names_the_rule_only() {
+    let running = Running::start("", Stub::default());
+    let (_, text) = response_of(&running, b"GET https://evil.example/?k=SECRET HTTP/1.1\r\nHost: x\r\n\r\n").await;
+    assert!(text.ends_with("the request target must be origin-form"), "{text}");
+}
+
+#[tokio::test]
+async fn origin_form_requests_pass_through_to_the_handler() {
+    let running = Running::start("", Stub::default());
+    assert_eq!(running.status(b"GET /fx/latest?x=1 HTTP/1.1\r\nHost: x\r\n\r\n").await, Some(200));
+    let post = b"POST /v1/chat HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\n\r\n{}";
+    assert_eq!(running.status(post).await, Some(200));
+    assert_eq!(running.calls(), 2);
+}
+
+#[tokio::test]
+async fn hyper_refuses_conflicting_content_lengths_before_the_handler_runs() {
+    let running = Running::start("", Stub::default());
+    let conflicting = b"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\nabc";
+    assert_eq!(response_of(&running, conflicting).await.0, Some(400));
+    assert_eq!(running.calls(), 0);
+}
