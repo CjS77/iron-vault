@@ -29,6 +29,7 @@
 
 mod br;
 mod budget;
+mod decisions;
 mod encoder;
 mod gzip;
 
@@ -39,6 +40,7 @@ use flate2::{Decompress, FlushDecompress};
 use zeroize::Zeroizing;
 
 pub use budget::{BudgetExceeded, DecompressionBudget};
+pub use decisions::{UPSTREAM_ACCEPT_ENCODING, UnsupportedCoding, choose_emitted, parse_content_encoding, rewrite_headers};
 pub use encoder::{EncodeError, ResponseEncoder};
 
 #[cfg(test)]
