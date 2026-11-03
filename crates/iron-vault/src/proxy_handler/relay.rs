@@ -2,8 +2,8 @@
 //! connection-scoped or caller-authentication headers and scrubbed, and its body scrubbed chunk by chunk.
 //!
 //! Every response passes through the scrubber with the scrub patterns of the credential injected for its request; no
-//! path relays a response without it. One it cannot screen, because a content coding hides the bytes, is refused with
-//! `502` before anything is sent (§3.8: no content coding is forwarded opaquely).
+//! path relays a response without it. One it cannot screen, because a content or transfer coding hides the bytes, is
+//! refused with `502` before anything is sent (§3.8: no coding is forwarded opaquely).
 
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
@@ -12,7 +12,7 @@ use bytes::Bytes;
 use futures_core::Stream;
 use http_body_util::BodyExt;
 use hyper::body::{Body, Frame};
-use hyper::header::{CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, HeaderMap, HeaderName as HttpHeaderName};
+use hyper::header::{CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, HeaderMap, HeaderName as HttpHeaderName, TRANSFER_ENCODING};
 use hyper::{Response, StatusCode};
 use iron_vault_kinds::ScrubPatterns;
 use iron_vault_policy::reserved_headers::HOP_BY_HOP_HEADERS;
@@ -48,11 +48,12 @@ pub(super) fn relay(
     context: ResponseContext,
 ) -> Result<Response<ResponseBody>, RefusalResponse> {
     let (status, mut headers, chunks) = upstream.into_parts();
-    strip_headers(&mut headers, token_header.as_ref());
-    if !is_identity_coded(&headers) {
-        tracing::warn!(route = %context.route, "response refused: its content coding cannot be scrubbed");
+    // Judged before stripping, which drops `Transfer-Encoding` and every header `Connection` names, `Content-Encoding`
+    // included: a coding hidden that way would still reach the caller.
+    if !is_screenable(&headers) {
         return Err(RefusalResponse::fixed(StatusCode::BAD_GATEWAY.as_u16()));
     }
+    strip_headers(&mut headers, token_header.as_ref());
     let header_matches = scrub_headers(&mut headers, &context.patterns);
     // EP-21: rewrite an eligible `Location` back under the route's prefix here, after the scrub; until then it passes
     // through scrubbed but otherwise unchanged. Redirects are never followed: the upstream client refuses them.
@@ -82,17 +83,25 @@ fn strip_headers(headers: &mut HeaderMap, token_header: Option<&HeaderName>) {
         });
 }
 
-/// Whether the body is sent as the upstream's bytes: no `Content-Encoding`, or only `identity`.
+/// Whether the body the scrubber sees is the upstream's bytes as meant: no content coding but `identity`, and no
+/// transfer coding but `chunked`, the only one hyper removes. Any other transfer coding, as in `gzip, chunked`, would
+/// reach the scrubber still coded.
 ///
-/// EP-20 replaces this check, and the pipeline's removal of `Accept-Encoding`, by decoding the body before the scrubber.
-fn is_identity_coded(headers: &HeaderMap) -> bool {
+/// EP-20 replaces the content-coding half, and the pipeline's removal of `Accept-Encoding`, by decoding the body before
+/// the scrubber.
+fn is_screenable(headers: &HeaderMap) -> bool {
+    codings(headers, CONTENT_ENCODING).all(|coding| coding.eq_ignore_ascii_case(b"identity"))
+        && codings(headers, TRANSFER_ENCODING).all(|coding| coding.eq_ignore_ascii_case(b"chunked"))
+}
+
+/// Every coding the `name` headers list, trimmed, empty list members skipped.
+fn codings(headers: &HeaderMap, name: HttpHeaderName) -> impl Iterator<Item = &[u8]> {
     headers
-        .get_all(CONTENT_ENCODING)
-        .iter()
+        .get_all(name)
+        .into_iter()
         .flat_map(|value| value.as_bytes().split(|b| *b == b','))
         .map(<[u8]>::trim_ascii)
         .filter(|coding| !coding.is_empty())
-        .all(|coding| coding.eq_ignore_ascii_case(b"identity"))
 }
 
 /// Whether the response has no body whatever its headers say (RFC 9110 §6.4.1): one to `HEAD`, a `204` or a `304`.
@@ -312,22 +321,27 @@ mod tests {
     }
 
     #[test]
-    fn only_absent_or_identity_content_coding_is_relayed() {
+    fn only_identity_content_and_chunked_transfer_codings_are_relayed() {
         [
             &[][..],
             &[("content-encoding", "identity")],
             &[("content-encoding", " Identity , ")],
+            &[("transfer-encoding", "chunked")],
+            &[("transfer-encoding", "Chunked"), ("content-encoding", "identity")],
         ]
         .iter()
-        .for_each(|pairs| assert!(is_identity_coded(&headers(pairs)), "{pairs:?}"));
+        .for_each(|pairs| assert!(is_screenable(&headers(pairs)), "{pairs:?}"));
         [
             &[("content-encoding", "gzip")][..],
             &[("content-encoding", "identity, br")],
             &[("content-encoding", "identity"), ("content-encoding", "zstd")],
             &[("content-encoding", "x-unknown")],
+            &[("transfer-encoding", "gzip, chunked")],
+            &[("transfer-encoding", "gzip"), ("transfer-encoding", "chunked")],
+            &[("transfer-encoding", "identity")],
         ]
         .iter()
-        .for_each(|pairs| assert!(!is_identity_coded(&headers(pairs)), "{pairs:?}"));
+        .for_each(|pairs| assert!(!is_screenable(&headers(pairs)), "{pairs:?}"));
     }
 
     #[test]
