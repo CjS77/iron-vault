@@ -23,9 +23,9 @@
 //! the request are never consulted to choose one (§8.2 Q-1). A marker in the slot is only checked against that
 //! credential when the slot is filled, and a marker anywhere else is inert text.
 //!
-//! Step 2 of §3.5, refusing a target that is not in origin form, `CONNECT` and upgrades before authentication, belongs
-//! to the request interface ahead of this pipeline. [`RequestTarget::parse`] and the method allowlist refuse them here
-//! too, after authentication.
+//! Step 2 of §3.5, the request-form gate, runs before authentication and is not part of this pipeline. This module
+//! refuses absolute-form and authority-form targets ([`RequestTarget::parse`]) and `CONNECT` (the method allowlist) too,
+//! after authentication. It does not refuse upgrades: sanitizing only strips `Upgrade` as a reserved header.
 
 use std::fmt;
 use std::time::Instant;
@@ -33,29 +33,19 @@ use std::time::Instant;
 use iron_vault_kinds::{KindError, ScrubPatterns};
 use iron_vault_policy::{
     ActivePolicy, AssembleError, AuthorizedRequest, AuthzError, CallerName, ChargeError, CheckedRequest, CredentialName, FinalCheckError,
-    HeaderName, HeaderValue, ListenerConfig, ListenerName, Method, OutgoingHeaders, OutgoingRequest, RateLimiter, RequestTarget,
-    RouteConfig, RouteName, SanitizeError, TargetError, Unauthenticated, UpstreamTarget, authorize, final_check, identify_caller, sanitize,
+    HeaderName, HeaderValue, ListenerName, Method, OutgoingHeaders, OutgoingRequest, RateLimiter, RequestTarget, RouteConfig, RouteName,
+    SanitizeError, TargetError, Unauthenticated, UpstreamTarget, authorize, final_check, identify_caller, sanitize,
 };
 use iron_vault_store::{CredentialRecord, ResolvedCredential};
 
+use crate::connection_tags::ConnectionTags;
 use crate::serving_snapshot::ServingSnapshot;
-
-/// The connection a request arrived on: the listener that accepted it and, on a Unix socket, the peer's uid.
-///
-/// Both must come from the accepted connection, never from the request. The request server's connection tags carry
-/// the same two facts and convert into this when the server hands a request to the pipeline.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Arrival {
-    /// The listener that accepted the connection.
-    pub listener: ListenerName,
-    /// The peer's uid as the kernel reported it; `None` on TCP, which reports no account.
-    pub peer_uid: Option<u32>,
-}
 
 /// The parts of a caller's request the pipeline reads: the method text, the raw request target and the header pairs.
 ///
 /// Free of HTTP-library types, so the pipeline is tested without a server. The headers may hold a caller token, and
-/// the query may hold caller secrets, so `Debug` shows neither the target nor any header value.
+/// the query may hold caller secrets, so `Debug` shows neither the target nor any header value. The method text is
+/// caller-controlled and may be any token, so `Debug` redacts it too, as [`PipelineRefusal::Method`] drops it.
 pub struct RequestHead {
     /// The method token exactly as sent.
     pub method: String,
@@ -68,7 +58,7 @@ pub struct RequestHead {
 impl fmt::Debug for RequestHead {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RequestHead")
-            .field("method", &self.method)
+            .field("method", &"<redacted>")
             .field("target", &"<redacted>")
             .field("headers", &self.headers)
             .finish()
@@ -153,11 +143,12 @@ pub enum PipelineRefusal {
     FinalCheck(#[from] FinalCheckError),
 }
 
-/// Runs §3.5 steps 3-8 for `head`, which arrived as `arrival`, against one serving snapshot at `now`.
+/// Runs §3.5 steps 3-8 for `head`, which arrived on the connection `tags` describes, against one serving snapshot at
+/// `now`.
 ///
 /// `now` is when the request is charged against its rate limits; the caller passes the current instant.
-pub fn prepare(snapshot: &ServingSnapshot, arrival: &Arrival, head: RequestHead, now: Instant) -> Result<Prepared, PipelineRefusal> {
-    run(snapshot, arrival, head, now)
+pub fn prepare(snapshot: &ServingSnapshot, tags: &ConnectionTags, head: RequestHead, now: Instant) -> Result<Prepared, PipelineRefusal> {
+    run(snapshot, tags, head, now)
 }
 
 /// What the pipeline reads from a serving snapshot. Tests supply their own to observe which records are looked up.
@@ -185,17 +176,18 @@ impl Sources for ServingSnapshot {
 }
 
 /// The steps in order; see the module documentation for why they run in this order.
-fn run(sources: &impl Sources, arrival: &Arrival, head: RequestHead, now: Instant) -> Result<Prepared, PipelineRefusal> {
+fn run(sources: &impl Sources, tags: &ConnectionTags, head: RequestHead, now: Instant) -> Result<Prepared, PipelineRefusal> {
     let policy = sources.policy();
     let RequestHead { method, target, headers } = head;
-    let caller = identify_caller(policy, &arrival.listener, arrival.peer_uid, &headers)?;
+    let caller = identify_caller(policy, tags.listener(), tags.peer_uid(), &headers)?;
     let authorized = authorize_request(policy, &caller, &method, &target)?;
-    let headers = sanitize(headers, &token_header(policy, &arrival.listener)?)?;
+    let headers = sanitize(headers, &token_header(policy, tags.listener())?)?;
+    // Looked up before the charge, so nothing that can fail runs after it except resolution onward.
+    let route = selected_route(policy, &authorized)?;
     // §3.5 step 5 also obtains owner confirmation, which needs no code in v0: activation refuses a route with
     // `confirm = "touch"` unless `Capabilities::touch_provider` is set, and v0 never sets it (§2, §8.2 "Touch policy
     // without a device"). A confirmation provider must add its check here, after the charge and before resolution.
     sources.limiter().charge(&caller, authorized.route(), now)?;
-    let route = selected_route(policy, &authorized)?;
     let resolved = resolve(sources, route, &authorized)?;
     let outgoing = assemble(route, &authorized, headers, &resolved)?;
     let request = final_check(outgoing, &authorized, route.upstream(), route.slot(), &resolved.bound())?;
@@ -219,7 +211,7 @@ fn authorize_request(policy: &ActivePolicy, caller: &CallerName, method: &str, t
 /// Caller identification passed, so the listener is in the policy; one that is not cannot have authenticated anyone.
 fn token_header(policy: &ActivePolicy, listener: &ListenerName) -> Result<HeaderName, Unauthenticated> {
     let config = policy.config().listeners().get(listener).ok_or(Unauthenticated)?;
-    Ok(ListenerConfig::caller_token_header(config))
+    Ok(config.caller_token_header())
 }
 
 /// The configuration of the route `authorized` selected.

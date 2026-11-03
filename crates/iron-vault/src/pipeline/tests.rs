@@ -193,8 +193,8 @@ impl TestSources {
         self.start + Duration::from_secs(1)
     }
 
-    fn run(&self, arrival: &Arrival, head: RequestHead) -> Result<Prepared, PipelineRefusal> {
-        run(self, arrival, head, self.one_token())
+    fn run(&self, tags: &ConnectionTags, head: RequestHead) -> Result<Prepared, PipelineRefusal> {
+        run(self, tags, head, self.one_token())
     }
 
     fn looked_up(&self) -> Vec<String> {
@@ -217,15 +217,12 @@ impl Sources for TestSources {
     }
 }
 
-fn arrival(listener: &str, peer_uid: Option<u32>) -> Arrival {
-    Arrival {
-        listener: listener.parse().unwrap(),
-        peer_uid,
-    }
+fn tags(listener: &str, peer_uid: Option<u32>) -> ConnectionTags {
+    ConnectionTags::new(listener.parse().unwrap(), peer_uid)
 }
 
-fn loopback() -> Arrival {
-    arrival("loopback", None)
+fn loopback() -> ConnectionTags {
+    tags("loopback", None)
 }
 
 fn head(method: &str, target: &str, headers: &[(&str, &str)]) -> RequestHead {
@@ -289,7 +286,7 @@ fn a_header_slot_holds_the_credential_and_nothing_else_does() {
 fn a_query_slot_holds_the_credential_and_nothing_else_does() {
     let sources = TestSources::new();
     let request = head("GET", "/fx/latest?base=USD&access_key=placeholder", &[]);
-    let prepared = sources.run(&arrival("local", Some(FX_MCP_UID)), request).unwrap();
+    let prepared = sources.run(&tags("local", Some(FX_MCP_UID)), request).unwrap();
 
     assert_eq!(holders(&prepared, FX_SECRET), ["url"]);
     assert_eq!(
@@ -302,7 +299,7 @@ fn a_query_slot_holds_the_credential_and_nothing_else_does() {
 fn a_basic_slot_holds_the_credential_and_nothing_else_does() {
     let sources = TestSources::new();
     let request = head("GET", "/billing/v1/invoices", &[("Authorization", "Basic placeholder")]);
-    let prepared = sources.run(&arrival("naomi-backoffice", None), request).unwrap();
+    let prepared = sources.run(&tags("naomi-backoffice", None), request).unwrap();
 
     let token = "YWxpY2U6czNjcmV0"; // base64("alice:s3cret")
     assert_eq!(holders(&prepared, token), ["Authorization"]);
@@ -341,7 +338,7 @@ fn an_ungranted_request_is_not_charged_or_resolved() {
     assert!(sources.looked_up().is_empty());
     let fx = head("GET", "/fx/latest", &[]);
     assert!(
-        sources.run(&arrival("local", Some(FX_MCP_UID)), fx).is_ok(),
+        sources.run(&tags("local", Some(FX_MCP_UID)), fx).is_ok(),
         "the fx token is still there"
     );
 }
@@ -372,6 +369,22 @@ fn ambiguous_framing_is_refused_before_the_charge() {
     let refused = sources.run(&loopback(), brave_search("placeholder", &framing)).unwrap_err();
 
     assert_eq!(refused, PipelineRefusal::Sanitize(SanitizeError::ConflictingContentLength));
+    assert!(sources.looked_up().is_empty());
+    assert!(
+        sources.run(&loopback(), brave_search("placeholder", &[])).is_ok(),
+        "the one token is still there"
+    );
+}
+
+#[test]
+fn a_malformed_target_is_not_charged_or_resolved() {
+    let sources = TestSources::new();
+    let token = bearer();
+    let traversal = head("GET", "/brave/../fx/latest", &[("Proxy-Authorization", &token)]);
+
+    let refused = sources.run(&loopback(), traversal).unwrap_err();
+
+    assert!(matches!(refused, PipelineRefusal::Target(_)), "{refused:?}");
     assert!(sources.looked_up().is_empty());
     assert!(
         sources.run(&loopback(), brave_search("placeholder", &[])).is_ok(),
@@ -478,9 +491,10 @@ fn prepare_reads_a_serving_snapshot() {
 }
 
 #[test]
-fn debug_hides_the_target_and_header_values() {
+fn debug_hides_the_method_target_and_header_values() {
     let target = format!("/brave/search?q={MARKER}");
     assert_hides_marker(&head("GET", &target, &[("X-Subscription-Token", MARKER)]));
+    assert_hides_marker(&head(MARKER, "/brave/search", &[]));
 
     let sources = TestSources::new();
     assert_hides_marker(&sources.run(&loopback(), brave_search("placeholder", &[])).unwrap());
