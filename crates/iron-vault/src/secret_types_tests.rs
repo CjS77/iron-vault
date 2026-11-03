@@ -22,6 +22,7 @@ assert_not_impl_any!(RequestHead: Clone, Copy, Display, Serialize, Deserialize<'
 assert_not_impl_any!(Prepared: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(SnapshotHolder: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(crate::scrub::Scrubber<'static>: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(crate::content_coding::ResponseDecoder: Clone, Copy, Display, Serialize, Deserialize<'static>);
 #[cfg(target_os = "linux")]
 assert_not_impl_any!(crate::listener_tls::ListenerTls: Clone, Copy, Display, Serialize, Deserialize<'static>);
 
@@ -62,4 +63,17 @@ fn scrubber_debug_hides_its_patterns_and_held_bytes() {
     let released = scrubber.push(&MARKER.as_bytes()[..MARKER.len() - 1]);
     assert!(released.is_empty());
     assert_hides_marker(&scrubber);
+}
+
+#[test]
+fn response_decoder_debug_hides_the_plaintext_in_its_window() {
+    use std::io::Write;
+
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(MARKER.as_bytes()).unwrap();
+    let body = encoder.finish().unwrap();
+    let mut decoder = crate::content_coding::ResponseDecoder::new(crate::content_coding::ContentCoding::Gzip);
+    let decoded: Vec<u8> = decoder.push(&body).flat_map(|piece| piece.unwrap()).collect();
+    assert_eq!(decoded, MARKER.as_bytes());
+    assert_hides_marker(&decoder);
 }
