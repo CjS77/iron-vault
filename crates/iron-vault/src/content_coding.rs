@@ -37,7 +37,7 @@ use bytes::Bytes;
 use flate2::{Decompress, FlushDecompress};
 use zeroize::Zeroizing;
 
-pub use budget::{BudgetExceeded, DecompressionBudget, RATIO_FLOOR};
+pub use budget::{BudgetExceeded, DecompressionBudget};
 
 #[cfg(test)]
 mod tests;

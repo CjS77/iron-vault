@@ -5,7 +5,7 @@ use iron_vault_policy::Limits;
 /// Decoded bytes below which the ratio is not checked. A tiny body such as `{}` followed by a long run of spaces
 /// compresses by a huge factor yet costs nothing to process, so judging the ratio from the first few bytes would refuse
 /// harmless responses. At 1 MiB a bomb has done little damage, and the size limit still applies throughout.
-pub const RATIO_FLOOR: u64 = 1024 * 1024;
+const RATIO_FLOOR: u64 = 1024 * 1024;
 
 /// Which limit a response passed, with the counters at that moment. It carries no body byte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
