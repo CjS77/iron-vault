@@ -169,9 +169,9 @@ Errors specific to `config approve`:
 | `config-invalid` | the proposed config fails parsing, validation or activation; the message names the rule and the configured names involved, escaped, and never quotes other config bytes | no |
 | `declined` | the owner did not answer the confirmation with `yes` | no |
 | `approval-denied` | the approval passphrase did not open the approver key, or the key it opened is not the pinned approver | no |
-| `approval-unavailable` | the service cannot approve now: the vault is locked, the approval state is damaged, or the version counter is exhausted; the message says which | no |
+| `approval-unavailable` | the service cannot approve now: the vault is locked, the approval state is damaged, the version counter is exhausted, or a write failed before any version was reserved; the message says which | no |
 | `approval-failed` | the transaction failed after its reservation and before its commit; the active policy is unchanged | yes; the message names it |
-| `committed-not-active` | the commit landed, but publishing or activating failed; the service is unavailable until a reload or restart finishes the transaction | yes; the message names the committed version |
+| `committed-not-active` | the commit landed, or may have landed, but publishing or activating failed; the service is unavailable until a reload or restart finishes the transaction or refuses it | yes; the message names the version |
 
 ### Prompt (kind 2)
 

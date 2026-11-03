@@ -127,13 +127,15 @@ A failure ends the transaction at that step:
 
 | Fails at | Version | Files | Service afterwards |
 |---|---|---|---|
-| step 1: write, validation or activation | none reserved | pending removed | unchanged; `config-invalid` |
-| step 2, before reserving: the owner declines or cancels, or the passphrase is wrong | none reserved | pending removed | unchanged |
-| step 2, the reservation itself (counter exhausted, write failed) | none, or the one the uncertain write may hold | pending removed | unchanged |
-| step 3 or 4 | consumed | pending and staged removed | unchanged; `approval-failed` |
-| step 5, before the rename of `approval.age` | consumed | pending and staged removed | the pause ends on the **old** snapshot: nothing was committed |
-| step 5, after the rename (the directory fsync failed) | consumed | left in place | **unavailable**, `recovery-needed`: the commit may or may not survive power loss, so neither the old nor the new policy may be served until the next config check reads `approval.age` back |
-| step 6 | committed | left in place | **unavailable**, `recovery-needed`; the next config check (reload or restart) finishes publishing |
+| step 1: validation or activation | none reserved | pending removed | unchanged; `config-invalid` |
+| step 1: the write | none reserved | pending removed | unchanged; `approval-unavailable` |
+| step 2, before reserving: the owner declines or cancels, or the passphrase is wrong | none reserved | pending removed | unchanged; `declined`, `approval-denied`, or no response for a cancel |
+| step 2, the reservation: counter exhausted, or the write failed before its rename | none reserved | pending removed | unchanged; `approval-unavailable` |
+| step 2, the reservation: the directory fsync failed after the rename | consumed, whether or not it survives power loss | pending removed | unchanged policy; `approval-failed`; further approvals are refused until a config check reads `approval.age` back |
+| step 3 or 4, or building the candidate snapshot | consumed | pending and staged removed | unchanged; `approval-failed` |
+| step 5, before the rename of `approval.age` | consumed | pending and staged removed | the pause ends on the **old** snapshot, because nothing was committed; `approval-failed` |
+| step 5, after the rename (the directory fsync failed) | consumed | left in place | **unavailable**, `recovery-needed`: the commit may or may not survive power loss, so neither the old nor the new policy may be served until the next config check reads `approval.age` back; `committed-not-active` |
+| step 6 | committed | left in place | **unavailable**, `recovery-needed`; the next config check (reload or restart) finishes publishing; `committed-not-active` |
 
 Removing uncommitted files is best effort. One left behind is a leftover that the next config check discards (see the
 recovery table).
