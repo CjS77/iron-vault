@@ -123,6 +123,12 @@ impl ListenerConfig {
     pub fn token_header(&self) -> Option<&HeaderName> {
         self.token_header.as_ref()
     }
+
+    /// The header that carries a caller token on this listener, and that sanitizing must strip: the dedicated
+    /// `token_header`, or `Proxy-Authorization` when the listener sets none.
+    pub fn caller_token_header(&self) -> HeaderName {
+        self.token_header.clone().unwrap_or_else(HeaderName::proxy_authorization)
+    }
 }
 
 /// The `[listeners.<name>]` table as written.
@@ -328,6 +334,15 @@ mod tests {
             "address = \"127.0.0.1:7878\"\ntoken_header = \"X Token\"",
             "not allowed in an HTTP token",
         );
+    }
+
+    #[test]
+    fn caller_token_header_defaults_to_proxy_authorization() {
+        let dedicated = parse("unix_socket = \"/run/iron-vault/proxy.sock\"\ntoken_header = \"X-Iron-Vault-Token\"").unwrap();
+        assert_eq!(dedicated.caller_token_header().as_str(), "X-Iron-Vault-Token");
+        let default = parse("address = \"127.0.0.1:7878\"").unwrap();
+        assert_eq!(default.caller_token_header().as_str(), "Proxy-Authorization");
+        assert_eq!(default.caller_token_header().lowercase(), DEFAULT_TOKEN_HEADER);
     }
 
     #[test]

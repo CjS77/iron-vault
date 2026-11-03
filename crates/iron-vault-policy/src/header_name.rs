@@ -56,6 +56,15 @@ impl HeaderName {
             lowercase: "authorization".to_owned(),
         }
     }
+
+    /// `Proxy-Authorization`, the caller-token header of a listener that sets no `token_header`; built directly because
+    /// a constant cannot fail to parse.
+    pub(crate) fn proxy_authorization() -> Self {
+        Self {
+            spelling: "Proxy-Authorization".to_owned(),
+            lowercase: crate::listener::DEFAULT_TOKEN_HEADER.to_owned(),
+        }
+    }
 }
 
 /// RFC 9110 §5.6.2 `tchar`.

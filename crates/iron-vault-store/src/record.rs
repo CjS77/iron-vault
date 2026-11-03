@@ -173,6 +173,10 @@ mod tests {
         assert_eq!(bound.permitted(), &BTreeSet::from([(HOST.parse().unwrap(), Port::HTTPS)]));
         assert_eq!(bound.value().expose_secret(), "fx-secret");
         assert!(resolved.patterns().iter().any(|pattern| pattern == b"fx-secret"));
+        let count = resolved.patterns().len();
+        let patterns = resolved.into_patterns();
+        assert_eq!(patterns.len(), count);
+        assert!(patterns.iter().any(|pattern| pattern == b"fx-secret"));
     }
 
     #[test]

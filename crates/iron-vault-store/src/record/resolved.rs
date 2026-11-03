@@ -32,4 +32,10 @@ impl<'a> ResolvedCredential<'a> {
     pub fn patterns(&self) -> &ScrubPatterns {
         self.resolution.patterns()
     }
+
+    /// The scrub patterns alone, for response scrubbing once the final check has used the value; the value is dropped
+    /// and wiped here.
+    pub fn into_patterns(self) -> ScrubPatterns {
+        self.resolution.into_parts().1
+    }
 }
