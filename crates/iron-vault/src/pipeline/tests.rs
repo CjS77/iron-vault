@@ -296,6 +296,21 @@ fn a_header_slot_holds_the_credential_and_nothing_else_does() {
 }
 
 #[test]
+fn accept_encoding_is_removed_and_other_caller_headers_kept() {
+    let sources = TestSources::new();
+    let extra = [
+        ("Accept-Encoding", "gzip, br"),
+        ("accept-encoding", "zstd"),
+        ("Accept", "application/json"),
+    ];
+    let prepared = sources.run(&loopback(), brave_search("placeholder", &extra)).unwrap();
+
+    let names: Vec<String> = headers(&prepared).into_iter().map(|(n, _)| n.to_ascii_lowercase()).collect();
+    assert!(!names.contains(&"accept-encoding".to_owned()), "{names:?}");
+    assert!(names.contains(&"accept".to_owned()), "{names:?}");
+}
+
+#[test]
 fn a_query_slot_holds_the_credential_and_nothing_else_does() {
     let sources = TestSources::new();
     let request = head("GET", "/fx/latest?base=USD&access_key=placeholder", &[]);

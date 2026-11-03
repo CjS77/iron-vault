@@ -84,9 +84,10 @@ impl Prepared {
         &self.request
     }
 
-    /// The checked request alone, for the transport to send. The scrub patterns are dropped with the rest.
-    pub fn into_request(self) -> CheckedRequest {
-        self.request
+    /// The checked request for the transport and the scrub patterns for the response stage, which takes them so they
+    /// live until the response ends.
+    pub fn into_parts(self) -> (CheckedRequest, ScrubPatterns) {
+        (self.request, self.patterns)
     }
 
     /// The forms of the injected secret that response scrubbing removes.
@@ -186,7 +187,11 @@ fn run(sources: &impl Sources, tags: &ConnectionTags, head: RequestHead, now: In
     let RequestHead { method, target, headers } = head;
     let caller = identify_caller(policy, tags.listener(), tags.peer_uid(), &headers)?;
     let authorized = authorize_request(policy, &caller, &method, &target)?;
-    let headers = sanitize(headers, &token_header(policy, tags.listener())?)?;
+    let mut headers = sanitize(headers, &token_header(policy, tags.listener())?)?;
+    // EP-20 replaces this and the response stage's refusal of any content coding: until compressed responses are decoded
+    // before scrubbing, asking for none keeps compliant upstreams from compressing. It does not meet §3.8 on its own;
+    // the refusal does.
+    headers.remove_all(&HeaderName::accept_encoding());
     // Looked up before the charge, so nothing that can fail runs after it except resolution onward.
     let route = selected_route(policy, &authorized)?;
     charge_and_build(sources, &caller, route, &authorized, headers, now)

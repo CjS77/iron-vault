@@ -2,7 +2,8 @@
 //!
 //! Per request it loads the serving snapshot once and uses only that, runs the request pipeline (§3.5 steps 3-8),
 //! sends the checked request with the caller's body through the route's upstream client (step 9), and relays the
-//! response (step 10). Each failure gets one fixed answer, and none formats a library error (§3.15):
+//! response through the scrubber with the injected credential's scrub patterns (step 10, §3.8). Each failure gets one
+//! fixed answer, and none formats a library error (§3.15):
 //!
 //! | Failure | Answer |
 //! |---|---|
@@ -10,6 +11,7 @@
 //! | The route has no upstream client | `503` |
 //! | The upstream exchange fails | [`TransportError::status`]: `502`, or `504` for a timeout |
 //! | No response headers by the request deadline | `504` |
+//! | The response has a content coding, which the scrubber cannot see through | `502` |
 //! | The response body fails after its head was sent | The caller's connection is aborted |
 //!
 //! The request deadline bounds the body as well: the request server fails a response body still streaming at it.
@@ -35,7 +37,8 @@ use crate::upstream::body::{UpstreamBody, UpstreamBodyError};
 use crate::upstream::transport_error::TransportError;
 
 mod relay;
-pub use relay::RelayedBody;
+pub(crate) use relay::ResponseContext;
+pub use relay::{RelayedBody, ResponseOutcome};
 
 /// The request handler that serves every request from the current serving snapshot.
 #[derive(Debug)]
@@ -83,12 +86,20 @@ async fn proxy(
         .clients()
         .for_route(prepared.route())
         .map_err(|_| RefusalResponse::fixed(StatusCode::SERVICE_UNAVAILABLE.as_u16()))?;
-    let send = client.send(prepared.into_request(), upstream_body(&parts, body));
+    let (route, credential) = (prepared.route().clone(), prepared.credential().clone());
+    let (request, patterns) = prepared.into_parts();
+    let context = ResponseContext {
+        method: request.method(),
+        patterns,
+        route,
+        credential,
+    };
+    let send = client.send(request, upstream_body(&parts, body));
     let response = tokio::time::timeout_at(deadline, send)
         .await
         .unwrap_or(Err(TransportError::Timeout))
         .map_err(|error| RefusalResponse::fixed(error.status().as_u16()))?;
-    Ok(relay::relay(response, token_header(snapshot, tags)))
+    relay::relay(response, token_header(snapshot, tags), context)
 }
 
 /// The request head the pipeline reads, or `None` if a header does not convert, which hyper's parser should never let

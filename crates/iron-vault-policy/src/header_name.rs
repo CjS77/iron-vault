@@ -57,6 +57,15 @@ impl HeaderName {
         }
     }
 
+    /// `Accept-Encoding`, which the request pipeline removes from outgoing requests until compressed responses are
+    /// decoded before scrubbing; built directly because a constant cannot fail to parse.
+    pub fn accept_encoding() -> Self {
+        Self {
+            spelling: "Accept-Encoding".to_owned(),
+            lowercase: "accept-encoding".to_owned(),
+        }
+    }
+
     /// `Proxy-Authorization`, the caller-token header of a listener that sets no `token_header`; built directly because
     /// a constant cannot fail to parse.
     pub(crate) fn proxy_authorization() -> Self {

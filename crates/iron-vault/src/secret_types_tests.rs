@@ -25,6 +25,10 @@ assert_not_impl_any!(crate::scrub::Scrubber<'static>: Clone, Copy, Display, Seri
 assert_not_impl_any!(crate::content_coding::ResponseDecoder: Clone, Copy, Display, Serialize, Deserialize<'static>);
 #[cfg(target_os = "linux")]
 assert_not_impl_any!(crate::listener_tls::ListenerTls: Clone, Copy, Display, Serialize, Deserialize<'static>);
+#[cfg(target_os = "linux")]
+assert_not_impl_any!(crate::proxy_handler::ResponseContext: Clone, Copy, Debug, Display, Serialize, Deserialize<'static>);
+#[cfg(target_os = "linux")]
+assert_not_impl_any!(crate::proxy_handler::RelayedBody: Clone, Copy, Debug, Display, Serialize, Deserialize<'static>);
 
 /// Distinctive enough that a match in `Debug` output can only be the secret leaking.
 pub(crate) const MARKER: &str = "MARKER-secret-5d1c9e";

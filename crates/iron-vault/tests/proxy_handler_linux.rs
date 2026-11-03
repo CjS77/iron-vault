@@ -87,8 +87,10 @@ async fn a_granted_get_carries_the_credential_and_gets_the_upstreams_response() 
     assert_eq!(response.status, 201);
     assert_eq!(response.header("content-type"), Some("application/json"));
     assert_eq!(response.header("x-rate"), Some("59"));
-    assert_eq!(response.header("content-length"), Some("8"));
-    assert_eq!(response.body, r#"{"ok":1}"#);
+    // Scrubbing may change the length, so the upstream's `Content-Length` is dropped and the body is sent chunked.
+    assert_eq!(response.header("content-length"), None);
+    assert_eq!(response.header("transfer-encoding"), Some("chunked"));
+    assert_eq!(response.body, "8\r\n{\"ok\":1}\r\n0\r\n\r\n");
     let sent = upstream.requests();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].request_line(), "GET /v1/latest?base=USD HTTP/1.1");
@@ -127,7 +129,7 @@ async fn hop_by_hop_and_caller_auth_headers_from_the_upstream_never_reach_the_ca
         "{:?}",
         response.headers
     );
-    assert_eq!(response.body, "ok");
+    assert_eq!(response.body, "2\r\nok\r\n0\r\n\r\n");
 }
 
 #[tokio::test]

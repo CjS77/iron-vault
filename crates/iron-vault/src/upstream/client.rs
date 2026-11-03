@@ -191,6 +191,24 @@ impl Stream for ResponseChunks {
     }
 }
 
+#[cfg(test)]
+impl ResponseChunks {
+    /// A body of `chunks`, each ready at once, for the response stage's unit tests.
+    pub(crate) fn of(chunks: Vec<Bytes>) -> Self {
+        struct Ready(std::vec::IntoIter<Bytes>);
+
+        impl Stream for Ready {
+            type Item = reqwest::Result<Bytes>;
+
+            fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+                Poll::Ready(self.0.next().map(Ok))
+            }
+        }
+
+        Self(Box::pin(Ready(chunks.into_iter())))
+    }
+}
+
 impl fmt::Debug for ResponseChunks {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ResponseChunks").finish_non_exhaustive()
