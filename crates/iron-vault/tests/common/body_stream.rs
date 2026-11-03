@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_core::Stream;
-use iron_vault::upstream::request_body::{UpstreamBody, UpstreamBodyError};
+use iron_vault::upstream::body::{UpstreamBody, UpstreamBodyError};
 
 /// How long a failing stream waits before its error, so the client has sent the chunks before it as well as the head.
 const PAUSE_BEFORE_ERROR: Duration = Duration::from_millis(100);

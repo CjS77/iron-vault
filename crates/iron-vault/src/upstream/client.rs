@@ -19,7 +19,7 @@ use reqwest::retry;
 use reqwest::{Client, Request, Response, StatusCode};
 use rustls::ClientConfig;
 
-use super::request_body::{Kind, UpstreamBody};
+use super::body::{Kind, UpstreamBody, settle_empty};
 use super::transport_error::TransportError;
 use super::trust::{ClientConfigError, UpstreamTrust};
 
@@ -124,12 +124,19 @@ impl UpstreamClient {
     ///
     /// It must run on a tokio runtime with its timer enabled, which both deadlines use.
     pub async fn send(&self, request: CheckedRequest, body: UpstreamBody) -> Result<UpstreamResponse, TransportError> {
-        let request = with_body(to_reqwest(request)?, body);
-        let response = tokio::time::timeout(self.limits.response_headers, self.client.execute(request))
+        let request = to_reqwest(request)?;
+        let response = tokio::time::timeout(self.limits.response_headers, self.execute(request, body))
             .await
-            .map_err(|_| TransportError::Timeout)?
-            .map_err(TransportError::classify)?;
+            .map_err(|_| TransportError::Timeout)??;
         Ok(UpstreamResponse { response })
+    }
+}
+
+impl UpstreamClient {
+    /// Attaches `body` to `request` and executes it.
+    async fn execute(&self, request: Request, body: UpstreamBody) -> Result<Response, TransportError> {
+        let request = with_body(request, body).await?;
+        self.client.execute(request).await.map_err(TransportError::classify)
     }
 }
 
@@ -192,15 +199,24 @@ fn to_reqwest(checked: CheckedRequest) -> Result<Request, TransportError> {
 /// `request` with `body` attached.
 ///
 /// reqwest's streamed body has no length of its own, so a declared length goes in as a `Content-Length` header, which
-/// both hyper's HTTP/1.1 and HTTP/2 clients frame by; without one the body is chunked.
-fn with_body(mut request: Request, body: UpstreamBody) -> Request {
-    if let Kind::Stream { length, chunks } = body.kind {
-        if let Some(length) = length {
-            request.headers_mut().insert(header::CONTENT_LENGTH, length.into());
+/// both hyper's HTTP/1.1 and HTTP/2 clients frame by; without one the body is chunked. A declared length of zero is
+/// settled here, before anything is sent, and goes out as `Content-Length: 0` with no body: hyper's HTTP/1.1 client
+/// never polls a zero-length body, so the stream could not be checked later.
+async fn with_body(mut request: Request, body: UpstreamBody) -> Result<Request, TransportError> {
+    match body.kind {
+        Kind::Empty => {}
+        Kind::Stream { length: Some(0), chunks } => {
+            settle_empty(chunks).await.map_err(|_| TransportError::Body)?;
+            request.headers_mut().insert(header::CONTENT_LENGTH, 0.into());
         }
-        *request.body_mut() = Some(reqwest::Body::wrap_stream(chunks));
+        Kind::Stream { length, chunks } => {
+            if let Some(length) = length {
+                request.headers_mut().insert(header::CONTENT_LENGTH, length.into());
+            }
+            *request.body_mut() = Some(reqwest::Body::wrap_stream(chunks));
+        }
     }
-    request
+    Ok(request)
 }
 
 fn method(method: Method) -> reqwest::Method {

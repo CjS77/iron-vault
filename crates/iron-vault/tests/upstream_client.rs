@@ -16,8 +16,8 @@ use std::time::Duration;
 use common::body_stream::{body as body_of, eventually, failing_body};
 use common::checked::checked;
 use common::mock_upstream::{MockUpstream, RecordedRequest, Reply, TestCa, UPSTREAM_HOST};
+use iron_vault::upstream::body::UpstreamBody;
 use iron_vault::upstream::client::{TransportLimits, UpstreamClient, UpstreamResponse};
-use iron_vault::upstream::request_body::UpstreamBody;
 use iron_vault::upstream::transport_error::TransportError;
 use iron_vault::upstream::trust::UpstreamTrust;
 use iron_vault_policy::Method;
@@ -341,16 +341,39 @@ async fn a_body_stream_that_ends_short_of_its_declared_length_aborts_the_request
 
 #[tokio::test]
 async fn a_body_stream_longer_than_its_declared_length_aborts_the_request() {
+    // "abcde" alone completes the declared 5 bytes, so hyper would stop polling there and send a whole, truncated
+    // request; the "fg" after it must still be seen and refuse the request. A declared 0 is never polled by hyper at all.
+    for (length, chunks) in [(5, &["toolong"][..]), (5, &["abcde", "fg"][..]), (0, &["x"][..])] {
+        let ca = TestCa::new("Test CA");
+        let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+        let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+
+        let error = client(&ca.trust()).send(request, body_of(Some(length), chunks)).await.unwrap_err();
+
+        assert_eq!(error.status(), StatusCode::BAD_GATEWAY, "{length} {chunks:?}: {error:?}");
+        // The upstream must never record a request that looks whole but was cut to the declared length.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            upstream.requests().iter().all(|received| !received.body_complete),
+            "{length} {chunks:?}: {:?}",
+            upstream.requests()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_zero_length_body_is_sent_as_content_length_zero() {
     let ca = TestCa::new("Test CA");
     let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
     let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
 
-    let error = client(&ca.trust()).send(request, body_of(Some(5), &["toolong"])).await.unwrap_err();
+    client(&ca.trust()).send(request, body_of(Some(0), &["", ""])).await.unwrap();
 
-    assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
-    // The upstream must never record a request that looks whole but was cut to the declared length.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(upstream.requests().iter().all(|received| !received.body_complete));
+    let received = only_request(&upstream);
+    assert_eq!(header(&received.headers(), "content-length"), Some("0"));
+    assert_eq!(header(&received.headers(), "transfer-encoding"), None);
+    assert_eq!(received.body, b"");
+    assert!(received.body_complete);
 }
 
 #[tokio::test]

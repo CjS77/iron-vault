@@ -3,7 +3,9 @@
 //! The body is not part of a [`CheckedRequest`](iron_vault_policy::CheckedRequest). The final check never inspects it,
 //! because no credential goes into a caller's body, and keeping it apart makes that visible.
 
+use std::cmp::Ordering;
 use std::fmt;
+use std::future::poll_fn;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -42,11 +44,15 @@ impl UpstreamBody {
     /// `length` is the `Content-Length` the caller declared, if any. It is sent as `Content-Length` and the body is
     /// not chunked; with `None` the transport frames the body as chunked (HTTP/1.1) or by stream end (HTTP/2).
     ///
-    /// A declared length is enforced here: a stream that ends short of it, or whose chunk would take the total past it,
-    /// yields [`UpstreamBodyError`] and aborts the upstream request. The transport cannot be left to do this: hyper's
-    /// HTTP/1.1 encoder silently cuts a longer stream off at `Content-Length`, which would give the upstream a complete
-    /// request with a truncated body, and its HTTP/2 client never compares the count with the declaration. A stream
-    /// that yields an error aborts the request too, so the upstream never sees a complete request with a wrong body.
+    /// A declared length is enforced here, because the transport cannot be left to do it. hyper's HTTP/1.1 client stops
+    /// polling a body once it has written `Content-Length` bytes (and never polls it for length 0), so a longer stream
+    /// would reach the upstream as a complete request with a truncated body; its HTTP/2 client never compares the
+    /// count with the declaration. The stream therefore holds back the chunk that brings the total to the declared
+    /// length until the source has proved it ends there: the transport gets the last byte only after that, and a source
+    /// that goes on, or fails, yields [`UpstreamBodyError`] with that chunk never sent. A stream that ends short fails
+    /// the same way. A zero length has no chunk to hold, so [`UpstreamClient::send`](super::client::UpstreamClient::send)
+    /// settles it by draining the stream before sending anything. A stream that yields an error aborts the request too,
+    /// so the upstream never sees a complete request with a wrong body.
     pub fn stream(length: Option<u64>, chunks: impl Stream<Item = Result<Bytes, UpstreamBodyError>> + Send + 'static) -> Self {
         let chunks: Chunks = match length {
             Some(declared) => Box::pin(Counted::new(Box::pin(chunks), declared)),
@@ -59,11 +65,12 @@ impl UpstreamBody {
 }
 
 /// Passes chunks through while counting them against the declared length, so a body of any other length fails instead of
-/// reaching the transport.
+/// reaching the transport. The chunk that completes the count is held until the source ends; only one is ever held.
 struct Counted {
     inner: Chunks,
     declared: u64,
     seen: u64,
+    held: Option<Bytes>,
     finished: bool,
 }
 
@@ -73,14 +80,40 @@ impl Counted {
             inner,
             declared,
             seen: 0,
+            held: None,
             finished: false,
         }
     }
 
-    /// Ends the stream with an error: nothing is polled after one, so a transport that retries cannot see more chunks.
-    fn fail(&mut self) -> Poll<Option<Result<Bytes, UpstreamBodyError>>> {
+    /// Ends the stream with `error`, dropping any held chunk: nothing is polled after one, so a transport that polls
+    /// again cannot see more chunks.
+    fn fail(&mut self, error: UpstreamBodyError) -> Poll<Option<Result<Bytes, UpstreamBodyError>>> {
+        self.held = None;
         self.finished = true;
-        Poll::Ready(Some(Err(UpstreamBodyError)))
+        Poll::Ready(Some(Err(error)))
+    }
+
+    /// Counts a non-empty `chunk`: it is passed on while the total stays short of the declared length, held when it
+    /// reaches it, and a failure when it passes it. `None` means keep polling.
+    fn count(&mut self, chunk: Bytes) -> Option<Poll<Option<Result<Bytes, UpstreamBodyError>>>> {
+        self.seen = self.seen.saturating_add(chunk.len() as u64);
+        match self.seen.cmp(&self.declared) {
+            Ordering::Less => Some(Poll::Ready(Some(Ok(chunk)))),
+            Ordering::Equal => {
+                self.held = Some(chunk);
+                None
+            }
+            Ordering::Greater => Some(self.fail(UpstreamBodyError)),
+        }
+    }
+
+    /// The source ended: a short count fails; otherwise the held chunk, if any, is released and the stream then ends.
+    fn end(&mut self) -> Poll<Option<Result<Bytes, UpstreamBodyError>>> {
+        if self.seen < self.declared {
+            return self.fail(UpstreamBodyError);
+        }
+        self.finished = true;
+        Poll::Ready(self.held.take().map(Ok))
     }
 }
 
@@ -88,28 +121,34 @@ impl Stream for Counted {
     type Item = Result<Bytes, UpstreamBodyError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if self.finished {
-            return Poll::Ready(None);
-        }
-        match self.inner.as_mut().poll_next(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Some(Ok(chunk))) => {
-                self.seen = self.seen.saturating_add(chunk.len() as u64);
-                if self.seen > self.declared {
-                    self.fail()
-                } else {
-                    Poll::Ready(Some(Ok(chunk)))
+        loop {
+            if self.finished {
+                return Poll::Ready(None);
+            }
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Some(Ok(chunk))) if chunk.is_empty() => {}
+                Poll::Ready(Some(Ok(chunk))) => {
+                    if let Some(ready) = self.count(chunk) {
+                        return ready;
+                    }
                 }
+                Poll::Ready(Some(Err(error))) => return self.fail(error),
+                Poll::Ready(None) => return self.end(),
             }
-            Poll::Ready(Some(Err(error))) => {
-                self.finished = true;
-                Poll::Ready(Some(Err(error)))
-            }
-            Poll::Ready(None) if self.seen < self.declared => self.fail(),
-            Poll::Ready(None) => {
-                self.finished = true;
-                Poll::Ready(None)
-            }
+        }
+    }
+}
+
+/// Reads a zero-length body to its end, which only empty chunks may precede. hyper's HTTP/1.1 client never polls a body
+/// whose `Content-Length` is 0, so this is the only place a source that goes on or fails is caught.
+pub(super) async fn settle_empty(mut chunks: Chunks) -> Result<(), UpstreamBodyError> {
+    loop {
+        match poll_fn(|cx| chunks.as_mut().poll_next(cx)).await {
+            None => return Ok(()),
+            Some(Ok(chunk)) if chunk.is_empty() => {}
+            Some(Ok(_)) => return Err(UpstreamBodyError),
+            Some(Err(error)) => return Err(error),
         }
     }
 }
@@ -128,10 +167,8 @@ impl fmt::Debug for UpstreamBody {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
-    use std::future::poll_fn;
-
     use super::*;
+    use std::collections::VecDeque;
 
     struct Items(VecDeque<Result<Bytes, UpstreamBodyError>>);
 
@@ -171,6 +208,32 @@ mod tests {
     async fn a_chunk_past_the_declared_length_fails_and_is_not_passed_on() {
         let out = drain(5, &["abc", "def", "g"]).await;
         assert_eq!(out, vec![Ok(Bytes::from_static(b"abc")), Err(UpstreamBodyError)]);
+    }
+
+    #[tokio::test]
+    async fn the_chunk_that_completes_the_length_is_not_passed_on_when_the_source_goes_on() {
+        let out = drain(5, &["abcde", "fg"]).await;
+        assert_eq!(out, vec![Err(UpstreamBodyError)]);
+    }
+
+    #[tokio::test]
+    async fn the_chunk_that_completes_the_length_is_released_when_only_empty_chunks_follow() {
+        let out = drain(5, &["abcde", ""]).await;
+        assert_eq!(out, vec![Ok(Bytes::from_static(b"abcde"))]);
+    }
+
+    #[tokio::test]
+    async fn a_failing_source_drops_the_held_chunk() {
+        let items = VecDeque::from([Ok(Bytes::from_static(b"abcde")), Err(UpstreamBodyError)]);
+        let mut counted = Box::pin(Counted::new(Box::pin(Items(items)), 5));
+        assert_eq!(poll_fn(|cx| counted.as_mut().poll_next(cx)).await, Some(Err(UpstreamBodyError)));
+        assert!(poll_fn(|cx| counted.as_mut().poll_next(cx)).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn any_data_in_a_stream_of_declared_length_zero_fails() {
+        let out = drain(0, &["x"]).await;
+        assert_eq!(out, vec![Err(UpstreamBodyError)]);
     }
 
     #[tokio::test]
