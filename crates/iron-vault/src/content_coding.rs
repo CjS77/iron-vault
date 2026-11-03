@@ -21,9 +21,11 @@
 //! An empty body is not a complete stream in any of these codings, so [`finish`](ResponseDecoder::finish) reports it as
 //! truncated; whether a response with no body is decoded at all is the caller's rule.
 //!
-//! The decoders' windows hold plaintext response data, which may echo a secret before the scrubber has seen it. Each
-//! window is wiped when the decoder is dropped (see `design/secret-handling.md`), and neither a [`DecodeError`] nor a
-//! `Debug` output carries any body byte.
+//! The decoders' windows hold plaintext response data, which may echo a secret before the scrubber has seen it. The brotli
+//! buffers and the piece buffer are wiped by `Zeroizing` when the decoder is dropped. The gzip and deflate window is
+//! wiped by miniz_oxide's reset with ordinary (non-volatile) stores that `black_box` keeps the compiler from removing, so
+//! that wipe is best-effort (see `design/secret-handling.md`). Neither a [`DecodeError`] nor a `Debug` output carries any
+//! body byte.
 
 mod br;
 mod gzip;
@@ -80,6 +82,18 @@ struct Step {
     produced: usize,
 }
 
+impl Step {
+    /// This step if it fits the buffers it was given. A library that claims more than that is not trusted: slicing by the
+    /// claim would drop input or release bytes that are not output, so the body fails closed.
+    fn within(self, input: usize, out: usize) -> Result<Self, DecodeError> {
+        if self.consumed <= input && self.produced <= out {
+            Ok(self)
+        } else {
+            Err(DecodeError::Corrupt)
+        }
+    }
+}
+
 /// One coding's decoder. `step` may leave input unused when `out` fills or the coded stream ends; the caller offers the
 /// rest again. A call that uses no input and writes no output means the engine needs more input.
 trait Engine: Send {
@@ -122,7 +136,9 @@ impl ResponseDecoder {
     ///
     /// Each piece is decoded only when the iterator is advanced, so a caller that stops after a few pieces has decoded
     /// no more than that. Dropping the iterator before it ends abandons the rest of the chunk and poisons the decoder
-    /// with [`DecodeError::Abandoned`]: the caller is giving up on the response.
+    /// with [`DecodeError::Abandoned`]: the caller is giving up on the response. Ignoring the result of `push` drops the
+    /// iterator at once and so poisons the decoder, hence `must_use`.
+    #[must_use = "dropping the pieces unread abandons the chunk and poisons the decoder"]
     pub fn push<'a>(&'a mut self, chunk: &'a [u8]) -> Pieces<'a> {
         Pieces {
             decoder: self,
@@ -151,6 +167,7 @@ impl fmt::Debug for ResponseDecoder {
 }
 
 /// The pieces one [`ResponseDecoder::push`] decodes, each at most [`PIECE_SIZE`] bytes and never empty.
+#[must_use = "dropping the pieces unread abandons the chunk and poisons the decoder"]
 pub struct Pieces<'a> {
     decoder: &'a mut ResponseDecoder,
     input: &'a [u8],
@@ -176,7 +193,8 @@ impl Iterator for Pieces<'_> {
         }
         while !self.ended {
             let decoder = &mut *self.decoder;
-            let step = match decoder.engine.step(self.input, &mut decoder.out) {
+            let stepped = decoder.engine.step(self.input, &mut decoder.out);
+            let step = match stepped.and_then(|step| step.within(self.input.len(), decoder.out.len())) {
                 Ok(step) => step,
                 Err(error) => return self.fail(error),
             };
@@ -231,10 +249,11 @@ impl Inflate {
             .decompress(input, out, FlushDecompress::None)
             .map_err(|_| DecodeError::Corrupt)?;
         self.ended = status == flate2::Status::StreamEnd;
-        Ok(Step {
+        Step {
             consumed: usize::try_from(self.inner.total_in() - before_in).map_err(|_| DecodeError::Corrupt)?,
             produced: usize::try_from(self.inner.total_out() - before_out).map_err(|_| DecodeError::Corrupt)?,
-        })
+        }
+        .within(input.len(), out.len())
     }
 }
 
@@ -255,5 +274,8 @@ impl Engine for Inflate {
 impl Drop for Inflate {
     fn drop(&mut self) {
         self.restart();
+        // miniz_oxide 0.9.1 zeroes the window with plain stores (`state.dict = [0; ...]`) right before the Box is freed,
+        // which the compiler may remove as dead stores; `black_box` makes it treat the zeroed state as used.
+        std::hint::black_box(&self.inner);
     }
 }

@@ -31,7 +31,8 @@ clap = { version = "4.6", default-features = false, features = ["derive", "std",
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["zeroize"] }
 # gzip and deflate response decoding on the pure-Rust miniz_oxide backend (no C build), through the low-level `Decompress`
 # API so each step's output is bounded. Default features are off: that drops only `runtime_detection`, so crc32fast falls
-# back to its compile-time CPU features.
+# back to its compile-time CPU features. flate2 hard-wires miniz_oxide's `simd` feature, which pulls simd-adler32, a crate
+# with unsafe SIMD code that cannot be turned off from here.
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 # The HTTP/2 test upstream's server half, so the upstream client's HTTP/2 path is tested end to end; dev-only, and the
 # version reqwest's `http2` feature already brings.

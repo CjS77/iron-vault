@@ -150,8 +150,8 @@ enum State {
     Header(Header),
     /// Inside a member's deflate stream.
     Body,
-    /// The eight trailer bytes: those read so far, and the CRC-32 and length of the member's output.
-    Trailer(Vec<u8>, u32, u32),
+    /// The eight trailer bytes: those read so far and how many, then the CRC-32 and length of the member's output.
+    Trailer([u8; TRAILER_LEN], usize, u32, u32),
     /// After a member: the next byte starts another member, or is trailing data.
     Between,
 }
@@ -162,7 +162,6 @@ pub(super) struct Gzip {
     inflate: Inflate,
     /// Over the current member's output.
     crc: Crc,
-    members: u64,
 }
 
 impl Gzip {
@@ -171,7 +170,6 @@ impl Gzip {
             state: State::Header(Header::new(false)),
             inflate: Inflate::new(false),
             crc: Crc::new(),
-            members: 0,
         }
     }
 
@@ -190,26 +188,27 @@ impl Gzip {
 
     fn body(&mut self, input: &[u8], out: &mut [u8]) -> Result<Step, DecodeError> {
         let step = self.inflate.run(input, out)?;
+        // `run` has checked that `produced` fits `out`.
         self.crc.update(out.get(..step.produced).unwrap_or_default());
         if self.inflate.ended {
-            self.state = State::Trailer(Vec::with_capacity(TRAILER_LEN), self.crc.sum(), self.crc.amount());
+            self.state = State::Trailer([0; TRAILER_LEN], 0, self.crc.sum(), self.crc.amount());
         }
         Ok(step)
     }
 
     fn trailer(&mut self, input: &[u8]) -> Result<Step, DecodeError> {
-        let State::Trailer(read, crc, size) = &mut self.state else {
+        let State::Trailer(read, len, crc, size) = &mut self.state else {
             return Ok(Step::default());
         };
-        let consumed = input.len().min(TRAILER_LEN - read.len());
-        read.extend_from_slice(input.get(..consumed).unwrap_or_default());
-        if read.len() == TRAILER_LEN {
+        let consumed = input.len().min(TRAILER_LEN - *len);
+        read.iter_mut().skip(*len).zip(input).for_each(|(slot, &byte)| *slot = byte);
+        *len += consumed;
+        if *len == TRAILER_LEN {
             let (stored_crc, stored_size) = read.split_at(4);
             // Both are little-endian; the length is of the uncompressed data modulo 2^32.
             if stored_crc != crc.to_le_bytes() || stored_size != size.to_le_bytes() {
                 return Err(DecodeError::Corrupt);
             }
-            self.members += 1;
             self.state = State::Between;
         }
         Ok(Step { consumed, produced: 0 })
