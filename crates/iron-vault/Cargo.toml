@@ -78,6 +78,8 @@ rcgen.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 static_assertions.workspace = true
+# Builds non-default `Limits` the way an installation does, from a `[limits]` table.
+toml.workspace = true
 # The admin server tests stop the server on demand through a oneshot channel; the request server tests pause time.
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "test-util"] }
 

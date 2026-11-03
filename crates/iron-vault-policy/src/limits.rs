@@ -49,10 +49,14 @@ pub enum LimitsError {
 /// | `max_header_bytes` | 64 KiB | 1 MiB | Request line plus headers; fits large bearer/cookie headers, caps per-connection memory. |
 /// | `max_header_count` | 100 | 1 000 | Matches common HTTP server defaults; real API clients send far fewer. |
 /// | `max_request_body_bytes` | 10 MiB | 1 GiB | Covers JSON API payloads and small uploads; larger uploads are an explicit choice. |
-/// | `max_decompressed_response_bytes` | 64 MiB | 4 GiB | Scrubbing decompresses responses, so this bounds decompression bombs. |
+/// | `max_decompressed_response_bytes` | 64 MiB | 4 GiB | Scrubbing decompresses responses, so this bounds decompression bombs. Counts `identity` bodies too, because it bounds what the scrubber processes, not only what was decompressed. |
+/// | `max_decompression_ratio` | 100 | 10 000 | Decoded bytes per compressed byte, checked once a response has decoded 1 MiB. Ordinary compressed JSON is 5-20x, so 100 never trips on real traffic, while a bomb is stopped after about 1 MiB instead of the size cap. The ceiling is near what deflate can reach; a higher value would make the check meaningless. Not applied to `identity` bodies. |
 /// | `request_timeout_secs` | 300 | 3 600 | Whole-request ceiling long enough for streamed model responses. |
 /// | `upstream_timeout_secs` | 300 | 600 | Wait for upstream response headers; non-streaming LLM replies send them after generation. |
 /// | `max_connections` | 256 | 65 536 | Concurrent caller connections; well above local use, low enough to bound file descriptors. |
+///
+/// A brotli stream can ask its decoder for a window of up to 16 MiB before any output limit applies, so memory per
+/// response is bounded by the decoder's window as well as by these limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawLimits")]
 pub struct Limits {
@@ -60,6 +64,7 @@ pub struct Limits {
     max_header_count: u64,
     max_request_body_bytes: u64,
     max_decompressed_response_bytes: u64,
+    max_decompression_ratio: u64,
     request_timeout_secs: u64,
     upstream_timeout_secs: u64,
     max_connections: u64,
@@ -72,6 +77,7 @@ impl Default for Limits {
             max_header_count: 100,
             max_request_body_bytes: 10 * MIB,
             max_decompressed_response_bytes: 64 * MIB,
+            max_decompression_ratio: 100,
             request_timeout_secs: 300,
             upstream_timeout_secs: 300,
             max_connections: 256,
@@ -100,6 +106,12 @@ impl Limits {
         self.max_decompressed_response_bytes
     }
 
+    /// Largest accepted ratio of decoded to compressed response bytes, enforced once the response has decoded a floor's
+    /// worth of bytes (see the decompression budget in `iron-vault`).
+    pub fn max_decompression_ratio(&self) -> u64 {
+        self.max_decompression_ratio
+    }
+
     /// Time allowed for a whole request, in seconds.
     pub fn request_timeout_secs(&self) -> u64 {
         self.request_timeout_secs
@@ -124,6 +136,7 @@ struct RawLimits {
     max_header_count: Option<u64>,
     max_request_body_bytes: Option<u64>,
     max_decompressed_response_bytes: Option<u64>,
+    max_decompression_ratio: Option<u64>,
     request_timeout_secs: Option<u64>,
     upstream_timeout_secs: Option<u64>,
     max_connections: Option<u64>,
@@ -153,6 +166,12 @@ impl TryFrom<RawLimits> for Limits {
                 raw.max_decompressed_response_bytes,
                 d.max_decompressed_response_bytes,
                 4 * GIB,
+            )?,
+            max_decompression_ratio: pick(
+                "max_decompression_ratio",
+                raw.max_decompression_ratio,
+                d.max_decompression_ratio,
+                10_000,
             )?,
             request_timeout_secs: pick("request_timeout_secs", raw.request_timeout_secs, d.request_timeout_secs, 3_600)?,
             upstream_timeout_secs: pick("upstream_timeout_secs", raw.upstream_timeout_secs, d.upstream_timeout_secs, 600)?,
@@ -191,6 +210,7 @@ mod tests {
         assert_eq!(d.max_header_count(), 100);
         assert_eq!(d.max_request_body_bytes(), 10_485_760);
         assert_eq!(d.max_decompressed_response_bytes(), 67_108_864);
+        assert_eq!(d.max_decompression_ratio(), 100);
         assert_eq!(d.request_timeout_secs(), 300);
         assert_eq!(d.upstream_timeout_secs(), 300);
         assert_eq!(d.max_connections(), 256);
@@ -228,6 +248,31 @@ mod tests {
         assert!(
             err.to_string().contains("limits.upstream_timeout_secs is 601; the maximum is 600"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn decompression_ratio_override_zero_and_ceiling() {
+        assert_eq!(
+            parse("[limits]\nmax_decompression_ratio = 10000")
+                .unwrap()
+                .max_decompression_ratio(),
+            10_000
+        );
+        assert_eq!(
+            parse("[limits]\nmax_decompression_ratio = 20").unwrap().max_decompression_ratio(),
+            20
+        );
+        let zero = parse("[limits]\nmax_decompression_ratio = 0").unwrap_err();
+        assert!(
+            zero.to_string().contains("limits.max_decompression_ratio must not be zero"),
+            "{zero}"
+        );
+        let big = parse("[limits]\nmax_decompression_ratio = 10001").unwrap_err();
+        assert!(
+            big.to_string()
+                .contains("limits.max_decompression_ratio is 10001; the maximum is 10000"),
+            "{big}"
         );
     }
 

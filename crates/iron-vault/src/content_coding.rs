@@ -28,6 +28,7 @@
 //! body byte.
 
 mod br;
+mod budget;
 mod gzip;
 
 use std::fmt;
@@ -35,6 +36,8 @@ use std::fmt;
 use bytes::Bytes;
 use flate2::{Decompress, FlushDecompress};
 use zeroize::Zeroizing;
+
+pub use budget::{BudgetExceeded, DecompressionBudget, RATIO_FLOOR};
 
 #[cfg(test)]
 mod tests;
