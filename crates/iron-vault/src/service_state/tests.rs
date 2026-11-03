@@ -25,12 +25,13 @@ const EVENTS: [ServiceEvent; 10] = [
     E::Stop,
 ];
 
-const OPERATIONS: [AdminOperation; 7] = [
+const OPERATIONS: [AdminOperation; 8] = [
     AdminOperation::Ping,
     AdminOperation::Status,
     AdminOperation::Unlock,
     AdminOperation::Lock,
     AdminOperation::Reload,
+    AdminOperation::Approve,
     AdminOperation::Repair,
     AdminOperation::VaultChange,
 ];
@@ -135,10 +136,13 @@ fn admin_commands_follow_the_state() {
     assert_eq!(allowed(S::Starting), [A::Ping, A::Status]);
     assert_eq!(allowed(S::Locked), [A::Ping, A::Status, A::Unlock]);
     assert_eq!(allowed(S::Checking), [A::Ping, A::Status]);
-    assert_eq!(allowed(S::Ready), [A::Ping, A::Status, A::Lock, A::Reload, A::VaultChange]);
+    assert_eq!(
+        allowed(S::Ready),
+        [A::Ping, A::Status, A::Lock, A::Reload, A::Approve, A::VaultChange]
+    );
     assert_eq!(
         allowed(S::Unavailable(FailureReason::PolicyInvalid)),
-        [A::Ping, A::Status, A::Repair]
+        [A::Ping, A::Status, A::Approve]
     );
     assert_eq!(
         allowed(S::Unavailable(FailureReason::RecoveryNeeded)),

@@ -49,21 +49,13 @@ impl UnavailableReason {
             Self::RecoveryNeeded => "recovery needed",
         }
     }
-}
 
-impl UnavailableReason {
     /// The reason a request listener gives for a failed check.
     pub const fn from_failure(reason: FailureReason) -> Self {
         match reason {
             FailureReason::PolicyInvalid => Self::PolicyInvalid,
             FailureReason::RecoveryNeeded => Self::RecoveryNeeded,
         }
-    }
-}
-
-impl From<FailureReason> for UnavailableReason {
-    fn from(reason: FailureReason) -> Self {
-        Self::from_failure(reason)
     }
 }
 
@@ -105,7 +97,9 @@ pub enum ServiceEvent {
     Reload,
     /// An explicit lock was requested.
     Lock,
-    /// An authorized repair, or recovery of a committed transaction, finished.
+    /// An authorized repair, or recovery of a committed transaction, finished. A configuration approval committed from
+    /// Unavailable with [`FailureReason::PolicyInvalid`] leaves through this event too (the diagram's "authorized
+    /// repair"), so approving needs no edge of its own.
     Repaired,
     /// The service is stopping.
     Stop,
@@ -171,8 +165,10 @@ pub enum AdminOperation {
     Unlock,
     /// Clear the in-memory vault identity.
     Lock,
-    /// Reload, or approve a pending configuration.
+    /// Reload the configuration.
     Reload,
+    /// Approve a new configuration; also the way out of an invalid policy.
+    Approve,
     /// Authorized repair or recovery of a committed transaction.
     Repair,
     /// Change the vault: credentials, recipients, export and import.
@@ -192,15 +188,16 @@ impl ServiceState {
     }
 
     /// Whether the admin interface accepts `operation` in this state. Status and ping are always answered while the
-    /// service runs; every operation that needs the vault waits for Ready, and repair is offered only when Unavailable.
+    /// service runs; every operation that needs the vault waits for Ready, and approving is also offered for an invalid policy, and repair only for damaged state.
     pub const fn admin_allows(self, operation: AdminOperation) -> bool {
         use AdminOperation as A;
         match (self, operation) {
             (Self::Stopped, _) => false,
             (_, A::Ping | A::Status) => true,
             (Self::Locked, A::Unlock) => true,
-            (Self::Ready, A::Lock | A::Reload | A::VaultChange) => true,
-            (Self::Unavailable(_), A::Repair) => true,
+            (Self::Ready, A::Lock | A::Reload | A::Approve | A::VaultChange) => true,
+            (Self::Unavailable(FailureReason::PolicyInvalid), A::Approve) => true,
+            (Self::Unavailable(FailureReason::RecoveryNeeded), A::Repair) => true,
             _ => false,
         }
     }
