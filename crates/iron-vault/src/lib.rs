@@ -26,6 +26,7 @@ pub mod request_server;
 #[cfg(target_os = "linux")]
 pub mod request_socket;
 pub mod scrub;
+pub mod service_state;
 pub mod serving_snapshot;
 // Adopting activated sockets uses listenfd and rustix, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
