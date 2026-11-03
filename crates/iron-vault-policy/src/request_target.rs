@@ -309,7 +309,9 @@ fn is_query_char(c: char) -> bool {
 }
 
 /// Normalizes one raw segment, then checks the fully decoded text for traversal that a later decoder could see.
-fn normalize_segment(raw: &str) -> Result<String, TargetError> {
+///
+/// Crate-visible so that a rewritten `Location` path passes exactly the rules a caller path does.
+pub(crate) fn normalize_segment(raw: &str) -> Result<String, TargetError> {
     if raw.is_empty() {
         return Err(TargetError::EmptySegment);
     }
