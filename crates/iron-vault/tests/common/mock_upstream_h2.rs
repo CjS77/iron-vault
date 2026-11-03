@@ -74,6 +74,10 @@ pub struct RecordedH2Request {
     /// Every field of the request's header block in wire order, pseudo-headers included, as HPACK encoded it. `None` if
     /// the raw block could not be read, which a test should treat as a failure.
     pub fields: Option<Vec<Field>>,
+    /// The request body's DATA frames, concatenated.
+    pub body: Vec<u8>,
+    /// Whether the stream ended with END_STREAM. A client that resets the stream partway leaves this `false`.
+    pub body_complete: bool,
 }
 
 impl RecordedH2Request {
@@ -193,15 +197,24 @@ impl Server {
         let Ok(mut connection) = h2::server::handshake(recording).await else {
             return;
         };
-        let Some(Ok((request, respond))) = connection.accept().await else {
+        let Some(Ok((mut request, respond))) = connection.accept().await else {
             return;
         };
         // The request's HEADERS frame has been read in full by now, so `received` holds it.
         let fields = first_header_fields(&received.lock().unwrap());
         self.heads.fetch_add(1, Ordering::SeqCst);
-        let recorded = record(server_name, alpn, &request, fields);
+        let mut recorded = record(server_name, alpn, &request, fields);
+        // The connection must be polled while the body is read, or h2 never delivers its frames.
+        let (body, body_complete) = tokio::select! {
+            read = read_body(request.body_mut()) => read,
+            _ = drive(&mut connection) => (Vec::new(), false),
+        };
+        recorded.body = body;
+        recorded.body_complete = body_complete;
         self.requests.lock().unwrap().push(recorded);
-        reply(&self.reply, connection, respond).await;
+        if body_complete {
+            reply(&self.reply, connection, respond).await;
+        }
     }
 }
 
@@ -226,7 +239,27 @@ fn record(
         path: uri.path_and_query().map(|path| path.as_str().to_owned()),
         headers,
         fields,
+        body: Vec::new(),
+        body_complete: false,
     }
+}
+
+/// Reads the request body's DATA frames to the end of the stream; the flag is `false` if the stream was reset.
+async fn read_body(body: &mut h2::RecvStream) -> (Vec<u8>, bool) {
+    let mut received = Vec::new();
+    while let Some(data) = body.data().await {
+        let Ok(data) = data else {
+            return (received, false);
+        };
+        received.extend_from_slice(&data);
+        let _ = body.flow_control().release_capacity(data.len());
+    }
+    (received, true)
+}
+
+/// Polls the connection until it ends, so the frames of a request body in flight are processed.
+async fn drive(connection: &mut H2Connection) {
+    while let Some(Ok(_)) = connection.accept().await {}
 }
 
 /// Sends `reply` and drives the connection until the client closes it, so every frame is flushed.

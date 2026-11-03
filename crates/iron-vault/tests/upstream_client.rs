@@ -13,6 +13,7 @@ mod common;
 
 use std::time::Duration;
 
+use common::body_stream::{body as body_of, eventually, failing_body};
 use common::checked::checked;
 use common::mock_upstream::{MockUpstream, RecordedRequest, Reply, TestCa, UPSTREAM_HOST};
 use iron_vault::upstream::client::{TransportLimits, UpstreamClient, UpstreamResponse};
@@ -232,6 +233,125 @@ async fn transport_errors_show_neither_the_credential_nor_the_url() {
                     .for_each(|forbidden| assert!(!text.contains(forbidden), "{text:?} contains {forbidden:?}"));
             });
     });
+}
+
+/// The only request `upstream` records, waited for, since an aborted request is recorded after `send` has failed.
+async fn recorded(upstream: &MockUpstream) -> RecordedRequest {
+    eventually(|| upstream.requests().into_iter().next()).await
+}
+
+fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers.iter().find(|(found, _)| found == name).map(|(_, value)| value.as_str())
+}
+
+const CHAT: &str = "/header/chat";
+
+#[tokio::test]
+async fn a_fixed_length_body_arrives_byte_for_byte() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+    let chunks = ["{\"prompt\":", "\"h\u{e9}llo ", "w\u{f6}rld\"}"];
+    let sent = chunks.concat();
+
+    let response = client(&ca.trust())
+        .send(request, body_of(Some(sent.len() as u64), &chunks))
+        .await
+        .unwrap();
+
+    assert_eq!(body(response).await, b"done");
+    let received = only_request(&upstream);
+    assert_eq!(received.request_line(), "POST /v1/chat HTTP/1.1");
+    assert_eq!(header(&received.headers(), "content-length"), Some(sent.len().to_string().as_str()));
+    assert_eq!(header(&received.headers(), "transfer-encoding"), None);
+    assert_eq!(received.body, sent.as_bytes());
+    assert!(received.body_complete);
+}
+
+#[tokio::test]
+async fn a_body_of_unknown_length_arrives_chunked_byte_for_byte() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+    let chunks = ["one,", "two,", "three"];
+
+    client(&ca.trust()).send(request, body_of(None, &chunks)).await.unwrap();
+
+    let received = only_request(&upstream);
+    assert_eq!(header(&received.headers(), "transfer-encoding"), Some("chunked"));
+    assert_eq!(header(&received.headers(), "content-length"), None);
+    assert_eq!(received.body, chunks.concat().as_bytes());
+    assert!(received.body_complete);
+}
+
+/// A caller's `Content-Length` and `Transfer-Encoding` are dropped by `sanitize`; the transport frames the body from the
+/// length it is given, so a caller cannot make the framing disagree with the bytes.
+#[tokio::test]
+async fn the_callers_own_framing_headers_never_reach_the_upstream() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[("Content-Length", "999")], SECRET);
+
+    client(&ca.trust()).send(request, body_of(None, &["abc"])).await.unwrap();
+
+    let received = only_request(&upstream);
+    assert_eq!(header(&received.headers(), "content-length"), None);
+    assert_eq!(received.body, b"abc");
+}
+
+#[tokio::test]
+async fn a_body_stream_that_fails_partway_aborts_the_request() {
+    for length in [None, Some(100)] {
+        let ca = TestCa::new("Test CA");
+        let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+        let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+
+        let error = client(&ca.trust())
+            .send(request, failing_body(length, &["partial ", "body"]))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.status(), StatusCode::BAD_GATEWAY, "{length:?}: {error:?}");
+        let received = recorded(&upstream).await;
+        assert!(
+            !received.body_complete,
+            "{length:?}: the upstream saw a complete request: {received:?}"
+        );
+        assert_eq!(
+            received.body, b"partial body",
+            "{length:?}: the chunks before the failure were forwarded"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_body_stream_that_ends_short_of_its_declared_length_aborts_the_request() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+
+    let error = client(&ca.trust()).send(request, body_of(Some(100), &["short"])).await.unwrap_err();
+
+    assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
+    // hyper may refuse before it writes anything, so the upstream records no request at all; it must never record a
+    // complete one.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(upstream.requests().iter().all(|received| !received.body_complete));
+}
+
+#[tokio::test]
+async fn a_get_without_a_body_sends_no_body_and_no_framing_headers() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("")).await;
+    let request = checked(&upstream.origin(), Method::Get, "/header/rates", &[], SECRET);
+
+    client(&ca.trust()).send(request, RequestBody::empty()).await.unwrap();
+
+    let received = only_request(&upstream);
+    assert_eq!(header(&received.headers(), "content-length"), None);
+    assert_eq!(header(&received.headers(), "transfer-encoding"), None);
+    assert_eq!(received.body, b"");
+    assert!(received.body_complete);
 }
 
 #[test]

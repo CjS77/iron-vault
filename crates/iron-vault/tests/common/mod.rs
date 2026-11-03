@@ -7,6 +7,7 @@
 // under the test harness, where a panic is a test failure.
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+pub mod body_stream;
 pub mod checked;
 pub mod h2_refusal;
 pub mod hpack_fields;

@@ -115,7 +115,7 @@ impl UpstreamClient {
     /// `body` is forwarded chunk by chunk, never buffered whole and never inspected. It is framed by its declared
     /// length when [`RequestBody::stream`] was given one, and as chunked (HTTP/1.1) otherwise; the caller's own framing
     /// headers were already dropped by `sanitize`. If the body stream fails, the upstream request is aborted, not
-    /// completed with a short body, and `send` returns a [`TransportError`] (usually [`TransportError::Body`]).
+    /// completed with a short body, and `send` returns a [`TransportError`], which is a 502 whatever its class.
     ///
     /// There is no retry, and a streamed body could not be replayed if there were: its chunks are gone once sent, so
     /// whether to try again is the caller's call, with a new body.

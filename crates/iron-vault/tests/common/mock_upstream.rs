@@ -117,6 +117,11 @@ pub struct RecordedRequest {
     pub server_name: Option<String>,
     /// The request line and header lines, without the blank line that ends them.
     pub head: String,
+    /// The body bytes that arrived, decoded from `Content-Length` or chunked framing.
+    pub body: Vec<u8>,
+    /// Whether the body arrived whole: all of its declared length, or every chunk through the terminating one. A client
+    /// that aborts a request partway leaves this `false`.
+    pub body_complete: bool,
 }
 
 impl RecordedRequest {
@@ -229,7 +234,16 @@ impl Server {
             return;
         };
         let server_name = tls.get_ref().1.server_name().map(str::to_owned);
-        self.requests.lock().unwrap().push(RecordedRequest { server_name, head });
+        let (body, body_complete) = read_body(&mut tls, &head).await;
+        self.requests.lock().unwrap().push(RecordedRequest {
+            server_name,
+            head,
+            body,
+            body_complete,
+        });
+        if !body_complete {
+            return;
+        }
         match &*self.reply {
             Reply::Stall => tokio::time::sleep(Duration::from_secs(3600)).await,
             Reply::Respond { status, headers, body } => {
@@ -252,6 +266,61 @@ async fn read_head(stream: &mut (impl AsyncReadExt + Unpin)) -> Option<String> {
     }
     head.truncate(head.len() - 4);
     String::from_utf8(head).ok()
+}
+
+/// Reads the body that follows `head`, framed by its `Content-Length` or `Transfer-Encoding: chunked`, and whether it
+/// arrived whole. A head with neither has no body.
+async fn read_body(stream: &mut (impl AsyncReadExt + Unpin), head: &str) -> (Vec<u8>, bool) {
+    let header = |wanted: &str| {
+        head.lines()
+            .skip(1)
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
+            .map(|(_, value)| value.trim().to_owned())
+    };
+    let mut body = Vec::new();
+    let complete = if header("transfer-encoding").is_some_and(|value| value.eq_ignore_ascii_case("chunked")) {
+        read_chunks(stream, &mut body).await.is_some()
+    } else if let Some(length) = header("content-length").and_then(|value| value.parse::<usize>().ok()) {
+        read_up_to(stream, length, &mut body).await == length
+    } else {
+        true
+    };
+    (body, complete)
+}
+
+/// Appends each chunk of a chunked body to `body`; `None` if the stream ends before the terminating chunk.
+async fn read_chunks(stream: &mut (impl AsyncReadExt + Unpin), body: &mut Vec<u8>) -> Option<()> {
+    loop {
+        let line = read_line(stream).await?;
+        let size = usize::from_str_radix(line.split(';').next()?.trim(), 16).ok()?;
+        (read_up_to(stream, size, body).await == size).then_some(())?;
+        // The CRLF after the chunk data, or after the last-chunk line when no trailers follow.
+        read_line(stream).await?;
+        if size == 0 {
+            return Some(());
+        }
+    }
+}
+
+/// Appends up to `count` bytes from `stream` to `body` and returns how many arrived; fewer if the stream ended or failed.
+async fn read_up_to(stream: &mut (impl AsyncReadExt + Unpin), count: usize, body: &mut Vec<u8>) -> usize {
+    let before = body.len();
+    let _ = stream.take(count as u64).read_to_end(body).await;
+    body.len() - before
+}
+
+/// One line up to its LF, without the line ending; `None` at the end of the stream.
+async fn read_line(stream: &mut (impl AsyncReadExt + Unpin)) -> Option<String> {
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    while line.last() != Some(&b'\n') {
+        if stream.read(&mut byte).await.ok()? == 0 {
+            return None;
+        }
+        line.push(byte[0]);
+    }
+    Some(String::from_utf8(line).ok()?.trim_end().to_owned())
 }
 
 fn response(status: u16, headers: &[(String, String)], body: &[u8]) -> Vec<u8> {

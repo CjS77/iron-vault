@@ -13,6 +13,7 @@
 
 mod common;
 
+use common::body_stream::{body as body_of, eventually, failing_body};
 use common::checked::checked;
 use common::h2_refusal::Refusal;
 use common::hpack_fields::{FieldName, Representation};
@@ -231,4 +232,107 @@ async fn a_refused_stream_is_not_retried() {
 #[tokio::test]
 async fn goaway_before_the_request_was_processed_is_not_retried() {
     assert_sent_once(Refusal::GoAwayUnprocessed).await;
+}
+
+/// The only request `upstream` records, waited for, since an aborted request is recorded after `send` has failed.
+async fn recorded(upstream: &MockH2Upstream) -> RecordedH2Request {
+    eventually(|| upstream.requests().into_iter().next()).await
+}
+
+fn header<'a>(request: &'a RecordedH2Request, name: &str) -> Option<&'a str> {
+    request
+        .headers
+        .iter()
+        .find(|(found, _)| found == name)
+        .map(|(_, value)| value.as_str())
+}
+
+const CHAT: &str = "/header/chat";
+
+#[tokio::test]
+async fn a_fixed_length_body_arrives_byte_for_byte_over_http2() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockH2Upstream::start(&ca, H2Reply::ok("done")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+    let chunks = ["{\"prompt\":", "\"h\u{e9}llo ", "w\u{f6}rld\"}"];
+    let sent = chunks.concat();
+
+    let response = client(&ca).send(request, body_of(Some(sent.len() as u64), &chunks)).await.unwrap();
+
+    assert_eq!(body(response).await, b"done");
+    let received = only_request(&upstream);
+    assert_eq!(received.alpn.as_deref(), Some(&b"h2"[..]));
+    assert_eq!(received.method, "POST");
+    assert_eq!(header(&received, "content-length"), Some(sent.len().to_string().as_str()));
+    assert_eq!(received.body, sent.as_bytes());
+    assert!(received.body_complete);
+}
+
+#[tokio::test]
+async fn a_body_of_unknown_length_arrives_byte_for_byte_over_http2() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockH2Upstream::start(&ca, H2Reply::ok("done")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+    let chunks = ["one,", "two,", "three"];
+
+    client(&ca).send(request, body_of(None, &chunks)).await.unwrap();
+
+    let received = only_request(&upstream);
+    assert_eq!(header(&received, "content-length"), None, "HTTP/2 frames by END_STREAM");
+    assert_eq!(header(&received, "transfer-encoding"), None);
+    assert_eq!(received.body, chunks.concat().as_bytes());
+    assert!(received.body_complete);
+}
+
+#[tokio::test]
+async fn a_body_stream_that_fails_partway_resets_the_http2_stream() {
+    for length in [None, Some(100)] {
+        let ca = TestCa::new("Test CA");
+        let upstream = MockH2Upstream::start(&ca, H2Reply::ok("done")).await;
+        let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+
+        let error = client(&ca)
+            .send(request, failing_body(length, &["partial ", "body"]))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.status(), StatusCode::BAD_GATEWAY, "{length:?}: {error:?}");
+        let received = recorded(&upstream).await;
+        assert!(
+            !received.body_complete,
+            "{length:?}: the upstream saw a complete request: {received:?}"
+        );
+        assert_eq!(
+            received.body, b"partial body",
+            "{length:?}: the chunks before the failure were forwarded"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_body_stream_that_ends_short_of_its_declared_length_is_not_completed_over_http2() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockH2Upstream::start(&ca, H2Reply::ok("done")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+
+    let error = client(&ca).send(request, body_of(Some(100), &["short"])).await.unwrap_err();
+
+    assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(upstream.requests().iter().all(|received| !received.body_complete));
+}
+
+#[tokio::test]
+async fn a_get_without_a_body_sends_no_body_over_http2() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockH2Upstream::start(&ca, H2Reply::ok("")).await;
+    let request = checked(&upstream.origin(), Method::Get, "/header/rates", &[], SECRET);
+
+    client(&ca).send(request, RequestBody::empty()).await.unwrap();
+
+    let received = only_request(&upstream);
+    assert_eq!(header(&received, "content-length"), None);
+    assert_eq!(header(&received, "transfer-encoding"), None);
+    assert_eq!(received.body, b"");
+    assert!(received.body_complete);
 }
