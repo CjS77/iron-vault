@@ -14,8 +14,8 @@ Three §3.9 rules drive everything below:
 - **Reserved counters stay consumed.** A version handed out for a signing attempt is never handed out again, whether
   or not the attempt finished.
 
-Points the specification leaves open, and this design does not settle, are listed under
-[Open questions](#open-questions).
+Every default this design picks where the specification is open, or where it departs from the specification's
+wording, is listed under [Open questions](#open-questions), for the owner to decide.
 
 ## File layout
 
@@ -71,8 +71,9 @@ between the binary and the config file, and the lock file after the config file.
 
 Once the service reads its config, a refused config directory, config file or config-directory lock file stops
 startup, as the binary and runtime directory already do (§3.1: "refuse an unsafe installation and explain which path
-failed"). The package creates `/etc/iron-vault` owned by `iron-vault` with mode `0700`; in development the service
-creates its config directory with mode `0700` when it is missing.
+failed"). Today the check only reports these paths. The package creates `/etc/iron-vault` owned by `iron-vault` with
+mode `0700`; in development the service creates its config directory with mode `0700` when it is missing. The mode and
+the refusal are defaults ([open question 9](#open-questions)).
 
 Administrator-installed files under the config directory, such as `/etc/iron-vault/tls/server.crt` in the
 specification's example, keep their own rules (`AdminCertificate`, `AdminPrivateKey`). The service account owning the
@@ -110,49 +111,87 @@ Everything goes through `StoreFs`, so `FaultFs` can fail or cut power at any cal
 ## The transaction
 
 The approval transaction runs the six steps of §3.9 in order. Each step is durable before the next one starts.
-Approvals, vault writes, reload and the config check are serialized by one service-wide lock, taken when the
-`config approve` request arrives. Taking that lock fails at once if another operation already holds it, and the
-command answers `busy`. It is held to the end of the exchange, prompts included, so a reload that arrives during an
-approval waits for it.
 
-| Step | What the service does | Durable change |
-|---|---|---|
-| 1 | Writes the proposed bytes as `config.toml.pending`. Then parses, validates and activates them against the credential catalog, capabilities and account directory, using the one owned buffer it wrote. Never reads the file back to do this. | `config.toml.pending` |
-| 2 | Shows the approval summary and asks the owner to confirm it. Then takes the approval passphrase and opens the approver key with it (the owner's authorization, as in the §3.9 sequence diagram). Then reserves the next version. | `approval.age`: highest reserved version + 1 |
-| 3 | Signs the approval payload (purpose, vault ID, the reserved version, the digest of the buffer) and drops the signer. | none |
-| 4 | Writes the envelope as `config.toml.sig.staged`. Then builds the candidate serving snapshot from the step 1 activation: upstream clients and a new rate limiter. | `config.toml.sig.staged` |
-| 5 | **Admission pause starts.** Commits `(version, digest)`. | `approval.age`: the committed approval |
-| 6 | Publishes. Reads `config.toml` and `config.toml.sig` back, requires the config to equal the buffer, and verifies them with `verify_approval`. Swaps in the candidate snapshot. **Admission pause ends.** | `config.toml`, `config.toml.sig` |
+### The service-wide lock
 
-A failure ends the transaction at that step:
+Approvals, vault writes, reloads and every config check are serialized by one in-process lock, the **service-wide
+lock**. A `config approve` request takes it before step 1 and holds it until its admin response, prompts included, so
+the summary's predicted version stays exact and nothing changes the credential catalog under the review. Up to two
+prompts can each wait up to the 5-minute prompt deadline, so an approval can hold the lock for about 10 minutes.
+Meanwhile:
 
-| Fails at | Version | Files | Service afterwards |
+- another approval or a vault write fails at once with `busy`;
+- SIGHUP is queued, and the reload runs once the approval ends;
+- `lock` cancels an approval that is still waiting at a prompt, which has reserved nothing, and then locks. An
+  approval past its passphrase prompt is not interrupted: `lock` waits for it, which takes seconds.
+
+These are defaults ([open question 8](#open-questions)).
+
+### Steps and service states
+
+| Step | What the service does | Durable change | Service state |
 |---|---|---|---|
-| step 1: validation or activation | none reserved | pending removed | unchanged; `config-invalid` |
-| step 1: the write | none reserved | pending removed | unchanged; `approval-unavailable` |
-| step 2, before reserving: the owner declines or cancels, or the passphrase is wrong | none reserved | pending removed | unchanged; `declined`, `approval-denied`, or no response for a cancel |
-| step 2, the reservation: counter exhausted, or the write failed before its rename | none reserved | pending removed | unchanged; `approval-unavailable` |
-| step 2, the reservation: the directory fsync failed after the rename | consumed, whether or not it survives power loss | pending removed | unchanged policy; `approval-failed`; further approvals are refused until a config check reads `approval.age` back |
-| step 3 or 4, or building the candidate snapshot | consumed | pending and staged removed | unchanged; `approval-failed` |
-| step 5, before the rename of `approval.age` | consumed | pending and staged removed | the pause ends on the **old** snapshot, because nothing was committed; `approval-failed` |
-| step 5, after the rename (the directory fsync failed) | consumed | left in place | **unavailable**, `recovery-needed`: the commit may or may not survive power loss, so neither the old nor the new policy may be served until the next config check reads `approval.age` back; `committed-not-active` |
-| step 6 | committed | left in place | **unavailable**, `recovery-needed`; the next config check (reload or restart) finishes publishing; `committed-not-active` |
+| 1 | Writes the proposed bytes as `config.toml.pending`. Then parses, validates and activates them against the credential catalog, capabilities and account directory, using the one owned buffer it wrote. Never reads the file back to do this. | `config.toml.pending` | Ready, or Unavailable with `PolicyInvalid` |
+| 2 | Shows the approval summary and asks the owner to confirm it. Then takes the approval passphrase and opens the approver key with it. Then reserves the next version. | `approval.age`: highest reserved version + 1 | unchanged |
+| 3 | Signs the approval payload (purpose, vault ID, the reserved version, the digest of the buffer) and drops the signer. | none | unchanged |
+| 4 | Writes the envelope as `config.toml.sig.staged`. Then dry-runs the serving snapshot from the step 1 activation: builds upstream clients and a rate limiter, so a config that cannot be served fails here, before the commit. | `config.toml.sig.staged` | unchanged |
+| 5 | **Admission pause starts:** from Ready, the service moves to Checking, and requests get `503` `checking` from then on. Then it commits `(version, digest)`. | `approval.age`: the committed approval | Checking |
+| 6 | Publishes, then runs the config check, which builds the serving snapshot from the published files. The check passing moves the service to Ready, with the listener set rebuilt from the new config; failing moves it to Unavailable. **Admission pause ends.** | `config.toml`, `config.toml.sig` | Checking, then Ready or Unavailable |
+
+The service enters Checking before the commit, not after it, because the pause must start before the commit (§3.9),
+and Checking is the state in which requests are refused while the service is unchanged in every other way. The
+service state model has the edge from Ready to Checking. It is labelled "explicit reload", so the approval needs an
+event of its own on that edge ([open question 3](#open-questions)).
+
+From Unavailable with `PolicyInvalid`, the request interface already refuses everything, so step 5 changes no state.
+After the commit, the service leaves Unavailable through `Repaired` to Checking, as the service state model's
+`Repaired` event documents for an approval committed there, and step 6 runs as above. The service answers the admin
+request only after the config check ends, so the result says whether the new config is active.
+
+The step 4 dry run does not replace the config check. It only moves the failures it can find to before the commit.
+The config check may reuse the dry-run snapshot when the approval it verifies has the dry run's digest.
+
+**Why the order of step 2 is confirmation, passphrase, then reservation.** §3.9's text says "authenticate the owner,
+show the summary, and durably reserve". Its sequence diagram instead puts the summary before the owner's authorization.
+This design follows the diagram ([open question 6](#open-questions)): the admin principal is authenticated at
+connect, by its peer credentials, and the approval passphrase comes after the summary, so the owner authorizes what
+they have just read. Opening the approver key before reserving means a mistyped passphrase consumes no version. A TPM
+signer authorizes inside step 3 instead, so its failed PIN does consume one, which §3.9 allows ("failed attempts
+consume their versions").
+
+### When a step fails
+
+| Fails at | Version | Files | Service afterwards | `config approve` answers |
+|---|---|---|---|---|
+| step 1: validation or activation | none reserved | pending removed | unchanged | `config-invalid` |
+| step 1: the write | none reserved | pending removed | unchanged | `approval-unavailable` |
+| step 2, before reserving: the owner declines or cancels, or the passphrase is wrong | none reserved | pending removed | unchanged | `declined`, `approval-denied`, or no response for a cancel |
+| step 2, the reservation: counter exhausted, or its write failed before the rename | none reserved | pending removed | unchanged | `approval-unavailable` |
+| step 2, the reservation: the directory fsync failed after the rename | consumed, unless power loss undoes it; nothing was signed under it, so reusing it after power loss is harmless | pending removed | unchanged; the in-memory approval state accepts no more writes until the next approval loads it again from disk, which restores consistency, not durability, and here only consistency matters | `approval-failed` |
+| step 3 or 4, or the dry run | consumed | pending and staged removed | unchanged | `approval-failed` |
+| step 5, before the rename of `approval.age` | consumed | pending and staged removed | Checking: the config check runs on the unchanged published pair and normally returns to Ready on the old policy, which is still the committed one | `approval-failed` |
+| step 5, the rename landed but the directory fsync failed | committed, if settled (below) | left in place | Checking: settle the commit, then publish and check; if settling fails, Unavailable with `RecoveryNeeded` | success, or `committed-not-active` |
+| step 6, a rename failed | committed | left in place | Checking: the config check's recovery retries the renames (rows 2-4); if that fails too, Unavailable with `RecoveryNeeded` | success, or `committed-not-active` |
+| step 6, the directory fsync failed | committed | renamed | Checking: the check goes on (see [Publish](#publish)) | success, or `committed-not-active` |
+| step 6, the config check fails | committed | as recovery leaves them | Unavailable, with the check's failure reason | `committed-not-active` |
 
 Removing uncommitted files is best effort. One left behind is a leftover that the next config check discards (see the
 recovery table).
 
-**Why the order of step 2 is passphrase, then reservation.** §3.9's text reads "authenticate the owner, show the
-summary, and durably reserve". The admin principal is authenticated at connect, by its peer credentials. The owner's
-own authorization, the approval passphrase, comes after the summary, as the §3.9 sequence diagram draws it, so the
-owner authorizes what they have just read. Opening the approver key before reserving means a mistyped passphrase
-consumes no version. A TPM signer authorizes inside step 3 instead, so its failed PIN does consume one, which §3.9
-allows ("failed attempts consume their versions").
+### Settling an uncertain commit
 
-**Why the candidate snapshot is built before the pause.** Building upstream clients reads pinned CA files and sets up
-TLS configurations: work that can take milliseconds and fail. Doing it before step 5 keeps the pause down to one
-durable replace, two renames, a directory fsync and a signature check. A candidate that cannot be built fails the
-transaction before the commit, leaving the old policy committed and active. Only the swap waits for verification, so
-the snapshot still activates only a verified approval.
+A failed directory fsync after the rename of `approval.age` leaves the commit visible but possibly not durable.
+Reading the file back proves nothing, because a read is served from the page cache. Re-running the fsync proves
+nothing either: after a failed writeback, Linux can mark the pages clean and report a later fsync of the same file as
+successful, even though the data never reached the disk. The transaction therefore **settles** the commit by writing
+`approval.age` again, durably, with the same counters: a fresh temporary file, its fsync, the rename and the
+directory fsync. A write with unchanged counters still takes the next state generation, by the vault-wide rule. Only
+when that write succeeds is the commit trusted, and only then does step 6 publish.
+
+Settling is part of the transaction, which holds the service-wide lock and is the approval state's writer. A config
+check never settles, because loading never writes the approval state. The service leaves Unavailable with
+`RecoveryNeeded` only through an authorized repair (`Repaired` to Checking) or a restart
+([open question 13](#open-questions)).
 
 ### Publish
 
@@ -167,14 +206,22 @@ directory fsync returns, power loss can keep either rename, both or neither, wha
 never infers progress from which file landed. It decides from the committed approval alone. The two files are
 published separately, never as one atomic swap.
 
+The durable record of an approval is its commit in `approval.age`, not the published files. A failed directory fsync
+after both renames is therefore logged at WARN and does not stop the transaction. If power loss later undoes a rename,
+the files are back in a state that the recovery table finishes at the next start (rows 2-4). A failed rename is not
+passed over in this way: the config check that follows finds the committed config unpublished, and its recovery
+retries the rename. If the retry fails too, the service goes Unavailable with `RecoveryNeeded`.
+
 The same publish finishes a committed transaction during the config check. There it renames only the files that are
-not yet in place.
+not yet in place. Finishing a publish in a running service, and not only "on restart" as §3.9 puts it, is a default
+([open question 7](#open-questions)).
 
 ## Recovery
 
-The config check runs recovery first, at startup and at reload. It needs the vault identity to open `approval.age`, so
-a locked service recovers when it is unlocked. Recovery reads `approval.age` and never writes it, so loading never
-advances a counter.
+Every config check runs recovery first. A config check is the work the service does in Checking: after an unlock,
+after a reload, after an approval's commit, and after an authorized repair. It needs the vault identity to open
+`approval.age`, so a locked service recovers when it is unlocked. Recovery reads `approval.age` and never writes it, so
+loading never advances a counter.
 
 ### Inputs
 
@@ -188,10 +235,13 @@ advances a counter.
 
 ### Before the table
 
+The failure reasons are the service state model's `FailureReason`s. A request sees the matching `UnavailableReason`
+text.
+
 | Condition | Outcome |
 |---|---|
-| `approval.age` missing, damaged, a partial restore, or unreadable | **stay unavailable**, `recovery-needed`; touch nothing |
-| nothing committed (`NothingCommitted`: a vault whose first approval never committed) | **stay unavailable**, `policy-invalid` (detail: no approved config); touch nothing |
+| `approval.age` missing, damaged, a partial restore, or unreadable | **stay unavailable**, `RecoveryNeeded`; touch nothing |
+| nothing committed (`NothingCommitted`: a vault whose first approval never committed) | **stay unavailable**, `PolicyInvalid` (detail: no approved config); touch nothing |
 
 ### Recovery table
 
@@ -204,8 +254,12 @@ Find where C's config is (`config.toml` or `config.toml.pending`) and where C's 
 | 2 | `config.toml` | `config.toml.sig.staged` | half published: new config, old signature | **finish publishing**: rename the staged approval, fsync |
 | 3 | `config.toml.pending` | `config.toml.sig` | half published: new signature, old config | **finish publishing**: rename the pending config, fsync |
 | 4 | `config.toml.pending` | `config.toml.sig.staged` | committed, nothing published yet (a crash in step 6, or between steps 5 and 6) | **finish publishing**: both renames, fsync |
-| 5 | either, or nowhere | nowhere | | **stay unavailable**, `policy-invalid`; touch nothing |
-| 6 | nowhere | either | | **stay unavailable**, `policy-invalid`; touch nothing |
+| 5 | `config.toml.pending` | nowhere | committed, but its staged approval was lost | **stay unavailable**, `RecoveryNeeded`; touch nothing |
+| 6 | nowhere | `config.toml.sig.staged` | committed, but its pending config was lost | **stay unavailable**, `RecoveryNeeded`; touch nothing |
+| 7 | `config.toml`, or nowhere | nowhere | the published pair does not verify as C, and no file of C waits to be published | **stay unavailable**, `PolicyInvalid`; touch nothing |
+| 8 | nowhere | `config.toml.sig` | as row 7 | **stay unavailable**, `PolicyInvalid`; touch nothing |
+
+The rows cover all nine combinations of three places for C's config and three for C's approval.
 
 After rows 2-4 the published pair matches C. Any pending or staged file still left is discarded, and the check goes
 on as for row 1. A publish that fails midway leaves a state this table resolves to row 1, 2, 3 or 4, so recovery is
@@ -214,6 +268,14 @@ safe to run again. Each finish is recorded as `config.recovery-published`.
 *Discard* means durable remove, then the `config.recovery-discarded` event naming each file and, for a staged
 approval, the version it was signed for. Discarding never touches the counters: a discarded staged approval's version
 stays consumed.
+
+**Why rows 5 and 6 differ from rows 7 and 8.** Rows 5 and 6 hold a file of C waiting to be published, so a committed
+transaction is on disk that cannot be completed. The service state model documents exactly that case as
+`RecoveryNeeded`. Rows 7 and 8 hold no such file: the published pair simply does not verify as the committed
+approval, which is §3.9's "invalid signature, a previous version, or an uncommitted higher version", and the model's
+`PolicyInvalid`. The split decides the way out, because the admin interface offers approving only for
+`PolicyInvalid`, and for `RecoveryNeeded` only a repair. Both are defaults ([open question 4](#open-questions)). In
+none of these rows may the service serve the older pair beside the committed one (§3.9).
 
 ### Pending and staged files beside a published pair that matches C (row 1)
 
@@ -229,11 +291,12 @@ Every combination is an uncommitted leftover, from a transaction that ended befo
 | absent or present | present | C's version with another digest (`DigestNotCommitted`) | discard, and log at ERROR: only a misbehaving signer produces it |
 | absent or present | present | does not verify (malformed, wrong algorithm, bad signature, wrong vault) | discard |
 
-### Detail when the service stays unavailable (rows 5 and 6)
+### Detail when the service stays unavailable (rows 5 to 8)
 
-The redacted reason is `policy-invalid` in both rows, and recovery changes nothing on disk, so the files stay as
-evidence. The next `config approve` overwrites the pending config and the staged approval anyway. The detail logged
-for the owner is the first that applies to the published pair, in this order:
+Recovery changes nothing on disk, so the files stay as evidence. The next `config approve` overwrites the pending
+config and the staged approval anyway. In rows 5 and 6 the detail first names the committed version and which of
+its two files is missing. Then, in every row, it gives the first of these that applies to the published pair, in
+this order:
 
 | Published pair | Detail | `VerifyError` |
 |---|---|---|
@@ -247,74 +310,82 @@ for the owner is the first that applies to the published pair, in this order:
 | the version is above C | signed but never committed; never promote it | `Uncommitted` |
 | C's version with another digest | the signer signed one version twice | `DigestNotCommitted` |
 
-Row 5 with C's config in place but C's approval lost, and row 6 with C's approval staged but its config lost, are both
-committed transactions that cannot be completed. §3.9 requires the service to stay unavailable then, never to serve
-the older pair beside them. The repair is a new approval at a higher version.
-
 ### After recovery
 
 The config check then parses, validates and activates the published config. A config that fails (for example, an
-unknown credential reference) is `policy-invalid`. A damaged or needs-login record is not a failure: only its routes
-are unavailable (§3.9). Last, the check builds the serving snapshot.
+unknown credential reference) is `PolicyInvalid`. A damaged or needs-login record is not a failure: only its routes
+are unavailable (§3.9). Last, the check builds the serving snapshot. The check passing moves Checking to Ready, and
+the listener set is rebuilt from the verified config on entry to Ready.
 
-### Redacted reasons
+### Reasons a request sees
 
-A request answered `503` sees only the redacted reason, and logs and `status` give the owner the detail. The reasons
-this design produces:
+The redacted reasons are the service state model's four `UnavailableReason`s, with their `503` texts. This design
+adds none:
 
-| Redacted reason | When |
+| `UnavailableReason` (text) | When, in this design |
 |---|---|
-| `recovery-needed` | `approval.age` cannot be loaded; a commit whose durability is uncertain; a committed transaction whose publish failed in the running service |
-| `policy-invalid` | rows 5 and 6; nothing committed; the published config fails validation or activation |
-| `reconfiguring` | an admission pause outlasted the request's wait (see below) |
+| `Checking` (`checking`) | throughout an approval's admission pause, and throughout a reload |
+| `RecoveryNeeded` (`recovery needed`) | `approval.age` cannot be loaded; recovery rows 5 and 6; an uncertain commit could not be settled; a committed publish could not be finished |
+| `PolicyInvalid` (`policy invalid`) | recovery rows 7 and 8; nothing committed; the published config fails validation or activation |
+| `Locked` (`locked`) | not produced here; the vault is locked |
 
-`locked` is the service state model's reason, not this design's. The service state model owns the full set. This
-design adds `reconfiguring` to it.
+Logs and `status` give the owner the detail.
 
 ## Admission pause
 
-A request is **admitted** when it takes a serving snapshot. The proxy handler does this once per request, before
-caller identification, because identification reads the snapshot's policy. The admission pause is the interval in
-which no request is admitted.
+A request is **admitted** when its one load from the snapshot holder returns a serving snapshot. The proxy handler
+loads once per request, before caller identification, because identification reads the snapshot's policy.
 
-- **It starts** in step 5, immediately before the durable replace of `approval.age` that commits the new approval,
-  after the candidate snapshot is built.
-- **It ends** in step 6, when the candidate snapshot is swapped in, after publish and verification. If the transaction
-  fails during the pause, it ends there instead: on the old snapshot when the commit cleanly did not happen, otherwise
-  with the service unavailable (see the failure table).
+**Mechanism.** The snapshot holder holds one value. It is either *serve*, with a serving snapshot, or *refuse*, with
+an `UnavailableReason`. A request's load and every state transition's store each take the holder's lock once, so a
+request sees exactly one of the two, and that load is its admission. Entering the pause is a single store of *refuse*
+`checking`, made in step 5 before the write of `approval.age` begins. The store happens before the commit, and every
+load that returned the old snapshot happened before the store. Admission never checks "is the service paused?" and
+then loads the snapshot in a second step, because a commit could land between the two.
+
+- **It starts** in step 5, with the move to Checking, immediately before the durable replace of `approval.age` that
+  commits the new approval.
+- **It ends** in step 6, when the config check ends: with a store of *serve* and the new snapshot on Ready, or a store
+  of *refuse* and the failure reason on Unavailable. When the commit cleanly did not happen, the check runs on the
+  unchanged published pair, and the pause normally ends on the old policy, which is still the committed one.
 
 **Invariant.** No request is admitted under the old policy after the commit. Every admission under the old snapshot
 happened before the pause began, and the pause begins before the commit.
 
-**A request that arrives during the pause waits.** It waits until the pause ends, at most `ADMISSION_WAIT` (5 seconds),
-and never past its own request deadline. If the pause ends in time, the request is admitted under whatever follows:
-the new snapshot, or a `503` with the redacted reason if the service went unavailable. If the wait runs out first,
-the request gets `503` with reason `reconfiguring` and `Retry-After: 1`, and is never admitted. A normal pause is one
-durable replace, two renames, a directory fsync and a signature check, well under a second, so callers see a short
-delay instead of an error. The bound keeps a stalled disk from holding connections open indefinitely. The wait counts
-against the request server's request timeout like any other handler time.
+**A request that arrives during the pause** gets `503` `checking` at once, as in every Checking state, and is never
+admitted. A bounded wait instead, and a `Retry-After` header, are options ([open question 5](#open-questions)).
 
-**A request admitted before the pause** keeps the snapshot it took and finishes on it: its route, its credential
-record, its upstream client and its rate-limit charge all come from the old activation. A successful approval does not
-cancel it. Only a withdrawn snapshot (a failed reload, a lock) cancels outstanding work, where the transport permits
-(§3.9). See [open question 1](#open-questions).
+**How long the pause lasts.** The pause covers the commit, publish, the config check and the listener rebuild on entry
+to Ready. That is milliseconds for the files and the signature check, and longer when the listener set changes or a
+TLS listener's key is loaded. The step 4 dry run takes upstream-client construction out of the pause only when the
+check reuses its snapshot.
 
-**Reload has no pause.** A reload commits nothing. Requests keep the current snapshot until the check finishes. On
-success, the new snapshot is swapped in. On failure, the old one is withdrawn at once, so new requests get `503`, and
-the service keeps no old route policy (§3.9).
+**A request admitted before the pause** keeps the snapshot it took. This holds whether its upstream request has been
+sent or not. If the pause ends on Ready, it finishes on the old snapshot: its route, its credential record, its
+upstream client and its rate-limit charge all come from the old activation. If the pause ends on Unavailable, the old
+snapshot is withdrawn, and its outstanding work is cancelled where the transport permits (§3.9). Both are defaults
+([open question 1](#open-questions)).
 
 ## Reload
 
-The service reloads on SIGHUP, never by watching files (§8.2 Q-5). A reload takes the service-wide lock, so one that
-arrives during an approval runs after it, and then runs the config check against the unlocked vault. A reload that
-fails is recorded as `config.reload-failed`, with the detail, and a WARN to the owner.
+The service reloads on SIGHUP, never by watching files (§8.2 Q-5), and only from Ready. SIGHUP in any other state is
+logged at INFO and ignored. In particular, a reload is not a way out of Unavailable: that takes an authorized repair or
+a restart.
+
+A reload takes the service-wide lock, so one that arrives during an approval runs after it. It then moves Ready to
+Checking: a single store of *refuse* `checking` in the snapshot holder, after which requests get `503` `checking` until
+the config check ends, as §3.12 draws it. A reload commits nothing, so it never writes the approval state. The check
+passing moves the service to Ready with a store of *serve* and the new snapshot. Failing moves it to Unavailable: the old
+snapshot is withdrawn, its outstanding work is cancelled where the transport permits, and the service keeps no old
+route policy (§3.9). A failed reload is recorded as `config.reload-failed`, with a WARN to the owner.
 
 ## Approval summary
 
 The service writes the approval summary itself (§3.2). The owner reviews it, it goes to the audit log and the owner
 notification, and its headline is in the command's result. It is a diff of the pending validated config against the
 active one: the config of the current serving snapshot, or, when the service is unavailable or this is the first
-approval, the empty config, in which case the summary says "no active config" and lists everything as added.
+approval, the empty config, in which case the summary says "no active config" and lists everything as added
+([open question 10](#open-questions)).
 
 The order is fixed, so the same two configs always give the same text:
 
@@ -329,7 +400,9 @@ The order is fixed, so the same two configs always give the same text:
    each field that changed, old → new: prefix, upstream (host, port, base path), credential name, slot, pinned CA file,
    methods, path patterns, rate limit and confirmation.
 5. **Listeners**: added, removed or changed. §3.2 does not list them, but a listener moved to a non-loopback
-   address changes who can reach the routes, so hiding it would mislead the owner.
+   address changes who can reach the routes, so hiding it would mislead the owner
+   ([open question 14](#open-questions)). A listener the running service cannot bind is marked "takes effect after
+   restart" ([open question 2](#open-questions)).
 6. **Limits**: each operational limit that changed, old → new.
 7. **Text only**: when the bytes differ but no section above has an entry, the line "no policy change; text changed"
    (whitespace or comments), so the summary is never empty.
@@ -344,38 +417,84 @@ command's result.
 
 ## Audit events
 
-Distinct names, so a reserved version is never mistaken for a completed approval (§3.9). EP-26 adopts them for the
-audit log. Until then they are `tracing` events with these names. None carries config bytes, signature bytes, key
-material or a passphrase.
+Each event has a distinct name, so a reserved version is never mistaken for a completed approval (§3.9). EP-26 adopts
+them for the audit log. Until then they are `tracing` events with these names. None carries config bytes, signature
+bytes, key material or a passphrase.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `config.version-reserved` | INFO | step 2's reservation is durable | version, config digest |
-| `config.approval-completed` | INFO | the commit is durable (step 5) | version, config digest, the approval summary |
 | `config.approval-failed` | WARN | the transaction failed after its reservation and before its commit | version (consumed), the step that failed, the error |
-| `config.reload-failed` | WARN | a config check failed in a running service: a SIGHUP reload, or step 6 after a commit | trigger (`signal` or `approval`), redacted reason, detail |
-| `config.recovery-published` | WARN | the config check finished publishing a committed transaction | version, which renames it ran |
-| `config.recovery-discarded` | INFO | the config check removed uncommitted files | each file, and a staged approval's version |
+| `config.commit-uncertain` | WARN | step 5's rename of `approval.age` landed, but its directory fsync failed | version, the error |
+| `config.approval-completed` | INFO | the commit is durable: step 5 succeeded, or an uncertain commit was settled | version, config digest, the approval summary |
+| `config.activation-failed` | WARN | the config check after a committed approval failed, or an uncertain commit could not be settled | version, failure reason, detail |
+| `config.reload-failed` | WARN | the config check of a SIGHUP reload failed | committed version, failure reason, detail |
+| `config.recovery-published` | WARN | a config check finished publishing a committed transaction | version, which renames it ran |
+| `config.recovery-discarded` | INFO | a config check removed uncommitted files | each file, and a staged approval's version |
 
-A commit followed by a failed publish records `config.approval-completed` and then `config.reload-failed` with
-trigger `approval`. The approval did complete, and only its activation failed.
+An uncertain commit records `config.commit-uncertain`, followed by `config.approval-completed` once it is settled, or
+by `config.activation-failed` when settling fails. A commit followed by a failed publish or check records
+`config.approval-completed` and then `config.activation-failed`: the approval did complete, and only its activation
+failed. *Reload* stays the SIGHUP operation alone, so a check after an approval is never a "reload failed".
 
 ## Open questions
 
-These are points where the specification is ambiguous. The design above takes the default stated for each, which the
-downstream tickets already assume, but each needs the owner's decision before the code is final.
+The specification leaves each point below open, or this design departs from its wording. The design takes the
+default stated for each. Each needs the owner's decision before the code is final, and the downstream tickets follow
+the default until then.
 
-1. **In-flight requests across a successful approval.** §3.9 says "never admit new requests under the previous policy
-   after that commit" and "operations already sent upstream remain subject to the cancellation limits below". The
-   cancellation limits are those of a failed reload ("cancel or stop outstanding work where the transport permits").
-   It is unclear whether a successful approval must also cancel requests admitted under the old policy. That matters
-   when an approval revokes a caller whose long streaming response is still running. *Default:* they finish on the
-   old snapshot. Only a withdrawn snapshot cancels.
-2. **Listener changes in an approval.** The serving snapshot carries callers and routes, but listeners are bound
-   sockets, and in a protected Linux install every TCP listener must come from socket activation (§3.4), so the
-   service cannot bind a new TCP listener while it runs. The specification does not say whether an approval that adds,
-   removes or moves a listener applies it at once or at the next restart. *Default:* inside the admission pause,
-   before the swap, the service rebuilds the listener set the way the service runtime does on entering Ready. Sockets
-   the new config no longer names are closed. A listener the new config adds that cannot be bound or adopted now is
-   logged at WARN and stays missing until restart, and the summary marks it "takes effect after restart". The other
-   routes serve under the new policy.
+1. **Requests admitted before an approval's commit.** §3.9 forbids admitting new requests under the previous policy
+   after the commit, and says operations already sent upstream "remain subject to the cancellation limits below". It
+   does not say what happens to requests admitted under the old policy before the pause, whether already forwarded or
+   still inside the pipeline at the commit. That matters when an approval revokes a caller whose long streaming
+   response is still running. *Default:* when the check ends on Ready, they all finish on the old snapshot. When it
+   ends on Unavailable, the old snapshot is withdrawn and they are cancelled where the transport permits.
+2. **Listener changes in an approval.** On entry to Ready the listener set is rebuilt from the verified config. But
+   in a protected Linux install every TCP listener comes from socket activation (§3.4), so a running service cannot
+   bind a TCP listener that the new config adds. *Default:* the rebuild closes the sockets the new config no longer
+   names and binds or adopts what it can. A listener it cannot bind is logged at WARN and stays missing until restart,
+   the service still enters Ready, and the approval summary marks that listener "takes effect after restart".
+3. **The event that takes an approval from Ready to Checking.** §3.12 draws Ready to Checking only for "explicit
+   reload", and `ServiceEvent::Reload` is SIGHUP's. *Default:* a new event, such as `ApprovalCommitting`, on the
+   existing Ready-to-Checking edge, so *Reload* keeps one meaning. The alternative reuses `Reload`.
+4. **The failure reason for recovery rows 5 to 8.** *Default:* rows 5 and 6, a committed transaction with a file
+   waiting to be published, are `RecoveryNeeded`, as `FailureReason::RecoveryNeeded`'s doc comment describes ("a
+   committed transaction could not be completed"). Rows 7 and 8, a published pair that does not verify, are
+   `PolicyInvalid`. Consequence: in rows 5 and 6 `config approve` is refused (`admin_allows` offers only repair), and
+   no repair command is specified yet, so only a restart is available, and a restart reaches the same row. The
+   alternative makes rows 5 and 6 `PolicyInvalid` too, so a new approval at a higher version is the repair. That is
+   safe, because the new version is above the lost committed one, but K-124's doc comment would change.
+5. **What a request sees during the pause.** *Default:* `503` `checking` at once, like any Checking state, with no
+   `Retry-After`. An earlier draft of this design had requests wait up to 5 seconds for the pause to end, then answer
+   `503` with a fifth reason, `reconfiguring`, and `Retry-After: 1`. That hides a sub-second approval from callers,
+   but adds an `UnavailableReason` and a wait that Checking does not have anywhere else.
+6. **The order of step 2.** §3.9's text puts "authenticate the owner" before "show the service-generated summary". Its
+   sequence diagram puts the summary first. *Default:* the diagram's order: summary, confirmation, approval passphrase,
+   then reservation. The admin principal itself is authenticated at connect.
+7. **Finishing a publish in a running service.** §3.9 allows finishing publishing "on restart". *Default:* every
+   config check may finish it, under the same rule (only the committed transaction, only when its files verify): the
+   check after an approval's commit, after an unlock and after a repair, as well as at startup. A failed directory
+   fsync after the publish renames is logged and does not stop the check, because the commit is the durable record.
+8. **The service-wide lock across prompts.** *Default:* `config approve` holds it from its request to its response,
+   up to about 10 minutes across two prompts. Meanwhile other approvals and vault writes get `busy`, SIGHUP waits, and
+   `lock` cancels an approval that is still at a prompt. The alternative takes the lock only after the passphrase, and
+   refuses the approval if the committed approval or the catalog changed since the summary.
+9. **Config directory mode, and refusing to start.** *Default:* the config directory is the service account's, with
+   mode exactly `0700`, the state directory's rule. A refused config directory, config file or config-directory lock
+   file stops startup. Today that check only reports.
+10. **The summary when nothing is active.** *Default:* when the service is Unavailable, or for the first approval, the
+    summary diffs against the empty config, says "no active config" and lists everything as added. An Unavailable
+    service still has a committed approval, so the alternative diffs against the committed config, whose bytes are
+    then read from `config.toml` if they verify.
+11. **The notice frame in protocol version 1.** *Default:* the notice frame, byte values, `config approve` and error
+    codes 7 to 12 join version 1 without a version bump, because version 1 has not been released.
+12. **Where the CLI reads the config.** *Default:* `config approve <file>` only. stdin is not accepted, because when
+    stdin is not a terminal it carries the answers to the prompts. K-128's spec reads stdin when no file is given, so
+    K-128 or this default has to change.
+13. **Settling an uncertain commit, and restarting after one.** *Default:* the transaction settles it with a second
+    durable write of `approval.age`. A config check never writes the approval state, so if settling fails the service
+    stays Unavailable with `RecoveryNeeded`. A restart without a reboot then reads a commit that is visible in the page
+    cache but may not be durable, and trusts it.
+14. **Sections beyond §3.2's list.** §3.2 says the summary includes "changed callers, route grants, destinations,
+    restrictions, and the committed version". *Default:* the summary also lists listener and limit changes, and a
+    text-only change, so no change to the config goes unshown.

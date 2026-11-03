@@ -135,15 +135,16 @@ The exchange, after the request:
 1. The service writes the pending config and validates it. An invalid config ends the exchange with `config-invalid`
    before any prompt.
 2. **Summary.** The service sends the approval summary as one or more notices: the header (vault ID, the version this
-   approval will commit, the config digest, the committed version), then the sections in their fixed order. A notice
-   ends at a line boundary, so a summary longer than one frame body is split across several notices, never inside a
-   line.
+   approval will commit, the config digest, the committed version), then the sections in their fixed order. A summary
+   longer than one notice continues in the next, and nothing is ever truncated (see [Notice](#notice-kind-6)).
 3. **Confirmation.** A prompt, not secret: `Approve this config as version <n>? Type yes to approve`. Any answer other
    than exactly `yes` ends the exchange with `declined`. No version is reserved.
 4. **Approval passphrase.** A prompt, secret: `Approval passphrase`. The service opens the approver key with it. A
    wrong passphrase ends the exchange with `approval-denied`, still before any reservation. There is no second try in
-   the same exchange.
-5. The service runs steps 2 to 6 of the transaction and answers with the result, or an error below.
+   the same exchange. Summary, confirmation, then passphrase is the order of §3.9's sequence diagram, which its text
+   words differently ([open question 6](config-approval.md#open-questions)).
+5. The service runs steps 2 to 6 of the transaction, including the config check after the commit, and answers once
+   the check has ended, with the result or an error below. A success means the new config is active.
 
 A prompt that gets no owner input cancels the command, as for every command, before a version is reserved. The service
 answers within the CLI's 60-second timeout after the passphrase: scrypt, three durable replaces, two renames, a
@@ -169,9 +170,9 @@ Errors specific to `config approve`:
 | `config-invalid` | the proposed config fails parsing, validation or activation; the message names the rule and the configured names involved, escaped, and never quotes other config bytes | no |
 | `declined` | the owner did not answer the confirmation with `yes` | no |
 | `approval-denied` | the approval passphrase did not open the approver key, or the key it opened is not the pinned approver | no |
-| `approval-unavailable` | the service cannot approve now: the vault is locked, the approval state is damaged, the version counter is exhausted, or a write failed before any version was reserved; the message says which | no |
+| `approval-unavailable` | the service cannot approve now: its state does not allow it (only Ready and Unavailable with an invalid policy do), the approval state is damaged, the version counter is exhausted, or a write failed before any version was reserved; the message says which | no |
 | `approval-failed` | the transaction failed after its reservation and before its commit; the active policy is unchanged | yes; the message names it |
-| `committed-not-active` | the commit landed, or may have landed, but publishing or activating failed; the service is unavailable until a reload or restart finishes the transaction or refuses it | yes; the message names the version |
+| `committed-not-active` | the commit landed, or may have landed, but it could not be settled, published or activated; the service is Unavailable, and a reload does not leave that state: only an authorized repair (`Repaired`, then Checking) or a restart does | yes; the message names the version |
 
 ### Prompt (kind 2)
 
@@ -184,12 +185,18 @@ Errors specific to `config approve`:
 
 | Tag | Field | Value |
 |---|---|---|
-| 1 | text | UTF-8 text the CLI shows the owner; lines end with `\n` |
+| 1 | text | UTF-8 text the CLI shows the owner, continuing the previous notice's text; `\n` ends a line |
 
 A notice carries text the service needs the owner to read before a prompt, such as an approval summary. It is never
 answered. Unlike a prompt label, it may hold many lines, and a command may send as many notices as it needs, so text
 of any length reaches the owner without changing the frame bound. A single prompt label could not carry it: a label is
 one line, because the CLI removes control characters from it, newlines included.
+
+The CLI writes the texts of consecutive notices one after another and adds nothing between them, so a notice
+boundary means nothing to the owner. The service may therefore split text anywhere between two UTF-8 characters, even
+inside a line, and does so whenever the next piece would make the body longer than the frame bound. A long line, such
+as a route's path patterns after escaping, is split this way across notices. It is never truncated, because the owner
+must see everything the service will sign.
 
 ### Owner input (kind 3)
 
@@ -250,8 +257,9 @@ the message itself, and neither the code nor the message ever contains owner inp
 ## Versions
 
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
-is refused before its kind or length is read. Version 1 has not been released, so the notice frame, byte values and
-`config approve` join it rather than starting version 2.
+is refused before its kind or length is read. Version 1 has not been released, so the notice frame, byte values,
+`config approve` and error codes 7 to 12 join it rather than starting version 2. That is a default for the owner to
+confirm ([open question 11](config-approval.md#open-questions)).
 
 Only the service sends responses, so the version rule is asymmetric:
 
@@ -359,7 +367,8 @@ service.
 when stdin is not a terminal, it carries the owner's answers to the prompts, so it cannot also carry the config. The
 config is not a secret, but the CLI never echoes its bytes in a diagnostic. A file longer than `MAX_CONFIG_LEN` is
 refused before anything is sent, with exit code 2. The CLI never computes a summary or a digest of its own: it shows
-the service's notices and result.
+the service's notices and result. File-only input is a default that conflicts with K-128's spec, which reads stdin
+when no file is given ([open question 12](config-approval.md#open-questions)).
 
 ### Owner input
 
