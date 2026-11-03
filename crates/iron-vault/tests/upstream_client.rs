@@ -16,6 +16,7 @@ use std::time::Duration;
 use common::checked::checked;
 use common::mock_upstream::{MockUpstream, RecordedRequest, Reply, TestCa, UPSTREAM_HOST};
 use iron_vault::upstream::client::{TransportLimits, UpstreamClient, UpstreamResponse};
+use iron_vault::upstream::request_body::RequestBody;
 use iron_vault::upstream::transport_error::TransportError;
 use iron_vault::upstream::trust::UpstreamTrust;
 use iron_vault_policy::Method;
@@ -55,7 +56,11 @@ async fn body(mut response: UpstreamResponse) -> Vec<u8> {
 /// Sends a GET for `target` through the query-slot route with the credential marker in the query, expecting failure.
 async fn failure(trust: &UpstreamTrust, limits: TransportLimits, origin: &str) -> TransportError {
     let request = checked(origin, Method::Get, "/query/rates?base=USD", &[], SECRET);
-    UpstreamClient::new(trust, limits).unwrap().send(request).await.unwrap_err()
+    UpstreamClient::new(trust, limits)
+        .unwrap()
+        .send(request, RequestBody::empty())
+        .await
+        .unwrap_err()
 }
 
 #[tokio::test]
@@ -69,7 +74,7 @@ async fn the_upstream_receives_exactly_the_checked_method_target_and_headers() {
     ];
     let request = checked(&upstream.origin(), Method::Get, "/header/rates?base=USD", &caller_headers, SECRET);
 
-    let response = client(&ca.trust()).send(request).await.unwrap();
+    let response = client(&ca.trust()).send(request, RequestBody::empty()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body(response).await, b"hello");
@@ -105,7 +110,7 @@ async fn a_query_slot_reaches_the_upstream_in_the_query() {
         SECRET,
     );
 
-    client(&ca.trust()).send(request).await.unwrap();
+    client(&ca.trust()).send(request, RequestBody::empty()).await.unwrap();
 
     let received = only_request(&upstream);
     assert_eq!(
@@ -124,7 +129,7 @@ async fn reqwest_adds_only_accept_to_a_request_without_one() {
     let upstream = MockUpstream::start(&ca, Reply::ok("")).await;
     let request = checked(&upstream.origin(), Method::Get, "/header/x", &[], SECRET);
 
-    client(&ca.trust()).send(request).await.unwrap();
+    client(&ca.trust()).send(request, RequestBody::empty()).await.unwrap();
 
     let host = format!("{UPSTREAM_HOST}:{}", upstream.port());
     assert_eq!(
@@ -141,7 +146,7 @@ async fn a_redirect_is_returned_and_never_followed() {
     let upstream = MockUpstream::start(&ca, Reply::redirect(&location)).await;
     let request = checked(&upstream.origin(), Method::Get, "/header/x", &[], SECRET);
 
-    let response = client(&ca.trust()).send(request).await.unwrap();
+    let response = client(&ca.trust()).send(request, RequestBody::empty()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::FOUND);
     assert_eq!(response.headers()["location"], location.as_str());

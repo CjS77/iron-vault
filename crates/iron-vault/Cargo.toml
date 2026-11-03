@@ -19,6 +19,8 @@ anyhow.workspace = true
 # The upstream client's response body chunks.
 bytes.workspace = true
 clap.workspace = true
+# The `Stream` trait of the upstream client's request body.
+futures-core.workspace = true
 # Credential kinds, the serving snapshot's resolver half: the pipeline resolves a record's material through them.
 iron-vault-kinds = { path = "../iron-vault-kinds" }
 iron-vault-policy = { path = "../iron-vault-policy" }

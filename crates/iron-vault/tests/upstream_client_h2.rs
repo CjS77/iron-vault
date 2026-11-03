@@ -20,6 +20,7 @@ use common::mock_upstream::{TestCa, UPSTREAM_HOST};
 use common::mock_upstream_h2::{H2Reply, MockH2Upstream, RecordedH2Request};
 use h2::Reason;
 use iron_vault::upstream::client::{TransportLimits, UpstreamClient, UpstreamResponse};
+use iron_vault::upstream::request_body::RequestBody;
 use iron_vault::upstream::transport_error::TransportError;
 use iron_vault_policy::Method;
 use reqwest::StatusCode;
@@ -59,7 +60,7 @@ async fn failure(reply: H2Reply) -> (TransportError, MockH2Upstream) {
     let ca = TestCa::new("Test CA");
     let upstream = MockH2Upstream::start(&ca, reply).await;
     let request = checked(&upstream.origin(), Method::Get, "/query/rates?base=USD", &CALLER_HEADERS, SECRET);
-    let error = client(&ca).send(request).await.unwrap_err();
+    let error = client(&ca).send(request, RequestBody::empty()).await.unwrap_err();
     (error, upstream)
 }
 
@@ -82,7 +83,7 @@ async fn http2_carries_exactly_the_checked_authority_path_and_headers() {
     let upstream = MockH2Upstream::start(&ca, H2Reply::ok("hello")).await;
     let request = checked(&upstream.origin(), Method::Get, "/header/rates?base=USD", &CALLER_HEADERS, SECRET);
 
-    let response = client(&ca).send(request).await.unwrap();
+    let response = client(&ca).send(request, RequestBody::empty()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body(response).await, b"hello");
@@ -113,7 +114,7 @@ async fn a_query_slot_reaches_the_upstream_in_path() {
     let upstream = MockH2Upstream::start(&ca, H2Reply::ok("")).await;
     let request = checked(&upstream.origin(), Method::Post, "/query/rates?base=USD", &CALLER_HEADERS, SECRET);
 
-    client(&ca).send(request).await.unwrap();
+    client(&ca).send(request, RequestBody::empty()).await.unwrap();
 
     let received = only_request(&upstream);
     assert_eq!(received.method, "POST");
@@ -128,7 +129,7 @@ async fn every_checked_header_is_a_never_indexed_literal() {
     let upstream = MockH2Upstream::start(&ca, H2Reply::ok("")).await;
     let request = checked(&upstream.origin(), Method::Get, "/header/rates?base=USD", &CALLER_HEADERS, SECRET);
 
-    client(&ca).send(request).await.unwrap();
+    client(&ca).send(request, RequestBody::empty()).await.unwrap();
 
     let received = only_request(&upstream);
     assert!(received.fields.is_some(), "the raw header block could not be read");
@@ -148,7 +149,7 @@ async fn reqwest_indexes_the_accept_it_adds() {
     let upstream = MockH2Upstream::start(&ca, H2Reply::ok("")).await;
     let request = checked(&upstream.origin(), Method::Get, "/header/rates?base=USD", &[], SECRET);
 
-    client(&ca).send(request).await.unwrap();
+    client(&ca).send(request, RequestBody::empty()).await.unwrap();
 
     let representations: Vec<_> = only_request(&upstream)
         .regular_fields()
@@ -172,7 +173,7 @@ async fn a_path_with_a_query_slot_never_enters_the_dynamic_table() {
     let upstream = MockH2Upstream::start(&ca, H2Reply::ok("")).await;
     let request = checked(&upstream.origin(), Method::Get, "/query/rates?base=USD", &CALLER_HEADERS, SECRET);
 
-    client(&ca).send(request).await.unwrap();
+    client(&ca).send(request, RequestBody::empty()).await.unwrap();
 
     let fields = only_request(&upstream).fields.unwrap();
     let paths: Vec<_> = fields.iter().filter(|field| field.name == FieldName::Static(":path")).collect();

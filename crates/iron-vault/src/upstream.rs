@@ -2,5 +2,6 @@
 
 pub mod client;
 pub mod clients;
+pub mod request_body;
 pub mod transport_error;
 pub mod trust;

@@ -28,6 +28,7 @@ use common::mock_upstream::{MockUpstream, RecordedRequest, Reply, TestCa, UPSTRE
 use common::mock_upstream_h2::{H2Reply, MockH2Upstream, RecordedH2Request};
 use iron_vault::logging::CAPPED_TARGETS;
 use iron_vault::upstream::client::{TransportLimits, UpstreamClient, UpstreamResponse};
+use iron_vault::upstream::request_body::RequestBody;
 use iron_vault::upstream::transport_error::TransportError;
 use iron_vault::upstream::trust::UpstreamTrust;
 use iron_vault_policy::Method;
@@ -144,7 +145,7 @@ async fn child_sends_the_request_its_parent_describes() {
     let slot = Slot::parse(&std::env::var(SLOT_VAR).unwrap());
     let request = checked(&origin, Method::Get, &slot.target(), &[], slot.marker());
     let client = UpstreamClient::new(&child_trust(), TransportLimits::default()).unwrap();
-    report(client.send(request).await);
+    report(client.send(request, RequestBody::empty()).await);
     if logging {
         tracing::info!("{LOGGED}");
     }
