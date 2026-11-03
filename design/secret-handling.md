@@ -133,8 +133,58 @@ proves the first event is relayed while the upstream is still waiting to send th
 `a_streamed_chat_completion_without_the_secret_arrives_unchanged_and_in_at_least_as_many_chunks` checks that traffic
 holding no secret is byte-identical and not coalesced.
 
-Not covered: compressed bodies (EP-20) and the HTTP/2 upstream path, whose relay shares the scrubber but is not
-exercised with scripted chunks.
+Not covered here: the HTTP/2 upstream path, whose relay shares the scrubber but is not exercised with scripted chunks.
+Compressed bodies are covered in the next section.
+
+### Compressed responses
+
+Spec §3.8 and §9 ask for tests that combine compression with chunk boundaries and unchanged traffic, and for measured
+decompression limits. `crates/iron-vault/tests/proxy_coding_stream_linux.rs` runs the same assembled service against an
+upstream that sends already compressed, scripted chunks; the refusals are in `proxy_coding_linux.rs`.
+
+**Supported codings and refusals.** The service decodes `gzip`, `deflate` (zlib) and `br`, and asks upstreams for
+exactly `Accept-Encoding: gzip, deflate, br`. It refuses with `502` and sends none of the body for an unknown coding
+(`zstd`), a stacked coding (`gzip, br`) and a coded `206`
+(`an_unsupported_or_stacked_coding_is_502_with_none_of_its_body`, `a_coded_partial_content_reply_is_502`). A body that is
+corrupt, truncated or past a limit aborts the caller's connection after the head (`a_truncated_gzip_body_aborts_the_connection`,
+`a_decompression_bomb_aborts_the_connection_before_a_secret_planted_past_the_limit`). The response sheds
+`Content-Encoding` and `Content-Length` unless the caller refuses identity, when it gets gzip of the scrubbed body.
+
+**Default limits.** `max_decompressed_response_bytes` is 64 MiB and `max_decompression_ratio` is 100, checked once 1 MiB
+has decoded. `s3_8_the_default_limits_accept_a_10_mib_gzip_json_reply` sends 10 MiB of JSON that gzip shrinks 3.8 times and
+requires it byte for byte. `s3_8_a_decompression_bomb_is_cut_off_with_no_chunk_over_one_decoder_step_plus_the_hold_back`
+sends 16 MiB of zeros (a thousandfold) with a key planted past the limit, in 16-byte upstream chunks. The caller's
+connection is aborted, receives under 2 MiB, never sees the key, and no chunk it received exceeds `PIECE_SIZE` (64 KiB)
+plus the longest pattern minus one.
+
+**Peak bytes held per response are not bounded by `PIECE_SIZE` in general.** The relay gathers all of one upstream
+chunk's decoded output before it emits any (`Stages::push`), so the bound is the chunk's size times its expansion, not one
+decoder piece. The bomb test therefore scripts small chunks, and the assertion depends on that. Measured: a valid 10 MiB
+gzip JSON reply made the caller's largest chunk 1.9 MB (`measure_gzip_decode_throughput`), because hyper handed the relay
+upstream frames of about 500 KB. A bomb in one upstream chunk is cut off with nothing sent
+(`measure_a_bomb_in_one_upstream_chunk`), but the service decoded up to the 1 MiB ratio floor in memory first.
+
+**Latency per gzip SSE event** comes from `measure_gzip_sse_latency_per_event`: 200 events, each coded with a sync flush
+and sent only after the caller has the one before, timed from the upstream's write to the moment the caller holds the
+event decoded. Median, 95th percentile and maximum on one development machine (Linux 6.8, loopback):
+
+| Build | gzip to identity | gzip to gzip (`identity;q=0`) |
+|---|---|---|
+| debug | 105 / 113 / 286 us | 127 / 136 / 311 us |
+| release | 13 / 16 / 74 us | 15 / 17 / 63 us |
+
+`s3_8_a_gzip_sse_event_reaches_the_caller_decoded_before_the_next_is_sent` and its `..._recompressed_...` twin gate the
+upstream on a channel, so they prove the event is relayed before the next exists without a timing threshold.
+
+**Throughput** comes from `measure_gzip_decode_throughput`: a 10 MiB gzip JSON body (2.8 MB compressed) sent in one
+write, timed from the caller's request to the end of the response, best of five. Release: 126 ms, 79 MiB/s decoded.
+Debug: 3.7 s, 3 MiB/s. It includes TLS to the upstream, decode, scrub and the Unix socket.
+
+**Boundaries.** `s3_8_a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes` splits the compressed bytes of a
+body holding every pattern of a Basic credential and of a static key at every offset; the `br` test does so at eight.
+`s3_8_a_secret_across_two_decoder_output_pieces_is_scrubbed` plants a key across the 64 KiB piece boundary at three
+offsets. `s3_8_a_realistic_gzip_json_reply_without_a_secret_decodes_to_the_same_bytes` requires gzip, deflate and br
+replies without a secret to decode byte for byte.
 
 ## Clearing a vault
 
