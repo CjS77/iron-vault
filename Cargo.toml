@@ -15,13 +15,11 @@ anyhow = "1"
 base64 = "0.23.1"
 # zeroize clears hasher state on drop, so the manifest key does not outlive its use; alloc is not needed.
 blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
-# The brotli response encoder (its writer API flushes per chunk) and the decoder tests' reference encoder. Pure Rust, std
-# only for the writer API. It depends on brotli-decompressor, but does not re-export its `StandardAlloc`, which the decoder
-# needs, so both stay direct dependencies.
+# The brotli response encoder (its writer API flushes per chunk), the response decoder (through brotli's re-export of
+# brotli-decompressor's low-level stream API, so each step's output is bounded) and the decoder tests' reference encoder.
+# Pure Rust; `std` brings the writer API and the standard allocator, which the decoder wraps in one that wipes the window.
+# Large-window streams are refused.
 brotli = { version = "8.0.4", default-features = false, features = ["std"] }
-# The brotli response decoder, through its low-level stream API so each step's output is bounded. Pure Rust; `std` brings
-# only the standard allocator, which the decoder wraps in one that wipes the window. Large-window streams are refused.
-brotli-decompressor = { version = "5.0.3", default-features = false, features = ["std"] }
 # The response body chunks the upstream client hands on; the version hyper and reqwest already use.
 bytes = "1.12.1"
 # The binary's argument parser. Default features are off: colour, suggestions and terminal-width detection are not

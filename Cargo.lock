@@ -1318,7 +1318,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "brotli",
- "brotli-decompressor",
  "bytes",
  "clap",
  "flate2",

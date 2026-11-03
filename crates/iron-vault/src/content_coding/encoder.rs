@@ -85,6 +85,9 @@ impl Writer {
 /// of the body. After an error the encoder is unusable and the response must be aborted.
 pub struct ResponseEncoder {
     writer: Writer,
+    /// Set by the first error. The brotli writer panics if used after a failure, so a failed encoder refuses all later
+    /// calls rather than reaching it.
+    failed: bool,
 }
 
 impl ResponseEncoder {
@@ -92,21 +95,35 @@ impl ResponseEncoder {
     pub fn new(coding: ContentCoding) -> Self {
         Self {
             writer: Writer::new(coding),
+            failed: false,
         }
     }
 
     /// Compresses `chunk` and sync-flushes, returning the bytes to send now. Decoding everything returned so far yields
     /// exactly the input pushed so far. An empty chunk returns nothing, since a flush would only add framing.
     pub fn push(&mut self, chunk: &[u8]) -> Result<Bytes, EncodeError> {
+        if self.failed {
+            return Err(EncodeError);
+        }
         if chunk.is_empty() {
             return Ok(Bytes::new());
         }
-        Ok(Bytes::from(self.writer.push(chunk)?))
+        self.writer.push(chunk).map(Bytes::from).map_err(|_| {
+            self.failed = true;
+            EncodeError
+        })
     }
 
     /// Ends the stream and returns the remaining bytes, including the trailer. A body that was never pushed to becomes a
     /// valid empty stream.
+    ///
+    /// For `br` this cannot report every failure: `CompressorWriter::into_inner` discards an error from writing the final
+    /// block and returns the sink anyway, so `Ok` could in principle lack the trailer. Writing to a `Vec` does not fail
+    /// in practice, but no caller should rely on `finish` detecting a brotli failure.
     pub fn finish(self) -> Result<Bytes, EncodeError> {
+        if self.failed {
+            return Err(EncodeError);
+        }
         let out = match self.writer {
             Writer::Gzip(w) => w.finish()?,
             Writer::Deflate(w) => w.finish()?,
@@ -174,14 +191,16 @@ mod tests {
 
     #[test]
     fn every_push_is_decodable_up_to_that_point() {
-        let data = text(20_000);
-        for coding in CODINGS {
+        // Each check builds a fresh decoder, which is costly for brotli, so the short chunkings use short bodies.
+        let data = text(3000);
+        for (coding, size) in CODINGS.into_iter().flat_map(|coding| [1, 7, 333].map(|size| (coding, size))) {
+            let data = &data[..if size == 333 { data.len() } else { 150 }];
             let mut encoder = ResponseEncoder::new(coding);
             let mut sent = Vec::new();
-            data.chunks(333).enumerate().for_each(|(i, chunk)| {
+            data.chunks(size).enumerate().for_each(|(i, chunk)| {
                 sent.extend_from_slice(&encoder.push(chunk).unwrap());
-                let pushed = &data[..((i + 1) * 333).min(data.len())];
-                assert_eq!(decode_prefix(coding, &sent), pushed, "{coding:?} after chunk {i}");
+                let pushed = &data[..((i + 1) * size).min(data.len())];
+                assert_eq!(decode_prefix(coding, &sent), pushed, "{coding:?} by {size} after chunk {i}");
             });
         }
     }

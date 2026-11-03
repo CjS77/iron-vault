@@ -1,6 +1,7 @@
-//! The brotli engine (RFC 7932), over `brotli-decompressor`'s low-level stream call.
+//! The brotli engine (RFC 7932), over the low-level stream call of the decompressor that `brotli` re-exports.
 
-use brotli_decompressor::{Allocator, BrotliDecompressStream, BrotliResult, BrotliState, SliceWrapper, SliceWrapperMut, StandardAlloc};
+use brotli::enc::StandardAlloc;
+use brotli::{Allocator, BrotliDecompressStream, BrotliResult, BrotliState, SliceWrapper, SliceWrapperMut};
 use zeroize::Zeroizing;
 
 use super::{DecodeError, Engine, Step};

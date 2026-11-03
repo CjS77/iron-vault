@@ -16,10 +16,8 @@ test-support = []
 
 [dependencies]
 anyhow.workspace = true
-# The brotli response encoder.
+# The brotli response encoder and decoder.
 brotli.workspace = true
-# The brotli response decoder.
-brotli-decompressor.workspace = true
 # The upstream client's response body chunks, and the bytes the scrubber releases from them.
 bytes.workspace = true
 clap.workspace = true
