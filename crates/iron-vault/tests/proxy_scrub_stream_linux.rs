@@ -76,7 +76,7 @@ fn venice() -> Cred {
     static_cred(
         "venice",
         "venice_key",
-        "vK3_xT9-qLm2Zp7Rw4Yc1Dn8Hf5Jb0Ua6Gs-Ei_Ono",
+        "vK3_xT9-qLm2Zp7Rw4Yc1Dn8Hf5Jb0Ua6Gs-Ei_Onop",
         "{ header = \"Authorization\", format = \"Bearer {}\" }",
     )
 }

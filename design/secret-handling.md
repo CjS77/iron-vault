@@ -95,6 +95,46 @@ operation.
 `blake2`'s `zeroize` feature, enabled in the workspace, clears the `Blake2b512` hasher that derives a key and the
 `Blake2bMac` state keyed with it when each is dropped. Without it, the key would survive in the dropped MAC's state.
 
+## Streamed response compatibility
+
+Spec §9 asks for measured overlap buffering and SSE latency. `crates/iron-vault/tests/proxy_scrub_stream_linux.rs` runs
+the real request server and pipeline against a test upstream that sends scripted chunks, each flushed as its own write.
+
+The scrubber holds back only the tail of the pending bytes that is a proper prefix of some pattern (`Scrubber::scan`
+stops at the first such position), at most the longest pattern minus one. A chunk that ends in no such prefix is released
+whole, so an SSE event never waits for the next.
+
+**Bytes held back per chunk** come from `measure_bytes_held_back_per_chunk`, as bytes pushed minus bytes the caller
+received once none arrived for 150 ms. The test pushes a typical chat-completion event, then a chunk that ends in the
+longest pattern minus its last byte, which is the worst case. Run it with `--nocapture`.
+
+| Credential (test stand-in) | Longest pattern | Maximum held | Typical chunk held |
+|---|---|---|---|
+| FX, Basic: 8-byte username, 19-byte password | 46 bytes | 45 | 0 |
+| Brave, static: 31-byte key | 44 bytes | 43 | 0 |
+| Venice, static: 43-byte key | 60 bytes | 59 | 0 |
+
+The longest pattern is the padded base64 form of a static key, and `Basic <token>` for a Basic credential. A typical
+event ends in `\n\n`, which begins no pattern, so nothing is held. A chunk that ends in a pattern's first byte is held
+only that far: a chunk ending in `B` holds one byte when a Brave key is injected. The stand-ins have the shape of each
+provider's key, not a real key; a longer real key raises the maximum by 4/3 of the difference.
+
+**Latency per SSE event** comes from `measure_sse_latency_per_event`: 200 events, each sent by the upstream only after the
+caller has received the one before, timed from the upstream's write to the caller's read, through TLS to the proxy, the
+scrubber and the Unix socket. Observed in a debug build on one development machine (Linux 6.8, loopback), three runs:
+median 85-88 us, 95th percentile 99-107 us, maximum 219-234 us. These are loopback figures with no network, so they
+bound the proxy's own cost and do not predict a deployment's.
+
+**Chunk boundaries.** `a_body_split_at_every_byte_offset_scrubs_to_the_same_bytes` sends a body holding every scrub
+pattern of a Basic credential and of a static key with URL-reserved characters, split at every byte offset, and requires
+the caller to receive exactly the one-shot scrubbed body. `an_sse_event_reaches_the_caller_before_the_next_one_is_sent`
+proves the first event is relayed while the upstream is still waiting to send the second, and
+`a_streamed_chat_completion_without_the_secret_arrives_unchanged_and_in_at_least_as_many_chunks` checks that traffic
+holding no secret is byte-identical and not coalesced.
+
+Not covered: compressed bodies (EP-20) and the HTTP/2 upstream path, whose relay shares the scrubber but is not
+exercised with scripted chunks.
+
 ## Clearing a vault
 
 `Vault` owns its identity and records by value. The store's production code uses no `Rc`, `Arc`, `OnceLock`,
