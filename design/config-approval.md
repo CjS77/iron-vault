@@ -14,7 +14,8 @@ Three §3.9 rules drive everything below:
 - **Reserved counters stay consumed.** A version handed out for a signing attempt is never handed out again, whether
   or not the attempt finished.
 
-Points the specification leaves open, and this design does not settle, are listed under [Open questions](#open-questions).
+Points the specification leaves open, and this design does not settle, are listed under
+[Open questions](#open-questions).
 
 ## File layout
 
@@ -149,9 +150,9 @@ allows ("failed attempts consume their versions").
 
 **Why the candidate snapshot is built before the pause.** Building upstream clients reads pinned CA files and sets up
 TLS configurations: work that can take milliseconds and fail. Doing it before step 5 keeps the pause down to one
-durable replace, two renames, a directory fsync and a signature check. A candidate that cannot be built fails the transaction before the
-commit, leaving the old policy committed and active. Only the swap waits for verification, so the snapshot still
-activates only a verified approval.
+durable replace, two renames, a directory fsync and a signature check. A candidate that cannot be built fails the
+transaction before the commit, leaving the old policy committed and active. Only the swap waits for verification, so
+the snapshot still activates only a verified approval.
 
 ### Publish
 
@@ -289,9 +290,9 @@ happened before the pause began, and the pause begins before the commit.
 and never past its own request deadline. If the pause ends in time, the request is admitted under whatever follows:
 the new snapshot, or a `503` with the redacted reason if the service went unavailable. If the wait runs out first,
 the request gets `503` with reason `reconfiguring` and `Retry-After: 1`, and is never admitted. A normal pause is one
-durable replace, two renames, a directory fsync and a signature check, well under a second, so callers see a short delay instead of an
-error. The bound keeps a stalled disk from holding connections open indefinitely. The wait counts against the request
-server's request timeout like any other handler time.
+durable replace, two renames, a directory fsync and a signature check, well under a second, so callers see a short
+delay instead of an error. The bound keeps a stalled disk from holding connections open indefinitely. The wait counts
+against the request server's request timeout like any other handler time.
 
 **A request admitted before the pause** keeps the snapshot it took and finishes on it: its route, its credential
 record, its upstream client and its rate-limit charge all come from the old activation. A successful approval does not
