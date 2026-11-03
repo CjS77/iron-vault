@@ -16,12 +16,13 @@ test-support = []
 
 [dependencies]
 anyhow.workspace = true
-# The upstream client's response body chunks.
+# The upstream client's response body chunks, and the bytes the scrubber releases from them.
 bytes.workspace = true
 clap.workspace = true
 # The `Stream` trait of the upstream client's upstream body.
 futures-core.workspace = true
-# Credential kinds, the serving snapshot's resolver half: the pipeline resolves a record's material through them.
+# Credential kinds, the serving snapshot's resolver half: the pipeline resolves a record's material through them,
+# and the scrubber watches for the scrub patterns they produce.
 iron-vault-kinds = { path = "../iron-vault-kinds" }
 iron-vault-policy = { path = "../iron-vault-policy" }
 # The vault whose healthy credential records a serving snapshot holds.

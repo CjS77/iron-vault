@@ -18,6 +18,7 @@ assert_not_impl_any!(Decoded: Clone, Copy, Display, Serialize, Deserialize<'stat
 assert_not_impl_any!(ServingSnapshot: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_impl_all!(ServingSnapshot: Send, Sync);
 assert_not_impl_any!(SnapshotHolder: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(crate::scrub::Scrubber<'static>: Clone, Copy, Display, Serialize, Deserialize<'static>);
 #[cfg(target_os = "linux")]
 assert_not_impl_any!(crate::listener_tls::ListenerTls: Clone, Copy, Display, Serialize, Deserialize<'static>);
 
@@ -50,4 +51,12 @@ fn frames_holding_owner_input_hide_the_value() {
         frame: Frame::OwnerInput(owner_input()),
         used: 0,
     });
+}
+
+#[test]
+fn scrubber_debug_hides_its_patterns_and_held_bytes() {
+    let mut scrubber = crate::scrub::Scrubber::with_patterns([MARKER.as_bytes()]);
+    let released = scrubber.push(&MARKER.as_bytes()[..MARKER.len() - 1]);
+    assert!(released.is_empty());
+    assert_hides_marker(&scrubber);
 }
