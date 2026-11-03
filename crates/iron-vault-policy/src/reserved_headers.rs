@@ -3,12 +3,15 @@
 //! This is the single denylist for two uses: a header slot may never name one of these headers, and the outgoing
 //! request has them removed before forwarding. Keeping both uses on one list means a header cannot be stripped from
 //! callers yet written with a credential, or the reverse.
+//!
+//! The hop-by-hop part of the list, [`HOP_BY_HOP_HEADERS`], is also what the request handler removes from an upstream's
+//! response before relaying it, so the two directions share one copy.
 
 use crate::header_name::HeaderName;
 
-/// Reserved header names, lowercase, matched exactly.
-pub const RESERVED_HEADERS: &[&str] = &[
-    // Hop-by-hop headers (RFC 9110 §7.6.1), plus the legacy `Keep-Alive` and `Proxy-Connection`.
+/// Hop-by-hop headers (RFC 9110 §7.6.1), plus the legacy `Keep-Alive` and `Proxy-Connection`, lowercase. They describe
+/// one connection, so neither a caller's nor an upstream's crosses the service.
+pub const HOP_BY_HOP_HEADERS: &[&str] = &[
     "connection",
     "keep-alive",
     "proxy-connection",
@@ -18,6 +21,10 @@ pub const RESERVED_HEADERS: &[&str] = &[
     "trailer",
     "transfer-encoding",
     "upgrade",
+];
+
+/// Reserved header names besides [`HOP_BY_HOP_HEADERS`], lowercase, matched exactly.
+pub const RESERVED_HEADERS: &[&str] = &[
     // The service controls the authority and message framing; a credential written here would redirect or split the
     // request.
     "host",
@@ -52,7 +59,9 @@ pub const RESERVED_PREFIXES: &[&str] = &["x-forwarded-"];
 /// Whether `name` is a caller-authentication or transport-control header.
 pub fn is_reserved(name: &HeaderName) -> bool {
     let lowercase = name.lowercase();
-    RESERVED_HEADERS.contains(&lowercase) || RESERVED_PREFIXES.iter().any(|prefix| lowercase.starts_with(prefix))
+    HOP_BY_HOP_HEADERS.contains(&lowercase)
+        || RESERVED_HEADERS.contains(&lowercase)
+        || RESERVED_PREFIXES.iter().any(|prefix| lowercase.starts_with(prefix))
 }
 
 #[cfg(test)]
@@ -65,10 +74,14 @@ mod tests {
 
     #[test]
     fn list_entries_are_lowercase_header_names() {
-        RESERVED_HEADERS.iter().chain(RESERVED_PREFIXES).for_each(|entry| {
-            assert_eq!(*entry, entry.to_ascii_lowercase());
-            assert!(entry.parse::<HeaderName>().is_ok(), "{entry}");
-        });
+        HOP_BY_HOP_HEADERS
+            .iter()
+            .chain(RESERVED_HEADERS)
+            .chain(RESERVED_PREFIXES)
+            .for_each(|entry| {
+                assert_eq!(*entry, entry.to_ascii_lowercase());
+                assert!(entry.parse::<HeaderName>().is_ok(), "{entry}");
+            });
     }
 
     #[test]
