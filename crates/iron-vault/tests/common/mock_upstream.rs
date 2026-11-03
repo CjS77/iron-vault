@@ -6,7 +6,7 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iron_vault::upstream::trust::UpstreamTrust;
 use rcgen::{BasicConstraints, Certificate, CertificateParams, DnType, IsCa, Issuer, KeyPair};
@@ -104,6 +104,75 @@ pub enum Reply {
         /// The only chunk sent.
         sent: String,
     },
+    /// Answers `200` with a chunked body of scripted chunks, each flushed as its own write.
+    Script(Script),
+}
+
+/// One step of a scripted chunked body.
+#[derive(Debug, Clone)]
+pub enum Step {
+    /// Flushes these bytes as one chunk. Never empty: a zero-length chunk would end the body.
+    Chunk(Vec<u8>),
+    /// Pauses until the test notifies the gate, so it can prove the earlier chunks were relayed before the later ones existed.
+    Wait(Arc<tokio::sync::Notify>),
+}
+
+/// A chunked `200` reply whose steps may depend on the request target.
+#[derive(Clone)]
+pub struct Script {
+    content_type: String,
+    plan: Arc<dyn Fn(&str) -> Vec<Step> + Send + Sync>,
+    /// When each chunk was handed to the socket, in order, for measuring relay latency.
+    pub sent: Arc<Mutex<Vec<Instant>>>,
+}
+
+impl Script {
+    /// The same `steps` for every request.
+    pub fn fixed(content_type: &str, steps: Vec<Step>) -> Self {
+        Self::by_target(content_type, move |_| steps.clone())
+    }
+
+    /// The steps `plan` returns for the request target, such as one that encodes where to split the body.
+    pub fn by_target(content_type: &str, plan: impl Fn(&str) -> Vec<Step> + Send + Sync + 'static) -> Self {
+        Self {
+            content_type: content_type.to_owned(),
+            plan: Arc::new(plan),
+            sent: Arc::default(),
+        }
+    }
+}
+
+impl std::fmt::Debug for Script {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Script")
+            .field("content_type", &self.content_type)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Script {
+    /// Sends the head, then each step in order, then the last chunk.
+    async fn play(&self, tls: &mut (impl AsyncWriteExt + Unpin), target: &str) {
+        let head = format!(
+            "HTTP/1.1 200 Test\r\ncontent-type: {}\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+            self.content_type
+        );
+        let _ = tls.write_all(head.as_bytes()).await;
+        let _ = tls.flush().await;
+        for step in (self.plan)(target) {
+            match step {
+                Step::Chunk(bytes) => {
+                    self.sent.lock().unwrap().push(Instant::now());
+                    let framed = [format!("{:x}\r\n", bytes.len()).as_bytes(), &bytes, b"\r\n"].concat();
+                    let _ = tls.write_all(&framed).await;
+                    let _ = tls.flush().await;
+                }
+                Step::Wait(gate) => gate.notified().await,
+            }
+        }
+        let _ = tls.write_all(b"0\r\n\r\n").await;
+        let _ = tls.shutdown().await;
+    }
 }
 
 impl Reply {
@@ -243,6 +312,8 @@ impl Server {
 
     /// Records one request on `stream` and replies; a failed handshake or a cut-short head records nothing.
     async fn serve(self, stream: TcpStream) {
+        // Each scripted chunk must leave as its own segment, not wait for Nagle to coalesce it with the next.
+        let _ = stream.set_nodelay(true);
         let Ok(mut tls) = self.acceptor.accept(stream).await else {
             return;
         };
@@ -250,6 +321,7 @@ impl Server {
             return;
         };
         let server_name = tls.get_ref().1.server_name().map(str::to_owned);
+        let target = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
         let (body, body_complete) = read_body(&mut tls, &head).await;
         self.requests.lock().unwrap().push(RecordedRequest {
             server_name,
@@ -276,6 +348,9 @@ impl Server {
                 gate.notified().await;
                 let _ = tls.write_all(format!("{}0\r\n\r\n", chunk(second)).as_bytes()).await;
                 let _ = tls.shutdown().await;
+            }
+            Reply::Script(script) => {
+                script.play(&mut tls, &target).await;
             }
             Reply::Truncated { sent } => {
                 let head = "HTTP/1.1 200 Test\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n";
