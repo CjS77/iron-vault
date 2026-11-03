@@ -11,7 +11,7 @@
 //! | The route has no upstream client | `503` |
 //! | The upstream exchange fails | [`TransportError::status`]: `502`, or `504` for a timeout |
 //! | No response headers by the request deadline | `504` |
-//! | The response has a content coding, which the scrubber cannot see through | `502` |
+//! | The response has a content coding, or a transfer coding besides `chunked`, which the scrubber cannot see through | `502` |
 //! | The response body fails after its head was sent | The caller's connection is aborted |
 //!
 //! The request deadline bounds the body as well: the request server fails a response body still streaming at it.
