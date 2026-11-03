@@ -29,6 +29,8 @@ ed25519-dalek = { version = "2.2.0", default-features = false, features = ["zero
 h2 = { version = "0.4.20", default-features = false }
 # The request and response types the HTTP/2 test upstream exchanges with `h2`; dev-only, already in the lock tree.
 http = { version = "1.5.0", default-features = false, features = ["std"] }
+# The operating system's random source for the software signer's private key; the same version uuid already uses.
+getrandom = { version = "0.4.3", default-features = false }
 # Body adapters for the request server's own responses and its boxed response body; the version reqwest already brings.
 http-body-util = { version = "0.1.5", default-features = false }
 # The caller-facing HTTP/1.1 server. The version reqwest already brings, so the build gets no second copy; each crate
@@ -37,8 +39,6 @@ hyper = { version = "1.12.0", default-features = false }
 # Tokio adapters for hyper: its I/O traits over a request stream and its timer for the header-read timeout. The version
 # reqwest already brings.
 hyper-util = { version = "0.1.21", default-features = false }
-# The operating system's random source for the software signer's private key; the same version uuid already uses.
-getrandom = { version = "0.4.3", default-features = false }
 # Open-flag constants (O_NOFOLLOW, O_NONBLOCK, ELOOP) for state-file reads on Unix; already in the lock tree.
 libc = { version = "0.2.191", default-features = false }
 # Takes ownership of the sockets systemd passes by socket activation; `from_raw_fd` is unsafe, which this workspace

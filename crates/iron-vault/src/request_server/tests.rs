@@ -194,6 +194,20 @@ async fn a_client_that_never_finishes_its_headers_is_dropped_at_the_header_timeo
 }
 
 #[tokio::test(start_paused = true)]
+async fn an_idle_connection_that_sends_nothing_is_dropped_at_the_header_timeout() {
+    let running = Running::start("", Stub::default());
+    let mut client = running.unix().await;
+    let start = Instant::now();
+    let read = tokio::time::timeout(HEADER_READ_TIMEOUT * 2, client.read(&mut [0; 1]))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read, 0, "the idle client got a response");
+    assert!(start.elapsed() >= HEADER_READ_TIMEOUT, "dropped after {:?}", start.elapsed());
+    assert_eq!(running.calls(), 0);
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_request_still_unanswered_at_the_request_timeout_gets_408() {
     let stalled = Stub {
         stall: true,

@@ -11,12 +11,15 @@
 //! | `max_connections` | A semaphore permit taken before the TLS handshake | Closed unread |
 //! | `max_header_bytes` | hyper's `max_header_size`, which counts the request line and headers on the wire exactly | `431` |
 //! | `max_header_count` | hyper's `max_headers` | `431` |
-//! | `max_request_body_bytes` | A `Content-Length` over it, before the handler runs; otherwise [`RequestBody`] counts as it streams | `413` |
-//! | `request_timeout_secs` | A deadline from the request head to the last byte of the response | `408` if no response has started, else the connection is dropped |
+//! | `max_request_body_bytes` | `Content-Length` before the handler runs, else [`RequestBody`] as it streams | `413` |
+//! | `request_timeout_secs` | A deadline from the request head to the last byte of the response | `408`, or dropped |
 //! | Header read timeout | hyper's `header_read_timeout`: [`HEADER_READ_TIMEOUT`], or the request timeout if shorter | Closed |
 //!
 //! hyper answers both header limits with `431`: it reports a head that is too long and one with too many headers as
-//! the same error. Every `413` and `408` closes the connection, since the rest of that request is never read.
+//! the same error. A request target over 65,534 bytes gets `414` instead, from hyper's own URI limit; that is
+//! reachable only when `max_header_bytes` is over 64 KiB. A request past the request timeout gets `408` if no response
+//! has started; once one has, its body fails at the deadline and the connection is dropped. Every `413` and `408`
+//! closes the connection, since the rest of that request is never read.
 //!
 //! The handler sees only the connection tags the transport set ([`ConnectionTags`]), never anything from the request
 //! that claims to be one (§3.4).
@@ -125,7 +128,7 @@ impl<H: RequestHandler> RequestServer<H> {
                 Ok(permit) => {
                     connections.spawn(self.connection(permit, incoming));
                 }
-                Err(_) => tracing::warn!(
+                Err(_) => tracing::debug!(
                     "listener {}: connection closed: {} connections are already open",
                     incoming.listener(),
                     self.limits.max_connections()
