@@ -255,7 +255,8 @@ async fn s3_15_fx_query_slot_sends_the_credential_in_the_query_only() {
 
     let response = proxy.get("/fx/latest?base=USD").await;
 
-    assert_eq!((response.status, response.body.as_str()), (200, "ok"));
+    // Scrubbing may change the length, so the relayed body is chunked rather than framed by the upstream's length.
+    assert_eq!((response.status, response.body.as_str()), (200, "2\r\nok\r\n0\r\n\r\n"));
     let sent = upstreams.sole_request("fx");
     assert_eq!(sent.request_line(), format!("GET /latest?base=USD&access_key={FX_SECRET} HTTP/1.1"));
     assert_eq!(count(&wire_text(&sent), FX_SECRET), 1, "{}", sent.head);
