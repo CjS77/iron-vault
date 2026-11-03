@@ -197,3 +197,73 @@ fn case_is_never_folded() {
 fn no_patterns_passes_everything_through() {
     assert_eq!(scrubbed(&[], "anything\n"), "anything\n");
 }
+
+mod headers {
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+    use super::*;
+
+    const SECRET: &[u8] = b"sk-secret-key-123";
+
+    fn scrubbed(headers: &mut HeaderMap) -> u64 {
+        scrub_header_values(headers, || Scrubber::with_patterns([SECRET, b"sk-secret%2Dkey" as &[u8]]))
+    }
+
+    fn map(pairs: &[(&'static str, &[u8])]) -> HeaderMap {
+        pairs
+            .iter()
+            .map(|(name, value)| (HeaderName::from_static(name), HeaderValue::from_bytes(value).unwrap()))
+            .fold(HeaderMap::new(), |mut headers, (name, value)| {
+                headers.append(name, value);
+                headers
+            })
+    }
+
+    #[test]
+    fn replaces_secret_in_custom_www_authenticate_and_location() {
+        let mut headers = map(&[
+            ("x-debug", b"key=sk-secret-key-123"),
+            ("www-authenticate", b"Bearer error_description=\"bad sk-secret-key-123\""),
+            ("location", b"/next?k=sk-secret%2Dkey&a=1"),
+            ("content-type", b"application/json"),
+        ]);
+        assert_eq!(scrubbed(&mut headers), 3);
+        assert_eq!(headers["x-debug"], format!("key={R}").as_str());
+        assert_eq!(
+            headers["www-authenticate"],
+            format!("Bearer error_description=\"bad {R}\"").as_str()
+        );
+        assert_eq!(headers["location"], format!("/next?k={R}&a=1").as_str());
+        assert_eq!(headers["content-type"], "application/json");
+    }
+
+    #[test]
+    fn unmatched_headers_are_unchanged() {
+        let mut headers = map(&[("x-a", b"one"), ("x-b", b"sk-secret")]);
+        let before = headers.clone();
+        assert_eq!(scrubbed(&mut headers), 0);
+        assert_eq!(headers, before);
+    }
+
+    #[test]
+    fn repeated_headers_are_each_scrubbed() {
+        let mut headers = map(&[
+            ("x-echo", b"sk-secret-key-123"),
+            ("x-echo", b"ok"),
+            ("x-echo", b"a sk-secret-key-123"),
+        ]);
+        assert_eq!(scrubbed(&mut headers), 2);
+        let values: Vec<&[u8]> = headers.get_all("x-echo").iter().map(HeaderValue::as_bytes).collect();
+        assert_eq!(values, [R.as_bytes(), b"ok", format!("a {R}").as_bytes()]);
+    }
+
+    #[test]
+    fn non_utf8_value_is_scrubbed_as_bytes() {
+        let mut headers = map(&[("x-raw", b"\xff\xfesk-secret-key-123\xfd")]);
+        assert_eq!(scrubbed(&mut headers), 1);
+        assert_eq!(
+            headers["x-raw"].as_bytes(),
+            [b"\xff\xfe".as_slice(), R.as_bytes(), b"\xfd"].concat()
+        );
+    }
+}

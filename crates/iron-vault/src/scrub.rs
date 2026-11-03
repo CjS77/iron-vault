@@ -8,6 +8,7 @@ use std::fmt;
 
 use bytes::Bytes;
 use iron_vault_kinds::ScrubPatterns;
+use reqwest::header::{HeaderMap, HeaderValue};
 use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(test)]
@@ -157,4 +158,48 @@ impl fmt::Debug for Scrubber<'_> {
             .field("matches", &self.matches)
             .finish()
     }
+}
+
+/// Scrubs every response header value in place and returns how many values held a match (spec §3.8).
+///
+/// Each value is scrubbed whole and one-shot through the same [`Scrubber`] as the body, so headers and body share one
+/// matching rule. Header names are not scrubbed: a secret in a name is implausible, and rewriting names would change
+/// semantics. A value that is not UTF-8 is scrubbed as bytes. `Location` is scrubbed like any other header.
+///
+/// Note for EP-21: its `Location` rewriting must run after this call, on the scrubbed value.
+pub fn scrub_headers(headers: &mut HeaderMap, patterns: &ScrubPatterns) -> u64 {
+    scrub_header_values(headers, || Scrubber::new(patterns))
+}
+
+/// [`scrub_headers`] over a scrubber factory, one fresh scrubber per value.
+pub(crate) fn scrub_header_values<'p>(headers: &mut HeaderMap, scrubber: impl Fn() -> Scrubber<'p>) -> u64 {
+    headers
+        .values_mut()
+        .map(|value| match scrub_value(scrubber(), value.as_bytes()) {
+            Some(scrubbed) => {
+                let sensitive = value.is_sensitive();
+                *value = scrubbed;
+                value.set_sensitive(sensitive);
+                1
+            }
+            None => 0,
+        })
+        .sum()
+}
+
+/// The scrubbed value if `value` held a match, else `None` so an unmatched value stays byte-identical.
+fn scrub_value(mut scrubber: Scrubber<'_>, value: &[u8]) -> Option<HeaderValue> {
+    let mut out = Zeroizing::new(scrubber.push(value).to_vec());
+    let finished = scrubber.finish();
+    out.extend_from_slice(&finished.tail);
+    (finished.matches > 0).then(|| header_value(&out))
+}
+
+/// A header value from scrubbed bytes. The replacement is ASCII and the rest came from a valid header value, so this
+/// cannot fail; if it somehow did, the whole value becomes the replacement rather than leaving the secret in place.
+fn header_value(bytes: &[u8]) -> HeaderValue {
+    HeaderValue::from_bytes(bytes).unwrap_or_else(|_| {
+        debug_assert!(false, "scrubbed header value is not a valid header value");
+        HeaderValue::from_static("[iron-vault:scrubbed]")
+    })
 }
