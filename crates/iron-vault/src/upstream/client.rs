@@ -8,10 +8,13 @@
 //! which the final check never reads.
 
 use std::fmt;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
+use futures_core::Stream;
 use iron_vault_policy::{CheckedRequest, HeaderName, HeaderValue, Method};
 use reqwest::header::{self, HeaderMap};
 use reqwest::redirect::Policy;
@@ -162,6 +165,35 @@ impl UpstreamResponse {
     /// The next chunk of the body as it arrived, or `None` at its end.
     pub async fn chunk(&mut self) -> Result<Option<Bytes>, TransportError> {
         self.response.chunk().await.map_err(TransportError::classify)
+    }
+
+    /// The status, the headers and the body still streaming, taken apart so the headers move rather than being copied.
+    pub fn into_parts(self) -> (StatusCode, HeaderMap, ResponseChunks) {
+        let status = self.response.status();
+        let mut response = self.response;
+        let headers = std::mem::take(response.headers_mut());
+        (status, headers, ResponseChunks(Box::pin(response.bytes_stream())))
+    }
+}
+
+/// An upstream response body as it arrives: each chunk unchanged, each failure classified as a [`TransportError`] and
+/// the library error dropped unformatted.
+pub struct ResponseChunks(Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>);
+
+impl Stream for ResponseChunks {
+    type Item = Result<Bytes, TransportError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.0
+            .as_mut()
+            .poll_next(cx)
+            .map(|chunk| chunk.map(|chunk| chunk.map_err(TransportError::classify)))
+    }
+}
+
+impl fmt::Debug for ResponseChunks {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResponseChunks").finish_non_exhaustive()
     }
 }
 

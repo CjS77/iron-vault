@@ -84,6 +84,11 @@ impl Prepared {
         &self.request
     }
 
+    /// The checked request alone, for the transport to send. The scrub patterns are dropped with the rest.
+    pub fn into_request(self) -> CheckedRequest {
+        self.request
+    }
+
     /// The forms of the injected secret that response scrubbing removes.
     pub fn patterns(&self) -> &ScrubPatterns {
         &self.patterns

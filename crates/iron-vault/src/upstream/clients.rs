@@ -66,6 +66,18 @@ impl UpstreamClients {
         Self::build(policy, limits, |path| UpstreamTrust::pinned(path, profile, owner))
     }
 
+    /// [`new`](Self::new) with the pinned-CA loader passed in, so integration tests can pin a test CA without a
+    /// trusted path on disk. The `test-support` feature that exposes it is enabled only by this crate's own
+    /// dev-dependency.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_pinned_loader(
+        policy: &ActivePolicy,
+        limits: TransportLimits,
+        load_pinned: impl Fn(&Path) -> Result<UpstreamTrust, PinnedCaError>,
+    ) -> Result<Self, ClientBuildError> {
+        Self::build(policy, limits, load_pinned)
+    }
+
     /// The client for `route`.
     pub fn for_route(&self, route: &RouteName) -> Result<&UpstreamClient, RouteClientError> {
         match self.routes.get(route) {

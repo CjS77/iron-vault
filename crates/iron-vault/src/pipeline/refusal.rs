@@ -39,6 +39,12 @@ impl RefusalResponse {
         }
     }
 
+    /// The fixed answer with `status` and its constant body, for a request the pipeline accepted but the service could
+    /// not send: `503` when the route has no upstream client, or a transport failure's `502` or `504`.
+    pub fn fixed(status: u16) -> Self {
+        Self::new(status, body_for(status))
+    }
+
     /// The HTTP status.
     pub fn status(&self) -> u16 {
         self.status
@@ -116,7 +122,7 @@ impl PipelineRefusal {
     }
 }
 
-/// The constant body for `status`, one per status the pipeline answers.
+/// The constant body for `status`, one per status the pipeline and the proxy handler answer.
 fn body_for(status: u16) -> &'static str {
     match status {
         400 => "bad request",
@@ -124,7 +130,9 @@ fn body_for(status: u16) -> &'static str {
         403 => "forbidden",
         404 => "not found",
         429 => "too many requests",
+        502 => "bad gateway",
         503 => "service unavailable",
+        504 => "gateway timeout",
         _ => "internal error",
     }
 }
