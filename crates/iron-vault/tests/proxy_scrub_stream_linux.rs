@@ -158,7 +158,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
                 port,
             })
             .collect(),
-        tcp_port: None,
+        tcp: false,
         request_timeout_secs: 60,
     })
     .await

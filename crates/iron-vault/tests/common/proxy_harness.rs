@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::proxy_handler::ProxyHandler;
-use iron_vault::request_listeners::RequestListeners;
+use iron_vault::request_listeners::{OpenError, RequestListeners};
 use iron_vault::request_server::RequestServer;
 use iron_vault::serving_snapshot::{ServingSnapshot, SnapshotHolder};
 use iron_vault::trusted_path_report::ServicePaths;
@@ -116,14 +117,14 @@ pub struct Setup<'a> {
     /// The `[callers.*]` and `[routes.*]` sections. Callers name the listener `local` (Unix) or `loopback` (TCP).
     pub callers_and_routes: String,
     pub credentials: Vec<Credential>,
-    /// The port of the TCP listener `loopback`; `None` configures no TCP listener.
-    pub tcp_port: Option<u16>,
+    /// Whether to configure the TCP listener `loopback`. The harness picks its port, retrying when another test takes it first.
+    pub tcp: bool,
     pub request_timeout_secs: u64,
 }
 
 impl Setup<'_> {
-    fn config(&self, socket: &Path) -> ValidatedConfig {
-        let tcp = self.tcp_port.map_or_else(String::new, |port| {
+    fn config(&self, socket: &Path, tcp_port: Option<u16>) -> ValidatedConfig {
+        let tcp = tcp_port.map_or_else(String::new, |port| {
             format!("\n[listeners.loopback]\naddress = \"127.0.0.1:{port}\"\n")
         });
         let toml = format!(
@@ -162,7 +163,8 @@ fn vault(credentials: Vec<Credential>, state_dir: &Path) -> Vault {
 }
 
 /// A free loopback port, bound, read and closed. Config rejects port 0, so a TCP listener needs a number up front.
-pub fn free_port() -> u16 {
+/// Another process can take it before the caller binds it, so a caller that binds it retries on `AddrInUse`.
+pub fn next_free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
@@ -307,6 +309,39 @@ async fn exchange(mut stream: impl AsyncReadExt + AsyncWriteExt + Unpin, request
     raw
 }
 
+/// How many fresh ports [`open_listeners`] tries before giving up.
+const BIND_ATTEMPTS: usize = 10;
+
+/// True when opening the listeners failed because a TCP address was already bound.
+fn address_in_use(error: &OpenError) -> bool {
+    matches!(
+        error,
+        OpenError::Tcp {
+            kind: io::ErrorKind::AddrInUse,
+            ..
+        }
+    )
+}
+
+/// Opens `setup`'s listeners. The TCP port is picked before it is bound, so a parallel test can take it in between; each
+/// `AddrInUse` retries with a freshly picked port, up to [`BIND_ATTEMPTS`] times. Returns the config that opened, and the port.
+fn open_listeners(setup: &Setup<'_>, socket: &Path, dir: &Path) -> (ValidatedConfig, RequestListeners, Option<u16>) {
+    let attempt = || {
+        let port = setup.tcp.then(next_free_port);
+        let config = setup.config(socket, port);
+        let opened = RequestListeners::open(config.listeners(), &paths(dir), BTreeMap::new());
+        opened.map(|listeners| (config, listeners, port))
+    };
+    let mut result = attempt();
+    for _ in 1..BIND_ATTEMPTS {
+        match result {
+            Err(ref e) if setup.tcp && address_in_use(e) => result = attempt(),
+            _ => break,
+        }
+    }
+    result.unwrap()
+}
+
 /// The request server with the proxy handler on the configured listeners, stopped on drop.
 pub struct Proxy {
     dir: TempDir,
@@ -320,15 +355,14 @@ impl Proxy {
     pub async fn start(setup: Setup<'_>) -> Self {
         let dir = TempDir::new();
         let socket = dir.path().join("proxy.sock");
-        let config = setup.config(&socket);
-        let (ca, tcp_port) = (setup.ca, setup.tcp_port);
+        let (config, listeners, tcp_port) = open_listeners(&setup, &socket, dir.path());
+        let ca = setup.ca;
         let vault = vault(setup.credentials, &dir.path().join("state"));
         let policy = activate(&config, &Capabilities::default(), &vault, &NoAccounts).unwrap();
         let trust = ca.trust();
         let clients = UpstreamClients::with_pinned_loader(&policy, TransportLimits::default(), |_| Ok(trust.clone())).unwrap();
         let limiter = RateLimiter::new(&policy, Instant::now().checked_sub(Duration::from_secs(60)).unwrap());
         let snapshot = ServingSnapshot::new(policy, vault, clients, limiter).unwrap();
-        let listeners = RequestListeners::open(config.listeners(), &paths(dir.path()), BTreeMap::new()).unwrap();
         let server = RequestServer::new(*config.limits(), ProxyHandler::new(Arc::new(SnapshotHolder::new(snapshot))));
         let task = tokio::spawn(async move {
             let _ = server.serve(&listeners).await;

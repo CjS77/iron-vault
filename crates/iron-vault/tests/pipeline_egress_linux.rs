@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use common::mock_upstream::{MockUpstream, RecordedRequest, Reply, TestCa};
 use common::mock_upstream_h2::{H2Reply, MockH2Upstream};
-use common::proxy_harness::{CallerRequest, Credential, Proxy, Response, Setup, TOKEN_BYTES, Via, free_port, token_hash};
+use common::proxy_harness::{CallerRequest, Credential, Proxy, Response, Setup, TOKEN_BYTES, Via, next_free_port, token_hash};
 use iron_vault_kinds::CredentialMaterial;
 
 const FX_SECRET: &str = "fx-secret-3a7d91";
@@ -156,7 +156,7 @@ async fn proxy(ca: &TestCa, ports: Ports) -> Proxy {
         ca,
         callers_and_routes: callers_and_routes(&ports),
         credentials: credentials(&ports),
-        tcp_port: Some(free_port()),
+        tcp: true,
         request_timeout_secs: 30,
     })
     .await
@@ -324,10 +324,10 @@ async fn s3_15_brave_over_http2_sends_the_credential_to_the_enrolled_authority_o
     let ca = TestCa::new("egress test CA");
     let brave = MockH2Upstream::start(&ca, H2Reply::ok("ok")).await;
     let ports = Ports {
-        fx: free_port(),
+        fx: next_free_port(),
         brave: brave.port(),
-        venice: free_port(),
-        billing: free_port(),
+        venice: next_free_port(),
+        billing: next_free_port(),
     };
     let proxy = proxy(&ca, ports).await;
 

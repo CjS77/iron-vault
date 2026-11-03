@@ -59,7 +59,7 @@ async fn start(ca: &TestCa, fx: &MockUpstream, brave: &MockUpstream) -> Proxy {
         ca,
         callers_and_routes: routes(fx.port(), brave.port()),
         credentials: vec![key("fx_key", FX_SECRET, fx.port()), key("brave", BRAVE_SECRET, brave.port())],
-        tcp_port: None,
+        tcp: false,
         request_timeout_secs: 30,
     })
     .await

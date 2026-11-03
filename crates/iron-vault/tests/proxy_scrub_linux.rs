@@ -60,7 +60,7 @@ async fn start(ca: &TestCa, upstream: &MockUpstream, route: &str) -> Proxy {
             material,
             port: upstream.port(),
         }],
-        tcp_port: None,
+        tcp: false,
         request_timeout_secs: 30,
     })
     .await

@@ -53,7 +53,7 @@ async fn start(ca: &TestCa, port: u16, request_timeout_secs: u64) -> Proxy {
             material: CredentialMaterial::Static { key: SECRET.into() },
             port,
         }],
-        tcp_port: None,
+        tcp: false,
         request_timeout_secs,
     })
     .await
