@@ -25,6 +25,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use common::checked::checked;
 use common::mock_upstream::{MockUpstream, RecordedRequest, Reply, TestCa, UPSTREAM_HOST};
+use common::mock_upstream_h2::{H2Reply, MockH2Upstream, RecordedH2Request};
+use iron_vault::logging::CAPPED_TARGETS;
 use iron_vault::upstream::client::{TransportLimits, UpstreamClient, UpstreamResponse};
 use iron_vault::upstream::transport_error::TransportError;
 use iron_vault::upstream::trust::UpstreamTrust;
@@ -114,6 +116,14 @@ impl Slot {
         match self {
             Self::Header => request.headers().contains(&("x-api-key".to_owned(), HEADER_MARKER.to_owned())),
             Self::Query => request.request_line() == format!("GET /v1/rates?base=USD&access_key={QUERY_MARKER} HTTP/1.1"),
+        }
+    }
+
+    /// Whether the HTTP/2 `request` carries this slot's marker where the slot puts it.
+    fn carried_by_h2(self, request: &RecordedH2Request) -> bool {
+        match self {
+            Self::Header => request.headers.contains(&("x-api-key".to_owned(), HEADER_MARKER.to_owned())),
+            Self::Query => request.path.as_deref() == Some(format!("/v1/rates?base=USD&access_key={QUERY_MARKER}").as_str()),
         }
     }
 }
@@ -501,6 +511,36 @@ async fn rust_log_case(slot: Slot, rust_log: &str) {
 
     run.assert_status(200);
     assert_carried(&upstream, slot);
+    assert_logging_capped(&run, rust_log);
+}
+
+/// The same case against an upstream that speaks only HTTP/2, where h2's frame logs can carry `:path` and so the
+/// query-slot credential.
+async fn h2_rust_log_case(slot: Slot, rust_log: &str) {
+    let ca = TestCa::new("Upstream CA");
+    let upstream = MockH2Upstream::start(&ca, H2Reply::ok("")).await;
+    let pins = TempDir::new();
+    let case = Case::new(slot, upstream.origin())
+        .pinned(&pins.write_ca("pinned.pem", &ca))
+        .logging()
+        .env("RUST_LOG", rust_log);
+
+    let run = case.run().await;
+
+    run.assert_status(200);
+    let requests = upstream.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(
+        requests[0].alpn.as_deref(),
+        Some(b"h2".as_slice()),
+        "the request did not use h2: {requests:?}"
+    );
+    assert!(slot.carried_by_h2(&requests[0]), "{slot:?} marker missing from {requests:?}");
+    assert_logging_capped(&run, rust_log);
+}
+
+/// The service logger wrote its line, and no capped target logged at `DEBUG` or `TRACE`.
+fn assert_logging_capped(run: &ChildRun, rust_log: &str) {
     assert!(run.stderr.contains(LOGGED), "the service's logging wrote nothing to stderr: {run}");
     assert_eq!(
         verbose_lines(&run.stderr),
@@ -509,20 +549,49 @@ async fn rust_log_case(slot: Slot, rust_log: &str) {
     );
 }
 
-/// The `DEBUG` and `TRACE` lines in a child's stderr. Over HTTP/1.1 no dependency prints a header or the request target
-/// even at `TRACE`, so the markers alone could not show a lifted cap; any verbose line does.
+/// The `DEBUG` and `TRACE` lines in a child's stderr that come from a capped target or one of its sub-modules. Over
+/// HTTP/1.1 no dependency prints a header or the request target even at `TRACE`, so the markers alone could not show a
+/// lifted cap; any verbose line does. The target is matched as a token, not a field position, and iron-vault's own
+/// targets are left out so a raised service level does not fail the check.
 fn verbose_lines(stderr: &str) -> Vec<&str> {
     stderr
         .lines()
-        .filter(|line| matches!(line.split_whitespace().nth(1), Some("DEBUG" | "TRACE")))
+        .filter(|line| {
+            let mut tokens = line.split_whitespace();
+            tokens.clone().any(|token| matches!(token, "DEBUG" | "TRACE")) && tokens.any(is_capped_target)
+        })
         .collect()
 }
 
+/// Whether `token` is a capped target or one of its sub-modules, as in `h2::codec::framed_write:`.
+fn is_capped_target(token: &str) -> bool {
+    let token = token.trim_end_matches(':');
+    CAPPED_TARGETS
+        .iter()
+        .any(|target| token == *target || token.strip_prefix(target).is_some_and(|rest| rest.starts_with("::")))
+}
+
 /// §3.7: the package must "cap HTTP/TLS dependency log verbosity in code, regardless of `RUST_LOG`".
+///
+/// `logging::init()` ignores `RUST_LOG` today (it installs a fixed `INFO` level), so this test shows what comes out of
+/// a child that sets it, not that the caps hold. `caps_hold_under_a_trace_global_level` in `logging.rs` proves the caps
+/// hold under a `TRACE` global level; cite that test for the caps.
 #[tokio::test]
 async fn s3_7_capped_dependency_logs_rust_log_lifts_no_level_and_logs_no_credential() {
     rust_log_case(Slot::Header, "trace").await;
     rust_log_case(Slot::Query, "trace").await;
     rust_log_case(Slot::Header, "hyper=trace,rustls=trace,h2=trace").await;
     rust_log_case(Slot::Query, "hyper=trace,rustls=trace,h2=trace").await;
+}
+
+/// The log case over HTTP/2 (ALPN `h2`), where an uncapped h2 would log `:path` with the query credential.
+///
+/// `logging::init()` ignores `RUST_LOG` today, so this shows what comes out; `caps_hold_under_a_trace_global_level` in
+/// `logging.rs` is the proof that the caps hold.
+#[tokio::test]
+async fn s3_7_capped_dependency_logs_over_h2_log_no_credential_and_no_verbose_line() {
+    for rust_log in ["trace", "hyper=trace,rustls=trace,h2=trace"] {
+        h2_rust_log_case(Slot::Header, rust_log).await;
+        h2_rust_log_case(Slot::Query, rust_log).await;
+    }
 }
