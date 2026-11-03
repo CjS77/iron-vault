@@ -2,7 +2,7 @@
 //!
 //! Matching is a hand-rolled scan rather than `aho-corasick`: a request has 10-20 short patterns, `aho-corasick`'s
 //! streaming search does not support leftmost-longest matching, and its automaton would hold copies of the secrets that
-//! are never wiped. The scrubber borrows the patterns and copies none of them.
+//! are never wiped. The scrubber borrows or takes the patterns and copies none of them.
 
 use std::fmt;
 
@@ -34,9 +34,45 @@ const REPLACEMENT_TEXT: &str = "[iron-vault:scrubbed]";
 /// nothing further, which is the path for a body that fails partway: the held bytes may be a secret prefix and are never
 /// sent.
 pub struct Scrubber<'p> {
-    patterns: Vec<&'p [u8]>,
+    patterns: Patterns<'p>,
     held: Zeroizing<Vec<u8>>,
     matches: u64,
+}
+
+/// The patterns a scrubber watches for. A header scrub borrows them for one value; a response body's scrubber owns
+/// them, because the body outlives the request handler that resolved them, and dropping the scrubber wipes them.
+enum Patterns<'p> {
+    Borrowed(Vec<&'p [u8]>),
+    Owned(ScrubPatterns),
+}
+
+impl Patterns<'_> {
+    /// Whether some pattern satisfies `test`.
+    fn any(&self, test: impl Fn(&[u8]) -> bool) -> bool {
+        match self {
+            Self::Borrowed(patterns) => patterns.iter().any(|pattern| test(pattern)),
+            Self::Owned(patterns) => patterns.iter().any(test),
+        }
+    }
+
+    /// The length of the longest pattern that satisfies `test`.
+    fn longest(&self, test: impl Fn(&[u8]) -> bool) -> Option<usize> {
+        match self {
+            Self::Borrowed(patterns) => longest_of(patterns.iter().copied(), test),
+            Self::Owned(patterns) => longest_of(patterns.iter(), test),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Borrowed(patterns) => patterns.len(),
+            Self::Owned(patterns) => patterns.len(),
+        }
+    }
+}
+
+fn longest_of<'a>(patterns: impl Iterator<Item = &'a [u8]>, test: impl Fn(&[u8]) -> bool) -> Option<usize> {
+    patterns.filter(|pattern| test(pattern)).map(<[u8]>::len).max()
 }
 
 /// The end of a scrubbed body, from [`Scrubber::finish`].
@@ -58,16 +94,29 @@ enum Step {
     Release,
 }
 
+impl Scrubber<'static> {
+    /// A scrubber that takes `patterns`, for a response body that outlives the request that resolved them. They are
+    /// wiped when the scrubber is dropped, by [`finish`](Scrubber::finish) or with a body that fails.
+    pub fn owning(patterns: ScrubPatterns) -> Self {
+        Self::over(Patterns::Owned(patterns))
+    }
+}
+
 impl<'p> Scrubber<'p> {
     /// A scrubber for one response, watching for `patterns`.
     pub fn new(patterns: &'p ScrubPatterns) -> Self {
-        Self::with_patterns(patterns.iter())
+        Self::over(Patterns::Borrowed(patterns.iter().collect()))
     }
 
-    /// A scrubber over arbitrary patterns; an empty pattern is dropped, since it would match everywhere.
+    /// A scrubber over arbitrary patterns, for tests; an empty pattern is dropped, since it would match everywhere.
+    #[cfg(test)]
     pub(crate) fn with_patterns(patterns: impl IntoIterator<Item = &'p [u8]>) -> Self {
         let patterns: Vec<&[u8]> = patterns.into_iter().filter(|pattern| !pattern.is_empty()).collect();
-        let longest = patterns.iter().map(|pattern| pattern.len()).max().unwrap_or(0);
+        Self::over(Patterns::Borrowed(patterns))
+    }
+
+    fn over(patterns: Patterns<'p>) -> Self {
+        let longest = patterns.longest(|_| true).unwrap_or(0);
         // Held bytes never reach the longest pattern's length, so this buffer never reallocates and leaves no copy.
         let held = Zeroizing::new(Vec::with_capacity(longest.saturating_sub(1)));
         Self {
@@ -138,18 +187,13 @@ impl<'p> Scrubber<'p> {
             return Step::Hold;
         }
         self.patterns
-            .iter()
-            .filter(|pattern| rest.starts_with(pattern))
-            .map(|pattern| pattern.len())
-            .max()
+            .longest(|pattern| rest.starts_with(pattern))
             .map_or(Step::Release, Step::Replace)
     }
 
     /// Whether some pattern is longer than `rest` and begins with it, so the next chunk could complete it.
     fn could_grow(&self, rest: &[u8]) -> bool {
-        self.patterns
-            .iter()
-            .any(|pattern| pattern.len() > rest.len() && pattern.starts_with(rest))
+        self.patterns.any(|pattern| pattern.len() > rest.len() && pattern.starts_with(rest))
     }
 }
 
