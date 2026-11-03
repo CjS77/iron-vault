@@ -16,9 +16,13 @@ test-support = []
 
 [dependencies]
 anyhow.workspace = true
+# The brotli response decoder.
+brotli-decompressor.workspace = true
 # The upstream client's response body chunks, and the bytes the scrubber releases from them.
 bytes.workspace = true
 clap.workspace = true
+# The gzip and deflate response decoders.
+flate2.workspace = true
 # The `Stream` trait of the upstream client's upstream body.
 futures-core.workspace = true
 # Credential kinds, the serving snapshot's resolver half: the pipeline resolves a record's material through them,
@@ -59,6 +63,8 @@ tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "signal"
 tokio-rustls.workspace = true
 
 [dev-dependencies]
+# The reference brotli encoder for the response decoder's tests.
+brotli.workspace = true
 # This crate with `test-support`, so the integration tests can pin a test CA.
 iron-vault = { path = ".", features = ["test-support"] }
 # The HTTP/2 test upstream: its server half and the request and response types it exchanges.

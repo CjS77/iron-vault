@@ -15,6 +15,11 @@ anyhow = "1"
 base64 = "0.23.1"
 # zeroize clears hasher state on drop, so the manifest key does not outlive its use; alloc is not needed.
 blake2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+# The reference brotli encoder for the response decoder's tests; dev-only. Pure Rust, std only for the writer API.
+brotli = { version = "8.0.4", default-features = false, features = ["std"] }
+# The brotli response decoder, through its low-level stream API so each step's output is bounded. Pure Rust; `std` brings
+# only the standard allocator, which the decoder wraps in one that wipes the window. Large-window streams are refused.
+brotli-decompressor = { version = "5.0.3", default-features = false, features = ["std"] }
 # The response body chunks the upstream client hands on; the version hyper and reqwest already use.
 bytes = "1.12.1"
 # The binary's argument parser. Default features are off: colour, suggestions and terminal-width detection are not
@@ -24,6 +29,10 @@ clap = { version = "4.6", default-features = false, features = ["derive", "std",
 # std, fast tables and rand_core stay off: verify_strict needs no feature, and key generation fills the seed from
 # getrandom directly.
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["zeroize"] }
+# gzip and deflate response decoding on the pure-Rust miniz_oxide backend (no C build), through the low-level `Decompress`
+# API so each step's output is bounded. Default features are off: that drops only `runtime_detection`, so crc32fast falls
+# back to its compile-time CPU features.
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 # The HTTP/2 test upstream's server half, so the upstream client's HTTP/2 path is tested end to end; dev-only, and the
 # version reqwest's `http2` feature already brings.
 h2 = { version = "0.4.20", default-features = false }
