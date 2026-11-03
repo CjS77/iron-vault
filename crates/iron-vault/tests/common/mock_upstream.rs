@@ -111,7 +111,7 @@ pub enum Reply {
 /// One step of a scripted chunked body.
 #[derive(Debug, Clone)]
 pub enum Step {
-    /// Flushes these bytes as one chunk. Never empty: a zero-length chunk would end the body.
+    /// Flushes these bytes as one chunk. An empty chunk is skipped: a zero-length chunk would end the body.
     Chunk(Vec<u8>),
     /// Pauses until the test notifies the gate, so it can prove the earlier chunks were relayed before the later ones existed.
     Wait(Arc<tokio::sync::Notify>),
@@ -143,17 +143,7 @@ impl Script {
             sent: Arc::default(),
         }
     }
-}
 
-impl std::fmt::Debug for Script {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Script")
-            .field("content_type", &self.content_type)
-            .finish_non_exhaustive()
-    }
-}
-
-impl Script {
     /// Sends the head, then each step in order, then the last chunk.
     async fn play(&self, tls: &mut (impl AsyncWriteExt + Unpin), target: &str) {
         let head = format!(
@@ -164,6 +154,7 @@ impl Script {
         let _ = tls.flush().await;
         for step in (self.plan)(target) {
             match step {
+                Step::Chunk(bytes) if bytes.is_empty() => {}
                 Step::Chunk(bytes) => {
                     self.sent.lock().unwrap().push(Instant::now());
                     let framed = [format!("{:x}\r\n", bytes.len()).as_bytes(), &bytes, b"\r\n"].concat();
@@ -175,6 +166,14 @@ impl Script {
         }
         let _ = tls.write_all(b"0\r\n\r\n").await;
         let _ = tls.shutdown().await;
+    }
+}
+
+impl std::fmt::Debug for Script {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Script")
+            .field("content_type", &self.content_type)
+            .finish_non_exhaustive()
     }
 }
 

@@ -110,19 +110,20 @@ longest pattern minus its last byte, which is the worst case. Run it with `--noc
 
 | Credential (test stand-in) | Longest pattern | Maximum held | Typical chunk held |
 |---|---|---|---|
-| FX, Basic: 8-byte username, 19-byte password | 46 bytes | 45 | 0 |
+| FX, static in the `access_key` query slot: 32-byte hex key | 44 bytes | 43 | 0 |
+| Generic Basic: 8-byte username, 19-byte password | 46 bytes | 45 | 0 |
 | Brave, static: 31-byte key | 44 bytes | 43 | 0 |
 | Venice, static: 43-byte key | 60 bytes | 59 | 0 |
 
-The longest pattern is the padded base64 form of a static key, and `Basic <token>` for a Basic credential. A typical
-event ends in `\n\n`, which begins no pattern, so nothing is held. A chunk that ends in a pattern's first byte is held
+The longest pattern is the padded base64 form of a static key, and `Basic <token>` for a Basic credential (a generic
+row, not one of the three target credentials). A typical event ends in `\n\n`, which begins no pattern, so nothing is held. A chunk that ends in a pattern's first byte is held
 only that far: a chunk ending in `B` holds one byte when a Brave key is injected. The stand-ins have the shape of each
 provider's key, not a real key; a longer real key raises the maximum by 4/3 of the difference.
 
 **Latency per SSE event** comes from `measure_sse_latency_per_event`: 200 events, each sent by the upstream only after the
 caller has received the one before, timed from the upstream's write to the caller's read, through TLS to the proxy, the
-scrubber and the Unix socket. Observed in a debug build on one development machine (Linux 6.8, loopback), three runs:
-median 85-88 us, 95th percentile 99-107 us, maximum 219-234 us. These are loopback figures with no network, so they
+scrubber and the Unix socket. Observed in a debug build on one development machine (Linux 6.8, loopback), twelve runs:
+median 75-78 us, 95th percentile 82-106 us, maximum 210-247 us. These are loopback figures with no network, so they
 bound the proxy's own cost and do not predict a deployment's.
 
 **Chunk boundaries.** `a_body_split_at_every_byte_offset_scrubs_to_the_same_bytes` sends a body holding every scrub

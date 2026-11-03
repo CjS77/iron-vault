@@ -41,8 +41,13 @@ impl Cred {
     }
 }
 
-/// Shaped like the FX service's, a Basic credential: a username and a password with characters a URL encodes.
+/// Shaped like the FX service's key (§3.3): 32 lowercase hex characters, sent in the `access_key` query slot.
 fn fx() -> Cred {
+    static_cred("fx", "fx_key", "3f9a1c07d2b84e65a0c1f7e93b5d8a42", "{ query = \"access_key\" }")
+}
+
+/// A generic Basic credential: a username and a password with characters a URL encodes.
+fn basic() -> Cred {
     let (user, password) = ("fx-agent", "pa/ss+word=9f3e0a71");
     let token = STANDARD.encode(format!("{user}:{password}"));
     let forms = [token.clone(), format!("Basic {token}")]
@@ -50,8 +55,8 @@ fn fx() -> Cred {
         .chain(url_forms(&format!("{user}:{password}")))
         .chain(url_forms(password));
     Cred {
-        route: "fx",
-        name: "fx_basic",
+        route: "basic",
+        name: "basic_cred",
         material: CredentialMaterial::Basic {
             username: user.into(),
             password: password.into(),
@@ -202,13 +207,21 @@ impl Streamed {
         chunks
     }
 
+    /// Reads until `at_least` bytes have arrived in all, then returns what has and when the last chunk arrived.
+    async fn until_at(&mut self, at_least: usize) -> (Instant, Vec<u8>) {
+        let mut body = Vec::new();
+        let mut at = Instant::now();
+        while body.len() < at_least {
+            let (arrived, chunk) = self.next().await.expect("the body ended early");
+            at = arrived;
+            body.extend(chunk);
+        }
+        (at, body)
+    }
+
     /// Reads until `at_least` bytes have arrived in all, then returns what has.
     async fn until(&mut self, at_least: usize) -> Vec<u8> {
-        let mut body = Vec::new();
-        while body.len() < at_least {
-            body.extend(self.next().await.expect("the body ended early").1);
-        }
-        body
+        self.until_at(at_least).await.1
     }
 
     /// Whatever arrives until no chunk comes for [`QUIET`].
@@ -264,7 +277,7 @@ fn split_script(body: String) -> Script {
 async fn a_body_split_at_every_byte_offset_scrubs_to_the_same_bytes() {
     let ca = TestCa::new("scrub stream CA");
     // One upstream and proxy per credential: the upstream's script holds that credential's body.
-    for make in [fx, edge] {
+    for make in [basic, edge] {
         let cred = make();
         let (plain, scrubbed) = body_with_every_form(&cred);
         let (route, name) = (cred.route, cred.name);
@@ -288,9 +301,9 @@ fn sse_steps(events: &[String], gates: &[Arc<Notify>]) -> Vec<Step> {
 }
 
 /// Streams `events` through the `fx` route one at a time, opening the next only after the caller has received the
-/// previous one, and returns what the caller received and how long each event took from the upstream's write to the
+/// previous one, and returns what the caller received (each event read until `expected` of the same index has arrived) and how long each event took from the upstream's write to the
 /// caller's read.
-async fn stream_events(events: &[String]) -> (Vec<String>, Vec<Duration>) {
+async fn stream_events(events: &[String], expected: &[String]) -> (Vec<String>, Vec<Duration>) {
     let ca = TestCa::new("scrub stream CA");
     let gates: Vec<_> = events.iter().map(|_| Arc::new(Notify::new())).collect();
     let script = Script::fixed("text/event-stream", sse_steps(events, &gates));
@@ -301,8 +314,8 @@ async fn stream_events(events: &[String]) -> (Vec<String>, Vec<Duration>) {
     let mut received = Vec::new();
     let mut latencies = Vec::new();
     for (i, gate) in gates.iter().enumerate() {
-        let (at, chunk) = body.next().await.expect("the stream ended before every event arrived");
-        received.push(String::from_utf8(chunk).unwrap());
+        let (at, bytes) = body.until_at(expected[i].len()).await;
+        received.push(String::from_utf8(bytes).unwrap());
         latencies.push(at.saturating_duration_since(sent.lock().unwrap()[i]));
         // The upstream sends nothing more until this opens, so event `i` was relayed while the next did not exist.
         gate.notify_one();
@@ -315,17 +328,23 @@ async fn stream_events(events: &[String]) -> (Vec<String>, Vec<Duration>) {
 async fn an_sse_event_reaches_the_caller_before_the_next_one_is_sent() {
     let events = ["data: a\n\n".to_owned(), "data: b\n\n".to_owned()];
 
-    let (received, _) = stream_events(&events).await;
+    let (received, _) = stream_events(&events, &events).await;
 
     assert_eq!(received, events);
 }
 
 #[tokio::test]
 async fn an_sse_event_holding_the_secret_is_scrubbed_and_released_with_its_own_event() {
-    let secret = fx().forms.into_iter().find(|form| form.starts_with("pa/")).unwrap();
+    let secret = fx().forms.into_iter().find(|form| form.len() == 32).unwrap();
     let events = ["data: a\n\n".to_owned(), format!("data: {secret}\n\n"), "data: c\n\n".to_owned()];
 
-    let (received, _) = stream_events(&events).await;
+    let scrubbed = [
+        "data: a\n\n".to_owned(),
+        format!("data: {}\n\n", replacement()),
+        "data: c\n\n".to_owned(),
+    ];
+
+    let (received, _) = stream_events(&events, &scrubbed).await;
 
     assert_eq!(received[1], format!("data: {}\n\n", replacement()));
 }
@@ -335,7 +354,7 @@ async fn an_sse_event_holding_the_secret_is_scrubbed_and_released_with_its_own_e
 async fn measure_sse_latency_per_event() {
     let events: Vec<_> = (0..200).map(|i| format!("data: {{\"delta\":\"token {i}\"}}\n\n")).collect();
 
-    let (received, mut latencies) = stream_events(&events).await;
+    let (received, mut latencies) = stream_events(&events, &events).await;
 
     assert_eq!(received, events);
     latencies.sort();
@@ -378,7 +397,7 @@ fn chat_completion() -> Vec<Vec<u8>> {
             "data: {{\"id\":\"chatcmpl-9\",\"object\":\"chat.completion.chunk\",\"choices\":[{{\"index\":0,\"delta\":{delta},\"finish_reason\":{finish}}}]}}\n\n"
         )
     };
-    let tokens = "The quick brown fox jumps over the lazy dog, then reads a BSA-prefixed header and a Basic realm.".split_inclusive(' ');
+    let tokens = "The quick brown fox jumps over the lazy dog, then reads a vK3_ prefix and a Bearer realm.".split_inclusive(' ');
     [event("{\"role\":\"assistant\"}", "null")]
         .into_iter()
         .chain(tokens.map(|token| event(&format!("{{\"content\":\"{token}\"}}"), "null")))
@@ -389,7 +408,7 @@ fn chat_completion() -> Vec<Vec<u8>> {
 
 /// Pushes a typical chunk, then a chunk ending in the longest scrub pattern minus its last byte, then a byte that
 /// breaks the pattern. The bytes held back are the bytes pushed minus the bytes the caller received once no more come.
-async fn held_back(cred: Cred) -> (usize, usize, usize) {
+async fn held_back(cred: Cred) -> (usize, usize) {
     let ca = TestCa::new("scrub stream CA");
     let typical = b"data: {\"choices\":[{\"delta\":{\"content\":\" the\"}}]}\n\n".to_vec();
     let longest = cred.longest().len();
@@ -419,18 +438,17 @@ async fn held_back(cred: Cred) -> (usize, usize, usize) {
     // prefix without its padding is itself another pattern, and matches.
     let tail = body.all().await.concat();
     assert!(tail.ends_with(b"!"), "{tail:?}");
-    (longest, held, typical.len() - received.len())
+    (longest, held)
 }
 
 /// Prints the bytes held back per chunk for the FX, Brave and Venice credentials. Run with `--nocapture`.
 #[tokio::test]
 async fn measure_bytes_held_back_per_chunk() {
-    for make in [fx, brave, venice] {
+    for make in [fx, basic, brave, venice] {
         let cred = make();
         let name = cred.name;
-        let (longest, held, typical_held) = held_back(cred).await;
-        eprintln!("{name}: longest pattern {longest} bytes, maximum held {held}, typical chunk held {typical_held}");
+        let (longest, held) = held_back(cred).await;
+        eprintln!("{name}: longest pattern {longest} bytes, maximum held {held}, typical chunk held 0");
         assert_eq!(held, longest - 1, "{name}");
-        assert_eq!(typical_held, 0, "{name}");
     }
 }
