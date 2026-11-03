@@ -214,3 +214,6 @@ fn rewritten(
     require(url.query() == query && url.fragment() == fragment, LocationRefusal::Malformed)?;
     HeaderValue::try_from(url[Position::BeforePath..].as_bytes()).map_err(|_| LocationRefusal::Malformed)
 }
+
+#[cfg(test)]
+mod tests;
