@@ -190,6 +190,17 @@ impl TestSources {
         }
     }
 
+    /// Sources whose limiter is built from `config` instead of the policy requests are authorized against, so a charge
+    /// can meet a route or grant the limiter does not know.
+    fn with_limiter_config(config: &str) -> Self {
+        let mut sources = Self::new();
+        let parsed = ParsedConfig::from_toml(config.as_bytes()).unwrap();
+        let validated = ValidatedConfig::try_from(parsed).unwrap();
+        let policy = activate(&validated, &Capabilities::default(), &Catalog(&sources.records), &Accounts).unwrap();
+        sources.limiter = RateLimiter::new(&policy, sources.start);
+        sources
+    }
+
     /// Buckets start empty and refill at one token a second, so one second in each holds exactly one token.
     fn one_token(&self) -> Instant {
         self.start + Duration::from_secs(1)

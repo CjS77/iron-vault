@@ -5,7 +5,8 @@
 //!
 //! - `401` names no scheme, token header or listener caller, and carries no `WWW-Authenticate`, so a client without a
 //!   token learns nothing about where to look for one;
-//! - `403` and `404` are told apart only by status, as §3.12 requires, and neither body names a route or a grant;
+//! - `403` and `404` get different statuses and neither body names a route or a grant: §3.12 requires that `404`
+//!   disclose no other caller's grants, and a constant body per status meets that;
 //! - `503` carries a redacted reason: the same body whether the vault is damaged, a record is missing or a kind failed;
 //! - a refusal that only a service defect can cause answers `500` "internal error".
 //!
@@ -68,8 +69,13 @@ impl PipelineRefusal {
             Self::Authz(AuthzError::Unavailable { .. }) | Self::NoHealthyRecord { .. } | Self::Kind(_) => 503,
             Self::Target(_) | Self::Method | Self::Sanitize(_) => 400,
             Self::Assemble(AssembleError::ForeignMarker | AssembleError::MalformedMarker) => 400,
-            // §3.12 has no row for these: only a service defect reaches them, so `500` is the honest status.
-            Self::Charge(_) | Self::Assemble(_) | Self::FinalCheck(_) => 500,
+            // §3.12 has no row for these: only a service defect reaches them, so `500` is the honest status. This list
+            // and `defect()` name the same variants; a test checks that a `500` is exactly a logged defect.
+            Self::Charge(ChargeError::UnknownRoute { .. } | ChargeError::NotGranted { .. })
+            | Self::Assemble(
+                AssembleError::NonAsciiSlotValue | AssembleError::HeaderValue(_) | AssembleError::Header(_) | AssembleError::Target(_),
+            )
+            | Self::FinalCheck(_) => 500,
         }
     }
 
@@ -98,9 +104,14 @@ impl PipelineRefusal {
         match self {
             Self::FinalCheck(error) => Some(final_check_label(error)),
             Self::Assemble(error) => assemble_label(error),
-            Self::Charge(ChargeError::UnknownRoute { .. }) => Some("ChargeUnknownRoute"),
-            Self::Charge(ChargeError::NotGranted { .. }) => Some("ChargeNotGranted"),
-            _ => None,
+            Self::Charge(error) => charge_label(error),
+            Self::Unauthenticated(_)
+            | Self::Authz(_)
+            | Self::NoHealthyRecord { .. }
+            | Self::Kind(_)
+            | Self::Target(_)
+            | Self::Method
+            | Self::Sanitize(_) => None,
         }
     }
 }
@@ -134,6 +145,15 @@ fn final_check_label(error: &iron_vault_policy::FinalCheckError) -> &'static str
         E::Slot => "Slot",
         E::SlotValue => "SlotValue",
         E::CredentialOutsideSlot => "CredentialOutsideSlot",
+    }
+}
+
+/// The label of a charge failure; `None` for a rate limit, which the caller caused.
+fn charge_label(error: &ChargeError) -> Option<&'static str> {
+    match error {
+        ChargeError::Limited(_) => None,
+        ChargeError::UnknownRoute { .. } => Some("ChargeUnknownRoute"),
+        ChargeError::NotGranted { .. } => Some("ChargeNotGranted"),
     }
 }
 

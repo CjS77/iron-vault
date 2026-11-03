@@ -1,7 +1,7 @@
 use std::io;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use iron_vault_policy::FinalCheckError;
+use iron_vault_policy::{FinalCheckError, HeaderValueError, OutgoingHeadersError, UpstreamTargetError};
 use tracing_subscriber::fmt::MakeWriter;
 
 use super::*;
@@ -72,6 +72,31 @@ fn unknown_route() -> PipelineRefusal {
     ChargeError::UnknownRoute { route: route("brave") }.into()
 }
 
+fn not_granted() -> PipelineRefusal {
+    ChargeError::NotGranted {
+        caller: "brave-cli".parse().unwrap(),
+        route: route("brave"),
+    }
+    .into()
+}
+
+/// Every refusal only a service defect causes.
+fn defects() -> Vec<PipelineRefusal> {
+    vec![
+        construction(),
+        AssembleError::HeaderValue(HeaderValueError::Nul).into(),
+        AssembleError::Header(OutgoingHeadersError::Reserved {
+            name: "host".parse().unwrap(),
+        })
+        .into(),
+        AssembleError::Target(UpstreamTargetError::Path).into(),
+        unknown_route(),
+        not_granted(),
+        FinalCheckError::Slot.into(),
+        FinalCheckError::Host.into(),
+    ]
+}
+
 #[test]
 fn every_variant_has_its_status_body_and_headers() {
     let token = bearer();
@@ -89,15 +114,38 @@ fn every_variant_has_its_status_body_and_headers() {
         (AssembleError::ForeignMarker.into(), 400, "bad request"),
         (AssembleError::MalformedMarker.into(), 400, "bad request"),
         (construction(), 500, "internal error"),
-        (unknown_route(), 500, "internal error"),
-        (FinalCheckError::Slot.into(), 500, "internal error"),
     ];
+    let defects = defects().into_iter().map(|refusal| (refusal, 500, "internal error"));
+    let cases = cases.into_iter().chain(defects);
     cases.into_iter().for_each(|(refusal, status, body)| {
         let response = refusal.respond();
         assert_eq!((response.status(), response.body()), (status, body), "{refusal}");
         assert_eq!(refusal.status(), status);
         assert_eq!(response.headers(), plain, "{refusal}");
     });
+}
+
+#[test]
+fn a_500_is_answered_exactly_when_the_event_is_logged() {
+    let token = bearer();
+    let caller_errors = [
+        unauthenticated(),
+        forbidden(&token),
+        not_found(&token),
+        unavailable(),
+        no_record(),
+        kind(),
+        target(),
+        PipelineRefusal::Method,
+        sanitize(),
+        rate_limited(),
+        AssembleError::ForeignMarker.into(),
+        AssembleError::MalformedMarker.into(),
+    ];
+    defects()
+        .into_iter()
+        .chain(caller_errors)
+        .for_each(|refusal| assert_eq!(refusal.status() == 500, !logged(&refusal).is_empty(), "{refusal}"));
 }
 
 #[test]
@@ -173,13 +221,42 @@ impl<'a> MakeWriter<'a> for Captured {
     }
 }
 
-/// What `report` logs for `refusal` on the brave route.
-fn logged(refusal: &PipelineRefusal) -> String {
+/// What `f` logs.
+fn capture<T>(f: impl FnOnce() -> T) -> (T, String) {
     let captured = Captured::default();
     let subscriber = tracing_subscriber::fmt().with_writer(captured.clone()).with_ansi(false).finish();
-    tracing::subscriber::with_default(subscriber, || refusal.report(&route("brave"), &credential("brave")));
+    let value = tracing::subscriber::with_default(subscriber, f);
     let bytes = captured.0.lock().unwrap_or_else(PoisonError::into_inner).clone();
-    String::from_utf8(bytes).unwrap()
+    (value, String::from_utf8(bytes).unwrap())
+}
+
+/// What `report` logs for `refusal` on the brave route.
+fn logged(refusal: &PipelineRefusal) -> String {
+    capture(|| refusal.report(&route("brave"), &credential("brave"))).1
+}
+
+#[test]
+fn running_into_a_defect_raises_the_event_without_the_request() {
+    // A limiter built without the brave route: authorization passes, the charge cannot find the route.
+    let sources = TestSources::with_limiter_config(&without_brave_route());
+    let (result, event) = capture(|| sources.run(&loopback(), brave_search(MARKER, &[])));
+
+    assert!(matches!(result, Err(PipelineRefusal::Charge(ChargeError::UnknownRoute { .. }))));
+    assert!(event.contains("ERROR"), "{event}");
+    assert!(event.contains("severity=\"high\""), "{event}");
+    assert!(event.contains("route=brave"), "{event}");
+    assert!(event.contains("credential=brave"), "{event}");
+    assert!(!event.contains(MARKER) && !event.contains("q=rust"), "{event}");
+}
+
+/// The configuration without the brave route or any grant of it.
+fn without_brave_route() -> String {
+    let config = config();
+    let (head, rest) = config.split_once("[routes.brave]").unwrap();
+    let (_, tail) = rest.split_once("[routes.billing]").unwrap();
+    format!("{head}[routes.billing]{tail}")
+        .replace("routes = [\"brave\"]", "routes = [\"fx\"]")
+        .replace("\"venice\", \"brave\", \"billing\"", "\"venice\", \"billing\"")
 }
 
 #[test]
