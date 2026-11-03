@@ -1,5 +1,6 @@
 //! The request server on real sockets, with a stub handler, speaking raw HTTP/1.1 so each limit is hit to the byte.
 
+use std::io::ErrorKind;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -10,6 +11,7 @@ use tokio::net::{TcpStream, UnixStream};
 use tokio::task::JoinHandle;
 
 use super::*;
+use crate::request_listeners::OpenError;
 use crate::request_listeners::tests::{TestCa, ThreeListeners, name};
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -64,6 +66,21 @@ impl RequestHandler for Arc<Stub> {
     }
 }
 
+/// Opens three listeners on freshly probed loopback ports. Another test, in this process or another, can take a probed
+/// port before it is bound, so an address-in-use failure probes again rather than failing the test.
+fn open_listeners(ca: &TestCa) -> (ThreeListeners, RequestListeners) {
+    loop {
+        let setup = ThreeListeners::new();
+        match setup.open(ca, 0o600) {
+            Err(OpenError::Tcp {
+                kind: ErrorKind::AddrInUse,
+                ..
+            }) => continue,
+            opened => return (setup, opened.unwrap()),
+        }
+    }
+}
+
 /// A request server on three listeners, stopped on drop.
 struct Running {
     setup: ThreeListeners,
@@ -75,9 +92,8 @@ struct Running {
 impl Running {
     /// Serves with the `[limits]` table `limits` and the stub `stub`.
     fn start(limits: &str, stub: Stub) -> Self {
-        let setup = ThreeListeners::new();
         let ca = TestCa::new();
-        let listeners = setup.open(&ca, 0o600).unwrap();
+        let (setup, listeners) = open_listeners(&ca);
         let config = ParsedConfig::from_toml(format!("schema_version = 1\n[limits]\n{limits}").as_bytes()).unwrap();
         let stub = Arc::new(stub);
         let server = RequestServer::new(*config.limits(), Arc::clone(&stub));
@@ -194,33 +210,30 @@ async fn a_connection_past_max_connections_is_closed_while_the_others_are_served
     assert_eq!(running.calls(), 3);
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_client_that_never_finishes_its_headers_is_dropped_at_the_header_timeout() {
+/// Connects, sends `sent`, and checks the server closes the connection without a response, no sooner than the header
+/// timeout. `start` is taken before connecting, so the server's timer cannot have been armed earlier.
+async fn assert_dropped_at_the_header_timeout(sent: &[u8]) {
     let running = Running::start("", Stub::default());
-    let mut client = running.unix().await;
     let start = Instant::now();
-    client.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n").await.unwrap();
+    let mut client = running.unix().await;
+    client.write_all(sent).await.unwrap();
     let read = tokio::time::timeout(HEADER_READ_TIMEOUT * 2, client.read(&mut [0; 1]))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(read, 0, "the slow client got a response");
+    assert_eq!(read, 0, "the client got a response");
     assert!(start.elapsed() >= HEADER_READ_TIMEOUT, "dropped after {:?}", start.elapsed());
     assert_eq!(running.calls(), 0);
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_client_that_never_finishes_its_headers_is_dropped_at_the_header_timeout() {
+    assert_dropped_at_the_header_timeout(b"GET / HTTP/1.1\r\nHost: x\r\n").await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn an_idle_connection_that_sends_nothing_is_dropped_at_the_header_timeout() {
-    let running = Running::start("", Stub::default());
-    let mut client = running.unix().await;
-    let start = Instant::now();
-    let read = tokio::time::timeout(HEADER_READ_TIMEOUT * 2, client.read(&mut [0; 1]))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(read, 0, "the idle client got a response");
-    assert!(start.elapsed() >= HEADER_READ_TIMEOUT, "dropped after {:?}", start.elapsed());
-    assert_eq!(running.calls(), 0);
+    assert_dropped_at_the_header_timeout(b"").await;
 }
 
 #[tokio::test(start_paused = true)]
