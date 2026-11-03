@@ -8,19 +8,19 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_core::Stream;
-use iron_vault::upstream::request_body::{BodyStreamError, RequestBody};
+use iron_vault::upstream::request_body::{UpstreamBody, UpstreamBodyError};
 
 /// How long a failing stream waits before its error, so the client has sent the chunks before it as well as the head.
 const PAUSE_BEFORE_ERROR: Duration = Duration::from_millis(100);
 
 /// A stream that yields its items in order, each ready at once except that an error waits for `pause` first, then ends.
 struct Items {
-    items: VecDeque<Result<Bytes, BodyStreamError>>,
+    items: VecDeque<Result<Bytes, UpstreamBodyError>>,
     pause: Pin<Box<tokio::time::Sleep>>,
 }
 
 impl Stream for Items {
-    type Item = Result<Bytes, BodyStreamError>;
+    type Item = Result<Bytes, UpstreamBodyError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.items.front().is_some_and(Result::is_err) && self.pause.as_mut().poll(cx).is_pending() {
@@ -31,22 +31,22 @@ impl Stream for Items {
 }
 
 /// A body of `chunks` in order, declaring `length` when given.
-pub fn body(length: Option<u64>, chunks: &[&str]) -> RequestBody {
+pub fn body(length: Option<u64>, chunks: &[&str]) -> UpstreamBody {
     stream(length, chunks.iter().map(|chunk| Ok(Bytes::copy_from_slice(chunk.as_bytes()))))
 }
 
-/// A body that yields `chunks`, then fails with [`BodyStreamError`].
-pub fn failing_body(length: Option<u64>, chunks: &[&str]) -> RequestBody {
+/// A body that yields `chunks`, then fails with [`UpstreamBodyError`].
+pub fn failing_body(length: Option<u64>, chunks: &[&str]) -> UpstreamBody {
     let items = chunks.iter().map(|chunk| Ok(Bytes::copy_from_slice(chunk.as_bytes())));
-    stream(length, items.chain([Err(BodyStreamError)]))
+    stream(length, items.chain([Err(UpstreamBodyError)]))
 }
 
-fn stream(length: Option<u64>, items: impl Iterator<Item = Result<Bytes, BodyStreamError>>) -> RequestBody {
+fn stream(length: Option<u64>, items: impl Iterator<Item = Result<Bytes, UpstreamBodyError>>) -> UpstreamBody {
     let items = Items {
         items: items.collect(),
         pause: Box::pin(tokio::time::sleep(PAUSE_BEFORE_ERROR)),
     };
-    RequestBody::stream(length, items)
+    UpstreamBody::stream(length, items)
 }
 
 /// Polls `probe` until it returns a value. A test upstream records an aborted request after the client has already

@@ -3,7 +3,7 @@
 //! [`UpstreamClient::new`] is the one constructor. It hands reqwest the rustls config built from an [`UpstreamTrust`],
 //! turns off proxies, redirects, retries and the `Referer` header, and refuses cleartext. `clippy.toml` refuses every
 //! other way to build a reqwest client, to add a proxy, to set a retry policy or to switch certificate checks off.
-//! [`UpstreamClient::send`] takes a [`CheckedRequest`] and a [`RequestBody`], so nothing reaches the network without
+//! [`UpstreamClient::send`] takes a [`CheckedRequest`] and a [`UpstreamBody`], so nothing reaches the network without
 //! passing the final outgoing-request check. It sends exactly that request's method, URL and headers, plus the body,
 //! which the final check never reads.
 
@@ -19,7 +19,7 @@ use reqwest::retry;
 use reqwest::{Client, Request, Response, StatusCode};
 use rustls::ClientConfig;
 
-use super::request_body::{Kind, RequestBody};
+use super::request_body::{Kind, UpstreamBody};
 use super::transport_error::TransportError;
 use super::trust::{ClientConfigError, UpstreamTrust};
 
@@ -113,7 +113,7 @@ impl UpstreamClient {
     /// reqwest adds `Accept: */*` when the request has no `Accept`, and its builder offers no way to stop it.
     ///
     /// `body` is forwarded chunk by chunk, never buffered whole and never inspected. It is framed by its declared
-    /// length when [`RequestBody::stream`] was given one, and as chunked (HTTP/1.1) otherwise; the caller's own framing
+    /// length when [`UpstreamBody::stream`] was given one, and as chunked (HTTP/1.1) otherwise; the caller's own framing
     /// headers were already dropped by `sanitize`. If the body stream fails, the upstream request is aborted, not
     /// completed with a short body, and `send` returns a [`TransportError`], which is a 502 whatever its class.
     ///
@@ -123,7 +123,7 @@ impl UpstreamClient {
     /// The response-headers deadline starts when sending starts, so it also bounds how long the body may take to upload.
     ///
     /// It must run on a tokio runtime with its timer enabled, which both deadlines use.
-    pub async fn send(&self, request: CheckedRequest, body: RequestBody) -> Result<UpstreamResponse, TransportError> {
+    pub async fn send(&self, request: CheckedRequest, body: UpstreamBody) -> Result<UpstreamResponse, TransportError> {
         let request = with_body(to_reqwest(request)?, body);
         let response = tokio::time::timeout(self.limits.response_headers, self.client.execute(request))
             .await
@@ -193,7 +193,7 @@ fn to_reqwest(checked: CheckedRequest) -> Result<Request, TransportError> {
 ///
 /// reqwest's streamed body has no length of its own, so a declared length goes in as a `Content-Length` header, which
 /// both hyper's HTTP/1.1 and HTTP/2 clients frame by; without one the body is chunked.
-fn with_body(mut request: Request, body: RequestBody) -> Request {
+fn with_body(mut request: Request, body: UpstreamBody) -> Request {
     if let Kind::Stream { length, chunks } = body.kind {
         if let Some(length) = length {
             request.headers_mut().insert(header::CONTENT_LENGTH, length.into());

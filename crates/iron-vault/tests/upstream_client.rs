@@ -17,7 +17,7 @@ use common::body_stream::{body as body_of, eventually, failing_body};
 use common::checked::checked;
 use common::mock_upstream::{MockUpstream, RecordedRequest, Reply, TestCa, UPSTREAM_HOST};
 use iron_vault::upstream::client::{TransportLimits, UpstreamClient, UpstreamResponse};
-use iron_vault::upstream::request_body::RequestBody;
+use iron_vault::upstream::request_body::UpstreamBody;
 use iron_vault::upstream::transport_error::TransportError;
 use iron_vault::upstream::trust::UpstreamTrust;
 use iron_vault_policy::Method;
@@ -59,7 +59,7 @@ async fn failure(trust: &UpstreamTrust, limits: TransportLimits, origin: &str) -
     let request = checked(origin, Method::Get, "/query/rates?base=USD", &[], SECRET);
     UpstreamClient::new(trust, limits)
         .unwrap()
-        .send(request, RequestBody::empty())
+        .send(request, UpstreamBody::empty())
         .await
         .unwrap_err()
 }
@@ -75,7 +75,7 @@ async fn the_upstream_receives_exactly_the_checked_method_target_and_headers() {
     ];
     let request = checked(&upstream.origin(), Method::Get, "/header/rates?base=USD", &caller_headers, SECRET);
 
-    let response = client(&ca.trust()).send(request, RequestBody::empty()).await.unwrap();
+    let response = client(&ca.trust()).send(request, UpstreamBody::empty()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body(response).await, b"hello");
@@ -111,7 +111,7 @@ async fn a_query_slot_reaches_the_upstream_in_the_query() {
         SECRET,
     );
 
-    client(&ca.trust()).send(request, RequestBody::empty()).await.unwrap();
+    client(&ca.trust()).send(request, UpstreamBody::empty()).await.unwrap();
 
     let received = only_request(&upstream);
     assert_eq!(
@@ -130,7 +130,7 @@ async fn reqwest_adds_only_accept_to_a_request_without_one() {
     let upstream = MockUpstream::start(&ca, Reply::ok("")).await;
     let request = checked(&upstream.origin(), Method::Get, "/header/x", &[], SECRET);
 
-    client(&ca.trust()).send(request, RequestBody::empty()).await.unwrap();
+    client(&ca.trust()).send(request, UpstreamBody::empty()).await.unwrap();
 
     let host = format!("{UPSTREAM_HOST}:{}", upstream.port());
     assert_eq!(
@@ -147,7 +147,7 @@ async fn a_redirect_is_returned_and_never_followed() {
     let upstream = MockUpstream::start(&ca, Reply::redirect(&location)).await;
     let request = checked(&upstream.origin(), Method::Get, "/header/x", &[], SECRET);
 
-    let response = client(&ca.trust()).send(request, RequestBody::empty()).await.unwrap();
+    let response = client(&ca.trust()).send(request, UpstreamBody::empty()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::FOUND);
     assert_eq!(response.headers()["location"], location.as_str());
@@ -340,12 +340,26 @@ async fn a_body_stream_that_ends_short_of_its_declared_length_aborts_the_request
 }
 
 #[tokio::test]
+async fn a_body_stream_longer_than_its_declared_length_aborts_the_request() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+
+    let error = client(&ca.trust()).send(request, body_of(Some(5), &["toolong"])).await.unwrap_err();
+
+    assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
+    // The upstream must never record a request that looks whole but was cut to the declared length.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(upstream.requests().iter().all(|received| !received.body_complete));
+}
+
+#[tokio::test]
 async fn a_get_without_a_body_sends_no_body_and_no_framing_headers() {
     let ca = TestCa::new("Test CA");
     let upstream = MockUpstream::start(&ca, Reply::ok("")).await;
     let request = checked(&upstream.origin(), Method::Get, "/header/rates", &[], SECRET);
 
-    client(&ca.trust()).send(request, RequestBody::empty()).await.unwrap();
+    client(&ca.trust()).send(request, UpstreamBody::empty()).await.unwrap();
 
     let received = only_request(&upstream);
     assert_eq!(header(&received.headers(), "content-length"), None);
