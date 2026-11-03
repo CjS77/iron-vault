@@ -15,22 +15,38 @@ use crate::request_listeners::tests::{TestCa, ThreeListeners, name};
 const WAIT: Duration = Duration::from_secs(5);
 const GET: &[u8] = b"GET / HTTP/1.1\r\nHost: x\r\n\r\n";
 
-/// Records every request it sees; answers `200` once it has read the whole body, `500` if reading it failed, or never
-/// when it stalls.
+/// Records every request it sees; answers `200` once it has read the whole body, `500` if reading it failed, never
+/// when it stalls, or `504` with a body at the deadline when it waits for it.
 #[derive(Default)]
 struct Stub {
     stall: bool,
+    answer_at_deadline: bool,
     calls: AtomicUsize,
     read_bodies: AtomicUsize,
     tags: Mutex<Vec<ConnectionTags>>,
 }
 
 impl RequestHandler for Arc<Stub> {
-    fn handle(&self, request: Request<RequestBody>, tags: &ConnectionTags) -> impl Future<Output = Response<ResponseBody>> + Send {
+    fn handle(
+        &self,
+        request: Request<RequestBody>,
+        tags: &ConnectionTags,
+        deadline: Instant,
+    ) -> impl Future<Output = Response<ResponseBody>> + Send {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.tags.lock().unwrap().push(tags.clone());
         let stub = Arc::clone(self);
         async move {
+            if stub.answer_at_deadline {
+                tokio::time::sleep_until(deadline).await;
+                let mut response = Response::new(
+                    Full::new(Bytes::from_static(b"gateway timeout"))
+                        .map_err(|never| match never {})
+                        .boxed_unsync(),
+                );
+                *response.status_mut() = StatusCode::GATEWAY_TIMEOUT;
+                return response;
+            }
             if stub.stall {
                 std::future::pending::<()>().await;
             }
@@ -217,6 +233,18 @@ async fn a_request_still_unanswered_at_the_request_timeout_gets_408() {
     let start = Instant::now();
     assert_eq!(running.status(GET).await, Some(408));
     assert!(start.elapsed() >= Duration::from_secs(1), "answered after {:?}", start.elapsed());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_handler_answering_at_the_deadline_is_heard_with_its_whole_body() {
+    let at_deadline = Stub {
+        answer_at_deadline: true,
+        ..Stub::default()
+    };
+    let running = Running::start("request_timeout_secs = 1\nupstream_timeout_secs = 1", at_deadline);
+    let (code, text) = response_of(&running, b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await;
+    assert_eq!(code, Some(504));
+    assert!(text.ends_with("\r\n\r\ngateway timeout"), "{text}");
 }
 
 #[tokio::test]

@@ -118,6 +118,10 @@ impl Body for RequestBody {
 struct DeadlinePassed;
 
 /// A response body that fails at the request deadline, so a response cannot stream past the whole-request timeout.
+///
+/// A body whose rest is already in hand at the deadline still finishes: a handler may answer at the deadline itself
+/// with a fixed body, and failing that body would drop the connection without its status. Only a body still waiting
+/// on more fails.
 pub(super) struct Deadline {
     body: ResponseBody,
     sleep: Pin<Box<Sleep>>,
@@ -138,10 +142,15 @@ impl Body for Deadline {
 
     fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
         let this = self.get_mut();
-        if this.sleep.as_mut().poll(cx).is_ready() {
-            return Poll::Ready(Some(Err(Box::new(DeadlinePassed))));
+        let frame = Pin::new(&mut this.body).poll_frame(cx);
+        if this.sleep.as_mut().poll(cx).is_pending() {
+            return frame;
         }
-        Pin::new(&mut this.body).poll_frame(cx)
+        match frame {
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(Some(Ok(frame))) if this.body.is_end_stream() => Poll::Ready(Some(Ok(frame))),
+            _ => Poll::Ready(Some(Err(Box::new(DeadlinePassed)))),
+        }
     }
 
     fn is_end_stream(&self) -> bool {

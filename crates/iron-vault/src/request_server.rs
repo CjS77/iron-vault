@@ -13,7 +13,7 @@
 //! | `max_header_bytes` | hyper's `max_header_size`, which counts the request line and headers on the wire exactly | `431` |
 //! | `max_header_count` | hyper's `max_headers` | `431` |
 //! | `max_request_body_bytes` | `Content-Length` before the handler runs, else [`RequestBody`] as it streams | `413` |
-//! | `request_timeout_secs` | A deadline from the request head to the last byte of the response | `408`, or dropped |
+//! | `request_timeout_secs` | A deadline from the request head to the last byte of the response, handed to the handler | `408`, or dropped |
 //! | Header read timeout | hyper's `header_read_timeout`: [`HEADER_READ_TIMEOUT`], or the request timeout if shorter | Closed |
 //!
 //! hyper answers both header limits with `431`: it reports a head that is too long and one with too many headers as
@@ -72,11 +72,20 @@ impl ConnectionTags {
     }
 }
 
-/// Answers one request that has passed the request server's limits. The request pipeline implements it.
+/// Answers one request that has passed the request server's limits. The proxy handler implements it.
 pub trait RequestHandler: Send + Sync + 'static {
     /// The response to `request`, which arrived on the connection `tags` describes. Its body fails with
     /// [`RequestBodyError::TooLarge`] once it passes the body limit, and the server then answers `413` itself.
-    fn handle(&self, request: Request<RequestBody>, tags: &ConnectionTags) -> impl Future<Output = Response<ResponseBody>> + Send;
+    ///
+    /// `deadline` is the request deadline. A handler that answers by then is heard, even at the deadline itself, so it
+    /// can give its own status for what it was waiting on; otherwise the server answers `408`. A response body still
+    /// streaming at the deadline fails there.
+    fn handle(
+        &self,
+        request: Request<RequestBody>,
+        tags: &ConnectionTags,
+        deadline: Instant,
+    ) -> impl Future<Output = Response<ResponseBody>> + Send;
 }
 
 /// Serves HTTP/1.1 on the request listeners under one set of operational limits.
@@ -168,11 +177,12 @@ async fn respond<H: RequestHandler>(
     }
     let overflow = Arc::new(Overflow::default());
     let request = request.map(|body| RequestBody::new(body, max_body, Arc::clone(&overflow)));
+    // The handler is polled before the deadline, so one that times out its own wait at the same deadline is heard.
     let response = tokio::select! {
         biased;
         () = overflow.tripped() => refusal(StatusCode::PAYLOAD_TOO_LARGE),
+        response = handler.handle(request, &tags, deadline) => response,
         () = tokio::time::sleep_until(deadline) => refusal(StatusCode::REQUEST_TIMEOUT),
-        response = handler.handle(request, &tags) => response,
     };
     // A handler may answer in the same poll in which its body passed the limit.
     let response = match overflow.is_tripped() {
