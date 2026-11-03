@@ -6,7 +6,7 @@
 use std::fmt::{Debug, Display};
 
 use serde::{Deserialize, Serialize};
-use static_assertions::assert_not_impl_any;
+use static_assertions::{assert_impl_all, assert_not_impl_any};
 use zeroize::Zeroizing;
 
 use crate::admin::protocol::{Decoded, Frame, OwnerInput};
@@ -16,6 +16,7 @@ assert_not_impl_any!(OwnerInput: Clone, Copy, Display, Serialize, Deserialize<'s
 assert_not_impl_any!(Frame: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Decoded: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(ServingSnapshot: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_impl_all!(ServingSnapshot: Send, Sync);
 assert_not_impl_any!(SnapshotHolder: Clone, Copy, Display, Serialize, Deserialize<'static>);
 #[cfg(target_os = "linux")]
 assert_not_impl_any!(crate::listener_tls::ListenerTls: Clone, Copy, Display, Serialize, Deserialize<'static>);

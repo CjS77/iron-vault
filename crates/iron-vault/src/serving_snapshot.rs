@@ -24,26 +24,24 @@ pub struct ServingSnapshot {
     limiter: RateLimiter,
 }
 
-/// Why a policy and a vault cannot form one snapshot.
+/// Why a policy and a vault cannot form one snapshot: a route's availability disagrees with whether the vault holds a
+/// healthy record for its credential.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SnapshotError {
-    /// The policy's availability for a route disagrees with whether the vault holds a healthy record for its credential,
-    /// so the policy was activated against another vault or against this vault in another state.
-    #[error("route {route} is {} in the policy, but the vault {} a healthy record for its credential", availability(*.available), holds(*.available))]
-    PolicyVaultMismatch {
+    /// The policy marks the route available, but the vault has no healthy record for its credential, so a request
+    /// would reach the route with nothing to resolve.
+    #[error("route {route} is available in the policy, but the vault has no healthy record for its credential")]
+    AvailableWithoutRecord {
         /// The route whose availability disagrees.
         route: RouteName,
-        /// What the policy says: `true` when the route is available.
-        available: bool,
     },
-}
-
-fn availability(available: bool) -> &'static str {
-    if available { "available" } else { "unavailable" }
-}
-
-fn holds(available: bool) -> &'static str {
-    if available { "has no" } else { "holds" }
+    /// The policy marks the route unavailable, but the vault holds a healthy record for its credential, so the
+    /// policy was activated against another vault or this vault in another state.
+    #[error("route {route} is unavailable in the policy, but the vault holds a healthy record for its credential")]
+    UnavailableWithRecord {
+        /// The route whose availability disagrees.
+        route: RouteName,
+    },
 }
 
 impl ServingSnapshot {
@@ -62,10 +60,8 @@ impl ServingSnapshot {
             .map(|(name, route)| (name, policy.is_available(name), vault.record(route.credential()).is_some()))
             .find(|(_, available, healthy)| available != healthy);
         match mismatch {
-            Some((route, available, _)) => Err(SnapshotError::PolicyVaultMismatch {
-                route: route.clone(),
-                available,
-            }),
+            Some((route, true, _)) => Err(SnapshotError::AvailableWithoutRecord { route: route.clone() }),
+            Some((route, false, _)) => Err(SnapshotError::UnavailableWithRecord { route: route.clone() }),
             None => Ok(Self {
                 policy,
                 vault,

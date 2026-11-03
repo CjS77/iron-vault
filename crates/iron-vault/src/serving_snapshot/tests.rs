@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::{AccountDirectory, AccountName, Capabilities, ParsedConfig, Port, ValidatedConfig, activate};
+use iron_vault_policy::{
+    AccountDirectory, AccountName, Capabilities, CatalogEntry, CredentialCatalog, ParsedConfig, Port, ValidatedConfig, activate,
+};
 use iron_vault_store::{OsFs, PermittedOrigins, StateDirLock, Vault, VaultIdentity};
 
 use super::*;
@@ -148,14 +150,37 @@ fn a_policy_activated_against_another_vault_is_refused() {
 
     let refused = ServingSnapshot::new(policy, other, clients, limiter).unwrap_err();
 
+    assert_eq!(refused, SnapshotError::AvailableWithoutRecord { route: route("fx") });
     assert_eq!(
-        refused,
-        SnapshotError::PolicyVaultMismatch {
-            route: route("fx"),
-            available: true
-        }
+        refused.to_string(),
+        "route fx is available in the policy, but the vault has no healthy record for its credential"
     );
-    assert!(refused.to_string().contains("route fx is available"), "{refused}");
+}
+
+/// Reports every credential as damaged, so activation marks every route unavailable.
+struct AllUnusable;
+
+impl CredentialCatalog for AllUnusable {
+    fn entry(&self, _: &CredentialName) -> CatalogEntry {
+        CatalogEntry::Unusable
+    }
+}
+
+#[test]
+fn a_route_unavailable_in_the_policy_but_healthy_in_the_vault_is_refused() {
+    let scratch = Scratch::new();
+    let vault = vault(&scratch, "fx", "key");
+    let config = ValidatedConfig::try_from(ParsedConfig::from_toml(config("fx", "key").as_bytes()).unwrap()).unwrap();
+    let policy = activate(&config, &Capabilities::default(), &AllUnusable, &NoAccounts).unwrap();
+    let (clients, limiter) = parts(&policy);
+
+    let refused = ServingSnapshot::new(policy, vault, clients, limiter).unwrap_err();
+
+    assert_eq!(refused, SnapshotError::UnavailableWithRecord { route: route("fx") });
+    assert_eq!(
+        refused.to_string(),
+        "route fx is unavailable in the policy, but the vault holds a healthy record for its credential"
+    );
 }
 
 #[test]

@@ -47,7 +47,7 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | `Frame` | iron-vault | an `OwnerInput` when it is an owner-input frame | its `OwnerInput` | `secret_types_tests` |
 | `Decoded` | iron-vault | a decoded `Frame` | its `Frame` | `secret_types_tests` |
 | `ServingSnapshot` | iron-vault | the `Vault`, so every healthy `CredentialRecord` | its `Vault`; shared through an `Arc`, so the vault is cleared when the last request holding the snapshot ends | `secret_types_tests`, `serving_snapshot/tests` |
-| `SnapshotHolder` | iron-vault | the current `ServingSnapshot` | the snapshot, once no request holds it | `serving_snapshot/tests` |
+| `SnapshotHolder` | iron-vault | the current `ServingSnapshot` | the snapshot, once no request holds it | `secret_types_tests`, `serving_snapshot/tests` |
 | `ListenerTls` | iron-vault | a TLS listener's signing key, inside its rustls `ServerConfig` | not cleared: see residual copies | `listener_tls/tests` (its `Debug` shows only the listener name and handshake timeout) |
 
 `ScrubPatterns` stores each pattern in a private `ScrubPattern` newtype, which has no `Clone`, `Display` or `Debug`.
@@ -92,9 +92,10 @@ operation.
 
 `Vault` owns its identity and records by value. The store's production code uses no `Rc`, `Arc`, `OnceLock`,
 `LazyLock`, `OnceCell`, `thread_local!` or `static mut`, so no other owner can keep a copy alive after the `Vault` is
-dropped. (The service's `ServingSnapshot` shares its vault through an `Arc`: the vault is dropped when the holder has replaced
-the snapshot and the last request that loaded it has finished.) `secret_types_tests` checks this by scanning the store's sources, and asserts `Vault: Send + Sync`, which
-`Rc` would break. The lock state machine that decides when to drop it is EP-23.
+dropped. (The service's `ServingSnapshot` shares its vault through an `Arc`: the vault is dropped when the holder has
+replaced the snapshot and the last request that loaded it has finished.) `secret_types_tests` checks this by scanning
+the store's sources, and asserts `Vault: Send + Sync`, which `Rc` would break. The lock state
+machine that decides when to drop it is EP-23.
 
 ## Known residual copies
 
