@@ -1,6 +1,5 @@
 //! The request server on real sockets, with a stub handler, speaking raw HTTP/1.1 so each limit is hit to the byte.
 
-use std::io::ErrorKind;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -11,7 +10,6 @@ use tokio::net::{TcpStream, UnixStream};
 use tokio::task::JoinHandle;
 
 use super::*;
-use crate::request_listeners::OpenError;
 use crate::request_listeners::tests::{TestCa, ThreeListeners, name};
 
 const WAIT: Duration = Duration::from_secs(5);
@@ -66,21 +64,6 @@ impl RequestHandler for Arc<Stub> {
     }
 }
 
-/// Opens three listeners on freshly probed loopback ports. Another test, in this process or another, can take a probed
-/// port before it is bound, so an address-in-use failure probes again rather than failing the test.
-fn open_listeners(ca: &TestCa) -> (ThreeListeners, RequestListeners) {
-    loop {
-        let setup = ThreeListeners::new();
-        match setup.open(ca, 0o600) {
-            Err(OpenError::Tcp {
-                kind: ErrorKind::AddrInUse,
-                ..
-            }) => continue,
-            opened => return (setup, opened.unwrap()),
-        }
-    }
-}
-
 /// A request server on three listeners, stopped on drop.
 struct Running {
     setup: ThreeListeners,
@@ -93,7 +76,8 @@ impl Running {
     /// Serves with the `[limits]` table `limits` and the stub `stub`.
     fn start(limits: &str, stub: Stub) -> Self {
         let ca = TestCa::new();
-        let (setup, listeners) = open_listeners(&ca);
+        let mut setup = ThreeListeners::new();
+        let listeners = setup.open(&ca, 0o600).unwrap();
         let config = ParsedConfig::from_toml(format!("schema_version = 1\n[limits]\n{limits}").as_bytes()).unwrap();
         let stub = Arc::new(stub);
         let server = RequestServer::new(*config.limits(), Arc::clone(&stub));

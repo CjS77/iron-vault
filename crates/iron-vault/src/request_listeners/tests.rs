@@ -74,9 +74,11 @@ pub(crate) fn name(s: &str) -> ListenerName {
     ListenerName::try_from(s).unwrap()
 }
 
-/// A loopback address with a port nothing is listening on.
-fn free_address() -> SocketAddr {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+/// A loopback TCP socket on a port the kernel picked, listening from the start: handed to the code under test as an
+/// activated socket, its port is never released for another test to take before it is opened.
+fn loopback_listener() -> (SocketAddr, AdoptedSocket) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    (listener.local_addr().unwrap(), AdoptedSocket::Tcp(listener))
 }
 
 /// A test CA, its leaf certificate for `localhost` and the leaf's key.
@@ -160,17 +162,22 @@ fn components(path: &Path, mode: Mode) -> Vec<PathComponent> {
 }
 
 /// Three listeners, in name order: a Unix socket, plain loopback TCP and TLS on loopback.
+///
+/// The two TCP listeners are bound here and passed to [`open`](Self::open) as activated sockets, as systemd would pass
+/// them. Binding a probed port instead would race any other test that takes the port between the probe and the bind.
 pub(crate) struct ThreeListeners {
     dir: RuntimeDir,
     pub(crate) tcp: SocketAddr,
     pub(crate) tls: SocketAddr,
     config: BTreeMap<ListenerName, ListenerConfig>,
+    /// The bound TCP sockets, until `open` takes them.
+    sockets: BTreeMap<ListenerName, AdoptedSocket>,
 }
 
 impl ThreeListeners {
     pub(crate) fn new() -> Self {
         let dir = RuntimeDir::new();
-        let (tcp, tls) = (free_address(), free_address());
+        let ((tcp, tcp_socket), (tls, tls_socket)) = (loopback_listener(), loopback_listener());
         let toml = format!(
             "schema_version = 1\n\
              [listeners.a-unix]\nunix_socket = \"{}\"\n\
@@ -179,13 +186,22 @@ impl ThreeListeners {
             dir.socket("proxy.sock").display()
         );
         let config = ParsedConfig::from_toml(toml.as_bytes()).unwrap().listeners().clone();
-        Self { dir, tcp, tls, config }
+        let sockets = BTreeMap::from([(name("b-tcp"), tcp_socket), (name("c-tls"), tls_socket)]);
+        Self {
+            dir,
+            tcp,
+            tls,
+            config,
+            sockets,
+        }
     }
 
-    pub(crate) fn open(&self, ca: &TestCa, key_mode: u32) -> Result<RequestListeners, OpenError> {
+    /// Opens the listeners, handing over the TCP sockets; a second call would find none and bind the ports itself.
+    pub(crate) fn open(&mut self, ca: &TestCa, key_mode: u32) -> Result<RequestListeners, OpenError> {
         let profile = DeploymentProfile::Development;
         let disk = ca.disk(key_mode);
-        RequestListeners::open_with(&self.config, &self.dir.paths(profile), BTreeMap::new(), read_from(&disk, profile))
+        let sockets = std::mem::take(&mut self.sockets);
+        RequestListeners::open_with(&self.config, &self.dir.paths(profile), sockets, read_from(&disk, profile))
     }
 
     pub(crate) fn unix_path(&self) -> PathBuf {
@@ -213,7 +229,7 @@ async fn exchange(server: &mut RequestStream, client: &mut (impl AsyncRead + Asy
 
 #[tokio::test]
 async fn each_connection_is_tagged_with_its_listener_and_only_unix_ones_with_a_peer() {
-    let setup = ThreeListeners::new();
+    let mut setup = ThreeListeners::new();
     let ca = TestCa::new();
     let listeners = setup.open(&ca, 0o600).unwrap();
 
@@ -243,7 +259,7 @@ async fn each_connection_is_tagged_with_its_listener_and_only_unix_ones_with_a_p
 
 #[tokio::test]
 async fn a_stalled_tls_client_does_not_hold_up_a_unix_connection() {
-    let setup = ThreeListeners::new();
+    let mut setup = ThreeListeners::new();
     let listeners = setup.open(&TestCa::new(), 0o600).unwrap();
 
     let _stalled = TcpStream::connect(setup.tls).await.unwrap();
@@ -262,7 +278,11 @@ async fn a_stalled_tls_client_does_not_hold_up_a_unix_connection() {
 
 #[tokio::test]
 async fn when_the_third_listener_fails_the_ones_already_open_are_closed() {
-    let setup = ThreeListeners::new();
+    let mut setup = ThreeListeners::new();
+    // Waiting in the TCP listener's backlog, this connection is reset when the listener closes: proof it closed that
+    // holds even if another test takes the port straight afterwards.
+    let mut waiting = std::net::TcpStream::connect(setup.tcp).unwrap();
+    waiting.set_read_timeout(Some(WAIT)).unwrap();
     let refused = setup.open(&TestCa::new(), 0o644).unwrap_err();
     let OpenError::Tls(ListenerTlsError::Unreadable { listener, .. }) = &refused else {
         panic!("expected an unreadable key, got {refused:?}");
@@ -273,12 +293,16 @@ async fn when_the_third_listener_fails_the_ones_already_open_are_closed() {
         fs::symlink_metadata(setup.unix_path()).is_err(),
         "the Unix socket file was left behind"
     );
-    std::net::TcpListener::bind(setup.tcp).expect("the TCP listener's port is free again");
+    let read = std::io::Read::read(&mut waiting, &mut [0; 1]);
+    assert!(
+        matches!(&read, Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset),
+        "the TCP listener is still open: {read:?}"
+    );
 }
 
 #[tokio::test]
 async fn dropping_the_listeners_removes_the_socket_files_they_bound() {
-    let setup = ThreeListeners::new();
+    let mut setup = ThreeListeners::new();
     let listeners = setup.open(&TestCa::new(), 0o600).unwrap();
     assert!(fs::symlink_metadata(setup.unix_path()).is_ok());
     drop(listeners);
