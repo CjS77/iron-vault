@@ -39,11 +39,12 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use iron_vault_policy::{Limits, ListenerName};
+use iron_vault_policy::Limits;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
+pub use crate::connection_tags::ConnectionTags;
 use crate::request_listeners::{IncomingConnection, RequestListeners};
 
 mod body;
@@ -65,30 +66,9 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// The body of a response the handler returns.
 pub type ResponseBody = UnsyncBoxBody<Bytes, BoxError>;
 
-/// What the transport says about the connection a request arrived on: its listener and, on a Unix socket, the peer's
-/// uid. Only the request server builds these, from the accepted connection, so a request can never set them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConnectionTags {
-    listener: ListenerName,
-    peer_uid: Option<u32>,
-}
-
 impl ConnectionTags {
     fn of(connection: &IncomingConnection) -> Self {
-        Self {
-            listener: connection.listener().clone(),
-            peer_uid: connection.peer().map(|peer| peer.uid()),
-        }
-    }
-
-    /// The listener the connection arrived on.
-    pub fn listener(&self) -> &ListenerName {
-        &self.listener
-    }
-
-    /// The peer's uid as the kernel reported it on a Unix socket; `None` on TCP, which reports no account.
-    pub fn peer_uid(&self) -> Option<u32> {
-        self.peer_uid
+        Self::new(connection.listener().clone(), connection.peer().map(|peer| peer.uid()))
     }
 }
 
@@ -148,9 +128,9 @@ impl<H: RequestHandler> RequestServer<H> {
             let tags = ConnectionTags::of(&incoming);
             let stream = match incoming.establish().await {
                 Ok(stream) => stream,
-                Err(e) => return tracing::debug!("listener {}: {e}", tags.listener),
+                Err(e) => return tracing::debug!("listener {}: {e}", tags.listener()),
             };
-            let listener = tags.listener.clone();
+            let listener = tags.listener().clone();
             let service = service_fn(move |request| respond(Arc::clone(&handler), tags.clone(), limits, request));
             if let Err(e) = http.serve_connection(TokioIo::new(stream), service).await {
                 tracing::debug!("listener {listener}: connection ended: {e}");
