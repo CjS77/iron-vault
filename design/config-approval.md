@@ -123,7 +123,9 @@ Meanwhile:
 - another approval or a vault write fails at once with `busy`;
 - SIGHUP is queued, and the reload runs once the approval ends;
 - `lock` cancels an approval that is still waiting at a prompt, which has reserved nothing, and then locks. An
-  approval past its passphrase prompt is not interrupted: `lock` waits for it, which takes seconds.
+  approval past its passphrase prompt is not interrupted: `lock` waits for it, which takes seconds. A `lock` or a
+  reload that waited checks `admin_allows` again once it holds the service-wide lock, because the approval may have
+  left the service in a state that refuses it.
 
 These are defaults ([open question 8](#open-questions)).
 
@@ -174,6 +176,23 @@ consume their versions").
 | step 6, a rename failed | committed | left in place | Checking: the config check's recovery retries the renames (rows 2-4); if that fails too, Unavailable with `RecoveryNeeded` | success, or `committed-not-active` |
 | step 6, the directory fsync failed | committed | renamed | Checking: the check goes on (see [Publish](#publish)) | success, or `committed-not-active` |
 | step 6, the config check fails | committed | as recovery leaves them | Unavailable, with the check's failure reason | `committed-not-active` |
+
+The "Service afterwards" column above is for an approval started from Ready. From either starting state, steps 5
+and 6 move the service only along `next()` edges:
+
+| Outcome of steps 5 and 6 | Started from Ready (in Checking since the pause began) | Started from Unavailable(`PolicyInvalid`) |
+|---|---|---|
+| step 5 fails before the rename of `approval.age` | the config check runs on the unchanged published pair: `CheckPassed` to Ready, or `CheckFailed` with its reason | no event: the service stays Unavailable(`PolicyInvalid`) |
+| the commit is durable (step 5 succeeded, or the commit was settled), and publish and the config check pass | `CheckPassed` to Ready | `Repaired` to Checking, then `CheckPassed` to Ready |
+| the commit is durable, but the publish retry or the config check fails | `CheckFailed` with the check's reason (`RecoveryNeeded` for a publish that cannot be finished) | `Repaired` to Checking, then `CheckFailed` with the check's reason |
+| settling the commit fails | `CheckFailed(RecoveryNeeded)` at once, without running the check | `Repaired` to Checking, then `CheckFailed(RecoveryNeeded)` at once, without running the check |
+
+**When `Repaired` fires.** Only for an approval started from Unavailable, and only after step 5 has an outcome. It
+never fires before the commit, or after a clean failure before the rename. For a commit that is durable, because step
+5 succeeded or the commit was settled, it fires once the commit is durable, and the config check then runs. A commit
+that could not be settled has no path to `RecoveryNeeded` but through Checking, because `next()` has no edge from
+Unavailable(`PolicyInvalid`) to Unavailable(`RecoveryNeeded`). There `Repaired` still fires, and Checking ends at once
+with `CheckFailed(RecoveryNeeded)`. That is a default too ([open question 3](#open-questions)).
 
 Removing uncommitted files is best effort. One left behind is a leftover that the next config check discards (see the
 recovery table).
@@ -338,8 +357,10 @@ loads once per request, before caller identification, because identification rea
 
 **Mechanism.** The snapshot holder holds one value. It is either *serve*, with a serving snapshot, or *refuse*, with
 an `UnavailableReason`. A request's load and every state transition's store each take the holder's lock once, so a
-request sees exactly one of the two, and that load is its admission. Entering the pause is a single store of *refuse*
-`checking`, made in step 5 before the write of `approval.age` begins. The store happens before the commit, and every
+request sees exactly one of the two, and that load is its admission. Every transition stores the value derived from
+the new state's `request_interface()`: *serve* for Ready, *refuse* with that state's reason otherwise. So the reason a
+`503` carries has one source, the service state model. Entering the pause is a single store of *refuse* `checking`,
+made in step 5 before the write of `approval.age` begins. The store happens before the commit, and every
 load that returned the old snapshot happened before the store. Admission never checks "is the service paused?" and
 then loads the snapshot in a second step, because a commit could land between the two.
 
@@ -348,6 +369,10 @@ then loads the snapshot in a second step, because a commit could land between th
 - **It ends** in step 6, when the config check ends: with a store of *serve* and the new snapshot on Ready, or a store
   of *refuse* and the failure reason on Unavailable. When the commit cleanly did not happen, the check runs on the
   unchanged published pair, and the pause normally ends on the old policy, which is still the committed one.
+
+An approval started from Unavailable(`PolicyInvalid`) makes no move to Checking and no store: the holder already
+holds *refuse* `policy invalid`, so no request is admitted, and nothing changes until `Repaired` and the config check
+that follows.
 
 **Invariant.** No request is admitted under the old policy after the commit. Every admission under the old snapshot
 happened before the pause began, and the pause begins before the commit.
@@ -448,20 +473,29 @@ the default until then.
    does not say what happens to requests admitted under the old policy before the pause, whether already forwarded or
    still inside the pipeline at the commit. That matters when an approval revokes a caller whose long streaming
    response is still running. *Default:* when the check ends on Ready, they all finish on the old snapshot. When it
-   ends on Unavailable, the old snapshot is withdrawn and they are cancelled where the transport permits.
+   ends on Unavailable, the old snapshot is withdrawn and they are cancelled where the transport permits. This may
+   depart from §3.9 rather than fill a gap in it: §3.9 carves out only operations "already sent upstream", so a
+   request admitted but not yet forwarded at the commit may count as admitted under the old policy after the commit.
+   The alternative cancels, or re-admits under the new snapshot, every request not yet forwarded when the pause
+   begins.
 2. **Listener changes in an approval.** On entry to Ready the listener set is rebuilt from the verified config. But
    in a protected Linux install every TCP listener comes from socket activation (§3.4), so a running service cannot
    bind a TCP listener that the new config adds. *Default:* the rebuild closes the sockets the new config no longer
    names and binds or adopts what it can. A listener it cannot bind is logged at WARN and stays missing until restart,
    the service still enters Ready, and the approval summary marks that listener "takes effect after restart".
-3. **The event that takes an approval from Ready to Checking.** §3.12 draws Ready to Checking only for "explicit
-   reload", and `ServiceEvent::Reload` is SIGHUP's. *Default:* a new event, such as `ApprovalCommitting`, on the
-   existing Ready-to-Checking edge, so *Reload* keeps one meaning. The alternative reuses `Reload`.
+3. **The events an approval uses.** The §3.12 diagram labels its one edge from Ready to Checking "explicit reload",
+   and nothing else, and `ServiceEvent::Reload` is SIGHUP's. *Default:* a new event, such as `ApprovalCommitting`, on
+   that existing edge, so *Reload* keeps one meaning. The alternative reuses `Reload`. Also by default, from
+   Unavailable(`PolicyInvalid`), `Repaired` fires once the commit is durable, and also for a commit that could not be
+   settled, only so that the service can reach `RecoveryNeeded` through Checking (see
+   [When `Repaired` fires](#when-a-step-fails)). The alternative adds a direct edge from Unavailable(`PolicyInvalid`)
+   to Unavailable(`RecoveryNeeded`), which §3.12 does not draw.
 4. **The failure reason for recovery rows 5 to 8.** *Default:* rows 5 and 6, a committed transaction with a file
    waiting to be published, are `RecoveryNeeded`, as `FailureReason::RecoveryNeeded`'s doc comment describes ("a
    committed transaction could not be completed"). Rows 7 and 8, a published pair that does not verify, are
-   `PolicyInvalid`. Consequence: in rows 5 and 6 `config approve` is refused (`admin_allows` offers only repair), and
-   no repair command is specified yet, so only a restart is available, and a restart reaches the same row. The
+   `PolicyInvalid`. Consequence: in rows 5 and 6 `config approve` is refused (`admin_allows` offers only repair). No
+   repair command is specified, in §3.13 or in any ticket, and a restart reaches the same row. So until one is, rows 5
+   and 6 have no exit but `reset`, which discards the vault and rebuilds it from reissued credentials. The
    alternative makes rows 5 and 6 `PolicyInvalid` too, so a new approval at a higher version is the repair. That is
    safe, because the new version is above the lost committed one, but K-124's doc comment would change.
 5. **What a request sees during the pause.** *Default:* `503` `checking` at once, like any Checking state, with no
@@ -493,8 +527,27 @@ the default until then.
     K-128 or this default has to change.
 13. **Settling an uncertain commit, and restarting after one.** *Default:* the transaction settles it with a second
     durable write of `approval.age`. A config check never writes the approval state, so if settling fails the service
-    stays Unavailable with `RecoveryNeeded`. A restart without a reboot then reads a commit that is visible in the page
-    cache but may not be durable, and trusts it.
+    stays Unavailable with `RecoveryNeeded`. A restart without a reboot then reads a commit of version N that is
+    visible in the page cache but may not be durable, and trusts it. If a later power loss undoes that commit,
+    `approval.age` is back at N-1. If the publish renames were undone as well, the N-1 pair is published again beside
+    N's pending and staged files, so recovery serves the N-1 pair and discards N's files as uncommitted leftovers.
+    (If the renames survived, the published N pair is `Uncommitted` and the service stays Unavailable.) The service
+    would then serve N-1 after it served N, which is what §3.9's "never fall back to an older committed version" forbids.
+    The alternative: every startup config check settles `approval.age` with a durable re-write, because after a
+    restart nothing records whether the last commit was settled. That breaks "loading never writes the approval
+    state", which K-126 asserts in a test.
 14. **Sections beyond §3.2's list.** §3.2 says the summary includes "changed callers, route grants, destinations,
     restrictions, and the committed version". *Default:* the summary also lists listener and limit changes, and a
     text-only change, so no change to the config goes unshown.
+
+### Which tickets each question blocks
+
+| Ticket | Open questions |
+|---|---|
+| K-119 | 9 |
+| K-120 | 3, 6, 8, 13 |
+| K-121 | 4, 7 (recovery at every config check, not only at startup), 13 |
+| K-122 | 4, 7, 13 |
+| K-123 | 1, 5 (its reason set needs `checking`) |
+| K-125 | 2, 3, 9 |
+| K-128 | 12 (stdin, a direct conflict), 11, 6, 8, 10, 14, 4 |
