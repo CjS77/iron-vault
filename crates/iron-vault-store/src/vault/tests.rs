@@ -307,6 +307,8 @@ fn a_healthy_vault_loads_every_record() {
     assert!(matches!(vault.material(&n("brave")), Some(CredentialMaterial::Static { .. })));
     assert_eq!(vault.entry(&n("venice")), CatalogEntry::Unknown);
     assert!(vault.material(&n("venice")).is_none());
+    assert!(vault.record(&n("venice")).is_none());
+    assert_eq!(vault.record(&n("brave")).map(|record| record.name().as_str()), Some("brave"));
     assert_eq!(vault.manifest().entries().len(), 2);
 }
 
@@ -333,9 +335,11 @@ fn each_damaged_record_takes_down_only_itself() {
     assert!(report.unindexed().is_empty());
     assert!(matches!(vault.entry(&n("keep")), CatalogEntry::Usable { .. }));
     assert!(vault.material(&n("keep")).is_some());
+    assert!(vault.record(&n("keep")).is_some());
     expected.iter().for_each(|(name, _)| {
         assert_eq!(vault.entry(&n(name)), CatalogEntry::Unusable, "{name}");
         assert!(vault.material(&n(name)).is_none(), "{name}");
+        assert!(vault.record(&n(name)).is_none(), "{name}");
     });
     // Events follow record ID order, which is random, so match them up by credential name.
     let by_name: BTreeMap<_, _> = events.iter().map(|e| (e.field("credential").to_owned(), e)).collect();

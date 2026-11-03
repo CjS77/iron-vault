@@ -193,6 +193,14 @@ impl Vault {
     pub fn material(&self, name: &CredentialName) -> Option<&CredentialMaterial> {
         self.healthy.get(name).map(CredentialRecord::material)
     }
+
+    /// The healthy record named `name`; `None` for a damaged or absent one.
+    ///
+    /// Resolving through the record keeps its permitted origins with the value it produced, which
+    /// [`material`](Self::material) alone cannot (glossary: *Resolved credential*).
+    pub fn record(&self, name: &CredentialName) -> Option<&CredentialRecord> {
+        self.healthy.get(name)
+    }
 }
 
 impl CredentialCatalog for Vault {
