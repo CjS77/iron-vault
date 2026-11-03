@@ -79,7 +79,7 @@ secrecy.workspace = true
 serde.workspace = true
 static_assertions.workspace = true
 # The admin server tests stop the server on demand through a oneshot channel; the request server tests pause time.
-tokio = { workspace = true, features = ["rt", "macros", "sync", "test-util"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "test-util"] }
 
 [lints]
 workspace = true
