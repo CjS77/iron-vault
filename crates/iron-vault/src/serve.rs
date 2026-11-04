@@ -38,6 +38,7 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport)
     // reach it; development gives no isolation from other accounts' callers anyway.
     create_dir(runtime_dir, 0o711, "runtime")?;
     create_config_dir(paths)?;
+    create_state_dir(paths)?;
     check_trusted_paths(paths)?;
     let locks = ServiceLocks::acquire(paths)?;
     locks.sweep_stale_temps(&OsFs);
@@ -102,6 +103,21 @@ fn create_config_dir(paths: &ServicePaths) -> anyhow::Result<()> {
     }
 }
 
+/// Creates a development install's state directory, and any missing parents, at `0700`. `$XDG_STATE_HOME` may not exist
+/// yet and the XDG specification allows `0700` for what is created. An existing directory is left as it is, so a wrong
+/// mode is refused by the trusted-path check rather than repaired. A packaged install's directory belongs to the
+/// package (§3.1), so the protected profile never creates it.
+fn create_state_dir(paths: &ServicePaths) -> anyhow::Result<()> {
+    if paths.profile != DeploymentProfile::Development {
+        return Ok(());
+    }
+    DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&paths.state_dir)
+        .with_context(|| format!("cannot create the state directory {}", paths.state_dir.display()))
+}
+
 /// Refuses to start when a path the service reads before it unlocks anything is untrusted (§3.1: "refuse an unsafe
 /// installation and explain which path failed"), and logs each path caution.
 fn check_trusted_paths(paths: &ServicePaths) -> anyhow::Result<()> {
@@ -127,4 +143,86 @@ fn stop_signal() -> io::Result<impl Future<Output = ()>> {
             _ = interrupt.recv() => tracing::info!("stopping on SIGINT"),
         }
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use iron_vault::trusted_path::{ExpectedOwner, TrustedPathRule};
+
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn paths(profile: DeploymentProfile, state_dir: &Path) -> ServicePaths {
+        ServicePaths {
+            profile,
+            owner: ExpectedOwner {
+                uid: rustix::process::getuid().as_raw(),
+            },
+            config: state_dir.join("config/config.toml"),
+            state_dir: state_dir.to_path_buf(),
+            runtime_dir: None,
+        }
+    }
+
+    /// A fresh empty directory under the system temp directory, unique within this process.
+    fn scratch() -> PathBuf {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!("iv-serve-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir_all(&dir).expect("scratch");
+        dir
+    }
+
+    fn mode(path: &Path) -> u32 {
+        fs::metadata(path).expect("stat").permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn development_creates_the_state_directory_and_its_parents_at_0700() {
+        let root = scratch();
+        let state = root.join("state-home/iron-vault");
+        create_state_dir(&paths(DeploymentProfile::Development, &state)).expect("create");
+        assert_eq!(mode(&state), 0o700);
+        assert_eq!(mode(state.parent().expect("parent")), 0o700);
+    }
+
+    #[test]
+    fn protected_never_creates_the_state_directory_and_the_check_names_it() {
+        let root = scratch();
+        let state = root.join("iron-vault");
+        let paths = paths(DeploymentProfile::Protected, &state);
+        create_state_dir(&paths).expect("no-op");
+        assert!(!state.exists());
+        let report = TrustedPathReport::check(&paths);
+        let entry = report
+            .entries
+            .iter()
+            .find(|e| e.rule == TrustedPathRule::StateDir)
+            .expect("state entry");
+        assert_eq!(entry.path, state);
+        assert!(entry.outcome.is_err());
+    }
+
+    #[test]
+    fn an_existing_state_directory_keeps_its_mode() {
+        let root = scratch();
+        let state = root.join("iron-vault");
+        DirBuilder::new().mode(0o755).create(&state).expect("mkdir");
+        fs::set_permissions(&state, fs::Permissions::from_mode(0o755)).expect("chmod");
+        create_state_dir(&paths(DeploymentProfile::Development, &state)).expect("create");
+        assert_eq!(mode(&state), 0o755);
+        let report = TrustedPathReport::check(&paths(DeploymentProfile::Development, &state));
+        let entry = report
+            .entries
+            .iter()
+            .find(|e| e.rule == TrustedPathRule::StateDir)
+            .expect("state entry");
+        assert!(entry.outcome.is_err());
+    }
 }
