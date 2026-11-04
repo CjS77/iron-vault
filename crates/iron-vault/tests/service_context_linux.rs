@@ -39,7 +39,7 @@ use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{LockOutcome, ServiceContext, ServiceLocks, ServiceSetup, StartError};
-use iron_vault::service_state::{FailureReason, ListenerProvenance, ServiceEvent, ServiceState, UnavailableReason};
+use iron_vault::service_state::{FailureReason, IllegalTransition, ListenerProvenance, ServiceEvent, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, SnapshotHolder};
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
@@ -1215,4 +1215,32 @@ async fn a_snapshot_held_past_the_lock_drain_keeps_the_identity_until_it_is_drop
     assert!(identity.upgrade().is_some(), "the held vault lost its identity");
     drop(stubborn);
     assert!(identity.upgrade().is_none(), "the vault identity outlived the last snapshot");
+}
+
+#[tokio::test]
+async fn recheck_refuses_an_event_that_does_not_lead_to_checking_and_changes_nothing() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    let snapshot = served_snapshot(&service);
+    let kept = service.identity_probe().await.unwrap();
+
+    let lock = service.recheck(ServiceEvent::Lock).await;
+    let stop = service.recheck(ServiceEvent::Stop).await;
+
+    let refused = |event| {
+        Err(IllegalTransition {
+            state: ServiceState::Ready,
+            event,
+        })
+    };
+    assert_eq!(lock, refused(ServiceEvent::Lock));
+    assert_eq!(stop, refused(ServiceEvent::Stop));
+
+    assert_eq!(service.state().await, ServiceState::Ready);
+    assert!(
+        std::sync::Weak::ptr_eq(&snapshot, &served_snapshot(&service)),
+        "the served snapshot changed"
+    );
+    assert!(std::sync::Weak::ptr_eq(&kept, &service.identity_probe().await.unwrap()));
+    assert_served(&get_unix(&fixture.socket(), true).await);
 }

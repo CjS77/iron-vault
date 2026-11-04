@@ -251,8 +251,9 @@ impl<F: StoreFs> ServiceContext<F> {
     /// Unavailable: [`ServiceEvent::Reload`] from Ready, [`ServiceEvent::Repaired`] from Unavailable after an authorized
     /// repair, a committed transaction's recovery, or a `config approve` out of an invalid policy.
     ///
-    /// No unlock is needed: the check opens a new vault from the identity the context kept. Without a kept identity
-    /// (Locked, Starting, Stopped) there is nothing to check with, and the event is refused as the state model refuses it.
+    /// No unlock is needed: the check opens a new vault from the identity the context kept. An event that does not lead
+    /// to Checking from the current state is refused and changes nothing, and so is any event without a kept identity
+    /// (Starting, Locked, Stopped), since there is nothing to check with.
     pub async fn recheck(&self, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
         let mut inner = self.inner.lock().await;
         let identity = inner.identity.clone().ok_or(IllegalTransition { state: inner.state, event })?;
@@ -396,6 +397,7 @@ impl<F: StoreFs> ServiceContext<F> {
     /// config check with it ([`open_and_check`]), and settles in Ready or Unavailable. Leaving Locked, both changes are
     /// logged as lock transitions.
     ///
+    /// An event that does not lead to Checking is refused before the state, the snapshot or the kept identity changes.
     /// Entering Checking withdraws any served snapshot, so the context drops what it kept of that vault with it.
     async fn check_and_settle(
         &self,
@@ -404,6 +406,9 @@ impl<F: StoreFs> ServiceContext<F> {
         identity: Arc<VaultIdentity>,
     ) -> Result<ServiceState, IllegalTransition> {
         let from = inner.state;
+        if next(from, event) != Ok(ServiceState::Checking) {
+            return Err(IllegalTransition { state: from, event });
+        }
         let checking = self.apply(inner, event)?;
         inner.open = None;
         inner.identity = Some(Arc::clone(&identity));
