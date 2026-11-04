@@ -12,8 +12,35 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
+
+/// How long a refusing service gets to exit. A service that starts instead would serve forever.
+const DEADLINE: Duration = Duration::from_secs(5);
+
+trait WaitWithDeadline {
+    fn wait_with_deadline(self) -> Output;
+}
+
+impl WaitWithDeadline for Child {
+    /// Polls for the exit; on timeout kills the process and fails with whatever it wrote to stderr.
+    fn wait_with_deadline(mut self) -> Output {
+        let start = Instant::now();
+        while self.try_wait().unwrap().is_none() {
+            if start.elapsed() > DEADLINE {
+                self.kill().unwrap();
+                let output = self.wait_with_output().unwrap();
+                panic!(
+                    "serve did not exit within {DEADLINE:?}; stderr:\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        self.wait_with_output().unwrap()
+    }
+}
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
@@ -53,8 +80,12 @@ impl Install {
             .env("XDG_CONFIG_HOME", self.dir("config"))
             .env("XDG_STATE_HOME", self.dir("state"))
             .env("XDG_RUNTIME_DIR", self.dir("run"))
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .unwrap()
+            .wait_with_deadline()
     }
 }
 
@@ -73,19 +104,23 @@ fn chmod(path: &Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
 
-/// Asserts `serve` refused to start naming `path`, and bound no admin socket.
+/// Asserts `serve` refused to start because `path` fails with `problem`, which tells it from a refusal of an ancestor, and bound no admin socket.
 ///
 /// `serve` checks its own executable first, so a checkout below a directory the build user's group can write is refused
 /// at the binary before the tree under test is reached; the test then has nothing to say and returns.
-fn assert_refused_naming(install: &Install, output: &Output, path: &Path) {
+fn assert_refused_naming(install: &Install, output: &Output, path: &Path, problem: &str) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let binary_refused = format!("refusing to start: {} is not trusted", env!("CARGO_BIN_EXE_iron-vault"));
     if stderr.contains(&binary_refused) {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "the build tree is not a trusted path in CI:\n{stderr}"
+        );
         eprintln!("skipped: the build tree is not a trusted path on this host:\n{stderr}");
         return;
     }
     assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
-    let expected = format!("refusing to start: {} is not trusted", path.display());
+    let expected = format!("refusing to start: {path} is not trusted: {path} {problem}", path = path.display());
     assert!(stderr.contains(&expected), "expected `{expected}` in:\n{stderr}");
     assert!(
         !install.dir("run/iron-vault-dev/admin.sock").exists(),
@@ -98,15 +133,25 @@ fn a_state_directory_other_accounts_can_read_is_refused_by_path() {
     let install = Install::new();
     mkdir(&install.state_dir(), 0o755);
 
-    assert_refused_naming(&install, &install.serve(), &install.state_dir());
+    assert_refused_naming(
+        &install,
+        &install.serve(),
+        &install.state_dir(),
+        "has mode 0755 but must have mode 0700",
+    );
 }
 
 #[test]
 fn a_config_directory_other_accounts_can_write_is_refused_by_path() {
     let install = Install::new();
-    mkdir(&install.config_dir(), 0o777);
+    mkdir(&install.config_dir(), 0o707);
 
-    assert_refused_naming(&install, &install.serve(), &install.config_dir());
+    assert_refused_naming(
+        &install,
+        &install.serve(),
+        &install.config_dir(),
+        "has mode 0707 but must have mode 0700",
+    );
 }
 
 #[test]
@@ -115,7 +160,7 @@ fn a_config_file_other_accounts_can_write_is_refused_by_path() {
     mkdir(&install.config_dir(), 0o700);
     let config = install.config_dir().join("config.toml");
     fs::write(&config, "schema_version = 1\n").unwrap();
-    chmod(&config, 0o666);
+    chmod(&config, 0o606);
 
-    assert_refused_naming(&install, &install.serve(), &config);
+    assert_refused_naming(&install, &install.serve(), &config, "has mode 0606 but must have mode 0600");
 }
