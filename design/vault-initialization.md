@@ -25,7 +25,7 @@ Three rules drive the design:
   can have written (a config file only when its bytes are the initial config), and refuses anything else.
 
 Every default this design picks where the specification is silent, or where it departs from the specification's
-wording, is listed under [Open questions](#open-questions), for the owner to decide.
+wording, is listed under [Open questions](#open-questions); the owner has accepted all but the last.
 
 ## State before and after
 
@@ -47,8 +47,9 @@ none, nor any edge ([open question 1](#open-questions)):
   `RecoveryNeeded`, where `init` is refused and the only way out is a restart. So `unlock` reads the
   [initialization state](#initialization-state) before its passphrase prompt, and again under the service
   context's mutex, and anything but Initialized ends the exchange with `unlock-failed`. The message names the
-  initialization state and says what to run; the service stays Locked. Every other way from Locked into Checking,
-  such as a later host unlock (EP-32), checks the same.
+  initialization state and says what to run; for Unfinished it adds that an init may be in progress, since an
+  `unlock` that reads the state while step 5 runs also sees `init.unfinished`. The service stays Locked. Every other
+  way from Locked into Checking, such as a later host unlock (EP-32), checks the same.
 
 ## Initialization state
 
@@ -57,29 +58,33 @@ vault identity, so it is known while the vault is locked. The one exception is t
 bytes are compared with the initial config (below). The checks run in this order, and the first that matches decides:
 
 1. **`init.unfinished` is present.** The state is Unfinished if the state directory holds no file but the lock file
-   (`lock`), stale temp files (`.<name>.tmp`) and the files an initialization writes (`init.unfinished`,
-   `identity.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`), and the config directory
-   passes the [config test](#the-config-test). Otherwise it is Unrecognized.
-2. **`manifest.age` is present.** The state is Initialized if the state directory holds no file but the lock file,
-   stale temp files, the vault's own files (`identity.age`, `operational.age`, `approver.age`, `manifest.age`,
-   `approval.age`) and record files (`record-*.age`). Otherwise it is Unrecognized. The config directory may hold
-   anything.
-3. **The state directory holds only the lock file and stale temp files**, and none of `config.toml`,
-   `config.toml.sig`, `config.toml.pending` and `config.toml.sig.staged` is in the config directory. The state is
-   Uninitialized.
+   (`lock`), a `lost+found` directory, stale temp files (`.<name>.tmp`) and the files an initialization writes
+   (`init.unfinished`, `identity.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`), and the
+   config directory passes the [config test](#the-config-test). Otherwise it is Unrecognized.
+2. **`manifest.age` is present.** The state is Initialized, whatever else the directories hold: an Initialized vault
+   never depends on the absence of other files.
+3. **The state directory holds only the lock file, a `lost+found` directory and stale temp files**, and none of
+   `config.toml`, `config.toml.sig`, `config.toml.pending` and `config.toml.sig.staged` is in the config directory.
+   The state is Uninitialized.
 4. **Otherwise** the state is Unrecognized.
 
 | State | Meaning |
 |---|---|
 | Uninitialized | Check 3 matched: nothing of a vault or its config is there. |
 | Unfinished | Check 1 matched: an initialization started and has not reached its commit point. |
-| Initialized | Check 2 matched: a manifest, no `init.unfinished`, and no file that no Iron Vault release writes. |
-| Unrecognized | No check matched, or a file that no Iron Vault release writes sits beside `init.unfinished` or `manifest.age`. |
+| Initialized | Check 2 matched: a manifest and no `init.unfinished`. |
+| Unrecognized | No check matched: a foreign file or a config file that is not init's own beside `init.unfinished`, or files of a vault without its manifest, or anything else in a directory with no manifest. |
 
-A **foreign file** is a file in the state directory that is not on the lists above: a file no Iron Vault release
-writes. Beside `init.unfinished` or `manifest.age` it makes the state Unrecognized, so it is never swept into the new
-vault by the discard, and a vault that carries one is not unlocked or initialized until the owner removes it. The
-messages name the first such file.
+A **foreign file** is a file in the state directory that is not on the lists above: the lock file, `lost+found`, temp
+files, the vault's own files (`identity.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`,
+`init.unfinished`) and record files (`record-*.age`). It matters only beside `init.unfinished`, where it makes the state
+Unrecognized so the discard never sweeps it into the new vault, and in a state directory with no manifest, where it
+makes Uninitialized impossible. Beside a manifest it changes nothing: `unlock` logs its name at WARN
+(`vault.foreign-file`) and goes on, because `Vault::open` already ignores names it does not know and the manifest alone
+decides which records exist ([§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). A stray
+`lost+found` on a state volume, an editor's backup or a file a later release writes, left after a downgrade, must not
+lock the owner out of a working vault. `lost+found` is the directory a filesystem check creates on a fresh volume, so
+`init` ignores it like the lock file and temp files ([open question 9](#open-questions)).
 
 Init proceeds only on Uninitialized and Unfinished. Examples of Unrecognized:
 
@@ -90,7 +95,7 @@ Init proceeds only on Uninitialized and Unfinished. Examples of Unrecognized:
 - `config.toml` or `config.toml.sig` beside an empty state directory. Init refuses rather than overwrite the owner's
   config file. The owner moves it aside, runs init, then approves it with `config approve`;
 - `init.unfinished` beside a config file that is not init's own, by the config test below;
-- any foreign file in the state directory.
+- `init.unfinished` beside a foreign file, or any foreign file in a state directory with no manifest.
 
 ### The config test
 
@@ -136,22 +141,27 @@ After the admin request, in order:
 5. **Writes.** The service tries the service-wide lock and fails at once with `busy` if it is taken; it never waits.
    It then checks again that it is Locked (`wrong-state` otherwise) and that the initialization state is
    Uninitialized or Unfinished (`already-initialized` otherwise), discards an unfinished initialization, then runs the
-   [write order](#write-order). A failure ends with `init-failed`.
+   [write order](#write-order). A failure ends with `init-failed`, which names the failed step by its number, or
+   `discard` for a failure of the discard.
 6. The success result: the vault ID and the committed version, 1.
 
-Nothing is written before step 5. A prompt that gets no owner input, a refusal or a cancelled CLI ends the exchange
-with the directories exactly as they were, and every generated key is dropped and cleared.
+Nothing is written before step 5. A prompt that gets no owner input, a refusal or a cancelled CLI, up to the owner's
+`yes`, ends the exchange with the directories exactly as they were, and every generated key is dropped and cleared.
+Once the CLI has sent `yes` no prompt remains, so a cancel or a lost connection no longer stops the service: step 5
+runs to its end whatever the CLI does.
 
 Step 4's reveal puts the recovery key on the owner's screen, and steps 4 and 5 can still end without a vault. Every
-ending after the reveal other than success therefore tells the owner to
-[discard the recovery key](#failing-after-the-reveal).
+ending after the reveal other than success therefore tells the owner what to do with
+[the recovery key](#failing-after-the-reveal).
 
 **Locking.** The prompts are not under any lock: holding the service context's mutex across up to five prompts of up
 to 5 minutes each would block `status`. Step 5 takes the service-wide lock without waiting, as [`config approve`'s
 concurrent writes](config-approval.md#the-service-wide-lock) do: another approval, vault write, reload, config check
 or init holding it ends step 5 with `busy`. Waiting could outlast the CLI's 60-second timeout, since an approval can
 hold the lock for about 10 minutes. Step 5 then holds the lock and the service context's mutex from the second state
-check to the response, so an `unlock` arriving meanwhile waits and then sees Initialized. A second init that passed
+check to the response. An `unlock` that reads the state before step 9 sees Unfinished and ends with `unlock-failed`,
+whose message says an init may be in progress; its read under the context's mutex waits for step 5 and sees
+Initialized. A second init that passed
 its own first check ends with `busy` if the first still holds the lock, or finds Initialized under the lock and ends
 with `already-initialized` once it has finished. The service wrote nothing for the second init, but its owner has
 already saved a recovery key, so both messages say to discard it. Step 5 takes a few seconds: two scrypt seals and one
@@ -210,10 +220,12 @@ CLI shows text only ([open question 4](#open-questions)).
 
 ### Failing after the reveal
 
-From the reveal on, the owner holds a recovery key that opens a vault only if init succeeds. Any other ending leaves
-no vault, or a different one, so a key kept as "the vault's recovery key" would be a dead key kept in good faith. Every
-ending after the reveal other than success says so, in these words or close to them: *the recovery key shown opens
-nothing: discard it*. The endings are:
+From the reveal on, the owner holds a recovery key that opens a vault only if init succeeds. Two kinds of ending leave
+no vault with that key, or leave it unknown, and the owner is told which.
+
+**The key is dead.** No vault was written for it, or the vault that was written is not the one it opens. A key kept as
+"the vault's recovery key" would be a dead key kept in good faith, so the ending says *the recovery key shown opens
+nothing: discard it*:
 
 | Ending | Who says it |
 |---|---|
@@ -221,13 +233,23 @@ nothing: discard it*. The endings are:
 | `busy`: another operation, such as a second init, holds the service-wide lock at step 5 | the service |
 | `already-initialized`: the re-check under the lock finds Initialized or Unrecognized, as when a second init finished first | the service |
 | `wrong-state`: the re-check under the lock finds the service has left Locked | the service |
-| `init-failed`: a write failed | the service |
-| a cancelled or lost command: Ctrl-C or a closed terminal, a signal, a dropped or timed-out connection | the CLI, on stderr before it exits; the service cannot answer a closed connection |
+| `init-failed` at the discard or at any step before 9: a write failed | the service |
+| the command cancelled or lost before the CLI sent `yes`: Ctrl-C or a closed terminal, a signal, a dropped or timed-out connection | the CLI, on stderr before it exits; the service cannot answer a closed connection |
 
-The one exception is `init-failed` at step 9, where the vault may already stand: its message says to keep the key
-until `init` is run again, and to discard it only if that run starts over instead of answering `already-initialized`.
-The same errors raised before the reveal do not carry the sentence, because no key was shown. The service tracks
-whether it has sent the reveal, and the CLI whether it has shown one, so each says it only when it is true.
+**The outcome is unknown.** The owner's `yes` has been sent, or the vault may already stand, so step 5 may have
+finished, may still be running or may have failed, and the CLI cannot tell which. The advice is stated once, here:
+*keep the recovery key and run `iron-vault init` again. If it answers `already-initialized`, the vault stands and the
+key is its recovery key. If it starts over, with a new recovery key, the old key is dead: discard it. If it answers
+`busy`, the first run is still writing: wait a few seconds and run it again.* The endings are:
+
+| Ending | Who says it |
+|---|---|
+| `init-failed` at step 9: the unlink landed but the directory fsync failed, so a power loss may bring `init.unfinished` back | the service |
+| the command cancelled or lost after the CLI sent `yes`, including a timeout waiting for the result | the CLI, on stderr before it exits |
+
+The same errors raised before the reveal do not carry either sentence, because no key was shown. The service tracks
+whether it has sent the reveal, and the CLI whether it has shown one and whether it has sent `yes`, so each says only
+what is true.
 
 ## Write order
 
@@ -264,8 +286,8 @@ Notes on the steps:
 - **Step 9** is the only durable change that turns Unfinished into Initialized. A failure before it leaves the vault
   Unfinished, so a re-run discards it. If the unlink lands but the state directory's fsync fails, the vault reads
   Initialized now and may read Unfinished after a power loss; the service answers `init-failed` naming step 9, and the
-  message says that a re-run either answers `already-initialized`, and the vault stands with the recovery key shown,
-  or starts over with a new one. Either way nothing is lost: the vault holds no credential until `add`, and `add`'s
+  message gives the [unknown-outcome advice](#failing-after-the-reveal): keep the key until the re-run decides. Either
+  way nothing is lost: the vault holds no credential until `add`, and `add`'s
   own directory fsync makes the earlier unlink durable.
 
 ## Discarding an unfinished initialization
@@ -282,7 +304,7 @@ writes, each durably, and only those present:
 the next init discards again. Nothing else is left to touch: the state is Unfinished only if the state directory holds
 nothing but the lock file, temp files, `init.unfinished` and files removed here, and only if the config files pass the
 [config test](#the-config-test). So the discard removes a config file only when its bytes are the initial
-config (or it is a signature beside one), and a config file the owner placed there is never deleted: it makes the
+config (or it is a signature beside one), and a config file with any other bytes is never deleted: it makes the
 state Unrecognized, and init refuses before any prompt.
 
 The config test is why the discard can delete config files at all. Init starts only from Uninitialized, where the
@@ -311,7 +333,7 @@ It does not report the initialization state until K-161 ([open question 6](#open
 | Last step durable | Initialization state | `unlock` | `init` again |
 |---|---|---|---|
 | none | Uninitialized | `unlock-failed`: not initialized, run `iron-vault init` | proceeds from step 1 |
-| 1 `init.unfinished` | Unfinished | `unlock-failed`: initialization unfinished, run `iron-vault init` again | notice, discards (nothing yet), proceeds |
+| 1 `init.unfinished` | Unfinished | `unlock-failed`: initialization unfinished, an init may be in progress; run `iron-vault init` again if none is | notice, discards (nothing yet), proceeds |
 | 2 `identity.age` | Unfinished | as row 1 | discards `identity.age`, proceeds |
 | 3 `operational.age` | Unfinished | as row 1; the passphrase is never asked for, so the vault never reaches Checking | discards both envelopes, proceeds |
 | 4 `approver.age` | Unfinished | as row 1 | discards the three envelopes, proceeds |
@@ -321,10 +343,12 @@ It does not report the initialization state until K-161 ([open question 6](#open
 | 8, any part: pending, reserved, staged, committed or published | Unfinished | as row 1 | as row 6, and discards whichever of the four config files exist; each holds the initial config, or is a signature beside one |
 | 9 `init.unfinished` removed | Initialized | prompts for the passphrase; the config check publishes nothing new, verifies version 1 and enters Ready with no listeners and no routes | `already-initialized` |
 | any step, with a config file whose bytes are not the initial config (the owner's), or a signature file alone | Unrecognized | `unlock-failed`: files init did not write, names the first | `already-initialized`: names the first; nothing is changed, and the owner moves the file aside |
-| any step, or after step 9, with a foreign file in the state directory | Unrecognized | as the row above | as the row above |
+| any step, with a foreign file in the state directory | Unrecognized | as the row above | as the row above |
+| 9 or later, with a foreign file in the state directory | Initialized | as row 9, and logs the file's name at WARN | `already-initialized` |
 
-Each discard also tells the owner, in its notice, that the recovery key from the unfinished run opens nothing; the
-`init-failed` message has already said so (at step 9 it said to keep the key until the re-run).
+Each discard also tells the owner, in its notice, that the recovery key from the unfinished run opens nothing. That
+settles an [unknown outcome](#failing-after-the-reveal): a run that starts over has discarded the vault the old key
+opened.
 
 ## Initial config
 
@@ -352,6 +376,7 @@ service-generated summary", so this departs from its wording ([open question 3](
 | `config.approval-completed` | INFO | step 8's commit of version 1 is durable | version, config digest; the summary field reads `initial config` |
 | `vault.initialized` | INFO | step 9 is durable | the vault ID only |
 | `vault.init-failed` | WARN | a step failed | the step, the error, which names files and never their contents |
+| `vault.foreign-file` | WARN | `unlock` read an Initialized state directory holding a file not on the [lists](#initialization-state) | the file's name |
 
 The two `config.` events are the [audit events](config-approval.md#audit-events) every approval raises (K-118), so
 version 1 is audited like any other. No event carries a passphrase, the recovery key's text, any key material or the
@@ -360,37 +385,47 @@ logs only the admin server's usual line: the principal and the command.
 
 ## Open questions
 
-The specification leaves each point below open, or this design departs from its wording. The design takes the default
-stated for each until the owner decides.
+The specification leaves each point below open, or this design departs from its wording. The owner has decided
+questions 1 to 8 by accepting their defaults, and the design stands on them; only question 9 is open, and takes its
+default until the owner decides.
 
-1. **No uninitialized service state.** [§3.12](iron-vault-specification.md#312-service-states-and-errors) draws no
-   state for a service without a vault. *Default:* the service starts Locked as it does today; `init` runs only in
-   Locked and leaves the service Locked; `unlock` refuses with `unlock-failed` unless the vault is Initialized. No
-   state or edge is added. The alternative adds an Uninitialized state with an edge to Locked on init.
-2. **Discarding counters on a re-run.** [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)
-   initializes the highest reserved version to zero "only when creating a new vault". *Default:* a re-run on
-   Unfinished discards the unfinished vault's `approval.age`, counters included, and creates a new vault with a new
-   vault ID and a new approver, so no old signature can verify and the discarded counters never protected anything
-   served. The alternative keeps an unfinished vault's counters, which would mean resuming rather than restarting.
-3. **Version 1 without a summary or confirmation.**
+1. **No uninitialized service state.** *Decided: default accepted (2026-11-04).*
+   [§3.12](iron-vault-specification.md#312-service-states-and-errors) draws no state for a service without a vault.
+   *Default:* the service starts Locked as it does today; `init` runs only in Locked and leaves the service Locked;
+   `unlock` refuses with `unlock-failed` unless the vault is Initialized. No state or edge is added. The alternative
+   adds an Uninitialized state with an edge to Locked on init.
+2. **Discarding counters on a re-run.** *Decided: default accepted (2026-11-04).*
+   [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) initializes the highest reserved version
+   to zero "only when creating a new vault". *Default:* a re-run on Unfinished discards the unfinished vault's
+   `approval.age`, counters included, and creates a new vault with a new vault ID and a new approver, so no old
+   signature can verify and the discarded counters never protected anything served. The alternative keeps an
+   unfinished vault's counters, which would mean resuming rather than restarting.
+3. **Version 1 without a summary or confirmation.** *Decided: default accepted (2026-11-04).*
    [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) step 2 says "authenticate the owner, show
    the service-generated summary". *Default:* init commits the fixed initial config without either, because the owner
    authorizes init as a whole and the config is fixed and empty. The alternative shows the empty summary and asks for
    a second confirmation.
-4. **The QR code.** [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) asks for the
-   recovery identity "as text and a QR code". *Default:* text only until K-160. A QR code needs no protocol change,
-   since the CLI can render one from the reveal value on the terminal; K-160 adds it.
-5. **Where the reveal is shown.** *Default:* the CLI writes the recovery key to the controlling terminal (`/dev/tty`)
-   only, even when stdin is a pipe; with no controlling terminal it cancels the command before sending the request, so
-   the service generates nothing and writes nothing. A scripted init therefore needs a terminal. The alternative
-   writes it to stderr when there is no terminal, as notices are, which puts the key into whatever captures stderr.
-6. **`status` and the initialization state.** *Default:* this design leaves the status report unchanged, so before
-   init `status` says Locked, as after it, and `unlock`'s and `init`'s messages say which initialization state the
-   directories are in. K-161 plans to add a status field for it.
-7. **Passphrase rules.** The specification sets no strength rule. *Default:* the [rules above](#passphrase-rules):
-   entered twice, at least 12 Unicode scalar values, the two passphrases different, no strength estimate or
-   blocklist; applied when a passphrase is chosen (init, and later a passphrase change), never when one is typed to
-   unlock or approve.
-8. **Refusing Unrecognized with `already-initialized`.** *Default:* Initialized and Unrecognized both end with
-   `already-initialized`, whose message says which, and for Unrecognized names the first offending files. Both mean
-   "init will not write here". The alternative gives Unrecognized its own error code.
+4. **The QR code.** *Decided: default accepted (2026-11-04).*
+   [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) asks for the recovery identity "as
+   text and a QR code". *Default:* text only until K-160. A QR code needs no protocol change, since the CLI can render
+   one from the reveal value on the terminal; K-160 adds it.
+5. **Where the reveal is shown.** *Decided: default accepted (2026-11-04).* *Default:* the CLI writes the recovery key
+   to the controlling terminal (`/dev/tty`) only, even when stdin is a pipe; with no controlling terminal it cancels
+   the command before sending the request, so the service generates nothing and writes nothing. A scripted init
+   therefore needs a terminal. The alternative writes it to stderr when there is no terminal, as notices are, which
+   puts the key into whatever captures stderr.
+6. **`status` and the initialization state.** *Decided: default accepted (2026-11-04).* *Default:* this design leaves
+   the status report unchanged, so before init `status` says Locked, as after it, and `unlock`'s and `init`'s messages
+   say which initialization state the directories are in. K-161 plans to add a status field for it.
+7. **Passphrase rules.** *Decided: default accepted (2026-11-04).* The specification sets no strength rule. *Default:*
+   the [rules above](#passphrase-rules): entered twice, at least 12 Unicode scalar values, the two passphrases
+   different, no strength estimate or blocklist; applied when a passphrase is chosen (init, and later a passphrase
+   change), never when one is typed to unlock or approve.
+8. **Refusing Unrecognized with `already-initialized`.** *Decided: default accepted (2026-11-04).* *Default:*
+   Initialized and Unrecognized both end with `already-initialized`, whose message says which, and for Unrecognized
+   names the first offending files. Both mean "init will not write here". The alternative gives Unrecognized its own
+   error code.
+9. **`lost+found` on a fresh state volume.** A filesystem check creates a `lost+found` directory in the root of a
+   freshly formatted volume, and a Compose deployment mounts such a volume as the state directory. *Default:* a
+   `lost+found` directory is ignored like the lock file and temp files, so it does not make the state Unrecognized and
+   `init` proceeds. The alternative treats it as a foreign file, so `init` refuses until the owner removes it.
