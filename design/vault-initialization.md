@@ -162,7 +162,7 @@ store adds a way to keep the identity it generated; either keeps the parse insid
 
 The CLI writes the reveal value to the controlling terminal only, never to stdout or a pipe
 ([open question 5](#open-questions)). [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)
-also asks for a QR code; v0 shows text only ([open question 4](#open-questions)).
+also asks for a QR code; until K-160 the CLI shows text only ([open question 4](#open-questions)).
 
 ## Write order
 
@@ -238,7 +238,7 @@ Discarding is logged; see [Logging](#logging).
 What each command does after a crash, or any failure, following each step. A crash inside a step leaves the state of
 the row before it or of its own row, because each durable write is whole or absent. `status` is the same in every row:
 it answers in Locked, and the vault ID, approval versions and credentials print as unknown while the vault is locked.
-It does not report the initialization state ([open question 6](#open-questions)).
+It does not report the initialization state until K-161 ([open question 6](#open-questions)).
 
 | Last step durable | Initialization state | `unlock` | `init` again |
 |---|---|---|---|
@@ -308,15 +308,15 @@ stated for each until the owner decides.
    authorizes init as a whole and the config is fixed and empty. The alternative shows the empty summary and asks for
    a second confirmation.
 4. **The QR code.** [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) asks for the
-   recovery identity "as text and a QR code". *Default:* text only in v0. A QR code needs no protocol change, since
-   the CLI can render one from the reveal value on the terminal, and can follow in its own ticket.
+   recovery identity "as text and a QR code". *Default:* text only until K-160. A QR code needs no protocol change,
+   since the CLI can render one from the reveal value on the terminal; K-160 adds it.
 5. **Where the reveal is shown.** *Default:* the CLI writes the recovery key to the controlling terminal
    (`/dev/tty`) only, even when stdin is a pipe; with no controlling terminal it cancels the command before showing
    anything, so the exchange ends with nothing written. A scripted init therefore needs a terminal. The alternative
    writes it to stderr when there is no terminal, as notices are, which puts the key into whatever captures stderr.
-6. **`status` and the initialization state.** *Default:* the status report is unchanged, so before init `status`
-   says Locked, as after it; `unlock`'s and `init`'s messages say which initialization state the directories are
-   in. The alternative adds a status field for it.
+6. **`status` and the initialization state.** *Default:* this design leaves the status report unchanged, so before
+   init `status` says Locked, as after it, and `unlock`'s and `init`'s messages say which initialization state the
+   directories are in. K-161 plans to add a status field for it.
 7. **Passphrase rules.** The specification sets no strength rule. *Default:* the [rules above](#passphrase-rules):
    entered twice, at least 12 Unicode scalar values, the two passphrases different, no strength estimate or
    blocklist; applied when a passphrase is chosen (init, and later a passphrase change), never when one is typed to
