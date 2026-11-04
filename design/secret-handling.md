@@ -44,7 +44,8 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | `SoftwareSignerKey` | store | the software signer's Ed25519 private key | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop (`zeroize` feature); built once into its box, so moves copy only the pointer | `software_signer/tests` |
 | `SoftwareSigner` | store | the opened Ed25519 private key and its `PinnedApprover` | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop; `SoftwareSigner::new` takes the box from `SoftwareSignerKey` by pointer | `software_signer/tests` |
 | `OwnerInput` | iron-vault | the bytes the owner typed in answer to a prompt, in the CLI from the owner console until sent, and in the service from decoding until its handler is done | `Zeroizing<Vec<u8>>`, a private field: the type has no `Clone` and a `Debug` that shows no byte | `secret_types_tests` |
-| `Frame` | iron-vault | an `OwnerInput` when it is an owner-input frame | its `OwnerInput` | `secret_types_tests` |
+| `RevealedSecret` | iron-vault | a secret value the service shows the owner once in a reveal frame, such as the recovery key's `AGE-SECRET-KEY-1…` text: in the service from encoding until the frame is written, in the CLI from decoding until it is shown on the terminal | `Zeroizing<Vec<u8>>`, a private field: the type has no `Clone` and a `Debug` that shows no byte | `secret_types_tests` |
+| `Frame` | iron-vault | an `OwnerInput` when it is an owner-input frame, a `RevealedSecret` when it is a reveal frame | its `OwnerInput` or `RevealedSecret` | `secret_types_tests` |
 | `Decoded` | iron-vault | a decoded `Frame` | its `Frame` | `secret_types_tests` |
 | `Scrubber` | iron-vault | a request's `ScrubPatterns`, borrowed for a header scrub or owned for a response body (`Scrubber::owning`), and the bytes held back between chunks, which may be a secret prefix | `Zeroizing<Vec<u8>>` for the held bytes, sized once for the longest pattern so it never reallocates; owned patterns by `ScrubPatterns`; the patterns are never copied | `secret_types_tests` |
 | `ResponseContext` | iron-vault | the request's `ScrubPatterns`, moved from `Prepared` to the response stage | its patterns, which move on into the `RelayedBody`'s scrubber | `secret_types_tests` (no `Debug`) |
@@ -59,9 +60,11 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 `ScrubPatterns` stores each pattern in a private `ScrubPattern` newtype, which has no `Clone`, `Display` or `Debug`.
 It is private to its module, so the test module cannot name it; it is covered through `ScrubPatterns`.
 
-`OwnerInput` is decoded by copying the frame body once, straight into its clearing buffer; it never passes through
-the admin protocol's field decoder or `serde` (`design/admin-protocol.md`). Its encoded frame holds the value too, so
-`encode` writes into a buffer the caller supplies, and a caller sending owner input passes a `Zeroizing<Vec<u8>>`.
+`OwnerInput` and `RevealedSecret` are each decoded by copying the frame body once, straight into a clearing buffer;
+neither passes through the admin protocol's field decoder or `serde` (`design/admin-protocol.md`). Each encoded frame
+holds the value too, so `encode` writes into a buffer the caller supplies, and a caller sending owner input or a reveal
+passes a `Zeroizing<Vec<u8>>`. The CLI writes a `RevealedSecret` only to the controlling terminal, never to stdout or stderr
+(`design/vault-initialization.md`).
 
 `OperationalIdentity` holds nothing: it only generates a `RecipientIdentity`.
 

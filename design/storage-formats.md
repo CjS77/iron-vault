@@ -366,6 +366,22 @@ open_passphrase_envelope, unlock_with_passphrase}`.
 - **Changing the passphrase.** `reseal_passphrase_envelope` opens the file with the old passphrase and seals the same
   operational identity to the new one. Only `operational.age` is rewritten; `identity.age` stays byte-identical.
 
+## Unfinished initialization file
+
+The state-directory file `init.unfinished` is empty: its presence is the whole of its meaning. `iron-vault init` writes
+it with a durable replace before any other file of a new vault, and durably removes it as its last step, which is
+init's commit point. While it exists the vault is an [unfinished initialization](glossary.md): `unlock` refuses it, and
+the next `init` discards the files the unfinished run wrote and starts over. See
+[vault-initialization.md](vault-initialization.md#write-order).
+
+- **Content.** Zero bytes. A non-empty file is read as present too: only the name is looked at, never the bytes, so
+  there is nothing to parse and nothing to refuse.
+- **Reading.** The [initialization state](vault-initialization.md#initialization-state) is read from the directory
+  listing alone, without the vault identity, so it is known while the vault is locked. The file is not sealed or MAC'd:
+  only the service account can write the state directory, and anyone who can could delete the vault's files outright.
+- **Temp file.** A crash during its durable replace can leave `.init.unfinished.tmp`, a stale temp file that the
+  startup sweep removes like any other.
+
 ## Approver key envelope
 
 The [approver key envelope](glossary.md), state-directory file `approver.age`, holds the
