@@ -1,7 +1,7 @@
 //! `iron-vault status` output: one field per line, in a fixed order, from the service's status report. Pure, so the same
 //! report always prints the same bytes.
 
-use iron_vault::admin::protocol::{CredentialStatus, MemoryStatus, Standing, StatusReport, UnlockedVault, VaultStatus};
+use iron_vault::admin::protocol::{CredentialStatus, MemoryStatus, RouteStatus, Standing, StatusReport, UnlockedVault, VaultStatus};
 use iron_vault::deployment::{DeploymentProfile, no_isolation_warning};
 use iron_vault::service_state::{FailureReason, ServiceState, UnavailableReason};
 
@@ -16,6 +16,7 @@ pub fn render(report: &StatusReport, user: &str) -> String {
     lines.extend(vault_lines(&report.vault));
     lines.push(memory_line(&report.memory));
     lines.extend(credential_lines(&report.vault));
+    lines.extend(route_fault_lines(&report.vault));
     lines.iter().map(|line| format!("{line}\n")).collect()
 }
 
@@ -81,6 +82,18 @@ fn credential_lines(vault: &VaultStatus) -> Vec<String> {
         VaultStatus::Unlocked(unlocked) if unlocked.credentials.is_empty() => vec!["credentials: none".to_owned()],
         VaultStatus::Unlocked(unlocked) => unlocked.credentials.iter().map(credential_line).collect(),
     }
+}
+
+/// One line per route fault; nothing while the vault is locked or no route has one.
+fn route_fault_lines(vault: &VaultStatus) -> Vec<String> {
+    match vault {
+        VaultStatus::Locked => Vec::new(),
+        VaultStatus::Unlocked(unlocked) => unlocked.route_faults.iter().map(route_fault_line).collect(),
+    }
+}
+
+fn route_fault_line(route: &RouteStatus) -> String {
+    format!("route {}: unavailable ({})", route.name, route.fault)
 }
 
 fn credential_line(credential: &CredentialStatus) -> String {

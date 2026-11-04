@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use iron_vault_policy::{
     AccountDirectory, AccountName, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, ParsedConfig,
-    ValidatedConfig, activate,
+    UnavailableCause, ValidatedConfig, activate,
 };
 
 use super::*;
@@ -148,10 +148,11 @@ fn route(name: &str) -> RouteName {
 }
 
 #[test]
-fn each_distinct_ca_file_of_an_available_route_is_loaded_once_in_path_order() {
+fn each_distinct_ca_file_is_loaded_once_in_path_order() {
     let loaded = RefCell::new(Vec::new());
     build(&loaded);
-    assert_eq!(loaded.into_inner(), [PathBuf::from(BROKEN_CA), PathBuf::from(SHARED_CA)]);
+    let expected = [BROKEN_CA, SHARED_CA, UNAVAILABLE_CA].map(PathBuf::from);
+    assert_eq!(loaded.into_inner(), expected);
 }
 
 #[test]
@@ -185,10 +186,46 @@ fn a_ca_that_fails_to_load_fails_only_its_routes() {
 }
 
 #[test]
-fn an_unavailable_or_unknown_route_has_no_client() {
+fn an_unknown_route_has_no_client() {
     let clients = build(&RefCell::default());
-    ["damaged", "nowhere"].iter().for_each(|name| {
-        assert!(matches!(clients.for_route(&route(name)), Err(RouteClientError::NotAvailable(failed)) if failed == route(name)));
-    });
-    assert!(!clients.pinned.contains_key(Path::new(UNAVAILABLE_CA)));
+    assert!(matches!(clients.for_route(&route("nowhere")), Err(RouteClientError::NotAvailable(failed)) if failed == route("nowhere")));
+}
+
+#[test]
+fn a_route_unavailable_through_its_credential_still_has_its_ca_tried() {
+    let clients = build(&RefCell::default());
+    assert!(clients.pinned.contains_key(Path::new(UNAVAILABLE_CA)));
+    assert!(clients.for_route(&route("damaged")).is_ok());
+}
+
+#[test]
+fn marking_makes_only_the_routes_of_a_failed_ca_unavailable() {
+    let policy = build(&RefCell::default()).mark_unusable_routes(policy());
+    let pinned = BTreeSet::from([UnavailableCause::PinnedCaUnavailable]);
+    let credential = BTreeSet::from([UnavailableCause::CredentialUnusable]);
+    let expected = BTreeMap::from([
+        (route("broken_a"), pinned.clone()),
+        (route("broken_b"), pinned),
+        (route("damaged"), credential),
+    ]);
+    assert_eq!(policy.unavailable_routes(), &expected);
+    assert!(
+        ["public", "shared_a", "shared_b"]
+            .iter()
+            .all(|name| policy.is_available(&route(name)))
+    );
+}
+
+#[test]
+fn a_route_unavailable_for_both_causes_reports_both() {
+    let clients = UpstreamClients::build(&policy(), TransportLimits::default(), |path| {
+        match path == Path::new(UNAVAILABLE_CA) {
+            true => Err(broken()),
+            false => Ok(UpstreamTrust::BuiltIn),
+        }
+    })
+    .unwrap();
+    let policy = clients.mark_unusable_routes(policy());
+    let both = BTreeSet::from([UnavailableCause::CredentialUnusable, UnavailableCause::PinnedCaUnavailable]);
+    assert_eq!(policy.unavailable_routes().get(&route("damaged")), Some(&both));
 }

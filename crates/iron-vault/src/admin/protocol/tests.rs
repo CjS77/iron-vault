@@ -238,11 +238,11 @@ fn a_status_result_with_a_field_missing_or_extra_is_refused() {
     let frame = Frame::Response(AdminResponse::Status(Box::new(report)));
     assert_round_trips(&frame);
     let mut full = encoded(&frame);
-    let extra = field(11, b"x");
+    let extra = field(12, b"x");
     full.extend_from_slice(&extra);
     let length = u32::try_from(full.len() - HEADER_LEN).unwrap().to_be_bytes();
     full[3..HEADER_LEN].copy_from_slice(&length);
-    assert_eq!(decode_err(&full), FrameError::UnknownTag(11));
+    assert_eq!(decode_err(&full), FrameError::UnknownTag(12));
     assert_eq!(decode_err(&raw(1, 4, &field(1, &[0, 6]))), FrameError::MissingField(2));
 }
 

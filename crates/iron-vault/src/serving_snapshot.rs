@@ -11,12 +11,12 @@ use std::collections::VecDeque;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use iron_vault_policy::{ActivePolicy, CredentialName, RateLimiter, RouteName};
+use iron_vault_policy::{ActivePolicy, CredentialName, RateLimiter, RouteName, UnavailableCause};
 use iron_vault_store::{CredentialRecord, OpenReport, Vault};
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
-use crate::admin::protocol::{CredentialStatus, Standing};
+use crate::admin::protocol::{CredentialStatus, RouteFault, RouteStatus, Standing};
 use crate::service_state::{FailureReason, UnavailableReason};
 use crate::upstream::clients::UpstreamClients;
 
@@ -37,19 +37,19 @@ pub struct ServingSnapshot {
     released: Option<oneshot::Sender<()>>,
 }
 
-/// Why a policy and a vault cannot form one snapshot: a route's availability disagrees with whether the vault holds a
-/// healthy record for its credential.
+/// Why a policy and a vault cannot form one snapshot: whether a route is unavailable through its credential disagrees
+/// with whether the vault holds a healthy record for it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SnapshotError {
-    /// The policy marks the route available, but the vault has no healthy record for its credential, so a request
-    /// would reach the route with nothing to resolve.
+    /// The policy does not mark the route's credential unusable, but the vault has no healthy record for it, so a
+    /// request could reach the route with nothing to resolve.
     #[error("route {route} is available in the policy, but the vault has no healthy record for its credential")]
     AvailableWithoutRecord {
         /// The route whose availability disagrees.
         route: RouteName,
     },
-    /// The policy marks the route unavailable, but the vault holds a healthy record for its credential, so the
-    /// policy was activated against another vault or this vault in another state.
+    /// The policy marks the route's credential unusable, but the vault holds a healthy record for it, so the policy
+    /// was activated against another vault or this vault in another state.
     #[error("route {route} is unavailable in the policy, but the vault holds a healthy record for its credential")]
     UnavailableWithRecord {
         /// The route whose availability disagrees.
@@ -61,7 +61,8 @@ impl ServingSnapshot {
     /// Joins the four parts, after checking that `policy` was activated against `vault`'s catalog.
     ///
     /// Activation records no fingerprint of its catalog, so the check is the one the policy does expose: a route is
-    /// available exactly when the vault holds a healthy record for its credential. That catches a policy activated
+    /// unavailable through its credential exactly when the vault holds no healthy record for it. A route unavailable
+    /// only through its pinned CA has a healthy record. That catches a policy activated
     /// against another vault or before a record was damaged or repaired, which is the mix that would send a request to
     /// a route with no record to resolve. It cannot tell two vaults with the same healthy names apart, and it does not
     /// compare permitted origins or kinds; the clients and the limiter carry no identity to check at all.
@@ -70,8 +71,11 @@ impl ServingSnapshot {
             .config()
             .routes()
             .iter()
-            .map(|(name, route)| (name, policy.is_available(name), vault.record(route.credential()).is_some()))
-            .find(|(_, available, healthy)| available != healthy);
+            .map(|(name, route)| {
+                let usable = !policy.is_unavailable_for(name, UnavailableCause::CredentialUnusable);
+                (name, usable, vault.record(route.credential()).is_some())
+            })
+            .find(|(_, usable, healthy)| usable != healthy);
         match mismatch {
             Some((route, true, _)) => Err(SnapshotError::AvailableWithoutRecord { route: route.clone() }),
             Some((route, false, _)) => Err(SnapshotError::UnavailableWithRecord { route: route.clone() }),
@@ -125,11 +129,26 @@ impl ServingSnapshot {
             .collect()
     }
 
+    /// The routes `credential` makes unavailable; a route unavailable only through its pinned CA is not one of them.
     fn unavailable_routes_of(&self, credential: &CredentialName) -> Vec<RouteName> {
         let routes = self.policy.config().routes().iter();
         routes
-            .filter(|(route, config)| config.credential() == credential && !self.policy.is_available(route))
+            .filter(|(route, config)| {
+                config.credential() == credential && self.policy.is_unavailable_for(route, UnavailableCause::CredentialUnusable)
+            })
             .map(|(route, _)| route.clone())
+            .collect()
+    }
+
+    /// Every route unavailable for a cause of its own, in name order: today a pinned CA that could not be loaded.
+    pub fn route_faults(&self) -> Vec<RouteStatus> {
+        let routes = self.policy.unavailable_routes().iter();
+        routes
+            .filter(|(_, causes)| causes.contains(&UnavailableCause::PinnedCaUnavailable))
+            .map(|(route, _)| RouteStatus {
+                name: route.clone(),
+                fault: RouteFault::PinnedCaUnavailable,
+            })
             .collect()
     }
 

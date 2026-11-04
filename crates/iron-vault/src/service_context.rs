@@ -28,7 +28,7 @@ use iron_vault_store::{
 };
 use tokio::sync::Mutex;
 
-use crate::admin::protocol::{CredentialStatus, MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
+use crate::admin::protocol::{CredentialStatus, MemoryStatus, RouteStatus, StatusReport, UnlockedVault, VaultStatus};
 use crate::config_check::{UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
@@ -181,6 +181,8 @@ struct OpenVault {
     approval: ApprovalState,
     /// The standing of each credential, from the report of opening the vault.
     credentials: Vec<CredentialStatus>,
+    /// The routes unavailable for a cause of their own, from the check.
+    route_faults: Vec<RouteStatus>,
 }
 
 /// What changes, behind the one mutex.
@@ -365,6 +367,7 @@ impl<F: StoreFs> ServiceContext<F> {
                     committed: open.approval.committed().map(|(version, _)| version.get()),
                     highest_reserved: open.approval.highest_reserved(),
                     credentials: open.credentials.clone(),
+                    route_faults: open.route_faults.clone(),
                 })
             }),
             memory: MemoryStatus::from(&self.setup.hardening.memory),
@@ -441,19 +444,20 @@ impl<F: StoreFs> ServiceContext<F> {
             accounts,
             upstream,
         ) {
-            Ok((snapshot, approval, credentials)) => self.enter_ready(inner, snapshot, approval, credentials).await,
+            Ok((snapshot, approval, credentials, route_faults)) => {
+                let open = OpenVault {
+                    approval,
+                    credentials,
+                    route_faults,
+                };
+                self.enter_ready(inner, snapshot, open).await
+            }
             Err(failure) => self.apply(inner, ServiceEvent::CheckFailed(failure.failure())),
         }
     }
 
     /// Checking to Ready: the listener rebuild, then the snapshot, then the state.
-    async fn enter_ready(
-        &self,
-        inner: &mut Inner,
-        snapshot: ServingSnapshot,
-        approval: ApprovalState,
-        credentials: Vec<CredentialStatus>,
-    ) -> Result<ServiceState, IllegalTransition> {
+    async fn enter_ready(&self, inner: &mut Inner, snapshot: ServingSnapshot, open: OpenVault) -> Result<ServiceState, IllegalTransition> {
         let ready = next(inner.state, ServiceEvent::CheckPassed)?;
         let config = snapshot.policy().config();
         let current = match inner.serving.take() {
@@ -466,7 +470,7 @@ impl<F: StoreFs> ServiceContext<F> {
             .for_each(|error| tracing::warn!("approved request listener missing until restart: {error}"));
         inner.serving = Some(Serving::start(listeners, *config.limits(), Arc::clone(&self.holder)));
         self.holder.serve(snapshot);
-        inner.open = Some(OpenVault { approval, credentials });
+        inner.open = Some(open);
         inner.state = ready;
         Ok(ready)
     }

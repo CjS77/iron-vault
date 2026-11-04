@@ -22,6 +22,7 @@ fn ready(credentials: Vec<CredentialStatus>) -> StatusReport {
             committed: Some(3),
             highest_reserved: 4,
             credentials,
+            route_faults: Vec::new(),
         }),
         memory: MemoryStatus::Locked,
     }
@@ -135,4 +136,27 @@ fn rendering_twice_gives_the_same_bytes_and_never_a_secret() {
     let first = render(&report, "alice");
     assert_eq!(first, render(&report, "alice"));
     assert!(!first.contains(FX_SECRET));
+}
+
+#[test]
+fn each_route_fault_follows_the_credentials() {
+    let mut report = ready(vec![credential("fx", Standing::Healthy, &[])]);
+    if let VaultStatus::Unlocked(vault) = &mut report.vault {
+        vault.route_faults = ["internal", "lab"]
+            .iter()
+            .map(|route| RouteStatus {
+                name: route.parse().unwrap(),
+                fault: iron_vault::admin::protocol::RouteFault::PinnedCaUnavailable,
+            })
+            .collect();
+    }
+    let text = render(&report, "alice");
+    assert!(
+        text.ends_with(
+            "credential fx: healthy\n\
+             route internal: unavailable (pinned CA unavailable)\n\
+             route lab: unavailable (pinned CA unavailable)\n"
+        ),
+        "{text}"
+    );
 }

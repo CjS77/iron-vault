@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use ed25519_dalek::{Signer, SigningKey};
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::{AccountDirectory, AccountName, Port};
+use iron_vault_policy::{AccountDirectory, AccountName, Port, UnavailableCause};
 use iron_vault_store::{
     ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalStorage, ApprovalVersion, ConfigDigest, ConfigDirLock, OsFs, PendingConfig,
     PermittedOrigins, PinnedApprover, PublishedPairFault, RecordId, SignError, SignatureAlgorithm, StateDirLock, StateFileName, VaultId,
@@ -209,8 +209,12 @@ impl Fixture {
 
     /// Runs the check on a freshly opened vault.
     fn check(&self) -> Result<ServingSnapshot, CheckFailure> {
+        self.check_with(&development())
+    }
+
+    /// Runs the check on a freshly opened vault, building the upstream clients with `upstream`.
+    fn check_with(&self, upstream: &UpstreamSettings) -> Result<ServingSnapshot, CheckFailure> {
         let (vault, _) = Vault::open(&self.state_lock, &OsFs, identity()).unwrap();
-        let upstream = UpstreamSettings::new(DeploymentProfile::Development, ExpectedOwner { uid: 0 }, TransportLimits::default());
         check_config(
             &self.config_lock,
             &OsFs,
@@ -218,9 +222,14 @@ impl Fixture {
             &self.state,
             &Capabilities::default(),
             &NoAccounts,
-            &upstream,
+            upstream,
         )
     }
+}
+
+/// Upstream settings that read each pinned CA file through the development profile's trusted-path rule.
+fn development() -> UpstreamSettings {
+    UpstreamSettings::new(DeploymentProfile::Development, ExpectedOwner { uid: 0 }, TransportLimits::default())
 }
 
 fn failure(result: Result<ServingSnapshot, CheckFailure>) -> CheckFailure {
@@ -364,7 +373,7 @@ fn damaged_shared_state_needs_recovery() {
 impl Fixture {
     /// Opens the vault with the identity and runs the check, as an unlock does.
     fn open_and_check(&self) -> Result<Checked, CheckFailure> {
-        let upstream = UpstreamSettings::new(DeploymentProfile::Development, ExpectedOwner { uid: 0 }, TransportLimits::default());
+        let upstream = development();
         open_and_check(
             &self.state_lock,
             &self.config_lock,
@@ -380,7 +389,7 @@ impl Fixture {
 #[test]
 fn opening_then_checking_returns_the_snapshot_and_the_approval_state() {
     let fixture = approved();
-    let (snapshot, state, _) = fixture.open_and_check().unwrap();
+    let (snapshot, state, _, _) = fixture.open_and_check().unwrap();
     assert_eq!(state, fixture.state);
     assert!(snapshot.record(&"alpha".parse().unwrap()).is_some());
 }
@@ -497,4 +506,80 @@ fn no_status_or_detail_holds_a_config_byte_a_path_or_a_secret() {
             .for_each(|forbidden| assert!(!text.contains(*forbidden), "{text:?} contains {forbidden:?}"));
         });
     });
+}
+
+/// A CA path no test creates, so loading it always fails.
+const MISSING_CA: &str = "/nonexistent/iron-vault-test/ca.pem";
+
+/// Routes `pinned` and `plain` share credential `alpha` and its upstream, `other` uses `beta`; only `pinned` pins a CA,
+/// at `ca_file`.
+fn pinned_config(ca_file: &str) -> String {
+    let text = config(&[("other", "beta"), ("pinned", "alpha"), ("plain", "alpha")])
+        .replace("api.other.example", "api.beta.example")
+        .replace("api.pinned.example", "api.alpha.example")
+        .replace("api.plain.example", "api.alpha.example");
+    let pinned = "prefix = \"/pinned\"\n";
+    assert!(text.contains(pinned));
+    text.replacen(pinned, &format!("{pinned}ca_file = \"{ca_file}\"\n"), 1)
+}
+
+fn pinned_fixture() -> Fixture {
+    let mut fixture = Fixture::new(&["alpha", "beta"]);
+    fixture.approve(&pinned_config(MISSING_CA));
+    fixture
+}
+
+fn assert_only_pinned_is_unavailable(snapshot: &ServingSnapshot) {
+    assert!(!snapshot.policy().is_available(&route("pinned")));
+    assert!(
+        snapshot
+            .policy()
+            .is_unavailable_for(&route("pinned"), UnavailableCause::PinnedCaUnavailable)
+    );
+    assert!(
+        !snapshot
+            .policy()
+            .is_unavailable_for(&route("pinned"), UnavailableCause::CredentialUnusable)
+    );
+    assert!(snapshot.policy().is_available(&route("plain")) && snapshot.policy().is_available(&route("other")));
+}
+
+#[test]
+fn a_missing_pinned_ca_passes_the_check_and_makes_only_its_route_unavailable() {
+    let snapshot = pinned_fixture().check().unwrap();
+    assert_only_pinned_is_unavailable(&snapshot);
+    assert!(snapshot.record(&"alpha".parse().unwrap()).is_some());
+}
+
+#[test]
+fn a_malformed_pinned_ca_passes_the_check_and_makes_only_its_route_unavailable() {
+    let malformed = PinnedCaError::MalformedPem {
+        path: PathBuf::from(MISSING_CA),
+    };
+    let snapshot = pinned_fixture().check_with(&development().with_pinned_failure(malformed)).unwrap();
+    assert_only_pinned_is_unavailable(&snapshot);
+}
+
+#[test]
+fn status_reports_a_pinned_ca_route_as_a_route_fault_and_its_credential_stays_healthy() {
+    let (_, _, credentials, faults) = pinned_fixture().open_and_check().unwrap();
+    let alpha = credentials.iter().find(|c| c.name.as_str() == "alpha").unwrap();
+    assert_eq!(alpha.standing, crate::admin::protocol::Standing::Healthy);
+    assert!(alpha.unavailable_routes.is_empty());
+    let expected = crate::admin::protocol::RouteStatus {
+        name: route("pinned"),
+        fault: crate::admin::protocol::RouteFault::PinnedCaUnavailable,
+    };
+    assert_eq!(faults, [expected]);
+}
+
+#[test]
+fn a_route_unavailable_through_its_credential_and_its_pinned_ca_reports_both() {
+    let fixture = pinned_fixture();
+    fixture.damage("alpha");
+    let (snapshot, _, credentials, faults) = fixture.open_and_check().unwrap();
+    let alpha = credentials.iter().find(|c| c.name.as_str() == "alpha").unwrap();
+    assert_eq!(alpha.unavailable_routes, [route("pinned"), route("plain")]);
+    assert_eq!(faults.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["pinned"]);
+    assert!(snapshot.policy().is_available(&route("other")));
 }

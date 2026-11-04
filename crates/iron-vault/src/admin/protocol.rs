@@ -17,7 +17,7 @@ use crate::deployment::DeploymentProfile;
 use iron_vault_policy::{CredentialKind, Port};
 use iron_vault_store::RecordId;
 
-pub use status::{CredentialStatus, MemoryStatus, Standing, StatusReport, UnlockedVault, VaultStatus};
+pub use status::{CredentialStatus, MemoryStatus, RouteFault, RouteStatus, Standing, StatusReport, UnlockedVault, VaultStatus};
 
 /// The protocol version this code writes and the only one it reads.
 pub const PROTOCOL_VERSION: u16 = 1;

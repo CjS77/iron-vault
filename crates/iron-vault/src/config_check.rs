@@ -25,7 +25,7 @@ use iron_vault_store::{
     VaultIdentity, recover_approval,
 };
 
-use crate::admin::protocol::CredentialStatus;
+use crate::admin::protocol::{CredentialStatus, RouteStatus};
 use crate::deployment::DeploymentProfile;
 use crate::service_state::{FailureReason, UnavailableReason};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotError};
@@ -33,7 +33,7 @@ use crate::trusted_path::ExpectedOwner;
 use crate::upstream::client::{ClientBuildError, TransportLimits};
 use crate::upstream::clients::UpstreamClients;
 #[cfg(any(test, feature = "test-support"))]
-use crate::upstream::trust::UpstreamTrust;
+use crate::upstream::trust::{PinnedCaError, UpstreamTrust};
 
 /// How the check builds the upstream clients of the snapshot.
 #[derive(Debug, Clone)]
@@ -44,9 +44,9 @@ pub struct UpstreamSettings {
     owner: ExpectedOwner,
     /// The transport deadlines.
     limits: TransportLimits,
-    /// The trust every pinned CA route gets instead of its file, for integration tests.
+    /// What every pinned CA route gets instead of its file, for integration tests: a trust, or a load failure.
     #[cfg(any(test, feature = "test-support"))]
-    pinned: Option<UpstreamTrust>,
+    pinned: Option<Result<UpstreamTrust, PinnedCaError>>,
 }
 
 impl UpstreamSettings {
@@ -67,15 +67,25 @@ impl UpstreamSettings {
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_pinned_trust(self, trust: UpstreamTrust) -> Self {
         Self {
-            pinned: Some(trust),
+            pinned: Some(Ok(trust)),
+            ..self
+        }
+    }
+
+    /// Fails every pinned CA route's load with `error` instead of reading its file, so tests can show a CA that does
+    /// not load without one on disk.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_pinned_failure(self, error: PinnedCaError) -> Self {
+        Self {
+            pinned: Some(Err(error)),
             ..self
         }
     }
 
     fn clients(&self, policy: &ActivePolicy) -> Result<UpstreamClients, ClientBuildError> {
         #[cfg(any(test, feature = "test-support"))]
-        if let Some(trust) = &self.pinned {
-            return UpstreamClients::with_pinned_loader(policy, self.limits, |_| Ok(trust.clone()));
+        if let Some(pinned) = &self.pinned {
+            return UpstreamClients::with_pinned_loader(policy, self.limits, |_| pinned.clone());
         }
         UpstreamClients::new(policy, self.profile, self.owner, self.limits)
     }
@@ -213,9 +223,9 @@ fn activation_detail(error: &ActivationError) -> String {
     }
 }
 
-/// What a passed check on a freshly opened vault yields: the snapshot to serve, the vault's approval state and the
-/// standing of each credential.
-pub type Checked = (ServingSnapshot, ApprovalState, Vec<CredentialStatus>);
+/// What a passed check on a freshly opened vault yields: the snapshot to serve, the vault's approval state, the
+/// standing of each credential and each route fault.
+pub type Checked = (ServingSnapshot, ApprovalState, Vec<CredentialStatus>, Vec<RouteStatus>);
 
 /// Opens a new vault from `identity` and loads its approval state, then runs the config check, for a service entering
 /// Checking.
@@ -250,13 +260,15 @@ fn open_and_run(
     let state = vault.load_approval_state(state_dir, fs).map_err(CheckFailure::ApprovalState)?;
     let snapshot = run(config_dir, fs, vault, &state, capabilities, accounts, upstream)?;
     let credentials = snapshot.credential_statuses(&opened);
-    Ok((snapshot, state, credentials))
+    let faults = snapshot.route_faults();
+    Ok((snapshot, state, credentials, faults))
 }
 
 /// Runs the config check and returns the snapshot to serve, or the failure that leaves the service Unavailable.
 ///
 /// `vault` and `state` are the opened shared state; `config_dir` is the held config directory lock. A damaged or
-/// needs-login credential record is not a failure: activation marks only its routes unavailable (§3.9). The vault moves
+/// needs-login credential record is not a failure: activation marks only its routes unavailable (§3.9). Nor is a
+/// pinned CA that fails to load: the routes that pin it are marked unavailable the same way, and logged. The vault moves
 /// into the snapshot on success and is dropped on failure, so the next check opens it again. A failure is logged here at
 /// WARN as `config.check-failed`, with its [`detail`](CheckFailure::detail). Opening the vault and the approval state
 /// comes before this function; [`open_and_check`] logs a failure there the same way.
@@ -296,6 +308,7 @@ fn run(
     let clients = upstream
         .clients(&policy)
         .map_err(|error| CheckFailure::Config(InvalidConfig::Clients(error)))?;
+    let policy = clients.mark_unusable_routes(policy);
     let limiter = RateLimiter::new(&policy, Instant::now());
     ServingSnapshot::new(policy, vault, clients, limiter).map_err(|error| CheckFailure::Config(InvalidConfig::Snapshot(error)))
 }

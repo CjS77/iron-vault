@@ -23,6 +23,7 @@ const TAG_RESERVED: u16 = 7;
 const TAG_MEMORY: u16 = 8;
 const TAG_MEMORY_DETAIL: u16 = 9;
 const TAG_CREDENTIALS: u16 = 10;
+const TAG_ROUTE_FAULTS: u16 = 11;
 
 /// What the service answers `status` with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +59,8 @@ pub struct UnlockedVault {
     pub highest_reserved: u64,
     /// Every credential in the vault manifest, in name order.
     pub credentials: Vec<CredentialStatus>,
+    /// Every route unavailable for a cause of its own, in name order.
+    pub route_faults: Vec<RouteStatus>,
 }
 
 /// One credential's standing and the routes it makes unavailable.
@@ -78,6 +81,23 @@ pub enum Standing {
     Healthy,
     /// The manifest lists the record but it did not load.
     Damaged(RecordDamage),
+}
+
+/// A route unavailable for a cause of its own, which no credential standing explains (glossary: *Route fault*).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteStatus {
+    /// The route's name.
+    pub name: RouteName,
+    /// Why it is unavailable.
+    pub fault: RouteFault,
+}
+
+/// Why a route is unavailable, apart from its credential. It carries no path, PEM byte or load error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum RouteFault {
+    /// The route's pinned CA could not be loaded.
+    #[error("pinned CA unavailable")]
+    PinnedCaUnavailable,
 }
 
 /// Whether the service's memory is kept out of swap. Only `Locked` is protection.
@@ -104,13 +124,14 @@ impl From<&MemoryProtection> for MemoryStatus {
 /// `status`'s success body: the command it answers, then the report's fields.
 pub(super) fn encode(command: u16, report: &StatusReport) -> Vec<u8> {
     let (state, reason) = state_codes(report.state);
-    let (id, committed, reserved, credentials) = match &report.vault {
-        VaultStatus::Locked => (Vec::new(), 0, 0, Vec::new()),
+    let (id, committed, reserved, credentials, faults) = match &report.vault {
+        VaultStatus::Locked => (Vec::new(), 0, 0, Vec::new(), Vec::new()),
         VaultStatus::Unlocked(vault) => (
             vault.id.as_bytes().to_vec(),
             vault.committed.unwrap_or(0),
             vault.highest_reserved,
             encode_credentials(&vault.credentials),
+            encode_route_faults(&vault.route_faults),
         ),
     };
     let (memory, detail) = match &report.memory {
@@ -129,12 +150,25 @@ pub(super) fn encode(command: u16, report: &StatusReport) -> Vec<u8> {
     fields::put(&mut out, TAG_MEMORY, &[memory]);
     fields::put(&mut out, TAG_MEMORY_DETAIL, detail.as_bytes());
     fields::put(&mut out, TAG_CREDENTIALS, &credentials);
+    fields::put(&mut out, TAG_ROUTE_FAULTS, &faults);
     out
 }
 
 /// Reads the report from a success body's fields, which must be exactly the command and the report's.
 pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, FrameError> {
-    let [_, state, reason, profile, id, committed, reserved, memory, detail, credentials] = exact(
+    let [
+        _,
+        state,
+        reason,
+        profile,
+        id,
+        committed,
+        reserved,
+        memory,
+        detail,
+        credentials,
+        faults,
+    ] = exact(
         fields,
         [
             TAG_COMMAND,
@@ -147,6 +181,7 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
             TAG_MEMORY,
             TAG_MEMORY_DETAIL,
             TAG_CREDENTIALS,
+            TAG_ROUTE_FAULTS,
         ],
     )?;
     Ok(StatusReport {
@@ -156,7 +191,7 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
             id,
             read_u64(TAG_COMMITTED, committed)?,
             read_u64(TAG_RESERVED, reserved)?,
-            credentials,
+            SealedLists { credentials, faults },
         )?,
         memory: read_memory(memory, detail)?,
     })
@@ -208,10 +243,17 @@ fn read_u64(tag: u16, value: &[u8]) -> Result<u64, FrameError> {
         .map_err(|_| FrameError::InvalidValue(tag))
 }
 
+/// The encoded lists sealed behind the vault identity.
+struct SealedLists<'a> {
+    credentials: &'a [u8],
+    faults: &'a [u8],
+}
+
 /// An empty vault ID is a locked vault, which has nothing else to report; anything else must be a whole unlocked vault.
-fn read_vault(id: &[u8], committed: u64, reserved: u64, credentials: &[u8]) -> Result<VaultStatus, FrameError> {
+fn read_vault(id: &[u8], committed: u64, reserved: u64, lists: SealedLists<'_>) -> Result<VaultStatus, FrameError> {
+    let SealedLists { credentials, faults } = lists;
     if id.is_empty() {
-        let nothing = committed == 0 && reserved == 0 && credentials.is_empty();
+        let nothing = committed == 0 && reserved == 0 && credentials.is_empty() && faults.is_empty();
         return nothing.then_some(VaultStatus::Locked).ok_or(FrameError::InvalidValue(TAG_VAULT_ID));
     }
     let id = <[u8; 16]>::try_from(id)
@@ -223,6 +265,7 @@ fn read_vault(id: &[u8], committed: u64, reserved: u64, credentials: &[u8]) -> R
         committed: (committed != 0).then_some(committed),
         highest_reserved: reserved,
         credentials: decode_credentials(credentials)?,
+        route_faults: decode_route_faults(faults)?,
     }))
 }
 
@@ -296,16 +339,55 @@ fn take_credential(rest: &mut &[u8]) -> Result<CredentialStatus, FrameError> {
 }
 
 fn take_name<T: FromStr>(rest: &mut &[u8]) -> Result<T, FrameError> {
-    let len = usize::from(take(rest, 1)?[0]);
-    let text = std::str::from_utf8(take(rest, len)?).map_err(|_| invalid_credentials())?;
-    text.parse().map_err(|_| invalid_credentials())
+    take_name_in(TAG_CREDENTIALS, rest)
+}
+
+/// A length-prefixed name from the list in field `tag`.
+fn take_name_in<T: FromStr>(tag: u16, rest: &mut &[u8]) -> Result<T, FrameError> {
+    let len = usize::from(take_in(tag, rest, 1)?[0]);
+    let text = std::str::from_utf8(take_in(tag, rest, len)?).map_err(|_| FrameError::InvalidValue(tag))?;
+    text.parse().map_err(|_| FrameError::InvalidValue(tag))
 }
 
 /// The first `n` bytes of `rest`, which then starts after them.
 fn take<'a>(rest: &mut &'a [u8], n: usize) -> Result<&'a [u8], FrameError> {
-    let (head, tail) = rest.split_at_checked(n).ok_or_else(invalid_credentials)?;
+    take_in(TAG_CREDENTIALS, rest, n)
+}
+
+/// [`take`] for the list in field `tag`.
+fn take_in<'a>(tag: u16, rest: &mut &'a [u8], n: usize) -> Result<&'a [u8], FrameError> {
+    let (head, tail) = rest.split_at_checked(n).ok_or(FrameError::InvalidValue(tag))?;
     *rest = tail;
     Ok(head)
+}
+
+/// Each entry: name length, name, fault code.
+fn encode_route_faults(faults: &[RouteStatus]) -> Vec<u8> {
+    let mut out = Vec::new();
+    faults.iter().for_each(|route| {
+        put_name(&mut out, route.name.as_str());
+        out.push(fault_code(route.fault));
+    });
+    out
+}
+
+fn fault_code(fault: RouteFault) -> u8 {
+    match fault {
+        RouteFault::PinnedCaUnavailable => 1,
+    }
+}
+
+fn decode_route_faults(mut rest: &[u8]) -> Result<Vec<RouteStatus>, FrameError> {
+    std::iter::from_fn(|| (!rest.is_empty()).then(|| take_route_fault(&mut rest))).collect()
+}
+
+fn take_route_fault(rest: &mut &[u8]) -> Result<RouteStatus, FrameError> {
+    let name = take_name_in(TAG_ROUTE_FAULTS, rest)?;
+    let fault = match take_in(TAG_ROUTE_FAULTS, rest, 1)? {
+        [1] => RouteFault::PinnedCaUnavailable,
+        _ => return Err(FrameError::InvalidValue(TAG_ROUTE_FAULTS)),
+    };
+    Ok(RouteStatus { name, fault })
 }
 
 #[cfg(test)]
@@ -334,12 +416,24 @@ mod tests {
     }
 
     fn unlocked(credentials: Vec<CredentialStatus>) -> VaultStatus {
+        with_faults(credentials, Vec::new())
+    }
+
+    fn with_faults(credentials: Vec<CredentialStatus>, route_faults: Vec<RouteStatus>) -> VaultStatus {
         VaultStatus::Unlocked(UnlockedVault {
             id: VaultId::new_random(),
             committed: Some(3),
             highest_reserved: 4,
             credentials,
+            route_faults,
         })
+    }
+
+    fn pinned_ca(route: &str) -> RouteStatus {
+        RouteStatus {
+            name: route.parse().unwrap(),
+            fault: RouteFault::PinnedCaUnavailable,
+        }
     }
 
     #[test]
@@ -366,30 +460,58 @@ mod tests {
         ];
         states.into_iter().for_each(|state| {
             memories.iter().for_each(|memory| {
-                [VaultStatus::Locked, unlocked(credentials.clone()), unlocked(Vec::new())]
-                    .into_iter()
-                    .for_each(|vault| {
-                        let report = StatusReport {
-                            state,
-                            memory: memory.clone(),
-                            ..report(vault)
-                        };
-                        assert_eq!(decoded(&encode(6, &report)), Ok(report));
-                    });
+                let faults = vec![pinned_ca("fx"), pinned_ca("internal")];
+                [
+                    VaultStatus::Locked,
+                    unlocked(credentials.clone()),
+                    unlocked(Vec::new()),
+                    with_faults(credentials.clone(), faults.clone()),
+                    with_faults(Vec::new(), faults),
+                ]
+                .into_iter()
+                .for_each(|vault| {
+                    let report = StatusReport {
+                        state,
+                        memory: memory.clone(),
+                        ..report(vault)
+                    };
+                    assert_eq!(decoded(&encode(6, &report)), Ok(report));
+                });
             });
         });
     }
 
     #[test]
-    fn a_locked_vault_with_a_version_or_credentials_is_refused() {
-        [(1, 0, &[][..]), (0, 1, &[]), (0, 0, &[0])]
+    fn a_locked_vault_with_a_version_credentials_or_route_faults_is_refused() {
+        [(1, 0, &[][..], &[][..]), (0, 1, &[], &[]), (0, 0, &[0], &[]), (0, 0, &[], &[0])]
             .into_iter()
-            .for_each(|(committed, reserved, credentials)| {
+            .for_each(|(committed, reserved, credentials, faults)| {
                 assert_eq!(
-                    read_vault(&[], committed, reserved, credentials),
+                    read_vault(&[], committed, reserved, SealedLists { credentials, faults }),
                     Err(FrameError::InvalidValue(TAG_VAULT_ID))
                 );
             });
+    }
+
+    #[test]
+    fn a_truncated_or_unknown_route_fault_is_refused() {
+        let full = encode_route_faults(&[pinned_ca("fx")]);
+        (1..full.len()).for_each(|cut| {
+            assert_eq!(
+                decode_route_faults(&full[..cut]),
+                Err(FrameError::InvalidValue(TAG_ROUTE_FAULTS)),
+                "cut at {cut}"
+            );
+        });
+        [0, 2].into_iter().for_each(|code| {
+            let mut bytes = full.clone();
+            *bytes.last_mut().unwrap() = code;
+            assert_eq!(
+                decode_route_faults(&bytes),
+                Err(FrameError::InvalidValue(TAG_ROUTE_FAULTS)),
+                "code {code}"
+            );
+        });
     }
 
     #[test]

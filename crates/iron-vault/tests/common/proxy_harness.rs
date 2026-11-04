@@ -23,6 +23,7 @@ use iron_vault::serving_snapshot::{ServingSnapshot, SnapshotHolder};
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault::upstream::clients::UpstreamClients;
+use iron_vault::upstream::trust::PinnedCaError;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{
     AccountDirectory, AccountName, CallerToken, Capabilities, ParsedConfig, RateLimiter, TokenHash, ValidatedConfig, activate,
@@ -147,12 +148,21 @@ token_header = "{TOKEN_HEADER}"
     }
 }
 
-/// The serving snapshot for `config`, over a new vault in `state_dir` that holds `setup`'s credentials.
+/// A `ca_file` the harness fails to load, as a missing file would, so a route pinning it is unavailable.
+pub const UNLOADABLE_CA: &str = "/etc/iron-vault/ca/unloadable.pem";
+
+/// The serving snapshot for `config`, over a new vault in `state_dir` that holds `setup`'s credentials. Every pinned
+/// route trusts the test CA, except one pinning [`UNLOADABLE_CA`], which the config check's marking makes unavailable.
 fn snapshot(setup: Setup<'_>, config: &ValidatedConfig, state_dir: &Path) -> ServingSnapshot {
     let vault = vault(setup.credentials, state_dir);
     let policy = activate(config, &Capabilities::default(), &vault, &NoAccounts).unwrap();
     let trust = setup.ca.trust();
-    let clients = UpstreamClients::with_pinned_loader(&policy, TransportLimits::default(), |_| Ok(trust.clone())).unwrap();
+    let clients = UpstreamClients::with_pinned_loader(&policy, TransportLimits::default(), |path| match path == Path::new(UNLOADABLE_CA) {
+        true => Err(PinnedCaError::NoCertificates { path: path.to_path_buf() }),
+        false => Ok(trust.clone()),
+    })
+    .unwrap();
+    let policy = clients.mark_unusable_routes(policy);
     let limiter = RateLimiter::new(&policy, Instant::now().checked_sub(Duration::from_secs(60)).unwrap());
     ServingSnapshot::new(policy, vault, clients, limiter).unwrap()
 }

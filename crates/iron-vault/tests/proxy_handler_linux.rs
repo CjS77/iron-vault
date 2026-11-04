@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
-use common::proxy_harness::{CallerRequest, Credential, Proxy, Response, Setup, Via, WAIT, token_hash};
+use common::proxy_harness::{CallerRequest, Credential, Proxy, Response, Setup, UNLOADABLE_CA, Via, WAIT, token_hash};
 use iron_vault_kinds::CredentialMaterial;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -234,4 +234,51 @@ fn assert_no_upstream_detail(response: &Response, port: u16) {
         .iter()
         .for_each(|detail| assert!(!text.contains(detail), "{detail} in {text}"));
     assert!(!response.body.contains(&port.to_string()), "{}", response.body);
+}
+
+/// The `fx` route pinning a CA that does not load, and the `fx_plain` route on the same credential pinning the test CA.
+fn pinned_ca_unavailable(port: u16) -> String {
+    let fx = callers_and_routes(port)
+        .replace("routes = [\"fx\"]", "routes = [\"fx\", \"fx_plain\"]")
+        .replace("/etc/iron-vault/ca/test.pem", UNLOADABLE_CA);
+    format!(
+        r#"{fx}
+[routes.fx_plain]
+prefix = "/fx-plain"
+upstream = "https://localhost:{port}/v1"
+ca_file = "/etc/iron-vault/ca/test.pem"
+credential = "fx_key"
+slot = {{ header = "X-Api-Key" }}
+methods = ["GET"]
+paths = ["/v1/**"]
+rate_limit = {{ requests = 60, per_seconds = 60, burst = 10 }}
+"#
+    )
+}
+
+#[tokio::test]
+async fn a_route_whose_pinned_ca_did_not_load_is_503_and_reaches_no_upstream() {
+    let ca = TestCa::new("proxy test CA");
+    let upstream = MockUpstream::start(&ca, reply(200, &[], "ok")).await;
+    let proxy = Proxy::start(Setup {
+        ca: &ca,
+        callers_and_routes: pinned_ca_unavailable(upstream.port()),
+        credentials: vec![Credential {
+            name: "fx_key",
+            material: CredentialMaterial::Static { key: SECRET.into() },
+            port: upstream.port(),
+        }],
+        tcp: false,
+        request_timeout_secs: 30,
+    })
+    .await;
+
+    let response = proxy.get("/fx/latest").await;
+
+    assert_eq!((response.status, response.body.as_str()), (503, "service unavailable"));
+    assert_eq!(upstream.connections(), 0);
+    assert!(upstream.requests().is_empty());
+    // The same credential's other route pins a CA that loaded, so it keeps serving.
+    assert_eq!(proxy.get("/fx-plain/latest").await.status, 200);
+    assert_eq!(upstream.requests().len(), 1);
 }

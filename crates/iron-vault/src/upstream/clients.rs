@@ -13,12 +13,12 @@ use super::trust::{PinnedCaError, UpstreamTrust};
 use crate::deployment::DeploymentProfile;
 use crate::trusted_path::ExpectedOwner;
 
-/// Each available route's upstream client, keyed in name and path order so building them is deterministic.
+/// Each route's upstream client, keyed in name and path order so building them is deterministic.
 #[derive(Debug)]
 pub struct UpstreamClients {
     built_in: UpstreamClient,
     pinned: BTreeMap<PathBuf, UpstreamClient>,
-    /// Each available route's pinned CA path, `None` for the built-in roots, or why that CA's client failed.
+    /// Each route's pinned CA path, `None` for the built-in roots, or why that CA's client failed.
     routes: BTreeMap<RouteName, Result<Option<PathBuf>, PinnedClientError>>,
 }
 
@@ -36,8 +36,8 @@ pub enum PinnedClientError {
 /// Why [`UpstreamClients::for_route`] has no client for a route.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum RouteClientError {
-    /// The route is not an available route of the policy the clients were built for.
-    #[error("route {0} is not available in the active policy")]
+    /// The route is not a route of the policy the clients were built for.
+    #[error("route {0} is not in the active policy")]
     NotAvailable(RouteName),
     /// The route's pinned CA gave no client.
     #[error("route {route} has no upstream client: {source}")]
@@ -50,13 +50,15 @@ pub enum RouteClientError {
 }
 
 impl UpstreamClients {
-    /// Builds the clients for `policy`'s available routes, reading each distinct pinned CA file once through its
+    /// Builds the clients for every route of `policy`, reading each distinct pinned CA file once through its
     /// trusted-path rule.
     ///
     /// Only the built-in client failing is an error here, since no route could then be served. A pinned CA that fails
-    /// gives its routes a [`RouteClientError::PinnedCa`] and leaves every other route its client; whether that
-    /// disables only those routes or refuses the whole policy is the activation step's decision (EP-22), which
-    /// [`unusable_routes`](Self::unusable_routes) reports to.
+    /// gives its routes a [`RouteClientError::PinnedCa`] and leaves every other route its client. That makes only those
+    /// routes unavailable, like a damaged credential record (§3.9): the config check passes them to
+    /// [`mark_unusable_routes`](Self::mark_unusable_routes) before the policy serves, so a request to one is refused
+    /// before it reaches [`for_route`](Self::for_route). A route already unavailable through its credential is tried
+    /// too, so it reports both causes.
     pub fn new(
         policy: &ActivePolicy,
         profile: DeploymentProfile,
@@ -100,6 +102,22 @@ impl UpstreamClients {
             .filter_map(|(route, client)| client.as_ref().err().map(|error| (route, error)))
     }
 
+    /// `policy` with every route whose pinned CA gave no client also unavailable for that cause, each logged at WARN.
+    ///
+    /// The event names the route and the `ca_file` field, never the path, the PEM bytes or the load error.
+    pub fn mark_unusable_routes(&self, policy: ActivePolicy) -> ActivePolicy {
+        let unusable: Vec<&RouteName> = self.unusable_routes().map(|(route, _)| route).collect();
+        unusable.iter().for_each(|route| {
+            tracing::warn!(
+                event = "route.pinned-ca-unavailable",
+                route = %route,
+                field = "ca_file",
+                "the route's pinned CA could not be loaded; the route is unavailable",
+            );
+        });
+        policy.with_pinned_ca_unavailable(unusable)
+    }
+
     /// [`new`](Self::new) with the pinned-CA loader passed in, so it is testable without a trusted path on disk.
     fn build(
         policy: &ActivePolicy,
@@ -128,13 +146,12 @@ impl UpstreamClients {
     }
 }
 
-/// Each available route's pinned CA path, `None` for the built-in roots.
+/// Each route's pinned CA path, `None` for the built-in roots.
 fn route_ca_files(policy: &ActivePolicy) -> BTreeMap<&RouteName, Option<&Path>> {
     policy
         .config()
         .routes()
         .iter()
-        .filter(|(name, _)| policy.is_available(name))
         .map(|(name, route)| (name, route.ca_file().map(|ca_file| ca_file.as_path())))
         .collect()
 }
