@@ -193,8 +193,19 @@ replies without a secret to decode byte for byte.
 `LazyLock`, `OnceCell`, `thread_local!` or `static mut`, so no other owner can keep a copy alive after the `Vault` is
 dropped. (The service's `ServingSnapshot` shares its vault through an `Arc`: the vault is dropped when the holder has
 replaced the snapshot and the last request that loaded it has finished.) `secret_types_tests` checks this by scanning
-the store's sources, and asserts `Vault: Send + Sync`, which `Rc` would break. The lock state
-machine that decides when to drop it is EP-23.
+the store's sources, and asserts `Vault: Send + Sync`, which `Rc` would break.
+
+**Lock** (`ServiceContext::lock`, spec §3.13) drops every owner of a secret in this order, under the context's mutex:
+the holder stops admitting requests and withdraws its snapshots, which cancels the requests running on them; the
+approval state is dropped; then the service waits up to the *lock drain* for the last `Arc<ServingSnapshot>` to go.
+Each snapshot ends with a sender that is its last field, so it is released only after the `Vault` and every other
+field have been dropped. Everything reachable from `Vault` (the `VaultIdentity`, the `CredentialRecord`s) and from
+`ServingSnapshot` clears its buffers on drop, as the inventory shows; the rest of the snapshot holds no secret bytes: the
+`ActivePolicy` holds caller token hashes and route policy, the rate limiter holds counters, and the upstream clients
+hold CA certificates and connection pools. `ApprovalState` is not secret-bearing: it holds the vault ID, the
+generations, the pinned approver's public key, and the committed version and digest, so dropping it removes a cache, not
+a secret. What does not clear is in the table below: the HTTP stack's buffers for requests that were in flight, and the
+URLs inside them.
 
 ## Known residual copies
 
@@ -206,6 +217,7 @@ machine that decides when to drop it is EP-23.
 | `age`'s `StreamReader` (age 0.12.1, `primitives/stream.rs:410`) keeps the decrypted chunk in a `SecretSlice<u8>`, which is wiped. The AEAD's output `Vec` is 16 bytes larger than the plaintext (room for the tag), so converting it into a `SecretSlice` shrinks it, and the allocator may move it, leaving a freed, unwiped copy of the chunk. | `age` owns the conversion. Locked memory (K-45) keeps it out of swap; the plaintext `sealed::open` returns is in a `Zeroizing` buffer. |
 | `age`'s scrypt recipient and identity take a `SecretString` copy of the passphrase (`Passphrase::for_age`), and derive the wrapping key inside `age`. | The copy is a `SecretString` and is wiped; `age`'s internal key derivation is not audited here. Locked memory (K-45) keeps it out of swap. |
 | `base64`'s `encode_string`, used by both `CallerToken` constructors, encodes through a 1 KiB stack buffer it does not wipe, leaving a copy of the token's body in a dead stack frame. | The next calls on that thread overwrite it; locked memory (K-45) keeps it out of swap. The 32 raw bytes are held in `Zeroizing` buffers. |
+| A request that ignores its cancellation. | `lock` cancels requests where the transport permits (§3.9), but a request blocked in code that never polls its cancellation keeps its `Arc<ServingSnapshot>`, and with it the vault, until it ends. The lock drain bounds the wait and `lock` then answers `cleared` as false and logs the count of snapshots still held, instead of claiming the secrets are gone. |
 | The kernel holds owner input outside the CLI: in the terminal's line buffer while the owner types, in the pipe buffer when it is piped, and in the admin socket's buffers in transit. | Outside any process's control. Each buffer is drained by the read that empties it. |
 | When SIGINT, SIGQUIT or SIGTERM arrives while the CLI has the terminal open, its watcher thread restores the terminal and calls `process::exit`, which runs no destructors, so a line buffer the main thread is filling is not wiped. | The process exits at once and the kernel frees its memory. Core dumps and same-account `ptrace` are off, so nothing can read the buffer between the signal and the exit. |
 | The CLI's memory is not locked, so an owner-input buffer could be swapped out while it lives. | It lives only from the read until the frame is written. The CLI disables core dumps and same-account `ptrace` before connecting; encrypted swap, which the install guide requires, covers the rest. |

@@ -5,13 +5,14 @@ use std::collections::BTreeMap;
 use std::future::{self, Future};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode};
 use super::server::{Exchange, ExchangeError};
 use super::unlock::Unlock;
 use crate::deployment::DeploymentProfile;
-use crate::service_context::ServiceContext;
+use crate::service_context::{LockOutcome, ServiceContext};
 use iron_vault_store::StoreFs;
 
 /// The future a handler returns: the exchange's admin response, or the error that cancelled its command when a prompt
@@ -47,6 +48,20 @@ impl Handlers {
         Self::standard(service.paths().profile)
             .with(AdminCommand::Status, Status(Arc::clone(service)))
             .with(AdminCommand::Unlock, Unlock::new(Arc::clone(service)))
+            .with_lock_drain(service, LOCK_DRAIN)
+    }
+
+    /// Registers `lock` for `service` with a lock drain of `drain`: how long it waits for a request that ignores its
+    /// cancellation before answering that the secrets are not confirmed cleared. [`for_service`](Self::for_service)
+    /// uses a drain fit for production; a test of the expired wait shortens it.
+    pub fn with_lock_drain<F: StoreFs + Send + Sync + 'static>(self, service: &Arc<ServiceContext<F>>, drain: Duration) -> Self {
+        self.with(
+            AdminCommand::Lock,
+            Lock {
+                service: Arc::clone(service),
+                drain,
+            },
+        )
     }
 
     /// Registers `handler` for `command`, replacing any handler it had.
@@ -69,6 +84,32 @@ impl Handlers {
                 message: format!("this service has no `{}` command", request.command().name()),
             }),
         }
+    }
+}
+
+/// How long `lock` waits for requests to release the old snapshot. It is far below the CLI's 60-second socket timeout, and
+/// longer than a cancelled request needs to unwind.
+const LOCK_DRAIN: Duration = Duration::from_secs(10);
+
+/// `lock`: clears the vault identity and every cached secret, then reports whether that was confirmed.
+struct Lock<F> {
+    service: Arc<ServiceContext<F>>,
+    drain: Duration,
+}
+
+impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Lock<F> {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            Ok(match self.service.lock(self.drain).await {
+                Ok(outcome) => AdminResponse::Lock {
+                    cleared: outcome == LockOutcome::Cleared,
+                },
+                Err(refused) => AdminResponse::Error {
+                    code: ErrorCode::WrongState,
+                    message: format!("cannot lock: the service is {:?}, and lock needs Ready", refused.state),
+                },
+            })
+        })
     }
 }
 

@@ -15,6 +15,7 @@ mod serving;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use iron_vault_policy::{Capabilities, Limits, ListenerConfig, ListenerName, ParsedConfig};
 use iron_vault_store::{
@@ -105,6 +106,18 @@ impl ServiceLocks {
     }
 }
 
+/// How a lock ended: whether the secrets are confirmed gone from memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockOutcome {
+    /// Every serving snapshot, and the vault in it, was dropped within the lock drain.
+    Cleared,
+    /// The lock drain expired while this many snapshots were still held by requests that ignored their cancellation.
+    Held {
+        /// The snapshots still held.
+        snapshots: usize,
+    },
+}
+
 /// What the service runs with besides its locks.
 #[derive(Debug)]
 pub struct ServiceSetup<F = OsFs> {
@@ -131,14 +144,21 @@ pub struct ServiceContext<F = OsFs> {
     inner: Mutex<Inner>,
 }
 
+/// What the context keeps of an open vault beside the snapshot. They are one value, so a lock, a stop or a failed check
+/// drops the approval state and the credential report together, and neither can outlive the other.
+#[derive(Debug)]
+struct OpenVault {
+    approval: ApprovalState,
+    /// The standing of each credential, from the report of opening the vault.
+    credentials: Vec<CredentialStatus>,
+}
+
 /// What changes, behind the one mutex.
 #[derive(Debug)]
 struct Inner {
     state: ServiceState,
-    /// The approval state of the open vault; the vault itself is in the served snapshot.
-    approval: Option<ApprovalState>,
-    /// The standing of each credential in the open vault, from the report of opening it; meaningful with `approval`.
-    credentials: Vec<CredentialStatus>,
+    /// What the context keeps of the open vault, which itself is in the served snapshot. `None` unless the vault is open.
+    open: Option<OpenVault>,
     /// The request listeners and the task serving them; `None` only while they are being rebuilt or once stopped.
     serving: Option<Serving>,
 }
@@ -166,8 +186,7 @@ impl<F: StoreFs> ServiceContext<F> {
         let mut service = Self {
             inner: Mutex::new(Inner {
                 state: ServiceState::Starting,
-                approval: None,
-                credentials: Vec::new(),
+                open: None,
                 serving: Some(Serving::start(listeners, Limits::default(), Arc::clone(&holder))),
             }),
             setup,
@@ -216,6 +235,35 @@ impl<F: StoreFs> ServiceContext<F> {
             .map_err(|illegal| UnlockRefusal::WrongState(illegal.state))
     }
 
+    /// Locks the service on an explicit `lock`: Ready to Locked, clearing the vault identity and every cached secret
+    /// (§3.13, §3.11). Only a Ready service has secrets to clear; from any other state the event is refused.
+    ///
+    /// Under the context's mutex it stops admitting requests, withdraws the serving snapshot (cancelling the requests
+    /// running on it) and drops the approval state, so no later change interleaves. The mutex is then released and the
+    /// call waits up to `drain` for the last holder of the old snapshot to drop it, so a slow request does not stall the
+    /// other admin commands. If the drain expires it logs a warning and returns [`LockOutcome::Held`], never claiming
+    /// the secrets are cleared.
+    pub async fn lock(&self, drain: Duration) -> Result<LockOutcome, IllegalTransition> {
+        let mut withdrawn = {
+            let mut inner = self.inner.lock().await;
+            let from = inner.state;
+            let state = next(from, ServiceEvent::Lock)?;
+            // Refusing first closes the gate and cancels the in-flight requests before anything else changes.
+            let withdrawn = self.holder.refuse(UnavailableReason::Locked);
+            inner.open = None;
+            inner.state = state;
+            log_lock_transition(from, state);
+            withdrawn
+        };
+        Ok(match withdrawn.released(drain).await {
+            0 => LockOutcome::Cleared,
+            snapshots => {
+                tracing::warn!("lock drain expired: {snapshots} serving snapshot(s) are still held by requests that ignore cancellation");
+                LockOutcome::Held { snapshots }
+            }
+        })
+    }
+
     /// Stops the service on SIGTERM or SIGINT: Ready to Stopped, then drops the snapshot, the vault in it and the
     /// approval state, so their secret buffers clear (§3.11), and closes the request listeners, removing their socket
     /// files.
@@ -229,8 +277,7 @@ impl<F: StoreFs> ServiceContext<F> {
         }
         // Stopped has no request interface; storing a refusal withdraws the snapshot and drops the holder's reference.
         self.holder.refuse(UnavailableReason::Locked);
-        inner.approval = None;
-        inner.credentials.clear();
+        inner.open = None;
         if let Some(serving) = inner.serving.take() {
             drop(serving.stop().await);
         }
@@ -255,12 +302,12 @@ impl<F: StoreFs> ServiceContext<F> {
         StatusReport {
             state: inner.state,
             profile: self.setup.paths.profile,
-            vault: inner.approval.as_ref().map_or(VaultStatus::Locked, |approval| {
+            vault: inner.open.as_ref().map_or(VaultStatus::Locked, |open| {
                 VaultStatus::Unlocked(UnlockedVault {
-                    id: approval.vault_id(),
-                    committed: approval.committed().map(|(version, _)| version.get()),
-                    highest_reserved: approval.highest_reserved(),
-                    credentials: inner.credentials.clone(),
+                    id: open.approval.vault_id(),
+                    committed: open.approval.committed().map(|(version, _)| version.get()),
+                    highest_reserved: open.approval.highest_reserved(),
+                    credentials: open.credentials.clone(),
                 })
             }),
             memory: MemoryStatus::from(&self.setup.hardening.memory),
@@ -347,8 +394,7 @@ impl<F: StoreFs> ServiceContext<F> {
             .for_each(|error| tracing::warn!("approved request listener missing until restart: {error}"));
         inner.serving = Some(Serving::start(listeners, *config.limits(), Arc::clone(&self.holder)));
         self.holder.serve(snapshot);
-        inner.approval = Some(approval);
-        inner.credentials = credentials;
+        inner.open = Some(OpenVault { approval, credentials });
         inner.state = ready;
         Ok(ready)
     }

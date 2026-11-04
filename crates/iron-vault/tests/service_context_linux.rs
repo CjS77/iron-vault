@@ -20,6 +20,7 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::Duration;
 
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, WAIT, next_free_port, token_hash};
@@ -37,7 +38,7 @@ use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 use iron_vault::path_metadata::invoking_user;
-use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup, StartError};
+use iron_vault::service_context::{LockOutcome, ServiceContext, ServiceLocks, ServiceSetup, StartError};
 use iron_vault::service_state::{FailureReason, ListenerProvenance, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, SnapshotHolder};
 use iron_vault::trusted_path_report::ServicePaths;
@@ -116,15 +117,20 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
-        let dir = TempDir::new();
-        mkdir(&dir.path().join("state"), 0o700);
-        mkdir(&dir.path().join("etc"), 0o700);
-        let ca = TestCa::new("service test CA");
         let reply = Reply::Respond {
             status: 200,
             headers: Vec::new(),
             body: b"ok".to_vec(),
         };
+        Self::with_reply(reply).await
+    }
+
+    /// A fixture whose upstream answers every request with `reply`.
+    async fn with_reply(reply: Reply) -> Self {
+        let dir = TempDir::new();
+        mkdir(&dir.path().join("state"), 0o700);
+        mkdir(&dir.path().join("etc"), 0o700);
+        let ca = TestCa::new("service test CA");
         let upstream = MockUpstream::start(&ca, reply).await;
         let lock = StateDirLock::acquire(&dir.path().join("state")).unwrap();
         let mut vault = Vault::create(&lock, &OsFs, identity()).unwrap();
@@ -323,17 +329,23 @@ async fn status(service: &Arc<ServiceContext>) -> (Vec<u8>, StatusReport) {
 }
 
 /// Serves `service`'s admin handlers on its runtime directory and sends `request` over the admin protocol, answering
-/// each prompt with `answer`. Returns the response frame's bytes, the prompts and the response. It does not run the CLI
-/// binary: a child forked while another test holds a directory lock would hold that lock too until it execs.
+/// each prompt with `answer`. Returns the response frame's bytes, the prompts and the response.
 async fn admin(service: &Arc<ServiceContext>, request: AdminRequest, answer: &str) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
+    admin_with(service, Handlers::for_service(service), request, answer).await
+}
+
+/// [`admin`] with `handlers` in place of the service's own. It does not run the CLI binary: a child forked while another
+/// test holds a directory lock would hold that lock too until it execs.
+async fn admin_with(
+    service: &Arc<ServiceContext>,
+    handlers: Handlers,
+    request: AdminRequest,
+    answer: &str,
+) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
     let paths = service.paths().clone();
     let runtime_dir = paths.runtime_dir.clone().unwrap();
     let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
-    let server = AdminServer::new(
-        AdminPrincipals::new(paths.profile, paths.owner.uid),
-        Handlers::for_service(service),
-        Limits::default(),
-    );
+    let server = AdminServer::new(AdminPrincipals::new(paths.profile, paths.owner.uid), handlers, Limits::default());
     let (stop, stopped) = oneshot::channel::<()>();
     let served = tokio::spawn(async move {
         server
@@ -860,4 +872,133 @@ async fn an_unreadable_passphrase_envelope_leaves_the_service_locked() {
     assert_eq!(code, ErrorCode::UnlockFailed);
     assert!(message.ends_with("; the service stays Locked"), "{message}");
     assert_eq!(service.state().await, ServiceState::Locked);
+}
+
+/// The lock drain tests that expect the wait to end at once give a request this long to unwind; the ones that expect it
+/// to expire give it only a moment.
+const DRAIN: Duration = Duration::from_secs(10);
+const SHORT_DRAIN: Duration = Duration::from_millis(200);
+
+async fn ready_service(fixture: &Fixture) -> Arc<ServiceContext> {
+    let service = fixture.start().unwrap();
+    assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
+    service
+}
+
+/// A weak reference to the snapshot the Ready service serves, which the test does not keep alive.
+fn served_snapshot(service: &ServiceContext) -> std::sync::Weak<iron_vault::serving_snapshot::ServingSnapshot> {
+    match service.holder().load() {
+        Admission::Serve(snapshot) => Arc::downgrade(&snapshot),
+        Admission::Refuse(reason) => panic!("expected a served snapshot, got {reason:?}"),
+    }
+}
+
+async fn wait_for_requests(upstream: &MockUpstream, count: usize) {
+    tokio::time::timeout(WAIT, async {
+        while upstream.requests().len() < count {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn lock_over_the_admin_socket_leaves_the_service_locked_answering_503_until_it_is_unlocked() {
+    let logs = captured_logs();
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    assert_served(&get_unix(&fixture.socket(), true).await);
+    let snapshot = served_snapshot(&service);
+    assert!(matches!(status(&service).await.1.vault, VaultStatus::Unlocked(_)));
+
+    let response = admin(&service, AdminRequest::Lock, "").await.2;
+
+    assert_eq!(response, AdminResponse::Lock { cleared: true });
+    assert_eq!(service.state().await, ServiceState::Locked);
+    // The approval state and the credential report go with the vault: status reports no vault and no credentials.
+    let report = status(&service).await.1;
+    assert_eq!((report.state, report.vault), (ServiceState::Locked, VaultStatus::Locked));
+    assert!(snapshot.upgrade().is_none(), "the snapshot holding the vault outlived lock");
+    assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
+    assert_eq!(fixture.upstream.requests().len(), 1, "the locked service sent nothing upstream");
+    assert!(logs.text().contains("lock transition: Ready to Locked"), "{}", logs.text());
+    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+    assert_eq!(service.state().await, ServiceState::Ready);
+    assert_served(&get_unix(&fixture.socket(), true).await);
+}
+
+#[tokio::test]
+async fn a_request_in_flight_is_cancelled_and_its_snapshot_is_gone_before_lock_answers() {
+    let mut fixture = Fixture::with_reply(Reply::Stall).await;
+    fixture.approve(&fixture.config(""));
+    let service = ready_service(&fixture).await;
+    let snapshot = served_snapshot(&service);
+    let socket = fixture.socket();
+    let waiting = tokio::spawn(async move { get_unix(&socket, true).await });
+    wait_for_requests(&fixture.upstream, 1).await;
+    assert!(snapshot.upgrade().is_some(), "the in-flight request holds the snapshot");
+
+    let outcome = service.lock(DRAIN).await;
+
+    assert_eq!(outcome, Ok(LockOutcome::Cleared));
+    assert_eq!(snapshot.strong_count(), 0);
+    let response = waiting.await.unwrap();
+    assert_eq!(response.status, 503);
+}
+
+#[tokio::test]
+async fn lock_is_refused_unless_the_service_is_ready() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+
+    let locked = admin(&service, AdminRequest::Lock, "").await.2;
+
+    let AdminResponse::Error { code, message } = locked else {
+        panic!("expected an error, got {locked:?}");
+    };
+    assert_eq!(code, ErrorCode::WrongState);
+    assert!(message.contains("Locked"), "{message}");
+    assert_eq!(service.state().await, ServiceState::Locked);
+    // Unavailable holds no vault, and §3.12 draws no edge from it to Locked.
+    fs::write(fixture.path("etc/config.toml"), fixture.config("# edited after approval\n")).unwrap();
+    let state = service.enter_checking(identity()).await;
+    assert_eq!(state, Ok(ServiceState::Unavailable(FailureReason::PolicyInvalid)));
+    assert!(service.lock(DRAIN).await.is_err());
+    assert_eq!(service.state().await, state.unwrap());
+}
+
+#[tokio::test]
+async fn a_request_that_ignores_cancellation_makes_lock_say_the_secrets_are_not_confirmed_cleared() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    let Admission::Serve(stubborn) = service.holder().load() else {
+        panic!("a Ready service serves a snapshot");
+    };
+    let handlers = Handlers::standard(DeploymentProfile::Development).with_lock_drain(&service, SHORT_DRAIN);
+
+    let response = admin_with(&service, handlers, AdminRequest::Lock, "").await.2;
+
+    assert_eq!(response, AdminResponse::Lock { cleared: false });
+    assert_eq!(service.state().await, ServiceState::Locked);
+    assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
+    assert!(
+        stubborn.policy().is_available(&"fx".parse().unwrap()),
+        "the stubborn request still holds its snapshot"
+    );
+    drop(stubborn);
+}
+
+#[tokio::test]
+async fn the_expired_drain_counts_the_snapshots_still_held() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    let Admission::Serve(stubborn) = service.holder().load() else {
+        panic!("a Ready service serves a snapshot");
+    };
+
+    let outcome = service.lock(SHORT_DRAIN).await;
+
+    assert_eq!(outcome, Ok(LockOutcome::Held { snapshots: 1 }));
+    drop(stubborn);
 }

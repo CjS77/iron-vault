@@ -330,3 +330,57 @@ fn a_pause_from_policy_invalid_fails_with_the_failure_reason() {
 
     assert_eq!(refused(&holder), Some(UnavailableReason::RecoveryNeeded));
 }
+
+const DRAIN: Duration = Duration::from_secs(5);
+
+#[tokio::test(start_paused = true)]
+async fn a_withdrawal_with_no_request_holding_a_snapshot_is_released_at_once() {
+    let scratch = Scratch::new();
+    let holder = SnapshotHolder::new(snapshot(&scratch, "fx").unwrap());
+
+    assert_eq!(holder.refuse(UnavailableReason::Locked).released(DRAIN).await, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_withdrawal_waits_for_every_request_that_holds_a_served_snapshot() {
+    let (first, second) = (Scratch::new(), Scratch::new());
+    let holder = SnapshotHolder::new(snapshot(&first, "old").unwrap());
+    let streaming = served(&holder);
+    holder.pause().resume(snapshot(&second, "new").unwrap());
+    let current = served(&holder);
+    let mut withdrawn = holder.refuse(UnavailableReason::Locked);
+
+    assert_eq!(withdrawn.released(DRAIN).await, 2, "both snapshots are held");
+    drop(streaming);
+    assert_eq!(withdrawn.released(DRAIN).await, 1, "the current snapshot is still held");
+    drop(current);
+    assert_eq!(withdrawn.released(DRAIN).await, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_release_during_the_wait_ends_it_before_the_drain() {
+    let scratch = Scratch::new();
+    let holder = SnapshotHolder::new(snapshot(&scratch, "fx").unwrap());
+    let request = served(&holder);
+    let mut withdrawn = holder.refuse(UnavailableReason::Locked);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        drop(request);
+    });
+    let started = tokio::time::Instant::now();
+
+    assert_eq!(withdrawn.released(DRAIN).await, 0);
+
+    assert_eq!(started.elapsed(), Duration::from_secs(1));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_checking_pause_withdraws_nothing_to_wait_for() {
+    let scratch = Scratch::new();
+    let holder = SnapshotHolder::new(snapshot(&scratch, "fx").unwrap());
+    let request = served(&holder);
+
+    assert_eq!(holder.refuse(UnavailableReason::Checking).released(DRAIN).await, 0);
+
+    assert!(!request.is_withdrawn());
+}

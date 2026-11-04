@@ -8,9 +8,11 @@
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, PoisonError, RwLock};
+use std::time::Duration;
 
 use iron_vault_policy::{ActivePolicy, CredentialName, RateLimiter, RouteName};
 use iron_vault_store::{CredentialRecord, OpenReport, Vault};
+use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
 use crate::admin::protocol::{CredentialStatus, Standing};
@@ -29,6 +31,9 @@ pub struct ServingSnapshot {
     limiter: RateLimiter,
     /// Fired when the holder that serves the snapshot ends its epoch. A snapshot no holder serves is never withdrawn.
     withdrawn: CancellationToken,
+    /// Dropped with the snapshot, and declared last so that every other field, the vault among them, is already dropped
+    /// when the holder's [`Withdrawn`] sees it go.
+    released: Option<oneshot::Sender<()>>,
 }
 
 /// Why a policy and a vault cannot form one snapshot: a route's availability disagrees with whether the vault holds a
@@ -75,14 +80,17 @@ impl ServingSnapshot {
                 clients,
                 limiter,
                 withdrawn: CancellationToken::new(),
+                released: None,
             }),
         }
     }
 
-    /// The snapshot, withdrawn with every other snapshot of `epoch`.
-    fn in_epoch(mut self, epoch: &CancellationToken) -> Self {
+    /// The snapshot, withdrawn with every other snapshot of `epoch`, and the signal that it has been dropped.
+    fn in_epoch(mut self, epoch: &CancellationToken) -> (Self, oneshot::Receiver<()>) {
+        let (released, dropped) = oneshot::channel();
         self.withdrawn = epoch.child_token();
-        self
+        self.released = Some(released);
+        (self, dropped)
     }
 
     /// The policy requests are authorized against.
@@ -180,18 +188,16 @@ pub struct SnapshotHolder {
 struct Held {
     admission: Admission,
     epoch: CancellationToken,
+    /// For each snapshot served in this epoch, the signal that it has been dropped.
+    served: Vec<oneshot::Receiver<()>>,
 }
 
 impl SnapshotHolder {
     /// A holder that serves `snapshot`.
     pub fn new(snapshot: ServingSnapshot) -> Self {
-        let epoch = CancellationToken::new();
-        Self {
-            current: RwLock::new(Held {
-                admission: Admission::Serve(Arc::new(snapshot.in_epoch(&epoch))),
-                epoch,
-            }),
-        }
+        let holder = Self::refusing(UnavailableReason::Checking);
+        holder.serve(snapshot);
+        holder
     }
 
     /// A holder that refuses with `reason` until a snapshot is served, for a service that has none yet.
@@ -200,6 +206,7 @@ impl SnapshotHolder {
             current: RwLock::new(Held {
                 admission: Admission::Refuse(reason),
                 epoch: CancellationToken::new(),
+                served: Vec::new(),
             }),
         }
     }
@@ -214,17 +221,28 @@ impl SnapshotHolder {
     /// Makes `snapshot` the one every later [`load`](Self::load) returns; requests holding the old one finish on it.
     pub fn serve(&self, snapshot: ServingSnapshot) {
         let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
-        current.admission = Admission::Serve(Arc::new(snapshot.in_epoch(&current.epoch)));
+        let (snapshot, dropped) = snapshot.in_epoch(&current.epoch);
+        // A receiver whose sender is gone is a snapshot already dropped; forget it so the list does not grow.
+        current
+            .served
+            .retain_mut(|served| matches!(served.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+        current.served.push(dropped);
+        current.admission = Admission::Serve(Arc::new(snapshot));
     }
 
     /// Makes every later [`load`](Self::load) refuse with `reason`. Any reason but *checking* also withdraws every
-    /// snapshot served, so no old route policy is kept (specification §3.9).
-    pub fn refuse(&self, reason: UnavailableReason) {
+    /// snapshot served, so no old route policy is kept (specification §3.9), and returns them for the caller to wait
+    /// on; *checking* withdraws none and returns an empty [`Withdrawn`].
+    pub fn refuse(&self, reason: UnavailableReason) -> Withdrawn {
         let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
-        if reason != UnavailableReason::Checking {
+        let served = if reason == UnavailableReason::Checking {
+            Vec::new()
+        } else {
             std::mem::replace(&mut current.epoch, CancellationToken::new()).cancel();
-        }
+            std::mem::take(&mut current.served)
+        };
         current.admission = Admission::Refuse(reason);
+        Withdrawn(served)
     }
 
     /// Starts an admission pause, after which no request is admitted until the returned guard ends the pause.
@@ -240,6 +258,31 @@ impl SnapshotHolder {
             current.admission = Admission::Refuse(UnavailableReason::Checking);
         }
         AdmissionPause { holder: self }
+    }
+}
+
+/// The snapshots a withdrawal ended: each is dropped once the last request holding it has finished.
+#[derive(Debug)]
+pub struct Withdrawn(Vec<oneshot::Receiver<()>>);
+
+impl Withdrawn {
+    /// Waits up to `within` for every snapshot to be dropped, vault included, and returns how many are still held.
+    ///
+    /// A request that ignores its cancellation holds its snapshot until it ends, so the wait is bounded and the caller
+    /// reports a non-zero count rather than claiming the secrets are cleared (specification §3.9, §3.11).
+    pub async fn released(&mut self, within: Duration) -> usize {
+        // A sender dropping without a value resolves its receiver with an error, which is the signal. A receiver is
+        // removed once it resolves, because polling it again would panic, and the wait can be called again.
+        let all = async {
+            while let Some(dropped) = self.0.first_mut() {
+                let _ = dropped.await;
+                self.0.remove(0);
+            }
+        };
+        let _ = tokio::time::timeout(within, all).await;
+        self.0
+            .retain_mut(|dropped| matches!(dropped.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+        self.0.len()
     }
 }
 
