@@ -352,7 +352,8 @@ fn commit<F: StoreFs>(
 
 /// Step 6's file change. A directory fsync failure is logged and passed over: it normally comes after both renames.
 /// It is also what publish reports when the platform cannot fsync a directory, before any rename; the read-back in
-/// [`PreparedApproval::commit`] then finds the pair not in place, so that case fails too.
+/// [`PreparedApproval::commit`] then finds the previous published pair, which does not verify as the committed
+/// approval, so that case fails too.
 fn publish_both<F: StoreFs>(storage: &ApprovalStorage<'_, F>, version: ApprovalVersion) -> Result<(), ConfigWriteError> {
     match publish(storage.config_dir, storage.fs, PublishSet::Both) {
         Err(ConfigWriteError::Io {

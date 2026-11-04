@@ -549,13 +549,19 @@ fn refuse_existing(lock: &StateDirLock, fs: &impl StoreFs) -> Result<(), Approva
 }
 
 /// Durably replaces `approval.age`. A failure at the directory fsync comes after the rename, so the disk may already
-/// hold the new state; that is [`ApprovalStateError::WriteUncertain`], never "unchanged". The caller reports it: the
-/// approval transaction as `config.commit-uncertain`.
+/// hold the new state; that is [`ApprovalStateError::WriteUncertain`], never "unchanged".
 fn replace_file(lock: &StateDirLock, fs: &impl StoreFs, bytes: &[u8]) -> Result<(), ApprovalStateError> {
     durable_replace(lock, fs, &StateFileName::approval_state(), bytes).map_err(|error| match error {
         WriteError::Io {
             step: WriteStep::SyncDir, ..
-        } => ApprovalStateError::WriteUncertain(error),
+        } => {
+            tracing::error!(
+                error = %error,
+                remediation = "reload the approval state: the change took effect only if the reloaded state shows it",
+                "approval state was replaced but the state directory fsync failed; the change may not survive power loss"
+            );
+            ApprovalStateError::WriteUncertain(error)
+        }
         other => ApprovalStateError::Write(other),
     })
 }
