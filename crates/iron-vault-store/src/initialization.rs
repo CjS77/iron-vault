@@ -8,8 +8,8 @@
 use std::ffi::OsStr;
 use std::io;
 
-use crate::config_dir::{DISCARD_ORDER, remove_config_files};
-use crate::durable::{ReadFailure, read_in};
+use crate::config_dir::remove_config_files;
+use crate::durable::{ReadFailure, ensure_dir_sync_supported, read_in};
 use crate::state_dir::LOCK_FILE;
 use crate::vault::is_record_file_name;
 use crate::{
@@ -23,6 +23,16 @@ const INITIAL_CONFIG: &[u8] = b"schema_version = 1\n";
 
 /// The directory a filesystem check creates on a fresh volume; it is not a vault file, so the checks ignore it.
 const LOST_FOUND: &str = "lost+found";
+
+/// The order a discard removes config files: all signatures before any config. A signature with no config beside it
+/// reads as the owner's file (Unrecognized), and `publish` can leave `config.toml` beside `config.toml.sig.staged`, so
+/// removing any config while a signature remains could strand that signature after a crash.
+const DISCARD_ORDER: [ConfigFileName; 4] = [
+    ConfigFileName::ActiveSignature,
+    ConfigFileName::StagedSignature,
+    ConfigFileName::Active,
+    ConfigFileName::Pending,
+];
 
 /// How many offending names an [`InitStateError::Unrecognized`] carries.
 const MAX_NAMED: usize = 5;
@@ -122,14 +132,17 @@ pub fn begin_initialization(state: &StateDirLock, config: &ConfigDirLock, fs: &i
 /// Finishes an initialization: durably removes `init.unfinished`, its commit point.
 ///
 /// A failed directory fsync comes after the unlink, so it is [`InitStateError::FinishUncertain`] and not a plain
-/// failure: the vault reads Initialized now and may read Unfinished after power loss.
+/// failure: the vault reads Initialized now and may read Unfinished after power loss. A platform with no directory
+/// fsync is refused up front, before the unlink, as an ordinary failure.
 pub fn finish_initialization(state: &StateDirLock, fs: &impl StoreFs) -> Result<(), InitStateError> {
-    durable_remove(state, fs, &StateFileName::unfinished_initialization()).map_err(|error| match error {
+    let marker = StateFileName::unfinished_initialization();
+    ensure_dir_sync_supported(&marker)?;
+    durable_remove(state, fs, &marker).map_err(|error| match error {
         WriteError::Io {
             step: WriteStep::SyncDir,
             kind,
             ..
-        } if kind != io::ErrorKind::Unsupported => InitStateError::FinishUncertain { kind },
+        } => InitStateError::FinishUncertain { kind },
         other => InitStateError::State(other),
     })
 }
@@ -141,9 +154,10 @@ pub(crate) fn ensure_unlockable(lock: &StateDirLock, fs: &impl StoreFs) -> Resul
     if has(StateFileName::unfinished_initialization()) {
         return Err(UnlockError::InitializationUnfinished);
     }
-    match has(StateFileName::passphrase_envelope()) || has(StateFileName::manifest()) {
-        true => Ok(()),
-        false => Err(UnlockError::NotInitialized),
+    if has(StateFileName::passphrase_envelope()) || has(StateFileName::manifest()) {
+        Ok(())
+    } else {
+        Err(UnlockError::NotInitialized)
     }
 }
 

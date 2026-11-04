@@ -65,9 +65,11 @@ impl Dirs {
         }
     }
 
-    /// The directory after the write-order step `step` (0 to 8) is durable, with every earlier step.
+    /// The directory after the write-order step `step` (0 to 7) is durable, with every earlier step. Step 8 is the
+    /// publish, and its three outcomes are `PUBLISHED` (both renames), `ONLY_CONFIG_PUBLISHED` (`config.toml` beside
+    /// the staged signature) and `ONLY_SIGNATURE_PUBLISHED` (the pending config beside `config.toml.sig`).
     fn crashed_after(&self, fs: &impl StoreFs, step: usize) {
-        (0..=step).for_each(|s| match s {
+        (0..=step.min(7)).for_each(|s| match s {
             0 => self.put_bytes(fs, "init.unfinished", b""),
             1 => self.put(fs, "identity.age"),
             2 => self.put(fs, "operational.age"),
@@ -75,9 +77,22 @@ impl Dirs {
             4 => self.put(fs, "manifest.age"),
             5 => self.put(fs, "approval.age"),
             6 => self.put_config(fs, Pending, INITIAL_CONFIG),
-            7 => self.put_config(fs, StagedSignature, b"signature"),
-            _ => publish(&self.config, fs, PublishSet::Both).unwrap(),
+            _ => self.put_config(fs, StagedSignature, b"signature"),
         });
+        let published = match step {
+            PUBLISHED => Some(PublishSet::Both),
+            ONLY_CONFIG_PUBLISHED => Some(PublishSet::ConfigOnly),
+            ONLY_SIGNATURE_PUBLISHED => Some(PublishSet::SignatureOnly),
+            _ => None,
+        };
+        published.into_iter().for_each(|set| publish(&self.config, fs, set).unwrap());
+    }
+
+    /// A [`FaultFs`] that shows the two lock files, which are real files the fault filesystem does not see.
+    fn fault_fs(&self) -> FaultFs {
+        FaultFs::new()
+            .with_durable_file(&self.state_dir.path().join("lock"), b"")
+            .with_durable_file(&self.config_dir.path().join("config.toml.lock"), b"")
     }
 
     fn state_names(&self, fs: &impl StoreFs) -> Vec<String> {
@@ -93,7 +108,10 @@ impl Dirs {
     }
 }
 
-const LAST_STEP: usize = 8;
+const PUBLISHED: usize = 8;
+const ONLY_CONFIG_PUBLISHED: usize = 9;
+const ONLY_SIGNATURE_PUBLISHED: usize = 10;
+const LAST_STEP: usize = ONLY_SIGNATURE_PUBLISHED;
 
 fn names(fs: &impl StoreFs, dir: &Path) -> Vec<String> {
     fs.list_dir(dir)
@@ -268,14 +286,14 @@ fn begin_after_every_crash_point_leaves_only_the_marker() {
         let removed = dirs.begin(&OsFs).unwrap();
         assert_eq!(dirs.state_names(&OsFs), ["init.unfinished", "lock"], "after step {step}");
         assert_eq!(dirs.config_names(&OsFs), ["config.toml.lock"], "after step {step}");
-        assert_eq!(removed.len(), [0, 1, 2, 3, 4, 5, 6, 7, 7][step], "after step {step}");
+        assert_eq!(removed.len(), [0, 1, 2, 3, 4, 5, 6, 7, 7, 7, 7][step], "after step {step}");
     });
 }
 
 #[test]
 fn begin_names_what_it_removed_config_first() {
     let dirs = Dirs::new("init-begin-names");
-    dirs.crashed_after(&OsFs, LAST_STEP);
+    dirs.crashed_after(&OsFs, PUBLISHED);
     assert_eq!(
         dirs.begin(&OsFs).unwrap(),
         [
@@ -336,26 +354,31 @@ fn an_unrecognized_error_names_files_only_and_at_most_five() {
     );
 }
 
-/// The discard unlinks each signature before the config beside it, so a crash after any call reads Unfinished again and
-/// never Unrecognized.
+/// The discard unlinks every signature before any config, so a crash after any call reads Unfinished again and never
+/// Unrecognized, from each state the publish step can leave, the half-published ones included.
 #[test]
 fn a_crash_during_the_discard_reads_unfinished() {
-    let probe = FaultFs::new();
-    let dirs = Dirs::new("init-discard-crash");
-    dirs.crashed_after(&probe, LAST_STEP);
-    let base = probe.trace().len();
-    dirs.begin(&probe).unwrap();
-    let calls = probe.trace().len() - base;
-    (0..calls).for_each(|cut| {
-        let fs = FaultFs::new();
-        dirs.crashed_after(&fs, LAST_STEP);
-        fs.cut_power_after(fs.trace().len() + cut);
-        assert!(dirs.begin(&fs).is_err(), "cut {cut}");
-        fs.crash();
-        assert_eq!(dirs.read(&fs), InitializationState::Unfinished, "cut {cut}");
-        dirs.begin(&fs).unwrap();
-        assert_eq!(dirs.state_names(&fs), ["init.unfinished"], "cut {cut}");
-    });
+    [PUBLISHED, ONLY_CONFIG_PUBLISHED, ONLY_SIGNATURE_PUBLISHED]
+        .into_iter()
+        .for_each(|step| {
+            let dirs = Dirs::new("init-discard-crash");
+            let probe = dirs.fault_fs();
+            dirs.crashed_after(&probe, step);
+            let base = probe.trace().len();
+            dirs.begin(&probe).unwrap();
+            let calls = probe.trace().len() - base;
+            (0..calls).for_each(|cut| {
+                let fs = dirs.fault_fs();
+                dirs.crashed_after(&fs, step);
+                fs.cut_power_after(fs.trace().len() + cut);
+                assert!(dirs.begin(&fs).is_err(), "step {step} cut {cut}");
+                fs.crash();
+                assert_eq!(dirs.read(&fs), InitializationState::Unfinished, "step {step} cut {cut}");
+                dirs.begin(&fs).unwrap();
+                assert_eq!(dirs.state_names(&fs), ["init.unfinished", "lock"], "step {step} cut {cut}");
+                assert_eq!(dirs.config_names(&fs), ["config.toml.lock"], "step {step} cut {cut}");
+            });
+        });
 }
 
 /// Fails each call of `run` in turn and checks that it reports the failure, then returns the state it left.
@@ -396,7 +419,7 @@ fn begin_on_a_fresh_directory_fails_cleanly_at_every_call() {
 #[test]
 fn begin_on_an_unfinished_directory_fails_cleanly_at_every_call() {
     let dirs = Dirs::new("init-fault-unfinished");
-    let outcomes = fail_each_call(&dirs, |fs| dirs.crashed_after(fs, LAST_STEP), |fs| dirs.begin(fs));
+    let outcomes = fail_each_call(&dirs, |fs| dirs.crashed_after(fs, ONLY_CONFIG_PUBLISHED), |fs| dirs.begin(fs));
     assert!(outcomes.len() >= 10, "{outcomes:?}");
     outcomes
         .iter()

@@ -217,16 +217,6 @@ pub fn remove_pending_and_staged(lock: &ConfigDirLock, fs: &impl StoreFs) -> Res
     }
 }
 
-/// The config files an interrupted initialization can have left, in the order the discard removes them. Each
-/// signature goes before the config it sits beside, so a crash part-way never leaves a signature alone, which the
-/// initialization state reads as the owner's file.
-pub(crate) const DISCARD_ORDER: [ConfigFileName; 4] = [
-    ConfigFileName::ActiveSignature,
-    ConfigFileName::Active,
-    ConfigFileName::StagedSignature,
-    ConfigFileName::Pending,
-];
-
 /// Durably removes the config files `names`, in that order, with a directory fsync after each, and returns the ones
 /// that existed. A file already absent is skipped. Stops at the first failure.
 ///

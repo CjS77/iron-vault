@@ -302,8 +302,10 @@ Notes on the steps:
 On Unfinished, under the service-wide lock and before step 1, init removes exactly the files an initialization
 writes, each durably, and only those present:
 
-- in the config directory: `config.toml.sig`, `config.toml`, `config.toml.sig.staged` and `config.toml.pending`,
-  then one directory fsync;
+- in the config directory: first `config.toml.sig` and `config.toml.sig.staged`, then `config.toml` and
+  `config.toml.pending`, each removed durably (unlink, then directory fsync). All signatures go before any config,
+  because a signature with no config beside it makes the state Unrecognized and `publish` can leave `config.toml`
+  beside `config.toml.sig.staged`;
 - in the state directory: `approval.age`, `manifest.age`, `approver.age`, `operational.age` and `identity.age`, each
   with `durable_remove`.
 
