@@ -6,6 +6,7 @@
 
 pub mod account_name;
 pub mod activation;
+pub mod approval_summary;
 pub mod authorization;
 pub mod bound_credential;
 pub mod caller;
@@ -55,6 +56,7 @@ pub mod validated;
 
 pub use account_name::{AccountName, AccountNameError};
 pub use activation::{AccountDirectory, ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
+pub use approval_summary::{ApprovalSummary, summarize};
 pub use authorization::{AuthorizedRequest, AuthzError, Refusal, authorize};
 pub use bound_credential::BoundCredential;
 pub use caller::{CallerAuth, CallerConfig, CallerError};
