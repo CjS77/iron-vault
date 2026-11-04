@@ -146,47 +146,80 @@ fn stop_signal() -> io::Result<impl Future<Output = ()>> {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
 mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
-
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use iron_vault::trusted_path::{ExpectedOwner, TrustedPathRule};
-
-    use std::path::PathBuf;
+    use iron_vault::path_metadata::{self, CollectError};
+    use iron_vault::trusted_path::{self, ExpectedOwner, Mode, PathComponent, Problem, TrustedPathRule, UnsafePath};
+    use iron_vault::trusted_path_report::PathFailure;
 
     use super::*;
+
+    /// A fresh `0755` directory under the system temp directory, removed on drop.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            static NEXT: AtomicU32 = AtomicU32::new(0);
+            let dir = std::env::temp_dir().join(format!("iv-serve-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("scratch");
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("chmod scratch");
+            Self(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn owner() -> ExpectedOwner {
+        ExpectedOwner {
+            uid: rustix::process::getuid().as_raw(),
+        }
+    }
 
     fn paths(profile: DeploymentProfile, state_dir: &Path) -> ServicePaths {
         ServicePaths {
             profile,
-            owner: ExpectedOwner {
-                uid: rustix::process::getuid().as_raw(),
-            },
+            owner: owner(),
             config: state_dir.join("config/config.toml"),
             state_dir: state_dir.to_path_buf(),
             runtime_dir: None,
         }
     }
 
-    /// A fresh empty directory under the system temp directory, unique within this process.
-    fn scratch() -> PathBuf {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let dir = std::env::temp_dir().join(format!("iv-serve-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-        fs::create_dir_all(&dir).expect("scratch");
-        dir
-    }
-
     fn mode(path: &Path) -> u32 {
         fs::metadata(path).expect("stat").permissions().mode() & 0o777
     }
 
+    /// The chain to `path` with the root-owned sticky directories above `root` shown as private `0755`, so only the
+    /// state directory's own mode can fail the check.
+    fn chain_beside_tmp(root: &Path, path: &Path) -> Vec<PathComponent> {
+        path_metadata::collect(path)
+            .expect("collect")
+            .into_iter()
+            .map(
+                |component| match root.starts_with(&component.path) && component.uid == 0 && component.mode.bits() & 0o1000 != 0 {
+                    true => PathComponent {
+                        mode: Mode::new(0o755),
+                        ..component
+                    },
+                    false => component,
+                },
+            )
+            .collect()
+    }
+
     #[test]
     fn development_creates_the_state_directory_and_its_parents_at_0700() {
-        let root = scratch();
-        let state = root.join("state-home/iron-vault");
+        let root = Scratch::new();
+        let state = root.0.join("state-home/iron-vault");
         create_state_dir(&paths(DeploymentProfile::Development, &state)).expect("create");
         assert_eq!(mode(&state), 0o700);
         assert_eq!(mode(state.parent().expect("parent")), 0o700);
@@ -194,8 +227,8 @@ mod tests {
 
     #[test]
     fn protected_never_creates_the_state_directory_and_the_check_names_it() {
-        let root = scratch();
-        let state = root.join("iron-vault");
+        let root = Scratch::new();
+        let state = root.0.join("iron-vault");
         let paths = paths(DeploymentProfile::Protected, &state);
         create_state_dir(&paths).expect("no-op");
         assert!(!state.exists());
@@ -206,23 +239,26 @@ mod tests {
             .find(|e| e.rule == TrustedPathRule::StateDir)
             .expect("state entry");
         assert_eq!(entry.path, state);
-        assert!(entry.outcome.is_err());
+        assert!(matches!(
+            &entry.outcome,
+            Err(PathFailure::Uncollected(CollectError::Io { path, kind: io::ErrorKind::NotFound })) if *path == state
+        ));
     }
 
     #[test]
-    fn an_existing_state_directory_keeps_its_mode() {
-        let root = scratch();
-        let state = root.join("iron-vault");
-        DirBuilder::new().mode(0o755).create(&state).expect("mkdir");
+    fn an_existing_state_directory_keeps_its_mode_and_is_refused_for_it() {
+        let root = Scratch::new();
+        let state = root.0.join("iron-vault");
+        fs::create_dir(&state).expect("mkdir");
         fs::set_permissions(&state, fs::Permissions::from_mode(0o755)).expect("chmod");
         create_state_dir(&paths(DeploymentProfile::Development, &state)).expect("create");
         assert_eq!(mode(&state), 0o755);
-        let report = TrustedPathReport::check(&paths(DeploymentProfile::Development, &state));
-        let entry = report
-            .entries
-            .iter()
-            .find(|e| e.rule == TrustedPathRule::StateDir)
-            .expect("state entry");
-        assert!(entry.outcome.is_err());
+        let chain = chain_beside_tmp(&root.0, &state);
+        let refused = trusted_path::check(TrustedPathRule::StateDir, DeploymentProfile::Development, owner(), &chain);
+        let problem = Problem::WrongMode {
+            found: Mode::new(0o755),
+            expected: Mode::new(0o700),
+        };
+        assert_eq!(refused, Err(UnsafePath { path: state, problem }));
     }
 }
