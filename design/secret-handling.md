@@ -63,8 +63,8 @@ It is private to its module, so the test module cannot name it; it is covered th
 `OwnerInput` and `RevealedSecret` are each decoded by copying the frame body once, straight into a clearing buffer;
 neither passes through the admin protocol's field decoder or `serde` (`design/admin-protocol.md`). Each encoded frame
 holds the value too, so `encode` writes into a buffer the caller supplies, and a caller sending owner input or a reveal
-passes a `Zeroizing<Vec<u8>>`. The CLI writes a `RevealedSecret` only to the controlling terminal, never to stdout or stderr
-(`design/vault-initialization.md`).
+passes a `Zeroizing<Vec<u8>>`. The CLI writes a `RevealedSecret` only to the controlling terminal, never to stdout
+or stderr (`design/vault-initialization.md`).
 
 `OperationalIdentity` holds nothing: it only generates a `RecipientIdentity`.
 
