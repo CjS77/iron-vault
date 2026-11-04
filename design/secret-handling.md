@@ -230,8 +230,8 @@ The service holds each reqwest `Client` inside one `UpstreamClient`, which is no
 out; the `UpstreamClients` that own them live only in a `ServingSnapshot`. So the pools are dropped exactly when the
 snapshot is, and the snapshot drops its clients before the sender it releases last, so the lock drain sees the release
 only after every idle handle has gone. `after_a_cleared_lock_no_upstream_connection_that_carried_the_credential_is_open`
-(`service_context_linux.rs`) and `dropping_the_client_closes_its_idle_connection` (`upstream_client.rs`, over HTTP/1.1
-and HTTP/2) hold this in place against an upstream that keeps every connection open.
+(`service_context_linux.rs`) and `dropping_the_client_closes_its_idle_connection` (`upstream_client.rs`, and its HTTP/2
+twin in `upstream_client_h2.rs`) hold this in place against an upstream that keeps every connection open.
 
 **Decision (K-143): keep the pool, and keep the snapshot its only owner.** The options considered:
 

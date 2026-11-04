@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
+use common::body_stream::eventually;
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, WAIT, next_free_port, token_hash};
 use ed25519_dalek::{Signer, SigningKey};
@@ -1274,6 +1275,22 @@ async fn lock_clears_the_vault_identity_once_its_drain_releases_the_last_snapsho
 
     assert!(identity.upgrade().is_none(), "the vault identity outlived the lock drain");
     assert!(service.identity_probe().await.is_none());
+}
+
+#[tokio::test]
+async fn after_a_cleared_lock_no_upstream_connection_that_carried_the_credential_is_open() {
+    // The upstream keeps every connection for the client's next request, so only the service can close one.
+    let mut fixture = Fixture::with_reply(Reply::KeepAlive("ok".to_owned())).await;
+    fixture.approve(&fixture.config(""));
+    let service = ready_service(&fixture).await;
+    assert_served(&get_unix(&fixture.socket(), true).await);
+    assert!(fixture.upstream.requests()[0].head.contains(SECRET));
+
+    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+
+    // The upstream learns of the close only when the client's FIN reaches it, so the test waits for that.
+    eventually(|| (fixture.upstream.open_connections() == 0).then_some(())).await;
+    assert_eq!(fixture.upstream.connections(), 1);
 }
 
 #[tokio::test]

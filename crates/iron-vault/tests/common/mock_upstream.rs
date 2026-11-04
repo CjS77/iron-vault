@@ -106,6 +106,9 @@ pub enum Reply {
     },
     /// Answers `200` with a chunked body of scripted chunks, each flushed as its own write.
     Script(Script),
+    /// Answers `200 OK` with this body and keeps the connection open for the client's next request, as a real
+    /// upstream does, until the client closes it.
+    KeepAlive(String),
 }
 
 /// One step of a scripted chunked body.
@@ -248,6 +251,7 @@ pub struct MockUpstream {
     port: u16,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
     connections: Arc<AtomicUsize>,
+    open: Arc<AtomicUsize>,
     task: JoinHandle<()>,
 }
 
@@ -263,17 +267,20 @@ impl MockUpstream {
         let port = listener.local_addr().unwrap().port();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let connections = Arc::new(AtomicUsize::new(0));
+        let open = Arc::new(AtomicUsize::new(0));
         let server = Server {
             acceptor: TlsAcceptor::from(config),
             reply: Arc::new(reply),
             requests: Arc::clone(&requests),
             connections: Arc::clone(&connections),
+            open: Arc::clone(&open),
         };
         let task = tokio::spawn(server.run(listener));
         Self {
             port,
             requests,
             connections,
+            open,
             task,
         }
     }
@@ -297,6 +304,11 @@ impl MockUpstream {
     pub fn connections(&self) -> usize {
         self.connections.load(Ordering::SeqCst)
     }
+
+    /// How many accepted connections are still open: the server sees the client close a connection when its read ends.
+    pub fn open_connections(&self) -> usize {
+        self.open.load(Ordering::SeqCst)
+    }
 }
 
 impl Drop for MockUpstream {
@@ -312,6 +324,24 @@ struct Server {
     reply: Arc<Reply>,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
     connections: Arc<AtomicUsize>,
+    open: Arc<AtomicUsize>,
+}
+
+/// Counts one connection open from its accept until its task ends, however it ends.
+pub struct OpenConnection(Arc<AtomicUsize>);
+
+impl OpenConnection {
+    /// Counts one more connection in `open` until the value is dropped.
+    pub fn new(open: &Arc<AtomicUsize>) -> Self {
+        open.fetch_add(1, Ordering::SeqCst);
+        Self(Arc::clone(open))
+    }
+}
+
+impl Drop for OpenConnection {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl Server {
@@ -321,7 +351,12 @@ impl Server {
                 continue;
             };
             self.connections.fetch_add(1, Ordering::SeqCst);
-            tokio::spawn(self.clone().serve(stream));
+            let open = OpenConnection::new(&self.open);
+            let server = self.clone();
+            tokio::spawn(async move {
+                server.serve(stream).await;
+                drop(open);
+            });
         }
     }
 
@@ -348,6 +383,7 @@ impl Server {
             return;
         }
         match &*self.reply {
+            Reply::KeepAlive(body) => self.keep_alive(tls, body).await,
             Reply::Stall => tokio::time::sleep(Duration::from_secs(3600)).await,
             Reply::Respond { status, headers, body } => {
                 // A header value may name the upstream's own origin, whose port is known only once it runs.
@@ -372,6 +408,27 @@ impl Server {
                 let _ = tls.write_all(format!("{head}{}", chunk(sent)).as_bytes()).await;
                 let _ = tls.shutdown().await;
             }
+        }
+    }
+}
+
+impl Server {
+    /// Answers the request already recorded, then records and answers each further request on the connection until the
+    /// client closes it.
+    async fn keep_alive(&self, mut tls: tokio_rustls::server::TlsStream<TcpStream>, body: &str) {
+        let reply = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{body}", body.len());
+        while tls.write_all(reply.as_bytes()).await.is_ok() {
+            let Some(head) = read_head(&mut tls).await else {
+                return;
+            };
+            let server_name = tls.get_ref().1.server_name().map(str::to_owned);
+            let (body, body_complete) = read_body(&mut tls, &head).await;
+            self.requests.lock().unwrap().push(RecordedRequest {
+                server_name,
+                head,
+                body,
+                body_complete,
+            });
         }
     }
 }

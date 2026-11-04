@@ -66,6 +66,11 @@ pub enum ClientBuildError {
 }
 
 /// An HTTP client over one upstream trust that sends only checked requests.
+///
+/// It keeps idle connections for reuse, and an idle connection's task holds the last request's headers, the injected
+/// credential included. The pool is owned by this value alone: it is not `Clone` and never hands out its reqwest
+/// client, so dropping it, which a lock does with the serving snapshot, closes every idle connection
+/// (`design/secret-handling.md`, "Upstream connections close with their snapshot").
 pub struct UpstreamClient {
     client: Client,
     limits: TransportLimits,

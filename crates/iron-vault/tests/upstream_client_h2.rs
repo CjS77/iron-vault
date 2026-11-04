@@ -349,3 +349,18 @@ async fn a_get_without_a_body_sends_no_body_over_http2() {
     assert_eq!(received.body, b"");
     assert!(received.body_complete);
 }
+
+#[tokio::test]
+async fn dropping_the_client_closes_its_idle_http2_connection() {
+    // The upstream keeps the connection open, so only the client can close it.
+    let ca = TestCa::new("Test CA");
+    let upstream = MockH2Upstream::start(&ca, H2Reply::KeepOpen(b"kept".to_vec())).await;
+    let client = client(&ca);
+    let request = checked(&upstream.origin(), Method::Get, "/header/rates", &[], SECRET);
+    assert_eq!(body(client.send(request, UpstreamBody::empty()).await.unwrap()).await, b"kept");
+    assert_eq!(upstream.open_connections(), 1, "the pool should keep the connection");
+
+    drop(client);
+
+    eventually(|| (upstream.open_connections() == 0).then_some(())).await;
+}

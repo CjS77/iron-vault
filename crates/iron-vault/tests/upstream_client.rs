@@ -412,3 +412,29 @@ fn only_a_timeout_maps_to_504() {
         ]
     );
 }
+
+#[tokio::test]
+async fn dropping_the_client_closes_its_idle_connection() {
+    // The upstream keeps every connection for the client's next request, so only the client can close one.
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::KeepAlive("kept".to_owned())).await;
+    let client = client(&ca.trust());
+    let send = || {
+        client.send(
+            checked(&upstream.origin(), Method::Get, "/header/rates", &[], SECRET),
+            UpstreamBody::empty(),
+        )
+    };
+    assert_eq!(body(send().await.unwrap()).await, b"kept");
+    assert_eq!(body(send().await.unwrap()).await, b"kept");
+    assert_eq!(
+        (upstream.connections(), upstream.open_connections()),
+        (1, 1),
+        "the pool should keep and reuse the connection"
+    );
+
+    drop(client);
+
+    // The upstream learns of the close only when the client's FIN reaches it.
+    eventually(|| (upstream.open_connections() == 0).then_some(())).await;
+}

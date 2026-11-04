@@ -22,7 +22,7 @@ use tokio_rustls::server::TlsStream;
 
 use super::h2_refusal::{Refusal, refuse};
 use super::hpack_fields::{Field, first_header_fields};
-use super::mock_upstream::{TestCa, UPSTREAM_HOST};
+use super::mock_upstream::{OpenConnection, TestCa, UPSTREAM_HOST};
 
 /// What the HTTP/2 test upstream does once it has recorded a request.
 #[derive(Debug, Clone)]
@@ -42,6 +42,9 @@ pub enum H2Reply {
     /// server answers in raw frames rather than through `h2`, so it records no [`RecordedH2Request`], only each request
     /// head in [`MockH2Upstream::request_heads`].
     Refuse(Refusal),
+    /// Answers `200 OK` with this body and keeps the connection open, as a real upstream does, until the client closes
+    /// it. Later streams on the connection get no answer.
+    KeepOpen(Vec<u8>),
 }
 
 impl H2Reply {
@@ -92,6 +95,7 @@ pub struct MockH2Upstream {
     port: u16,
     requests: Arc<Mutex<Vec<RecordedH2Request>>>,
     connections: Arc<AtomicUsize>,
+    open: Arc<AtomicUsize>,
     heads: Arc<AtomicUsize>,
     task: JoinHandle<()>,
 }
@@ -105,12 +109,14 @@ impl MockH2Upstream {
         let port = listener.local_addr().unwrap().port();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let connections = Arc::new(AtomicUsize::new(0));
+        let open = Arc::new(AtomicUsize::new(0));
         let heads = Arc::new(AtomicUsize::new(0));
         let server = Server {
             acceptor: TlsAcceptor::from(Arc::new(config)),
             reply: Arc::new(reply),
             requests: Arc::clone(&requests),
             connections: Arc::clone(&connections),
+            open: Arc::clone(&open),
             heads: Arc::clone(&heads),
         };
         let task = tokio::spawn(server.run(listener));
@@ -118,6 +124,7 @@ impl MockH2Upstream {
             port,
             requests,
             connections,
+            open,
             heads,
             task,
         }
@@ -143,6 +150,11 @@ impl MockH2Upstream {
         self.connections.load(Ordering::SeqCst)
     }
 
+    /// How many accepted connections are still open: the server sees the client close one when its connection ends.
+    pub fn open_connections(&self) -> usize {
+        self.open.load(Ordering::SeqCst)
+    }
+
     /// How many request heads the server has received: each recorded request, plus each one a [`H2Reply::Refuse`]
     /// refused.
     pub fn request_heads(&self) -> usize {
@@ -162,6 +174,7 @@ struct Server {
     reply: Arc<H2Reply>,
     requests: Arc<Mutex<Vec<RecordedH2Request>>>,
     connections: Arc<AtomicUsize>,
+    open: Arc<AtomicUsize>,
     heads: Arc<AtomicUsize>,
 }
 
@@ -174,7 +187,12 @@ impl Server {
                 continue;
             };
             self.connections.fetch_add(1, Ordering::SeqCst);
-            tokio::spawn(self.clone().serve(stream));
+            let open = OpenConnection::new(&self.open);
+            let server = self.clone();
+            tokio::spawn(async move {
+                server.serve(stream).await;
+                drop(open);
+            });
         }
     }
 
@@ -270,6 +288,10 @@ async fn reply(reply: &H2Reply, mut connection: H2Connection, mut respond: SendR
             let mut stream = respond.send_response(response, false).unwrap();
             stream.send_data(Bytes::from(body.clone()), true).unwrap();
             connection.graceful_shutdown();
+        }
+        H2Reply::KeepOpen(body) => {
+            let mut stream = respond.send_response(Response::new(()), false).unwrap();
+            stream.send_data(Bytes::from(body.clone()), true).unwrap();
         }
         H2Reply::Reset(reason) => respond.send_reset(*reason),
         H2Reply::GoAway(reason) => connection.abrupt_shutdown(*reason),
