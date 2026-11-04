@@ -273,8 +273,7 @@ mod tests {
         let fifo = dir.path().join("fifo");
         std::fs::write(&regular, b"1234").unwrap();
         let checked = regular_file_metadata(&regular).unwrap();
-        let status = std::process::Command::new("mkfifo").arg(&fifo).status().unwrap();
-        assert!(status.success(), "mkfifo failed: {status}");
+        crate::test_dir::make_fifo(&fifo);
         let (sender, receiver) = std::sync::mpsc::channel();
         // The lstat is bypassed, so only the non-blocking open keeps a regression from hanging this thread.
         std::thread::spawn(move || sender.send(open_checked(&fifo, &checked).map(|_| ()).map_err(|e| e.kind())));

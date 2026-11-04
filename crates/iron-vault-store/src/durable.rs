@@ -426,8 +426,7 @@ mod tests {
     fn a_fifo_is_refused_without_blocking() {
         let dir = TestDir::new("dur-read-fifo");
         let lock = StateDirLock::acquire(dir.path()).unwrap();
-        let status = std::process::Command::new("mkfifo").arg(dir.path().join("rec")).status().unwrap();
-        assert!(status.success(), "mkfifo failed: {status}");
+        crate::test_dir::make_fifo(&dir.path().join("rec"));
         let (sender, receiver) = std::sync::mpsc::channel();
         // Opening a FIFO for reading blocks until a writer appears, so a regression hangs this thread, not the suite.
         std::thread::spawn(move || sender.send(read_state_file(&lock, &OsFs, &name("rec"), 4)));

@@ -52,7 +52,12 @@ fn open_lock_file(path: &Path) -> io::Result<File> {
     {
         use std::os::unix::fs::OpenOptionsExt;
         // NOFOLLOW keeps a planted symlink from redirecting the create; NONBLOCK keeps a planted FIFO from hanging startup.
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        // CLOEXEC keeps an exec'd child from holding the lock past its parent; std sets it already, so this states the
+        // requirement rather than relying on that. A child still shares the fd between fork and exec, so a process that
+        // holds a lock must not fork while it may drop and retake one.
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
     }
     options.open(path)
 }
@@ -86,4 +91,19 @@ fn is_eloop(e: &io::Error) -> bool {
 #[cfg(not(unix))]
 fn is_eloop(_e: &io::Error) -> bool {
     false
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use rustix::io::{FdFlags, fcntl_getfd};
+
+    use super::*;
+    use crate::test_dir::TestDir;
+
+    #[test]
+    fn the_lock_fd_is_closed_on_exec() {
+        let dir = TestDir::new("lock-cloexec");
+        let file = lock_file(dir.path(), "lock").unwrap();
+        assert!(fcntl_getfd(&file).unwrap().contains(FdFlags::CLOEXEC));
+    }
 }

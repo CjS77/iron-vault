@@ -1398,6 +1398,7 @@ dependencies = [
  "iron-vault-policy",
  "libc",
  "proptest",
+ "rustix",
  "secrecy",
  "serde",
  "static_assertions",

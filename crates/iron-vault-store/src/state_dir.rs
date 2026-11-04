@@ -106,8 +106,7 @@ mod tests {
     fn fifo_lock_is_refused_without_blocking() {
         let dir = TestDir::new("lock-fifo");
         let fifo = dir.path().join("lock");
-        let status = std::process::Command::new("mkfifo").arg(&fifo).status().unwrap();
-        assert!(status.success(), "mkfifo failed: {status}");
+        crate::test_dir::make_fifo(&fifo);
         let (sender, receiver) = std::sync::mpsc::channel();
         let state = dir.path().to_path_buf();
         std::thread::spawn(move || sender.send(StateDirLock::acquire(&state).map(|_| ())));

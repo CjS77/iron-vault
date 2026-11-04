@@ -29,3 +29,17 @@ impl Drop for TestDir {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// Makes a FIFO at `path` with a system call. Spawning `mkfifo` would fork, and the child would share this process's
+/// lock fds until it execs, so a concurrent test retaking its own lock could find it held.
+#[cfg(unix)]
+pub(crate) fn make_fifo(path: &Path) {
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        path,
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+        0,
+    )
+    .unwrap();
+}

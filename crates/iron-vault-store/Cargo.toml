@@ -34,5 +34,10 @@ proptest.workspace = true
 serde.workspace = true
 static_assertions.workspace = true
 
+# Tests make FIFOs and read fd flags through system calls rather than by forking a helper: a fork shares this process's
+# lock fds with the child until it execs, which can make a concurrent test's lock read as held.
+[target.'cfg(unix)'.dev-dependencies]
+rustix.workspace = true
+
 [lints]
 workspace = true
