@@ -49,7 +49,7 @@ pub use approval::{
     open_signer_key, read_signer_key, recover_approval, seal_approval_state, seal_signer_key, verify_approval, write_signer_key,
 };
 pub use config_dir::{
-    ConfigDirLock, ConfigReadError, ConfigWriteError, PublishSet, publish, read_config_file, remove_pending_and_staged,
+    ConfigDirLock, ConfigReadError, ConfigWriteError, PublishSet, RemoveStagingError, publish, read_config_file, remove_pending_and_staged,
     sweep_stale_config_temps, write_pending, write_staged,
 };
 pub use config_file_name::{ConfigFileName, MAX_CONFIG_LEN};

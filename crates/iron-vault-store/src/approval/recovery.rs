@@ -9,14 +9,16 @@
 #[cfg(test)]
 mod tests;
 
+use std::io;
+
 use thiserror::Error;
 
 use super::verify::verify_signed;
 use super::{ApprovalEnvelope, ApprovalPayload, ApprovalState, ApprovalVersion, CommittedApproval, ConfigDigest, VerifyError};
 use crate::ConfigFileName::{Active, ActiveSignature, Pending, StagedSignature};
 use crate::{
-    ConfigDirLock, ConfigFileName, ConfigWriteError, PublishSet, StoreFs, WriteStep, publish, read_config_file, remove_pending_and_staged,
-    verify_approval,
+    ConfigDirLock, ConfigFileName, ConfigReadError, ConfigWriteError, PublishSet, StoreFs, WriteStep, publish, read_config_file,
+    remove_pending_and_staged, verify_approval,
 };
 
 /// The store's counterpart of the service's failure reason: what a refused recovery leaves the service as. The
@@ -33,23 +35,36 @@ pub enum RecoveryFailure {
 /// table in design/config-approval.md.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PublishedPairFault {
-    /// `config.toml` or `config.toml.sig` is missing, over its limit or not a regular file.
-    #[error("{0} is missing")]
+    /// `config.toml` or `config.toml.sig` is absent: missing, over its limit or not a regular file. A file that is there
+    /// but cannot be read is [`ApprovalRecoveryError::Unreadable`] instead.
+    #[error("{0} is missing, oversized or not a regular file")]
     Missing(ConfigFileName),
     /// Both files are there, but the pair does not verify as the committed approval.
     #[error(transparent)]
     DoesNotVerify(VerifyError),
 }
 
-/// Why recovery left the service unavailable. Nothing on disk was changed, except as [`PublishFailed`] says; no variant
-/// carries config or signature bytes.
+/// Why recovery left the service unavailable. Nothing on disk was changed, except as [`PublishFailed`] and
+/// [`Unreadable`] say; no variant carries config or signature bytes.
 ///
 /// [`PublishFailed`]: ApprovalRecoveryError::PublishFailed
+/// [`Unreadable`]: ApprovalRecoveryError::Unreadable
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ApprovalRecoveryError {
     /// No approval was ever committed, so no config can be active.
     #[error("no approved config: no approval has been committed")]
     NothingCommitted,
+    /// A config file is there but reading it failed, so recovery cannot tell what it holds. It may be the file that
+    /// completes the commit, so recovery refuses before the recovery table and touches nothing. Only the read-back after
+    /// finishing a publish comes after renames, which the next recovery sees as row 1.
+    #[error("cannot read {file}: {kind}")]
+    Unreadable {
+        /// The first unreadable file, in the order `config.toml`, `config.toml.sig`, `config.toml.pending`,
+        /// `config.toml.sig.staged`.
+        file: ConfigFileName,
+        /// The I/O error kind; never [`io::ErrorKind::NotFound`], which is absent.
+        kind: io::ErrorKind,
+    },
     /// One file of the committed approval waits to be published, but the other is gone (recovery rows 5 and 6).
     #[error("committed version {version} cannot be published: its {missing} is missing; the published pair: {published}")]
     CommittedFileMissing {
@@ -93,7 +108,7 @@ impl ApprovalRecoveryError {
     pub fn failure(&self) -> RecoveryFailure {
         match self {
             Self::NothingCommitted | Self::PublishedPairInvalid { .. } => RecoveryFailure::PolicyInvalid,
-            Self::CommittedFileMissing { .. } | Self::PublishFailed { .. } | Self::PublishNotVerified { .. } => {
+            Self::Unreadable { .. } | Self::CommittedFileMissing { .. } | Self::PublishFailed { .. } | Self::PublishNotVerified { .. } => {
                 RecoveryFailure::RecoveryNeeded
             }
         }
@@ -136,20 +151,21 @@ impl RecoveredApproval {
 
 /// Runs approval recovery on the config directory against the committed approval in `state`, which it never writes.
 ///
-/// Serves the published pair when it verifies as the committed approval (row 1), finishes publishing when the committed
-/// approval's files wait as the pending config or staged approval (rows 2 to 4), and otherwise refuses and touches
-/// nothing (rows 5 to 8). Once the published pair verifies, any pending or staged file left is an uncommitted leftover
-/// and is removed, best effort. A recovery that fails midway leaves a state the next one resolves, so it is safe to run
-/// again, at startup or in any later config check (design/config-approval.md, open question 7).
+/// Refuses and touches nothing if any config file is there but unreadable. Otherwise serves the published pair when it
+/// verifies as the committed approval (row 1), finishes publishing when the committed approval's files wait as the
+/// pending config or staged approval (rows 2 to 4), and otherwise refuses and touches nothing (rows 5 to 8). Once the
+/// published pair verifies, any pending or staged file left is an uncommitted leftover and is removed, best effort. A
+/// recovery that fails midway leaves a state the next one resolves, so it is safe to run again, at startup or in any
+/// later config check (design/config-approval.md, open question 7).
 pub fn recover_approval(
     config_dir: &ConfigDirLock,
     fs: &impl StoreFs,
     state: &ApprovalState,
 ) -> Result<RecoveredApproval, ApprovalRecoveryError> {
     let committed = state.committed().ok_or(ApprovalRecoveryError::NothingCommitted)?;
-    let files = ConfigFiles::read(config_dir, fs);
+    let files = ConfigFiles::read(config_dir, fs)?;
     match files.published.verify(state) {
-        Ok(published) => Ok(finish(config_dir, fs, state, published, None)),
+        Ok(published) => Ok(serve_discarding_leftovers(config_dir, fs, state, &files, published, None)),
         Err(published) => recover_unpublished(config_dir, fs, state, &files, committed, published),
     }
 }
@@ -177,9 +193,9 @@ fn recover_unpublished(
         published: published.clone(),
     };
     match (config, approval) {
-        (Some(Place::InPlace), Some(Place::Waiting)) => publish_committed(config_dir, fs, state, version, PublishSet::SignatureOnly),
-        (Some(Place::Waiting), Some(Place::InPlace)) => publish_committed(config_dir, fs, state, version, PublishSet::ConfigOnly),
-        (Some(Place::Waiting), Some(Place::Waiting)) => publish_committed(config_dir, fs, state, version, PublishSet::Both),
+        (Some(Place::InPlace), Some(Place::Waiting)) => publish_committed(config_dir, fs, state, files, version, PublishSet::SignatureOnly),
+        (Some(Place::Waiting), Some(Place::InPlace)) => publish_committed(config_dir, fs, state, files, version, PublishSet::ConfigOnly),
+        (Some(Place::Waiting), Some(Place::Waiting)) => publish_committed(config_dir, fs, state, files, version, PublishSet::Both),
         (Some(Place::Waiting), None) => Err(missing(StagedSignature)),
         (None, Some(Place::Waiting)) => Err(missing(Pending)),
         // Rows 7 and 8. Both files in place would verify, which is row 1, so refusing it here can only be the safe side.
@@ -215,6 +231,7 @@ fn publish_committed(
     config_dir: &ConfigDirLock,
     fs: &impl StoreFs,
     state: &ApprovalState,
+    files: &ConfigFiles,
     version: ApprovalVersion,
     set: PublishSet,
 ) -> Result<RecoveredApproval, ApprovalRecoveryError> {
@@ -228,43 +245,48 @@ fn publish_committed(
         Err(cause) => return Err(ApprovalRecoveryError::PublishFailed { version, cause }),
     }
     tracing::warn!(event = "config.recovery-published", %version, renames = ?set, "ran the publish renames of a committed approval");
-    let published = PublishedPair::read(config_dir, fs)
+    let published = PublishedPair::read(config_dir, fs)?
         .verify(state)
         .map_err(|published| ApprovalRecoveryError::PublishNotVerified { version, published })?;
-    Ok(finish(config_dir, fs, state, published, Some(set)))
+    Ok(serve_discarding_leftovers(config_dir, fs, state, files, published, Some(set)))
 }
 
-/// The published pair verifies: discards the leftovers and reports the result.
-fn finish(
+/// The published pair verifies: discards the leftovers and serves the pair. `files` is what recovery read before any
+/// rename; a staged approval it held is still the one on disk if the publish left it there.
+fn serve_discarding_leftovers(
     config_dir: &ConfigDirLock,
     fs: &impl StoreFs,
     state: &ApprovalState,
+    files: &ConfigFiles,
     published: CommittedApproval,
     finished: Option<PublishSet>,
 ) -> RecoveredApproval {
     RecoveredApproval {
-        discarded: discard_leftovers(config_dir, fs, state),
+        discarded: discard_leftovers(config_dir, fs, state, files.staged.as_deref()),
         published,
         finished,
     }
 }
 
 /// Durably removes the pending config and staged approval beside a published pair that verifies, best effort: a
-/// leftover is never promoted, so one left behind is discarded by the next config check. The counters are not touched.
-fn discard_leftovers(config_dir: &ConfigDirLock, fs: &impl StoreFs, state: &ApprovalState) -> Vec<DiscardedFile> {
-    let signed_for = read_config_file(config_dir, fs, StagedSignature)
-        .ok()
-        .and_then(|envelope| staged_payload(state, &envelope))
-        .map(|payload| payload.version());
+/// leftover is never promoted, so one left behind is discarded by the next config check. Reports and logs every file
+/// that was removed, even when the removal then failed. The counters are not touched.
+fn discard_leftovers(config_dir: &ConfigDirLock, fs: &impl StoreFs, state: &ApprovalState, staged: Option<&[u8]>) -> Vec<DiscardedFile> {
     let removed = remove_pending_and_staged(config_dir, fs).unwrap_or_else(|error| {
-        tracing::warn!(%error, "cannot discard the uncommitted pending config and staged approval; the next config check retries");
-        Vec::new()
+        let removed = &error.removed;
+        tracing::warn!(%error, ?removed, "cannot discard all of the uncommitted pending config and staged approval; the next config check retries");
+        error.removed
     });
+    let signed_for = || {
+        staged
+            .and_then(|envelope| staged_payload(state, envelope))
+            .map(|payload| payload.version())
+    };
     let discarded: Vec<_> = removed
         .into_iter()
         .map(|file| DiscardedFile {
             file,
-            signed_for: signed_for.filter(|_| file == StagedSignature),
+            signed_for: (file == StagedSignature).then(signed_for).flatten(),
         })
         .collect();
     discarded.iter().for_each(|d| {
@@ -298,12 +320,24 @@ struct ConfigFiles {
 }
 
 impl ConfigFiles {
-    fn read(config_dir: &ConfigDirLock, fs: &impl StoreFs) -> Self {
-        Self {
-            published: PublishedPair::read(config_dir, fs),
-            pending: read_config_file(config_dir, fs, Pending).ok(),
-            staged: read_config_file(config_dir, fs, StagedSignature).ok(),
-        }
+    /// Reads `config.toml`, `config.toml.sig`, `config.toml.pending` and `config.toml.sig.staged` in that order,
+    /// stopping at the first that is unreadable.
+    fn read(config_dir: &ConfigDirLock, fs: &impl StoreFs) -> Result<Self, ApprovalRecoveryError> {
+        Ok(Self {
+            published: PublishedPair::read(config_dir, fs)?,
+            pending: read_if_present(config_dir, fs, Pending)?,
+            staged: read_if_present(config_dir, fs, StagedSignature)?,
+        })
+    }
+}
+
+/// The file's bytes, `None` if it is absent, or [`ApprovalRecoveryError::Unreadable`] if it is there but reading it
+/// failed.
+fn read_if_present(config_dir: &ConfigDirLock, fs: &impl StoreFs, file: ConfigFileName) -> Result<Option<Vec<u8>>, ApprovalRecoveryError> {
+    match read_config_file(config_dir, fs, file) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(ConfigReadError::Io { kind, .. }) if kind != io::ErrorKind::NotFound => Err(ApprovalRecoveryError::Unreadable { file, kind }),
+        Err(ConfigReadError::Io { .. } | ConfigReadError::TooLarge { .. } | ConfigReadError::NotARegularFile { .. }) => Ok(None),
     }
 }
 
@@ -314,11 +348,11 @@ struct PublishedPair {
 }
 
 impl PublishedPair {
-    fn read(config_dir: &ConfigDirLock, fs: &impl StoreFs) -> Self {
-        Self {
-            config: read_config_file(config_dir, fs, Active).ok(),
-            envelope: read_config_file(config_dir, fs, ActiveSignature).ok(),
-        }
+    fn read(config_dir: &ConfigDirLock, fs: &impl StoreFs) -> Result<Self, ApprovalRecoveryError> {
+        Ok(Self {
+            config: read_if_present(config_dir, fs, Active)?,
+            envelope: read_if_present(config_dir, fs, ActiveSignature)?,
+        })
     }
 
     /// The pair, verified as the committed approval.

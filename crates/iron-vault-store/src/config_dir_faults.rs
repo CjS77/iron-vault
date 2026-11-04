@@ -9,8 +9,8 @@ use crate::durable_faults::assert_trace_properties;
 use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::test_dir::TestDir;
 use crate::{
-    ConfigDirLock, ConfigFileName, ConfigWriteError, PublishSet, StoreFs, WriteStep, publish, remove_pending_and_staged,
-    sweep_stale_config_temps, write_pending, write_staged,
+    ConfigDirLock, ConfigFileName, ConfigWriteError, PublishSet, RemoveStagingError, StoreFs, WriteStep, publish,
+    remove_pending_and_staged, sweep_stale_config_temps, write_pending, write_staged,
 };
 
 const OLD_CONFIG: &[u8] = b"old config, longer than the new one";
@@ -420,22 +420,27 @@ fn remove_failure_at_each_call_names_the_step_and_the_file_and_tries_the_rest() 
         file,
         kind: io::ErrorKind::PermissionDenied,
     };
-    // For each call: the error, then whether the pending config and the staged approval are left on disk.
+    // For each call: the error, the files reported removed, then whether the pending config and the staged approval
+    // are left on disk.
     let cases = [
-        (io(WriteStep::Remove, Pending), true, false),
-        (io(WriteStep::Remove, StagedSignature), false, true),
-        (io(WriteStep::SyncDir, Pending), false, false),
+        (io(WriteStep::Remove, Pending), vec![StagedSignature], true, false),
+        (io(WriteStep::Remove, StagedSignature), vec![Pending], false, true),
+        (io(WriteStep::SyncDir, Pending), vec![Pending, StagedSignature], false, false),
     ];
-    cases.into_iter().enumerate().for_each(|(i, (error, pending_left, staged_left))| {
-        let fs = setup.staged_fs();
-        fs.fail_call(i, io::ErrorKind::PermissionDenied);
-        assert_eq!(remove_pending_and_staged(&setup.lock, &fs), Err(error), "fault at call {i}");
-        assert_eq!(setup.contents(&fs, Pending).is_some(), pending_left, "fault at call {i}");
-        assert_eq!(setup.contents(&fs, StagedSignature).is_some(), staged_left, "fault at call {i}");
-        assert_eq!(setup.active_pair(&fs), (Gen::Old, Gen::Old), "fault at call {i}");
-        // Every attempt reaches the directory fsync, so the unlink that did happen is made durable.
-        assert_eq!(fs.trace().len(), 3, "fault at call {i}");
-    });
+    cases
+        .into_iter()
+        .enumerate()
+        .for_each(|(i, (cause, removed, pending_left, staged_left))| {
+            let fs = setup.staged_fs();
+            fs.fail_call(i, io::ErrorKind::PermissionDenied);
+            let error = RemoveStagingError { removed, cause };
+            assert_eq!(remove_pending_and_staged(&setup.lock, &fs), Err(error), "fault at call {i}");
+            assert_eq!(setup.contents(&fs, Pending).is_some(), pending_left, "fault at call {i}");
+            assert_eq!(setup.contents(&fs, StagedSignature).is_some(), staged_left, "fault at call {i}");
+            assert_eq!(setup.active_pair(&fs), (Gen::Old, Gen::Old), "fault at call {i}");
+            // Every attempt reaches the directory fsync, so the unlink that did happen is made durable.
+            assert_eq!(fs.trace().len(), 3, "fault at call {i}");
+        });
 }
 
 #[test]

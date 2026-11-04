@@ -81,7 +81,8 @@ impl ConfigWriteError {
     }
 }
 
-/// Why a config file could not be read. Recovery treats every one of them as the file being absent.
+/// Why a config file could not be read. Recovery treats a missing, oversized or non-regular file as absent, and refuses
+/// on any other I/O error.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigReadError {
     /// The file is longer than its limit; it was not read in full.
@@ -106,6 +107,17 @@ pub enum ConfigReadError {
         /// The underlying error kind.
         kind: io::ErrorKind,
     },
+}
+
+/// Why [`remove_pending_and_staged`] failed, with the files it removed all the same.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{cause}")]
+pub struct RemoveStagingError {
+    /// The files that were unlinked, pending first. After a [`WriteStep::SyncDir`] failure the unlinks are visible but
+    /// may not survive power loss.
+    pub removed: Vec<ConfigFileName>,
+    /// The first failure.
+    pub cause: ConfigWriteError,
 }
 
 /// The two files the transaction stages beside the active pair: what [`remove_pending_and_staged`] and the sweep touch.
@@ -173,11 +185,16 @@ pub fn read_config_file(lock: &ConfigDirLock, fs: &impl StoreFs, name: ConfigFil
 /// files that existed and were removed, pending first.
 ///
 /// A file that is already absent is not an error. Both removals are tried even if the first fails, and the directory
-/// is fsynced if either one happened; the first failure is the one reported. A [`WriteStep::SyncDir`] failure comes
-/// after the unlinks.
-pub fn remove_pending_and_staged(lock: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<ConfigFileName>, ConfigWriteError> {
+/// is fsynced if either one happened; the first failure is the one reported, beside the files that were removed. A
+/// [`WriteStep::SyncDir`] failure comes after the unlinks.
+pub fn remove_pending_and_staged(lock: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<ConfigFileName>, RemoveStagingError> {
     let dir = lock.dir();
-    dir_sync_supported().map_err(ConfigWriteError::io(ConfigFileName::Pending))?;
+    dir_sync_supported()
+        .map_err(ConfigWriteError::io(ConfigFileName::Pending))
+        .map_err(|cause| RemoveStagingError {
+            removed: Vec::new(),
+            cause,
+        })?;
     let attempts = STAGING_FILES.map(|name| (name, unlink_in(fs, dir, name.as_str())));
     let removed: Vec<_> = attempts.iter().filter(|(_, r)| r.is_ok()).map(|(name, _)| *name).collect();
     let first_error = attempts.iter().find_map(|(name, r)| match r {
@@ -191,9 +208,12 @@ pub fn remove_pending_and_staged(lock: &ConfigDirLock, fs: &impl StoreFs) -> Res
             .map_err(ConfigWriteError::io(*first)),
         None => Ok(()),
     };
-    match first_error {
-        Some((name, failure)) => Err(ConfigWriteError::io(name)(failure)),
-        None => synced.map(|()| removed),
+    let failure = first_error
+        .map(|(name, failure)| ConfigWriteError::io(name)(failure))
+        .or(synced.err());
+    match failure {
+        Some(cause) => Err(RemoveStagingError { removed, cause }),
+        None => Ok(removed),
     }
 }
 

@@ -392,3 +392,111 @@ fn power_loss_at_any_call_of_recovery_is_safe_to_run_again() {
         });
     });
 }
+
+/// The kind the OS filesystem gives a read that fails with `EIO`.
+#[cfg(unix)]
+fn eio() -> io::ErrorKind {
+    io::Error::from_raw_os_error(libc::EIO).kind()
+}
+
+/// Recovery of `row` with the read of `file` failing with `kind`: it must refuse with `expected` and change nothing.
+fn assert_refuses_on_read_fault(setup: &Setup, n: u8, file: ConfigFileName, kind: io::ErrorKind, expected: &ApprovalRecoveryError) {
+    let context = format!("row {n}, reading {file} fails with {kind}");
+    let (fs, state) = row(setup, n);
+    let (before, base) = (snapshot(setup, &fs), fs.trace().len());
+    let read_index = ALL_FILES.iter().position(|&f| f == file).unwrap();
+    fs.fail_call(base + read_index, kind);
+    let error = recover(setup, &fs, &state).unwrap_err();
+    assert_eq!((&error, error.failure()), (expected, RecoveryFailure::RecoveryNeeded), "{context}");
+    assert_eq!(snapshot(setup, &fs), before, "{context}");
+    let only_reads = fs.trace()[base..].iter().all(|c| c.op() == FsOp::ReadBounded);
+    assert!(only_reads, "{context}: recovery changed the config directory");
+    assert_state_untouched(setup, &fs, base);
+    // Once the file reads again, recovery goes on as the table says.
+    let recovered = recover(setup, &fs, &state).unwrap_or_else(|e| panic!("{context}, after the fault: {e}"));
+    assert_recovered_new(setup, &fs, &state, &recovered, &context);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_config_file_refuses_before_the_table_and_touches_nothing() {
+    let setup = Setup::new("rcv-unreadable");
+    // Row 4 holds all four files, so an unreadable pending config or staged approval is not row 5 or 6; row 1 holds
+    // only the published pair, so an unreadable one is not a missing one.
+    let cases = [
+        (4, Pending),
+        (4, StagedSignature),
+        (4, Active),
+        (4, ActiveSignature),
+        (1, Active),
+        (1, ActiveSignature),
+    ];
+    cases.into_iter().for_each(|(n, file)| {
+        [io::ErrorKind::PermissionDenied, eio()].into_iter().for_each(|kind| {
+            assert_refuses_on_read_fault(&setup, n, file, kind, &ApprovalRecoveryError::Unreadable { file, kind });
+        });
+    });
+}
+
+#[test]
+fn a_read_that_finds_no_file_is_absent_as_before() {
+    let setup = Setup::new("rcv-not-found");
+    let superseded = PublishedPairFault::DoesNotVerify(VerifyError::Superseded {
+        version: OLD,
+        committed: version(2),
+    });
+    let missing = |missing| ApprovalRecoveryError::CommittedFileMissing {
+        version: version(2),
+        missing,
+        published: superseded.clone(),
+    };
+    assert_refuses_on_read_fault(&setup, 4, StagedSignature, io::ErrorKind::NotFound, &missing(StagedSignature));
+    assert_refuses_on_read_fault(&setup, 4, Pending, io::ErrorKind::NotFound, &missing(Pending));
+}
+
+#[test]
+fn the_first_unreadable_file_in_order_is_reported() {
+    let setup = Setup::new("rcv-unreadable-first");
+    let (fs, state) = row(&setup, 4);
+    let base = fs.trace().len();
+    // The pending config and the staged approval are both unreadable; the reads after the pending config never run.
+    [2, 3]
+        .into_iter()
+        .for_each(|i| fs.fail_call(base + i, io::ErrorKind::PermissionDenied));
+    let expected = ApprovalRecoveryError::Unreadable {
+        file: Pending,
+        kind: io::ErrorKind::PermissionDenied,
+    };
+    assert_eq!(recover(&setup, &fs, &state).unwrap_err(), expected);
+    assert_eq!(fs.trace().len() - base, 3);
+}
+
+/// A discard that fails partway reports, and so logs, each leftover it removed.
+#[test]
+fn a_partial_discard_still_reports_the_files_it_removed() {
+    let setup = Setup::new("rcv-partial-discard");
+    let pending = DiscardedFile {
+        file: Pending,
+        signed_for: None,
+    };
+    let staged = DiscardedFile {
+        file: StagedSignature,
+        signed_for: Some(version(3)),
+    };
+    // For each failing call: what recovery reports discarding, and whether the pending config is left.
+    let cases = [
+        (FsOp::RemoveFile, vec![staged], true),
+        (FsOp::SyncDir, vec![pending, staged], false),
+    ];
+    cases.into_iter().for_each(|(op, discarded, pending_left)| {
+        let (fs, state) = row(&setup, 1);
+        let payload = ApprovalPayload::new(state.vault_id(), version(3), ConfigDigest::of(NEW_CONFIG));
+        write_pending(&setup.config_lock, &fs, NEW_CONFIG).unwrap();
+        write_staged(&setup.config_lock, &fs, &signed(payload)).unwrap();
+        fs.fail_first(op, io::ErrorKind::PermissionDenied);
+        let recovered = recover(&setup, &fs, &state).unwrap();
+        assert_eq!(recovered.discarded(), discarded, "{op:?} fails");
+        assert_eq!(setup.read(&fs, Pending).is_some(), pending_left, "{op:?} fails");
+        assert_eq!(setup.read(&fs, StagedSignature), None, "{op:?} fails");
+    });
+}
