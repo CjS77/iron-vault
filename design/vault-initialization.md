@@ -159,10 +159,10 @@ to 5 minutes each would block `status`. Step 5 takes the service-wide lock witho
 concurrent writes](config-approval.md#the-service-wide-lock) do: another approval, vault write, reload, config check
 or init holding it ends step 5 with `busy`. Waiting could outlast the CLI's 60-second timeout, since an approval can
 hold the lock for about 10 minutes. Step 5 then holds the lock and the service context's mutex from the second state
-check to the response. An `unlock` that reads the state before step 9 sees Unfinished and ends with `unlock-failed`,
-whose message says an init may be in progress; its read under the context's mutex waits for step 5 and sees
-Initialized. A second init that passed
-its own first check ends with `busy` if the first still holds the lock, or finds Initialized under the lock and ends
+check to the response. An `unlock` whose first read comes before step 9 sees Unfinished and ends with `unlock-failed`,
+whose message says an init may be in progress. An `unlock` whose first read comes after step 9 sees Initialized
+at once; its read under the context's mutex waits for step 5 to finish and sees Initialized too. A second init that passed its
+own first check ends with `busy` if the first still holds the lock, or finds Initialized under the lock and ends
 with `already-initialized` once it has finished. The service wrote nothing for the second init, but its owner has
 already saved a recovery key, so both messages say to discard it. Step 5 takes a few seconds: two scrypt seals and one
 scrypt open at `PASSPHRASE_WORK_FACTOR`, and about a dozen durable writes, inside the CLI's 60-second timeout.
@@ -238,9 +238,16 @@ nothing: discard it*:
 
 **The outcome is unknown.** The owner's `yes` has been sent, or the vault may already stand, so step 5 may have
 finished, may still be running or may have failed, and the CLI cannot tell which. The advice is stated once, here:
-*keep the recovery key and run `iron-vault init` again. If it answers `already-initialized`, the vault stands and the
-key is its recovery key. If it starts over, with a new recovery key, the old key is dead: discard it. If it answers
-`busy`, the first run is still writing: wait a few seconds and run it again.* The endings are:
+*keep the recovery key and run `iron-vault init` again. If it starts over, with a new recovery key, the old key is
+dead: discard it. If it answers `busy`, the first run is still writing: wait a few seconds and run it again. If it
+answers `already-initialized` and the message says the vault is Initialized, a vault stands, but it may not be the
+one this key opens, so do not rely on the key yet: once the vault is unlocked, confirm it with
+`iron-vault recovery check` ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)) and keep
+the key only if that passes. If the message says Unrecognized, files init did not write are present and the key is
+not confirmed either.* The case the check guards against is a concurrent init: a second init finished first, so the
+owner's own run was refused and its key is dead, yet the re-run answers `already-initialized` for the other run's
+vault. `recovery check` has no design of its own yet, only the specification's §3.13 requirement; until it is
+designed and built, the owner cannot confirm the key and treats it as unconfirmed. The endings are:
 
 | Ending | Who says it |
 |---|---|

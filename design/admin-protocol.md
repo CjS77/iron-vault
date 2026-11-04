@@ -328,7 +328,7 @@ Errors specific to `init`:
 | `wrong-state` | the service is not Locked: at the request, before any prompt, or at the re-check under the lock after the reveal, when the message also says the recovery key shown opens nothing and is to be discarded |
 | `passphrase-rejected` | a passphrase broke a rule; the message names the rule |
 | `declined` | the owner did not answer the recovery key confirmation with `yes`; the message says the recovery key shown opens nothing and is to be discarded |
-| `init-failed` | a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: `already-initialized` means the vault stands with that key, and a start-over means the key is dead. A failure of the discard of an unfinished initialization names `discard` as its step |
+| `init-failed` | a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: a start-over means the key is dead, and `already-initialized` with a vault that is Initialized means a vault stands, which the owner confirms with `iron-vault recovery check` once unlocked before relying on the key, because a concurrent init may have finished first. A failure of the discard of an unfinished initialization names `discard` as its step |
 
 ### Prompt (kind 2)
 
@@ -491,7 +491,7 @@ the message itself, and neither the code nor the message ever contains owner inp
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
 byte values, `config approve` (command 2), `unlock` (command 4), `lock` (command 5), `status` (command 6), `init`
-(command 7), `add` (command 8), error codes 7 to 19 and error codes 20 to 22 join it rather than starting version 2.
+(command 7), `add` (command 8), error codes 7 to 22 join it rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
@@ -635,8 +635,11 @@ with the key, because the service cannot say so over a closed connection. It tra
 
 - **Before `yes`:** the service writes nothing, so the recovery key shown opens nothing and is to be discarded.
 - **After `yes`:** no prompt remains, so step 5 runs on and the outcome is unknown. The CLI says to keep the key and
-  run `iron-vault init` again: `already-initialized` means the vault stands and the key is its recovery key, and a
-  start-over, with a new recovery key, means the old one is dead. `busy` means the first run is still writing.
+  run `iron-vault init` again. A start-over, with a new recovery key, means the old one is dead, and `busy` means the
+  first run is still writing. `already-initialized` with a vault that is Initialized means a vault stands, but not
+  necessarily the one this key opens: a concurrent init may have finished first. The owner unlocks and confirms the
+  key with `iron-vault recovery check` (specification §3.13, which has no design document yet) before relying on it.
+
 On success it prints `initialized vault <vault ID>: approval version 1 committed` and `run iron-vault unlock to start
 serving` to stdout; the recovery key never goes there. Otherwise it prints the service's error to stderr and exits
 with code 1.
