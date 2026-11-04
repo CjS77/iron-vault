@@ -147,6 +147,16 @@ token_header = "{TOKEN_HEADER}"
     }
 }
 
+/// The serving snapshot for `config`, over a new vault in `state_dir` that holds `setup`'s credentials.
+fn snapshot(setup: Setup<'_>, config: &ValidatedConfig, state_dir: &Path) -> ServingSnapshot {
+    let vault = vault(setup.credentials, state_dir);
+    let policy = activate(config, &Capabilities::default(), &vault, &NoAccounts).unwrap();
+    let trust = setup.ca.trust();
+    let clients = UpstreamClients::with_pinned_loader(&policy, TransportLimits::default(), |_| Ok(trust.clone())).unwrap();
+    let limiter = RateLimiter::new(&policy, Instant::now().checked_sub(Duration::from_secs(60)).unwrap());
+    ServingSnapshot::new(policy, vault, clients, limiter).unwrap()
+}
+
 /// A vault holding every credential, each permitted to reach `localhost` on its own port only.
 fn vault(credentials: Vec<Credential>, state_dir: &Path) -> Vault {
     fs::create_dir(state_dir).unwrap();
@@ -351,6 +361,7 @@ fn open_listeners(setup: &Setup<'_>, socket: &Path, dir: &Path) -> (ValidatedCon
 pub struct Proxy {
     dir: TempDir,
     endpoints: Endpoints,
+    holder: Arc<SnapshotHolder>,
     task: JoinHandle<()>,
 }
 
@@ -361,19 +372,32 @@ impl Proxy {
         let dir = TempDir::new();
         let socket = dir.path().join("proxy.sock");
         let (config, listeners, tcp_port) = open_listeners(&setup, &socket, dir.path());
-        let ca = setup.ca;
-        let vault = vault(setup.credentials, &dir.path().join("state"));
-        let policy = activate(&config, &Capabilities::default(), &vault, &NoAccounts).unwrap();
-        let trust = ca.trust();
-        let clients = UpstreamClients::with_pinned_loader(&policy, TransportLimits::default(), |_| Ok(trust.clone())).unwrap();
-        let limiter = RateLimiter::new(&policy, Instant::now().checked_sub(Duration::from_secs(60)).unwrap());
-        let snapshot = ServingSnapshot::new(policy, vault, clients, limiter).unwrap();
-        let server = RequestServer::new(*config.limits(), ProxyHandler::new(Arc::new(SnapshotHolder::new(snapshot))));
+        let snapshot = snapshot(setup, &config, &dir.path().join("state"));
+        let holder = Arc::new(SnapshotHolder::new(snapshot));
+        let server = RequestServer::new(*config.limits(), ProxyHandler::new(Arc::clone(&holder)));
         let task = tokio::spawn(async move {
             let _ = server.serve(&listeners).await;
         });
         let endpoints = Endpoints { socket, tcp_port };
-        Self { dir, endpoints, task }
+        Self {
+            dir,
+            endpoints,
+            holder,
+            task,
+        }
+    }
+
+    /// The holder the proxy admits requests by, for a test to pause, swap or withdraw.
+    pub fn holder(&self) -> Arc<SnapshotHolder> {
+        Arc::clone(&self.holder)
+    }
+
+    /// A snapshot of `setup` on this proxy's listeners, for a test to serve in place of the running one. `setup.tcp` must
+    /// match the proxy's own, so the snapshot's policy names the listeners callers actually reach.
+    pub fn snapshot(&self, setup: Setup<'_>) -> ServingSnapshot {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let config = setup.config(&self.endpoints.socket, self.endpoints.tcp_port);
+        snapshot(setup, &config, &self.dir.path().join(format!("state-{n}")))
     }
 
     /// Where callers reach this proxy.
