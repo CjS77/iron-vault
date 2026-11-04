@@ -7,9 +7,11 @@
 //!
 //! The approval state, which pins the approver and holds the version counters, is in [`state`]; checking an approval
 //! against it is in [`verify`]. The signer that produces approvals is [`signer`], with the software signer in
-//! [`software_signer`]. The approval transaction's durable steps, which build on all of these, are in [`transaction`].
+//! [`software_signer`]. The approval transaction's durable steps, which build on all of these, are in [`transaction`],
+//! and the approval recovery every config check runs first is in [`recovery`].
 
 mod encoding;
+mod recovery;
 mod signer;
 mod software_signer;
 mod state;
@@ -25,6 +27,7 @@ use thiserror::Error;
 
 use crate::vault_id::{VaultId, VaultIdError};
 
+pub use recovery::{ApprovalRecoveryError, DiscardedFile, PublishedPairFault, RecoveredApproval, RecoveryFailure, recover_approval};
 pub use signer::{ApprovalSigner, SignError};
 pub use software_signer::{
     ApprovalPassphrase, SoftwareSigner, SoftwareSignerKey, open_signer_key, read_signer_key, seal_signer_key, write_signer_key,

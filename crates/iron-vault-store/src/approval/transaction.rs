@@ -16,7 +16,7 @@
 //! behind is a leftover the next config check discards.
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 use std::fmt;
 
@@ -260,10 +260,7 @@ impl PreparedApproval<'_> {
         let read = |name| read_config_file(storage.config_dir, storage.fs, name).map_err(|e| committed(e.into()));
         let (config, envelope) = (read(ConfigFileName::Active)?, read(ConfigFileName::ActiveSignature)?);
         let approval = verify_approval(self.state, &config, &envelope).map_err(|e| committed(ApprovalFailure::BadApproval(e)))?;
-        Ok(CommittedApproval {
-            approval,
-            config: config.into_boxed_slice(),
-        })
+        Ok(CommittedApproval::new(approval, config.into_boxed_slice()))
     }
 }
 
@@ -274,6 +271,11 @@ pub struct CommittedApproval {
 }
 
 impl CommittedApproval {
+    /// The published pair `config` as read back, which verified as `approval`.
+    pub(super) fn new(approval: VerifiedApproval, config: Box<[u8]>) -> Self {
+        Self { approval, config }
+    }
+
     /// The committed approval, verified over the published pair as read back.
     pub fn approval(&self) -> VerifiedApproval {
         self.approval
