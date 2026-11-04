@@ -107,6 +107,14 @@ impl ConfigDigest {
     }
 }
 
+/// `blake2b:` and 64 lowercase hex digits, as the owner reads a digest in the approval summary and the logs.
+impl fmt::Display for ConfigDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("blake2b:")?;
+        self.0.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
+    }
+}
+
 impl PartialEq for ConfigDigest {
     fn eq(&self, other: &Self) -> bool {
         self.0.ct_eq(&other.0).into()
@@ -323,6 +331,7 @@ mod tests {
         let abc = "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319";
         let hex: String = ConfigDigest::of(b"abc").as_bytes().iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(hex, abc);
+        assert_eq!(ConfigDigest::of(b"abc").to_string(), format!("blake2b:{abc}"));
     }
 
     #[test]

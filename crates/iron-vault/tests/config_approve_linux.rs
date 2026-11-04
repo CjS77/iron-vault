@@ -349,7 +349,11 @@ fn captured_logs() -> Captured {
     CAPTURED
         .get_or_init(|| {
             let captured = Captured::default();
-            let subscriber = tracing_subscriber::fmt().with_writer(captured.clone()).with_ansi(false).finish();
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(captured.clone())
+                .with_ansi(false)
+                .finish();
             tracing::subscriber::set_global_default(subscriber).unwrap();
             captured
         })
@@ -362,6 +366,15 @@ struct Captured(Arc<Mutex<Vec<u8>>>);
 impl Captured {
     fn text(&self) -> String {
         String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner)).into_owned()
+    }
+
+    /// Whether one log line names `event`, `version` and `digest`. The digest tells this test's approval apart from
+    /// another test's at the same version, since every test logs into this one buffer.
+    fn has_event(&self, event: &str, version: u64, digest: &ConfigDigest) -> bool {
+        let (version, digest) = (format!("version={version} "), digest.to_string());
+        self.text()
+            .lines()
+            .any(|line| line.contains(event) && line.contains(&version) && line.contains(&digest))
     }
 
     fn assert_no_passphrase(&self) {
@@ -467,15 +480,20 @@ async fn a_wrong_approval_passphrase_consumes_no_version() {
 
 #[tokio::test]
 async fn a_failure_after_the_reservation_consumes_the_version_and_the_next_approval_gets_a_higher_one() {
+    let logs = captured_logs();
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
     // A leftover temp file makes the durable write of the staged approval (step 4) refuse.
     let blocker = fixture.path("etc/.config.toml.sig.staged.tmp");
     fs::write(&blocker, b"").unwrap();
+    let proposed = fixture.config("rates");
 
-    let failed = approve(&service, &fixture.config("rates"), &["yes", APPROVAL_PASSPHRASE]).await;
+    let failed = approve(&service, &proposed, &["yes", APPROVAL_PASSPHRASE]).await;
 
     assert_eq!(error_code(&failed.response), ErrorCode::ApprovalFailed);
+    let digest = ConfigDigest::of(proposed.as_bytes());
+    assert!(logs.has_event("config.version-reserved", 2, &digest), "{}", logs.text());
+    assert!(logs.has_event("config.approval-failed", 2, &digest), "{}", logs.text());
     assert_eq!(versions(&service).await, (Some(1), 2));
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_eq!(get(&fixture, "fx").await.status, 200);
@@ -557,4 +575,63 @@ async fn a_locked_service_cannot_approve() {
     assert_eq!(error_code(&exchanged.response), ErrorCode::ApprovalUnavailable);
     assert!(exchanged.prompts.is_empty());
     assert!(!fixture.path("etc/config.toml.pending").exists());
+}
+
+/// Sends `config approve` for `config` on a connection of its own and reads up to the confirmation prompt.
+async fn at_confirmation(path: &Path, config: &str) -> UnixStream {
+    let mut stream = UnixStream::connect(path).await.unwrap();
+    send(&mut stream, &approve_request(config)).await;
+    while !matches!(read_frame(&mut stream).await, Frame::Prompt(_)) {}
+    stream
+}
+
+#[tokio::test]
+async fn a_lock_and_an_unlock_at_the_prompt_end_the_approval_with_nothing_reserved() {
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    let (path, stop) = serve_admin(&service);
+    let mut stream = at_confirmation(&path, &fixture.config("rates")).await;
+
+    service.lock(WAIT).await.unwrap();
+    assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
+    send(&mut stream, &Frame::OwnerInput(OwnerInput::new(Zeroizing::new(b"yes".to_vec())))).await;
+    let exchanged = converse(&mut stream, &[APPROVAL_PASSPHRASE]).await;
+
+    assert_eq!(error_code(&exchanged.response), ErrorCode::ApprovalUnavailable);
+    assert_eq!(versions(&service).await, (Some(1), 1));
+    assert_eq!(service.state().await, ServiceState::Ready);
+    assert_eq!(get(&fixture, "fx").await.status, 200);
+    ["etc/config.toml.pending", "etc/config.toml.sig.staged"]
+        .iter()
+        .for_each(|file| assert!(!fixture.path(file).exists(), "{file} is left behind"));
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn a_client_that_goes_away_at_the_prompt_releases_the_service_wide_lock() {
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    let (path, stop) = serve_admin(&service);
+    drop(at_confirmation(&path, &fixture.config("rates")).await);
+
+    // The handler sees the close when it next reads, so the lock is released shortly after, not at once.
+    let mut second = None;
+    for _ in 0..100 {
+        let mut stream = UnixStream::connect(&path).await.unwrap();
+        send(&mut stream, &approve_request(&fixture.config("other"))).await;
+        match read_frame(&mut stream).await {
+            Frame::Response(response) => assert_eq!(error_code(&response), ErrorCode::Busy),
+            _ => {
+                second = Some(stream);
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let mut second = second.expect("the second approval stayed busy");
+    assert_eq!(error_code(&converse(&mut second, &["no"]).await.response), ErrorCode::Declined);
+    assert_eq!(versions(&service).await, (Some(1), 1));
+    assert!(!fixture.path("etc/config.toml.pending").exists());
+    let _ = stop.send(());
 }

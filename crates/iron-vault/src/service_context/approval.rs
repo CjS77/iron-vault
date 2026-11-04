@@ -4,7 +4,12 @@
 //! [`ServiceContext::review_approval`] takes the service-wide lock and runs step 1. The [`ApprovalReview`] it returns
 //! holds that lock until it is committed or abandoned, so the predicted version stays exact and nothing changes the
 //! credential catalog while the owner reads the summary. The review keeps no vault identity, so a `lock` while the owner
-//! is at a prompt leaves no copy of it behind, and the commit then refuses.
+//! is at a prompt leaves no copy of it behind.
+//!
+//! An unlock does not take the service-wide lock, so a `lock` and an `unlock` can both happen while the owner is at a
+//! prompt, and the unlock's config check discards this approval's pending config. The review therefore records the
+//! service state and the context's check generation when it starts, and the commit refuses before reserving anything
+//! unless both are unchanged.
 //!
 //! [`ApprovalReview::commit`] runs steps 2 to 6 under the context's mutex: reserve, sign and stage, then the admission
 //! pause, the commit and publish, then the config check that ends the pause in Ready or Unavailable.
@@ -13,15 +18,15 @@ use std::sync::Arc;
 
 use iron_vault_policy::{ActivePolicy, ApprovalSummary, ValidatedConfig, summarize};
 use iron_vault_store::{
-    ApprovalError, ApprovalPassphrase, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, PendingConfig, SignError,
-    SoftwareSigner, StoreFs, Vault, VaultIdentity, open_signer_key, read_signer_key, remove_pending_and_staged,
+    ApprovalError, ApprovalPassphrase, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDigest, PendingConfig,
+    SignError, SoftwareSigner, StoreFs, Vault, VaultIdentity, open_signer_key, read_signer_key,
 };
 use tokio::sync::MutexGuard;
 
 use super::{Inner, ServiceContext};
-use crate::admin::protocol::{ApprovalResult, digest_text};
+use crate::admin::protocol::ApprovalResult;
 use crate::config_check::{InvalidConfig, activate_config};
-use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState};
+use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState, UnavailableReason};
 use crate::serving_snapshot::Admission;
 
 /// How a `config approve` ended without an active new config. Each variant is one `config approve` error code, and no
@@ -68,10 +73,17 @@ pub enum ApprovalEnd {
 pub struct ApprovalReview<'a, F> {
     service: &'a ServiceContext<F>,
     _service_wide: MutexGuard<'a, ()>,
-    started: ServiceState,
+    started: Started,
     pending: PendingConfig,
     approval: ApprovalState,
     summary: ApprovalSummary,
+}
+
+/// Where an approval started: the service state and the context's check generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Started {
+    state: ServiceState,
+    checks: u64,
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
@@ -85,10 +97,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let (vault, _) = Vault::open(&self.locks.state, &self.setup.fs, Arc::clone(&identity)).map_err(unavailable)?;
         let approval = vault.load_approval_state(&self.locks.state, &self.setup.fs).map_err(unavailable)?;
         let pending = PendingConfig::write(&self.storage(&identity), config).map_err(unavailable)?;
-        let policy = self.servable(pending.bytes(), &vault).map_err(|invalid| {
-            self.remove_pending();
-            ApprovalEnd::Invalid(invalid.detail())
-        })?;
+        let policy = match self.servable(pending.bytes(), &vault) {
+            Ok(policy) => policy,
+            Err(invalid) => {
+                pending.abandon(&self.locks.config, &self.setup.fs);
+                return Err(ApprovalEnd::Invalid(invalid.detail()));
+            }
+        };
         Ok(ApprovalReview {
             service: self,
             _service_wide: service_wide,
@@ -99,9 +114,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         })
     }
 
-    /// The state the approval starts in, the kept vault identity, and the config of the serving snapshot, which the
-    /// summary diffs against; none when the service is not serving one.
-    async fn approval_start(&self) -> Result<(ServiceState, Arc<VaultIdentity>, Option<ValidatedConfig>), ApprovalEnd> {
+    /// Where the approval starts, the kept vault identity, and the config of the serving snapshot, which the summary
+    /// diffs against; none when the service is not serving one.
+    async fn approval_start(&self) -> Result<(Started, Arc<VaultIdentity>, Option<ValidatedConfig>), ApprovalEnd> {
         let inner = self.inner.lock().await;
         let identity = match &inner.identity {
             Some(identity) if inner.state.admin_allows(AdminOperation::Approve) => Arc::clone(identity),
@@ -111,7 +126,11 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             Admission::Serve(snapshot) => Some(snapshot.policy().config().clone()),
             Admission::Refuse(_) => None,
         };
-        Ok((inner.state, identity, active))
+        let started = Started {
+            state: inner.state,
+            checks: inner.checks,
+        };
+        Ok((started, identity, active))
     }
 
     /// The pending config activated against `vault`, once its upstream clients build.
@@ -127,14 +146,6 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             config_dir: &self.locks.config,
             identity,
             fs: &self.setup.fs,
-        }
-    }
-
-    /// Removes the pending config of an approval that ends before its reservation, best effort: the next config check
-    /// discards a leftover.
-    fn remove_pending(&self) {
-        if let Err(error) = remove_pending_and_staged(&self.locks.config, &self.setup.fs) {
-            tracing::warn!(%error, "cannot remove the pending config; the next config check discards it");
         }
     }
 
@@ -170,7 +181,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
             "Approval summary\nvault: {}\nversion to commit: {}\nconfig digest: {}\ncommitted version: {committed}\n{}",
             self.approval.vault_id(),
             self.version(),
-            digest_text(self.pending.digest().as_bytes()),
+            self.pending.digest(),
             self.summary.render(),
         )
     }
@@ -184,38 +195,40 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
     /// the pinned approver's, is [`ApprovalEnd::Denied`].
     pub fn open_signer(&self, passphrase: &ApprovalPassphrase) -> Result<SoftwareSigner, ApprovalEnd> {
         let envelope = read_signer_key(&self.service.locks.state, &self.service.setup.fs).map_err(unavailable)?;
-        open_signer_key(&envelope, passphrase, self.approval.approver()).map_err(|error| {
-            tracing::warn!(event = "config.approval-denied", %error, "config approval refused before any reservation");
-            match error {
-                SignError::WrongPassphrase | SignError::KeyMismatch => ApprovalEnd::Denied,
-                other => unavailable(other),
+        open_signer_key(&envelope, passphrase, self.approval.approver()).map_err(|error| match error {
+            SignError::WrongPassphrase | SignError::KeyMismatch => {
+                tracing::warn!(%error, "config approval refused before any reservation");
+                ApprovalEnd::Denied
             }
+            other => unavailable(other),
         })
     }
 
     /// Ends the approval before any reservation: removes the pending config and releases the service-wide lock.
     pub fn abandon(self) {
-        self.service.remove_pending();
+        self.pending.abandon(&self.service.locks.config, &self.service.setup.fs);
     }
 
     /// Steps 2 to 6 with `signer`, which is dropped once it has signed: reserve, sign and stage; then the admission
     /// pause (from Ready, the move to Checking), the commit and publish; then the config check that ends the pause.
     ///
-    /// Refuses before reserving if the service left the state the approval started in, such as a `lock` while the
-    /// owner was at a prompt.
+    /// Refuses before reserving unless the service is in the state, and at the check generation, the approval started
+    /// at: a `lock`, or a `lock` and an `unlock`, while the owner was at a prompt ends it with nothing reserved.
     pub async fn commit(self, signer: impl ApprovalSigner) -> Result<ApprovalResult, ApprovalEnd> {
         let Self {
             service,
-            started,
+            _service_wide: _held,
+            started: Started { state: started, checks },
             pending,
             mut approval,
             summary,
-            ..
         } = self;
         let mut inner = service.inner.lock().await;
-        let Some(identity) = inner.identity.clone().filter(|_| inner.state == started) else {
-            service.remove_pending();
-            return Err(ApprovalEnd::WrongState(inner.state));
+        let Some(identity) = inner.identity.clone().filter(|_| inner.state == started && inner.checks == checks) else {
+            pending.abandon(&service.locks.config, &service.setup.fs);
+            return Err(ApprovalEnd::Unavailable(
+                "the service was locked or checked again while the owner was at a prompt; nothing was reserved".to_owned(),
+            ));
         };
         let storage = service.storage(&identity);
         let digest = pending.digest();
@@ -226,26 +239,29 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
                 if let Some(open) = &mut inner.open {
                     open.approval = approval;
                 }
-                return Err(not_committed(error));
+                return Err(not_committed(error, digest));
             }
         };
         let version = prepared.version().get();
-        tracing::info!(event = "config.version-reserved", version, digest = %digest_text(digest.as_bytes()), "approval version reserved");
         if started == ServiceState::Ready {
             inner.open = None;
+            // Cannot fail: the state was checked as Ready under this same guard. Were it to, the version is consumed.
             service
                 .apply(&mut inner, ServiceEvent::ApprovalCommitting)
-                .map_err(|_| ApprovalEnd::WrongState(started))?;
+                .map_err(|illegal| ApprovalEnd::Failed {
+                    version,
+                    cause: illegal.to_string(),
+                })?;
         }
         let committed = {
             let pause = service.holder.pause();
             prepared.commit(&storage, &pause).map(drop)
         };
-        service.durable(&mut inner, started, &identity, committed).await?;
+        service.durable(&mut inner, started, &identity, committed, digest).await?;
         tracing::info!(
             event = "config.approval-completed",
             version,
-            digest = %digest_text(digest.as_bytes()),
+            %digest,
             summary = %summary.render(),
             "config approval completed",
         );
@@ -256,12 +272,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
                 headline: summary.headline(),
             }),
             state => {
-                tracing::warn!(
-                    event = "config.activation-failed",
-                    version,
-                    ?state,
-                    "the approved config is not active"
-                );
+                activation_failed(version, state, "the config check after the commit failed; see config.check-failed");
                 Err(ApprovalEnd::NotActive { version, state })
             }
         }
@@ -282,6 +293,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         started: ServiceState,
         identity: &Arc<VaultIdentity>,
         committed: Result<(), ApprovalError>,
+        digest: ConfigDigest,
     ) -> Result<(), ApprovalEnd> {
         let Err(error) = committed else {
             return Ok(());
@@ -293,7 +305,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             }
             ApprovalProgress::CommitUncertain(version) => {
                 let state = self.recovery_needed(inner, started);
-                tracing::warn!(event = "config.activation-failed", %version, %error, "the uncertain commit could not be settled");
+                activation_failed(version.get(), state, &error);
                 Err(ApprovalEnd::NotActive {
                     version: version.get(),
                     state,
@@ -305,18 +317,25 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                         .settle(inner, Arc::clone(identity), ServiceEvent::ApprovalCommitting, None)
                         .await;
                 }
-                Err(not_committed(error))
+                Err(not_committed(error, digest))
             }
         }
     }
 }
 
-/// A failure before the commit: the version consumed when one was reserved, logged as a failed approval.
-fn not_committed(error: ApprovalError) -> ApprovalEnd {
+/// A failure before the commit: the version consumed when one was reserved, logged as a failed approval of `digest`.
+fn not_committed(error: ApprovalError, digest: ConfigDigest) -> ApprovalEnd {
     match error.progress() {
         ApprovalProgress::Reserved(version) => {
             let (version, step) = (version.get(), error.step());
-            tracing::warn!(event = "config.approval-failed", version, %step, %error, "config approval failed after its reservation");
+            tracing::warn!(
+                event = "config.approval-failed",
+                version,
+                %digest,
+                %step,
+                %error,
+                "config approval failed after its reservation"
+            );
             ApprovalEnd::Failed {
                 version,
                 cause: error.to_string(),
@@ -324,6 +343,15 @@ fn not_committed(error: ApprovalError) -> ApprovalEnd {
         }
         _ => unavailable(error),
     }
+}
+
+/// Records that the committed `version` is not active: the service settled in `state`, for the reason `detail` gives.
+fn activation_failed(version: u64, state: ServiceState, detail: impl std::fmt::Display) {
+    let reason = match state {
+        ServiceState::Unavailable(reason) => UnavailableReason::from_failure(reason).as_str(),
+        _ => "not ready",
+    };
+    tracing::warn!(event = "config.activation-failed", version, reason, %detail, "the approved config is not active");
 }
 
 fn unavailable(error: impl std::fmt::Display) -> ApprovalEnd {

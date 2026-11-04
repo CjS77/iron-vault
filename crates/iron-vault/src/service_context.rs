@@ -184,7 +184,8 @@ pub struct ServiceContext<F = OsFs> {
     locks: Arc<ServiceLocks>,
     holder: Arc<SnapshotHolder>,
     /// The service-wide lock (glossary). `config approve` holds it from its request to its response, prompts included,
-    /// and fails at once with `busy` while another holds it; a recheck waits for it. Vault writes take it too.
+    /// and fails at once with `busy` while another holds it; a recheck waits for it. Vault writes (K-147) are to take it
+    /// too.
     service_wide: Mutex<()>,
     inner: Mutex<Inner>,
 }
@@ -211,6 +212,9 @@ struct Inner {
     open: Option<OpenVault>,
     /// The request listeners and the task serving them; `None` only while they are being rebuilt or once stopped.
     serving: Option<Serving>,
+    /// The check generation: how many times the service has entered Checking through a config check. An approval
+    /// commits only at the generation it started at, because each check discards uncommitted pending files.
+    checks: u64,
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
@@ -238,6 +242,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 state: ServiceState::Starting,
                 identity: None,
                 open: None,
+                checks: 0,
                 serving: Some(Serving::start(listeners, Limits::default(), Arc::clone(&holder))),
             }),
             setup: Arc::new(setup),
@@ -474,6 +479,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             return Err(IllegalTransition { state: from, event });
         }
         let checking = self.apply(inner, event)?;
+        inner.checks = inner.checks.wrapping_add(1);
         let committed = inner
             .open
             .as_ref()

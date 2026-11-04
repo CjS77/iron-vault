@@ -479,7 +479,7 @@ bytes, key material or a passphrase.
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `config.version-reserved` | INFO | step 2's reservation is durable | version, config digest |
-| `config.approval-failed` | WARN | the transaction failed after its reservation and before its commit | version (consumed), the step that failed, the error |
+| `config.approval-failed` | WARN | the transaction failed after its reservation and before its commit | version (consumed), config digest, the step that failed, the error |
 | `config.commit-uncertain` | WARN | step 5's rename of `approval.age` landed, but its directory fsync failed | version, the error |
 | `config.approval-completed` | INFO | the commit is durable: step 5 succeeded, or an uncertain commit was settled | version, config digest, the approval summary |
 | `config.activation-failed` | WARN | the config check after a committed approval failed, or an uncertain commit could not be settled | version, failure reason, detail |

@@ -184,10 +184,11 @@ impl PendingConfig {
         self.digest
     }
 
-    /// Ends the approval before anything is reserved (the config is invalid, or the owner declined): removes the
-    /// pending config, best effort.
-    pub fn abandon<F: StoreFs>(self, storage: &ApprovalStorage<'_, F>) {
-        discard_uncommitted(storage);
+    /// Ends the approval before anything is reserved (the config is invalid, the owner declined or went away, or the
+    /// service left the state the approval started in): removes the pending config, best effort. It needs no vault
+    /// identity, so an approval whose service was locked meanwhile can still clean up.
+    pub fn abandon<F: StoreFs>(self, config_dir: &ConfigDirLock, fs: &F) {
+        discard_uncommitted(config_dir, fs);
     }
 
     /// Steps 2 to 4: durably reserves the next version, signs it with `signer` (dropped once it has signed), checks
@@ -202,7 +203,7 @@ impl PendingConfig {
         state: &'s mut ApprovalState,
         signer: S,
     ) -> Result<PreparedApproval<'s>, ApprovalError> {
-        let version = reserve(storage, state)?;
+        let version = reserve(storage, state, self.digest)?;
         let payload = ApprovalPayload::new(state.vault_id(), version, self.digest);
         let envelope = sign(state, &payload, signer).map_err(|e| fail(storage, ApprovalStep::Sign, Some(version), e))?;
         write_staged(storage.config_dir, storage.fs, &envelope).map_err(|e| fail(storage, ApprovalStep::Stage, Some(version), e.into()))?;
@@ -227,13 +228,6 @@ impl PreparedApproval<'_> {
     /// The digest of the approved config.
     pub fn digest(&self) -> ConfigDigest {
         self.payload.digest()
-    }
-
-    /// Ends the approval before the commit (the serving dry run failed): removes the pending config and the staged
-    /// approval, best effort, and returns the version it consumed.
-    pub fn abandon<F: StoreFs>(self, storage: &ApprovalStorage<'_, F>) -> ApprovalVersion {
-        discard_uncommitted(storage);
-        self.version()
     }
 
     /// Steps 5 and 6: durably commits the approval, publishes the pending config and the staged approval, then reads
@@ -308,12 +302,21 @@ impl fmt::Debug for CommittedApproval {
 
 /// Step 2. Exhaustion and a failure before the rename reserve nothing; a failed directory fsync after the rename
 /// leaves the version consumed, because the next reservation reads it from disk.
-fn reserve<F: StoreFs>(storage: &ApprovalStorage<'_, F>, state: &mut ApprovalState) -> Result<ApprovalVersion, ApprovalError> {
+///
+/// A durable reservation is recorded as `config.version-reserved` here, before anything is signed, so audit never sees
+/// a failed approval without the reservation that preceded it.
+fn reserve<F: StoreFs>(
+    storage: &ApprovalStorage<'_, F>,
+    state: &mut ApprovalState,
+    digest: ConfigDigest,
+) -> Result<ApprovalVersion, ApprovalError> {
     let next = state.highest_reserved().checked_add(1).and_then(ApprovalVersion::new);
-    state.reserve(storage.state_dir, storage.fs, storage.identity).map_err(|e| {
+    let version = state.reserve(storage.state_dir, storage.fs, storage.identity).map_err(|e| {
         let consumed = matches!(e, ApprovalStateError::WriteUncertain(_)).then_some(next).flatten();
         fail(storage, ApprovalStep::Reserve, consumed, e.into())
-    })
+    })?;
+    tracing::info!(event = "config.version-reserved", %version, %digest, "approval version reserved");
+    Ok(version)
 }
 
 /// Step 3: signs `payload`, then checks the encoded envelope as the config check later will, so a misbehaving signer
@@ -381,14 +384,14 @@ fn fail<F: StoreFs>(
     reserved: Option<ApprovalVersion>,
     cause: ApprovalFailure,
 ) -> ApprovalError {
-    discard_uncommitted(storage);
+    discard_uncommitted(storage.config_dir, storage.fs);
     let progress = reserved.map_or(ApprovalProgress::NothingReserved, ApprovalProgress::Reserved);
     ApprovalError { step, progress, cause }
 }
 
 /// Removes the pending config and the staged approval, best effort: the next config check discards a leftover.
-fn discard_uncommitted<F: StoreFs>(storage: &ApprovalStorage<'_, F>) {
-    if let Err(error) = remove_pending_and_staged(storage.config_dir, storage.fs) {
+fn discard_uncommitted<F: StoreFs>(config_dir: &ConfigDirLock, fs: &F) {
+    if let Err(error) = remove_pending_and_staged(config_dir, fs) {
         tracing::warn!(%error, "cannot remove the uncommitted pending config and staged approval; the next config check discards them");
     }
 }
