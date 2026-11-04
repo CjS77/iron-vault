@@ -15,12 +15,13 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, mpsc};
+use std::time::{Duration, Instant};
 
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, WAIT, next_free_port, token_hash};
@@ -48,7 +49,7 @@ use iron_vault_policy::{Capabilities, ListenerName};
 use iron_vault_store::{
     ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDirLock, LockError, OperationalIdentity, OsFs,
     Passphrase, PendingConfig, PermittedOrigins, PinnedApprover, RecipientSet, RecordDamage, SignError, SignatureAlgorithm, StateDirLock,
-    Vault, VaultIdentity, seal_passphrase_envelope_for_tests, wrap_identity, write_identity_envelope, write_passphrase_envelope,
+    StoreFs, Vault, VaultIdentity, seal_passphrase_envelope_for_tests, wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -232,6 +233,11 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
 
     /// Starts the service on this fixture's directories, as `serve` does, without systemd sockets.
     fn start(&self) -> Result<Arc<ServiceContext>, StartError> {
+        self.start_on(OsFs)
+    }
+
+    /// [`start`](Self::start) with the vault and config files read through `fs`.
+    fn start_on<F: StoreFs + Send + Sync + 'static>(&self, fs: F) -> Result<Arc<ServiceContext<F>>, StartError> {
         let paths = self.paths();
         let locks = ServiceLocks::acquire(&paths)?;
         locks.sweep_stale_temps(&OsFs);
@@ -239,7 +245,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
         let setup = ServiceSetup {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
             paths,
-            fs: OsFs,
+            fs,
             capabilities: Capabilities::default(),
             upstream: UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default())
                 .with_pinned_trust(self.ca.trust()),
@@ -355,7 +361,16 @@ async fn admin_with(
             })
             .await
     });
-    let mut stream = UnixStream::connect(runtime_dir.join(ADMIN_SOCKET_NAME)).await.unwrap();
+    let exchanged = converse(&runtime_dir.join(ADMIN_SOCKET_NAME), request, answer.to_owned()).await;
+    let _ = stop.send(());
+    served.await.unwrap().unwrap();
+    exchanged
+}
+
+/// Sends `request` on a new connection to the admin socket at `socket`, answering each prompt with `answer`. Returns
+/// the response frame's bytes, the prompts and the response.
+async fn converse(socket: &Path, request: AdminRequest, answer: String) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
+    let mut stream = UnixStream::connect(socket).await.unwrap();
     send(&mut stream, &Frame::Request(request)).await;
     let mut prompts = Vec::new();
     let (bytes, response) = loop {
@@ -369,8 +384,6 @@ async fn admin_with(
             (_, other) => panic!("unexpected frame {other:?}"),
         }
     };
-    let _ = stop.send(());
-    served.await.unwrap().unwrap();
     (bytes, prompts, response)
 }
 
@@ -1379,4 +1392,209 @@ async fn sighup_outside_ready_changes_nothing_and_never_repairs_unavailable() {
 
     assert_eq!(service.reload().await, refused(unavailable));
     assert_eq!(service.state().await, unavailable);
+}
+
+/// How soon an answer that must not wait for a blocking task arrives. Far below [`WAIT`], which a gate holds a task for
+/// at most, so a gated task on the runtime thread would fail the test rather than hang it.
+const PROMPTLY: Duration = Duration::from_secs(2);
+
+/// One armed stop: the file whose first read blocks, the signal that a read reached it, and the release.
+struct Gate {
+    file: &'static str,
+    reached: oneshot::Sender<()>,
+    release: mpsc::Receiver<()>,
+}
+
+/// The real filesystem, except that the first read of an armed file blocks until the test releases it (or [`WAIT`]
+/// passes), so a test can hold the unlock or the config check mid-way.
+#[derive(Clone, Default)]
+struct GatedFs(Arc<Mutex<Option<Gate>>>);
+
+impl GatedFs {
+    /// Arms the gate on `file`; returns the signal that a read reached it and its release.
+    fn arm(&self, file: &'static str) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
+        let (reached, on_reached) = oneshot::channel();
+        let (release, on_release) = mpsc::channel();
+        *self.0.lock().unwrap() = Some(Gate {
+            file,
+            reached,
+            release: on_release,
+        });
+        (on_reached, release)
+    }
+
+    /// Blocks the calling thread on the gate if it is armed on `path`'s file, disarming it.
+    fn pass(&self, path: &Path) {
+        let mut armed = self.0.lock().unwrap();
+        if !armed.as_ref().is_some_and(|gate| path.file_name() == Some(gate.file.as_ref())) {
+            return;
+        }
+        let gate = armed.take().unwrap();
+        drop(armed);
+        let _ = gate.reached.send(());
+        let _ = gate.release.recv_timeout(WAIT);
+    }
+}
+
+impl StoreFs for GatedFs {
+    type File = fs::File;
+
+    fn create_private(&self, path: &Path) -> io::Result<fs::File> {
+        OsFs.create_private(path)
+    }
+
+    fn write_all(&self, file: &mut fs::File, bytes: &[u8]) -> io::Result<()> {
+        OsFs.write_all(file, bytes)
+    }
+
+    fn sync_file(&self, file: &fs::File) -> io::Result<()> {
+        OsFs.sync_file(file)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        OsFs.rename(from, to)
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        OsFs.remove_file(path)
+    }
+
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        OsFs.sync_dir(dir)
+    }
+
+    fn list_dir(&self, dir: &Path) -> io::Result<Vec<OsString>> {
+        OsFs.list_dir(dir)
+    }
+
+    fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>> {
+        self.pass(path);
+        OsFs.read_bounded(path, max_len)
+    }
+}
+
+/// The service's admin handlers served on its runtime directory until closed, so several commands can overlap.
+struct AdminSession {
+    socket: PathBuf,
+    stop: oneshot::Sender<()>,
+    served: tokio::task::JoinHandle<io::Result<()>>,
+}
+
+impl AdminSession {
+    fn open<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> Self {
+        let paths = service.paths().clone();
+        let runtime_dir = paths.runtime_dir.clone().unwrap();
+        let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
+        let handlers = Handlers::for_service(service);
+        let server = AdminServer::new(AdminPrincipals::new(paths.profile, paths.owner.uid), handlers, Limits::default());
+        let (stop, stopped) = oneshot::channel::<()>();
+        let served = tokio::spawn(async move {
+            server
+                .serve(socket, async {
+                    let _ = stopped.await;
+                })
+                .await
+        });
+        Self {
+            socket: runtime_dir.join(ADMIN_SOCKET_NAME),
+            stop,
+            served,
+        }
+    }
+
+    /// Sends `request` on its own connection, in a task of its own, answering each prompt with `answer`.
+    fn send(&self, request: AdminRequest, answer: &str) -> tokio::task::JoinHandle<AdminResponse> {
+        let (socket, answer) = (self.socket.clone(), answer.to_owned());
+        tokio::spawn(async move { converse(&socket, request, answer).await.2 })
+    }
+
+    async fn close(self) {
+        let _ = self.stop.send(());
+        self.served.await.unwrap().unwrap();
+    }
+}
+
+/// A service started on a [`GatedFs`] armed on `operational.age`, with an `unlock` sent and held in its blocking task,
+/// where scrypt runs. Returns the service, the admin session, the pending unlock and the gate's release.
+async fn unlock_held_in_its_task(
+    fixture: &Fixture,
+) -> (
+    Arc<ServiceContext<GatedFs>>,
+    AdminSession,
+    tokio::task::JoinHandle<AdminResponse>,
+    mpsc::Sender<()>,
+) {
+    let fs = GatedFs::default();
+    let (reached, release) = fs.arm("operational.age");
+    let service = fixture.start_on(fs).unwrap();
+    let session = AdminSession::open(&service);
+    let unlocking = session.send(AdminRequest::Unlock, PASSPHRASE);
+    tokio::time::timeout(WAIT, reached).await.unwrap().unwrap();
+    (service, session, unlocking, release)
+}
+
+#[tokio::test]
+async fn a_request_gets_503_locked_at_once_while_an_unlock_is_in_scrypt() {
+    let fixture = approved().await;
+    let (service, session, unlocking, release) = unlock_held_in_its_task(&fixture).await;
+
+    let started = Instant::now();
+    let response = get_unix(&fixture.socket(), true).await;
+
+    assert!(started.elapsed() < PROMPTLY, "the refusal took {:?}", started.elapsed());
+    assert_refused(&response, UnavailableReason::Locked);
+    release.send(()).unwrap();
+    assert_eq!(unlocking.await.unwrap(), AdminResponse::Success);
+    assert_eq!(service.state().await, ServiceState::Ready);
+    session.close().await;
+}
+
+#[tokio::test]
+async fn ping_answers_at_once_and_status_waits_for_an_unlock_in_scrypt() {
+    let fixture = approved().await;
+    let (_service, session, unlocking, release) = unlock_held_in_its_task(&fixture).await;
+
+    let started = Instant::now();
+    assert_eq!(session.send(AdminRequest::Ping, "").await.unwrap(), PONG);
+    assert!(started.elapsed() < PROMPTLY, "ping took {:?}", started.elapsed());
+    let status = session.send(AdminRequest::Status, "");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!status.is_finished(), "status did not wait for the unlock");
+
+    release.send(()).unwrap();
+    assert_eq!(unlocking.await.unwrap(), AdminResponse::Success);
+    let AdminResponse::Status(report) = status.await.unwrap() else {
+        panic!("expected a status report");
+    };
+    assert_eq!(report.state, ServiceState::Ready);
+    session.close().await;
+}
+
+#[tokio::test]
+async fn a_cancelled_check_still_drops_the_vault_its_task_opened() {
+    let fixture = approved().await;
+    let fs = GatedFs::default();
+    let service = fixture.start_on(fs.clone()).unwrap();
+    assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
+    let identity = service.identity_probe().await.unwrap();
+    let (reached, release) = fs.arm("config.toml");
+    let recheck = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move { service.recheck(ServiceEvent::Reload).await }
+    });
+    tokio::time::timeout(WAIT, reached).await.unwrap().unwrap();
+    // The context's copy, and the vault the held task opened.
+    assert_eq!(identity.strong_count(), 2);
+
+    recheck.abort();
+    assert!(recheck.await.unwrap_err().is_cancelled());
+    release.send(()).unwrap();
+
+    tokio::time::timeout(WAIT, async {
+        while identity.strong_count() > 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the cancelled check's task kept its vault");
 }
