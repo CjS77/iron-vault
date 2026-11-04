@@ -4,11 +4,12 @@
 //! state directory's: a private temporary file, fsync, rename, directory fsync, and a single writer. None of them
 //! decides anything; the transaction and recovery do.
 
+use std::fs::File;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use crate::dir_lock::lock_file;
 use crate::durable::{ReadFailure, StepFailure, dir_sync_supported, read_in, replace_in, unlink_in};
-use crate::state_dir::lock_file;
 use crate::{ConfigFileName, LockError, StoreFs, WriteStep};
 
 /// Name of the lock file inside the config directory. It is not a [`ConfigFileName`]: no store call may write it.
@@ -20,9 +21,9 @@ const CONFIG_LOCK_FILE: &str = "config.toml.lock";
 /// from independent settings in development. Every config-directory write takes a reference to this guard.
 #[derive(Debug)]
 pub struct ConfigDirLock {
-    dir: std::path::PathBuf,
+    dir: PathBuf,
     // Keeping the file open keeps the lock; dropping it releases the lock.
-    _file: std::fs::File,
+    _file: File,
 }
 
 impl ConfigDirLock {
@@ -107,13 +108,32 @@ pub enum ConfigReadError {
     },
 }
 
-/// Which renames [`publish`] performed.
+/// The two files the transaction stages beside the active pair: what [`remove_pending_and_staged`] and the sweep touch.
+const STAGING_FILES: [ConfigFileName; 2] = [ConfigFileName::Pending, ConfigFileName::StagedSignature];
+
+/// Which staged files [`publish`] renames into place. The caller chooses from the committed approval, because a
+/// leftover staged file that is not the committed one must never replace an active file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Published {
-    /// The pending config was renamed to `config.toml`.
-    pub config: bool,
-    /// The staged approval was renamed to `config.toml.sig`.
-    pub signature: bool,
+pub enum PublishSet {
+    /// Both: the pending config becomes `config.toml`, then the staged approval becomes `config.toml.sig`.
+    Both,
+    /// Only the pending config. `config.toml.sig` already holds the committed approval.
+    ConfigOnly,
+    /// Only the staged approval. `config.toml` already holds the committed config.
+    SignatureOnly,
+}
+
+impl PublishSet {
+    /// The renames, as (source, destination) in the order they run.
+    fn renames(self) -> &'static [(ConfigFileName, ConfigFileName)] {
+        const CONFIG: (ConfigFileName, ConfigFileName) = (ConfigFileName::Pending, ConfigFileName::Active);
+        const SIGNATURE: (ConfigFileName, ConfigFileName) = (ConfigFileName::StagedSignature, ConfigFileName::ActiveSignature);
+        match self {
+            Self::Both => &[CONFIG, SIGNATURE],
+            Self::ConfigOnly => &[CONFIG],
+            Self::SignatureOnly => &[SIGNATURE],
+        }
+    }
 }
 
 /// Durably writes `bytes` as `config.toml.pending`. Step 1 of the approval transaction.
@@ -158,7 +178,7 @@ pub fn read_config_file(lock: &ConfigDirLock, fs: &impl StoreFs, name: ConfigFil
 pub fn remove_pending_and_staged(lock: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<ConfigFileName>, ConfigWriteError> {
     let dir = lock.dir();
     dir_sync_supported().map_err(ConfigWriteError::io(ConfigFileName::Pending))?;
-    let attempts = [ConfigFileName::Pending, ConfigFileName::StagedSignature].map(|name| (name, unlink_in(fs, dir, name.as_str())));
+    let attempts = STAGING_FILES.map(|name| (name, unlink_in(fs, dir, name.as_str())));
     let removed: Vec<_> = attempts.iter().filter(|(_, r)| r.is_ok()).map(|(name, _)| *name).collect();
     let first_error = attempts.iter().find_map(|(name, r)| match r {
         Err(f) if f.kind != io::ErrorKind::NotFound => Some((*name, *f)),
@@ -177,17 +197,20 @@ pub fn remove_pending_and_staged(lock: &ConfigDirLock, fs: &impl StoreFs) -> Res
     }
 }
 
-/// Publishes: renames `config.toml.pending` to `config.toml`, then `config.toml.sig.staged` to `config.toml.sig`,
-/// then fsyncs the config directory once. Step 6 of the approval transaction.
+/// Publishes the staged files chosen by `set`: renames `config.toml.pending` to `config.toml`, then
+/// `config.toml.sig.staged` to `config.toml.sig`, for the files `set` names, then fsyncs the config directory once.
+/// Step 6 of the approval transaction, and recovery's finish of a half-published one.
 ///
-/// The two renames are separate and the order is a convention only: until the directory fsync returns, power loss can
-/// keep either rename, both or neither. A source file that is absent is skipped and reported in [`Published`], so the
-/// same call finishes a half-published pair; a caller that needs both renames checks the report. The directory is
-/// fsynced either way, which also makes durable a rename that landed in an earlier call whose fsync failed.
+/// The caller decides what to publish, from the committed approval; this function infers nothing from which files
+/// exist. Every requested source must exist: the directory is listed first, and a missing one fails the call with
+/// `Io { step: Rename, kind: NotFound }` naming that source, before any rename runs. A file `set` does not name is never
+/// touched, so a leftover pending config that is not the committed one cannot replace `config.toml`.
 ///
-/// If the first rename fails nothing has changed. If the second fails, the new config is in place beside the old
-/// signature, and the staged approval is still there for another call. A [`WriteStep::SyncDir`] failure, reported
-/// against `config.toml.sig`, comes after the renames: they are visible but may not survive power loss.
+/// The two renames are separate and their order is a convention only: until the directory fsync returns, power loss can
+/// keep either rename, both or neither. If the first rename fails nothing has changed. If the second fails, the new
+/// config is in place beside the old signature, and the staged approval is still there for another call with
+/// [`PublishSet::SignatureOnly`]. A [`WriteStep::SyncDir`] failure, reported against `config.toml.sig`, comes after
+/// the renames: they are visible but may not survive power loss, and the sources are gone, so repeating the call fails with `NotFound`.
 ///
 /// # Reachable mixed states
 ///
@@ -202,37 +225,52 @@ pub fn remove_pending_and_staged(lock: &ConfigDirLock, fs: &impl StoreFs) -> Res
 ///
 /// Both leave the staged or pending file that was not yet renamed in place, so recovery finishes them from the
 /// committed approval alone.
-pub fn publish(lock: &ConfigDirLock, fs: &impl StoreFs) -> Result<Published, ConfigWriteError> {
+pub fn publish(lock: &ConfigDirLock, fs: &impl StoreFs, set: PublishSet) -> Result<(), ConfigWriteError> {
     let dir = lock.dir();
     dir_sync_supported().map_err(ConfigWriteError::io(ConfigFileName::ActiveSignature))?;
-    let config = rename_if_present(fs, dir, ConfigFileName::Pending, ConfigFileName::Active)?;
-    let signature = rename_if_present(fs, dir, ConfigFileName::StagedSignature, ConfigFileName::ActiveSignature)?;
+    ensure_sources_present(fs, dir, set)?;
+    set.renames().iter().try_for_each(|&(from, to)| rename_staged(fs, dir, from, to))?;
     fs.sync_dir(dir)
         .map_err(StepFailure::new(WriteStep::SyncDir))
-        .map_err(ConfigWriteError::io(ConfigFileName::ActiveSignature))?;
-    Ok(Published { config, signature })
+        .map_err(ConfigWriteError::io(ConfigFileName::ActiveSignature))
 }
 
-fn rename_if_present(fs: &impl StoreFs, dir: &Path, from: ConfigFileName, to: ConfigFileName) -> Result<bool, ConfigWriteError> {
-    match fs.rename(&dir.join(from.as_str()), &dir.join(to.as_str())) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(ConfigWriteError::io(from)(StepFailure::new(WriteStep::Rename)(e))),
-    }
+/// Fails with `NotFound` on the first requested source that is not in the directory, so a call never renames some of
+/// its files and then fails on another.
+fn ensure_sources_present(fs: &impl StoreFs, dir: &Path, set: PublishSet) -> Result<(), ConfigWriteError> {
+    let present = fs.list_dir(dir).map_err(|e| ConfigWriteError::ListConfigDir { kind: e.kind() })?;
+    let missing = set
+        .renames()
+        .iter()
+        .map(|&(from, _)| from)
+        .find(|from| !present.iter().any(|n| n == from.as_str()));
+    missing.map_or(Ok(()), |file| {
+        Err(ConfigWriteError::Io {
+            step: WriteStep::Rename,
+            file,
+            kind: io::ErrorKind::NotFound,
+        })
+    })
 }
 
-/// Durably removes every stale temp file in the config directory and returns the files they belonged to, in
-/// [`ConfigFileName::ALL`] order, for the audit log.
+fn rename_staged(fs: &impl StoreFs, dir: &Path, from: ConfigFileName, to: ConfigFileName) -> Result<(), ConfigWriteError> {
+    fs.rename(&dir.join(from.as_str()), &dir.join(to.as_str()))
+        .map_err(StepFailure::new(WriteStep::Rename))
+        .map_err(ConfigWriteError::io(from))
+}
+
+/// Durably removes every stale temp file of the pending config and the staged approval, and returns the files they
+/// belonged to, pending first, for the audit log.
 ///
 /// A durable replace cut short by a crash leaves `.<name>.tmp`, and the next replace of `name` refuses to reuse it.
-/// The service runs this once after taking the config-directory lock and before any write. It removes only the four
-/// temporary names a replace can produce; every other entry, including the lock file, is left alone. All removals
-/// share one directory fsync, reported against the first file.
+/// The active files are only ever written by rename, so they have no temp files. The service runs this once after
+/// taking the config-directory lock and before any write. Every other entry, including the lock file, is left alone.
+/// All removals share one directory fsync, reported against the first file.
 pub fn sweep_stale_config_temps(lock: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<ConfigFileName>, ConfigWriteError> {
     let dir = lock.dir();
     let entries = fs.list_dir(dir).map_err(|e| ConfigWriteError::ListConfigDir { kind: e.kind() })?;
     let present: Vec<_> = entries.iter().filter_map(|n| n.to_str()).collect();
-    let stale: Vec<_> = ConfigFileName::ALL
+    let stale: Vec<_> = STAGING_FILES
         .into_iter()
         .filter(|n| present.contains(&n.temp_name().as_str()))
         .collect();
@@ -267,8 +305,7 @@ mod tests {
         write_staged(&lock, &OsFs, b"signature").unwrap();
         assert_eq!(read(&lock, ConfigFileName::Pending).unwrap(), b"[config]");
         assert_eq!(read(&lock, ConfigFileName::StagedSignature).unwrap(), b"signature");
-        let published = publish(&lock, &OsFs).unwrap();
-        assert!(published.config && published.signature);
+        publish(&lock, &OsFs, PublishSet::Both).unwrap();
         assert_eq!(read(&lock, ConfigFileName::Active).unwrap(), b"[config]");
         assert_eq!(read(&lock, ConfigFileName::ActiveSignature).unwrap(), b"signature");
         assert!(read(&lock, ConfigFileName::Pending).is_err());

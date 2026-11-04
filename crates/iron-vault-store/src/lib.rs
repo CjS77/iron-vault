@@ -6,6 +6,7 @@ mod config_dir;
 #[cfg(test)]
 mod config_dir_faults;
 mod config_file_name;
+mod dir_lock;
 mod durable;
 #[cfg(test)]
 mod durable_faults;
@@ -46,10 +47,11 @@ pub use approval::{
     open_approval_state, open_signer_key, read_signer_key, seal_approval_state, seal_signer_key, verify_approval, write_signer_key,
 };
 pub use config_dir::{
-    ConfigDirLock, ConfigReadError, ConfigWriteError, Published, publish, read_config_file, remove_pending_and_staged,
+    ConfigDirLock, ConfigReadError, ConfigWriteError, PublishSet, publish, read_config_file, remove_pending_and_staged,
     sweep_stale_config_temps, write_pending, write_staged,
 };
 pub use config_file_name::{ConfigFileName, MAX_CONFIG_LEN};
+pub use dir_lock::LockError;
 pub use durable::{MAX_STATE_FILE_LEN, ReadError, WriteError, WriteStep, durable_remove, durable_replace, read_state_file};
 pub use envelope::{
     EnvelopeError, MAX_IDENTITY_ENVELOPE_LEN, read_identity_envelope, stanza_kinds, unwrap_identity, wrap_identity, write_identity_envelope,
@@ -73,7 +75,7 @@ pub use recovery::{RecoveryError, RecoveryKey, RecoveryKeySecret};
 pub use sealed::{OpenError, SealError, open, seal};
 pub use stale_temps::sweep_stale_temps;
 pub use stanza::StanzaKind;
-pub use state_dir::{LockError, StateDirLock};
+pub use state_dir::StateDirLock;
 pub use state_file_name::{StateFileName, StateFileNameError};
 pub use state_generation::StateGeneration;
 pub use store_fs::{OsFs, StoreFs};

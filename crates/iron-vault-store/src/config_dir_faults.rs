@@ -9,8 +9,8 @@ use crate::durable_faults::assert_trace_properties;
 use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::test_dir::TestDir;
 use crate::{
-    ConfigDirLock, ConfigFileName, ConfigWriteError, StoreFs, WriteStep, publish, remove_pending_and_staged, sweep_stale_config_temps,
-    write_pending, write_staged,
+    ConfigDirLock, ConfigFileName, ConfigWriteError, PublishSet, StoreFs, WriteStep, publish, remove_pending_and_staged,
+    sweep_stale_config_temps, write_pending, write_staged,
 };
 
 const OLD_CONFIG: &[u8] = b"old config, longer than the new one";
@@ -195,20 +195,22 @@ fn an_oversized_write_is_refused_before_the_filesystem_is_touched() {
 }
 
 #[test]
-fn publish_renames_config_then_signature_then_syncs_once() {
+fn publish_lists_then_renames_config_then_signature_then_syncs_once() {
     let setup = Setup::new("cfg-publish-trace");
     let fs = setup.staged_fs();
-    let published = publish(&setup.lock, &fs).unwrap();
-    assert!(published.config && published.signature);
+    publish(&setup.lock, &fs, PublishSet::Both).unwrap();
     let rename = |from, to| FsCall::Rename {
         from: setup.path(from),
         to: setup.path(to),
     };
-    let sync = FsCall::SyncDir(setup.dir.path().to_path_buf());
-    assert_eq!(
-        fs.trace(),
-        [rename(Pending, Active), rename(StagedSignature, ActiveSignature), sync]
-    );
+    let dir = setup.dir.path().to_path_buf();
+    let expected = [
+        FsCall::ListDir(dir.clone()),
+        rename(Pending, Active),
+        rename(StagedSignature, ActiveSignature),
+        FsCall::SyncDir(dir),
+    ];
+    assert_eq!(fs.trace(), expected);
     assert_trace_properties(&fs.trace());
     assert_eq!(setup.active_pair(&fs), (Gen::New, Gen::New));
     assert_eq!((setup.contents(&fs, Pending), setup.contents(&fs, StagedSignature)), (None, None));
@@ -217,42 +219,52 @@ fn publish_renames_config_then_signature_then_syncs_once() {
 #[test]
 fn publish_failure_at_each_call_names_the_file_and_leaves_a_resumable_pair() {
     let setup = Setup::new("cfg-publish-steps");
+    let io = |step, file| ConfigWriteError::Io {
+        step,
+        file,
+        kind: io::ErrorKind::StorageFull,
+    };
+    let list = ConfigWriteError::ListConfigDir {
+        kind: io::ErrorKind::StorageFull,
+    };
+    // For each call: the error, the active pair left behind, and the set that finishes the publish (None if done).
     let cases = [
-        (Pending, WriteStep::Rename, (Gen::Old, Gen::Old), true),
-        (StagedSignature, WriteStep::Rename, (Gen::New, Gen::Old), true),
-        (ActiveSignature, WriteStep::SyncDir, (Gen::New, Gen::New), false),
+        (list, (Gen::Old, Gen::Old), Some(PublishSet::Both)),
+        (io(WriteStep::Rename, Pending), (Gen::Old, Gen::Old), Some(PublishSet::Both)),
+        (
+            io(WriteStep::Rename, StagedSignature),
+            (Gen::New, Gen::Old),
+            Some(PublishSet::SignatureOnly),
+        ),
+        (io(WriteStep::SyncDir, ActiveSignature), (Gen::New, Gen::New), None),
     ];
-    cases.into_iter().enumerate().for_each(|(i, (file, step, pair, staged_kept))| {
+    cases.into_iter().enumerate().for_each(|(i, (error, pair, retry))| {
         let fs = setup.staged_fs();
         fs.fail_call(i, io::ErrorKind::StorageFull);
-        let expected = ConfigWriteError::Io {
-            step,
-            file,
-            kind: io::ErrorKind::StorageFull,
-        };
-        assert_eq!(publish(&setup.lock, &fs).unwrap_err(), expected, "fault at call {i}");
+        assert_eq!(publish(&setup.lock, &fs, PublishSet::Both), Err(error), "fault at call {i}");
         assert_eq!(setup.active_pair(&fs), pair, "fault at call {i}");
-        assert_eq!(setup.contents(&fs, StagedSignature).is_some(), staged_kept, "fault at call {i}");
-        // Whatever failed, publishing again finishes the pair.
-        publish(&setup.lock, &fs).unwrap();
-        assert_eq!(setup.active_pair(&fs), (Gen::New, Gen::New), "retry after fault at call {i}");
+        if let Some(set) = retry {
+            publish(&setup.lock, &fs, set).unwrap();
+        }
+        assert_eq!(setup.active_pair(&fs), (Gen::New, Gen::New), "after retry of fault at call {i}");
     });
 }
 
 #[test]
 fn publish_survives_a_crash_at_every_point() {
     let setup = Setup::new("cfg-publish-crash");
-    (0..=3).for_each(|k| {
+    let calls = 4;
+    (0..=calls).for_each(|k| {
         let fs = setup.staged_fs();
         fs.cut_power_after(k);
-        let result = publish(&setup.lock, &fs);
+        let result = publish(&setup.lock, &fs, PublishSet::Both);
         fs.crash();
         let pair = setup.active_pair(&fs);
         assert!(result.is_err() || pair == (Gen::New, Gen::New), "an Ok publish was lost in a crash");
         // Without an fsync, the filesystem keeps none of the renames; with it, both.
         assert_eq!(
             pair,
-            if k == 3 { (Gen::New, Gen::New) } else { (Gen::Old, Gen::Old) },
+            if k == calls { (Gen::New, Gen::New) } else { (Gen::Old, Gen::Old) },
             "crash after {k}"
         );
     });
@@ -262,11 +274,11 @@ fn publish_survives_a_crash_at_every_point() {
 /// subset of the two renames. The recovery ticket relies on this list.
 fn reachable_pairs(setup: &Setup) -> BTreeSet<(Gen, Gen)> {
     let renames = [(Pending, Active), (StagedSignature, ActiveSignature)];
-    let power_loss = (0..4u8).flat_map(|keep| {
+    let power_loss = (0..4u8).map(|keep| {
         let fs = setup.staged_fs();
-        // Power is lost just before the directory fsync, after both renames.
-        fs.cut_power_after(2);
-        assert!(publish(&setup.lock, &fs).is_err());
+        // Power is lost just before the directory fsync: after the listing and both renames.
+        fs.cut_power_after(3);
+        assert!(publish(&setup.lock, &fs, PublishSet::Both).is_err());
         let kept: Vec<PathBuf> = renames
             .iter()
             .enumerate()
@@ -274,12 +286,12 @@ fn reachable_pairs(setup: &Setup) -> BTreeSet<(Gen, Gen)> {
             .flat_map(|(_, (from, to))| [setup.path(*from), setup.path(*to)])
             .collect();
         fs.crash_keeping(&kept.iter().map(PathBuf::as_path).collect::<Vec<_>>());
-        Some(setup.active_pair(&fs))
+        setup.active_pair(&fs)
     });
-    let failed = (0..3).map(|i| {
+    let failed = (0..4).map(|i| {
         let fs = setup.staged_fs();
         fs.fail_call(i, io::ErrorKind::StorageFull);
-        assert!(publish(&setup.lock, &fs).is_err());
+        assert!(publish(&setup.lock, &fs, PublishSet::Both).is_err());
         setup.active_pair(&fs)
     });
     power_loss.chain(failed).collect()
@@ -299,32 +311,93 @@ fn the_reachable_mixed_states_are_new_config_old_signature_and_the_reverse() {
 }
 
 #[test]
-fn a_mixed_state_keeps_the_file_that_finishes_it_and_publish_completes_it() {
+fn a_mixed_state_keeps_the_file_that_finishes_it_and_the_matching_set_completes_it() {
     let setup = Setup::new("cfg-publish-resume");
     // New config + old signature keeps the staged signature; old config + new signature keeps the pending config.
     let cases = [
-        (Pending, Active, StagedSignature, (Gen::New, Gen::Old)),
-        (StagedSignature, ActiveSignature, Pending, (Gen::Old, Gen::New)),
+        (Pending, Active, StagedSignature, (Gen::New, Gen::Old), PublishSet::SignatureOnly),
+        (
+            StagedSignature,
+            ActiveSignature,
+            Pending,
+            (Gen::Old, Gen::New),
+            PublishSet::ConfigOnly,
+        ),
     ];
-    cases.into_iter().for_each(|(from, to, kept, pair)| {
+    cases.into_iter().for_each(|(from, to, kept, pair, set)| {
         let fs = setup.staged_fs();
         fs.rename(&setup.path(from), &setup.path(to)).unwrap();
         assert_eq!(setup.active_pair(&fs), pair);
         assert!(setup.contents(&fs, kept).is_some(), "{kept} is gone");
-        publish(&setup.lock, &fs).unwrap();
+        publish(&setup.lock, &fs, set).unwrap();
         assert_eq!(setup.active_pair(&fs), (Gen::New, Gen::New));
     });
 }
 
 #[test]
-fn publish_skips_an_absent_source_and_still_syncs() {
-    let setup = Setup::new("cfg-publish-absent");
+fn a_missing_requested_source_fails_with_not_found_before_anything_is_renamed() {
+    let setup = Setup::new("cfg-publish-missing");
+    // (set, the source removed first, the source the error names)
+    let cases = [
+        (PublishSet::Both, Pending, Pending),
+        (PublishSet::Both, StagedSignature, StagedSignature),
+        (PublishSet::ConfigOnly, Pending, Pending),
+        (PublishSet::SignatureOnly, StagedSignature, StagedSignature),
+    ];
+    cases.into_iter().for_each(|(set, removed, named)| {
+        let fs = setup.staged_fs();
+        fs.remove_file(&setup.path(removed)).unwrap();
+        let before = fs.trace().len();
+        let expected = ConfigWriteError::Io {
+            step: WriteStep::Rename,
+            file: named,
+            kind: io::ErrorKind::NotFound,
+        };
+        assert_eq!(publish(&setup.lock, &fs, set), Err(expected), "{set:?} without {removed}");
+        assert_eq!(
+            fs.trace()[before..],
+            [FsCall::ListDir(setup.dir.path().to_path_buf())],
+            "{set:?} without {removed}"
+        );
+        assert_eq!(setup.active_pair(&fs), (Gen::Old, Gen::Old), "{set:?} without {removed}");
+    });
+}
+
+#[test]
+fn signature_only_leaves_a_leftover_pending_config_and_the_active_config_alone() {
+    let setup = Setup::new("cfg-publish-sig-only");
+    // Recovery row 2 with an uncommitted pending config from a later approval beside it.
     let fs = setup.staged_fs();
-    fs.rename(&setup.path(Pending), &setup.path(Active)).unwrap();
-    let published = publish(&setup.lock, &fs).unwrap();
-    assert!(!published.config && published.signature);
-    assert_eq!(fs.trace().last(), Some(&FsCall::SyncDir(setup.dir.path().to_path_buf())));
-    assert_eq!(setup.active_pair(&fs), (Gen::New, Gen::New));
+    publish(&setup.lock, &fs, PublishSet::SignatureOnly).unwrap();
+    assert_eq!(setup.active_pair(&fs), (Gen::Old, Gen::New));
+    assert_eq!(setup.contents(&fs, Active).as_deref(), Some(OLD_CONFIG));
+    assert_eq!(setup.contents(&fs, Pending).as_deref(), Some(NEW_CONFIG));
+    assert_eq!(setup.contents(&fs, StagedSignature), None);
+    assert_eq!(renames(&fs), [setup.path(StagedSignature)]);
+}
+
+#[test]
+fn config_only_leaves_a_leftover_staged_signature_and_the_active_signature_alone() {
+    let setup = Setup::new("cfg-publish-config-only");
+    // Recovery row 3 with an uncommitted staged signature from a later approval beside it.
+    let fs = setup.staged_fs();
+    publish(&setup.lock, &fs, PublishSet::ConfigOnly).unwrap();
+    assert_eq!(setup.active_pair(&fs), (Gen::New, Gen::Old));
+    assert_eq!(setup.contents(&fs, ActiveSignature).as_deref(), Some(OLD_SIG));
+    assert_eq!(setup.contents(&fs, StagedSignature).as_deref(), Some(NEW_SIG));
+    assert_eq!(setup.contents(&fs, Pending), None);
+    assert_eq!(renames(&fs), [setup.path(Pending)]);
+}
+
+/// The sources of every rename in the trace.
+fn renames(fs: &FaultFs) -> Vec<PathBuf> {
+    fs.trace()
+        .into_iter()
+        .filter_map(|c| match c {
+            FsCall::Rename { from, .. } => Some(from),
+            _ => None,
+        })
+        .collect()
 }
 
 #[test]
@@ -335,34 +408,34 @@ fn remove_pending_and_staged_is_durable_and_tolerates_absence() {
     assert_trace_properties(&fs.trace());
     fs.crash();
     assert_eq!((setup.contents(&fs, Pending), setup.contents(&fs, StagedSignature)), (None, None));
-    assert_eq!(
-        setup.active_pair(
-            &FaultFs::new()
-                .with_durable_file(&setup.path(Active), OLD_CONFIG)
-                .with_durable_file(&setup.path(ActiveSignature), OLD_SIG)
-        ),
-        (Gen::Old, Gen::Old)
-    );
-    assert_eq!(remove_pending_and_staged(&setup.lock, &fs).unwrap(), []);
     assert_eq!(setup.active_pair(&fs), (Gen::Old, Gen::Old));
+    assert_eq!(remove_pending_and_staged(&setup.lock, &fs).unwrap(), []);
 }
 
 #[test]
-fn a_failed_unlink_does_not_stop_the_other_and_is_reported() {
-    let setup = Setup::new("cfg-remove-fail");
-    let fs = setup.staged_fs();
-    fs.fail_first(FsOp::RemoveFile, io::ErrorKind::PermissionDenied);
-    let expected = ConfigWriteError::Io {
-        step: WriteStep::Remove,
-        file: Pending,
+fn remove_failure_at_each_call_names_the_step_and_the_file_and_tries_the_rest() {
+    let setup = Setup::new("cfg-remove-steps");
+    let io = |step, file| ConfigWriteError::Io {
+        step,
+        file,
         kind: io::ErrorKind::PermissionDenied,
     };
-    assert_eq!(remove_pending_and_staged(&setup.lock, &fs), Err(expected));
-    assert_eq!(
-        (setup.contents(&fs, Pending).is_some(), setup.contents(&fs, StagedSignature)),
-        (true, None)
-    );
-    assert_eq!(fs.trace().last(), Some(&FsCall::SyncDir(setup.dir.path().to_path_buf())));
+    // For each call: the error, then whether the pending config and the staged approval are left on disk.
+    let cases = [
+        (io(WriteStep::Remove, Pending), true, false),
+        (io(WriteStep::Remove, StagedSignature), false, true),
+        (io(WriteStep::SyncDir, Pending), false, false),
+    ];
+    cases.into_iter().enumerate().for_each(|(i, (error, pending_left, staged_left))| {
+        let fs = setup.staged_fs();
+        fs.fail_call(i, io::ErrorKind::PermissionDenied);
+        assert_eq!(remove_pending_and_staged(&setup.lock, &fs), Err(error), "fault at call {i}");
+        assert_eq!(setup.contents(&fs, Pending).is_some(), pending_left, "fault at call {i}");
+        assert_eq!(setup.contents(&fs, StagedSignature).is_some(), staged_left, "fault at call {i}");
+        assert_eq!(setup.active_pair(&fs), (Gen::Old, Gen::Old), "fault at call {i}");
+        // Every attempt reaches the directory fsync, so the unlink that did happen is made durable.
+        assert_eq!(fs.trace().len(), 3, "fault at call {i}");
+    });
 }
 
 #[test]
@@ -380,25 +453,27 @@ fn remove_survives_a_crash_at_every_point() {
 }
 
 #[test]
-fn sweep_removes_only_the_four_temp_names_durably() {
+fn sweep_removes_only_the_pending_and_staged_temp_names_durably() {
     let setup = Setup::new("cfg-sweep");
+    // The active files are written only by rename, so their temp names are never produced and never swept.
     let bystanders = [
+        ".config.toml.tmp",
+        ".config.toml.sig.tmp",
         ".config.toml.lock.tmp",
         "config.toml.tmp",
         ".hidden",
         "config.toml.lock",
-        ".config.toml.sig.tmp~",
+        ".config.toml.sig.staged.tmp~",
     ];
-    let fs = ConfigFileName::ALL
+    let fs = [Pending, StagedSignature]
         .iter()
         .map(|n| setup.temp(*n))
         .chain(bystanders.iter().map(|n| setup.dir.path().join(n)))
         .fold(FaultFs::new(), |fs, path| fs.with_durable_file(&path, b"x"));
-    let swept = sweep_stale_config_temps(&setup.lock, &fs).unwrap();
-    assert_eq!(swept, ConfigFileName::ALL);
+    assert_eq!(sweep_stale_config_temps(&setup.lock, &fs).unwrap(), [Pending, StagedSignature]);
     assert_trace_properties(&fs.trace());
     fs.crash();
-    ConfigFileName::ALL
+    [Pending, StagedSignature]
         .iter()
         .for_each(|n| assert_eq!(fs.contents(&setup.temp(*n)), None));
     bystanders

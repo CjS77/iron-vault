@@ -29,7 +29,7 @@ pub enum ConfigFileName {
 }
 
 impl ConfigFileName {
-    /// Every data file, in the order the config directory's sweep reports them.
+    /// Every data file.
     pub const ALL: [Self; 4] = [Self::Active, Self::ActiveSignature, Self::Pending, Self::StagedSignature];
 
     /// The file's name in the config directory.
