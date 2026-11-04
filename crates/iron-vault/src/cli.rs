@@ -14,6 +14,8 @@
 mod client;
 #[cfg(target_os = "linux")]
 mod console;
+#[cfg(target_os = "linux")]
+mod status;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -34,7 +36,8 @@ Exit codes:
   1  the service answered with an error
   2  usage error
   3  no answer from the service: it is not running, this account may not connect, the exchange failed, or a prompt
-     got no value";
+     got no value
+  4  `status`: the service answered, and it is not Ready";
 
 /// The exit statuses listed in [`EXIT_CODES`]. Usage errors exit through clap, with its status 2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +48,8 @@ pub enum Exit {
     CommandError = 1,
     /// No admin response came back.
     Unreachable = 3,
+    /// `status` reached the service, which is in a state other than Ready.
+    NotReady = 4,
 }
 
 impl From<Exit> for ExitCode {
@@ -78,6 +83,8 @@ pub enum Command {
     Serve,
     /// Check that the service is running and show its deployment profile.
     Ping,
+    /// Show the service, vault, approval, memory protection and credential states, without secrets.
+    Status,
 }
 
 impl Cli {
@@ -110,11 +117,23 @@ pub fn ping(socket: Option<&Path>) -> ExitCode {
     client::ping(socket).into()
 }
 
+/// `iron-vault status`: sends `status` and prints the report; exits 0 only when the service is Ready.
+#[cfg(target_os = "linux")]
+pub fn status(socket: Option<&Path>) -> ExitCode {
+    client::status(socket).into()
+}
+
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn ping(_socket: Option<&Path>) -> ExitCode {
     eprintln!("iron-vault: client commands are not supported on this platform yet");
     Exit::Unreachable.into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn status(_socket: Option<&Path>) -> ExitCode {
+    ping(None)
 }
 
 #[cfg(test)]

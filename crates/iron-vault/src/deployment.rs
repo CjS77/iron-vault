@@ -309,8 +309,14 @@ fn xdg_base(variable: Option<&Path>, home: Option<&Path>, default: &str, purpose
 pub fn development_banner(uid: u32, user: &str) -> Result<String, ProfileError> {
     match uid {
         0 => Err(ProfileError::DevelopmentAsRoot),
-        _ => Ok(format!("development mode: no isolation from malware running as {user}")),
+        _ => Ok(format!("development mode: {}", no_isolation_warning(user))),
     }
+}
+
+/// What a development build gives the user: no isolation from `user`'s malware. The startup banner and `status` both
+/// say it, from here, so the two cannot drift. It is not feature-gated because the CLI shows it for any build's service.
+pub fn no_isolation_warning(user: &str) -> String {
+    format!("no isolation from malware running as {user}")
 }
 
 /// `<version> (features: <list>)`, naming every enabled build feature so a release check can refuse a build that has

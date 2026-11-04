@@ -21,6 +21,13 @@ fn ping_is_a_client_command() {
 }
 
 #[test]
+fn status_is_a_client_command_and_not_ready_has_its_own_exit_code() {
+    assert_eq!(parse(&["status"]).unwrap().command, Command::Status);
+    assert_eq!(Exit::NotReady as u8, 4);
+    assert!(EXIT_CODES.contains("4  `status`"));
+}
+
+#[test]
 fn admin_socket_overrides_the_path_before_or_after_the_command() {
     let before = parse(&["--admin-socket", "/tmp/fwd.sock", "ping"]).unwrap();
     let after = parse(&["ping", "--admin-socket", "/tmp/fwd.sock"]).unwrap();

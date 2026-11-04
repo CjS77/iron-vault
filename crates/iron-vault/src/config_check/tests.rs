@@ -363,7 +363,7 @@ fn damaged_shared_state_needs_recovery() {
 
 impl Fixture {
     /// Opens the vault with the identity and runs the check, as an unlock does.
-    fn open_and_check(&self) -> Result<(ServingSnapshot, ApprovalState), CheckFailure> {
+    fn open_and_check(&self) -> Result<Checked, CheckFailure> {
         let upstream = UpstreamSettings::new(DeploymentProfile::Development, ExpectedOwner { uid: 0 }, TransportLimits::default());
         open_and_check(
             &self.state_lock,
@@ -380,7 +380,7 @@ impl Fixture {
 #[test]
 fn opening_then_checking_returns_the_snapshot_and_the_approval_state() {
     let fixture = approved();
-    let (snapshot, state) = fixture.open_and_check().unwrap();
+    let (snapshot, state, _) = fixture.open_and_check().unwrap();
     assert_eq!(state, fixture.state);
     assert!(snapshot.record(&"alpha".parse().unwrap()).is_some());
 }

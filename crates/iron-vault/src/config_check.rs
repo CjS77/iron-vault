@@ -23,6 +23,7 @@ use iron_vault_store::{
     VaultIdentity, recover_approval,
 };
 
+use crate::admin::protocol::CredentialStatus;
 use crate::deployment::DeploymentProfile;
 use crate::service_state::{FailureReason, UnavailableReason};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotError};
@@ -210,12 +211,17 @@ fn activation_detail(error: &ActivationError) -> String {
     }
 }
 
+/// What a passed check on a freshly opened vault yields: the snapshot to serve, the vault's approval state and the
+/// standing of each credential.
+pub type Checked = (ServingSnapshot, ApprovalState, Vec<CredentialStatus>);
+
 /// Opens the vault with `identity` and loads its approval state, then runs the config check, for a service entering
 /// Checking with the vault identity in hand.
 ///
 /// Damaged shared state that keeps the vault or the approval state from opening is a check failure like any other
 /// ([`CheckFailure::Vault`], [`CheckFailure::ApprovalState`]), logged the same way. On success the vault is in the
-/// snapshot and the approval state is returned beside it; on failure both are dropped, the identity with them.
+/// snapshot, and the approval state and each credential's standing (which only the open report knows) are returned
+/// beside it; on failure all are dropped, the identity with them.
 pub fn open_and_check(
     state_dir: &StateDirLock,
     config_dir: &ConfigDirLock,
@@ -224,7 +230,7 @@ pub fn open_and_check(
     capabilities: &Capabilities,
     accounts: &impl AccountDirectory,
     upstream: &UpstreamSettings,
-) -> Result<(ServingSnapshot, ApprovalState), CheckFailure> {
+) -> Result<Checked, CheckFailure> {
     open_and_run(state_dir, config_dir, fs, identity, capabilities, accounts, upstream).inspect_err(log_failure)
 }
 
@@ -236,11 +242,12 @@ fn open_and_run(
     capabilities: &Capabilities,
     accounts: &impl AccountDirectory,
     upstream: &UpstreamSettings,
-) -> Result<(ServingSnapshot, ApprovalState), CheckFailure> {
-    let (vault, _) = Vault::open(state_dir, fs, identity).map_err(CheckFailure::Vault)?;
+) -> Result<Checked, CheckFailure> {
+    let (vault, opened) = Vault::open(state_dir, fs, identity).map_err(CheckFailure::Vault)?;
     let state = vault.load_approval_state(state_dir, fs).map_err(CheckFailure::ApprovalState)?;
     let snapshot = run(config_dir, fs, vault, &state, capabilities, accounts, upstream)?;
-    Ok((snapshot, state))
+    let credentials = snapshot.credential_statuses(&opened);
+    Ok((snapshot, state, credentials))
 }
 
 /// Runs the config check and returns the snapshot to serve, or the failure that leaves the service Unavailable.

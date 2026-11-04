@@ -150,18 +150,21 @@ impl fmt::Display for CoreDumps {
     }
 }
 
+impl fmt::Display for LockUnavailable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LimitTooLow { limit_bytes } => write!(f, "RLIMIT_MEMLOCK soft limit is {limit_bytes} bytes, not unlimited"),
+            Self::LockFailed { error } => write!(f, "mlockall failed: {error}"),
+        }
+    }
+}
+
 // Only `Locked` may use the word "locked": the other wordings are what an operator greps status for.
 impl fmt::Display for MemoryProtection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Locked => f.write_str("memory: locked against swap"),
-            Self::Unavailable(LockUnavailable::LimitTooLow { limit_bytes }) => write!(
-                f,
-                "memory: swap protection unavailable (RLIMIT_MEMLOCK soft limit is {limit_bytes} bytes, not unlimited)"
-            ),
-            Self::Unavailable(LockUnavailable::LockFailed { error }) => {
-                write!(f, "memory: swap protection unavailable (mlockall failed: {error})")
-            }
+            Self::Unavailable(why) => write!(f, "memory: swap protection unavailable ({why})"),
             Self::Unsupported => f.write_str("memory: swap protection unsupported on this platform"),
         }
     }

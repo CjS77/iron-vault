@@ -6,12 +6,14 @@
 //! on it, and none loads it after the replacement. When no snapshot is held, the admission is a refusal with a redacted
 //! reason, and a snapshot withdrawn from its requests tells them to stop ([`ServingSnapshot::withdrawn`]).
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, PoisonError, RwLock};
 
 use iron_vault_policy::{ActivePolicy, CredentialName, RateLimiter, RouteName};
-use iron_vault_store::{CredentialRecord, Vault};
+use iron_vault_store::{CredentialRecord, OpenReport, Vault};
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
+use crate::admin::protocol::{CredentialStatus, Standing};
 use crate::service_state::{FailureReason, UnavailableReason};
 use crate::upstream::clients::UpstreamClients;
 
@@ -91,6 +93,35 @@ impl ServingSnapshot {
     /// The healthy record named `credential`, for resolving the value and its permitted origins together.
     pub fn record(&self, credential: &CredentialName) -> Option<&CredentialRecord> {
         self.vault.record(credential)
+    }
+
+    /// Every credential the vault manifest lists, in name order, with the routes its standing makes unavailable.
+    ///
+    /// `opened` is the report from opening this snapshot's vault: only it knows why a record did not load.
+    pub fn credential_statuses(&self, opened: &OpenReport) -> Vec<CredentialStatus> {
+        let names = self
+            .vault
+            .manifest()
+            .entries()
+            .values()
+            .map(|entry| entry.name())
+            .collect::<BTreeSet<_>>();
+        names
+            .into_iter()
+            .map(|name| CredentialStatus {
+                name: name.clone(),
+                standing: opened.damaged().get(name).copied().map_or(Standing::Healthy, Standing::Damaged),
+                unavailable_routes: self.unavailable_routes_of(name),
+            })
+            .collect()
+    }
+
+    fn unavailable_routes_of(&self, credential: &CredentialName) -> Vec<RouteName> {
+        let routes = self.policy.config().routes().iter();
+        routes
+            .filter(|(route, config)| config.credential() == credential && !self.policy.is_available(route))
+            .map(|(route, _)| route.clone())
+            .collect()
     }
 
     /// The upstream clients built for the policy.

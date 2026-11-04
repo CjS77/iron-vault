@@ -18,11 +18,12 @@ use std::time::Duration;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
-use iron_vault::admin::protocol::{AdminCommand, AdminRequest, AdminResponse, Prompt};
+use iron_vault::admin::protocol::{AdminCommand, AdminRequest, AdminResponse, MemoryStatus, Prompt, StatusReport, VaultStatus};
 use iron_vault::admin::server::{AdminServer, Exchange, Limits};
 use iron_vault::admin::socket::AdminSocket;
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
+use iron_vault::service_state::ServiceState;
 use tokio::sync::oneshot;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -91,6 +92,11 @@ async fn ping_server_as(dir: &TempDir, service_uid: u32) -> Output {
 /// Serves `handlers` on `dir`'s admin socket, runs `iron-vault ping` against it with `input` on stdin, then stops the
 /// server.
 async fn serve_and_run(dir: &TempDir, service_uid: u32, handlers: Handlers, input: Vec<u8>) -> Output {
+    serve_and_run_args(dir, service_uid, handlers, ping_args(&dir.socket()), input).await
+}
+
+/// As [`serve_and_run`], running the CLI with `args`.
+async fn serve_and_run_args(dir: &TempDir, service_uid: u32, handlers: Handlers, args: Vec<String>, input: Vec<u8>) -> Output {
     let me = invoking_user().unwrap();
     let socket = AdminSocket::bind(&dir.0, me).unwrap();
     let principals = AdminPrincipals::new(DeploymentProfile::Protected, service_uid);
@@ -103,7 +109,7 @@ async fn serve_and_run(dir: &TempDir, service_uid: u32, handlers: Handlers, inpu
             })
             .await
     });
-    let output = run_cli_with_input(ping_args(&dir.socket()), input).await;
+    let output = run_cli_with_input(args, input).await;
     let _ = stop.send(());
     served.await.unwrap().unwrap();
     output
@@ -226,4 +232,42 @@ async fn piped_input_that_ends_early_cancels_the_command() {
         stderr,
         "iron-vault: the command was cancelled: the input ended before a value was given\n"
     );
+}
+
+/// A test-only `status` handler that answers with a fixed report.
+struct FixedStatus(ServiceState);
+
+impl AdminHandler for FixedStatus {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        let report = StatusReport {
+            state: self.0,
+            profile: DeploymentProfile::Protected,
+            vault: VaultStatus::Locked,
+            memory: MemoryStatus::Unsupported,
+        };
+        Box::pin(async move { Ok(AdminResponse::Status(Box::new(report))) })
+    }
+}
+
+async fn status_with(state: ServiceState) -> Output {
+    let dir = TempDir::new();
+    let handlers = Handlers::default().with(AdminCommand::Status, FixedStatus(state));
+    let args = vec!["status".into(), "--admin-socket".into(), dir.socket().display().to_string()];
+    serve_and_run_args(&dir, invoking_user().unwrap().uid, handlers, args, Vec::new()).await
+}
+
+#[tokio::test]
+async fn status_prints_one_field_per_line_and_exits_zero_only_when_ready() {
+    let ready = status_with(ServiceState::Ready).await;
+    assert_eq!(ready.status.code(), Some(0), "stderr: {}", text(&ready.stderr));
+    assert!(
+        text(&ready.stdout).starts_with("service: ready\nprofile: protected\nvault: locked\n"),
+        "{}",
+        text(&ready.stdout)
+    );
+
+    let locked = status_with(ServiceState::Locked).await;
+    assert_eq!(locked.status.code(), Some(4), "stderr: {}", text(&locked.stderr));
+    assert!(text(&locked.stdout).starts_with("service: locked\n"));
+    assert_eq!(text(&locked.stderr), "");
 }

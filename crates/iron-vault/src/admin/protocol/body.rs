@@ -1,10 +1,11 @@
 //! The bodies of every frame kind except owner input, which is never read as fields.
 
 use super::fields::{self, exact, first, read_flag, read_text, read_u16};
+use super::status::{self, StatusReport};
 use super::{AdminCommand, AdminRequest, AdminResponse, ErrorCode, FrameError, Prompt};
 use crate::deployment::DeploymentProfile;
 
-const TAG_COMMAND: u16 = 1;
+pub(super) const TAG_COMMAND: u16 = 1;
 const TAG_LABEL: u16 = 1;
 const TAG_SECRET: u16 = 2;
 const TAG_CODE: u16 = 1;
@@ -12,6 +13,7 @@ const TAG_MESSAGE: u16 = 2;
 const TAG_PROFILE: u16 = 2;
 
 const COMMAND_PING: u16 = AdminCommand::Ping as u16;
+const COMMAND_STATUS: u16 = AdminCommand::Status as u16;
 
 const PROFILE_PROTECTED: u8 = 1;
 const PROFILE_DEVELOPMENT: u8 = 2;
@@ -27,6 +29,7 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
     let fields = fields::parse(body)?;
     match read_u16(TAG_COMMAND, first(&fields, TAG_COMMAND)?)? {
         COMMAND_PING => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Ping),
+        COMMAND_STATUS => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Status),
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
 }
@@ -58,6 +61,11 @@ pub(super) fn encode_ping_result(profile: DeploymentProfile) -> Vec<u8> {
     out
 }
 
+/// `status`'s success body: the command it answers, then the report's fields.
+pub(super) fn encode_status_result(report: &StatusReport) -> Vec<u8> {
+    status::encode(COMMAND_STATUS, report)
+}
+
 /// A success without a result has only the empty body; one with a result names its command first, so the body
 /// decodes without knowing which request it answers.
 pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
@@ -72,6 +80,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
                 profile: read_profile(profile)?,
             })
         }
+        COMMAND_STATUS => status::decode(&fields).map(|report| AdminResponse::Status(Box::new(report))),
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
 }

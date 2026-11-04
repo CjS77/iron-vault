@@ -18,6 +18,7 @@ fn main() -> anyhow::Result<ExitCode> {
         Command::Serve => run_service().map(|()| ExitCode::SUCCESS),
         // Client commands log nothing: what they report is their output.
         Command::Ping => Ok(run_client(|| cli::ping(cli.admin_socket.as_deref()))),
+        Command::Status => Ok(run_client(|| cli::status(cli.admin_socket.as_deref()))),
     }
 }
 

@@ -22,6 +22,7 @@ use iron_vault_store::{
 };
 use tokio::sync::Mutex;
 
+use crate::admin::protocol::{CredentialStatus, MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 use crate::config_check::{UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
@@ -114,6 +115,8 @@ struct Inner {
     state: ServiceState,
     /// The approval state of the open vault; the vault itself is in the served snapshot.
     approval: Option<ApprovalState>,
+    /// The standing of each credential in the open vault, from the report of opening it; meaningful with `approval`.
+    credentials: Vec<CredentialStatus>,
     /// The request listeners and the task serving them; `None` only while they are being rebuilt or once stopped.
     serving: Option<Serving>,
 }
@@ -142,6 +145,7 @@ impl<F: StoreFs> ServiceContext<F> {
             inner: Mutex::new(Inner {
                 state: ServiceState::Starting,
                 approval: None,
+                credentials: Vec::new(),
                 serving: Some(Serving::start(listeners, Limits::default(), Arc::clone(&holder))),
             }),
             setup,
@@ -179,6 +183,7 @@ impl<F: StoreFs> ServiceContext<F> {
         // Stopped has no request interface; storing a refusal withdraws the snapshot and drops the holder's reference.
         self.holder.refuse(UnavailableReason::Locked);
         inner.approval = None;
+        inner.credentials.clear();
         if let Some(serving) = inner.serving.take() {
             drop(serving.stop().await);
         }
@@ -192,6 +197,27 @@ impl<F: StoreFs> ServiceContext<F> {
     /// The names of the open request listeners, in name order.
     pub async fn listener_names(&self) -> Vec<ListenerName> {
         self.inner.lock().await.serving.as_ref().map(Serving::names).unwrap_or_default()
+    }
+
+    /// The status report: what the context holds right now, which is all `status` may say.
+    ///
+    /// The vault ID, approval versions and credentials come from the open vault, so they are known only while the
+    /// context holds one. A failed check drops the vault, so Unavailable reports them as unknown too.
+    pub async fn status(&self) -> StatusReport {
+        let inner = self.inner.lock().await;
+        StatusReport {
+            state: inner.state,
+            profile: self.setup.paths.profile,
+            vault: inner.approval.as_ref().map_or(VaultStatus::Locked, |approval| {
+                VaultStatus::Unlocked(UnlockedVault {
+                    id: approval.vault_id(),
+                    committed: approval.committed().map(|(version, _)| version.get()),
+                    highest_reserved: approval.highest_reserved(),
+                    credentials: inner.credentials.clone(),
+                })
+            }),
+            memory: MemoryStatus::from(&self.setup.hardening.memory),
+        }
     }
 
     /// The holder every request's admission is loaded from.
@@ -234,7 +260,7 @@ impl<F: StoreFs> ServiceContext<F> {
             accounts,
             upstream,
         ) {
-            Ok((snapshot, approval)) => self.enter_ready(inner, snapshot, approval).await,
+            Ok((snapshot, approval, credentials)) => self.enter_ready(inner, snapshot, approval, credentials).await,
             Err(failure) => self.apply(inner, ServiceEvent::CheckFailed(failure.failure())),
         }
     }
@@ -245,6 +271,7 @@ impl<F: StoreFs> ServiceContext<F> {
         inner: &mut Inner,
         snapshot: ServingSnapshot,
         approval: ApprovalState,
+        credentials: Vec<CredentialStatus>,
     ) -> Result<ServiceState, IllegalTransition> {
         let ready = next(inner.state, ServiceEvent::CheckPassed)?;
         let config = snapshot.policy().config();
@@ -259,6 +286,7 @@ impl<F: StoreFs> ServiceContext<F> {
         inner.serving = Some(Serving::start(listeners, *config.limits(), Arc::clone(&self.holder)));
         self.holder.serve(snapshot);
         inner.approval = Some(approval);
+        inner.credentials = credentials;
         inner.state = ready;
         Ok(ready)
     }

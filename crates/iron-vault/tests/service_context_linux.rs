@@ -23,7 +23,9 @@ use ed25519_dalek::{Signer, SigningKey};
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
-use iron_vault::admin::protocol::{self, AdminRequest, AdminResponse, Decoded, Frame};
+use iron_vault::admin::protocol::{
+    self, AdminRequest, AdminResponse, CredentialStatus, Decoded, Frame, MemoryStatus, Standing, StatusReport, VaultStatus,
+};
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
 use iron_vault::config_check::UpstreamSettings;
@@ -39,7 +41,7 @@ use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{Capabilities, ListenerName};
 use iron_vault_store::{
     ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDirLock, LockError, OsFs, PendingConfig,
-    PermittedOrigins, PinnedApprover, SignError, SignatureAlgorithm, StateDirLock, Vault, VaultIdentity,
+    PermittedOrigins, PinnedApprover, RecordDamage, SignError, SignatureAlgorithm, StateDirLock, Vault, VaultIdentity,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
@@ -74,6 +76,16 @@ fn signer() -> TestSigner {
     TestSigner(SigningKey::from_bytes(&[7; 32]))
 }
 
+fn record_files(state_dir: &Path) -> Vec<PathBuf> {
+    let mut files = fs::read_dir(state_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.file_name().unwrap().to_string_lossy().starts_with("record-"))
+        .collect::<Vec<_>>();
+    files.sort();
+    files
+}
+
 fn mkdir(path: &Path, mode: u32) {
     fs::create_dir(path).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
@@ -86,6 +98,8 @@ struct Fixture {
     ca: TestCa,
     upstream: MockUpstream,
     state: ApprovalState,
+    /// The record file of `brave_key`, a second credential that no caller is granted, to damage in a test.
+    brave_record: PathBuf,
 }
 
 impl Fixture {
@@ -104,10 +118,24 @@ impl Fixture {
         let mut vault = Vault::create(&lock, &OsFs, identity()).unwrap();
         let port = upstream.port().to_string().parse().unwrap();
         let origins = PermittedOrigins::new([("localhost".parse().unwrap(), port)].into()).unwrap();
-        let material = CredentialMaterial::Static { key: SECRET.into() };
-        vault.add(&lock, &OsFs, "fx_key".parse().unwrap(), material, origins).unwrap();
+        let material = || CredentialMaterial::Static { key: SECRET.into() };
+        vault
+            .add(&lock, &OsFs, "fx_key".parse().unwrap(), material(), origins.clone())
+            .unwrap();
+        let before = record_files(&dir.path().join("state"));
+        vault.add(&lock, &OsFs, "brave_key".parse().unwrap(), material(), origins).unwrap();
+        let brave_record = record_files(&dir.path().join("state"))
+            .into_iter()
+            .find(|file| !before.contains(file))
+            .unwrap();
         let (state, _) = vault.create_approval_state(&lock, &OsFs, signer().pinned()).unwrap();
-        Self { dir, ca, upstream, state }
+        Self {
+            dir,
+            ca,
+            upstream,
+            state,
+            brave_record,
+        }
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -261,6 +289,18 @@ fn assert_refused(response: &Response, reason: UnavailableReason) {
 /// Serves `service`'s admin handlers on its runtime directory and sends `ping` over the admin protocol. It does not run
 /// the CLI binary: a child forked while another test holds a directory lock would hold that lock too until it execs.
 async fn ping(service: &Arc<ServiceContext>) -> AdminResponse {
+    admin(service, AdminRequest::Ping).await.1
+}
+
+/// Sends `status` over the admin protocol and returns the response frame's bytes with the decoded report.
+async fn status(service: &Arc<ServiceContext>) -> (Vec<u8>, StatusReport) {
+    match admin(service, AdminRequest::Status).await {
+        (bytes, AdminResponse::Status(report)) => (bytes, *report),
+        (_, other) => panic!("expected a status report, got {other:?}"),
+    }
+}
+
+async fn admin(service: &Arc<ServiceContext>, request_frame: AdminRequest) -> (Vec<u8>, AdminResponse) {
     let paths = service.paths().clone();
     let runtime_dir = paths.runtime_dir.clone().unwrap();
     let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
@@ -278,9 +318,9 @@ async fn ping(service: &Arc<ServiceContext>) -> AdminResponse {
             .await
     });
     let mut stream = UnixStream::connect(runtime_dir.join(ADMIN_SOCKET_NAME)).await.unwrap();
-    let mut request = Vec::new();
-    protocol::encode(&Frame::Request(AdminRequest::Ping), &mut request).unwrap();
-    stream.write_all(&request).await.unwrap();
+    let mut sent = Vec::new();
+    protocol::encode(&Frame::Request(request_frame), &mut sent).unwrap();
+    stream.write_all(&sent).await.unwrap();
     let mut bytes = Vec::new();
     tokio::time::timeout(WAIT, stream.read_to_end(&mut bytes)).await.unwrap().unwrap();
     let _ = stop.send(());
@@ -289,7 +329,7 @@ async fn ping(service: &Arc<ServiceContext>) -> AdminResponse {
         Decoded::Frame {
             frame: Frame::Response(response),
             ..
-        } => response,
+        } => (bytes, response),
         other => panic!("expected a response, got {other:?}"),
     }
 }
@@ -456,4 +496,149 @@ async fn stop_drops_the_vault_and_closes_the_listeners() {
     assert_eq!(service.state().await, ServiceState::Stopped);
     assert!(vault.upgrade().is_none(), "the snapshot holding the vault outlived stop");
     assert!(!fixture.socket().exists());
+}
+
+/// The route `brave`, which uses the `brave_key` credential. No caller is granted it: status does not need one.
+fn brave_route(upstream_port: u16) -> String {
+    format!(
+        r#"
+[routes.brave]
+prefix = "/brave"
+upstream = "https://localhost:{upstream_port}/v1"
+ca_file = "/etc/iron-vault/ca/test.pem"
+credential = "brave_key"
+slot = {{ header = "X-Api-Key" }}
+methods = ["GET"]
+paths = ["/v1/**"]
+rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
+"#
+    )
+}
+
+fn standing(report: &StatusReport) -> Vec<(String, Standing, Vec<String>)> {
+    let VaultStatus::Unlocked(vault) = &report.vault else {
+        panic!("the vault should be unlocked: {report:?}");
+    };
+    vault
+        .credentials
+        .iter()
+        .map(
+            |CredentialStatus {
+                 name,
+                 standing,
+                 unavailable_routes,
+             }| {
+                (
+                    name.to_string(),
+                    *standing,
+                    unavailable_routes.iter().map(ToString::to_string).collect(),
+                )
+            },
+        )
+        .collect()
+}
+
+#[tokio::test]
+async fn status_while_locked_reports_the_sealed_values_as_unknown() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+
+    let (_, report) = status(&service).await;
+
+    assert_eq!(report.state, ServiceState::Locked);
+    assert_eq!(report.profile, DeploymentProfile::Development);
+    assert_eq!(report.vault, VaultStatus::Locked);
+    assert_eq!(report.memory, MemoryStatus::Unsupported);
+}
+
+#[tokio::test]
+async fn status_when_ready_reports_the_vault_approval_and_every_credential() {
+    let mut fixture = Fixture::new().await;
+    fixture.approve(&fixture.config(&brave_route(fixture.upstream.port())));
+    let service = fixture.start().unwrap();
+    service.enter_checking(identity()).await.unwrap();
+
+    let (_, report) = status(&service).await;
+
+    assert_eq!(report.state, ServiceState::Ready);
+    let VaultStatus::Unlocked(vault) = &report.vault else {
+        panic!("{report:?}")
+    };
+    assert_eq!((vault.committed, vault.highest_reserved), (Some(1), 1));
+    assert_eq!(vault.id, fixture.state.vault_id());
+    assert_eq!(
+        standing(&report),
+        [
+            ("brave_key".to_owned(), Standing::Healthy, Vec::new()),
+            ("fx_key".to_owned(), Standing::Healthy, Vec::new())
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_damaged_record_is_damaged_with_its_routes_unavailable_and_the_others_stay_healthy() {
+    let damages = [
+        (None, RecordDamage::Missing),
+        (Some(b"not the record".as_slice()), RecordDamage::Substituted),
+    ];
+    for (replacement, damage) in damages {
+        let mut fixture = Fixture::new().await;
+        fixture.approve(&fixture.config(&brave_route(fixture.upstream.port())));
+        match replacement {
+            None => fs::remove_file(&fixture.brave_record).unwrap(),
+            Some(bytes) => fs::write(&fixture.brave_record, bytes).unwrap(),
+        }
+        let service = fixture.start().unwrap();
+        assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
+
+        let (_, report) = status(&service).await;
+
+        assert_eq!(
+            standing(&report),
+            [
+                ("brave_key".to_owned(), Standing::Damaged(damage), vec!["brave".to_owned()]),
+                ("fx_key".to_owned(), Standing::Healthy, Vec::new())
+            ]
+        );
+    }
+}
+
+#[tokio::test]
+async fn status_when_unavailable_gives_each_reason_and_reports_the_dropped_vault_as_unknown() {
+    let policy_invalid = approved().await;
+    fs::write(
+        policy_invalid.path("etc/config.toml"),
+        policy_invalid.config("# edited after approval\n"),
+    )
+    .unwrap();
+    let recovery_needed = approved().await;
+    fs::write(recovery_needed.path("state/approval.age"), b"damaged").unwrap();
+    let cases = [
+        (policy_invalid, FailureReason::PolicyInvalid),
+        (recovery_needed, FailureReason::RecoveryNeeded),
+    ];
+    for (fixture, reason) in cases {
+        let service = fixture.start().unwrap();
+        service.enter_checking(identity()).await.unwrap();
+
+        let (_, report) = status(&service).await;
+
+        assert_eq!(report.state, ServiceState::Unavailable(reason));
+        assert_eq!(report.vault, VaultStatus::Locked);
+    }
+}
+
+#[tokio::test]
+async fn status_is_byte_identical_across_runs_and_holds_no_secret() {
+    let mut fixture = Fixture::new().await;
+    fixture.approve(&fixture.config(&brave_route(fixture.upstream.port())));
+    let service = fixture.start().unwrap();
+    service.enter_checking(identity()).await.unwrap();
+
+    let (first, _) = status(&service).await;
+    let (second, _) = status(&service).await;
+
+    assert_eq!(first, second);
+    let secret = SECRET.as_bytes();
+    assert!(!first.windows(secret.len()).any(|window| window == secret));
 }

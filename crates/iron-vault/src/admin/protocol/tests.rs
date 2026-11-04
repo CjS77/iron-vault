@@ -108,6 +108,7 @@ fn owner_bytes() -> impl Strategy<Value = Vec<u8>> {
 fn any_frame() -> impl Strategy<Value = Frame> {
     prop_oneof![
         Just(AdminRequest::Ping).prop_map(Frame::Request),
+        Just(AdminRequest::Status).prop_map(Frame::Request),
         (text(MAX_LABEL), any::<bool>()).prop_map(|(label, secret)| Frame::Prompt(Prompt { label, secret })),
         owner_bytes().prop_map(|bytes| owner_input(&bytes)),
         Just(AdminResponse::Success).prop_map(Frame::Response),
@@ -172,6 +173,39 @@ fn every_frame_kind_round_trips_with_its_kind_byte() {
 fn ping_has_the_documented_encoding() {
     let expected = [0, 1, 1, 0, 0, 0, 8, 0, 1, 0, 0, 0, 2, 0, 1];
     assert_eq!(encoded(&Frame::Request(AdminRequest::Ping)), expected);
+}
+
+#[test]
+fn status_has_command_id_6() {
+    let expected = [0, 1, 1, 0, 0, 0, 8, 0, 1, 0, 0, 0, 2, 0, 6];
+    assert_eq!(encoded(&Frame::Request(AdminRequest::Status)), expected);
+    assert_eq!(AdminRequest::Status.command(), AdminCommand::Status);
+    assert_eq!(AdminCommand::Status.name(), "status");
+}
+
+#[test]
+fn a_status_request_takes_no_arguments() {
+    let with_argument = body(&[field(1, &[0, 6]), field(2, b"x")]);
+    assert_eq!(decode_err(&raw(1, 1, &with_argument)), FrameError::UnknownTag(2));
+}
+
+#[test]
+fn a_status_result_with_a_field_missing_or_extra_is_refused() {
+    let report = StatusReport {
+        state: crate::service_state::ServiceState::Locked,
+        profile: DeploymentProfile::Protected,
+        vault: VaultStatus::Locked,
+        memory: MemoryStatus::Locked,
+    };
+    let frame = Frame::Response(AdminResponse::Status(Box::new(report)));
+    assert_round_trips(&frame);
+    let mut full = encoded(&frame);
+    let extra = field(11, b"x");
+    full.extend_from_slice(&extra);
+    let length = u32::try_from(full.len() - HEADER_LEN).unwrap().to_be_bytes();
+    full[3..HEADER_LEN].copy_from_slice(&length);
+    assert_eq!(decode_err(&full), FrameError::UnknownTag(11));
+    assert_eq!(decode_err(&raw(1, 4, &field(1, &[0, 6]))), FrameError::MissingField(2));
 }
 
 #[test]

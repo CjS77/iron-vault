@@ -3,6 +3,7 @@
 
 mod body;
 mod fields;
+mod status;
 #[cfg(test)]
 mod tests;
 
@@ -12,6 +13,8 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::deployment::DeploymentProfile;
+
+pub use status::{CredentialStatus, MemoryStatus, Standing, StatusReport, UnlockedVault, VaultStatus};
 
 /// The protocol version this code writes and the only one it reads.
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -25,6 +28,8 @@ pub const HEADER_LEN: usize = 7;
 pub enum AdminRequest {
     /// Changes nothing; the service answers with its deployment profile. Command ID 1.
     Ping,
+    /// Reports service, vault, approval, memory protection and credential states; allowed in every state. Command ID 6.
+    Status,
 }
 
 impl AdminRequest {
@@ -32,6 +37,7 @@ impl AdminRequest {
     pub const fn command(&self) -> AdminCommand {
         match self {
             Self::Ping => AdminCommand::Ping,
+            Self::Status => AdminCommand::Status,
         }
     }
 }
@@ -41,6 +47,8 @@ impl AdminRequest {
 pub enum AdminCommand {
     /// `ping`.
     Ping = 1,
+    /// `status`. IDs 3 to 5 are reserved for `caller-token`, `unlock` and `lock`.
+    Status = 6,
 }
 
 impl AdminCommand {
@@ -48,6 +56,7 @@ impl AdminCommand {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Ping => "ping",
+            Self::Status => "status",
         }
     }
 }
@@ -95,6 +104,8 @@ pub enum AdminResponse {
         /// The service's deployment profile.
         profile: DeploymentProfile,
     },
+    /// `status` completed. Boxed: the report is much larger than every other response.
+    Status(Box<StatusReport>),
     /// The command failed. The message is the service's own text and never contains owner input.
     Error {
         /// The stable code scripts act on.
@@ -242,6 +253,7 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::OwnerInput(input) => put_frame(out, FrameKind::OwnerInput, input.expose_secret()),
         Frame::Response(AdminResponse::Success) => put_frame(out, FrameKind::Success, &[]),
         Frame::Response(AdminResponse::Ping { profile }) => put_frame(out, FrameKind::Success, &body::encode_ping_result(*profile)),
+        Frame::Response(AdminResponse::Status(report)) => put_frame(out, FrameKind::Success, &body::encode_status_result(report)),
         Frame::Response(AdminResponse::Error { code, message }) => put_frame(out, FrameKind::Error, &body::encode_error(*code, message)),
     }
 }

@@ -41,8 +41,8 @@ impl Handlers {
 
     /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile. A command that acts on
     /// the service (unlock, lock, status, reload, approve) registers here with a clone of `service`.
-    pub fn for_service<F: StoreFs>(service: &Arc<ServiceContext<F>>) -> Self {
-        Self::standard(service.paths().profile)
+    pub fn for_service<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> Self {
+        Self::standard(service.paths().profile).with(AdminCommand::Status, Status(Arc::clone(service)))
     }
 
     /// Registers `handler` for `command`, replacing any handler it had.
@@ -76,5 +76,14 @@ struct Ping {
 impl AdminHandler for Ping {
     fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
         Box::pin(future::ready(Ok(AdminResponse::Ping { profile: self.profile })))
+    }
+}
+
+/// `status`: reports the service context's state in every service state, so the owner can diagnose why requests fail.
+struct Status<F>(Arc<ServiceContext<F>>);
+
+impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Status<F> {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move { Ok(AdminResponse::Status(Box::new(self.0.status().await))) })
     }
 }

@@ -12,6 +12,7 @@ use iron_vault::admin::protocol::{
     self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, OwnerInput, PROTOCOL_VERSION,
 };
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
+use iron_vault::service_state::ServiceState;
 use iron_vault::trusted_path_report::ServicePaths;
 use zeroize::Zeroizing;
 
@@ -96,21 +97,62 @@ impl From<FrameError> for ClientError {
 
 /// Runs `ping` and reports the outcome: the profile on stdout, or what went wrong on stderr.
 pub fn ping(socket: Option<&Path>) -> Exit {
-    let path = match socket.map_or_else(installation_socket, |path| Ok(path.to_path_buf())) {
-        Ok(path) => path,
-        Err(e) => return fail(Exit::Unreachable, &format!("{e:#}")),
-    };
-    match exchange(&path, AdminRequest::Ping, &mut ProcessConsole::default()) {
-        Ok(AdminResponse::Ping { profile }) => {
+    run(socket, AdminRequest::Ping, |response| match response {
+        AdminResponse::Ping { profile } => {
             println!(
                 "the service is running: {} profile, admin protocol version {PROTOCOL_VERSION}",
                 profile_name(profile)
             );
             Exit::Success
         }
+        _ => unexpected(),
+    })
+}
+
+/// Runs `status` and prints the report on stdout. Any answer from the service that is not Ready exits with
+/// [`Exit::NotReady`], so a script can wait on readiness.
+pub fn status(socket: Option<&Path>) -> Exit {
+    run(socket, AdminRequest::Status, |response| match response {
+        AdminResponse::Status(report) => {
+            print!("{}", super::status::render(&report, &invoking_user_name()));
+            if report.state == ServiceState::Ready {
+                Exit::Success
+            } else {
+                Exit::NotReady
+            }
+        }
+        _ => unexpected(),
+    })
+}
+
+/// One exchange for a command without prompts: `answer` handles a success; an error response and a failed exchange are
+/// reported here.
+fn run(socket: Option<&Path>, request: AdminRequest, answer: impl FnOnce(AdminResponse) -> Exit) -> Exit {
+    let path = match socket.map_or_else(installation_socket, |path| Ok(path.to_path_buf())) {
+        Ok(path) => path,
+        Err(e) => return fail(Exit::Unreachable, &format!("{e:#}")),
+    };
+    match exchange(&path, request, &mut ProcessConsole::default()) {
         Ok(AdminResponse::Error { code, message }) => fail(Exit::CommandError, &service_error(code, &message)),
-        Ok(AdminResponse::Success) => fail(Exit::Unreachable, &ClientError::Unexpected.to_string()),
+        Ok(response) => answer(response),
         Err(e) => fail(Exit::Unreachable, &e.to_string()),
+    }
+}
+
+fn unexpected() -> Exit {
+    fail(Exit::Unreachable, &ClientError::Unexpected.to_string())
+}
+
+/// The account this CLI runs as, for `status`'s development profile line; its uid when `/etc/passwd` does not name it.
+fn invoking_user_name() -> String {
+    let accounts = Accounts::read().ok();
+    let uid = accounts
+        .as_ref()
+        .and_then(|accounts| ProfileEnv::from_process(accounts).ok())
+        .map(|env| env.invoking_uid);
+    match (accounts, uid) {
+        (Some(accounts), Some(uid)) => accounts.name(uid).map_or_else(|| format!("uid {uid}"), str::to_owned),
+        _ => "this user".to_owned(),
     }
 }
 
