@@ -11,7 +11,7 @@
 
 mod common;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -400,7 +400,6 @@ async fn a_verified_listener_the_provisional_set_lacked_is_bound_before_ready() 
     assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
 
     assert_eq!(service.listener_names().await, [listener("local"), listener("wide")]);
-    assert_eq!(service.missing_listeners().await, BTreeSet::new());
     let response = get_tcp(port).await;
     assert_served(&response);
 }
@@ -415,7 +414,7 @@ async fn a_verified_listener_that_cannot_be_bound_stays_missing_and_the_service_
 
     assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
 
-    assert_eq!(service.missing_listeners().await, BTreeSet::from([listener("wide")]));
+    assert_eq!(service.listener_names().await, [listener("local")]);
     assert_served(&get_unix(&fixture.socket(), true).await);
 }
 

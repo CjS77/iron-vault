@@ -12,7 +12,7 @@
 
 mod serving;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -116,8 +116,6 @@ struct Inner {
     approval: Option<ApprovalState>,
     /// The request listeners and the task serving them; `None` only while they are being rebuilt or once stopped.
     serving: Option<Serving>,
-    /// Verified listeners the last rebuild could not open, which stay missing until restart.
-    missing: BTreeSet<ListenerName>,
 }
 
 impl<F: StoreFs> ServiceContext<F> {
@@ -145,7 +143,6 @@ impl<F: StoreFs> ServiceContext<F> {
                 state: ServiceState::Starting,
                 approval: None,
                 serving: Some(Serving::start(listeners, Limits::default(), Arc::clone(&holder))),
-                missing: BTreeSet::new(),
             }),
             setup,
             locks,
@@ -160,33 +157,12 @@ impl<F: StoreFs> ServiceContext<F> {
 
     /// Unlocks with `identity` and runs the config check: Locked to Checking, then Ready or Unavailable.
     ///
-    /// Opens the vault and its approval state and runs the config check ([`open_and_check`]). When it passes, the
-    /// listener set is rebuilt from the verified config, and only then is the snapshot served and the set approved.
-    /// When it fails, the provisional listeners keep answering `503` with the failure's reason, the check has logged the
-    /// detail at WARN, and the vault and its identity are dropped. Reload (K-126) and approval (K-128) reuse the steps
-    /// after the transition into Checking.
+    /// When the check passes, the listener set is rebuilt from the verified config, and only then is the snapshot
+    /// served and the set approved. When it fails, the provisional listeners keep answering `503` with the failure's
+    /// reason, the check has logged the detail at WARN, and the vault and its identity are dropped.
     pub async fn enter_checking(&self, identity: VaultIdentity) -> Result<ServiceState, IllegalTransition> {
         let mut inner = self.inner.lock().await;
-        self.apply(&mut inner, ServiceEvent::UnlockSucceeded)?;
-        let ServiceSetup {
-            fs,
-            accounts,
-            capabilities,
-            upstream,
-            ..
-        } = &self.setup;
-        match open_and_check(
-            &self.locks.state,
-            &self.locks.config,
-            fs,
-            identity,
-            capabilities,
-            accounts,
-            upstream,
-        ) {
-            Ok((snapshot, approval)) => self.enter_ready(&mut inner, snapshot, approval).await,
-            Err(failure) => self.apply(&mut inner, ServiceEvent::CheckFailed(failure.failure())),
-        }
+        self.check_and_settle(&mut inner, ServiceEvent::UnlockSucceeded, identity).await
     }
 
     /// Stops the service on SIGTERM or SIGINT: Ready to Stopped, then drops the snapshot, the vault in it and the
@@ -218,11 +194,6 @@ impl<F: StoreFs> ServiceContext<F> {
         self.inner.lock().await.serving.as_ref().map(Serving::names).unwrap_or_default()
     }
 
-    /// The verified listeners the last rebuild could not open; they stay missing until restart.
-    pub async fn missing_listeners(&self) -> BTreeSet<ListenerName> {
-        self.inner.lock().await.missing.clone()
-    }
-
     /// The holder every request's admission is loaded from.
     pub fn holder(&self) -> &Arc<SnapshotHolder> {
         &self.holder
@@ -236,6 +207,36 @@ impl<F: StoreFs> ServiceContext<F> {
     /// What process hardening achieved at startup.
     pub fn hardening(&self) -> &HardeningReport {
         &self.setup.hardening
+    }
+
+    /// Moves into Checking on `event` (an unlock; later a reload, an approval's commit or a repair), runs the config check
+    /// with `identity` ([`open_and_check`]), and settles in Ready or Unavailable.
+    async fn check_and_settle(
+        &self,
+        inner: &mut Inner,
+        event: ServiceEvent,
+        identity: VaultIdentity,
+    ) -> Result<ServiceState, IllegalTransition> {
+        self.apply(inner, event)?;
+        let ServiceSetup {
+            fs,
+            accounts,
+            capabilities,
+            upstream,
+            ..
+        } = &self.setup;
+        match open_and_check(
+            &self.locks.state,
+            &self.locks.config,
+            fs,
+            identity,
+            capabilities,
+            accounts,
+            upstream,
+        ) {
+            Ok((snapshot, approval)) => self.enter_ready(inner, snapshot, approval).await,
+            Err(failure) => self.apply(inner, ServiceEvent::CheckFailed(failure.failure())),
+        }
     }
 
     /// Checking to Ready: the listener rebuild, then the snapshot, then the state.
@@ -255,12 +256,6 @@ impl<F: StoreFs> ServiceContext<F> {
         failures
             .iter()
             .for_each(|error| tracing::warn!("approved request listener missing until restart: {error}"));
-        inner.missing = config
-            .listeners()
-            .keys()
-            .filter(|name| !listeners.names().any(|open| open == *name))
-            .cloned()
-            .collect();
         inner.serving = Some(Serving::start(listeners, *config.limits(), Arc::clone(&self.holder)));
         self.holder.serve(snapshot);
         inner.approval = Some(approval);

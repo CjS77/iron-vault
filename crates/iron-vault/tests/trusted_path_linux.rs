@@ -113,7 +113,7 @@ fn state_tree(state: &Path, lock_mode: u32) {
 #[test]
 fn a_safe_tree_passes() {
     let tree = Tree::new("safe");
-    dir(&tree.path("etc"), 0o755);
+    dir(&tree.path("etc"), 0o700);
     file(&tree.path("etc/config.toml"), 0o600);
     file(&tree.path("etc/config.toml.lock"), 0o600);
     state_tree(&tree.path("state"), 0o600);
@@ -121,7 +121,9 @@ fn a_safe_tree_passes() {
 
     assert_eq!(check_real(TrustedPathRule::RuntimeDir, &tree.path("run")), Ok(()));
     assert_eq!(check_real(TrustedPathRule::StateFile, &tree.path("state/lock")), Ok(()));
+    assert_eq!(check_real(TrustedPathRule::StateFile, &tree.path("etc/config.toml.lock")), Ok(()));
     assert_eq!(check_beside_tmp(&tree, TrustedPathRule::StateDir, &tree.path("state")), Ok(()));
+    assert_eq!(check_beside_tmp(&tree, TrustedPathRule::ConfigDir, &tree.path("etc")), Ok(()));
     assert_eq!(
         check_beside_tmp(&tree, TrustedPathRule::Config, &tree.path("etc/config.toml")),
         Ok(())
@@ -251,7 +253,7 @@ fn follow_links(component: &PathComponent) -> (usize, &SymlinkTarget) {
 #[test]
 fn the_report_lists_every_path_in_a_fixed_order() {
     let tree = Tree::new("report");
-    dir(&tree.path("etc"), 0o755);
+    dir(&tree.path("etc"), 0o700);
     file(&tree.path("etc/config.toml"), 0o600);
     file(&tree.path("etc/config.toml.lock"), 0o600);
     state_tree(&tree.path("state"), 0o600);
@@ -279,6 +281,12 @@ fn the_report_lists_every_path_in_a_fixed_order() {
     [3, 5, 6]
         .into_iter()
         .for_each(|index| assert_eq!(report.entries[index].outcome, Ok(vec![]), "{index}"));
+    // The config directory passes its own rule: the real check refuses only the shared temp directory above it, as the
+    // state directory and config rules rightly do too.
+    let Err(PathFailure::Unsafe(config_dir)) = &report.entries[1].outcome else {
+        panic!("{:?}", report.entries[1].outcome);
+    };
+    assert_eq!(config_dir.problem, Problem::SharedStickyAncestor, "{config_dir}");
 }
 
 #[test]

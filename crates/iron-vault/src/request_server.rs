@@ -115,17 +115,37 @@ impl<H: RequestHandler> RequestServer<H> {
         let mut connections = JoinSet::new();
         loop {
             let incoming = listeners.accept().await;
-            while connections.try_join_next().is_some() {}
-            match Arc::clone(&self.connections).try_acquire_owned() {
-                Ok(permit) => {
-                    connections.spawn(self.connection(permit, incoming));
-                }
-                Err(_) => tracing::debug!(
-                    "listener {}: connection closed: {} connections are already open",
-                    incoming.listener(),
-                    self.limits.max_connections()
-                ),
+            self.admit(&mut connections, incoming);
+        }
+    }
+
+    /// Serves as [`serve`](Self::serve) does until `stop` completes, then closes every connection it is serving and
+    /// returns once each connection's task has ended, so nothing of the connections outlives the call, whatever runtime
+    /// it runs on.
+    pub async fn serve_until(&self, listeners: &RequestListeners, stop: impl Future<Output = ()>) {
+        let mut connections = JoinSet::new();
+        let mut stop = std::pin::pin!(stop);
+        loop {
+            tokio::select! {
+                incoming = listeners.accept() => self.admit(&mut connections, incoming),
+                () = &mut stop => break,
             }
+        }
+        connections.shutdown().await;
+    }
+
+    /// Serves `incoming` in a task of its own, or closes it unread when `max_connections` are already open.
+    fn admit(&self, connections: &mut JoinSet<()>, incoming: IncomingConnection) {
+        while connections.try_join_next().is_some() {}
+        match Arc::clone(&self.connections).try_acquire_owned() {
+            Ok(permit) => {
+                connections.spawn(self.connection(permit, incoming));
+            }
+            Err(_) => tracing::debug!(
+                "listener {}: connection closed: {} connections are already open",
+                incoming.listener(),
+                self.limits.max_connections()
+            ),
         }
     }
 

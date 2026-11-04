@@ -144,7 +144,8 @@ pub enum TrustedPathRule {
     ConfigDir,
     /// The runtime directory holding the service's sockets.
     RuntimeDir,
-    /// A file inside the state directory, such as its lock file.
+    /// A file the service writes inside the state directory or the config directory, such as either directory's lock
+    /// file.
     StateFile,
     /// An administrator-installed certificate: a TLS listener's certificate chain or a route's pinned CA file. Whoever
     /// can write one can impersonate Iron Vault to TLS callers or point a route at an interceptor, so only root or the

@@ -1,9 +1,10 @@
 //! The config check: the work the service does in Checking (specification §3.9, §3.12, §8.2 Q-5).
 //!
 //! Startup, reload, an approval's commit and a repair all call [`check_config`], an unlock through [`open_and_check`],
-//! which opens the vault first, so they cannot disagree about what a servable config is. It recovers any committed transaction, parses, validates and activates the config the recovered
-//! pair holds, and builds one [`ServingSnapshot`]. Any failure is a [`CheckFailure`] that names the safe state that
-//! follows and carries nothing a `503` body or a status answer must not show. The check never writes the approval state.
+//! which opens the vault first, so they cannot disagree about what a servable config is. It recovers any committed
+//! transaction, parses, validates and activates the config the recovered pair holds, and builds one
+//! [`ServingSnapshot`]. Any failure is a [`CheckFailure`] that names the safe state that follows and carries nothing a
+//! `503` body or a status answer must not show. The check never writes the approval state.
 //!
 //! Recovery verifies the published pair against the committed approval and returns the config bytes as read back, so
 //! the check parses exactly the bytes that verified and does not verify a second time.

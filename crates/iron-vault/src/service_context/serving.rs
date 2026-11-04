@@ -29,10 +29,12 @@ impl Serving {
         let (stop, stopped) = oneshot::channel();
         let server = RequestServer::new(limits, ProxyHandler::new(holder));
         let task = tokio::spawn(async move {
-            tokio::select! {
-                never = server.serve(&listeners) => match never {},
-                _ = stopped => {}
-            }
+            // A dropped sender stops the server as a sent signal does.
+            server
+                .serve_until(&listeners, async {
+                    let _ = stopped.await;
+                })
+                .await;
             listeners
         });
         Self { names, stop, task }
@@ -43,10 +45,11 @@ impl Serving {
         self.names.clone()
     }
 
-    /// Stops accepting, closes every connection being served, and returns the listeners with their sockets still open.
-    /// A task that panicked has dropped them, which closed them, so a rebuild then opens every listener afresh.
+    /// Stops accepting, closes every connection being served and waits for each to end, then returns the listeners with
+    /// their sockets still open. A task that panicked has dropped them, which closed them, so a rebuild then opens every
+    /// listener afresh.
     pub(super) async fn stop(self) -> RequestListeners {
-        // The task ends whether the signal is received or the sender is dropped, so a failed send needs no handling.
+        // A failed send means the task has already ended, which `await` below reports.
         let _ = self.stop.send(());
         self.task.await.unwrap_or_else(|error| {
             tracing::error!("the request listener task failed: {error}");

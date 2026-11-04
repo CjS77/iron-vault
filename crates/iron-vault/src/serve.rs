@@ -30,6 +30,11 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport)
         .runtime_dir
         .as_deref()
         .context("this deployment names no runtime directory for the admin socket")?;
+    // In a packaged install the service manager has already created the runtime directory; a development install has
+    // nothing else to make it. At `0711` other accounts may search it, so they can reach a request socket inside it, but
+    // never list or write it, so none can put its own socket there (§3.4). The admin socket in it stays `0600` and
+    // peer-checked. In development it sits in the user's `0700` `$XDG_RUNTIME_DIR`, so other accounts still cannot
+    // reach it; development gives no isolation from other accounts' callers anyway.
     create_dir(runtime_dir, 0o711, "runtime")?;
     create_config_dir(paths)?;
     check_trusted_paths(paths)?;
@@ -77,12 +82,6 @@ fn adopt_sockets(paths: &ServicePaths, listeners: &BTreeMap<ListenerName, Listen
 }
 
 /// Creates `dir` at `mode` when it is missing, naming it by `purpose` in the error.
-///
-/// The runtime directory is `0711`. In a packaged install the service manager has already created it; a development
-/// install has nothing else to make it. Other accounts may search the directory, so they can reach a request socket
-/// inside it, but never list or write it, so none can put its own socket there (§3.4). The admin socket in it stays
-/// `0600` and peer-checked. In development the directory sits in the user's `0700` `$XDG_RUNTIME_DIR`, so other
-/// accounts still cannot reach it; development gives no isolation from other accounts' callers anyway.
 fn create_dir(dir: &Path, mode: u32, purpose: &str) -> anyhow::Result<()> {
     match DirBuilder::new().mode(mode).create(dir) {
         Err(e) if e.kind() != io::ErrorKind::AlreadyExists => {

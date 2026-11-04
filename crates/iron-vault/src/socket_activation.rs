@@ -140,7 +140,9 @@ pub struct NotActivated {
 /// Decides which listener each fd in `env` belongs to, for the process `pid` whose config has the listeners `known`.
 ///
 /// Variables for another process are ignored. Variables for this one must name every socket, each after a different
-/// known listener; anything else means the `.socket` unit and the config disagree, and the service must not start.
+/// known listener; anything else means the `.socket` unit and the config disagree. `known` comes from the unverified
+/// config at startup, so `serve` then logs the disagreement at WARN and adopts nothing: the provisional listeners are
+/// bound by the service where the profile allows it, or stay closed, and the service still starts Locked.
 pub fn inheritance(env: &ActivationEnv, pid: u32, known: &BTreeSet<ListenerName>) -> Result<Inheritance, ActivationError> {
     let Some(listen_pid) = env.listen_pid.as_deref() else {
         return Ok(Inheritance::Nothing);
