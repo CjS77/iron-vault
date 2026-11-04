@@ -174,7 +174,7 @@ impl InvalidConfig {
 }
 
 /// A parse error by position only: the parser's message may quote the offending value.
-fn parse_detail(error: &ConfigError) -> String {
+pub(crate) fn parse_detail(error: &ConfigError) -> String {
     match error {
         ConfigError::NotUtf8 { location } => format!("config is not valid UTF-8 at {location}"),
         ConfigError::MissingSchemaVersion { location } => format!("config has no schema_version at {location}"),

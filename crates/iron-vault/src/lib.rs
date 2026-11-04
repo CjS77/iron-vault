@@ -7,6 +7,7 @@ pub mod config_check;
 pub mod connection_tags;
 pub mod content_coding;
 pub mod deployment;
+pub mod hardening;
 // The TLS acceptor runs on tokio and tokio-rustls, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
 pub mod listener_tls;
@@ -27,6 +28,9 @@ pub mod request_server;
 #[cfg(target_os = "linux")]
 pub mod request_socket;
 pub mod scrub;
+// The service context serves its request listeners on tokio, which this crate depends on only on Linux.
+#[cfg(target_os = "linux")]
+pub mod service_context;
 pub mod service_state;
 pub mod serving_snapshot;
 // Adopting activated sockets uses listenfd and rustix, which this crate depends on only on Linux.

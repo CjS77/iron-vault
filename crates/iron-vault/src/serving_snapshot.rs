@@ -164,8 +164,7 @@ impl SnapshotHolder {
     }
 
     /// A holder that refuses with `reason` until a snapshot is served, for a service that has none yet.
-    #[cfg(test)]
-    pub(crate) fn refusing(reason: UnavailableReason) -> Self {
+    pub fn refusing(reason: UnavailableReason) -> Self {
         Self {
             current: RwLock::new(Held {
                 admission: Admission::Refuse(reason),

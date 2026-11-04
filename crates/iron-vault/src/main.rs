@@ -2,7 +2,6 @@
 //! scrubbing, logging, and notifications.
 
 mod cli;
-mod hardening;
 #[cfg(target_os = "linux")]
 mod serve;
 
@@ -10,6 +9,7 @@ use std::process::ExitCode;
 
 use cli::{Cli, Command};
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
+use iron_vault::hardening;
 use iron_vault::trusted_path_report::ServicePaths;
 
 fn main() -> anyhow::Result<ExitCode> {
@@ -40,17 +40,17 @@ fn run_service() -> anyhow::Result<()> {
     #[cfg(feature = "dev-mode")]
     warn_development(&env, &accounts)?;
     let paths = ServicePaths::for_profile(DeploymentProfile::current(), &env)?;
-    serve(&paths)
+    serve(&paths, accounts, report)
 }
 
 #[cfg(target_os = "linux")]
-fn serve(paths: &ServicePaths) -> anyhow::Result<()> {
-    serve::run(paths)
+fn serve(paths: &ServicePaths, accounts: Accounts, report: hardening::HardeningReport) -> anyhow::Result<()> {
+    serve::run(paths, accounts, report)
 }
 
 /// The admin socket needs a peer-credential adapter, which only Linux has so far.
 #[cfg(not(target_os = "linux"))]
-fn serve(_paths: &ServicePaths) -> anyhow::Result<()> {
+fn serve(_paths: &ServicePaths, _accounts: Accounts, _report: hardening::HardeningReport) -> anyhow::Result<()> {
     anyhow::bail!("`iron-vault serve` is not supported on this platform yet")
 }
 

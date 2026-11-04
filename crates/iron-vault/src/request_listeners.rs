@@ -5,8 +5,9 @@
 //! [`IncomingConnection`]'s tags are its only inputs besides the request headers.
 //!
 //! [`RequestServer::serve`](crate::request_server::RequestServer::serve) runs the accept loop on
-//! [`RequestListeners::accept`]. `serve` does not open these yet: it has no active policy to serve until policy
-//! activation at startup (EP-22) lands.
+//! [`RequestListeners::accept`]. The service opens a provisional set from the unverified config at startup
+//! ([`RequestListeners::open_each`]) and rebuilds it from the verified config on entry to Ready
+//! ([`RequestListeners::rebuild`]).
 //!
 //! Startup order matters. [`adopt`](crate::socket_activation::adopt) runs first, before the async runtime or any
 //! other thread exists, because `listenfd` edits the environment as it takes the fds. [`RequestListeners::open`] runs
@@ -15,6 +16,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::net::SocketAddr;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,7 +32,7 @@ use crate::admin_file::{self, AdminFile, AdminFileError};
 use crate::listener_tls::{DEFAULT_HANDSHAKE_TIMEOUT, ListenerTls, ListenerTlsError};
 use crate::peer::peer_identity;
 use crate::request_socket::{RequestBindError, RequestSocket, SocketFile};
-use crate::socket_activation::{AdoptedSocket, NotActivated, check_origin};
+use crate::socket_activation::{AdoptError, AdoptedSocket, NotActivated, check_origin, verify};
 use crate::trusted_path_report::ServicePaths;
 
 mod stream;
@@ -56,6 +58,8 @@ pub struct RequestListeners {
 #[derive(Debug)]
 struct OpenListener {
     name: ListenerName,
+    /// The configuration it was opened for, which a rebuild compares with the verified one.
+    config: ListenerConfig,
     socket: Socket,
     tls: Option<Arc<ListenerTls>>,
     /// The socket file the service bound, held to be removed on drop; `None` for a TCP listener or one systemd passed.
@@ -108,6 +112,9 @@ pub enum OpenError {
     /// A TLS listener's certificate and key did not load; the error names the listener.
     #[error(transparent)]
     Tls(#[from] ListenerTlsError),
+    /// A socket kept through a rebuild no longer passes the checks an adopted socket must.
+    #[error(transparent)]
+    Recheck(#[from] AdoptError),
     /// The runtime would not take the socket.
     #[error("cannot register listener {listener} with the async runtime: {kind}")]
     Register {
@@ -145,28 +152,85 @@ impl RequestListeners {
         mut activated: BTreeMap<ListenerName, AdoptedSocket>,
         read: impl Fn(AdminFile, &Path) -> Result<Zeroizing<Vec<u8>>, AdminFileError>,
     ) -> Result<Self, OpenError> {
-        tokio::runtime::Handle::try_current().map_err(|_| OpenError::NoRuntime)?;
-        let admin_socket = admin_socket_path(paths)?;
+        let admin_socket = prerequisites(paths)?;
         let open = listeners
             .iter()
-            .map(|(name, config)| {
-                let tls = load_tls(name, config.endpoint(), &read)?;
-                let (socket, file) = match activated.remove(name) {
-                    Some(adopted) => (register(name, adopted)?, None),
-                    None => bind(name, config.endpoint(), paths, &admin_socket)?,
-                };
-                Ok(OpenListener {
-                    name: name.clone(),
-                    socket,
-                    tls,
-                    _file: file,
-                })
-            })
+            .map(|(name, config)| open_one(name, config, paths, &admin_socket, &mut activated, &read))
             .collect::<Result<_, OpenError>>()?;
-        Ok(Self {
+        Ok(Self::of(open))
+    }
+
+    /// Opens each listener in `listeners` on its own, as [`open`](Self::open) does: one that fails is left out and its
+    /// error returned, and the others open. For the provisional set, where a listener the unverified config names
+    /// wrongly must not keep the rest from answering `503`.
+    pub fn open_each(
+        listeners: &BTreeMap<ListenerName, ListenerConfig>,
+        paths: &ServicePaths,
+        mut activated: BTreeMap<ListenerName, AdoptedSocket>,
+    ) -> (Self, Vec<OpenError>) {
+        let read = |file, path: &Path| admin_file::read(file, paths.profile, paths.owner, path);
+        let results = match prerequisites(paths) {
+            Ok(admin_socket) => listeners
+                .iter()
+                .map(|(name, config)| open_one(name, config, paths, &admin_socket, &mut activated, read))
+                .collect(),
+            Err(error) => vec![Err(error)],
+        };
+        Self::partition(results)
+    }
+
+    /// The listener set the verified `listeners` name (the listener rebuild on entry to Ready).
+    ///
+    /// An open listener is kept only when `listeners` names it with exactly the configuration it was opened for: the
+    /// same endpoint, TLS files and token header. Its socket is then checked again as an adopted socket is, and its TLS
+    /// files read again through their trusted-path rules, so it holds no certificate or key the unverified config
+    /// chose. Every other open listener is closed, its socket file removed, before anything is bound, so a changed
+    /// listener can take its old path. Each verified listener not kept is then bound; systemd's sockets were all
+    /// adopted at startup, so none can be adopted now. One that fails is left out and its error returned.
+    pub fn rebuild(self, listeners: &BTreeMap<ListenerName, ListenerConfig>, paths: &ServicePaths) -> (Self, Vec<OpenError>) {
+        let read = |file, path: &Path| admin_file::read(file, paths.profile, paths.owner, path);
+        let (kept, closed): (Vec<_>, Vec<_>) = self
+            .open
+            .into_iter()
+            .partition(|open| listeners.get(&open.name) == Some(&open.config));
+        drop(closed);
+        let mut kept: BTreeMap<_, _> = kept.into_iter().map(|open| (open.name.clone(), open)).collect();
+        let results = match prerequisites(paths) {
+            Ok(admin_socket) => listeners
+                .iter()
+                .map(|(name, config)| match kept.remove(name) {
+                    Some(open) => open.recheck(paths, read),
+                    None => open_one(name, config, paths, &admin_socket, &mut BTreeMap::new(), read),
+                })
+                .collect(),
+            Err(error) => vec![Err(error)],
+        };
+        Self::partition(results)
+    }
+
+    /// A set with no listeners, which never accepts.
+    pub fn empty() -> Self {
+        Self::of(Vec::new())
+    }
+
+    /// The name of each open listener, in name order.
+    pub fn names(&self) -> impl Iterator<Item = &ListenerName> {
+        self.open.iter().map(|open| &open.name)
+    }
+
+    fn of(open: Vec<OpenListener>) -> Self {
+        Self {
             open,
             next: AtomicUsize::new(0),
-        })
+        }
+    }
+
+    fn partition(results: Vec<Result<OpenListener, OpenError>>) -> (Self, Vec<OpenError>) {
+        let (open, failed): (Vec<_>, Vec<_>) = results.into_iter().partition(Result::is_ok);
+        (
+            Self::of(open.into_iter().flatten().collect()),
+            failed.into_iter().filter_map(Result::err).collect(),
+        )
     }
 
     /// The next connection on any listener, tagged with its listener and, on a Unix socket, its peer identity. Its TLS
@@ -209,6 +273,17 @@ impl RequestListeners {
 }
 
 impl OpenListener {
+    /// This listener, kept through a rebuild, after its socket and TLS files pass their checks again.
+    fn recheck(
+        mut self,
+        paths: &ServicePaths,
+        read: impl Fn(AdminFile, &Path) -> Result<Zeroizing<Vec<u8>>, AdminFileError>,
+    ) -> Result<Self, OpenError> {
+        verify(&self.name, self.socket.as_fd(), self.config.endpoint(), paths.owner)?;
+        self.tls = load_tls(&self.name, self.config.endpoint(), read)?;
+        Ok(self)
+    }
+
     /// Tags an accepted stream with this listener and its peer, or closes it when its peer credentials are unreadable.
     fn tag(&self, accepted: Accepted) -> Option<IncomingConnection> {
         match accepted {
@@ -220,6 +295,15 @@ impl OpenListener {
                 }
             },
             Accepted::Tcp(stream) => Some(IncomingConnection::tcp(self.name.clone(), stream, self.tls.clone())),
+        }
+    }
+}
+
+impl AsFd for Socket {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        match self {
+            Self::Unix(listener) => listener.as_fd(),
+            Self::Tcp(listener) => listener.as_fd(),
         }
     }
 }
@@ -244,6 +328,36 @@ async fn pause(listener: &ListenerName, error: &io::Error) {
             tokio::time::sleep(ACCEPT_BACKOFF).await;
         }
     }
+}
+
+/// Opens one listener: the socket systemd passed for it in `activated` if there is one, otherwise one the service
+/// binds. Its TLS files load first.
+fn open_one(
+    name: &ListenerName,
+    config: &ListenerConfig,
+    paths: &ServicePaths,
+    admin_socket: &Path,
+    activated: &mut BTreeMap<ListenerName, AdoptedSocket>,
+    read: impl Fn(AdminFile, &Path) -> Result<Zeroizing<Vec<u8>>, AdminFileError>,
+) -> Result<OpenListener, OpenError> {
+    let tls = load_tls(name, config.endpoint(), read)?;
+    let (socket, file) = match activated.remove(name) {
+        Some(adopted) => (register(name, adopted)?, None),
+        None => bind(name, config.endpoint(), paths, admin_socket)?,
+    };
+    Ok(OpenListener {
+        name: name.clone(),
+        config: config.clone(),
+        socket,
+        tls,
+        _file: file,
+    })
+}
+
+/// What opening any listener needs: a runtime to register with, and the admin socket's path.
+fn prerequisites(paths: &ServicePaths) -> Result<PathBuf, OpenError> {
+    tokio::runtime::Handle::try_current().map_err(|_| OpenError::NoRuntime)?;
+    admin_socket_path(paths)
 }
 
 /// The admin socket's path, which a request socket must never take.

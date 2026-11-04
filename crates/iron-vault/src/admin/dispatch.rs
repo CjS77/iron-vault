@@ -4,11 +4,14 @@
 use std::collections::BTreeMap;
 use std::future::{self, Future};
 use std::pin::Pin;
+use std::sync::Arc;
 
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode};
 use super::server::{Exchange, ExchangeError};
 use crate::deployment::DeploymentProfile;
+use crate::service_context::ServiceContext;
+use iron_vault_store::StoreFs;
 
 /// The future a handler returns: the exchange's admin response, or the error that cancelled its command when a prompt
 /// got no owner input.
@@ -34,6 +37,12 @@ impl Handlers {
     /// The service's handlers: `ping`, answering with `profile`.
     pub fn standard(profile: DeploymentProfile) -> Self {
         Self::default().with(AdminCommand::Ping, Ping { profile })
+    }
+
+    /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile. A command that acts on
+    /// the service (unlock, lock, status, reload, approve) registers here with a clone of `service`.
+    pub fn for_service<F: StoreFs>(service: &Arc<ServiceContext<F>>) -> Self {
+        Self::standard(service.paths().profile)
     }
 
     /// Registers `handler` for `command`, replacing any handler it had.

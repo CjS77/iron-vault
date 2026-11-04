@@ -1,21 +1,31 @@
-//! `iron-vault serve`: checks the trusted paths, binds the admin socket and serves it until SIGTERM or SIGINT.
+//! `iron-vault serve`: checks the trusted paths, takes the directory locks, starts the service context Locked with its
+//! provisional request listeners, and serves the admin socket until SIGTERM or SIGINT, then stops the service.
 
+use std::collections::BTreeMap;
 use std::fs::DirBuilder;
 use std::io;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Context;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
-use iron_vault::deployment::DeploymentProfile;
+use iron_vault::config_check::UpstreamSettings;
+use iron_vault::deployment::{Accounts, DeploymentProfile, OVERFLOW_UID_FILE, PasswdDirectory};
+use iron_vault::hardening::HardeningReport;
+use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
+use iron_vault::socket_activation::{ActivationEnv, AdoptedSocket, adopt};
 use iron_vault::trusted_path_report::{self, ServicePaths, TrustedPathReport};
+use iron_vault::upstream::client::TransportLimits;
+use iron_vault_policy::{Capabilities, ListenerConfig, ListenerName};
+use iron_vault_store::OsFs;
 use tokio::signal::unix::{SignalKind, signal};
 
-/// Serves the admin socket of the installation at `paths` until the service is told to stop.
-pub fn run(paths: &ServicePaths) -> anyhow::Result<()> {
+/// Runs the service of the installation at `paths` until it is told to stop.
+pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport) -> anyhow::Result<()> {
     let runtime_dir = paths
         .runtime_dir
         .as_deref()
@@ -23,20 +33,47 @@ pub fn run(paths: &ServicePaths) -> anyhow::Result<()> {
     create_dir(runtime_dir, 0o711, "runtime")?;
     create_config_dir(paths)?;
     check_trusted_paths(paths)?;
-    // Everything that can fail or be interrupted comes before binding, so once the socket file exists the server owns
-    // it and removes it on every exit.
+    let locks = ServiceLocks::acquire(paths)?;
+    let provisional = locks.unverified_listeners(&OsFs);
+    // `listenfd` edits the environment as it takes the sockets, so adoption runs before the runtime starts a thread.
+    let activated = adopt_sockets(paths, &provisional);
+    let setup = ServiceSetup {
+        paths: paths.clone(),
+        fs: OsFs,
+        accounts: PasswdDirectory::new(accounts, paths, Path::new(OVERFLOW_UID_FILE))?,
+        capabilities: Capabilities::default(),
+        upstream: UpstreamSettings::new(paths.profile, paths.owner, TransportLimits::default()),
+        hardening,
+    };
+    // Everything that can fail or be interrupted comes before binding the admin socket, so once its file exists the
+    // server owns it and removes it on every exit.
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     let stop = {
         let _context = runtime.enter();
         stop_signal()?
     };
-    let principals = AdminPrincipals::new(paths.profile, paths.owner.uid);
-    let server = AdminServer::new(principals, Handlers::standard(paths.profile), Limits::default());
-    let socket = AdminSocket::bind(runtime_dir, paths.owner)?;
-    tracing::info!("admin socket listening at {}", socket.path().display());
-    runtime.block_on(server.serve(socket, stop))?;
+    runtime.block_on(async {
+        let service = Arc::new(ServiceContext::start(locks, setup, &provisional, activated)?);
+        let principals = AdminPrincipals::new(paths.profile, paths.owner.uid);
+        let server = AdminServer::new(principals, Handlers::for_service(&service), Limits::default());
+        let socket = AdminSocket::bind(runtime_dir, paths.owner)?;
+        tracing::info!("admin socket listening at {}", socket.path().display());
+        let served = server.serve(socket, stop).await;
+        service.stop().await;
+        served.map_err(anyhow::Error::from)
+    })?;
     tracing::info!("stopped");
     Ok(())
+}
+
+/// The sockets systemd passed for the provisional listeners. Sockets that do not match the unverified config are
+/// logged at WARN and none is adopted, so a swapped `config.toml` cannot keep the service from starting; the listeners
+/// it names are then bound where the profile allows it, or stay closed.
+fn adopt_sockets(paths: &ServicePaths, listeners: &BTreeMap<ListenerName, ListenerConfig>) -> BTreeMap<ListenerName, AdoptedSocket> {
+    adopt(&ActivationEnv::from_process(), std::process::id(), listeners, paths.owner).unwrap_or_else(|error| {
+        tracing::warn!("no socket adopted from systemd: {error}");
+        BTreeMap::new()
+    })
 }
 
 /// Creates `dir` at `mode` when it is missing, naming it by `purpose` in the error.
