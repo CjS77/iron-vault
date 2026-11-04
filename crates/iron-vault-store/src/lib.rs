@@ -13,6 +13,7 @@ mod durable_faults;
 mod envelope;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fault_fs;
+mod initialization;
 mod mac_file;
 mod manifest;
 mod partial_restore;
@@ -60,6 +61,7 @@ pub use durable::{MAX_STATE_FILE_LEN, ReadError, WriteError, WriteStep, durable_
 pub use envelope::{
     EnvelopeError, MAX_IDENTITY_ENVELOPE_LEN, read_identity_envelope, stanza_kinds, unwrap_identity, wrap_identity, write_identity_envelope,
 };
+pub use initialization::{InitStateError, InitializationState, begin_initialization, finish_initialization};
 pub use manifest::{
     MAX_MANIFEST_ENTRIES, MAX_MANIFEST_LEN, ManifestEntry, ManifestError, VaultManifest, open_manifest, record_digest, seal_manifest,
 };

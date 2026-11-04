@@ -162,13 +162,29 @@ pub enum UnlockError {
     /// `identity.age` is damaged, or the operational identity is not one of its recipients.
     #[error("the identity envelope cannot be opened with the operational identity: {0}")]
     IdentityEnvelope(EnvelopeError),
+    /// `init.unfinished` is present: an initialization has not finished, or is running now.
+    #[error("the vault initialization is unfinished, or is running now; run `iron-vault init` again if it is not")]
+    InitializationUnfinished,
+    /// There is no vault in the state directory.
+    #[error("there is no vault here; run `iron-vault init`")]
+    NotInitialized,
+    /// Listing the state directory failed, so the initialization state is unknown.
+    #[error("cannot list the state directory: {kind}")]
+    ListStateDir {
+        /// The underlying error kind.
+        kind: std::io::ErrorKind,
+    },
 }
 
 /// Reads both envelopes and unlocks the vault identity: the passphrase opens the operational identity, which unwraps
 /// the vault identity.
 ///
 /// As with [`unwrap_identity`], the returned identity is trusted only once the vault manifest's MAC verifies.
+///
+/// It refuses first, before any envelope is read or scrypt runs, while `init.unfinished` exists or when the directory
+/// holds neither `operational.age` nor a manifest.
 pub fn unlock_with_passphrase(lock: &StateDirLock, fs: &impl StoreFs, passphrase: &Passphrase) -> Result<VaultIdentity, UnlockError> {
+    crate::initialization::ensure_unlockable(lock, fs)?;
     let operational = open_passphrase_envelope(&read_passphrase_envelope(lock, fs)?, passphrase).map_err(|error| match error {
         EnvelopeError::WrongPassphrase => UnlockError::WrongPassphrase,
         other => UnlockError::PassphraseEnvelope(other),
@@ -471,13 +487,13 @@ mod tests {
     }
 
     #[test]
-    fn unlock_without_a_passphrase_envelope_is_a_read_error() {
+    fn unlock_without_a_passphrase_envelope_or_manifest_is_not_initialized() {
         let dir = TestDir::new("passphrase-missing");
         let lock = StateDirLock::acquire(dir.path()).unwrap();
-        assert!(matches!(
-            unlock_with_passphrase(&lock, &OsFs, &passphrase("x")),
-            Err(UnlockError::Read(ReadError::Io { .. }))
-        ));
+        assert_eq!(
+            unlock_with_passphrase(&lock, &OsFs, &passphrase("x")).unwrap_err(),
+            UnlockError::NotInitialized
+        );
     }
 
     #[test]

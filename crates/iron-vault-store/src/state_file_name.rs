@@ -69,6 +69,11 @@ impl StateFileName {
         Self("approver.age".to_owned())
     }
 
+    /// The empty file `init.unfinished`, which marks a vault initialization that has not finished.
+    pub fn unfinished_initialization() -> Self {
+        Self("init.unfinished".to_owned())
+    }
+
     /// The file of the credential record with ID `id`: `record-<id>.age`. A record ID's text uses only `[0-9a-f-]`, so
     /// the name always passes [`StateFileName::new`].
     pub fn record(id: &RecordId) -> Self {
@@ -148,6 +153,10 @@ mod tests {
         assert_eq!(StateFileName::new("operational.age"), Ok(StateFileName::passphrase_envelope()));
         assert_eq!(StateFileName::new("approval.age"), Ok(StateFileName::approval_state()));
         assert_eq!(StateFileName::new("approver.age"), Ok(StateFileName::approver_key()));
+        assert_eq!(
+            StateFileName::new("init.unfinished"),
+            Ok(StateFileName::unfinished_initialization())
+        );
         let id: RecordId = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();
         assert_eq!(
             StateFileName::record(&id).as_str(),

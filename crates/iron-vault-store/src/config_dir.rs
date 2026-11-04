@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::dir_lock::lock_file;
-use crate::durable::{ReadFailure, StepFailure, dir_sync_supported, read_in, replace_in, unlink_in};
+use crate::durable::{ReadFailure, StepFailure, dir_sync_supported, read_in, remove_in, replace_in, unlink_in};
 use crate::{ConfigFileName, LockError, StoreFs, WriteStep};
 
 /// Name of the lock file inside the config directory. It is not a [`ConfigFileName`]: no store call may write it.
@@ -215,6 +215,38 @@ pub fn remove_pending_and_staged(lock: &ConfigDirLock, fs: &impl StoreFs) -> Res
         Some(cause) => Err(RemoveStagingError { removed, cause }),
         None => Ok(removed),
     }
+}
+
+/// The config files an interrupted initialization can have left, in the order the discard removes them. Each
+/// signature goes before the config it sits beside, so a crash part-way never leaves a signature alone, which the
+/// initialization state reads as the owner's file.
+pub(crate) const DISCARD_ORDER: [ConfigFileName; 4] = [
+    ConfigFileName::ActiveSignature,
+    ConfigFileName::Active,
+    ConfigFileName::StagedSignature,
+    ConfigFileName::Pending,
+];
+
+/// Durably removes the config files `names`, in that order, with a directory fsync after each, and returns the ones
+/// that existed. A file already absent is skipped. Stops at the first failure.
+///
+/// The fsync per file keeps the order durable: power loss cannot keep a later unlink and lose an earlier one.
+pub(crate) fn remove_config_files(
+    lock: &ConfigDirLock,
+    fs: &impl StoreFs,
+    names: &[ConfigFileName],
+) -> Result<Vec<ConfigFileName>, ConfigWriteError> {
+    names
+        .iter()
+        .filter_map(|&name| match remove_in(fs, lock.dir(), name.as_str()) {
+            Ok(()) => Some(Ok(name)),
+            Err(StepFailure {
+                step: WriteStep::Remove,
+                kind: io::ErrorKind::NotFound,
+            }) => None,
+            Err(failure) => Some(Err(ConfigWriteError::io(name)(failure))),
+        })
+        .collect()
 }
 
 /// Publishes the staged files chosen by `set`: renames `config.toml.pending` to `config.toml`, then

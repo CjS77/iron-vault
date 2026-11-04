@@ -336,7 +336,7 @@ fn unindexed_files(manifest: &VaultManifest, files: &[String]) -> BTreeSet<State
 }
 
 /// Whether `name` has the shape of a record file name, whatever sits between the prefix and the suffix.
-fn is_record_file_name(name: &str) -> bool {
+pub(crate) fn is_record_file_name(name: &str) -> bool {
     name.starts_with("record-") && name.ends_with(".age")
 }
 

@@ -7,7 +7,7 @@ use crate::LockError;
 use crate::dir_lock::lock_file;
 
 /// Name of the lock file inside the state directory.
-const LOCK_FILE: &str = "lock";
+pub(crate) const LOCK_FILE: &str = "lock";
 
 /// An exclusive lock on a state directory, held until this guard drops.
 ///
