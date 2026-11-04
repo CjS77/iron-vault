@@ -51,6 +51,8 @@ fn legal_edges() -> Vec<(ServiceState, ServiceEvent, ServiceState)> {
         (S::Ready, E::Lock, S::Locked),
         (policy, E::Repaired, S::Checking),
         (recovery, E::Repaired, S::Checking),
+        (policy, E::Lock, S::Locked),
+        (recovery, E::Lock, S::Locked),
         (S::Ready, E::Stop, S::Stopped),
     ]
 }
@@ -73,9 +75,17 @@ fn every_other_pair_is_refused() {
 }
 
 #[test]
-fn unavailable_has_no_edge_to_locked() {
-    let state = S::Unavailable(FailureReason::RecoveryNeeded);
-    assert!(next(state, E::Lock).is_err());
+fn lock_leads_to_locked_from_every_unavailable_reason() {
+    [FailureReason::PolicyInvalid, FailureReason::RecoveryNeeded]
+        .into_iter()
+        .for_each(|reason| assert_eq!(next(S::Unavailable(reason), E::Lock), Ok(S::Locked), "{reason:?}"));
+}
+
+#[test]
+fn lock_is_refused_while_starting_checking_or_locked() {
+    [S::Starting, S::Checking, S::Locked]
+        .into_iter()
+        .for_each(|state| assert_eq!(next(state, E::Lock), Err(IllegalTransition { state, event: E::Lock }), "{state:?}"));
 }
 
 #[test]
@@ -142,11 +152,11 @@ fn admin_commands_follow_the_state() {
     );
     assert_eq!(
         allowed(S::Unavailable(FailureReason::PolicyInvalid)),
-        [A::Ping, A::Status, A::Approve]
+        [A::Ping, A::Status, A::Lock, A::Approve]
     );
     assert_eq!(
         allowed(S::Unavailable(FailureReason::RecoveryNeeded)),
-        [A::Ping, A::Status, A::Repair]
+        [A::Ping, A::Status, A::Lock, A::Repair]
     );
     assert!(allowed(S::Stopped).is_empty());
 }

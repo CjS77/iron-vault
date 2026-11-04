@@ -115,8 +115,8 @@ pub struct IllegalTransition {
     pub event: ServiceEvent,
 }
 
-/// The state `event` moves `state` to, or the refusal. Implements exactly the §3.12 diagram: Unavailable has no edge to
-/// Locked there, so a lock while Unavailable is refused.
+/// The state `event` moves `state` to, or the refusal. Implements exactly the §3.12 diagram: a lock is taken from Ready
+/// and from Unavailable, so the owner can clear the vault identity an Unavailable service keeps without stopping it.
 pub fn next(state: ServiceState, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
     use ServiceEvent as E;
     use ServiceState as S;
@@ -130,6 +130,7 @@ pub fn next(state: ServiceState, event: ServiceEvent) -> Result<ServiceState, Il
         (S::Ready, E::Lock) => Ok(S::Locked),
         (S::Ready, E::Stop) => Ok(S::Stopped),
         (S::Unavailable(_), E::Repaired) => Ok(S::Checking),
+        (S::Unavailable(_), E::Lock) => Ok(S::Locked),
         _ => Err(IllegalTransition { state, event }),
     }
 }
@@ -189,6 +190,7 @@ impl ServiceState {
 
     /// Whether the admin interface accepts `operation` in this state. Status and ping are always answered while the
     /// service runs; every operation that needs the vault waits for Ready, and approving is also offered for an invalid policy, and repair only for damaged state.
+    /// Lock is offered wherever the vault identity is kept outside Checking: Ready and Unavailable.
     pub const fn admin_allows(self, operation: AdminOperation) -> bool {
         use AdminOperation as A;
         match (self, operation) {
@@ -196,6 +198,7 @@ impl ServiceState {
             (_, A::Ping | A::Status) => true,
             (Self::Locked, A::Unlock) => true,
             (Self::Ready, A::Lock | A::Reload | A::Approve | A::VaultChange) => true,
+            (Self::Unavailable(_), A::Lock) => true,
             (Self::Unavailable(FailureReason::PolicyInvalid), A::Approve) => true,
             (Self::Unavailable(FailureReason::RecoveryNeeded), A::Repair) => true,
             _ => false,
