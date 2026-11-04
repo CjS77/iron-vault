@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use iron_vault_kinds::{CredentialMaterial, KindError};
 use iron_vault_policy::{CatalogEntry, CredentialCatalog, CredentialName};
@@ -139,12 +140,14 @@ pub enum SharedStateDamage {
 
 /// An open vault: its identity, its manifest and every healthy credential record.
 ///
-/// Records the manifest lists but that failed to load are known by name only, so their routes can be refused rather
+/// The identity is shared, not owned: the service keeps the vault identity from unlock to lock and opens a new vault
+/// from it on every config check, and [`VaultIdentity`] has no `Clone`, so each holder keeps a reference to the one
+/// copy, whose key bytes are cleared when the last holder drops it. Records the manifest lists but that failed to load are known by name only, so their routes can be refused rather
 /// than reported as unknown. `Debug` shows credential names, never material.
 pub struct Vault {
     /// The state directory the vault was opened or created in; a write refuses any other directory's lock.
     dir: PathBuf,
-    identity: VaultIdentity,
+    identity: Arc<VaultIdentity>,
     manifest: VaultManifest,
     healthy: BTreeMap<CredentialName, CredentialRecord>,
 }
@@ -163,7 +166,14 @@ impl Vault {
     ///
     /// An approval state the manifest does not yet record, left by a crash inside [`Vault::create_approval_state`], is
     /// a valid pair: the open succeeds, flags it in the [`OpenReport`] and logs it at WARN, and writes nothing.
-    pub fn open(lock: &StateDirLock, fs: &impl StoreFs, identity: VaultIdentity) -> Result<(Vault, OpenReport), VaultError> {
+    ///
+    /// `identity` may be shared with its other holders; the vault keeps its reference until it is dropped.
+    pub fn open(
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        identity: impl Into<Arc<VaultIdentity>>,
+    ) -> Result<(Vault, OpenReport), VaultError> {
+        let identity = identity.into();
         let files = list_state_dir(lock, fs).inspect_err(log_vault_error)?;
         let manifest = read_manifest(lock, fs, &identity, &files).inspect_err(log_vault_error)?;
         let approval = approval_generations(lock, fs, &identity, &manifest).inspect_err(log_vault_error)?;
@@ -186,8 +196,8 @@ impl Vault {
 
     /// Loads this vault's approval state, as [`ApprovalState::load`] does, with the vault identity the vault holds.
     ///
-    /// The vault owns its identity, and the identity has no `Clone`, so a caller that has opened the vault cannot load
-    /// the approval state with the identity itself.
+    /// The identity has no `Clone`, so a caller that has handed the vault its only reference cannot load the approval
+    /// state with the identity itself.
     pub fn load_approval_state(&self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<ApprovalState, ApprovalStateError> {
         ApprovalState::load(lock, fs, &self.identity, self.manifest.vault_id())
     }

@@ -27,7 +27,7 @@ impl Vault {
         commit_manifest(lock, fs, &seal_manifest(&identity, &manifest).map_err(VaultError::Seal)?)?;
         Ok(Vault {
             dir: lock.dir().to_path_buf(),
-            identity,
+            identity: identity.into(),
             manifest,
             healthy: BTreeMap::new(),
         })

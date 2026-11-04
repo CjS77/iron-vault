@@ -39,7 +39,7 @@ use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{LockOutcome, ServiceContext, ServiceLocks, ServiceSetup, StartError};
-use iron_vault::service_state::{FailureReason, ListenerProvenance, ServiceState, UnavailableReason};
+use iron_vault::service_state::{FailureReason, ListenerProvenance, ServiceEvent, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, SnapshotHolder};
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
@@ -619,11 +619,13 @@ async fn stop_drops_the_vault_and_closes_the_listeners() {
     };
     let vault = Arc::downgrade(&snapshot);
     drop(snapshot);
+    let identity = service.identity_probe().await.unwrap();
 
     service.stop().await;
 
     assert_eq!(service.state().await, ServiceState::Stopped);
     assert!(vault.upgrade().is_none(), "the snapshot holding the vault outlived stop");
+    assert!(identity.upgrade().is_none(), "the vault identity outlived stop");
     assert!(!fixture.socket().exists());
 }
 
@@ -1143,4 +1145,74 @@ async fn a_response_streaming_when_lock_runs_holds_the_snapshot_until_its_body_i
     raw.push_str(&String::from_utf8_lossy(&rest));
     assert!(!raw.ends_with("0\r\n\r\n"), "the withdrawn body ended cleanly: {raw}");
     assert!(!raw.contains("data: second"), "{raw}");
+}
+
+#[tokio::test]
+async fn a_failed_check_keeps_the_identity_and_a_repair_reaches_ready_without_a_second_unlock() {
+    let fixture = approved().await;
+    fs::write(fixture.path("etc/config.toml"), fixture.config("# edited after approval\n")).unwrap();
+    let service = fixture.start().unwrap();
+    assert!(
+        service.recheck(ServiceEvent::Repaired).await.is_err(),
+        "a Locked service has no identity to check with"
+    );
+    assert_eq!(
+        service.enter_checking(identity()).await,
+        Ok(ServiceState::Unavailable(FailureReason::PolicyInvalid))
+    );
+    let kept = service.identity_probe().await.unwrap();
+    assert!(kept.upgrade().is_some(), "the failed check dropped the vault identity");
+    assert_eq!(status(&service).await.1.vault, VaultStatus::Locked);
+
+    fs::write(fixture.path("etc/config.toml"), fixture.config("")).unwrap();
+    let state = service.recheck(ServiceEvent::Repaired).await;
+
+    assert_eq!(state, Ok(ServiceState::Ready));
+    assert!(std::sync::Weak::ptr_eq(&kept, &service.identity_probe().await.unwrap()));
+    assert_served(&get_unix(&fixture.socket(), true).await);
+}
+
+#[tokio::test]
+async fn a_reload_from_ready_opens_a_new_vault_from_the_kept_identity() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    let old = served_snapshot(&service);
+    let kept = service.identity_probe().await.unwrap();
+
+    let state = service.recheck(ServiceEvent::Reload).await;
+
+    assert_eq!(state, Ok(ServiceState::Ready));
+    assert!(old.upgrade().is_none(), "the reload kept the old snapshot and its vault");
+    assert!(served_snapshot(&service).upgrade().is_some());
+    assert!(std::sync::Weak::ptr_eq(&kept, &service.identity_probe().await.unwrap()));
+    assert!(matches!(status(&service).await.1.vault, VaultStatus::Unlocked(_)));
+    assert_served(&get_unix(&fixture.socket(), true).await);
+}
+
+#[tokio::test]
+async fn lock_clears_the_vault_identity_once_its_drain_releases_the_last_snapshot() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    let identity = service.identity_probe().await.unwrap();
+
+    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+
+    assert!(identity.upgrade().is_none(), "the vault identity outlived the lock drain");
+    assert!(service.identity_probe().await.is_none());
+}
+
+#[tokio::test]
+async fn a_snapshot_held_past_the_lock_drain_keeps_the_identity_until_it_is_dropped() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    let identity = service.identity_probe().await.unwrap();
+    let Admission::Serve(stubborn) = service.holder().load() else {
+        panic!("a Ready service serves a snapshot");
+    };
+
+    assert_eq!(service.lock(SHORT_DRAIN).await, Ok(LockOutcome::Held { snapshots: 1 }));
+
+    assert!(identity.upgrade().is_some(), "the held vault lost its identity");
+    drop(stubborn);
+    assert!(identity.upgrade().is_none(), "the vault identity outlived the last snapshot");
 }

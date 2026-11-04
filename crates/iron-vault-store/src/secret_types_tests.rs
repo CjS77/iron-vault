@@ -127,8 +127,12 @@ fn vault_debug_hides_the_identity_and_every_record() {
     assert_hides(&vault, identity_secret.expose_secret());
 }
 
-/// Shared ownership or a process-wide cache would let a copy of the identity or a record outlive the `Vault` that
-/// dropped it. The store's production sources must use neither, so dropping a `Vault` drops its only copies.
+/// Shared ownership or a process-wide cache would let a copy of a record outlive the `Vault` that dropped it. The store's
+/// production sources must use neither, so dropping a `Vault` drops its only copies of the records.
+///
+/// The vault identity is the one exception, as `Arc<VaultIdentity>`: the service keeps it from unlock until lock or stop
+/// and opens a new `Vault` from it on every config check (§3.11, §3.12), so its holders share the one copy, cleared when
+/// the last drops it.
 #[test]
 fn no_shared_or_global_owner_of_vault_secrets() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -148,8 +152,9 @@ fn no_shared_or_global_owner_of_vault_secrets() {
     assert!(offenders.is_empty(), "{offenders:?}");
 }
 
-/// Whether `line` names a shared owner or declares a non-`const` `static` item.
+/// Whether `line` names a shared owner other than the shared vault identity, or declares a non-`const` `static` item.
 fn is_shared_or_global(line: &str) -> bool {
+    let line = line.replace("Arc<VaultIdentity>", "");
     const FORBIDDEN: [&str; 10] = [
         "Rc<",
         "Rc::",

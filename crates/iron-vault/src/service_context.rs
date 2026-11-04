@@ -1,5 +1,9 @@
 //! The service context (specification §3.1, §3.11, §3.12): the one owned value the running service is. It drives the
-//! service state model, holds the open vault through the serving snapshot, and binds the request interface.
+//! service state model, keeps the vault identity from unlock until lock or stop, holds the open vault through the
+//! serving snapshot, and binds the request interface.
+//!
+//! Every config check opens a new vault from the kept identity, so a reload, a repair or an approval re-enters Checking
+//! without a new unlock, and an Unavailable service holds the one key and none of the decrypted credential records.
 //!
 //! Every change takes one async mutex and goes through [`next`], so no two changes interleave and none makes a
 //! transition the §3.12 diagram lacks. Requests never take that mutex: each loads its admission from the snapshot
@@ -183,6 +187,9 @@ struct OpenVault {
 #[derive(Debug)]
 struct Inner {
     state: ServiceState,
+    /// The vault identity, from unlock until lock or stop: `Some` in Checking, Ready and Unavailable. Each vault opened
+    /// from it shares this one copy, so its key bytes are cleared when the last of them drops it.
+    identity: Option<Arc<VaultIdentity>>,
     /// What the context keeps of the open vault, which itself is in the served snapshot. `None` unless the vault is open.
     open: Option<OpenVault>,
     /// The request listeners and the task serving them; `None` only while they are being rebuilt or once stopped.
@@ -212,6 +219,7 @@ impl<F: StoreFs> ServiceContext<F> {
         let mut service = Self {
             inner: Mutex::new(Inner {
                 state: ServiceState::Starting,
+                identity: None,
                 open: None,
                 serving: Some(Serving::start(listeners, Limits::default(), Arc::clone(&holder))),
             }),
@@ -230,11 +238,25 @@ impl<F: StoreFs> ServiceContext<F> {
     ///
     /// When the check passes, the listener set is rebuilt from the verified config, and only then is the snapshot
     /// served and the set approved. When it fails, the provisional listeners keep answering `503` with the failure's
-    /// reason, the check has logged the detail at WARN, and the vault and its identity are dropped. Both state changes
-    /// are logged as lock transitions, so a host unlock (EP-32) entering here is audited like a passphrase unlock.
+    /// reason, the check has logged the detail at WARN, and the vault is dropped; the context keeps `identity` either
+    /// way. Both state changes are logged as lock transitions, so a host unlock (EP-32) entering here is audited like a
+    /// passphrase unlock.
     pub async fn enter_checking(&self, identity: VaultIdentity) -> Result<ServiceState, IllegalTransition> {
         let mut inner = self.inner.lock().await;
-        self.check_and_settle(&mut inner, ServiceEvent::UnlockSucceeded, identity).await
+        self.check_and_settle(&mut inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
+            .await
+    }
+
+    /// Re-enters Checking with the kept vault identity on `event`, runs the config check again and settles in Ready or
+    /// Unavailable: [`ServiceEvent::Reload`] from Ready, [`ServiceEvent::Repaired`] from Unavailable after an authorized
+    /// repair, a committed transaction's recovery, or a `config approve` out of an invalid policy.
+    ///
+    /// No unlock is needed: the check opens a new vault from the identity the context kept. Without a kept identity
+    /// (Locked, Starting, Stopped) there is nothing to check with, and the event is refused as the state model refuses it.
+    pub async fn recheck(&self, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
+        let mut inner = self.inner.lock().await;
+        let identity = inner.identity.clone().ok_or(IllegalTransition { state: inner.state, event })?;
+        self.check_and_settle(&mut inner, event, identity).await
     }
 
     /// Unlocks with the owner's `passphrase` (§3.11) and runs the config check: Locked to Checking, then Ready or
@@ -256,7 +278,7 @@ impl<F: StoreFs> ServiceContext<F> {
                 other => UnlockRefusal::Failed(other),
             }
         })?;
-        self.check_and_settle(&mut inner, ServiceEvent::UnlockSucceeded, identity)
+        self.check_and_settle(&mut inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
             .await
             .map_err(|illegal| UnlockRefusal::WrongState(illegal.state))
     }
@@ -265,10 +287,12 @@ impl<F: StoreFs> ServiceContext<F> {
     /// (§3.13, §3.11). Only a Ready service has secrets to clear; from any other state the event is refused.
     ///
     /// Under the context's mutex it stops admitting requests, withdraws the serving snapshot (cancelling the requests
-    /// running on it) and drops the approval state and credential report, so no later change interleaves. The mutex is
-    /// then released and the call waits up to `drain` for the last holder of the old snapshot, a streaming response body
-    /// included, to drop it, so a slow request does not stall the other admin commands. If the drain expires it logs a
-    /// warning and returns [`LockOutcome::Held`], never claiming the secrets are cleared.
+    /// running on it) and drops the approval state, the credential report and the context's copy of the vault identity,
+    /// so no later change interleaves. The mutex is then released and the call waits up to `drain` for the last holder
+    /// of the old snapshot, a streaming response body included, to drop it, so a slow request does not stall the other
+    /// admin commands. The vault in that snapshot holds the last reference to the identity, so the identity is cleared
+    /// with it. If the drain expires it logs a warning and returns [`LockOutcome::Held`], never claiming the secrets are
+    /// cleared.
     pub async fn lock(&self, drain: Duration) -> Result<LockOutcome, IllegalTransition> {
         let mut withdrawn = {
             let mut inner = self.inner.lock().await;
@@ -277,6 +301,7 @@ impl<F: StoreFs> ServiceContext<F> {
             // Refusing first closes the gate and cancels the in-flight requests before anything else changes.
             let withdrawn = self.holder.refuse(UnavailableReason::Locked);
             inner.open = None;
+            inner.identity = None;
             inner.state = state;
             log_lock_transition(from, state);
             withdrawn
@@ -293,9 +318,9 @@ impl<F: StoreFs> ServiceContext<F> {
         })
     }
 
-    /// Stops the service on SIGTERM or SIGINT: Ready to Stopped, then drops the snapshot, the vault in it and the
-    /// approval state, so their secret buffers clear (§3.11), and closes the request listeners, removing their socket
-    /// files.
+    /// Stops the service on SIGTERM or SIGINT: Ready to Stopped, then drops the snapshot, the vault in it, the approval
+    /// state and the vault identity, so their secret buffers clear (§3.11), and closes the request listeners, removing
+    /// their socket files.
     ///
     /// §3.12 draws a stop only from Ready. From any other state there is no transition to make: the process ends all
     /// the same, after the same teardown.
@@ -307,6 +332,7 @@ impl<F: StoreFs> ServiceContext<F> {
         // Stopped has no request interface; storing a refusal withdraws the snapshot and drops the holder's reference.
         self.holder.refuse(UnavailableReason::Locked);
         inner.open = None;
+        inner.identity = None;
         if let Some(serving) = inner.serving.take() {
             drop(serving.stop().await);
         }
@@ -325,7 +351,8 @@ impl<F: StoreFs> ServiceContext<F> {
     /// The status report: what the context holds right now, which is all `status` may say.
     ///
     /// The vault ID, approval versions and credentials come from the open vault, so they are known only while the
-    /// context holds one. A failed check drops the vault, so Unavailable reports them as unknown too.
+    /// context holds one. A failed check drops the vault, though not the vault identity, so Unavailable reports them
+    /// as unknown too.
     pub async fn status(&self) -> StatusReport {
         let inner = self.inner.lock().await;
         StatusReport {
@@ -343,6 +370,13 @@ impl<F: StoreFs> ServiceContext<F> {
         }
     }
 
+    /// A weak reference to the kept vault identity, so a test can see when its last holder drops it; `None` when the
+    /// context keeps none.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn identity_probe(&self) -> Option<std::sync::Weak<VaultIdentity>> {
+        self.inner.lock().await.identity.as_ref().map(Arc::downgrade)
+    }
+
     /// The holder every request's admission is loaded from.
     pub fn holder(&self) -> &Arc<SnapshotHolder> {
         &self.holder
@@ -358,17 +392,21 @@ impl<F: StoreFs> ServiceContext<F> {
         &self.setup.hardening
     }
 
-    /// Moves into Checking on `event` (an unlock; later a reload, an approval's commit or a repair), runs the config check
-    /// with `identity` ([`open_and_check`]), and settles in Ready or Unavailable. Leaving Locked, both changes are
+    /// Moves into Checking on `event` (an unlock, a reload, an approval's commit or a repair), keeps `identity`, runs the
+    /// config check with it ([`open_and_check`]), and settles in Ready or Unavailable. Leaving Locked, both changes are
     /// logged as lock transitions.
+    ///
+    /// Entering Checking withdraws any served snapshot, so the context drops what it kept of that vault with it.
     async fn check_and_settle(
         &self,
         inner: &mut Inner,
         event: ServiceEvent,
-        identity: VaultIdentity,
+        identity: Arc<VaultIdentity>,
     ) -> Result<ServiceState, IllegalTransition> {
         let from = inner.state;
         let checking = self.apply(inner, event)?;
+        inner.open = None;
+        inner.identity = Some(Arc::clone(&identity));
         let leaving_locked = from == ServiceState::Locked;
         if leaving_locked {
             log_lock_transition(from, checking);
@@ -381,7 +419,7 @@ impl<F: StoreFs> ServiceContext<F> {
     }
 
     /// Runs the config check in Checking with `identity` and settles in Ready or Unavailable.
-    async fn settle(&self, inner: &mut Inner, identity: VaultIdentity) -> Result<ServiceState, IllegalTransition> {
+    async fn settle(&self, inner: &mut Inner, identity: Arc<VaultIdentity>) -> Result<ServiceState, IllegalTransition> {
         let ServiceSetup {
             fs,
             accounts,

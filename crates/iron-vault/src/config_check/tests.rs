@@ -369,7 +369,7 @@ impl Fixture {
             &self.state_lock,
             &self.config_lock,
             &OsFs,
-            identity(),
+            Arc::new(identity()),
             &Capabilities::default(),
             &NoAccounts,
             &upstream,

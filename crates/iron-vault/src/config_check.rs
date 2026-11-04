@@ -1,7 +1,8 @@
 //! The config check: the work the service does in Checking (specification §3.9, §3.12, §8.2 Q-5).
 //!
-//! Startup, reload, an approval's commit and a repair all call [`check_config`], an unlock through [`open_and_check`],
-//! which opens the vault first, so they cannot disagree about what a servable config is. It recovers any committed
+//! Every entry to Checking (an unlock, a reload, an approval's commit, a repair) calls [`open_and_check`], which opens a
+//! new vault from the vault identity the service keeps and then runs [`check_config`], so they cannot disagree about
+//! what a servable config is. It recovers any committed
 //! transaction, parses, validates and activates the config the recovered pair holds, and builds one
 //! [`ServingSnapshot`]. Any failure is a [`CheckFailure`] that names the safe state that follows and carries nothing a
 //! `503` body or a status answer must not show. The check never writes the approval state.
@@ -12,6 +13,7 @@
 #[cfg(test)]
 mod tests;
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use iron_vault_policy::{
@@ -215,18 +217,19 @@ fn activation_detail(error: &ActivationError) -> String {
 /// standing of each credential.
 pub type Checked = (ServingSnapshot, ApprovalState, Vec<CredentialStatus>);
 
-/// Opens the vault with `identity` and loads its approval state, then runs the config check, for a service entering
-/// Checking with the vault identity in hand.
+/// Opens a new vault from `identity` and loads its approval state, then runs the config check, for a service entering
+/// Checking.
 ///
 /// Damaged shared state that keeps the vault or the approval state from opening is a check failure like any other
 /// ([`CheckFailure::Vault`], [`CheckFailure::ApprovalState`]), logged the same way. On success the vault is in the
 /// snapshot, and the approval state and each credential's standing (which only the open report knows) are returned
-/// beside it; on failure all are dropped, the identity with them.
+/// beside it. On failure all are dropped with the vault's decrypted records; the caller's reference to `identity`
+/// stays, so the next check needs no new unlock.
 pub fn open_and_check(
     state_dir: &StateDirLock,
     config_dir: &ConfigDirLock,
     fs: &impl StoreFs,
-    identity: VaultIdentity,
+    identity: Arc<VaultIdentity>,
     capabilities: &Capabilities,
     accounts: &impl AccountDirectory,
     upstream: &UpstreamSettings,
@@ -238,7 +241,7 @@ fn open_and_run(
     state_dir: &StateDirLock,
     config_dir: &ConfigDirLock,
     fs: &impl StoreFs,
-    identity: VaultIdentity,
+    identity: Arc<VaultIdentity>,
     capabilities: &Capabilities,
     accounts: &impl AccountDirectory,
     upstream: &UpstreamSettings,
