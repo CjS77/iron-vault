@@ -63,6 +63,11 @@ impl DecompressionBudget {
         }
     }
 
+    /// The decoded bytes recorded so far.
+    pub fn decoded(&self) -> u64 {
+        self.decoded
+    }
+
     /// Adds `compressed_in` input bytes and `decoded_out` output bytes, then checks both limits.
     pub fn record(&mut self, compressed_in: u64, decoded_out: u64) -> Result<(), BudgetExceeded> {
         self.compressed = self.compressed.saturating_add(compressed_in);

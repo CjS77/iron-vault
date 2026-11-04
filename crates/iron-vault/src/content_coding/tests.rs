@@ -265,3 +265,14 @@ fn the_brotli_large_window_extension_is_refused() {
     let mut decoder = ResponseDecoder::new(ContentCoding::Br);
     assert_eq!(decoder.push(&[0x11, 0x0f, 0x00, 0x00]).next(), Some(Err(DecodeError::Corrupt)));
 }
+
+#[test]
+fn feeding_before_the_last_chunk_is_pulled_to_its_end_abandons_it() {
+    let body = encode(ContentCoding::Gzip, &text(3 * PIECE_SIZE));
+    let mut decoder = ResponseDecoder::new(ContentCoding::Gzip);
+    decoder.feed(Bytes::from(body.clone()));
+    assert!(decoder.next_piece().is_some_and(|piece| piece.is_ok()));
+    decoder.feed(Bytes::from(body));
+    assert_eq!(decoder.next_piece(), Some(Err(DecodeError::Abandoned)));
+    assert_eq!(decoder.next_piece(), None);
+}

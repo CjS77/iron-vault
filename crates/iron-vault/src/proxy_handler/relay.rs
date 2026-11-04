@@ -279,11 +279,14 @@ pub struct RelayedBody {
 struct Stages {
     /// `None` for an identity body.
     decoder: Option<ResponseDecoder>,
+    /// An identity body's chunk not yet taken, which is one piece.
+    identity: Option<Bytes>,
     budget: DecompressionBudget,
+    /// Compressed bytes fed and not yet recorded; they are recorded with the chunk's first piece, or alone if it has none.
+    compressed: u64,
     scrubber: Scrubber<'static>,
     /// `None` unless the caller is sent a coding.
     encoder: Option<ResponseEncoder>,
-    decoded: u64,
 }
 
 impl Stages {
@@ -294,52 +297,57 @@ impl Stages {
         };
         Self {
             decoder: codings.upstream.map(ResponseDecoder::new),
+            identity: None,
             budget,
+            compressed: 0,
             scrubber: Scrubber::owning(patterns),
             encoder: codings.emitted.map(ResponseEncoder::new),
-            decoded: 0,
         }
     }
 
-    /// Runs one upstream chunk through every stage and returns the bytes to send now, which may be none.
-    ///
-    /// One chunk's output is gathered before it is sent, so a chunk that decodes to many pieces is held in memory whole,
-    /// but no more than the budget allows: each piece is counted before it is scrubbed, and the first over the budget
-    /// fails the body.
-    fn push(&mut self, chunk: &[u8]) -> Result<Bytes, RelayFailure> {
-        let scrubbed = match self.decoder.as_mut() {
-            None => {
-                Self::count(&mut self.budget, &mut self.decoded, 0, chunk)?;
-                self.scrubber.push(chunk)
-            }
+    /// Takes the next upstream chunk. Nothing is decoded until [`next_output`](Self::next_output) pulls it, and the
+    /// previous chunk must have been pulled to its end.
+    fn feed(&mut self, chunk: Bytes) {
+        match self.decoder.as_mut() {
             Some(decoder) => {
-                let (budget, decoded, scrubber) = (&mut self.budget, &mut self.decoded, &mut self.scrubber);
-                // The chunk's compressed size is counted with its first piece, or alone if it yields none.
-                let mut compressed = len(chunk);
-                let out = decoder.push(chunk).try_fold(BytesMut::new(), |mut out, piece| {
-                    let piece = piece?;
-                    Self::count(budget, decoded, std::mem::take(&mut compressed), &piece)?;
-                    out.extend_from_slice(&scrubber.push(&piece));
-                    Ok::<_, RelayFailure>(out)
-                })?;
-                budget.record(compressed, 0)?;
-                out.freeze()
+                self.compressed = len(&chunk);
+                decoder.feed(chunk);
             }
-        };
-        self.encode(&scrubbed)
+            None => self.identity = Some(chunk),
+        }
     }
 
-    /// Records `piece` against the budget, with the compressed bytes consumed since the last record.
-    fn count(budget: &mut DecompressionBudget, decoded: &mut u64, compressed: u64, piece: &[u8]) -> Result<(), RelayFailure> {
-        budget.record(compressed, len(piece))?;
-        *decoded = decoded.saturating_add(len(piece));
-        Ok(())
+    /// Runs the fed chunk's next piece through the stages and returns the bytes to send now. `None` means the chunk is
+    /// used up and the next one is wanted.
+    ///
+    /// One piece is held at a time, so a chunk that decodes to many pieces is never in memory whole: each piece is counted
+    /// before it is scrubbed, and the first over the budget fails the body. A piece the scrubber holds back whole sends
+    /// nothing, and the next is taken.
+    fn next_output(&mut self) -> Result<Option<Bytes>, RelayFailure> {
+        while let Some(piece) = self.next_piece()? {
+            self.budget.record(std::mem::take(&mut self.compressed), len(&piece))?;
+            let scrubbed = self.scrubber.push(&piece);
+            let out = self.encode(scrubbed)?;
+            if !out.is_empty() {
+                return Ok(Some(out));
+            }
+        }
+        self.budget.record(std::mem::take(&mut self.compressed), 0)?;
+        Ok(None)
     }
 
-    fn encode(&mut self, scrubbed: &[u8]) -> Result<Bytes, RelayFailure> {
+    /// The fed chunk's next decoded piece, or the whole chunk for an identity body.
+    fn next_piece(&mut self) -> Result<Option<Bytes>, RelayFailure> {
+        match self.decoder.as_mut() {
+            Some(decoder) => Ok(decoder.next_piece().transpose()?),
+            None => Ok(self.identity.take()),
+        }
+    }
+
+    fn encode(&mut self, scrubbed: Bytes) -> Result<Bytes, RelayFailure> {
         match self.encoder.as_mut() {
-            None => Ok(Bytes::copy_from_slice(scrubbed)),
-            Some(encoder) => Ok(encoder.push(scrubbed)?),
+            None => Ok(scrubbed),
+            Some(encoder) => Ok(encoder.push(&scrubbed)?),
         }
     }
 }
@@ -383,10 +391,7 @@ impl RelayedBody {
             decoder.finish()?;
         }
         let Some(Stages {
-            scrubber,
-            encoder,
-            decoded,
-            ..
+            scrubber, encoder, budget, ..
         }) = self.stages.take()
         else {
             return Ok(Bytes::new());
@@ -401,7 +406,7 @@ impl RelayedBody {
                 out.freeze()
             }
         };
-        self.decoded = decoded;
+        self.decoded = budget.decoded();
         self.ended = true;
         Ok(tail)
     }
@@ -426,14 +431,23 @@ impl Body for RelayedBody {
             let Some(stages) = this.stages.as_mut() else {
                 return Poll::Ready(None);
             };
+            // The fed chunk's pieces go out one frame at a time before the next chunk is read.
+            match stages.next_output() {
+                Err(failure) => return Poll::Ready(Some(Err(this.fail(failure)))),
+                Ok(Some(out)) => return Poll::Ready(Some(Ok(Frame::data(out)))),
+                Ok(None) => {}
+            }
             let out = match ready!(Pin::new(&mut this.chunks).poll_next(cx)) {
-                Some(Ok(chunk)) => stages.push(&chunk),
+                Some(Ok(chunk)) => {
+                    stages.feed(chunk);
+                    continue;
+                }
                 Some(Err(_)) => Err(RelayFailure::Upstream),
                 None => this.end(),
             };
             match out {
                 Err(failure) => return Poll::Ready(Some(Err(this.fail(failure)))),
-                // A chunk wholly held back yields nothing; the next one is read rather than sending an empty frame.
+                // Nothing is left to send; the stages are gone, so the next poll ends the body.
                 Ok(out) if out.is_empty() => {}
                 Ok(out) => return Poll::Ready(Some(Ok(Frame::data(out)))),
             }
@@ -457,6 +471,7 @@ mod tests {
     use hyper::header::HeaderValue;
 
     use super::*;
+    use crate::content_coding::PIECE_SIZE;
 
     /// A relayed body over `chunks` in `codings` with no scrub patterns, after `header_matches` matches in the headers.
     fn coded_body(chunks: Vec<Bytes>, codings: BodyCodings, limits: Limits) -> RelayedBody {
@@ -531,6 +546,18 @@ mod tests {
         assert_eq!(drain(&mut relayed).concat(), b"hello, decoded world");
         let outcome = relayed.outcome().unwrap();
         assert_eq!((outcome.scrubbed, outcome.decoded_bytes), (false, 20));
+    }
+
+    #[test]
+    fn one_upstream_chunk_that_decodes_to_many_pieces_is_sent_a_piece_at_a_time() {
+        let plain = vec![b'a'; 3 * PIECE_SIZE + 5];
+        let mut relayed = coded_body(vec![gzip(&plain)], GZIP, Limits::default());
+        let frames = drain(&mut relayed);
+        assert_eq!(
+            frames.iter().map(Bytes::len).collect::<Vec<_>>(),
+            [PIECE_SIZE, PIECE_SIZE, PIECE_SIZE, 5]
+        );
+        assert_eq!(frames.concat(), plain);
     }
 
     #[test]

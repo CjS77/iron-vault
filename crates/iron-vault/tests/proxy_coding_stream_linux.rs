@@ -371,32 +371,40 @@ fn bomb(cred: &Cred) -> Vec<u8> {
     gzip(&[vec![0; 16 << 20], key.as_bytes().to_vec(), vec![0; 1 << 20]].concat())
 }
 
-/// Sends `bomb` in upstream chunks of `compressed_chunk` bytes and returns the caller's raw response.
-async fn bombed(cred: Cred, bomb: Vec<u8>, compressed_chunk: usize) -> Vec<u8> {
+/// Sends `bomb` as one upstream chunk, the worst case for the service, and returns the caller's raw response.
+async fn bombed(cred: Cred, bomb: Vec<u8>) -> Vec<u8> {
     let ca = TestCa::new("coding stream CA");
-    let steps = bomb.chunks(compressed_chunk).map(|part| Step::Chunk(part.to_vec())).collect();
-    let upstream = MockUpstream::start(&ca, Reply::Script(Script::fixed("application/json", steps).encoded("gzip"))).await;
+    let upstream = MockUpstream::start(
+        &ca,
+        Reply::Script(Script::fixed("application/json", vec![Step::Chunk(bomb)]).encoded("gzip")),
+    )
+    .await;
     let route = cred.route;
     let proxy = start(&ca, &upstream, vec![cred]).await;
     let request = CallerRequest::get(&format!("/{route}/bomb")).signed(Via::Unix);
     proxy.endpoints().send_raw(Via::Unix, &request).await
 }
 
+/// A bomb in a single upstream chunk decodes to many pieces, and the service sends each on before decoding the next, so
+/// the caller never sees a chunk over one decoder piece plus the scrubber's hold-back. Prints what the caller received;
+/// run with `--nocapture`.
 #[tokio::test]
 async fn s3_8_a_decompression_bomb_is_cut_off_with_no_chunk_over_one_decoder_step_plus_the_hold_back() {
-    // The bound holds when the upstream's chunks are small: the service gathers a chunk's whole decoded output before it
-    // sends any, so a chunk decodes to at most chunk * 1032 bytes (the most deflate can expand). 16-byte chunks keep that
-    // under PIECE_SIZE. With one large chunk the service holds up to the limit check, measured in
-    // `measure_a_bomb_in_one_upstream_chunk`.
     let cred = fx();
     let hold_back = cred.longest().len() - 1;
     let bomb = bomb(&cred);
+    let compressed = bomb.len();
 
-    let raw = bombed(cred, bomb, 16).await;
+    let raw = bombed(cred, bomb).await;
 
     let (body, sizes, complete) = chunked_body(&raw);
     assert!(!complete, "the bomb ended as a complete response");
     let largest = sizes.iter().copied().max().unwrap_or(0);
+    eprintln!(
+        "bomb in one chunk ({compressed} compressed): caller received {} bytes in {} chunks, largest {largest}",
+        body.len(),
+        sizes.len(),
+    );
     assert!(
         largest <= PIECE_SIZE + hold_back,
         "largest chunk the caller received: {largest} bytes"
@@ -404,23 +412,4 @@ async fn s3_8_a_decompression_bomb_is_cut_off_with_no_chunk_over_one_decoder_ste
     // The ratio limit applies from 1 MiB decoded, and the key sits 16 MiB in.
     assert!(body.len() < 2 << 20, "the caller received {} bytes of the bomb", body.len());
     assert!(!raw.windows(32).any(|w| w == b"3f9a1c07d2b84e65a0c1f7e93b5d8a42"));
-}
-
-/// Prints what the caller receives of a bomb sent in one upstream chunk. Run with `--nocapture`.
-#[tokio::test]
-async fn measure_a_bomb_in_one_upstream_chunk() {
-    let cred = fx();
-    let bomb = bomb(&cred);
-    let compressed = bomb.len();
-
-    let raw = bombed(cred, bomb, usize::MAX).await;
-
-    let (body, sizes, complete) = chunked_body(&raw);
-    eprintln!(
-        "bomb in one chunk ({compressed} compressed): caller received {} bytes in {} chunks, largest {}, complete {complete}",
-        body.len(),
-        sizes.len(),
-        sizes.iter().max().copied().unwrap_or(0)
-    );
-    assert!(!complete);
 }

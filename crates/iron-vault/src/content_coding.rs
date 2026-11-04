@@ -1,10 +1,11 @@
 //! Response decoders: turn a content-coded response body back into the bytes the scrubber screens (spec §3.8, Q-6, §9).
 //!
 //! A compressed body hides an echoed secret from the scrubber, so the service decodes `gzip`, `deflate` and `br` before
-//! scrubbing. Like the [`Scrubber`](crate::scrub::Scrubber), a [`ResponseDecoder`] is push-based: each upstream chunk goes
-//! in, decoded bytes come out, and no body is buffered whole. A small chunk can expand a thousandfold, so
-//! [`push`](ResponseDecoder::push) yields its output in pieces of at most [`PIECE_SIZE`] bytes, produced one at a time as
-//! the caller pulls them. The caller checks its size budget between pieces and stops pulling when one runs out.
+//! scrubbing. Like the [`Scrubber`](crate::scrub::Scrubber), a [`ResponseDecoder`] is fed each upstream chunk in turn
+//! and no body is buffered whole. A small chunk can expand a thousandfold, so
+//! [`next_piece`](ResponseDecoder::next_piece) yields the output in pieces of at most [`PIECE_SIZE`] bytes, each decoded
+//! only when it is pulled. The caller checks its size budget between pieces and stops pulling when one runs out, and
+//! can send each piece on before pulling the next, so a response is held in memory one piece at a time.
 //!
 //! The codings are decoded strictly, so a body that is not exactly what its `Content-Encoding` claims is an error rather
 //! than a guess:
@@ -35,7 +36,7 @@ mod gzip;
 
 use std::fmt;
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use flate2::{Decompress, FlushDecompress};
 use zeroize::Zeroizing;
 
@@ -46,7 +47,7 @@ pub use encoder::{EncodeError, ResponseEncoder};
 #[cfg(test)]
 mod tests;
 
-/// The largest piece [`ResponseDecoder::push`] yields: small enough that checking a budget between pieces bounds the
+/// The largest piece [`ResponseDecoder::next_piece`] yields: small enough that checking a budget between pieces bounds the
 /// memory one chunk can use, large enough that the per-piece cost is negligible.
 pub const PIECE_SIZE: usize = 64 * 1024;
 
@@ -75,7 +76,7 @@ pub enum DecodeError {
     /// Bytes followed the end of the coded stream.
     #[error("response body continues after its coded stream ended")]
     TrailingData,
-    /// The output of an earlier [`push`](ResponseDecoder::push) was dropped before it ended, so input was lost.
+    /// A chunk was fed, or the body ended, before the previous chunk's pieces were all pulled, so input was lost.
     #[error("response decoder abandoned part of its input")]
     Abandoned,
 }
@@ -112,14 +113,19 @@ trait Engine: Send {
 
 /// The per-response streaming decoder for one [`ContentCoding`].
 ///
-/// Call [`push`](Self::push) with each upstream chunk and drain the pieces it yields, then [`finish`](Self::finish) at
-/// the end of the body. `finish` consumes the decoder and fails unless the coded stream ended, so a truncated body never
-/// looks complete. After any error the decoder is unusable: every later `push` and `finish` repeats it.
+/// [`feed`](Self::feed) each upstream chunk, then pull its output with [`next_piece`](Self::next_piece) until it returns
+/// `None`; [`finish`](Self::finish) ends the body. The decoder owns the chunk it was fed, so a caller can pull one piece,
+/// do other work or return to its executor, and come back for the next: nothing is decoded ahead of the pull. After any
+/// error the decoder is unusable: every later `next_piece` and `finish` repeats it.
 pub struct ResponseDecoder {
     coding: ContentCoding,
     engine: Box<dyn Engine>,
     /// Where each piece is decoded before it is copied out; wiped on drop because it holds plaintext.
     out: Zeroizing<Vec<u8>>,
+    /// The part of the fed chunk the engine has not used yet.
+    pending: Bytes,
+    /// Whether a fed chunk still has output to pull: the engine may hold output after it has used all its input.
+    active: bool,
     failed: Option<DecodeError>,
 }
 
@@ -135,32 +141,72 @@ impl ResponseDecoder {
             coding,
             engine,
             out: Zeroizing::new(vec![0; PIECE_SIZE]),
+            pending: Bytes::new(),
+            active: false,
             failed: None,
         }
     }
 
-    /// Decodes the next chunk of the body, yielding the output in pieces of at most [`PIECE_SIZE`] bytes.
-    ///
-    /// Each piece is decoded only when the iterator is advanced, so a caller that stops after a few pieces has decoded
-    /// no more than that. Dropping the iterator before it ends abandons the rest of the chunk and poisons the decoder
-    /// with [`DecodeError::Abandoned`]: the caller is giving up on the response. Ignoring the result of `push` drops the
-    /// iterator at once and so poisons the decoder, hence `must_use`.
-    #[must_use = "dropping the pieces unread abandons the chunk and poisons the decoder"]
-    pub fn push<'a>(&'a mut self, chunk: &'a [u8]) -> Pieces<'a> {
-        Pieces {
-            decoder: self,
-            input: chunk,
-            ended: false,
+    /// Takes the next chunk of the body. Feeding before the previous chunk's pieces were all pulled loses input, so it
+    /// poisons the decoder with [`DecodeError::Abandoned`].
+    pub fn feed(&mut self, chunk: Bytes) {
+        if self.active {
+            self.failed.get_or_insert(DecodeError::Abandoned);
         }
+        self.pending = chunk;
+        self.active = true;
     }
 
-    /// Ends the body. Fails with [`DecodeError::Truncated`] unless the coded stream has ended.
+    /// Decodes the fed chunk's next piece, at most [`PIECE_SIZE`] bytes and never empty; `None` once the chunk is used up.
+    /// A failed decoder returns its error once per chunk.
+    pub fn next_piece(&mut self) -> Option<Result<Bytes, DecodeError>> {
+        if let Some(error) = self.failed.filter(|_| self.active) {
+            return self.fail(error);
+        }
+        while self.active {
+            let stepped = self.engine.step(&self.pending, &mut self.out);
+            let step = match stepped.and_then(|step| step.within(self.pending.len(), self.out.len())) {
+                Ok(step) => step,
+                Err(error) => return self.fail(error),
+            };
+            // `within` has checked that the engine used no more than it was given.
+            self.pending.advance(step.consumed);
+            match (step.produced, step.consumed) {
+                (0, 0) if self.pending.is_empty() => self.active = false,
+                // The engine can neither use the input nor make output; treating it as finished would drop the input.
+                (0, 0) => return self.fail(DecodeError::Corrupt),
+                (0, _) => {}
+                (produced, _) => return Some(Ok(Bytes::copy_from_slice(self.out.get(..produced).unwrap_or_default()))),
+            }
+        }
+        None
+    }
+
+    /// Decodes `chunk` in one call: [`feed`](Self::feed) it and iterate its pieces. Dropping the iterator early leaves
+    /// the rest of the chunk fed, which [`finish`](Self::finish) reports as abandoned.
+    #[must_use = "dropping the pieces unread abandons the chunk and poisons the decoder"]
+    pub fn push(&mut self, chunk: &[u8]) -> impl Iterator<Item = Result<Bytes, DecodeError>> {
+        self.feed(Bytes::copy_from_slice(chunk));
+        std::iter::from_fn(|| self.next_piece())
+    }
+
+    /// Ends the body. Fails with [`DecodeError::Truncated`] unless the coded stream has ended, and with
+    /// [`DecodeError::Abandoned`] if a fed chunk was not pulled to its end.
     pub fn finish(self) -> Result<(), DecodeError> {
         match self.failed {
             Some(error) => Err(error),
+            None if self.active => Err(DecodeError::Abandoned),
             None if self.engine.is_complete() => Ok(()),
             None => Err(DecodeError::Truncated),
         }
+    }
+
+    /// Ends the fed chunk after `error`, which the decoder keeps and repeats.
+    fn fail(&mut self, error: DecodeError) -> Option<Result<Bytes, DecodeError>> {
+        self.active = false;
+        self.pending = Bytes::new();
+        self.failed = Some(error);
+        Some(Err(error))
     }
 }
 
@@ -170,59 +216,6 @@ impl fmt::Debug for ResponseDecoder {
             .field("coding", &self.coding)
             .field("failed", &self.failed)
             .finish()
-    }
-}
-
-/// The pieces one [`ResponseDecoder::push`] decodes, each at most [`PIECE_SIZE`] bytes and never empty.
-#[must_use = "dropping the pieces unread abandons the chunk and poisons the decoder"]
-pub struct Pieces<'a> {
-    decoder: &'a mut ResponseDecoder,
-    input: &'a [u8],
-    /// Whether the iterator returned its last item, so dropping it loses no input.
-    ended: bool,
-}
-
-impl Pieces<'_> {
-    /// Ends the iteration after `error`, which the decoder keeps and repeats.
-    fn fail(&mut self, error: DecodeError) -> Option<Result<Bytes, DecodeError>> {
-        self.ended = true;
-        self.decoder.failed = Some(error);
-        Some(Err(error))
-    }
-}
-
-impl Iterator for Pieces<'_> {
-    type Item = Result<Bytes, DecodeError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(error) = self.decoder.failed.filter(|_| !self.ended) {
-            return self.fail(error);
-        }
-        while !self.ended {
-            let decoder = &mut *self.decoder;
-            let stepped = decoder.engine.step(self.input, &mut decoder.out);
-            let step = match stepped.and_then(|step| step.within(self.input.len(), decoder.out.len())) {
-                Ok(step) => step,
-                Err(error) => return self.fail(error),
-            };
-            self.input = self.input.get(step.consumed..).unwrap_or_default();
-            match (step.produced, step.consumed) {
-                (0, 0) if self.input.is_empty() => self.ended = true,
-                // The engine can neither use the input nor make output; treating it as finished would drop the input.
-                (0, 0) => return self.fail(DecodeError::Corrupt),
-                (0, _) => {}
-                (produced, _) => return Some(Ok(Bytes::copy_from_slice(self.decoder.out.get(..produced).unwrap_or_default()))),
-            }
-        }
-        None
-    }
-}
-
-impl Drop for Pieces<'_> {
-    fn drop(&mut self) {
-        if !self.ended {
-            self.decoder.failed.get_or_insert(DecodeError::Abandoned);
-        }
     }
 }
 
