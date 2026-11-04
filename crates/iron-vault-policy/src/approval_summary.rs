@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use crate::caller::{CallerAuth, CallerConfig};
-use crate::display::escaped;
+use crate::confirmation::Confirmation;
+use crate::display::{escaped, quoted};
 use crate::limits::Limits;
 use crate::listener::{Endpoint, ListenerConfig};
 use crate::name::{CallerName, RouteName};
@@ -150,6 +151,11 @@ fn count_text(entries: &[Entry]) -> String {
     }
 }
 
+/// A free-text configured value in double quotes, escaped, so it cannot pass for the summary's own separators.
+fn quote(value: impl Display) -> String {
+    quoted(&value.to_string())
+}
+
 /// Escapes a configured value for one summary line.
 fn esc(value: impl Display) -> String {
     escaped(&value.to_string())
@@ -242,14 +248,14 @@ fn rate_text(limit: RateLimit) -> String {
 
 fn slot_text(slot: &Slot) -> String {
     match slot {
-        Slot::Header(header) => format!("header {} format {}", esc(header.name()), esc(header.format())),
+        Slot::Header(header) => format!("header {} format {}", esc(header.name()), quote(header.format())),
         Slot::Query(name) => format!("query {}", esc(name)),
         Slot::Basic => "basic".to_owned(),
     }
 }
 
 fn route_fields(route: &RouteConfig) -> Vec<Field> {
-    let ca_file = route.ca_file().map_or_else(|| "none".to_owned(), esc);
+    let ca_file = route.ca_file().map_or_else(|| "none".to_owned(), quote);
     vec![
         ("prefix", esc(route.prefix())),
         ("upstream", esc(route.upstream())),
@@ -259,17 +265,24 @@ fn route_fields(route: &RouteConfig) -> Vec<Field> {
         ("methods", join(route.methods().iter().map(|m| m.as_str()).collect::<BTreeSet<_>>())),
         ("paths", join(route.paths().iter().map(|p| p.as_str()).collect::<BTreeSet<_>>())),
         ("rate limit", rate_text(route.rate_limit())),
-        ("confirm", format!("{:?}", route.confirm()).to_lowercase()),
+        ("confirm", confirm_text(route.confirm()).to_owned()),
     ]
+}
+
+fn confirm_text(confirm: Confirmation) -> &'static str {
+    match confirm {
+        Confirmation::None => "none",
+        Confirmation::Touch => "touch",
+    }
 }
 
 fn listener_fields(listener: &ListenerConfig) -> Vec<Field> {
     let endpoint = match listener.endpoint() {
-        Endpoint::UnixSocket(path) => format!("unix socket {}", esc(path)),
+        Endpoint::UnixSocket(path) => format!("unix socket {}", quote(path)),
         Endpoint::Tcp { address, tls } => {
             let tls = tls.as_ref().map_or_else(
                 || "no tls".to_owned(),
-                |files| format!("tls cert {} key {}", esc(files.certificate()), esc(files.key())),
+                |files| format!("tls cert {} key {}", quote(files.certificate()), quote(files.key())),
             );
             format!("tcp {}, {tls}", esc(address))
         }
@@ -359,7 +372,7 @@ mod tests {
         assert!(text.contains("route grants:\n  + brave-cli: granted brave\n"));
         assert!(text.contains("  + naomi-backoffice: granted brave, venice\n"));
         assert!(text.contains("routes:\n  + brave: prefix /brave, upstream https://api.search.brave.com"));
-        assert!(text.contains("listeners:\n  + local: endpoint unix socket /run/iron-vault/proxy.sock, token header default\n"));
+        assert!(text.contains("listeners:\n  + local: endpoint unix socket \"/run/iron-vault/proxy.sock\", token header default\n"));
         assert!(!text.contains("limits:"), "defaults are not a change");
         assert!(!text.contains(TEXT_ONLY));
         assert_eq!(
@@ -411,18 +424,31 @@ mod tests {
         assert_eq!(lines(&pending), ["route grants:", "  ~ fx-mcp: granted venice"]);
     }
 
+    const FX_LIMIT_END: &str = "per_seconds = 60, burst = 10 }\n\n[routes.venice]";
+
+    const EXTRA_ROUTE: &str = "\n[routes.extra]\nprefix = \"/extra\"\nupstream = \"https://api.extra.example\"\ncredential = \"extra\"\n\
+        slot = \"basic\"\nmethods = [\"GET\"]\npaths = [\"/x\"]\nrate_limit = { requests = 1, per_seconds = 1, burst = 1 }\n";
+
+    const EXTRA_LISTENER: &str = "\n[listeners.extra]\nunix_socket = \"/run/iron-vault/extra.sock\"\n";
+
     #[test]
     fn each_route_field_change_is_one_routes_line() {
         let cases = [
+            ("prefix = \"/fx\"", "prefix = \"/fx2\"", "prefix /fx -> /fx2"),
             (
                 "upstream = \"https://api.fx.example\"",
                 "upstream = \"https://api.fx.example:8443/v2\"",
-                "upstream https://api.fx.example/ -> ",
+                "upstream https://api.fx.example/ -> https://api.fx.example:8443/v2",
             ),
             (
                 "credential = \"fx_key\"",
                 "credential = \"fx_other\"",
                 "credential fx_key -> fx_other",
+            ),
+            (
+                "slot = { query = \"access_key\" }",
+                "slot = \"basic\"",
+                "slot query access_key -> basic",
             ),
             (
                 "methods = [\"GET\"]\npaths = [\"/latest\"",
@@ -432,7 +458,7 @@ mod tests {
             (
                 "\"/historical/**\"]",
                 "\"/historical/**\", \"/rates\"]",
-                "paths /historical/**, /latest -> ",
+                "paths /historical/**, /latest -> /historical/**, /latest, /rates",
             ),
             (
                 "requests = 60, per_seconds = 60, burst = 10 }\n\n[routes.venice]",
@@ -440,17 +466,48 @@ mod tests {
                 "rate limit 60 per 60s burst 10 -> 30 per 60s burst 10",
             ),
             (
-                "per_seconds = 60, burst = 10 }\n\n[routes.venice]",
-                "per_seconds = 60, burst = 10 }\nconfirm = \"touch\"\n\n[routes.venice]",
+                FX_LIMIT_END,
+                &FX_LIMIT_END.replace("\n\n", "\nconfirm = \"touch\"\n\n"),
                 "confirm none -> touch",
             ),
+            (
+                FX_LIMIT_END,
+                &FX_LIMIT_END.replace("\n\n", "\nca_file = \"/etc/iron-vault/ca/fx.pem\"\n\n"),
+                "ca file none -> \"/etc/iron-vault/ca/fx.pem\"",
+            ),
         ];
-        cases.iter().for_each(|(from, to, expected)| {
-            let out = lines(&edited(from, to));
-            assert_eq!(out.len(), 2, "{out:?}");
-            assert_eq!(out[0], "routes:");
-            assert!(out[1].starts_with("  ~ fx: ") && out[1].contains(expected), "{out:?}");
+        cases.iter().for_each(|(from, to, detail)| {
+            assert_eq!(lines(&edited(from, to)), ["routes:", &format!("  ~ fx: {detail}")]);
         });
+    }
+
+    #[test]
+    fn route_added_and_removed_are_one_line_each() {
+        let (base, with_extra) = (spec(), config(&format!("{SPEC_EXAMPLE}{EXTRA_ROUTE}")));
+        let added = summarize(Some(&base), &with_extra).render();
+        assert!(added.starts_with("routes:\n  + extra: prefix /extra, upstream https://api.extra.example/, credential extra, slot basic"));
+        assert_eq!(added.lines().count(), 2);
+        assert_eq!(summarize(Some(&with_extra), &base).render(), "routes:\n  - extra\n");
+    }
+
+    #[test]
+    fn listener_added_and_removed_are_one_line_each() {
+        let (base, with_extra) = (spec(), config(&format!("{SPEC_EXAMPLE}{EXTRA_LISTENER}")));
+        let added = "listeners:\n  + extra: endpoint unix socket \"/run/iron-vault/extra.sock\", token header default\n";
+        assert_eq!(summarize(Some(&base), &with_extra).render(), added);
+        assert_eq!(summarize(Some(&with_extra), &base).render(), "listeners:\n  - extra\n");
+    }
+
+    #[test]
+    fn hostile_ca_file_cannot_forge_a_line_or_a_field() {
+        let ca = "ca_file = \"/x\\n  ~ fx-mcp: token changed; credential fx_key -> evil\"\n";
+        let pending = edited(FX_LIMIT_END, &FX_LIMIT_END.replace("\n\n", &format!("\n{ca}\n")));
+        let out = lines(&pending);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!(
+            out[1],
+            "  ~ fx: ca file none -> \"/x\\n  ~ fx-mcp: token changed; credential fx_key -> evil\""
+        );
     }
 
     #[test]
