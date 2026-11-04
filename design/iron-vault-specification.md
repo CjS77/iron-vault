@@ -196,7 +196,7 @@ flowchart LR
 The service must produce its own approval summary and notification, including changed callers, route grants,
 destinations, restrictions, and the committed version. It must not treat the CLI's displayed summary as evidence
 of what it signed. Device enrollment and access controls must prevent untrusted processes from using Iron Vault's
-keys where the platform supports that restriction. They do not eliminate the compromised-display limit in §1.2.
+keys where the platform supports that restriction. They do not eliminate the compromised-display limit in [§1.2](#12-security-promise-and-limits).
 
 **Attack mitigated (R-3).** Keeping private keys and stored secrets in the service removes them from a compromised
 CLI's memory. Accepting only service-initiated approvals prevents an attacker from submitting a signature obtained
@@ -460,7 +460,7 @@ The configured slot is the only injection location:
 
 For caller-forwarded requests, the service never inserts credentials into a body, URL path, unrelated header, or
 unrelated parameter. Service-owned OAuth exchanges may send credentials in a provider-defined body, but only to
-the separately enrolled token endpoint (§4.1). Header formats must have one substitution point and must not permit
+the separately enrolled token endpoint ([§4.1](#41-service-owned-consent)). Header formats must have one substitution point and must not permit
 CR or LF injection. Slot names must not collide with caller-authentication headers or transport-control headers.
 A marker that names another credential in the selected slot causes rejection. A missing or ordinary SDK
 placeholder may be replaced by the
@@ -563,7 +563,7 @@ The approval transaction must follow this order:
 2. Authenticate the owner, show the service-generated summary, and durably reserve a higher version.
 3. Sign the pending hash and reserved version with the approved signer; require touch when the signer policy requires it.
 4. Durably stage the signed artifact beside the pending config in protected storage.
-5. Atomically commit the new current `(version, hash)` in vault metadata, using the durable write procedure in §3.10.
+5. Atomically commit the new current `(version, hash)` in vault metadata, using the durable write procedure in [§3.10](#310-vault-structure-and-durable-writes).
 6. Publish the pending config and artifact as `config.toml` and `config.toml.sig`, fsync their directory, and activate the verified
    snapshot.
 
@@ -678,7 +678,7 @@ directory fsync preserve a completed replacement across power loss; an atomic re
 ### 3.11 Recipients, startup, and memory
 
 The primary Linux TPM recipient uses a non-exportable hardware key to open a TPM-sealed intermediate identity, which
-in turn unwraps the vault identity (§3.10). The service stores credentials on disk, not in TPM NV space. `age-plugin-tpm` provides an implementation lead, not a verified dependency;
+in turn unwraps the vault identity ([§3.10](#310-vault-structure-and-durable-writes)). The service stores credentials on disk, not in TPM NV space. `age-plugin-tpm` provides an implementation lead, not a verified dependency;
 the host adapter must demonstrate interoperable wrapping, recovery, and restart behavior before release.
 
 PCR 7 records Secure Boot policy; it does not uniquely identify the intended installed OS. It cannot by itself
@@ -761,7 +761,7 @@ chosen TPM session and dictionary-attack state; it must not assume that repeated
 
 **Failure prevented (R-22).** Explicit startup states keep a missing interactive unlock from becoming a silent
 fallback to weaker storage or an unexplained service failure. Hardware-specific power-loss behavior remains a
-release check in §9.
+release check in [§9](#9-implementation-gates-and-unresolved-details).
 
 ### 3.13 Administration, recovery, and migration
 
@@ -862,7 +862,7 @@ credential rotation addresses exposure after a machine is lost.
 
 ### 3.14 Docker, remote servers, and appliances
 
-On desktops, run Iron Vault as the host system service described in §3.1. Development containers may use rootless
+On desktops, run Iron Vault as the host system service described in [§3.1](#31-installation-and-ownership). Development containers may use rootless
 Docker or Podman under the desktop user. Do not place Iron Vault inside that user-controlled runtime. The desktop
 user must not control the host's rootful Docker daemon, its socket, or unrestricted passwordless Docker administration;
 that access defeats the host service-account boundary.
@@ -874,7 +874,7 @@ including socket ACLs and administrative APIs, rather than group membership alon
 On servers and Naomi appliances, container deployment is supported when callers cannot control the daemon,
 execute commands in Iron Vault's container, inspect its memory, mount its state, or run privileged containers.
 The runtime administrator remains outside the threat model. Maintain distinct caller networks and TLS listeners
-as specified in §3.4.
+as specified in [§3.4](#34-caller-authentication-and-listeners).
 
 Protect Compose definitions, overrides, entrypoints, mounted application code, unlock files, and deployment helpers
 from untrusted host users. Otherwise an attacker can change what a later administrator-controlled recreation runs,
@@ -886,7 +886,7 @@ administrative socket, host PID namespace, privileged mode, or Docker management
 Malware confined to a properly isolated sibling container can use that caller's authorized routes but must not
 extract provider credentials. An ordinary host account without runtime access must also remain outside private
 storage and process memory. The owner's desktop session can still expose newly typed secrets or administrative
-authorization; §1.2 states that input limitation. Runtime administrators can replace the service or capture its
+authorization; [§1.2](#12-security-promise-and-limits) states that input limitation. Runtime administrators can replace the service or capture its
 unwrapped vault identity after unlock, even when the hardware wrapping key remains non-exportable.
 
 Prefer a host unlock adapter that unseals the vault identity using `systemd-creds` and supplies it to the container
@@ -1069,7 +1069,7 @@ separation, and interaction with other desktop smart-card applications. It must 
 PC/SC policy limits a key to Iron Vault.
 
 A hardware key may replace or accompany the TPM as a vault recipient, through its own hardware-sealed intermediate
-identity (§3.10). Any enrolled recipient can unwrap the identity. A TPM-plus-YubiKey installation may still start through its TPM without a touch; adding a touch-enabled
+identity ([§3.10](#310-vault-structure-and-durable-writes)). Any enrolled recipient can unwrap the identity. A TPM-plus-YubiKey installation may still start through its TPM without a touch; adding a touch-enabled
 recipient alone does not make touch mandatory. A YubiKey-only operational profile requires PIN and touch on
 unlock and keeps the identity in service memory afterwards.
 
@@ -1243,31 +1243,31 @@ compressed API results, concurrent refresh, and signing-body limits; define supp
 
 ### 8.1 Deferred security and compatibility work
 
-The v0 design addresses the earlier findings through the requirements and threat notes in §1–3. Those controls
+The v0 design addresses the earlier findings through the requirements and threat notes in [§1](#1-product-and-scope)–[§3](#3-v0-protected-proxy). Those controls
 remain mandatory; removing duplicate findings does not claim that an implementation has passed verification.
-Hardware and platform validation remains subject to §9. Later features inherit the same controls and must pass
+Hardware and platform validation remains subject to [§9](#9-implementation-gates-and-unresolved-details). Later features inherit the same controls and must pass
 their own release checks before activation.
 
 Only the following follow-up work remains in this section:
 
 | Follow-up | Remaining work | Release gate |
 |---|---|---|
-| R-19: OAuth refresh-token rotation | Implement and fault-test the durable refresh transaction and `needs login` recovery in §4.3–4.4. A provider can rotate a token before the service persists its replacement; an unresolved operation must never retry the old token. | v1 |
-| R-31: CLI and MCP compatibility | Verify complete base-URL workflows for each advertised client (§6). If a required workflow cannot use those overrides, decide between a client patch and the conditional interception phase before claiming support. | Each integration claim |
+| R-19: OAuth refresh-token rotation | Implement and fault-test the durable refresh transaction and `needs login` recovery in [§4.3](#43-refresh-token-rotation-and-crash-recovery)–[§4.4](#44-v1-release-checks). A provider can rotate a token before the service persists its replacement; an unresolved operation must never retry the old token. | v1 |
+| R-31: CLI and MCP compatibility | Verify complete base-URL workflows for each advertised client ([§6](#6-conditional-phase-forward-proxy-and-cli-compatibility)). If a required workflow cannot use those overrides, decide between a client patch and the conditional interception phase before claiming support. | Each integration claim |
 
 ### 8.2 Product decisions and resulting behavior
 
 | Decision                                 | Specification result                                                                                                            |
 |------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
-| Q-1: marker syntax                       | Use `{iv:name}` only as a slot placeholder; never expand it through arbitrary request text (§3.6)                               |
-| Q-3: forward-proxy need                  | Keep base-URL mode; test actual callers and require a separate interception design (§6)                                         |
-| Q-4: no TPM                              | Offer service-owned interactive passphrase unlock; validate Secure Enclave where available; retain independent recovery (§3.11) |
-| Q-5: reload                              | Restart or explicit signal; verify signature, counter, record restrictions, and config; stop proxying on failure (§3.9)         |
-| Q-6: compressed responses                | Decompress, scrub, and recompress when required; do not depend on stripping Accept-Encoding alone (§3.8)                        |
-| Q-7: license                             | Release Iron Vault under Apache-2.0 (§10)                                                                                       |
-| Q-9: one approval flow                   | Use one versioned signature envelope for TPM, YubiKey, and software signers; keep the version in protected state (§3.9)         |
-| Config approval retained                 | Retain it for grants and route policy while credential records independently restrict destinations (§2, §3.3, §3.9)             |
-| Touch policy without a device            | Refuse to activate a touch-required route; never silently downgrade (§2, §5.1)                                                  |
+| Q-1: marker syntax                       | Use `{iv:name}` only as a slot placeholder; never expand it through arbitrary request text ([§3.6](#36-url-header-and-slot-rules))                               |
+| Q-3: forward-proxy need                  | Keep base-URL mode; test actual callers and require a separate interception design ([§6](#6-conditional-phase-forward-proxy-and-cli-compatibility))                                         |
+| Q-4: no TPM                              | Offer service-owned interactive passphrase unlock; validate Secure Enclave where available; retain independent recovery ([§3.11](#311-recipients-startup-and-memory)) |
+| Q-5: reload                              | Restart or explicit signal; verify signature, counter, record restrictions, and config; stop proxying on failure ([§3.9](#39-configuration-approval-and-reload))         |
+| Q-6: compressed responses                | Decompress, scrub, and recompress when required; do not depend on stripping Accept-Encoding alone ([§3.8](#38-responses-redirects-and-scrubbing))                        |
+| Q-7: license                             | Release Iron Vault under Apache-2.0 ([§10](#10-license-and-design-references))                                                                                       |
+| Q-9: one approval flow                   | Use one versioned signature envelope for TPM, YubiKey, and software signers; keep the version in protected state ([§3.9](#39-configuration-approval-and-reload))         |
+| Config approval retained                 | Retain it for grants and route policy while credential records independently restrict destinations ([§2](#2-release-plan), [§3.3](#33-credential-records-and-configuration), [§3.9](#39-configuration-approval-and-reload))             |
+| Touch policy without a device            | Refuse to activate a touch-required route; never silently downgrade ([§2](#2-release-plan), [§5.1](#51-hardware-key-recipients-signers-and-touch-confirmation))                                                  |
 
 ## 9. Implementation gates and unresolved details
 

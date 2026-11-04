@@ -1,6 +1,6 @@
 # Admin protocol
 
-The CLI and the service talk only over the admin socket (spec §3.2). This document specifies the bytes they exchange:
+The CLI and the service talk only over the admin socket (spec [§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). This document specifies the bytes they exchange:
 the **admin protocol**. Terms are defined in the [glossary](glossary.md). The codec is `iron_vault::admin::protocol`;
 it is pure and does no I/O. The [admin socket](#admin-socket) section specifies the service's transport:
 binding, the peer check and the server loop (`iron_vault::admin::socket` and `iron_vault::admin::server`).
@@ -23,7 +23,7 @@ One connection carries one exchange:
    one **owner input** frame before the service sends anything else. A notice is shown to the owner and never answered.
 3. The service sends exactly one **admin response**, success or error, and closes the connection.
 
-The service, not the CLI, decides what to prompt for: the service owns the operation (§3.2), so a modified CLI cannot
+The service, not the CLI, decides what to prompt for: the service owns the operation ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)), so a modified CLI cannot
 skip a step by not asking for it. A frame of a kind the receiver does not expect at that point in the exchange ends
 it: the service answers with an `unexpected-frame` error response and closes; the CLI reports the fault and closes.
 
@@ -111,7 +111,7 @@ an error.
 | `5` | `lock` | none | whether every cached secret was confirmed cleared |
 | `6` | `status` | none | the [status report](#status) |
 
-**No command accepts an external signature** (§3.2). The service signs only the pending config of its own approval
+**No command accepts an external signature** ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
 input. Normal loading verifies only the `config.toml.sig` the service itself published. A later command that would
 take any of these is out of bounds for this protocol, whatever it is for.
@@ -122,9 +122,9 @@ check that the service is up and which profile it runs before the real commands 
 
 #### lock
 
-Clears the vault identity and every cached secret from the service's memory (spec §3.13, §3.11) and moves the service
+Clears the vault identity and every cached secret from the service's memory (spec [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration), [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)) and moves the service
 from Ready to Locked. It takes no arguments and no prompt. In order, the service stops admitting requests, withdraws the
-serving snapshot so requests running on it stop where the transport permits (§3.9), and drops the approval state. It
+serving snapshot so requests running on it stop where the transport permits ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)), and drops the approval state. It
 then waits for the last holder of the old snapshot, a request or a streaming response body, to release it (the *lock
 drain*, at most 10 seconds). The vault, which the snapshot owns, is dropped when that last holder releases it, so during
 the drain the vault may still be in memory.
@@ -142,7 +142,7 @@ any other state the command fails with `wrong-state`.
 
 #### config approve
 
-Runs the approval transaction (spec §3.9; [config-approval.md](config-approval.md#the-transaction)) on the bytes the
+Runs the approval transaction (spec [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload); [config-approval.md](config-approval.md#the-transaction)) on the bytes the
 owner proposes.
 
 | Tag | Field | Value |
@@ -164,7 +164,7 @@ The exchange, after the request:
    than exactly `yes` ends the exchange with `declined`. No version is reserved.
 4. **Approval passphrase.** A prompt, secret: `Approval passphrase`. The service opens the approver key with it. A
    wrong passphrase ends the exchange with `approval-denied`, still before any reservation. There is no second try in
-   the same exchange. Summary, confirmation, then passphrase is the order of §3.9's sequence diagram, which its text
+   the same exchange. Summary, confirmation, then passphrase is the order of [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)'s sequence diagram, which its text
    words differently ([open question 6](config-approval.md#open-questions)).
 5. The service runs steps 2 to 6 of the transaction, including the config check after the commit, and answers once
    the check has ended, with the result or an error below. A success means the new config is active.
@@ -199,7 +199,7 @@ Errors specific to `config approve`:
 
 #### unlock
 
-Opens the vault with the interactive passphrase (spec §3.11, §3.12, §3.13). It is allowed only while the service is
+Opens the vault with the interactive passphrase (spec [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory), [§3.12](iron-vault-specification.md#312-service-states-and-errors), [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). It is allowed only while the service is
 Locked; in any other state the exchange ends with `wrong-state` before any prompt, and the state is unchanged.
 
 1. **Vault passphrase.** A prompt, secret: `Vault passphrase`. The value is the vault-unlock passphrase, never the
@@ -207,7 +207,7 @@ Locked; in any other state the exchange ends with `wrong-state` before any promp
    non-UTF-8 input cannot be the passphrase and is answered as a wrong one.
 2. The service checks the state again under the service context's mutex, so two unlocks never both open the vault,
    and opens `operational.age` with the passphrase, then `identity.age` with the operational identity, which is
-   dropped as soon as the vault identity is unwrapped (§3.10). A wrong passphrase ends the exchange with
+   dropped as soon as the vault identity is unwrapped ([§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). A wrong passphrase ends the exchange with
    `unlock-denied`, whose message is only `wrong passphrase`; an envelope that cannot be read or opened ends it with
    `unlock-failed`. Either way the service stays Locked, and no other storage is tried (R-22). There is no second try
    in the same exchange.
@@ -275,7 +275,7 @@ an unknown command, is an error.
 
 #### status
 
-`status` changes nothing and is answered in every state (§3.12), including Locked and Unavailable, so the owner can
+`status` changes nothing and is answered in every state ([§3.12](iron-vault-specification.md#312-service-states-and-errors)), including Locked and Unavailable, so the owner can
 diagnose why requests fail. The result is the **status report**: fields, never one preformatted string, so the CLI
 renders them and tests assert on values. Every collection is in name order, and the report holds no secret value, record
 digest or permitted origin.
@@ -299,7 +299,7 @@ credential state to report there. The CLI shows these as unknown rather than gue
 report says the vault is locked; an unlocked vault with no credentials has a non-empty vault ID and an empty list.
 
 Memory protection is reported from the process hardening report and never claims swap protection unless `mlockall`
-succeeded (§3.11).
+succeeded ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)).
 
 The credential list is one entry per credential in the vault manifest, in credential-name order:
 
@@ -365,7 +365,7 @@ ID, and never contain body bytes, so no error can carry owner input into a log o
 
 ## Admin socket
 
-The service serves the admin protocol on `admin.sock` in its runtime directory (spec §3.2, §3.4).
+The service serves the admin protocol on `admin.sock` in its runtime directory (spec [§3.2](iron-vault-specification.md#32-service-and-cli-boundary), [§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners)).
 
 **Binding.** A leftover file at the path is removed only when `lstat` shows a socket owned by the service account;
 a regular file, a symlink, or a socket another account owns stops startup with an error naming the path. The service
@@ -481,7 +481,7 @@ redacted reason, and exits with code 1.
 ### Owner input
 
 The CLI collects each prompted value from its **owner console**, opened at the first prompt or notice, so a command
-the service never prompts for touches neither the terminal nor stdin. No argument ever carries a value (§3.2, §3.13).
+the service never prompts for touches neither the terminal nor stdin. No argument ever carries a value ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary), [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)).
 
 - **Stdin is a terminal:** the CLI opens `/dev/tty`, writes the label to it followed by `: `, and reads one line from
   it. For a secret prompt it turns echo off for the read with `tcsetattr`: `ECHO` off and `ECHONL` on, so the owner's

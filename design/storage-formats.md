@@ -1,7 +1,7 @@
 # Iron Vault storage formats
 
 Byte layouts of the data Iron Vault writes to disk. Each format carries a version so a later release can read what an
-earlier one wrote and refuse what it does not understand (specification §9). Terms follow the
+earlier one wrote and refuse what it does not understand (specification [§9](iron-vault-specification.md#9-implementation-gates-and-unresolved-details)). Terms follow the
 [glossary](glossary.md).
 
 ## Record payload v1
@@ -15,7 +15,7 @@ only what is inside the encryption. Rust: `iron_vault_store::{encode, decode}`.
 The payload is a small hand-written, length-prefixed binary layout rather than TOML or a serde format. Decoding reads
 each secret field as a borrowed slice of the decrypted buffer, checks it is UTF-8 in place, and copies it once, straight
 into the `SecretString` that owns it from then on. A TOML or serde decoder would first build its own `String` for each
-value, a heap copy of the secret that nothing zeroizes. Specification §3.11 asks for as few copies of a secret as
+value, a heap copy of the secret that nothing zeroizes. Specification [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory) asks for as few copies of a secret as
 possible, each cleared on release. The encoder sizes its `Zeroizing<Vec<u8>>` exactly before writing, so the buffer
 never reallocates and leaves no stale copy behind either.
 
@@ -50,7 +50,7 @@ Material fields:
 The kind is the material tag; the record stores no separate kind, so a kind and its material cannot disagree.
 
 Each origin is a field holding the host in its canonical form, followed by the port as a `u16`. The scheme is not
-stored: specification §3.3 makes HTTPS mandatory, so every origin is an HTTPS origin.
+stored: specification [§3.3](iron-vault-specification.md#33-credential-records-and-configuration) makes HTTPS mandatory, so every origin is an HTTPS origin.
 
 ### Example
 
@@ -82,7 +82,7 @@ is accepted only if it is the encoding of the record it decodes to:
 - each port is from 1 to 65535;
 - the origin count is at least 1, and the origins are strictly ascending, so none repeats;
 - the material passes its kind's rules: a static key is non-empty with no control character; a Basic username is
-  non-empty with no `:`, and neither username nor password contains a control character (RFC 7617 §2).
+  non-empty with no `:`, and neither username nor password contains a control character ([RFC 7617 §2](https://www.rfc-editor.org/rfc/rfc7617#section-2)).
 
 Decoding rejects a wrong magic, an unknown version, an unknown material or source tag, truncation, trailing bytes and
 any of the rule failures above. Its errors name the rule or field that failed, never a secret byte.
@@ -96,8 +96,8 @@ A longer file is a damaged record and is never read in full.
 
 ### Versions
 
-Payload version 1 holds no provider settings or operational state. Specification §3.3 lists both, and both arrive
-with OAuth in product phase v1 (§4). Adding them means a new version byte with its own layout, and a reader for every
+Payload version 1 holds no provider settings or operational state. Specification [§3.3](iron-vault-specification.md#33-credential-records-and-configuration) lists both, and both arrive
+with OAuth in product phase v1 ([§4](iron-vault-specification.md#4-v1-oauth-login-and-refresh)). Adding them means a new version byte with its own layout, and a reader for every
 version still on disk. A reader never guesses at a version it does not know.
 
 ## MAC'd file frame
@@ -105,7 +105,7 @@ version still on disk. A reader never guesses at a version it does not know.
 A [MAC'd file](glossary.md) is a control file the service alone may write. `age` does not authenticate the sender, so
 anyone holding the vault public key can write a file that decrypts cleanly. A MAC'd file is therefore sealed to the
 vault public key and then authenticated with a MAC keyed from the private vault identity, which only the service holds
-while the vault is unlocked (specification §3.10). The manifest file and the approval state file are MAC'd files; each
+while the vault is unlocked (specification [§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). The manifest file and the approval state file are MAC'd files; each
 fixes its own magic, version, key persona, domain tag and size limit. Rust: `MacFileKind`, crate-private.
 
 ### Layout
@@ -149,7 +149,7 @@ Opening a MAC'd file does the cheap, key-free checks first and decrypts last:
 2. A file shorter than header plus MAC is truncated. A wrong magic or unknown version is refused; the version is read
    before the MAC because it decides how the MAC is computed.
 3. The MAC is compared in constant time. A mismatch is reported as damaged shared state: the file was altered, or was
-   not written by this vault, and specification §3.10 says the vault may need recovery.
+   not written by this vault, and specification [§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes) says the vault may need recovery.
 4. Only then is the vault ID parsed and the ciphertext opened, with the size limit also bounding the plaintext, and
    decoded. A payload naming a different vault from the header is refused.
 
@@ -206,16 +206,16 @@ refuse a partial restore as damaged shared state, naming the file that is behind
 and the one found, and every write of either file refuses it before touching any file: writing over it would record
 the restored file as the peer and make the pair agree again. Creating the approval state is refused once the manifest
 records one, since that would reset its counters. A partial restore is never repaired automatically (specification
-§3.9); the owner recovers the vault with the recovery key or resets it.
+[§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)); the owner recovers the vault with the recovery key or resets it.
 
 The check cannot tell a pair that was once on disk together from the current one. That covers restoring both files
-together, the whole-storage rollback of specification §3.9, and restoring one file to a copy that the other file's
+together, the whole-storage rollback of specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload), and restoring one file to a copy that the other file's
 latest write already saw. Outside v0, anchoring the state generation in a TPM monotonic counter is what detects those.
 
 ## Manifest file v1
 
 The [vault manifest](glossary.md): the service's index of which credential records exist, in the state-directory file
-`manifest.age`. Specification §3.10 makes the service's own index the authority on which records exist, and §3.3 says
+`manifest.age`. Specification [§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes) makes the service's own index the authority on which records exist, and [§3.3](iron-vault-specification.md#33-credential-records-and-configuration) says
 only the service may index record files. A manifest sealed only to the vault public key would be as forgeable as the
 records it indexes, so it is a [MAC'd file](#macd-file-frame). Rust: `iron_vault_store::{seal_manifest, open_manifest}`.
 
@@ -282,7 +282,7 @@ even one that decrypts to the same record, no longer matches its entry. Record f
 A new vault's first manifest is at state generation 1 with peer generation 0 and no entries, written before any record
 file and before the approval state. Every later manifest takes its state generation from the
 [vault-wide rule](#state-generation). Rolling the whole state directory back to an older consistent copy is outside
-what the manifest detects (specification §9).
+what the manifest detects (specification [§9](iron-vault-specification.md#9-implementation-gates-and-unresolved-details)).
 
 ### Example
 
@@ -324,7 +324,7 @@ Iron Vault framing. Its plaintext is the vault identity's secret text: the 74 AS
 derived from. Rust: `iron_vault_store::{wrap_identity, unwrap_identity}`.
 
 - **Stanzas.** One X25519 stanza per recipient key, plus the one random `*-grease` stanza `age` adds to every file
-  without a passphrase. Specification §3.11 forbids an scrypt stanza beside other recipients, so the envelope never
+  without a passphrase. Specification [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory) forbids an scrypt stanza beside other recipients, so the envelope never
   holds one; passphrase unlock and the recovery key each reach it through an X25519 recipient.
 - **Recipients.** Between 2 and `MAX_RECIPIENTS` (64), so a vault always has a second way in.
 - **Size limit.** `MAX_IDENTITY_ENVELOPE_LEN` is 16 KiB. An X25519 stanza is 98 bytes, the grease stanza at most about
@@ -355,7 +355,7 @@ open_passphrase_envelope, unlock_with_passphrase}`.
 
 - **Stanzas.** Exactly one scrypt stanza and no other. `age` adds its random grease stanza only to files without an
   scrypt stanza, and refuses to write an scrypt stanza beside any other, so this file never holds one. `stanza_kinds`
-  of it is `[Scrypt]`, and of `identity.age` never contains `Scrypt` (specification §3.11, §3.15).
+  of it is `[Scrypt]`, and of `identity.age` never contains `Scrypt` (specification [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory), [§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)).
 - **Work factor.** New envelopes are sealed at `PASSPHRASE_WORK_FACTOR` = 18 (N = 2^18, r = 8: 256 MiB and roughly
   half a second to a second per unlock). Opening refuses a header asking for more than `MAX_PASSPHRASE_WORK_FACTOR` = 20
   (1 GiB) before any scrypt work. The work factor must be one or two decimal digits without a leading zero.
@@ -395,7 +395,7 @@ Its plaintext is the 32-byte Ed25519 private key (the RFC 8032 seed), raw. Rust:
 
 ## Approval payload v1
 
-The bytes a [config approval](glossary.md) signs (specification §3.9). It binds the fixed purpose, the vault, the
+The bytes a [config approval](glossary.md) signs (specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). It binds the fixed purpose, the vault, the
 approval version and the config digest, so a signature cannot be moved to another vault, another version or another
 config. It uses the conventions of record payload v1: big-endian unsigned integers, `u64` length prefixes, lengths
 checked against the bytes remaining before anything is read, and no trailing bytes. Rust:
@@ -444,7 +444,7 @@ not a version 4 UUID, approval version 0, truncation and trailing bytes.
 ## Approval envelope v1
 
 The file `config.toml.sig`: an approval payload, the [signature algorithm](glossary.md) that signed it and the
-signature. Software, TPM and later YubiKey signers all write this one envelope (specification §8.2 Q-9). Rust:
+signature. Software, TPM and later YubiKey signers all write this one envelope (specification [§8.2](iron-vault-specification.md#82-product-decisions-and-resulting-behavior) Q-9). Rust:
 `iron_vault_store::ApprovalEnvelope::{encode, decode}`.
 
 ### Layout
@@ -465,7 +465,7 @@ signature. Software, TPM and later YubiKey signers all write this one envelope (
 
 Any other ID is refused as unknown. The signature is over exactly the bytes inside the payload field.
 
-The envelope carries **no public key**. Specification §3.9 forbids trusting a key from the signature file; the
+The envelope carries **no public key**. Specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) forbids trusting a key from the signature file; the
 verifier uses the approver key and algorithm pinned in protected vault metadata, and refuses an envelope whose
 algorithm differs from the pinned one.
 
@@ -504,7 +504,7 @@ a larger signature while keeping a planted file cheap to refuse.
 ## Approval state file v1
 
 The [approval state](glossary.md) of one vault, in the state-directory file `approval.age`: the pinned approver, the
-highest reserved version and the committed approval (specification §3.9). Versioned approval rejects an old
+highest reserved version and the committed approval (specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). Versioned approval rejects an old
 `config.toml` and `config.toml.sig` pair only while these counters never go backwards, so the file is a
 [MAC'd file](#macd-file-frame) that a party holding only the vault public key cannot write. Rust:
 `iron_vault_store::{seal_approval_state, open_approval_state, ApprovalState}`.
@@ -534,8 +534,8 @@ MAC           432bf6223d8cfcab01ea4ba4f7e3757ed426bb724c440ccbf42d2ecdeca76e3f
 ```
 
 A MAC mismatch, a payload naming another vault, or a payload whose committed version is above its highest reserved
-version is damaged shared state: approvals cannot be checked, so the service stops proxying (specification §3.9,
-§3.10).
+version is damaged shared state: approvals cannot be checked, so the service stops proxying (specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload),
+[§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)).
 
 ### Size limit
 
@@ -563,7 +563,7 @@ replace returns. Every write reads the manifest from disk first and takes its st
 
 Before each write the service reads the file back and requires it to equal its in-memory state, so a stale copy can
 never write lower counters over newer ones. Restoring the whole state directory from an older copy restores older
-counters too; specification §3.9 leaves that outside v0.
+counters too; specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) leaves that outside v0.
 
 ## Approval state payload v1
 

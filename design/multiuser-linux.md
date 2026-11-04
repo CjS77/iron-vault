@@ -5,7 +5,7 @@ different user accounts, and Iron Vault hands each account only the API access i
 cryptography, systemd or Linux permissions beyond "each user has their own files".
 
 > **Status:** Iron Vault is still being built. This guide describes the planned behaviour in the
-> [specification](iron-vault-specification.md) (§3.4 for how callers are recognised). Command names and config
+> [specification](iron-vault-specification.md) ([§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners) for how callers are recognised). Command names and config
 > fields may still change.
 
 ## The situation
@@ -252,7 +252,7 @@ file.
 For a program that has a "base URL" setting, set it to the route. A Python script, for example, would use
 `/gh` in place of `https://api.github.com`. Not every tool can talk to a socket file; for those, use the
 `http://127.0.0.1` listener with a caller token, described above. Some command-line tools, such as `gh`, need more
-than a base URL change and are not supported yet (specification §6).
+than a base URL change and are not supported yet (specification [§6](iron-vault-specification.md#6-conditional-phase-forward-proxy-and-cli-compatibility)).
 
 ## What each account can and can't do
 

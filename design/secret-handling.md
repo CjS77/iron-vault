@@ -1,6 +1,6 @@
 # Secret handling in memory
 
-Spec §3.11 requires the service to hold secret values in types that suppress debugging and clear their buffers on
+Spec [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory) requires the service to hold secret values in types that suppress debugging and clear their buffers on
 release, to minimize copies, and to clear cached values on lock or replacement. This document lists every type that
 holds secret bytes, how each one is cleared, and the copies the code knows about but cannot yet avoid.
 
@@ -97,7 +97,7 @@ operation.
 
 ## Streamed response compatibility
 
-Spec §9 asks for measured overlap buffering and SSE latency. `crates/iron-vault/tests/proxy_scrub_stream_linux.rs` runs
+Spec [§9](iron-vault-specification.md#9-implementation-gates-and-unresolved-details) asks for measured overlap buffering and SSE latency. `crates/iron-vault/tests/proxy_scrub_stream_linux.rs` runs
 the real request server and pipeline against a test upstream that sends scripted chunks, each flushed as its own write.
 
 The scrubber holds back only the tail of the pending bytes that is a proper prefix of some pattern (`Scrubber::scan`
@@ -138,7 +138,7 @@ Compressed bodies are covered in the next section.
 
 ### Compressed responses
 
-Spec §3.8 and §9 ask for tests that combine compression with chunk boundaries and unchanged traffic, and for measured
+Spec [§3.8](iron-vault-specification.md#38-responses-redirects-and-scrubbing) and [§9](iron-vault-specification.md#9-implementation-gates-and-unresolved-details) ask for tests that combine compression with chunk boundaries and unchanged traffic, and for measured
 decompression limits. `crates/iron-vault/tests/proxy_coding_stream_linux.rs` runs the same assembled service against an
 upstream that sends already compressed, scripted chunks; the refusals are in `proxy_coding_linux.rs`.
 
@@ -195,7 +195,7 @@ dropped. (The service's `ServingSnapshot` shares its vault through an `Arc`: the
 replaced the snapshot and the last request that loaded it has finished.) `secret_types_tests` checks this by scanning
 the store's sources, and asserts `Vault: Send + Sync`, which `Rc` would break.
 
-**Lock** (`ServiceContext::lock`, spec §3.13) drops every owner of a secret in this order. Under the context's mutex,
+**Lock** (`ServiceContext::lock`, spec [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)) drops every owner of a secret in this order. Under the context's mutex,
 the holder stops admitting requests and withdraws its snapshots, which cancels the requests running on them, and the
 approval state is dropped. The mutex is then released, and the service waits up to the *lock drain* for every
 `Arc<ServingSnapshot>` to go. A snapshot has three kinds of holder, and the drain waits for all of them: a request still
@@ -219,7 +219,7 @@ pinned approver's public key, and the committed version and digest, so dropping 
 | `age`'s scrypt recipient and identity take a `SecretString` copy of the passphrase (`Passphrase::for_age`), and derive the wrapping key inside `age`. | The copy is a `SecretString` and is wiped; `age`'s internal key derivation is not audited here. Locked memory (K-45) keeps it out of swap. |
 | `base64`'s `encode_string`, used by both `CallerToken` constructors, encodes through a 1 KiB stack buffer it does not wipe, leaving a copy of the token's body in a dead stack frame. | The next calls on that thread overwrite it; locked memory (K-45) keeps it out of swap. The 32 raw bytes are held in `Zeroizing` buffers. |
 | reqwest and hyper's idle keep-alive connections. They stay open after a response (reqwest's default idle timeout is 90 seconds, and `UpstreamClient::new` sets no pool option), and each connection's spawned task keeps its write buffer, which still holds the last request's headers, the injected credential included, unwiped. Those tasks can outlive the `UpstreamClients` that created them, and the lock drain does not track them. | **Not yet fixed.** `lock` can answer `cleared` while an idle connection's buffer still holds the last credential sent through it. A follow-up ticket tracks closing the pool and the tasks on lock. Locked memory (K-45) keeps the buffer out of swap, and core dumps and same-account `ptrace` are off. |
-| A request that ignores its cancellation. | `lock` cancels requests where the transport permits (§3.9), but a request blocked in code that never polls its cancellation keeps its `Arc<ServingSnapshot>`, and with it the vault, until it ends. The lock drain bounds the wait and `lock` then answers `cleared` as false and logs the count of snapshots still held, instead of claiming the secrets are gone. |
+| A request that ignores its cancellation. | `lock` cancels requests where the transport permits ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)), but a request blocked in code that never polls its cancellation keeps its `Arc<ServingSnapshot>`, and with it the vault, until it ends. The lock drain bounds the wait and `lock` then answers `cleared` as false and logs the count of snapshots still held, instead of claiming the secrets are gone. |
 | The kernel holds owner input outside the CLI: in the terminal's line buffer while the owner types, in the pipe buffer when it is piped, and in the admin socket's buffers in transit. | Outside any process's control. Each buffer is drained by the read that empties it. |
 | When SIGINT, SIGQUIT or SIGTERM arrives while the CLI has the terminal open, its watcher thread restores the terminal and calls `process::exit`, which runs no destructors, so a line buffer the main thread is filling is not wiped. | The process exits at once and the kernel frees its memory. Core dumps and same-account `ptrace` are off, so nothing can read the buffer between the signal and the exit. |
 | The CLI's memory is not locked, so an owner-input buffer could be swapped out while it lives. | It lives only from the read until the frame is written. The CLI disables core dumps and same-account `ptrace` before connecting; encrypted swap, which the install guide requires, covers the rest. |

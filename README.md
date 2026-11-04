@@ -7,7 +7,7 @@ authenticates the caller, checks its route, adds the credential, and forwards th
 The application holds at most a local caller token that grants specific routes; it never needs the provider secret.
 
 **Status:** specification stage; implementation has not started. The
-[product specification](iron-vault-specification.md) defines the requirements, roadmap, threat mitigations, and
+[product specification](design/iron-vault-specification.md) defines the requirements, roadmap, threat mitigations, and
 release checks.
 
 ## Planned features
@@ -61,8 +61,8 @@ scrubbing reduces accidental disclosure but cannot recognize every transformed s
 The host and runtime administrators remain trusted. Anyone who controls Iron Vault's Docker daemon can replace or
 inspect it; TPM encryption does not protect secrets after the service unwraps them into memory. Protected deployments
 must keep vault storage, unlock material, and deployment files outside ordinary callers' control. See the
-[security requirements](iron-vault-specification.md#12-security-promise-and-limits) and
-[deployment requirements](iron-vault-specification.md#314-docker-remote-servers-and-appliances).
+[security requirements](design/iron-vault-specification.md#12-security-promise-and-limits) and
+[deployment requirements](design/iron-vault-specification.md#314-docker-remote-servers-and-appliances).
 
 ## How the vault is locked
 
