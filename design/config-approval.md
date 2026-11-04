@@ -255,6 +255,9 @@ identity is cleared when the lock drain releases that snapshot; a stop drops bot
 - **C**, the committed approval `(version, digest)` from `approval.age`.
 - The four data files in the config directory. A missing, oversized or non-regular file is *absent* for every purpose
   below.
+- A file is *unreadable* when it is there but reading it fails with any other I/O error (permission denied, an I/O
+  error from the disk, ...). An unreadable file is not absent: recovery cannot tell what it holds, so it refuses
+  before the table.
 - **Matches C**: a config file X and a signature file Y *match C* when `verify_approval(state, X, Y)` succeeds. That
   covers all of these: the envelope decodes; it is signed with the pinned approver's algorithm and key; it names this
   vault; its digest is the digest of X; and its version and digest are C. A config file holds C's config when its
@@ -268,7 +271,13 @@ text.
 | Condition | Outcome |
 |---|---|
 | `approval.age` missing, damaged, a partial restore, or unreadable | **stay unavailable**, `RecoveryNeeded`; touch nothing |
+| `config.toml`, `config.toml.sig`, `config.toml.pending` or `config.toml.sig.staged` unreadable (`Unreadable`, naming the first in that order and the error kind) | **stay unavailable**, `RecoveryNeeded`; touch nothing |
 | nothing committed (`NothingCommitted`: a vault whose first approval never committed) | **stay unavailable**, `PolicyInvalid` (detail: no approved config); touch nothing |
+
+An unreadable config file is not treated as absent, because the file recovery cannot read might be the one that
+completes the commit: a staged approval that is there but unreadable would otherwise look like row 5, and discarding
+around it could lose a committed approval. The owner fixes the permissions or the disk in place, then an authorized
+repair or a restart runs the check again.
 
 ### Recovery table
 
@@ -293,7 +302,8 @@ on as for row 1. A publish that fails midway leaves a state this table resolves 
 safe to run again. Each finish is recorded as `config.recovery-published`.
 
 *Discard* means durable remove, then the `config.recovery-discarded` event naming each file and, for a staged
-approval, the version it was signed for. Discarding never touches the counters: a discarded staged approval's version
+approval, the version it was signed for. A discard that fails partway still records each file it removed. Discarding
+never touches the counters: a discarded staged approval's version
 stays consumed.
 
 **Why rows 5 and 6 differ from rows 7 and 8.** Rows 5 and 6 hold a file of C waiting to be published, so a committed
@@ -327,7 +337,7 @@ this order:
 
 | Published pair | Detail | `VerifyError` |
 |---|---|---|
-| `config.toml` or `config.toml.sig` absent | the committed config or its signature is missing | none |
+| `config.toml` or `config.toml.sig` absent (missing, oversized or not a regular file) | the committed config or its signature is missing | none |
 | the signature does not decode | signature malformed | `Malformed` |
 | another algorithm than the pinned approver's | signed with the wrong algorithm | `WrongAlgorithm` |
 | the signature does not verify against the pinned key | bad signature | `BadSignature` |
@@ -358,7 +368,7 @@ adds none:
 | `UnavailableReason` (text) | When, in this design |
 |---|---|
 | `Checking` (`checking`) | throughout an approval's admission pause, and throughout a reload |
-| `RecoveryNeeded` (`recovery needed`) | `approval.age` cannot be loaded; recovery rows 5 and 6; an uncertain commit could not be settled; a committed publish could not be finished |
+| `RecoveryNeeded` (`recovery needed`) | `approval.age` cannot be loaded; a config file is unreadable (`Unreadable`); recovery rows 5 and 6; an uncertain commit could not be settled; a committed publish could not be finished |
 | `PolicyInvalid` (`policy invalid`) | recovery rows 7 and 8; nothing committed; the published config fails validation or activation |
 | `Locked` (`locked`) | not produced here; the vault is locked |
 
