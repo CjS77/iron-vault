@@ -377,7 +377,8 @@ the next `init` discards the files the unfinished run wrote and starts over. See
 - **Content.** Zero bytes. A non-empty file is read as present too: only the name is looked at, never the bytes, so
   there is nothing to parse and nothing to refuse.
 - **Reading.** The [initialization state](vault-initialization.md#initialization-state) is read from the directory
-  listing alone, without the vault identity, so it is known while the vault is locked. The file is not sealed or MAC'd:
+  listings, with only the initial config's bytes compared, without the vault identity, so it is known while the vault
+  is locked. The file is not sealed or MAC'd:
   only the service account can write the state directory, and anyone who can could delete the vault's files outright.
 - **Temp file.** A crash during its durable replace can leave `.init.unfinished.tmp`, a stale temp file that the
   startup sweep removes like any other.

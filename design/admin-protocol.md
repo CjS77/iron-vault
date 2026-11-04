@@ -208,11 +208,15 @@ Errors specific to `config approve`:
 
 #### unlock
 
-Opens the vault with the interactive passphrase (spec [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory), [§3.12](iron-vault-specification.md#312-service-states-and-errors), [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). It is allowed only while the service is
-Locked; in any other state the exchange ends with `wrong-state` before any prompt, and the state is unchanged. It also
-needs an initialized vault: unless the [initialization state](vault-initialization.md#initialization-state) is
+Opens the vault with the interactive passphrase (spec
+[§3.11](iron-vault-specification.md#311-recipients-startup-and-memory),
+[§3.12](iron-vault-specification.md#312-service-states-and-errors),
+[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). It is allowed only while the service
+is Locked; in any other state the exchange ends with `wrong-state` before any prompt, and the state is unchanged. It
+also needs an initialized vault: unless the [initialization state](vault-initialization.md#initialization-state) is
 Initialized, the exchange ends with `unlock-failed` before any prompt, and the message names the initialization state
-and says to run `iron-vault init`. The state is read again under the service context's mutex in step 2.
+and says to run `iron-vault init` (for Unrecognized, it names the first offending files instead). The state is read
+again under the service context's mutex in step 2.
 
 1. **Vault passphrase.** A prompt, secret: `Vault passphrase`. The value is the vault-unlock passphrase, never the
    approval passphrase: the two are separate types, and unlocking never implies authority to approve. Empty or
@@ -281,7 +285,8 @@ The exchange, after the request:
 
 1. The service reads the [initialization state](vault-initialization.md#initialization-state). Initialized or
    Unrecognized ends with `already-initialized` before any prompt. On Unfinished, a notice says the unfinished
-   initialization will be discarded.
+   initialization will be discarded. (The CLI has already checked for a controlling terminal, and never sends the
+   request without one; see [the CLI's `init`](#init-1).)
 2. **Passphrases.** Four prompts, all secret: `Vault passphrase`, `Repeat the vault passphrase`, `Approval passphrase`,
    `Repeat the approval passphrase`. A value that breaks a
    [passphrase rule](vault-initialization.md#passphrase-rules) ends the exchange with `passphrase-rejected`, whose
@@ -291,13 +296,17 @@ The exchange, after the request:
    [reveal](#reveal-kind-7) holding the key's `AGE-SECRET-KEY-1…` text.
 4. **Confirmation.** A prompt, not secret: `Type yes once you have saved the recovery key`. Any answer other than
    exactly `yes` ends the exchange with `declined`.
-5. Only now does the service write anything. It runs the
+5. Only now does the service write anything. It tries the service-wide lock, failing at once with `busy` if it is
+   taken, and checks the service state and the initialization state again under it: the prompts held no lock, so
+   another init may have finished, or the service may have left Locked. That re-check can end the exchange with
+   `already-initialized` or `wrong-state` after the reveal. Then it runs the
    [write order](vault-initialization.md#write-order), committing approval version 1 on the initial config, and
    answers once `init.unfinished` is durably removed.
 
-Nothing is written before step 5, so a refusal, a cancelled prompt or a closed CLI leaves the directories as they were.
-Step 5 takes a few seconds (three scrypt operations and about a dozen durable writes), inside the CLI's 60-second
-timeout.
+Nothing is written before step 5, so a refusal, a cancelled prompt or a closed CLI leaves the directories as they
+were. Every ending after step 3's reveal other than success leaves the owner holding a recovery key that opens
+nothing; see [Failing after the reveal](vault-initialization.md#failing-after-the-reveal). Step 5 takes a few seconds
+(three scrypt operations and about a dozen durable writes), inside the CLI's 60-second timeout.
 
 The success result:
 
@@ -310,10 +319,12 @@ Errors specific to `init`:
 
 | Code | When |
 |---|---|
-| `already-initialized` | the directories hold an initialized vault, or files no initialization explains; the message says which, and names the first such files |
+| `already-initialized` | the directories hold an initialized vault, or files no initialization explains; the message says which, and names the first such files. Raised by the re-check under the lock (step 5), after the reveal, it also says the recovery key shown opens nothing and is to be discarded |
+| `busy` | step 5 found the service-wide lock taken (another init, an approval, a vault write, a reload or a config check) and did not wait. It comes after the reveal, so the message says the recovery key shown opens nothing and is to be discarded, and to run `iron-vault init` again |
+| `wrong-state` | the service is not Locked: at the request, before any prompt, or at the re-check under the lock after the reveal, when the message also says the recovery key shown opens nothing and is to be discarded |
 | `passphrase-rejected` | a passphrase broke a rule; the message names the rule |
-| `declined` | the owner did not answer the recovery key confirmation with `yes` |
-| `init-failed` | a write failed; the message names the failed step, says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing |
+| `declined` | the owner did not answer the recovery key confirmation with `yes`; the message says the recovery key shown opens nothing and is to be discarded |
+| `init-failed` | a write failed; the message names the failed step, says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. At step 9 the vault may already stand, so the message says to keep the key until `init` is run again, and to discard it only if that run starts over |
 
 ### Prompt (kind 2)
 
@@ -464,9 +475,9 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `14` | `unlock-denied` | `unlock`: the vault passphrase was wrong |
 | `15` | `unlock-failed` | `unlock`: the vault did not open, for a reason other than the passphrase; the service stays Locked |
 | `16` | `unlocked-unavailable` | `unlock`: the vault unlocked, but the config check left the service Unavailable; the message names the redacted reason |
-| `17` | `already-initialized` | `init`: the directories already hold a vault, or files init did not write; nothing was changed |
+| `17` | `already-initialized` | `init`: the directories already hold a vault, or files init did not write; nothing was changed. Raised after the reveal, the message says to discard the recovery key shown |
 | `18` | `passphrase-rejected` | `init`: a chosen passphrase broke a rule; the message names the rule, never the input |
-| `19` | `init-failed` | `init`: a write failed; the message names the step, says to re-run `init`, which discards the unfinished vault, and says to discard the recovery key shown |
+| `19` | `init-failed` | `init`: a write failed; the message names the step, says to re-run `init`, which discards the unfinished vault, and says to discard the recovery key shown (at step 9, to keep it until the re-run) |
 | `20` | `name-taken` | `add`: the name is already in the manifest, healthy or damaged; `add` never overwrites |
 | `21` | `credential-invalid` | `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
 | `22` | `vault-write-failed` | `add`: the vault write failed; the message says whether it may have committed |
@@ -612,9 +623,14 @@ redacted reason, and exits with code 1.
 ### init
 
 `iron-vault init` takes no argument: the passphrases are answers to the service's secret prompts, read as for any
-prompt, and the recovery key arrives in a reveal. On success it prints `initialized vault <vault ID>: approval version 1
-committed` and `run iron-vault unlock to start serving` to stdout; the recovery key never goes there. Otherwise it
-prints the service's error to stderr and exits with code 1.
+prompt, and the recovery key arrives in a reveal. Before it sends the request it checks that it can open `/dev/tty`,
+and without a controlling terminal it reports that on stderr and exits with code 3, so the service never generates a
+key for a CLI that will refuse to show it. If the command ends after the reveal without success, however it ends
+(Ctrl-C, a closed terminal, a signal, a dropped or timed-out connection), the CLI prints on stderr that the recovery
+key shown opens nothing and is to be discarded, before it exits; the service cannot say so over a closed connection.
+On success it prints `initialized vault <vault ID>: approval version 1 committed` and `run iron-vault unlock to start
+serving` to stdout; the recovery key never goes there. Otherwise it prints the service's error to stderr and exits
+with code 1.
 
 ### add
 
@@ -648,7 +664,8 @@ command the service never prompts for touches neither the terminal nor stdin. No
 - **A reveal** is written to the controlling terminal, `/dev/tty`, whether or not stdin is a terminal, and nowhere
   else: never to stdout, and never to stderr, which a script may capture. When there is no controlling terminal, the
   CLI shows nothing, reports on stderr that the value can only be shown on a terminal, and cancels the command with
-  exit code 3, so the service writes nothing ([open question 5](vault-initialization.md#open-questions)).
+  exit code 3, so the service writes nothing ([open question 5](vault-initialization.md#open-questions)). `init` checks
+  for the terminal before it sends its request, so this is its backstop, not its first check.
 
 The label is the service's text with control characters removed, so a label cannot move the cursor or reprogram the
 terminal. A notice's text has every control character except `\n` removed, for the same reason. It is written to

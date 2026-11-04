@@ -21,8 +21,8 @@ Three rules drive the design:
   state directory as it was.
 - **Every step is durable before the next one starts**, and one durable remove is the commit point
   ([§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)).
-- **Init never overwrites what it did not write.** It removes only the files an unfinished initialization can have
-  written, and refuses anything else.
+- **Init never overwrites or removes what it did not write.** It removes only the files an unfinished initialization
+  can have written (a config file only when its bytes are the initial config), and refuses anything else.
 
 Every default this design picks where the specification is silent, or where it departs from the specification's
 wording, is listed under [Open questions](#open-questions), for the owner to decide.
@@ -52,15 +52,34 @@ none, nor any edge ([open question 1](#open-questions)):
 
 ## Initialization state
 
-The **initialization state** is read from the names in the state directory and the config directory alone, without
-the vault identity, so it is known while the vault is locked. It is one of:
+The **initialization state** is read from the names in the state directory and the config directory without the
+vault identity, so it is known while the vault is locked. The one exception is the config directory's own files, whose
+bytes are compared with the initial config (below). The checks run in this order, and the first that matches decides:
 
-| State | The directories hold |
+1. **`init.unfinished` is present.** The state is Unfinished if the state directory holds no file but the lock file
+   (`lock`), stale temp files (`.<name>.tmp`) and the files an initialization writes (`init.unfinished`,
+   `identity.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`), and the config directory
+   passes the [config test](#the-config-test). Otherwise it is Unrecognized.
+2. **`manifest.age` is present.** The state is Initialized if the state directory holds no file but the lock file,
+   stale temp files, the vault's own files (`identity.age`, `operational.age`, `approver.age`, `manifest.age`,
+   `approval.age`) and record files (`record-*.age`). Otherwise it is Unrecognized. The config directory may hold
+   anything.
+3. **The state directory holds only the lock file and stale temp files**, and none of `config.toml`,
+   `config.toml.sig`, `config.toml.pending` and `config.toml.sig.staged` is in the config directory. The state is
+   Uninitialized.
+4. **Otherwise** the state is Unrecognized.
+
+| State | Meaning |
 |---|---|
-| Uninitialized | In the state directory, only the lock file (`lock`) and stale temp files (`.<name>.tmp`). In the config directory, none of `config.toml`, `config.toml.sig`, `config.toml.pending` and `config.toml.sig.staged`. |
-| Unfinished | `init.unfinished` in the state directory, and no `record-*.age` file. The config directory may hold anything. |
-| Initialized | `manifest.age`, and no `init.unfinished`, in the state directory. The config directory may hold anything. |
-| Unrecognized | Anything else. |
+| Uninitialized | Check 3 matched: nothing of a vault or its config is there. |
+| Unfinished | Check 1 matched: an initialization started and has not reached its commit point. |
+| Initialized | Check 2 matched: a manifest, no `init.unfinished`, and no file that no Iron Vault release writes. |
+| Unrecognized | No check matched, or a file that no Iron Vault release writes sits beside `init.unfinished` or `manifest.age`. |
+
+A **foreign file** is a file in the state directory that is not on the lists above: a file no Iron Vault release
+writes. Beside `init.unfinished` or `manifest.age` it makes the state Unrecognized, so it is never swept into the new
+vault by the discard, and a vault that carries one is not unlocked or initialized until the owner removes it. The
+messages name the first such file.
 
 Init proceeds only on Uninitialized and Unfinished. Examples of Unrecognized:
 
@@ -70,7 +89,22 @@ Init proceeds only on Uninitialized and Unfinished. Examples of Unrecognized:
 - `init.unfinished` beside a record file: only `add` writes a record file, and only an initialized vault adds;
 - `config.toml` or `config.toml.sig` beside an empty state directory. Init refuses rather than overwrite the owner's
   config file. The owner moves it aside, runs init, then approves it with `config approve`;
-- any file in the state directory that no Iron Vault release writes.
+- `init.unfinished` beside a config file that is not init's own, by the config test below;
+- any foreign file in the state directory.
+
+### The config test
+
+In an Unfinished directory the config directory may hold files an interrupted init wrote, and only those. They pass
+when every one of the following holds:
+
+- `config.toml` and `config.toml.pending`, each only if present, hold exactly the [initial config](#initial-config),
+  `schema_version = 1\n`. Step 8 writes nothing else to either, so a crash cannot leave other bytes there;
+- `config.toml.sig` and `config.toml.sig.staged`, each only if present, sit beside `config.toml` or
+  `config.toml.pending`. A signature file is opaque, so it is judged by the config it belongs to; publishing renames the
+  pending config before the signature, so a signature alone is never a crash state.
+
+A config file with other bytes is the owner's: it makes the state Unrecognized, for the same reason `config.toml`
+beside an empty state directory does. The test reads at most one byte more than the initial config.
 
 The config directory holds other files too, such as administrator-installed TLS files, and only the four config file
 names above count. Stale temp files are swept at startup, before any admin command runs, and do not count either.
@@ -99,20 +133,29 @@ After the admin request, in order:
    key (`SoftwareSigner::generate`, which also returns the pinned approver).
 4. **Recovery key.** The [presentation](#recovery-key-presentation): a notice, the reveal frame, then the prompt
    `Type yes once you have saved the recovery key`. Any answer but exactly `yes` ends with `declined`.
-5. **Writes.** The service takes the service-wide lock, checks again that it is Locked and that the initialization
-   state is Uninitialized or Unfinished, discards an unfinished initialization, then runs the
+5. **Writes.** The service tries the service-wide lock and fails at once with `busy` if it is taken; it never waits.
+   It then checks again that it is Locked (`wrong-state` otherwise) and that the initialization state is
+   Uninitialized or Unfinished (`already-initialized` otherwise), discards an unfinished initialization, then runs the
    [write order](#write-order). A failure ends with `init-failed`.
 6. The success result: the vault ID and the committed version, 1.
 
 Nothing is written before step 5. A prompt that gets no owner input, a refusal or a cancelled CLI ends the exchange
 with the directories exactly as they were, and every generated key is dropped and cleared.
 
+Step 4's reveal puts the recovery key on the owner's screen, and steps 4 and 5 can still end without a vault. Every
+ending after the reveal other than success therefore tells the owner to
+[discard the recovery key](#failing-after-the-reveal).
+
 **Locking.** The prompts are not under any lock: holding the service context's mutex across up to five prompts of up
-to 5 minutes each would block `status`. Step 5 holds the service-wide lock and the service context's mutex from the
-second state check to the response, so an `unlock` arriving meanwhile waits and then sees Initialized. A second init
-that passed its own first check finds Initialized under the lock and ends with `already-initialized`; its keys were
-never written. Step 5 takes a few seconds: two scrypt seals and one scrypt open at `PASSPHRASE_WORK_FACTOR`, and about
-a dozen durable writes, inside the CLI's 60-second timeout.
+to 5 minutes each would block `status`. Step 5 takes the service-wide lock without waiting, as [`config approve`'s
+concurrent writes](config-approval.md#the-service-wide-lock) do: another approval, vault write, reload, config check
+or init holding it ends step 5 with `busy`. Waiting could outlast the CLI's 60-second timeout, since an approval can
+hold the lock for about 10 minutes. Step 5 then holds the lock and the service context's mutex from the second state
+check to the response, so an `unlock` arriving meanwhile waits and then sees Initialized. A second init that passed
+its own first check ends with `busy` if the first still holds the lock, or finds Initialized under the lock and ends
+with `already-initialized` once it has finished. The service wrote nothing for the second init, but its owner has
+already saved a recovery key, so both messages say to discard it. Step 5 takes a few seconds: two scrypt seals and one
+scrypt open at `PASSPHRASE_WORK_FACTOR`, and about a dozen durable writes, inside the CLI's 60-second timeout.
 
 ## Passphrase rules
 
@@ -144,13 +187,12 @@ recovery identity once, through the owner-only session, and to have the owner co
    prompt comes between the reveal and the confirmation except the confirmation itself.
 2. **Notice.** One or more notice frames saying: this recovery key is shown once and the service keeps no copy; it is
    the second way into the vault if the passphrase or this machine is lost; store it in an independent password
-   manager or on paper, never beside the vault; the owner may protect it in a passphrase-encrypted file of their own;
-   clear the terminal's scrollback once it is saved.
+   manager or on paper, never beside the vault; the owner may protect it in a passphrase-encrypted file of their own.
 3. **Reveal.** One [reveal frame](admin-protocol.md#reveal-kind-7) whose body is the `AGE-SECRET-KEY-1…` text, 74
    bytes. The service builds the frame in a clearing buffer straight from `RecoveryKeySecret`'s text, writes it, and
    drops both the buffer and the `RecoveryKeySecret` as soon as the write returns.
 4. **Confirmation.** A prompt, not secret: `Type yes once you have saved the recovery key`. Any other answer ends with
-   `declined`, and nothing is written.
+   `declined`, and nothing is written. The message says the recovery key shown opens nothing and is to be discarded.
 5. **Only then** does the service write anything.
 
 After the reveal the service keeps only the recovery key's parsed `RecipientIdentity`, for
@@ -161,8 +203,31 @@ returns only the text, so the binary parses that text back with `RecoveryKeySecr
 store adds a way to keep the identity it generated; either keeps the parse inside a clearing buffer.
 
 The CLI writes the reveal value to the controlling terminal only, never to stdout or a pipe
-([open question 5](#open-questions)). [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)
-also asks for a QR code; until K-160 the CLI shows text only ([open question 4](#open-questions)).
+([open question 5](#open-questions)). It checks for that terminal before it sends the `init` request, so the secret
+never reaches a CLI that will refuse to show it.
+[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) also asks for a QR code; until K-160 the
+CLI shows text only ([open question 4](#open-questions)).
+
+### Failing after the reveal
+
+From the reveal on, the owner holds a recovery key that opens a vault only if init succeeds. Any other ending leaves
+no vault, or a different one, so a key kept as "the vault's recovery key" would be a dead key kept in good faith. Every
+ending after the reveal other than success says so, in these words or close to them: *the recovery key shown opens
+nothing: discard it*. The endings are:
+
+| Ending | Who says it |
+|---|---|
+| `declined`: any answer but `yes` | the service, in the error message |
+| `busy`: another operation, such as a second init, holds the service-wide lock at step 5 | the service |
+| `already-initialized`: the re-check under the lock finds Initialized or Unrecognized, as when a second init finished first | the service |
+| `wrong-state`: the re-check under the lock finds the service has left Locked | the service |
+| `init-failed`: a write failed | the service |
+| a cancelled or lost command: Ctrl-C or a closed terminal, a signal, a dropped or timed-out connection | the CLI, on stderr before it exits; the service cannot answer a closed connection |
+
+The one exception is `init-failed` at step 9, where the vault may already stand: its message says to keep the key
+until `init` is run again, and to discard it only if that run starts over instead of answering `already-initialized`.
+The same errors raised before the reveal do not carry the sentence, because no key was shown. The service tracks
+whether it has sent the reveal, and the CLI whether it has shown one, so each says it only when it is true.
 
 ## Write order
 
@@ -198,10 +263,10 @@ Notes on the steps:
   first config check runs at `unlock`.
 - **Step 9** is the only durable change that turns Unfinished into Initialized. A failure before it leaves the vault
   Unfinished, so a re-run discards it. If the unlink lands but the state directory's fsync fails, the vault reads
-  Initialized now and may read Unfinished after a power loss; the service answers `init-failed` naming step 9, and
-  the message says that a re-run either answers `already-initialized`, and the vault stands, or starts over. Either
-  way nothing is lost: the vault holds no credential until `add`, and `add`'s own directory fsync makes the earlier
-  unlink durable.
+  Initialized now and may read Unfinished after a power loss; the service answers `init-failed` naming step 9, and the
+  message says that a re-run either answers `already-initialized`, and the vault stands with the recovery key shown,
+  or starts over with a new one. Either way nothing is lost: the vault holds no credential until `add`, and `add`'s
+  own directory fsync makes the earlier unlink durable.
 
 ## Discarding an unfinished initialization
 
@@ -214,12 +279,15 @@ writes, each durably, and only those present:
   with `durable_remove`.
 
 `init.unfinished` stays, and step 1 then rewrites it, so a crash during the discard leaves the state Unfinished and
-the next init discards again. Init refuses if any `record-*.age` exists: that is Unrecognized, never Unfinished. No
-other file is touched.
+the next init discards again. Nothing else is left to touch: the state is Unfinished only if the state directory holds
+nothing but the lock file, temp files, `init.unfinished` and files removed here, and only if the config files pass the
+[config test](#the-config-test). So the discard removes a config file only when its bytes are the initial
+config (or it is a signature beside one), and a config file the owner placed there is never deleted: it makes the
+state Unrecognized, and init refuses before any prompt.
 
-The config files are safe to remove because init starts only from Uninitialized, where the config directory holds none
-of them, or from Unfinished, where they can only be the unfinished init's own. A config file the owner put in place
-while an initialization was unfinished is removed with the rest: Unfinished means the directories are init's.
+The config test is why the discard can delete config files at all. Init starts only from Uninitialized, where the
+config directory holds none of the four, or from Unfinished, where each is init's own, because step 8 is the only
+writer and writes the initial config alone.
 
 **Counters.** Discarding `approval.age` discards approval counters, which
 [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) says start at zero "only when creating a new
@@ -250,11 +318,13 @@ It does not report the initialization state until K-161 ([open question 6](#open
 | 5 manifest | Unfinished | as row 1 | discards envelopes and manifest, proceeds |
 | 6 approval state (recorded or not) | Unfinished | as row 1 | discards envelopes, manifest and `approval.age`, proceeds |
 | 7 (no write) | Unfinished | as row 1 | as row 6 |
-| 8, any part: pending, reserved, staged, committed or published | Unfinished | as row 1 | as row 6, and discards whichever of the four config files exist |
+| 8, any part: pending, reserved, staged, committed or published | Unfinished | as row 1 | as row 6, and discards whichever of the four config files exist; each holds the initial config, or is a signature beside one |
 | 9 `init.unfinished` removed | Initialized | prompts for the passphrase; the config check publishes nothing new, verifies version 1 and enters Ready with no listeners and no routes | `already-initialized` |
+| any step, with a config file whose bytes are not the initial config (the owner's), or a signature file alone | Unrecognized | `unlock-failed`: files init did not write, names the first | `already-initialized`: names the first; nothing is changed, and the owner moves the file aside |
+| any step, or after step 9, with a foreign file in the state directory | Unrecognized | as the row above | as the row above |
 
 Each discard also tells the owner, in its notice, that the recovery key from the unfinished run opens nothing; the
-`init-failed` message has already said so.
+`init-failed` message has already said so (at step 9 it said to keep the key until the re-run).
 
 ## Initial config
 
@@ -310,9 +380,9 @@ stated for each until the owner decides.
 4. **The QR code.** [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) asks for the
    recovery identity "as text and a QR code". *Default:* text only until K-160. A QR code needs no protocol change,
    since the CLI can render one from the reveal value on the terminal; K-160 adds it.
-5. **Where the reveal is shown.** *Default:* the CLI writes the recovery key to the controlling terminal
-   (`/dev/tty`) only, even when stdin is a pipe; with no controlling terminal it cancels the command before showing
-   anything, so the exchange ends with nothing written. A scripted init therefore needs a terminal. The alternative
+5. **Where the reveal is shown.** *Default:* the CLI writes the recovery key to the controlling terminal (`/dev/tty`)
+   only, even when stdin is a pipe; with no controlling terminal it cancels the command before sending the request, so
+   the service generates nothing and writes nothing. A scripted init therefore needs a terminal. The alternative
    writes it to stderr when there is no terminal, as notices are, which puts the key into whatever captures stderr.
 6. **`status` and the initialization state.** *Default:* this design leaves the status report unchanged, so before
    init `status` says Locked, as after it, and `unlock`'s and `init`'s messages say which initialization state the
