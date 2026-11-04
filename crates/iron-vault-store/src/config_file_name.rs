@@ -51,7 +51,7 @@ impl ConfigFileName {
     }
 
     /// The temporary name a durable replace of this file writes first: `.<name>.tmp`.
-    pub(crate) fn temp_name(self) -> String {
+    pub fn temp_name(self) -> String {
         temp_name(self.as_str())
     }
 }

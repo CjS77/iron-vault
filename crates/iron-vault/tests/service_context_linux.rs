@@ -234,6 +234,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
     fn start(&self) -> Result<Arc<ServiceContext>, StartError> {
         let paths = self.paths();
         let locks = ServiceLocks::acquire(&paths)?;
+        locks.sweep_stale_temps(&OsFs);
         let provisional = locks.unverified_listeners(&OsFs);
         let setup = ServiceSetup {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
@@ -624,6 +625,93 @@ async fn stop_drops_the_vault_and_closes_the_listeners() {
     assert_eq!(service.state().await, ServiceState::Stopped);
     assert!(vault.upgrade().is_none(), "the snapshot holding the vault outlived stop");
     assert!(!fixture.socket().exists());
+}
+
+/// The stale temp files a crash mid-write can leave, in the config directory and the state directory.
+const STALE_TEMPS: [&str; 4] = [
+    "etc/.config.toml.pending.tmp",
+    "etc/.config.toml.sig.staged.tmp",
+    "state/.approval.age.tmp",
+    "state/.identity.age.tmp",
+];
+
+/// The files a sweep must leave as they were: the active config and its approval, the pending and staged files, and
+/// the approval state.
+const SWEEP_BYSTANDERS: [&str; 5] = [
+    "etc/config.toml",
+    "etc/config.toml.sig",
+    "etc/config.toml.pending",
+    "etc/config.toml.sig.staged",
+    "state/approval.age",
+];
+
+fn read_all(fixture: &Fixture, files: &[&str]) -> Vec<Vec<u8>> {
+    files.iter().map(|file| fs::read(fixture.path(file)).unwrap()).collect()
+}
+
+/// An approved fixture with a pending config, a staged approval and every stale temp in place.
+async fn with_stale_temps() -> Fixture {
+    let fixture = approved().await;
+    fs::write(fixture.path("etc/config.toml.pending"), "pending").unwrap();
+    fs::write(fixture.path("etc/config.toml.sig.staged"), "staged").unwrap();
+    STALE_TEMPS
+        .iter()
+        .for_each(|temp| fs::write(fixture.path(temp), "partial").unwrap());
+    fixture
+}
+
+#[tokio::test]
+async fn startup_sweeps_stale_temps_in_both_directories_and_leaves_every_other_file() {
+    let logs = captured_logs();
+    let fixture = with_stale_temps().await;
+    let before = read_all(&fixture, &SWEEP_BYSTANDERS);
+
+    let service = fixture.start().unwrap();
+
+    assert_eq!(service.state().await, ServiceState::Locked);
+    STALE_TEMPS
+        .iter()
+        .for_each(|temp| assert!(!fixture.path(temp).exists(), "{temp} survived the sweep"));
+    assert_eq!(read_all(&fixture, &SWEEP_BYSTANDERS), before);
+    let text = logs.text();
+    [
+        ".config.toml.pending.tmp",
+        ".config.toml.sig.staged.tmp",
+        ".approval.age.tmp",
+        ".identity.age.tmp",
+    ]
+    .iter()
+    .for_each(|name| {
+        assert!(
+            text.contains(&format!("removed stale temp file {name} ")),
+            "{name} not logged:\n{text}"
+        )
+    });
+    assert!(
+        !text.contains(fixture.dir.path().to_str().unwrap()),
+        "a sweep log named a path:\n{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_sweep_that_fails_on_one_file_still_starts_the_service() {
+    let logs = captured_logs();
+    let fixture = with_stale_temps().await;
+    // A directory under a temp name cannot be unlinked as a file, so the config sweep fails on it.
+    let stuck = fixture.path("etc/.config.toml.pending.tmp");
+    fs::remove_file(&stuck).unwrap();
+    fs::create_dir(&stuck).unwrap();
+
+    let service = fixture.start().unwrap();
+
+    assert_eq!(service.state().await, ServiceState::Locked);
+    assert_eq!(ping(&service).await, PONG);
+    assert!(stuck.is_dir());
+    assert!(!fixture.path("state/.approval.age.tmp").exists(), "the state sweep did not run");
+    assert!(
+        logs.text()
+            .contains("stale temp sweep of the config directory failed, starting anyway")
+    );
 }
 
 /// The route `brave`, which uses the `brave_key` credential. No caller is granted it: status does not need one.

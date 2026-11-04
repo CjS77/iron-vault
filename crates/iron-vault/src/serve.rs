@@ -1,5 +1,6 @@
-//! `iron-vault serve`: checks the trusted paths, takes the directory locks, starts the service context Locked with its
-//! provisional request listeners, and serves the admin socket until SIGTERM or SIGINT, then stops the service.
+//! `iron-vault serve`: checks the trusted paths, takes the directory locks and sweeps their stale temp files, starts
+//! the service context Locked with its provisional request listeners, and serves the admin socket until SIGTERM or
+//! SIGINT, then stops the service.
 
 use std::collections::BTreeMap;
 use std::fs::DirBuilder;
@@ -39,6 +40,7 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport)
     create_config_dir(paths)?;
     check_trusted_paths(paths)?;
     let locks = ServiceLocks::acquire(paths)?;
+    locks.sweep_stale_temps(&OsFs);
     let provisional = locks.unverified_listeners(&OsFs);
     // `listenfd` edits the environment as it takes the sockets, so adoption runs before the runtime starts a thread.
     let activated = adopt_sockets(paths, &provisional);

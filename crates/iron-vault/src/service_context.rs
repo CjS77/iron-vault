@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use iron_vault_policy::{Capabilities, Limits, ListenerConfig, ListenerName, ParsedConfig};
 use iron_vault_store::{
-    ApprovalState, ConfigDirLock, ConfigFileName, LockError, OsFs, Passphrase, StateDirLock, StoreFs, UnlockError, VaultIdentity,
-    read_config_file, unlock_with_passphrase,
+    ApprovalState, ConfigDirLock, ConfigFileName, LockError, OsFs, Passphrase, StateDirLock, StateFileName, StoreFs, UnlockError,
+    VaultIdentity, read_config_file, sweep_stale_config_temps, sweep_stale_temps, unlock_with_passphrase,
 };
 use tokio::sync::Mutex;
 
@@ -87,6 +87,22 @@ impl ServiceLocks {
         Ok(Self { state, config })
     }
 
+    /// Removes the stale temp files a crash mid-write left in the state directory and the config directory, each under
+    /// its own lock, before anything reads either directory. Each removed temp is logged at INFO by file name.
+    ///
+    /// A failed sweep is logged at WARN and startup goes on: a leftover temp file only makes the next durable replace
+    /// of its file refuse, which reports its own error, and the active files are never touched.
+    pub fn sweep_stale_temps(&self, fs: &impl StoreFs) {
+        log_sweep(
+            "state",
+            sweep_stale_temps(&self.state, fs).map(|names| names.iter().map(StateFileName::temp_name).collect()),
+        );
+        log_sweep(
+            "config",
+            sweep_stale_config_temps(&self.config, fs).map(|names| names.into_iter().map(ConfigFileName::temp_name).collect()),
+        );
+    }
+
     /// The listeners the unverified `config.toml` names, for the provisional listener set and for adopting the sockets
     /// systemd passed, which must happen before the async runtime starts. Nothing else of the unverified config is used.
     ///
@@ -103,6 +119,16 @@ impl ServiceLocks {
                 BTreeMap::new()
             }
         }
+    }
+}
+
+/// Logs the outcome of one directory's stale temp sweep: each removed temp file at INFO, or the failure at WARN.
+fn log_sweep(dir: &str, swept: Result<Vec<String>, impl std::fmt::Display>) {
+    match swept {
+        Ok(temps) => temps
+            .iter()
+            .for_each(|temp| tracing::info!("removed stale temp file {temp} from the {dir} directory")),
+        Err(error) => tracing::warn!("stale temp sweep of the {dir} directory failed, starting anyway: {error}"),
     }
 }
 

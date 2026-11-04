@@ -81,7 +81,7 @@ impl StateFileName {
     }
 
     /// The temporary name a durable replace of this file writes first: `.<name>.tmp`.
-    pub(crate) fn temp_name(&self) -> String {
+    pub fn temp_name(&self) -> String {
         crate::durable::temp_name(&self.0)
     }
 
