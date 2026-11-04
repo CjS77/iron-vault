@@ -19,31 +19,31 @@ use crate::{
     durable_replace, read_config_file, seal_approval_state,
 };
 
-const OLD_CONFIG: &[u8] = b"# version 1\n[listener.agent]\nbind = \"127.0.0.1:8080\"\n";
-const NEW_CONFIG: &[u8] = b"# version 2\n[listener.agent]\nbind = \"127.0.0.1:8081\"\n";
-const OLD: ApprovalVersion = ApprovalVersion::FIRST;
+pub(crate) const OLD_CONFIG: &[u8] = b"# version 1\n[listener.agent]\nbind = \"127.0.0.1:8080\"\n";
+pub(crate) const NEW_CONFIG: &[u8] = b"# version 2\n[listener.agent]\nbind = \"127.0.0.1:8081\"\n";
+pub(crate) const OLD: ApprovalVersion = ApprovalVersion::FIRST;
 
-fn version(v: u64) -> ApprovalVersion {
+pub(crate) fn version(v: u64) -> ApprovalVersion {
     ApprovalVersion::new(v).unwrap()
 }
 
 /// The pause guard's stand-in: the store cannot see the service's snapshot holder.
-struct Paused;
+pub(crate) struct Paused;
 
 impl AdmissionPaused for Paused {}
 
 /// An Ed25519 signer that can be told to fail, as a TPM signer authorizing inside step 3 would.
-struct TestSigner {
+pub(crate) struct TestSigner {
     key: SigningKey,
     fail: Option<SignError>,
 }
 
 impl TestSigner {
-    fn pinned() -> Self {
+    pub(crate) fn pinned() -> Self {
         Self::with_seed(7)
     }
 
-    fn with_seed(seed: u8) -> Self {
+    pub(crate) fn with_seed(seed: u8) -> Self {
         Self {
             key: SigningKey::from_bytes(&[seed; 32]),
             fail: None,
@@ -94,12 +94,12 @@ impl ApprovalSigner for UnusableSigner {
 }
 
 /// Locked state and config directories whose files live in a [`FaultFs`] under the same paths.
-struct Setup {
+pub(crate) struct Setup {
     state_dir: TestDir,
     config_dir: TestDir,
-    state_lock: StateDirLock,
-    config_lock: ConfigDirLock,
-    identity: VaultIdentity,
+    pub(crate) state_lock: StateDirLock,
+    pub(crate) config_lock: ConfigDirLock,
+    pub(crate) identity: VaultIdentity,
     vault_id: VaultId,
 }
 
@@ -111,7 +111,7 @@ enum Place {
 }
 
 impl Setup {
-    fn new(label: &str) -> Self {
+    pub(crate) fn new(label: &str) -> Self {
         let state_dir = TestDir::new(&format!("{label}-state"));
         let config_dir = TestDir::new(&format!("{label}-config"));
         Self {
@@ -124,7 +124,7 @@ impl Setup {
         }
     }
 
-    fn storage<'a>(&'a self, fs: &'a FaultFs) -> ApprovalStorage<'a, FaultFs> {
+    pub(crate) fn storage<'a>(&'a self, fs: &'a FaultFs) -> ApprovalStorage<'a, FaultFs> {
         ApprovalStorage {
             state_dir: &self.state_lock,
             config_dir: &self.config_lock,
@@ -133,30 +133,36 @@ impl Setup {
         }
     }
 
-    fn config_path(&self, name: ConfigFileName) -> PathBuf {
+    pub(crate) fn config_path(&self, name: ConfigFileName) -> PathBuf {
         self.config_dir.path().join(name.as_str())
     }
 
-    fn state_path(&self) -> PathBuf {
+    pub(crate) fn state_path(&self) -> PathBuf {
         self.state_dir.path().join(StateFileName::approval_state().as_str())
     }
 
-    /// A vault with `OLD_CONFIG` approved, committed and published as version 1, everything durable.
-    fn seeded(&self) -> (FaultFs, ApprovalState) {
+    /// A vault whose approval state pins `TestSigner::pinned()` and has nothing reserved or committed.
+    pub(crate) fn created(&self) -> (FaultFs, ApprovalState) {
         let manifest = VaultManifest::new(self.vault_id, StateGeneration::FIRST, None, Default::default()).unwrap();
         let manifest_path = self.state_dir.path().join(StateFileName::manifest().as_str());
         let fs = FaultFs::new().with_durable_file(&manifest_path, &crate::seal_manifest(&self.identity, &manifest).unwrap());
-        let mut state = ApprovalState::create(&self.state_lock, &fs, &self.identity, TestSigner::pinned().pinned()).unwrap();
+        let state = ApprovalState::create(&self.state_lock, &fs, &self.identity, TestSigner::pinned().pinned()).unwrap();
+        (fs, state)
+    }
+
+    /// A vault with `OLD_CONFIG` approved, committed and published as version 1, everything durable.
+    pub(crate) fn seeded(&self) -> (FaultFs, ApprovalState) {
+        let (fs, mut state) = self.created();
         let committed = approve(self, &fs, &mut state, OLD_CONFIG, TestSigner::pinned()).unwrap();
         assert_eq!(committed.approval().version(), OLD);
         (fs, state)
     }
 
-    fn load(&self, fs: &FaultFs) -> ApprovalState {
+    pub(crate) fn load(&self, fs: &FaultFs) -> ApprovalState {
         ApprovalState::load(&self.state_lock, fs, &self.identity, self.vault_id).unwrap()
     }
 
-    fn read(&self, fs: &FaultFs, name: ConfigFileName) -> Option<Vec<u8>> {
+    pub(crate) fn read(&self, fs: &FaultFs, name: ConfigFileName) -> Option<Vec<u8>> {
         read_config_file(&self.config_lock, fs, name).ok()
     }
 
@@ -203,7 +209,7 @@ impl Setup {
 }
 
 /// Runs the whole transaction for `config`.
-fn approve(
+pub(crate) fn approve(
     setup: &Setup,
     fs: &FaultFs,
     state: &mut ApprovalState,
@@ -216,7 +222,10 @@ fn approve(
 }
 
 /// Approves `NEW_CONFIG` on a seeded vault, after `inject` has set up faults counted from the approval's first call.
-fn approve_new(setup: &Setup, inject: impl FnOnce(&FaultFs, usize)) -> (FaultFs, ApprovalState, Result<CommittedApproval, ApprovalError>) {
+pub(crate) fn approve_new(
+    setup: &Setup,
+    inject: impl FnOnce(&FaultFs, usize),
+) -> (FaultFs, ApprovalState, Result<CommittedApproval, ApprovalError>) {
     let (fs, mut state) = setup.seeded();
     inject(&fs, fs.trace().len());
     let result = approve(setup, &fs, &mut state, NEW_CONFIG, TestSigner::pinned());
@@ -224,7 +233,7 @@ fn approve_new(setup: &Setup, inject: impl FnOnce(&FaultFs, usize)) -> (FaultFs,
 }
 
 /// The calls a clean approval of `NEW_CONFIG` makes, from its first.
-fn clean_calls(setup: &Setup) -> Vec<FsCall> {
+pub(crate) fn clean_calls(setup: &Setup) -> Vec<FsCall> {
     let (fs, _, result) = approve_new(setup, |_, _| ());
     result.unwrap();
     let base = setup.seeded().0.trace().len();
@@ -232,7 +241,7 @@ fn clean_calls(setup: &Setup) -> Vec<FsCall> {
 }
 
 /// Whether the approval reached its commit, by its result.
-fn committed(result: &Result<CommittedApproval, ApprovalError>) -> Option<bool> {
+pub(crate) fn committed(result: &Result<CommittedApproval, ApprovalError>) -> Option<bool> {
     match result.as_ref().map_err(ApprovalError::progress) {
         Ok(_) | Err(ApprovalProgress::Committed(_)) => Some(true),
         Err(ApprovalProgress::NothingReserved | ApprovalProgress::Reserved(_)) => Some(false),
@@ -326,7 +335,7 @@ fn a_failure_at_every_call_leaves_the_previous_approval_or_a_finishable_new_one(
 /// The paths of each rename that ran before call `cut`, counted from `base`, and that no fsync of its directory
 /// followed before the cut: the renames a crash may keep or lose. A synced rename is durable already, and keeping its
 /// paths again would undo half of a later rename of one of them.
-fn unsynced_renames(fs: &FaultFs, base: usize, cut: usize) -> Vec<Vec<PathBuf>> {
+pub(crate) fn unsynced_renames(fs: &FaultFs, base: usize, cut: usize) -> Vec<Vec<PathBuf>> {
     let trace = fs.trace();
     let ran = &trace[base..(base + cut).min(trace.len())];
     let synced_after = |i: usize, dir: &Path| ran[i + 1..].iter().any(|c| matches!(c, FsCall::SyncDir(d) if d == dir));
