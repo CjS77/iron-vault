@@ -12,6 +12,8 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::AsFd;
 
 use iron_vault::admin::protocol::{MAX_BODY_LEN, OwnerInput, Prompt, RevealedSecret};
+use qrcode::render::unicode::Dense1x2;
+use qrcode::{EcLevel, QrCode};
 use zeroize::Zeroizing;
 
 /// The longest line a value may arrive in: the longest value, then `\r\n`.
@@ -65,7 +67,7 @@ pub trait OwnerConsole {
     /// Shows a notice's text, after the text of the notice before it.
     fn notice(&mut self, text: &str) -> Result<(), InputError>;
 
-    /// Shows a revealed value, then `\n`, on the controlling terminal and nowhere else. A value with a byte outside
+    /// Shows a revealed value, then `\n`, then the value as a QR code, on the controlling terminal and nowhere else. A value with a byte outside
     /// printable ASCII is refused and nothing of it is shown.
     fn reveal(&mut self, secret: &RevealedSecret) -> Result<(), InputError>;
 }
@@ -250,12 +252,28 @@ fn printable_reveal(secret: &RevealedSecret) -> Result<&[u8], InputError> {
         .ok_or(InputError::UnprintableReveal)
 }
 
-/// Writes `value` and then `\n` straight to `tty`, so the value passes through no other buffer.
+/// Writes `value` and then `\n` straight to `tty`, so the text passes through no other buffer, and then the same value as a
+/// QR code on the same `tty`, so the owner can scan it into a password manager instead of retyping it.
 fn write_reveal(tty: &mut impl Write, value: &[u8]) -> Result<(), InputError> {
     tty.write_all(value)
         .and_then(|()| tty.write_all(b"\n"))
+        .and_then(|()| write_qr(tty, value))
         .and_then(|()| tty.flush())
         .map_err(InputError::Reveal)
+}
+
+/// Draws `value` as a QR code, two module rows to a text line, with a quiet zone, at error-correction level M. A value
+/// too long for any QR code gets a one-line note instead, because the text above it is already shown.
+///
+/// The drawing holds the value, so it is overwritten before it is dropped. The library's own module buffers are not
+/// cleared (`design/secret-handling.md`).
+fn write_qr(tty: &mut impl Write, value: &[u8]) -> io::Result<()> {
+    let Ok(code) = QrCode::with_error_correction_level(value, EcLevel::M) else {
+        return tty.write_all(b"(too long for a QR code)\n");
+    };
+    let drawing = Zeroizing::new(code.render::<Dense1x2>().quiet_zone(true).build());
+    drop(code);
+    tty.write_all(drawing.as_bytes()).and_then(|()| tty.write_all(b"\n"))
 }
 
 /// Reads one line and strips one trailing `\n` and a `\r` before it. A last line without `\n` is still a value; input

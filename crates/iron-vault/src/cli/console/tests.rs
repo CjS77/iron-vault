@@ -2,6 +2,9 @@ use std::cell::RefCell;
 use std::io::{self, Cursor, Read, Write};
 use std::rc::Rc;
 
+use qrcode::render::unicode::Dense1x2;
+use qrcode::{EcLevel, QrCode};
+
 use super::*;
 
 fn line(input: &[u8]) -> Result<Vec<u8>, InputError> {
@@ -318,7 +321,7 @@ fn piped(has_tty: bool) -> (FakePiped, Sink, Sink) {
 fn a_terminal_shows_a_reveal_once_then_a_newline_and_reads_nothing() {
     let (mut console, events) = terminal(None, false);
     console.reveal(&revealed(KEY)).unwrap();
-    assert_eq!(console.tty.shown, [KEY, b"\n"].concat());
+    assert_eq!(console.tty.shown, [KEY, b"\n", &qr_of(KEY)].concat());
     assert!(steps(&events).is_empty(), "a reveal reads nothing");
 }
 
@@ -327,7 +330,11 @@ fn a_piped_console_shows_a_reveal_on_the_terminal_and_never_on_stderr() {
     let (mut console, stderr, tty) = piped(true);
     console.notice("save this key\n").unwrap();
     console.reveal(&revealed(KEY)).unwrap();
-    assert_eq!(tty.bytes(), [KEY, b"\n"].concat(), "the value is written exactly once");
+    assert_eq!(
+        tty.bytes(),
+        [KEY, b"\n", &qr_of(KEY)].concat(),
+        "the text, then its QR code, on the terminal"
+    );
     assert_eq!(stderr.bytes(), b"save this key\n", "the notice goes to stderr, the value does not");
 }
 
@@ -373,5 +380,53 @@ fn every_printable_ascii_byte_and_the_space_can_be_revealed() {
     let printable: Vec<u8> = (b' '..=b'~').collect();
     let (mut console, _) = terminal(None, false);
     console.reveal(&revealed(&printable)).unwrap();
-    assert_eq!(console.tty.shown, [&printable[..], b"\n"].concat());
+    assert_eq!(console.tty.shown, [&printable[..], b"\n", &qr_of(&printable)].concat());
+}
+
+/// An obviously fake 74-character key of the recovery key's shape.
+const SAMPLE: &[u8] = b"AGE-SECRET-KEY-1FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFA";
+
+/// What a reveal draws after the text: the library's own rendering, newline-ended.
+fn qr_of(value: &[u8]) -> Vec<u8> {
+    let code = QrCode::with_error_correction_level(value, EcLevel::M).unwrap();
+    let mut drawing = code.render::<Dense1x2>().quiet_zone(true).build().into_bytes();
+    drawing.push(b'\n');
+    drawing
+}
+
+#[test]
+fn the_sample_key_is_74_characters() {
+    assert_eq!(SAMPLE.len(), 74);
+}
+
+#[test]
+fn a_reveal_draws_a_small_square_qr_code_that_does_not_change() {
+    let (mut console, _) = terminal(None, false);
+    console.reveal(&revealed(SAMPLE)).unwrap();
+    let shown = String::from_utf8(console.tty.shown.clone()).unwrap();
+    let drawing = shown.strip_prefix(&format!("{}\n", String::from_utf8_lossy(SAMPLE))).unwrap();
+    let widths: Vec<usize> = drawing.lines().map(|line| line.chars().count()).collect();
+    assert!(
+        widths.windows(2).all(|pair| pair[0] == pair[1]),
+        "every line is as wide as the first: {widths:?}"
+    );
+    // Version 5 is 37 modules and a quiet zone of 4 on each side: at most 45 columns.
+    assert!(widths.first().is_some_and(|width| *width <= 45), "at most version 5: {widths:?}");
+    assert_eq!(drawing, include_str!("recovery_qr.snapshot.txt"));
+}
+
+#[test]
+fn a_reveal_too_long_for_a_qr_code_still_shows_its_text() {
+    let long = vec![b'A'; 4000];
+    let (mut console, _) = terminal(None, false);
+    console.reveal(&revealed(&long)).unwrap();
+    assert_eq!(console.tty.shown, [&long[..], b"\n", b"(too long for a QR code)\n"].concat());
+}
+
+#[test]
+fn a_piped_reveal_puts_no_qr_code_on_the_notices_sink() {
+    let (mut console, stderr, tty) = piped(true);
+    console.reveal(&revealed(SAMPLE)).unwrap();
+    assert!(stderr.bytes().is_empty(), "nothing but the terminal is written");
+    assert!(tty.bytes().len() > SAMPLE.len() + 1, "the QR code follows the text on the terminal");
 }

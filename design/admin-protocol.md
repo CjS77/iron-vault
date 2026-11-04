@@ -381,7 +381,12 @@ it.
 The service encodes the frame into a buffer that clears itself on drop, straight from the secret's own type, and drops
 both once the frame is written. The CLI decodes the body once, straight from the received bytes into a clearing buffer
 (`Zeroizing<Vec<u8>>`), wrapped in `RevealedSecret`, a secret-bearing type (`design/secret-handling.md`). It shows the
-value on the owner console, followed by a newline, and drops it. A value with any byte outside printable ASCII is
+value on the owner console, followed by a newline and then the same value as a QR code, and drops it. Every reveal is
+shown as text and QR code (specification §3.13), so the owner can scan a recovery key into a phone password manager
+instead of retyping it. The CLI draws the QR code itself from the text it holds: the service never sends a rendered
+code, because a notice is not a secret type. The code is level M, in the automatic encoding mode, with a quiet zone,
+two module rows to a text line, and it goes to the same descriptor as the text. A value too long for any QR code is
+shown as text with a one-line note in place of the code. A value with any byte outside printable ASCII is
 refused and nothing of it is shown: removing the other bytes would show a value that differs from the secret, which the
 owner would save in good faith. It never writes it to stdout, a pipe or a diagnostic: when the owner console cannot
 show it, the CLI cancels the command before showing anything (see [Owner input](#owner-input)).

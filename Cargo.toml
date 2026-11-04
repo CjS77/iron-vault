@@ -92,6 +92,9 @@ log = "0.4.34"
 # The binary's async runtime for its sockets; each crate enables only the features it uses. The policy crate's dependency
 # guard keeps it out of iron-vault-policy.
 tokio = { version = "1.54.1", default-features = false }
+# The recovery key's QR code, drawn by the CLI from the text it already holds. No image, svg or pic features, and no
+# dependencies of its own, so nothing else joins the build.
+qrcode = { version = "0.14.1", default-features = false }
 # Async TLS over tokio sockets with the same rustls build as the outbound client. Default features are off: they would
 # select aws-lc-rs, whose build needs cmake, and turn on rustls's `logging`; ring and tls12 match the rustls entry.
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }

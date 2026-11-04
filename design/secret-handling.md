@@ -67,6 +67,12 @@ input or a reveal passes a `Zeroizing<Vec<u8>>`. The CLI reads every frame from 
 once for the largest frame, because a reveal frame holds the value. The CLI writes a `RevealedSecret` only to the controlling terminal, never to stdout
 or stderr (`design/vault-initialization.md`).
 
+The CLI also draws each revealed value as a QR code with the `qrcode` crate (no dependencies of its own), on the same
+descriptor as the text. The drawn `String` is held in a clearing buffer and overwritten before it is dropped, and the
+`QrCode` is dropped as soon as it is drawn. The library's internal module buffers are not cleared. This residual is
+accepted: the CLI is short-lived, and it disables core dumps and `ptrace` attachment before it connects
+(`design/admin-protocol.md`, "Hardening").
+
 `OperationalIdentity` holds nothing: it only generates a `RecipientIdentity`.
 
 `SoftwareSignerKey` and `SoftwareSigner` do not carry the `ZeroizeOnDrop` marker themselves; only the inner

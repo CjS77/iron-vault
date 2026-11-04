@@ -33,6 +33,8 @@ iron-vault-policy = { path = "../iron-vault-policy" }
 iron-vault-store = { path = "../iron-vault-store" }
 # OsRng for caller-token generation; only the binary reaches for the operating system's random source.
 rand_core = { workspace = true, features = ["getrandom"] }
+# The QR code the owner console draws beside a revealed value.
+qrcode.workspace = true
 # The upstream client: the one outbound HTTP client, over the rustls config from the route's upstream trust.
 reqwest.workspace = true
 # Upstream trust: the outbound client's rustls config over the built-in roots or a route's pinned CA.
