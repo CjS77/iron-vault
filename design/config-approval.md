@@ -379,14 +379,14 @@ the version after the highest one on disk, so a version a cut left reserved is n
 
 | Power cut after | Crash keeps | Surviving approval C | Recovery row | Restarted service |
 |---|---|---|---|---|
-| calls 0-6: reading the vault and the approval state | n/a | v1 | 1 | Ready, previous policy |
+| 0 to 6 calls made before the cut, which read the vault and the approval state | n/a | v1 | 1 | Ready, previous policy |
 | calls 7-11: step 1, `config.toml.pending` written, renamed, directory fsynced | any | v1 | 1 (a leftover pending file is discarded) | Ready, previous policy |
 | calls 12-17: step 2, the approver key and approval state read, the `approval.age` temp file written and fsynced | n/a | v1, version 2 not reserved | 1 | Ready, previous policy |
 | call 18: step 2, rename onto `approval.age` | lose all | v1, version 2 not reserved | 1 | Ready, previous policy |
 | call 18: step 2, rename onto `approval.age` | keep all | v1, version 2 reserved | 1 | Ready, previous policy; the next approval is version 3 |
 | calls 19-24: steps 2-4, the reservation durable; `config.toml.sig.staged` written, renamed, directory fsynced | any | v1, version 2 reserved | 1 (leftover pending and staged files are discarded) | Ready, previous policy; the next approval is version 3 |
 | calls 25-29: step 5, the approval state read again, the new `approval.age` temp file written and fsynced | n/a | v1, version 2 reserved | 1 | Ready, previous policy; the next approval is version 3 |
-| call 30: step 5, rename onto `approval.age` | lose all | v1, version 2 reserved | 1 | Ready, previous policy |
+| call 30: step 5, rename onto `approval.age` | lose all | v1, version 2 reserved | 1 | Ready, previous policy; the next approval is version 3 |
 | call 30: step 5, rename onto `approval.age` | keep all | v2 | 4 | Ready, approved policy: recovery publishes both files |
 | calls 31-32: step 5 directory fsync done; step 6 about to publish | n/a | v2 | 4 | Ready, approved policy: recovery publishes both files |
 | call 33: step 6, rename onto `config.toml` | lose all | v2 | 4 | Ready, approved policy |
@@ -401,10 +401,20 @@ A cut before call 30 never leaves version 2 committed, so the previous policy is
 at every point, because the transaction writes only `config.toml.pending`, `config.toml.sig.staged` and `approval.age`
 before the commit. A cut from call 30 on either loses the commit's rename (the previous policy, with version 2 still
 consumed) or keeps it, and then recovery finishes exactly that transaction. No cut of this transaction reaches rows
-5 to 8, because steps 1 and 4 fsync their files and the config directory before the commit. Those rows are covered by the recovery tests of the store. The test asserts each restart against
-the recovery table (the committed approval and where its files are decide between Ready on the previous policy, Ready
-on the approved policy, and Unavailable with the table's reason), so a service that serves a version its disk has not
-committed, or any other outcome than the table prescribes, fails it.
+5 to 8, because steps 1 and 4 fsync their files and the config directory before the commit. Those rows are covered
+by the recovery tests of the store.
+
+The test asserts each restart against the recovery table, and the row decides the outcome: rows 1 to 4 serve the
+committed version's policy, rows 5 and 6 are Unavailable with `RecoveryNeeded`, and rows 7 and 8 are Unavailable with
+`PolicyInvalid`, even when the committed version is the previous one. So a service that serves a version its disk has
+not committed, serves a published pair that does not verify as the committed approval, or ends in any other state than
+the table prescribes, fails it. Every row also checks that the highest version reserved on disk is at least the
+highest version of any signature file that survived, so a signed version is never signed again.
+
+**What the model varies.** Only the renames that no directory fsync had yet covered, as lost, all kept or one kept.
+A temp file's creation and an unlink are never kept without their directory fsync, and a file's contents are kept only
+if it was fsynced. A real filesystem may keep more. The test service also skips `sweep_stale_temps`, which
+production runs at startup, so leftover temp files from a cut are not swept before the config check.
 
 ### Reasons a request sees
 

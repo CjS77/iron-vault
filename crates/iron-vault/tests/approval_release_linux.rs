@@ -425,6 +425,9 @@ enum Place {
 struct Surviving {
     committed: u64,
     highest_reserved: u64,
+    /// The highest version of any signature file that decodes, `config.toml.sig` or `config.toml.sig.staged`: a version
+    /// that was signed must stay reserved, or the next approval could sign it again.
+    highest_signed: u64,
     row: u8,
 }
 
@@ -440,12 +443,21 @@ fn surviving(fixture: &Fixture, fs: &SharedFs) -> Surviving {
         let envelope = file(name).and_then(|bytes| ApprovalEnvelope::decode(&bytes).ok());
         envelope.is_some_and(|e| (e.payload().version(), e.payload().digest()) == (version, digest))
     };
-    let approval = [("config.toml.sig", Place::InPlace), ("config.toml.sig.staged", Place::Waiting)]
+    let signatures = ["config.toml.sig", "config.toml.sig.staged"];
+    let highest_signed = signatures
+        .iter()
+        .filter_map(|name| file(name).and_then(|bytes| ApprovalEnvelope::decode(&bytes).ok()))
+        .map(|envelope| envelope.payload().version().get())
+        .max()
+        .unwrap_or(0);
+    let approval = signatures
         .into_iter()
+        .zip([Place::InPlace, Place::Waiting])
         .find(|(name, _)| holds_approval(name));
     Surviving {
         committed: version.get(),
         highest_reserved: state.highest_reserved(),
+        highest_signed,
         row: row_of(config.map(|(_, place)| place), approval.map(|(_, place)| place)),
     }
 }
@@ -476,12 +488,14 @@ enum Restarted {
 }
 
 impl Restarted {
-    /// What the recovery table prescribes for committed version `committed` and recovery `row`.
+    /// What the recovery table prescribes for committed version `committed` and recovery `row`: the row decides whether
+    /// the service serves, and the committed version which policy it serves. A published pair that does not verify as
+    /// the committed approval (rows 7 and 8) is refused even when the committed version is the previous one.
     fn expected(committed: u64, row: u8) -> Self {
-        match (committed, row) {
-            (1, _) => Self::Previous,
-            (_, 1..=4) => Self::Approved,
-            (_, 5 | 6) => Self::Unavailable(FailureReason::RecoveryNeeded),
+        match (row, committed) {
+            (1..=4, 1) => Self::Previous,
+            (1..=4, _) => Self::Approved,
+            (5 | 6, _) => Self::Unavailable(FailureReason::RecoveryNeeded),
             _ => Self::Unavailable(FailureReason::PolicyInvalid),
         }
     }
@@ -614,6 +628,14 @@ async fn power_cut_table(fixture: &Fixture, cuts: impl Iterator<Item = usize>) -
             let restarted = restart(fixture, &approval.fs).await;
             let context = format!("power cut after {cut} calls ({last_call}), crash {crash}: {surviving:?}");
             assert_eq!(restarted, Restarted::expected(surviving.committed, surviving.row), "{context}");
+            assert!(
+                surviving.highest_reserved >= surviving.highest_signed,
+                "{context}: a signed version is not reserved"
+            );
+            assert!(
+                surviving.highest_reserved >= surviving.committed,
+                "{context}: the committed version is not reserved"
+            );
             let next = next_approval(fixture, &approval.fs, restarted).await;
             assert!(
                 next.is_none_or(|version| version == surviving.highest_reserved + 1),
@@ -677,7 +699,7 @@ async fn a_power_cut_after_the_commit_completes_that_transaction_or_keeps_the_se
         let context = row.render();
         match row.surviving.committed {
             // The commit's directory fsync had not run and the crash undid its rename: the previous policy is intact.
-            1 => assert_eq!(row.restarted, Restarted::Previous, "{context}"),
+            1 => assert_eq!((row.surviving.row, row.restarted), (1, Restarted::Previous), "{context}"),
             // The commit is durable: recovery finishes exactly it, or refuses; it never serves another version.
             _ => assert!(
                 matches!(row.restarted, Restarted::Approved | Restarted::Unavailable(_)),
