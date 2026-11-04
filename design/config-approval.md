@@ -271,8 +271,10 @@ text.
 | Condition | Outcome |
 |---|---|
 | `approval.age` missing, damaged, a partial restore, or unreadable | **stay unavailable**, `RecoveryNeeded`; touch nothing |
-| `config.toml`, `config.toml.sig`, `config.toml.pending` or `config.toml.sig.staged` unreadable (`Unreadable`, naming the first in that order and the error kind) | **stay unavailable**, `RecoveryNeeded`; touch nothing |
 | nothing committed (`NothingCommitted`: a vault whose first approval never committed) | **stay unavailable**, `PolicyInvalid` (detail: no approved config); touch nothing |
+| `config.toml`, `config.toml.sig`, `config.toml.pending` or `config.toml.sig.staged` unreadable (`Unreadable`, naming the first in that order and the error kind) | **stay unavailable**, `RecoveryNeeded`; touch nothing |
+
+The conditions are checked in this order.
 
 An unreadable config file is not treated as absent, because the file recovery cannot read might be the one that
 completes the commit: a staged approval that is there but unreadable would otherwise look like row 5, and discarding
@@ -301,10 +303,14 @@ After rows 2-4 the published pair matches C. Any pending or staged file still le
 on as for row 1. A publish that fails midway leaves a state this table resolves to row 1, 2, 3 or 4, so recovery is
 safe to run again. Each finish is recorded as `config.recovery-published`.
 
+Recovery reads the published pair back after the renames. If that read-back finds a file unreadable, or a pair that
+does not verify as C, the service stays unavailable with `RecoveryNeeded`, and the detail names C's version as
+published but not verified (`PublishNotVerified`), never `Unreadable`: the renames have run, so something was touched.
+The next recovery reads the files again and, once they read, resolves them as row 1.
+
 *Discard* means durable remove, then the `config.recovery-discarded` event naming each file and, for a staged
 approval, the version it was signed for. A discard that fails partway still records each file it removed. Discarding
-never touches the counters: a discarded staged approval's version
-stays consumed.
+never touches the counters: a discarded staged approval's version stays consumed.
 
 **Why rows 5 and 6 differ from rows 7 and 8.** Rows 5 and 6 hold a file of C waiting to be published, so a committed
 transaction is on disk that cannot be completed. The service state model documents exactly that case as
@@ -368,7 +374,7 @@ adds none:
 | `UnavailableReason` (text) | When, in this design |
 |---|---|
 | `Checking` (`checking`) | throughout an approval's admission pause, and throughout a reload |
-| `RecoveryNeeded` (`recovery needed`) | `approval.age` cannot be loaded; a config file is unreadable (`Unreadable`); recovery rows 5 and 6; an uncertain commit could not be settled; a committed publish could not be finished |
+| `RecoveryNeeded` (`recovery needed`) | `approval.age` cannot be loaded; a config file is unreadable before the table (`Unreadable`); recovery rows 5 and 6; an uncertain commit could not be settled; a committed publish could not be finished |
 | `PolicyInvalid` (`policy invalid`) | recovery rows 7 and 8; nothing committed; the published config fails validation or activation |
 | `Locked` (`locked`) | not produced here; the vault is locked |
 

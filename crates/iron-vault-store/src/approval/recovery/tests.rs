@@ -399,7 +399,7 @@ fn eio() -> io::ErrorKind {
     io::Error::from_raw_os_error(libc::EIO).kind()
 }
 
-/// Recovery of `row` with the read of `file` failing with `kind`: it must refuse with `expected` and change nothing.
+/// Recovery of row `n` with the read of `file` failing with `kind`: it must refuse with `expected` and change nothing.
 fn assert_refuses_on_read_fault(setup: &Setup, n: u8, file: ConfigFileName, kind: io::ErrorKind, expected: &ApprovalRecoveryError) {
     let context = format!("row {n}, reading {file} fails with {kind}");
     let (fs, state) = row(setup, n);
@@ -438,9 +438,12 @@ fn an_unreadable_config_file_refuses_before_the_table_and_touches_nothing() {
     });
 }
 
+/// A missing, oversized or non-regular file is absent, never unreadable. The store filesystem reports an oversized
+/// file as `FileTooLarge` and a non-regular one as `InvalidInput`, which the config read maps to `TooLarge` and
+/// `NotARegularFile`.
 #[test]
-fn a_read_that_finds_no_file_is_absent_as_before() {
-    let setup = Setup::new("rcv-not-found");
+fn a_missing_oversized_or_non_regular_file_is_absent_as_before() {
+    let setup = Setup::new("rcv-absent");
     let superseded = PublishedPairFault::DoesNotVerify(VerifyError::Superseded {
         version: OLD,
         committed: version(2),
@@ -450,8 +453,42 @@ fn a_read_that_finds_no_file_is_absent_as_before() {
         missing,
         published: superseded.clone(),
     };
-    assert_refuses_on_read_fault(&setup, 4, StagedSignature, io::ErrorKind::NotFound, &missing(StagedSignature));
-    assert_refuses_on_read_fault(&setup, 4, Pending, io::ErrorKind::NotFound, &missing(Pending));
+    let kinds = [io::ErrorKind::NotFound, io::ErrorKind::FileTooLarge, io::ErrorKind::InvalidInput];
+    kinds.into_iter().for_each(|kind| {
+        assert_refuses_on_read_fault(&setup, 4, StagedSignature, kind, &missing(StagedSignature));
+        assert_refuses_on_read_fault(&setup, 4, Pending, kind, &missing(Pending));
+    });
+}
+
+/// After the publish renames, an unreadable `config.toml` in the read-back is reported as published but not verified,
+/// naming the committed version, never as `Unreadable`, which promises nothing was touched.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_read_back_after_publishing_is_publish_not_verified() {
+    let setup = Setup::new("rcv-read-back");
+    let (fs, state) = row(&setup, 4);
+    let base = fs.trace().len();
+    let (probe, probe_state) = row(&setup, 4);
+    let probe_base = probe.trace().len();
+    recover(&setup, &probe, &probe_state).unwrap();
+    let probe_calls = &probe.trace()[probe_base..];
+    let last_rename = probe_calls.iter().rposition(|c| c.op() == FsOp::Rename).unwrap();
+    let read_back = last_rename + probe_calls[last_rename..].iter().position(|c| c.op() == FsOp::ReadBounded).unwrap();
+    assert_eq!(probe_calls[read_back], FsCall::ReadBounded(setup.config_path(Active)));
+    fs.fail_call(base + read_back, eio());
+    let error = recover(&setup, &fs, &state).unwrap_err();
+    let expected = ApprovalRecoveryError::PublishNotVerified {
+        version: version(2),
+        published: PublishedPairFault::Unreadable { file: Active, kind: eio() },
+    };
+    assert_eq!((&error, error.failure()), (&expected, RecoveryFailure::RecoveryNeeded));
+    // The renames ran: the committed pair is published and nothing waits.
+    assert_eq!(setup.read(&fs, Active).as_deref(), Some(NEW_CONFIG));
+    assert_eq!((setup.read(&fs, Pending), setup.read(&fs, StagedSignature)), (None, None));
+    // Once the file reads again, the next recovery serves it as row 1.
+    let recovered = recover(&setup, &fs, &state).unwrap();
+    assert_eq!(recovered.finished(), None);
+    assert_recovered_new(&setup, &fs, &state, &recovered, "after the read-back fault");
 }
 
 #[test]

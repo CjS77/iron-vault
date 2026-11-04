@@ -36,27 +36,38 @@ pub enum RecoveryFailure {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PublishedPairFault {
     /// `config.toml` or `config.toml.sig` is absent: missing, over its limit or not a regular file. A file that is there
-    /// but cannot be read is [`ApprovalRecoveryError::Unreadable`] instead.
+    /// but cannot be read is [`ApprovalRecoveryError::Unreadable`] before the recovery table, and
+    /// [`PublishedPairFault::Unreadable`] in the read-back after a publish.
     #[error("{0} is missing, oversized or not a regular file")]
     Missing(ConfigFileName),
+    /// Reading back `config.toml` or `config.toml.sig` after recovery's publish renames failed with an I/O error other
+    /// than NotFound. Only [`ApprovalRecoveryError::PublishNotVerified`] carries it.
+    #[error("cannot read {file}: {kind}")]
+    Unreadable {
+        /// The file that could not be read.
+        file: ConfigFileName,
+        /// The I/O error kind.
+        kind: io::ErrorKind,
+    },
     /// Both files are there, but the pair does not verify as the committed approval.
     #[error(transparent)]
     DoesNotVerify(VerifyError),
 }
 
 /// Why recovery left the service unavailable. Nothing on disk was changed, except as [`PublishFailed`] and
-/// [`Unreadable`] say; no variant carries config or signature bytes.
+/// [`PublishNotVerified`] say; no variant carries config or signature bytes.
 ///
 /// [`PublishFailed`]: ApprovalRecoveryError::PublishFailed
-/// [`Unreadable`]: ApprovalRecoveryError::Unreadable
+/// [`PublishNotVerified`]: ApprovalRecoveryError::PublishNotVerified
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ApprovalRecoveryError {
     /// No approval was ever committed, so no config can be active.
     #[error("no approved config: no approval has been committed")]
     NothingCommitted,
     /// A config file is there but reading it failed, so recovery cannot tell what it holds. It may be the file that
-    /// completes the commit, so recovery refuses before the recovery table and touches nothing. Only the read-back after
-    /// finishing a publish comes after renames, which the next recovery sees as row 1.
+    /// completes the commit, so recovery refuses before the recovery table and touches nothing. It is only ever
+    /// returned before any rename: an unreadable file in the read-back after a publish is
+    /// [`PublishNotVerified`](ApprovalRecoveryError::PublishNotVerified), which says the renames ran.
     #[error("cannot read {file}: {kind}")]
     Unreadable {
         /// The first unreadable file, in the order `config.toml`, `config.toml.sig`, `config.toml.pending`,
@@ -93,7 +104,8 @@ pub enum ApprovalRecoveryError {
         /// The failed publish step.
         cause: ConfigWriteError,
     },
-    /// Publishing reported success, but the published pair as read back does not verify as the committed approval.
+    /// Publishing reported success, but the published pair as read back cannot be read or does not verify as the
+    /// committed approval. The renames have run, so the committed version is on disk as the published pair.
     #[error("committed version {version} was published but does not verify as read back: {published}")]
     PublishNotVerified {
         /// The committed version.
@@ -245,8 +257,9 @@ fn publish_committed(
         Err(cause) => return Err(ApprovalRecoveryError::PublishFailed { version, cause }),
     }
     tracing::warn!(event = "config.recovery-published", %version, renames = ?set, "ran the publish renames of a committed approval");
-    let published = PublishedPair::read(config_dir, fs)?
-        .verify(state)
+    let published = PublishedPair::read(config_dir, fs)
+        .map_err(PublishedPairFault::from)
+        .and_then(|pair| pair.verify(state))
         .map_err(|published| ApprovalRecoveryError::PublishNotVerified { version, published })?;
     Ok(serve_discarding_leftovers(config_dir, fs, state, files, published, Some(set)))
 }
@@ -274,7 +287,11 @@ fn serve_discarding_leftovers(
 fn discard_leftovers(config_dir: &ConfigDirLock, fs: &impl StoreFs, state: &ApprovalState, staged: Option<&[u8]>) -> Vec<DiscardedFile> {
     let removed = remove_pending_and_staged(config_dir, fs).unwrap_or_else(|error| {
         let removed = &error.removed;
-        tracing::warn!(%error, ?removed, "cannot discard all of the uncommitted pending config and staged approval; the next config check retries");
+        tracing::warn!(
+            %error,
+            ?removed,
+            "cannot discard all of the uncommitted pending config and staged approval; the next config check retries"
+        );
         error.removed
     });
     let signed_for = || {
@@ -331,12 +348,29 @@ impl ConfigFiles {
     }
 }
 
-/// The file's bytes, `None` if it is absent, or [`ApprovalRecoveryError::Unreadable`] if it is there but reading it
-/// failed.
-fn read_if_present(config_dir: &ConfigDirLock, fs: &impl StoreFs, file: ConfigFileName) -> Result<Option<Vec<u8>>, ApprovalRecoveryError> {
+/// A config file that is there but could not be read. Which error it becomes depends on whether a rename has run.
+struct UnreadableFile {
+    file: ConfigFileName,
+    kind: io::ErrorKind,
+}
+
+impl From<UnreadableFile> for ApprovalRecoveryError {
+    fn from(UnreadableFile { file, kind }: UnreadableFile) -> Self {
+        Self::Unreadable { file, kind }
+    }
+}
+
+impl From<UnreadableFile> for PublishedPairFault {
+    fn from(UnreadableFile { file, kind }: UnreadableFile) -> Self {
+        Self::Unreadable { file, kind }
+    }
+}
+
+/// The file's bytes, `None` if it is absent, or [`UnreadableFile`] if it is there but reading it failed.
+fn read_if_present(config_dir: &ConfigDirLock, fs: &impl StoreFs, file: ConfigFileName) -> Result<Option<Vec<u8>>, UnreadableFile> {
     match read_config_file(config_dir, fs, file) {
         Ok(bytes) => Ok(Some(bytes)),
-        Err(ConfigReadError::Io { kind, .. }) if kind != io::ErrorKind::NotFound => Err(ApprovalRecoveryError::Unreadable { file, kind }),
+        Err(ConfigReadError::Io { kind, .. }) if kind != io::ErrorKind::NotFound => Err(UnreadableFile { file, kind }),
         Err(ConfigReadError::Io { .. } | ConfigReadError::TooLarge { .. } | ConfigReadError::NotARegularFile { .. }) => Ok(None),
     }
 }
@@ -348,7 +382,7 @@ struct PublishedPair {
 }
 
 impl PublishedPair {
-    fn read(config_dir: &ConfigDirLock, fs: &impl StoreFs) -> Result<Self, ApprovalRecoveryError> {
+    fn read(config_dir: &ConfigDirLock, fs: &impl StoreFs) -> Result<Self, UnreadableFile> {
         Ok(Self {
             config: read_if_present(config_dir, fs, Active)?,
             envelope: read_if_present(config_dir, fs, ActiveSignature)?,
