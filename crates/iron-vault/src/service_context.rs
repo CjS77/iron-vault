@@ -6,7 +6,8 @@
 //! without a new unlock, and an Unavailable service holds the one key and none of the decrypted credential records.
 //!
 //! Every change takes one async mutex and goes through [`next`], so no two changes interleave and none makes a
-//! transition the §3.12 diagram lacks. Requests never take that mutex: each loads its admission from the snapshot
+//! transition the §3.12 diagram lacks. Scrypt and the config check run on the blocking pool with the mutex held, so the
+//! runtime thread stays free to answer requests with `503`, serve other admin commands and handle signals (§3.12). Requests never take that mutex: each loads its admission from the snapshot
 //! holder, which every transition stores into.
 //!
 //! Outside Ready the request listeners come from the unverified `config.toml` and answer only `503` with the holder's
@@ -29,7 +30,7 @@ use iron_vault_store::{
 use tokio::sync::Mutex;
 
 use crate::admin::protocol::{CredentialStatus, MemoryStatus, RouteStatus, StatusReport, UnlockedVault, VaultStatus};
-use crate::config_check::{CheckFailure, UpstreamSettings, open_and_check, parse_detail};
+use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
 use crate::request_listeners::RequestListeners;
@@ -58,6 +59,9 @@ pub enum UnlockRefusal {
     /// The envelopes could not be read or opened; the service stays Locked.
     #[error("the vault could not be unlocked: {0}")]
     Failed(UnlockError),
+    /// The unlock task ended without a result (it panicked, or the runtime is shutting down); the service stays Locked.
+    #[error("the vault could not be unlocked: the unlock did not finish")]
+    Interrupted,
 }
 
 /// The state-directory lock and the config-directory lock, held for the service's lifetime: a second instance on
@@ -168,8 +172,9 @@ pub struct ServiceSetup<F = OsFs> {
 /// The running service. Shared by the admin handlers and the request side; see the module documentation.
 #[derive(Debug)]
 pub struct ServiceContext<F = OsFs> {
-    setup: ServiceSetup<F>,
-    locks: ServiceLocks,
+    /// Shared with each blocking task, which must own what it reads.
+    setup: Arc<ServiceSetup<F>>,
+    locks: Arc<ServiceLocks>,
     holder: Arc<SnapshotHolder>,
     inner: Mutex<Inner>,
 }
@@ -198,7 +203,7 @@ struct Inner {
     serving: Option<Serving>,
 }
 
-impl<F: StoreFs> ServiceContext<F> {
+impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Starts the service on `locks`: Starting, then Locked, with the provisional listener set open on `provisional` and
     /// the sockets in `activated`. Call it inside the async runtime.
     ///
@@ -225,8 +230,8 @@ impl<F: StoreFs> ServiceContext<F> {
                 open: None,
                 serving: Some(Serving::start(listeners, Limits::default(), Arc::clone(&holder))),
             }),
-            setup,
-            locks,
+            setup: Arc::new(setup),
+            locks: Arc::new(locks),
             holder,
         };
         let inner = service.inner.get_mut();
@@ -281,18 +286,14 @@ impl<F: StoreFs> ServiceContext<F> {
     /// The state is checked under the mutex, so two unlocks never both open the vault. A wrong passphrase or an
     /// unreadable envelope leaves the service Locked: no other storage is ever tried (R-22). The operational identity
     /// the passphrase opens is dropped inside [`unlock_with_passphrase`], once it has unwrapped the vault identity.
-    pub async fn unlock(&self, passphrase: &Passphrase) -> Result<ServiceState, UnlockRefusal> {
+    pub async fn unlock(&self, passphrase: Passphrase) -> Result<ServiceState, UnlockRefusal> {
         let mut inner = self.inner.lock().await;
         let locked = inner.state;
         if !locked.admin_allows(AdminOperation::Unlock) {
             return Err(UnlockRefusal::WrongState(locked));
         }
-        let identity = unlock_with_passphrase(&self.locks.state, &self.setup.fs, passphrase).map_err(|error| {
-            tracing::warn!("{UNLOCK_REFUSED}: {error}");
-            match error {
-                UnlockError::WrongPassphrase => UnlockRefusal::WrongPassphrase,
-                other => UnlockRefusal::Failed(other),
-            }
+        let identity = self.open_identity(passphrase).await.inspect_err(|refusal| {
+            tracing::warn!("{UNLOCK_REFUSED}: {refusal}");
         })?;
         self.check_and_settle(&mut inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
             .await
@@ -409,6 +410,42 @@ impl<F: StoreFs> ServiceContext<F> {
         &self.setup.hardening
     }
 
+    /// Opens the vault identity with `passphrase` on the blocking pool, since scrypt holds a thread for seconds.
+    ///
+    /// The task owns the passphrase and drops it when it ends. If this future is dropped first, the task still runs to
+    /// its end and drops the identity it opened, which clears its key bytes.
+    async fn open_identity(&self, passphrase: Passphrase) -> Result<VaultIdentity, UnlockRefusal> {
+        let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
+        tokio::task::spawn_blocking(move || unlock_with_passphrase(&locks.state, &setup.fs, &passphrase))
+            .await
+            .map_err(|_| UnlockRefusal::Interrupted)?
+            .map_err(|error| match error {
+                UnlockError::WrongPassphrase => UnlockRefusal::WrongPassphrase,
+                other => UnlockRefusal::Failed(other),
+            })
+    }
+
+    /// Runs [`open_and_check`] with `identity` on the blocking pool, since it reads and decrypts every vault file.
+    ///
+    /// If this future is dropped first, the task still runs to its end and drops what it built, the vault and its
+    /// decrypted records included. A task that ends without a result fails the check.
+    async fn run_check(&self, identity: Arc<VaultIdentity>) -> Result<Checked, CheckFailure> {
+        let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
+        tokio::task::spawn_blocking(move || {
+            open_and_check(
+                &locks.state,
+                &locks.config,
+                &setup.fs,
+                identity,
+                &setup.capabilities,
+                &setup.accounts,
+                &setup.upstream,
+            )
+        })
+        .await
+        .unwrap_or_else(|_| Err(CheckFailure::interrupted()))
+    }
+
     /// Moves into Checking on `event` (an unlock, a reload, an approval's commit or a repair), keeps `identity`, runs the
     /// config check with it ([`open_and_check`]), and settles in Ready or Unavailable. Leaving Locked, both changes are
     /// logged as lock transitions.
@@ -453,22 +490,7 @@ impl<F: StoreFs> ServiceContext<F> {
         event: ServiceEvent,
         committed: Option<u64>,
     ) -> Result<ServiceState, IllegalTransition> {
-        let ServiceSetup {
-            fs,
-            accounts,
-            capabilities,
-            upstream,
-            ..
-        } = &self.setup;
-        match open_and_check(
-            &self.locks.state,
-            &self.locks.config,
-            fs,
-            identity,
-            capabilities,
-            accounts,
-            upstream,
-        ) {
+        match self.run_check(identity).await {
             Ok((snapshot, approval, credentials, route_faults)) => {
                 let open = OpenVault {
                     approval,

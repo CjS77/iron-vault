@@ -109,6 +109,10 @@ pub enum CheckFailure {
     /// The approved config is not servable: it does not parse, validate or activate, or its parts cannot form a snapshot.
     #[error("policy invalid: config invalid")]
     Config(InvalidConfig),
+    /// The check's task ended without a result: it panicked, or the runtime is shutting down. Nothing was checked, so
+    /// the service fails closed.
+    #[error("recovery needed: config check did not finish")]
+    Interrupted,
 }
 
 /// Why a config whose approval verified is not servable.
@@ -143,7 +147,7 @@ impl CheckFailure {
     /// The failure reason the service state machine takes (`CheckFailed`).
     pub fn failure(&self) -> FailureReason {
         match self {
-            Self::Vault(_) | Self::ApprovalState(_) => FailureReason::RecoveryNeeded,
+            Self::Vault(_) | Self::ApprovalState(_) | Self::Interrupted => FailureReason::RecoveryNeeded,
             Self::Recovery(error) => match error.failure() {
                 RecoveryFailure::RecoveryNeeded => FailureReason::RecoveryNeeded,
                 RecoveryFailure::PolicyInvalid => FailureReason::PolicyInvalid,
@@ -171,7 +175,15 @@ impl CheckFailure {
             Self::ApprovalState(error) => error.to_string(),
             Self::Recovery(error) => error.to_string(),
             Self::Config(invalid) => invalid.detail(),
+            Self::Interrupted => "the config check task ended without a result".to_owned(),
         }
+    }
+
+    /// The failure of a check whose task ended without a result, logged as every check failure is.
+    pub fn interrupted() -> Self {
+        let failure = Self::Interrupted;
+        log_failure(&failure);
+        failure
     }
 }
 

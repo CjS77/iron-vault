@@ -35,7 +35,7 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Unlock<F> {
     }
 }
 
-impl<F: StoreFs> Unlock<F> {
+impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
     /// Refuses before prompting when the service is not Locked, so the owner is not asked for a passphrase that cannot
     /// be used; the context checks the state again under its mutex.
     async fn run(&self, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
@@ -51,7 +51,7 @@ impl<F: StoreFs> Unlock<F> {
             tracing::warn!("{UNLOCK_REFUSED}: wrong passphrase");
             return Ok(refused(UnlockRefusal::WrongPassphrase));
         };
-        Ok(match self.service.unlock(&passphrase).await {
+        Ok(match self.service.unlock(passphrase).await {
             Ok(state) => settled(state),
             Err(refusal) => refused(refusal),
         })
@@ -86,7 +86,9 @@ fn refused(refusal: UnlockRefusal) -> AdminResponse {
             format!("`unlock` is allowed only while the service is Locked; it is {}", state_name(state)),
         ),
         UnlockRefusal::WrongPassphrase => error(ErrorCode::UnlockDenied, "wrong passphrase".to_owned()),
-        failed @ UnlockRefusal::Failed(_) => error(ErrorCode::UnlockFailed, format!("{failed}; the service stays Locked")),
+        failed @ (UnlockRefusal::Failed(_) | UnlockRefusal::Interrupted) => {
+            error(ErrorCode::UnlockFailed, format!("{failed}; the service stays Locked"))
+        }
     }
 }
 
