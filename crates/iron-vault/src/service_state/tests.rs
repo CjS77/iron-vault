@@ -12,7 +12,7 @@ const STATES: [ServiceState; 7] = [
     S::Stopped,
 ];
 
-const EVENTS: [ServiceEvent; 10] = [
+const EVENTS: [ServiceEvent; 11] = [
     E::InteractiveUnlockRequired,
     E::HostUnlockSucceeded,
     E::UnlockSucceeded,
@@ -20,6 +20,7 @@ const EVENTS: [ServiceEvent; 10] = [
     E::CheckFailed(FailureReason::PolicyInvalid),
     E::CheckFailed(FailureReason::RecoveryNeeded),
     E::Reload,
+    E::ApprovalCommitting,
     E::Lock,
     E::Repaired,
     E::Stop,
@@ -48,6 +49,7 @@ fn legal_edges() -> Vec<(ServiceState, ServiceEvent, ServiceState)> {
         (S::Checking, E::CheckFailed(FailureReason::PolicyInvalid), policy),
         (S::Checking, E::CheckFailed(FailureReason::RecoveryNeeded), recovery),
         (S::Ready, E::Reload, S::Checking),
+        (S::Ready, E::ApprovalCommitting, S::Checking),
         (S::Ready, E::Lock, S::Locked),
         (policy, E::Repaired, S::Checking),
         (recovery, E::Repaired, S::Checking),

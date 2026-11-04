@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::approve::Approve;
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode};
 use super::server::{Exchange, ExchangeError};
@@ -41,13 +42,14 @@ impl Handlers {
         Self::default().with(AdminCommand::Ping, Ping { profile })
     }
 
-    /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile, then `status` and
-    /// `unlock`. A command that acts on the service (unlock, lock, status, reload, approve) registers here with a clone of
+    /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile, then `status`,
+    /// `unlock`, `lock` and `config approve`. A command that acts on the service (unlock, lock, status, reload, approve) registers here with a clone of
     /// `service`.
     pub fn for_service<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> Self {
         Self::standard(service.paths().profile)
             .with(AdminCommand::Status, Status(Arc::clone(service)))
             .with(AdminCommand::Unlock, Unlock::new(Arc::clone(service)))
+            .with(AdminCommand::ConfigApprove, Approve::new(Arc::clone(service)))
             .with_lock_drain(service, LOCK_DRAIN)
     }
 

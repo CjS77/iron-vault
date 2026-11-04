@@ -149,6 +149,13 @@ pub fn open_signer_key(envelope: &[u8], passphrase: &ApprovalPassphrase, pinned:
     SoftwareSigner::new(open_key(envelope, passphrase)?, pinned)
 }
 
+/// [`seal_signer_key`] at work factor 2 instead of [`PASSPHRASE_WORK_FACTOR`], so a test that opens the key spends no
+/// seconds in scrypt. Only the `test-support` feature exposes it.
+#[cfg(any(test, feature = "test-support"))]
+pub fn seal_signer_key_for_tests(key: &SoftwareSignerKey, passphrase: &ApprovalPassphrase) -> Result<Vec<u8>, SignError> {
+    seal_signer_key_at(key, passphrase, 2)
+}
+
 /// Durably replaces `approver.age` with `envelope`.
 pub fn write_signer_key(lock: &StateDirLock, fs: &impl StoreFs, envelope: &[u8]) -> Result<(), WriteError> {
     durable_replace(lock, fs, &StateFileName::approver_key(), envelope)

@@ -133,10 +133,10 @@ These are defaults ([open question 8](#open-questions)).
 
 | Step | What the service does | Durable change | Service state |
 |---|---|---|---|
-| 1 | Writes the proposed bytes as `config.toml.pending`. Then parses, validates and activates them against the credential catalog, capabilities and account directory, using the one owned buffer it wrote. Never reads the file back to do this. | `config.toml.pending` | Ready, or Unavailable with `PolicyInvalid` |
+| 1 | Writes the proposed bytes as `config.toml.pending`. Then parses, validates and activates them against the credential catalog, capabilities and account directory, using the one owned buffer it wrote, and dry-runs the upstream clients, so a config that cannot be served is invalid before any prompt. Never reads the file back to do this. | `config.toml.pending` | Ready, or Unavailable with `PolicyInvalid` |
 | 2 | Shows the approval summary and asks the owner to confirm it. Then takes the approval passphrase and opens the approver key with it. Then reserves the next version. | `approval.age`: highest reserved version + 1 | unchanged |
 | 3 | Signs the approval payload (purpose, vault ID, the reserved version, the digest of the buffer) and drops the signer. | none | unchanged |
-| 4 | Writes the envelope as `config.toml.sig.staged`. Then dry-runs the serving snapshot from the step 1 activation: builds upstream clients and a rate limiter, so a config that cannot be served fails here, before the commit. | `config.toml.sig.staged` | unchanged |
+| 4 | Writes the envelope as `config.toml.sig.staged`. | `config.toml.sig.staged` | unchanged |
 | 5 | **Admission pause starts:** from Ready, the service moves to Checking, and requests get `503` `checking` from then on. Then it commits `(version, digest)`. | `approval.age`: the committed approval | Checking |
 | 6 | Publishes, then runs the config check, which builds the serving snapshot from the published files. The check passing moves the service to Ready, with the listener set rebuilt from the new config; failing moves it to Unavailable. **Admission pause ends.** | `config.toml`, `config.toml.sig` | Checking, then Ready or Unavailable |
 
@@ -150,8 +150,8 @@ After the commit, the service leaves Unavailable through `Repaired` to Checking,
 `Repaired` event documents for an approval committed there, and step 6 runs as above. The service answers the admin
 request only after the config check ends, so the result says whether the new config is active.
 
-The step 4 dry run does not replace the config check. It only moves the failures it can find to before the commit.
-The config check may reuse the dry-run snapshot when the approval it verifies has the dry run's digest.
+The step 1 dry run does not replace the config check. It only moves the failures it can find to before the first
+prompt, where they consume no version.
 
 **Why the order of step 2 is confirmation, passphrase, then reservation.** [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)'s text says "authenticate the owner,
 show the summary, and durably reserve". Its sequence diagram instead puts the summary before the owner's authorization.
@@ -165,12 +165,12 @@ consume their versions").
 
 | Fails at | Version | Files | Service afterwards | `config approve` answers |
 |---|---|---|---|---|
-| step 1: validation or activation | none reserved | pending removed | unchanged | `config-invalid` |
+| step 1: validation, activation or the dry run | none reserved | pending removed | unchanged | `config-invalid` |
 | step 1: the write | none reserved | pending removed | unchanged | `approval-unavailable` |
 | step 2, before reserving: the owner declines or cancels, or the passphrase is wrong | none reserved | pending removed | unchanged | `declined`, `approval-denied`, or no response for a cancel |
 | step 2, the reservation: counter exhausted, or its write failed before the rename | none reserved | pending removed | unchanged | `approval-unavailable` |
 | step 2, the reservation: the directory fsync failed after the rename | consumed, unless power loss undoes it; nothing was signed under it, so reusing it after power loss is harmless | pending removed | unchanged; the in-memory approval state accepts no more writes until the next approval loads it again from disk, which restores consistency, not durability, and here only consistency matters | `approval-failed` |
-| step 3 or 4, or the dry run | consumed | pending and staged removed | unchanged | `approval-failed` |
+| step 3 or 4 | consumed | pending and staged removed | unchanged | `approval-failed` |
 | step 5, before the rename of `approval.age` | consumed | pending and staged removed | Checking: the config check runs on the unchanged published pair and normally returns to Ready on the old policy, which is still the committed one | `approval-failed` |
 | step 5, the rename landed but the directory fsync failed | committed, if settled (below) | left in place | Checking: settle the commit, then publish and check; if settling fails, Unavailable with `RecoveryNeeded` | success, or `committed-not-active` |
 | step 6, a rename failed | committed | left in place | Checking: the config check's recovery retries the renames (rows 2-4); if that fails too, Unavailable with `RecoveryNeeded` | success, or `committed-not-active` |
@@ -412,8 +412,8 @@ admitted. A bounded wait instead, and a `Retry-After` header, are options ([open
 
 **How long the pause lasts.** The pause covers the commit, publish, the config check and the listener rebuild on entry
 to Ready. That is milliseconds for the files and the signature check, and longer when the listener set changes or a
-TLS listener's key is loaded. The step 4 dry run takes upstream-client construction out of the pause only when the
-check reuses its snapshot.
+TLS listener's key is loaded. The config check builds its own upstream clients inside the pause; the step 1 dry run
+only finds earlier the configs whose clients cannot be built.
 
 **A request admitted before the pause** keeps the snapshot it took. This holds whether its upstream request has been
 sent or not. If the pause ends on Ready, it finishes on the old snapshot: its route, its credential record, its

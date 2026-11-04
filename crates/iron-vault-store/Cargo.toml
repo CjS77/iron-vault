@@ -25,8 +25,9 @@ libc.workspace = true
 
 [features]
 # Exposes test doubles for other crates' tests: `FaultFs`, the in-memory fault filesystem that injects faults and
-# crashes into store writes, and `seal_passphrase_envelope_for_tests`, which seals at work factor 2 instead of 18.
-# Off by default, and never enabled outside dev-dependencies: a weak passphrase envelope must never ship in the service.
+# crashes into store writes, and `seal_passphrase_envelope_for_tests` and `seal_signer_key_for_tests`, which seal at work
+# factor 2 instead of 18. Off by default, and never enabled outside dev-dependencies: a weak passphrase envelope must
+# never ship in the service.
 test-support = []
 
 [dev-dependencies]

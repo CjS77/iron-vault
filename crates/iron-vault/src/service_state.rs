@@ -95,6 +95,9 @@ pub enum ServiceEvent {
     CheckFailed(FailureReason),
     /// An explicit reload was requested.
     Reload,
+    /// A config approval started from Ready is about to commit: the admission pause begins. It shares the diagram's one
+    /// edge from Ready to Checking with [`Reload`](Self::Reload), so *reload* keeps its one meaning, the SIGHUP operation.
+    ApprovalCommitting,
     /// An explicit lock was requested.
     Lock,
     /// An authorized repair, or recovery of a committed transaction, finished. A configuration approval committed from
@@ -126,7 +129,7 @@ pub fn next(state: ServiceState, event: ServiceEvent) -> Result<ServiceState, Il
         (S::Locked, E::UnlockSucceeded) => Ok(S::Checking),
         (S::Checking, E::CheckPassed) => Ok(S::Ready),
         (S::Checking, E::CheckFailed(reason)) => Ok(S::Unavailable(reason)),
-        (S::Ready, E::Reload) => Ok(S::Checking),
+        (S::Ready, E::Reload | E::ApprovalCommitting) => Ok(S::Checking),
         (S::Ready, E::Lock) => Ok(S::Locked),
         (S::Ready, E::Stop) => Ok(S::Stopped),
         (S::Unavailable(_), E::Repaired) => Ok(S::Checking),

@@ -82,7 +82,7 @@ impl UpstreamSettings {
         }
     }
 
-    fn clients(&self, policy: &ActivePolicy) -> Result<UpstreamClients, ClientBuildError> {
+    pub(crate) fn clients(&self, policy: &ActivePolicy) -> Result<UpstreamClients, ClientBuildError> {
         #[cfg(any(test, feature = "test-support"))]
         if let Some(pinned) = &self.pinned {
             return UpstreamClients::with_pinned_loader(policy, self.limits, |_| pinned.clone());
@@ -188,7 +188,9 @@ impl CheckFailure {
 }
 
 impl InvalidConfig {
-    fn detail(&self) -> String {
+    /// What the owner's log and a `config-invalid` answer say: the rule broken and the configured names involved,
+    /// never config bytes, URLs or paths.
+    pub(crate) fn detail(&self) -> String {
         match self {
             Self::Parse(error) => parse_detail(error),
             Self::Validation(errors) => errors.iter().map(validation_detail).collect::<Vec<_>>().join("; "),
@@ -338,7 +340,7 @@ fn run(
 }
 
 /// Parses, validates and activates `bytes` against `vault`'s credential catalog.
-fn activate_config(
+pub(crate) fn activate_config(
     bytes: &[u8],
     capabilities: &Capabilities,
     vault: &Vault,

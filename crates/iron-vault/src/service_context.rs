@@ -15,6 +15,7 @@
 //! verified config before the snapshot is served, so a socket the verified config does not name is closed before the
 //! snapshot could serve through it.
 
+mod approval;
 mod serving;
 
 use std::collections::BTreeMap;
@@ -40,6 +41,8 @@ use crate::socket_activation::AdoptedSocket;
 use crate::standing::{CredentialStanding, RouteFault};
 use crate::trusted_path_report::ServicePaths;
 use serving::Serving;
+
+pub use approval::{ApprovalEnd, ApprovalReview};
 
 /// The log target of lock transitions (glossary: *Lock transition*), so the audit design (EP-26) can route them as
 /// their own events.
@@ -180,6 +183,9 @@ pub struct ServiceContext<F = OsFs> {
     setup: Arc<ServiceSetup<F>>,
     locks: Arc<ServiceLocks>,
     holder: Arc<SnapshotHolder>,
+    /// The service-wide lock (glossary). `config approve` holds it from its request to its response, prompts included,
+    /// and fails at once with `busy` while another holds it; a recheck waits for it. Vault writes take it too.
+    service_wide: Mutex<()>,
     inner: Mutex<Inner>,
 }
 
@@ -237,6 +243,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             setup: Arc::new(setup),
             locks: Arc::new(locks),
             holder,
+            service_wide: Mutex::new(()),
         };
         let inner = service.inner.get_mut();
         let state = next(inner.state, ServiceEvent::InteractiveUnlockRequired)?;
@@ -262,10 +269,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Unavailable: [`ServiceEvent::Reload`] from Ready, [`ServiceEvent::Repaired`] from Unavailable after an authorized
     /// repair, a committed transaction's recovery, or a `config approve` out of an invalid policy.
     ///
-    /// No unlock is needed: the check opens a new vault from the identity the context kept. An event that does not lead
+    /// It waits for the service-wide lock, so a recheck that arrives during an approval runs after it. No unlock is
+    /// needed: the check opens a new vault from the identity the context kept. An event that does not lead
     /// to Checking from the current state is refused and changes nothing, and so is any event without a kept identity
     /// (Starting, Locked, Stopped), since there is nothing to check with.
     pub async fn recheck(&self, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
+        let _service_wide = self.service_wide.lock().await;
         let mut inner = self.inner.lock().await;
         let identity = inner.identity.clone().ok_or(IllegalTransition { state: inner.state, event })?;
         self.check_and_settle(&mut inner, event, identity).await

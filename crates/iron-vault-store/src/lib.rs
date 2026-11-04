@@ -40,6 +40,8 @@ mod vault_id;
 mod vault_identity;
 mod wire;
 
+#[cfg(any(test, feature = "test-support"))]
+pub use approval::seal_signer_key_for_tests;
 pub use approval::{
     APPROVAL_PURPOSE, AdmissionPaused, ApprovalDecodeError, ApprovalEnvelope, ApprovalError, ApprovalFailure, ApprovalPassphrase,
     ApprovalPayload, ApprovalProgress, ApprovalRecoveryError, ApprovalSigner, ApprovalState, ApprovalStateError, ApprovalStep,

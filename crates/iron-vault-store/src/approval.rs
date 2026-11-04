@@ -29,6 +29,8 @@ use crate::vault_id::{VaultId, VaultIdError};
 
 pub use recovery::{ApprovalRecoveryError, DiscardedFile, PublishedPairFault, RecoveredApproval, RecoveryFailure, recover_approval};
 pub use signer::{ApprovalSigner, SignError};
+#[cfg(any(test, feature = "test-support"))]
+pub use software_signer::seal_signer_key_for_tests;
 pub use software_signer::{
     ApprovalPassphrase, SoftwareSigner, SoftwareSignerKey, open_signer_key, read_signer_key, seal_signer_key, write_signer_key,
 };
