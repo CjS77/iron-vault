@@ -3,12 +3,13 @@
 //!
 //! The types follow the steps, so they cannot be run out of order or skipped:
 //!
-//! - [`PendingConfig::write`] is step 1. It keeps the one owned buffer that is validated, summarized, digested, signed
-//!   and published. The file is never read back.
+//! - [`PendingConfig::write`] is step 1. It keeps the one owned buffer that is validated, summarized, digested and
+//!   signed. The pending file is never read back.
 //! - [`PendingConfig::prepare`] is steps 2 to 4: reserve, sign, stage. The service has already shown the approval
 //!   summary, had it confirmed and opened the signer, so the store prompts for nothing.
-//! - [`PreparedApproval::commit`] is steps 5 and 6: commit, then publish. It takes proof that admission is paused, so
-//!   the service cannot commit while requests are still being admitted under the old policy.
+//! - [`PreparedApproval::commit`] is steps 5 and 6: commit, then publish and verify the published pair as read back.
+//!   It takes proof that admission is paused, so the service cannot commit while requests are still being admitted
+//!   under the old policy.
 //!
 //! Each failure says which step failed and how far the transaction got ([`ApprovalProgress`]), so audit can tell a
 //! reserved version from a completed approval. Uncommitted files are removed on failure, best effort: a file left
@@ -24,15 +25,16 @@ use thiserror::Error;
 use super::verify::verify_signed;
 use super::{ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalVersion, ConfigDigest, SignError, VerifiedApproval, VerifyError};
 use crate::{
-    ApprovalStateError, ConfigDirLock, ConfigWriteError, PublishSet, StateDirLock, StoreFs, VaultIdentity, WriteStep, publish,
-    remove_pending_and_staged, verify_approval, write_pending, write_staged,
+    ApprovalStateError, ConfigDirLock, ConfigFileName, ConfigReadError, ConfigWriteError, PublishSet, StateDirLock, StoreFs, VaultIdentity,
+    WriteStep, publish, read_config_file, remove_pending_and_staged, verify_approval, write_pending, write_staged,
 };
 
 /// Proof that no request is being admitted: the service's admission pause guard implements this.
 ///
 /// [`PreparedApproval::commit`] takes it by reference, so a commit cannot run unless the caller holds the pause
-/// (spec §3.9: "pause new admissions before committing"). Implement it only for a guard whose existence means the
-/// snapshot holder refuses every new request.
+/// (spec §3.9: "pause new admissions before committing"). The one production implementation is the service's
+/// `AdmissionPause` guard, returned by `SnapshotHolder::pause`, whose existence means the snapshot holder refuses every
+/// new request. Any other implementation could commit with requests still being admitted, so adding one needs review.
 pub trait AdmissionPaused {}
 
 /// Everything the transaction's durable steps act on: the two locked directories, the vault identity that seals the
@@ -93,9 +95,20 @@ pub enum ApprovalProgress {
     Committed(ApprovalVersion),
 }
 
+impl fmt::Display for ApprovalProgress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NothingReserved => f.write_str("no version reserved"),
+            Self::Reserved(v) => write!(f, "version {v} reserved, not committed"),
+            Self::CommitUncertain(v) => write!(f, "version {v} committed, but the commit may not survive power loss"),
+            Self::Committed(v) => write!(f, "version {v} committed"),
+        }
+    }
+}
+
 /// A failed approval: the step that failed, how far it got, and why.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("config approval failed at {step}: {cause}")]
+#[error("config approval failed at {step} ({progress}): {cause}")]
 pub struct ApprovalError {
     step: ApprovalStep,
     progress: ApprovalProgress,
@@ -125,6 +138,9 @@ pub enum ApprovalFailure {
     /// A write to the config directory failed.
     #[error(transparent)]
     ConfigDir(#[from] ConfigWriteError),
+    /// The published config or signature could not be read back to verify it.
+    #[error(transparent)]
+    ReadBack(#[from] ConfigReadError),
     /// The approval state could not be reserved, committed or settled; [`ApprovalStateError::Exhausted`] means no
     /// version is left to reserve.
     #[error(transparent)]
@@ -132,8 +148,9 @@ pub enum ApprovalFailure {
     /// The signer refused or failed to sign.
     #[error(transparent)]
     Sign(#[from] SignError),
-    /// The signer's envelope does not verify against the pinned approver for this vault and config.
-    #[error("the signed approval does not verify: {0}")]
+    /// The signer's envelope does not verify against the pinned approver for this vault and config, or the published
+    /// pair read back does not verify as the committed approval.
+    #[error("the approval does not verify: {0}")]
     BadApproval(VerifyError),
     /// The signer's envelope verifies but carries another version from the one reserved.
     #[error("the signer signed another approval version from the one reserved")]
@@ -189,21 +206,15 @@ impl PendingConfig {
         let payload = ApprovalPayload::new(state.vault_id(), version, self.digest);
         let envelope = sign(state, &payload, signer).map_err(|e| fail(storage, ApprovalStep::Sign, Some(version), e))?;
         write_staged(storage.config_dir, storage.fs, &envelope).map_err(|e| fail(storage, ApprovalStep::Stage, Some(version), e.into()))?;
-        Ok(PreparedApproval {
-            state,
-            config: self.bytes,
-            envelope,
-            payload,
-        })
+        Ok(PreparedApproval { state, payload })
     }
 }
 
 /// Steps 1 to 4 done: the pending config and its staged approval are durable, and its version is reserved but not
 /// committed. Nothing is changed for requests until [`commit`](Self::commit).
+#[derive(Debug)]
 pub struct PreparedApproval<'s> {
     state: &'s mut ApprovalState,
-    config: Box<[u8]>,
-    envelope: Vec<u8>,
     payload: ApprovalPayload,
 }
 
@@ -225,13 +236,14 @@ impl PreparedApproval<'_> {
         self.version()
     }
 
-    /// Steps 5 and 6: durably commits the approval, then publishes the pending config and the staged approval, and
-    /// returns the approval verified over the bytes it published.
+    /// Steps 5 and 6: durably commits the approval, publishes the pending config and the staged approval, then reads
+    /// `config.toml` and `config.toml.sig` back and returns them verified as the committed approval.
     ///
     /// `_paused` is the proof that admission is paused, which must be in place before the commit. A commit whose
     /// directory fsync fails is settled by a second durable write of the approval state before anything is published.
-    /// A failed directory fsync after the publish renames is logged and passed over, because the commit, not the
-    /// published files, is the durable record of the approval.
+    /// A failed directory fsync from publish is logged and passed over, because the commit, not the published files,
+    /// is the durable record of the approval. The read-back is what proves the renames landed, so a pair that is not
+    /// in place, or does not verify, fails at [`ApprovalStep::Publish`] with the version committed.
     pub fn commit<F: StoreFs>(
         self,
         storage: &ApprovalStorage<'_, F>,
@@ -244,11 +256,13 @@ impl PreparedApproval<'_> {
             progress: ApprovalProgress::Committed(version),
             cause,
         };
-        publish_both(storage).map_err(|e| committed(e.into()))?;
-        let approval = verify_approval(self.state, &self.config, &self.envelope).map_err(|e| committed(ApprovalFailure::BadApproval(e)))?;
+        publish_both(storage, version).map_err(|e| committed(e.into()))?;
+        let read = |name| read_config_file(storage.config_dir, storage.fs, name).map_err(|e| committed(e.into()));
+        let (config, envelope) = (read(ConfigFileName::Active)?, read(ConfigFileName::ActiveSignature)?);
+        let approval = verify_approval(self.state, &config, &envelope).map_err(|e| committed(ApprovalFailure::BadApproval(e)))?;
         Ok(CommittedApproval {
             approval,
-            config: self.config,
+            config: config.into_boxed_slice(),
         })
     }
 }
@@ -260,12 +274,12 @@ pub struct CommittedApproval {
 }
 
 impl CommittedApproval {
-    /// The committed approval, verified over the published bytes.
+    /// The committed approval, verified over the published pair as read back.
     pub fn approval(&self) -> VerifiedApproval {
         self.approval
     }
 
-    /// The published config bytes, the same buffer step 1 wrote.
+    /// The published config bytes as read back and verified: the bytes to activate.
     pub fn config(&self) -> &[u8] {
         &self.config
     }
@@ -278,15 +292,6 @@ impl fmt::Debug for PendingConfig {
             .field("len", &self.bytes.len())
             .field("digest", &self.digest)
             .finish()
-    }
-}
-
-/// Shows the payload only: no config bytes or signature bytes.
-impl fmt::Debug for PreparedApproval<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PreparedApproval")
-            .field("payload", &self.payload)
-            .finish_non_exhaustive()
     }
 }
 
@@ -314,9 +319,10 @@ fn reserve<F: StoreFs>(storage: &ApprovalStorage<'_, F>, state: &mut ApprovalSta
 fn sign<S: ApprovalSigner>(state: &ApprovalState, payload: &ApprovalPayload, signer: S) -> Result<Vec<u8>, ApprovalFailure> {
     let envelope = signer.sign(payload)?.encode();
     let signed = verify_signed(state, payload.digest(), &envelope).map_err(ApprovalFailure::BadApproval)?;
-    match signed == *payload {
-        true => Ok(envelope),
-        false => Err(ApprovalFailure::WrongVersion),
+    if signed == *payload {
+        Ok(envelope)
+    } else {
+        Err(ApprovalFailure::WrongVersion)
     }
 }
 
@@ -344,8 +350,10 @@ fn commit<F: StoreFs>(
     }
 }
 
-/// Step 6's file change. A directory fsync failure comes after both renames, so it is logged and passed over.
-fn publish_both<F: StoreFs>(storage: &ApprovalStorage<'_, F>) -> Result<(), ConfigWriteError> {
+/// Step 6's file change. A directory fsync failure is logged and passed over: it normally comes after both renames.
+/// It is also what publish reports when the platform cannot fsync a directory, before any rename; the read-back in
+/// [`PreparedApproval::commit`] then finds the pair not in place, so that case fails too.
+fn publish_both<F: StoreFs>(storage: &ApprovalStorage<'_, F>, version: ApprovalVersion) -> Result<(), ConfigWriteError> {
     match publish(storage.config_dir, storage.fs, PublishSet::Both) {
         Err(ConfigWriteError::Io {
             step: WriteStep::SyncDir,
@@ -353,6 +361,7 @@ fn publish_both<F: StoreFs>(storage: &ApprovalStorage<'_, F>) -> Result<(), Conf
             ..
         }) => {
             tracing::warn!(
+                %version,
                 ?kind,
                 "the approved config was published but the config directory fsync failed; recovery finishes it if power loss undoes it"
             );

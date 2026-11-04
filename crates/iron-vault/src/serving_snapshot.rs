@@ -224,6 +224,10 @@ pub struct AdmissionPause<'a> {
     holder: &'a SnapshotHolder,
 }
 
+/// The store's approval commit takes this guard as its proof that admission is paused; it is the only production
+/// implementation of [`iron_vault_store::AdmissionPaused`].
+impl iron_vault_store::AdmissionPaused for AdmissionPause<'_> {}
+
 impl AdmissionPause<'_> {
     /// Ends the pause on a passed check: later requests are admitted to `snapshot`, and those admitted before the pause
     /// finish on the old one.

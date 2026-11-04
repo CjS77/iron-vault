@@ -495,10 +495,13 @@ fn what_is_signed_is_the_buffer_written_in_step_1_not_the_file() {
     let staged = ApprovalEnvelope::decode(&setup.read(&fs, StagedSignature).unwrap()).unwrap();
     assert_eq!(staged.payload().digest(), ConfigDigest::of(NEW_CONFIG));
     assert_eq!(prepared.digest(), ConfigDigest::of(NEW_CONFIG));
-    let committed = prepared.commit(&storage, &Paused).unwrap();
-    assert_eq!(committed.config(), NEW_CONFIG);
-    // The edited file was published, so the config check refuses it rather than serving what was not signed.
-    let (config, sig) = (setup.read(&fs, Active).unwrap(), setup.read(&fs, ActiveSignature).unwrap());
-    assert_eq!(config, edited);
-    assert_eq!(verify_approval(&state, &config, &sig), Err(VerifyError::ConfigChanged));
+    // The edited file was published, so step 6's read-back refuses it rather than activating what was not signed.
+    let error = prepared.commit(&storage, &Paused).unwrap_err();
+    let expected = (
+        ApprovalStep::Publish,
+        ApprovalProgress::Committed(version(2)),
+        &ApprovalFailure::BadApproval(VerifyError::ConfigChanged),
+    );
+    assert_eq!((error.step(), error.progress(), error.cause()), expected);
+    assert_eq!(setup.read(&fs, Active), Some(edited));
 }
