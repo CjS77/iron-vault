@@ -2,10 +2,10 @@
 //!
 //! Every entry to Checking (an unlock, a reload, an approval's commit, a repair) calls [`open_and_check`], which opens a
 //! new vault from the vault identity the service keeps and then runs [`check_config`], so they cannot disagree about
-//! what a servable config is. It recovers any committed
-//! transaction, parses, validates and activates the config the recovered pair holds, and builds one
-//! [`ServingSnapshot`]. Any failure is a [`CheckFailure`] that names the safe state that follows and carries nothing a
-//! `503` body or a status answer must not show. The check never writes the approval state.
+//! what a servable config is. It recovers any committed transaction, parses, validates and activates the config the
+//! recovered pair holds, and builds one [`ServingSnapshot`]. Any failure is a [`CheckFailure`] that names the safe state
+//! that follows and carries nothing a `503` body or a status answer must not show. The check never writes the approval
+//! state.
 //!
 //! Recovery verifies the published pair against the committed approval and returns the config bytes as read back, so
 //! the check parses exactly the bytes that verified and does not verify a second time.

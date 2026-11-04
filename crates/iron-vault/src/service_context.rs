@@ -284,7 +284,7 @@ impl<F: StoreFs> ServiceContext<F> {
     }
 
     /// Locks the service on an explicit `lock`: Ready to Locked, clearing the vault identity and every cached secret
-    /// (§3.13, §3.11). Only a Ready service has secrets to clear; from any other state the event is refused.
+    /// (§3.13, §3.11). §3.12 draws a lock only from Ready; from any other state the event is refused.
     ///
     /// Under the context's mutex it stops admitting requests, withdraws the serving snapshot (cancelling the requests
     /// running on it) and drops the approval state, the credential report and the context's copy of the vault identity,
