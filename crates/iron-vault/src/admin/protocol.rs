@@ -32,6 +32,8 @@ pub enum AdminRequest {
     Status,
     /// Opens the vault with the passphrase the service prompts for; no arguments and no result. Command ID 4.
     Unlock,
+    /// Clears the vault identity and every cached secret from memory. Command ID 5.
+    Lock,
 }
 
 impl AdminRequest {
@@ -41,6 +43,7 @@ impl AdminRequest {
             Self::Ping => AdminCommand::Ping,
             Self::Status => AdminCommand::Status,
             Self::Unlock => AdminCommand::Unlock,
+            Self::Lock => AdminCommand::Lock,
         }
     }
 }
@@ -50,10 +53,12 @@ impl AdminRequest {
 pub enum AdminCommand {
     /// `ping`.
     Ping = 1,
-    /// `status`. IDs 3 and 5 are reserved for `caller-token` and `lock`.
+    /// `status`. ID 3 is reserved for `caller-token`.
     Status = 6,
     /// `unlock`.
     Unlock = 4,
+    /// `lock`.
+    Lock = 5,
 }
 
 impl AdminCommand {
@@ -63,6 +68,7 @@ impl AdminCommand {
             Self::Ping => "ping",
             Self::Status => "status",
             Self::Unlock => "unlock",
+            Self::Lock => "lock",
         }
     }
 }
@@ -112,6 +118,12 @@ pub enum AdminResponse {
     },
     /// `status` completed. Boxed: the report is much larger than every other response.
     Status(Box<StatusReport>),
+    /// `lock` completed: the service is Locked.
+    Lock {
+        /// Whether every snapshot holding secrets was dropped within the lock drain. When false, a request that ignored
+        /// its cancellation may still hold them, and the service has logged how many.
+        cleared: bool,
+    },
     /// The command failed. The message is the service's own text and never contains owner input.
     Error {
         /// The stable code scripts act on.
@@ -273,6 +285,7 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::Success) => put_frame(out, FrameKind::Success, &[]),
         Frame::Response(AdminResponse::Ping { profile }) => put_frame(out, FrameKind::Success, &body::encode_ping_result(*profile)),
         Frame::Response(AdminResponse::Status(report)) => put_frame(out, FrameKind::Success, &body::encode_status_result(report)),
+        Frame::Response(AdminResponse::Lock { cleared }) => put_frame(out, FrameKind::Success, &body::encode_lock_result(*cleared)),
         Frame::Response(AdminResponse::Error { code, message }) => put_frame(out, FrameKind::Error, &body::encode_error(*code, message)),
     }
 }

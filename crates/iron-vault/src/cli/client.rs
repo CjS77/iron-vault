@@ -125,6 +125,21 @@ pub fn status(socket: Option<&Path>) -> Exit {
     })
 }
 
+/// Runs `lock` and reports the new state. A drain that expired is a success with a warning on stderr: the service is
+/// Locked, but the owner must know that a request may still hold secrets.
+pub fn lock(socket: Option<&Path>) -> Exit {
+    run(socket, AdminRequest::Lock, |response| match response {
+        AdminResponse::Lock { cleared } => {
+            println!("locked");
+            if !cleared {
+                eprintln!("iron-vault: warning: a request still holds secrets in the service's memory; see the service log");
+            }
+            Exit::Success
+        }
+        _ => unexpected(),
+    })
+}
+
 /// One exchange, answering any prompt the service sends from the owner console: `answer` handles a success; an error
 /// response and a failed exchange are reported here.
 fn run(socket: Option<&Path>, request: AdminRequest, answer: impl FnOnce(AdminResponse) -> Exit) -> Exit {

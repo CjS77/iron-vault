@@ -87,6 +87,8 @@ pub enum Command {
     Status,
     /// Open the vault: the service prompts for the vault passphrase, read with echo off or from stdin.
     Unlock,
+    /// Clear the vault identity and every cached secret from the service's memory, leaving it Locked.
+    Lock,
 }
 
 impl Cli {
@@ -138,9 +140,26 @@ pub fn unlock(_socket: Option<&Path>) -> ExitCode {
     ping(None)
 }
 
+/// `iron-vault lock`: sends `lock` to the admin socket at `socket`, or this installation's, and shows the new state.
+#[cfg(target_os = "linux")]
+pub fn lock(socket: Option<&Path>) -> ExitCode {
+    client::lock(socket).into()
+}
+
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn ping(_socket: Option<&Path>) -> ExitCode {
+    unsupported_platform()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn lock(_socket: Option<&Path>) -> ExitCode {
+    unsupported_platform()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn unsupported_platform() -> ExitCode {
     eprintln!("iron-vault: client commands are not supported on this platform yet");
     Exit::Unreachable.into()
 }

@@ -111,14 +111,19 @@ fn owner_bytes() -> impl Strategy<Value = Vec<u8>> {
 
 fn any_frame() -> impl Strategy<Value = Frame> {
     prop_oneof![
-        Just(AdminRequest::Ping).prop_map(Frame::Request),
-        Just(AdminRequest::Status).prop_map(Frame::Request),
-        Just(AdminRequest::Unlock).prop_map(Frame::Request),
+        prop_oneof![
+            Just(AdminRequest::Ping),
+            Just(AdminRequest::Status),
+            Just(AdminRequest::Unlock),
+            Just(AdminRequest::Lock)
+        ]
+        .prop_map(Frame::Request),
         (text(MAX_LABEL), any::<bool>()).prop_map(|(label, secret)| Frame::Prompt(Prompt { label, secret })),
         owner_bytes().prop_map(|bytes| owner_input(&bytes)),
         Just(AdminResponse::Success).prop_map(Frame::Response),
         prop_oneof![Just(DeploymentProfile::Protected), Just(DeploymentProfile::Development)]
             .prop_map(|profile| Frame::Response(AdminResponse::Ping { profile })),
+        any::<bool>().prop_map(|cleared| Frame::Response(AdminResponse::Lock { cleared })),
         (error_code(), text(MAX_MESSAGE)).prop_map(|(code, message)| Frame::Response(AdminResponse::Error { code, message })),
     ]
 }
@@ -232,6 +237,34 @@ fn ping_result_has_the_documented_encoding() {
 }
 
 #[test]
+fn lock_has_the_documented_encoding() {
+    assert_eq!(
+        encoded(&Frame::Request(AdminRequest::Lock)),
+        [0, 1, 1, 0, 0, 0, 8, 0, 1, 0, 0, 0, 2, 0, 5]
+    );
+    let cleared = [0, 1, 4, 0, 0, 0, 15, 0, 1, 0, 0, 0, 2, 0, 5, 0, 2, 0, 0, 0, 1, 1];
+    assert_eq!(encoded(&Frame::Response(AdminResponse::Lock { cleared: true })), cleared);
+    let (held, _) = decoded(&raw(1, 4, &body(&[field(1, &[0, 5]), field(2, &[0])])));
+    assert!(same(&held, &Frame::Response(AdminResponse::Lock { cleared: false })));
+}
+
+#[test]
+fn lock_takes_no_arguments_and_its_result_needs_a_flag() {
+    let with_argument = body(&[field(1, &[0, 5]), field(2, b"x")]);
+    assert_eq!(decode_err(&raw(1, 1, &with_argument)), FrameError::UnknownTag(2));
+    assert_eq!(decode_err(&raw(1, 4, &field(1, &[0, 5]))), FrameError::MissingField(2));
+    let not_a_flag = body(&[field(1, &[0, 5]), field(2, &[2])]);
+    assert_eq!(decode_err(&raw(1, 4, &not_a_flag)), FrameError::InvalidValue(2));
+}
+
+#[test]
+fn wrong_state_is_error_code_13() {
+    assert_eq!(ErrorCode::WrongState as u16, 13);
+    assert_eq!(ErrorCode::WrongState.name(), "wrong-state");
+    assert_round_trips(&error(ErrorCode::WrongState, "cannot lock"));
+}
+
+#[test]
 fn a_success_result_must_name_a_command_with_a_result_and_a_known_profile() {
     let no_command = field(2, &[1]);
     assert_eq!(decode_err(&raw(1, 4, &no_command)), FrameError::MissingField(1));
@@ -263,6 +296,8 @@ fn a_request_names_its_command() {
     assert_eq!(AdminCommand::Ping.name(), "ping");
     assert_eq!(AdminRequest::Unlock.command(), AdminCommand::Unlock);
     assert_eq!(AdminCommand::Unlock.name(), "unlock");
+    assert_eq!(AdminRequest::Lock.command(), AdminCommand::Lock);
+    assert_eq!((AdminCommand::Lock as u16, AdminCommand::Lock.name()), (5, "lock"));
 }
 
 #[test]

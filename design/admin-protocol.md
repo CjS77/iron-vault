@@ -108,6 +108,7 @@ an error.
 | `1` | `ping` | none | the deployment profile |
 | `2` | `config approve` | the proposed config bytes | the committed version, the config digest and the summary headline |
 | `4` | `unlock` | none | none |
+| `5` | `lock` | none | whether every cached secret was confirmed cleared |
 | `6` | `status` | none | the [status report](#status) |
 
 **No command accepts an external signature** (§3.2). The service signs only the pending config of its own approval
@@ -118,6 +119,24 @@ take any of these is out of bounds for this protocol, whatever it is for.
 `ping` changes nothing; the service answers it with a success response naming its deployment profile. The response's
 frame header already carries the service's protocol version, so the result does not repeat it. `ping` lets the CLI
 check that the service is up and which profile it runs before the real commands exist.
+
+#### lock
+
+Clears the vault identity and every cached secret from the service's memory (spec §3.13, §3.11) and moves the service
+from Ready to Locked. It takes no arguments and no prompt. In order, the service stops admitting requests, withdraws the
+serving snapshot so requests running on it stop where the transport permits (§3.9), drops the vault and the approval
+state, and then waits for the last request holding the old snapshot to end (the *lock drain*, at most 10 seconds).
+
+The success result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | cleared | flag: `1` when every snapshot was released within the drain, `0` when a request still held one |
+
+`cleared` `0` is a success, not an error: the service is Locked and admits nothing, but a request that ignored its
+cancellation still holds secrets until it ends, and the service logs how many. The CLI prints `locked` for `1`, and for
+`0` also a warning on stderr that secrets may remain in memory; both exit with code `0`. Only a Ready service locks: in
+any other state the command fails with `wrong-state`.
 
 #### config approve
 

@@ -20,6 +20,7 @@ fn main() -> anyhow::Result<ExitCode> {
         Command::Ping => Ok(run_client(|| cli::ping(cli.admin_socket.as_deref()))),
         Command::Status => Ok(run_client(|| cli::status(cli.admin_socket.as_deref()))),
         Command::Unlock => Ok(run_client(|| cli::unlock(cli.admin_socket.as_deref()))),
+        Command::Lock => Ok(run_client(|| cli::lock(cli.admin_socket.as_deref()))),
     }
 }
 

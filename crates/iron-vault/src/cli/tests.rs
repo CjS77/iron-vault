@@ -34,6 +34,11 @@ fn unlock_is_a_client_command_without_arguments() {
 }
 
 #[test]
+fn lock_is_a_client_command() {
+    assert_eq!(parse(&["lock"]).unwrap().command, Command::Lock);
+}
+
+#[test]
 fn admin_socket_overrides_the_path_before_or_after_the_command() {
     let before = parse(&["--admin-socket", "/tmp/fwd.sock", "ping"]).unwrap();
     let after = parse(&["ping", "--admin-socket", "/tmp/fwd.sock"]).unwrap();

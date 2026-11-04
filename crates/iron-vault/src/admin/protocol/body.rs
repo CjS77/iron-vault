@@ -11,10 +11,12 @@ const TAG_SECRET: u16 = 2;
 const TAG_CODE: u16 = 1;
 const TAG_MESSAGE: u16 = 2;
 const TAG_PROFILE: u16 = 2;
+const TAG_CLEARED: u16 = 2;
 
 const COMMAND_PING: u16 = AdminCommand::Ping as u16;
 const COMMAND_STATUS: u16 = AdminCommand::Status as u16;
 const COMMAND_UNLOCK: u16 = AdminCommand::Unlock as u16;
+const COMMAND_LOCK: u16 = AdminCommand::Lock as u16;
 
 const PROFILE_PROTECTED: u8 = 1;
 const PROFILE_DEVELOPMENT: u8 = 2;
@@ -32,6 +34,7 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
         COMMAND_PING => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Ping),
         COMMAND_STATUS => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Status),
         COMMAND_UNLOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Unlock),
+        COMMAND_LOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Lock),
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
 }
@@ -68,6 +71,14 @@ pub(super) fn encode_status_result(report: &StatusReport) -> Vec<u8> {
     status::encode(COMMAND_STATUS, report)
 }
 
+/// `lock`'s success body: the command it answers, then whether every cached secret was confirmed cleared.
+pub(super) fn encode_lock_result(cleared: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    fields::put(&mut out, TAG_COMMAND, &COMMAND_LOCK.to_be_bytes());
+    fields::put(&mut out, TAG_CLEARED, &[u8::from(cleared)]);
+    out
+}
+
 /// A success without a result has only the empty body; one with a result names its command first, so the body
 /// decodes without knowing which request it answers.
 pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
@@ -83,6 +94,12 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
             })
         }
         COMMAND_STATUS => status::decode(&fields).map(|report| AdminResponse::Status(Box::new(report))),
+        COMMAND_LOCK => {
+            let [_, cleared] = exact(&fields, [TAG_COMMAND, TAG_CLEARED])?;
+            Ok(AdminResponse::Lock {
+                cleared: read_flag(TAG_CLEARED, cleared)?,
+            })
+        }
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
 }
