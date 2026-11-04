@@ -366,6 +366,46 @@ WARN event per such route, naming the route and the `ca_file` field but never th
 check builds the serving snapshot. The check passing moves Checking to Ready, and
 the listener set is rebuilt from the verified config on entry to Ready.
 
+### Power loss around the commit
+
+`crates/iron-vault/tests/approval_release_linux.rs` runs `config approve` through a running service on an in-memory
+filesystem that models power loss (`FaultFs`), cuts the power after each filesystem call the service makes from the
+request on, restarts a service on whatever survived, and checks what it serves against the tables above. `cargo test
+-p iron-vault --test approval_release_linux -- --nocapture` prints one row per cut and per way the crash can treat the
+renames that no directory fsync had yet covered: *lose all* (the pessimistic model), *keep all*, or *keep* one of
+the two renames of a publish alone. Reads count as calls, so the numbers below are for the current code; the
+steps are what to compare. After every restart that reaches Ready, a second `config approve` is checked to reserve
+the version after the highest one on disk, so a version a cut left reserved is never reused.
+
+| Power cut after | Crash keeps | Surviving approval C | Recovery row | Restarted service |
+|---|---|---|---|---|
+| calls 0-6: reading the vault and the approval state | n/a | v1 | 1 | Ready, previous policy |
+| calls 7-11: step 1, `config.toml.pending` written, renamed, directory fsynced | any | v1 | 1 (a leftover pending file is discarded) | Ready, previous policy |
+| calls 12-17: step 2, the approver key and approval state read, the `approval.age` temp file written and fsynced | n/a | v1, version 2 not reserved | 1 | Ready, previous policy |
+| call 18: step 2, rename onto `approval.age` | lose all | v1, version 2 not reserved | 1 | Ready, previous policy |
+| call 18: step 2, rename onto `approval.age` | keep all | v1, version 2 reserved | 1 | Ready, previous policy; the next approval is version 3 |
+| calls 19-24: steps 2-4, the reservation durable; `config.toml.sig.staged` written, renamed, directory fsynced | any | v1, version 2 reserved | 1 (leftover pending and staged files are discarded) | Ready, previous policy; the next approval is version 3 |
+| calls 25-29: step 5, the approval state read again, the new `approval.age` temp file written and fsynced | n/a | v1, version 2 reserved | 1 | Ready, previous policy; the next approval is version 3 |
+| call 30: step 5, rename onto `approval.age` | lose all | v1, version 2 reserved | 1 | Ready, previous policy |
+| call 30: step 5, rename onto `approval.age` | keep all | v2 | 4 | Ready, approved policy: recovery publishes both files |
+| calls 31-32: step 5 directory fsync done; step 6 about to publish | n/a | v2 | 4 | Ready, approved policy: recovery publishes both files |
+| call 33: step 6, rename onto `config.toml` | lose all | v2 | 4 | Ready, approved policy |
+| call 33: step 6, rename onto `config.toml` | keep all | v2 | 2 | Ready, approved policy: recovery renames the staged approval |
+| call 34: step 6, rename onto `config.toml.sig` | lose all | v2 | 4 | Ready, approved policy |
+| call 34: step 6, rename onto `config.toml.sig` | keep both renames | v2 | 1 | Ready, approved policy |
+| call 34: step 6, rename onto `config.toml.sig` | keep only the first | v2 | 2 | Ready, approved policy: recovery renames the staged approval |
+| call 34: step 6, rename onto `config.toml.sig` | keep only the second | v2 | 3 | Ready, approved policy: recovery renames the pending config |
+| calls 35-49: step 6 directory fsync done; the config check, and the unlinks of the leftover pending and staged files | n/a | v2 | 1 | Ready, approved policy |
+
+A cut before call 30 never leaves version 2 committed, so the previous policy is served: the previous pair is intact
+at every point, because the transaction writes only `config.toml.pending`, `config.toml.sig.staged` and `approval.age`
+before the commit. A cut from call 30 on either loses the commit's rename (the previous policy, with version 2 still
+consumed) or keeps it, and then recovery finishes exactly that transaction. No cut of this transaction reaches rows
+5 to 8, because steps 1 and 4 fsync their files and the config directory before the commit. Those rows are covered by the recovery tests of the store. The test asserts each restart against
+the recovery table (the committed approval and where its files are decide between Ready on the previous policy, Ready
+on the approved policy, and Unavailable with the table's reason), so a service that serves a version its disk has not
+committed, or any other outcome than the table prescribes, fails it.
+
 ### Reasons a request sees
 
 The redacted reasons are the service state model's four `UnavailableReason`s, with their `503` texts. This design
