@@ -110,6 +110,7 @@ an error.
 | `4` | `unlock` | none | none |
 | `5` | `lock` | none | whether every cached secret was confirmed cleared |
 | `6` | `status` | none | the [status report](#status) |
+| `8` | `add` | the credential name, kind and permitted origins | the [record ID](#add) |
 
 **No command accepts an external signature** ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -217,6 +218,43 @@ Locked; in any other state the exchange ends with `wrong-state` before any promp
 
 Each state change is logged at INFO as a lock transition, under the target `iron_vault::lock_transition`, naming the two
 states and nothing the owner typed. scrypt and the config check take a few seconds, inside the CLI's 60-second timeout.
+
+#### add
+
+Enrols a new credential (spec [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration), [§3.3](iron-vault-specification.md#33-credential-records-and-configuration)). The name, kind and permitted origins are arguments, because none of
+them is secret; the material is owner input, so it never travels as an argument ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)) and stdin carries
+nothing else: `pass show fx | iron-vault add fx --origin api.fx.example` works.
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | name | UTF-8 text: the credential name |
+| 3 | kind | `u8`: `1` static, `2` basic |
+| 4 | origins | byte value: the requested origins below |
+
+The origins value is a `u8` count, 1 to 32, then per origin a `u8` host length, 1 to 253, the host bytes, which must be
+UTF-8, and a `u16` port, never `0`. Nothing may follow the last origin. The decoder checks only these bounds: the host
+stays text on the wire, and the service parses it with the same origin rule the CLI used, so a modified CLI gains
+nothing by skipping it. HTTPS is implied and never sent ([§3.3](iron-vault-specification.md#33-credential-records-and-configuration)).
+
+The service, not the CLI, decides what to prompt for, by kind:
+
+- **static:** one secret prompt, `Secret for <name>`.
+- **basic:** `Username for <name>`, then `Password for <name>`. Both are secret prompts, because the username is the
+  secret when the password is empty (glossary: *Scrub patterns*).
+
+The success result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | record ID | byte value, exactly 16 bytes: the new record's random version 4 UUID |
+
+`add` never overwrites. Errors specific to `add`:
+
+| Code | When |
+|---|---|
+| `name-taken` | the name is in the manifest, healthy or damaged |
+| `credential-invalid` | the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
+| `vault-write-failed` | writing the record or the manifest failed; the message says whether the write may have committed |
 
 ### Prompt (kind 2)
 
@@ -342,13 +380,16 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `14` | `unlock-denied` | `unlock`: the vault passphrase was wrong |
 | `15` | `unlock-failed` | `unlock`: the vault did not open, for a reason other than the passphrase; the service stays Locked |
 | `16` | `unlocked-unavailable` | `unlock`: the vault unlocked, but the config check left the service Unavailable; the message names the redacted reason |
+| `20` | `name-taken` | `add`: the name is already in the manifest, healthy or damaged; `add` never overwrites |
+| `21` | `credential-invalid` | `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
+| `22` | `vault-write-failed` | `add`: the vault write failed; the message says whether it may have committed |
 
 ## Versions
 
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, byte values,
-`config approve` (command 2), `unlock` (command 4), `lock` (command 5), `status` (command 6) and error codes 7 to 16
-join it rather than starting version 2. That is a default for the owner to confirm
+`config approve` (command 2), `unlock` (command 4), `lock` (command 5), `status` (command 6), `add` (command 8),
+error codes 7 to 16 and error codes 20 to 22 join it rather than starting version 2. That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
 Only the service sends responses, so the version rule is asymmetric:
@@ -478,6 +519,15 @@ and `4` for any other state.
 terminal with echo off or as the next line of stdin. On success it prints `the vault is unlocked: the service is
 Ready` to stdout. Otherwise it prints the service's error to stderr, which for an Unavailable service names the
 redacted reason, and exits with code 1.
+
+### add
+
+`iron-vault add <name> --origin <ORIGIN>... [--kind static|basic]` sends the name, the kind (static by default) and
+one to 32 origins. Each origin is `host`, `host:port`, `[v6]` or `[v6]:port`; the port defaults to 443. The CLI parses
+each one with the policy's origin rule before connecting and sends the canonical host: a scheme (`https://…`), a path,
+an invalid host or port, or more than 32 origins is a usage error, exit code 2, whose message names the rule and never
+the value. The secret is the answer to the service's prompts, read from the terminal with echo off or from stdin. On
+success it prints `added <name> (<kind>) as record <uuid>` to stdout; a service error goes to stderr with exit code 1.
 
 ### Owner input
 
