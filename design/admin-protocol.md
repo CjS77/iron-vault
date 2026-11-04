@@ -329,13 +329,14 @@ digest or permitted origin.
 | 8 | memory protection | `u8`: `1` locked against swap, `2` unavailable, `3` unsupported |
 | 9 | memory protection detail | UTF-8 text: why memory is not locked; empty when it is locked or unsupported |
 | 10 | credentials | byte value: the credential list below; empty while the vault is locked |
+| 11 | route faults | byte value: the route fault list below; empty while the vault is locked or no route has a fault |
 
-The vault ID, both approval versions and the credentials are sealed behind the vault identity (`approval.age`, the
-manifest), so they are unknown while no vault is open. No vault is open in Starting, Locked and Unavailable: in
-Unavailable a failed config check dropped the vault and its records and kept only the vault identity for the next
-check, so the service holds no ID, version or credential state to report there. The CLI shows these as unknown rather
-than guessing. An empty vault ID is how the report says no vault is open; an open vault with no credentials has a
-non-empty vault ID and an empty list.
+The vault ID, both approval versions, the credentials and the route faults are sealed behind the vault identity
+(`approval.age`, the manifest), so they are unknown while no vault is open. No vault is open in Starting, Locked and
+Unavailable: in Unavailable a failed config check dropped the vault and its records and kept only the vault identity
+for the next check, so the service holds no ID, version, credential or route fault state to report there. The CLI
+shows these as unknown rather than guessing. An empty vault ID is how the report says no vault is open; an open vault
+with no credentials has a non-empty vault ID and an empty list.
 
 Memory protection is reported from the process hardening report and never claims swap protection unless `mlockall`
 succeeded ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)).
@@ -351,6 +352,17 @@ The credential list is one entry per credential in the vault manifest, in creden
 | `r` times | route name length (1 byte) then the route name, in route-name order |
 
 A healthy credential makes no route unavailable. A needs-login standing joins this table with OAuth (v1).
+
+The route fault list is one entry per route that is unavailable for a cause of its own, in route-name order. A route
+listed here is never listed under a healthy credential; one whose credential is also damaged appears in both lists.
+
+| Size | Part |
+|---|---|
+| 1 | route name length `n`, 1 to 64 |
+| `n` | route name |
+| 1 | fault: `1` pinned CA unavailable |
+
+The entry names no CA path, PEM bytes or load error; the owner's log names the route and its `ca_file` field.
 
 ### Admin response: error (kind 5)
 
@@ -506,7 +518,8 @@ when no file is given ([open question 12](config-approval.md#open-questions)).
 
 `iron-vault status` prints one field per line, in this order, to stdout: `service`, `reason` (only when Unavailable),
 `profile`, `vault`, `vault id`, `approval committed`, `approval highest reserved`, `memory protection`, then one
-`credential <name>` line per credential (or `credentials` alone when there are none or they are unknown). A value
+`credential <name>` line per credential (or `credentials` alone when there are none or they are unknown), then one
+`route <name>: unavailable (pinned CA unavailable)` line per route fault. A value
 sealed behind a locked vault prints as `unknown while the vault is locked`. Under the development profile the
 profile line is exactly `profile: development — no isolation from malware running as <user>`, with the user the CLI
 runs as: in development the service account, the admin principal and the invoking user are the same account. The output

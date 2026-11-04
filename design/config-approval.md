@@ -341,7 +341,13 @@ this order:
 
 The config check then parses, validates and activates the published config. A config that fails (for example, an
 unknown credential reference) is `PolicyInvalid`. A damaged or needs-login record is not a failure: only its routes
-are unavailable ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). Last, the check builds the serving snapshot. The check passing moves Checking to Ready, and
+are unavailable ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). Next the check builds the upstream clients, and a route's pinned CA that fails to load
+([§3.7](iron-vault-specification.md#37-outbound-tls-and-environment)) is treated the same way: only the routes that pin it are unavailable, with the cause *pinned CA
+unavailable*, and every other route keeps serving. It is not `PolicyInvalid`: the config verified and validated, and
+the fault is in an administrator-installed file outside it, which the owner fixes and then reloads. The check logs one
+WARN event per such route, naming the route and the `ca_file` field but never the path or the file's bytes, and
+`status` reports the route as a route fault. A route can be unavailable for both causes, and reports both. Last, the
+check builds the serving snapshot. The check passing moves Checking to Ready, and
 the listener set is rebuilt from the verified config on entry to Ready.
 
 ### Reasons a request sees
