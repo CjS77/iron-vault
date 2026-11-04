@@ -107,6 +107,7 @@ an error.
 |---|---|---|---|
 | `1` | `ping` | none | the deployment profile |
 | `2` | `config approve` | the proposed config bytes | the committed version, the config digest and the summary headline |
+| `4` | `unlock` | none | none |
 | `6` | `status` | none | the [status report](#status) |
 
 **No command accepts an external signature** (§3.2). The service signs only the pending config of its own approval
@@ -174,6 +175,27 @@ Errors specific to `config approve`:
 | `approval-unavailable` | the service cannot approve now: its state does not allow it (only Ready and Unavailable with an invalid policy do), the approval state is damaged, the version counter is exhausted, or a write failed before any version was reserved; the message says which | no |
 | `approval-failed` | the transaction failed after its reservation and before its commit; the active policy is unchanged | yes; the message names it |
 | `committed-not-active` | the commit landed, or may have landed, but it could not be settled, published or activated; the service is Unavailable, and a reload does not leave that state: only an authorized repair (`Repaired`, then Checking) or a restart does | yes; the message names the version |
+
+#### unlock
+
+Opens the vault with the interactive passphrase (spec §3.11, §3.12, §3.13). It is allowed only while the service is
+Locked; in any other state the exchange ends with `wrong-state` before any prompt, and the state is unchanged.
+
+1. **Vault passphrase.** A prompt, secret: `Vault passphrase`. The value is the vault-unlock passphrase, never the
+   approval passphrase: the two are separate types, and unlocking never implies authority to approve. Empty or
+   non-UTF-8 input cannot be the passphrase and is answered as a wrong one.
+2. The service checks the state again under the service context's mutex, so two unlocks never both open the vault,
+   and opens `operational.age` with the passphrase, then `identity.age` with the operational identity, which is
+   dropped as soon as the vault identity is unwrapped (§3.10). A wrong passphrase ends the exchange with
+   `unlock-denied`, whose message is only `wrong passphrase`; an envelope that cannot be read or opened ends it with
+   `unlock-failed`. Either way the service stays Locked, and no other storage is tried (R-22). There is no second try
+   in the same exchange.
+3. The service moves to Checking and runs the config check. Ready answers with a success without a result.
+   Unavailable answers `unlock-failed`, and the message names the redacted reason (`policy invalid` or
+   `recovery needed`), never the check's detail, which goes to the log at WARN.
+
+Each state change is logged at INFO as a lock transition, under the target `iron_vault::lock_transition`, naming the two
+states and nothing the owner typed. scrypt and the config check take a few seconds, inside the CLI's 60-second timeout.
 
 ### Prompt (kind 2)
 
@@ -294,6 +316,9 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `10` | `approval-unavailable` | `config approve`: the service cannot run an approval now |
 | `11` | `approval-failed` | `config approve`: failed after reserving a version, before committing it |
 | `12` | `committed-not-active` | `config approve`: committed, but not yet published or active |
+| `13` | `wrong-state` | the command is not allowed in the service's current state; the message names the state |
+| `14` | `unlock-denied` | `unlock`: the vault passphrase was wrong |
+| `15` | `unlock-failed` | `unlock`: the vault did not open for a reason other than the passphrase, or it opened and the config check left the service Unavailable; the message says which, with the redacted reason |
 
 ## Versions
 
@@ -422,6 +447,13 @@ profile line is exactly `profile: development — no isolation from malware runn
 runs as: in development the service account, the admin principal and the invoking user are the same account. The output
 is a function of the report, so two runs on the same state are byte-identical. It exits `0` when the service is Ready
 and `4` for any other state.
+
+### unlock
+
+`iron-vault unlock` takes no argument: the passphrase is the answer to the service's secret prompt, read from the
+terminal with echo off or as the next line of stdin. On success it prints `the vault is unlocked: the service is
+Ready` to stdout. Otherwise it prints the service's error to stderr, which for an Unavailable service names the
+redacted reason, and exits with code 1.
 
 ### Owner input
 
