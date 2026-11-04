@@ -263,3 +263,115 @@ fn input_errors_name_no_typed_byte() {
     assert!(!error.to_string().contains(marker), "{error}");
     assert!(!format!("{error:?}").contains(marker), "{error:?}");
 }
+
+const KEY: &[u8] = b"AGE-SECRET-KEY-1MARKER5D1C9E";
+
+fn revealed(bytes: &[u8]) -> RevealedSecret {
+    RevealedSecret::new(Zeroizing::new(bytes.to_vec()))
+}
+
+/// Bytes a fake terminal or a fake stderr was given, shared with the test that reads them back.
+#[derive(Clone, Default)]
+struct Sink(Rc<RefCell<Vec<u8>>>);
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Sink {
+    fn bytes(&self) -> Vec<u8> {
+        self.0.borrow().clone()
+    }
+}
+
+/// A piped console with fake stderr and terminal: it opens the terminal only for a reveal.
+type FakePiped = Piped<&'static [u8], Sink, Box<dyn FnMut() -> io::Result<Sink>>>;
+
+/// A piped console whose notices go to the returned stderr and whose reveals go to the returned terminal, or fail to
+/// open one when `has_tty` is false.
+fn piped(has_tty: bool) -> (FakePiped, Sink, Sink) {
+    let (stderr, tty) = (Sink::default(), Sink::default());
+    let tty_handle = tty.clone();
+    let console = Piped {
+        input: &b""[..],
+        show_labels: false,
+        notices: stderr.clone(),
+        open_tty: Box::new(move || {
+            if has_tty {
+                Ok(tty_handle.clone())
+            } else {
+                Err(io::Error::from(io::ErrorKind::NotFound))
+            }
+        }) as Box<dyn FnMut() -> io::Result<Sink>>,
+    };
+    (console, stderr, tty)
+}
+
+#[test]
+fn a_terminal_shows_a_reveal_once_then_a_newline_and_reads_nothing() {
+    let (mut console, events) = terminal(None, false);
+    console.reveal(&revealed(KEY)).unwrap();
+    assert_eq!(console.tty.shown, [KEY, b"\n"].concat());
+    assert!(steps(&events).is_empty(), "a reveal reads nothing");
+}
+
+#[test]
+fn a_piped_console_shows_a_reveal_on_the_terminal_and_never_on_stderr() {
+    let (mut console, stderr, tty) = piped(true);
+    console.notice("save this key\n").unwrap();
+    console.reveal(&revealed(KEY)).unwrap();
+    assert_eq!(tty.bytes(), [KEY, b"\n"].concat(), "the value is written exactly once");
+    assert_eq!(stderr.bytes(), b"save this key\n", "the notice goes to stderr, the value does not");
+}
+
+#[test]
+fn a_piped_console_without_a_terminal_shows_nothing_and_cancels() {
+    let (mut console, stderr, _) = piped(false);
+    let error = console.reveal(&revealed(KEY)).unwrap_err();
+    assert!(matches!(error, InputError::NoTerminal(_)), "{error:?}");
+    assert!(stderr.bytes().is_empty());
+    assert!(error.to_string().contains("shown only on a terminal"), "{error}");
+}
+
+#[test]
+fn a_reveal_with_a_byte_outside_printable_ascii_is_refused_unshown() {
+    [
+        &b"KEY\x1b[2J"[..],
+        b"KEY\n",
+        b"KEY\r",
+        b"KEY\x7f",
+        b"KEY\0",
+        "KEYé".as_bytes(),
+        b"KEY\x9b",
+    ]
+    .into_iter()
+    .map(|bad| [KEY, bad].concat())
+    .for_each(|value| {
+        let (mut terminal, _) = terminal(None, false);
+        // Without a terminal, so a value checked only after opening one would fail as `NoTerminal` instead.
+        let (mut piped, stderr, tty) = piped(false);
+        [terminal.reveal(&revealed(&value)), piped.reveal(&revealed(&value))]
+            .into_iter()
+            .for_each(|result| {
+                let error = result.unwrap_err();
+                assert!(matches!(error, InputError::UnprintableReveal), "{value:?}: {error:?}");
+                assert!(!format!("{error} {error:?}").contains("MARKER"), "{error:?}");
+            });
+        assert!(terminal.tty.shown.is_empty() && tty.bytes().is_empty() && stderr.bytes().is_empty());
+    });
+}
+
+#[test]
+fn every_printable_ascii_byte_and_the_space_can_be_revealed() {
+    let printable: Vec<u8> = (b' '..=b'~').collect();
+    let (mut console, _) = terminal(None, false);
+    console.reveal(&revealed(&printable)).unwrap();
+    assert_eq!(console.tty.shown, [&printable[..], b"\n"].concat());
+}

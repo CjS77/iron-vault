@@ -8,13 +8,13 @@ use std::time::Duration;
 
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
-use iron_vault::admin::protocol::{AdminCommand, AdminRequest, AdminResponse, MAX_BODY_LEN, Prompt};
+use iron_vault::admin::protocol::{AdminCommand, AdminRequest, AdminResponse, MAX_BODY_LEN, Prompt, RevealedSecret};
 use iron_vault::admin::server::{AdminServer, Exchange, Limits};
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
 
 use super::*;
-use crate::cli::console::{InputError, Piped};
+use crate::cli::console::{InputError, OwnerConsole, Piped};
 
 /// Distinctive enough that finding it in a log or an error can only be the typed value leaking.
 const MARKER: &str = "MARKER-secret-5d1c9e";
@@ -91,7 +91,7 @@ fn capture(logs: &Captured) -> impl tracing::Subscriber + Send + Sync + use<> {
 }
 
 /// Serves one connection on `stream` with `handler` registered for `ping`.
-fn serve_one(stream: UnixStream, handler: Prompts) {
+fn serve_one(stream: UnixStream, handler: impl AdminHandler + 'static) {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     runtime.block_on(async {
         stream.set_nonblocking(true).unwrap();
@@ -208,6 +208,82 @@ fn a_service_that_stops_answering_times_out() {
     let mut console = Piped::new(&b""[..], false);
     let error = converse(&mut client, AdminRequest::Ping, &mut console).unwrap_err();
     assert!(matches!(error, ClientError::TimedOut), "{error:?}");
+}
+
+/// The test-only command, registered for `ping`, that shows a notice, reveals [`MARKER`], then prompts once and records
+/// the answer.
+struct Shows {
+    answers: Arc<Mutex<Vec<Answer>>>,
+}
+
+impl AdminHandler for Shows {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            exchange.notice("save this key\n").await?;
+            exchange.reveal(MARKER.as_bytes()).await?;
+            let answer = exchange.prompt(&plain()).await?;
+            self.answers.lock().unwrap().push(value(answer.expose_secret()));
+            Ok(AdminResponse::Success)
+        })
+    }
+}
+
+/// What the owner console was asked to do, in order.
+#[derive(Debug, PartialEq, Eq)]
+enum Shown {
+    Notice(String),
+    Reveal(Vec<u8>),
+    Prompt(String),
+}
+
+/// An owner console that records each call and answers every prompt `yes`.
+#[derive(Default)]
+struct Recording(Vec<Shown>);
+
+impl OwnerConsole for Recording {
+    fn collect(&mut self, prompt: &Prompt) -> Result<OwnerInput, InputError> {
+        self.0.push(Shown::Prompt(prompt.label.clone()));
+        Ok(OwnerInput::new(Zeroizing::new(b"yes".to_vec())))
+    }
+
+    fn notice(&mut self, text: &str) -> Result<(), InputError> {
+        self.0.push(Shown::Notice(text.to_owned()));
+        Ok(())
+    }
+
+    fn reveal(&mut self, secret: &RevealedSecret) -> Result<(), InputError> {
+        self.0.push(Shown::Reveal(secret.expose_secret().to_vec()));
+        Ok(())
+    }
+}
+
+#[test]
+fn notices_reveals_and_prompts_reach_the_console_in_order_and_the_reveal_reaches_no_log() {
+    let logs = Captured::default();
+    let answers = Arc::default();
+    let handler = Shows {
+        answers: Arc::clone(&answers),
+    };
+    let (mut client, service) = UnixStream::pair().unwrap();
+    let service_logs = capture(&logs);
+    let served = std::thread::spawn(move || tracing::subscriber::with_default(service_logs, || serve_one(service, handler)));
+    let mut console = Recording::default();
+    let result = tracing::subscriber::with_default(capture(&logs), || converse(&mut client, AdminRequest::Ping, &mut console));
+    drop(client);
+    served.join().unwrap();
+    assert_eq!(result.unwrap(), AdminResponse::Success);
+    assert_eq!(
+        console.0,
+        [
+            Shown::Notice("save this key\n".to_owned()),
+            Shown::Reveal(MARKER.as_bytes().to_vec()),
+            Shown::Prompt("Plain".to_owned()),
+        ]
+    );
+    assert_eq!(*answers.lock().unwrap(), [value(b"yes")]);
+    let logs = logs.text();
+    assert!(logs.contains("admin command `ping`"), "the capture saw nothing: {logs}");
+    assert!(!logs.contains(MARKER), "{logs}");
 }
 
 /// A temporary config file holding the given bytes, removed on drop.

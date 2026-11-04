@@ -40,12 +40,17 @@ fn same(a: &Frame, b: &Frame) -> bool {
         (Frame::OwnerInput(a), Frame::OwnerInput(b)) => a.expose_secret() == b.expose_secret(),
         (Frame::Response(a), Frame::Response(b)) => a == b,
         (Frame::Notice(a), Frame::Notice(b)) => a == b,
+        (Frame::Reveal(a), Frame::Reveal(b)) => a.expose_secret() == b.expose_secret(),
         _ => false,
     }
 }
 
 fn owner_input(bytes: &[u8]) -> Frame {
     Frame::OwnerInput(OwnerInput::new(Zeroizing::new(bytes.to_vec())))
+}
+
+fn reveal(bytes: &[u8]) -> Frame {
+    Frame::Reveal(RevealedSecret::new(Zeroizing::new(bytes.to_vec())))
 }
 
 fn prompt(label: &str, secret: bool) -> Frame {
@@ -147,6 +152,9 @@ fn any_frame() -> impl Strategy<Value = Frame> {
         ))),
         (text(MAX_LABEL), any::<bool>()).prop_map(|(label, secret)| Frame::Prompt(Prompt { label, secret })),
         owner_bytes().prop_map(|bytes| owner_input(&bytes)),
+        owner_bytes()
+            .prop_filter("a reveal is never empty", |bytes| !bytes.is_empty())
+            .prop_map(|bytes| reveal(&bytes)),
         Just(AdminResponse::Success).prop_map(Frame::Response),
         prop_oneof![Just(DeploymentProfile::Protected), Just(DeploymentProfile::Development)]
             .prop_map(|profile| Frame::Response(AdminResponse::Ping { profile })),
@@ -280,7 +288,7 @@ proptest! {
     }
 
     #[test]
-    fn random_bodies_never_panic_and_accepted_frames_re_encode_exactly(kind in 0u8..7, body in field_soup()) {
+    fn random_bodies_never_panic_and_accepted_frames_re_encode_exactly(kind in 0u8..8, body in field_soup()) {
         let bytes = raw(PROTOCOL_VERSION, kind, &body);
         if let Ok(Decoded::Frame { frame, used }) = decode(&bytes) {
             prop_assert_eq!(used, bytes.len());
@@ -303,6 +311,7 @@ fn every_frame_kind_round_trips_with_its_kind_byte() {
             }),
             6,
         ),
+        (reveal(b"AGE-SECRET-KEY-1"), 7),
     ];
     frames.iter().for_each(|(frame, kind)| {
         assert_eq!(encoded(frame)[2], *kind);
@@ -518,7 +527,7 @@ fn an_unsupported_version_is_refused_before_the_kind() {
 
 #[test]
 fn unknown_frame_kinds_are_refused() {
-    [0, 7, 255]
+    [0, 8, 255]
         .into_iter()
         .for_each(|kind| assert_eq!(decode_err(&raw(1, kind, &[])), FrameError::UnknownKind(kind)));
 }
@@ -604,6 +613,7 @@ fn no_error_carries_the_bytes_of_the_frame_it_refused() {
         raw(1, 2, &body(&[field(1, marker), field(1, marker)])),
         raw(1, 2, &[&field(1, marker)[..], &[0, 2, 0, 0, 0, 99], marker].concat()),
         raw(1, 4, &field(7, marker)),
+        raw(2, 7, marker),
     ];
     refused.iter().for_each(|bytes| {
         let error = decode_err(bytes);
@@ -841,4 +851,30 @@ fn long_text_splits_into_notices_that_fit_and_join_back_exactly() {
     notices.iter().for_each(|notice| assert_round_trips(&Frame::Notice(notice.clone())));
     assert_eq!(notices.iter().map(|notice| notice.text.as_str()).collect::<String>(), text);
     assert!(Notice::split("").is_empty());
+}
+
+#[test]
+fn a_reveal_carries_its_value_unframed_and_round_trips() {
+    let bytes = encoded(&reveal(MARKER.as_bytes()));
+    assert_eq!(bytes, raw(PROTOCOL_VERSION, 7, MARKER.as_bytes()));
+    assert_round_trips(&reveal(MARKER.as_bytes()));
+    assert_round_trips(&reveal(&vec![0xa5; MAX_BODY_LEN]));
+    let mut direct = Vec::new();
+    encode_reveal(MARKER.as_bytes(), &mut direct).unwrap();
+    assert_eq!(direct, bytes, "encoding from the bytes matches encoding the frame");
+}
+
+#[test]
+fn a_reveal_over_the_body_bound_is_refused_at_the_header() {
+    let header = [&[0, 1, 7][..], &(u32::try_from(MAX_BODY_LEN).unwrap() + 1).to_be_bytes()].concat();
+    assert_eq!(decode_err(&header), FrameError::BodyTooLong);
+    let mut out = vec![9];
+    assert_eq!(encode_reveal(&vec![0; MAX_BODY_LEN + 1], &mut out), Err(FrameError::BodyTooLong));
+    assert_eq!(out, [9], "a refused reveal appends nothing");
+}
+
+#[test]
+fn an_empty_reveal_is_refused_both_ways() {
+    assert_eq!(decode_err(&raw(1, 7, &[])), FrameError::EmptyBody(7));
+    assert_eq!(encode(&reveal(b""), &mut Vec::new()), Err(FrameError::EmptyBody(7)));
 }
