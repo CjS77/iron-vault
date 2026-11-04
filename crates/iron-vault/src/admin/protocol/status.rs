@@ -40,8 +40,8 @@ pub struct StatusReport {
 /// The vault's lock state, and what is known only while it is unlocked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultStatus {
-    /// The vault identity is not in memory, so the vault ID, the approval versions and the credentials are unknown. The
-    /// service is also here in Unavailable, where the failed check dropped the vault.
+    /// No vault is open, so the vault ID, the approval versions and the credentials are unknown. The service is also
+    /// here in Unavailable, where the failed check dropped the vault, though the service context keeps the vault identity.
     Locked,
     /// The vault is open.
     Unlocked(UnlockedVault),

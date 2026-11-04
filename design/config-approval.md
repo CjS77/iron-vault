@@ -239,7 +239,15 @@ not yet in place. Finishing a publish in a running service, and not only "on res
 
 Every config check runs recovery first. A config check is the work the service does in Checking: after an unlock,
 after a reload, after an approval's commit, and after an authorized repair. It needs the vault identity to open
-`approval.age`, so a locked service recovers when it is unlocked. Recovery reads `approval.age` and never writes it, so
+`approval.age`, so a locked service recovers when it is unlocked.
+
+The service context keeps the vault identity from unlock until lock or stop, in Checking, Ready and Unavailable alike.
+Every config check opens a new vault from it: on success the vault moves into the serving snapshot, and on failure the
+vault and its decrypted records are dropped while the identity stays. So a reload, an approval's commit and a repair
+re-enter Checking without a new unlock, and an Unavailable service holds the one key and no credential record. The
+identity has no copies: the context and each open vault share the one value, whose key bytes are cleared when the last
+holder drops it. A `lock` drops the context's share at once and the withdrawn snapshot's vault holds the last, so the
+identity is cleared when the lock drain releases that snapshot; a stop drops both. Recovery reads `approval.age` and never writes it, so
 loading never advances a counter.
 
 ### Inputs

@@ -294,8 +294,8 @@ digest or permitted origin.
 
 The vault ID, both approval versions and the credentials are sealed behind the vault identity (`approval.age`, the
 manifest), so they are unknown while the vault is locked. The vault is locked in Starting and Locked, and also in
-Unavailable: a failed config check drops the vault and its identity, so the service holds no ID, version or
-credential state to report there. The CLI shows these as unknown rather than guessing. An empty vault ID is how the
+Unavailable: a failed config check drops the vault and its records, and keeps only the vault identity for the next
+check, so the service holds no ID, version or credential state to report there. The CLI shows these as unknown rather than guessing. An empty vault ID is how the
 report says the vault is locked; an unlocked vault with no credentials has a non-empty vault ID and an empty list.
 
 Memory protection is reported from the process hardening report and never claims swap protection unless `mlockall`
