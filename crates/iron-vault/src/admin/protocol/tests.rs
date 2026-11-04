@@ -98,6 +98,7 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::WrongState),
         Just(ErrorCode::UnlockDenied),
         Just(ErrorCode::UnlockFailed),
+        Just(ErrorCode::UnlockedUnavailable),
     ]
 }
 
@@ -278,6 +279,7 @@ fn the_unlock_error_codes_have_their_documented_numbers_and_names() {
         (ErrorCode::WrongState, 13, "wrong-state"),
         (ErrorCode::UnlockDenied, 14, "unlock-denied"),
         (ErrorCode::UnlockFailed, 15, "unlock-failed"),
+        (ErrorCode::UnlockedUnavailable, 16, "unlocked-unavailable"),
     ]
     .into_iter()
     .for_each(|(code, number, name)| {

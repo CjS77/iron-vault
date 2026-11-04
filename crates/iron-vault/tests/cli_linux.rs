@@ -326,7 +326,7 @@ async fn unlock_sends_the_piped_passphrase_and_reports_ready_without_echoing_it(
 async fn unlock_into_an_unavailable_service_shows_the_redacted_reason() {
     let message = "the vault unlocked, but the config check failed: the service is Unavailable (policy invalid)";
     let response = AdminResponse::Error {
-        code: ErrorCode::UnlockFailed,
+        code: ErrorCode::UnlockedUnavailable,
         message: message.to_owned(),
     };
     let (output, _) = scripted_unlock(response).await;
@@ -335,7 +335,7 @@ async fn unlock_into_an_unavailable_service_shows_the_redacted_reason() {
     assert_eq!(stdout, "");
     assert_eq!(
         stderr,
-        format!("iron-vault: the service answered error 15 (unlock-failed): {message}\n")
+        format!("iron-vault: the service answered error 16 (unlocked-unavailable): {message}\n")
     );
     assert!(!stderr.contains(MARKER), "{stderr}");
 }

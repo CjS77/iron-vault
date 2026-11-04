@@ -140,9 +140,11 @@ pub enum ErrorCode {
     WrongState = 13,
     /// `unlock`: the vault passphrase was wrong.
     UnlockDenied = 14,
-    /// `unlock`: the vault did not open for a reason other than the passphrase, or it opened and the config check left
-    /// the service Unavailable; the message says which, with the redacted reason.
+    /// `unlock`: the vault did not open, for a reason other than the passphrase; the service stays Locked.
     UnlockFailed = 15,
+    /// `unlock`: the vault unlocked, but the config check left the service Unavailable; the message names the redacted
+    /// reason.
+    UnlockedUnavailable = 16,
 }
 
 impl ErrorCode {
@@ -158,6 +160,7 @@ impl ErrorCode {
             Self::WrongState => "wrong-state",
             Self::UnlockDenied => "unlock-denied",
             Self::UnlockFailed => "unlock-failed",
+            Self::UnlockedUnavailable => "unlocked-unavailable",
         }
     }
 

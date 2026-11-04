@@ -12,7 +12,7 @@ use super::dispatch::{AdminHandler, HandlerFuture};
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode, OwnerInput, Prompt};
 use super::server::{Exchange, ExchangeError};
-use crate::service_context::{ServiceContext, UnlockRefusal};
+use crate::service_context::{ServiceContext, UNLOCK_REFUSED, UnlockRefusal};
 use crate::service_state::{AdminOperation, ServiceState, UnavailableReason};
 
 /// The label of the one prompt `unlock` sends.
@@ -48,7 +48,7 @@ impl<F: StoreFs> Unlock<F> {
             secret: true,
         };
         let Some(passphrase) = vault_passphrase(exchange.prompt(&prompt).await?) else {
-            tracing::warn!("unlock refused, the service stays Locked: wrong passphrase");
+            tracing::warn!("{UNLOCK_REFUSED}: wrong passphrase");
             return Ok(refused(UnlockRefusal::WrongPassphrase));
         };
         Ok(match self.service.unlock(&passphrase).await {
@@ -70,7 +70,7 @@ fn settled(state: ServiceState) -> AdminResponse {
     match state {
         ServiceState::Ready => AdminResponse::Success,
         other => error(
-            ErrorCode::UnlockFailed,
+            ErrorCode::UnlockedUnavailable,
             format!(
                 "the vault unlocked, but the config check failed: the service is {}",
                 state_name(other)

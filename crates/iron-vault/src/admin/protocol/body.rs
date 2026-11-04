@@ -121,6 +121,7 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::WrongState,
         ErrorCode::UnlockDenied,
         ErrorCode::UnlockFailed,
+        ErrorCode::UnlockedUnavailable,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

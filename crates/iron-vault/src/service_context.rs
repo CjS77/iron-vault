@@ -38,6 +38,9 @@ use serving::Serving;
 /// their own events.
 pub const LOCK_TRANSITION_TARGET: &str = "iron_vault::lock_transition";
 
+/// The start of the WARN line an unlock refusal logs, whichever layer refuses it.
+pub(crate) const UNLOCK_REFUSED: &str = "unlock refused, the service stays Locked";
+
 /// Why an unlock left the service where it was. No variant holds passphrase text.
 #[derive(Debug, thiserror::Error)]
 pub enum UnlockRefusal {
@@ -182,7 +185,8 @@ impl<F: StoreFs> ServiceContext<F> {
     ///
     /// When the check passes, the listener set is rebuilt from the verified config, and only then is the snapshot
     /// served and the set approved. When it fails, the provisional listeners keep answering `503` with the failure's
-    /// reason, the check has logged the detail at WARN, and the vault and its identity are dropped.
+    /// reason, the check has logged the detail at WARN, and the vault and its identity are dropped. Both state changes
+    /// are logged as lock transitions, so a host unlock (EP-32) entering here is audited like a passphrase unlock.
     pub async fn enter_checking(&self, identity: VaultIdentity) -> Result<ServiceState, IllegalTransition> {
         let mut inner = self.inner.lock().await;
         self.check_and_settle(&mut inner, ServiceEvent::UnlockSucceeded, identity).await
@@ -201,18 +205,15 @@ impl<F: StoreFs> ServiceContext<F> {
             return Err(UnlockRefusal::WrongState(locked));
         }
         let identity = unlock_with_passphrase(&self.locks.state, &self.setup.fs, passphrase).map_err(|error| {
-            tracing::warn!("unlock refused, the service stays Locked: {error}");
+            tracing::warn!("{UNLOCK_REFUSED}: {error}");
             match error {
                 UnlockError::WrongPassphrase => UnlockRefusal::WrongPassphrase,
                 other => UnlockRefusal::Failed(other),
             }
         })?;
-        let refused = |refused: IllegalTransition| UnlockRefusal::WrongState(refused.state);
-        let checking = self.apply(&mut inner, ServiceEvent::UnlockSucceeded).map_err(refused)?;
-        log_lock_transition(locked, checking);
-        let outcome = self.settle(&mut inner, identity).await.map_err(refused)?;
-        log_lock_transition(checking, outcome);
-        Ok(outcome)
+        self.check_and_settle(&mut inner, ServiceEvent::UnlockSucceeded, identity)
+            .await
+            .map_err(|illegal| UnlockRefusal::WrongState(illegal.state))
     }
 
     /// Stops the service on SIGTERM or SIGINT: Ready to Stopped, then drops the snapshot, the vault in it and the
@@ -282,15 +283,25 @@ impl<F: StoreFs> ServiceContext<F> {
     }
 
     /// Moves into Checking on `event` (an unlock; later a reload, an approval's commit or a repair), runs the config check
-    /// with `identity` ([`open_and_check`]), and settles in Ready or Unavailable.
+    /// with `identity` ([`open_and_check`]), and settles in Ready or Unavailable. Leaving Locked, both changes are
+    /// logged as lock transitions.
     async fn check_and_settle(
         &self,
         inner: &mut Inner,
         event: ServiceEvent,
         identity: VaultIdentity,
     ) -> Result<ServiceState, IllegalTransition> {
-        self.apply(inner, event)?;
-        self.settle(inner, identity).await
+        let from = inner.state;
+        let checking = self.apply(inner, event)?;
+        let leaving_locked = from == ServiceState::Locked;
+        if leaving_locked {
+            log_lock_transition(from, checking);
+        }
+        let outcome = self.settle(inner, identity).await?;
+        if leaving_locked {
+            log_lock_transition(checking, outcome);
+        }
+        Ok(outcome)
     }
 
     /// Runs the config check in Checking with `identity` and settles in Ready or Unavailable.

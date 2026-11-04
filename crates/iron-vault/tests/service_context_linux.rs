@@ -835,7 +835,7 @@ async fn unlock_with_an_invalid_approval_ends_unavailable_and_names_the_redacted
     let response = unlock(&service, PASSPHRASE).await;
 
     let message = "the vault unlocked, but the config check failed: the service is Unavailable (policy invalid)";
-    assert_eq!(response, error_response(ErrorCode::UnlockFailed, message));
+    assert_eq!(response, error_response(ErrorCode::UnlockedUnavailable, message));
     assert_eq!(service.state().await, ServiceState::Unavailable(FailureReason::PolicyInvalid));
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::PolicyInvalid);
     assert!(

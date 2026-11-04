@@ -191,7 +191,7 @@ Locked; in any other state the exchange ends with `wrong-state` before any promp
    `unlock-failed`. Either way the service stays Locked, and no other storage is tried (R-22). There is no second try
    in the same exchange.
 3. The service moves to Checking and runs the config check. Ready answers with a success without a result.
-   Unavailable answers `unlock-failed`, and the message names the redacted reason (`policy invalid` or
+   Unavailable answers `unlocked-unavailable`, and the message names the redacted reason (`policy invalid` or
    `recovery needed`), never the check's detail, which goes to the log at WARN.
 
 Each state change is logged at INFO as a lock transition, under the target `iron_vault::lock_transition`, naming the two
@@ -318,13 +318,14 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `12` | `committed-not-active` | `config approve`: committed, but not yet published or active |
 | `13` | `wrong-state` | the command is not allowed in the service's current state; the message names the state |
 | `14` | `unlock-denied` | `unlock`: the vault passphrase was wrong |
-| `15` | `unlock-failed` | `unlock`: the vault did not open for a reason other than the passphrase, or it opened and the config check left the service Unavailable; the message says which, with the redacted reason |
+| `15` | `unlock-failed` | `unlock`: the vault did not open, for a reason other than the passphrase; the service stays Locked |
+| `16` | `unlocked-unavailable` | `unlock`: the vault unlocked, but the config check left the service Unavailable; the message names the redacted reason |
 
 ## Versions
 
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, byte values,
-`config approve` and error codes 7 to 12 join it rather than starting version 2. That is a default for the owner to
+`config approve`, `unlock` (command 4) and error codes 7 to 16 join it rather than starting version 2. That is a default for the owner to
 confirm ([open question 11](config-approval.md#open-questions)).
 
 Only the service sends responses, so the version rule is asymmetric:
