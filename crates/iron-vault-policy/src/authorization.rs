@@ -71,8 +71,9 @@ pub enum AuthzError {
         /// Which check failed.
         reason: Refusal,
     },
-    /// The caller is granted the route, but its credential record is unusable: `503`, while other routes keep serving.
-    #[error("route {route} is unavailable because its credential cannot be used")]
+    /// The caller is granted the route, but the route is unavailable (its credential record is unusable or its pinned CA
+    /// could not be loaded): `503`, while other routes keep serving.
+    #[error("route {route} is unavailable")]
     Unavailable {
         /// The unavailable route.
         route: RouteName,

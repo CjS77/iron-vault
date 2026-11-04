@@ -56,7 +56,9 @@ pub mod upstream_target;
 pub mod validated;
 
 pub use account_name::{AccountName, AccountNameError};
-pub use activation::{AccountDirectory, ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
+pub use activation::{
+    AccountDirectory, ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, UnavailableCause, activate,
+};
 pub use approval_summary::{ApprovalSummary, summarize};
 pub use authorization::{AuthorizedRequest, AuthzError, Refusal, authorize};
 pub use bound_credential::BoundCredential;

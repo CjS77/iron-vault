@@ -69,8 +69,8 @@ pub enum CatalogEntry {
 
 /// A validated config activated against the service's capabilities, credential catalog and account directory.
 ///
-/// Only [`activate`] builds one. Routes whose record is unusable stay listed so the service can answer for them, but
-/// are unavailable; every other route may serve requests.
+/// Only [`activate`] builds one. Unavailable routes stay listed so the service can answer for them, each with its
+/// causes; every other route may serve requests.
 ///
 /// Each peer caller's account is resolved to a uid once, here, so identifying a caller is a uid comparison and a
 /// missing, privileged or overflow account refuses the config rather than a request. The uids are a snapshot: an
@@ -78,8 +78,19 @@ pub enum CatalogEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivePolicy {
     config: ValidatedConfig,
-    unavailable: BTreeSet<RouteName>,
+    unavailable: BTreeMap<RouteName, BTreeSet<UnavailableCause>>,
     peer_uids: BTreeMap<CallerName, u32>,
+}
+
+/// Why a route of an active policy serves no request (glossary: *Unavailable route*). A route may have both.
+///
+/// Neither cause refuses the policy: each is a fault local to its routes, which the owner fixes and then reloads (§3.9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum UnavailableCause {
+    /// The route's credential record is damaged or needs login.
+    CredentialUnusable,
+    /// The route's pinned CA could not be loaded (§3.7).
+    PinnedCaUnavailable,
 }
 
 /// Why a validated config cannot be activated.
@@ -176,15 +187,37 @@ impl ActivePolicy {
 
     /// The route named `route`, if it exists and is available.
     ///
-    /// This is the lookup for serving a request, so a route whose record is unusable can never be reached by forgetting
-    /// to check [`ActivePolicy::is_available`].
+    /// This is the lookup for serving a request, so an unavailable route, whatever its cause, can never be reached by
+    /// forgetting to check [`ActivePolicy::is_available`].
     pub fn route(&self, route: &RouteName) -> Option<&RouteConfig> {
-        self.config.routes().get(route).filter(|_| !self.unavailable.contains(route))
+        self.config.routes().get(route).filter(|_| !self.unavailable.contains_key(route))
     }
 
-    /// Routes whose credential record is unusable, in name order.
-    pub fn unavailable_routes(&self) -> &BTreeSet<RouteName> {
+    /// The unavailable routes, in name order, each with its causes.
+    pub fn unavailable_routes(&self) -> &BTreeMap<RouteName, BTreeSet<UnavailableCause>> {
         &self.unavailable
+    }
+
+    /// Whether `route` is unavailable for `cause`, whatever other cause it also has.
+    pub fn is_unavailable_for(&self, route: &RouteName, cause: UnavailableCause) -> bool {
+        self.unavailable.get(route).is_some_and(|causes| causes.contains(&cause))
+    }
+
+    /// This policy with each of `routes` also unavailable because its pinned CA could not be loaded.
+    ///
+    /// Only the service can load a CA file, so it marks these after activation, before the policy serves anything. A
+    /// name the config does not hold is ignored. It can only take routes away, never make one available.
+    pub fn with_pinned_ca_unavailable<'a>(mut self, routes: impl IntoIterator<Item = &'a RouteName>) -> Self {
+        routes
+            .into_iter()
+            .filter(|route| self.config.routes().contains_key(*route))
+            .for_each(|route| {
+                self.unavailable
+                    .entry(route.clone())
+                    .or_default()
+                    .insert(UnavailableCause::PinnedCaUnavailable);
+            });
+        self
     }
 
     /// Whether `route` exists and may serve requests.
@@ -225,7 +258,7 @@ pub fn activate(
         (true, Ok(peer_uids)) => {
             let unavailable = routes
                 .filter(|(_, _, entry)| !is_usable(entry))
-                .map(|(name, _, _)| name.clone())
+                .map(|(name, _, _)| (name.clone(), BTreeSet::from([UnavailableCause::CredentialUnusable])))
                 .collect();
             Ok(ActivePolicy {
                 config: config.clone(),
@@ -430,10 +463,8 @@ mod tests {
     fn damaged_credential_disables_only_its_route() {
         let catalog = spec_catalog(&[("venice", CatalogEntry::Unusable)]);
         let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap();
-        assert_eq!(
-            policy.unavailable_routes().iter().map(RouteName::as_str).collect::<Vec<_>>(),
-            ["venice"]
-        );
+        let causes = BTreeSet::from([UnavailableCause::CredentialUnusable]);
+        assert_eq!(policy.unavailable_routes(), &BTreeMap::from([(n("venice"), causes)]));
         assert!(!policy.is_available(&n("venice")));
         assert!(policy.is_available(&n("fx")) && policy.is_available(&n("brave")));
     }
@@ -447,6 +478,23 @@ mod tests {
         assert_eq!(policy.route(&n("venice")), None);
         assert!(policy.config().routes().contains_key(&n("venice")));
         assert_eq!(policy.route(&n("missing")), None);
+    }
+
+    #[test]
+    fn a_pinned_ca_route_is_unavailable_and_keeps_its_credential_cause() {
+        let catalog = spec_catalog(&[("venice", CatalogEntry::Unusable)]);
+        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap();
+        let policy = policy.with_pinned_ca_unavailable(&[n("fx"), n("venice"), n("missing")]);
+        let both = BTreeSet::from([UnavailableCause::CredentialUnusable, UnavailableCause::PinnedCaUnavailable]);
+        let expected = BTreeMap::from([
+            (n("fx"), BTreeSet::from([UnavailableCause::PinnedCaUnavailable])),
+            (n("venice"), both),
+        ]);
+        assert_eq!(policy.unavailable_routes(), &expected);
+        assert_eq!(policy.route(&n("fx")), None);
+        assert!(policy.is_unavailable_for(&n("fx"), UnavailableCause::PinnedCaUnavailable));
+        assert!(!policy.is_unavailable_for(&n("fx"), UnavailableCause::CredentialUnusable));
+        assert!(policy.is_available(&n("brave")));
     }
 
     #[test]

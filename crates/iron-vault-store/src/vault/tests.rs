@@ -574,7 +574,7 @@ fn a_missing_record_makes_only_its_routes_unavailable() {
     let (vault, _) = opened.unwrap();
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(SPEC_EXAMPLE.as_bytes()).unwrap()).unwrap();
     let policy = activate(&config, &Capabilities::default(), &vault, &NoAccounts).unwrap();
-    assert_eq!(policy.unavailable_routes(), &[n::<RouteName>("venice")].into());
+    assert!(policy.unavailable_routes().keys().eq([&n::<RouteName>("venice")]));
     assert!(policy.is_available(&n("fx")) && policy.is_available(&n("brave")));
 }
 
