@@ -10,7 +10,7 @@ use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
-use iron_vault::trusted_path::TrustedPathRule;
+use iron_vault::deployment::DeploymentProfile;
 use iron_vault::trusted_path_report::{self, ServicePaths, TrustedPathReport};
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -20,7 +20,8 @@ pub fn run(paths: &ServicePaths) -> anyhow::Result<()> {
         .runtime_dir
         .as_deref()
         .context("this deployment names no runtime directory for the admin socket")?;
-    create_runtime_dir(runtime_dir)?;
+    create_dir(runtime_dir, 0o711, "runtime")?;
+    create_config_dir(paths)?;
     check_trusted_paths(paths)?;
     // Everything that can fail or be interrupted comes before binding, so once the socket file exists the server owns
     // it and removes it on every exit.
@@ -38,40 +39,37 @@ pub fn run(paths: &ServicePaths) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Creates the runtime directory at mode `0711` when it is missing. In a packaged install the service manager has
-/// already created it; a development install has nothing else to make it.
+/// Creates `dir` at `mode` when it is missing, naming it by `purpose` in the error.
 ///
-/// Other accounts may search the directory, so they can reach a request socket inside it, but never list or write it,
-/// so none can put its own socket there (§3.4). The admin socket in it stays `0600` and peer-checked. In development
-/// the directory sits in the user's `0700` `$XDG_RUNTIME_DIR`, so other accounts still cannot reach it; development
-/// gives no isolation from other accounts' callers anyway.
-fn create_runtime_dir(dir: &Path) -> anyhow::Result<()> {
-    match DirBuilder::new().mode(0o711).create(dir) {
+/// The runtime directory is `0711`. In a packaged install the service manager has already created it; a development
+/// install has nothing else to make it. Other accounts may search the directory, so they can reach a request socket
+/// inside it, but never list or write it, so none can put its own socket there (§3.4). The admin socket in it stays
+/// `0600` and peer-checked. In development the directory sits in the user's `0700` `$XDG_RUNTIME_DIR`, so other
+/// accounts still cannot reach it; development gives no isolation from other accounts' callers anyway.
+fn create_dir(dir: &Path, mode: u32, purpose: &str) -> anyhow::Result<()> {
+    match DirBuilder::new().mode(mode).create(dir) {
         Err(e) if e.kind() != io::ErrorKind::AlreadyExists => {
-            Err(e).with_context(|| format!("cannot create the runtime directory {}", dir.display()))
+            Err(e).with_context(|| format!("cannot create the {purpose} directory {}", dir.display()))
         }
         _ => Ok(()),
     }
 }
 
-/// Logs every untrusted path and refuses to start when one the service relies on now is untrusted: its own binary and
-/// the runtime directory holding the admin socket. The config and state paths are reported only, until the service
-/// reads them.
+/// Creates a development install's config directory at `0700` when it is missing. A packaged install's directory
+/// belongs to the package, which creates it with that mode for the service account, so the service never does.
+fn create_config_dir(paths: &ServicePaths) -> anyhow::Result<()> {
+    match (paths.profile, paths.config.parent()) {
+        (DeploymentProfile::Development, Some(dir)) => create_dir(dir, 0o700, "config"),
+        _ => Ok(()),
+    }
+}
+
+/// Refuses to start when a path the service reads before it unlocks anything is untrusted (§3.1: "refuse an unsafe
+/// installation and explain which path failed"), and logs each path caution.
 fn check_trusted_paths(paths: &ServicePaths) -> anyhow::Result<()> {
     let report = TrustedPathReport::check(paths);
     trusted_path_report::log_cautions(&report);
-    let failures: Vec<_> = report
-        .entries
-        .iter()
-        .filter_map(|entry| entry.outcome.as_ref().err().map(|failure| (entry, failure)))
-        .collect();
-    failures
-        .iter()
-        .for_each(|(entry, failure)| tracing::warn!("untrusted path {}: {failure}", entry.path.display()));
-    match failures
-        .iter()
-        .find(|(entry, _)| matches!(entry.rule, TrustedPathRule::Binary | TrustedPathRule::RuntimeDir))
-    {
+    match report.refusal() {
         Some((entry, failure)) => Err(anyhow::anyhow!(
             "refusing to start: {} is not trusted: {failure}",
             entry.path.display()

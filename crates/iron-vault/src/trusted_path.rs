@@ -139,6 +139,9 @@ pub enum TrustedPathRule {
     Config,
     /// The state directory, which must be the expected owner's alone.
     StateDir,
+    /// The config directory, which the service writes when it publishes an approved config, so it is the expected
+    /// owner's alone with mode `0700`, like the state directory.
+    ConfigDir,
     /// The runtime directory holding the service's sockets.
     RuntimeDir,
     /// A file inside the state directory, such as its lock file.
@@ -158,7 +161,10 @@ pub enum TrustedPathRule {
 impl TrustedPathRule {
     /// Whether a root-owned sticky ancestor such as `/tmp` may be group- or world-writable on this path.
     const fn allows_sticky_ancestor(self) -> bool {
-        !matches!(self, Self::StateDir | Self::Config | Self::AdminCertificate | Self::AdminPrivateKey)
+        !matches!(
+            self,
+            Self::StateDir | Self::ConfigDir | Self::Config | Self::AdminCertificate | Self::AdminPrivateKey
+        )
     }
 
     /// Whether the leaf must be the file itself rather than a symlink to it. These files are opened with
@@ -172,7 +178,13 @@ impl TrustedPathRule {
     pub const fn cautioned_file(self) -> Option<CautionedFile> {
         match self {
             Self::Binary => Some(CautionedFile::Binary),
-            Self::Config | Self::StateDir | Self::RuntimeDir | Self::StateFile | Self::AdminCertificate | Self::AdminPrivateKey => None,
+            Self::Config
+            | Self::StateDir
+            | Self::ConfigDir
+            | Self::RuntimeDir
+            | Self::StateFile
+            | Self::AdminCertificate
+            | Self::AdminPrivateKey => None,
         }
     }
 }
@@ -499,7 +511,7 @@ impl Walk {
                 require_owner(component, self.binary_owner())?;
                 require_not_writable(component)
             }
-            TrustedPathRule::StateDir => {
+            TrustedPathRule::StateDir | TrustedPathRule::ConfigDir => {
                 require_directory(component)?;
                 require_owner(component, service)?;
                 require_mode(component, Mode::new(0o700))

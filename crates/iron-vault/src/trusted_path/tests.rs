@@ -309,7 +309,8 @@ fn ancestor_cases() -> Vec<Case> {
 }
 
 fn state_and_runtime_cases() -> Vec<Case> {
-    use TrustedPathRule::{RuntimeDir, StateDir, StateFile};
+    use TrustedPathRule::{ConfigDir, RuntimeDir, StateDir, StateFile};
+    let etc = |leaf| vec![dir("/", ROOT_UID, 0o755), dir("/etc", ROOT_UID, 0o755), leaf];
     let run = |uid, mode| {
         vec![
             dir("/", ROOT_UID, 0o755),
@@ -348,6 +349,29 @@ fn state_and_runtime_cases() -> Vec<Case> {
             StateDir,
             state_chain(file("/var/lib/iron-vault", SERVICE, 0o700)),
             unsafe_at("/var/lib/iron-vault", Problem::NotADirectory),
+        ),
+        case("config dir at 0700", ConfigDir, etc(dir("/etc/iron-vault", SERVICE, 0o700)), Ok(())),
+        case(
+            "config dir at 0755",
+            ConfigDir,
+            etc(dir("/etc/iron-vault", SERVICE, 0o755)),
+            unsafe_at("/etc/iron-vault", wrong_mode(0o755, 0o700)),
+        ),
+        case(
+            "root-owned config dir",
+            ConfigDir,
+            etc(dir("/etc/iron-vault", ROOT_UID, 0o700)),
+            unsafe_at("/etc/iron-vault", wrong_owner(ROOT_UID, OwnerRequirement::Uid(SERVICE))),
+        ),
+        case(
+            "config dir under a shared sticky directory",
+            ConfigDir,
+            vec![
+                dir("/", ROOT_UID, 0o755),
+                dir("/tmp", ROOT_UID, 0o1777),
+                dir("/tmp/iron-vault", SERVICE, 0o700),
+            ],
+            unsafe_at("/tmp", Problem::SharedStickyAncestor),
         ),
         case("runtime dir at 0755", RuntimeDir, run(SERVICE, 0o755), Ok(())),
         case(

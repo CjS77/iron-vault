@@ -1,8 +1,9 @@
 //! The trusted-path report: every trusted path a deployment names, checked in a fixed order, for startup and `status`.
 //!
-//! This module only reports. Whether an unsafe or unchecked path stops the service is the deployment profile's
-//! decision; path cautions never stop it, so they are logged as warnings.
+//! The service reads every path in the report before it unlocks anything, so startup refuses an unsafe or unchecked
+//! one ([`TrustedPathReport::refusal`]). Path cautions never stop it, so they are logged as warnings.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::deployment::DeploymentProfile;
@@ -12,6 +13,9 @@ use crate::trusted_path::{self, CautionedFile, ExpectedOwner, PathCaution, Trust
 /// The name of the state-directory lock file inside the state directory.
 const STATE_LOCK_FILE: &str = "lock";
 
+/// The name of the config-directory lock file inside the config directory.
+const CONFIG_LOCK_FILE: &str = "config.toml.lock";
+
 /// The trusted paths a deployment names, with its profile and expected owner. The running binary is not listed: it
 /// is found from the process itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,7 +24,7 @@ pub struct ServicePaths {
     pub profile: DeploymentProfile,
     /// Who must own the config, the state and runtime directories and the state files.
     pub owner: ExpectedOwner,
-    /// The configuration file. Its directory is checked as the config path's last ancestor.
+    /// The configuration file. Its directory is the config directory.
     pub config: PathBuf,
     /// The state directory.
     pub state_dir: PathBuf,
@@ -50,7 +54,8 @@ pub struct TrustedPathEntry {
     pub outcome: Result<Vec<PathCaution>, PathFailure>,
 }
 
-/// Every trusted path, in a fixed order: binary, config, state directory, state lock file, then runtime directory.
+/// Every trusted path, in a fixed order: binary, config directory, config, config lock file, state directory, state lock
+/// file, then runtime directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustedPathReport {
     /// The checked paths, in report order.
@@ -60,8 +65,11 @@ pub struct TrustedPathReport {
 impl TrustedPathReport {
     /// Checks the running binary and every path in `paths`.
     pub fn check(paths: &ServicePaths) -> Self {
+        let config_dir = paths.config.parent();
         let named = [
+            config_dir.map(|dir| (TrustedPathRule::ConfigDir, dir.to_path_buf())),
             Some((TrustedPathRule::Config, paths.config.clone())),
+            config_dir.map(|dir| (TrustedPathRule::StateFile, dir.join(CONFIG_LOCK_FILE))),
             Some((TrustedPathRule::StateDir, paths.state_dir.clone())),
             Some((TrustedPathRule::StateFile, paths.state_dir.join(STATE_LOCK_FILE))),
             paths.runtime_dir.clone().map(|dir| (TrustedPathRule::RuntimeDir, dir)),
@@ -74,6 +82,27 @@ impl TrustedPathReport {
         Self {
             entries: std::iter::once(binary_entry(paths.profile, paths.owner)).chain(entries).collect(),
         }
+    }
+
+    /// The first path that stops startup, in report order: every untrusted or unchecked path, except a file that is
+    /// missing before it is first needed. `config.toml` is missing until the first approval publishes it, and a lock
+    /// file until the first start, whose lock creates it; their directories are checked all the same.
+    pub fn refusal(&self) -> Option<(&TrustedPathEntry, &PathFailure)> {
+        self.entries.iter().find_map(|entry| match &entry.outcome {
+            Err(failure) if !entry.missing_file(failure) => Some((entry, failure)),
+            _ => None,
+        })
+    }
+}
+
+impl TrustedPathEntry {
+    /// Whether `failure` is only that this entry's file, a config or lock file, does not exist.
+    fn missing_file(&self, failure: &PathFailure) -> bool {
+        let missing = matches!(
+            failure,
+            PathFailure::Uncollected(CollectError::Io { path, kind: io::ErrorKind::NotFound }) if *path == self.path
+        );
+        missing && matches!(self.rule, TrustedPathRule::Config | TrustedPathRule::StateFile)
     }
 }
 
@@ -230,6 +259,84 @@ mod tests {
     fn an_unnamed_owner_is_shown_by_uid() {
         let warning = caution_warning(&opt_caution(None), Path::new("/opt/iron-vault/iron-vault"));
         assert!(warning.starts_with("/opt/iron-vault is owned by uid 997, not root"), "{warning}");
+    }
+
+    fn not_found(path: &str) -> Result<Vec<PathCaution>, PathFailure> {
+        Err(PathFailure::Uncollected(CollectError::Io {
+            path: PathBuf::from(path),
+            kind: io::ErrorKind::NotFound,
+        }))
+    }
+
+    fn wrong_mode(path: &str) -> Result<Vec<PathCaution>, PathFailure> {
+        Err(PathFailure::Unsafe(UnsafePath {
+            path: PathBuf::from(path),
+            problem: crate::trusted_path::Problem::WrongMode {
+                found: crate::trusted_path::Mode::new(0o755),
+                expected: crate::trusted_path::Mode::new(0o700),
+            },
+        }))
+    }
+
+    /// A report of the config directory, config file and config lock file, every one trusted but the one at `path`.
+    fn config_report(path: &str) -> TrustedPathReport {
+        let entries = [
+            (TrustedPathRule::ConfigDir, "/etc/iron-vault"),
+            (TrustedPathRule::Config, "/etc/iron-vault/config.toml"),
+            (TrustedPathRule::StateFile, "/etc/iron-vault/config.toml.lock"),
+        ];
+        TrustedPathReport {
+            entries: entries
+                .into_iter()
+                .map(|(rule, at)| entry(rule, at, if at == path { wrong_mode(at) } else { Ok(vec![]) }))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn an_unsafe_config_directory_refuses_startup() {
+        let report = config_report("/etc/iron-vault");
+        assert_eq!(report.refusal().map(|(entry, _)| entry.rule), Some(TrustedPathRule::ConfigDir));
+    }
+
+    #[test]
+    fn an_unsafe_config_file_refuses_startup() {
+        let report = config_report("/etc/iron-vault/config.toml");
+        assert_eq!(report.refusal().map(|(entry, _)| entry.rule), Some(TrustedPathRule::Config));
+    }
+
+    #[test]
+    fn an_unsafe_config_lock_file_refuses_startup() {
+        let report = config_report("/etc/iron-vault/config.toml.lock");
+        let refused = report.refusal().map(|(entry, _)| entry.path.clone());
+        assert_eq!(refused, Some(PathBuf::from("/etc/iron-vault/config.toml.lock")));
+    }
+
+    #[test]
+    fn a_missing_config_or_lock_file_does_not_refuse_startup_but_a_missing_directory_does() {
+        let missing_files = TrustedPathReport {
+            entries: vec![
+                entry(
+                    TrustedPathRule::Config,
+                    "/etc/iron-vault/config.toml",
+                    not_found("/etc/iron-vault/config.toml"),
+                ),
+                entry(
+                    TrustedPathRule::StateFile,
+                    "/var/lib/iron-vault/lock",
+                    not_found("/var/lib/iron-vault/lock"),
+                ),
+            ],
+        };
+        assert_eq!(missing_files.refusal(), None);
+        let missing_dir = TrustedPathReport {
+            entries: vec![
+                entry(TrustedPathRule::ConfigDir, "/etc/iron-vault", not_found("/etc/iron-vault")),
+                // The file's chain stops at its missing directory, which is not the file itself.
+                entry(TrustedPathRule::Config, "/etc/iron-vault/config.toml", not_found("/etc/iron-vault")),
+            ],
+        };
+        assert_eq!(missing_dir.refusal().map(|(entry, _)| entry.rule), Some(TrustedPathRule::ConfigDir));
     }
 
     #[test]

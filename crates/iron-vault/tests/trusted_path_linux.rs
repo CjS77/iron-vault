@@ -115,6 +115,7 @@ fn a_safe_tree_passes() {
     let tree = Tree::new("safe");
     dir(&tree.path("etc"), 0o755);
     file(&tree.path("etc/config.toml"), 0o600);
+    file(&tree.path("etc/config.toml.lock"), 0o600);
     state_tree(&tree.path("state"), 0o600);
     dir(&tree.path("run"), 0o755);
 
@@ -252,6 +253,7 @@ fn the_report_lists_every_path_in_a_fixed_order() {
     let tree = Tree::new("report");
     dir(&tree.path("etc"), 0o755);
     file(&tree.path("etc/config.toml"), 0o600);
+    file(&tree.path("etc/config.toml.lock"), 0o600);
     state_tree(&tree.path("state"), 0o600);
     dir(&tree.path("run"), 0o755);
     let paths = ServicePaths {
@@ -266,14 +268,17 @@ fn the_report_lists_every_path_in_a_fixed_order() {
     let listed: Vec<(TrustedPathRule, PathBuf)> = report.entries.iter().map(|e| (e.rule, e.path.clone())).collect();
     let expected = [
         (TrustedPathRule::Binary, std::env::current_exe().unwrap()),
+        (TrustedPathRule::ConfigDir, tree.path("etc")),
         (TrustedPathRule::Config, tree.path("etc/config.toml")),
+        (TrustedPathRule::StateFile, tree.path("etc/config.toml.lock")),
         (TrustedPathRule::StateDir, tree.path("state")),
         (TrustedPathRule::StateFile, tree.path("state/lock")),
         (TrustedPathRule::RuntimeDir, tree.path("run")),
     ];
     assert_eq!(listed, expected);
-    assert_eq!(report.entries[3].outcome, Ok(vec![]));
-    assert_eq!(report.entries[4].outcome, Ok(vec![]));
+    [3, 5, 6]
+        .into_iter()
+        .for_each(|index| assert_eq!(report.entries[index].outcome, Ok(vec![]), "{index}"));
 }
 
 #[test]
@@ -290,7 +295,9 @@ fn a_report_without_a_runtime_dir_omits_it() {
         rules,
         [
             TrustedPathRule::Binary,
+            TrustedPathRule::ConfigDir,
             TrustedPathRule::Config,
+            TrustedPathRule::StateFile,
             TrustedPathRule::StateDir,
             TrustedPathRule::StateFile
         ]
