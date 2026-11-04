@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use iron_vault_policy::{Capabilities, ListenerConfig, ListenerName, ParsedConfig};
+use iron_vault_policy::{Capabilities, Limits, ListenerConfig, ListenerName, ParsedConfig};
 use iron_vault_store::{
     ApprovalState, ConfigDirLock, ConfigFileName, LockError, OsFs, StateDirLock, StoreFs, VaultIdentity, read_config_file,
 };
@@ -137,13 +137,14 @@ impl<F: StoreFs> ServiceContext<F> {
         failures
             .iter()
             .for_each(|error| tracing::warn!("provisional request listener not open: {error}"));
-        // Starting refuses as Locked does, before any listener accepts.
+        // Starting refuses as Locked does, before any listener accepts. The default limits bound the provisional set:
+        // nothing of the unverified config but its listeners is used.
         let holder = Arc::new(SnapshotHolder::refusing(UnavailableReason::Locked));
         let mut service = Self {
             inner: Mutex::new(Inner {
                 state: ServiceState::Starting,
                 approval: None,
-                serving: Some(Serving::start(listeners, Default::default(), Arc::clone(&holder))),
+                serving: Some(Serving::start(listeners, Limits::default(), Arc::clone(&holder))),
                 missing: BTreeSet::new(),
             }),
             setup,

@@ -15,14 +15,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, WAIT, next_free_port, token_hash};
 use ed25519_dalek::{Signer, SigningKey};
+use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
+use iron_vault::admin::protocol::{self, AdminRequest, AdminResponse, Decoded, Frame};
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
 use iron_vault::config_check::UpstreamSettings;
@@ -257,8 +258,9 @@ fn assert_refused(response: &Response, reason: UnavailableReason) {
     assert_eq!((response.status, response.body.as_str()), (503, reason.as_str()));
 }
 
-/// Serves `service`'s admin handlers on its runtime directory and runs `iron-vault ping` against it.
-async fn ping(service: &Arc<ServiceContext>) -> String {
+/// Serves `service`'s admin handlers on its runtime directory and sends `ping` over the admin protocol. It does not run
+/// the CLI binary: a child forked while another test holds a directory lock would hold that lock too until it execs.
+async fn ping(service: &Arc<ServiceContext>) -> AdminResponse {
     let paths = service.paths().clone();
     let runtime_dir = paths.runtime_dir.clone().unwrap();
     let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
@@ -275,20 +277,27 @@ async fn ping(service: &Arc<ServiceContext>) -> String {
             })
             .await
     });
-    let admin_socket = runtime_dir.join(iron_vault::admin::ADMIN_SOCKET_NAME);
-    let output = tokio::task::spawn_blocking(move || {
-        Command::new(env!("CARGO_BIN_EXE_iron-vault"))
-            .args(["ping", "--admin-socket"])
-            .arg(admin_socket)
-            .output()
-            .unwrap()
-    })
-    .await
-    .unwrap();
+    let mut stream = UnixStream::connect(runtime_dir.join(ADMIN_SOCKET_NAME)).await.unwrap();
+    let mut request = Vec::new();
+    protocol::encode(&Frame::Request(AdminRequest::Ping), &mut request).unwrap();
+    stream.write_all(&request).await.unwrap();
+    let mut bytes = Vec::new();
+    tokio::time::timeout(WAIT, stream.read_to_end(&mut bytes)).await.unwrap().unwrap();
     let _ = stop.send(());
     served.await.unwrap().unwrap();
-    String::from_utf8(output.stdout).unwrap()
+    match protocol::decode(&bytes).unwrap() {
+        Decoded::Frame {
+            frame: Frame::Response(response),
+            ..
+        } => response,
+        other => panic!("expected a response, got {other:?}"),
+    }
 }
+
+/// What `ping` answers: the service's profile, unchanged by the context.
+const PONG: AdminResponse = AdminResponse::Ping {
+    profile: DeploymentProfile::Development,
+};
 
 /// A fixture with the base config approved and published.
 async fn approved() -> Fixture {
@@ -306,7 +315,7 @@ async fn startup_without_an_unlock_is_locked_and_answers_503_before_reaching_the
     assert_eq!(service.state().await.listener_provenance(), Some(ListenerProvenance::Provisional));
     assert_refused(&get_unix(&fixture.socket(), false).await, UnavailableReason::Locked);
     assert!(fixture.upstream.requests().is_empty());
-    assert!(ping(&service).await.starts_with("the service is running: "));
+    assert_eq!(ping(&service).await, PONG);
 }
 
 #[tokio::test]
@@ -419,7 +428,7 @@ async fn an_unparsable_config_starts_locked_with_no_request_listeners_and_a_work
     assert_eq!(service.state().await, ServiceState::Locked);
     assert_eq!(service.listener_names().await, []);
     assert!(!fixture.socket().exists());
-    assert!(ping(&service).await.starts_with("the service is running: "));
+    assert_eq!(ping(&service).await, PONG);
 }
 
 #[tokio::test]

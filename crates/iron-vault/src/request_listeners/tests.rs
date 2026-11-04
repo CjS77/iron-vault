@@ -381,3 +381,73 @@ fn opening_outside_the_runtime_is_an_error() {
     let refused = RequestListeners::open(&BTreeMap::new(), &dir.paths(DeploymentProfile::Development), BTreeMap::new());
     assert_eq!(refused.unwrap_err(), OpenError::NoRuntime);
 }
+
+/// Unix listeners `(name, socket file, token_header line)` in `dir`.
+fn unix_listeners(dir: &RuntimeDir, listeners: &[(&str, &str, &str)]) -> BTreeMap<ListenerName, ListenerConfig> {
+    let tables: String = listeners
+        .iter()
+        .map(|(listener, file, extra)| {
+            format!(
+                "[listeners.{listener}]\nunix_socket = \"{}\"\n{extra}\n",
+                dir.socket(file).display()
+            )
+        })
+        .collect();
+    let toml = format!("schema_version = 1\n{tables}");
+    ParsedConfig::from_toml(toml.as_bytes()).unwrap().listeners().clone()
+}
+
+fn inode(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    fs::symlink_metadata(path).unwrap().ino()
+}
+
+#[tokio::test]
+async fn open_each_leaves_out_only_the_listener_that_fails() {
+    let dir = RuntimeDir::new();
+    let config = unix_listeners(&dir, &[("good", "good.sock", ""), ("bad", "missing/bad.sock", "")]);
+    let (listeners, failures) = RequestListeners::open_each(&config, &dir.paths(DeploymentProfile::Development), BTreeMap::new());
+    assert_eq!(listeners.names().cloned().collect::<Vec<_>>(), [name("good")]);
+    assert!(
+        matches!(failures.as_slice(), [OpenError::Unix { listener, .. }] if *listener == name("bad")),
+        "{failures:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_rebuild_keeps_identical_listeners_and_reopens_changed_ones_after_closing_the_rest() {
+    let dir = RuntimeDir::new();
+    let paths = dir.paths(DeploymentProfile::Development);
+    let before = unix_listeners(
+        &dir,
+        &[
+            ("kept", "kept.sock", ""),
+            ("changed", "changed.sock", ""),
+            ("gone", "gone.sock", ""),
+        ],
+    );
+    let (listeners, failures) = RequestListeners::open_each(&before, &paths, BTreeMap::new());
+    assert!(failures.is_empty(), "{failures:?}");
+    let kept_inode = inode(&dir.socket("kept.sock"));
+    let after = unix_listeners(
+        &dir,
+        &[
+            ("kept", "kept.sock", ""),
+            ("changed", "changed.sock", "token_header = \"X-Iron-Vault-Token\""),
+            ("added", "added.sock", ""),
+        ],
+    );
+
+    let (rebuilt, failures) = listeners.rebuild(&after, &paths);
+
+    assert!(failures.is_empty(), "{failures:?}");
+    let names: Vec<_> = rebuilt.names().cloned().collect();
+    assert_eq!(names, [name("added"), name("changed"), name("kept")]);
+    assert_eq!(inode(&dir.socket("kept.sock")), kept_inode, "the identical listener was rebound");
+    assert!(
+        fs::symlink_metadata(dir.socket("gone.sock")).is_err(),
+        "the unnamed listener's socket file remains"
+    );
+    UnixStream::connect(dir.socket("changed.sock")).await.unwrap();
+    UnixStream::connect(dir.socket("added.sock")).await.unwrap();
+}
