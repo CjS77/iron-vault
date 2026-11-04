@@ -70,8 +70,8 @@ pub trait OwnerConsole {
     fn reveal(&mut self, secret: &RevealedSecret) -> Result<(), InputError>;
 }
 
-/// The process's console, opened at the first prompt or notice, so a command the service never prompts for touches
-/// neither the terminal nor stdin.
+/// The process's console, opened at the first prompt, notice or reveal, so a command the service never prompts for
+/// touches neither the terminal nor stdin.
 #[derive(Default)]
 pub struct ProcessConsole(Option<Box<dyn OwnerConsole>>);
 
