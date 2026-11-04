@@ -63,9 +63,11 @@ impl VaultIdentity {
         Some(Self { secret })
     }
 
-    /// The identity a literal `AGE-SECRET-KEY-1…` string encodes, so tests can pin derived keys to known answers.
-    #[cfg(test)]
-    pub(crate) fn from_secret(text: &str) -> Self {
+    /// The identity a literal `AGE-SECRET-KEY-1…` string encodes, so tests can pin derived keys to known answers, and
+    /// other crates' tests can hold the same identity in a vault and in an approval's storage (the type has no `Clone`).
+    #[cfg(any(test, feature = "test-support"))]
+    #[allow(clippy::unwrap_used, reason = "test support: a malformed literal is a bug in the test")]
+    pub fn from_secret(text: &str) -> Self {
         Self {
             secret: text.parse().unwrap(),
         }

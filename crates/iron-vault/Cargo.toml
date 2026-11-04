@@ -66,10 +66,14 @@ tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "signal"
 tokio-rustls.workspace = true
 
 [dev-dependencies]
+# Signs the approvals the config check tests commit, as the store's own test signer does.
+ed25519-dalek.workspace = true
 # Encodes the secrets the scrub tests expect the service to recognise.
 base64.workspace = true
 # This crate with `test-support`, so the integration tests can pin a test CA.
 iron-vault = { path = ".", features = ["test-support"] }
+# The store with `test-support`, so config check tests can build a vault and an approval in a temporary directory.
+iron-vault-store = { path = "../iron-vault-store", features = ["test-support"] }
 # The HTTP/2 test upstream: its server half and the request and response types it exchanges.
 h2.workspace = true
 http.workspace = true

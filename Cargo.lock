@@ -1321,6 +1321,7 @@ dependencies = [
  "brotli",
  "bytes",
  "clap",
+ "ed25519-dalek",
  "flate2",
  "futures-core",
  "h2",
