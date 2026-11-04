@@ -1244,3 +1244,139 @@ async fn recheck_refuses_an_event_that_does_not_lead_to_checking_and_changes_not
     assert!(std::sync::Weak::ptr_eq(&kept, &service.identity_probe().await.unwrap()));
     assert_served(&get_unix(&fixture.socket(), true).await);
 }
+
+/// The bytes of the approval state file, which no reload may write.
+fn approval_state_bytes(fixture: &Fixture) -> Vec<u8> {
+    fs::read(fixture.path("state/approval.age")).unwrap()
+}
+
+/// The published config and its signature.
+fn published_pair(fixture: &Fixture) -> (Vec<u8>, Vec<u8>) {
+    (
+        fs::read(fixture.path("etc/config.toml")).unwrap(),
+        fs::read(fixture.path("etc/config.toml.sig")).unwrap(),
+    )
+}
+
+fn publish_pair(fixture: &Fixture, (config, signature): &(Vec<u8>, Vec<u8>)) {
+    fs::write(fixture.path("etc/config.toml"), config).unwrap();
+    fs::write(fixture.path("etc/config.toml.sig"), signature).unwrap();
+}
+
+/// Reloads and asserts the service is Unavailable with a policy-invalid `503`, the approval state untouched.
+async fn assert_reload_fails(fixture: &Fixture, service: &Arc<ServiceContext>, state_before: &[u8]) {
+    assert_eq!(service.reload().await, Ok(ServiceState::Unavailable(FailureReason::PolicyInvalid)));
+    assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::PolicyInvalid);
+    assert!(fixture.upstream.requests().is_empty());
+    assert_eq!(approval_state_bytes(fixture), state_before, "a reload wrote the approval state");
+}
+
+#[tokio::test]
+async fn a_reload_with_nothing_edited_stays_ready_on_the_same_committed_version() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    let before = approval_state_bytes(&fixture);
+    let committed = status(&service).await.1.vault;
+
+    assert_eq!(service.reload().await, Ok(ServiceState::Ready));
+
+    assert_eq!(status(&service).await.1.vault, committed);
+    assert_served(&get_unix(&fixture.socket(), true).await);
+    assert_eq!(approval_state_bytes(&fixture), before);
+}
+
+#[tokio::test]
+async fn a_reload_to_an_older_committed_pair_goes_unavailable_and_the_old_policy_is_not_served() {
+    let mut fixture = approved().await;
+    let older = published_pair(&fixture);
+    fixture.approve(&fixture.config("# version two\n"));
+    let service = ready_service(&fixture).await;
+    let before = approval_state_bytes(&fixture);
+    let logs = captured_logs();
+    publish_pair(&fixture, &older);
+
+    assert_reload_fails(&fixture, &service, &before).await;
+
+    let text = logs.text();
+    assert!(text.contains("config.reload-failed"), "{text}");
+    assert!(!text.contains(SECRET), "{text}");
+}
+
+#[tokio::test]
+async fn a_reload_to_a_validly_signed_uncommitted_higher_version_goes_unavailable() {
+    let mut fixture = approved().await;
+    let (committed_state, first) = (approval_state_bytes(&fixture), published_pair(&fixture));
+    fixture.approve(&fixture.config("# version two\n"));
+    let higher = published_pair(&fixture);
+    // Roll the protected state and the published pair back to version one: the signature on the higher pair is valid,
+    // but that version was never committed.
+    fs::write(fixture.path("state/approval.age"), &committed_state).unwrap();
+    publish_pair(&fixture, &first);
+    let service = ready_service(&fixture).await;
+    publish_pair(&fixture, &higher);
+
+    assert_reload_fails(&fixture, &service, &committed_state).await;
+}
+
+#[tokio::test]
+async fn a_reload_after_one_byte_of_whitespace_goes_unavailable_on_a_digest_mismatch() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    let before = approval_state_bytes(&fixture);
+    let mut edited = fs::read(fixture.path("etc/config.toml")).unwrap();
+    edited.push(b'\n');
+    fs::write(fixture.path("etc/config.toml"), edited).unwrap();
+
+    assert_reload_fails(&fixture, &service, &before).await;
+}
+
+#[tokio::test]
+async fn a_request_in_flight_during_a_failed_reload_is_cancelled() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let reply = Reply::TwoChunks {
+        first: "data: first\n\n".to_owned(),
+        second: "data: second\n\n".to_owned(),
+        gate: Arc::clone(&gate),
+    };
+    let mut fixture = Fixture::with_reply(reply).await;
+    fixture.approve(&fixture.config(""));
+    let service = ready_service(&fixture).await;
+    let (mut stream, mut raw) = start_streaming(&fixture.socket(), "data: first\n\n").await;
+    let before = approval_state_bytes(&fixture);
+    let mut edited = fs::read(fixture.path("etc/config.toml")).unwrap();
+    edited.push(b'\n');
+    fs::write(fixture.path("etc/config.toml"), edited).unwrap();
+
+    assert_eq!(service.reload().await, Ok(ServiceState::Unavailable(FailureReason::PolicyInvalid)));
+
+    let mut rest = Vec::new();
+    let _ = tokio::time::timeout(WAIT, stream.read_to_end(&mut rest)).await.unwrap();
+    raw.push_str(&String::from_utf8_lossy(&rest));
+    assert!(!raw.ends_with("0\r\n\r\n"), "the withdrawn body ended cleanly: {raw}");
+    assert!(!raw.contains("data: second"), "{raw}");
+    assert_eq!(approval_state_bytes(&fixture), before);
+}
+
+#[tokio::test]
+async fn sighup_outside_ready_changes_nothing_and_never_repairs_unavailable() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+    let refused = |state| {
+        Err(IllegalTransition {
+            state,
+            event: ServiceEvent::Reload,
+        })
+    };
+    assert_eq!(service.reload().await, refused(ServiceState::Locked));
+
+    let mut edited = fs::read(fixture.path("etc/config.toml")).unwrap();
+    edited.push(b'\n');
+    fs::write(fixture.path("etc/config.toml"), edited).unwrap();
+    let unavailable = ServiceState::Unavailable(FailureReason::PolicyInvalid);
+    assert_eq!(service.enter_checking(identity()).await, Ok(unavailable));
+    // Even after the file is mended, a reload does not leave Unavailable.
+    fs::write(fixture.path("etc/config.toml"), fixture.config("")).unwrap();
+
+    assert_eq!(service.reload().await, refused(unavailable));
+    assert_eq!(service.state().await, unavailable);
+}
