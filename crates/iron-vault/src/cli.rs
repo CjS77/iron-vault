@@ -17,13 +17,17 @@ mod console;
 #[cfg(target_os = "linux")]
 mod status;
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::LazyLock;
 
+use clap::builder::TypedValueParser;
 use clap::error::ErrorKind;
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use iron_vault::admin::protocol::MAX_ORIGINS;
 use iron_vault::deployment;
+use iron_vault_policy::{CredentialKind, Host, Port, parse_origin};
 
 /// `--version` prints the binary's name, then this: the version and the enabled build features. A release check reads
 /// the feature list, so it must come from the same place as the service's own report.
@@ -77,7 +81,7 @@ pub struct Cli {
 }
 
 /// The binary's commands: the service itself, and the client commands it answers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
     /// Run the service until SIGTERM or SIGINT.
     Serve,
@@ -89,6 +93,55 @@ pub enum Command {
     Unlock,
     /// Clear the vault identity and every cached secret from the service's memory, leaving it Locked.
     Lock,
+    /// Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so
+    /// `pass show fx | iron-vault add fx --origin api.fx.example` works. It never overwrites an existing name.
+    Add {
+        /// The credential name, which routes reference.
+        name: String,
+        /// The credential's kind: a static key, or a Basic username and password.
+        #[arg(long, value_enum, default_value_t = KindArg::Static)]
+        kind: KindArg,
+        /// A permitted origin: `host`, `host:port`, `[v6]` or `[v6]:port`, without a scheme (HTTPS is implied); the port
+        /// defaults to 443. Repeat for each origin, up to 32.
+        #[arg(long = "origin", value_name = "ORIGIN", required = true, value_parser = OriginParser)]
+        origins: Vec<(Host, Port)>,
+    },
+}
+
+/// The credential kinds `add --kind` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum KindArg {
+    /// A provider key, sent as is.
+    Static,
+    /// A username and password, sent as `Authorization: Basic`.
+    Basic,
+}
+
+impl From<KindArg> for CredentialKind {
+    fn from(kind: KindArg) -> Self {
+        match kind {
+            KindArg::Static => CredentialKind::Static,
+            KindArg::Basic => CredentialKind::Basic,
+        }
+    }
+}
+
+/// Parses `--origin` with the service's own origin rule. Its usage error names the rule and never the value, because
+/// diagnostics never echo arguments.
+#[derive(Debug, Clone, Copy)]
+struct OriginParser;
+
+impl TypedValueParser for OriginParser {
+    type Value = (Host, Port);
+
+    fn parse_ref(&self, cmd: &clap::Command, _arg: Option<&clap::Arg>, value: &OsStr) -> Result<Self::Value, clap::Error> {
+        let rule = match value.to_str().map(parse_origin) {
+            Some(Ok(origin)) => return Ok(origin),
+            Some(Err(e)) => e.to_string(),
+            None => "an origin must be UTF-8 text".to_owned(),
+        };
+        Err(cmd.clone().error(ErrorKind::ValueValidation, format!("invalid --origin: {rule}")))
+    }
 }
 
 impl Cli {
@@ -105,10 +158,14 @@ impl Cli {
     {
         let cli = Self::try_parse_from(args)?;
         // The service binds its deployment's own socket; accepting the flag there would only mislead.
-        match (cli.command, &cli.admin_socket) {
+        match (&cli.command, &cli.admin_socket) {
             (Command::Serve, Some(_)) => Err(Self::command().error(
                 ErrorKind::ArgumentConflict,
                 "`--admin-socket` is for client commands; `serve` always binds this installation's admin socket",
+            )),
+            (Command::Add { origins, .. }, _) if origins.len() > MAX_ORIGINS => Err(Self::command().error(
+                ErrorKind::TooManyValues,
+                format!("`add` takes at most {MAX_ORIGINS} --origin values"),
             )),
             _ => Ok(cli),
         }
@@ -144,6 +201,19 @@ pub fn unlock(_socket: Option<&Path>) -> ExitCode {
 #[cfg(target_os = "linux")]
 pub fn lock(socket: Option<&Path>) -> ExitCode {
     client::lock(socket).into()
+}
+
+/// `iron-vault add`: sends `add` with the name, kind and origins, answers the service's secret prompts from the owner
+/// console, and prints the new record's ID.
+#[cfg(target_os = "linux")]
+pub fn add(socket: Option<&Path>, name: String, kind: CredentialKind, origins: &[(Host, Port)]) -> ExitCode {
+    client::add(socket, name, kind, origins).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn add(_socket: Option<&Path>, _name: String, _kind: CredentialKind, _origins: &[(Host, Port)]) -> ExitCode {
+    unsupported_platform()
 }
 
 /// The client is Linux-only for now, like the service.

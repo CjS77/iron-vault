@@ -9,11 +9,12 @@ use std::time::Duration;
 use anyhow::Context;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::protocol::{
-    self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, OwnerInput, PROTOCOL_VERSION,
+    self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, OwnerInput, PROTOCOL_VERSION, RequestedOrigin,
 };
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::service_state::ServiceState;
 use iron_vault::trusted_path_report::ServicePaths;
+use iron_vault_policy::{CredentialKind, Host, Port};
 use zeroize::Zeroizing;
 
 use super::Exit;
@@ -160,6 +161,30 @@ pub fn unlock(socket: Option<&Path>) -> Exit {
     run(socket, AdminRequest::Unlock, |response| match response {
         AdminResponse::Success => {
             println!("the vault is unlocked: the service is Ready");
+            Exit::Success
+        }
+        _ => unexpected(),
+    })
+}
+
+/// Runs `add`. The service decides what to prompt for, by kind, and each answer comes from the owner console, so the
+/// secret never travels as an argument. On success the new record's ID goes to stdout.
+pub fn add(socket: Option<&Path>, name: String, kind: CredentialKind, origins: &[(Host, Port)]) -> Exit {
+    let origins = origins
+        .iter()
+        .map(|(host, port)| RequestedOrigin {
+            host: host.to_string(),
+            port: *port,
+        })
+        .collect();
+    let request = AdminRequest::Add {
+        name: name.clone(),
+        kind,
+        origins,
+    };
+    run(socket, request, |response| match response {
+        AdminResponse::Add { record_id } => {
+            println!("added {name} ({}) as record {record_id}", kind.as_str());
             Exit::Success
         }
         _ => unexpected(),

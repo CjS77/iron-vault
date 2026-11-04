@@ -80,3 +80,70 @@ fn help_lists_the_exit_codes() {
     let help = Cli::command().render_help().to_string();
     assert!(help.contains(EXIT_CODES), "{help}");
 }
+
+/// `add`'s parsed arguments: the name, the kind, and each origin's host text and port.
+type AddArgs = (String, KindArg, Vec<(String, u16)>);
+
+/// The `add` command's arguments, or the usage error.
+fn add(args: &[&str]) -> Result<AddArgs, clap::Error> {
+    match parse(&[&["add"], args].concat())?.command {
+        Command::Add { name, kind, origins } => Ok((
+            name,
+            kind,
+            origins.iter().map(|(host, port)| (host.to_string(), port.get())).collect(),
+        )),
+        other => panic!("parsed as {other:?}"),
+    }
+}
+
+#[test]
+fn add_takes_a_name_and_origins_and_defaults_to_a_static_kind() {
+    let (name, kind, origins) = add(&["fx", "--origin", "api.fx.example"]).unwrap();
+    assert_eq!((name.as_str(), kind), ("fx", KindArg::Static));
+    assert_eq!(origins, [("api.fx.example".to_owned(), 443)]);
+    assert_eq!(CredentialKind::from(kind), CredentialKind::Static);
+}
+
+#[test]
+fn add_accepts_every_origin_form() {
+    let args = [
+        "fx",
+        "--origin",
+        "a.example",
+        "--origin",
+        "B.example:8443",
+        "--origin",
+        "[::1]",
+        "--origin",
+        "[2001:db8::1]:1",
+    ];
+    let (_, _, origins) = add(&args).unwrap();
+    let expected = [("a.example", 443), ("b.example", 8443), ("[::1]", 443), ("[2001:db8::1]", 1)];
+    assert_eq!(origins, expected.map(|(host, port)| (host.to_owned(), port)));
+}
+
+#[test]
+fn add_takes_a_basic_kind() {
+    let (_, kind, _) = add(&["fx", "--kind", "basic", "--origin", "x"]).unwrap();
+    assert_eq!(CredentialKind::from(kind), CredentialKind::Basic);
+    assert_eq!(add(&["fx", "--kind", "oauth", "--origin", "x"]).unwrap_err().exit_code(), 2);
+}
+
+#[test]
+fn add_refuses_a_scheme_a_path_or_a_bad_port_without_echoing_it() {
+    ["https://x", "x/path", "x:0", "x:65536"].into_iter().for_each(|origin| {
+        let error = add(&["fx", "--origin", origin]).unwrap_err();
+        assert_eq!((error.kind(), error.exit_code()), (ErrorKind::ValueValidation, 2), "{origin}");
+        assert!(!error.to_string().contains(origin), "{error}");
+    });
+}
+
+#[test]
+fn add_needs_an_origin_and_at_most_32() {
+    let error = add(&["fx"]).unwrap_err();
+    assert_eq!((error.kind(), error.exit_code()), (ErrorKind::MissingRequiredArgument, 2));
+    let too_many: Vec<&str> = std::iter::once("fx").chain(["--origin", "x"].repeat(33)).collect();
+    assert_eq!(add(&too_many).unwrap_err().kind(), ErrorKind::TooManyValues);
+    let enough: Vec<&str> = std::iter::once("fx").chain(["--origin", "x"].repeat(32)).collect();
+    assert_eq!(add(&enough).unwrap().2.len(), 32);
+}

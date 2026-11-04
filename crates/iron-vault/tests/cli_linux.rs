@@ -18,12 +18,16 @@ use std::time::Duration;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
-use iron_vault::admin::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode, MemoryStatus, Prompt, StatusReport, VaultStatus};
+use iron_vault::admin::protocol::{
+    AdminCommand, AdminRequest, AdminResponse, ErrorCode, MemoryStatus, Prompt, RequestedOrigin, StatusReport, VaultStatus,
+};
 use iron_vault::admin::server::{AdminServer, Exchange, Limits};
 use iron_vault::admin::socket::AdminSocket;
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_state::ServiceState;
+use iron_vault_policy::{CredentialKind, Port};
+use iron_vault_store::RecordId;
 use tokio::sync::oneshot;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -103,6 +107,11 @@ async fn ping_server_as(dir: &TempDir, service_uid: u32) -> Output {
 /// Serves `handlers` on `dir`'s admin socket, runs `iron-vault <command>` against it with `input` on stdin, then stops
 /// the server.
 async fn serve_and_run(dir: &TempDir, service_uid: u32, handlers: Handlers, command: &str, input: Vec<u8>) -> Output {
+    serve_and_run_args(dir, service_uid, handlers, command_args(command, &dir.socket()), input).await
+}
+
+/// Serves `handlers` on `dir`'s admin socket, runs `iron-vault` with `args` and `input` on stdin, then stops the server.
+async fn serve_and_run_args(dir: &TempDir, service_uid: u32, handlers: Handlers, args: Vec<String>, input: Vec<u8>) -> Output {
     let me = invoking_user().unwrap();
     let socket = AdminSocket::bind(&dir.0, me).unwrap();
     let principals = AdminPrincipals::new(DeploymentProfile::Protected, service_uid);
@@ -115,7 +124,7 @@ async fn serve_and_run(dir: &TempDir, service_uid: u32, handlers: Handlers, comm
             })
             .await
     });
-    let output = run_cli_with_input(command_args(command, &dir.socket()), input).await;
+    let output = run_cli_with_input(args, input).await;
     let _ = stop.send(());
     served.await.unwrap().unwrap();
     output
@@ -354,4 +363,116 @@ async fn a_wrong_passphrase_is_reported_without_the_passphrase() {
         stderr,
         "iron-vault: the service answered error 14 (unlock-denied): wrong passphrase\n"
     );
+}
+
+/// A test-only `add` handler: records the request, prompts for the static secret as the service will, records the value,
+/// and answers with `RECORD_ID`.
+struct StubAdd(Arc<AddLog>);
+
+/// What the stub `add` handler received.
+#[derive(Default)]
+struct AddLog {
+    requests: Mutex<Vec<AdminRequest>>,
+    values: Mutex<Vec<Vec<u8>>>,
+}
+
+const RECORD_ID: &str = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+
+impl AdminHandler for StubAdd {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            self.0.requests.lock().unwrap().push(request);
+            let prompt = Prompt {
+                label: "Secret for fx".to_owned(),
+                secret: true,
+            };
+            let input = exchange.prompt(&prompt).await?;
+            self.0.values.lock().unwrap().push(input.expose_secret().to_vec());
+            Ok(AdminResponse::Add {
+                record_id: RECORD_ID.parse::<RecordId>().unwrap(),
+            })
+        })
+    }
+}
+
+fn add_args(socket: &Path) -> Vec<String> {
+    let args = [
+        "add",
+        "fx",
+        "--origin",
+        "API.fx.example",
+        "--origin",
+        "[::1]:8443",
+        "--admin-socket",
+    ];
+    args.iter()
+        .map(|arg| (*arg).to_owned())
+        .chain([socket.display().to_string()])
+        .collect()
+}
+
+#[tokio::test]
+async fn add_sends_its_arguments_and_the_piped_secret_and_prints_the_record_id() {
+    let dir = TempDir::new();
+    let stub = Arc::new(AddLog::default());
+    let handlers = Handlers::default().with(AdminCommand::Add, StubAdd(Arc::clone(&stub)));
+    let args = add_args(&dir.socket());
+    assert!(!args.iter().any(|arg| arg.contains(MARKER)), "the secret is never an argument");
+    let input = format!("{MARKER}\n").into_bytes();
+    let output = serve_and_run_args(&dir, invoking_user().unwrap().uid, handlers, args, input).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(stdout, format!("added fx (static) as record {RECORD_ID}\n"));
+    assert_eq!(stderr, "");
+    assert_eq!(*stub.values.lock().unwrap(), [MARKER.as_bytes().to_vec()]);
+    let origin = |host: &str, port: u16| RequestedOrigin {
+        host: host.to_owned(),
+        port: Port::try_from(port).unwrap(),
+    };
+    let expected = AdminRequest::Add {
+        name: "fx".to_owned(),
+        kind: CredentialKind::Static,
+        origins: vec![origin("api.fx.example", 443), origin("[::1]", 8443)],
+    };
+    assert_eq!(*stub.requests.lock().unwrap(), [expected]);
+}
+
+#[tokio::test]
+async fn add_without_a_service_handler_is_an_unknown_command() {
+    let dir = TempDir::new();
+    let handlers = Handlers::standard(DeploymentProfile::Protected);
+    let input = format!("{MARKER}\n").into_bytes();
+    let output = serve_and_run_args(&dir, invoking_user().unwrap().uid, handlers, add_args(&dir.socket()), input).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("error 3 (unknown-command)"), "{stderr}");
+    assert!(!stderr.contains("fx") && !stderr.contains(MARKER), "{stderr}");
+}
+
+#[tokio::test]
+async fn an_add_service_error_goes_to_stderr_without_the_arguments() {
+    let dir = TempDir::new();
+    let handlers = Handlers::default().with(AdminCommand::Add, FixedError(ErrorCode::NameTaken));
+    let output = serve_and_run_args(&dir, invoking_user().unwrap().uid, handlers, add_args(&dir.socket()), Vec::new()).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        "iron-vault: the service answered error 20 (name-taken): the name is already in the vault\n"
+    );
+}
+
+/// A test-only handler that answers every request with one error and prompts for nothing.
+struct FixedError(ErrorCode);
+
+impl AdminHandler for FixedError {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        let response = AdminResponse::Error {
+            code: self.0,
+            message: "the name is already in the vault".to_owned(),
+        };
+        Box::pin(async move { Ok(response) })
+    }
 }
