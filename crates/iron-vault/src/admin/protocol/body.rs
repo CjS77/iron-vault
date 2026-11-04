@@ -1,9 +1,11 @@
 //! The bodies of every frame kind except owner input, which is never read as fields.
 
+use super::add;
 use super::fields::{self, exact, first, read_flag, read_text, read_u16};
 use super::status::{self, StatusReport};
 use super::{AdminCommand, AdminRequest, AdminResponse, ErrorCode, FrameError, Prompt};
 use crate::deployment::DeploymentProfile;
+use iron_vault_store::RecordId;
 
 pub(super) const TAG_COMMAND: u16 = 1;
 const TAG_LABEL: u16 = 1;
@@ -17,14 +19,19 @@ const COMMAND_PING: u16 = AdminCommand::Ping as u16;
 const COMMAND_STATUS: u16 = AdminCommand::Status as u16;
 const COMMAND_UNLOCK: u16 = AdminCommand::Unlock as u16;
 const COMMAND_LOCK: u16 = AdminCommand::Lock as u16;
+const COMMAND_ADD: u16 = AdminCommand::Add as u16;
 
 const PROFILE_PROTECTED: u8 = 1;
 const PROFILE_DEVELOPMENT: u8 = 2;
 
-pub(super) fn encode_request(request: AdminRequest) -> Vec<u8> {
+/// A request body; only `add`, whose origins have bounds, can be refused.
+pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameError> {
+    if let AdminRequest::Add { name, kind, origins } = request {
+        return add::encode_request(COMMAND_ADD, name, *kind, origins);
+    }
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &(request.command() as u16).to_be_bytes());
-    out
+    Ok(out)
 }
 
 /// The command is read first, so an unknown command is reported as such whatever arguments follow it.
@@ -35,6 +42,7 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
         COMMAND_STATUS => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Status),
         COMMAND_UNLOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Unlock),
         COMMAND_LOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Lock),
+        COMMAND_ADD => add::decode_request(&fields),
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
 }
@@ -79,6 +87,11 @@ pub(super) fn encode_lock_result(cleared: bool) -> Vec<u8> {
     out
 }
 
+/// `add`'s success body: the command it answers, then the new record's ID.
+pub(super) fn encode_add_result(record_id: RecordId) -> Vec<u8> {
+    add::encode_result(COMMAND_ADD, record_id)
+}
+
 /// A success without a result has only the empty body; one with a result names its command first, so the body
 /// decodes without knowing which request it answers.
 pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
@@ -100,6 +113,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
                 cleared: read_flag(TAG_CLEARED, cleared)?,
             })
         }
+        COMMAND_ADD => add::decode_result(&fields),
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
 }
@@ -139,6 +153,9 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::UnlockDenied,
         ErrorCode::UnlockFailed,
         ErrorCode::UnlockedUnavailable,
+        ErrorCode::NameTaken,
+        ErrorCode::CredentialInvalid,
+        ErrorCode::VaultWriteFailed,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

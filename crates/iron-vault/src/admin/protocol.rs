@@ -1,6 +1,7 @@
 //! The admin protocol's frames and their pure codec (`design/admin-protocol.md`). Nothing here does I/O: the transport
 //! hands [`decode`] the bytes it has read and sends what [`encode`] writes.
 
+mod add;
 mod body;
 mod fields;
 mod status;
@@ -13,6 +14,8 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::deployment::DeploymentProfile;
+use iron_vault_policy::{CredentialKind, Port};
+use iron_vault_store::RecordId;
 
 pub use status::{CredentialStatus, MemoryStatus, Standing, StatusReport, UnlockedVault, VaultStatus};
 
@@ -22,9 +25,13 @@ pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_BODY_LEN: usize = 64 * 1024;
 /// The fixed header size: version (2), kind (1), body length (4).
 pub const HEADER_LEN: usize = 7;
+/// The most permitted origins one `add` request carries.
+pub const MAX_ORIGINS: usize = 32;
+/// The longest requested origin host, in bytes: the DNS name limit.
+pub const MAX_ORIGIN_HOST_LEN: usize = 253;
 
 /// One command with its arguments, sent by the CLI as the first frame of an exchange.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AdminRequest {
     /// Changes nothing; the service answers with its deployment profile. Command ID 1.
     Ping,
@@ -34,6 +41,26 @@ pub enum AdminRequest {
     Unlock,
     /// Clears the vault identity and every cached secret from memory. Command ID 5.
     Lock,
+    /// Enrols a new credential under a name the manifest does not hold; the service prompts for the material. Command
+    /// ID 8.
+    Add {
+        /// The credential name, as the owner wrote it; the service validates it.
+        name: String,
+        /// The credential's kind, which decides what the service prompts for.
+        kind: CredentialKind,
+        /// The permitted origins, 1 to [`MAX_ORIGINS`] of them.
+        origins: Vec<RequestedOrigin>,
+    },
+}
+
+/// A requested origin: one permitted origin as an `add` request carries it. The host stays text on the wire, at most
+/// [`MAX_ORIGIN_HOST_LEN`] bytes, and the service parses it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RequestedOrigin {
+    /// The host as the CLI sent it.
+    pub host: String,
+    /// The port; HTTPS is implied.
+    pub port: Port,
 }
 
 impl AdminRequest {
@@ -44,6 +71,7 @@ impl AdminRequest {
             Self::Status => AdminCommand::Status,
             Self::Unlock => AdminCommand::Unlock,
             Self::Lock => AdminCommand::Lock,
+            Self::Add { .. } => AdminCommand::Add,
         }
     }
 }
@@ -59,6 +87,8 @@ pub enum AdminCommand {
     Unlock = 4,
     /// `lock`.
     Lock = 5,
+    /// `add`. ID 7 is reserved for `init`.
+    Add = 8,
 }
 
 impl AdminCommand {
@@ -69,6 +99,7 @@ impl AdminCommand {
             Self::Status => "status",
             Self::Unlock => "unlock",
             Self::Lock => "lock",
+            Self::Add => "add",
         }
     }
 }
@@ -124,6 +155,11 @@ pub enum AdminResponse {
         /// its cancellation may still hold them, and the service has logged how many.
         cleared: bool,
     },
+    /// `add` completed: the new credential record's ID.
+    Add {
+        /// The ID of the record the service wrote.
+        record_id: RecordId,
+    },
     /// The command failed. The message is the service's own text and never contains owner input.
     Error {
         /// The stable code scripts act on.
@@ -157,6 +193,12 @@ pub enum ErrorCode {
     /// `unlock`: the vault unlocked, but the config check left the service Unavailable; the message names the redacted
     /// reason.
     UnlockedUnavailable = 16,
+    /// `add`: the name is already in the manifest, healthy or damaged; `add` never overwrites.
+    NameTaken = 20,
+    /// `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte.
+    CredentialInvalid = 21,
+    /// `add`: writing the vault failed; the message says whether the write may have committed.
+    VaultWriteFailed = 22,
 }
 
 impl ErrorCode {
@@ -173,6 +215,9 @@ impl ErrorCode {
             Self::UnlockDenied => "unlock-denied",
             Self::UnlockFailed => "unlock-failed",
             Self::UnlockedUnavailable => "unlocked-unavailable",
+            Self::NameTaken => "name-taken",
+            Self::CredentialInvalid => "credential-invalid",
+            Self::VaultWriteFailed => "vault-write-failed",
         }
     }
 
@@ -279,13 +324,14 @@ impl FrameKind {
 /// holds the value; `out` is grown once, before writing, so no partial copy is left behind in a freed allocation.
 pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
     match frame {
-        Frame::Request(request) => put_frame(out, FrameKind::Request, &body::encode_request(*request)),
+        Frame::Request(request) => put_frame(out, FrameKind::Request, &body::encode_request(request)?),
         Frame::Prompt(prompt) => put_frame(out, FrameKind::Prompt, &body::encode_prompt(prompt)),
         Frame::OwnerInput(input) => put_frame(out, FrameKind::OwnerInput, input.expose_secret()),
         Frame::Response(AdminResponse::Success) => put_frame(out, FrameKind::Success, &[]),
         Frame::Response(AdminResponse::Ping { profile }) => put_frame(out, FrameKind::Success, &body::encode_ping_result(*profile)),
         Frame::Response(AdminResponse::Status(report)) => put_frame(out, FrameKind::Success, &body::encode_status_result(report)),
         Frame::Response(AdminResponse::Lock { cleared }) => put_frame(out, FrameKind::Success, &body::encode_lock_result(*cleared)),
+        Frame::Response(AdminResponse::Add { record_id }) => put_frame(out, FrameKind::Success, &body::encode_add_result(*record_id)),
         Frame::Response(AdminResponse::Error { code, message }) => put_frame(out, FrameKind::Error, &body::encode_error(*code, message)),
     }
 }
