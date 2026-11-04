@@ -124,22 +124,23 @@ check that the service is up and which profile it runs before the real commands 
 #### lock
 
 Clears the vault identity and every cached secret from the service's memory (spec [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration), [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)) and moves the service
-from Ready to Locked. It takes no arguments and no prompt. In order, the service stops admitting requests, withdraws the
+from Ready or Unavailable to Locked. It takes no arguments and no prompt. In order, the service stops admitting requests, withdraws the
 serving snapshot so requests running on it stop where the transport permits ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)), and drops the approval state. It
 then waits for the last holder of the old snapshot, a request or a streaming response body, to release it (the *lock
 drain*, at most 10 seconds). The vault, which the snapshot owns, is dropped when that last holder releases it, so during
-the drain the vault may still be in memory.
+the drain the vault may still be in memory. Unavailable has no snapshot to withdraw: there the service drops the vault
+identity it kept for a repair, which clears it at once unless a request still holds a vault from before the failed check.
 
 The success result:
 
 | Tag | Field | Value |
 |---|---|---|
-| 2 | cleared | flag: `1` when every snapshot was released within the drain, `0` when a request still held one |
+| 2 | cleared | flag: `1` when every snapshot was released within the drain and the vault identity was cleared, `0` when a request still held a snapshot or the identity |
 
 `cleared` `0` is a success, not an error: the service is Locked and admits nothing, but a request that ignored its
 cancellation still holds secrets until it ends, and the service logs how many. The CLI prints `locked` for `1`, and for
-`0` also a warning on stderr that secrets may remain in memory; both exit with code `0`. Only a Ready service locks: in
-any other state the command fails with `wrong-state`.
+`0` also a warning on stderr that secrets may remain in memory; both exit with code `0`. Only a Ready or Unavailable
+service locks: in any other state the command fails with `wrong-state`.
 
 #### config approve
 
