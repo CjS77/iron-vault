@@ -216,20 +216,30 @@ pinned approver's public key, and the committed version and digest, so dropping 
 Each upstream connection runs in a task hyper spawns, and that task owns the connection's write buffer, which still
 holds the last request's headers, injected credential included, until the connection is dropped. reqwest keeps an idle
 connection for reuse for up to 90 seconds. K-131's review recorded these idle connections as able to outlive `lock`;
-K-143 checked that and found they cannot, because of who owns the pool.
+K-143 checked that and found they close when the snapshot drops or, if a background connect is still running, when it
+ends, at most `TransportLimits::connect` later, because of who owns the pool.
 
 **What closes them.** hyper-util's pool (`hyper-util` 0.1.21, `client/legacy/pool.rs`) is one `Arc<Mutex<PoolInner>>`
-whose only strong owners are the reqwest `Client` and the futures of requests in flight. Everything else that touches
-it, the idle-expiry task and a connection still being set up, holds a `Weak`. An idle connection is the pool's handle
+with three kinds of strong owner: the reqwest `Client`, the futures of requests in flight, and a background connect.
+`Client::connect_to` (`client/legacy/client.rs:490`) moves a strong `self.pool.clone()` into the connect future and
+holds it until `pool.pooled(...)` (`:655`) inserts the new connection. When an idle connection frees up while a request
+is already connecting, the request takes the idle one and `one_connection_for` spawns the started connect as its own
+task (`self.exec.execute(bg)`, `:435-446`) so the socket is not wasted. Cancelling the request does not cancel that
+task, so it keeps `PoolInner`, and with it every idle credential-bearing connection, alive until the TCP and TLS connect
+ends or `TransportLimits::connect` (10 seconds by default; reqwest's `connect_timeout` covers both) expires. Concurrent
+HTTP/1 requests to one upstream reach this. The idle-expiry task and the `Connecting` lock, which stops a second HTTP/2
+connect, hold only a `Weak`. An idle connection is the pool's handle
 to the connection's task (`PoolClient`, a hyper `SendRequest`); while a response body is still streaming, its handle is
-held through a `Weak` to the pool and dropped when the body ends. When the last strong owner drops, `PoolInner` drops
+held through a `Weak` to the pool and dropped when the body ends. Lock cancels the requests in flight, so once the snapshot drops its clients the last strong owner is a background connect
+if one is running, and nothing otherwise. When the last strong owner drops, `PoolInner` drops
 every idle handle, and each connection's task, finding its request channel closed, closes the connection and drops its
 buffers on its next poll. HTTP/2 connections are held in the same idle list and end the same way.
 
 The service holds each reqwest `Client` inside one `UpstreamClient`, which is not `Clone` and never hands the client
-out; the `UpstreamClients` that own them live only in a `ServingSnapshot`. So the pools are dropped exactly when the
-snapshot is, and the snapshot drops its clients before the sender it releases last, so the lock drain sees the release
-only after every idle handle has gone. `after_a_cleared_lock_no_upstream_connection_that_carried_the_credential_is_open`
+out; the `UpstreamClients` that own them live only in a `ServingSnapshot`. So the pools are dropped when the snapshot is
+or, if a background connect is still running, when it ends, at most `TransportLimits::connect` later. The snapshot drops
+its clients before the sender it releases last, so without a background connect the lock drain sees the release only
+after every idle handle has gone; with one, the drain does not wait for it (residual table below). `after_a_cleared_lock_no_upstream_connection_that_carried_the_credential_is_open`
 (`service_context_linux.rs`) and `dropping_the_client_closes_its_idle_connection` (`upstream_client.rs`, and its HTTP/2
 twin in `upstream_client_h2.rs`) hold this in place against an upstream that keeps every connection open.
 
@@ -259,7 +269,7 @@ client shared between snapshots) breaks this, and must come with a new way to cl
 | `age`'s `StreamReader` (age 0.12.1, `primitives/stream.rs:410`) keeps the decrypted chunk in a `SecretSlice<u8>`, which is wiped. The AEAD's output `Vec` is 16 bytes larger than the plaintext (room for the tag), so converting it into a `SecretSlice` shrinks it, and the allocator may move it, leaving a freed, unwiped copy of the chunk. | `age` owns the conversion. Locked memory (K-45) keeps it out of swap; the plaintext `sealed::open` returns is in a `Zeroizing` buffer. |
 | `age`'s scrypt recipient and identity take a `SecretString` copy of the passphrase (`Passphrase::for_age`), and derive the wrapping key inside `age`. | The copy is a `SecretString` and is wiped; `age`'s internal key derivation is not audited here. Locked memory (K-45) keeps it out of swap. |
 | `base64`'s `encode_string`, used by both `CallerToken` constructors, encodes through a 1 KiB stack buffer it does not wipe, leaving a copy of the token's body in a dead stack frame. | The next calls on that thread overwrite it; locked memory (K-45) keeps it out of swap. The 32 raw bytes are held in `Zeroizing` buffers. |
-| An upstream connection's task, which owns the connection's write buffer (the last request's headers, the injected credential included), outlives the last handle to it by the task's final poll. The drain waits for the snapshot, not the task, so `lock` can answer `cleared` in that window. | Dropping the snapshot drops its pools, and with them every idle connection's handle, before the drain sees it released ("Upstream connections close with their snapshot" above); a connection still streaming loses its handle when its body drops, which is also before. Each task is woken then and closes on its next poll, normally within microseconds. A TLS `close_notify` that cannot be flushed because the upstream stopped reading keeps it longer, until the kernel accepts the write or the connection fails; reqwest offers no write timeout. The buffer is then freed unwiped, like the next rows. Locked memory (K-45) keeps it out of swap, and core dumps and same-account `ptrace` are off. |
+| An upstream connection's task, which owns the connection's write buffer (the last request's headers, the injected credential included), outlives the last handle to it by the task's final poll. The drain waits for the snapshot, not the task, so `lock` can answer `cleared` in that window. | Dropping the snapshot drops its pools, and with them every idle connection's handle, before the drain sees it released ("Upstream connections close with their snapshot" above); a connection still streaming loses its handle when its body drops, which is also before. Each task is woken then and closes on its next poll, normally within microseconds. A TLS `close_notify` that cannot be flushed because the upstream stopped reading keeps it longer, until the kernel accepts the write or the connection fails; reqwest offers no write timeout. A background connect (hyper-util's `one_connection_for` spawning a connect that an idle connection beat, above) holds the pool strongly past the snapshot, so idle connections then lose their handles only when it ends, at most `TransportLimits::connect` (10 seconds by default) after `lock`; the drain does not see this task, so `lock` can answer `cleared` while it runs. The buffer is then freed unwiped, like the next rows. Locked memory (K-45) keeps it out of swap, and core dumps and same-account `ptrace` are off. |
 | A request that ignores its cancellation. | `lock` cancels requests where the transport permits ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)), but a request blocked in code that never polls its cancellation keeps its `Arc<ServingSnapshot>`, and with it the vault, until it ends. The lock drain bounds the wait and `lock` then answers `cleared` as false and logs the count of snapshots still held, instead of claiming the secrets are gone. |
 | The kernel holds owner input outside the CLI: in the terminal's line buffer while the owner types, in the pipe buffer when it is piped, and in the admin socket's buffers in transit. | Outside any process's control. Each buffer is drained by the read that empties it. |
 | When SIGINT, SIGQUIT or SIGTERM arrives while the CLI has the terminal open, its watcher thread restores the terminal and calls `process::exit`, which runs no destructors, so a line buffer the main thread is filling is not wiped. | The process exits at once and the kernel frees its memory. Core dumps and same-account `ptrace` are off, so nothing can read the buffer between the signal and the exit. |
