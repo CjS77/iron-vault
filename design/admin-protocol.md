@@ -107,6 +107,7 @@ an error.
 |---|---|---|---|
 | `1` | `ping` | none | the deployment profile |
 | `2` | `config approve` | the proposed config bytes | the committed version, the config digest and the summary headline |
+| `6` | `status` | none | the [status report](#status) |
 
 **No command accepts an external signature** (§3.2). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -229,6 +230,46 @@ an unknown command, is an error.
 |---|---|---|
 | 2 | deployment profile | `u8`: `1` protected, `2` development |
 
+#### status
+
+`status` changes nothing and is answered in every state (§3.12), including Locked and Unavailable, so the owner can
+diagnose why requests fail. The result is the **status report**: fields, never one preformatted string, so the CLI
+renders them and tests assert on values. Every collection is in name order, and the report holds no secret value, record
+digest or permitted origin.
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | service state | `u8`: `1` starting, `2` locked, `3` checking, `4` ready, `5` unavailable, `6` stopped |
+| 3 | unavailable reason | `u8`: `0` none, `1` policy invalid, `2` recovery needed; non-zero exactly when the state is `5` |
+| 4 | deployment profile | `u8`: `1` protected, `2` development |
+| 5 | vault ID | byte value: empty while the vault is locked, otherwise the 16 raw bytes of the vault ID |
+| 6 | committed approval version | `u64`: `0` when none is committed, and while the vault is locked |
+| 7 | highest reserved approval version | `u64`: `0` while the vault is locked |
+| 8 | memory protection | `u8`: `1` locked against swap, `2` unavailable, `3` unsupported |
+| 9 | memory protection detail | UTF-8 text: why memory is not locked; empty when it is locked or unsupported |
+| 10 | credentials | byte value: the credential list below; empty while the vault is locked |
+
+The vault ID, both approval versions and the credentials are sealed behind the vault identity (`approval.age`, the
+manifest), so they are unknown while the vault is locked. The vault is locked in Starting and Locked, and also in
+Unavailable: a failed config check drops the vault and its identity, so the service holds no ID, version or
+credential state to report there. The CLI shows these as unknown rather than guessing. An empty vault ID is how the
+report says the vault is locked; an unlocked vault with no credentials has a non-empty vault ID and an empty list.
+
+Memory protection is reported from the process hardening report and never claims swap protection unless `mlockall`
+succeeded (§3.11).
+
+The credential list is one entry per credential in the vault manifest, in credential-name order:
+
+| Size | Part |
+|---|---|
+| 1 | name length `n`, 1 to 64 |
+| `n` | credential name |
+| 1 | standing: `0` healthy, `1` damaged: record missing, `2` damaged: record substituted, `3` damaged: record unreadable |
+| 2 | `u16` count `r` of routes this credential makes unavailable |
+| `r` times | route name length (1 byte) then the route name, in route-name order |
+
+A healthy credential makes no route unavailable. A needs-login standing joins this table with OAuth (v1).
+
 ### Admin response: error (kind 5)
 
 | Tag | Field | Value |
@@ -340,6 +381,7 @@ after the last frame does not hide it.
 | `1` | the service answered with an error response |
 | `2` | usage error |
 | `3` | no admin response: no socket or nothing listening, permission denied, the exchange failed or timed out, or a prompt got no value |
+| `4` | `status`: the service answered, and it is not Ready |
 | `128 + n` | signal `n` while the CLI had the terminal open for prompting: `130` for SIGINT, `131` for SIGQUIT, `143` for SIGTERM |
 
 A `not-admin-principal` response or a permission-denied connect tells the owner that a protected install needs `sudo`.
@@ -369,6 +411,17 @@ config is not a secret, but the CLI never echoes its bytes in a diagnostic. A fi
 refused before anything is sent, with exit code 2. The CLI never computes a summary or a digest of its own: it shows
 the service's notices and result. File-only input is a default that conflicts with K-128's spec, which reads stdin
 when no file is given ([open question 12](config-approval.md#open-questions)).
+
+### status
+
+`iron-vault status` prints one field per line, in this order, to stdout: `service`, `reason` (only when Unavailable),
+`profile`, `vault`, `vault id`, `approval committed`, `approval highest reserved`, `memory protection`, then one
+`credential <name>` line per credential (or `credentials` alone when there are none or they are unknown). A value
+sealed behind a locked vault prints as `unknown while the vault is locked`. Under the development profile the
+profile line is exactly `profile: development — no isolation from malware running as <user>`, with the user the CLI
+runs as: in development the service account, the admin principal and the invoking user are the same account. The output
+is a function of the report, so two runs on the same state are byte-identical. It exits `0` when the service is Ready
+and `4` for any other state.
 
 ### Owner input
 
