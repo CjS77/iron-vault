@@ -210,11 +210,7 @@ impl Fixture {
     /// Runs the check on a freshly opened vault.
     fn check(&self) -> Result<ServingSnapshot, CheckFailure> {
         let (vault, _) = Vault::open(&self.state_lock, &OsFs, identity()).unwrap();
-        let upstream = UpstreamSettings {
-            profile: DeploymentProfile::Development,
-            owner: ExpectedOwner { uid: 0 },
-            limits: TransportLimits::default(),
-        };
+        let upstream = UpstreamSettings::new(DeploymentProfile::Development, ExpectedOwner { uid: 0 }, TransportLimits::default());
         check_config(
             &self.config_lock,
             &OsFs,
@@ -222,7 +218,7 @@ impl Fixture {
             &self.state,
             &Capabilities::default(),
             &NoAccounts,
-            upstream,
+            &upstream,
         )
     }
 }
@@ -363,6 +359,39 @@ fn damaged_shared_state_needs_recovery() {
     let failure = CheckFailure::Vault(VaultError::NotInitialized);
     assert_eq!(failure.unavailable(), UnavailableReason::RecoveryNeeded);
     assert_eq!(failure.status(), "recovery needed: shared state damaged");
+}
+
+impl Fixture {
+    /// Opens the vault with the identity and runs the check, as an unlock does.
+    fn open_and_check(&self) -> Result<(ServingSnapshot, ApprovalState), CheckFailure> {
+        let upstream = UpstreamSettings::new(DeploymentProfile::Development, ExpectedOwner { uid: 0 }, TransportLimits::default());
+        open_and_check(
+            &self.state_lock,
+            &self.config_lock,
+            &OsFs,
+            identity(),
+            &Capabilities::default(),
+            &NoAccounts,
+            &upstream,
+        )
+    }
+}
+
+#[test]
+fn opening_then_checking_returns_the_snapshot_and_the_approval_state() {
+    let fixture = approved();
+    let (snapshot, state) = fixture.open_and_check().unwrap();
+    assert_eq!(state, fixture.state);
+    assert!(snapshot.record(&"alpha".parse().unwrap()).is_some());
+}
+
+#[test]
+fn damaged_shared_state_found_on_opening_is_a_recovery_needed_check_failure() {
+    let fixture = approved();
+    std::fs::write(fixture.state_dir.0.join(StateFileName::approval_state().as_str()), b"damaged").unwrap();
+    let failure = fixture.open_and_check().map(|_| ()).expect_err("the check should fail");
+    assert!(matches!(failure, CheckFailure::Vault(_)), "{failure:?}");
+    assert_eq!(failure.unavailable(), UnavailableReason::RecoveryNeeded);
 }
 
 #[test]

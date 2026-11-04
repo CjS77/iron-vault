@@ -657,6 +657,8 @@ fn interleaved_vault_and_approval_writes_take_one_state_generation_each_and_name
     let (reopened, _) = setup.open(&fs).unwrap();
     let reloaded = ApprovalState::load(&setup.lock, &fs, &identity(), vault.manifest().vault_id()).unwrap();
     assert_eq!((reopened.manifest(), &reloaded), (vault.manifest(), &approval));
+    // An opened vault loads the same approval state with the identity it now owns.
+    assert_eq!(reopened.load_approval_state(&setup.lock, &fs).unwrap(), approval);
 }
 
 /// The vault never sees the approval state's writes in memory, so each write reads it from disk: once it exists, a

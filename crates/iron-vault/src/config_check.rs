@@ -1,7 +1,7 @@
 //! The config check: the work the service does in Checking (specification §3.9, §3.12, §8.2 Q-5).
 //!
-//! Startup, reload, an approval's commit and a repair all call [`check_config`], so they cannot disagree about what a
-//! servable config is. It recovers any committed transaction, parses, validates and activates the config the recovered
+//! Startup, reload, an approval's commit and a repair all call [`check_config`], an unlock through [`open_and_check`],
+//! which opens the vault first, so they cannot disagree about what a servable config is. It recovers any committed transaction, parses, validates and activates the config the recovered
 //! pair holds, and builds one [`ServingSnapshot`]. Any failure is a [`CheckFailure`] that names the safe state that
 //! follows and carries nothing a `503` body or a status answer must not show. The check never writes the approval state.
 //!
@@ -18,7 +18,8 @@ use iron_vault_policy::{
     ValidationError, activate,
 };
 use iron_vault_store::{
-    ApprovalRecoveryError, ApprovalState, ApprovalStateError, ConfigDirLock, RecoveryFailure, StoreFs, Vault, VaultError, recover_approval,
+    ApprovalRecoveryError, ApprovalState, ApprovalStateError, ConfigDirLock, RecoveryFailure, StateDirLock, StoreFs, Vault, VaultError,
+    VaultIdentity, recover_approval,
 };
 
 use crate::deployment::DeploymentProfile;
@@ -27,16 +28,53 @@ use crate::serving_snapshot::{ServingSnapshot, SnapshotError};
 use crate::trusted_path::ExpectedOwner;
 use crate::upstream::client::{ClientBuildError, TransportLimits};
 use crate::upstream::clients::UpstreamClients;
+#[cfg(any(test, feature = "test-support"))]
+use crate::upstream::trust::UpstreamTrust;
 
 /// How the check builds the upstream clients of the snapshot.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct UpstreamSettings {
     /// The deployment profile, which decides how a pinned CA file's path is trusted.
-    pub profile: DeploymentProfile,
+    profile: DeploymentProfile,
     /// The owner a pinned CA file must have.
-    pub owner: ExpectedOwner,
+    owner: ExpectedOwner,
     /// The transport deadlines.
-    pub limits: TransportLimits,
+    limits: TransportLimits,
+    /// The trust every pinned CA route gets instead of its file, for integration tests.
+    #[cfg(any(test, feature = "test-support"))]
+    pinned: Option<UpstreamTrust>,
+}
+
+impl UpstreamSettings {
+    /// Settings that read each pinned CA file through its trusted-path rule for `profile` and `owner`.
+    pub fn new(profile: DeploymentProfile, owner: ExpectedOwner, limits: TransportLimits) -> Self {
+        Self {
+            profile,
+            owner,
+            limits,
+            #[cfg(any(test, feature = "test-support"))]
+            pinned: None,
+        }
+    }
+
+    /// Gives every pinned CA route `trust` instead of reading its file, so integration tests can pin a test CA without
+    /// a trusted path on disk. The `test-support` feature that exposes it is enabled only by this crate's own
+    /// dev-dependency.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_pinned_trust(self, trust: UpstreamTrust) -> Self {
+        Self {
+            pinned: Some(trust),
+            ..self
+        }
+    }
+
+    fn clients(&self, policy: &ActivePolicy) -> Result<UpstreamClients, ClientBuildError> {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(trust) = &self.pinned {
+            return UpstreamClients::with_pinned_loader(policy, self.limits, |_| Ok(trust.clone()));
+        }
+        UpstreamClients::new(policy, self.profile, self.owner, self.limits)
+    }
 }
 
 /// Why the check did not produce a snapshot.
@@ -171,12 +209,46 @@ fn activation_detail(error: &ActivationError) -> String {
     }
 }
 
+/// Opens the vault with `identity` and loads its approval state, then runs the config check, for a service entering
+/// Checking with the vault identity in hand.
+///
+/// Damaged shared state that keeps the vault or the approval state from opening is a check failure like any other
+/// ([`CheckFailure::Vault`], [`CheckFailure::ApprovalState`]), logged the same way. On success the vault is in the
+/// snapshot and the approval state is returned beside it; on failure both are dropped, the identity with them.
+pub fn open_and_check(
+    state_dir: &StateDirLock,
+    config_dir: &ConfigDirLock,
+    fs: &impl StoreFs,
+    identity: VaultIdentity,
+    capabilities: &Capabilities,
+    accounts: &impl AccountDirectory,
+    upstream: &UpstreamSettings,
+) -> Result<(ServingSnapshot, ApprovalState), CheckFailure> {
+    open_and_run(state_dir, config_dir, fs, identity, capabilities, accounts, upstream).inspect_err(log_failure)
+}
+
+fn open_and_run(
+    state_dir: &StateDirLock,
+    config_dir: &ConfigDirLock,
+    fs: &impl StoreFs,
+    identity: VaultIdentity,
+    capabilities: &Capabilities,
+    accounts: &impl AccountDirectory,
+    upstream: &UpstreamSettings,
+) -> Result<(ServingSnapshot, ApprovalState), CheckFailure> {
+    let (vault, _) = Vault::open(state_dir, fs, identity).map_err(CheckFailure::Vault)?;
+    let state = vault.load_approval_state(state_dir, fs).map_err(CheckFailure::ApprovalState)?;
+    let snapshot = run(config_dir, fs, vault, &state, capabilities, accounts, upstream)?;
+    Ok((snapshot, state))
+}
+
 /// Runs the config check and returns the snapshot to serve, or the failure that leaves the service Unavailable.
 ///
 /// `vault` and `state` are the opened shared state; `config_dir` is the held config directory lock. A damaged or
 /// needs-login credential record is not a failure: activation marks only its routes unavailable (§3.9). The vault moves
 /// into the snapshot on success and is dropped on failure, so the next check opens it again. A failure is logged here at
-/// WARN as `config.check-failed`, with its [`detail`](CheckFailure::detail), so every caller reports it the same way.
+/// WARN as `config.check-failed`, with its [`detail`](CheckFailure::detail). Opening the vault and the approval state
+/// comes before this function; [`open_and_check`] logs a failure there the same way.
 pub fn check_config(
     config_dir: &ConfigDirLock,
     fs: &impl StoreFs,
@@ -184,17 +256,19 @@ pub fn check_config(
     state: &ApprovalState,
     capabilities: &Capabilities,
     accounts: &impl AccountDirectory,
-    upstream: UpstreamSettings,
+    upstream: &UpstreamSettings,
 ) -> Result<ServingSnapshot, CheckFailure> {
-    run(config_dir, fs, vault, state, capabilities, accounts, upstream).inspect_err(|failure| {
-        tracing::warn!(
-            event = "config.check-failed",
-            reason = failure.unavailable().as_str(),
-            status = %failure,
-            detail = %failure.detail(),
-            "the config check failed",
-        );
-    })
+    run(config_dir, fs, vault, state, capabilities, accounts, upstream).inspect_err(log_failure)
+}
+
+fn log_failure(failure: &CheckFailure) {
+    tracing::warn!(
+        event = "config.check-failed",
+        reason = failure.unavailable().as_str(),
+        status = %failure,
+        detail = %failure.detail(),
+        "the config check failed",
+    );
 }
 
 fn run(
@@ -204,11 +278,12 @@ fn run(
     state: &ApprovalState,
     capabilities: &Capabilities,
     accounts: &impl AccountDirectory,
-    upstream: UpstreamSettings,
+    upstream: &UpstreamSettings,
 ) -> Result<ServingSnapshot, CheckFailure> {
     let recovered = recover_approval(config_dir, fs, state).map_err(CheckFailure::Recovery)?;
     let policy = activate_config(recovered.published().config(), capabilities, &vault, accounts).map_err(CheckFailure::Config)?;
-    let clients = UpstreamClients::new(&policy, upstream.profile, upstream.owner, upstream.limits)
+    let clients = upstream
+        .clients(&policy)
         .map_err(|error| CheckFailure::Config(InvalidConfig::Clients(error)))?;
     let limiter = RateLimiter::new(&policy, Instant::now());
     ServingSnapshot::new(policy, vault, clients, limiter).map_err(|error| CheckFailure::Config(InvalidConfig::Snapshot(error)))

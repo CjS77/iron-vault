@@ -184,6 +184,14 @@ impl Vault {
         ))
     }
 
+    /// Loads this vault's approval state, as [`ApprovalState::load`] does, with the vault identity the vault holds.
+    ///
+    /// The vault owns its identity, and the identity has no `Clone`, so a caller that has opened the vault cannot load
+    /// the approval state with the identity itself.
+    pub fn load_approval_state(&self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<ApprovalState, ApprovalStateError> {
+        ApprovalState::load(lock, fs, &self.identity, self.manifest.vault_id())
+    }
+
     /// The manifest the vault was opened with.
     pub fn manifest(&self) -> &VaultManifest {
         &self.manifest
