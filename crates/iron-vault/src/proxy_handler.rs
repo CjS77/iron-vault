@@ -8,6 +8,9 @@
 //!
 //! | Failure | Answer |
 //! |---|---|
+//! | The service holds no snapshot (locked, policy invalid, checking, recovery needed) | `503` with the [`UnavailableReason`] text, before the caller is identified |
+//! | The snapshot is withdrawn before the response head | `503` |
+//! | The snapshot is withdrawn after the response head | The caller's connection is aborted |
 //! | The pipeline refuses the request | Its [`RefusalResponse`] |
 //! | The route has no upstream client | `503` |
 //! | The upstream exchange fails | [`TransportError::status`]: `502`, or `504` for a timeout |
@@ -27,7 +30,7 @@ use futures_core::Stream;
 use http_body_util::{BodyExt, Full};
 use hyper::HeaderMap;
 use hyper::body::Body;
-use hyper::header::{ACCEPT_ENCODING, CONTENT_LENGTH, HeaderValue as HttpHeaderValue};
+use hyper::header::{ACCEPT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, HeaderValue as HttpHeaderValue};
 use hyper::http::request::Parts;
 use hyper::{Request, Response, StatusCode};
 use iron_vault_policy::{HeaderName, HeaderValue, ListenerConfig};
@@ -35,13 +38,16 @@ use tokio::time::Instant;
 
 use crate::pipeline::{RefusalResponse, RequestHead, prepare};
 use crate::request_server::{ConnectionTags, RequestBody, RequestHandler, ResponseBody};
-use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder};
+use crate::service_state::UnavailableReason;
+use crate::serving_snapshot::{Admission, ServingSnapshot, SnapshotHolder};
 use crate::upstream::body::{UpstreamBody, UpstreamBodyError};
 use crate::upstream::transport_error::TransportError;
 
 mod relay;
+mod withdrawn;
 pub(crate) use relay::ResponseContext;
 pub use relay::{RelayFailure, RelayedBody, ResponseOutcome};
+use withdrawn::UntilWithdrawn;
 
 /// The request handler that serves every request from the current serving snapshot.
 #[derive(Debug)]
@@ -64,14 +70,34 @@ impl RequestHandler for ProxyHandler {
         deadline: Instant,
     ) -> impl Future<Output = Response<ResponseBody>> + Send {
         // Loaded once, here, so the whole request runs on one activation even if a reload lands while it is in flight.
-        let snapshot = self.snapshots.load();
+        let admission = self.snapshots.load();
         let tags = tags.clone();
         async move {
-            match proxy(&snapshot, &tags, request, deadline).await {
-                Ok(response) => response,
-                Err(refusal) => fixed(&refusal),
+            match admission {
+                Admission::Serve(snapshot) => serve(&snapshot, &tags, request, deadline).await,
+                Admission::Refuse(reason) => unavailable(reason),
             }
         }
+    }
+}
+
+/// Serves `request` from `snapshot` until the snapshot is withdrawn. A request withdrawn before its response head is
+/// dropped, which cancels its upstream request, and answered with a fixed `503`; one withdrawn after it has its body fail,
+/// so the caller's connection is aborted rather than ended as if the body were complete (§3.9).
+async fn serve(
+    snapshot: &ServingSnapshot,
+    tags: &ConnectionTags,
+    request: Request<RequestBody>,
+    deadline: Instant,
+) -> Response<ResponseBody> {
+    let answer = tokio::select! {
+        biased;
+        () = snapshot.withdrawn() => Err(RefusalResponse::fixed(StatusCode::SERVICE_UNAVAILABLE.as_u16())),
+        answer = proxy(snapshot, tags, request, deadline) => answer,
+    };
+    match answer {
+        Ok(response) => response.map(|body| UntilWithdrawn::new(body, snapshot.withdrawn()).boxed_unsync()),
+        Err(refusal) => fixed(&refusal),
     }
 }
 
@@ -192,6 +218,18 @@ fn token_header(snapshot: &ServingSnapshot, tags: &ConnectionTags) -> Option<Hea
         .listeners()
         .get(tags.listener())
         .map(ListenerConfig::caller_token_header)
+}
+
+/// The `503` for a request refused at admission: the redacted reason as its whole body. It is given before the caller is
+/// identified, because with no snapshot there is no policy to identify the caller against (§3.12).
+fn unavailable(reason: UnavailableReason) -> Response<ResponseBody> {
+    let body = Full::new(Bytes::from_static(reason.as_str().as_bytes()));
+    let mut response = Response::new(body.map_err(|never| match never {}).boxed_unsync());
+    *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+    response
+        .headers_mut()
+        .insert(CONTENT_TYPE, HttpHeaderValue::from_static("text/plain; charset=utf-8"));
+    response
 }
 
 /// A refusal as a hyper response.

@@ -117,27 +117,38 @@ fn route(name: &str) -> RouteName {
 }
 
 #[test]
-fn a_request_that_loaded_a_snapshot_keeps_it_after_replace() {
+fn a_request_that_loaded_a_snapshot_keeps_it_after_serve() {
     let (first, second) = (Scratch::new(), Scratch::new());
     let holder = SnapshotHolder::new(snapshot(&first, "old").unwrap());
-    let in_flight = holder.load();
+    let in_flight = holder.load().snapshot().unwrap();
 
-    holder.replace(snapshot(&second, "new").unwrap());
+    holder.serve(snapshot(&second, "new").unwrap());
 
     assert!(in_flight.policy().is_available(&route("old")));
     assert!(!in_flight.policy().is_available(&route("new")));
     assert!(in_flight.record(&"key".parse().unwrap()).is_some());
-    let after = holder.load();
+    let after = holder.load().snapshot().unwrap();
     assert!(after.policy().is_available(&route("new")));
     assert!(!after.policy().is_available(&route("old")));
     assert!(!Arc::ptr_eq(&in_flight, &after));
+}
+
+fn served(holder: &SnapshotHolder) -> Arc<ServingSnapshot> {
+    holder.load().snapshot().unwrap()
+}
+
+fn refused(holder: &SnapshotHolder) -> Option<UnavailableReason> {
+    match holder.load() {
+        Admission::Refuse(reason) => Some(reason),
+        Admission::Serve(_) => None,
+    }
 }
 
 #[test]
 fn loads_between_replacements_share_one_snapshot() {
     let scratch = Scratch::new();
     let holder = SnapshotHolder::new(snapshot(&scratch, "fx").unwrap());
-    assert!(Arc::ptr_eq(&holder.load(), &holder.load()));
+    assert!(Arc::ptr_eq(&served(&holder), &served(&holder)));
 }
 
 #[test]
@@ -195,6 +206,85 @@ fn the_record_for_a_route_carries_its_permitted_origins() {
 fn debug_hides_the_secret_material() {
     let scratch = Scratch::new();
     let holder = SnapshotHolder::new(snapshot(&scratch, "fx").unwrap());
-    assert_hides_marker(&*holder.load());
+    assert_hides_marker(&holder.load());
     assert_hides_marker(&holder);
+}
+
+#[test]
+fn a_holder_with_no_snapshot_refuses_with_its_reason() {
+    let holder = SnapshotHolder::refusing(UnavailableReason::Locked);
+    assert_eq!(refused(&holder), Some(UnavailableReason::Locked));
+}
+
+#[test]
+fn a_pause_refuses_with_checking_and_keeps_the_old_snapshot_running() {
+    let scratch = Scratch::new();
+    let holder = SnapshotHolder::new(snapshot(&scratch, "fx").unwrap());
+    let in_flight = served(&holder);
+
+    let pause = holder.pause();
+
+    assert_eq!(refused(&holder), Some(UnavailableReason::Checking));
+    assert!(!in_flight.is_withdrawn());
+    drop(pause);
+    assert_eq!(refused(&holder), Some(UnavailableReason::Checking), "an unended pause stays closed");
+}
+
+#[test]
+fn a_pause_that_resumes_serves_the_new_snapshot_and_lets_the_old_one_finish() {
+    let (first, second) = (Scratch::new(), Scratch::new());
+    let holder = SnapshotHolder::new(snapshot(&first, "old").unwrap());
+    let in_flight = served(&holder);
+
+    holder.pause().resume(snapshot(&second, "new").unwrap());
+
+    assert!(!in_flight.is_withdrawn());
+    let after = served(&holder);
+    assert!(!after.is_withdrawn());
+    assert!(after.policy().is_available(&route("new")));
+}
+
+#[test]
+fn a_pause_that_fails_refuses_with_the_failure_and_withdraws_the_old_snapshot() {
+    let scratch = Scratch::new();
+    let holder = SnapshotHolder::new(snapshot(&scratch, "fx").unwrap());
+    let in_flight = served(&holder);
+
+    holder.pause().fail(FailureReason::PolicyInvalid);
+
+    assert_eq!(refused(&holder), Some(UnavailableReason::PolicyInvalid));
+    assert!(in_flight.is_withdrawn());
+}
+
+#[test]
+fn a_refusal_withdraws_every_snapshot_served_since_the_last_one() {
+    let (first, second) = (Scratch::new(), Scratch::new());
+    let holder = SnapshotHolder::new(snapshot(&first, "old").unwrap());
+    let streaming = served(&holder);
+    holder.pause().resume(snapshot(&second, "new").unwrap());
+    let current = served(&holder);
+
+    holder.refuse(UnavailableReason::Locked);
+
+    assert!(streaming.is_withdrawn(), "a request still streaming from the replaced snapshot");
+    assert!(current.is_withdrawn());
+}
+
+#[test]
+fn a_snapshot_served_after_a_withdrawal_is_not_withdrawn() {
+    let (first, second) = (Scratch::new(), Scratch::new());
+    let holder = SnapshotHolder::new(snapshot(&first, "old").unwrap());
+    let old = served(&holder);
+    holder.refuse(UnavailableReason::RecoveryNeeded);
+
+    holder.serve(snapshot(&second, "new").unwrap());
+
+    assert!(old.is_withdrawn());
+    assert!(!served(&holder).is_withdrawn());
+}
+
+#[test]
+fn a_snapshot_no_holder_serves_is_never_withdrawn() {
+    let scratch = Scratch::new();
+    assert!(!snapshot(&scratch, "fx").unwrap().is_withdrawn());
 }

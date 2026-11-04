@@ -1,15 +1,18 @@
 //! The serving snapshot: everything one request is served with, swapped as a unit (specification §3.5, §3.9).
 //!
-//! A request takes the snapshot once with [`SnapshotHolder::load`] and uses only that, so the route it was authorized
-//! against, the credential record it resolves, the client it sends with and the limiter it was charged by always come
-//! from one activation. A reload replaces the whole snapshot; requests that already loaded the old one finish on it,
-//! and none loads it after the replacement.
+//! A request takes its [`Admission`] once with [`SnapshotHolder::load`] and uses only that, so the route it was
+//! authorized against, the credential record it resolves, the client it sends with and the limiter it was charged by
+//! always come from one activation. A reload replaces the whole snapshot; requests that already loaded the old one finish
+//! on it, and none loads it after the replacement. When no snapshot is held, the admission is a refusal with a redacted
+//! reason, and a snapshot withdrawn from its requests tells them to stop ([`ServingSnapshot::withdrawn`]).
 
 use std::sync::{Arc, PoisonError, RwLock};
 
 use iron_vault_policy::{ActivePolicy, CredentialName, RateLimiter, RouteName};
 use iron_vault_store::{CredentialRecord, Vault};
+use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
+use crate::service_state::{FailureReason, UnavailableReason};
 use crate::upstream::clients::UpstreamClients;
 
 /// The active policy, the vault's healthy records, the upstream clients and the rate limiter for one activation.
@@ -22,6 +25,8 @@ pub struct ServingSnapshot {
     vault: Vault,
     clients: UpstreamClients,
     limiter: RateLimiter,
+    /// Fired when the holder that serves the snapshot ends its epoch. A snapshot no holder serves is never withdrawn.
+    withdrawn: CancellationToken,
 }
 
 /// Why a policy and a vault cannot form one snapshot: a route's availability disagrees with whether the vault holds a
@@ -67,8 +72,15 @@ impl ServingSnapshot {
                 vault,
                 clients,
                 limiter,
+                withdrawn: CancellationToken::new(),
             }),
         }
+    }
+
+    /// The snapshot, withdrawn with every other snapshot of `epoch`.
+    fn in_epoch(mut self, epoch: &CancellationToken) -> Self {
+        self.withdrawn = epoch.child_token();
+        self
     }
 
     /// The policy requests are authorized against.
@@ -90,36 +102,139 @@ impl ServingSnapshot {
     pub fn limiter(&self) -> &RateLimiter {
         &self.limiter
     }
+
+    /// Completes once the holder withdraws this snapshot (a failed check or a lock), and at once if it already has. A
+    /// request running on the snapshot stops when it does, where the transport permits (specification §3.9).
+    pub fn withdrawn(&self) -> WaitForCancellationFutureOwned {
+        self.withdrawn.clone().cancelled_owned()
+    }
+
+    /// Whether the holder has withdrawn this snapshot.
+    pub fn is_withdrawn(&self) -> bool {
+        self.withdrawn.is_cancelled()
+    }
 }
 
-/// The snapshot new requests are served with.
+/// What a request's one load from the [`SnapshotHolder`] returns, and so what it is admitted to.
+#[derive(Debug, Clone)]
+pub enum Admission {
+    /// Serve the request from this snapshot, which it keeps to its end.
+    Serve(Arc<ServingSnapshot>),
+    /// Answer `503` with this reason; the request is not admitted.
+    Refuse(UnavailableReason),
+}
+
+impl Admission {
+    /// The snapshot to serve from, or `None` when the request is refused.
+    pub fn snapshot(self) -> Option<Arc<ServingSnapshot>> {
+        match self {
+            Self::Serve(snapshot) => Some(snapshot),
+            Self::Refuse(_) => None,
+        }
+    }
+}
+
+/// The value new requests are admitted by: *serve* with the current snapshot, or *refuse* with a redacted reason.
 ///
-/// A lock around an `Arc` rather than an atomic pointer: the lock is held only to clone or swap the `Arc`, so a
-/// request never waits on another's work, and it adds no dependency.
+/// A lock around that one value rather than an atomic pointer: the lock is held only to clone or store it, so a request
+/// never waits on another's work. A request's load and every store each take the lock once, so a request sees exactly one
+/// value and no request is admitted to a snapshot after a store that replaced it. Every service state transition stores
+/// the value its [`request_interface`](crate::service_state::ServiceState::request_interface) names, so the reason a `503`
+/// carries has one source.
+///
+/// Every snapshot served hangs off one withdrawal epoch. Storing any refusal but [`Checking`](UnavailableReason::Checking)
+/// ends the epoch: every snapshot served since the last such refusal is withdrawn, including an old one a request is still
+/// streaming from after a reload, and the next snapshot starts a new epoch. *Checking* withdraws nothing, because a check
+/// that passes ends on a new snapshot and the requests admitted before the pause finish on the old one.
 #[derive(Debug)]
 pub struct SnapshotHolder {
-    current: RwLock<Arc<ServingSnapshot>>,
+    current: RwLock<Held>,
+}
+
+/// What the holder holds: the value a load returns, and the epoch the snapshots it serves belong to.
+#[derive(Debug)]
+struct Held {
+    admission: Admission,
+    epoch: CancellationToken,
 }
 
 impl SnapshotHolder {
-    /// A holder whose current snapshot is `snapshot`.
+    /// A holder that serves `snapshot`.
     pub fn new(snapshot: ServingSnapshot) -> Self {
+        let epoch = CancellationToken::new();
         Self {
-            current: RwLock::new(Arc::new(snapshot)),
+            current: RwLock::new(Held {
+                admission: Admission::Serve(Arc::new(snapshot.in_epoch(&epoch))),
+                epoch,
+            }),
         }
     }
 
-    /// The current snapshot. The pipeline calls this once per request and keeps the result to the end of the request.
-    pub fn load(&self) -> Arc<ServingSnapshot> {
-        // A poisoned lock still holds a whole `Arc`, since the guarded code only clones or assigns one.
-        Arc::clone(&self.current.read().unwrap_or_else(PoisonError::into_inner))
+    /// A holder that refuses with `reason` until a snapshot is served, for a service that has none yet.
+    pub fn refusing(reason: UnavailableReason) -> Self {
+        Self {
+            current: RwLock::new(Held {
+                admission: Admission::Refuse(reason),
+                epoch: CancellationToken::new(),
+            }),
+        }
     }
 
-    /// Makes `snapshot` the one every later [`load`](Self::load) returns; requests holding the old one are unaffected.
+    /// The request's admission. The proxy handler calls this once per request, before identifying the caller, and keeps
+    /// the result to the end of the request.
+    pub fn load(&self) -> Admission {
+        // A poisoned lock still holds a whole value, since the guarded code only clones or assigns one.
+        self.current.read().unwrap_or_else(PoisonError::into_inner).admission.clone()
+    }
+
+    /// Makes `snapshot` the one every later [`load`](Self::load) returns; requests holding the old one finish on it.
+    pub fn serve(&self, snapshot: ServingSnapshot) {
+        let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
+        current.admission = Admission::Serve(Arc::new(snapshot.in_epoch(&current.epoch)));
+    }
+
+    /// Makes every later [`load`](Self::load) refuse with `reason`. Any reason but *checking* also withdraws every
+    /// snapshot served, so no old route policy is kept (specification §3.9).
+    pub fn refuse(&self, reason: UnavailableReason) {
+        let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
+        if reason != UnavailableReason::Checking {
+            std::mem::replace(&mut current.epoch, CancellationToken::new()).cancel();
+        }
+        current.admission = Admission::Refuse(reason);
+    }
+
+    /// Starts an admission pause: one store of *refuse* `checking`, after which no request is admitted until the returned
+    /// guard ends the pause.
     ///
-    /// Nothing calls this yet: reload (EP-22) is its only intended caller.
-    pub fn replace(&self, snapshot: ServingSnapshot) {
-        *self.current.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(snapshot);
+    /// The commit of a new approval takes the guard by reference, so it cannot run without the pause in place.
+    pub fn pause(&self) -> AdmissionPause<'_> {
+        self.refuse(UnavailableReason::Checking);
+        AdmissionPause { holder: self }
+    }
+}
+
+/// Proof that new requests are not being admitted: held from the pause's start until the config check that follows ends
+/// it, by [`resume`](Self::resume) or [`fail`](Self::fail).
+///
+/// Dropping it without ending the pause leaves the holder refusing with *checking*, so an error path that forgets to end
+/// it keeps the service closed rather than reopening it on a policy nobody checked.
+#[derive(Debug)]
+#[must_use = "dropping the pause leaves requests refused with `checking`"]
+pub struct AdmissionPause<'a> {
+    holder: &'a SnapshotHolder,
+}
+
+impl AdmissionPause<'_> {
+    /// Ends the pause on a passed check: later requests are admitted to `snapshot`, and those admitted before the pause
+    /// finish on the old one.
+    pub fn resume(self, snapshot: ServingSnapshot) {
+        self.holder.serve(snapshot);
+    }
+
+    /// Ends the pause on a failed check: later requests are refused with the failure's reason, and the old snapshot is
+    /// withdrawn.
+    pub fn fail(self, reason: FailureReason) {
+        self.holder.refuse(UnavailableReason::from_failure(reason));
     }
 }
 
