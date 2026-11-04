@@ -17,3 +17,6 @@ pub mod mock_upstream_h2;
 pub mod proxy_harness;
 #[cfg(target_os = "linux")]
 pub mod scrub_stream;
+
+/// How long a test waits for one response, or for a test upstream to record something, before failing.
+pub const WAIT: std::time::Duration = std::time::Duration::from_secs(10);

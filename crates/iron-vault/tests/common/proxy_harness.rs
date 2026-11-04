@@ -42,8 +42,7 @@ pub const TOKEN_HEADER: &str = "X-Iron-Vault-Token";
 /// The bytes of the token every test caller holds.
 pub const TOKEN_BYTES: [u8; 32] = [7; 32];
 
-/// How long a test waits for one response before failing.
-pub const WAIT: Duration = Duration::from_secs(10);
+pub use super::WAIT;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 

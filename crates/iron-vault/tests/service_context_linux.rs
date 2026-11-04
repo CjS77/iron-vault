@@ -1285,6 +1285,11 @@ async fn after_a_cleared_lock_no_upstream_connection_that_carried_the_credential
     let service = ready_service(&fixture).await;
     assert_served(&get_unix(&fixture.socket(), true).await);
     assert!(fixture.upstream.requests()[0].head.contains(SECRET));
+    assert_eq!(
+        fixture.upstream.open_connections(),
+        1,
+        "the credential-bearing connection was not pooled"
+    );
 
     assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
 

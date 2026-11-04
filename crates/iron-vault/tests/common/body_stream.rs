@@ -10,6 +10,8 @@ use bytes::Bytes;
 use futures_core::Stream;
 use iron_vault::upstream::body::{UpstreamBody, UpstreamBodyError};
 
+use super::WAIT;
+
 /// How long a failing stream waits before its error, so the client has sent the chunks before it as well as the head.
 const PAUSE_BEFORE_ERROR: Duration = Duration::from_millis(100);
 
@@ -49,14 +51,15 @@ fn stream(length: Option<u64>, items: impl Iterator<Item = Result<Bytes, Upstrea
     UpstreamBody::stream(length, items)
 }
 
-/// Polls `probe` until it returns a value. A test upstream records an aborted request after the client has already
-/// reported the failure, so a test waits for the recording instead of assuming it is there.
+/// Polls `probe` until it returns a value, for up to [`WAIT`]. A test upstream records an aborted request, or a closed
+/// connection, after the client has already moved on, so a test waits for the recording instead of assuming it is there.
 pub async fn eventually<T>(mut probe: impl FnMut() -> Option<T>) -> T {
-    for _ in 0..200 {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while tokio::time::Instant::now() < deadline {
         if let Some(found) = probe() {
             return found;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    panic!("the test upstream recorded nothing within two seconds");
+    panic!("the test upstream did not reach the awaited state within {WAIT:?}");
 }
