@@ -1,8 +1,9 @@
-//! The owner console: where the CLI collects owner input for the service's prompts (`design/admin-protocol.md`, "Owner
-//! input").
+//! The owner console: where the CLI collects owner input for the service's prompts, and shows its notices and reveals
+//! (`design/admin-protocol.md`, "Owner input").
 //!
-//! Each value goes from the input straight into a clearing buffer, and from there into one owner-input frame. It never
-//! passes through `String`, formatting, `Debug` or a log call, and no error names a byte of it.
+//! Each value goes from the input straight into a clearing buffer, and from there into one owner-input frame. A revealed
+//! value goes from its clearing buffer straight to the terminal's descriptor. Neither passes through `String`,
+//! formatting, `Debug` or a log call, and no error names a byte of either.
 
 mod tty;
 
@@ -10,7 +11,7 @@ use std::fs::File;
 use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::AsFd;
 
-use iron_vault::admin::protocol::{MAX_BODY_LEN, OwnerInput, Prompt};
+use iron_vault::admin::protocol::{MAX_BODY_LEN, OwnerInput, Prompt, RevealedSecret};
 use zeroize::Zeroizing;
 
 /// The longest line a value may arrive in: the longest value, then `\r\n`.
@@ -45,15 +46,28 @@ pub enum InputError {
     /// A notice from the service could not be shown.
     #[error("cannot show the service's notice: {0}")]
     Notice(io::Error),
+    /// A reveal was sent, and there is no controlling terminal to show it on.
+    #[error("the service sent a secret value, which is shown only on a terminal, and there is none: {0}")]
+    NoTerminal(io::Error),
+    /// A revealed value holds a byte outside printable ASCII, so none of it was shown.
+    #[error("the service sent a secret value that is not printable text, so it was not shown")]
+    UnprintableReveal,
+    /// A revealed value could not be written to the terminal.
+    #[error("cannot show the service's secret value: {0}")]
+    Reveal(io::Error),
 }
 
-/// Collects one value from the owner for each prompt, and shows the owner each notice.
+/// Collects one value from the owner for each prompt, and shows the owner each notice and reveal.
 pub trait OwnerConsole {
     /// Shows the prompt's label and reads one value.
     fn collect(&mut self, prompt: &Prompt) -> Result<OwnerInput, InputError>;
 
     /// Shows a notice's text, after the text of the notice before it.
     fn notice(&mut self, text: &str) -> Result<(), InputError>;
+
+    /// Shows a revealed value, then `\n`, on the controlling terminal and nowhere else. A value with a byte outside
+    /// printable ASCII is refused and nothing of it is shown.
+    fn reveal(&mut self, secret: &RevealedSecret) -> Result<(), InputError>;
 }
 
 /// The process's console, opened at the first prompt or notice, so a command the service never prompts for touches
@@ -79,6 +93,10 @@ impl OwnerConsole for ProcessConsole {
     fn notice(&mut self, text: &str) -> Result<(), InputError> {
         self.console()?.notice(text)
     }
+
+    fn reveal(&mut self, secret: &RevealedSecret) -> Result<(), InputError> {
+        self.console()?.reveal(secret)
+    }
 }
 
 /// The terminal when stdin is one; otherwise stdin itself, so a piped value (`pass show fx | sudo iron-vault add fx`)
@@ -95,20 +113,28 @@ fn open() -> Result<Box<dyn OwnerConsole>, InputError> {
 
 /// Reads each value as the next line of `input`. A label goes to stderr, and only when stderr is a terminal, so it
 /// never mixes into output a script reads. A notice always goes to stderr, so a scripted approval still records the
-/// summary it approved.
-pub struct Piped<R> {
+/// summary it approved. A reveal goes to the controlling terminal, opened for it, and never to stderr, which a script
+/// may capture.
+pub struct Piped<R, W = io::Stderr, O = fn() -> io::Result<File>> {
     input: R,
     show_labels: bool,
+    notices: W,
+    open_tty: O,
 }
 
 impl<R: Read> Piped<R> {
     /// Reads values from `input`, showing labels on stderr when `show_labels` is set.
     pub fn new(input: R, show_labels: bool) -> Self {
-        Self { input, show_labels }
+        Self {
+            input,
+            show_labels,
+            notices: io::stderr(),
+            open_tty: tty::open_for_reveal,
+        }
     }
 }
 
-impl<R: Read> OwnerConsole for Piped<R> {
+impl<R: Read, W: Write, O: FnMut() -> io::Result<T>, T: Write> OwnerConsole for Piped<R, W, O> {
     fn collect(&mut self, prompt: &Prompt) -> Result<OwnerInput, InputError> {
         if self.show_labels {
             eprint!("{}: ", printable(&prompt.label));
@@ -121,11 +147,16 @@ impl<R: Read> OwnerConsole for Piped<R> {
     }
 
     fn notice(&mut self, text: &str) -> Result<(), InputError> {
-        let mut stderr = io::stderr();
-        stderr
+        self.notices
             .write_all(printable_notice(text).as_bytes())
-            .and_then(|()| stderr.flush())
+            .and_then(|()| self.notices.flush())
             .map_err(InputError::Notice)
+    }
+
+    fn reveal(&mut self, secret: &RevealedSecret) -> Result<(), InputError> {
+        let value = printable_reveal(secret)?;
+        let mut tty = (self.open_tty)().map_err(InputError::NoTerminal)?;
+        write_reveal(&mut tty, value)
     }
 }
 
@@ -191,6 +222,10 @@ impl<T: Read + Write, E: EchoControl> OwnerConsole for Terminal<T, E> {
             .and_then(|()| self.tty.flush())
             .map_err(InputError::Notice)
     }
+
+    fn reveal(&mut self, secret: &RevealedSecret) -> Result<(), InputError> {
+        write_reveal(&mut self.tty, printable_reveal(secret)?)
+    }
 }
 
 /// The label without control characters, so a label cannot move the cursor or reprogram the terminal.
@@ -201,6 +236,26 @@ fn printable(label: &str) -> String {
 /// A notice's text without control characters other than `\n`, which ends its lines.
 fn printable_notice(text: &str) -> String {
     text.chars().filter(|c| *c == '\n' || !c.is_control()).collect()
+}
+
+/// The revealed value, when every byte of it is printable ASCII. Removing the other bytes instead would show the owner a
+/// value that differs from the secret, which they would save in good faith; a terminal control byte could also hide or
+/// rewrite what is shown.
+fn printable_reveal(secret: &RevealedSecret) -> Result<&[u8], InputError> {
+    let value = secret.expose_secret();
+    value
+        .iter()
+        .all(|byte| *byte == b' ' || byte.is_ascii_graphic())
+        .then_some(value)
+        .ok_or(InputError::UnprintableReveal)
+}
+
+/// Writes `value` and then `\n` straight to `tty`, so the value passes through no other buffer.
+fn write_reveal(tty: &mut impl Write, value: &[u8]) -> Result<(), InputError> {
+    tty.write_all(value)
+        .and_then(|()| tty.write_all(b"\n"))
+        .and_then(|()| tty.flush())
+        .map_err(InputError::Reveal)
 }
 
 /// Reads one line and strips one trailing `\n` and a `\r` before it. A last line without `\n` is still a value; input

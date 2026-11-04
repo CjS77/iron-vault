@@ -195,6 +195,10 @@ pub enum ExchangeError {
     /// The CLI answered with a well-formed frame other than owner input.
     #[error("the CLI answered a prompt with a frame other than owner input")]
     Unexpected,
+    /// The handler asked to send a frame the codec refuses, such as an empty reveal: a bug in the handler. Nothing was
+    /// sent.
+    #[error("the service could not encode an admin frame: {0}")]
+    Unencodable(FrameError),
 }
 
 impl ExchangeError {
@@ -202,7 +206,7 @@ impl ExchangeError {
     /// connection is closed without one, as when no admin request arrives.
     fn response(&self) -> Option<AdminResponse> {
         match self {
-            Self::Closed | Self::TimedOut | Self::Io(_) => None,
+            Self::Closed | Self::TimedOut | Self::Io(_) | Self::Unencodable(_) => None,
             Self::Malformed(e) => Some(error(ErrorCode::for_frame_error(*e), &e.to_string())),
             Self::Unexpected => Some(error(ErrorCode::UnexpectedFrame, "a prompt must be answered with owner input")),
         }
@@ -256,9 +260,23 @@ impl Exchange {
         Ok(())
     }
 
+    /// Shows `value`, a secret the service generated, to the owner once, in one reveal frame written within the request
+    /// deadline. The frame is built in a clearing buffer sized for it up front, straight from `value`, and dropped as soon
+    /// as it is written. A failed write cancels the command, as a failed prompt does.
+    pub async fn reveal(&mut self, value: &[u8]) -> Result<(), ExchangeError> {
+        let mut frame = Zeroizing::new(Vec::with_capacity(HEADER_LEN + value.len()));
+        protocol::encode_reveal(value, &mut frame).map_err(ExchangeError::Unencodable)?;
+        self.write(&frame).await
+    }
+
     /// Writes one frame the service sends within the request deadline.
     async fn send(&mut self, frame: &Frame) -> Result<(), ExchangeError> {
-        match tokio::time::timeout(self.limits.request_deadline, self.stream.write_all(&encoded(frame))).await {
+        self.write(&encoded(frame)).await
+    }
+
+    /// Writes an encoded frame within the request deadline.
+    async fn write(&mut self, bytes: &[u8]) -> Result<(), ExchangeError> {
+        match tokio::time::timeout(self.limits.request_deadline, self.stream.write_all(bytes)).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(ExchangeError::Io(e)),
             Err(_) => Err(ExchangeError::TimedOut),

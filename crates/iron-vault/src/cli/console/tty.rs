@@ -26,6 +26,12 @@ pub(super) fn open() -> Result<Terminal<File, TtyEcho>, InputError> {
     Ok(Terminal::new(tty, echo))
 }
 
+/// Opens the controlling terminal for writing only, to show a reveal when stdin is not a terminal. Nothing is read from
+/// it and echo is never switched, so no signal watcher is needed.
+pub(super) fn open_for_reveal() -> io::Result<File> {
+    File::options().write(true).open("/dev/tty")
+}
+
 /// Switches the terminal's echo, keeping the settings to restore where the signal watcher can reach them too.
 #[derive(Clone)]
 pub(super) struct TtyEcho(Arc<Shared>);

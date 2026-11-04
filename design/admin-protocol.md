@@ -373,9 +373,10 @@ it.
 The service encodes the frame into a buffer that clears itself on drop, straight from the secret's own type, and drops
 both once the frame is written. The CLI decodes the body once, straight from the received bytes into a clearing buffer
 (`Zeroizing<Vec<u8>>`), wrapped in `RevealedSecret`, a secret-bearing type (`design/secret-handling.md`). It shows the
-value on the owner console, with control characters removed, followed by a newline, and drops it. It never writes it
-to stdout, a pipe or a diagnostic: when the owner console cannot show it, the CLI cancels the command before showing
-anything (see [Owner input](#owner-input)).
+value on the owner console, followed by a newline, and drops it. A value with any byte outside printable ASCII is
+refused and nothing of it is shown: removing the other bytes would show a value that differs from the secret, which the
+owner would save in good faith. It never writes it to stdout, a pipe or a diagnostic: when the owner console cannot
+show it, the CLI cancels the command before showing anything (see [Owner input](#owner-input)).
 
 ### Admin response: success (kind 4)
 
@@ -573,7 +574,7 @@ after the last frame does not hide it.
 | `0` | the command succeeded |
 | `1` | the service answered with an error response |
 | `2` | usage error |
-| `3` | no admin response: no socket or nothing listening, permission denied, the exchange failed or timed out, or a prompt got no value |
+| `3` | no admin response: no socket or nothing listening, permission denied, the exchange failed or timed out, a prompt got no value, or a reveal could not be shown on a terminal |
 | `4` | `status`: the service answered, and it is not Ready |
 | `128 + n` | signal `n` while the CLI had the terminal open for prompting: `130` for SIGINT, `131` for SIGQUIT, `143` for SIGTERM |
 

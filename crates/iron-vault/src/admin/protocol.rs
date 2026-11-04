@@ -246,6 +246,32 @@ impl fmt::Debug for OwnerInput {
     }
 }
 
+/// A secret value the service shows the owner once, received in a reveal frame: a secret-bearing type
+/// (`design/secret-handling.md`).
+///
+/// Like [`OwnerInput`], it has no `Clone`, `Display` or serde impl, its `Debug` shows no byte, and its buffer clears
+/// itself on drop. The service never builds one: it encodes a reveal straight from the secret's own type with
+/// [`encode_reveal`].
+pub struct RevealedSecret(Zeroizing<Vec<u8>>);
+
+impl RevealedSecret {
+    /// Wraps a value already held in a clearing buffer, so building one never leaves an unwiped copy.
+    pub fn new(bytes: Zeroizing<Vec<u8>>) -> Self {
+        Self(bytes)
+    }
+
+    /// The value, for the owner console to show.
+    pub fn expose_secret(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for RevealedSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RevealedSecret([REDACTED])")
+    }
+}
+
 /// The final frame of an exchange.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AdminResponse {
@@ -378,8 +404,8 @@ impl ErrorCode {
     }
 }
 
-/// One message of the admin protocol. It holds owner input when it is an owner-input frame, so it is secret-bearing
-/// and has no `Clone`.
+/// One message of the admin protocol. It holds a secret when it is an owner-input or a reveal frame, so it is
+/// secret-bearing and has no `Clone`.
 #[derive(Debug)]
 pub enum Frame {
     /// Kind 1, CLI to service.
@@ -392,6 +418,8 @@ pub enum Frame {
     Response(AdminResponse),
     /// Kind 6, service to CLI.
     Notice(Notice),
+    /// Kind 7, service to CLI.
+    Reveal(RevealedSecret),
 }
 
 /// What [`decode`] found at the start of its input.
@@ -448,6 +476,9 @@ pub enum FrameError {
     /// The error code is not one this version defines.
     #[error("unknown admin error code {0}")]
     UnknownErrorCode(u16),
+    /// A frame of this kind, which must carry a value, has an empty body.
+    #[error("admin frame kind {0} has an empty body")]
+    EmptyBody(u8),
 }
 
 /// The frame kind byte, which selects how the body is read.
@@ -459,6 +490,7 @@ enum FrameKind {
     Success = 4,
     Error = 5,
     Notice = 6,
+    Reveal = 7,
 }
 
 impl FrameKind {
@@ -470,6 +502,7 @@ impl FrameKind {
             Self::Success,
             Self::Error,
             Self::Notice,
+            Self::Reveal,
         ]
         .into_iter()
         .find(|kind| *kind as u8 == byte)
@@ -477,8 +510,8 @@ impl FrameKind {
     }
 }
 
-/// Appends `frame`'s one encoding to `out`. A caller sending owner input passes a clearing buffer, because the encoding
-/// holds the value; `out` is grown once, before writing, so no partial copy is left behind in a freed allocation.
+/// Appends `frame`'s one encoding to `out`. A caller sending owner input or a reveal passes a clearing buffer, because
+/// the encoding holds the value; `out` is grown once, before writing, so no partial copy is left behind in a freed allocation.
 pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
     match frame {
         Frame::Request(request) => put_frame(out, FrameKind::Request, &body::encode_request(request)?),
@@ -492,7 +525,18 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::ConfigApprove(result)) => put_frame(out, FrameKind::Success, &body::encode_approval_result(result)),
         Frame::Response(AdminResponse::Error { code, message }) => put_frame(out, FrameKind::Error, &body::encode_error(*code, message)),
         Frame::Notice(notice) => put_frame(out, FrameKind::Notice, &body::encode_notice(notice)),
+        Frame::Reveal(secret) => encode_reveal(secret.expose_secret(), out),
     }
+}
+
+/// Appends a reveal frame carrying `value` to `out`, which holds the value afterwards, so the caller passes a clearing
+/// buffer. It takes the bytes rather than a [`Frame`], so the service encodes straight from the secret's own type
+/// without a second copy. An empty value is refused: a reveal always shows something.
+pub fn encode_reveal(value: &[u8], out: &mut Vec<u8>) -> Result<(), FrameError> {
+    if value.is_empty() {
+        return Err(FrameError::EmptyBody(FrameKind::Reveal as u8));
+    }
+    put_frame(out, FrameKind::Reveal, value)
 }
 
 /// Reads the frame at the start of `bytes`: a whole frame and its length, a request for more bytes, or the first rule
@@ -514,6 +558,9 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, FrameError> {
         FrameKind::Success => Frame::Response(body::decode_success(body)?),
         FrameKind::Error => Frame::Response(body::decode_error(body)?),
         FrameKind::Notice => Frame::Notice(body::decode_notice(body)?),
+        FrameKind::Reveal if body.is_empty() => return Err(FrameError::EmptyBody(FrameKind::Reveal as u8)),
+        // As for owner input: one copy, straight into its clearing buffer.
+        FrameKind::Reveal => Frame::Reveal(RevealedSecret::new(Zeroizing::new(body.to_vec()))),
     };
     Ok(Decoded::Frame { frame, used })
 }

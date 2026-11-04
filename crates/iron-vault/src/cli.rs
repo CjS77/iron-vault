@@ -39,8 +39,8 @@ Exit codes:
   0  success
   1  the service answered with an error
   2  usage error
-  3  no answer from the service: it is not running, this account may not connect, the exchange failed, or a prompt
-     got no value
+  3  no answer from the service: it is not running, this account may not connect, the exchange failed, a prompt
+     got no value, or a secret value the service sent could not be shown on a terminal
   4  `status`: the service answered, and it is not Ready";
 
 /// The exit statuses listed in [`EXIT_CODES`]. Usage errors exit through clap, with its status 2.

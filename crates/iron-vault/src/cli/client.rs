@@ -10,8 +10,8 @@ use std::time::Duration;
 use anyhow::Context;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::protocol::{
-    self, AdminRequest, AdminResponse, ApprovalResult, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_CONFIG_LEN, OwnerInput,
-    PROTOCOL_VERSION, ProposedConfig, RequestedOrigin, digest_text,
+    self, AdminRequest, AdminResponse, ApprovalResult, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, MAX_CONFIG_LEN,
+    OwnerInput, PROTOCOL_VERSION, ProposedConfig, RequestedOrigin, digest_text,
 };
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::service_state::ServiceState;
@@ -270,8 +270,9 @@ fn converse(stream: &mut UnixStream, request: AdminRequest, console: &mut impl O
         sent = match frame {
             Frame::Response(response) => return Ok(response),
             Frame::Prompt(prompt) => send_input(stream, console.collect(&prompt).map_err(ClientError::Input)?),
-            // A notice comes only after the service has read the request, so the request was sent.
+            // A notice or a reveal comes only after the service has read the request, so the request was sent.
             Frame::Notice(notice) => Ok(console.notice(&notice.text).map_err(ClientError::Input)?),
+            Frame::Reveal(secret) => Ok(console.reveal(&secret).map_err(ClientError::Input)?),
             Frame::Request(_) | Frame::OwnerInput(_) => return Err(ClientError::Unexpected),
         };
     }
@@ -314,19 +315,25 @@ fn send_input(stream: &mut UnixStream, input: OwnerInput) -> io::Result<()> {
 }
 
 /// Reads one frame, asking the socket for no more bytes than the decoder needs: a service that closed on unsent
-/// input may reset the connection after its last frame. Frames from the service never hold owner input, so an ordinary
-/// buffer is enough.
+/// input may reset the connection after its last frame. A reveal frame holds a secret, so every frame is read into a
+/// clearing buffer sized once for the largest frame, which never reallocates and leaves no copy behind.
 fn read_frame(stream: &mut impl Read) -> Result<Frame, ClientError> {
-    let mut bytes = Vec::new();
+    let mut buffer = Zeroizing::new(vec![0; HEADER_LEN + MAX_BODY_LEN]);
+    let mut filled = 0;
     loop {
-        let needed = match protocol::decode(&bytes)? {
+        let needed = match protocol::decode(buffer.get(..filled).unwrap_or_default())? {
             Decoded::Frame { frame, .. } => return Ok(frame),
             Decoded::NeedMore(needed) => needed,
         };
-        let limit = u64::try_from(needed).unwrap_or(u64::MAX);
-        let read = stream.take(limit).read_to_end(&mut bytes)?;
-        if read < needed {
-            return Err(ClientError::Closed);
+        // The decoder never asks past the largest frame, which the buffer holds.
+        let window = buffer
+            .get_mut(filled..filled.saturating_add(needed))
+            .ok_or(ClientError::Malformed(FrameError::BodyTooLong))?;
+        match stream.read(window) {
+            Ok(0) => return Err(ClientError::Closed),
+            Ok(read) => filled += read,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e.into()),
         }
     }
 }
