@@ -81,6 +81,11 @@ impl Passphrase {
     fn for_age(&self) -> SecretString {
         SecretString::from(self.0.expose_secret())
     }
+
+    /// The passphrase text, borrowed for the rules initialization checks it against.
+    pub(crate) fn text(&self) -> &str {
+        self.0.expose_secret()
+    }
 }
 
 impl fmt::Debug for Passphrase {

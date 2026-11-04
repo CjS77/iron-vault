@@ -43,6 +43,9 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | `ApprovalPassphrase` | store | the approver's passphrase for `approver.age` | `SecretString` | `secret_types_tests` |
 | `SoftwareSignerKey` | store | the software signer's Ed25519 private key | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop (`zeroize` feature); built once into its box, so moves copy only the pointer | `software_signer/tests` |
 | `SoftwareSigner` | store | the opened Ed25519 private key and its `PinnedApprover` | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop; `SoftwareSigner::new` takes the box from `SoftwareSignerKey` by pointer | `software_signer/tests` |
+| `InitPassphrases` | store | the vault passphrase and the approval passphrase the owner chose at initialization | its `Passphrase` and `ApprovalPassphrase`; the passphrase rules borrow their text and copy none of it | `secret_types_tests` |
+| `NewVaultKeys` | store | every key initialization generates, and the recovery key's text for the one reveal | its `SealingKeys` and `RecoveryKeySecret`; `into_sealing` drops the text | `secret_types_tests` |
+| `SealingKeys` | store | the vault identity, the operational and recovery `RecipientIdentity`, and the `SoftwareSignerKey` with its pinned approver | its fields; `initialize` takes it by value and each key is dropped after the step that uses it, the vault identity with the `Vault` it creates | `secret_types_tests` |
 | `OwnerInput` | iron-vault | the bytes the owner typed in answer to a prompt, in the CLI from the owner console until sent, and in the service from decoding until its handler is done | `Zeroizing<Vec<u8>>`, a private field: the type has no `Clone` and a `Debug` that shows no byte | `secret_types_tests` |
 | `RevealedSecret` | iron-vault | a secret value the service shows the owner once in a reveal frame, such as the recovery key's `AGE-SECRET-KEY-1…` text, in the CLI from decoding until it is shown on the terminal; the service never builds one, and encodes the frame straight from the secret's own type (`encode_reveal`) | `Zeroizing<Vec<u8>>`, a private field: the type has no `Clone` and a `Debug` that shows no byte | `secret_types_tests` |
 | `Frame` | iron-vault | an `OwnerInput` when it is an owner-input frame, a `RevealedSecret` when it is a reveal frame | its `OwnerInput` or `RevealedSecret` | `secret_types_tests` |
@@ -74,6 +77,9 @@ accepted: the CLI is short-lived, and it disables core dumps and `ptrace` attach
 (`design/admin-protocol.md`, "Hardening").
 
 `OperationalIdentity` holds nothing: it only generates a `RecipientIdentity`.
+
+Initialization keeps the recovery key's `RecipientIdentity` from generation (`RecoveryKey::generate_with_identity`)
+instead of parsing the revealed text back, so no second copy of that text is ever made.
 
 `SoftwareSignerKey` and `SoftwareSigner` do not carry the `ZeroizeOnDrop` marker themselves; only the inner
 boxed `SigningKey` does, and dropping the wrapper drops it. Their `Debug` checks build them from a known seed, which

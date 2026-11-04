@@ -21,8 +21,15 @@ impl RecoveryKey {
     ///
     /// The identity is dropped, and its key bytes cleared, before this returns; the secret text is the only copy.
     pub fn generate() -> (RecoveryKeySecret, RecipientKey) {
+        let (secret, identity) = Self::generate_with_identity();
+        (secret, identity.recipient_key())
+    }
+
+    /// A fresh recovery key's secret text and its recipient identity, kept so initialization can prove the identity
+    /// envelope opens for it without parsing the text back.
+    pub(crate) fn generate_with_identity() -> (RecoveryKeySecret, RecipientIdentity) {
         let identity = RecipientIdentity::generate();
-        (RecoveryKeySecret(identity.secret_text()), identity.recipient_key())
+        (RecoveryKeySecret(identity.secret_text()), identity)
     }
 }
 

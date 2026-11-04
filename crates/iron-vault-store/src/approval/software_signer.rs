@@ -41,6 +41,11 @@ impl ApprovalPassphrase {
     fn for_age(&self) -> SecretString {
         SecretString::from(self.0.expose_secret())
     }
+
+    /// The passphrase text, borrowed for the rules initialization checks it against.
+    pub(crate) fn text(&self) -> &str {
+        self.0.expose_secret()
+    }
 }
 
 impl fmt::Debug for ApprovalPassphrase {
@@ -167,7 +172,7 @@ pub fn read_signer_key(lock: &StateDirLock, fs: &impl StoreFs) -> Result<Vec<u8>
 }
 
 /// [`seal_signer_key`] at work factor `log_n`, which must be in `1..64`.
-fn seal_signer_key_at(key: &SoftwareSignerKey, passphrase: &ApprovalPassphrase, log_n: u8) -> Result<Vec<u8>, SignError> {
+pub(crate) fn seal_signer_key_at(key: &SoftwareSignerKey, passphrase: &ApprovalPassphrase, log_n: u8) -> Result<Vec<u8>, SignError> {
     Ok(seal_scrypt_file(key.0.as_bytes(), passphrase.for_age(), log_n)?)
 }
 

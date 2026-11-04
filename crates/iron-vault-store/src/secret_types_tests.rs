@@ -15,8 +15,9 @@ use static_assertions::{assert_impl_all, assert_not_impl_any};
 use crate::test_dir::TestDir;
 use crate::test_request::{HOST, header_request};
 use crate::{
-    ApprovalPassphrase, CredentialRecord, OsFs, Passphrase, PermittedOrigins, RecipientIdentity, RecordId, RecoveryKey, RecoveryKeySecret,
-    ResolvedCredential, SoftwareSigner, SoftwareSignerKey, Source, StateDirLock, Vault, VaultIdentity,
+    ApprovalPassphrase, CredentialRecord, InitPassphrases, NewVaultKeys, OsFs, Passphrase, PermittedOrigins, RecipientIdentity, RecordId,
+    RecoveryKey, RecoveryKeySecret, ResolvedCredential, SealingKeys, SoftwareSigner, SoftwareSignerKey, Source, StateDirLock, Vault,
+    VaultIdentity,
 };
 
 assert_not_impl_any!(VaultIdentity: Clone, Copy, Display, Serialize, Deserialize<'static>);
@@ -29,6 +30,9 @@ assert_not_impl_any!(RecoveryKeySecret: Clone, Copy, Display, Serialize, Deseria
 assert_not_impl_any!(ApprovalPassphrase: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(SoftwareSignerKey: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(SoftwareSigner: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(InitPassphrases: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(NewVaultKeys: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(SealingKeys: Clone, Copy, Display, Serialize, Deserialize<'static>);
 
 // `Rc` is neither `Send` nor `Sync`, so a vault that shared its identity or a record through one would fail here.
 assert_impl_all!(Vault: Send, Sync);
@@ -86,6 +90,30 @@ fn passphrase_debug_hides_the_text() {
 #[test]
 fn approval_passphrase_debug_hides_the_text() {
     assert_hides(&ApprovalPassphrase::new(SecretString::from(MARKER)).unwrap(), MARKER);
+}
+
+#[test]
+fn init_passphrases_debug_hides_both_texts() {
+    let approval = format!("{MARKER}-approval");
+    let passphrases = InitPassphrases::new(
+        Passphrase::new(SecretString::from(MARKER)).unwrap(),
+        ApprovalPassphrase::new(SecretString::from(approval.as_str())).unwrap(),
+    )
+    .unwrap();
+    assert_hides(&passphrases, MARKER);
+}
+
+/// The recovery key's text is the one secret of the new vault keys a test can see from here; the `Debug` of both forms
+/// is a fixed string, so it shows no other key either.
+#[test]
+fn new_vault_keys_debug_hides_every_key() {
+    let keys = NewVaultKeys::generate().unwrap();
+    let recovery = keys.recovery_secret().expose_secret().to_owned();
+    assert_hides(&keys, &recovery);
+    assert_hides(&keys, "AGE-SECRET-KEY");
+    let sealing = keys.into_sealing();
+    assert_hides(&sealing, &recovery);
+    assert_eq!(format!("{sealing:?}"), "SealingKeys([REDACTED])");
 }
 
 // `SoftwareSignerKey` and `SoftwareSigner` are built from a known seed only inside their own module, so their `Debug`

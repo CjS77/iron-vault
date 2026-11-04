@@ -171,7 +171,7 @@ impl Fixture {
 
 /// One event a [`Capture`] saw.
 #[derive(Debug)]
-pub(super) struct Captured {
+pub(crate) struct Captured {
     pub(super) level: Level,
     fields: BTreeMap<&'static str, String>,
 }
@@ -270,7 +270,7 @@ pub(super) fn init_test_tracing() {
     });
 }
 
-pub(super) fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, Vec<Captured>) {
+pub(crate) fn capture_logs<T>(f: impl FnOnce() -> T) -> (T, Vec<Captured>) {
     init_test_tracing();
     let capture = Capture::default();
     let out = tracing::subscriber::with_default(capture.clone(), f);

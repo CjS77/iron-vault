@@ -14,7 +14,7 @@ mod report;
 #[cfg(test)]
 mod restore_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod write;
 #[cfg(test)]
 mod write_tests;
@@ -200,6 +200,11 @@ impl Vault {
     /// state with the identity itself.
     pub fn load_approval_state(&self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<ApprovalState, ApprovalStateError> {
         ApprovalState::load(lock, fs, &self.identity, self.manifest.vault_id())
+    }
+
+    /// The vault identity, lent to the approval transaction that initialization runs on a vault it just created.
+    pub(crate) fn identity(&self) -> &VaultIdentity {
+        &self.identity
     }
 
     /// The manifest the vault was opened with.

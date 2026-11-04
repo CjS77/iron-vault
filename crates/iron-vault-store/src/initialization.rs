@@ -19,7 +19,7 @@ use crate::{
 
 /// The only bytes initialization ever writes to `config.toml` and `config.toml.pending`. A config file with any other
 /// bytes is the owner's and is never discarded.
-const INITIAL_CONFIG: &[u8] = b"schema_version = 1\n";
+pub(crate) const INITIAL_CONFIG: &[u8] = b"schema_version = 1\n";
 
 /// The directory a filesystem check creates on a fresh volume; it is not a vault file, so the checks ignore it.
 const LOST_FOUND: &str = "lost+found";

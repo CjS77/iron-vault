@@ -13,6 +13,7 @@ mod durable_faults;
 mod envelope;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fault_fs;
+mod init;
 mod initialization;
 mod mac_file;
 mod manifest;
@@ -60,6 +61,10 @@ pub use dir_lock::LockError;
 pub use durable::{MAX_STATE_FILE_LEN, ReadError, WriteError, WriteStep, durable_remove, durable_replace, read_state_file};
 pub use envelope::{
     EnvelopeError, MAX_IDENTITY_ENVELOPE_LEN, read_identity_envelope, stanza_kinds, unwrap_identity, wrap_identity, write_identity_envelope,
+};
+pub use init::{
+    InitError, InitFailure, InitPassphrases, InitPassphrasesError, InitStep, InitializedVault, MIN_PASSPHRASE_CHARS, NewVaultKeys,
+    SealingKeys, WhichPassphrase, initialize,
 };
 pub use initialization::{InitStateError, InitializationState, begin_initialization, finish_initialization};
 pub use manifest::{
