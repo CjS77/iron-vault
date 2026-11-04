@@ -5,14 +5,14 @@
 
 use std::str::FromStr;
 
-use iron_vault_policy::{CredentialName, RouteName};
 use iron_vault_store::{RecordDamage, VaultId};
 
-use super::fields::{self, exact, read_text};
+use super::fields::{self, exact, read_profile, read_text, read_u64};
 use super::{FrameError, body::TAG_COMMAND};
 use crate::deployment::DeploymentProfile;
 use crate::hardening::MemoryProtection;
 use crate::service_state::{FailureReason, ServiceState};
+use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
 
 const TAG_STATE: u16 = 2;
 const TAG_REASON: u16 = 3;
@@ -58,46 +58,9 @@ pub struct UnlockedVault {
     /// The highest version any approval attempt has reserved.
     pub highest_reserved: u64,
     /// Every credential in the vault manifest, in name order.
-    pub credentials: Vec<CredentialStatus>,
+    pub credentials: Vec<CredentialStanding>,
     /// Every route unavailable for a cause of its own, in name order.
-    pub route_faults: Vec<RouteStatus>,
-}
-
-/// One credential's standing and the routes it makes unavailable.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CredentialStatus {
-    /// The credential's name.
-    pub name: CredentialName,
-    /// Whether its record loaded.
-    pub standing: Standing,
-    /// The routes that cannot serve because of it, in name order.
-    pub unavailable_routes: Vec<RouteName>,
-}
-
-/// Whether a credential record can serve requests (glossary: *Credential standing*).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Standing {
-    /// The record loaded.
-    Healthy,
-    /// The manifest lists the record but it did not load.
-    Damaged(RecordDamage),
-}
-
-/// A route unavailable for a cause of its own, which no credential standing explains (glossary: *Route fault*).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouteStatus {
-    /// The route's name.
-    pub name: RouteName,
-    /// Why it is unavailable.
-    pub fault: RouteFault,
-}
-
-/// Why a route is unavailable, apart from its credential. It carries no path, PEM byte or load error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum RouteFault {
-    /// The route's pinned CA could not be loaded.
-    #[error("pinned CA unavailable")]
-    PinnedCaUnavailable,
+    pub route_faults: Vec<RouteFault>,
 }
 
 /// Whether the service's memory is kept out of swap. Only `Locked` is protection.
@@ -143,7 +106,7 @@ pub(super) fn encode(command: u16, report: &StatusReport) -> Vec<u8> {
     fields::put(&mut out, TAG_COMMAND, &command.to_be_bytes());
     fields::put(&mut out, TAG_STATE, &[state]);
     fields::put(&mut out, TAG_REASON, &[reason]);
-    fields::put(&mut out, TAG_PROFILE, &[profile_code(report.profile)]);
+    fields::put(&mut out, TAG_PROFILE, &[fields::profile_code(report.profile)]);
     fields::put(&mut out, TAG_VAULT_ID, &id);
     fields::put(&mut out, TAG_COMMITTED, &committed.to_be_bytes());
     fields::put(&mut out, TAG_RESERVED, &reserved.to_be_bytes());
@@ -186,7 +149,7 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
     )?;
     Ok(StatusReport {
         state: read_state(state, reason)?,
-        profile: read_profile(profile)?,
+        profile: read_profile(TAG_PROFILE, profile)?,
         vault: read_vault(
             id,
             read_u64(TAG_COMMITTED, committed)?,
@@ -220,27 +183,6 @@ fn read_state(state: &[u8], reason: &[u8]) -> Result<ServiceState, FrameError> {
         ([6], [0]) => Ok(ServiceState::Stopped),
         _ => Err(FrameError::InvalidValue(TAG_STATE)),
     }
-}
-
-fn profile_code(profile: DeploymentProfile) -> u8 {
-    match profile {
-        DeploymentProfile::Protected => 1,
-        DeploymentProfile::Development => 2,
-    }
-}
-
-fn read_profile(value: &[u8]) -> Result<DeploymentProfile, FrameError> {
-    match value {
-        [1] => Ok(DeploymentProfile::Protected),
-        [2] => Ok(DeploymentProfile::Development),
-        _ => Err(FrameError::InvalidValue(TAG_PROFILE)),
-    }
-}
-
-fn read_u64(tag: u16, value: &[u8]) -> Result<u64, FrameError> {
-    <[u8; 8]>::try_from(value)
-        .map(u64::from_be_bytes)
-        .map_err(|_| FrameError::InvalidValue(tag))
 }
 
 /// The encoded lists sealed behind the vault identity.
@@ -279,7 +221,7 @@ fn read_memory(kind: &[u8], detail: &[u8]) -> Result<MemoryStatus, FrameError> {
 }
 
 /// Each entry: name length, name, standing, route count (`u16`), then each route's length and name.
-fn encode_credentials(credentials: &[CredentialStatus]) -> Vec<u8> {
+fn encode_credentials(credentials: &[CredentialStanding]) -> Vec<u8> {
     let mut out = Vec::new();
     credentials.iter().for_each(|credential| {
         put_name(&mut out, credential.name.as_str());
@@ -322,16 +264,16 @@ fn invalid_credentials() -> FrameError {
     FrameError::InvalidValue(TAG_CREDENTIALS)
 }
 
-fn decode_credentials(mut rest: &[u8]) -> Result<Vec<CredentialStatus>, FrameError> {
+fn decode_credentials(mut rest: &[u8]) -> Result<Vec<CredentialStanding>, FrameError> {
     std::iter::from_fn(|| (!rest.is_empty()).then(|| take_credential(&mut rest))).collect()
 }
 
-fn take_credential(rest: &mut &[u8]) -> Result<CredentialStatus, FrameError> {
+fn take_credential(rest: &mut &[u8]) -> Result<CredentialStanding, FrameError> {
     let name = take_name(rest)?;
     let standing = read_standing(take(rest, 1)?[0])?;
     let count = u16::from_be_bytes(<[u8; 2]>::try_from(take(rest, 2)?).map_err(|_| invalid_credentials())?);
     let unavailable_routes = (0..count).map(|_| take_name(rest)).collect::<Result<_, _>>()?;
-    Ok(CredentialStatus {
+    Ok(CredentialStanding {
         name,
         standing,
         unavailable_routes,
@@ -362,32 +304,32 @@ fn take_in<'a>(tag: u16, rest: &mut &'a [u8], n: usize) -> Result<&'a [u8], Fram
 }
 
 /// Each entry: name length, name, fault code.
-fn encode_route_faults(faults: &[RouteStatus]) -> Vec<u8> {
+fn encode_route_faults(faults: &[RouteFault]) -> Vec<u8> {
     let mut out = Vec::new();
     faults.iter().for_each(|route| {
         put_name(&mut out, route.name.as_str());
-        out.push(fault_code(route.fault));
+        out.push(fault_code(route.kind));
     });
     out
 }
 
-fn fault_code(fault: RouteFault) -> u8 {
+fn fault_code(fault: RouteFaultKind) -> u8 {
     match fault {
-        RouteFault::PinnedCaUnavailable => 1,
+        RouteFaultKind::PinnedCaUnavailable => 1,
     }
 }
 
-fn decode_route_faults(mut rest: &[u8]) -> Result<Vec<RouteStatus>, FrameError> {
+fn decode_route_faults(mut rest: &[u8]) -> Result<Vec<RouteFault>, FrameError> {
     std::iter::from_fn(|| (!rest.is_empty()).then(|| take_route_fault(&mut rest))).collect()
 }
 
-fn take_route_fault(rest: &mut &[u8]) -> Result<RouteStatus, FrameError> {
+fn take_route_fault(rest: &mut &[u8]) -> Result<RouteFault, FrameError> {
     let name = take_name_in(TAG_ROUTE_FAULTS, rest)?;
-    let fault = match take_in(TAG_ROUTE_FAULTS, rest, 1)? {
-        [1] => RouteFault::PinnedCaUnavailable,
+    let kind = match take_in(TAG_ROUTE_FAULTS, rest, 1)? {
+        [1] => RouteFaultKind::PinnedCaUnavailable,
         _ => return Err(FrameError::InvalidValue(TAG_ROUTE_FAULTS)),
     };
-    Ok(RouteStatus { name, fault })
+    Ok(RouteFault { name, kind })
 }
 
 #[cfg(test)]
@@ -407,19 +349,19 @@ mod tests {
         decode(&fields::parse(body)?)
     }
 
-    fn credential(name: &str, standing: Standing, routes: &[&str]) -> CredentialStatus {
-        CredentialStatus {
+    fn credential(name: &str, standing: Standing, routes: &[&str]) -> CredentialStanding {
+        CredentialStanding {
             name: name.parse().unwrap(),
             standing,
             unavailable_routes: routes.iter().map(|route| route.parse().unwrap()).collect(),
         }
     }
 
-    fn unlocked(credentials: Vec<CredentialStatus>) -> VaultStatus {
+    fn unlocked(credentials: Vec<CredentialStanding>) -> VaultStatus {
         with_faults(credentials, Vec::new())
     }
 
-    fn with_faults(credentials: Vec<CredentialStatus>, route_faults: Vec<RouteStatus>) -> VaultStatus {
+    fn with_faults(credentials: Vec<CredentialStanding>, route_faults: Vec<RouteFault>) -> VaultStatus {
         VaultStatus::Unlocked(UnlockedVault {
             id: VaultId::new_random(),
             committed: Some(3),
@@ -429,10 +371,10 @@ mod tests {
         })
     }
 
-    fn pinned_ca(route: &str) -> RouteStatus {
-        RouteStatus {
+    fn pinned_ca(route: &str) -> RouteFault {
+        RouteFault {
             name: route.parse().unwrap(),
-            fault: RouteFault::PinnedCaUnavailable,
+            kind: RouteFaultKind::PinnedCaUnavailable,
         }
     }
 

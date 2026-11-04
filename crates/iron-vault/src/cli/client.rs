@@ -115,7 +115,7 @@ pub fn ping(socket: Option<&Path>) -> Exit {
 pub fn status(socket: Option<&Path>) -> Exit {
     run(socket, AdminRequest::Status, |response| match response {
         AdminResponse::Status(report) => {
-            print!("{}", super::status::render(&report, &invoking_user_name()));
+            print!("{}", super::status::render(&report, invoking_user_name));
             if report.state == ServiceState::Ready {
                 Exit::Success
             } else {

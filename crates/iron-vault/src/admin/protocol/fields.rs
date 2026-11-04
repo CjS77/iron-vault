@@ -2,6 +2,7 @@
 //! ascending so each body has exactly one encoding.
 
 use super::FrameError;
+use crate::deployment::DeploymentProfile;
 
 /// The size of a field's tag and length.
 pub(super) const FIELD_HEADER_LEN: usize = 6;
@@ -72,6 +73,30 @@ pub(super) fn read_u16(tag: u16, value: &[u8]) -> Result<u16, FrameError> {
     <[u8; 2]>::try_from(value)
         .map(u16::from_be_bytes)
         .map_err(|_| FrameError::InvalidValue(tag))
+}
+
+/// A `u64` field value, which must be exactly eight bytes.
+pub(super) fn read_u64(tag: u16, value: &[u8]) -> Result<u64, FrameError> {
+    <[u8; 8]>::try_from(value)
+        .map(u64::from_be_bytes)
+        .map_err(|_| FrameError::InvalidValue(tag))
+}
+
+/// The deployment profile's one-byte code, which `ping` and `status` share.
+pub(super) const fn profile_code(profile: DeploymentProfile) -> u8 {
+    match profile {
+        DeploymentProfile::Protected => 1,
+        DeploymentProfile::Development => 2,
+    }
+}
+
+/// A deployment profile field value: exactly one byte, a [`profile_code`].
+pub(super) fn read_profile(tag: u16, value: &[u8]) -> Result<DeploymentProfile, FrameError> {
+    match value {
+        [1] => Ok(DeploymentProfile::Protected),
+        [2] => Ok(DeploymentProfile::Development),
+        _ => Err(FrameError::InvalidValue(tag)),
+    }
 }
 
 /// A flag field value: exactly one byte, 0 or 1.

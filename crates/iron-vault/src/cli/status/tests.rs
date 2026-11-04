@@ -1,19 +1,22 @@
 use iron_vault::hardening::MemoryProtection;
+use iron_vault::standing::RouteFaultKind;
 use iron_vault_store::{RecordDamage, VaultId};
 
 use super::*;
 
-const FX_SECRET: &str = "fx-secret-4b1d";
+fn alice() -> String {
+    "alice".to_owned()
+}
 
-fn credential(name: &str, standing: Standing, routes: &[&str]) -> CredentialStatus {
-    CredentialStatus {
+fn credential(name: &str, standing: Standing, routes: &[&str]) -> CredentialStanding {
+    CredentialStanding {
         name: name.parse().unwrap(),
         standing,
         unavailable_routes: routes.iter().map(|route| route.parse().unwrap()).collect(),
     }
 }
 
-fn ready(credentials: Vec<CredentialStatus>) -> StatusReport {
+fn ready(credentials: Vec<CredentialStanding>) -> StatusReport {
     StatusReport {
         state: ServiceState::Ready,
         profile: DeploymentProfile::Protected,
@@ -38,7 +41,7 @@ fn locked(state: ServiceState) -> StatusReport {
 
 #[test]
 fn a_locked_service_shows_what_is_sealed_as_unknown() {
-    let text = render(&locked(ServiceState::Locked), "alice");
+    let text = render(&locked(ServiceState::Locked), alice);
     let lines = text.lines().collect::<Vec<_>>();
     assert_eq!(lines[0], "service: locked");
     assert_eq!(lines[1], "profile: protected");
@@ -56,7 +59,7 @@ fn an_unavailable_service_names_its_redacted_reason() {
     ]
     .into_iter()
     .for_each(|(failure, reason)| {
-        let text = render(&locked(ServiceState::Unavailable(failure)), "alice");
+        let text = render(&locked(ServiceState::Unavailable(failure)), alice);
         assert_eq!(
             text.lines().take(2).collect::<Vec<_>>(),
             ["service: unavailable", &format!("reason: {reason}")]
@@ -71,7 +74,7 @@ fn a_ready_service_lists_each_credential_in_the_order_given() {
         credential("fx", Standing::Healthy, &[]),
         credential("venice", Standing::Damaged(RecordDamage::Unreadable), &[]),
     ];
-    let text = render(&ready(credentials), "alice");
+    let text = render(&ready(credentials), alice);
     assert_eq!(
         text,
         "service: ready\n\
@@ -93,7 +96,7 @@ fn no_credentials_and_no_approval_are_shown_as_none() {
     if let VaultStatus::Unlocked(vault) = &mut report.vault {
         vault.committed = None;
     }
-    let text = render(&report, "alice");
+    let text = render(&report, alice);
     assert!(text.contains("approval committed: none\n"), "{text}");
     assert!(text.ends_with("credentials: none\n"), "{text}");
 }
@@ -104,7 +107,7 @@ fn the_development_profile_line_is_exact() {
         profile: DeploymentProfile::Development,
         ..ready(Vec::new())
     };
-    let text = render(&report, "alice");
+    let text = render(&report, alice);
     assert_eq!(
         text.lines().nth(1),
         Some("profile: development — no isolation from malware running as alice")
@@ -122,7 +125,7 @@ fn only_locked_memory_claims_swap_protection() {
         memory,
         ..ready(Vec::new())
     });
-    let lines = reports.map(|report| render(&report, "alice").lines().nth(6).unwrap_or_default().to_owned());
+    let lines = reports.map(|report| render(&report, alice).lines().nth(6).unwrap_or_default().to_owned());
     assert_eq!(lines[0], "memory protection: locked against swap");
     lines[1..].iter().for_each(|line| {
         assert!(line.starts_with("memory protection: NOT protected"), "{line}");
@@ -131,11 +134,15 @@ fn only_locked_memory_claims_swap_protection() {
 }
 
 #[test]
-fn rendering_twice_gives_the_same_bytes_and_never_a_secret() {
+fn rendering_twice_gives_the_same_bytes() {
     let report = ready(vec![credential("fx", Standing::Damaged(RecordDamage::Substituted), &["fx"])]);
-    let first = render(&report, "alice");
-    assert_eq!(first, render(&report, "alice"));
-    assert!(!first.contains(FX_SECRET));
+    assert_eq!(render(&report, alice), render(&report, alice));
+}
+
+#[test]
+fn the_protected_profile_never_asks_for_the_user_name() {
+    let text = render(&ready(Vec::new()), || panic!("the protected profile names no user"));
+    assert_eq!(text.lines().nth(1), Some("profile: protected"));
 }
 
 #[test]
@@ -144,13 +151,13 @@ fn each_route_fault_follows_the_credentials() {
     if let VaultStatus::Unlocked(vault) = &mut report.vault {
         vault.route_faults = ["internal", "lab"]
             .iter()
-            .map(|route| RouteStatus {
+            .map(|route| RouteFault {
                 name: route.parse().unwrap(),
-                fault: iron_vault::admin::protocol::RouteFault::PinnedCaUnavailable,
+                kind: RouteFaultKind::PinnedCaUnavailable,
             })
             .collect();
     }
-    let text = render(&report, "alice");
+    let text = render(&report, alice);
     assert!(
         text.ends_with(
             "credential fx: healthy\n\

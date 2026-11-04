@@ -5,8 +5,10 @@ use super::fields::FIELD_HEADER_LEN;
 use super::*;
 use crate::deployment::DeploymentProfile;
 use crate::secret_types_tests::MARKER;
+use crate::service_state::{FailureReason, ServiceState};
+use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
 use iron_vault_policy::{CredentialKind, Port};
-use iron_vault_store::RecordId;
+use iron_vault_store::{RecordDamage, RecordId, VaultId};
 
 /// The longest prompt label: the body bound less two field headers and the one-byte secret flag.
 const MAX_LABEL: usize = MAX_BODY_LEN - 2 * FIELD_HEADER_LEN - 1;
@@ -131,15 +133,86 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             .prop_map(|profile| Frame::Response(AdminResponse::Ping { profile })),
         any::<bool>().prop_map(|cleared| Frame::Response(AdminResponse::Lock { cleared })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Add { record_id: v4(bytes) })),
+        status_report().prop_map(|report| Frame::Response(AdminResponse::Status(Box::new(report)))),
         (error_code(), text(MAX_MESSAGE)).prop_map(|(code, message)| Frame::Response(AdminResponse::Error { code, message })),
     ]
 }
 
 /// The record ID with `bytes`' randomness and the version 4, RFC 9562 variant bits set.
-fn v4(mut bytes: [u8; 16]) -> RecordId {
+fn v4(bytes: [u8; 16]) -> RecordId {
+    RecordId::from_bytes(v4_bytes(bytes)).unwrap()
+}
+
+/// `bytes` with the version 4, RFC 9562 variant bits set.
+fn v4_bytes(mut bytes: [u8; 16]) -> [u8; 16] {
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    RecordId::from_bytes(bytes).unwrap()
+    bytes
+}
+
+/// Any status report the service could send: every state, profile and memory status, and a locked or unlocked vault.
+fn status_report() -> impl Strategy<Value = StatusReport> {
+    let state = prop_oneof![
+        Just(ServiceState::Starting),
+        Just(ServiceState::Locked),
+        Just(ServiceState::Checking),
+        Just(ServiceState::Ready),
+        Just(ServiceState::Unavailable(FailureReason::PolicyInvalid)),
+        Just(ServiceState::Unavailable(FailureReason::RecoveryNeeded)),
+        Just(ServiceState::Stopped),
+    ];
+    let profile = prop_oneof![Just(DeploymentProfile::Protected), Just(DeploymentProfile::Development)];
+    let memory = prop_oneof![
+        Just(MemoryStatus::Locked),
+        "\\PC{0,64}".prop_map(MemoryStatus::Unavailable),
+        Just(MemoryStatus::Unsupported),
+    ];
+    let vault = prop_oneof![Just(VaultStatus::Locked), unlocked_vault().prop_map(VaultStatus::Unlocked)];
+    (state, profile, vault, memory).prop_map(|(state, profile, vault, memory)| StatusReport {
+        state,
+        profile,
+        vault,
+        memory,
+    })
+}
+
+/// A credential or route name: 1 to 64 bytes of `[a-z0-9_-]`, starting with a letter.
+fn name<T: std::str::FromStr<Err: std::fmt::Debug> + std::fmt::Debug>() -> impl Strategy<Value = T> {
+    "[a-z][a-z0-9_-]{0,63}".prop_map(|name| name.parse().unwrap())
+}
+
+fn unlocked_vault() -> impl Strategy<Value = UnlockedVault> {
+    let credentials = prop::collection::vec(credential_standing(), 0..4);
+    let faults = prop::collection::vec(
+        name().prop_map(|name| RouteFault {
+            name,
+            kind: RouteFaultKind::PinnedCaUnavailable,
+        }),
+        0..4,
+    );
+    (any::<[u8; 16]>(), prop::option::of(1u64..), any::<u64>(), credentials, faults).prop_map(
+        |(id, committed, highest_reserved, credentials, route_faults)| UnlockedVault {
+            id: VaultId::from_bytes(v4_bytes(id)).unwrap(),
+            committed,
+            highest_reserved,
+            credentials,
+            route_faults,
+        },
+    )
+}
+
+fn credential_standing() -> impl Strategy<Value = CredentialStanding> {
+    let standing = prop_oneof![
+        Just(Standing::Healthy),
+        Just(Standing::Damaged(RecordDamage::Missing)),
+        Just(Standing::Damaged(RecordDamage::Substituted)),
+        Just(Standing::Damaged(RecordDamage::Unreadable)),
+    ];
+    (name(), standing, prop::collection::vec(name(), 0..4)).prop_map(|(name, standing, unavailable_routes)| CredentialStanding {
+        name,
+        standing,
+        unavailable_routes,
+    })
 }
 
 fn requested_origin() -> impl Strategy<Value = RequestedOrigin> {
@@ -166,6 +239,11 @@ proptest! {
     #[test]
     fn every_frame_round_trips(frame in any_frame()) {
         assert_round_trips(&frame);
+    }
+
+    #[test]
+    fn every_status_report_round_trips(report in status_report()) {
+        assert_round_trips(&Frame::Response(AdminResponse::Status(Box::new(report))));
     }
 
     #[test]
@@ -230,7 +308,7 @@ fn a_status_request_takes_no_arguments() {
 #[test]
 fn a_status_result_with_a_field_missing_or_extra_is_refused() {
     let report = StatusReport {
-        state: crate::service_state::ServiceState::Locked,
+        state: ServiceState::Locked,
         profile: DeploymentProfile::Protected,
         vault: VaultStatus::Locked,
         memory: MemoryStatus::Locked,

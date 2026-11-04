@@ -16,8 +16,8 @@ use iron_vault_store::{CredentialRecord, OpenReport, Vault};
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
-use crate::admin::protocol::{CredentialStatus, RouteFault, RouteStatus, Standing};
 use crate::service_state::{FailureReason, UnavailableReason};
+use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
 use crate::upstream::clients::UpstreamClients;
 
 /// The active policy, the vault's healthy records, the upstream clients and the rate limiter for one activation.
@@ -111,7 +111,7 @@ impl ServingSnapshot {
     /// Every credential the vault manifest lists, in name order, with the routes its standing makes unavailable.
     ///
     /// `opened` is the report from opening this snapshot's vault: only it knows why a record did not load.
-    pub fn credential_statuses(&self, opened: &OpenReport) -> Vec<CredentialStatus> {
+    pub fn credential_standings(&self, opened: &OpenReport) -> Vec<CredentialStanding> {
         let names = self
             .vault
             .manifest()
@@ -121,7 +121,7 @@ impl ServingSnapshot {
             .collect::<BTreeSet<_>>();
         names
             .into_iter()
-            .map(|name| CredentialStatus {
+            .map(|name| CredentialStanding {
                 name: name.clone(),
                 standing: opened.damaged().get(name).copied().map_or(Standing::Healthy, Standing::Damaged),
                 unavailable_routes: self.unavailable_routes_of(name),
@@ -141,13 +141,13 @@ impl ServingSnapshot {
     }
 
     /// Every route unavailable for a cause of its own, in name order: today a pinned CA that could not be loaded.
-    pub fn route_faults(&self) -> Vec<RouteStatus> {
+    pub fn route_faults(&self) -> Vec<RouteFault> {
         let routes = self.policy.unavailable_routes().iter();
         routes
             .filter(|(_, causes)| causes.contains(&UnavailableCause::PinnedCaUnavailable))
-            .map(|(route, _)| RouteStatus {
+            .map(|(route, _)| RouteFault {
                 name: route.clone(),
-                fault: RouteFault::PinnedCaUnavailable,
+                kind: RouteFaultKind::PinnedCaUnavailable,
             })
             .collect()
     }

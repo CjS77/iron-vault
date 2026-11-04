@@ -194,7 +194,7 @@ pub fn unlock(socket: Option<&Path>) -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn unlock(_socket: Option<&Path>) -> ExitCode {
-    ping(None)
+    unsupported_platform()
 }
 
 /// `iron-vault lock`: sends `lock` to the admin socket at `socket`, or this installation's, and shows the new state.
@@ -237,7 +237,7 @@ fn unsupported_platform() -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn status(_socket: Option<&Path>) -> ExitCode {
-    ping(None)
+    unsupported_platform()
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! The bodies of every frame kind except owner input, which is never read as fields.
 
 use super::add;
-use super::fields::{self, exact, first, read_flag, read_text, read_u16};
+use super::fields::{self, exact, first, read_flag, read_profile, read_text, read_u16};
 use super::status::{self, StatusReport};
 use super::{AdminCommand, AdminRequest, AdminResponse, ErrorCode, FrameError, Prompt};
 use crate::deployment::DeploymentProfile;
@@ -20,9 +20,6 @@ const COMMAND_STATUS: u16 = AdminCommand::Status as u16;
 const COMMAND_UNLOCK: u16 = AdminCommand::Unlock as u16;
 const COMMAND_LOCK: u16 = AdminCommand::Lock as u16;
 const COMMAND_ADD: u16 = AdminCommand::Add as u16;
-
-const PROFILE_PROTECTED: u8 = 1;
-const PROFILE_DEVELOPMENT: u8 = 2;
 
 /// A request body; only `add`, whose origins have bounds, can be refused.
 pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameError> {
@@ -64,13 +61,9 @@ pub(super) fn decode_prompt(body: &[u8]) -> Result<Prompt, FrameError> {
 
 /// `ping`'s success body: the command it answers, then the deployment profile.
 pub(super) fn encode_ping_result(profile: DeploymentProfile) -> Vec<u8> {
-    let profile = match profile {
-        DeploymentProfile::Protected => PROFILE_PROTECTED,
-        DeploymentProfile::Development => PROFILE_DEVELOPMENT,
-    };
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &COMMAND_PING.to_be_bytes());
-    fields::put(&mut out, TAG_PROFILE, &[profile]);
+    fields::put(&mut out, TAG_PROFILE, &[fields::profile_code(profile)]);
     out
 }
 
@@ -103,7 +96,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
         COMMAND_PING => {
             let [_, profile] = exact(&fields, [TAG_COMMAND, TAG_PROFILE])?;
             Ok(AdminResponse::Ping {
-                profile: read_profile(profile)?,
+                profile: read_profile(TAG_PROFILE, profile)?,
             })
         }
         COMMAND_STATUS => status::decode(&fields).map(|report| AdminResponse::Status(Box::new(report))),
@@ -115,14 +108,6 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
         }
         COMMAND_ADD => add::decode_result(&fields),
         unknown => Err(FrameError::UnknownCommand(unknown)),
-    }
-}
-
-fn read_profile(value: &[u8]) -> Result<DeploymentProfile, FrameError> {
-    match value {
-        [PROFILE_PROTECTED] => Ok(DeploymentProfile::Protected),
-        [PROFILE_DEVELOPMENT] => Ok(DeploymentProfile::Development),
-        _ => Err(FrameError::InvalidValue(TAG_PROFILE)),
     }
 }
 

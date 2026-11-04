@@ -1,16 +1,17 @@
 //! `iron-vault status` output: one field per line, in a fixed order, from the service's status report. Pure, so the same
 //! report always prints the same bytes.
 
-use iron_vault::admin::protocol::{CredentialStatus, MemoryStatus, RouteStatus, Standing, StatusReport, UnlockedVault, VaultStatus};
+use iron_vault::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 use iron_vault::deployment::{DeploymentProfile, no_isolation_warning};
 use iron_vault::service_state::{FailureReason, ServiceState, UnavailableReason};
+use iron_vault::standing::{CredentialStanding, RouteFault, Standing};
 
 /// What a value sealed behind the vault identity shows while the vault is locked.
 const UNKNOWN: &str = "unknown while the vault is locked";
 
-/// The report as the lines `status` prints, each ending in a newline. `user` is the account the CLI runs as, which in the
-/// development profile is the service account too.
-pub fn render(report: &StatusReport, user: &str) -> String {
+/// The report as the lines `status` prints, each ending in a newline. `user` names the account the CLI runs as, which in
+/// the development profile is the service account too; it is called only for that profile's line.
+pub fn render(report: &StatusReport, user: impl FnOnce() -> String) -> String {
     let mut lines = service_lines(report.state);
     lines.push(profile_line(report.profile, user));
     lines.extend(vault_lines(&report.vault));
@@ -35,10 +36,10 @@ fn reason_text(reason: FailureReason) -> &'static str {
     UnavailableReason::from_failure(reason).as_str()
 }
 
-fn profile_line(profile: DeploymentProfile, user: &str) -> String {
+fn profile_line(profile: DeploymentProfile, user: impl FnOnce() -> String) -> String {
     match profile {
         DeploymentProfile::Protected => "profile: protected".to_owned(),
-        DeploymentProfile::Development => format!("profile: development — {}", no_isolation_warning(user)),
+        DeploymentProfile::Development => format!("profile: development — {}", no_isolation_warning(&user())),
     }
 }
 
@@ -92,11 +93,11 @@ fn route_fault_lines(vault: &VaultStatus) -> Vec<String> {
     }
 }
 
-fn route_fault_line(route: &RouteStatus) -> String {
-    format!("route {}: unavailable ({})", route.name, route.fault)
+fn route_fault_line(route: &RouteFault) -> String {
+    format!("route {}: unavailable ({})", route.name, route.kind)
 }
 
-fn credential_line(credential: &CredentialStatus) -> String {
+fn credential_line(credential: &CredentialStanding) -> String {
     let name = &credential.name;
     match credential.standing {
         Standing::Healthy => format!("credential {name}: healthy"),

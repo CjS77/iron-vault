@@ -29,7 +29,7 @@ use iron_vault_store::{
 };
 use tokio::sync::Mutex;
 
-use crate::admin::protocol::{CredentialStatus, MemoryStatus, RouteStatus, StatusReport, UnlockedVault, VaultStatus};
+use crate::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
@@ -37,6 +37,7 @@ use crate::request_listeners::RequestListeners;
 use crate::service_state::{AdminOperation, IllegalTransition, RequestInterface, ServiceEvent, ServiceState, UnavailableReason, next};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder};
 use crate::socket_activation::AdoptedSocket;
+use crate::standing::{CredentialStanding, RouteFault};
 use crate::trusted_path_report::ServicePaths;
 use serving::Serving;
 
@@ -185,9 +186,9 @@ pub struct ServiceContext<F = OsFs> {
 struct OpenVault {
     approval: ApprovalState,
     /// The standing of each credential, from the report of opening the vault.
-    credentials: Vec<CredentialStatus>,
+    credentials: Vec<CredentialStanding>,
     /// The routes unavailable for a cause of their own, from the check.
-    route_faults: Vec<RouteStatus>,
+    route_faults: Vec<RouteFault>,
 }
 
 /// What changes, behind the one mutex.
@@ -491,7 +492,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         committed: Option<u64>,
     ) -> Result<ServiceState, IllegalTransition> {
         match self.run_check(identity).await {
-            Ok((snapshot, approval, credentials, route_faults)) => {
+            Ok(Checked {
+                snapshot,
+                approval,
+                credentials,
+                route_faults,
+            }) => {
                 let open = OpenVault {
                     approval,
                     credentials,

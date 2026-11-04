@@ -30,8 +30,7 @@ use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
 use iron_vault::admin::protocol::{
-    self, AdminRequest, AdminResponse, CredentialStatus, Decoded, ErrorCode, Frame, MemoryStatus, OwnerInput, Prompt, Standing,
-    StatusReport, VaultStatus,
+    self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, MemoryStatus, OwnerInput, Prompt, StatusReport, VaultStatus,
 };
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
@@ -42,6 +41,7 @@ use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{LockOutcome, ServiceContext, ServiceLocks, ServiceSetup, StartError};
 use iron_vault::service_state::{FailureReason, IllegalTransition, ListenerProvenance, ServiceEvent, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, SnapshotHolder};
+use iron_vault::standing::{CredentialStanding, Standing};
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
@@ -754,7 +754,7 @@ fn standing(report: &StatusReport) -> Vec<(String, Standing, Vec<String>)> {
         .credentials
         .iter()
         .map(
-            |CredentialStatus {
+            |CredentialStanding {
                  name,
                  standing,
                  unavailable_routes,
@@ -1296,6 +1296,21 @@ async fn a_reload_with_nothing_edited_stays_ready_on_the_same_committed_version(
     assert_eq!(status(&service).await.1.vault, committed);
     assert_served(&get_unix(&fixture.socket(), true).await);
     assert_eq!(approval_state_bytes(&fixture), before);
+}
+
+#[tokio::test]
+async fn a_failed_reload_after_ready_reports_the_vault_as_not_open() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    assert!(matches!(status(&service).await.1.vault, VaultStatus::Unlocked(_)));
+    let before = approval_state_bytes(&fixture);
+    fs::write(fixture.path("etc/config.toml"), fixture.config("# edited after approval\n")).unwrap();
+
+    assert_reload_fails(&fixture, &service, &before).await;
+
+    let (_, report) = status(&service).await;
+    assert_eq!(report.state, ServiceState::Unavailable(FailureReason::PolicyInvalid));
+    assert_eq!(report.vault, VaultStatus::Locked);
 }
 
 #[tokio::test]

@@ -16,6 +16,7 @@ use super::*;
 use crate::secret_types_tests::MARKER;
 use crate::serving_snapshot::SnapshotHolder;
 use crate::serving_snapshot::tests::Scratch;
+use crate::standing::{RouteFaultKind, Standing};
 
 const IDENTITY: &str = "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE";
 
@@ -389,8 +390,8 @@ impl Fixture {
 #[test]
 fn opening_then_checking_returns_the_snapshot_and_the_approval_state() {
     let fixture = approved();
-    let (snapshot, state, _, _) = fixture.open_and_check().unwrap();
-    assert_eq!(state, fixture.state);
+    let Checked { snapshot, approval, .. } = fixture.open_and_check().unwrap();
+    assert_eq!(approval, fixture.state);
     assert!(snapshot.record(&"alpha".parse().unwrap()).is_some());
 }
 
@@ -562,24 +563,31 @@ fn a_malformed_pinned_ca_passes_the_check_and_makes_only_its_route_unavailable()
 
 #[test]
 fn status_reports_a_pinned_ca_route_as_a_route_fault_and_its_credential_stays_healthy() {
-    let (_, _, credentials, faults) = pinned_fixture().open_and_check().unwrap();
+    let Checked {
+        credentials, route_faults, ..
+    } = pinned_fixture().open_and_check().unwrap();
     let alpha = credentials.iter().find(|c| c.name.as_str() == "alpha").unwrap();
-    assert_eq!(alpha.standing, crate::admin::protocol::Standing::Healthy);
+    assert_eq!(alpha.standing, Standing::Healthy);
     assert!(alpha.unavailable_routes.is_empty());
-    let expected = crate::admin::protocol::RouteStatus {
+    let expected = RouteFault {
         name: route("pinned"),
-        fault: crate::admin::protocol::RouteFault::PinnedCaUnavailable,
+        kind: RouteFaultKind::PinnedCaUnavailable,
     };
-    assert_eq!(faults, [expected]);
+    assert_eq!(route_faults, [expected]);
 }
 
 #[test]
 fn a_route_unavailable_through_its_credential_and_its_pinned_ca_reports_both() {
     let fixture = pinned_fixture();
     fixture.damage("alpha");
-    let (snapshot, _, credentials, faults) = fixture.open_and_check().unwrap();
+    let Checked {
+        snapshot,
+        credentials,
+        route_faults,
+        ..
+    } = fixture.open_and_check().unwrap();
     let alpha = credentials.iter().find(|c| c.name.as_str() == "alpha").unwrap();
     assert_eq!(alpha.unavailable_routes, [route("pinned"), route("plain")]);
-    assert_eq!(faults.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["pinned"]);
+    assert_eq!(route_faults.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["pinned"]);
     assert!(snapshot.policy().is_available(&route("other")));
 }

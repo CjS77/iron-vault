@@ -25,10 +25,10 @@ use iron_vault_store::{
     VaultIdentity, recover_approval,
 };
 
-use crate::admin::protocol::{CredentialStatus, RouteStatus};
 use crate::deployment::DeploymentProfile;
 use crate::service_state::{FailureReason, UnavailableReason};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotError};
+use crate::standing::{CredentialStanding, RouteFault};
 use crate::trusted_path::ExpectedOwner;
 use crate::upstream::client::{ClientBuildError, TransportLimits};
 use crate::upstream::clients::UpstreamClients;
@@ -235,9 +235,18 @@ fn activation_detail(error: &ActivationError) -> String {
     }
 }
 
-/// What a passed check on a freshly opened vault yields: the snapshot to serve, the vault's approval state, the
-/// standing of each credential and each route fault.
-pub type Checked = (ServingSnapshot, ApprovalState, Vec<CredentialStatus>, Vec<RouteStatus>);
+/// What a passed check on a freshly opened vault yields.
+#[derive(Debug)]
+pub struct Checked {
+    /// The snapshot to serve, which holds the vault.
+    pub snapshot: ServingSnapshot,
+    /// The vault's approval state.
+    pub approval: ApprovalState,
+    /// Each credential's standing, in name order; only the report of opening the vault knows it.
+    pub credentials: Vec<CredentialStanding>,
+    /// Each route fault, in name order.
+    pub route_faults: Vec<RouteFault>,
+}
 
 /// Opens a new vault from `identity` and loads its approval state, then runs the config check, for a service entering
 /// Checking.
@@ -269,11 +278,14 @@ fn open_and_run(
     upstream: &UpstreamSettings,
 ) -> Result<Checked, CheckFailure> {
     let (vault, opened) = Vault::open(state_dir, fs, identity).map_err(CheckFailure::Vault)?;
-    let state = vault.load_approval_state(state_dir, fs).map_err(CheckFailure::ApprovalState)?;
-    let snapshot = run(config_dir, fs, vault, &state, capabilities, accounts, upstream)?;
-    let credentials = snapshot.credential_statuses(&opened);
-    let faults = snapshot.route_faults();
-    Ok((snapshot, state, credentials, faults))
+    let approval = vault.load_approval_state(state_dir, fs).map_err(CheckFailure::ApprovalState)?;
+    let snapshot = run(config_dir, fs, vault, &approval, capabilities, accounts, upstream)?;
+    Ok(Checked {
+        credentials: snapshot.credential_standings(&opened),
+        route_faults: snapshot.route_faults(),
+        snapshot,
+        approval,
+    })
 }
 
 /// Runs the config check and returns the snapshot to serve, or the failure that leaves the service Unavailable.
