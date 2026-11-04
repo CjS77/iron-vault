@@ -937,7 +937,11 @@ async fn a_request_in_flight_is_cancelled_and_its_snapshot_is_gone_before_lock_a
     let socket = fixture.socket();
     let waiting = tokio::spawn(async move { get_unix(&socket, true).await });
     wait_for_requests(&fixture.upstream, 1).await;
-    assert!(snapshot.upgrade().is_some(), "the in-flight request holds the snapshot");
+    assert_eq!(
+        snapshot.strong_count(),
+        2,
+        "the holder and the in-flight request should hold the snapshot"
+    );
 
     let outcome = service.lock(DRAIN).await;
 
@@ -1001,4 +1005,54 @@ async fn the_expired_drain_counts_the_snapshots_still_held() {
 
     assert_eq!(outcome, Ok(LockOutcome::Held { snapshots: 1 }));
     drop(stubborn);
+}
+
+/// Sends the token caller's `GET /fx/latest` on the Unix listener and reads until `wanted` has arrived, leaving the
+/// response streaming.
+async fn start_streaming(socket: &Path, wanted: &str) -> (UnixStream, String) {
+    let mut stream = UnixStream::connect(socket).await.unwrap();
+    stream
+        .write_all(&CallerRequest::get("/fx/latest").signed(Via::Unix).to_bytes())
+        .await
+        .unwrap();
+    let mut raw = Vec::new();
+    while !String::from_utf8_lossy(&raw).contains(wanted) {
+        let mut buf = [0u8; 256];
+        let read = tokio::time::timeout(WAIT, stream.read(&mut buf)).await.unwrap().unwrap();
+        assert!(read > 0, "the connection closed before {wanted:?} arrived");
+        raw.extend_from_slice(&buf[..read]);
+    }
+    (stream, String::from_utf8(raw).unwrap())
+}
+
+#[tokio::test]
+async fn a_response_streaming_when_lock_runs_holds_the_snapshot_until_its_body_is_dropped() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let reply = Reply::TwoChunks {
+        first: "data: first\n\n".to_owned(),
+        second: "data: second\n\n".to_owned(),
+        gate: Arc::clone(&gate),
+    };
+    let mut fixture = Fixture::with_reply(reply).await;
+    fixture.approve(&fixture.config(""));
+    let service = ready_service(&fixture).await;
+    let snapshot = served_snapshot(&service);
+    let (mut stream, mut raw) = start_streaming(&fixture.socket(), "data: first\n\n").await;
+    // The handler has returned the response head, so beside the holder only the streaming body can still hold the
+    // snapshot, with the scrubber's copies of the injected credential.
+    assert_eq!(
+        snapshot.strong_count(),
+        2,
+        "the holder and the streaming body should hold the snapshot"
+    );
+
+    let outcome = service.lock(DRAIN).await;
+
+    assert_eq!(outcome, Ok(LockOutcome::Cleared));
+    assert_eq!(snapshot.strong_count(), 0, "lock answered while the body still held the snapshot");
+    let mut rest = Vec::new();
+    let _ = tokio::time::timeout(WAIT, stream.read_to_end(&mut rest)).await.unwrap();
+    raw.push_str(&String::from_utf8_lossy(&rest));
+    assert!(!raw.ends_with("0\r\n\r\n"), "the withdrawn body ended cleanly: {raw}");
+    assert!(!raw.contains("data: second"), "{raw}");
 }

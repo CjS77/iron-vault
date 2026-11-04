@@ -124,8 +124,10 @@ check that the service is up and which profile it runs before the real commands 
 
 Clears the vault identity and every cached secret from the service's memory (spec §3.13, §3.11) and moves the service
 from Ready to Locked. It takes no arguments and no prompt. In order, the service stops admitting requests, withdraws the
-serving snapshot so requests running on it stop where the transport permits (§3.9), drops the vault and the approval
-state, and then waits for the last request holding the old snapshot to end (the *lock drain*, at most 10 seconds).
+serving snapshot so requests running on it stop where the transport permits (§3.9), and drops the approval state. It
+then waits for the last holder of the old snapshot, a request or a streaming response body, to release it (the *lock
+drain*, at most 10 seconds). The vault, which the snapshot owns, is dropped when that last holder releases it, so during
+the drain the vault may still be in memory.
 
 The success result:
 
@@ -344,8 +346,9 @@ the message itself, and neither the code nor the message ever contains owner inp
 
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, byte values,
-`config approve`, `unlock` (command 4), `status` (command 6) and error codes 7 to 16 join it rather than starting
-version 2. That is a default for the owner to confirm ([open question 11](config-approval.md#open-questions)).
+`config approve` (command 2), `unlock` (command 4), `lock` (command 5), `status` (command 6) and error codes 7 to 16
+join it rather than starting version 2. That is a default for the owner to confirm
+([open question 11](config-approval.md#open-questions)).
 
 Only the service sends responses, so the version rule is asymmetric:
 

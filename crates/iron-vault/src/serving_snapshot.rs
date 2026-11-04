@@ -7,6 +7,7 @@
 //! reason, and a snapshot withdrawn from its requests tells them to stop ([`ServingSnapshot::withdrawn`]).
 
 use std::collections::BTreeSet;
+use std::collections::VecDeque;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
@@ -189,7 +190,7 @@ struct Held {
     admission: Admission,
     epoch: CancellationToken,
     /// For each snapshot served in this epoch, the signal that it has been dropped.
-    served: Vec<oneshot::Receiver<()>>,
+    served: VecDeque<oneshot::Receiver<()>>,
 }
 
 impl SnapshotHolder {
@@ -206,7 +207,7 @@ impl SnapshotHolder {
             current: RwLock::new(Held {
                 admission: Admission::Refuse(reason),
                 epoch: CancellationToken::new(),
-                served: Vec::new(),
+                served: VecDeque::new(),
             }),
         }
     }
@@ -226,7 +227,7 @@ impl SnapshotHolder {
         current
             .served
             .retain_mut(|served| matches!(served.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
-        current.served.push(dropped);
+        current.served.push_back(dropped);
         current.admission = Admission::Serve(Arc::new(snapshot));
     }
 
@@ -236,7 +237,7 @@ impl SnapshotHolder {
     pub fn refuse(&self, reason: UnavailableReason) -> Withdrawn {
         let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
         let served = if reason == UnavailableReason::Checking {
-            Vec::new()
+            VecDeque::new()
         } else {
             std::mem::replace(&mut current.epoch, CancellationToken::new()).cancel();
             std::mem::take(&mut current.served)
@@ -263,7 +264,7 @@ impl SnapshotHolder {
 
 /// The snapshots a withdrawal ended: each is dropped once the last request holding it has finished.
 #[derive(Debug)]
-pub struct Withdrawn(Vec<oneshot::Receiver<()>>);
+pub struct Withdrawn(VecDeque<oneshot::Receiver<()>>);
 
 impl Withdrawn {
     /// Waits up to `within` for every snapshot to be dropped, vault included, and returns how many are still held.
@@ -274,9 +275,9 @@ impl Withdrawn {
         // A sender dropping without a value resolves its receiver with an error, which is the signal. A receiver is
         // removed once it resolves, because polling it again would panic, and the wait can be called again.
         let all = async {
-            while let Some(dropped) = self.0.first_mut() {
+            while let Some(dropped) = self.0.front_mut() {
                 let _ = dropped.await;
-                self.0.remove(0);
+                self.0.pop_front();
             }
         };
         let _ = tokio::time::timeout(within, all).await;

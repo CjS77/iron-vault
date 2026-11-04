@@ -74,7 +74,7 @@ impl RequestHandler for ProxyHandler {
         let tags = tags.clone();
         async move {
             match admission {
-                Admission::Serve(snapshot) => serve(&snapshot, &tags, request, deadline).await,
+                Admission::Serve(snapshot) => serve(snapshot, &tags, request, deadline).await,
                 Admission::Refuse(reason) => unavailable(reason),
             }
         }
@@ -84,8 +84,11 @@ impl RequestHandler for ProxyHandler {
 /// Serves `request` from `snapshot` until the snapshot is withdrawn. A request withdrawn before its response head is
 /// dropped, which cancels its upstream request, and answered with a fixed `503`; one withdrawn after it has its body fail,
 /// so the caller's connection is aborted rather than ended as if the body were complete (§3.9).
+///
+/// The response body keeps `snapshot` alive until the body is dropped, because the body owns the request's injected
+/// secret patterns: a lock that waits for the snapshot to drop therefore also waits for the body.
 async fn serve(
-    snapshot: &ServingSnapshot,
+    snapshot: Arc<ServingSnapshot>,
     tags: &ConnectionTags,
     request: Request<RequestBody>,
     deadline: Instant,
@@ -93,10 +96,10 @@ async fn serve(
     let answer = tokio::select! {
         biased;
         () = snapshot.withdrawn() => Err(RefusalResponse::fixed(StatusCode::SERVICE_UNAVAILABLE.as_u16())),
-        answer = proxy(snapshot, tags, request, deadline) => answer,
+        answer = proxy(&snapshot, tags, request, deadline) => answer,
     };
     match answer {
-        Ok(response) => response.map(|body| UntilWithdrawn::new(body, snapshot.withdrawn()).boxed_unsync()),
+        Ok(response) => response.map(|body| UntilWithdrawn::new(body, snapshot).boxed_unsync()),
         Err(refusal) => fixed(&refusal),
     }
 }

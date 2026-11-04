@@ -239,10 +239,10 @@ impl<F: StoreFs> ServiceContext<F> {
     /// (§3.13, §3.11). Only a Ready service has secrets to clear; from any other state the event is refused.
     ///
     /// Under the context's mutex it stops admitting requests, withdraws the serving snapshot (cancelling the requests
-    /// running on it) and drops the approval state, so no later change interleaves. The mutex is then released and the
-    /// call waits up to `drain` for the last holder of the old snapshot to drop it, so a slow request does not stall the
-    /// other admin commands. If the drain expires it logs a warning and returns [`LockOutcome::Held`], never claiming
-    /// the secrets are cleared.
+    /// running on it) and drops the approval state and credential report, so no later change interleaves. The mutex is
+    /// then released and the call waits up to `drain` for the last holder of the old snapshot, a streaming response body
+    /// included, to drop it, so a slow request does not stall the other admin commands. If the drain expires it logs a
+    /// warning and returns [`LockOutcome::Held`], never claiming the secrets are cleared.
     pub async fn lock(&self, drain: Duration) -> Result<LockOutcome, IllegalTransition> {
         let mut withdrawn = {
             let mut inner = self.inner.lock().await;
@@ -256,7 +256,10 @@ impl<F: StoreFs> ServiceContext<F> {
             withdrawn
         };
         Ok(match withdrawn.released(drain).await {
-            0 => LockOutcome::Cleared,
+            0 => {
+                tracing::info!("lock complete: every serving snapshot, and the vault in it, was dropped");
+                LockOutcome::Cleared
+            }
             snapshots => {
                 tracing::warn!("lock drain expired: {snapshots} serving snapshot(s) are still held by requests that ignore cancellation");
                 LockOutcome::Held { snapshots }

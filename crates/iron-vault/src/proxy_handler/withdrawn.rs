@@ -1,6 +1,7 @@
 //! A response body that fails once the serving snapshot it is served from is withdrawn.
 
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
@@ -8,6 +9,7 @@ use hyper::body::{Body, Frame, SizeHint};
 use tokio_util::sync::WaitForCancellationFutureOwned;
 
 use crate::request_server::{BoxError, ResponseBody};
+use crate::serving_snapshot::ServingSnapshot;
 
 /// The error a body fails with when its snapshot is withdrawn. The request server's HTTP stack aborts the connection on
 /// any body error, so the caller never sees the cut-off body end cleanly.
@@ -17,16 +19,23 @@ struct Withdrawn;
 
 /// `inner` until `withdrawn` completes, then an error. The withdrawal is checked before the inner body on every poll,
 /// so a withdrawn snapshot releases no further bytes.
+///
+/// It holds the snapshot for as long as it lives, because `inner` owns the request's secret patterns (the scrubber's)
+/// and a lock waits for the snapshot to drop before it reports the secrets cleared. `snapshot` is declared after
+/// `inner` so the patterns are dropped first, and the snapshot, with its vault, only after them.
 pub(super) struct UntilWithdrawn {
     inner: ResponseBody,
     withdrawn: Pin<Box<WaitForCancellationFutureOwned>>,
+    /// Never read: held so the snapshot outlives the body.
+    _snapshot: Arc<ServingSnapshot>,
 }
 
 impl UntilWithdrawn {
-    pub(super) fn new(inner: ResponseBody, withdrawn: WaitForCancellationFutureOwned) -> Self {
+    pub(super) fn new(inner: ResponseBody, snapshot: Arc<ServingSnapshot>) -> Self {
         Self {
             inner,
-            withdrawn: Box::pin(withdrawn),
+            withdrawn: Box::pin(snapshot.withdrawn()),
+            _snapshot: snapshot,
         }
     }
 }
