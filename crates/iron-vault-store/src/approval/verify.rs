@@ -13,7 +13,10 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use thiserror::Error;
 
 use super::state::ApproverKey;
-use super::{ApprovalDecodeError, ApprovalEnvelope, ApprovalState, ApprovalVersion, ConfigDigest, PinnedApprover, SignatureAlgorithm};
+use super::{
+    ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, ApprovalState, ApprovalVersion, ConfigDigest, PinnedApprover,
+    SignatureAlgorithm,
+};
 
 /// A config approval that passed every check in [`verify_approval`]: the committed approval, signed by the pinned
 /// approver, for this vault and the exact config bytes given.
@@ -101,20 +104,29 @@ pub enum VerifyError {
 /// `config`; and the payload's version and digest are the committed approval. Reads nothing but its arguments and
 /// changes nothing.
 pub fn verify_approval(state: &ApprovalState, config: &[u8], envelope: &[u8]) -> Result<VerifiedApproval, VerifyError> {
-    let envelope = ApprovalEnvelope::decode(envelope)?;
-    check_signature(state.approver(), &envelope)?;
-    let payload = envelope.payload();
-    if payload.vault_id() != state.vault_id() {
-        return Err(VerifyError::WrongVault);
-    }
-    if payload.digest() != ConfigDigest::of(config) {
-        return Err(VerifyError::ConfigChanged);
-    }
+    let payload = verify_signed(state, ConfigDigest::of(config), envelope)?;
     check_committed(state.committed(), payload.version(), payload.digest())?;
     Ok(VerifiedApproval {
         version: payload.version(),
         digest: payload.digest(),
     })
+}
+
+/// Runs every check of [`verify_approval`] but the last, the committed approval, and returns the signed payload.
+///
+/// For the approval transaction, which must check a new approval before it commits it, so the committed approval is
+/// not yet the one to compare with.
+pub(crate) fn verify_signed(state: &ApprovalState, digest: ConfigDigest, envelope: &[u8]) -> Result<ApprovalPayload, VerifyError> {
+    let envelope = ApprovalEnvelope::decode(envelope)?;
+    check_signature(state.approver(), &envelope)?;
+    let payload = *envelope.payload();
+    if payload.vault_id() != state.vault_id() {
+        return Err(VerifyError::WrongVault);
+    }
+    if payload.digest() != digest {
+        return Err(VerifyError::ConfigChanged);
+    }
+    Ok(payload)
 }
 
 /// Checks the envelope's algorithm and signature against `approver`, never against anything in the envelope itself.

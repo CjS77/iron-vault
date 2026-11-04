@@ -7,12 +7,13 @@
 //!
 //! The approval state, which pins the approver and holds the version counters, is in [`state`]; checking an approval
 //! against it is in [`verify`]. The signer that produces approvals is [`signer`], with the software signer in
-//! [`software_signer`].
+//! [`software_signer`]. The approval transaction's durable steps, which build on all of these, are in [`transaction`].
 
 mod encoding;
 mod signer;
 mod software_signer;
 mod state;
+mod transaction;
 mod verify;
 
 use std::fmt;
@@ -30,6 +31,10 @@ pub use software_signer::{
 };
 pub use state::{
     ApprovalState, ApprovalStateError, InvalidKeyReason, MAX_APPROVAL_STATE_LEN, PinnedApprover, open_approval_state, seal_approval_state,
+};
+pub use transaction::{
+    AdmissionPaused, ApprovalError, ApprovalFailure, ApprovalProgress, ApprovalStep, ApprovalStorage, CommittedApproval, PendingConfig,
+    PreparedApproval,
 };
 pub use verify::{VerifiedApproval, VerifyError, verify_approval};
 

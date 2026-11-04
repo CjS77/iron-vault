@@ -41,10 +41,12 @@ mod vault_identity;
 mod wire;
 
 pub use approval::{
-    APPROVAL_PURPOSE, ApprovalDecodeError, ApprovalEnvelope, ApprovalPassphrase, ApprovalPayload, ApprovalSigner, ApprovalState,
-    ApprovalStateError, ApprovalVersion, ConfigDigest, InvalidKeyReason, MAX_APPROVAL_ENVELOPE_LEN, MAX_APPROVAL_STATE_LEN, PinnedApprover,
-    RESERVED_ECDSA_P256_ID, SignError, SignatureAlgorithm, SoftwareSigner, SoftwareSignerKey, VerifiedApproval, VerifyError,
-    open_approval_state, open_signer_key, read_signer_key, seal_approval_state, seal_signer_key, verify_approval, write_signer_key,
+    APPROVAL_PURPOSE, AdmissionPaused, ApprovalDecodeError, ApprovalEnvelope, ApprovalError, ApprovalFailure, ApprovalPassphrase,
+    ApprovalPayload, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStateError, ApprovalStep, ApprovalStorage, ApprovalVersion,
+    CommittedApproval, ConfigDigest, InvalidKeyReason, MAX_APPROVAL_ENVELOPE_LEN, MAX_APPROVAL_STATE_LEN, PendingConfig, PinnedApprover,
+    PreparedApproval, RESERVED_ECDSA_P256_ID, SignError, SignatureAlgorithm, SoftwareSigner, SoftwareSignerKey, VerifiedApproval,
+    VerifyError, open_approval_state, open_signer_key, read_signer_key, seal_approval_state, seal_signer_key, verify_approval,
+    write_signer_key,
 };
 pub use config_dir::{
     ConfigDirLock, ConfigReadError, ConfigWriteError, PublishSet, publish, read_config_file, remove_pending_and_staged,

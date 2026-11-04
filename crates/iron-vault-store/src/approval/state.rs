@@ -439,6 +439,29 @@ impl ApprovalState {
         self.write(lock, fs, identity, Self { approver, ..self.clone() })
     }
 
+    /// Writes the state on disk again, its counters unchanged, after a commit of `expected` whose rename landed but
+    /// whose directory fsync failed (design/config-approval.md, "Settling an uncertain commit").
+    ///
+    /// Reading the file back proves nothing, since the page cache serves it, and neither does a second fsync, which
+    /// Linux can report as successful after a failed writeback. A fresh durable write is the only proof. Refuses with
+    /// [`ApprovalStateError::ReloadRequired`] unless the state on disk commits `expected`. Memory takes the state on
+    /// disk only once that write succeeds, so after a failure this state still refuses every write until a reload.
+    pub(crate) fn settle_commit(
+        &mut self,
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        identity: &VaultIdentity,
+        expected: (ApprovalVersion, ConfigDigest),
+    ) -> Result<(), ApprovalStateError> {
+        let mut on_disk = Self::load(lock, fs, identity, self.vault_id)?;
+        if on_disk.committed != Some(expected) {
+            return Err(ApprovalStateError::ReloadRequired);
+        }
+        on_disk.write(lock, fs, identity, on_disk.clone())?;
+        *self = on_disk;
+        Ok(())
+    }
+
     /// Replaces the file with `next` at the next state generation, then makes that the state in memory. The disk checks
     /// come first: a stale in-memory state would otherwise write lower counters over newer ones, and the manifest on
     /// disk gives the peer generation. A partial restore is refused rather than written over: recording the restored
@@ -473,6 +496,14 @@ impl ApprovalState {
     pub(crate) fn with_state_generation(&self, state_generation: StateGeneration) -> Self {
         Self {
             state_generation,
+            ..self.clone()
+        }
+    }
+
+    /// This state with `highest_reserved` reserved, which only a run of reservations reaches.
+    pub(crate) fn with_highest_reserved(&self, highest_reserved: u64) -> Self {
+        Self {
+            highest_reserved,
             ..self.clone()
         }
     }
