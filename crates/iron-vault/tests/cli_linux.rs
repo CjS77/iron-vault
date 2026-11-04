@@ -18,7 +18,7 @@ use std::time::Duration;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
-use iron_vault::admin::protocol::{AdminCommand, AdminRequest, AdminResponse, MemoryStatus, Prompt, StatusReport, VaultStatus};
+use iron_vault::admin::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode, MemoryStatus, Prompt, StatusReport, VaultStatus};
 use iron_vault::admin::server::{AdminServer, Exchange, Limits};
 use iron_vault::admin::socket::AdminSocket;
 use iron_vault::deployment::DeploymentProfile;
@@ -80,23 +80,29 @@ async fn run_cli_with_input(args: Vec<String>, input: Vec<u8>) -> Output {
 }
 
 fn ping_args(socket: &Path) -> Vec<String> {
-    vec!["ping".into(), "--admin-socket".into(), socket.display().to_string()]
+    command_args("ping", socket)
+}
+
+fn command_args(command: &str, socket: &Path) -> Vec<String> {
+    vec![command.into(), "--admin-socket".into(), socket.display().to_string()]
 }
 
 /// Serves `ping` on `dir`'s admin socket to the admin principals of a protected install run by `service_uid`, runs
 /// `iron-vault ping` against it, then stops the server.
 async fn ping_server_as(dir: &TempDir, service_uid: u32) -> Output {
-    serve_and_run(dir, service_uid, Handlers::standard(DeploymentProfile::Protected), Vec::new()).await
+    serve_and_run(
+        dir,
+        service_uid,
+        Handlers::standard(DeploymentProfile::Protected),
+        "ping",
+        Vec::new(),
+    )
+    .await
 }
 
-/// Serves `handlers` on `dir`'s admin socket, runs `iron-vault ping` against it with `input` on stdin, then stops the
-/// server.
-async fn serve_and_run(dir: &TempDir, service_uid: u32, handlers: Handlers, input: Vec<u8>) -> Output {
-    serve_and_run_args(dir, service_uid, handlers, ping_args(&dir.socket()), input).await
-}
-
-/// As [`serve_and_run`], running the CLI with `args`.
-async fn serve_and_run_args(dir: &TempDir, service_uid: u32, handlers: Handlers, args: Vec<String>, input: Vec<u8>) -> Output {
+/// Serves `handlers` on `dir`'s admin socket, runs `iron-vault <command>` against it with `input` on stdin, then stops
+/// the server.
+async fn serve_and_run(dir: &TempDir, service_uid: u32, handlers: Handlers, command: &str, input: Vec<u8>) -> Output {
     let me = invoking_user().unwrap();
     let socket = AdminSocket::bind(&dir.0, me).unwrap();
     let principals = AdminPrincipals::new(DeploymentProfile::Protected, service_uid);
@@ -109,7 +115,7 @@ async fn serve_and_run_args(dir: &TempDir, service_uid: u32, handlers: Handlers,
             })
             .await
     });
-    let output = run_cli_with_input(args, input).await;
+    let output = run_cli_with_input(command_args(command, &dir.socket()), input).await;
     let _ = stop.send(());
     served.await.unwrap().unwrap();
     output
@@ -204,7 +210,7 @@ async fn prompted_ping(input: &[u8]) -> (Output, Vec<Vec<u8>>) {
     let dir = TempDir::new();
     let values = Arc::default();
     let handlers = Handlers::default().with(AdminCommand::Ping, PromptingPing(Arc::clone(&values)));
-    let output = serve_and_run(&dir, invoking_user().unwrap().uid, handlers, input.to_vec()).await;
+    let output = serve_and_run(&dir, invoking_user().unwrap().uid, handlers, "ping", input.to_vec()).await;
     let values = std::mem::take(&mut *values.lock().unwrap());
     (output, values)
 }
@@ -252,8 +258,7 @@ impl AdminHandler for FixedStatus {
 async fn status_with(state: ServiceState) -> Output {
     let dir = TempDir::new();
     let handlers = Handlers::default().with(AdminCommand::Status, FixedStatus(state));
-    let args = vec!["status".into(), "--admin-socket".into(), dir.socket().display().to_string()];
-    serve_and_run_args(&dir, invoking_user().unwrap().uid, handlers, args, Vec::new()).await
+    serve_and_run(&dir, invoking_user().unwrap().uid, handlers, "status", Vec::new()).await
 }
 
 #[tokio::test]
@@ -270,4 +275,83 @@ async fn status_prints_one_field_per_line_and_exits_zero_only_when_ready() {
     assert_eq!(locked.status.code(), Some(4), "stderr: {}", text(&locked.stderr));
     assert!(text(&locked.stdout).starts_with("service: locked\n"));
     assert_eq!(text(&locked.stderr), "");
+}
+
+/// A test-only `unlock` handler: prompts for the vault passphrase as the service does, records the value, and answers
+/// with a fixed response, so the CLI's report of each outcome is checked without a vault.
+struct ScriptedUnlock {
+    response: AdminResponse,
+    values: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+impl AdminHandler for ScriptedUnlock {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let prompt = Prompt {
+                label: "Vault passphrase".to_owned(),
+                secret: true,
+            };
+            let input = exchange.prompt(&prompt).await?;
+            self.values.lock().unwrap().push(input.expose_secret().to_vec());
+            Ok(self.response.clone())
+        })
+    }
+}
+
+async fn scripted_unlock(response: AdminResponse) -> (Output, Vec<Vec<u8>>) {
+    let dir = TempDir::new();
+    let values = Arc::default();
+    let handler = ScriptedUnlock {
+        response,
+        values: Arc::clone(&values),
+    };
+    let handlers = Handlers::default().with(AdminCommand::Unlock, handler);
+    let input = format!("{MARKER}\n").into_bytes();
+    let output = serve_and_run(&dir, invoking_user().unwrap().uid, handlers, "unlock", input).await;
+    let values = std::mem::take(&mut *values.lock().unwrap());
+    (output, values)
+}
+
+#[tokio::test]
+async fn unlock_sends_the_piped_passphrase_and_reports_ready_without_echoing_it() {
+    let (output, values) = scripted_unlock(AdminResponse::Success).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(values, [MARKER.as_bytes().to_vec()]);
+    assert_eq!(stdout, "the vault is unlocked: the service is Ready\n");
+    assert_eq!(stderr, "");
+}
+
+#[tokio::test]
+async fn unlock_into_an_unavailable_service_shows_the_redacted_reason() {
+    let message = "the vault unlocked, but the config check failed: the service is Unavailable (policy invalid)";
+    let response = AdminResponse::Error {
+        code: ErrorCode::UnlockFailed,
+        message: message.to_owned(),
+    };
+    let (output, _) = scripted_unlock(response).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        format!("iron-vault: the service answered error 15 (unlock-failed): {message}\n")
+    );
+    assert!(!stderr.contains(MARKER), "{stderr}");
+}
+
+#[tokio::test]
+async fn a_wrong_passphrase_is_reported_without_the_passphrase() {
+    let response = AdminResponse::Error {
+        code: ErrorCode::UnlockDenied,
+        message: "wrong passphrase".to_owned(),
+    };
+    let (output, _) = scripted_unlock(response).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        "iron-vault: the service answered error 14 (unlock-denied): wrong passphrase\n"
+    );
 }

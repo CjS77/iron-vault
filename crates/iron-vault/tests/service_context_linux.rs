@@ -2,6 +2,9 @@
 //! Checking with a known vault identity (no prompt), the listener rebuild on entry to Ready, and stop (specification
 //! §3.1, §3.4, §3.9, §3.11, §3.12).
 //!
+//! `unlock` runs over the admin protocol against the same fixture, with the passphrase envelope in place, and every
+//! test's log goes to one captured buffer, which must never hold a passphrase.
+//!
 //! Each test builds a vault and an approval state in a temporary state directory and approves a config through the
 //! approval transaction, then releases both locks so the service takes them. The service account is the test's own uid.
 
@@ -13,9 +16,10 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, WAIT, next_free_port, token_hash};
@@ -24,7 +28,8 @@ use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
 use iron_vault::admin::protocol::{
-    self, AdminRequest, AdminResponse, CredentialStatus, Decoded, Frame, MemoryStatus, Standing, StatusReport, VaultStatus,
+    self, AdminRequest, AdminResponse, CredentialStatus, Decoded, ErrorCode, Frame, MemoryStatus, OwnerInput, Prompt, Standing,
+    StatusReport, VaultStatus,
 };
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
@@ -40,15 +45,22 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{Capabilities, ListenerName};
 use iron_vault_store::{
-    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDirLock, LockError, OsFs, PendingConfig,
-    PermittedOrigins, PinnedApprover, RecordDamage, SignError, SignatureAlgorithm, StateDirLock, Vault, VaultIdentity,
+    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDirLock, LockError, OperationalIdentity, OsFs,
+    Passphrase, PendingConfig, PermittedOrigins, PinnedApprover, RecipientSet, RecordDamage, SignError, SignatureAlgorithm, StateDirLock,
+    Vault, VaultIdentity, seal_passphrase_envelope_for_tests, wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
+use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::oneshot;
+use tracing_subscriber::fmt::MakeWriter;
+use zeroize::Zeroizing;
 
 const IDENTITY: &str = "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE";
 const SECRET: &str = "fx-secret-4b1d";
+/// The vault passphrase, and a wrong one; distinctive, so a search of the logs cannot match anything else.
+const PASSPHRASE: &str = "PASSPHRASE-correct-7c2e";
+const WRONG_PASSPHRASE: &str = "PASSPHRASE-wrong-91af";
 
 fn identity() -> VaultIdentity {
     VaultIdentity::from_secret(IDENTITY)
@@ -129,6 +141,7 @@ impl Fixture {
             .find(|file| !before.contains(file))
             .unwrap();
         let (state, _) = vault.create_approval_state(&lock, &OsFs, signer().pinned()).unwrap();
+        write_unlock_envelopes(&lock);
         Self {
             dir,
             ca,
@@ -234,6 +247,16 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
     }
 }
 
+/// `identity.age` for the operational identity and a second recipient, and `operational.age` sealing the operational
+/// identity to [`PASSPHRASE`], as initialization will write them.
+fn write_unlock_envelopes(lock: &StateDirLock) {
+    let (operational, operational_key) = OperationalIdentity::generate();
+    let recipients = RecipientSet::new([operational_key, OperationalIdentity::generate().1]).unwrap();
+    write_identity_envelope(lock, &OsFs, &wrap_identity(&identity(), &recipients).unwrap()).unwrap();
+    let passphrase = Passphrase::new(SecretString::from(PASSPHRASE)).unwrap();
+    write_passphrase_envelope(lock, &OsFs, &seal_passphrase_envelope_for_tests(&operational, &passphrase).unwrap()).unwrap();
+}
+
 fn listener(name: &str) -> ListenerName {
     ListenerName::try_from(name).unwrap()
 }
@@ -286,21 +309,23 @@ fn assert_refused(response: &Response, reason: UnavailableReason) {
     assert_eq!((response.status, response.body.as_str()), (503, reason.as_str()));
 }
 
-/// Serves `service`'s admin handlers on its runtime directory and sends `ping` over the admin protocol. It does not run
-/// the CLI binary: a child forked while another test holds a directory lock would hold that lock too until it execs.
+/// `ping`, which never prompts.
 async fn ping(service: &Arc<ServiceContext>) -> AdminResponse {
-    admin(service, AdminRequest::Ping).await.1
+    admin(service, AdminRequest::Ping, "").await.2
 }
 
 /// Sends `status` over the admin protocol and returns the response frame's bytes with the decoded report.
 async fn status(service: &Arc<ServiceContext>) -> (Vec<u8>, StatusReport) {
-    match admin(service, AdminRequest::Status).await {
-        (bytes, AdminResponse::Status(report)) => (bytes, *report),
-        (_, other) => panic!("expected a status report, got {other:?}"),
+    match admin(service, AdminRequest::Status, "").await {
+        (bytes, _, AdminResponse::Status(report)) => (bytes, *report),
+        (_, _, other) => panic!("expected a status report, got {other:?}"),
     }
 }
 
-async fn admin(service: &Arc<ServiceContext>, request_frame: AdminRequest) -> (Vec<u8>, AdminResponse) {
+/// Serves `service`'s admin handlers on its runtime directory and sends `request` over the admin protocol, answering
+/// each prompt with `answer`. Returns the response frame's bytes, the prompts and the response. It does not run the CLI
+/// binary: a child forked while another test holds a directory lock would hold that lock too until it execs.
+async fn admin(service: &Arc<ServiceContext>, request: AdminRequest, answer: &str) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
     let paths = service.paths().clone();
     let runtime_dir = paths.runtime_dir.clone().unwrap();
     let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
@@ -318,19 +343,110 @@ async fn admin(service: &Arc<ServiceContext>, request_frame: AdminRequest) -> (V
             .await
     });
     let mut stream = UnixStream::connect(runtime_dir.join(ADMIN_SOCKET_NAME)).await.unwrap();
-    let mut sent = Vec::new();
-    protocol::encode(&Frame::Request(request_frame), &mut sent).unwrap();
-    stream.write_all(&sent).await.unwrap();
-    let mut bytes = Vec::new();
-    tokio::time::timeout(WAIT, stream.read_to_end(&mut bytes)).await.unwrap().unwrap();
+    send(&mut stream, &Frame::Request(request)).await;
+    let mut prompts = Vec::new();
+    let (bytes, response) = loop {
+        match read_frame(&mut stream).await {
+            (bytes, Frame::Response(response)) => break (bytes, response),
+            (_, Frame::Prompt(prompt)) => {
+                prompts.push(prompt);
+                let input = OwnerInput::new(Zeroizing::new(answer.as_bytes().to_vec()));
+                send(&mut stream, &Frame::OwnerInput(input)).await;
+            }
+            (_, other) => panic!("unexpected frame {other:?}"),
+        }
+    };
     let _ = stop.send(());
     served.await.unwrap().unwrap();
-    match protocol::decode(&bytes).unwrap() {
-        Decoded::Frame {
-            frame: Frame::Response(response),
-            ..
-        } => (bytes, response),
-        other => panic!("expected a response, got {other:?}"),
+    (bytes, prompts, response)
+}
+
+async fn send(stream: &mut UnixStream, frame: &Frame) {
+    let mut bytes = Vec::new();
+    protocol::encode(frame, &mut bytes).unwrap();
+    stream.write_all(&bytes).await.unwrap();
+}
+
+/// Reads one frame a byte at a time, so nothing of the next frame is consumed; returns its bytes with the frame.
+async fn read_frame(stream: &mut UnixStream) -> (Vec<u8>, Frame) {
+    let mut bytes = Vec::new();
+    loop {
+        if let Decoded::Frame { frame, .. } = protocol::decode(&bytes).unwrap() {
+            return (bytes, frame);
+        }
+        let mut chunk = [0; 1];
+        let read = tokio::time::timeout(WAIT, stream.read(&mut chunk)).await.unwrap().unwrap();
+        assert_eq!(read, 1, "the service closed mid-frame");
+        bytes.extend_from_slice(&chunk);
+    }
+}
+/// `unlock`, answering its prompt with `passphrase`; the service must send exactly the secret passphrase prompt.
+async fn unlock(service: &Arc<ServiceContext>, passphrase: &str) -> AdminResponse {
+    let (_, prompts, response) = admin(service, AdminRequest::Unlock, passphrase).await;
+    let expected = Prompt {
+        label: "Vault passphrase".to_owned(),
+        secret: true,
+    };
+    assert_eq!(prompts, [expected]);
+    response
+}
+
+/// Everything this test binary logs, from a global subscriber installed on first use.
+///
+/// Global, not per thread: tracing caches each callsite's interest process-wide, so a thread-local subscriber can miss
+/// an event whose callsite another test's thread registered first with no subscriber.
+fn captured_logs() -> Captured {
+    static CAPTURED: OnceLock<Captured> = OnceLock::new();
+    CAPTURED
+        .get_or_init(|| {
+            let captured = Captured::default();
+            let subscriber = tracing_subscriber::fmt().with_writer(captured.clone()).with_ansi(false).finish();
+            tracing::subscriber::set_global_default(subscriber).unwrap();
+            captured
+        })
+        .clone()
+}
+
+/// A log writer that keeps everything written to it.
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner)).into_owned()
+    }
+}
+
+impl io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for Captured {
+    type Writer = Captured;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+fn assert_no_passphrase_logged(logs: &Captured) {
+    let text = logs.text();
+    [PASSPHRASE, WRONG_PASSPHRASE]
+        .iter()
+        .for_each(|passphrase| assert!(!text.contains(passphrase), "a passphrase reached the log:\n{text}"));
+}
+
+fn error_response(code: ErrorCode, message: &str) -> AdminResponse {
+    AdminResponse::Error {
+        code,
+        message: message.to_owned(),
     }
 }
 
@@ -641,4 +757,107 @@ async fn status_is_byte_identical_across_runs_and_holds_no_secret() {
     assert_eq!(first, second);
     let secret = SECRET.as_bytes();
     assert!(!first.windows(secret.len()).any(|window| window == secret));
+}
+
+#[tokio::test]
+async fn unlock_with_the_right_passphrase_reaches_ready_and_a_request_reaches_the_upstream() {
+    let logs = captured_logs();
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+
+    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+
+    assert_eq!(service.state().await, ServiceState::Ready);
+    assert_served(&get_unix(&fixture.socket(), true).await);
+    assert_eq!(fixture.upstream.requests().len(), 1);
+    let text = logs.text();
+    let transitions = ["lock transition: Locked to Checking", "lock transition: Checking to Ready"];
+    transitions
+        .iter()
+        .for_each(|line| assert!(text.contains(line), "{line} missing from:\n{text}"));
+    assert!(text.contains("iron_vault::lock_transition"), "{text}");
+    assert_no_passphrase_logged(&logs);
+}
+
+#[tokio::test]
+async fn a_wrong_passphrase_leaves_the_service_locked() {
+    let logs = captured_logs();
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+
+    let response = unlock(&service, WRONG_PASSPHRASE).await;
+
+    assert_eq!(response, error_response(ErrorCode::UnlockDenied, "wrong passphrase"));
+    assert_eq!(service.state().await, ServiceState::Locked);
+    assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
+    assert!(fixture.upstream.requests().is_empty());
+    // A later unlock with the right passphrase still works: the refusal changed nothing.
+    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+    assert_no_passphrase_logged(&logs);
+}
+
+#[tokio::test]
+async fn empty_input_is_a_wrong_passphrase() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+
+    assert_eq!(
+        unlock(&service, "").await,
+        error_response(ErrorCode::UnlockDenied, "wrong passphrase")
+    );
+    assert_eq!(service.state().await, ServiceState::Locked);
+}
+
+#[tokio::test]
+async fn unlock_while_ready_is_refused_before_any_prompt_and_changes_nothing() {
+    let logs = captured_logs();
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+    service.enter_checking(identity()).await.unwrap();
+
+    let (_, prompts, response) = admin(&service, AdminRequest::Unlock, PASSPHRASE).await;
+
+    assert_eq!(prompts, []);
+    let message = "`unlock` is allowed only while the service is Locked; it is Ready";
+    assert_eq!(response, error_response(ErrorCode::WrongState, message));
+    assert_eq!(service.state().await, ServiceState::Ready);
+    assert_served(&get_unix(&fixture.socket(), true).await);
+    assert_no_passphrase_logged(&logs);
+}
+
+#[tokio::test]
+async fn unlock_with_an_invalid_approval_ends_unavailable_and_names_the_redacted_reason() {
+    let logs = captured_logs();
+    let fixture = approved().await;
+    fs::write(fixture.path("etc/config.toml"), fixture.config("# edited after approval\n")).unwrap();
+    let service = fixture.start().unwrap();
+
+    let response = unlock(&service, PASSPHRASE).await;
+
+    let message = "the vault unlocked, but the config check failed: the service is Unavailable (policy invalid)";
+    assert_eq!(response, error_response(ErrorCode::UnlockFailed, message));
+    assert_eq!(service.state().await, ServiceState::Unavailable(FailureReason::PolicyInvalid));
+    assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::PolicyInvalid);
+    assert!(
+        logs.text().contains("lock transition: Checking to Unavailable(PolicyInvalid)"),
+        "{}",
+        logs.text()
+    );
+    assert_no_passphrase_logged(&logs);
+}
+
+#[tokio::test]
+async fn an_unreadable_passphrase_envelope_leaves_the_service_locked() {
+    let fixture = approved().await;
+    fs::remove_file(fixture.path("state/operational.age")).unwrap();
+    let service = fixture.start().unwrap();
+
+    let response = unlock(&service, PASSPHRASE).await;
+
+    let AdminResponse::Error { code, message } = response else {
+        panic!("expected an error, got {response:?}");
+    };
+    assert_eq!(code, ErrorCode::UnlockFailed);
+    assert!(message.ends_with("; the service stays Locked"), "{message}");
+    assert_eq!(service.state().await, ServiceState::Locked);
 }
