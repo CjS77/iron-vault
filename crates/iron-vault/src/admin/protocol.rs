@@ -17,6 +17,7 @@ use crate::deployment::DeploymentProfile;
 use iron_vault_policy::{CredentialKind, Port};
 use iron_vault_store::RecordId;
 
+pub use iron_vault_store::MAX_CONFIG_LEN;
 pub use status::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 
 /// The protocol version this code writes and the only one it reads.
@@ -35,6 +36,8 @@ pub const MAX_ORIGIN_HOST_LEN: usize = 253;
 pub enum AdminRequest {
     /// Changes nothing; the service answers with its deployment profile. Command ID 1.
     Ping,
+    /// Runs the approval transaction on the proposed config. Command ID 2.
+    ConfigApprove(ProposedConfig),
     /// Reports service, vault, approval, memory protection and credential states; allowed in every state. Command ID 6.
     Status,
     /// Opens the vault with the passphrase the service prompts for; no arguments and no result. Command ID 4.
@@ -68,6 +71,7 @@ impl AdminRequest {
     pub const fn command(&self) -> AdminCommand {
         match self {
             Self::Ping => AdminCommand::Ping,
+            Self::ConfigApprove(_) => AdminCommand::ConfigApprove,
             Self::Status => AdminCommand::Status,
             Self::Unlock => AdminCommand::Unlock,
             Self::Lock => AdminCommand::Lock,
@@ -81,6 +85,8 @@ impl AdminRequest {
 pub enum AdminCommand {
     /// `ping`.
     Ping = 1,
+    /// `config approve`.
+    ConfigApprove = 2,
     /// `status`. ID 3 is reserved for `caller-token`.
     Status = 6,
     /// `unlock`.
@@ -96,11 +102,88 @@ impl AdminCommand {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Ping => "ping",
+            Self::ConfigApprove => "config approve",
             Self::Status => "status",
             Self::Unlock => "unlock",
             Self::Lock => "lock",
             Self::Add => "add",
         }
+    }
+}
+
+/// No command accepts an external signature (§3.2): the service signs only the pending config of its own approval
+/// transaction. The test lists every argument of every command through an exhaustive match, so a new command does not
+/// compile until its arguments are listed and checked here.
+#[cfg(test)]
+mod no_external_signatures {
+    use super::{AdminCommand, FrameError, body, fields};
+
+    /// Every argument `command` takes, by name.
+    fn arguments(command: AdminCommand) -> &'static [&'static str] {
+        match command {
+            AdminCommand::Ping | AdminCommand::Status | AdminCommand::Unlock | AdminCommand::Lock => &[],
+            AdminCommand::ConfigApprove => &["config"],
+            AdminCommand::Add => &["name", "kind", "origins"],
+        }
+    }
+
+    const COMMANDS: [AdminCommand; 6] = [
+        AdminCommand::Ping,
+        AdminCommand::ConfigApprove,
+        AdminCommand::Unlock,
+        AdminCommand::Lock,
+        AdminCommand::Status,
+        AdminCommand::Add,
+    ];
+
+    #[test]
+    fn every_command_the_decoder_knows_is_listed() {
+        let known: Vec<u16> = (0..=u16::MAX)
+            .filter(|id| {
+                let mut request = Vec::new();
+                fields::put(&mut request, body::TAG_COMMAND, &id.to_be_bytes());
+                !matches!(body::decode_request(&request), Err(FrameError::UnknownCommand(_)))
+            })
+            .collect();
+        assert_eq!(known, COMMANDS.map(|command| command as u16));
+    }
+
+    #[test]
+    fn no_command_takes_a_signature_an_envelope_or_a_key() {
+        COMMANDS.iter().flat_map(|command| arguments(*command)).for_each(|argument| {
+            ["sig", "envelope", "key", "approval"]
+                .iter()
+                .for_each(|word| assert!(!argument.contains(word), "argument `{argument}` looks like {word}"));
+        });
+    }
+}
+
+/// The exact config bytes the owner proposes for approval, at most [`MAX_CONFIG_LEN`] long.
+///
+/// They are not secret, but they are never echoed in a diagnostic: `Debug` shows only their length.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProposedConfig(Vec<u8>);
+
+impl ProposedConfig {
+    /// Wraps `bytes`, refusing more than [`MAX_CONFIG_LEN`] of them.
+    pub fn new(bytes: Vec<u8>) -> Option<Self> {
+        (bytes.len() <= MAX_CONFIG_LEN).then_some(Self(bytes))
+    }
+
+    /// The bytes as proposed.
+    pub fn bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// The bytes, for the approval transaction that keeps them as its one byte snapshot.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl fmt::Debug for ProposedConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ProposedConfig({} bytes)", self.0.len())
     }
 }
 
@@ -111,6 +194,32 @@ pub struct Prompt {
     pub label: String,
     /// Whether the value is secret, so the CLI turns terminal echo off while the owner types.
     pub secret: bool,
+}
+
+/// Text the service needs the owner to read, such as an approval summary; it is never answered. Text longer than one
+/// frame is sent as several notices ([`Notice::split`]), which the CLI shows one after another.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Notice {
+    /// The text, continuing the previous notice's; `\n` ends a line.
+    pub text: String,
+}
+
+/// The longest notice text: the body bound less one field header.
+pub const MAX_NOTICE_LEN: usize = MAX_BODY_LEN - fields::FIELD_HEADER_LEN;
+
+impl Notice {
+    /// `text` as notices that each fit one frame, split between UTF-8 characters and never truncated.
+    pub fn split(text: &str) -> Vec<Self> {
+        let mut rest = text;
+        std::iter::from_fn(|| {
+            (!rest.is_empty()).then(|| {
+                let (head, tail) = rest.split_at(rest.floor_char_boundary(MAX_NOTICE_LEN));
+                rest = tail;
+                Self { text: head.to_owned() }
+            })
+        })
+        .collect()
+    }
 }
 
 /// The bytes the owner typed in answer to a prompt: a secret-bearing type (`design/secret-handling.md`).
@@ -149,6 +258,8 @@ pub enum AdminResponse {
     },
     /// `status` completed. Boxed: the report is much larger than every other response.
     Status(Box<StatusReport>),
+    /// `config approve` completed: the approved config is active.
+    ConfigApprove(ApprovalResult),
     /// `lock` completed: the service is Locked.
     Lock {
         /// Whether every snapshot holding secrets was dropped within the lock drain. When false, a request that ignored
@@ -169,6 +280,24 @@ pub enum AdminResponse {
     },
 }
 
+/// What a completed `config approve` reports. The full summary was shown as notices before the confirmation; the result
+/// carries only its headline, which is bounded whatever the config's size.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApprovalResult {
+    /// The approval version committed.
+    pub version: u64,
+    /// The BLAKE2b-256 digest of the approved config.
+    pub digest: [u8; 32],
+    /// One line of counts per summary section.
+    pub headline: String,
+}
+
+/// A config digest as the owner reads it: `blake2b:` and 64 lowercase hex digits.
+pub fn digest_text(digest: &[u8; 32]) -> String {
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("blake2b:{hex}")
+}
+
 /// The stable reason an admin response reports an error; the numbers are part of the protocol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorCode {
@@ -184,6 +313,18 @@ pub enum ErrorCode {
     NotAdminPrincipal = 5,
     /// The service is already serving as many admin connections as it allows.
     Busy = 6,
+    /// `config approve`: the proposed config fails parsing, validation or activation.
+    ConfigInvalid = 7,
+    /// The owner declined at a confirmation prompt.
+    Declined = 8,
+    /// `config approve`: the approval passphrase did not open the pinned approver's key.
+    ApprovalDenied = 9,
+    /// `config approve`: the service cannot run an approval now; no version was reserved.
+    ApprovalUnavailable = 10,
+    /// `config approve`: failed after reserving a version, before committing it; the version is consumed.
+    ApprovalFailed = 11,
+    /// `config approve`: committed, but not published or active; the service is Unavailable.
+    CommittedNotActive = 12,
     /// The command is not allowed in the service's current state; the message names the state.
     WrongState = 13,
     /// `unlock`: the vault passphrase was wrong.
@@ -211,6 +352,12 @@ impl ErrorCode {
             Self::UnexpectedFrame => "unexpected-frame",
             Self::NotAdminPrincipal => "not-admin-principal",
             Self::Busy => "busy",
+            Self::ConfigInvalid => "config-invalid",
+            Self::Declined => "declined",
+            Self::ApprovalDenied => "approval-denied",
+            Self::ApprovalUnavailable => "approval-unavailable",
+            Self::ApprovalFailed => "approval-failed",
+            Self::CommittedNotActive => "committed-not-active",
             Self::WrongState => "wrong-state",
             Self::UnlockDenied => "unlock-denied",
             Self::UnlockFailed => "unlock-failed",
@@ -243,6 +390,8 @@ pub enum Frame {
     OwnerInput(OwnerInput),
     /// Kind 4 (success) or 5 (error), service to CLI.
     Response(AdminResponse),
+    /// Kind 6, service to CLI.
+    Notice(Notice),
 }
 
 /// What [`decode`] found at the start of its input.
@@ -309,14 +458,22 @@ enum FrameKind {
     OwnerInput = 3,
     Success = 4,
     Error = 5,
+    Notice = 6,
 }
 
 impl FrameKind {
     fn from_byte(byte: u8) -> Result<Self, FrameError> {
-        [Self::Request, Self::Prompt, Self::OwnerInput, Self::Success, Self::Error]
-            .into_iter()
-            .find(|kind| *kind as u8 == byte)
-            .ok_or(FrameError::UnknownKind(byte))
+        [
+            Self::Request,
+            Self::Prompt,
+            Self::OwnerInput,
+            Self::Success,
+            Self::Error,
+            Self::Notice,
+        ]
+        .into_iter()
+        .find(|kind| *kind as u8 == byte)
+        .ok_or(FrameError::UnknownKind(byte))
     }
 }
 
@@ -332,7 +489,9 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::Status(report)) => put_frame(out, FrameKind::Success, &body::encode_status_result(report)),
         Frame::Response(AdminResponse::Lock { cleared }) => put_frame(out, FrameKind::Success, &body::encode_lock_result(*cleared)),
         Frame::Response(AdminResponse::Add { record_id }) => put_frame(out, FrameKind::Success, &body::encode_add_result(*record_id)),
+        Frame::Response(AdminResponse::ConfigApprove(result)) => put_frame(out, FrameKind::Success, &body::encode_approval_result(result)),
         Frame::Response(AdminResponse::Error { code, message }) => put_frame(out, FrameKind::Error, &body::encode_error(*code, message)),
+        Frame::Notice(notice) => put_frame(out, FrameKind::Notice, &body::encode_notice(notice)),
     }
 }
 
@@ -354,6 +513,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, FrameError> {
         FrameKind::OwnerInput => Frame::OwnerInput(OwnerInput::new(Zeroizing::new(body.to_vec()))),
         FrameKind::Success => Frame::Response(body::decode_success(body)?),
         FrameKind::Error => Frame::Response(body::decode_error(body)?),
+        FrameKind::Notice => Frame::Notice(body::decode_notice(body)?),
     };
     Ok(Decoded::Frame { frame, used })
 }

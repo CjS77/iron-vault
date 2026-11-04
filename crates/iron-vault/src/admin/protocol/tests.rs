@@ -39,6 +39,7 @@ fn same(a: &Frame, b: &Frame) -> bool {
         (Frame::Prompt(a), Frame::Prompt(b)) => a == b,
         (Frame::OwnerInput(a), Frame::OwnerInput(b)) => a.expose_secret() == b.expose_secret(),
         (Frame::Response(a), Frame::Response(b)) => a == b,
+        (Frame::Notice(a), Frame::Notice(b)) => a == b,
         _ => false,
     }
 }
@@ -99,6 +100,12 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::UnexpectedFrame),
         Just(ErrorCode::NotAdminPrincipal),
         Just(ErrorCode::Busy),
+        Just(ErrorCode::ConfigInvalid),
+        Just(ErrorCode::Declined),
+        Just(ErrorCode::ApprovalDenied),
+        Just(ErrorCode::ApprovalUnavailable),
+        Just(ErrorCode::ApprovalFailed),
+        Just(ErrorCode::CommittedNotActive),
         Just(ErrorCode::WrongState),
         Just(ErrorCode::UnlockDenied),
         Just(ErrorCode::UnlockFailed),
@@ -106,6 +113,13 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::NameTaken),
         Just(ErrorCode::CredentialInvalid),
         Just(ErrorCode::VaultWriteFailed),
+    ]
+}
+
+fn config_bytes() -> impl Strategy<Value = Vec<u8>> {
+    prop_oneof![
+        prop::collection::vec(any::<u8>(), 0..256),
+        Just(MAX_CONFIG_LEN).prop_map(|len| vec![b'#'; len]),
     ]
 }
 
@@ -124,8 +138,13 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             Just(AdminRequest::Unlock),
             Just(AdminRequest::Lock),
             add_request(),
+            config_bytes().prop_map(|bytes| AdminRequest::ConfigApprove(ProposedConfig::new(bytes).unwrap())),
         ]
         .prop_map(Frame::Request),
+        text(MAX_NOTICE_LEN).prop_map(|text| Frame::Notice(Notice { text })),
+        (any::<u64>(), any::<[u8; 32]>(), text(256)).prop_map(|(version, digest, headline)| Frame::Response(AdminResponse::ConfigApprove(
+            ApprovalResult { version, digest, headline }
+        ))),
         (text(MAX_LABEL), any::<bool>()).prop_map(|(label, secret)| Frame::Prompt(Prompt { label, secret })),
         owner_bytes().prop_map(|bytes| owner_input(&bytes)),
         Just(AdminResponse::Success).prop_map(Frame::Response),
@@ -278,6 +297,12 @@ fn every_frame_kind_round_trips_with_its_kind_byte() {
         (owner_input(b"typed"), 3),
         (Frame::Response(AdminResponse::Success), 4),
         (error(ErrorCode::MalformedFrame, "bad frame"), 5),
+        (
+            Frame::Notice(Notice {
+                text: "summary\n".to_owned(),
+            }),
+            6,
+        ),
     ];
     frames.iter().for_each(|(frame, kind)| {
         assert_eq!(encoded(frame)[2], *kind);
@@ -493,7 +518,7 @@ fn an_unsupported_version_is_refused_before_the_kind() {
 
 #[test]
 fn unknown_frame_kinds_are_refused() {
-    [0, 6, 255]
+    [0, 7, 255]
         .into_iter()
         .for_each(|kind| assert_eq!(decode_err(&raw(1, kind, &[])), FrameError::UnknownKind(kind)));
 }
@@ -512,7 +537,7 @@ fn unknown_tags_are_refused() {
 
 #[test]
 fn unknown_commands_are_refused_whatever_follows() {
-    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 2]))), FrameError::UnknownCommand(2));
+    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 3]))), FrameError::UnknownCommand(3));
     let with_arguments = body(&[field(1, &[0xff, 0xff]), field(2, b"argument")]);
     assert_eq!(decode_err(&raw(1, 1, &with_arguments)), FrameError::UnknownCommand(0xffff));
 }
@@ -553,7 +578,7 @@ fn malformed_fixed_width_values_and_flags_are_refused() {
 
 #[test]
 fn unknown_error_codes_are_refused() {
-    [0, 7, 0xffff].into_iter().for_each(|code: u16| {
+    [0, 17, 0xffff].into_iter().for_each(|code: u16| {
         let error = body(&[field(1, &code.to_be_bytes()), field(2, b"m")]);
         assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::UnknownErrorCode(code));
     });
@@ -712,4 +737,108 @@ fn the_add_error_codes_have_their_documented_numbers_and_names() {
         assert_eq!((code as u16, code.name()), (number, name));
         assert_round_trips(&error(code, "m"));
     });
+}
+
+fn config_approve(config: &[u8]) -> Frame {
+    Frame::Request(AdminRequest::ConfigApprove(ProposedConfig::new(config.to_vec()).unwrap()))
+}
+
+#[test]
+fn config_approve_has_command_id_2_and_carries_the_exact_bytes() {
+    let expected = [&[0, 1, 1, 0, 0, 0, 17, 0, 1, 0, 0, 0, 2, 0, 2, 0, 2, 0, 0, 0, 3][..], b"a\0\xff"].concat();
+    assert_eq!(encoded(&config_approve(b"a\0\xff")), expected);
+    assert_eq!(AdminCommand::ConfigApprove.name(), "config approve");
+    assert_round_trips(&config_approve(b""));
+}
+
+#[test]
+fn a_config_over_the_limit_is_refused_by_the_decoder_and_cannot_be_built() {
+    assert!(ProposedConfig::new(vec![b'#'; MAX_CONFIG_LEN + 1]).is_none());
+    let longest = body(&[field(1, &[0, 2]), field(2, &vec![b'#'; MAX_CONFIG_LEN])]);
+    assert!(decode(&raw(1, 1, &longest)).is_ok());
+    let over = body(&[field(1, &[0, 2]), field(2, &vec![b'#'; MAX_CONFIG_LEN + 1])]);
+    assert_eq!(decode_err(&raw(1, 1, &over)), FrameError::InvalidValue(2));
+}
+
+#[test]
+fn config_approve_needs_its_config_and_nothing_else() {
+    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 2]))), FrameError::MissingField(2));
+    let extra = body(&[field(1, &[0, 2]), field(2, b"x"), field(3, b"sig")]);
+    assert_eq!(decode_err(&raw(1, 1, &extra)), FrameError::UnknownTag(3));
+}
+
+#[test]
+fn a_proposed_config_never_shows_its_bytes_in_debug() {
+    let shown = format!(
+        "{:?}",
+        AdminRequest::ConfigApprove(ProposedConfig::new(MARKER.as_bytes().to_vec()).unwrap())
+    );
+    assert!(!shown.contains(MARKER), "{shown}");
+}
+
+#[test]
+fn the_approval_result_has_the_documented_fields_and_widths() {
+    let result = body(&[
+        field(1, &[0, 2]),
+        field(2, &7u64.to_be_bytes()),
+        field(3, &[0xab; 32]),
+        field(4, b"callers: none"),
+    ]);
+    let (frame, _) = decoded(&raw(1, 4, &result));
+    let expected = AdminResponse::ConfigApprove(ApprovalResult {
+        version: 7,
+        digest: [0xab; 32],
+        headline: "callers: none".to_owned(),
+    });
+    assert!(same(&frame, &Frame::Response(expected)));
+    let short_digest = body(&[
+        field(1, &[0, 2]),
+        field(2, &7u64.to_be_bytes()),
+        field(3, &[0xab; 31]),
+        field(4, b""),
+    ]);
+    assert_eq!(decode_err(&raw(1, 4, &short_digest)), FrameError::InvalidValue(3));
+    let short_version = body(&[field(1, &[0, 2]), field(2, &[7]), field(3, &[0xab; 32]), field(4, b"")]);
+    assert_eq!(decode_err(&raw(1, 4, &short_version)), FrameError::InvalidValue(2));
+}
+
+#[test]
+fn the_approval_error_codes_have_their_documented_numbers_and_names() {
+    [
+        (ErrorCode::ConfigInvalid, 7, "config-invalid"),
+        (ErrorCode::Declined, 8, "declined"),
+        (ErrorCode::ApprovalDenied, 9, "approval-denied"),
+        (ErrorCode::ApprovalUnavailable, 10, "approval-unavailable"),
+        (ErrorCode::ApprovalFailed, 11, "approval-failed"),
+        (ErrorCode::CommittedNotActive, 12, "committed-not-active"),
+    ]
+    .iter()
+    .for_each(|(code, number, name)| {
+        assert_eq!((*code as u16, code.name()), (*number, *name));
+        assert_round_trips(&error(*code, name));
+    });
+}
+
+#[test]
+fn a_notice_needs_its_text_as_utf8() {
+    assert_eq!(decode_err(&raw(1, 6, &[])), FrameError::MissingField(1));
+    assert_eq!(decode_err(&raw(1, 6, &field(1, &[0xff]))), FrameError::InvalidUtf8(1));
+    assert_round_trips(&Frame::Notice(Notice {
+        text: "a".repeat(MAX_NOTICE_LEN),
+    }));
+}
+
+#[test]
+fn long_text_splits_into_notices_that_fit_and_join_back_exactly() {
+    let text = format!("{}é{}", "a".repeat(MAX_NOTICE_LEN - 1), "b\n".repeat(MAX_NOTICE_LEN / 2));
+    let notices = Notice::split(&text);
+    assert_eq!(notices.len(), 3);
+    assert_eq!(
+        notices[0].text.len(),
+        MAX_NOTICE_LEN - 1,
+        "the split falls before the two-byte character"
+    );
+    notices.iter().for_each(|notice| assert_round_trips(&Frame::Notice(notice.clone())));
+    assert_eq!(notices.iter().map(|notice| notice.text.as_str()).collect::<String>(), text);
+    assert!(Notice::split("").is_empty());
 }

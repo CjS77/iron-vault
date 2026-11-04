@@ -209,3 +209,43 @@ fn a_service_that_stops_answering_times_out() {
     let error = converse(&mut client, AdminRequest::Ping, &mut console).unwrap_err();
     assert!(matches!(error, ClientError::TimedOut), "{error:?}");
 }
+
+/// A temporary config file holding the given bytes, removed on drop.
+struct ConfigFile(std::path::PathBuf);
+
+impl ConfigFile {
+    fn new(name: &str, bytes: &[u8]) -> Self {
+        let path = std::env::temp_dir().join(format!("iv-config-{}-{name}.toml", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for ConfigFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[test]
+fn a_config_file_is_read_whole_up_to_the_limit_and_refused_past_it_without_quoting_it() {
+    let longest = ConfigFile::new("longest", &[b'#'; MAX_CONFIG_LEN]);
+    assert_eq!(read_config(&longest.0).unwrap().bytes().len(), MAX_CONFIG_LEN);
+    let over = ConfigFile::new("over", &[MARKER.as_bytes(), &[b'#'; MAX_CONFIG_LEN]].concat());
+    let message = read_config(&over.0).unwrap_err();
+    assert!(message.contains("longer than") && !message.contains(MARKER), "{message}");
+    assert_eq!(config_approve(Some(Path::new("/nonexistent/admin.sock")), &over.0), Exit::Usage);
+}
+
+#[test]
+fn an_approval_prints_the_service_version_digest_and_headline() {
+    let result = ApprovalResult {
+        version: 3,
+        digest: [0xab; 32],
+        headline: "callers: none".to_owned(),
+    };
+    assert_eq!(
+        approved(&result),
+        format!("approved version 3 (blake2b:{})\ncallers: none\n", "ab".repeat(32))
+    );
+}

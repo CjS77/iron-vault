@@ -7,7 +7,7 @@ mod serve;
 
 use std::process::ExitCode;
 
-use cli::{Cli, Command};
+use cli::{Cli, Command, ConfigCommand};
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::hardening;
 use iron_vault::trusted_path_report::ServicePaths;
@@ -22,6 +22,7 @@ fn main() -> anyhow::Result<ExitCode> {
         Command::Unlock => Ok(run_client(|| cli::unlock(cli.admin_socket.as_deref()))),
         Command::Lock => Ok(run_client(|| cli::lock(cli.admin_socket.as_deref()))),
         Command::Add { name, kind, origins } => Ok(run_client(|| cli::add(cli.admin_socket.as_deref(), name, kind.into(), &origins))),
+        Command::Config(ConfigCommand::Approve { file }) => Ok(run_client(|| cli::config_approve(cli.admin_socket.as_deref(), &file))),
     }
 }
 

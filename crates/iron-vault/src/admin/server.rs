@@ -18,7 +18,7 @@ use zeroize::{Zeroize, Zeroizing};
 use super::dispatch::Handlers;
 use super::principal::{AdminPrincipal, AdminPrincipals, peer_identity};
 use super::protocol::{
-    self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, OwnerInput, Prompt,
+    self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, Notice, OwnerInput, Prompt,
 };
 use super::socket::AdminSocket;
 
@@ -236,18 +236,31 @@ impl Exchange {
     /// Asks the owner for one value: sends `prompt` within the request deadline, then waits for the CLI's owner input
     /// within the prompt deadline. On an error the handler returns it, so its command is cancelled.
     pub async fn prompt(&mut self, prompt: &Prompt) -> Result<OwnerInput, ExchangeError> {
-        let bytes = encoded(&Frame::Prompt(prompt.clone()));
-        match tokio::time::timeout(self.limits.request_deadline, self.stream.write_all(&bytes)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(ExchangeError::Io(e)),
-            Err(_) => return Err(ExchangeError::TimedOut),
-        }
+        self.send(&Frame::Prompt(prompt.clone())).await?;
         match tokio::time::timeout(self.limits.prompt_deadline, self.read_frame()).await {
             Ok(Ok(Frame::OwnerInput(input))) => Ok(input),
             Ok(Ok(_)) => Err(ExchangeError::Unexpected),
             Ok(Err(ReadError::Closed)) => Err(ExchangeError::Closed),
             Ok(Err(ReadError::Io(e))) => Err(ExchangeError::Io(e)),
             Ok(Err(ReadError::Frame(e))) => Err(ExchangeError::Malformed(e)),
+            Err(_) => Err(ExchangeError::TimedOut),
+        }
+    }
+
+    /// Shows `text` to the owner, as many notices as it takes, each written within the request deadline. The text is
+    /// never truncated. A failed write cancels the command, as a failed prompt does.
+    pub async fn notice(&mut self, text: &str) -> Result<(), ExchangeError> {
+        for notice in Notice::split(text) {
+            self.send(&Frame::Notice(notice)).await?;
+        }
+        Ok(())
+    }
+
+    /// Writes one frame the service sends within the request deadline.
+    async fn send(&mut self, frame: &Frame) -> Result<(), ExchangeError> {
+        match tokio::time::timeout(self.limits.request_deadline, self.stream.write_all(&encoded(frame))).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(ExchangeError::Io(e)),
             Err(_) => Err(ExchangeError::TimedOut),
         }
     }
@@ -325,7 +338,7 @@ async fn write_and_close(stream: &mut UnixStream, response: &AdminResponse) -> i
     stream.shutdown().await
 }
 
-/// The bytes of a frame the service sends: a prompt or a response. Neither holds owner input, so an ordinary buffer is
+/// The bytes of a frame the service sends: a prompt, a notice or a response. None holds owner input, so an ordinary buffer is
 /// enough.
 fn encoded(frame: &Frame) -> Vec<u8> {
     let mut out = Vec::new();

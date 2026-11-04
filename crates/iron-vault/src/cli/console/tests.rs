@@ -247,6 +247,15 @@ fn a_label_cannot_send_control_characters_to_the_terminal() {
 }
 
 #[test]
+fn a_notice_keeps_its_newlines_and_loses_every_other_control_character() {
+    let (mut console, events) = terminal(None, false);
+    console.notice("route \x1b[2Jfx\r\n").unwrap();
+    console.notice("ends here\n").unwrap();
+    assert_eq!(console.tty.shown, b"route [2Jfx\nends here\n");
+    assert!(steps(&events).is_empty(), "a notice reads nothing");
+}
+
+#[test]
 fn input_errors_name_no_typed_byte() {
     let marker = "MARKER-secret-5d1c9e";
     let over = marker.repeat(MAX_BODY_LEN / marker.len() + 1);

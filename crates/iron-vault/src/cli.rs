@@ -50,6 +50,8 @@ pub enum Exit {
     Success = 0,
     /// The service answered with an error response.
     CommandError = 1,
+    /// The command was refused before anything was sent, such as a config file over the size limit.
+    Usage = 2,
     /// No admin response came back.
     Unreachable = 3,
     /// `status` reached the service, which is in a state other than Ready.
@@ -106,6 +108,9 @@ pub enum Command {
         #[arg(long = "origin", value_name = "ORIGIN", required = true, value_parser = OriginParser)]
         origins: Vec<(Host, Port)>,
     },
+    /// Change the approved configuration.
+    #[command(subcommand)]
+    Config(ConfigCommand),
 }
 
 /// The credential kinds `add --kind` names.
@@ -142,6 +147,18 @@ impl TypedValueParser for OriginParser {
         };
         Err(cmd.clone().error(ErrorKind::ValueValidation, format!("invalid --origin: {rule}")))
     }
+}
+
+/// `iron-vault config`'s commands.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum ConfigCommand {
+    /// Propose FILE as the new config: the service shows its summary, asks for confirmation and the approval
+    /// passphrase, then commits, publishes and activates it. Stdin is not read for the config, because it carries the
+    /// answers to the prompts when it is not a terminal.
+    Approve {
+        /// The proposed config file.
+        file: PathBuf,
+    },
 }
 
 impl Cli {
@@ -210,9 +227,22 @@ pub fn add(socket: Option<&Path>, name: String, kind: CredentialKind, origins: &
     client::add(socket, name, kind, origins).into()
 }
 
+/// `iron-vault config approve FILE`: sends FILE's bytes for approval, answers the service's prompts, and shows the
+/// committed version.
+#[cfg(target_os = "linux")]
+pub fn config_approve(socket: Option<&Path>, file: &Path) -> ExitCode {
+    client::config_approve(socket, file).into()
+}
+
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn add(_socket: Option<&Path>, _name: String, _kind: CredentialKind, _origins: &[(Host, Port)]) -> ExitCode {
+    unsupported_platform()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn config_approve(_socket: Option<&Path>, _file: &Path) -> ExitCode {
     unsupported_platform()
 }
 

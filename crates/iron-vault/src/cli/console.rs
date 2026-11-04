@@ -42,26 +42,42 @@ pub enum InputError {
     /// Reading the value failed.
     #[error("cannot read the value: {0}")]
     Read(io::Error),
+    /// A notice from the service could not be shown.
+    #[error("cannot show the service's notice: {0}")]
+    Notice(io::Error),
 }
 
-/// Collects one value from the owner for each prompt.
+/// Collects one value from the owner for each prompt, and shows the owner each notice.
 pub trait OwnerConsole {
     /// Shows the prompt's label and reads one value.
     fn collect(&mut self, prompt: &Prompt) -> Result<OwnerInput, InputError>;
+
+    /// Shows a notice's text, after the text of the notice before it.
+    fn notice(&mut self, text: &str) -> Result<(), InputError>;
 }
 
-/// The process's console, opened at the first prompt, so a command the service never prompts for touches neither the
-/// terminal nor stdin.
+/// The process's console, opened at the first prompt or notice, so a command the service never prompts for touches
+/// neither the terminal nor stdin.
 #[derive(Default)]
 pub struct ProcessConsole(Option<Box<dyn OwnerConsole>>);
 
+impl ProcessConsole {
+    fn console(&mut self) -> Result<&mut Box<dyn OwnerConsole>, InputError> {
+        let console = match self.0.take() {
+            Some(console) => console,
+            None => open()?,
+        };
+        Ok(self.0.insert(console))
+    }
+}
+
 impl OwnerConsole for ProcessConsole {
     fn collect(&mut self, prompt: &Prompt) -> Result<OwnerInput, InputError> {
-        let console = match &mut self.0 {
-            Some(console) => console,
-            None => self.0.insert(open()?),
-        };
-        console.collect(prompt)
+        self.console()?.collect(prompt)
+    }
+
+    fn notice(&mut self, text: &str) -> Result<(), InputError> {
+        self.console()?.notice(text)
     }
 }
 
@@ -78,7 +94,8 @@ fn open() -> Result<Box<dyn OwnerConsole>, InputError> {
 }
 
 /// Reads each value as the next line of `input`. A label goes to stderr, and only when stderr is a terminal, so it
-/// never mixes into output a script reads.
+/// never mixes into output a script reads. A notice always goes to stderr, so a scripted approval still records the
+/// summary it approved.
 pub struct Piped<R> {
     input: R,
     show_labels: bool,
@@ -101,6 +118,14 @@ impl<R: Read> OwnerConsole for Piped<R> {
             eprintln!();
         }
         line.map(OwnerInput::new)
+    }
+
+    fn notice(&mut self, text: &str) -> Result<(), InputError> {
+        let mut stderr = io::stderr();
+        stderr
+            .write_all(printable_notice(text).as_bytes())
+            .and_then(|()| stderr.flush())
+            .map_err(InputError::Notice)
     }
 }
 
@@ -159,11 +184,23 @@ impl<T: Read + Write, E: EchoControl> OwnerConsole for Terminal<T, E> {
         }
         strip_ending(line).map(OwnerInput::new)
     }
+
+    fn notice(&mut self, text: &str) -> Result<(), InputError> {
+        self.tty
+            .write_all(printable_notice(text).as_bytes())
+            .and_then(|()| self.tty.flush())
+            .map_err(InputError::Notice)
+    }
 }
 
 /// The label without control characters, so a label cannot move the cursor or reprogram the terminal.
 fn printable(label: &str) -> String {
     label.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// A notice's text without control characters other than `\n`, which ends its lines.
+fn printable_notice(text: &str) -> String {
+    text.chars().filter(|c| *c == '\n' || !c.is_control()).collect()
 }
 
 /// Reads one line and strips one trailing `\n` and a `\r` before it. A last line without `\n` is still a value; input

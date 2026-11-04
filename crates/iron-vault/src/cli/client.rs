@@ -1,6 +1,7 @@
 //! The admin socket client: one exchange per connection (`design/admin-protocol.md`) over a blocking Unix stream, and
 //! the owner-facing report of how it went.
 
+use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -9,7 +10,8 @@ use std::time::Duration;
 use anyhow::Context;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::protocol::{
-    self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, OwnerInput, PROTOCOL_VERSION, RequestedOrigin,
+    self, AdminRequest, AdminResponse, ApprovalResult, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_CONFIG_LEN, OwnerInput,
+    PROTOCOL_VERSION, ProposedConfig, RequestedOrigin, digest_text,
 };
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::service_state::ServiceState;
@@ -191,6 +193,43 @@ pub fn add(socket: Option<&Path>, name: String, kind: CredentialKind, origins: &
     })
 }
 
+/// Runs `config approve` on the bytes of `file`. The service shows its own summary as notices and prompts for the
+/// confirmation and the approval passphrase; the CLI computes no summary or digest of its own. A file longer than
+/// [`MAX_CONFIG_LEN`] is refused before anything is sent. No diagnostic quotes the file's bytes.
+pub fn config_approve(socket: Option<&Path>, file: &Path) -> Exit {
+    let config = match read_config(file) {
+        Ok(config) => config,
+        Err(message) => return fail(Exit::Usage, &message),
+    };
+    run(socket, AdminRequest::ConfigApprove(config), |response| match response {
+        AdminResponse::ConfigApprove(result) => {
+            print!("{}", approved(&result));
+            Exit::Success
+        }
+        _ => unexpected(),
+    })
+}
+
+/// The proposed config from `file`, read no further than one byte past the limit.
+fn read_config(file: &Path) -> Result<ProposedConfig, String> {
+    let limit = u64::try_from(MAX_CONFIG_LEN).unwrap_or(u64::MAX).saturating_add(1);
+    let mut bytes = Vec::new();
+    File::open(file)
+        .and_then(|opened| opened.take(limit).read_to_end(&mut bytes))
+        .map_err(|e| format!("cannot read the config file {}: {e}", file.display()))?;
+    ProposedConfig::new(bytes).ok_or_else(|| format!("the config file {} is longer than {MAX_CONFIG_LEN} bytes", file.display()))
+}
+
+/// What a completed approval prints: the committed version with the digest, then the summary headline.
+fn approved(result: &ApprovalResult) -> String {
+    format!(
+        "approved version {} ({})\n{}\n",
+        result.version,
+        digest_text(&result.digest),
+        result.headline
+    )
+}
+
 fn unexpected() -> Exit {
     fail(Exit::Unreachable, &ClientError::Unexpected.to_string())
 }
@@ -231,6 +270,8 @@ fn converse(stream: &mut UnixStream, request: AdminRequest, console: &mut impl O
         sent = match frame {
             Frame::Response(response) => return Ok(response),
             Frame::Prompt(prompt) => send_input(stream, console.collect(&prompt).map_err(ClientError::Input)?),
+            // A notice comes only after the service has read the request, so the request was sent.
+            Frame::Notice(notice) => Ok(console.notice(&notice.text).map_err(ClientError::Input)?),
             Frame::Request(_) | Frame::OwnerInput(_) => return Err(ClientError::Unexpected),
         };
     }

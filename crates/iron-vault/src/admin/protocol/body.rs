@@ -3,7 +3,7 @@
 use super::add;
 use super::fields::{self, exact, first, read_flag, read_profile, read_text, read_u16};
 use super::status::{self, StatusReport};
-use super::{AdminCommand, AdminRequest, AdminResponse, ErrorCode, FrameError, Prompt};
+use super::{AdminCommand, AdminRequest, AdminResponse, ApprovalResult, ErrorCode, FrameError, Notice, Prompt, ProposedConfig};
 use crate::deployment::DeploymentProfile;
 use iron_vault_store::RecordId;
 
@@ -14,8 +14,14 @@ const TAG_CODE: u16 = 1;
 const TAG_MESSAGE: u16 = 2;
 const TAG_PROFILE: u16 = 2;
 const TAG_CLEARED: u16 = 2;
+const TAG_CONFIG: u16 = 2;
+const TAG_VERSION: u16 = 2;
+const TAG_DIGEST: u16 = 3;
+const TAG_HEADLINE: u16 = 4;
+const TAG_TEXT: u16 = 1;
 
 const COMMAND_PING: u16 = AdminCommand::Ping as u16;
+const COMMAND_CONFIG_APPROVE: u16 = AdminCommand::ConfigApprove as u16;
 const COMMAND_STATUS: u16 = AdminCommand::Status as u16;
 const COMMAND_UNLOCK: u16 = AdminCommand::Unlock as u16;
 const COMMAND_LOCK: u16 = AdminCommand::Lock as u16;
@@ -28,6 +34,9 @@ pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameErr
     }
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &(request.command() as u16).to_be_bytes());
+    if let AdminRequest::ConfigApprove(config) = request {
+        fields::put(&mut out, TAG_CONFIG, config.bytes());
+    }
     Ok(out)
 }
 
@@ -36,6 +45,12 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
     let fields = fields::parse(body)?;
     match read_u16(TAG_COMMAND, first(&fields, TAG_COMMAND)?)? {
         COMMAND_PING => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Ping),
+        COMMAND_CONFIG_APPROVE => {
+            let [_, config] = exact(&fields, [TAG_COMMAND, TAG_CONFIG])?;
+            ProposedConfig::new(config.to_vec())
+                .map(AdminRequest::ConfigApprove)
+                .ok_or(FrameError::InvalidValue(TAG_CONFIG))
+        }
         COMMAND_STATUS => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Status),
         COMMAND_UNLOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Unlock),
         COMMAND_LOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Lock),
@@ -85,6 +100,40 @@ pub(super) fn encode_add_result(record_id: RecordId) -> Vec<u8> {
     add::encode_result(COMMAND_ADD, record_id)
 }
 
+/// `config approve`'s success body: the command it answers, the committed version, the config digest and the headline.
+pub(super) fn encode_approval_result(result: &ApprovalResult) -> Vec<u8> {
+    let mut out = Vec::new();
+    fields::put(&mut out, TAG_COMMAND, &COMMAND_CONFIG_APPROVE.to_be_bytes());
+    fields::put(&mut out, TAG_VERSION, &result.version.to_be_bytes());
+    fields::put(&mut out, TAG_DIGEST, &result.digest);
+    fields::put(&mut out, TAG_HEADLINE, result.headline.as_bytes());
+    out
+}
+
+fn decode_approval_result(fields: &[fields::Field<'_>]) -> Result<AdminResponse, FrameError> {
+    let [_, version, digest, headline] = exact(fields, [TAG_COMMAND, TAG_VERSION, TAG_DIGEST, TAG_HEADLINE])?;
+    Ok(AdminResponse::ConfigApprove(ApprovalResult {
+        version: <[u8; 8]>::try_from(version)
+            .map(u64::from_be_bytes)
+            .map_err(|_| FrameError::InvalidValue(TAG_VERSION))?,
+        digest: <[u8; 32]>::try_from(digest).map_err(|_| FrameError::InvalidValue(TAG_DIGEST))?,
+        headline: read_text(TAG_HEADLINE, headline)?,
+    }))
+}
+
+pub(super) fn encode_notice(notice: &Notice) -> Vec<u8> {
+    let mut out = Vec::new();
+    fields::put(&mut out, TAG_TEXT, notice.text.as_bytes());
+    out
+}
+
+pub(super) fn decode_notice(body: &[u8]) -> Result<Notice, FrameError> {
+    let [text] = exact(&fields::parse(body)?, [TAG_TEXT])?;
+    Ok(Notice {
+        text: read_text(TAG_TEXT, text)?,
+    })
+}
+
 /// A success without a result has only the empty body; one with a result names its command first, so the body
 /// decodes without knowing which request it answers.
 pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
@@ -99,6 +148,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
                 profile: read_profile(TAG_PROFILE, profile)?,
             })
         }
+        COMMAND_CONFIG_APPROVE => decode_approval_result(&fields),
         COMMAND_STATUS => status::decode(&fields).map(|report| AdminResponse::Status(Box::new(report))),
         COMMAND_LOCK => {
             let [_, cleared] = exact(&fields, [TAG_COMMAND, TAG_CLEARED])?;
@@ -134,6 +184,12 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::UnexpectedFrame,
         ErrorCode::NotAdminPrincipal,
         ErrorCode::Busy,
+        ErrorCode::ConfigInvalid,
+        ErrorCode::Declined,
+        ErrorCode::ApprovalDenied,
+        ErrorCode::ApprovalUnavailable,
+        ErrorCode::ApprovalFailed,
+        ErrorCode::CommittedNotActive,
         ErrorCode::WrongState,
         ErrorCode::UnlockDenied,
         ErrorCode::UnlockFailed,

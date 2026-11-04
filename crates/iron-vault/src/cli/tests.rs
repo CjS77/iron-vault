@@ -39,6 +39,17 @@ fn lock_is_a_client_command() {
 }
 
 #[test]
+fn config_approve_takes_one_required_file() {
+    let command = Command::Config(ConfigCommand::Approve {
+        file: PathBuf::from("proposed.toml"),
+    });
+    assert_eq!(parse(&["config", "approve", "proposed.toml"]).unwrap().command, command);
+    assert_eq!(parse(&["config", "approve"]).unwrap_err().exit_code(), 2);
+    assert_eq!(parse(&["config", "approve", "a.toml", "b.toml"]).unwrap_err().exit_code(), 2);
+    assert_eq!(Exit::Usage as u8, 2);
+}
+
+#[test]
 fn admin_socket_overrides_the_path_before_or_after_the_command() {
     let before = parse(&["--admin-socket", "/tmp/fwd.sock", "ping"]).unwrap();
     let after = parse(&["ping", "--admin-socket", "/tmp/fwd.sock"]).unwrap();
