@@ -63,7 +63,7 @@ fn parent(path: &Path) -> PathBuf {
 
 /// Every rename and unlink is followed by an fsync of its directory, and every write is fsynced before the temp file
 /// is renamed.
-fn assert_trace_properties(trace: &[FsCall]) {
+pub(crate) fn assert_trace_properties(trace: &[FsCall]) {
     let synced_dir_after = |i: usize, path: &Path| trace[i..].contains(&FsCall::SyncDir(parent(path)));
     trace.iter().enumerate().for_each(|(i, call)| match call {
         FsCall::Rename { to, .. } => assert!(synced_dir_after(i, to), "rename at {i} has no directory fsync: {trace:?}"),

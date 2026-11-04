@@ -170,6 +170,27 @@ impl FaultFs {
         st.power_cut_at = None;
     }
 
+    /// Simulates power loss in which the filesystem also persisted the unsynced directory entries at `kept`: each
+    /// path takes its visible state (present with its inode, or absent) before everything else unsynced is lost.
+    ///
+    /// A real filesystem may persist directory changes before an fsync and in any order, so a rename's two paths, the
+    /// old name and the new, are passed together to keep or lose that rename as a whole.
+    pub fn crash_keeping(&self, kept: &[&Path]) {
+        {
+            let mut guard = self.state.borrow_mut();
+            let st = &mut *guard;
+            kept.iter().for_each(|path| match st.visible.get(*path).copied() {
+                Some(inode) => {
+                    st.durable.insert(path.to_path_buf(), inode);
+                }
+                None => {
+                    st.durable.remove(*path);
+                }
+            });
+        }
+        self.crash();
+    }
+
     /// Every call so far, in order.
     pub fn trace(&self) -> Vec<FsCall> {
         self.state.borrow().trace.clone()
@@ -361,6 +382,25 @@ mod tests {
         fs.crash();
         assert_eq!(fs.contents(&p("/d/a")).unwrap(), b"new");
         assert_eq!(fs.contents(&p("/d/b")), None);
+    }
+
+    #[test]
+    fn kept_entries_survive_a_crash_as_a_whole_rename() {
+        let new_fs = || {
+            let fs = FaultFs::new()
+                .with_durable_file(&p("/d/a"), b"old")
+                .with_durable_file(&p("/d/b"), b"new");
+            fs.rename(&p("/d/b"), &p("/d/a")).unwrap();
+            fs
+        };
+        let kept = new_fs();
+        kept.crash_keeping(&[&p("/d/a"), &p("/d/b")]);
+        assert_eq!(kept.contents(&p("/d/a")).unwrap(), b"new");
+        assert_eq!(kept.contents(&p("/d/b")), None);
+        let lost = new_fs();
+        lost.crash_keeping(&[]);
+        assert_eq!(lost.contents(&p("/d/a")).unwrap(), b"old");
+        assert_eq!(lost.contents(&p("/d/b")).unwrap(), b"new");
     }
 
     #[test]
