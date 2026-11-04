@@ -106,7 +106,10 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Lock<F> {
                 },
                 Err(refused) => AdminResponse::Error {
                     code: ErrorCode::WrongState,
-                    message: format!("cannot lock: the service is {:?}, and lock needs Ready", refused.state),
+                    message: format!(
+                        "cannot lock: the service is {:?}, and lock needs Ready or Unavailable",
+                        refused.state
+                    ),
                 },
             })
         })

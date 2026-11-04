@@ -1055,7 +1055,7 @@ async fn a_request_in_flight_is_cancelled_and_its_snapshot_is_gone_before_lock_a
 }
 
 #[tokio::test]
-async fn lock_is_refused_unless_the_service_is_ready() {
+async fn lock_is_refused_while_the_service_is_locked() {
     let fixture = approved().await;
     let service = fixture.start().unwrap();
 
@@ -1067,12 +1067,74 @@ async fn lock_is_refused_unless_the_service_is_ready() {
     assert_eq!(code, ErrorCode::WrongState);
     assert!(message.contains("Locked"), "{message}");
     assert_eq!(service.state().await, ServiceState::Locked);
-    // Unavailable holds no vault, and §3.12 draws no edge from it to Locked.
+}
+
+/// A service started on `fixture` with its config edited after approval, unlocked into Unavailable with the identity
+/// kept; returns the probe of that identity.
+async fn unavailable_service(fixture: &Fixture) -> (Arc<ServiceContext>, std::sync::Weak<VaultIdentity>) {
     fs::write(fixture.path("etc/config.toml"), fixture.config("# edited after approval\n")).unwrap();
-    let state = service.enter_checking(identity()).await;
-    assert_eq!(state, Ok(ServiceState::Unavailable(FailureReason::PolicyInvalid)));
-    assert!(service.lock(DRAIN).await.is_err());
-    assert_eq!(service.state().await, state.unwrap());
+    let service = fixture.start().unwrap();
+    assert_eq!(
+        service.enter_checking(identity()).await,
+        Ok(ServiceState::Unavailable(FailureReason::PolicyInvalid))
+    );
+    let kept = service.identity_probe().await.unwrap();
+    assert!(kept.upgrade().is_some(), "the failed check dropped the vault identity");
+    (service, kept)
+}
+
+#[tokio::test]
+async fn lock_from_unavailable_clears_the_kept_vault_identity() {
+    let logs = captured_logs();
+    let fixture = approved().await;
+    let (service, kept) = unavailable_service(&fixture).await;
+    assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::PolicyInvalid);
+
+    let response = admin(&service, AdminRequest::Lock, "").await.2;
+
+    assert_eq!(response, AdminResponse::Lock { cleared: true });
+    assert!(kept.upgrade().is_none(), "the vault identity outlived the lock");
+    assert!(service.identity_probe().await.is_none());
+    let report = status(&service).await.1;
+    assert_eq!((report.state, report.vault), (ServiceState::Locked, VaultStatus::Locked));
+    assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
+    assert!(
+        logs.text().contains("lock transition: Unavailable(PolicyInvalid) to Locked"),
+        "{}",
+        logs.text()
+    );
+}
+
+#[tokio::test]
+async fn unlock_after_a_lock_from_unavailable_rechecks_and_reaches_ready_once_the_config_is_fixed() {
+    let fixture = approved().await;
+    let (service, _) = unavailable_service(&fixture).await;
+    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+    fs::write(fixture.path("etc/config.toml"), fixture.config("")).unwrap();
+
+    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+
+    assert_eq!(service.state().await, ServiceState::Ready);
+    assert_served(&get_unix(&fixture.socket(), true).await);
+}
+
+#[tokio::test]
+async fn lock_from_unavailable_says_the_identity_is_not_cleared_while_an_old_snapshot_holds_it() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    let kept = service.identity_probe().await.unwrap();
+    let Admission::Serve(stubborn) = service.holder().load() else {
+        panic!("a Ready service serves a snapshot");
+    };
+    fs::write(fixture.path("etc/config.toml"), fixture.config("# edited after approval\n")).unwrap();
+    assert_eq!(service.reload().await, Ok(ServiceState::Unavailable(FailureReason::PolicyInvalid)));
+
+    assert_eq!(service.lock(SHORT_DRAIN).await, Ok(LockOutcome::IdentityHeld));
+
+    assert_eq!(service.state().await, ServiceState::Locked);
+    assert!(kept.upgrade().is_some(), "the held vault lost its identity");
+    drop(stubborn);
+    assert!(kept.upgrade().is_none(), "the vault identity outlived the last snapshot");
 }
 
 #[tokio::test]

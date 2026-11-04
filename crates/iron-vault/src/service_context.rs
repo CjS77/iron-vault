@@ -19,7 +19,7 @@ mod serving;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use iron_vault_policy::{Capabilities, Limits, ListenerConfig, ListenerName, ParsedConfig};
@@ -35,7 +35,7 @@ use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
 use crate::request_listeners::RequestListeners;
 use crate::service_state::{AdminOperation, IllegalTransition, RequestInterface, ServiceEvent, ServiceState, UnavailableReason, next};
-use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder};
+use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder, Withdrawn};
 use crate::socket_activation::AdoptedSocket;
 use crate::standing::{CredentialStanding, RouteFault};
 use crate::trusted_path_report::ServicePaths;
@@ -144,13 +144,16 @@ fn log_sweep(dir: &str, swept: Result<Vec<String>, impl std::fmt::Display>) {
 /// How a lock ended: whether the secrets are confirmed gone from memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockOutcome {
-    /// Every serving snapshot, and the vault in it, was dropped within the lock drain.
+    /// Every serving snapshot, the vault in it and the vault identity were dropped within the lock drain.
     Cleared,
     /// The lock drain expired while this many snapshots were still held by requests that ignored their cancellation.
     Held {
         /// The snapshots still held.
         snapshots: usize,
     },
+    /// Every snapshot the lock withdrew was dropped, but something else still holds the vault identity: the vault of a
+    /// snapshot that a failed check withdrew earlier, still held by a request that ignored its cancellation.
+    IdentityHeld,
 }
 
 /// What the service runs with besides its locks.
@@ -301,39 +304,37 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             .map_err(|illegal| UnlockRefusal::WrongState(illegal.state))
     }
 
-    /// Locks the service on an explicit `lock`: Ready to Locked, clearing the vault identity and every cached secret
-    /// (§3.13, §3.11). §3.12 draws a lock only from Ready; from any other state the event is refused.
+    /// Locks the service on an explicit `lock`: Ready or Unavailable to Locked, clearing the vault identity and every
+    /// cached secret (§3.13, §3.11). §3.12 draws a lock only from those two states; from any other the event is refused.
     ///
     /// Under the context's mutex it stops admitting requests, withdraws the serving snapshot (cancelling the requests
     /// running on it) and drops the approval state, the credential report and the context's copy of the vault identity,
-    /// so no later change interleaves. The mutex is then released and the call waits up to `drain` for the last holder
-    /// of the old snapshot, a streaming response body included, to drop it, so a slow request does not stall the other
-    /// admin commands. The vault in that snapshot holds the last reference to the identity, so the identity is cleared
-    /// with it. If the drain expires it logs a warning and returns [`LockOutcome::Held`], never claiming the secrets are
-    /// cleared.
+    /// so no later change interleaves. Unavailable has no snapshot to withdraw, so there the identity is cleared at once
+    /// unless something else still holds it. The mutex is then released and the call waits up to `drain` for the last
+    /// holder of the old snapshot, a streaming response body included, to drop it, so a slow request does not stall the
+    /// other admin commands. The vault in that snapshot holds the last reference to the identity, so the identity is
+    /// cleared with it. If the drain expires, or the identity is still held, it logs a warning and returns an outcome
+    /// other than [`LockOutcome::Cleared`], never claiming the secrets are cleared.
     pub async fn lock(&self, drain: Duration) -> Result<LockOutcome, IllegalTransition> {
-        let mut withdrawn = {
-            let mut inner = self.inner.lock().await;
-            let from = inner.state;
-            let state = next(from, ServiceEvent::Lock)?;
-            // Refusing first closes the gate and cancels the in-flight requests before anything else changes.
-            let withdrawn = self.holder.refuse(UnavailableReason::Locked);
-            inner.open = None;
-            inner.identity = None;
-            inner.state = state;
-            log_lock_transition(from, state);
-            withdrawn
-        };
-        Ok(match withdrawn.released(drain).await {
-            0 => {
-                tracing::info!("lock complete: every serving snapshot, and the vault in it, was dropped");
-                LockOutcome::Cleared
-            }
-            snapshots => {
-                tracing::warn!("lock drain expired: {snapshots} serving snapshot(s) are still held by requests that ignore cancellation");
-                LockOutcome::Held { snapshots }
-            }
-        })
+        let (mut withdrawn, identity) = self.withdraw_for_lock().await?;
+        let snapshots = withdrawn.released(drain).await;
+        Ok(lock_outcome(snapshots, identity.strong_count()))
+    }
+
+    /// The locked half of [`lock`](Self::lock): moves to Locked, withdraws the snapshot and drops what the context keeps
+    /// of the vault. Returns the withdrawn snapshots and a weak reference to the dropped identity, to see whether it is
+    /// cleared.
+    async fn withdraw_for_lock(&self) -> Result<(Withdrawn, Weak<VaultIdentity>), IllegalTransition> {
+        let mut inner = self.inner.lock().await;
+        let from = inner.state;
+        let state = next(from, ServiceEvent::Lock)?;
+        // Refusing first closes the gate and cancels the in-flight requests before anything else changes.
+        let withdrawn = self.holder.refuse(UnavailableReason::Locked);
+        inner.open = None;
+        let identity = inner.identity.take().as_ref().map_or_else(Weak::new, Arc::downgrade);
+        inner.state = state;
+        log_lock_transition(from, state);
+        Ok((withdrawn, identity))
     }
 
     /// Stops the service on SIGTERM or SIGINT: Ready to Stopped, then drops the snapshot, the vault in it, the approval
@@ -560,6 +561,25 @@ fn log_reload_failed(committed: Option<u64>, failure: &CheckFailure) {
         detail = %failure.detail(),
         "the reload failed, the service stops proxying",
     );
+}
+
+/// The outcome of a lock whose drain left `snapshots` held and the vault identity with `identity_holders` strong
+/// references, logged at INFO when everything is cleared and at WARN otherwise.
+fn lock_outcome(snapshots: usize, identity_holders: usize) -> LockOutcome {
+    match (snapshots, identity_holders) {
+        (0, 0) => {
+            tracing::info!("lock complete: every serving snapshot, the vault in it and the vault identity were dropped");
+            LockOutcome::Cleared
+        }
+        (0, _) => {
+            tracing::warn!("lock incomplete: the vault identity is still held by a request that ignores cancellation");
+            LockOutcome::IdentityHeld
+        }
+        (snapshots, _) => {
+            tracing::warn!("lock drain expired: {snapshots} serving snapshot(s) are still held by requests that ignore cancellation");
+            LockOutcome::Held { snapshots }
+        }
+    }
 }
 
 /// Logs one lock transition at INFO. It names the two states only; nothing an unlock was given reaches the log.
