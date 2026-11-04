@@ -19,8 +19,9 @@ Three properties drive the design:
 One connection carries one exchange:
 
 1. The CLI sends one **admin request**: a command and its arguments.
-2. The service sends zero or more **prompts** and **notices**, in any order. The CLI answers each prompt with exactly
-   one **owner input** frame before the service sends anything else. A notice is shown to the owner and never answered.
+2. The service sends zero or more **prompts**, **notices** and **reveals**, in any order. The CLI answers each prompt
+   with exactly one **owner input** frame before the service sends anything else. A notice or a reveal is shown to the
+   owner and never answered.
 3. The service sends exactly one **admin response**, success or error, and closes the connection.
 
 The service, not the CLI, decides what to prompt for: the service owns the operation ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)), so a modified CLI cannot
@@ -38,6 +39,8 @@ sequenceDiagram
             CLI->>Service: owner input
         else notice
             Service->>CLI: notice (text)
+        else reveal
+            Service->>CLI: reveal (secret value)
         end
     end
     Service->>CLI: admin response (success or error)
@@ -63,6 +66,7 @@ Every frame is a 7-byte header followed by its body. Integers are big-endian.
 | `4` | admin response: success | service | no fields (empty) |
 | `5` | admin response: error | service | fields |
 | `6` | notice | service | fields |
+| `7` | reveal | service | the value itself |
 
 The body bound is 64 KiB (65 536 bytes). It is far above any label, message or typed value an operation needs, and
 small enough that a hostile length costs nothing. A body length above the bound is refused as soon as the header is
@@ -75,7 +79,7 @@ Bytes after a complete frame belong to the next frame.
 
 ## Body encoding
 
-Every body except owner input is a sequence of **fields**:
+Every body except owner input and a reveal is a sequence of **fields**:
 
 | Size | Field part |
 |---|---|
@@ -110,7 +114,10 @@ an error.
 | `4` | `unlock` | none | none |
 | `5` | `lock` | none | whether every cached secret was confirmed cleared |
 | `6` | `status` | none | the [status report](#status) |
+| `7` | `init` | none | the vault ID and the committed version |
 | `8` | `add` | the credential name, kind and permitted origins | the [record ID](#add) |
+
+Command IDs `9` to `11` are reserved for `list`, `replace` and `rm` (EP-25).
 
 **No command accepts an external signature** ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -202,7 +209,10 @@ Errors specific to `config approve`:
 #### unlock
 
 Opens the vault with the interactive passphrase (spec [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory), [§3.12](iron-vault-specification.md#312-service-states-and-errors), [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). It is allowed only while the service is
-Locked; in any other state the exchange ends with `wrong-state` before any prompt, and the state is unchanged.
+Locked; in any other state the exchange ends with `wrong-state` before any prompt, and the state is unchanged. It also
+needs an initialized vault: unless the [initialization state](vault-initialization.md#initialization-state) is
+Initialized, the exchange ends with `unlock-failed` before any prompt, and the message names the initialization state
+and says to run `iron-vault init`. The state is read again under the service context's mutex in step 2.
 
 1. **Vault passphrase.** A prompt, secret: `Vault passphrase`. The value is the vault-unlock passphrase, never the
    approval passphrase: the two are separate types, and unlocking never implies authority to approve. Empty or
@@ -257,6 +267,54 @@ The success result:
 | `credential-invalid` | the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
 | `vault-write-failed` | writing the record or the manifest failed; the message says whether the write may have committed |
 
+#### init
+
+Creates the vault, its two recovery paths and its first committed approval (spec
+[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration),
+[§3.11](iron-vault-specification.md#311-recipients-startup-and-memory),
+[§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). The design, including what a crash
+part-way through leaves and what a re-run does with it, is [vault-initialization.md](vault-initialization.md). It takes
+no arguments. It is allowed only while the service is Locked; in any other state the exchange ends with `wrong-state`
+before any prompt. It leaves the service Locked.
+
+The exchange, after the request:
+
+1. The service reads the [initialization state](vault-initialization.md#initialization-state). Initialized or
+   Unrecognized ends with `already-initialized` before any prompt. On Unfinished, a notice says the unfinished
+   initialization will be discarded.
+2. **Passphrases.** Four prompts, all secret: `Vault passphrase`, `Repeat the vault passphrase`, `Approval passphrase`,
+   `Repeat the approval passphrase`. A value that breaks a
+   [passphrase rule](vault-initialization.md#passphrase-rules) ends the exchange with `passphrase-rejected`, whose
+   message names the rule and nothing typed. There is no second try in the same exchange.
+3. The service generates every key, then sends the recovery key: one or more notices (the key is shown once and the
+   service keeps no copy; store it in an independent password manager or on paper), then one
+   [reveal](#reveal-kind-7) holding the key's `AGE-SECRET-KEY-1…` text.
+4. **Confirmation.** A prompt, not secret: `Type yes once you have saved the recovery key`. Any answer other than
+   exactly `yes` ends the exchange with `declined`.
+5. Only now does the service write anything. It runs the
+   [write order](vault-initialization.md#write-order), committing approval version 1 on the initial config, and
+   answers once `init.unfinished` is durably removed.
+
+Nothing is written before step 5, so a refusal, a cancelled prompt or a closed CLI leaves the directories as they were.
+Step 5 takes a few seconds (three scrypt operations and about a dozen durable writes), inside the CLI's 60-second
+timeout.
+
+The success result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | vault ID | byte value, exactly 16 bytes: the new vault's ID |
+| 3 | committed version | `u64`: always `1` |
+
+Errors specific to `init`:
+
+| Code | When |
+|---|---|
+| `already-initialized` | the directories hold an initialized vault, or files no initialization explains; the message says which, and names the first such files |
+| `passphrase-rejected` | a passphrase broke a rule; the message names the rule |
+| `declined` | the owner did not answer the recovery key confirmation with `yes` |
+| `init-failed` | a write failed; the message names the failed step, says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing |
+
 ### Prompt (kind 2)
 
 | Tag | Field | Value |
@@ -291,6 +349,19 @@ into its own secret type, such as a passphrase.
 The encoder writes the frame into a buffer the caller supplies, so a caller sending owner input passes a clearing
 buffer. The transport that reads frames off the socket clears its read buffer for the same reason.
 
+### Reveal (kind 7)
+
+The service shows the owner a secret value it generated, once, such as the recovery key at `init`. Like owner input,
+the body is the value itself, whole and unframed, and never parsed as fields; it is never empty. The CLI never answers
+it.
+
+The service encodes the frame into a buffer that clears itself on drop, straight from the secret's own type, and drops
+both once the frame is written. The CLI decodes the body once, straight from the received bytes into a clearing buffer
+(`Zeroizing<Vec<u8>>`), wrapped in `RevealedSecret`, a secret-bearing type (`design/secret-handling.md`). It shows the
+value on the owner console, with control characters removed, followed by a newline, and drops it. It never writes it
+to stdout, a pipe or a diagnostic: when the owner console cannot show it, the CLI cancels the command before showing
+anything (see [Owner input](#owner-input)).
+
 ### Admin response: success (kind 4)
 
 A command without a result answers with an empty body. A command with a result answers with fields:
@@ -300,7 +371,7 @@ A command without a result answers with an empty body. A command with a result a
 | 1 | command | `u16` ID of the command this answers |
 | 2 and up | result | defined with the command |
 
-`config approve`'s result is defined [with the command](#config-approve).
+`config approve`'s result is defined [with the command](#config-approve), and `init`'s [with its command](#init).
 
 Naming the command keeps the codec context-free: a success body decodes on its own, without knowing which request it
 answers, and the CLI can check that it answers the request it sent. A body that names a command without a result, or
@@ -393,6 +464,9 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `14` | `unlock-denied` | `unlock`: the vault passphrase was wrong |
 | `15` | `unlock-failed` | `unlock`: the vault did not open, for a reason other than the passphrase; the service stays Locked |
 | `16` | `unlocked-unavailable` | `unlock`: the vault unlocked, but the config check left the service Unavailable; the message names the redacted reason |
+| `17` | `already-initialized` | `init`: the directories already hold a vault, or files init did not write; nothing was changed |
+| `18` | `passphrase-rejected` | `init`: a chosen passphrase broke a rule; the message names the rule, never the input |
+| `19` | `init-failed` | `init`: a write failed; the message names the step, says to re-run `init`, which discards the unfinished vault, and says to discard the recovery key shown |
 | `20` | `name-taken` | `add`: the name is already in the manifest, healthy or damaged; `add` never overwrites |
 | `21` | `credential-invalid` | `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
 | `22` | `vault-write-failed` | `add`: the vault write failed; the message says whether it may have committed |
@@ -400,9 +474,10 @@ the message itself, and neither the code nor the message ever contains owner inp
 ## Versions
 
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
-is refused before its kind or length is read. Version 1 has not been released, so the notice frame, byte values,
-`config approve` (command 2), `unlock` (command 4), `lock` (command 5), `status` (command 6), `add` (command 8),
-error codes 7 to 16 and error codes 20 to 22 join it rather than starting version 2. That is a default for the owner to confirm
+is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
+byte values, `config approve` (command 2), `unlock` (command 4), `lock` (command 5), `status` (command 6), `init`
+(command 7), `add` (command 8), error codes 7 to 19 and error codes 20 to 22 join it rather than starting version 2.
+That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
 Only the service sends responses, so the version rule is asymmetric:
@@ -534,6 +609,13 @@ terminal with echo off or as the next line of stdin. On success it prints `the v
 Ready` to stdout. Otherwise it prints the service's error to stderr, which for an Unavailable service names the
 redacted reason, and exits with code 1.
 
+### init
+
+`iron-vault init` takes no argument: the passphrases are answers to the service's secret prompts, read as for any
+prompt, and the recovery key arrives in a reveal. On success it prints `initialized vault <vault ID>: approval version 1
+committed` and `run iron-vault unlock to start serving` to stdout; the recovery key never goes there. Otherwise it
+prints the service's error to stderr and exits with code 1.
+
 ### add
 
 `iron-vault add <name> --origin <ORIGIN>... [--kind static|basic]` sends the name, the kind (static by default) and
@@ -545,8 +627,8 @@ success it prints `added <name> (<kind>) as record <uuid>` to stdout; a service 
 
 ### Owner input
 
-The CLI collects each prompted value from its **owner console**, opened at the first prompt or notice, so a command
-the service never prompts for touches neither the terminal nor stdin. No argument ever carries a value ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary), [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)).
+The CLI collects each prompted value from its **owner console**, opened at the first prompt, notice or reveal, so a
+command the service never prompts for touches neither the terminal nor stdin. No argument ever carries a value ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary), [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)).
 
 - **Stdin is a terminal:** the CLI opens `/dev/tty`, writes the label to it followed by `: `, and reads one line from
   it. For a secret prompt it turns echo off for the read with `tcsetattr`: `ECHO` off and `ECHONL` on, so the owner's
@@ -563,6 +645,10 @@ the service never prompts for touches neither the terminal nor stdin. No argumen
 - **Stdin is not a terminal:** each value is the next line of stdin, so `pass show fx | sudo iron-vault add fx` works
   from an interactive shell as well as from a script, and several prompts read consecutive lines. The label goes to
   stderr, and only when stderr is a terminal; it never goes to stdout.
+- **A reveal** is written to the controlling terminal, `/dev/tty`, whether or not stdin is a terminal, and nowhere
+  else: never to stdout, and never to stderr, which a script may capture. When there is no controlling terminal, the
+  CLI shows nothing, reports on stderr that the value can only be shown on a terminal, and cancels the command with
+  exit code 3, so the service writes nothing ([open question 5](vault-initialization.md#open-questions)).
 
 The label is the service's text with control characters removed, so a label cannot move the cursor or reprogram the
 terminal. A notice's text has every control character except `\n` removed, for the same reason. It is written to
