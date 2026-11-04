@@ -739,6 +739,7 @@ stateDiagram-v2
     Ready --> Checking: explicit reload
     Ready --> Locked: explicit lock or configured key removal
     Unavailable --> Checking: authorized repair or committed transaction recovery
+    Unavailable --> Locked: explicit lock
     Ready --> [*]: stop and clear memory
 ```
 
