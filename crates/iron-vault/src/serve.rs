@@ -1,6 +1,6 @@
 //! `iron-vault serve`: checks the trusted paths, takes the directory locks and sweeps their stale temp files, starts
 //! the service context Locked with its provisional request listeners, and serves the admin socket until SIGTERM or
-//! SIGINT, then stops the service.
+//! SIGINT, then stops the service. SIGHUP reloads the config (§3.9).
 
 use std::collections::BTreeMap;
 use std::fs::DirBuilder;
@@ -56,15 +56,16 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport)
     // Everything that can fail or be interrupted comes before binding the admin socket, so once its file exists the
     // server owns it and removes it on every exit.
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-    let stop = {
+    let (stop, hangup) = {
         let _context = runtime.enter();
-        stop_signal()?
+        (stop_signal()?, signal(SignalKind::hangup())?)
     };
     runtime.block_on(async {
         let service = Arc::new(ServiceContext::start(locks, setup, &provisional, activated)?);
         let principals = AdminPrincipals::new(paths.profile, paths.owner.uid);
         let server = AdminServer::new(principals, Handlers::for_service(&service), Limits::default());
         let socket = AdminSocket::bind(runtime_dir, paths.owner)?;
+        tokio::spawn(reload_on_sighup(hangup, Arc::clone(&service)));
         tracing::info!("admin socket listening at {}", socket.path().display());
         let served = server.serve(socket, stop).await;
         service.stop().await;
@@ -143,6 +144,16 @@ fn stop_signal() -> io::Result<impl Future<Output = ()>> {
             _ = interrupt.recv() => tracing::info!("stopping on SIGINT"),
         }
     })
+}
+
+/// Reloads the service on each SIGHUP, never by watching files (§8.2 Q-5). A SIGHUP arriving while a change holds the
+/// service queues behind it. The task ends with the runtime when serving stops.
+async fn reload_on_sighup(mut hangup: tokio::signal::unix::Signal, service: Arc<ServiceContext>) {
+    while hangup.recv().await.is_some() {
+        tracing::info!("reloading on SIGHUP");
+        // A refusal is logged by `reload`; a failed check by the check itself.
+        let _ = service.reload().await;
+    }
 }
 
 #[cfg(test)]

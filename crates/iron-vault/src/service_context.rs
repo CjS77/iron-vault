@@ -29,7 +29,7 @@ use iron_vault_store::{
 use tokio::sync::Mutex;
 
 use crate::admin::protocol::{CredentialStatus, MemoryStatus, RouteStatus, StatusReport, UnlockedVault, VaultStatus};
-use crate::config_check::{UpstreamSettings, open_and_check, parse_detail};
+use crate::config_check::{CheckFailure, UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
 use crate::request_listeners::RequestListeners;
@@ -262,6 +262,19 @@ impl<F: StoreFs> ServiceContext<F> {
         self.check_and_settle(&mut inner, event, identity).await
     }
 
+    /// Reloads on SIGHUP (§3.9, Q-5): [`recheck`](Self::recheck) with [`ServiceEvent::Reload`], which only a Ready service
+    /// accepts. In Locked, Checking or Unavailable nothing changes and the signal is logged at INFO: a reload is not an
+    /// authorized repair, so it never leads out of Unavailable. A failed check leaves the service Unavailable and logs
+    /// `config.reload-failed` at WARN.
+    pub async fn reload(&self) -> Result<ServiceState, IllegalTransition> {
+        self.recheck(ServiceEvent::Reload).await.inspect_err(|refused| {
+            tracing::info!(
+                "SIGHUP ignored: reload only runs from Ready, and the service is {:?}",
+                refused.state
+            );
+        })
+    }
+
     /// Unlocks with the owner's `passphrase` (§3.11) and runs the config check: Locked to Checking, then Ready or
     /// Unavailable, as [`enter_checking`](Self::enter_checking) does. Each state change is logged as a lock transition.
     ///
@@ -413,21 +426,33 @@ impl<F: StoreFs> ServiceContext<F> {
             return Err(IllegalTransition { state: from, event });
         }
         let checking = self.apply(inner, event)?;
+        let committed = inner
+            .open
+            .as_ref()
+            .and_then(|open| open.approval.committed())
+            .map(|(version, _)| version.get());
         inner.open = None;
         inner.identity = Some(Arc::clone(&identity));
         let leaving_locked = from == ServiceState::Locked;
         if leaving_locked {
             log_lock_transition(from, checking);
         }
-        let outcome = self.settle(inner, identity).await?;
+        let outcome = self.settle(inner, identity, event, committed).await?;
         if leaving_locked {
             log_lock_transition(checking, outcome);
         }
         Ok(outcome)
     }
 
-    /// Runs the config check in Checking with `identity` and settles in Ready or Unavailable.
-    async fn settle(&self, inner: &mut Inner, identity: Arc<VaultIdentity>) -> Result<ServiceState, IllegalTransition> {
+    /// Runs the config check in Checking with `identity` and settles in Ready or Unavailable. A failure after a reload is
+    /// recorded as `config.reload-failed`, with the version committed before the reload (`committed`).
+    async fn settle(
+        &self,
+        inner: &mut Inner,
+        identity: Arc<VaultIdentity>,
+        event: ServiceEvent,
+        committed: Option<u64>,
+    ) -> Result<ServiceState, IllegalTransition> {
         let ServiceSetup {
             fs,
             accounts,
@@ -452,7 +477,12 @@ impl<F: StoreFs> ServiceContext<F> {
                 };
                 self.enter_ready(inner, snapshot, open).await
             }
-            Err(failure) => self.apply(inner, ServiceEvent::CheckFailed(failure.failure())),
+            Err(failure) => {
+                if event == ServiceEvent::Reload {
+                    log_reload_failed(committed, &failure);
+                }
+                self.apply(inner, ServiceEvent::CheckFailed(failure.failure()))
+            }
         }
     }
 
@@ -490,6 +520,18 @@ impl<F: StoreFs> ServiceContext<F> {
             self.holder.refuse(reason);
         }
     }
+}
+
+/// Warns the owner that a SIGHUP reload failed (design/config-approval.md, audit events). The detail names versions, routes
+/// and credentials only; EP-26 picks the event up by its name.
+fn log_reload_failed(committed: Option<u64>, failure: &CheckFailure) {
+    tracing::warn!(
+        event = "config.reload-failed",
+        committed_version = ?committed,
+        reason = failure.unavailable().as_str(),
+        detail = %failure.detail(),
+        "the reload failed, the service stops proxying",
+    );
 }
 
 /// Logs one lock transition at INFO. It names the two states only; nothing an unlock was given reaches the log.
