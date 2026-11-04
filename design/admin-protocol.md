@@ -325,8 +325,8 @@ the message itself, and neither the code nor the message ever contains owner inp
 
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, byte values,
-`config approve`, `unlock` (command 4) and error codes 7 to 16 join it rather than starting version 2. That is a default for the owner to
-confirm ([open question 11](config-approval.md#open-questions)).
+`config approve`, `unlock` (command 4), `status` (command 6) and error codes 7 to 16 join it rather than starting
+version 2. That is a default for the owner to confirm ([open question 11](config-approval.md#open-questions)).
 
 Only the service sends responses, so the version rule is asymmetric:
 
