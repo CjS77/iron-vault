@@ -9,7 +9,7 @@
 //! | Failure | Answer |
 //! |---|---|
 //! | The service holds no snapshot (locked, policy invalid, checking, recovery needed) | `503` with the [`UnavailableReason`] text, before the caller is identified |
-//! | The snapshot is withdrawn before the response head | `503` |
+//! | The snapshot is withdrawn before the response head | `503` with the generic body, not the reason |
 //! | The snapshot is withdrawn after the response head | The caller's connection is aborted |
 //! | The pipeline refuses the request | Its [`RefusalResponse`] |
 //! | The route has no upstream client | `503` |
@@ -223,25 +223,31 @@ fn token_header(snapshot: &ServingSnapshot, tags: &ConnectionTags) -> Option<Hea
 /// The `503` for a request refused at admission: the redacted reason as its whole body. It is given before the caller is
 /// identified, because with no snapshot there is no policy to identify the caller against (§3.12).
 fn unavailable(reason: UnavailableReason) -> Response<ResponseBody> {
-    let body = Full::new(Bytes::from_static(reason.as_str().as_bytes()));
-    let mut response = Response::new(body.map_err(|never| match never {}).boxed_unsync());
-    *response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-    response
-        .headers_mut()
-        .insert(CONTENT_TYPE, HttpHeaderValue::from_static("text/plain; charset=utf-8"));
-    response
+    text_response(StatusCode::SERVICE_UNAVAILABLE, reason.as_str())
 }
 
 /// A refusal as a hyper response.
 fn fixed(refusal: &RefusalResponse) -> Response<ResponseBody> {
-    let body = Full::new(Bytes::from_static(refusal.body().as_bytes()));
-    let mut response = Response::new(body.map_err(|never| match never {}).boxed_unsync());
-    *response.status_mut() = StatusCode::from_u16(refusal.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut response = text_response(
+        StatusCode::from_u16(refusal.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        refusal.body(),
+    );
     let headers = response.headers_mut();
     refusal.headers().into_iter().for_each(|(name, value)| {
         if let Ok(value) = HttpHeaderValue::try_from(value) {
             headers.insert(name, value);
         }
     });
+    response
+}
+
+/// A `text/plain` response with `status` and a constant `body`.
+fn text_response(status: StatusCode, body: &'static str) -> Response<ResponseBody> {
+    let body = Full::new(Bytes::from_static(body.as_bytes()));
+    let mut response = Response::new(body.map_err(|never| match never {}).boxed_unsync());
+    *response.status_mut() = status;
+    response
+        .headers_mut()
+        .insert(CONTENT_TYPE, HttpHeaderValue::from_static("text/plain; charset=utf-8"));
     response
 }

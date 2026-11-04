@@ -110,7 +110,8 @@ impl ServingSnapshot {
     }
 
     /// Whether the holder has withdrawn this snapshot.
-    pub fn is_withdrawn(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn is_withdrawn(&self) -> bool {
         self.withdrawn.is_cancelled()
     }
 }
@@ -124,23 +125,15 @@ pub enum Admission {
     Refuse(UnavailableReason),
 }
 
-impl Admission {
-    /// The snapshot to serve from, or `None` when the request is refused.
-    pub fn snapshot(self) -> Option<Arc<ServingSnapshot>> {
-        match self {
-            Self::Serve(snapshot) => Some(snapshot),
-            Self::Refuse(_) => None,
-        }
-    }
-}
-
 /// The value new requests are admitted by: *serve* with the current snapshot, or *refuse* with a redacted reason.
 ///
 /// A lock around that one value rather than an atomic pointer: the lock is held only to clone or store it, so a request
 /// never waits on another's work. A request's load and every store each take the lock once, so a request sees exactly one
-/// value and no request is admitted to a snapshot after a store that replaced it. Every service state transition stores
-/// the value its [`request_interface`](crate::service_state::ServiceState::request_interface) names, so the reason a `503`
-/// carries has one source.
+/// value and no request is admitted to a snapshot after a store that replaced it.
+///
+/// Callers must store, on every service state transition, the value that the new state's
+/// [`request_interface`](crate::service_state::ServiceState::request_interface) names, so the reason a `503` carries has
+/// one source.
 ///
 /// Every snapshot served hangs off one withdrawal epoch. Storing any refusal but [`Checking`](UnavailableReason::Checking)
 /// ends the epoch: every snapshot served since the last such refusal is withdrawn, including an old one a request is still
@@ -171,7 +164,8 @@ impl SnapshotHolder {
     }
 
     /// A holder that refuses with `reason` until a snapshot is served, for a service that has none yet.
-    pub fn refusing(reason: UnavailableReason) -> Self {
+    #[cfg(test)]
+    pub(crate) fn refusing(reason: UnavailableReason) -> Self {
         Self {
             current: RwLock::new(Held {
                 admission: Admission::Refuse(reason),
@@ -203,12 +197,18 @@ impl SnapshotHolder {
         current.admission = Admission::Refuse(reason);
     }
 
-    /// Starts an admission pause: one store of *refuse* `checking`, after which no request is admitted until the returned
-    /// guard ends the pause.
+    /// Starts an admission pause, after which no request is admitted until the returned guard ends the pause.
     ///
-    /// The commit of a new approval takes the guard by reference, so it cannot run without the pause in place.
+    /// While serving, this is one store of *refuse* `checking`. A holder that already refuses keeps its reason, because
+    /// nothing is admitted to pause (an approval from Unavailable with `PolicyInvalid` changes no state), and still
+    /// returns the guard.
+    ///
+    /// A commit of a new approval must take the guard by reference, so that it cannot run without the pause in place.
     pub fn pause(&self) -> AdmissionPause<'_> {
-        self.refuse(UnavailableReason::Checking);
+        let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
+        if matches!(current.admission, Admission::Serve(_)) {
+            current.admission = Admission::Refuse(UnavailableReason::Checking);
+        }
         AdmissionPause { holder: self }
     }
 }
@@ -216,10 +216,10 @@ impl SnapshotHolder {
 /// Proof that new requests are not being admitted: held from the pause's start until the config check that follows ends
 /// it, by [`resume`](Self::resume) or [`fail`](Self::fail).
 ///
-/// Dropping it without ending the pause leaves the holder refusing with *checking*, so an error path that forgets to end
-/// it keeps the service closed rather than reopening it on a policy nobody checked.
+/// Dropping it without ending the pause leaves the holder refusing, with *checking* if it was serving, so an error path
+/// that forgets to end it keeps the service closed rather than reopening it on a policy nobody checked.
 #[derive(Debug)]
-#[must_use = "dropping the pause leaves requests refused with `checking`"]
+#[must_use = "dropping the pause leaves requests refused"]
 pub struct AdmissionPause<'a> {
     holder: &'a SnapshotHolder,
 }
