@@ -85,6 +85,8 @@ pub enum Command {
     Ping,
     /// Show the service, vault, approval, memory protection and credential states, without secrets.
     Status,
+    /// Open the vault: the service prompts for the vault passphrase, read with echo off or from stdin.
+    Unlock,
 }
 
 impl Cli {
@@ -121,6 +123,19 @@ pub fn ping(socket: Option<&Path>) -> ExitCode {
 #[cfg(target_os = "linux")]
 pub fn status(socket: Option<&Path>) -> ExitCode {
     client::status(socket).into()
+}
+
+/// `iron-vault unlock`: sends `unlock` to the admin socket at `socket`, or this installation's, answers the passphrase
+/// prompt, and shows the state the service settled in.
+#[cfg(target_os = "linux")]
+pub fn unlock(socket: Option<&Path>) -> ExitCode {
+    client::unlock(socket).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn unlock(_socket: Option<&Path>) -> ExitCode {
+    ping(None)
 }
 
 /// The client is Linux-only for now, like the service.

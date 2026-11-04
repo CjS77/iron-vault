@@ -14,6 +14,7 @@ const TAG_PROFILE: u16 = 2;
 
 const COMMAND_PING: u16 = AdminCommand::Ping as u16;
 const COMMAND_STATUS: u16 = AdminCommand::Status as u16;
+const COMMAND_UNLOCK: u16 = AdminCommand::Unlock as u16;
 
 const PROFILE_PROTECTED: u8 = 1;
 const PROFILE_DEVELOPMENT: u8 = 2;
@@ -30,6 +31,7 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
     match read_u16(TAG_COMMAND, first(&fields, TAG_COMMAND)?)? {
         COMMAND_PING => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Ping),
         COMMAND_STATUS => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Status),
+        COMMAND_UNLOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Unlock),
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
 }
@@ -116,6 +118,9 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::UnexpectedFrame,
         ErrorCode::NotAdminPrincipal,
         ErrorCode::Busy,
+        ErrorCode::WrongState,
+        ErrorCode::UnlockDenied,
+        ErrorCode::UnlockFailed,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

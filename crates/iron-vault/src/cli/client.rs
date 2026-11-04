@@ -125,8 +125,8 @@ pub fn status(socket: Option<&Path>) -> Exit {
     })
 }
 
-/// One exchange for a command without prompts: `answer` handles a success; an error response and a failed exchange are
-/// reported here.
+/// One exchange, answering any prompt the service sends from the owner console: `answer` handles a success; an error
+/// response and a failed exchange are reported here.
 fn run(socket: Option<&Path>, request: AdminRequest, answer: impl FnOnce(AdminResponse) -> Exit) -> Exit {
     let path = match socket.map_or_else(installation_socket, |path| Ok(path.to_path_buf())) {
         Ok(path) => path,
@@ -137,6 +137,18 @@ fn run(socket: Option<&Path>, request: AdminRequest, answer: impl FnOnce(AdminRe
         Ok(response) => answer(response),
         Err(e) => fail(Exit::Unreachable, &e.to_string()),
     }
+}
+
+/// Runs `unlock`, answering the service's passphrase prompt from the owner console, and reports the state it left the
+/// service in: Ready on stdout, or the service's error, which names an Unavailable state's redacted reason, on stderr.
+pub fn unlock(socket: Option<&Path>) -> Exit {
+    run(socket, AdminRequest::Unlock, |response| match response {
+        AdminResponse::Success => {
+            println!("the vault is unlocked: the service is Ready");
+            Exit::Success
+        }
+        _ => unexpected(),
+    })
 }
 
 fn unexpected() -> Exit {

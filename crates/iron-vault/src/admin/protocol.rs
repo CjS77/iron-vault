@@ -30,6 +30,8 @@ pub enum AdminRequest {
     Ping,
     /// Reports service, vault, approval, memory protection and credential states; allowed in every state. Command ID 6.
     Status,
+    /// Opens the vault with the passphrase the service prompts for; no arguments and no result. Command ID 4.
+    Unlock,
 }
 
 impl AdminRequest {
@@ -38,6 +40,7 @@ impl AdminRequest {
         match self {
             Self::Ping => AdminCommand::Ping,
             Self::Status => AdminCommand::Status,
+            Self::Unlock => AdminCommand::Unlock,
         }
     }
 }
@@ -47,8 +50,10 @@ impl AdminRequest {
 pub enum AdminCommand {
     /// `ping`.
     Ping = 1,
-    /// `status`. IDs 3 to 5 are reserved for `caller-token`, `unlock` and `lock`.
+    /// `status`. IDs 3 and 5 are reserved for `caller-token` and `lock`.
     Status = 6,
+    /// `unlock`.
+    Unlock = 4,
 }
 
 impl AdminCommand {
@@ -57,6 +62,7 @@ impl AdminCommand {
         match self {
             Self::Ping => "ping",
             Self::Status => "status",
+            Self::Unlock => "unlock",
         }
     }
 }
@@ -130,6 +136,13 @@ pub enum ErrorCode {
     NotAdminPrincipal = 5,
     /// The service is already serving as many admin connections as it allows.
     Busy = 6,
+    /// The command is not allowed in the service's current state; the message names the state.
+    WrongState = 13,
+    /// `unlock`: the vault passphrase was wrong.
+    UnlockDenied = 14,
+    /// `unlock`: the vault did not open for a reason other than the passphrase, or it opened and the config check left
+    /// the service Unavailable; the message says which, with the redacted reason.
+    UnlockFailed = 15,
 }
 
 impl ErrorCode {
@@ -142,6 +155,9 @@ impl ErrorCode {
             Self::UnexpectedFrame => "unexpected-frame",
             Self::NotAdminPrincipal => "not-admin-principal",
             Self::Busy => "busy",
+            Self::WrongState => "wrong-state",
+            Self::UnlockDenied => "unlock-denied",
+            Self::UnlockFailed => "unlock-failed",
         }
     }
 

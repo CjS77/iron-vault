@@ -122,6 +122,13 @@ pub fn open_passphrase_envelope(envelope: &[u8], passphrase: &Passphrase) -> Res
     RecipientIdentity::from_secret_text(&secret).ok_or(EnvelopeError::Malformed)
 }
 
+/// [`seal_passphrase_envelope`] at work factor 2, so other crates' tests do not spend 256 MiB and a second on each seal
+/// and each unlock.
+#[cfg(any(test, feature = "test-support"))]
+pub fn seal_passphrase_envelope_for_tests(identity: &RecipientIdentity, passphrase: &Passphrase) -> Result<Vec<u8>, EnvelopeError> {
+    seal_at(identity, passphrase, 2)
+}
+
 /// Opens `envelope` with `old` and seals the same operational identity to `new`.
 ///
 /// Changing the passphrase rewrites only `operational.age`: the operational identity, and so `identity.age`, stay as

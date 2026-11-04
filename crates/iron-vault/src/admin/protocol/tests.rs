@@ -95,6 +95,9 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::UnexpectedFrame),
         Just(ErrorCode::NotAdminPrincipal),
         Just(ErrorCode::Busy),
+        Just(ErrorCode::WrongState),
+        Just(ErrorCode::UnlockDenied),
+        Just(ErrorCode::UnlockFailed),
     ]
 }
 
@@ -109,6 +112,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
     prop_oneof![
         Just(AdminRequest::Ping).prop_map(Frame::Request),
         Just(AdminRequest::Status).prop_map(Frame::Request),
+        Just(AdminRequest::Unlock).prop_map(Frame::Request),
         (text(MAX_LABEL), any::<bool>()).prop_map(|(label, secret)| Frame::Prompt(Prompt { label, secret })),
         owner_bytes().prop_map(|bytes| owner_input(&bytes)),
         Just(AdminResponse::Success).prop_map(Frame::Response),
@@ -256,6 +260,30 @@ fn frame_errors_map_to_the_codes_the_service_answers_with() {
 fn a_request_names_its_command() {
     assert_eq!(AdminRequest::Ping.command(), AdminCommand::Ping);
     assert_eq!(AdminCommand::Ping.name(), "ping");
+    assert_eq!(AdminRequest::Unlock.command(), AdminCommand::Unlock);
+    assert_eq!(AdminCommand::Unlock.name(), "unlock");
+}
+
+#[test]
+fn unlock_has_the_documented_encoding() {
+    let expected = [0, 1, 1, 0, 0, 0, 8, 0, 1, 0, 0, 0, 2, 0, 4];
+    assert_eq!(encoded(&Frame::Request(AdminRequest::Unlock)), expected);
+    let with_argument = body(&[field(1, &[0, 4]), field(2, b"x")]);
+    assert_eq!(decode_err(&raw(1, 1, &with_argument)), FrameError::UnknownTag(2));
+}
+
+#[test]
+fn the_unlock_error_codes_have_their_documented_numbers_and_names() {
+    [
+        (ErrorCode::WrongState, 13, "wrong-state"),
+        (ErrorCode::UnlockDenied, 14, "unlock-denied"),
+        (ErrorCode::UnlockFailed, 15, "unlock-failed"),
+    ]
+    .into_iter()
+    .for_each(|(code, number, name)| {
+        assert_eq!((code as u16, code.name()), (number, name));
+        assert_round_trips(&error(code, "m"));
+    });
 }
 
 #[test]

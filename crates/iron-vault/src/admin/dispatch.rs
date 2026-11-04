@@ -9,6 +9,7 @@ use std::sync::Arc;
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode};
 use super::server::{Exchange, ExchangeError};
+use super::unlock::Unlock;
 use crate::deployment::DeploymentProfile;
 use crate::service_context::ServiceContext;
 use iron_vault_store::StoreFs;
@@ -39,10 +40,13 @@ impl Handlers {
         Self::default().with(AdminCommand::Ping, Ping { profile })
     }
 
-    /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile. A command that acts on
-    /// the service (unlock, lock, status, reload, approve) registers here with a clone of `service`.
+    /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile, then `status` and
+    /// `unlock`. A command that acts on the service (unlock, lock, status, reload, approve) registers here with a clone of
+    /// `service`.
     pub fn for_service<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> Self {
-        Self::standard(service.paths().profile).with(AdminCommand::Status, Status(Arc::clone(service)))
+        Self::standard(service.paths().profile)
+            .with(AdminCommand::Status, Status(Arc::clone(service)))
+            .with(AdminCommand::Unlock, Unlock::new(Arc::clone(service)))
     }
 
     /// Registers `handler` for `command`, replacing any handler it had.

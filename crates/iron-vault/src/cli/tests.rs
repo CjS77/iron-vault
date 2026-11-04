@@ -28,6 +28,12 @@ fn status_is_a_client_command_and_not_ready_has_its_own_exit_code() {
 }
 
 #[test]
+fn unlock_is_a_client_command_without_arguments() {
+    assert_eq!(parse(&["unlock"]).unwrap().command, Command::Unlock);
+    assert_eq!(parse(&["unlock", "hunter2"]).unwrap_err().exit_code(), 2);
+}
+
+#[test]
 fn admin_socket_overrides_the_path_before_or_after_the_command() {
     let before = parse(&["--admin-socket", "/tmp/fwd.sock", "ping"]).unwrap();
     let after = parse(&["ping", "--admin-socket", "/tmp/fwd.sock"]).unwrap();

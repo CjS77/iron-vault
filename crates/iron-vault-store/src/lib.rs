@@ -62,6 +62,8 @@ pub use manifest::{
     MAX_MANIFEST_ENTRIES, MAX_MANIFEST_LEN, ManifestEntry, ManifestError, VaultManifest, open_manifest, record_digest, seal_manifest,
 };
 pub use partial_restore::PartialRestore;
+#[cfg(any(test, feature = "test-support"))]
+pub use passphrase::seal_passphrase_envelope_for_tests;
 pub use passphrase::{
     MAX_PASSPHRASE_ENVELOPE_LEN, MAX_PASSPHRASE_WORK_FACTOR, OperationalIdentity, PASSPHRASE_WORK_FACTOR, Passphrase, PassphraseError,
     UnlockError, open_passphrase_envelope, read_passphrase_envelope, reseal_passphrase_envelope, seal_passphrase_envelope,

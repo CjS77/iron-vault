@@ -38,6 +38,8 @@ reqwest.workspace = true
 # Upstream trust: the outbound client's rustls config over the built-in roots or a route's pinned CA.
 rustls.workspace = true
 rustls-pki-types.workspace = true
+# The vault passphrase `unlock` builds from the owner's input: the store takes it as a `SecretString`.
+secrecy.workspace = true
 thiserror.workspace = true
 # The upstream client's deadline for response headers; reqwest itself runs on tokio on every platform.
 tokio = { workspace = true, features = ["time"] }
@@ -82,7 +84,6 @@ log.workspace = true
 proptest.workspace = true
 # A CA and leaf certificates for the upstream-trust tests, generated offline.
 rcgen.workspace = true
-secrecy.workspace = true
 serde.workspace = true
 static_assertions.workspace = true
 # Builds non-default `Limits` the way an installation does, from a `[limits]` table.

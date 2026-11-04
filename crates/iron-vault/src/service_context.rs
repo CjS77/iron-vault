@@ -18,7 +18,8 @@ use std::sync::Arc;
 
 use iron_vault_policy::{Capabilities, Limits, ListenerConfig, ListenerName, ParsedConfig};
 use iron_vault_store::{
-    ApprovalState, ConfigDirLock, ConfigFileName, LockError, OsFs, StateDirLock, StoreFs, VaultIdentity, read_config_file,
+    ApprovalState, ConfigDirLock, ConfigFileName, LockError, OsFs, Passphrase, StateDirLock, StoreFs, UnlockError, VaultIdentity,
+    read_config_file, unlock_with_passphrase,
 };
 use tokio::sync::Mutex;
 
@@ -27,11 +28,29 @@ use crate::config_check::{UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
 use crate::request_listeners::RequestListeners;
-use crate::service_state::{IllegalTransition, RequestInterface, ServiceEvent, ServiceState, UnavailableReason, next};
+use crate::service_state::{AdminOperation, IllegalTransition, RequestInterface, ServiceEvent, ServiceState, UnavailableReason, next};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder};
 use crate::socket_activation::AdoptedSocket;
 use crate::trusted_path_report::ServicePaths;
 use serving::Serving;
+
+/// The log target of lock transitions (glossary: *Lock transition*), so the audit design (EP-26) can route them as
+/// their own events.
+pub const LOCK_TRANSITION_TARGET: &str = "iron_vault::lock_transition";
+
+/// Why an unlock left the service where it was. No variant holds passphrase text.
+#[derive(Debug, thiserror::Error)]
+pub enum UnlockRefusal {
+    /// The service is not Locked, so there is nothing to unlock.
+    #[error("unlock is not allowed while the service is {0:?}")]
+    WrongState(ServiceState),
+    /// The passphrase does not open the passphrase envelope.
+    #[error("wrong passphrase")]
+    WrongPassphrase,
+    /// The envelopes could not be read or opened; the service stays Locked.
+    #[error("the vault could not be unlocked: {0}")]
+    Failed(UnlockError),
+}
 
 /// The state-directory lock and the config-directory lock, held for the service's lifetime: a second instance on
 /// either directory fails to start (§3.1).
@@ -169,6 +188,33 @@ impl<F: StoreFs> ServiceContext<F> {
         self.check_and_settle(&mut inner, ServiceEvent::UnlockSucceeded, identity).await
     }
 
+    /// Unlocks with the owner's `passphrase` (§3.11) and runs the config check: Locked to Checking, then Ready or
+    /// Unavailable, as [`enter_checking`](Self::enter_checking) does. Each state change is logged as a lock transition.
+    ///
+    /// The state is checked under the mutex, so two unlocks never both open the vault. A wrong passphrase or an
+    /// unreadable envelope leaves the service Locked: no other storage is ever tried (R-22). The operational identity
+    /// the passphrase opens is dropped inside [`unlock_with_passphrase`], once it has unwrapped the vault identity.
+    pub async fn unlock(&self, passphrase: &Passphrase) -> Result<ServiceState, UnlockRefusal> {
+        let mut inner = self.inner.lock().await;
+        let locked = inner.state;
+        if !locked.admin_allows(AdminOperation::Unlock) {
+            return Err(UnlockRefusal::WrongState(locked));
+        }
+        let identity = unlock_with_passphrase(&self.locks.state, &self.setup.fs, passphrase).map_err(|error| {
+            tracing::warn!("unlock refused, the service stays Locked: {error}");
+            match error {
+                UnlockError::WrongPassphrase => UnlockRefusal::WrongPassphrase,
+                other => UnlockRefusal::Failed(other),
+            }
+        })?;
+        let refused = |refused: IllegalTransition| UnlockRefusal::WrongState(refused.state);
+        let checking = self.apply(&mut inner, ServiceEvent::UnlockSucceeded).map_err(refused)?;
+        log_lock_transition(locked, checking);
+        let outcome = self.settle(&mut inner, identity).await.map_err(refused)?;
+        log_lock_transition(checking, outcome);
+        Ok(outcome)
+    }
+
     /// Stops the service on SIGTERM or SIGINT: Ready to Stopped, then drops the snapshot, the vault in it and the
     /// approval state, so their secret buffers clear (§3.11), and closes the request listeners, removing their socket
     /// files.
@@ -244,6 +290,11 @@ impl<F: StoreFs> ServiceContext<F> {
         identity: VaultIdentity,
     ) -> Result<ServiceState, IllegalTransition> {
         self.apply(inner, event)?;
+        self.settle(inner, identity).await
+    }
+
+    /// Runs the config check in Checking with `identity` and settles in Ready or Unavailable.
+    async fn settle(&self, inner: &mut Inner, identity: VaultIdentity) -> Result<ServiceState, IllegalTransition> {
         let ServiceSetup {
             fs,
             accounts,
@@ -306,4 +357,9 @@ impl<F: StoreFs> ServiceContext<F> {
             self.holder.refuse(reason);
         }
     }
+}
+
+/// Logs one lock transition at INFO. It names the two states only; nothing an unlock was given reaches the log.
+fn log_lock_transition(from: ServiceState, to: ServiceState) {
+    tracing::info!(target: LOCK_TRANSITION_TARGET, ?from, ?to, "lock transition: {from:?} to {to:?}");
 }
