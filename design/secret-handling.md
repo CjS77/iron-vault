@@ -153,16 +153,17 @@ corrupt, truncated or past a limit aborts the caller's connection after the head
 **Default limits.** `max_decompressed_response_bytes` is 64 MiB and `max_decompression_ratio` is 100, checked once 1 MiB
 has decoded. `s3_8_the_default_limits_accept_a_10_mib_gzip_json_reply` sends 10 MiB of JSON that gzip shrinks 3.8 times and
 requires it byte for byte. `s3_8_a_decompression_bomb_is_cut_off_with_no_chunk_over_one_decoder_step_plus_the_hold_back`
-sends 16 MiB of zeros (a thousandfold) with a key planted past the limit, in 16-byte upstream chunks. The caller's
-connection is aborted, receives under 2 MiB, never sees the key, and no chunk it received exceeds `PIECE_SIZE` (64 KiB)
-plus the longest pattern minus one.
+sends 16 MiB of zeros (a thousandfold, 17 KB compressed) with a key planted past the limit, all in one upstream chunk. The
+caller's connection is aborted, receives under 2 MiB, never sees the key, and no chunk it received exceeds `PIECE_SIZE`
+(64 KiB) plus the longest pattern minus one.
 
-**Peak bytes held per response are not bounded by `PIECE_SIZE` in general.** The relay gathers all of one upstream
-chunk's decoded output before it emits any (`Stages::push`), so the bound is the chunk's size times its expansion, not one
-decoder piece. The bomb test therefore scripts small chunks, and the assertion depends on that. Measured: a valid 10 MiB
-gzip JSON reply made the caller's largest chunk 1.9 MB (`measure_gzip_decode_throughput`), because hyper handed the relay
-upstream frames of about 500 KB. A bomb in one upstream chunk is cut off with nothing sent
-(`measure_a_bomb_in_one_upstream_chunk`), but the service decoded up to the 1 MiB ratio floor in memory first.
+**Peak bytes held per response.** The relay decodes one piece, counts it against the budget, scrubs it, encodes it and
+sends it before it decodes the next (`Stages::next_output`, driven from `RelayedBody::poll_frame`), whatever the upstream
+chunk size. What a response holds is one piece (`PIECE_SIZE`, 64 KiB), the scrubber's hold-back (the longest pattern minus
+one), and the encoder's output for that piece, plus the upstream chunk in flight, which the decoder keeps until it is used
+up. The bomb test sends the bomb in a single chunk: the caller receives exactly the 1 MiB the ratio floor allows, in sixteen
+64 KiB chunks, and the largest is 65,536 bytes. A valid 10 MiB gzip JSON reply reaches the caller in chunks of at most
+65,537 bytes (`measure_gzip_decode_throughput`), where gathering a chunk's output first gave 1.9 MB.
 
 **Latency per gzip SSE event** comes from `measure_gzip_sse_latency_per_event`: 200 events, each coded with a sync flush
 and sent only after the caller has the one before, timed from the upstream's write to the moment the caller holds the
@@ -177,7 +178,7 @@ event decoded. Median, 95th percentile and maximum on one development machine (L
 upstream on a channel, so they prove the event is relayed before the next exists without a timing threshold.
 
 **Throughput** comes from `measure_gzip_decode_throughput`: a 10 MiB gzip JSON body (2.8 MB compressed) sent in one
-write, timed from the caller's request to the end of the response, best of five. Release: 126 ms, 79 MiB/s decoded.
+write, timed from the caller's request to the end of the response, best of five. Release: 122 ms, 82 MiB/s decoded.
 Debug: 3.7 s, 3 MiB/s. It includes TLS to the upstream, decode, scrub and the Unix socket.
 
 **Boundaries.** `s3_8_a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes` splits the compressed bytes of a
