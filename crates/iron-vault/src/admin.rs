@@ -3,6 +3,8 @@
 // The server and its socket use tokio and rustix, which this crate depends on only on Linux, like the peer-credential
 // adapter the server relies on.
 #[cfg(target_os = "linux")]
+mod add;
+#[cfg(target_os = "linux")]
 mod approve;
 #[cfg(target_os = "linux")]
 pub mod dispatch;

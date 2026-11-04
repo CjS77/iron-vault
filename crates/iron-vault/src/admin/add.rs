@@ -1,0 +1,147 @@
+//! `add`: enrols a new credential record under a name the manifest does not hold (specification §3.3, §3.13;
+//! `design/admin-protocol.md`, add).
+//!
+//! The state, the name and the origins are checked before any prompt, so the owner is never asked for a secret that
+//! cannot be stored. The service, not the CLI, decides what to prompt for, by kind, and the material never travels as
+//! an argument (§3.2). The service-wide lock is taken only once the material is in hand, so a slow owner never blocks
+//! an approval.
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use iron_vault_kinds::CredentialMaterial;
+use iron_vault_policy::{CredentialKind, CredentialName, Host, NameRule, Port, parse_origin};
+use iron_vault_store::{PermittedOrigins, StoreFs};
+use secrecy::SecretString;
+
+use super::dispatch::{AdminHandler, HandlerFuture};
+use super::principal::AdminPrincipal;
+use super::protocol::{AdminRequest, AdminResponse, ErrorCode, OwnerInput, Prompt, RequestedOrigin};
+use super::server::{Exchange, ExchangeError};
+use super::unlock::state_name;
+use crate::service_context::{ServiceContext, VaultChangeRefusal};
+use crate::service_state::AdminOperation;
+
+/// `add`'s handler, acting on the running service.
+pub(super) struct Add<F> {
+    service: Arc<ServiceContext<F>>,
+}
+
+impl<F> Add<F> {
+    pub(super) fn new(service: Arc<ServiceContext<F>>) -> Self {
+        Self { service }
+    }
+}
+
+impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Add<F> {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(self.run(request, exchange))
+    }
+}
+
+impl<F: StoreFs + Send + Sync + 'static> Add<F> {
+    /// Checks the state, the name and the origins, prompts for the material, then writes; the context checks the state
+    /// again under its mutex.
+    async fn run(&self, request: AdminRequest, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
+        let AdminRequest::Add { name, kind, origins } = request else {
+            return Ok(invalid("the request is not `add`".to_owned()));
+        };
+        let state = self.service.state().await;
+        if !state.admin_allows(AdminOperation::VaultChange) {
+            return Ok(refused(VaultChangeRefusal::WrongState(state)));
+        }
+        let (name, origins) = match checked_arguments(&name, &origins) {
+            Ok(checked) => checked,
+            Err(rule) => return Ok(invalid(rule)),
+        };
+        let material = match material(kind, &name, exchange).await? {
+            Ok(material) => material,
+            Err(rule) => return Ok(invalid(rule)),
+        };
+        Ok(match self.service.add_credential(name, material, origins).await {
+            Ok(record_id) => AdminResponse::Add { record_id },
+            Err(refusal) => refused(refusal),
+        })
+    }
+}
+
+/// The name and the permitted origins, or the rule one of them breaks, without the value that broke it.
+fn checked_arguments(name: &str, origins: &[RequestedOrigin]) -> Result<(CredentialName, PermittedOrigins), String> {
+    let name = CredentialName::try_from(name).map_err(|error| format!("invalid credential name: {}", name_rule(error.rule())))?;
+    let origins = origins.iter().map(requested_origin).collect::<Result<BTreeSet<_>, _>>()?;
+    let origins = PermittedOrigins::new(origins).map_err(|error| format!("invalid origins: {error}"))?;
+    Ok((name, origins))
+}
+
+/// Parses a requested origin with the CLI's own origin rule, so a modified CLI gains nothing by skipping it. The host is
+/// put back together with its port, so a host that carries a port, a scheme or a path of its own is refused.
+fn requested_origin(origin: &RequestedOrigin) -> Result<(Host, Port), String> {
+    parse_origin(&format!("{}:{}", origin.host, origin.port.get())).map_err(|error| format!("invalid origin: {error}"))
+}
+
+/// The name rule broken, without the character that broke it.
+fn name_rule(rule: &NameRule) -> String {
+    match rule {
+        NameRule::BadStart { .. } => "it must start with a lowercase ASCII letter".to_owned(),
+        NameRule::BadChar { .. } => "it may contain only a-z, 0-9, '_' and '-'".to_owned(),
+        other => format!("it {other}"),
+    }
+}
+
+/// Prompts for `kind`'s fields and builds the material, or names the rule it breaks. The outer error is a prompt that
+/// got no owner input.
+async fn material(
+    kind: CredentialKind,
+    name: &CredentialName,
+    exchange: &mut Exchange,
+) -> Result<Result<CredentialMaterial, String>, ExchangeError> {
+    let material = match kind {
+        CredentialKind::Static => secret_text(exchange, format!("Secret for {name}"))
+            .await?
+            .map(|key| CredentialMaterial::Static { key }),
+        CredentialKind::Basic => {
+            let username = secret_text(exchange, format!("Username for {name}")).await?;
+            let password = secret_text(exchange, format!("Password for {name}")).await?;
+            username.and_then(|username| password.map(|password| CredentialMaterial::Basic { username, password }))
+        }
+    };
+    Ok(material.and_then(|material| match material.validate() {
+        Ok(()) => Ok(material),
+        Err(error) => Err(format!("invalid credential material: {error}")),
+    }))
+}
+
+/// Asks for one secret value. Both Basic fields are secret, since the username is the secret when the password is empty.
+async fn secret_text(exchange: &mut Exchange, label: String) -> Result<Result<SecretString, String>, ExchangeError> {
+    let input = exchange.prompt(&Prompt { label, secret: true }).await?;
+    Ok(secret_string(input).ok_or_else(|| "invalid credential material: a value must be UTF-8 text".to_owned()))
+}
+
+/// The owner's input as text; `None` when it is not UTF-8. The input's buffer is cleared when it drops here.
+fn secret_string(input: OwnerInput) -> Option<SecretString> {
+    std::str::from_utf8(input.expose_secret()).ok().map(SecretString::from)
+}
+
+fn refused(refusal: VaultChangeRefusal) -> AdminResponse {
+    let code = match refusal {
+        VaultChangeRefusal::Busy => ErrorCode::Busy,
+        VaultChangeRefusal::WrongState(state) => {
+            return error(
+                ErrorCode::WrongState,
+                format!("`add` is allowed only while the service is Ready; it is {}", state_name(state)),
+            );
+        }
+        VaultChangeRefusal::NameTaken(_) => ErrorCode::NameTaken,
+        VaultChangeRefusal::Invalid(_) => ErrorCode::CredentialInvalid,
+        VaultChangeRefusal::Failed(_) | VaultChangeRefusal::Uncertain { .. } => ErrorCode::VaultWriteFailed,
+    };
+    error(code, refusal.to_string())
+}
+
+fn invalid(rule: String) -> AdminResponse {
+    error(ErrorCode::CredentialInvalid, rule)
+}
+
+fn error(code: ErrorCode, message: String) -> AdminResponse {
+    AdminResponse::Error { code, message }
+}

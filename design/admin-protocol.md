@@ -264,6 +264,14 @@ The success result:
 |---|---|---|
 | 2 | record ID | byte value, exactly 16 bytes: the new record's random version 4 UUID |
 
+`add` runs only while the service is Ready
+([§3.12](iron-vault-specification.md#312-service-states-and-errors)); in any other state it answers `wrong-state`
+before any prompt. The name and the origins are checked before any prompt too, so the owner is never asked for material
+that cannot be stored. Once the material is in hand, the service takes the service-wide lock and answers `busy` while
+an approval, another vault write or a reload holds it. The write goes through a vault opened for it alone, not the one
+serving requests, so the new credential takes effect from the next approval: no active route can name it before then.
+`status` lists it as healthy at once.
+
 `add` never overwrites. Errors specific to `add`:
 
 | Code | When |

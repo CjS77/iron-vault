@@ -17,6 +17,7 @@
 
 mod approval;
 mod serving;
+mod vault_change;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -43,6 +44,7 @@ use crate::trusted_path_report::ServicePaths;
 use serving::Serving;
 
 pub use approval::{ApprovalEnd, ApprovalReview};
+pub use vault_change::VaultChangeRefusal;
 
 /// The log target of lock transitions (glossary: *Lock transition*), so the audit design (EP-26) can route them as
 /// their own events.
@@ -184,8 +186,8 @@ pub struct ServiceContext<F = OsFs> {
     locks: Arc<ServiceLocks>,
     holder: Arc<SnapshotHolder>,
     /// The service-wide lock (glossary). `config approve` holds it from its request to its response, prompts included,
-    /// and fails at once with `busy` while another holds it; a recheck waits for it. Vault writes (K-147) are to take it
-    /// too.
+    /// and fails at once with `busy` while another holds it; a recheck waits for it. A vault write takes it the same
+    /// way, so an approval never sees the credential catalog change under it.
     service_wide: Mutex<()>,
     inner: Mutex<Inner>,
 }

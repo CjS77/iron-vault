@@ -93,7 +93,7 @@ fn refused(refusal: UnlockRefusal) -> AdminResponse {
 }
 
 /// A state as the owner reads it, with Unavailable's redacted reason.
-fn state_name(state: ServiceState) -> String {
+pub(super) fn state_name(state: ServiceState) -> String {
     match state {
         ServiceState::Unavailable(reason) => format!("Unavailable ({})", UnavailableReason::from_failure(reason).as_str()),
         other => format!("{other:?}"),
