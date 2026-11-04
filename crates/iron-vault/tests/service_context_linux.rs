@@ -1613,3 +1613,209 @@ async fn a_cancelled_check_still_drops_the_vault_its_task_opened() {
     .await
     .expect("the cancelled check's task kept its vault");
 }
+
+// Safe states (specification §3.12, §3.15): each failure the service can meet at startup or while serving ends in an
+// explicit state. In every one the request interface answers a fixed redacted `503`, `status` names the state, `ping`
+// still answers, and nothing reaches the upstream.
+
+/// Every body a `503` can carry: the four redacted reasons and the generic one for a route that cannot serve.
+fn fixed_503_bodies() -> Vec<&'static str> {
+    [
+        UnavailableReason::Locked,
+        UnavailableReason::PolicyInvalid,
+        UnavailableReason::Checking,
+        UnavailableReason::RecoveryNeeded,
+    ]
+    .iter()
+    .map(|reason| reason.as_str())
+    .chain(["service unavailable"])
+    .collect()
+}
+
+/// A signed `GET` of `path` on the Unix listener.
+async fn get_path(socket: &Path, path: &str) -> Response {
+    exchange(
+        UnixStream::connect(socket).await.unwrap(),
+        &CallerRequest::get(path).signed(Via::Unix),
+    )
+    .await
+}
+
+/// Asserts the answers a safe state gives and that no path, version, secret or config byte leaks into them.
+async fn assert_safe_state(fixture: &Fixture, service: &Arc<ServiceContext>, expected: ServiceState, reason: UnavailableReason) {
+    assert_eq!(service.state().await, expected);
+    let response = get_unix(&fixture.socket(), true).await;
+    assert_refused(&response, reason);
+    assert!(fixed_503_bodies().contains(&response.body.as_str()), "{}", response.body);
+    assert_eq!(fixture.upstream.connections(), 0, "a safe state sent a request upstream");
+    let (bytes, report) = status(service).await;
+    assert_eq!(report.state, expected);
+    assert_eq!(report.vault, VaultStatus::Locked, "a safe state kept the vault in view");
+    let dir = fixture.dir.path().to_string_lossy().into_owned();
+    [SECRET, dir.as_str()]
+        .iter()
+        .for_each(|leak| assert!(!String::from_utf8_lossy(&bytes).contains(leak), "status leaked {leak}"));
+    assert_eq!(ping(service).await, PONG);
+}
+
+#[tokio::test]
+async fn locked_startup_is_locked_until_the_right_passphrase_is_given() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+
+    assert_safe_state(&fixture, &service, ServiceState::Locked, UnavailableReason::Locked).await;
+    assert_eq!(
+        unlock(&service, WRONG_PASSPHRASE).await,
+        error_response(ErrorCode::UnlockDenied, "wrong passphrase")
+    );
+    assert_safe_state(&fixture, &service, ServiceState::Locked, UnavailableReason::Locked).await;
+}
+
+/// Unlocks a service whose approved policy does not verify, and asserts the Unavailable (policy invalid) safe state.
+async fn unlocked_with_invalid_policy(fixture: &Fixture) {
+    let service = fixture.start().unwrap();
+    let message = "the vault unlocked, but the config check failed: the service is Unavailable (policy invalid)";
+    assert_eq!(
+        unlock(&service, PASSPHRASE).await,
+        error_response(ErrorCode::UnlockedUnavailable, message)
+    );
+    let unavailable = ServiceState::Unavailable(FailureReason::PolicyInvalid);
+    assert_safe_state(fixture, &service, unavailable, UnavailableReason::PolicyInvalid).await;
+}
+
+#[tokio::test]
+async fn a_bad_signature_at_startup_is_unavailable_with_policy_invalid() {
+    let fixture = approved().await;
+    let mut signature = fs::read(fixture.path("etc/config.toml.sig")).unwrap();
+    signature.iter_mut().for_each(|byte| *byte ^= 0xff);
+    fs::write(fixture.path("etc/config.toml.sig"), signature).unwrap();
+
+    unlocked_with_invalid_policy(&fixture).await;
+}
+
+#[tokio::test]
+async fn an_older_committed_pair_at_startup_is_unavailable_and_the_old_policy_is_not_served() {
+    let mut fixture = approved().await;
+    let older = published_pair(&fixture);
+    fixture.approve(&fixture.config("# version two\n"));
+    publish_pair(&fixture, &older);
+
+    unlocked_with_invalid_policy(&fixture).await;
+}
+
+#[tokio::test]
+async fn an_uncommitted_higher_version_at_startup_is_unavailable() {
+    let mut fixture = approved().await;
+    let (committed_state, first) = (approval_state_bytes(&fixture), published_pair(&fixture));
+    fixture.approve(&fixture.config("# version two\n"));
+    // The signature on version two is valid, but the protected state never committed it.
+    fs::write(fixture.path("state/approval.age"), committed_state).unwrap();
+    assert_ne!(published_pair(&fixture), first);
+
+    unlocked_with_invalid_policy(&fixture).await;
+}
+
+#[tokio::test]
+async fn a_route_naming_an_unknown_credential_at_startup_is_unavailable() {
+    let mut fixture = Fixture::new().await;
+    let ghost = brave_route(fixture.upstream.port()).replace("brave_key", "ghost_key");
+    fixture.approve(&fixture.config(&ghost));
+
+    unlocked_with_invalid_policy(&fixture).await;
+}
+
+#[tokio::test]
+async fn damaged_shared_state_after_unlock_is_unavailable_needing_recovery_and_does_not_crash() {
+    for file in ["manifest.age", "approval.age"] {
+        for damage in [b"damaged".to_vec(), Vec::new()] {
+            let fixture = approved().await;
+            fs::write(fixture.path("state").join(file), damage).unwrap();
+            let service = fixture.start().unwrap();
+
+            let response = unlock(&service, PASSPHRASE).await;
+
+            let AdminResponse::Error { code, message } = response else {
+                panic!("{file}: expected an error, got {response:?}");
+            };
+            assert_eq!(code, ErrorCode::UnlockedUnavailable, "{file}: {message}");
+            let unavailable = ServiceState::Unavailable(FailureReason::RecoveryNeeded);
+            assert_safe_state(&fixture, &service, unavailable, UnavailableReason::RecoveryNeeded).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn one_damaged_credential_record_gives_503_on_its_routes_while_unrelated_routes_reach_the_upstream() {
+    let mut fixture = Fixture::new().await;
+    let config = fixture.config(&brave_route(fixture.upstream.port()));
+    fixture.approve(&config.replace("routes = [\"fx\"]", "routes = [\"fx\", \"brave\"]"));
+    fs::write(&fixture.brave_record, b"not the record").unwrap();
+    let service = fixture.start().unwrap();
+    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+
+    let damaged = get_path(&fixture.socket(), "/brave/latest").await;
+
+    assert_eq!((damaged.status, damaged.body.as_str()), (503, "service unavailable"));
+    assert_eq!(
+        fixture.upstream.requests().len(),
+        0,
+        "the damaged credential's route sent a request"
+    );
+    assert_served(&get_unix(&fixture.socket(), true).await);
+    assert_eq!(fixture.upstream.requests().len(), 1);
+    let (bytes, report) = status(&service).await;
+    assert_eq!(report.state, ServiceState::Ready);
+    assert_eq!(
+        standing(&report),
+        [
+            (
+                "brave_key".to_owned(),
+                Standing::Damaged(RecordDamage::Substituted),
+                vec!["brave".to_owned()]
+            ),
+            ("fx_key".to_owned(), Standing::Healthy, Vec::new())
+        ]
+    );
+    assert!(!String::from_utf8_lossy(&bytes).contains(SECRET));
+    assert_eq!(ping(&service).await, PONG);
+}
+
+#[tokio::test]
+async fn locking_while_serving_gives_503_locked_and_unlock_restores_serving_at_the_same_committed_version() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+    assert_served(&get_unix(&fixture.socket(), true).await);
+    let VaultStatus::Unlocked(before) = status(&service).await.1.vault else {
+        panic!("the serving vault should be unlocked");
+    };
+
+    assert_eq!(
+        admin(&service, AdminRequest::Lock, "").await.2,
+        AdminResponse::Lock { cleared: true }
+    );
+    assert_safe_state_keeping_connections(&fixture, &service, fixture.upstream.connections()).await;
+
+    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+    assert_served(&get_unix(&fixture.socket(), true).await);
+    let VaultStatus::Unlocked(after) = status(&service).await.1.vault else {
+        panic!("the restored vault should be unlocked");
+    };
+    assert_eq!(
+        (after.committed, after.highest_reserved),
+        (before.committed, before.highest_reserved)
+    );
+    assert_eq!(after.id, before.id);
+}
+
+/// [`assert_safe_state`] for a service that has already served: the Locked answers, with the upstream's connection
+/// count unchanged at `connections`.
+async fn assert_safe_state_keeping_connections(fixture: &Fixture, service: &Arc<ServiceContext>, connections: usize) {
+    assert_eq!(service.state().await, ServiceState::Locked);
+    let response = get_unix(&fixture.socket(), true).await;
+    assert_refused(&response, UnavailableReason::Locked);
+    assert_eq!(fixture.upstream.connections(), connections);
+    let report = status(service).await.1;
+    assert_eq!((report.state, report.vault), (ServiceState::Locked, VaultStatus::Locked));
+    assert_eq!(ping(service).await, PONG);
+}
