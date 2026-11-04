@@ -26,8 +26,8 @@ use std::time::Duration;
 
 use iron_vault_policy::{Capabilities, Limits, ListenerConfig, ListenerName, ParsedConfig};
 use iron_vault_store::{
-    ApprovalState, ConfigDirLock, ConfigFileName, LockError, OsFs, Passphrase, StateDirLock, StateFileName, StoreFs, UnlockError,
-    VaultIdentity, read_config_file, sweep_stale_config_temps, sweep_stale_temps, unlock_with_passphrase,
+    ApprovalState, ConfigDirLock, ConfigFileName, InitializationState, LockError, OsFs, Passphrase, StateDirLock, StateFileName, StoreFs,
+    UnlockError, VaultIdentity, read_config_file, sweep_stale_config_temps, sweep_stale_temps, unlock_with_passphrase,
 };
 use tokio::sync::Mutex;
 
@@ -388,21 +388,38 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// The vault ID, approval versions and credentials come from the open vault, so they are known only while the
     /// context holds one. A failed check drops the vault, though not the vault identity, so Unavailable reports them
     /// as unknown too.
+    ///
+    /// While no vault is open the directories are read for [`InitializationState`], on the blocking pool under the
+    /// service's own locks. Unrecognized files, or a directory that cannot be listed, report as Locked: `status` has no
+    /// error to give, and `init` names the offending files when the owner runs it.
     pub async fn status(&self) -> StatusReport {
         let inner = self.inner.lock().await;
+        let vault = match inner.open.as_ref() {
+            Some(open) => VaultStatus::Unlocked(UnlockedVault {
+                id: open.approval.vault_id(),
+                committed: open.approval.committed().map(|(version, _)| version.get()),
+                highest_reserved: open.approval.highest_reserved(),
+                credentials: open.credentials.clone(),
+                route_faults: open.route_faults.clone(),
+            }),
+            None => self.closed_vault_status().await,
+        };
         StatusReport {
             state: inner.state,
             profile: self.setup.paths.profile,
-            vault: inner.open.as_ref().map_or(VaultStatus::Locked, |open| {
-                VaultStatus::Unlocked(UnlockedVault {
-                    id: open.approval.vault_id(),
-                    committed: open.approval.committed().map(|(version, _)| version.get()),
-                    highest_reserved: open.approval.highest_reserved(),
-                    credentials: open.credentials.clone(),
-                    route_faults: open.route_faults.clone(),
-                })
-            }),
+            vault,
             memory: MemoryStatus::from(&self.setup.hardening.memory),
+        }
+    }
+
+    /// What the directories say about a vault that is not open.
+    async fn closed_vault_status(&self) -> VaultStatus {
+        let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
+        let read = tokio::task::spawn_blocking(move || InitializationState::read(&locks.state, &locks.config, &setup.fs)).await;
+        match read {
+            Ok(Ok(InitializationState::Uninitialized)) => VaultStatus::NotInitialized,
+            Ok(Ok(InitializationState::Unfinished)) => VaultStatus::InitializationUnfinished,
+            _ => VaultStatus::Locked,
         }
     }
 

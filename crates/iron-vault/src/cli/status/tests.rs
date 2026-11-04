@@ -167,3 +167,24 @@ fn each_route_fault_follows_the_credentials() {
         "{text}"
     );
 }
+
+#[test]
+fn an_uninitialized_or_unfinished_vault_says_what_to_run() {
+    [
+        (VaultStatus::NotInitialized, "vault: not initialized (run iron-vault init)"),
+        (
+            VaultStatus::InitializationUnfinished,
+            "vault: initialization unfinished (run iron-vault init again)",
+        ),
+    ]
+    .into_iter()
+    .for_each(|(vault, line)| {
+        let report = StatusReport {
+            vault,
+            ..locked(ServiceState::Locked)
+        };
+        let text = render(&report, alice);
+        assert_eq!(text.lines().nth(2), Some(line), "{text}");
+        assert_eq!(render(&report, alice), text);
+    });
+}

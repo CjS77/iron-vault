@@ -24,6 +24,7 @@ const TAG_MEMORY: u16 = 8;
 const TAG_MEMORY_DETAIL: u16 = 9;
 const TAG_CREDENTIALS: u16 = 10;
 const TAG_ROUTE_FAULTS: u16 = 11;
+const TAG_INITIALIZATION: u16 = 12;
 
 /// What the service answers `status` with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,9 +42,13 @@ pub struct StatusReport {
 /// The vault's lock state, and what is known only while it is unlocked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultStatus {
-    /// No vault is open, so the vault ID, the approval versions and the credentials are unknown. The service is also
+    /// An initialized vault is not open, so the vault ID, the approval versions and the credentials are unknown. The service is also
     /// here in Unavailable, where the failed check dropped the vault, though the service context keeps the vault identity.
     Locked,
+    /// Nothing of a vault is on disk, so there is nothing to unlock; `iron-vault init` creates one.
+    NotInitialized,
+    /// An initialization started and never finished; `iron-vault init` run again starts it over.
+    InitializationUnfinished,
     /// The vault is open.
     Unlocked(UnlockedVault),
 }
@@ -87,9 +92,12 @@ impl From<&MemoryProtection> for MemoryStatus {
 /// `status`'s success body: the command it answers, then the report's fields.
 pub(super) fn encode(command: u16, report: &StatusReport) -> Vec<u8> {
     let (state, reason) = state_codes(report.state);
-    let (id, committed, reserved, credentials, faults) = match &report.vault {
-        VaultStatus::Locked => (Vec::new(), 0, 0, Vec::new(), Vec::new()),
+    let (initialization, id, committed, reserved, credentials, faults) = match &report.vault {
+        VaultStatus::Locked => (0, Vec::new(), 0, 0, Vec::new(), Vec::new()),
+        VaultStatus::NotInitialized => (1, Vec::new(), 0, 0, Vec::new(), Vec::new()),
+        VaultStatus::InitializationUnfinished => (2, Vec::new(), 0, 0, Vec::new(), Vec::new()),
         VaultStatus::Unlocked(vault) => (
+            0,
             vault.id.as_bytes().to_vec(),
             vault.committed.unwrap_or(0),
             vault.highest_reserved,
@@ -114,6 +122,7 @@ pub(super) fn encode(command: u16, report: &StatusReport) -> Vec<u8> {
     fields::put(&mut out, TAG_MEMORY_DETAIL, detail.as_bytes());
     fields::put(&mut out, TAG_CREDENTIALS, &credentials);
     fields::put(&mut out, TAG_ROUTE_FAULTS, &faults);
+    fields::put(&mut out, TAG_INITIALIZATION, &[initialization]);
     out
 }
 
@@ -131,6 +140,7 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
         detail,
         credentials,
         faults,
+        initialization,
     ] = exact(
         fields,
         [
@@ -145,12 +155,14 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
             TAG_MEMORY_DETAIL,
             TAG_CREDENTIALS,
             TAG_ROUTE_FAULTS,
+            TAG_INITIALIZATION,
         ],
     )?;
     Ok(StatusReport {
         state: read_state(state, reason)?,
         profile: read_profile(TAG_PROFILE, profile)?,
         vault: read_vault(
+            initialization,
             id,
             read_u64(TAG_COMMITTED, committed)?,
             read_u64(TAG_RESERVED, reserved)?,
@@ -191,12 +203,22 @@ struct SealedLists<'a> {
     faults: &'a [u8],
 }
 
-/// An empty vault ID is a locked vault, which has nothing else to report; anything else must be a whole unlocked vault.
-fn read_vault(id: &[u8], committed: u64, reserved: u64, lists: SealedLists<'_>) -> Result<VaultStatus, FrameError> {
+/// An empty vault ID is a vault that is not open, which has nothing else to report; anything else must be a whole unlocked
+/// vault, whose initialization code is `0`.
+fn read_vault(initialization: &[u8], id: &[u8], committed: u64, reserved: u64, lists: SealedLists<'_>) -> Result<VaultStatus, FrameError> {
     let SealedLists { credentials, faults } = lists;
     if id.is_empty() {
         let nothing = committed == 0 && reserved == 0 && credentials.is_empty() && faults.is_empty();
-        return nothing.then_some(VaultStatus::Locked).ok_or(FrameError::InvalidValue(TAG_VAULT_ID));
+        let closed = match initialization {
+            [0] => VaultStatus::Locked,
+            [1] => VaultStatus::NotInitialized,
+            [2] => VaultStatus::InitializationUnfinished,
+            _ => return Err(FrameError::InvalidValue(TAG_INITIALIZATION)),
+        };
+        return nothing.then_some(closed).ok_or(FrameError::InvalidValue(TAG_VAULT_ID));
+    }
+    if initialization != [0] {
+        return Err(FrameError::InvalidValue(TAG_INITIALIZATION));
     }
     let id = <[u8; 16]>::try_from(id)
         .ok()
@@ -405,6 +427,8 @@ mod tests {
                 let faults = vec![pinned_ca("fx"), pinned_ca("internal")];
                 [
                     VaultStatus::Locked,
+                    VaultStatus::NotInitialized,
+                    VaultStatus::InitializationUnfinished,
                     unlocked(credentials.clone()),
                     unlocked(Vec::new()),
                     with_faults(credentials.clone(), faults.clone()),
@@ -429,7 +453,7 @@ mod tests {
             .into_iter()
             .for_each(|(committed, reserved, credentials, faults)| {
                 assert_eq!(
-                    read_vault(&[], committed, reserved, SealedLists { credentials, faults }),
+                    read_vault(&[0], &[], committed, reserved, SealedLists { credentials, faults }),
                     Err(FrameError::InvalidValue(TAG_VAULT_ID))
                 );
             });

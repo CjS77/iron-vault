@@ -431,6 +431,7 @@ digest or permitted origin.
 | 9 | memory protection detail | UTF-8 text: why memory is not locked; empty when it is locked or unsupported |
 | 10 | credentials | byte value: the credential list below; empty while the vault is locked |
 | 11 | route faults | byte value: the route fault list below; empty while the vault is locked or no route has a fault |
+| 12 | initialization | `u8`: `0` initialized (locked or open), `1` not initialized, `2` initialization unfinished; non-zero only while no vault is open |
 
 The vault ID, both approval versions, the credentials and the route faults are sealed behind the vault identity
 (`approval.age`, the manifest), so they are unknown while no vault is open. No vault is open in Starting, Locked and
@@ -438,6 +439,11 @@ Unavailable: in Unavailable a failed config check dropped the vault and its reco
 for the next check, so the service holds no ID, version, credential or route fault state to report there. The CLI
 shows these as unknown rather than guessing. An empty vault ID is how the report says no vault is open; an open vault
 with no credentials has a non-empty vault ID and an empty list.
+
+While no vault is open the service reads the state and config directories for the initialization state
+([vault-initialization.md](vault-initialization.md)), without the vault identity. Nothing on disk reports `1`, an
+`init.unfinished` marker reports `2`, and an initialized vault reports `0`. Unrecognized files, or a directory that
+cannot be listed, also report `0`: `status` has no error to give, and `init` names the files when the owner runs it.
 
 Memory protection is reported from the process hardening report and never claims swap protection unless `mlockall`
 succeeded ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)).
@@ -622,7 +628,8 @@ when no file is given ([open question 12](config-approval.md#open-questions)).
 ### status
 
 `iron-vault status` prints one field per line, in this order, to stdout: `service`, `reason` (only when Unavailable),
-`profile`, `vault`, `vault id`, `approval committed`, `approval highest reserved`, `memory protection`, then one
+`profile`, `vault` (`locked`, `unlocked`, `not initialized (run iron-vault init)` or `initialization unfinished (run
+iron-vault init again)`), `vault id`, `approval committed`, `approval highest reserved`, `memory protection`, then one
 `credential <name>` line per credential (or `credentials` alone when there are none or they are unknown), then one
 `route <name>: unavailable (pinned CA unavailable)` line per route fault. A value
 sealed behind a locked vault prints as `unknown while the vault is locked`. Under the development profile the

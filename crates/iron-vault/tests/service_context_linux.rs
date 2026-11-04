@@ -783,6 +783,29 @@ async fn status_while_locked_reports_the_sealed_values_as_unknown() {
     assert_eq!(report.memory, MemoryStatus::Unsupported);
 }
 
+/// Removes every file of the vault from the fixture's state directory, leaving the lock file the service holds.
+fn empty_state_dir(fixture: &Fixture) {
+    fs::read_dir(fixture.path("state"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_file() && path.extension().is_none_or(|extension| extension != "lock"))
+        .for_each(|path| fs::remove_file(path).unwrap());
+}
+
+#[tokio::test]
+async fn status_names_an_uninitialized_vault_and_an_unfinished_initialization() {
+    let fixture = Fixture::new().await;
+    empty_state_dir(&fixture);
+    let service = fixture.start().unwrap();
+
+    let (first, report) = status(&service).await;
+    assert_eq!(report.vault, VaultStatus::NotInitialized);
+    assert_eq!(status(&service).await.0, first);
+
+    fs::write(fixture.path("state/init.unfinished"), b"").unwrap();
+    assert_eq!(status(&service).await.1.vault, VaultStatus::InitializationUnfinished);
+}
+
 #[tokio::test]
 async fn status_when_ready_reports_the_vault_approval_and_every_credential() {
     let mut fixture = Fixture::new().await;

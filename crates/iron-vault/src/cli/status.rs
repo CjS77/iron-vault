@@ -51,6 +51,8 @@ fn vault_lines(vault: &VaultStatus) -> [String; 4] {
             format!("approval committed: {UNKNOWN}"),
             format!("approval highest reserved: {UNKNOWN}"),
         ],
+        VaultStatus::NotInitialized => closed_vault("not initialized (run iron-vault init)"),
+        VaultStatus::InitializationUnfinished => closed_vault("initialization unfinished (run iron-vault init again)"),
         VaultStatus::Unlocked(UnlockedVault {
             id,
             committed,
@@ -68,6 +70,16 @@ fn vault_lines(vault: &VaultStatus) -> [String; 4] {
     }
 }
 
+/// The lines for a vault that is not open and is not merely locked: its sealed values are unknown as for a locked one.
+fn closed_vault(what: &str) -> [String; 4] {
+    [
+        format!("vault: {what}"),
+        "vault id: unknown".to_owned(),
+        format!("approval committed: {UNKNOWN}"),
+        format!("approval highest reserved: {UNKNOWN}"),
+    ]
+}
+
 /// Only `Locked` claims swap protection.
 fn memory_line(memory: &MemoryStatus) -> String {
     match memory {
@@ -79,7 +91,9 @@ fn memory_line(memory: &MemoryStatus) -> String {
 
 fn credential_lines(vault: &VaultStatus) -> Vec<String> {
     match vault {
-        VaultStatus::Locked => vec![format!("credentials: {UNKNOWN}")],
+        VaultStatus::Locked | VaultStatus::NotInitialized | VaultStatus::InitializationUnfinished => {
+            vec![format!("credentials: {UNKNOWN}")]
+        }
         VaultStatus::Unlocked(unlocked) if unlocked.credentials.is_empty() => vec!["credentials: none".to_owned()],
         VaultStatus::Unlocked(unlocked) => unlocked.credentials.iter().map(credential_line).collect(),
     }
@@ -88,7 +102,7 @@ fn credential_lines(vault: &VaultStatus) -> Vec<String> {
 /// One line per route fault; nothing while the vault is locked or no route has one.
 fn route_fault_lines(vault: &VaultStatus) -> Vec<String> {
     match vault {
-        VaultStatus::Locked => Vec::new(),
+        VaultStatus::Locked | VaultStatus::NotInitialized | VaultStatus::InitializationUnfinished => Vec::new(),
         VaultStatus::Unlocked(unlocked) => unlocked.route_faults.iter().map(route_fault_line).collect(),
     }
 }
