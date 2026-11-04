@@ -21,7 +21,7 @@ pub struct StateDirLock {
 #[derive(Debug, thiserror::Error)]
 pub enum LockError {
     /// Another process (or another open in this one) already holds the lock.
-    #[error("{} is locked: a second Iron Vault instance is already running against this state directory", path.display())]
+    #[error("{} is locked: a second Iron Vault instance is already running against this directory", path.display())]
     Held {
         /// The lock file path.
         path: PathBuf,
@@ -45,20 +45,9 @@ pub enum LockError {
 impl StateDirLock {
     /// Takes the exclusive lock on `dir`, failing at once if another instance holds it.
     pub fn acquire(dir: &Path) -> Result<Self, LockError> {
-        let path = dir.join(LOCK_FILE);
-        let io_err = |e: io::Error| LockError::Io {
-            path: path.clone(),
-            kind: e.kind(),
-        };
-        let file = open_lock_file(&path).map_err(|e| lock_open_error(e, &path))?;
-        ensure_regular(&file, &path)?;
-        file.try_lock().map_err(|e| match e {
-            TryLockError::WouldBlock => LockError::Held { path: path.clone() },
-            TryLockError::Error(e) => io_err(e),
-        })?;
         Ok(Self {
             dir: dir.to_path_buf(),
-            _file: file,
+            _file: lock_file(dir, LOCK_FILE)?,
         })
     }
 
@@ -66,6 +55,22 @@ impl StateDirLock {
     pub fn dir(&self) -> &Path {
         &self.dir
     }
+}
+
+/// Opens or creates `dir/file_name` and takes an exclusive, non-blocking lock on it. The lock lasts as long as the
+/// returned handle stays open.
+pub(crate) fn lock_file(dir: &Path, file_name: &str) -> Result<File, LockError> {
+    let path = dir.join(file_name);
+    let file = open_lock_file(&path).map_err(|e| lock_open_error(e, &path))?;
+    ensure_regular(&file, &path)?;
+    file.try_lock().map_err(|e| match e {
+        TryLockError::WouldBlock => LockError::Held { path: path.clone() },
+        TryLockError::Error(e) => LockError::Io {
+            path: path.clone(),
+            kind: e.kind(),
+        },
+    })?;
+    Ok(file)
 }
 
 fn open_lock_file(path: &Path) -> io::Result<File> {

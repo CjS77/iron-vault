@@ -107,16 +107,7 @@ pub enum ReadError {
 /// left, but the replacement may not survive power loss. Callers must not treat that error as "unchanged". Where
 /// directory fsync does not exist, this returns that error before touching the filesystem.
 pub fn durable_replace(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileName, bytes: &[u8]) -> Result<(), WriteError> {
-    ensure_dir_sync_supported(name)?;
-    let dir = lock.dir();
-    let temp = dir.join(name.temp_name());
-    let file = fs.create_private(&temp).map_err(io_error(WriteStep::CreateTemp, name))?;
-    fill_and_rename(fs, file, bytes, &temp, &dir.join(name.as_str()), name).inspect_err(|_| {
-        // Best effort: the original error is the one worth reporting, and a leftover temp file blocks only this name.
-        // No directory fsync follows: a lost unlink only leaves a stale temp file for the startup sweep.
-        let _ = fs.remove_file(&temp);
-    })?;
-    fs.sync_dir(dir).map_err(io_error(WriteStep::SyncDir, name))
+    replace_in(fs, lock.dir(), name.as_str(), bytes).map_err(|f| f.in_state_file(name))
 }
 
 /// Removes the state file `name`, durably: unlinks it, then fsyncs the state directory.
@@ -124,16 +115,7 @@ pub fn durable_replace(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileN
 /// A [`WriteStep::SyncDir`] failure comes after the unlink: the file is already gone, but the deletion may not
 /// survive power loss. Where directory fsync does not exist, this returns that error before touching the filesystem.
 pub fn durable_remove(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileName) -> Result<(), WriteError> {
-    ensure_dir_sync_supported(name)?;
-    fs.remove_file(&lock.dir().join(name.as_str())).map_err(|e| match e.kind() {
-        io::ErrorKind::NotFound => WriteError::NotFound { file: name.clone() },
-        kind => WriteError::Io {
-            step: WriteStep::Remove,
-            file: name.clone(),
-            kind,
-        },
-    })?;
-    fs.sync_dir(lock.dir()).map_err(io_error(WriteStep::SyncDir, name))
+    remove_in(fs, lock.dir(), name.as_str()).map_err(|f| f.in_state_file(name))
 }
 
 /// The most any state file read may return: 1 MiB, the manifest's own limit and the largest state file.
@@ -148,44 +130,114 @@ pub const MAX_STATE_FILE_LEN: u64 = 1 << 20;
 /// the service and a device cannot feed it without end.
 pub fn read_state_file(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileName, max_len: u64) -> Result<Vec<u8>, ReadError> {
     let max_len = max_len.min(MAX_STATE_FILE_LEN);
-    fs.read_bounded(&lock.dir().join(name.as_str()), max_len)
-        .map_err(|e| match e.kind() {
-            io::ErrorKind::FileTooLarge => ReadError::TooLarge {
-                file: name.clone(),
-                max_len,
+    read_in(fs, lock.dir(), name.as_str(), max_len).map_err(|f| match f {
+        ReadFailure::TooLarge => ReadError::TooLarge {
+            file: name.clone(),
+            max_len,
+        },
+        ReadFailure::NotRegular => ReadError::NotARegularFile { file: name.clone() },
+        ReadFailure::Io(kind) => ReadError::Io { file: name.clone(), kind },
+    })
+}
+
+/// A durable write or remove that failed at `step`, before it is attributed to a file of one directory or the other.
+///
+/// The state directory and the config directory share the durable-write bodies below, and each wraps this in its own
+/// error type, so a failure always names a file of the directory it happened in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StepFailure {
+    pub(crate) step: WriteStep,
+    pub(crate) kind: io::ErrorKind,
+}
+
+impl StepFailure {
+    pub(crate) fn new(step: WriteStep) -> impl Fn(io::Error) -> Self {
+        move |e| Self { step, kind: e.kind() }
+    }
+
+    fn in_state_file(self, file: &StateFileName) -> WriteError {
+        match (self.step, self.kind) {
+            (WriteStep::Remove, io::ErrorKind::NotFound) => WriteError::NotFound { file: file.clone() },
+            (step, kind) => WriteError::Io {
+                step,
+                file: file.clone(),
+                kind,
             },
-            io::ErrorKind::InvalidInput => ReadError::NotARegularFile { file: name.clone() },
-            kind => ReadError::Io { file: name.clone(), kind },
-        })
+        }
+    }
+}
+
+/// Why a bounded read failed, before it is attributed to a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadFailure {
+    TooLarge,
+    NotRegular,
+    Io(io::ErrorKind),
+}
+
+/// The temporary name a durable replace of the file `name` writes first: `.<name>.tmp`.
+pub(crate) fn temp_name(name: &str) -> String {
+    format!(".{name}.tmp")
+}
+
+/// Durably replaces `dir/name`: private temp file, fsync, rename, directory fsync. See [`durable_replace`].
+pub(crate) fn replace_in<F: StoreFs>(fs: &F, dir: &Path, name: &str, bytes: &[u8]) -> Result<(), StepFailure> {
+    dir_sync_supported()?;
+    let temp = dir.join(temp_name(name));
+    let file = fs.create_private(&temp).map_err(StepFailure::new(WriteStep::CreateTemp))?;
+    fill_and_rename(fs, file, bytes, &temp, &dir.join(name)).inspect_err(|_| {
+        // Best effort: the original error is the one worth reporting, and a leftover temp file blocks only this name.
+        // No directory fsync follows: a lost unlink only leaves a stale temp file for the startup sweep.
+        let _ = fs.remove_file(&temp);
+    })?;
+    fs.sync_dir(dir).map_err(StepFailure::new(WriteStep::SyncDir))
+}
+
+/// Durably removes `dir/name`: unlink, then directory fsync. See [`durable_remove`].
+pub(crate) fn remove_in<F: StoreFs>(fs: &F, dir: &Path, name: &str) -> Result<(), StepFailure> {
+    dir_sync_supported()?;
+    unlink_in(fs, dir, name)?;
+    fs.sync_dir(dir).map_err(StepFailure::new(WriteStep::SyncDir))
+}
+
+/// Unlinks `dir/name` without the directory fsync, for callers that remove several files and fsync once.
+pub(crate) fn unlink_in<F: StoreFs>(fs: &F, dir: &Path, name: &str) -> Result<(), StepFailure> {
+    fs.remove_file(&dir.join(name)).map_err(StepFailure::new(WriteStep::Remove))
+}
+
+/// Reads the regular file `dir/name` of at most `max_len` bytes. See [`read_state_file`].
+pub(crate) fn read_in<F: StoreFs>(fs: &F, dir: &Path, name: &str, max_len: u64) -> Result<Vec<u8>, ReadFailure> {
+    fs.read_bounded(&dir.join(name), max_len).map_err(|e| match e.kind() {
+        io::ErrorKind::FileTooLarge => ReadFailure::TooLarge,
+        io::ErrorKind::InvalidInput => ReadFailure::NotRegular,
+        kind => ReadFailure::Io(kind),
+    })
 }
 
 /// Writes and fsyncs the temporary file, closes it, then renames it over the destination.
-fn fill_and_rename<F: StoreFs>(
-    fs: &F,
-    mut file: F::File,
-    bytes: &[u8],
-    temp: &Path,
-    dest: &Path,
-    name: &StateFileName,
-) -> Result<(), WriteError> {
-    fs.write_all(&mut file, bytes).map_err(io_error(WriteStep::Write, name))?;
-    fs.sync_file(&file).map_err(io_error(WriteStep::SyncFile, name))?;
+fn fill_and_rename<F: StoreFs>(fs: &F, mut file: F::File, bytes: &[u8], temp: &Path, dest: &Path) -> Result<(), StepFailure> {
+    fs.write_all(&mut file, bytes).map_err(StepFailure::new(WriteStep::Write))?;
+    fs.sync_file(&file).map_err(StepFailure::new(WriteStep::SyncFile))?;
     // Close before renaming: some platforms refuse to rename an open file.
     drop(file);
-    fs.rename(temp, dest).map_err(io_error(WriteStep::Rename, name))
+    fs.rename(temp, dest).map_err(StepFailure::new(WriteStep::Rename))
 }
 
 /// Fails closed before any change on a platform with no directory fsync, so a write never claims durability it lacks.
-pub(crate) fn ensure_dir_sync_supported(name: &StateFileName) -> Result<(), WriteError> {
+pub(crate) fn dir_sync_supported() -> Result<(), StepFailure> {
     if cfg!(unix) {
         Ok(())
     } else {
-        Err(WriteError::Io {
+        Err(StepFailure {
             step: WriteStep::SyncDir,
-            file: name.clone(),
             kind: io::ErrorKind::Unsupported,
         })
     }
+}
+
+/// [`dir_sync_supported`] as a state-file [`WriteError`].
+pub(crate) fn ensure_dir_sync_supported(name: &StateFileName) -> Result<(), WriteError> {
+    dir_sync_supported().map_err(|f| f.in_state_file(name))
 }
 
 pub(crate) fn io_error(step: WriteStep, file: &StateFileName) -> impl Fn(io::Error) -> WriteError + '_ {
