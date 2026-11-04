@@ -632,6 +632,29 @@ async fn a_client_that_goes_away_at_the_prompt_releases_the_service_wide_lock() 
     let mut second = second.expect("the second approval stayed busy");
     assert_eq!(error_code(&converse(&mut second, &["no"]).await.response), ErrorCode::Declined);
     assert_eq!(versions(&service).await, (Some(1), 1));
+    // Both approvals wrote the pending config and both ended before a reservation, so none may be left; this cannot
+    // tell which of the two cleanups removed it.
+    assert!(!fixture.path("etc/config.toml.pending").exists());
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn a_lock_and_an_unlock_at_the_prompt_of_an_approval_out_of_an_invalid_policy_reserve_nothing() {
+    let fixture = Fixture::new().await;
+    fs::write(fixture.path("etc/config.toml"), fixture.config("edited")).unwrap();
+    let service = fixture.start().await;
+    let invalid = ServiceState::Unavailable(FailureReason::PolicyInvalid);
+    assert_eq!(service.state().await, invalid);
+    let (path, stop) = serve_admin(&service);
+    let mut stream = at_confirmation(&path, &fixture.config("rates")).await;
+
+    service.lock(WAIT).await.unwrap();
+    assert_eq!(service.enter_checking(identity()).await, Ok(invalid));
+    send(&mut stream, &Frame::OwnerInput(OwnerInput::new(Zeroizing::new(b"yes".to_vec())))).await;
+    let exchanged = converse(&mut stream, &[APPROVAL_PASSPHRASE]).await;
+
+    assert_eq!(error_code(&exchanged.response), ErrorCode::ApprovalUnavailable);
+    assert_eq!(service.state().await, invalid);
     assert!(!fixture.path("etc/config.toml.pending").exists());
     let _ = stop.send(());
 }

@@ -303,8 +303,9 @@ impl fmt::Debug for CommittedApproval {
 /// Step 2. Exhaustion and a failure before the rename reserve nothing; a failed directory fsync after the rename
 /// leaves the version consumed, because the next reservation reads it from disk.
 ///
-/// A durable reservation is recorded as `config.version-reserved` here, before anything is signed, so audit never sees
-/// a failed approval without the reservation that preceded it.
+/// A durable reservation is recorded as `config.version-reserved` here, before anything is signed, so a signing or
+/// staging failure follows its reservation in the audit log. A reservation whose directory fsync failed is consumed but
+/// not recorded here: it fails at this step, as `config.approval-failed`.
 fn reserve<F: StoreFs>(
     storage: &ApprovalStorage<'_, F>,
     state: &mut ApprovalState,

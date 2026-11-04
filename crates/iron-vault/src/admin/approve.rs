@@ -79,10 +79,10 @@ async fn authorize<F: StoreFs + Send + Sync + 'static>(
         label: PASSPHRASE_PROMPT.to_owned(),
         secret: true,
     };
-    let input = exchange.prompt(&prompt).await?;
-    Ok(approval_passphrase(input)
-        .ok_or(ApprovalEnd::Denied)
-        .and_then(|passphrase| review.open_signer(&passphrase)))
+    let Some(passphrase) = approval_passphrase(exchange.prompt(&prompt).await?) else {
+        return Ok(Err(ApprovalEnd::Denied));
+    };
+    Ok(review.open_signer(passphrase).await)
 }
 
 /// The owner's input as an approval passphrase. Empty or non-UTF-8 input cannot be the passphrase, so it is refused as

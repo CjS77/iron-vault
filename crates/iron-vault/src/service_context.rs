@@ -212,8 +212,8 @@ struct Inner {
     open: Option<OpenVault>,
     /// The request listeners and the task serving them; `None` only while they are being rebuilt or once stopped.
     serving: Option<Serving>,
-    /// The check generation: how many times the service has entered Checking through a config check. An approval
-    /// commits only at the generation it started at, because each check discards uncommitted pending files.
+    /// The check generation: how many config checks the service has run. An approval commits only at the generation it
+    /// started at, because each check discards uncommitted pending files.
     checks: u64,
 }
 
@@ -479,7 +479,6 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             return Err(IllegalTransition { state: from, event });
         }
         let checking = self.apply(inner, event)?;
-        inner.checks = inner.checks.wrapping_add(1);
         let committed = inner
             .open
             .as_ref()
@@ -507,6 +506,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         event: ServiceEvent,
         committed: Option<u64>,
     ) -> Result<ServiceState, IllegalTransition> {
+        inner.checks = inner.checks.wrapping_add(1);
         match self.run_check(identity).await {
             Ok(Checked {
                 snapshot,

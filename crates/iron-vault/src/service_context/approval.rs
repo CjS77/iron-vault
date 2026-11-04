@@ -36,7 +36,7 @@ pub enum ApprovalEnd {
     /// Another approval, vault write or reload holds the service-wide lock.
     #[error("another approval, vault write or reload is running; try again")]
     Busy,
-    /// The service state does not allow an approval, or it changed while the owner was at a prompt.
+    /// The service state does not allow an approval.
     #[error("the service is {0:?}; only Ready, or Unavailable with an invalid policy, can approve a config")]
     WrongState(ServiceState),
     /// The proposed config does not parse, validate, activate or build its upstream clients.
@@ -191,17 +191,24 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         self.approval.highest_reserved().saturating_add(1)
     }
 
-    /// Opens `approver.age` with `passphrase` as the pinned approver's signer. A wrong passphrase, or a key that is not
-    /// the pinned approver's, is [`ApprovalEnd::Denied`].
-    pub fn open_signer(&self, passphrase: &ApprovalPassphrase) -> Result<SoftwareSigner, ApprovalEnd> {
-        let envelope = read_signer_key(&self.service.locks.state, &self.service.setup.fs).map_err(unavailable)?;
-        open_signer_key(&envelope, passphrase, self.approval.approver()).map_err(|error| match error {
-            SignError::WrongPassphrase | SignError::KeyMismatch => {
-                tracing::warn!(%error, "config approval refused before any reservation");
-                ApprovalEnd::Denied
-            }
-            other => unavailable(other),
-        })
+    /// Opens `approver.age` with `passphrase` as the pinned approver's signer, on the blocking pool, since scrypt holds
+    /// a thread for seconds. A wrong passphrase, or a key that is not the pinned approver's, is [`ApprovalEnd::Denied`].
+    ///
+    /// The task owns the passphrase and drops it when it ends. A task that ends without a result refuses the approval
+    /// before anything is reserved; if this future is dropped first, the task still ends and drops the signer it opened.
+    pub async fn open_signer(&self, passphrase: ApprovalPassphrase) -> Result<SoftwareSigner, ApprovalEnd> {
+        let (locks, setup, approver) = (
+            Arc::clone(&self.service.locks),
+            Arc::clone(&self.service.setup),
+            self.approval.approver().clone(),
+        );
+        let opened = tokio::task::spawn_blocking(move || {
+            let envelope = read_signer_key(&locks.state, &setup.fs).map_err(unavailable)?;
+            open_signer_key(&envelope, &passphrase, &approver).map_err(denied_or_unavailable)
+        });
+        opened
+            .await
+            .unwrap_or_else(|_| Err(unavailable("the approver key check was interrupted; nothing was reserved")))
     }
 
     /// Ends the approval before any reservation: removes the pending config and releases the service-wide lock.
@@ -342,6 +349,18 @@ fn not_committed(error: ApprovalError, digest: ConfigDigest) -> ApprovalEnd {
             }
         }
         _ => unavailable(error),
+    }
+}
+
+/// A wrong approval passphrase, or a key that is not the pinned approver's, is the owner's refusal; anything else is
+/// the service's.
+fn denied_or_unavailable(error: SignError) -> ApprovalEnd {
+    match error {
+        SignError::WrongPassphrase | SignError::KeyMismatch => {
+            tracing::warn!(%error, "config approval refused before any reservation");
+            ApprovalEnd::Denied
+        }
+        other => unavailable(other),
     }
 }
 
