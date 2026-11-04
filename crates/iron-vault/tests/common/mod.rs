@@ -7,6 +7,8 @@
 // under the test harness, where a panic is a test failure.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+#[cfg(target_os = "linux")]
+pub mod approval_harness;
 pub mod body_stream;
 pub mod checked;
 pub mod h2_refusal;
