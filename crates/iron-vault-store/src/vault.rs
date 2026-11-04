@@ -142,7 +142,9 @@ pub enum SharedStateDamage {
 ///
 /// The identity is shared, not owned: the service keeps the vault identity from unlock to lock and opens a new vault
 /// from it on every config check, and [`VaultIdentity`] has no `Clone`, so each holder keeps a reference to the one
-/// copy, whose key bytes are cleared when the last holder drops it. Records the manifest lists but that failed to load are known by name only, so their routes can be refused rather
+/// copy, whose key bytes are cleared when the last holder drops it.
+///
+/// Records the manifest lists but that failed to load are known by name only, so their routes can be refused rather
 /// than reported as unknown. `Debug` shows credential names, never material.
 pub struct Vault {
     /// The state directory the vault was opened or created in; a write refuses any other directory's lock.
