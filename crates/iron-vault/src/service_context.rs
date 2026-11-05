@@ -496,27 +496,6 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// [`Settler::check_and_settle`] in place, under a guard the caller keeps.
-    async fn check_and_settle(
-        &self,
-        inner: &mut Inner,
-        event: ServiceEvent,
-        identity: Arc<VaultIdentity>,
-    ) -> Result<ServiceState, IllegalTransition> {
-        self.settler().check_and_settle(inner, event, identity).await
-    }
-
-    /// [`Settler::settle`] in place, under a guard the caller keeps.
-    async fn settle(
-        &self,
-        inner: &mut Inner,
-        identity: Arc<VaultIdentity>,
-        event: ServiceEvent,
-        committed: Option<u64>,
-    ) -> Result<ServiceState, IllegalTransition> {
-        self.settler().settle(inner, identity, event, committed).await
-    }
-
     /// [`Settler::check_and_settle`] in a spawned task that owns `inner`, so the move out of Checking finishes even if
     /// this future is dropped: §3.12 leaves Checking only on a pass or a failure. A task that ends without a result has
     /// already failed closed through its [`SettleGuard`], so the caller only reads the state it left.

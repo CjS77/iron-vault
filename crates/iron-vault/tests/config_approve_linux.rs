@@ -18,17 +18,19 @@ use std::sync::Arc;
 
 use common::WAIT;
 use common::approval_harness::{
-    APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approve, approve_request, captured_logs, converse, error_code, get, identity,
-    read_frame, send, serve_admin, the_two_prompts, versions,
+    APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approval_passphrase, approve, approve_request, captured_logs, converse, error_code,
+    get, identity, read_frame, send, serve_admin, the_two_prompts, versions,
 };
+use common::gated_fs::GatedFs;
 use common::mock_upstream::Reply;
 use common::proxy_harness::{CallerRequest, TOKEN_HEADER, Via};
 use iron_vault::admin::protocol::{AdminResponse, ApprovalResult, ErrorCode, Frame, OwnerInput};
-use iron_vault::service_state::{FailureReason, ServiceEvent, ServiceState};
+use iron_vault::service_state::{FailureReason, ServiceEvent, ServiceState, UnavailableReason};
+use iron_vault::serving_snapshot::Admission;
 use iron_vault_store::ConfigDigest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot};
 use zeroize::Zeroizing;
 
 #[tokio::test]
@@ -356,4 +358,46 @@ async fn an_approval_that_drops_a_listener_closes_only_that_socket_and_a_request
     raw.push_str(&String::from_utf8_lossy(&rest));
     assert!(raw.contains("data: second"), "{raw}");
     assert!(raw.ends_with("0\r\n\r\n"), "the response did not end cleanly: {raw}");
+}
+
+/// An approval aborted after its commit, while the config check that follows holds it, still ends in Ready on the new
+/// version: the check and the move out of Checking belong to a task of their own (§3.12).
+#[tokio::test]
+async fn an_approval_aborted_after_its_commit_still_settles_in_ready_on_the_new_version() {
+    let fixture = Fixture::new().await;
+    let fs = GatedFs::default();
+    let service = fixture.ready_on(fs.clone()).await;
+    let proposed = fixture.config("rates");
+    let (signed, go) = (oneshot::channel::<()>(), oneshot::channel::<()>());
+    let approving = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move {
+            let review = service.review_approval(proposed.into_bytes()).await.unwrap();
+            let signer = review.open_signer(approval_passphrase(APPROVAL_PASSPHRASE)).await.unwrap();
+            signed.0.send(()).unwrap();
+            go.1.await.unwrap();
+            review.commit(signer).await.map(drop)
+        }
+    });
+    signed.1.await.unwrap();
+    // The commit reads the approval state and the config pair but no credential record, which the config check opens.
+    let record = fs::read_dir(fixture.path("state"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .find(|name| name.starts_with("record-"))
+        .unwrap();
+    let (reached, release) = fs.arm(record);
+    go.0.send(()).unwrap();
+    tokio::time::timeout(WAIT, reached).await.unwrap().unwrap();
+    assert!(matches!(service.holder().load(), Admission::Refuse(UnavailableReason::Checking)));
+
+    approving.abort();
+    assert!(approving.await.unwrap_err().is_cancelled());
+    release.send(()).unwrap();
+
+    // The state waits for the mutex the settle task holds.
+    assert_eq!(tokio::time::timeout(WAIT, service.state()).await.unwrap(), ServiceState::Ready);
+    assert_eq!(versions(&service).await, (Some(2), 2));
+    assert_eq!(get(&fixture, "rates").await.status, 200);
+    assert_eq!(get(&fixture, "fx").await.status, 404);
 }

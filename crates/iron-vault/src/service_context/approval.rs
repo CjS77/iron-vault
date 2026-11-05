@@ -12,7 +12,8 @@
 //! unless both are unchanged.
 //!
 //! [`ApprovalReview::commit`] runs steps 2 to 6 under the context's mutex: reserve, sign and stage, then the admission
-//! pause, the commit and publish, then the config check that ends the pause in Ready or Unavailable.
+//! pause, the commit and publish, then the config check that ends the pause in Ready or Unavailable. A task of its own
+//! owns the mutex guard and runs all of it (see [`ApprovalReview::commit`] for what that guarantees).
 
 use std::sync::Arc;
 
@@ -23,7 +24,7 @@ use iron_vault_store::{
 };
 use tokio::sync::MutexGuard;
 
-use super::{Inner, ServiceContext, apply};
+use super::{Inner, ServiceContext, ServiceLocks, SettleGuard, Settler, apply};
 use crate::admin::protocol::ApprovalResult;
 use crate::config_check::{InvalidConfig, activate_config};
 use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState, UnavailableReason};
@@ -48,7 +49,9 @@ pub enum ApprovalEnd {
     /// The approval passphrase did not open the pinned approver's key.
     #[error("the approval passphrase does not open the approver key")]
     Denied,
-    /// Nothing was reserved, and the approval cannot run: the approval state, the approver key or a write failed.
+    /// Nothing was reserved, and the approval cannot run: the approval state, the approver key or a write failed. Also
+    /// the answer when the task running the transaction ended without a result, which leaves the service Unavailable
+    /// and a version possibly reserved or committed; its message says so.
     #[error("the service cannot approve now: {0}")]
     Unavailable(String),
     /// A version was reserved, and so consumed, but nothing was committed; the active config is unchanged.
@@ -141,31 +144,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 
     fn storage<'s>(&'s self, identity: &'s VaultIdentity) -> ApprovalStorage<'s, F> {
-        ApprovalStorage {
-            state_dir: &self.locks.state,
-            config_dir: &self.locks.config,
-            identity,
-            fs: &self.setup.fs,
-        }
-    }
-
-    /// Steps 5 and 6 after a durable commit: the config check, from Checking when the approval started in Ready, or
-    /// through `Repaired` when it started in Unavailable.
-    async fn check_committed(&self, inner: &mut Inner, started: ServiceState, identity: Arc<VaultIdentity>) -> ServiceState {
-        let checked = match started {
-            ServiceState::Ready => self.settle(inner, identity, ServiceEvent::ApprovalCommitting, None).await,
-            _ => self.check_and_settle(inner, ServiceEvent::Repaired, identity).await,
-        };
-        checked.unwrap_or_else(|illegal| illegal.state)
-    }
-
-    /// An uncertain commit that could not be settled: Unavailable needing recovery, through Checking from either start.
-    fn recovery_needed(&self, inner: &mut Inner, started: ServiceState) -> ServiceState {
-        if started != ServiceState::Ready {
-            inner.open = None;
-            let _ = apply(&self.holder, inner, ServiceEvent::Repaired);
-        }
-        apply(&self.holder, inner, ServiceEvent::CheckFailed(FailureReason::RecoveryNeeded)).unwrap_or(inner.state)
+        approval_storage(&self.locks, &self.setup.fs, identity)
     }
 }
 
@@ -220,23 +199,70 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
     ///
     /// Refuses before reserving unless the service is in the state, and at the check generation, the approval started
     /// at: a `lock`, or a `lock` and an `unlock`, while the owner was at a prompt ends it with nothing reserved.
-    pub async fn commit(self, signer: impl ApprovalSigner) -> Result<ApprovalResult, ApprovalEnd> {
+    ///
+    /// Cancel-safe: from the first reservation on, a task of its own owns the context's guard and runs every step to
+    /// its end, as [`ServiceContext::unlock`] does for a config check. Dropping this future after the commit therefore
+    /// never leaves the service in Checking (§3.12): the task still settles in Ready on the new config, or in
+    /// Unavailable. A task that ends without a result fails closed through its [`SettleGuard`], and this call then
+    /// answers [`ApprovalEnd::Unavailable`].
+    pub async fn commit<S: ApprovalSigner + Send + 'static>(self, signer: S) -> Result<ApprovalResult, ApprovalEnd> {
         let Self {
             service,
             _service_wide: _held,
             started: Started { state: started, checks },
             pending,
-            mut approval,
+            approval,
             summary,
         } = self;
-        let mut inner = service.inner.lock().await;
+        let inner = Arc::clone(&service.inner).lock_owned().await;
         let Some(identity) = inner.identity.clone().filter(|_| inner.state == started && inner.checks == checks) else {
             pending.abandon(&service.locks.config, &service.setup.fs);
             return Err(ApprovalEnd::Unavailable(
                 "the service was locked or checked again while the owner was at a prompt; nothing was reserved".to_owned(),
             ));
         };
-        let storage = service.storage(&identity);
+        let (settler, mut guard) = (service.settler(), SettleGuard::new(inner, Arc::clone(&service.holder)));
+        let transaction = Transaction {
+            started,
+            identity,
+            pending,
+            approval,
+            summary,
+            signer,
+        };
+        let running = tokio::spawn(async move { settler.run(&mut guard.inner, transaction).await });
+        running.await.unwrap_or_else(|crashed| {
+            let ended = if crashed.is_panic() { "panicked" } else { "was cancelled" };
+            tracing::error!("the approval transaction's task {ended} before it gave a result");
+            Err(unavailable(
+                "the approval did not finish; a version may be consumed or committed, and the service is Unavailable if it was checking",
+            ))
+        })
+    }
+}
+
+/// What the task that runs steps 2 to 6 owns: everything the transaction reads, so it can outlive the call that started it.
+struct Transaction<S> {
+    started: ServiceState,
+    identity: Arc<VaultIdentity>,
+    pending: PendingConfig,
+    approval: ApprovalState,
+    summary: ApprovalSummary,
+    signer: S,
+}
+
+impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
+    /// Steps 2 to 6 of `transaction` under `inner`, which the caller's task owns.
+    async fn run<S: ApprovalSigner>(&self, inner: &mut Inner, transaction: Transaction<S>) -> Result<ApprovalResult, ApprovalEnd> {
+        let Transaction {
+            started,
+            identity,
+            pending,
+            mut approval,
+            summary,
+            signer,
+        } = transaction;
+        let storage = approval_storage(&self.locks, &self.setup.fs, &identity);
         let digest = pending.digest();
         let prepared = match pending.prepare(&storage, &mut approval, signer) {
             Ok(prepared) => prepared,
@@ -252,16 +278,16 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         if started == ServiceState::Ready {
             inner.open = None;
             // Cannot fail: the state was checked as Ready under this same guard. Were it to, the version is consumed.
-            apply(&service.holder, &mut inner, ServiceEvent::ApprovalCommitting).map_err(|illegal| ApprovalEnd::Failed {
+            apply(&self.holder, inner, ServiceEvent::ApprovalCommitting).map_err(|illegal| ApprovalEnd::Failed {
                 version,
                 cause: illegal.to_string(),
             })?;
         }
         let committed = {
-            let pause = service.holder.pause();
+            let pause = self.holder.pause();
             prepared.commit(&storage, &pause).map(drop)
         };
-        service.durable(&mut inner, started, &identity, committed, digest).await?;
+        self.durable(inner, started, &identity, committed, digest).await?;
         tracing::info!(
             event = "config.approval-completed",
             version,
@@ -269,7 +295,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
             summary = %summary.render(),
             "config approval completed",
         );
-        match service.check_committed(&mut inner, started, identity).await {
+        match self.check_committed(inner, started, identity).await {
             ServiceState::Ready => Ok(ApprovalResult {
                 version,
                 digest: *digest.as_bytes(),
@@ -281,9 +307,26 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
             }
         }
     }
-}
 
-impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
+    /// Steps 5 and 6 after a durable commit: the config check, from Checking when the approval started in Ready, or
+    /// through `Repaired` when it started in Unavailable.
+    async fn check_committed(&self, inner: &mut Inner, started: ServiceState, identity: Arc<VaultIdentity>) -> ServiceState {
+        let checked = match started {
+            ServiceState::Ready => self.settle(inner, identity, ServiceEvent::ApprovalCommitting, None).await,
+            _ => self.check_and_settle(inner, ServiceEvent::Repaired, identity).await,
+        };
+        checked.unwrap_or_else(|illegal| illegal.state)
+    }
+
+    /// An uncertain commit that could not be settled: Unavailable needing recovery, through Checking from either start.
+    fn recovery_needed(&self, inner: &mut Inner, started: ServiceState) -> ServiceState {
+        if started != ServiceState::Ready {
+            inner.open = None;
+            let _ = apply(&self.holder, inner, ServiceEvent::Repaired);
+        }
+        apply(&self.holder, inner, ServiceEvent::CheckFailed(FailureReason::RecoveryNeeded)).unwrap_or(inner.state)
+    }
+
     /// Whether step 5 left a durable commit. A commit whose publish failed is durable: the config check's recovery
     /// finishes the publish. Otherwise this ends the admission pause and the approval:
     ///
@@ -372,4 +415,15 @@ fn activation_failed(version: u64, state: ServiceState, detail: impl std::fmt::D
 
 fn unavailable(error: impl std::fmt::Display) -> ApprovalEnd {
     ApprovalEnd::Unavailable(error.to_string())
+}
+
+/// The durable steps' storage over the context's locks and filesystem, for the review (step 1) and the task that runs
+/// the rest.
+fn approval_storage<'s, F>(locks: &'s ServiceLocks, fs: &'s F, identity: &'s VaultIdentity) -> ApprovalStorage<'s, F> {
+    ApprovalStorage {
+        state_dir: &locks.state,
+        config_dir: &locks.config,
+        identity,
+        fs,
+    }
 }

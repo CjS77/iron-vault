@@ -15,7 +15,6 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -25,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use common::admin_response::assert_response;
 use common::body_stream::eventually;
+use common::gated_fs::GatedFs;
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, WAIT, next_free_port, token_hash};
 use ed25519_dalek::{Signer, SigningKey};
@@ -1580,81 +1580,6 @@ async fn sighup_outside_ready_changes_nothing_and_never_repairs_unavailable() {
 /// How soon an answer that must not wait for a blocking task arrives. Far below [`WAIT`], which a gate holds a task for
 /// at most, so a gated task on the runtime thread would fail the test rather than hang it.
 const PROMPTLY: Duration = Duration::from_secs(2);
-
-/// One armed stop: the file whose first read blocks, the signal that a read reached it, and the release.
-struct Gate {
-    file: &'static str,
-    reached: oneshot::Sender<()>,
-    release: mpsc::Receiver<()>,
-}
-
-/// The real filesystem, except that the first read of an armed file blocks until the test releases it (or [`WAIT`]
-/// passes), so a test can hold the unlock or the config check mid-way.
-#[derive(Clone, Default)]
-struct GatedFs(Arc<Mutex<Option<Gate>>>);
-
-impl GatedFs {
-    /// Arms the gate on `file`; returns the signal that a read reached it and its release.
-    fn arm(&self, file: &'static str) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
-        let (reached, on_reached) = oneshot::channel();
-        let (release, on_release) = mpsc::channel();
-        *self.0.lock().unwrap() = Some(Gate {
-            file,
-            reached,
-            release: on_release,
-        });
-        (on_reached, release)
-    }
-
-    /// Blocks the calling thread on the gate if it is armed on `path`'s file, disarming it.
-    fn pass(&self, path: &Path) {
-        let mut armed = self.0.lock().unwrap();
-        if !armed.as_ref().is_some_and(|gate| path.file_name() == Some(gate.file.as_ref())) {
-            return;
-        }
-        let gate = armed.take().unwrap();
-        drop(armed);
-        let _ = gate.reached.send(());
-        let _ = gate.release.recv_timeout(WAIT);
-    }
-}
-
-impl StoreFs for GatedFs {
-    type File = fs::File;
-
-    fn create_private(&self, path: &Path) -> io::Result<fs::File> {
-        OsFs.create_private(path)
-    }
-
-    fn write_all(&self, file: &mut fs::File, bytes: &[u8]) -> io::Result<()> {
-        OsFs.write_all(file, bytes)
-    }
-
-    fn sync_file(&self, file: &fs::File) -> io::Result<()> {
-        OsFs.sync_file(file)
-    }
-
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        OsFs.rename(from, to)
-    }
-
-    fn remove_file(&self, path: &Path) -> io::Result<()> {
-        OsFs.remove_file(path)
-    }
-
-    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
-        OsFs.sync_dir(dir)
-    }
-
-    fn list_dir(&self, dir: &Path) -> io::Result<Vec<OsString>> {
-        OsFs.list_dir(dir)
-    }
-
-    fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>> {
-        self.pass(path);
-        OsFs.read_bounded(path, max_len)
-    }
-}
 
 /// The service's admin handlers served on its runtime directory until closed, so several commands can overlap.
 struct AdminSession {

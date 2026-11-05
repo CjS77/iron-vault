@@ -194,6 +194,12 @@ that could not be settled has no path to `RecoveryNeeded` but through Checking, 
 Unavailable(`PolicyInvalid`) to Unavailable(`RecoveryNeeded`). There `Repaired` still fires, and Checking ends at once
 with `CheckFailed(RecoveryNeeded)`. That is a default too ([open question 3](#open-questions)).
 
+**If the caller goes away.** From the first reservation on, a task of its own owns the context's guard and runs steps 2
+to 6, so dropping the `config approve` exchange after the commit (the admin server's drain at shutdown does) cannot
+leave the service in Checking: the task still ends in Ready, or in Unavailable. A task that panics fails closed from a
+guard it owns: a service still in Checking moves to Unavailable (`RecoveryNeeded`) and logs `config.check-failed`. The
+version may be consumed or committed then, and the next config check recovers a committed one.
+
 Removing uncommitted files is best effort. One left behind is a leftover that the next config check discards (see the
 recovery table).
 

@@ -12,6 +12,7 @@ pub mod admin_response;
 pub mod approval_harness;
 pub mod body_stream;
 pub mod checked;
+pub mod gated_fs;
 pub mod h2_refusal;
 pub mod hpack_fields;
 pub mod mock_upstream;
