@@ -62,6 +62,27 @@ fn a_missing_service_account_is_an_error_naming_it() {
     assert!(error.to_string().contains("`iron-vault` does not exist"), "{error}");
 }
 
+#[test]
+fn the_protected_bootstrap_log_directory_is_fixed_and_ignores_the_xdg_variables() {
+    let env = ProfileEnv {
+        xdg_state_home: Some(PathBuf::from("/srv/state")),
+        ..env()
+    };
+    assert_eq!(
+        bootstrap_log_dir(DeploymentProfile::Protected, &env),
+        Ok(PathBuf::from("/var/log/iron-vault"))
+    );
+}
+
+#[test]
+fn the_service_owner_is_the_service_account_when_protected_and_the_invoking_user_in_development() {
+    assert_eq!(
+        env().service_owner(DeploymentProfile::Protected),
+        Ok(ExpectedOwner { uid: SERVICE })
+    );
+    assert_eq!(env().service_owner(DeploymentProfile::Development), Ok(ExpectedOwner { uid: USER }));
+}
+
 #[cfg(not(feature = "dev-mode"))]
 #[test]
 fn a_build_without_dev_mode_cannot_resolve_development_paths() {
@@ -90,6 +111,22 @@ mod development {
                 state_dir: PathBuf::from("/home/alice/.local/state/iron-vault-dev"),
                 runtime_dir: Some(PathBuf::from("/run/user/1000/iron-vault-dev")),
             }
+        );
+    }
+
+    #[test]
+    fn the_development_log_directory_sits_beside_the_state_directory() {
+        assert_eq!(
+            bootstrap_log_dir(DeploymentProfile::Development, &env()),
+            Ok(PathBuf::from("/home/alice/.local/state/iron-vault-dev-log"))
+        );
+        let env = ProfileEnv {
+            xdg_state_home: Some(PathBuf::from("/srv/state")),
+            ..env()
+        };
+        assert_eq!(
+            bootstrap_log_dir(DeploymentProfile::Development, &env),
+            Ok(PathBuf::from("/srv/state/iron-vault-dev-log"))
         );
     }
 

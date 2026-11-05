@@ -2,7 +2,9 @@
 //!
 //! Every record is one flat JSON object on one line ([`RecordFormat`]); JSON escapes newlines and control characters in
 //! values, so no value can start a second record. The writer is a parameter, so the destination can change without
-//! touching the format.
+//! touching the format: [`LogFile`] appends to `iron-vault.log` in a verified log directory, [`LogStdout`] writes to
+//! stdout for Docker, and either trips [`LogFailure`] on its first failed write so `serve` stops rather than run without
+//! its audit log. [`install`] opens the destination and installs the subscriber on it.
 //!
 //! At `DEBUG` and `TRACE`, `hyper` and `h2` log frames and headers, and those headers carry the injected credential
 //! (§3.7, §3.15). [`dependency_caps`] is installed as its own layer, so no global level, `RUST_LOG` value or trace
@@ -14,6 +16,23 @@
 //! apply to them too.
 
 use std::fmt;
+
+// The log file and stdout writers use rustix and tokio, which this crate depends on only on Linux.
+#[cfg(target_os = "linux")]
+mod destination;
+#[cfg(target_os = "linux")]
+mod log_file;
+#[cfg(target_os = "linux")]
+mod log_stdout;
+mod writer;
+
+#[cfg(target_os = "linux")]
+pub use destination::{LogDestination, LogOpenError, install};
+#[cfg(target_os = "linux")]
+pub use log_file::{FileProblem, LOG_FILE_NAME, LogDir, LogFile};
+#[cfg(target_os = "linux")]
+pub use log_stdout::{JOURNAL_STREAM, LogStdout};
+pub use writer::LogFailure;
 
 use tracing::{Event, Subscriber};
 use tracing_subscriber::{

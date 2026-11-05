@@ -34,11 +34,18 @@ pub const DEFAULT_OVERFLOW_UID: u32 = 65534;
 const PROTECTED_CONFIG: &str = "/etc/iron-vault/config.toml";
 const PROTECTED_STATE_DIR: &str = "/var/lib/iron-vault";
 const PROTECTED_RUNTIME_DIR: &str = "/run/iron-vault";
+/// The bootstrap log directory of a protected install; the package's unit has systemd create it (`LogsDirectory=`).
+const PROTECTED_LOG_DIR: &str = "/var/log/iron-vault";
 
 /// The directory name under each XDG base directory; distinct from the protected names so a development build never
 /// shares files with a protected installation.
 #[cfg(feature = "dev-mode")]
 const DEVELOPMENT_DIR: &str = "iron-vault-dev";
+
+/// The development log directory's name under `$XDG_STATE_HOME`. It sits beside the state directory, not inside it:
+/// any other file in the state directory is a foreign file that makes `unlock` refuse.
+#[cfg(feature = "dev-mode")]
+const DEVELOPMENT_LOG_DIR: &str = "iron-vault-dev-log";
 
 /// How this build is installed. It decides the install paths, the service account and the admin principals, and
 /// nothing else: development mode never relaxes any request, TLS, scrubbing, encryption or approval check (§2).
@@ -251,6 +258,39 @@ impl ProfileEnv {
     }
 }
 
+impl ProfileEnv {
+    /// The account that owns the service's files under `profile`: the service account when protected, the invoking user
+    /// in development.
+    pub fn service_owner(&self, profile: DeploymentProfile) -> Result<ExpectedOwner, ProfileError> {
+        match profile {
+            DeploymentProfile::Protected => self
+                .service_account_uid
+                .map(|uid| ExpectedOwner { uid })
+                .ok_or(ProfileError::MissingServiceAccount { account: SERVICE_ACCOUNT }),
+            DeploymentProfile::Development => Ok(ExpectedOwner { uid: self.invoking_uid }),
+        }
+    }
+}
+
+/// The log directory a deployment writes to until an approved config names another: its bootstrap directory.
+pub fn bootstrap_log_dir(profile: DeploymentProfile, env: &ProfileEnv) -> Result<PathBuf, ProfileError> {
+    match profile {
+        DeploymentProfile::Protected => Ok(PathBuf::from(PROTECTED_LOG_DIR)),
+        DeploymentProfile::Development => development_log_dir(env),
+    }
+}
+
+#[cfg(feature = "dev-mode")]
+fn development_log_dir(env: &ProfileEnv) -> Result<PathBuf, ProfileError> {
+    xdg_base(env.xdg_state_home.as_deref(), env.home.as_deref(), ".local/state", "log directory")
+        .map(|state_home| state_home.join(DEVELOPMENT_LOG_DIR))
+}
+
+#[cfg(not(feature = "dev-mode"))]
+fn development_log_dir(_env: &ProfileEnv) -> Result<PathBuf, ProfileError> {
+    Err(ProfileError::DevelopmentNotBuilt)
+}
+
 impl ServicePaths {
     /// Resolves the install paths and service account of `profile` from `env`.
     pub fn for_profile(profile: DeploymentProfile, env: &ProfileEnv) -> Result<Self, ProfileError> {
@@ -262,12 +302,9 @@ impl ServicePaths {
 }
 
 fn protected_paths(env: &ProfileEnv) -> Result<ServicePaths, ProfileError> {
-    let uid = env
-        .service_account_uid
-        .ok_or(ProfileError::MissingServiceAccount { account: SERVICE_ACCOUNT })?;
     Ok(ServicePaths {
         profile: DeploymentProfile::Protected,
-        owner: ExpectedOwner { uid },
+        owner: env.service_owner(DeploymentProfile::Protected)?,
         config: PathBuf::from(PROTECTED_CONFIG),
         state_dir: PathBuf::from(PROTECTED_STATE_DIR),
         runtime_dir: Some(PathBuf::from(PROTECTED_RUNTIME_DIR)),
