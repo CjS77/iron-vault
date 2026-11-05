@@ -7,7 +7,7 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
-use crate::{StateDirLock, StateFileName, StoreFs};
+use crate::{ErrorKindLabel, StateDirLock, StateFileName, StoreFs};
 
 /// The step of a durable write that failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +68,16 @@ pub enum WriteError {
         /// The underlying error kind.
         kind: io::ErrorKind,
     },
+}
+
+impl WriteError {
+    /// The kind of the failed file operation as a label that holds no file name or error text.
+    pub fn error_kind_label(&self) -> ErrorKindLabel {
+        match self {
+            Self::Io { kind, .. } | Self::ListStateDir { kind } => ErrorKindLabel::from(*kind),
+            Self::NotFound { .. } => ErrorKindLabel::fixed("not_found"),
+        }
+    }
 }
 
 /// Why a state file could not be read.

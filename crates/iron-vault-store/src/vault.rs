@@ -30,17 +30,13 @@ use iron_vault_policy::{CatalogEntry, CredentialCatalog, CredentialName};
 use thiserror::Error;
 
 use crate::{
-    ApprovalState, ApprovalStateError, CredentialRecord, ErrorKindLabel, MAX_MANIFEST_LEN, ManifestError, PartialRestore, ReadError,
-    SealError, StateDirLock, StateFileName, StateGeneration, StoreFs, VaultIdentity, VaultManifest, WriteError, open_manifest,
+    ApprovalState, ApprovalStateError, CredentialRecord, MAX_MANIFEST_LEN, ManifestError, PartialRestore, ReadError, SealError,
+    StateDirLock, StateFileName, StateGeneration, StoreFs, VaultIdentity, VaultManifest, WriteError, open_manifest,
     partial_restore::check_control_generations, read_state_file,
 };
 
 pub use load::MAX_RECORD_FILE_LEN;
-pub use report::{OpenReport, RecordDamage, WriteReport};
-
-/// What the administrator should do about damaged shared state; recovery commands arrive with spec §3.13.
-const SHARED_STATE_REMEDIATION: &str = "restore the state directory from a backup taken by this vault, or recover the vault; \
-     do not delete or re-initialize the state directory, which would orphan every credential record";
+pub use report::{DamagedRecord, OpenReport, RecordDamage, WriteReport};
 
 /// The vault cannot be opened, created or written. No variant carries file contents or key material.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -156,8 +152,9 @@ impl Vault {
     /// Opens the vault in the locked state directory, loading every record the manifest lists that is intact.
     ///
     /// A missing, unreadable or forged manifest fails the whole open, because without it no record can be trusted. A
-    /// damaged record does not: it is left out, reported in the [`OpenReport`] and logged at ERROR, and the others
-    /// load. Record files the manifest does not list are reported and logged at WARN, and never loaded or removed.
+    /// damaged record does not: it is left out, reported in the [`OpenReport`], and the others load. Record files the
+    /// manifest does not list are reported too, and never loaded or removed. The store logs nothing; the service
+    /// audits the report and the error.
     ///
     /// The manifest and the approval state must be a pair some sequence of writes leaves together: a manifest or
     /// approval state restored alone from an older copy, or an approval state deleted, fails the open as a partial
@@ -165,7 +162,7 @@ impl Vault {
     /// the state directory (spec §3.9).
     ///
     /// An approval state the manifest does not yet record, left by a crash inside [`Vault::create_approval_state`], is
-    /// a valid pair: the open succeeds, flags it in the [`OpenReport`] and logs it at WARN, and writes nothing.
+    /// a valid pair: the open succeeds, flags it in the [`OpenReport`], and writes nothing.
     ///
     /// `identity` may be shared with its other holders; the vault keeps its reference until it is dropped.
     pub fn open(
@@ -174,14 +171,13 @@ impl Vault {
         identity: impl Into<Arc<VaultIdentity>>,
     ) -> Result<(Vault, OpenReport), VaultError> {
         let identity = identity.into();
-        let files = list_state_dir(lock, fs).inspect_err(log_vault_error)?;
-        let manifest = read_manifest(lock, fs, &identity, &files).inspect_err(log_vault_error)?;
-        let approval = approval_generations(lock, fs, &identity, &manifest).inspect_err(log_vault_error)?;
-        refuse_partial_restore(&manifest, approval).inspect_err(log_vault_error)?;
+        let files = list_state_dir(lock, fs)?;
+        let manifest = read_manifest(lock, fs, &identity, &files)?;
+        let approval = approval_generations(lock, fs, &identity, &manifest)?;
+        refuse_partial_restore(&manifest, approval)?;
         let (healthy, damaged) = load::load_records(lock, fs, &identity, &manifest);
         let unindexed = unindexed_files(&manifest, &files);
-        unindexed.iter().for_each(load::log_unindexed);
-        let unrecorded = approval_state_unrecorded(&manifest, approval);
+        let unrecorded = approval.is_some() && manifest.peer_generation().is_none();
         let dir = lock.dir().to_path_buf();
         Ok((
             Vault {
@@ -304,19 +300,6 @@ fn refuse_partial_restore(manifest: &VaultManifest, approval: Option<(StateGener
     })
 }
 
-/// Whether an approval state exists that the manifest does not record, which only an interrupted
-/// [`Vault::create_approval_state`] leaves; until it is recorded, deleting `approval.age` cannot be detected.
-fn approval_state_unrecorded(manifest: &VaultManifest, approval: Option<(StateGeneration, StateGeneration)>) -> bool {
-    let unrecorded = approval.is_some() && manifest.peer_generation().is_none();
-    if unrecorded {
-        tracing::warn!(
-            remediation = "record the approval state with `record_approval_state`",
-            "the approval state exists but the vault manifest does not record it; its deletion cannot be detected until it is recorded"
-        );
-    }
-    unrecorded
-}
-
 /// Why a state directory without a manifest is damaged shared state, or `None` when it holds no vault at all.
 fn classify_missing_manifest(files: &[String]) -> Option<SharedStateDamage> {
     let approval = StateFileName::approval_state();
@@ -343,36 +326,4 @@ fn unindexed_files(manifest: &VaultManifest, files: &[String]) -> BTreeSet<State
 /// Whether `name` has the shape of a record file name, whatever sits between the prefix and the suffix.
 pub(crate) fn is_record_file_name(name: &str) -> bool {
     name.starts_with("record-") && name.ends_with(".age")
-}
-
-/// Logs a failed open loudly. A missing vault is not damage, so the caller decides how to report it.
-fn log_vault_error(error: &VaultError) {
-    match error {
-        VaultError::SharedStateDamaged { file, damage } => tracing::error!(
-            file = %file,
-            damage = %damage,
-            remediation = SHARED_STATE_REMEDIATION,
-            "vault shared state is damaged; the whole vault is unavailable and recovery may be required"
-        ),
-        VaultError::ListStateDir { kind } => tracing::error!(
-            error_kind = %ErrorKindLabel::from(*kind),
-            remediation = "check that the state directory exists and that the service account can read it",
-            "cannot list the state directory; the vault is unavailable"
-        ),
-        // A missing vault is not damage, and the write variants go to the caller of the write, which audits them.
-        VaultError::NotInitialized
-        | VaultError::AlreadyInitialized
-        | VaultError::NameTaken(_)
-        | VaultError::UnknownName(_)
-        | VaultError::InvalidMaterial(_)
-        | VaultError::Seal(_)
-        | VaultError::NextManifest(_)
-        | VaultError::Write(_)
-        | VaultError::CommitUncertain(_)
-        | VaultError::ReopenRequired
-        | VaultError::NoApprovalState
-        | VaultError::ApprovalState(_)
-        | VaultError::ApprovalStateUnrecorded(_)
-        | VaultError::WrongStateDir { .. } => {}
-    }
 }

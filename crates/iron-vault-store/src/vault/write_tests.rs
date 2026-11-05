@@ -10,12 +10,14 @@ use tracing::Level;
 
 use super::tests::{capture_logs, identity, init_test_tracing, n, record, sealed, secret};
 use super::*;
+use crate::ErrorKindLabel;
 use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::test_dir::TestDir;
 use crate::{
     ApprovalState, ApprovalStateError, OsFs, PermittedOrigins, PinnedApprover, RecordId, StateGeneration, WriteStep, durable_remove,
     durable_replace, seal_approval_state, seal_manifest,
 };
+use iron_vault_kinds::{SecretField, ShortSecret};
 
 /// The credentials every vault under test starts with.
 const SEEDED: [&str; 2] = ["keep", "target"];
@@ -413,7 +415,7 @@ fn an_uncertain_commit_leaves_memory_unchanged_and_blocks_writes_until_reopen() 
             ),
             "{label}"
         );
-        assert_eq!(events.iter().filter(|e| e.level == Level::ERROR).count(), 1, "{label}: {events:?}");
+        assert!(events.is_empty(), "{label}: {events:?}");
         assert_eq!(snapshot(&vault), (before.0, old), "{label}");
         let calls = fs.trace().len();
         assert_eq!(
@@ -585,41 +587,46 @@ fn a_vault_given_another_directorys_lock_touches_no_file() {
 }
 
 #[test]
-fn a_short_secret_is_written_and_warned_about_without_its_value() {
+fn a_short_secret_is_reported_with_its_field_and_length_and_not_logged() {
     let setup = Setup::new("write-short-secret");
     let (fs, mut vault) = setup.seeded(&SEEDED);
     let short = CredentialMaterial::Static { key: "q7z".into() };
     let (added, events) = capture_logs(|| vault.add(&setup.lock, &fs, n("stripe"), short, origins("stripe")));
-    added.unwrap();
-    let warnings: Vec<_> = events.iter().filter(|event| event.level == Level::WARN).collect();
-    assert_eq!(warnings.len(), 1, "{events:?}");
-    assert_eq!((warnings[0].field("credential"), warnings[0].field("field")), ("stripe", "API key"));
-    assert_eq!(warnings[0].field("len"), "3");
-    assert!(
-        warnings[0]
-            .field("message")
-            .contains("credential `stripe`: the API key is 3 bytes long")
+    let (_, report) = added.unwrap();
+    assert_eq!(
+        report.short_secrets(),
+        [ShortSecret {
+            field: SecretField::Key,
+            len: 3
+        }]
     );
-    assert!(!format!("{events:?}").contains("q7z"), "{events:?}");
+    assert!(events.is_empty(), "{events:?}");
+    assert!(!format!("{report:?}").contains("q7z"), "{report:?}");
 
     let password = CredentialMaterial::Basic {
         username: "long-username".into(),
         password: "z9q".into(),
     };
     let (replaced, events) = capture_logs(|| vault.replace(&setup.lock, &fs, n("stripe"), password, origins("stripe")));
-    replaced.unwrap();
-    let fields: Vec<_> = events.iter().filter(|e| e.level == Level::WARN).map(|e| e.field("field")).collect();
-    assert_eq!(fields, ["password"]);
-    assert!(!format!("{events:?}").contains("z9q"), "{events:?}");
+    let (_, report) = replaced.unwrap();
+    assert_eq!(
+        report.short_secrets(),
+        [ShortSecret {
+            field: SecretField::Password,
+            len: 3
+        }]
+    );
+    assert!(events.is_empty(), "{events:?}");
+    assert!(!format!("{report:?}").contains("z9q"), "{report:?}");
 }
 
 #[test]
-fn a_long_secret_logs_no_warning() {
+fn a_long_secret_reports_no_short_secret() {
     let setup = Setup::new("write-long-secret");
     let (fs, mut vault) = setup.seeded(&SEEDED);
     let (added, events) = capture_logs(|| setup.add(&fs, &mut vault, "fx_key", 1));
-    added.unwrap();
-    assert!(events.iter().all(|event| event.level != Level::WARN), "{events:?}");
+    let (_, report) = added.unwrap();
+    assert!(report.short_secrets().is_empty() && events.is_empty(), "{report:?} {events:?}");
 }
 
 /// The state generation and peer generation the vault's manifest was written at.

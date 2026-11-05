@@ -12,7 +12,7 @@
 
 use std::collections::BTreeSet;
 
-use iron_vault_kinds::{CredentialMaterial, ShortSecret};
+use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::CredentialName;
 
 use super::{Vault, VaultError, WriteReport, approval_generations, list_state_dir, refuse_partial_restore, unindexed_files};
@@ -43,7 +43,7 @@ impl Vault {
     /// Adds a credential record named `name` under a new record ID, refusing a name the manifest already lists.
     ///
     /// This performs an already authorized change: the caller checks owner presence (spec §3.3). Returns the new
-    /// record's ID and what else the write did, for the audit log.
+    /// record's ID and what else the write did, including any short secret in the new record, for the audit log.
     pub fn add(
         &mut self,
         lock: &StateDirLock,
@@ -56,20 +56,19 @@ impl Vault {
         if self.record_id_of(&name).is_some() {
             return Err(VaultError::NameTaken(name));
         }
-        let logged_name = name.clone();
         let short = material.short_secrets();
         let record = new_record(name, material, origins)?;
         let id = record.id();
         let report = self.write(lock, fs, self.prepare(lock, fs, Some(record.name().clone()), Some(record), None)?)?;
-        warn_short_secrets(&logged_name, &short);
-        Ok((id, report))
+        Ok((id, report.with_short_secrets(short)))
     }
 
     /// Replaces the record named `name` with a new record under a new record ID, so a swapped account shows as a new
     /// record identity rather than an edit (spec §3.3, R-5). The superseded file is removed after the commit.
     ///
     /// The record may be damaged: replacing it is how a damaged credential is repaired. This performs an already
-    /// authorized change: the caller checks owner presence and the routes that use the credential.
+    /// authorized change: the caller checks owner presence and the routes that use the credential. The report names
+    /// any short secret in the new record.
     pub fn replace(
         &mut self,
         lock: &StateDirLock,
@@ -80,7 +79,6 @@ impl Vault {
     ) -> Result<(RecordId, WriteReport), VaultError> {
         self.ensure_same_dir(lock)?;
         let old = self.record_id_of(&name).ok_or_else(|| VaultError::UnknownName(name.clone()))?;
-        let logged_name = name.clone();
         let short = material.short_secrets();
         let record = new_record(name, material, origins)?;
         let id = record.id();
@@ -89,8 +87,7 @@ impl Vault {
             fs,
             self.prepare(lock, fs, Some(record.name().clone()), Some(record), Some(old))?,
         )?;
-        warn_short_secrets(&logged_name, &short);
-        Ok((id, report))
+        Ok((id, report.with_short_secrets(short)))
     }
 
     /// Removes the record named `name`, healthy or damaged: commits a manifest without it, then removes its file.
@@ -220,8 +217,7 @@ impl Vault {
     /// Runs the file steps of a prepared write, then updates memory once the manifest has committed.
     ///
     /// A success reports its removed unindexed files in the [`WriteReport`], which the service audits. A failure has no
-    /// report to carry them, so the store records each removal itself (`log_removed_before_failure`) until the removals
-    /// are returned as facts (K-188).
+    /// report to carry them, so the store records each removal itself (`log_removed_before_failure`).
     fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, prepared: Prepared) -> Result<WriteReport, VaultError> {
         let mut removed = BTreeSet::new();
         self.write_steps(lock, fs, prepared, &mut removed)
@@ -286,14 +282,7 @@ pub(super) fn commit_manifest(lock: &StateDirLock, fs: &impl StoreFs, bytes: &[u
     durable_replace(lock, fs, &StateFileName::manifest(), bytes).map_err(|error| match error {
         WriteError::Io {
             step: WriteStep::SyncDir, ..
-        } => {
-            tracing::error!(
-                error = %error,
-                remediation = "reopen the vault: the write committed only if the reopened vault shows it",
-                "vault manifest was replaced but the state directory fsync failed; the write may not survive power loss"
-            );
-            VaultError::CommitUncertain(error)
-        }
+        } => VaultError::CommitUncertain(error),
         other => VaultError::Write(other),
     })
 }
@@ -345,30 +334,6 @@ fn remove_superseded(lock: &StateDirLock, fs: &impl StoreFs, old: RecordId) -> O
     match durable_remove(lock, fs, &file) {
         // A damaged record's file may already be missing.
         Ok(()) | Err(WriteError::NotFound { .. }) => None,
-        Err(error) => Some((file, write_error_label(&error))),
+        Err(error) => Some((file, error.error_kind_label())),
     }
-}
-
-/// The kind of a failed state file operation, without its text.
-fn write_error_label(error: &WriteError) -> ErrorKindLabel {
-    match error {
-        WriteError::Io { kind, .. } | WriteError::ListStateDir { kind } => ErrorKindLabel::from(*kind),
-        WriteError::NotFound { .. } => ErrorKindLabel::fixed("not_found"),
-    }
-}
-
-/// Warns once per short secret in a record just written. The write stands: a short value is allowed, but it usually
-/// means the wrong field was pasted, and scrubbing blanks every occurrence of it in responses. Only the field and its
-/// length are logged, never the value.
-fn warn_short_secrets(name: &CredentialName, short: &[ShortSecret]) {
-    short.iter().for_each(|ShortSecret { field, len }| {
-        tracing::warn!(
-            credential = %name,
-            field = %field,
-            len,
-            remediation = "check that the right field was pasted; replace the credential if not",
-            "credential `{name}`: the {field} is {len} bytes long; response scrubbing will remove every occurrence of it, \
-             and it may be the wrong field"
-        );
-    });
 }

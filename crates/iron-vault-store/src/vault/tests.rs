@@ -14,7 +14,7 @@ use tracing::{Dispatch, Event, Level, Metadata, Subscriber, span};
 use super::*;
 use crate::manifest::tests::KAT_IDENTITY;
 use crate::test_dir::TestDir;
-use crate::{ManifestEntry, OsFs, PermittedOrigins, RecordId, Source, VaultId, encode, record_digest, seal, seal_manifest};
+use crate::{ErrorKindLabel, ManifestEntry, OsFs, PermittedOrigins, RecordId, Source, VaultId, encode, record_digest, seal, seal_manifest};
 
 /// A host with no accounts: this config has no peer callers, so activation never looks one up.
 struct NoAccounts;
@@ -341,18 +341,19 @@ fn each_damaged_record_takes_down_only_itself() {
         assert!(vault.material(&n(name)).is_none(), "{name}");
         assert!(vault.record(&n(name)).is_none(), "{name}");
     });
-    // Events follow record ID order, which is random, so match them up by credential name.
-    let by_name: BTreeMap<_, _> = events.iter().map(|e| (e.field("credential").to_owned(), e)).collect();
-    assert_eq!((events.len(), by_name.len()), (3, 3), "{events:?}");
+    // The report holds each fact; the store logs nothing.
+    let by_name: BTreeMap<_, _> = report.damaged_records().iter().map(|d| (d.credential.to_string(), d)).collect();
+    assert_eq!((report.damaged_records().len(), by_name.len()), (3, 3), "{report:?}");
     expected.iter().for_each(|(name, damage)| {
-        let event = by_name[*name];
-        assert_eq!(event.level, Level::ERROR);
-        assert_eq!(event.field("record_id"), ids[*name].to_string());
-        assert_eq!(event.field("file"), StateFileName::record(&ids[*name]).as_str());
-        assert_eq!(event.field("reason"), damage.to_string());
-        assert_eq!(event.field("remediation"), damage.remediation());
-        assert!(!event.field("cause").is_empty());
+        let fact = by_name[*name];
+        assert_eq!(
+            (fact.record_id, fact.damage, fact.error_kind.as_ref()),
+            (ids[*name], *damage, None),
+            "{name}"
+        );
+        assert_eq!(fact.file, StateFileName::record(&ids[*name]), "{name}");
     });
+    assert!(events.is_empty(), "{events:?}");
     assert_no_secret_logged(&events, &[&names[..], &["intruder"]].concat());
 }
 
@@ -376,7 +377,8 @@ fn substitution_is_caught_by_digest_record_id_or_name() {
     let (_, report) = opened.unwrap();
     let substituted = ["other_id", "renamed", "resealed"].map(|name| (name, RecordDamage::Substituted));
     assert_eq!(report.damaged(), &damage(&substituted));
-    assert_eq!(events.iter().filter(|e| e.level == Level::ERROR).count(), 3);
+    assert_eq!(report.damaged_records().len(), 3);
+    assert!(events.is_empty(), "{events:?}");
     assert_no_secret_logged(&events, &["resealed", "other_id", "impostor"]);
 }
 
@@ -401,13 +403,13 @@ fn a_file_whose_digest_differs_is_never_decrypted() {
     let id = RecordId::new_random();
     let (_, entry) = fixture.write_file(id, "fx_key", &sealed(&record_with_id(id, "fx_key", "api.fx.example")));
     fixture.write_manifest([(id, entry)]);
-    // Not an age file at all: decrypting it would fail, so a digest cause shows the check ran first and decryption never did.
+    // Not an age file at all: decrypting it would fail, so a Substituted verdict shows the digest check ran first.
     std::fs::write(fixture.record_path(id), b"not an age file").unwrap();
 
     let (opened, events) = fixture.open();
     let (_, report) = opened.unwrap();
     assert_eq!(report.damaged(), &damage(&[("fx_key", RecordDamage::Substituted)]));
-    assert_eq!(events[0].field("cause"), "the file's digest differs from its manifest entry");
+    assert!(events.is_empty(), "{events:?}");
 }
 
 #[test]
@@ -419,7 +421,8 @@ fn a_file_matching_its_digest_that_does_not_open_is_unreadable() {
     let (opened, events) = fixture.open();
     let (_, report) = opened.unwrap();
     assert_eq!(report.damaged(), &damage(&[("fx_key", RecordDamage::Unreadable)]));
-    assert!(events[0].field("cause").contains("does not decrypt"), "{events:?}");
+    assert_eq!(report.damaged_records()[0].error_kind, None);
+    assert!(events.is_empty(), "{events:?}");
 }
 
 #[test]
@@ -436,8 +439,7 @@ fn a_planted_record_is_unindexed_and_never_loaded() {
     assert_eq!(vault.entry(&n("planted")), CatalogEntry::Unknown);
     assert!(vault.material(&n("planted")).is_none());
     assert!(fixture.path(&file).exists());
-    assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!((events[0].level, events[0].field("file")), (Level::WARN, file.as_str()));
+    assert!(events.is_empty(), "{events:?}");
     assert_no_secret_logged(&events, &["fx_key", "planted"]);
 }
 
@@ -461,9 +463,7 @@ fn a_corrupt_manifest_fails_the_whole_open() {
         }
     );
     assert!(error.to_string().contains("may require recovery"), "{error}");
-    assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!((events[0].level, events[0].field("file")), (Level::ERROR, "manifest.age"));
-    assert!(events[0].field("message").contains("recovery may be required"));
+    assert!(events.is_empty(), "{events:?}");
     assert_no_secret_logged(&events, &["fx_key"]);
 }
 
@@ -485,7 +485,7 @@ fn a_missing_manifest_is_uninitialized_only_without_records() {
             damage
         }
     );
-    assert_eq!(events[0].level, Level::ERROR);
+    assert!(events.is_empty(), "{events:?}");
 }
 
 #[test]
@@ -555,7 +555,11 @@ fn an_oversized_record_is_unreadable_and_never_read_in_full() {
     assert_eq!(report.damaged(), &damage(&[("huge", RecordDamage::Unreadable)]));
     assert_eq!(vault.entry(&n("huge")), CatalogEntry::Unusable);
     assert!(spy.0.lock().unwrap().contains(&(path, MAX_RECORD_FILE_LEN)));
-    assert!(events[0].field("cause").contains("longer than"), "{events:?}");
+    assert_eq!(
+        report.damaged_records()[0].error_kind.as_ref().map(ErrorKindLabel::as_str),
+        Some("too_large")
+    );
+    assert!(events.is_empty(), "{events:?}");
 }
 
 #[test]

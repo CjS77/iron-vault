@@ -4,8 +4,6 @@
 
 use std::io;
 
-use tracing::Level;
-
 use super::tests::{capture_logs, identity, init_test_tracing, n};
 use super::write_tests::{material, mutations, origins};
 use super::*;
@@ -226,17 +224,7 @@ fn an_older_control_file_copied_back_or_a_deleted_approval_state_is_refused_at_o
         fixture.put(&OsFs, &restored);
         let (opened, events) = capture_logs(|| fixture.open(&OsFs));
         assert_eq!(opened.unwrap_err(), refused(restore.clone()), "{label}");
-        assert_eq!(events.len(), 1, "{label}: {events:?}");
-        assert_eq!(
-            (events[0].level, events[0].field("file")),
-            (Level::ERROR, restore.file().as_str()),
-            "{label}"
-        );
-        let damage = events[0].field("damage");
-        assert!(
-            damage.contains("restored from an older copy") && damage.contains("recovery key or reset"),
-            "{label}: {damage}"
-        );
+        assert!(events.is_empty(), "{label}: {events:?}");
         if restored.approval.is_some() {
             assert_eq!(
                 fixture.load(&OsFs, vault_id),
@@ -536,14 +524,14 @@ fn a_creation_cut_short_in_its_manifest_step_opens_flagged_and_can_be_finished()
 }
 
 #[test]
-fn an_unrecorded_approval_state_is_logged_at_warn_on_open() {
+fn an_unrecorded_approval_state_is_reported_on_open_and_not_logged() {
     let fixture = Fixture::new("restore-unrecorded-log");
     let fs = FaultFs::new();
     Vault::create(&fixture.lock, &fs, identity()).unwrap();
     fixture.create_approval(&fs).unwrap();
     let (opened, events) = capture_logs(|| fixture.open(&fs));
     assert!(opened.unwrap().1.approval_state_unrecorded());
-    assert_eq!(events.iter().map(|e| e.level).collect::<Vec<_>>(), [Level::WARN]);
+    assert!(events.is_empty(), "{events:?}");
 }
 
 #[test]

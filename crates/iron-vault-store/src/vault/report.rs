@@ -3,9 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use iron_vault_kinds::ShortSecret;
 use iron_vault_policy::CredentialName;
 
-use crate::{ErrorKindLabel, StateFileName};
+use crate::{ErrorKindLabel, RecordId, StateFileName};
 
 /// Why a record the manifest lists did not load (spec §3.10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -47,24 +48,37 @@ impl fmt::Display for RecordDamage {
     }
 }
 
+/// One record the manifest lists that did not load: what the audit log needs to find and fix it, and nothing from the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DamagedRecord {
+    /// The credential the manifest names for the record.
+    pub credential: CredentialName,
+    /// The record the manifest lists.
+    pub record_id: RecordId,
+    /// The record's file.
+    pub file: StateFileName,
+    /// Why it did not load.
+    pub damage: RecordDamage,
+    /// The kind of the read failure, when reading the file failed; `None` when the file was read.
+    pub error_kind: Option<ErrorKindLabel>,
+}
+
 /// The damaged records and unindexed record files found while opening the vault, for `status` and the audit log.
 ///
 /// It holds names, file names and damage only, never file contents, so `Debug` is safe to log.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct OpenReport {
     damaged: BTreeMap<CredentialName, RecordDamage>,
+    damaged_records: Vec<DamagedRecord>,
     unindexed: BTreeSet<StateFileName>,
     approval_state_unrecorded: bool,
 }
 
 impl OpenReport {
-    pub(super) fn new(
-        damaged: BTreeMap<CredentialName, RecordDamage>,
-        unindexed: BTreeSet<StateFileName>,
-        approval_state_unrecorded: bool,
-    ) -> Self {
+    pub(super) fn new(damaged_records: Vec<DamagedRecord>, unindexed: BTreeSet<StateFileName>, approval_state_unrecorded: bool) -> Self {
         Self {
-            damaged,
+            damaged: damaged_records.iter().map(|d| (d.credential.clone(), d.damage)).collect(),
+            damaged_records,
             unindexed,
             approval_state_unrecorded,
         }
@@ -81,6 +95,11 @@ impl OpenReport {
         &self.damaged
     }
 
+    /// Each record the manifest lists that did not load, with its ID, file and the kind of its read failure, in record ID order.
+    pub fn damaged_records(&self) -> &[DamagedRecord] {
+        &self.damaged_records
+    }
+
     /// Each `record-*.age` file the manifest does not list; none was loaded.
     pub fn unindexed(&self) -> &BTreeSet<StateFileName> {
         &self.unindexed
@@ -89,11 +108,12 @@ impl OpenReport {
 
 /// What a vault write did besides its change, for the audit log.
 ///
-/// It holds file names only, so `Debug` is safe to log.
+/// It holds file names, error kinds, and secret field names and lengths, never a value, so `Debug` is safe to log.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WriteReport {
     removed_unindexed: BTreeSet<StateFileName>,
     left_unindexed: Option<(StateFileName, ErrorKindLabel)>,
+    short_secrets: Vec<ShortSecret>,
 }
 
 impl WriteReport {
@@ -101,7 +121,19 @@ impl WriteReport {
         Self {
             removed_unindexed,
             left_unindexed,
+            short_secrets: Vec::new(),
         }
+    }
+
+    pub(super) fn with_short_secrets(mut self, short_secrets: Vec<ShortSecret>) -> Self {
+        self.short_secrets = short_secrets;
+        self
+    }
+
+    /// The secret fields of the record just written that are short: the write stands, but the owner probably pasted
+    /// the wrong field, and scrubbing blanks every occurrence of the value.
+    pub fn short_secrets(&self) -> &[ShortSecret] {
+        &self.short_secrets
     }
 
     /// The unindexed record files the write removed before it changed anything: left by an interrupted write, or planted.
