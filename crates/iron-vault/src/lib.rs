@@ -44,6 +44,7 @@ mod tls;
 pub mod trusted_path;
 pub mod trusted_path_report;
 pub mod upstream;
+pub mod vault_change_check;
 
 #[cfg(test)]
 mod secret_types_tests;
