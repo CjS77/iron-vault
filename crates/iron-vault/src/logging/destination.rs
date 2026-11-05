@@ -112,8 +112,10 @@ pub fn install(
     env: &ProfileEnv,
     journal_stream: Option<&OsStr>,
 ) -> Result<LogSwitch, LogOpenError> {
-    let owner = env.service_owner(profile)?;
+    let owner = env.service_owner(profile);
     if let LogDestination::Directory(path) = destination {
+        // A missing service account stops a directory destination before anything is created; stdout needs none.
+        owner.clone()?;
         create_development_dir(profile, path)?;
     }
     let opener = LogOpener::new(profile, owner, journal_stream.map(OsStr::to_os_string), LogFailure::default());

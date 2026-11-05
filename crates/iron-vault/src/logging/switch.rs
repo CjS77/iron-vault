@@ -16,7 +16,7 @@ use super::destination::{LogDestination, LogOpenError};
 use super::log_file::{LogDir, LogFile};
 use super::log_stdout::LogStdout;
 use super::writer::{Append, LogFailure, RecordWriter};
-use crate::deployment::DeploymentProfile;
+use crate::deployment::{DeploymentProfile, ProfileError};
 use crate::trusted_path::ExpectedOwner;
 
 /// An open log destination's writer.
@@ -49,7 +49,9 @@ impl Append for LogWriter {
 #[derive(Debug, Clone)]
 pub struct LogOpener {
     profile: DeploymentProfile,
-    owner: ExpectedOwner,
+    /// The service account a log directory must belong to; a stdout destination needs none, so a missing account fails
+    /// only a directory.
+    owner: Result<ExpectedOwner, ProfileError>,
     /// The value of [`JOURNAL_STREAM`](super::JOURNAL_STREAM) at startup, read only to refuse stdout.
     journal_stream: Option<OsString>,
     failure: LogFailure,
@@ -60,7 +62,12 @@ pub struct LogOpener {
 
 impl LogOpener {
     /// An opener that verifies directories under `profile`'s rule for `owner` and trips `failure` on a failed write.
-    pub fn new(profile: DeploymentProfile, owner: ExpectedOwner, journal_stream: Option<OsString>, failure: LogFailure) -> Self {
+    pub fn new(
+        profile: DeploymentProfile,
+        owner: Result<ExpectedOwner, ProfileError>,
+        journal_stream: Option<OsString>,
+        failure: LogFailure,
+    ) -> Self {
         Self {
             profile,
             owner,
@@ -81,7 +88,10 @@ impl LogOpener {
     pub fn open(&self, destination: &LogDestination) -> Result<LogWriter, LogOpenError> {
         match destination {
             LogDestination::Stdout => LogStdout::open(self.journal_stream.as_deref(), self.failure.clone()).map(LogWriter::Stdout),
-            LogDestination::Directory(path) => LogFile::open(self.open_dir(path)?, self.owner, self.failure.clone()).map(LogWriter::File),
+            LogDestination::Directory(path) => {
+                let (dir, owner) = self.open_dir(path)?;
+                LogFile::open(dir, owner, self.failure.clone()).map(LogWriter::File)
+            }
         }
     }
 
@@ -91,16 +101,21 @@ impl LogOpener {
     pub fn precheck(&self, destination: &LogDestination) -> Result<(), LogOpenError> {
         match destination {
             LogDestination::Stdout => LogStdout::open(self.journal_stream.as_deref(), self.failure.clone()).map(drop),
-            LogDestination::Directory(path) => self.open_dir(path)?.check_log_file(self.owner),
+            LogDestination::Directory(path) => {
+                let (dir, owner) = self.open_dir(path)?;
+                dir.check_log_file(owner)
+            }
         }
     }
 
-    fn open_dir(&self, path: &Path) -> Result<LogDir, LogOpenError> {
+    /// Opens and verifies the directory at `path`, with the owner it was verified for.
+    fn open_dir(&self, path: &Path) -> Result<(LogDir, ExpectedOwner), LogOpenError> {
+        let owner = self.owner.clone()?;
         #[cfg(any(test, feature = "test-support"))]
         if self.leaf_only {
-            return LogDir::open_leaf_only(path, self.owner);
+            return Ok((LogDir::open_leaf_only(path, owner)?, owner));
         }
-        LogDir::open(path, self.profile, self.owner)
+        Ok((LogDir::open(path, self.profile, owner)?, owner))
     }
 }
 
@@ -153,7 +168,7 @@ impl LogSwitch {
     /// A switch on stdout that nothing writes to unless a test installs it, for tests that need a service but not its log.
     #[cfg(any(test, feature = "test-support"))]
     pub fn stdout_for_tests(owner: ExpectedOwner) -> Result<Self, LogOpenError> {
-        let opener = LogOpener::new(DeploymentProfile::Development, owner, None, LogFailure::default());
+        let opener = LogOpener::new(DeploymentProfile::Development, Ok(owner), None, LogFailure::default());
         Self::open(LogDestination::Stdout, opener)
     }
 
@@ -222,5 +237,104 @@ impl io::Write for SwitchedWriter {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use super::*;
+    use crate::logging::{FileProblem, LOG_FILE_NAME};
+
+    /// A fresh `0750` directory under the system temp directory, removed on drop.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            static NEXT: AtomicU32 = AtomicU32::new(0);
+            let name = format!("iv-switch-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
+            let dir = std::env::temp_dir().join(name);
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o750)).unwrap();
+            Self(dir)
+        }
+
+        fn destination(&self) -> LogDestination {
+            LogDestination::Directory(self.0.clone())
+        }
+
+        fn log(&self) -> String {
+            fs::read_to_string(self.0.join(LOG_FILE_NAME)).unwrap_or_default()
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn opener() -> LogOpener {
+        let owner = ExpectedOwner {
+            uid: rustix::process::getuid().as_raw(),
+        };
+        LogOpener::new(DeploymentProfile::Development, Ok(owner), None, LogFailure::default()).leaf_only()
+    }
+
+    fn write(switch: &LogSwitch, record: &str) -> io::Result<()> {
+        switch.make_writer().write_all(record.as_bytes())
+    }
+
+    #[test]
+    fn a_switch_sends_later_records_to_the_new_destination_and_returns_the_old_one() {
+        let (old, new) = (Scratch::new(), Scratch::new());
+        let switch = LogSwitch::open(old.destination(), opener()).unwrap();
+        write(&switch, "before\n").unwrap();
+        let opened = switch.open_destination(new.destination()).unwrap();
+        assert_eq!(switch.switch(opened), old.destination());
+        write(&switch, "after\n").unwrap();
+        assert_eq!((old.log(), new.log()), ("before\n".to_owned(), "after\n".to_owned()));
+        assert_eq!(switch.current(), new.destination());
+        assert_eq!(switch.bootstrap(), &old.destination());
+    }
+
+    #[test]
+    fn a_failed_write_to_the_new_destination_trips_the_shared_latch() {
+        let (old, new) = (Scratch::new(), Scratch::new());
+        let switch = LogSwitch::open(old.destination(), opener()).unwrap();
+        switch.switch(switch.open_destination(new.destination()).unwrap());
+        // With its directory gone, the writer finds the log file renamed and cannot create it again.
+        fs::remove_dir_all(&new.0).unwrap();
+        assert!(write(&switch, "lost\n").is_err());
+        assert!(switch.failure().is_tripped());
+    }
+
+    #[test]
+    fn the_precheck_creates_nothing_and_refuses_an_unsafe_log_file() {
+        let dir = Scratch::new();
+        opener().precheck(&dir.destination()).unwrap();
+        assert!(!dir.0.join(LOG_FILE_NAME).exists());
+        fs::write(dir.0.join(LOG_FILE_NAME), "").unwrap();
+        fs::set_permissions(dir.0.join(LOG_FILE_NAME), fs::Permissions::from_mode(0o662)).unwrap();
+        assert!(matches!(
+            opener().precheck(&dir.destination()),
+            Err(LogOpenError::UnsafeFile(FileProblem::Writable))
+        ));
+    }
+
+    #[test]
+    fn the_precheck_refuses_a_missing_directory_and_one_others_can_write() {
+        let dir = Scratch::new();
+        let missing = LogDestination::Directory(dir.0.join("missing"));
+        assert!(opener().precheck(&missing).is_err());
+        fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o757)).unwrap();
+        assert!(matches!(opener().precheck(&dir.destination()), Err(LogOpenError::Untrusted(_))));
+        assert!(!dir.0.join(LOG_FILE_NAME).exists());
     }
 }
