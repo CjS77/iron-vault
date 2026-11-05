@@ -197,7 +197,7 @@ fn typed_values_appear_in_no_log_line_at_trace() {
     let run = run(vec![secret(), plain()], input.as_bytes());
     assert!(matches!(run.result.unwrap(), AdminResponse::Success));
     assert_eq!(run.answers, [value(MARKER.as_bytes()), value(format!("{MARKER}-plain").as_bytes())]);
-    assert!(run.logs.contains("admin command `ping`"), "the capture saw nothing: {}", run.logs);
+    assert!(run.logs.contains("admin.command"), "the capture saw nothing: {}", run.logs);
     assert!(!run.logs.contains(MARKER), "{}", run.logs);
 }
 
@@ -282,7 +282,7 @@ fn notices_reveals_and_prompts_reach_the_console_in_order_and_the_reveal_reaches
     );
     assert_eq!(*answers.lock().unwrap(), [value(b"yes")]);
     let logs = logs.text();
-    assert!(logs.contains("admin command `ping`"), "the capture saw nothing: {logs}");
+    assert!(logs.contains("admin.command"), "the capture saw nothing: {logs}");
     assert!(!logs.contains(MARKER), "{logs}");
 }
 

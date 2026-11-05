@@ -10,6 +10,7 @@ mod common;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use common::request_log::capture;
@@ -34,7 +35,8 @@ struct RuntimeDir(PathBuf);
 
 impl RuntimeDir {
     fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!("iv-ct-{}", std::process::id()));
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!("iv-ct-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir(&dir).unwrap();
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
