@@ -215,6 +215,19 @@ pub fn add(socket: Option<&Path>, name: String, kind: CredentialKind, origins: &
     })
 }
 
+/// Runs `rm`. The service describes the removal in a notice and prompts for the approval passphrase, answered from the
+/// owner console. A name a route still uses is refused with the routes to take out of the config first.
+pub fn rm(socket: Option<&Path>, name: String) -> Exit {
+    let request = AdminRequest::Rm { name: name.clone() };
+    run(socket, request, |response| match response {
+        AdminResponse::Success => {
+            println!("removed {name}");
+            Exit::Success
+        }
+        _ => unexpected(),
+    })
+}
+
 /// Runs `config approve` on the bytes of `file`. The service shows its own summary as notices and prompts for the
 /// confirmation and the approval passphrase; the CLI computes no summary or digest of its own. A file longer than
 /// [`MAX_CONFIG_LEN`] is refused before anything is sent. No diagnostic quotes the file's bytes.

@@ -13,16 +13,17 @@
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
 use iron_vault_policy::{
-    AccountDirectory, ActivationError, ActivePolicy, Capabilities, ConfigError, ParsedConfig, RateLimiter, ValidatedConfig,
+    AccountDirectory, ActivationError, ActivePolicy, Capabilities, ConfigError, CredentialName, ParsedConfig, RateLimiter, ValidatedConfig,
     ValidationError, activate,
 };
 use iron_vault_store::{
-    ApprovalRecoveryError, ApprovalState, ApprovalStateError, ConfigDirLock, PublishedPairFault, RecoveryFailure, StateDirLock, StoreFs,
-    Vault, VaultError, VaultIdentity, recover_approval,
+    ApprovalRecoveryError, ApprovalState, ApprovalStateError, ConfigDirLock, PublishedPairFault, RecordId, RecoveryFailure, StateDirLock,
+    StoreFs, Vault, VaultError, VaultIdentity, recover_approval,
 };
 
 use crate::deployment::DeploymentProfile;
@@ -258,6 +259,8 @@ pub struct Checked {
     pub approval: ApprovalState,
     /// Each credential's standing, in name order; only the report of opening the vault knows it.
     pub credentials: Vec<CredentialStanding>,
+    /// The record ID of each credential the manifest lists, damaged ones included.
+    pub record_ids: BTreeMap<CredentialName, RecordId>,
     /// Each route fault, in name order.
     pub route_faults: Vec<RouteFault>,
 }
@@ -296,6 +299,7 @@ fn open_and_run(
     let snapshot = run(config_dir, fs, vault, &approval, capabilities, accounts, upstream)?;
     Ok(Checked {
         credentials: snapshot.credential_standings(&opened),
+        record_ids: snapshot.record_ids(),
         route_faults: snapshot.route_faults(),
         snapshot,
         approval,

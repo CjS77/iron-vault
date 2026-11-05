@@ -123,6 +123,12 @@ pub enum Command {
         #[arg(long = "origin", value_name = "ORIGIN", required = true, value_parser = OriginParser)]
         origins: Vec<(Host, Port)>,
     },
+    /// Remove the credential NAME after you type the approval passphrase. It refuses while a route of the active config
+    /// uses the name: approve a config without those routes first.
+    Rm {
+        /// The credential name to remove.
+        name: String,
+    },
     /// Change the approved configuration.
     #[command(subcommand)]
     Config(ConfigCommand),
@@ -273,6 +279,13 @@ pub fn add(socket: Option<&Path>, name: String, kind: CredentialKind, origins: &
     client::add(socket, name, kind, origins).into()
 }
 
+/// `iron-vault rm`: sends `rm` with the name, answers the approval passphrase prompt from the owner console, and prints
+/// `removed NAME`.
+#[cfg(target_os = "linux")]
+pub fn rm(socket: Option<&Path>, name: String) -> ExitCode {
+    client::rm(socket, name).into()
+}
+
 /// `iron-vault config approve FILE`: sends FILE's bytes for approval, answers the service's prompts, and shows the
 /// committed version.
 #[cfg(target_os = "linux")]
@@ -283,6 +296,12 @@ pub fn config_approve(socket: Option<&Path>, file: &Path) -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn add(_socket: Option<&Path>, _name: String, _kind: CredentialKind, _origins: &[(Host, Port)]) -> ExitCode {
+    unsupported_platform()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn rm(_socket: Option<&Path>, _name: String) -> ExitCode {
     unsupported_platform()
 }
 

@@ -26,10 +26,11 @@ use iron_vault_store::{
 };
 use tokio::sync::OwnedMutexGuard;
 
-use super::super::{Inner, OwnerPresence, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, log_task_crash};
+use super::super::{Inner, OpenVault, OwnerPresence, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, log_task_crash};
 use super::{VaultChangeRefusal, kind_of};
 use crate::service_state::{AdminOperation, ServiceEvent, ServiceState};
 use crate::serving_snapshot::Admission;
+use crate::standing::{RecordSummary, Standing};
 use crate::vault_change_check::{PlannedChange, vault_change_check};
 
 /// Steps 2 to 4 of a `replace` or `rm` done: the service-wide lock is held and the vault change check passed. See the
@@ -43,6 +44,19 @@ pub struct VaultChangePlan<'a, F> {
     /// The pinned approver owner presence must open, from the approval state the service holds.
     approver: PinnedApprover,
     change: PlannedChange,
+    current: CurrentRecord,
+}
+
+/// The record a `replace` or `rm` acts on, as the vault change summary describes it (design/credential-commands.md,
+/// "Vault change summary"). Read under the service-wide lock, so it stays true until the write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentRecord {
+    /// The record's ID, which the write supersedes or removes.
+    pub record_id: RecordId,
+    /// Whether the record loaded.
+    pub standing: Standing,
+    /// The record's kind and permitted origins; `None` for a damaged record, whose origins cannot be trusted.
+    pub summary: Option<RecordSummary>,
 }
 
 /// What a committed `replace` or `rm` did.
@@ -86,9 +100,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let (Some(open), Admission::Serve(snapshot), true) = (inner.open.as_ref(), self.holder.load(), ready) else {
             return Err(VaultChangeRefusal::WrongState(inner.state));
         };
-        if !open.credentials.iter().any(|standing| &standing.name == change.name()) {
+        let Some(current) = current_record(open, change.name()) else {
             return Err(VaultChangeRefusal::UnknownCredential(change.name().clone()));
-        }
+        };
         let config = snapshot.policy().config();
         vault_change_check(config, &self.setup.capabilities, &*snapshot, &self.setup.accounts, &change).map_err(|routes| {
             VaultChangeRefusal::InUse {
@@ -102,6 +116,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             checks: inner.checks,
             approver: open.approval.approver().clone(),
             change,
+            current,
         })
     }
 }
@@ -110,6 +125,11 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
     /// The change the check passed, which the summary describes.
     pub fn change(&self) -> &PlannedChange {
         &self.change
+    }
+
+    /// The record the change replaces or removes, which the summary describes.
+    pub fn current(&self) -> &CurrentRecord {
+        &self.current
     }
 
     /// Completes once a `lock` is waiting for the service-wide lock this plan holds, so a prompt can end the change
@@ -177,6 +197,16 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
             }
         }
     }
+}
+
+/// The record `open` holds under `name`, healthy or damaged.
+fn current_record(open: &OpenVault, name: &CredentialName) -> Option<CurrentRecord> {
+    let standing = open.credentials.iter().find(|standing| &standing.name == name)?;
+    Some(CurrentRecord {
+        record_id: *open.record_ids.get(name)?,
+        standing: standing.standing,
+        summary: standing.summary.clone(),
+    })
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Settler<F> {

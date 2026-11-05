@@ -6,13 +6,13 @@
 //! on it, and none loads it after the replacement. When no snapshot is held, the admission is a refusal with a redacted
 //! reason, and a snapshot withdrawn from its requests tells them to stop ([`ServingSnapshot::withdrawn`]).
 
-use std::collections::BTreeSet;
 use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use iron_vault_policy::{ActivePolicy, CatalogEntry, CredentialCatalog, CredentialName, RateLimiter, RouteName, UnavailableCause};
-use iron_vault_store::{CredentialRecord, OpenReport, Vault};
+use iron_vault_store::{CredentialRecord, OpenReport, RecordId, Vault};
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
@@ -136,6 +136,12 @@ impl ServingSnapshot {
                 summary: self.vault.record(name).map(summary_of),
             })
             .collect()
+    }
+
+    /// The record ID of every credential the vault manifest lists, damaged ones included, for a vault change's summary.
+    pub fn record_ids(&self) -> BTreeMap<CredentialName, RecordId> {
+        let entries = self.vault.manifest().entries().iter();
+        entries.map(|(id, entry)| (entry.name().clone(), *id)).collect()
     }
 
     /// The routes `credential` makes unavailable; a route unavailable only through its pinned CA is not one of them.

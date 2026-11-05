@@ -479,6 +479,64 @@ impl AdminHandler for FixedError {
     }
 }
 
+/// A test-only `rm` handler: records the request, prompts for the approval passphrase as the service will, records the
+/// value, and answers with success.
+struct StubRm(Arc<AddLog>);
+
+impl AdminHandler for StubRm {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            self.0.requests.lock().unwrap().push(request);
+            let prompt = Prompt {
+                label: "Approval passphrase".to_owned(),
+                secret: true,
+            };
+            let input = exchange.prompt(&prompt).await?;
+            self.0.values.lock().unwrap().push(input.expose_secret().to_vec());
+            Ok(AdminResponse::Success)
+        })
+    }
+}
+
+fn rm_args(socket: &Path) -> Vec<String> {
+    ["rm", "old_key", "--admin-socket"]
+        .iter()
+        .map(|arg| (*arg).to_owned())
+        .chain([socket.display().to_string()])
+        .collect()
+}
+
+#[tokio::test]
+async fn rm_sends_its_name_and_the_piped_passphrase_and_prints_removed() {
+    let dir = TempDir::new();
+    let stub = Arc::new(AddLog::default());
+    let handlers = Handlers::default().with(AdminCommand::Rm, StubRm(Arc::clone(&stub)));
+    let input = format!("{MARKER}\n").into_bytes();
+    let output = serve_and_run_args(&dir, invoking_user().unwrap().uid, handlers, rm_args(&dir.socket()), input).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(stdout, "removed old_key\n");
+    assert_eq!(stderr, "");
+    assert_eq!(*stub.values.lock().unwrap(), [MARKER.as_bytes().to_vec()]);
+    assert_eq!(
+        *stub.requests.lock().unwrap(),
+        [AdminRequest::Rm {
+            name: "old_key".to_owned()
+        }]
+    );
+}
+
+#[tokio::test]
+async fn an_rm_refusal_goes_to_stderr_with_its_code_name() {
+    let dir = TempDir::new();
+    let handlers = Handlers::default().with(AdminCommand::Rm, FixedError(ErrorCode::CredentialInUse));
+    let output = serve_and_run_args(&dir, invoking_user().unwrap().uid, handlers, rm_args(&dir.socket()), Vec::new()).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    assert_eq!(stdout, "");
+    assert!(stderr.contains("error 24 (credential-in-use)"), "{stderr}");
+}
+
 /// `init` shows the recovery key on the controlling terminal only, so without one it stops before connecting and the
 /// service never generates a key. `setsid` runs it in a new session, which has no controlling terminal; nothing listens
 /// at the socket path, and the CLI never gets as far as saying so.

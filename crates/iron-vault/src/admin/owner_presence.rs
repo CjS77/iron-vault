@@ -55,10 +55,6 @@ pub(super) async fn ask_approval_passphrase(
 ///
 /// A `lock` waiting for the service-wide lock the plan holds ends the prompt with [`NoPresence::CancelledByLock`], as
 /// it ends an approval's.
-#[expect(
-    dead_code,
-    reason = "the `replace` and `rm` handlers will call it; its passphrase step is tested on its own"
-)]
 pub(super) async fn require_owner_presence<F: StoreFs + Send + Sync + 'static>(
     exchange: &mut Exchange,
     plan: &VaultChangePlan<'_, F>,

@@ -80,7 +80,7 @@ fn requested_origin(origin: &RequestedOrigin) -> Result<(Host, Port), String> {
 }
 
 /// The name rule broken, without the character that broke it.
-fn name_rule(rule: &NameRule) -> String {
+pub(super) fn name_rule(rule: &NameRule) -> String {
     match rule {
         NameRule::BadStart { .. } => "it must start with a lowercase ASCII letter".to_owned(),
         NameRule::BadChar { .. } => "it may contain only a-z, 0-9, '_' and '-'".to_owned(),

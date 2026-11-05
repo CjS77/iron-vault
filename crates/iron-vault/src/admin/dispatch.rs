@@ -13,6 +13,7 @@ use super::init::Init;
 use super::list::List;
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode};
+use super::rm::Rm;
 use super::server::{Exchange, ExchangeError};
 use super::unlock::Unlock;
 use crate::caller_token::generate_caller_token;
@@ -49,7 +50,7 @@ impl Handlers {
     }
 
     /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile, then `status`,
-    /// `unlock`, `lock`, `config approve`, `add`, `init` and `list`. A command that acts on the service registers here with a clone of
+    /// `unlock`, `lock`, `config approve`, `add`, `init`, `list` and `rm`. A command that acts on the service registers here with a clone of
     /// `service`.
     pub fn for_service<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> Self {
         Self::standard(service.paths().profile)
@@ -59,6 +60,7 @@ impl Handlers {
             .with(AdminCommand::Add, Add::new(Arc::clone(service)))
             .with(AdminCommand::Init, Init::new(Arc::clone(service)))
             .with(AdminCommand::List, List::new(Arc::clone(service)))
+            .with(AdminCommand::Rm, Rm::new(Arc::clone(service)))
             .with_lock_drain(service, LOCK_DRAIN)
     }
 

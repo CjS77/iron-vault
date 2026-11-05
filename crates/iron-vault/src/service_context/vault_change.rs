@@ -8,7 +8,7 @@
 
 mod plan;
 
-pub use plan::{CredentialChanged, VaultChangePlan};
+pub use plan::{CredentialChanged, CurrentRecord, VaultChangePlan};
 
 use std::sync::Arc;
 
@@ -75,6 +75,8 @@ pub enum VaultChangeRefusal {
 /// What one write left on disk, from the blocking task.
 enum Written {
     Added(RecordId),
+    /// The commit is not known to be durable, but the reopened vault lists the record.
+    AddedUncertain(RecordId),
     Refused(VaultChangeRefusal),
 }
 
@@ -103,7 +105,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let (name, origins) = logged;
         match written {
             Written::Added(record_id) => {
-                show_healthy(&mut inner, name.clone(), summary);
+                show_healthy(&mut inner, name.clone(), record_id, summary);
                 tracing::info!(
                     event = "credential.added",
                     credential = %name,
@@ -114,9 +116,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 );
                 Ok(record_id)
             }
-            Written::Refused(refusal @ VaultChangeRefusal::Uncertain { present: Some(true) }) => {
-                show_healthy(&mut inner, name, summary);
-                Err(refusal)
+            Written::AddedUncertain(record_id) => {
+                show_healthy(&mut inner, name, record_id, summary);
+                Err(VaultChangeRefusal::Uncertain { present: Some(true) })
             }
             Written::Refused(refusal) => Err(refusal),
         }
@@ -157,26 +159,41 @@ fn add_record(
         Ok((record_id, _)) => Written::Added(record_id),
         Err(VaultError::NameTaken(name)) => Written::Refused(VaultChangeRefusal::NameTaken(name)),
         Err(VaultError::InvalidMaterial(error)) => Written::Refused(VaultChangeRefusal::Invalid(error.to_string())),
-        Err(VaultError::CommitUncertain(_)) => Written::Refused(VaultChangeRefusal::Uncertain {
-            present: listed_after_reopen(locks, fs, identity, &name),
-        }),
+        Err(VaultError::CommitUncertain(_)) => match listed_after_reopen(locks, fs, identity, &name) {
+            Some(Some(record_id)) => Written::AddedUncertain(record_id),
+            Some(None) => Written::Refused(VaultChangeRefusal::Uncertain { present: Some(false) }),
+            None => Written::Refused(VaultChangeRefusal::Uncertain { present: None }),
+        },
         Err(other) => Written::Refused(VaultChangeRefusal::Failed(other.to_string())),
     }
 }
 
-/// Whether a vault reopened from disk lists `name`; `None` when it cannot be reopened.
-fn listed_after_reopen(locks: &ServiceLocks, fs: &impl StoreFs, identity: Arc<VaultIdentity>, name: &CredentialName) -> Option<bool> {
+/// The record ID a vault reopened from disk lists for `name`, if any; `None` when it cannot be reopened.
+fn listed_after_reopen(
+    locks: &ServiceLocks,
+    fs: &impl StoreFs,
+    identity: Arc<VaultIdentity>,
+    name: &CredentialName,
+) -> Option<Option<RecordId>> {
     let (vault, _) = Vault::open(&locks.state, fs, identity).ok()?;
-    Some(vault.manifest().entries().values().any(|entry| entry.name() == name))
+    Some(
+        vault
+            .manifest()
+            .entries()
+            .iter()
+            .find(|(_, entry)| entry.name() == name)
+            .map(|(id, _)| *id),
+    )
 }
 
 /// Lists `name` as healthy with no unavailable routes in the context's credential view, in name order. No active route
 /// can use it before the next approval, so none is unavailable through it.
-fn show_healthy(inner: &mut Inner, name: CredentialName, summary: RecordSummary) {
+fn show_healthy(inner: &mut Inner, name: CredentialName, record_id: RecordId, summary: RecordSummary) {
     let Some(open) = &mut inner.open else {
         return;
     };
     if let Err(at) = open.credentials.binary_search_by(|standing| standing.name.cmp(&name)) {
+        open.record_ids.insert(name.clone(), record_id);
         let standing = CredentialStanding {
             name,
             standing: Standing::Healthy,

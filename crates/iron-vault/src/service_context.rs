@@ -32,10 +32,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use iron_vault_policy::{Capabilities, Limits, ListenerConfig, ListenerName, ParsedConfig};
+use iron_vault_policy::{Capabilities, CredentialName, Limits, ListenerConfig, ListenerName, ParsedConfig};
 use iron_vault_store::{
-    ApprovalState, ConfigDirLock, ConfigFileName, InitializationState, LockError, OsFs, Passphrase, StateDirLock, StateFileName, StoreFs,
-    UnlockError, VaultIdentity, read_config_file, sweep_stale_config_temps, sweep_stale_temps, unlock_with_passphrase,
+    ApprovalState, ConfigDirLock, ConfigFileName, InitializationState, LockError, OsFs, Passphrase, RecordId, StateDirLock, StateFileName,
+    StoreFs, UnlockError, VaultIdentity, read_config_file, sweep_stale_config_temps, sweep_stale_temps, unlock_with_passphrase,
 };
 use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 
@@ -55,7 +55,7 @@ use unlock::log_foreign_files;
 pub use approval::{ApprovalEnd, ApprovalReview};
 pub use init::{InitRefusal, step_names};
 pub use presence::{OwnerPresence, PresenceRefusal};
-pub use vault_change::{CredentialChanged, VaultChangePlan, VaultChangeRefusal};
+pub use vault_change::{CredentialChanged, CurrentRecord, VaultChangePlan, VaultChangeRefusal};
 
 /// The log target of lock transitions (glossary: *Lock transition*), so the audit design (EP-26) can route them as
 /// their own events.
@@ -216,6 +216,8 @@ struct OpenVault {
     approval: ApprovalState,
     /// The standing of each credential, from the report of opening the vault.
     credentials: Vec<CredentialStanding>,
+    /// The record ID of each credential in `credentials`, which a vault change's summary names.
+    record_ids: BTreeMap<CredentialName, RecordId>,
     /// The routes unavailable for a cause of their own, from the check.
     route_faults: Vec<RouteFault>,
 }
@@ -698,11 +700,13 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
                 snapshot,
                 approval,
                 credentials,
+                record_ids,
                 route_faults,
             }) => {
                 let open = OpenVault {
                     approval,
                     credentials,
+                    record_ids,
                     route_faults,
                 };
                 self.enter_ready(inner, snapshot, open).await

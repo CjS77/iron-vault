@@ -120,6 +120,18 @@ fn add(args: &[&str]) -> Result<AddArgs, clap::Error> {
 }
 
 #[test]
+fn rm_takes_one_name_and_nothing_else() {
+    assert_eq!(
+        parse(&["rm", "old_key"]).unwrap().command,
+        Command::Rm {
+            name: "old_key".to_owned()
+        }
+    );
+    assert!(parse(&["rm"]).is_err());
+    assert!(parse(&["rm", "a", "b"]).is_err());
+}
+
+#[test]
 fn add_takes_a_name_and_origins_and_defaults_to_a_static_kind() {
     let (name, kind, origins) = add(&["fx", "--origin", "api.fx.example"]).unwrap();
     assert_eq!((name.as_str(), kind), ("fx", KindArg::Static));
