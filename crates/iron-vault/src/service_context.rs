@@ -20,6 +20,8 @@
 mod approval;
 mod init;
 mod serving;
+#[cfg(test)]
+mod tests;
 mod unlock;
 mod vault_change;
 
@@ -378,7 +380,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// the same, after the same teardown.
     pub async fn stop(&self) {
         let mut inner = self.inner.lock().await;
-        if let Err(refused) = self.apply(&mut inner, ServiceEvent::Stop) {
+        if let Err(refused) = apply(&self.holder, &mut inner, ServiceEvent::Stop) {
             tracing::info!("stopping from {:?}", refused.state);
         }
         // Stopped has no request interface; storing a refusal withdraws the snapshot and drops the holder's reference.
@@ -514,39 +516,62 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 
     /// [`Settler::check_and_settle`] in a spawned task that owns `inner`, so the move out of Checking finishes even if
-    /// this future is dropped: §3.12 leaves Checking only on a pass or a failure. A task that ends without a result
-    /// fails closed through [`fail_interrupted`](Self::fail_interrupted).
+    /// this future is dropped: §3.12 leaves Checking only on a pass or a failure. A task that ends without a result has
+    /// already failed closed through its [`SettleGuard`], so the caller only reads the state it left.
     async fn check_and_settle_detached(
         &self,
-        mut inner: OwnedMutexGuard<Inner>,
+        inner: OwnedMutexGuard<Inner>,
         event: ServiceEvent,
         identity: Arc<VaultIdentity>,
     ) -> Result<ServiceState, IllegalTransition> {
+        let mut guard = SettleGuard::new(inner, Arc::clone(&self.holder));
         let settler = self.settler();
-        let settling = tokio::spawn(async move { settler.check_and_settle(&mut inner, event, identity).await });
+        let settling = tokio::spawn(async move { settler.check_and_settle(&mut guard.inner, event, identity).await });
         match settling.await {
             Ok(settled) => settled,
-            Err(_) => Ok(self.fail_interrupted().await),
+            Err(crashed) => {
+                let ended = if crashed.is_panic() { "panicked" } else { "was cancelled" };
+                tracing::error!("the config check's settle task {ended} before it gave a result");
+                Ok(self.inner.lock().await.state)
+            }
         }
     }
+}
 
-    /// Moves a service that a crashed settle task left in Checking to Unavailable, withdrawing anything it served and
-    /// logging `config.check-failed`. A task that crashed before entering Checking, or after settling, left a state
-    /// §3.12 allows, which stays.
-    async fn fail_interrupted(&self) -> ServiceState {
-        let mut inner = self.inner.lock().await;
-        if inner.state == ServiceState::Checking {
-            inner.open = None;
-            let failed = ServiceEvent::CheckFailed(CheckFailure::interrupted().failure());
-            // Cannot fail: Checking always leads to Unavailable on a failure.
-            let _ = apply(&self.holder, &mut inner, failed);
+/// The settle task's hold on `inner`. The task owns it, so a crash fails closed even after the caller is gone: dropping
+/// it while the service is still in Checking moves the service to Unavailable needing recovery, drops the vault the
+/// check opened and logs `config.check-failed`. A settled task leaves a state §3.12 allows, which stays.
+struct SettleGuard {
+    inner: OwnedMutexGuard<Inner>,
+    holder: Arc<SnapshotHolder>,
+    /// The check started from Locked, so leaving Checking is a lock transition too.
+    leaving_locked: bool,
+}
+
+impl SettleGuard {
+    fn new(inner: OwnedMutexGuard<Inner>, holder: Arc<SnapshotHolder>) -> Self {
+        let leaving_locked = inner.state == ServiceState::Locked;
+        Self {
+            inner,
+            holder,
+            leaving_locked,
         }
-        inner.state
     }
+}
 
-    /// Moves to the state `event` leads to, storing that state's refusal in the holder.
-    fn apply(&self, inner: &mut Inner, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
-        apply(&self.holder, inner, event)
+impl Drop for SettleGuard {
+    fn drop(&mut self) {
+        if self.inner.state != ServiceState::Checking {
+            return;
+        }
+        self.inner.open = None;
+        let failed = ServiceEvent::CheckFailed(CheckFailure::interrupted().failure());
+        // Checking always leads to Unavailable on a failure, so the transition is always made.
+        if let Ok(unavailable) = apply(&self.holder, &mut self.inner, failed)
+            && self.leaving_locked
+        {
+            log_lock_transition(ServiceState::Checking, unavailable);
+        }
     }
 }
 
@@ -595,7 +620,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         if next(from, event) != Ok(ServiceState::Checking) {
             return Err(IllegalTransition { state: from, event });
         }
-        let checking = self.apply(inner, event)?;
+        let checking = apply(&self.holder, inner, event)?;
         let committed = inner
             .open
             .as_ref()
@@ -642,7 +667,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
                 if event == ServiceEvent::Reload {
                     log_reload_failed(committed, &failure);
                 }
-                self.apply(inner, ServiceEvent::CheckFailed(failure.failure()))
+                apply(&self.holder, inner, ServiceEvent::CheckFailed(failure.failure()))
             }
         }
     }
@@ -667,11 +692,6 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         inner.open = Some(open);
         inner.state = ready;
         Ok(ready)
-    }
-
-    /// Moves to the state `event` leads to, storing that state's refusal in the holder.
-    fn apply(&self, inner: &mut Inner, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
-        apply(&self.holder, inner, event)
     }
 }
 

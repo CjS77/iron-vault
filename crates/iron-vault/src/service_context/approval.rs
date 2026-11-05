@@ -23,7 +23,7 @@ use iron_vault_store::{
 };
 use tokio::sync::MutexGuard;
 
-use super::{Inner, ServiceContext};
+use super::{Inner, ServiceContext, apply};
 use crate::admin::protocol::ApprovalResult;
 use crate::config_check::{InvalidConfig, activate_config};
 use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState, UnavailableReason};
@@ -163,10 +163,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     fn recovery_needed(&self, inner: &mut Inner, started: ServiceState) -> ServiceState {
         if started != ServiceState::Ready {
             inner.open = None;
-            let _ = self.apply(inner, ServiceEvent::Repaired);
+            let _ = apply(&self.holder, inner, ServiceEvent::Repaired);
         }
-        self.apply(inner, ServiceEvent::CheckFailed(FailureReason::RecoveryNeeded))
-            .unwrap_or(inner.state)
+        apply(&self.holder, inner, ServiceEvent::CheckFailed(FailureReason::RecoveryNeeded)).unwrap_or(inner.state)
     }
 }
 
@@ -253,12 +252,10 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         if started == ServiceState::Ready {
             inner.open = None;
             // Cannot fail: the state was checked as Ready under this same guard. Were it to, the version is consumed.
-            service
-                .apply(&mut inner, ServiceEvent::ApprovalCommitting)
-                .map_err(|illegal| ApprovalEnd::Failed {
-                    version,
-                    cause: illegal.to_string(),
-                })?;
+            apply(&service.holder, &mut inner, ServiceEvent::ApprovalCommitting).map_err(|illegal| ApprovalEnd::Failed {
+                version,
+                cause: illegal.to_string(),
+            })?;
         }
         let committed = {
             let pause = service.holder.pause();
