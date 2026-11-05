@@ -180,7 +180,7 @@ mod no_external_signatures {
         }
     }
 
-    const COMMANDS: [AdminCommand; 10] = [
+    const COMMANDS: [AdminCommand; 11] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::CallerToken,
