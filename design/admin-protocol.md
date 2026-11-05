@@ -111,6 +111,7 @@ an error.
 |---|---|---|---|
 | `1` | `ping` | none | the deployment profile |
 | `2` | `config approve` | the proposed config bytes | the committed version, the config digest and the summary headline |
+| `3` | `caller-token` | none | a fresh [caller token](#caller-token), once |
 | `4` | `unlock` | none | none |
 | `5` | `lock` | none | whether every cached secret was confirmed cleared |
 | `6` | `status` | none | the [status report](#status) |
@@ -280,6 +281,45 @@ serving requests, so the new credential takes effect from the next approval: no 
 | `credential-invalid` | the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
 | `vault-write-failed` | writing the record or the manifest failed; the message says whether the write may have committed |
 
+#### caller-token
+
+Issues a fresh caller token for the owner to enroll (spec
+[§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners),
+[§3.3](iron-vault-specification.md#33-credential-records-and-configuration)). It takes no arguments and no prompt. The
+service draws the token from the operating system's random source and returns it in the result; it keeps no copy, and
+writes no config. Issuing enrolls nothing: the owner puts the token's `token_hash` on a token caller's
+`[callers.<name>]` table and approves that config with `config approve`
+([config-approval.md](config-approval.md)), which never needs a pending config to outlive one exchange. The token
+authenticates its caller from the moment that config is active.
+
+- **Rotate:** issue a new token and approve a config naming its hash. The old token works until that approval commits.
+- **Revoke:** approve a config without the caller, or without its `token_hash`.
+
+Neither changes a provider credential. The service cannot prove that an approved `token_hash` came from a token it
+issued; the owner is trusted ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)), and the approval
+summary shows that a token changed.
+
+It is allowed in every state the admin socket is served in, Locked and Unavailable included: it touches neither the
+vault nor the policy, so the owner can prepare the config that fixes an invalid policy. The service logs
+`caller.token-issued` at INFO, with neither the token nor its hash
+([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)).
+
+The success result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | caller token | byte value, exactly 47 bytes (`CALLER_TOKEN_LEN`): the token's text, `ivt_` and 43 base64url characters |
+
+The result holds a secret, so the service encodes it into a buffer that clears itself on drop, as it does every frame
+it sends. The decoder parses the token with `CallerToken::parse` straight from the clearing read buffer; a wrong length
+or an invalid token is `malformed-frame`, and the error names only the tag.
+
+Errors specific to `caller-token`:
+
+| Code | When |
+|---|---|
+| `random-source-failed` | the operating system's random source failed; no token was made, and no weaker source is tried |
+
 #### init
 
 Creates the vault, its two recovery paths and its first committed approval (spec
@@ -400,7 +440,8 @@ A command without a result answers with an empty body. A command with a result a
 | 1 | command | `u16` ID of the command this answers |
 | 2 and up | result | defined with the command |
 
-`config approve`'s result is defined [with the command](#config-approve), and `init`'s [with its command](#init).
+`config approve`'s result is defined [with the command](#config-approve), `caller-token`'s [with its
+command](#caller-token), and `init`'s [with its command](#init).
 
 Naming the command keeps the codec context-free: a success body decodes on its own, without knowing which request it
 answers, and the CLI can check that it answers the request it sent. A body that names a command without a result, or
@@ -505,13 +546,15 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `20` | `name-taken` | `add`: the name is already in the manifest, healthy or damaged; `add` never overwrites |
 | `21` | `credential-invalid` | `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
 | `22` | `vault-write-failed` | `add`: the vault write failed; the message says whether it may have committed |
+| `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
 
 ## Versions
 
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
-byte values, `config approve` (command 2), `unlock` (command 4), `lock` (command 5), `status` (command 6), `init`
-(command 7), `add` (command 8), error codes 7 to 22 join it rather than starting version 2.
+byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
+`status` (command 6), `init` (command 7), `add` (command 8), error codes 7 to 22 and error code 25 join it rather than
+starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
@@ -664,6 +707,16 @@ with the key, because the service cannot say so over a closed connection. It tra
 On success it prints `initialized vault <vault ID>: approval version 1 committed` and `run iron-vault unlock to start
 serving` to stdout; the recovery key never goes there. Otherwise it prints the service's error to stderr and exits
 with code 1.
+
+### caller-token
+
+`iron-vault caller-token` takes no argument. On success it writes exactly the token and a newline to stdout, so
+`iron-vault caller-token > token` captures the token alone. It writes the line through a duplicate of fd 1, never
+through `io::Stdout`, whose buffer is never cleared. To stderr it writes `token_hash = "blake2b:<64 hex>"`, computed
+before the token is consumed so the hash always matches the token printed, then a note: the token is shown once and
+the service keeps no copy; put the line on the caller's `[callers.<name>]` table and run `iron-vault config approve
+<file>`; the token works only once that config is approved and active, and the caller's old token, if any, keeps
+working until then. A service error goes to stderr with exit code 1. No diagnostic names a token byte.
 
 ### add
 
