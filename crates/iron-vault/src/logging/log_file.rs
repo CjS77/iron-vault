@@ -218,6 +218,39 @@ impl<'a> MakeWriter<'a> for LogFile {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+impl LogDir {
+    /// [`Self::open`] with the rule applied to the leaf alone, so an integration test can log to a directory under the build tree.
+    pub fn open_leaf_only(path: &Path, owner: ExpectedOwner) -> Result<Self, LogOpenError> {
+        Self::open_verified(path, leaf_only(owner))
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn root_dir() -> PathComponent {
+    PathComponent {
+        path: std::path::PathBuf::from("/"),
+        uid: 0,
+        gid: 0,
+        owner_name: None,
+        group_name: None,
+        mode: Mode::new(0o755),
+        kind: ComponentKind::Directory,
+        id: FileId { dev: 0, ino: 0 },
+    }
+}
+
+/// The log directory rule on the leaf alone, for a test tree under `/tmp` or a build directory, whose ancestors no log
+/// directory may sit under.
+#[cfg(any(test, feature = "test-support"))]
+fn leaf_only(owner: ExpectedOwner) -> impl Fn(&[PathComponent]) -> Result<(), UnsafePath> {
+    move |chain| {
+        let leaf = chain.last().cloned().into_iter();
+        let leaf_chain: Vec<PathComponent> = std::iter::once(root_dir()).chain(leaf).collect();
+        trusted_path::check(TrustedPathRule::LogDir, DeploymentProfile::Development, owner, &leaf_chain)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -266,28 +299,6 @@ mod tests {
     fn me() -> ExpectedOwner {
         ExpectedOwner {
             uid: rustix::process::getuid().as_raw(),
-        }
-    }
-
-    fn root_dir() -> PathComponent {
-        PathComponent {
-            path: PathBuf::from("/"),
-            uid: 0,
-            gid: 0,
-            owner_name: None,
-            group_name: None,
-            mode: Mode::new(0o755),
-            kind: ComponentKind::Directory,
-            id: FileId { dev: 0, ino: 0 },
-        }
-    }
-
-    /// The log directory rule on the leaf alone: the test tree sits under `/tmp`, whose ancestors no log directory may.
-    fn leaf_only(owner: ExpectedOwner) -> impl Fn(&[PathComponent]) -> Result<(), UnsafePath> {
-        move |chain| {
-            let leaf = chain.last().cloned().into_iter();
-            let leaf_chain: Vec<PathComponent> = std::iter::once(root_dir()).chain(leaf).collect();
-            trusted_path::check(TrustedPathRule::LogDir, DeploymentProfile::Development, owner, &leaf_chain)
         }
     }
 
