@@ -118,8 +118,8 @@ an error.
 | `7` | `init` | none | the vault ID and the committed version |
 | `8` | `add` | the credential name, kind and permitted origins | the [record ID](#add) |
 | `9` | `list` | none | the [credential list](#list) |
-
-Command IDs `10` and `11` are reserved for `replace` and `rm` (EP-25).
+| `10` | `replace` | the credential name, kind and permitted origins, as `add` | the new [record ID](#replace) |
+| `11` | `rm` | the credential name | none |
 
 **No command accepts an external signature** ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -282,6 +282,65 @@ serving requests, so the new credential takes effect from the next approval: no 
 | `credential-invalid` | the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
 | `vault-write-failed` | writing the record or the manifest failed; the message says whether the write may have committed |
 
+#### replace
+
+Replaces a credential record with a new one under the same name, after owner presence (spec
+[§3.3](iron-vault-specification.md#33-credential-records-and-configuration),
+[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). The design, including why each step
+is where it is, is [credential-commands.md](credential-commands.md). The arguments are `add`'s: tag 2 the name, tag 3
+the kind, tag 4 the origins, with the same encoding and bounds. The new kind and origins need not match the old ones.
+
+The exchange, after the request:
+
+1. The service must be Ready, else `wrong-state`. The name and the origins are checked as for `add`
+   (`credential-invalid`).
+2. The service tries the service-wide lock, and answers `busy` if it is held. It holds the lock until its response.
+3. A name the manifest does not list, healthy or damaged, ends the exchange with `unknown-credential`.
+4. The [vault change check](credential-commands.md#vault-change-check) ends the exchange with `credential-in-use` when
+   a route that uses the name would not activate with the new kind and origins. The message names each route and why.
+5. **Summary.** The [vault change summary](credential-commands.md#vault-change-summary), as one or more notices.
+6. **Owner presence.** A prompt, secret: `Approval passphrase`. The service opens the approver key with it and drops
+   it. A wrong passphrase, or a key that is not the pinned approver, ends the exchange with `approval-denied`. Nothing
+   is reserved or signed, and there is no second try.
+7. **Material.** The secret prompts for the new kind, as for `add`. Material that breaks its rule ends the exchange
+   with `credential-invalid`.
+8. The service checks again that it is Ready and that no `lock` and `unlock` ran during the prompts (`wrong-state`),
+   then writes the new record and the manifest. The old record file is removed after the commit.
+9. The service runs the config check, and answers once it ends.
+
+A damaged record can be replaced: that is how it is repaired. The success result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | record ID | byte value, exactly 16 bytes: the new record's random version 4 UUID |
+
+The old record ID was shown in the summary. Errors specific to `replace`:
+
+| Code | When |
+|---|---|
+| `unknown-credential` | the manifest holds no credential of that name |
+| `credential-in-use` | a route that uses the name would not activate after the change; the message names each route and the rule it breaks |
+| `approval-denied` | owner presence failed |
+| `credential-invalid` | the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
+| `vault-write-failed` | writing the record or the manifest failed; the message says whether the write may have committed, and, when it may have, the state the config check left |
+| `committed-not-active` | the change committed, but the config check after it left the service Unavailable; the message names the redacted reason |
+
+#### rm
+
+Removes a credential record, after owner presence (spec
+[§3.3](iron-vault-specification.md#33-credential-records-and-configuration),
+[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)); see
+[credential-commands.md](credential-commands.md).
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | name | UTF-8 text: the credential name |
+
+The exchange follows `replace`'s steps 1 to 6, 8 and 9, without kind, origins or material. Step 4 refuses the
+removal with `credential-in-use` while any route of the active config uses the name, healthy or damaged, and names
+those routes: the owner first approves a config without them. A damaged record can be removed. Success has no result.
+Its errors are `replace`'s, except that `credential-invalid` is only for the name.
+
 #### caller-token
 
 Issues a fresh caller token for the owner to enroll (spec
@@ -442,7 +501,7 @@ A command without a result answers with an empty body. A command with a result a
 | 2 and up | result | defined with the command |
 
 `config approve`'s result is defined [with the command](#config-approve), `caller-token`'s [with its
-command](#caller-token), and `init`'s [with its command](#init).
+command](#caller-token), `init`'s [with its command](#init), and `replace`'s [with its command](#replace).
 
 Naming the command keeps the codec context-free: a success body decodes on its own, without knowing which request it
 answers, and the CLI can check that it answers the request it sent. A body that names a command without a result, or
@@ -568,10 +627,10 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `6` | `busy` | the service is already serving as many admin connections as it allows, or another operation holds the lock a command needs; try again |
 | `7` | `config-invalid` | `config approve`: the proposed config is invalid |
 | `8` | `declined` | the owner declined at a confirmation prompt |
-| `9` | `approval-denied` | `config approve`: the approval passphrase was wrong |
+| `9` | `approval-denied` | `config approve`, `replace`, `rm`: owner presence failed: the approval passphrase did not open the approver key, or the key it opened is not the pinned approver |
 | `10` | `approval-unavailable` | `config approve`: the service cannot run an approval now |
 | `11` | `approval-failed` | `config approve`: failed after reserving a version, before committing it |
-| `12` | `committed-not-active` | `config approve`: committed, but not yet published or active |
+| `12` | `committed-not-active` | `config approve`: committed, but not yet published or active; `replace`, `rm`: the change committed, but the config check after it left the service Unavailable |
 | `13` | `wrong-state` | the command is not allowed in the service's current state; the message names the state |
 | `14` | `unlock-denied` | `unlock`: the vault passphrase was wrong |
 | `15` | `unlock-failed` | `unlock`: the vault did not open, for a reason other than the passphrase; the service stays Locked |
@@ -580,8 +639,10 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `18` | `passphrase-rejected` | `init`: a chosen passphrase broke a rule; the message names the rule, never the input |
 | `19` | `init-failed` | `init`: a write failed; the message names the step, says to re-run `init`, which discards the unfinished vault, and says to discard the recovery key shown (at step 9, where the outcome is unknown, to keep it until the re-run decides) |
 | `20` | `name-taken` | `add`: the name is already in the manifest, healthy or damaged; `add` never overwrites |
-| `21` | `credential-invalid` | `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
-| `22` | `vault-write-failed` | `add`: the vault write failed; the message says whether it may have committed |
+| `21` | `credential-invalid` | `add`, `replace`, `rm`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
+| `22` | `vault-write-failed` | `add`, `replace`, `rm`: the vault write failed; the message says whether it may have committed |
+| `23` | `unknown-credential` | `replace`, `rm`: the manifest holds no credential of that name |
+| `24` | `credential-in-use` | `replace`, `rm`: a route of the active config uses the name and would not activate after the change; the message names each route and why |
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
 | `26` | `list-too-large` | `list`: the credential list does not fit one frame; the message names the count |
 
@@ -590,8 +651,8 @@ the message itself, and neither the code nor the message ever contains owner inp
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
-`status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), error codes 7 to 22, 25 and 26
-join it rather than starting version 2.
+`status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), `replace` (command 10), `rm`
+(command 11) and error codes 7 to 26 join it rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
@@ -771,6 +832,20 @@ each one with the policy's origin rule before connecting and sends the canonical
 an invalid host or port, or more than 32 origins is a usage error, exit code 2, whose message names the rule and never
 the value. The secret is the answer to the service's prompts, read from the terminal with echo off or from stdin. On
 success it prints `added <name> (<kind>) as record <uuid>` to stdout; a service error goes to stderr with exit code 1.
+
+### replace
+
+`iron-vault replace <name> --origin <ORIGIN>... [--kind static|basic]` sends the name, the kind (static by default)
+and the origins, parsed and refused exactly as for `add`. The approval passphrase and the secret are answers to the
+service's prompts, passphrase first. When stdin is not a terminal, its first line is therefore the approval
+passphrase and the next lines the secret. On success it prints `replaced <name> (<kind>) as record <uuid>` to stdout;
+a service error goes to stderr with exit code 1.
+
+### rm
+
+`iron-vault rm <name>` sends the name. The approval passphrase is the answer to the service's prompt. On success it
+prints `removed <name>` to stdout; a service error goes to stderr with exit code 1, and for `credential-in-use` the
+message names the routes to remove from the config first.
 
 ### Owner input
 
