@@ -56,7 +56,7 @@ fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
         (R::Status(a), R::Status(b)) => a == b,
         (R::ConfigApprove(a), R::ConfigApprove(b)) => a == b,
         (R::Lock { cleared: a }, R::Lock { cleared: b }) => a == b,
-        (R::Add { record_id: a }, R::Add { record_id: b }) => a == b,
+        (R::Add { record_id: a }, R::Add { record_id: b }) | (R::Replace { record_id: a }, R::Replace { record_id: b }) => a == b,
         (R::CallerToken { token: a }, R::CallerToken { token: b }) => TokenHash::of(a) == TokenHash::of(b),
         (R::Init { vault_id: a, version: v }, R::Init { vault_id: b, version: w }) => a == b && v == w,
         (R::Error { code: a, message: m }, R::Error { code: b, message: n }) => a == b && m == n,
@@ -169,6 +169,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             Just(AdminRequest::Lock),
             Just(AdminRequest::Init),
             add_request(),
+            replace_request(),
             text(256).prop_map(|name| AdminRequest::Rm { name }),
             config_bytes().prop_map(|bytes| AdminRequest::ConfigApprove(ProposedConfig::new(bytes).unwrap())),
         ]
@@ -187,6 +188,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             .prop_map(|profile| Frame::Response(AdminResponse::Ping { profile })),
         any::<bool>().prop_map(|cleared| Frame::Response(AdminResponse::Lock { cleared })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Add { record_id: v4(bytes) })),
+        any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Replace { record_id: v4(bytes) })),
         any::<[u8; 32]>().prop_map(|bytes| Frame::Response(AdminResponse::CallerToken {
             token: CallerToken::from_bytes(bytes)
         })),
@@ -294,6 +296,13 @@ fn add_request() -> impl Strategy<Value = AdminRequest> {
     let kind = prop_oneof![Just(CredentialKind::Static), Just(CredentialKind::Basic)];
     let origins = prop::collection::vec(requested_origin(), 1..=MAX_ORIGINS);
     (text(256), kind, origins).prop_map(|(name, kind, origins)| AdminRequest::Add { name, kind, origins })
+}
+
+fn replace_request() -> impl Strategy<Value = AdminRequest> {
+    add_request().prop_map(|request| match request {
+        AdminRequest::Add { name, kind, origins } => AdminRequest::Replace { name, kind, origins },
+        other => other,
+    })
 }
 
 /// A body of arbitrary fields with small tags, so the structured fuzz below often reaches the body decoders.
@@ -787,6 +796,33 @@ fn the_add_error_codes_have_their_documented_numbers_and_names() {
         assert_eq!((code as u16, code.name()), (number, name));
         assert_round_trips(&error(code, "m"));
     });
+}
+
+#[test]
+fn replace_has_command_id_10_and_adds_encoding() {
+    let request = AdminRequest::Replace {
+        name: "fx".to_owned(),
+        kind: CredentialKind::Basic,
+        origins: vec![fx_origin()],
+    };
+    assert_eq!((AdminCommand::Replace as u16, request.command().name()), (10, "replace"));
+    let origins = [&[1][..], &origin_bytes(b"api.fx.example", 443)].concat();
+    let expected = body(&[field(1, &[0, 10]), field(2, b"fx"), field(3, &[2]), field(4, &origins)]);
+    assert_eq!(encoded(&Frame::Request(request.clone())), raw(1, 1, &expected));
+    assert_round_trips(&Frame::Request(request));
+    let no_origin = body(&[field(1, &[0, 10]), field(2, b"fx"), field(3, &[1]), field(4, &[0])]);
+    assert_eq!(decode_err(&raw(1, 1, &no_origin)), FrameError::InvalidValue(4));
+}
+
+#[test]
+fn the_replace_result_carries_the_raw_record_id_under_its_own_command() {
+    let record_id = v4([9; 16]);
+    let expected = body(&[field(1, &[0, 10]), field(2, record_id.as_bytes())]);
+    let frame = Frame::Response(AdminResponse::Replace { record_id });
+    assert_eq!(encoded(&frame), raw(1, 4, &expected));
+    assert_round_trips(&frame);
+    let not_v4 = body(&[field(1, &[0, 10]), field(2, &[0; 16])]);
+    assert_eq!(decode_err(&raw(1, 4, &not_v4)), FrameError::InvalidValue(2));
 }
 
 #[test]

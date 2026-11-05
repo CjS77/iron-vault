@@ -28,7 +28,7 @@ pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_BODY_LEN: usize = 64 * 1024;
 /// The fixed header size: version (2), kind (1), body length (4).
 pub const HEADER_LEN: usize = 7;
-/// The most permitted origins one `add` request carries.
+/// The most permitted origins one `add` or `replace` request carries.
 pub const MAX_ORIGINS: usize = 32;
 /// The longest requested origin host, in bytes: the DNS name limit.
 pub const MAX_ORIGIN_HOST_LEN: usize = 253;
@@ -64,6 +64,16 @@ pub enum AdminRequest {
         /// The permitted origins, 1 to [`MAX_ORIGINS`] of them.
         origins: Vec<RequestedOrigin>,
     },
+    /// Replaces a credential's record with a new one under a new record ID, after owner presence; the service prompts
+    /// for the approval passphrase, then the material. Its arguments are `add`'s. Command ID 10.
+    Replace {
+        /// The credential name, as the owner wrote it; the service validates it.
+        name: String,
+        /// The new record's kind, which decides what the service prompts for.
+        kind: CredentialKind,
+        /// The new record's permitted origins, 1 to [`MAX_ORIGINS`] of them.
+        origins: Vec<RequestedOrigin>,
+    },
     /// Removes a credential record after owner presence, while no route of the active config uses the name; no result.
     /// Command ID 11.
     Rm {
@@ -72,7 +82,7 @@ pub enum AdminRequest {
     },
 }
 
-/// A requested origin: one permitted origin as an `add` request carries it. The host stays text on the wire, at most
+/// A requested origin: one permitted origin as an `add` or `replace` request carries it. The host stays text on the wire, at most
 /// [`MAX_ORIGIN_HOST_LEN`] bytes, and the service parses it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestedOrigin {
@@ -95,6 +105,7 @@ impl AdminRequest {
             Self::Init => AdminCommand::Init,
             Self::Add { .. } => AdminCommand::Add,
             Self::List => AdminCommand::List,
+            Self::Replace { .. } => AdminCommand::Replace,
             Self::Rm { .. } => AdminCommand::Rm,
         }
     }
@@ -121,6 +132,8 @@ pub enum AdminCommand {
     Add = 8,
     /// `list`.
     List = 9,
+    /// `replace`.
+    Replace = 10,
     /// `rm`.
     Rm = 11,
 }
@@ -138,6 +151,7 @@ impl AdminCommand {
             Self::Init => "init",
             Self::Add => "add",
             Self::List => "list",
+            Self::Replace => "replace",
             Self::Rm => "rm",
         }
     }
@@ -161,7 +175,7 @@ mod no_external_signatures {
             | AdminCommand::Init
             | AdminCommand::List => &[],
             AdminCommand::ConfigApprove => &["config"],
-            AdminCommand::Add => &["name", "kind", "origins"],
+            AdminCommand::Add | AdminCommand::Replace => &["name", "kind", "origins"],
             AdminCommand::Rm => &["name"],
         }
     }
@@ -176,6 +190,7 @@ mod no_external_signatures {
         AdminCommand::Init,
         AdminCommand::Add,
         AdminCommand::List,
+        AdminCommand::Replace,
         AdminCommand::Rm,
     ];
 
@@ -346,6 +361,11 @@ pub enum AdminResponse {
         /// The ID of the record the service wrote.
         record_id: RecordId,
     },
+    /// `replace` completed: the ID of the record that replaced the old one. The old ID was shown in the summary.
+    Replace {
+        /// The ID of the record the service wrote.
+        record_id: RecordId,
+    },
     /// `caller-token` completed: a fresh caller token, shown to the owner once. The service keeps no copy.
     CallerToken {
         /// The new token.
@@ -433,7 +453,7 @@ pub enum ErrorCode {
     NameTaken = 20,
     /// `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte.
     CredentialInvalid = 21,
-    /// `add`: writing the vault failed; the message says whether the write may have committed.
+    /// `add`, `replace`: writing the vault failed; the message says whether the write may have committed.
     VaultWriteFailed = 22,
     /// `replace`, `rm`: the manifest holds no credential of that name.
     UnknownCredential = 23,
@@ -610,6 +630,9 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
             put_frame(out, FrameKind::Success, &body::encode_list_result(credentials.as_deref())?)
         }
         Frame::Response(AdminResponse::Add { record_id }) => put_frame(out, FrameKind::Success, &body::encode_add_result(*record_id)),
+        Frame::Response(AdminResponse::Replace { record_id }) => {
+            put_frame(out, FrameKind::Success, &body::encode_replace_result(*record_id))
+        }
         Frame::Response(AdminResponse::CallerToken { token }) => {
             put_frame(out, FrameKind::Success, &body::encode_caller_token_result(token))
         }

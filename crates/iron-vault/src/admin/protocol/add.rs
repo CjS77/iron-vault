@@ -1,11 +1,11 @@
-//! `add`'s arguments and success result (`design/admin-protocol.md`, add). Only the bounds are checked here: the host
-//! stays text, and the service parses the name, the hosts and the material it prompts for.
+//! `add`'s arguments and success result (`design/admin-protocol.md`, add), which `replace` shares. Only the bounds are
+//! checked here: the host stays text, and the service parses the name, the hosts and the material it prompts for.
 
 use iron_vault_policy::{CredentialKind, Port};
 use iron_vault_store::RecordId;
 
 use super::fields::{self, Field, exact, read_text};
-use super::{AdminRequest, AdminResponse, FrameError, MAX_ORIGIN_HOST_LEN, MAX_ORIGINS, RequestedOrigin};
+use super::{AdminRequest, FrameError, MAX_ORIGIN_HOST_LEN, MAX_ORIGINS, RequestedOrigin};
 
 const TAG_COMMAND: u16 = super::body::TAG_COMMAND;
 const TAG_NAME: u16 = 2;
@@ -29,13 +29,13 @@ pub(super) fn encode_request(command: u16, name: &str, kind: CredentialKind, ori
     Ok(out)
 }
 
-pub(super) fn decode_request(fields: &[Field<'_>]) -> Result<AdminRequest, FrameError> {
+/// The request `command` builds from the decoded name, kind and origins.
+pub(super) fn decode_request(
+    fields: &[Field<'_>],
+    command: fn(String, CredentialKind, Vec<RequestedOrigin>) -> AdminRequest,
+) -> Result<AdminRequest, FrameError> {
     let [_, name, kind, origins] = exact(fields, [TAG_COMMAND, TAG_NAME, TAG_KIND, TAG_ORIGINS])?;
-    Ok(AdminRequest::Add {
-        name: read_text(TAG_NAME, name)?,
-        kind: read_kind(kind)?,
-        origins: decode_origins(origins)?,
-    })
+    Ok(command(read_text(TAG_NAME, name)?, read_kind(kind)?, decode_origins(origins)?))
 }
 
 /// The success body: the command it answers, then the new record's ID.
@@ -46,12 +46,12 @@ pub(super) fn encode_result(command: u16, record_id: RecordId) -> Vec<u8> {
     out
 }
 
-pub(super) fn decode_result(fields: &[Field<'_>]) -> Result<AdminResponse, FrameError> {
+/// The new record's ID from a success body.
+pub(super) fn decode_result(fields: &[Field<'_>]) -> Result<RecordId, FrameError> {
     let [_, record_id] = exact(fields, [TAG_COMMAND, TAG_RECORD_ID])?;
     <[u8; 16]>::try_from(record_id)
         .ok()
         .and_then(|bytes| RecordId::from_bytes(bytes).ok())
-        .map(|record_id| AdminResponse::Add { record_id })
         .ok_or(FrameError::InvalidValue(TAG_RECORD_ID))
 }
 

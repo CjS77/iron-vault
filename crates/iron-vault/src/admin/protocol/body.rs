@@ -37,13 +37,16 @@ const COMMAND_LOCK: u16 = AdminCommand::Lock as u16;
 const COMMAND_INIT: u16 = AdminCommand::Init as u16;
 const COMMAND_ADD: u16 = AdminCommand::Add as u16;
 const COMMAND_LIST: u16 = AdminCommand::List as u16;
+const COMMAND_REPLACE: u16 = AdminCommand::Replace as u16;
 const COMMAND_RM: u16 = AdminCommand::Rm as u16;
 const TAG_NAME: u16 = 2;
 
-/// A request body; only `add`, whose origins have bounds, can be refused.
+/// A request body; only `add` and `replace`, whose origins have bounds, can be refused.
 pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameError> {
-    if let AdminRequest::Add { name, kind, origins } = request {
-        return add::encode_request(COMMAND_ADD, name, *kind, origins);
+    match request {
+        AdminRequest::Add { name, kind, origins } => return add::encode_request(COMMAND_ADD, name, *kind, origins),
+        AdminRequest::Replace { name, kind, origins } => return add::encode_request(COMMAND_REPLACE, name, *kind, origins),
+        _ => {}
     }
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &(request.command() as u16).to_be_bytes());
@@ -71,8 +74,9 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
         COMMAND_UNLOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Unlock),
         COMMAND_LOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Lock),
         COMMAND_INIT => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Init),
-        COMMAND_ADD => add::decode_request(&fields),
+        COMMAND_ADD => add::decode_request(&fields, |name, kind, origins| AdminRequest::Add { name, kind, origins }),
         COMMAND_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::List),
+        COMMAND_REPLACE => add::decode_request(&fields, |name, kind, origins| AdminRequest::Replace { name, kind, origins }),
         COMMAND_RM => {
             let [_, name] = exact(&fields, [TAG_COMMAND, TAG_NAME])?;
             Ok(AdminRequest::Rm {
@@ -122,6 +126,11 @@ pub(super) fn encode_lock_result(cleared: bool) -> Vec<u8> {
 /// `add`'s success body: the command it answers, then the new record's ID.
 pub(super) fn encode_add_result(record_id: RecordId) -> Vec<u8> {
     add::encode_result(COMMAND_ADD, record_id)
+}
+
+/// `replace`'s success body: the command it answers, then the new record's ID.
+pub(super) fn encode_replace_result(record_id: RecordId) -> Vec<u8> {
+    add::encode_result(COMMAND_REPLACE, record_id)
 }
 
 /// `caller-token`'s success body: the command it answers, then the token's text. It holds the token, so it is built in a
@@ -227,8 +236,9 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
             })
         }
         COMMAND_INIT => decode_init_result(&fields),
-        COMMAND_ADD => add::decode_result(&fields),
+        COMMAND_ADD => add::decode_result(&fields).map(|record_id| AdminResponse::Add { record_id }),
         COMMAND_LIST => list::decode_result(&fields),
+        COMMAND_REPLACE => add::decode_result(&fields).map(|record_id| AdminResponse::Replace { record_id }),
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
 }
