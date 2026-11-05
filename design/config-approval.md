@@ -518,7 +518,12 @@ The order is fixed, so the same two configs always give the same text:
    ([open question 14](#open-questions)). A listener the running service cannot bind is marked "takes effect after
    restart" ([open question 2](#open-questions)).
 6. **Limits**: each operational limit that changed, old → new.
-7. **Text only**: when the bytes differ but no section above has an entry, the line "no policy change; text changed"
+7. **Logging**: the log destination, old → new, when `[logging] destination` changes, including a change to or from
+   the default; a default is shown as the bootstrap destination it resolves to. A moved directory adds the line
+   "add a logrotate rule for the new directory", since the shipped rule names only the default
+   ([audit-logging.md](audit-logging.md#log-destination)). The audit log is where every later change is recorded, so
+   moving it is never hidden.
+8. **Text only**: when the bytes differ but no section above has an entry, the line "no policy change; text changed"
    (whitespace or comments), so the summary is never empty.
 
 Within each section, entries are in name order (`BTreeMap` order). Each entry is marked `+` added, `-` removed or `~`
@@ -526,7 +531,7 @@ changed. Every configured name is printed through the configured-name escaping, 
 summary line ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)).
 
 The **headline** is one line of counts per section, such as `callers: 1 added, 2 changed; route grants: 3 added;
-routes: 1 changed; listeners: none; limits: none`. It is bounded whatever the config size, so it fits in the
+routes: 1 changed; listeners: none; limits: none; logging: none`. It is bounded whatever the config size, so it fits in the
 command's result.
 
 ## Audit events
@@ -537,6 +542,7 @@ types, and the record shape they share. None carries config bytes, signature byt
 
 | Event | Level | When | Fields |
 |---|---|---|---|
+| `config.approval-refused` | WARN | the approval passphrase was wrong or the key is not the pinned approver's; nothing was reserved | the refusal, config digest |
 | `config.version-reserved` | INFO | step 2's reservation is durable | version, config digest |
 | `config.approval-failed` | WARN | the transaction failed after its reservation and before its commit | version (consumed), config digest, the step that failed, the error |
 | `config.commit-uncertain` | WARN | step 5's rename of `approval.age` landed, but its directory fsync failed | version, the error |
@@ -545,6 +551,7 @@ types, and the record shape they share. None carries config bytes, signature byt
 | `config.reload-failed` | WARN | the config check of a SIGHUP reload failed | committed version, failure reason, detail |
 | `config.recovery-published` | WARN | a config check finished publishing a committed transaction | version, which renames it ran |
 | `config.recovery-discarded` | INFO | a config check removed uncommitted files | each file, and a staged approval's version |
+| `config.conflicting-approval-discarded` | ERROR | a config check discarded a staged approval signed for the committed version over another config | version |
 
 An uncertain commit records `config.commit-uncertain`, followed by `config.approval-completed` once it is settled, or
 by `config.activation-failed` when settling fails. A commit followed by a failed publish or check records
