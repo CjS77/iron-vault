@@ -195,9 +195,11 @@ pub struct ServiceContext<F = OsFs> {
     holder: Arc<SnapshotHolder>,
     /// The service-wide lock (glossary). `config approve` holds it from its request to its response, prompts included,
     /// and fails at once with `busy` while another holds it; a recheck waits for it. A vault write takes it the same
-    /// way, so an approval never sees the credential catalog change under it.
-    service_wide: Mutex<()>,
-    /// Shared with the task that settles a check, which owns its guard so a dropped caller cannot strand Checking.
+    /// way, so an approval never sees the credential catalog change under it. Shared, so a blocking task can own its
+    /// guard and keep it until the task ends, even if the future that started the task is dropped.
+    service_wide: Arc<Mutex<()>>,
+    /// Shared for the same reason as `service_wide`: the task that settles a check, and init's write task, own their
+    /// guards, so a dropped caller can neither strand Checking nor release the lock while the task still writes.
     inner: Arc<Mutex<Inner>>,
 }
 
@@ -264,7 +266,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             setup: Arc::new(setup),
             locks: Arc::new(locks),
             holder,
-            service_wide: Mutex::new(()),
+            service_wide: Arc::new(Mutex::new(())),
         })
     }
 

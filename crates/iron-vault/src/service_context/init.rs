@@ -54,20 +54,24 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     ///
     /// The approval's commit needs proof that admission is paused. In Locked the holder already refuses with `locked`,
     /// and the pause keeps that reason; its guard is dropped without ending the pause, so requests go on being refused
-    /// with `locked`. If this future is dropped first, the task still runs to its end.
+    /// with `locked`.
+    ///
+    /// The blocking task owns both guards and drops them only once the store returns. If this future is dropped first,
+    /// as `abort_all` does at shutdown, the task still runs to its end, and no approval, vault write, unlock or second
+    /// init can start while it writes.
     pub async fn initialize(&self, keys: SealingKeys, passphrases: InitPassphrases) -> Result<InitializedVault, InitRefusal> {
-        let _service_wide = self.service_wide.try_lock().map_err(|_| InitRefusal::Busy)?;
-        let inner = self.inner.lock().await;
+        let service_wide = Arc::clone(&self.service_wide).try_lock_owned().map_err(|_| InitRefusal::Busy)?;
+        let inner = Arc::clone(&self.inner).lock_owned().await;
         if !inner.state.admin_allows(AdminOperation::Initialize) {
             return Err(InitRefusal::WrongState(inner.state));
         }
         let (locks, setup, holder) = (Arc::clone(&self.locks), Arc::clone(&self.setup), Arc::clone(&self.holder));
         let written = tokio::task::spawn_blocking(move || {
+            let _held = (service_wide, inner);
             let paused = holder.pause();
             initialize(&locks.state, &locks.config, &setup.fs, keys, passphrases, &paused)
         })
         .await;
-        drop(inner);
         settled(written)
     }
 }

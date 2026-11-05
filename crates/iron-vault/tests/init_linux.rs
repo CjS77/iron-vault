@@ -32,14 +32,17 @@ use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 use iron_vault::path_metadata::invoking_user;
-use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup, UnlockRefusal};
+use iron_vault::service_context::{InitRefusal, ServiceContext, ServiceLocks, ServiceSetup, UnlockRefusal};
 use iron_vault::service_state::{ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::Admission;
 use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::{Capabilities, CredentialKind};
-use iron_vault_store::{INITIAL_CONFIG, OsFs, Passphrase, RecoveryKeySecret, UnlockError, VaultId, unwrap_identity};
+use iron_vault_store::{
+    ApprovalPassphrase, INITIAL_CONFIG, InitPassphrases, NewVaultKeys, OsFs, Passphrase, RecoveryKeySecret, SealingKeys, UnlockError,
+    VaultId, unwrap_identity,
+};
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -582,6 +585,48 @@ async fn of_two_inits_confirmed_together_one_writes_and_the_other_is_busy() {
     task.await.unwrap();
     assert_response(&unlock(&service).await, &AdminResponse::Success);
     assert_no_secret_logged(&logs, &[&keys[0], &keys[1]]);
+}
+
+/// Waits until `done` holds, polling, for at most [`common::WAIT`].
+async fn wait_until(done: impl Fn() -> bool) {
+    tokio::time::timeout(common::WAIT, async {
+        while !done() {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the condition holds in time");
+}
+
+fn sealing_keys() -> SealingKeys {
+    NewVaultKeys::generate().unwrap().into_sealing()
+}
+
+fn init_passphrases() -> InitPassphrases {
+    let vault = Passphrase::new(SecretString::from(VAULT_PASSPHRASE)).unwrap();
+    let approval = ApprovalPassphrase::new(SecretString::from(APPROVAL_PASSPHRASE)).unwrap();
+    InitPassphrases::new(vault, approval).unwrap()
+}
+
+/// Dropping the write step's future, as `abort_all` does at shutdown, leaves both locks with the blocking task that is
+/// still writing: another init is `busy` until it ends, and the vault it writes unlocks.
+#[tokio::test]
+async fn an_init_dropped_while_writing_keeps_its_locks_until_the_writes_end() {
+    let fixture = Fixture::new().await;
+    let service = fixture.start();
+    let marker = fixture.path("state/init.unfinished");
+    let writing = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move { service.initialize(sealing_keys(), init_passphrases()).await.map(drop) }
+    });
+    wait_until(|| marker.exists()).await;
+    writing.abort();
+    assert!(writing.await.unwrap_err().is_cancelled());
+
+    let second = service.initialize(sealing_keys(), init_passphrases()).await;
+    assert!(matches!(second, Err(InitRefusal::Busy)), "{second:?}");
+    wait_until(|| !marker.exists()).await;
+    assert_response(&unlock(&service).await, &AdminResponse::Success);
 }
 
 #[tokio::test]
