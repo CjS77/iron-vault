@@ -40,7 +40,7 @@ use iron_vault::admin::protocol::{AdminRequest, AdminResponse, Frame, OwnerInput
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
-use iron_vault::logging::{LogDir, LogFailure, LogFile, subscriber_at};
+use iron_vault::logging::{LogDir, LogFailure, LogFile, LogSwitch, subscriber_at};
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
 use iron_vault::service_state::ServiceState;
@@ -584,7 +584,7 @@ fn uninitialized_service(dir: &TempDir, ca: &TestCa) -> Arc<ServiceContext> {
             core_dumps: CoreDumps::Disabled,
             memory: MemoryProtection::Unsupported,
         },
-        log_failure: LogFailure::default(),
+        log: LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
     };
     Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap())
 }
