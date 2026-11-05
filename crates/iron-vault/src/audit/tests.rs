@@ -265,6 +265,8 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for FieldNames {
     }
 }
 
+// `ApprovalFailed` is absent because an `ApprovalError` can only be built inside the store crate. Its fields are version,
+// config_digest, step and error_kind; `config_approve_linux` pins its exact key set on a real failed approval.
 #[test]
 fn no_audit_event_records_a_constant_field() {
     let names = FieldNames::default();

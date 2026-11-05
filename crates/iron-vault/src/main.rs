@@ -12,6 +12,7 @@ use anyhow::Context;
 use cli::{Cli, Command, ConfigCommand};
 #[cfg(target_os = "linux")]
 use iron_vault::audit::{AuditEvent, HardeningIncomplete, ServiceStarted};
+#[cfg(target_os = "linux")]
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::hardening;
 #[cfg(target_os = "linux")]
