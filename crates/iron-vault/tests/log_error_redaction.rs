@@ -26,7 +26,7 @@ const LOG_MACROS: [&str; 6] = ["trace!(", "debug!(", "info!(", "warn!(", "error!
 /// file names and `io::ErrorKind`s, never a library error's text. Some also render a full configured path (`OpenError`,
 /// `AdoptError`, `InitError`), which the design does not yet rule on; this list is about library text only. Each is
 /// `(file, formatted expression)`, once per site.
-const DOMAIN_ERRORS: [(&str, &str); 16] = [
+const DOMAIN_ERRORS: [(&str, &str); 14] = [
     // `FrameError`: the admin protocol's own decoding errors.
     ("crates/iron-vault/src/admin/server.rs", "{e}"),
     ("crates/iron-vault/src/admin/server.rs", "{e}"),
@@ -45,14 +45,10 @@ const DOMAIN_ERRORS: [(&str, &str); 16] = [
     // The store's `RemoveStagingError` and `VerifyError`.
     ("crates/iron-vault-store/src/approval/recovery.rs", "%error"),
     ("crates/iron-vault-store/src/approval/recovery.rs", "%error"),
-    // A damaged record's cause: the store's `ReadError` or record decoding error, or a fixed phrase with record IDs and
-    // credential names.
-    ("crates/iron-vault-store/src/vault/load.rs", "%damage.cause"),
     // The store's `WriteError`.
     ("crates/iron-vault-store/src/approval/state.rs", "%error"),
     ("crates/iron-vault-store/src/approval/transaction.rs", "%error"),
     ("crates/iron-vault-store/src/approval/transaction.rs", "%error"),
-    ("crates/iron-vault-store/src/vault/write.rs", "%error"),
 ];
 
 fn workspace_root() -> PathBuf {

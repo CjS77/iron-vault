@@ -31,6 +31,7 @@ use tokio::sync::OwnedMutexGuard;
 
 use super::{Inner, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_task_crash};
 use crate::admin::protocol::ApprovalResult;
+use crate::audit::corruption::open_vault;
 use crate::audit::{ActivationCause, ActivationFailed, ApprovalCompleted, ApprovalFailed, AuditEvent};
 use crate::config_check::{InvalidConfig, activate_config};
 use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState};
@@ -109,7 +110,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     pub async fn review_approval(&self, config: Vec<u8>) -> Result<ApprovalReview<'_, F>, ApprovalEnd> {
         let service_wide = Arc::clone(&self.service_wide).try_lock_owned().map_err(|_| ApprovalEnd::Busy)?;
         let (started, identity, active) = self.approval_start().await?;
-        let (vault, _) = Vault::open(&self.locks.state, &self.setup.fs, Arc::clone(&identity)).map_err(unavailable)?;
+        let (vault, _) = open_vault(&self.locks.state, &self.setup.fs, Arc::clone(&identity)).map_err(unavailable)?;
         let approval = vault.load_approval_state(&self.locks.state, &self.setup.fs).map_err(unavailable)?;
         let pending = PendingConfig::write(&self.storage(&identity), config).map_err(unavailable)?;
         let policy = match self.servable(pending.bytes(), &vault) {

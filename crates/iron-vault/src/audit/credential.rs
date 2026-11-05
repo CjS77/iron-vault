@@ -1,5 +1,6 @@
 //! Audit events about credentials and caller tokens (`design/audit-logging.md`, "Credentials and vault writes").
 
+use iron_vault_kinds::SecretField;
 use iron_vault_policy::{CredentialKind, CredentialName, Host, Port};
 use iron_vault_store::{ErrorKindLabel, RecordId};
 
@@ -104,6 +105,41 @@ impl AuditEvent for CredentialRemoved<'_> {
             record_id = self.record_id.to_string().as_str(),
             "credential removed; no active route used it",
         );
+    }
+}
+
+/// `credential.short-secret`: a record just written has a secret field so short that it is probably the wrong field.
+/// The value is not known here, only its field and length.
+#[derive(Debug, Clone, Copy)]
+pub struct ShortSecretWritten<'a> {
+    /// The credential's configured name.
+    pub credential: &'a CredentialName,
+    /// The short field.
+    pub field: SecretField,
+    /// The field's length in bytes.
+    pub len: usize,
+}
+
+impl AuditEvent for ShortSecretWritten<'_> {
+    const NAME: EventName = EventName("credential.short-secret");
+
+    fn emit(&self) {
+        tracing::warn!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            credential = self.credential.as_str(),
+            secret_field = secret_field_label(self.field),
+            len = u64::try_from(self.len).unwrap_or(u64::MAX),
+            "a stored secret is short; response scrubbing will remove every occurrence of it, and it may be the wrong field",
+        );
+    }
+}
+
+const fn secret_field_label(field: SecretField) -> &'static str {
+    match field {
+        SecretField::Key => "key",
+        SecretField::Username => "username",
+        SecretField::Password => "password",
     }
 }
 

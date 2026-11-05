@@ -1,8 +1,12 @@
 //! The vault, credential, caller, route and response events: each writes its name, level and exactly its own fields.
 
+use iron_vault_kinds::SecretField;
 use iron_vault_policy::{CredentialKind, CredentialName, Host, Port, RouteName};
-use iron_vault_store::{ErrorKindLabel, InitFailure, InitStep, RecordId, StateFileName, UnlockError, VaultId};
+use iron_vault_store::{
+    DamagedRecord, ErrorKindLabel, InitFailure, InitStep, RecordDamage, RecordId, SharedStateDamage, StateFileName, UnlockError, VaultId,
+};
 
+use super::corruption::*;
 use super::credential::*;
 use super::route::*;
 use super::tests::record_of;
@@ -174,7 +178,7 @@ fn route_and_scrub_events_name_the_route_and_never_a_path_or_byte() {
 }
 
 /// Every event of this module, for the test that no event records a constant field.
-pub(super) const NAMES: [EventName; 15] = [
+pub(super) const NAMES: [EventName; 22] = [
     VaultInitialized::NAME,
     InitDiscarded::NAME,
     InitFailed::NAME,
@@ -186,6 +190,13 @@ pub(super) const NAMES: [EventName; 15] = [
     CredentialAdded::NAME,
     CredentialReplaced::NAME,
     CredentialRemoved::NAME,
+    ShortSecretWritten::NAME,
+    CommitUncertain::NAME,
+    RecordDamaged::NAME,
+    UnindexedFile::NAME,
+    ApprovalStateUnrecorded::NAME,
+    SharedStateDamaged::NAME,
+    StateDirUnreadable::NAME,
     TokenIssued::NAME,
     TokenFailed::NAME,
     PinnedCaUnavailable::NAME,
@@ -251,6 +262,7 @@ pub(super) fn emit_every_event() {
         record_id: id,
     }
     .emit();
+    emit_corruption_events(&name, id, &kind);
     TokenIssued.emit();
     TokenFailed { error_kind: &kind }.emit();
     PinnedCaUnavailable { route: &route }.emit();
@@ -261,4 +273,37 @@ pub(super) fn emit_every_event() {
         matches: 1,
     }
     .emit();
+}
+
+fn emit_corruption_events(name: &CredentialName, id: RecordId, kind: &ErrorKindLabel) {
+    let file = StateFileName::record(&id);
+    ShortSecretWritten {
+        credential: name,
+        field: SecretField::Key,
+        len: 3,
+    }
+    .emit();
+    CommitUncertain {
+        file: &StateFileName::manifest(),
+        error_kind: kind,
+    }
+    .emit();
+    [None, Some(kind.clone())].into_iter().for_each(|error_kind| {
+        let record = DamagedRecord {
+            credential: name.clone(),
+            record_id: id,
+            file: file.clone(),
+            damage: RecordDamage::Unreadable,
+            error_kind,
+        };
+        RecordDamaged { record: &record }.emit();
+    });
+    UnindexedFile { file: &file }.emit();
+    ApprovalStateUnrecorded.emit();
+    SharedStateDamaged {
+        file: &StateFileName::manifest(),
+        damage: &SharedStateDamage::MissingWithRecords,
+    }
+    .emit();
+    StateDirUnreadable { error_kind: kind }.emit();
 }

@@ -10,11 +10,14 @@
 
 // `service.started` names the log destination, which only Linux has.
 #[cfg(test)]
+mod corruption_tests;
+#[cfg(test)]
 #[cfg(target_os = "linux")]
 mod tests;
 #[cfg(test)]
 mod vault_events_tests;
 
+pub mod corruption;
 pub mod credential;
 pub mod route;
 pub mod vault;

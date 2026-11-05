@@ -26,6 +26,7 @@ use iron_vault_store::{
     StoreFs, Vault, VaultError, VaultIdentity, recover_approval,
 };
 
+use crate::audit::corruption::open_vault;
 use crate::audit::{AuditEvent, CheckFailed};
 use crate::deployment::DeploymentProfile;
 use crate::service_state::{FailureReason, UnavailableReason};
@@ -295,7 +296,7 @@ fn open_and_run(
     accounts: &impl AccountDirectory,
     upstream: &UpstreamSettings,
 ) -> Result<Checked, CheckFailure> {
-    let (vault, opened) = Vault::open(state_dir, fs, identity).map_err(CheckFailure::Vault)?;
+    let (vault, opened) = open_vault(state_dir, fs, identity).map_err(CheckFailure::Vault)?;
     let approval = vault.load_approval_state(state_dir, fs).map_err(CheckFailure::ApprovalState)?;
     let snapshot = run(config_dir, fs, vault, &approval, capabilities, accounts, upstream)?;
     Ok(Checked {

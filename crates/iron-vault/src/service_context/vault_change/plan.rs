@@ -21,11 +21,13 @@ use std::sync::Arc;
 
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::CredentialName;
-use iron_vault_store::{ApprovalPassphrase, PermittedOrigins, PinnedApprover, RecordId, StoreFs, Vault, VaultError, VaultIdentity};
+use iron_vault_store::{ApprovalPassphrase, PermittedOrigins, PinnedApprover, RecordId, StoreFs, VaultError, VaultIdentity};
 use tokio::sync::OwnedMutexGuard;
 
 use super::super::{Inner, OpenVault, OwnerPresence, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, log_task_crash};
 use super::{VaultChangeRefusal, audit_write_report, kind_of, log_committed};
+use crate::audit::corruption::open_vault;
+use crate::audit::vault::emit_commit_uncertain;
 use crate::service_state::{AdminOperation, ServiceEvent, ServiceState};
 use crate::serving_snapshot::Admission;
 use crate::standing::{CredentialStanding, RecordSummary, Standing};
@@ -75,6 +77,14 @@ enum Write {
         material: CredentialMaterial,
         origins: PermittedOrigins,
     },
+}
+
+impl Write {
+    fn name(&self) -> &CredentialName {
+        match self {
+            Self::Remove(name) | Self::Replace { name, .. } => name,
+        }
+    }
 }
 
 /// What the write left on disk, from the blocking task.
@@ -260,10 +270,11 @@ fn write_of(change: PlannedChange, material: Option<CredentialMaterial>) -> Resu
 
 /// Replaces or removes the record through a vault opened for this write alone.
 fn write_record(locks: &ServiceLocks, fs: &impl StoreFs, identity: Arc<VaultIdentity>, write: Write) -> Written {
-    let mut vault = match Vault::open(&locks.state, fs, identity) {
+    let mut vault = match open_vault(&locks.state, fs, identity) {
         Ok((vault, _)) => vault,
         Err(error) => return Written::Refused(VaultChangeRefusal::Failed(error.to_string())),
     };
+    let credential = write.name().clone();
     let written = match write {
         Write::Remove(name) => vault
             .remove(&locks.state, fs, &name)
@@ -273,9 +284,9 @@ fn write_record(locks: &ServiceLocks, fs: &impl StoreFs, identity: Arc<VaultIden
             .map(|(id, report)| (CredentialChanged::Replaced(id), report)),
     };
     drop(vault);
-    match written {
+    match written.inspect_err(emit_commit_uncertain) {
         Ok((changed, report)) => {
-            audit_write_report(&report);
+            audit_write_report(&report, &credential);
             Written::Committed(changed)
         }
         Err(VaultError::UnknownName(name)) => Written::Refused(VaultChangeRefusal::UnknownCredential(name)),

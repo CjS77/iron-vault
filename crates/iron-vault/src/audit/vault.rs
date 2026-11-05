@@ -1,7 +1,7 @@
 //! Audit events about the vault: its initialization, unlock refusals, lock drains and the facts of a write report
 //! (`design/audit-logging.md`, "Credentials and vault writes" and "Initialization").
 
-use iron_vault_store::{ErrorKindLabel, InitFailure, InitStep, StateFileName, UnlockError, VaultId};
+use iron_vault_store::{ErrorKindLabel, InitFailure, InitStep, StateFileName, UnlockError, VaultError, VaultId, WriteError};
 
 use super::{AUDIT_TARGET, AuditEvent, EventName};
 use crate::service_context::{UnlockRefusal, step_names};
@@ -182,6 +182,44 @@ impl AuditEvent for SupersededLeft<'_> {
             error_kind = self.error_kind.as_str(),
             "a superseded record file could not be removed; the next vault write removes it",
         );
+    }
+}
+
+/// `vault.commit-uncertain`: the vault manifest was replaced but its directory fsync failed, so the write may not
+/// survive power loss.
+#[derive(Debug, Clone, Copy)]
+pub struct CommitUncertain<'a> {
+    /// The file that was replaced.
+    pub file: &'a StateFileName,
+    /// The kind of the failed fsync.
+    pub error_kind: &'a ErrorKindLabel,
+}
+
+impl AuditEvent for CommitUncertain<'_> {
+    const NAME: EventName = EventName("vault.commit-uncertain");
+
+    fn emit(&self) {
+        tracing::error!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            file = self.file.as_str(),
+            error_kind = self.error_kind.as_str(),
+            "vault manifest was replaced but the state directory fsync failed; the write may not survive power loss",
+        );
+    }
+}
+
+/// Emits `vault.commit-uncertain` when a vault write failed at the commit's directory fsync, also when it is the cause
+/// of an unrecorded approval state. Any other error is for the caller to report.
+pub fn emit_commit_uncertain(error: &VaultError) {
+    match error {
+        VaultError::CommitUncertain(cause @ WriteError::Io { file, .. }) => CommitUncertain {
+            file,
+            error_kind: &cause.error_kind_label(),
+        }
+        .emit(),
+        VaultError::ApprovalStateUnrecorded(inner) => emit_commit_uncertain(inner),
+        _ => {}
     }
 }
 

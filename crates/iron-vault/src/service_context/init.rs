@@ -15,7 +15,7 @@ use tokio::task::JoinError;
 
 use super::ServiceContext;
 use crate::audit::AuditEvent;
-use crate::audit::vault::{InitDiscarded, InitFailed, VaultInitialized};
+use crate::audit::vault::{InitDiscarded, InitFailed, VaultInitialized, emit_commit_uncertain};
 use crate::service_state::{AdminOperation, ServiceState};
 
 /// Why `init` wrote no vault, or may not have finished one. Each variant is one admin error code.
@@ -100,11 +100,16 @@ fn log_outcome(written: &Result<InitializedVault, InitError>) {
     }
     match written {
         Ok(vault) => VaultInitialized { vault_id: vault.vault_id }.emit(),
-        Err(error) if begin_refusal(error).is_none() => InitFailed::Step {
-            step: error.step(),
-            cause: error.cause(),
+        Err(error) if begin_refusal(error).is_none() => {
+            InitFailed::Step {
+                step: error.step(),
+                cause: error.cause(),
+            }
+            .emit();
+            if let InitFailure::Vault(vault_error) = error.cause() {
+                emit_commit_uncertain(vault_error);
+            }
         }
-        .emit(),
         Err(_) => {}
     }
 }

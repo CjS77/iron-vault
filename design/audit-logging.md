@@ -688,7 +688,7 @@ built from configured names. When the approval moves the log destination, the su
 | `vault.state-dir-unreadable` | ERROR | the state directory cannot be listed | `error_kind` |
 | `vault.foreign-file` | WARN | `unlock` read an Initialized state directory holding a file not on the [lists](vault-initialization.md#initialization-state) | `file`, escaped with `display::escaped`, since the name is not one the service chose |
 
-Each corruption event also carries `remediation`, the fixed phrase the store logs with it today.
+Each corruption event also carries `remediation`, a fixed phrase the service holds with the event.
 
 **Initialization** ([vault-initialization.md](vault-initialization.md#logging) gives when each fires):
 

@@ -14,12 +14,13 @@ use std::sync::Arc;
 
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{CredentialKind, CredentialName};
-use iron_vault_store::{PermittedOrigins, RecordId, StoreFs, Vault, VaultError, VaultIdentity, WriteReport};
+use iron_vault_store::{PermittedOrigins, RecordId, StoreFs, VaultError, VaultIdentity, WriteReport};
 
 use super::{Inner, ServiceContext, ServiceLocks};
 use crate::audit::AuditEvent;
-use crate::audit::credential::{CredentialAdded, CredentialRemoved, CredentialReplaced, Stored};
-use crate::audit::vault::{SupersededLeft, UnindexedRemoved};
+use crate::audit::corruption::open_vault;
+use crate::audit::credential::{CredentialAdded, CredentialRemoved, CredentialReplaced, ShortSecretWritten, Stored};
+use crate::audit::vault::{SupersededLeft, UnindexedRemoved, emit_commit_uncertain};
 use crate::service_state::{AdminOperation, ServiceState};
 use crate::standing::{CredentialStanding, RecordSummary, Standing};
 use crate::vault_change_check::{AffectedRoute, PlannedChange};
@@ -182,9 +183,17 @@ fn log_replaced(name: &CredentialName, old: &CurrentRecord, record_id: RecordId,
     .emit();
 }
 
-/// Emits what a committed vault write did besides its change: the unindexed record files it removed first, and a
-/// superseded record file it could not remove (the next vault write removes it).
-fn audit_write_report(report: &WriteReport) {
+/// Emits what a committed vault write did besides its change: the unindexed record files it removed first, a
+/// superseded record file it could not remove (the next vault write removes it), and the short secrets it stored.
+fn audit_write_report(report: &WriteReport, credential: &CredentialName) {
+    report.short_secrets().iter().for_each(|short| {
+        ShortSecretWritten {
+            credential,
+            field: short.field,
+            len: short.len,
+        }
+        .emit()
+    });
     report.removed_unindexed().iter().for_each(|file| UnindexedRemoved { file }.emit());
     if let Some((file, error_kind)) = report.left_unindexed().zip(report.left_unindexed_error_kind()) {
         SupersededLeft { file, error_kind }.emit();
@@ -200,15 +209,17 @@ fn add_record(
     material: CredentialMaterial,
     origins: PermittedOrigins,
 ) -> Written {
-    let mut vault = match Vault::open(&locks.state, fs, Arc::clone(&identity)) {
+    let mut vault = match open_vault(&locks.state, fs, Arc::clone(&identity)) {
         Ok((vault, _)) => vault,
         Err(error) => return Written::Refused(VaultChangeRefusal::Failed(error.to_string())),
     };
-    let added = vault.add(&locks.state, fs, name.clone(), material, origins);
+    let added = vault
+        .add(&locks.state, fs, name.clone(), material, origins)
+        .inspect_err(emit_commit_uncertain);
     drop(vault);
     match added {
         Ok((record_id, report)) => {
-            audit_write_report(&report);
+            audit_write_report(&report, &name);
             Written::Added(record_id)
         }
         Err(VaultError::NameTaken(name)) => Written::Refused(VaultChangeRefusal::NameTaken(name)),
@@ -229,7 +240,7 @@ fn listed_after_reopen(
     identity: Arc<VaultIdentity>,
     name: &CredentialName,
 ) -> Option<Option<RecordId>> {
-    let (vault, _) = Vault::open(&locks.state, fs, identity).ok()?;
+    let (vault, _) = open_vault(&locks.state, fs, identity).ok()?;
     Some(
         vault
             .manifest()
