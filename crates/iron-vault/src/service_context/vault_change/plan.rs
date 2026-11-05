@@ -258,6 +258,6 @@ fn write_record(locks: &ServiceLocks, fs: &impl StoreFs, identity: Arc<VaultIden
 /// Warns of a superseded record file the write could not remove; the next vault write removes it.
 fn warn_left_unindexed(report: &WriteReport) {
     if let Some(file) = report.left_unindexed() {
-        tracing::warn!(%file, "the superseded record file {file} could not be removed; the next vault write removes it");
+        tracing::warn!(%file, "a superseded record file could not be removed; the next vault write removes it");
     }
 }

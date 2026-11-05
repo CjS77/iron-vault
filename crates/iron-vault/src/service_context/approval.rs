@@ -196,7 +196,6 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
             .await
             .map_err(|refusal| match refusal {
                 PresenceRefusal::Denied => ApprovalEnd::Denied,
-                PresenceRefusal::CancelledByLock => ApprovalEnd::CancelledByLock,
                 PresenceRefusal::Unavailable(cause) => ApprovalEnd::Unavailable(format!("{cause}; nothing was reserved")),
             })
     }

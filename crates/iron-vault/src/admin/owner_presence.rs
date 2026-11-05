@@ -12,10 +12,10 @@ use super::server::{Exchange, ExchangeError};
 use crate::service_context::{OwnerPresence, PresenceRefusal, VaultChangePlan};
 
 /// The label of the secret prompt for the approval passphrase.
-pub const PASSPHRASE_PROMPT: &str = "Approval passphrase";
+const PASSPHRASE_PROMPT: &str = "Approval passphrase";
 
 /// The owner's answer to the approval passphrase prompt.
-pub enum PassphraseAnswer {
+pub(super) enum PassphraseAnswer {
     /// Input that can be the approval passphrase, still to be checked against the approver key.
     Typed(ApprovalPassphrase),
     /// Empty or non-UTF-8 input, which cannot be the passphrase and is refused as a wrong one.
@@ -24,9 +24,18 @@ pub enum PassphraseAnswer {
     CancelledByLock,
 }
 
+/// Why owner presence was not shown. Nothing was written either way.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum NoPresence {
+    /// The passphrase was refused (`approval-denied` for [`PresenceRefusal::Denied`]), or the key check could not run.
+    Refused(PresenceRefusal),
+    /// A `lock` came for the service-wide lock while the owner was at the prompt; the key was never checked.
+    CancelledByLock,
+}
+
 /// Asks for the approval passphrase with a secret prompt, which `lock_requested` ends. The error is a prompt that got no
 /// owner input.
-pub async fn ask_approval_passphrase(
+pub(super) async fn ask_approval_passphrase(
     exchange: &mut Exchange,
     lock_requested: impl Future<Output = ()>,
 ) -> Result<PassphraseAnswer, ExchangeError> {
@@ -42,24 +51,40 @@ pub async fn ask_approval_passphrase(
 }
 
 /// Owner presence for `plan`: asks for the approval passphrase and opens the pinned approver key with it. There is no
-/// second try. The outer error is a prompt that got no owner input, which cancels the command; the inner one is
-/// `approval-denied` for [`PresenceRefusal::Denied`].
+/// second try. The outer error is a prompt that got no owner input, which cancels the command.
 ///
-/// A `lock` waiting for the service-wide lock the plan holds ends the prompt with [`PresenceRefusal::CancelledByLock`],
-/// as it ends an approval's.
-pub async fn require_owner_presence<F: StoreFs + Send + Sync + 'static>(
+/// A `lock` waiting for the service-wide lock the plan holds ends the prompt with [`NoPresence::CancelledByLock`], as
+/// it ends an approval's.
+#[expect(
+    dead_code,
+    reason = "the `replace` and `rm` handlers will call it; its passphrase step is tested on its own"
+)]
+pub(super) async fn require_owner_presence<F: StoreFs + Send + Sync + 'static>(
     exchange: &mut Exchange,
     plan: &VaultChangePlan<'_, F>,
-) -> Result<Result<OwnerPresence, PresenceRefusal>, ExchangeError> {
-    let refusal = match ask_approval_passphrase(exchange, plan.lock_requested()).await? {
-        PassphraseAnswer::Typed(passphrase) => return Ok(plan.prove_presence(passphrase).await),
-        PassphraseAnswer::Unusable => PresenceRefusal::Denied,
+) -> Result<Result<OwnerPresence, NoPresence>, ExchangeError> {
+    let checked = match presence_passphrase(exchange, plan.lock_requested()).await? {
+        Ok(passphrase) => plan.prove_presence(passphrase).await.map_err(NoPresence::Refused),
+        Err(unchecked) => Err(unchecked),
+    };
+    Ok(checked)
+}
+
+/// The passphrase owner presence checks, or why it ends before any check: input that cannot be the passphrase is
+/// refused as a wrong one, and a `lock` cancels the change.
+async fn presence_passphrase(
+    exchange: &mut Exchange,
+    lock_requested: impl Future<Output = ()>,
+) -> Result<Result<ApprovalPassphrase, NoPresence>, ExchangeError> {
+    let passphrase = match ask_approval_passphrase(exchange, lock_requested).await? {
+        PassphraseAnswer::Typed(passphrase) => Ok(passphrase),
+        PassphraseAnswer::Unusable => Err(NoPresence::Refused(PresenceRefusal::Denied)),
         PassphraseAnswer::CancelledByLock => {
             tracing::warn!("vault change cancelled at its prompt by a lock; nothing was written");
-            PresenceRefusal::CancelledByLock
+            Err(NoPresence::CancelledByLock)
         }
     };
-    Ok(Err(refusal))
+    Ok(passphrase)
 }
 
 /// The owner's input as an approval passphrase. The input's buffer is cleared when it drops here.
@@ -67,3 +92,6 @@ fn approval_passphrase(input: OwnerInput) -> Option<ApprovalPassphrase> {
     let text = std::str::from_utf8(input.expose_secret()).ok()?;
     ApprovalPassphrase::new(SecretString::from(text)).ok()
 }
+
+#[cfg(test)]
+mod tests;

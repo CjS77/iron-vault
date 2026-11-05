@@ -23,9 +23,6 @@ pub enum PresenceRefusal {
     /// The passphrase does not open `approver.age`, or the key inside is not the pinned approver's.
     #[error("the approval passphrase does not open the approver key")]
     Denied,
-    /// A `lock` came for the service-wide lock while the owner was at the passphrase prompt; nothing was checked.
-    #[error("a `lock` cancelled the change at its prompt; nothing was written")]
-    CancelledByLock,
     /// The approver key could not be read, or the check did not finish.
     #[error("the approver key cannot be checked: {0}")]
     Unavailable(String),

@@ -95,19 +95,17 @@ pub fn vault_change_check(
 /// The affected route when `error` is about the credential `name`.
 fn caused_by(error: ActivationError, name: &CredentialName) -> Option<AffectedRoute> {
     use ActivationError as E;
-    match &error {
+    let route = match &error {
         E::UnknownCredential { route, credential }
         | E::OriginNotPermitted { route, credential, .. }
         | E::SlotMismatch { route, credential, .. }
             if credential == name =>
         {
-            Some(AffectedRoute {
-                route: route.clone(),
-                reason: error.clone(),
-            })
+            route.clone()
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+    Some(AffectedRoute { route, reason: error })
 }
 
 #[cfg(test)]

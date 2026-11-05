@@ -229,7 +229,7 @@ enum ReadError {
 }
 
 impl Exchange {
-    fn new(stream: UnixStream, limits: Limits) -> Self {
+    pub(super) fn new(stream: UnixStream, limits: Limits) -> Self {
         Self {
             stream,
             buffer: Zeroizing::new(vec![0; HEADER_LEN + MAX_BODY_LEN]),
