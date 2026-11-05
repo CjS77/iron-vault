@@ -14,6 +14,7 @@ use crate::confirmation::Confirmation;
 use crate::display::{escaped, quoted};
 use crate::limits::Limits;
 use crate::listener::{Endpoint, ListenerConfig};
+use crate::log_destination::LogDestinationSetting;
 use crate::name::{CallerName, RouteName};
 use crate::rate_limit::RateLimit;
 use crate::route::RouteConfig;
@@ -73,6 +74,7 @@ pub struct ApprovalSummary {
     routes: Vec<Entry>,
     listeners: Vec<Entry>,
     limits: Vec<Entry>,
+    logging: Vec<Entry>,
 }
 
 /// Diffs `pending` against `active`; `None` means nothing is active, so everything is listed as added.
@@ -92,17 +94,19 @@ pub fn summarize(active: Option<&ValidatedConfig>, pending: &ValidatedConfig) ->
         routes: diff_maps(old_routes, pending.routes(), route_fields, |_, _| None),
         listeners: diff_maps(old_listeners, pending.listeners(), listener_fields, |_, _| None),
         limits: limit_entries(&old_limits, pending.limits()),
+        logging: logging_entries(active.and_then(ValidatedConfig::log_destination), pending.log_destination()),
     }
 }
 
 impl ApprovalSummary {
-    fn sections(&self) -> [(&'static str, &Vec<Entry>); 5] {
+    fn sections(&self) -> [(&'static str, &Vec<Entry>); 6] {
         [
             ("callers", &self.callers),
             ("route grants", &self.grants),
             ("routes", &self.routes),
             ("listeners", &self.listeners),
             ("limits", &self.limits),
+            ("logging", &self.logging),
         ]
     }
 
@@ -340,6 +344,35 @@ fn limit_entries(old: &Limits, new: &Limits) -> Vec<Entry> {
         .collect()
 }
 
+/// The reminder shown when the log moves to a directory, because the shipped logrotate rule names only the default one.
+const LOGROTATE_REMINDER: &str = "add a logrotate rule for the new directory";
+
+/// How a destination reads in the summary. `None` is shown as `default`, not as the bootstrap destination it resolves
+/// to, so the text depends only on the two configs and not on the deployment profile.
+fn destination_text(setting: Option<&LogDestinationSetting>) -> String {
+    match setting {
+        None => "default".to_owned(),
+        Some(LogDestinationSetting::Stdout) => "stdout".to_owned(),
+        Some(LogDestinationSetting::Directory(path)) => quote(path),
+    }
+}
+
+/// One line when the destination changed, including a change to or from the default; a move to a directory adds the
+/// logrotate reminder.
+fn logging_entries(old: Option<&LogDestinationSetting>, new: Option<&LogDestinationSetting>) -> Vec<Entry> {
+    let reminder = matches!(new, Some(LogDestinationSetting::Directory(_))).then(|| format!("; {LOGROTATE_REMINDER}"));
+    let detail = format!(
+        "{} -> {}{}",
+        destination_text(old),
+        destination_text(new),
+        reminder.unwrap_or_default()
+    );
+    (old != new)
+        .then(|| entry(Mark::Changed, "destination".to_owned(), detail))
+        .into_iter()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,7 +410,7 @@ mod tests {
         assert!(!text.contains(TEXT_ONLY));
         assert_eq!(
             summary.headline(),
-            "callers: 3 added; route grants: 3 added; routes: 3 added; listeners: 3 added; limits: none"
+            "callers: 3 added; route grants: 3 added; routes: 3 added; listeners: 3 added; limits: none; logging: none"
         );
     }
 
@@ -533,7 +566,7 @@ mod tests {
         let pending = config(&format!("{SPEC_EXAMPLE}\n[limits]\nmax_connections = 512\n").replace("\"/latest\"", "\"/new\""));
         assert_eq!(
             summarize(Some(&spec()), &pending).headline(),
-            "callers: none; route grants: none; routes: 1 changed; listeners: none; limits: 1 changed"
+            "callers: none; route grants: none; routes: 1 changed; listeners: none; limits: 1 changed; logging: none"
         );
     }
 
@@ -551,5 +584,65 @@ mod tests {
         let render = || summarize(Some(&spec()), &pending).render();
         assert_eq!(render(), render());
         assert_eq!(summarize(None, &pending).render(), summarize(None, &pending).render());
+    }
+
+    fn with_logging(setting: &str) -> ValidatedConfig {
+        config(&format!("{SPEC_EXAMPLE}\n[logging]\ndestination = \"{setting}\"\n"))
+    }
+
+    fn logging_lines(active: &ValidatedConfig, pending: &ValidatedConfig) -> Vec<String> {
+        summarize(Some(active), pending).render().lines().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn default_destination_is_not_a_change() {
+        assert_eq!(summarize(Some(&spec()), &spec()).headline().matches("logging: none").count(), 1);
+        assert_eq!(
+            logging_lines(&with_logging("stdout"), &with_logging("stdout")),
+            ["no policy change; text changed"]
+        );
+    }
+
+    #[test]
+    fn configured_directory_is_old_to_new_with_logrotate_reminder() {
+        assert_eq!(
+            logging_lines(&spec(), &with_logging("/srv/iv-log")),
+            [
+                "logging:",
+                "  ~ destination: default -> \"/srv/iv-log\"; add a logrotate rule for the new directory"
+            ]
+        );
+    }
+
+    #[test]
+    fn stdout_has_no_logrotate_reminder() {
+        assert_eq!(
+            logging_lines(&spec(), &with_logging("stdout")),
+            ["logging:", "  ~ destination: default -> stdout"]
+        );
+    }
+
+    #[test]
+    fn moving_between_destinations_shows_both() {
+        assert_eq!(
+            logging_lines(&with_logging("stdout"), &with_logging("/srv/iv-log")),
+            [
+                "logging:",
+                "  ~ destination: stdout -> \"/srv/iv-log\"; add a logrotate rule for the new directory"
+            ]
+        );
+        assert_eq!(
+            logging_lines(&with_logging("/srv/iv-log"), &spec()),
+            ["logging:", "  ~ destination: \"/srv/iv-log\" -> default"]
+        );
+    }
+
+    #[test]
+    fn unprintable_characters_in_the_path_are_escaped() {
+        // Control characters are rejected when the config is parsed; bidi overrides are not, and must not reach the owner raw.
+        let out = logging_lines(&spec(), &with_logging("/srv/a\u{202e}b"));
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert!(out[1].contains("\"/srv/a\\u{202e}b\""), "{out:?}");
+        assert!(!out.concat().contains('\u{202e}'));
     }
 }
