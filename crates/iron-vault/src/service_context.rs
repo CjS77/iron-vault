@@ -194,11 +194,11 @@ pub struct ServiceContext<F = OsFs> {
     setup: Arc<ServiceSetup<F>>,
     locks: Arc<ServiceLocks>,
     holder: Arc<SnapshotHolder>,
-    /// The service-wide lock (glossary). `config approve` holds it from its request to its response, prompts included,
-    /// and fails at once with `busy` while another holds it. A vault write takes it the same way, so an approval never
-    /// sees the credential catalog change under it. A config check holds it to its end, so an unlock, a recheck and a
-    /// `lock` wait for it; each takes it before the context's mutex. Shared, so a blocking task can own its guard and
-    /// keep it until the task ends, even if the future that started the task is dropped.
+    /// The service-wide lock (glossary). `config approve` holds it from its request until its transaction ends, prompts
+    /// included, and fails at once with `busy` while another holds it. A vault write takes it the same way, so an
+    /// approval never sees the credential catalog change under it. A config check holds it to its end, so an unlock, a
+    /// recheck and a `lock` wait for it; each takes it before the context's mutex. Shared, so a blocking task can own its
+    /// guard and keep it until the task ends, even if the future that started the task is dropped.
     service_wide: Arc<Mutex<()>>,
     /// How many `lock` calls are waiting for the service-wide lock. An approval at a prompt ends while it is non-zero.
     lock_requests: watch::Sender<usize>,

@@ -342,7 +342,7 @@ async fn refused_by_the_backstop(fixture: &Fixture, stream: &mut UnixStream, act
     match converse(stream, &[APPROVAL_PASSPHRASE]).await.response {
         AdminResponse::Error { code, message } => {
             assert_eq!(code, ErrorCode::ApprovalUnavailable);
-            assert!(message.contains("nothing was reserved"), "{message}");
+            assert!(message.contains("stopped or checked again"), "{message}");
         }
         other => panic!("expected the backstop's refusal, got {other:?}"),
     }
