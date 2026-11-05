@@ -1003,6 +1003,14 @@ async fn unlock_while_ready_is_refused_before_any_prompt_and_changes_nothing() {
     assert_response(&response, &error_response(ErrorCode::WrongState, message));
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_served(&get_unix(&fixture.socket(), true).await);
+    // No other test in this binary unlocks a Ready service, so the shared buffer holds this refusal alone.
+    let refused: Vec<_> = logs
+        .events("vault.unlock-refused")
+        .into_iter()
+        .filter(|record| record["refusal"] == "wrong_state")
+        .collect();
+    assert_eq!(refused.len(), 1, "{}", logs.text());
+    assert_eq!(refused[0]["level"], "WARN");
     assert_no_passphrase_logged(&logs);
 }
 

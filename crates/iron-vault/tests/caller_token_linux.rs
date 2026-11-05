@@ -161,3 +161,38 @@ async fn a_peer_that_is_not_an_admin_principal_is_recorded_without_a_command() {
     assert!(record["peer_pid"].is_u64(), "{record}");
     assert!(logs.audit_events("admin.command").is_empty());
 }
+
+#[tokio::test]
+async fn a_malformed_request_from_an_admin_principal_is_refused_with_its_peer() {
+    let (_guard, logs) = capture();
+    let dir = RuntimeDir::new();
+    let me = invoking_user().unwrap();
+    let socket = AdminSocket::bind(&dir.0, me).unwrap();
+    let path = dir.0.join(iron_vault::admin::ADMIN_SOCKET_NAME);
+    let principals = AdminPrincipals::new(DeploymentProfile::Protected, me.uid);
+    let server = AdminServer::new(principals, Handlers::standard(DeploymentProfile::Protected), Limits::default());
+    let (stop, stopped) = oneshot::channel::<()>();
+    let served = tokio::spawn(async move {
+        server
+            .serve(socket, async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+
+    // A frame of an unsupported protocol version: header bytes only, never a command.
+    let mut stream = UnixStream::connect(&path).await.unwrap();
+    stream.write_all(&[0xff; 16]).await.unwrap();
+    let mut bytes = Vec::new();
+    // The service closes with the rest of the garbage unread, which the peer may see as a reset.
+    let _ = tokio::time::timeout(PATIENCE, stream.read_to_end(&mut bytes)).await.unwrap();
+    let _ = stop.send(());
+    served.await.unwrap().unwrap();
+
+    let refused = logs.audit_events("admin.refused");
+    assert_eq!(refused.len(), 1, "{}", logs.text());
+    assert_eq!(refused[0]["refusal"], "unsupported_version", "{}", refused[0]);
+    assert_eq!(refused[0]["peer_uid"].as_u64(), Some(u64::from(me.uid)));
+    assert!(refused[0]["peer_pid"].is_u64(), "{}", refused[0]);
+    assert!(logs.audit_events("admin.command").is_empty());
+}

@@ -746,6 +746,7 @@ async fn a_failed_manifest_rename_changes_nothing_and_the_next_add_sweeps_the_un
 
 #[tokio::test]
 async fn an_uncertain_commit_reports_what_the_reopened_vault_shows() {
+    let logs = captured_logs();
     let fixture = Fixture::new().await;
     let fs = FailingFs::default();
     let service = fixture.ready_with(fs.clone()).await;
@@ -759,8 +760,20 @@ async fn an_uncertain_commit_reports_what_the_reopened_vault_shows() {
         message.contains("may not survive power loss") && message.contains("so it was added"),
         "{message}"
     );
-    assert!(fixture.record_id("fx").is_some());
+    let record_id = fixture.record_id("fx").unwrap();
     assert_eq!(credentials(&service).await, vec![healthy("fx"), healthy("fx_key")]);
+    let added = logs.events("credential.added");
+    let ours: Vec<_> = added
+        .iter()
+        .filter(|record| record["record_id"] == record_id.to_string().as_str())
+        .collect();
+    assert_eq!(ours.len(), 1, "{}", logs.text());
+    assert_audit_record(ours[0], "INFO", &["credential", "record_id", "kind", "origins"]);
+    assert_eq!(
+        (ours[0]["credential"].as_str(), ours[0]["kind"].as_str()),
+        (Some("fx"), Some("static"))
+    );
+    assert_no_secret(&logs);
 }
 
 #[tokio::test]
