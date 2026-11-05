@@ -1346,6 +1346,7 @@ dependencies = [
  "secrecy",
  "serde",
  "static_assertions",
+ "subtle",
  "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",

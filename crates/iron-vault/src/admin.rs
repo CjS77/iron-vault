@@ -8,6 +8,8 @@ mod add;
 mod approve;
 #[cfg(target_os = "linux")]
 pub mod dispatch;
+#[cfg(target_os = "linux")]
+mod init;
 pub mod principal;
 pub mod protocol;
 #[cfg(target_os = "linux")]

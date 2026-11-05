@@ -42,6 +42,8 @@ rustls.workspace = true
 rustls-pki-types.workspace = true
 # The vault passphrase `unlock` builds from the owner's input: the store takes it as a `SecretString`.
 secrecy.workspace = true
+# `init` compares each chosen passphrase with its repeat in constant time.
+subtle.workspace = true
 thiserror.workspace = true
 # The upstream client's deadline for response headers; reqwest itself runs on tokio on every platform. `sync` is for the
 # serving snapshot's release signal (a oneshot channel), which is not Linux-only.

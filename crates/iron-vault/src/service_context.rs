@@ -16,6 +16,7 @@
 //! snapshot could serve through it.
 
 mod approval;
+mod init;
 mod serving;
 mod vault_change;
 
@@ -44,6 +45,7 @@ use crate::trusted_path_report::ServicePaths;
 use serving::Serving;
 
 pub use approval::{ApprovalEnd, ApprovalReview};
+pub use init::{InitRefusal, step_label};
 pub use vault_change::VaultChangeRefusal;
 
 /// The log target of lock transitions (glossary: *Lock transition*), so the audit design (EP-26) can route them as

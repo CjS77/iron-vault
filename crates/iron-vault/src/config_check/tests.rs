@@ -237,6 +237,17 @@ fn failure(result: Result<ServingSnapshot, CheckFailure>) -> CheckFailure {
     result.expect_err("the check should fail")
 }
 
+/// The store's initial config, which init approves as version 1, must reach Ready at the first unlock: it activates
+/// against a new vault's empty catalog and names nothing to serve.
+#[test]
+fn the_initial_config_activates_against_an_empty_catalog_and_serves_nothing() {
+    let fixture = Fixture::new(&[]);
+    let (vault, _) = Vault::open(&fixture.state_lock, &OsFs, identity()).unwrap();
+    let policy = activate_config(iron_vault_store::INITIAL_CONFIG, &Capabilities::default(), &vault, &NoAccounts).unwrap();
+    let config = policy.config();
+    assert!(config.listeners().is_empty() && config.callers().is_empty() && config.routes().is_empty());
+}
+
 #[test]
 fn a_valid_vault_and_active_pair_give_a_snapshot_of_the_configs_routes() {
     let mut fixture = Fixture::new(&["alpha", "beta"]);
