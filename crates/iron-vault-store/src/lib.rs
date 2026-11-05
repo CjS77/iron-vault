@@ -11,6 +11,7 @@ mod durable;
 #[cfg(test)]
 mod durable_faults;
 mod envelope;
+mod error_kind;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fault_fs;
 mod init;
@@ -62,6 +63,7 @@ pub use durable::{MAX_STATE_FILE_LEN, ReadError, WriteError, WriteStep, durable_
 pub use envelope::{
     EnvelopeError, MAX_IDENTITY_ENVELOPE_LEN, read_identity_envelope, stanza_kinds, unwrap_identity, wrap_identity, write_identity_envelope,
 };
+pub use error_kind::ErrorKindLabel;
 pub use init::{
     InitError, InitFailure, InitPassphrases, InitPassphrasesError, InitStep, InitializedVault, MIN_PASSPHRASE_CHARS, NewVaultKeys,
     SealingKeys, WhichPassphrase, initialize,

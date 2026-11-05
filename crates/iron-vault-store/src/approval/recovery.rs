@@ -17,8 +17,8 @@ use super::verify::verify_signed;
 use super::{ApprovalEnvelope, ApprovalPayload, ApprovalState, ApprovalVersion, CommittedApproval, ConfigDigest, VerifyError};
 use crate::ConfigFileName::{Active, ActiveSignature, Pending, StagedSignature};
 use crate::{
-    ConfigDirLock, ConfigFileName, ConfigReadError, ConfigWriteError, PublishSet, StoreFs, WriteStep, publish, read_config_file,
-    remove_pending_and_staged, verify_approval,
+    ConfigDirLock, ConfigFileName, ConfigReadError, ConfigWriteError, ErrorKindLabel, PublishSet, StoreFs, WriteStep, publish,
+    read_config_file, remove_pending_and_staged, verify_approval,
 };
 
 /// The store's counterpart of the service's failure reason: what a refused recovery leaves the service as. The
@@ -254,7 +254,9 @@ fn publish_committed(
             step: WriteStep::SyncDir,
             kind,
             ..
-        }) => tracing::warn!(%version, ?kind, "the config directory fsync failed while finishing a publish; the read-back decides"),
+        }) => {
+            tracing::warn!(%version, error_kind = %ErrorKindLabel::from(kind), "the config directory fsync failed while finishing a publish; the read-back decides")
+        }
         Err(cause) => return Err(ApprovalRecoveryError::PublishFailed { version, cause }),
     }
     tracing::warn!(event = "config.recovery-published", %version, renames = ?set, "ran the publish renames of a committed approval");

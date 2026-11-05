@@ -30,8 +30,8 @@ use iron_vault_policy::{CatalogEntry, CredentialCatalog, CredentialName};
 use thiserror::Error;
 
 use crate::{
-    ApprovalState, ApprovalStateError, CredentialRecord, MAX_MANIFEST_LEN, ManifestError, PartialRestore, ReadError, SealError,
-    StateDirLock, StateFileName, StateGeneration, StoreFs, VaultIdentity, VaultManifest, WriteError, open_manifest,
+    ApprovalState, ApprovalStateError, CredentialRecord, ErrorKindLabel, MAX_MANIFEST_LEN, ManifestError, PartialRestore, ReadError,
+    SealError, StateDirLock, StateFileName, StateGeneration, StoreFs, VaultIdentity, VaultManifest, WriteError, open_manifest,
     partial_restore::check_control_generations, read_state_file,
 };
 
@@ -355,7 +355,7 @@ fn log_vault_error(error: &VaultError) {
             "vault shared state is damaged; the whole vault is unavailable and recovery may be required"
         ),
         VaultError::ListStateDir { kind } => tracing::error!(
-            error = %kind,
+            error_kind = %ErrorKindLabel::from(*kind),
             remediation = "check that the state directory exists and that the service account can read it",
             "cannot list the state directory; the vault is unavailable"
         ),

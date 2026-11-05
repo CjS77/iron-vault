@@ -25,8 +25,8 @@ use thiserror::Error;
 use super::verify::verify_signed;
 use super::{ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalVersion, ConfigDigest, SignError, VerifiedApproval, VerifyError};
 use crate::{
-    ApprovalStateError, ConfigDirLock, ConfigFileName, ConfigReadError, ConfigWriteError, PublishSet, StateDirLock, StoreFs, VaultIdentity,
-    WriteStep, publish, read_config_file, remove_pending_and_staged, verify_approval, write_pending, write_staged,
+    ApprovalStateError, ConfigDirLock, ConfigFileName, ConfigReadError, ConfigWriteError, ErrorKindLabel, PublishSet, StateDirLock,
+    StoreFs, VaultIdentity, WriteStep, publish, read_config_file, remove_pending_and_staged, verify_approval, write_pending, write_staged,
 };
 
 /// Proof that no request is being admitted: the service's admission pause guard implements this.
@@ -369,7 +369,7 @@ fn publish_both<F: StoreFs>(storage: &ApprovalStorage<'_, F>, version: ApprovalV
         }) => {
             tracing::warn!(
                 %version,
-                ?kind,
+                error_kind = %ErrorKindLabel::from(kind),
                 "the approved config was published but the config directory fsync failed; recovery finishes it if power loss undoes it"
             );
             Ok(())
