@@ -56,6 +56,7 @@ async fn start(ca: &TestCa, port: u16, request_timeout_secs: u64) -> Proxy {
         }],
         tcp: false,
         request_timeout_secs,
+        limits: "",
     })
     .await
 }

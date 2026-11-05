@@ -55,6 +55,7 @@ async fn start(ca: &TestCa, port: u16, request_timeout_secs: u64) -> Proxy {
         }],
         tcp: false,
         request_timeout_secs,
+        limits: "",
     })
     .await
 }
@@ -270,6 +271,7 @@ async fn a_route_whose_pinned_ca_did_not_load_is_503_and_reaches_no_upstream() {
         }],
         tcp: false,
         request_timeout_secs: 30,
+        limits: "",
     })
     .await;
 

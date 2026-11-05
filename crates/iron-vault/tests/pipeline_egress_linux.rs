@@ -158,6 +158,7 @@ async fn proxy(ca: &TestCa, ports: Ports) -> Proxy {
         credentials: credentials(&ports),
         tcp: true,
         request_timeout_secs: 30,
+        limits: "",
     })
     .await
 }

@@ -556,6 +556,7 @@ async fn hostile_session(protocol: Upstream) -> (Ports, usize) {
         credentials: credentials(&ports),
         tcp: false,
         request_timeout_secs: 30,
+        limits: "",
     })
     .await;
     let requests = hostile_requests(&proxy).await + administrative_run().await;

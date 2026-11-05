@@ -39,6 +39,11 @@ fn callers_and_routes(port: u16) -> String {
 
 /// The proxy, with this request timeout, in front of an upstream that answers every request with `reply`.
 async fn start(ca: &TestCa, reply: Reply, request_timeout_secs: u64) -> (MockUpstream, Proxy) {
+    start_with(ca, reply, request_timeout_secs, "").await
+}
+
+/// As [`start`], with further `[limits]` keys.
+async fn start_with(ca: &TestCa, reply: Reply, request_timeout_secs: u64, limits: &'static str) -> (MockUpstream, Proxy) {
     let upstream = MockUpstream::start(ca, reply).await;
     let proxy = Proxy::start(Setup {
         ca,
@@ -50,6 +55,7 @@ async fn start(ca: &TestCa, reply: Reply, request_timeout_secs: u64) -> (MockUps
         }],
         tcp: false,
         request_timeout_secs,
+        limits,
     })
     .await;
     (upstream, proxy)
@@ -200,6 +206,18 @@ async fn a_compressed_scrubbed_response_counts_the_bytes_sent_and_writes_one_scr
         (&event["request_id"], Some(1))
     );
     assert!(!log.text().contains(KEY));
+}
+
+#[tokio::test]
+async fn a_body_past_the_size_limit_is_one_body_size_limit_event() {
+    let (_guard, log) = capture();
+    let ca = TestCa::new("relay events CA");
+    let (_upstream, proxy) = start_with(&ca, reply(200, &[], vec![b'a'; 4096]), 30, "max_decompressed_response_bytes = 1000").await;
+
+    let raw = send(&proxy, "GET", &[]).await;
+
+    assert!(raw.is_empty() || !dechunked(&raw).1, "the body ended cleanly");
+    assert_cut(&the_only_event(&log, proxy).await, "body_size_limit");
 }
 
 #[tokio::test]

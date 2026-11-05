@@ -65,6 +65,7 @@ fn setup<'a>(ca: &'a TestCa, route: &str, port: u16) -> Setup<'a> {
         }],
         tcp: false,
         request_timeout_secs: 30,
+        limits: "",
     }
 }
 

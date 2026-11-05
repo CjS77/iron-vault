@@ -120,6 +120,8 @@ pub struct Setup<'a> {
     /// Whether to configure the TCP listener `loopback`. The harness picks its port, retrying when another test takes it first.
     pub tcp: bool,
     pub request_timeout_secs: u64,
+    /// Further `[limits]` keys, one per line, such as `max_decompressed_response_bytes = 10`; empty for the defaults.
+    pub limits: &'static str,
 }
 
 impl Setup<'_> {
@@ -133,6 +135,7 @@ impl Setup<'_> {
 [limits]
 request_timeout_secs = {timeout}
 upstream_timeout_secs = {timeout}
+{limits}
 
 [listeners.local]
 unix_socket = "{socket}"
@@ -140,6 +143,7 @@ token_header = "{TOKEN_HEADER}"
 {tcp}
 {rest}"#,
             timeout = self.request_timeout_secs,
+            limits = self.limits,
             socket = socket.display(),
             rest = self.callers_and_routes,
         );

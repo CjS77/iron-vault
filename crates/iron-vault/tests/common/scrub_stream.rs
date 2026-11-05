@@ -153,6 +153,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
             .collect(),
         tcp: false,
         request_timeout_secs: 60,
+        limits: "",
     })
     .await
 }
