@@ -8,9 +8,8 @@
 //! that echoes the credential, to one that fails mid-body (HTTP/2: resets the stream) and to one nobody listens on, and
 //! types a credential and approval passphrases at the binary's prompts. Then every file in the log directory is read.
 //!
-//! The subscriber is the process-wide default, so records written on the blocking pool (the passphrase, vault and approval
-//! work) reach the file too. One test runs the HTTP/1.1 session and then the HTTP/2 session, because a global default can
-//! be installed once per process.
+//! The subscriber is the process-wide default. One test runs the HTTP/1.1 session and then the HTTP/2 session, because a
+//! global default can be installed once per process.
 
 #![cfg(target_os = "linux")]
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.

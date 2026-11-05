@@ -80,7 +80,7 @@ async fn authorize<F: StoreFs + Send + Sync + 'static>(
     }
     let passphrase = match ask_approval_passphrase(exchange, review.lock_requested()).await? {
         PassphraseAnswer::Typed(passphrase) => passphrase,
-        PassphraseAnswer::Unusable => return Ok(Err(ApprovalEnd::Denied)),
+        PassphraseAnswer::Unusable => return Ok(Err(review.refuse_unusable_passphrase())),
         PassphraseAnswer::CancelledByLock => return Ok(Err(cancelled_by_lock())),
     };
     Ok(review.open_signer(passphrase).await)

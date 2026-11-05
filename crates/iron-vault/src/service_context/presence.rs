@@ -9,7 +9,6 @@ use std::sync::Arc;
 use iron_vault_store::{ApprovalPassphrase, PinnedApprover, SignError, SoftwareSigner, StoreFs, open_signer_key, read_signer_key};
 
 use super::ServiceContext;
-use crate::audit::{AuditEvent, vault::PresenceRefused};
 
 /// Proof that the owner typed the approval passphrase in this exchange, after the service described the change.
 ///
@@ -75,13 +74,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         passphrase: ApprovalPassphrase,
         pinned: PinnedApprover,
     ) -> Result<OwnerPresence, PresenceRefusal> {
-        let signer = self.open_approver(passphrase, pinned).await.inspect_err(|refusal| {
-            if let PresenceRefusal::Denied(kind) = refusal {
-                PresenceRefused { refusal: *kind }.emit();
-            }
-        })?;
-        drop(signer);
-        Ok(OwnerPresence(()))
+        self.open_approver(passphrase, pinned).await.map(|signer| {
+            drop(signer);
+            OwnerPresence(())
+        })
     }
 }
 
