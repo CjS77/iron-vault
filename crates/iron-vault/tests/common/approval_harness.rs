@@ -129,6 +129,11 @@ impl Fixture {
         prepared.commit(&storage, &holder.pause()).unwrap();
     }
 
+    /// The upstream every route of [`config`](Self::config) forwards to.
+    pub fn upstream(&self) -> &MockUpstream {
+        &self.upstream
+    }
+
     pub fn path(&self, name: &str) -> PathBuf {
         self.dir.path().join(name)
     }
