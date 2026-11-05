@@ -29,7 +29,7 @@ use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::Capabilities;
-use iron_vault_store::{ApprovalPassphrase, InitPassphrases, NewVaultKeys, OsFs, Passphrase, StoreFs};
+use iron_vault_store::{ApprovalPassphrase, ConfigDigest, INITIAL_CONFIG, InitPassphrases, NewVaultKeys, OsFs, Passphrase, StoreFs};
 use secrecy::SecretString;
 use serde_json::Value;
 
@@ -230,7 +230,7 @@ impl InitFixture {
                 core_dumps: CoreDumps::Disabled,
                 memory: MemoryProtection::Unsupported,
             },
-            log_failure: iron_vault::logging::LogFailure::default(),
+            log: iron_vault::logging::LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
         };
         ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap()
     }
@@ -320,5 +320,7 @@ async fn a_failure_at_init_step_9_still_logs_the_committed_first_approval_before
         "{records:?}"
     );
     assert_uncertain_state_record(&records[2]);
+    assert_eq!(records[0]["version"].as_u64(), Some(1));
+    assert_eq!(records[0]["config_digest"], ConfigDigest::of(INITIAL_CONFIG).to_string().as_str());
     assert_eq!(records[4]["step"], "9");
 }

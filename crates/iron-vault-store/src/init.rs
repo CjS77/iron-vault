@@ -93,7 +93,8 @@ impl fmt::Display for InitStep {
 }
 
 /// A failed initialization: the step it failed at, why, and what its discard removed before the failure. It carries no
-/// key material, passphrase text or config bytes, because none of its causes do.
+/// key material, passphrase text or config bytes, because none of its causes do. When the first approval committed
+/// before the failure, [`InitError::approved`] reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("vault initialization failed at {step}: {cause}")]
 pub struct InitError {
