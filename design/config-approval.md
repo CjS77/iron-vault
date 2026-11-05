@@ -539,21 +539,21 @@ command's result.
 
 Each event has a distinct name, so a reserved version is never mistaken for a completed approval
 ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). They are audit events in the audit log;
-[audit-logging.md](audit-logging.md#audit-events) gives each one's exact field names and types, and the record shape
-they share. None carries config bytes, signature bytes, key material or a passphrase.
+[audit-logging.md](audit-logging.md#audit-events) is the one place that lists each one's fields, with their names and
+types, and the record shape they share. None carries config bytes, signature bytes, key material or a passphrase.
 
-| Event | Level | When | Fields |
-|---|---|---|---|
-| `config.approval-refused` | WARN | the approval passphrase was wrong or the key is not the pinned approver's; nothing was reserved | the refusal, config digest |
-| `config.version-reserved` | INFO | step 2's reservation is durable | version, config digest |
-| `config.approval-failed` | WARN | the transaction failed after its reservation and before its commit | version (consumed), config digest, the step that failed, the error |
-| `config.commit-uncertain` | WARN | step 5's rename of `approval.age` landed, but its directory fsync failed | version, the error |
-| `config.approval-completed` | INFO | the commit is durable: step 5 succeeded, or an uncertain commit was settled | version, config digest, the approval summary |
-| `config.activation-failed` | WARN | the config check after a committed approval failed, or an uncertain commit could not be settled | version, failure reason, detail |
-| `config.reload-failed` | WARN | the config check of a SIGHUP reload failed | committed version, failure reason, detail |
-| `config.recovery-published` | WARN | a config check finished publishing a committed transaction | version, which renames it ran |
-| `config.recovery-discarded` | INFO | a config check removed uncommitted files | each file, and a staged approval's version |
-| `config.conflicting-approval-discarded` | ERROR | a config check discarded a staged approval signed for the committed version over another config | version |
+| Event | Level | When |
+|---|---|---|
+| `config.approval-refused` | WARN | the approval passphrase was wrong or the key is not the pinned approver's; nothing was reserved |
+| `config.version-reserved` | INFO | step 2's reservation is durable |
+| `config.approval-failed` | WARN | the transaction failed after its reservation and before its commit |
+| `config.commit-uncertain` | WARN | step 5's rename of `approval.age` landed, but its directory fsync failed |
+| `config.approval-completed` | INFO | the commit is durable: step 5 succeeded, or an uncertain commit was settled |
+| `config.activation-failed` | WARN | the config check after a committed approval failed, or an uncertain commit could not be settled |
+| `config.reload-failed` | WARN | the config check of a SIGHUP reload failed |
+| `config.recovery-published` | WARN | a config check finished publishing a committed transaction |
+| `config.recovery-discarded` | INFO | a config check removed uncommitted files |
+| `config.conflicting-approval-discarded` | ERROR | a config check discarded a staged approval signed for the committed version over another config |
 
 An uncertain commit records `config.commit-uncertain`, followed by `config.approval-completed` once it is settled, or
 by `config.activation-failed` when settling fails. A commit followed by a failed publish or check records

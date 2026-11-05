@@ -624,8 +624,7 @@ the hardening report writes today (`hardening::log_report`), with the same fix i
 failed core-dump setting carries is not logged, since it is an OS error's text. Every record carries
 `deployment_profile` as a constant field, so the startup event needs no profile field of its own. The state labels are
 fixed strings, never `ServiceState`'s `Debug` output, which writes `Unavailable(PolicyInvalid)`.
-`service.lock-transition` is the struct `audit::LockTransition`. It takes over the records written under
-`LOCK_TRANSITION_TARGET` today; that target stays in use until K-171 moves the records, which retires it.
+`service.lock-transition` is the struct `audit::LockTransition`.
 
 **Admin commands:**
 
