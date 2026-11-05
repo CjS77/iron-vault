@@ -102,7 +102,7 @@ async fn serve(
         answer = proxy(&snapshot, tags, request, deadline, facts) => answer,
     };
     match answer {
-        Ok(response) => response.map(|body| UntilWithdrawn::new(body, snapshot).boxed_unsync()),
+        Ok(response) => response.map(|body| UntilWithdrawn::new(body, snapshot, facts.clone()).boxed_unsync()),
         Err(refusal) => fixed(&refusal),
     }
 }
@@ -124,16 +124,14 @@ async fn proxy(
     let prepared = prepared.map_err(|refusal| refuse_pipeline(facts, &refusal))?;
     let unavailable = || refused(facts, ReasonCode::RouteUnavailable, StatusCode::SERVICE_UNAVAILABLE);
     let client = snapshot.clients().for_route(prepared.route()).map_err(|_| unavailable())?;
-    let (route, credential) = (prepared.route().clone(), prepared.credential().clone());
-    let route_config = snapshot.policy().route(&route).ok_or_else(unavailable)?;
+    let route_config = snapshot.policy().route(prepared.route()).ok_or_else(unavailable)?;
     let (request, patterns) = prepared.into_parts();
     // The URL actually sent, which holds a query slot's secret: kept only until the response head is decided.
     let request_url = request.url().clone();
     let context = ResponseContext {
         method: request.method(),
         patterns,
-        route,
-        credential,
+        facts: facts.clone(),
         accept_encoding: accept_encoding(&parts.headers),
         limits: *snapshot.policy().config().limits(),
     };

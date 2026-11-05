@@ -526,3 +526,12 @@ async fn dropping_the_connections_counts_as_the_service_closing_them() {
     running.task.abort();
     assert_eq!(the_request_event(&read).await["reason"], "service_closed");
 }
+
+#[test]
+fn head_204_and_304_have_no_body() {
+    assert!(has_no_body(true, StatusCode::OK));
+    assert!(has_no_body(false, StatusCode::NO_CONTENT));
+    assert!(has_no_body(false, StatusCode::NOT_MODIFIED));
+    assert!(!has_no_body(false, StatusCode::OK));
+    assert!(!has_no_body(false, StatusCode::CREATED));
+}

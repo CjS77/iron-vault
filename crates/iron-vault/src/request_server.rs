@@ -38,7 +38,7 @@ use hyper::body::{Body, Incoming};
 use hyper::header::{CONNECTION, CONTENT_TYPE, HeaderValue};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
+use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use iron_vault_policy::{Limits, ListenerName};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -53,7 +53,7 @@ use crate::request_listeners::{IncomingConnection, RequestListeners};
 
 mod body;
 mod form;
-use body::{Deadline, Overflow};
+use body::{Deadline, Overflow, Recorded};
 pub use body::{RequestBody, RequestBodyError};
 pub use form::{FormViolation, check_form};
 
@@ -261,8 +261,9 @@ fn http_builder(limits: &Limits) -> http1::Builder {
     http
 }
 
-/// Answers one request and records how it ended. The record writes the request event when it drops, which is also when
-/// this future is dropped before it has a response, because the caller or the service closed the connection.
+/// Answers one request and records how it ended. The record moves into the response body, which writes the request event
+/// when it ends or is dropped; if this future is dropped before it has a response, because the caller or the service
+/// closed the connection, the record writes it as it drops.
 async fn respond<H: RequestHandler>(
     handler: Arc<H>,
     tags: ConnectionTags,
@@ -271,9 +272,16 @@ async fn respond<H: RequestHandler>(
     request: Request<Incoming>,
 ) -> Result<Response<ResponseBody>, Infallible> {
     let mut record = RequestRecord::new(tags.listener().clone(), request.method().as_str(), close);
+    let head = request.method() == Method::HEAD;
     let response = answer(handler.as_ref(), &tags, &limits, request, &record).await;
     record.answered(response.status().as_u16());
-    Ok(response)
+    let can_have_body = !has_no_body(head, response.status());
+    Ok(response.map(|body| Recorded::new(body, record, can_have_body).boxed_unsync()))
+}
+
+/// Whether a response has no body whatever its headers say (RFC 9110 §6.4.1): one to `HEAD`, a `204` or a `304`.
+pub(crate) fn has_no_body(head: bool, status: StatusCode) -> bool {
+    head || matches!(status, StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
 }
 
 /// Runs the handler on one request within the body limit and the whole-request deadline.
@@ -309,7 +317,7 @@ async fn answer<H: RequestHandler>(
         true => replaced(record, ReasonCode::RequestTooLarge, StatusCode::PAYLOAD_TOO_LARGE),
         false => response,
     };
-    response.map(|body| Deadline::new(body, deadline).boxed_unsync())
+    response.map(|body| Deadline::new(body, deadline, facts).boxed_unsync())
 }
 
 /// The server's own refusal in place of the handler's answer, which the request's record then disowns.

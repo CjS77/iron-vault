@@ -265,16 +265,18 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for FieldNames {
     }
 }
 
-/// Writes `request.completed` with every fact set, by dropping its record, and `request.defect`. Their types are private to
-/// the request module, so they are reached through the record and its facts.
+/// Writes `request.completed` with every fact set, by dropping its record, with `response.scrubbed` beside it, and
+/// `request.defect`. Their types are private to the request module, so they are reached through the record and its facts.
 fn emit_request_events() {
     let mut record = RequestRecord::new("local".parse().unwrap(), "GET", crate::connection_tags::ServiceClose::default());
     let facts = record.facts();
     facts.caller(&"agent".parse().unwrap());
     facts.route(&"fx".parse().unwrap(), &"fx-key".parse().unwrap(), &"api.example".parse().unwrap());
+    facts.scrub_matches(1);
     facts.report_defect("host");
     facts.refuse(ReasonCode::ServiceDefect);
     record.answered(500);
+    record.sent(1);
 }
 
 // `ApprovalFailed` is absent because an `ApprovalError` can only be built inside the store crate. Its fields are version,
@@ -320,8 +322,9 @@ fn no_audit_event_records_a_constant_field() {
     });
     let seen = names.0.lock().unwrap().clone();
     assert!(seen.iter().any(|name| name == "event"), "{seen:?}");
-    // Both request events were seen: `reason` is the request event's, `defect` the defect event's.
-    ["reason", "defect"]
+    // Every request event was seen: `reason` and `scrubbed` are the request event's, `defect` the defect event's and
+    // `matches` the scrub event's.
+    ["reason", "scrubbed", "defect", "matches"]
         .iter()
         .for_each(|own| assert!(seen.iter().any(|name| name == own), "{own} in {seen:?}"));
     CONSTANT_FIELDS

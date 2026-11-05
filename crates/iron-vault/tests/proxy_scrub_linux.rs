@@ -280,7 +280,7 @@ async fn the_scrub_event_names_the_route_and_credential_and_holds_no_secret_form
         (event["level"].as_str(), event["credential"].as_str(), event["matches"].as_u64()),
         (Some("WARN"), Some("fx_basic"), Some(4))
     );
-    assert_audit_record(&event, "WARN", &["credential", "matches", "route"]);
+    assert_audit_record(&event, "WARN", &["credential", "matches", "request_id", "route"]);
     let logged = captured.text();
     leaked_forms()
         .iter()

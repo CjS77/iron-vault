@@ -7,7 +7,7 @@ use super::credential::*;
 use super::route::*;
 use super::tests::record_of;
 use super::vault::*;
-use super::{AuditEvent, EventName};
+use super::{AuditEvent, EventName, RequestId};
 use crate::service_context::UnlockRefusal;
 
 fn credential() -> CredentialName {
@@ -162,12 +162,13 @@ fn route_and_scrub_events_name_the_route_and_never_a_path_or_byte() {
     let name = credential();
     let record = record_of(
         ResponseScrubbed {
+            request_id: RequestId::generate(),
             route: &route,
             credential: &name,
             matches: 4,
         },
         "WARN",
-        &["route", "credential", "matches"],
+        &["request_id", "route", "credential", "matches"],
     );
     assert_eq!(record["matches"].as_u64(), Some(4));
 }
@@ -254,6 +255,7 @@ pub(super) fn emit_every_event() {
     TokenFailed { error_kind: &kind }.emit();
     PinnedCaUnavailable { route: &route }.emit();
     ResponseScrubbed {
+        request_id: RequestId::generate(),
         route: &route,
         credential: &name,
         matches: 1,

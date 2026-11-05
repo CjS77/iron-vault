@@ -1,4 +1,5 @@
-//! The request body counted against the body limit, and the response body cut off at the request deadline.
+//! The request body counted against the body limit, the response body cut off at the request deadline, and the
+//! outermost response body that carries the request's record.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -12,7 +13,7 @@ use tokio::sync::Notify;
 use tokio::time::{Instant, Sleep};
 
 use super::{BoxError, ResponseBody};
-use crate::audit::RequestFacts;
+use crate::audit::{Ending, ReasonCode, RequestFacts, RequestRecord};
 
 /// Why reading a request body failed.
 #[derive(Debug, thiserror::Error)]
@@ -129,13 +130,15 @@ struct DeadlinePassed;
 pub(super) struct Deadline {
     body: ResponseBody,
     sleep: Pin<Box<Sleep>>,
+    facts: RequestFacts,
 }
 
 impl Deadline {
-    pub(super) fn new(body: ResponseBody, deadline: Instant) -> Self {
+    pub(super) fn new(body: ResponseBody, deadline: Instant, facts: RequestFacts) -> Self {
         Self {
             body,
             sleep: Box::pin(tokio::time::sleep_until(deadline)),
+            facts,
         }
     }
 }
@@ -153,7 +156,10 @@ impl Body for Deadline {
         match frame {
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Ready(Some(Ok(frame))) if this.body.is_end_stream() => Poll::Ready(Some(Ok(frame))),
-            _ => Poll::Ready(Some(Err(Box::new(DeadlinePassed)))),
+            _ => {
+                this.facts.refuse(ReasonCode::Deadline);
+                Poll::Ready(Some(Err(Box::new(DeadlinePassed))))
+            }
         }
     }
 
@@ -163,5 +169,61 @@ impl Body for Deadline {
 
     fn size_hint(&self) -> SizeHint {
         self.body.size_hint()
+    }
+}
+
+/// The outermost response body: it counts the bytes handed to hyper and ends the request's record when the body ends,
+/// fails or is dropped.
+///
+/// It forwards `is_end_stream` and `size_hint`, so hyper sees the body it would have seen unwrapped and skips polling an
+/// empty one. A drop before the end is a clean end when hyper had nothing to poll: the response cannot carry a body, or
+/// the inner body says it is empty or finished.
+pub(super) struct Recorded {
+    body: ResponseBody,
+    record: RequestRecord,
+    can_have_body: bool,
+}
+
+impl Recorded {
+    pub(super) fn new(body: ResponseBody, record: RequestRecord, can_have_body: bool) -> Self {
+        Self {
+            body,
+            record,
+            can_have_body,
+        }
+    }
+}
+
+impl Body for Recorded {
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
+        let this = self.get_mut();
+        let frame = ready!(Pin::new(&mut this.body).poll_frame(cx));
+        match &frame {
+            Some(Ok(frame)) => this
+                .record
+                .sent(frame.data_ref().map_or(0, |data| u64::try_from(data.len()).unwrap_or(u64::MAX))),
+            Some(Err(_)) => this.record.end(Ending::Cut),
+            None => this.record.end(Ending::Clean),
+        }
+        Poll::Ready(frame)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.body.size_hint()
+    }
+}
+
+impl Drop for Recorded {
+    /// Ends the record before the inner body drops; every fact the inner layers know is already in the record's facts.
+    fn drop(&mut self) {
+        let unpolled = !self.can_have_body || self.body.is_end_stream() || self.body.size_hint().exact() == Some(0);
+        self.record.end(if unpolled { Ending::Clean } else { Ending::Cut });
     }
 }

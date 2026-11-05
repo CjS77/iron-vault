@@ -4,7 +4,7 @@ use super::*;
 use crate::logging::tests::{capture, parse};
 use crate::request_server::FormViolation;
 
-const ALL_REASONS: [ReasonCode; 34] = [
+const ALL_REASONS: [ReasonCode; 42] = [
     ReasonCode::ConnectNotSupported,
     ReasonCode::NotOriginForm,
     ReasonCode::UpgradeNotSupported,
@@ -37,6 +37,14 @@ const ALL_REASONS: [ReasonCode; 34] = [
     ReasonCode::UpstreamTls,
     ReasonCode::UpstreamProtocol,
     ReasonCode::UpstreamBody,
+    ReasonCode::UnsupportedCoding,
+    ReasonCode::RedirectRefused,
+    ReasonCode::BodyCorrupt,
+    ReasonCode::BodyTruncated,
+    ReasonCode::BodySizeLimit,
+    ReasonCode::BodyRatioLimit,
+    ReasonCode::BodyEncode,
+    ReasonCode::Deadline,
     ReasonCode::CallerGone,
     ReasonCode::ServiceClosed,
 ];
@@ -87,6 +95,7 @@ fn a_refused_request_writes_one_failure_event_with_only_the_facts_known_by_then(
         "http_method",
         "status",
         "request_bytes",
+        "response_bytes",
         "duration_ms",
         "outcome",
         "reason",
@@ -175,15 +184,72 @@ fn a_reason_recorded_before_a_drop_is_kept() {
     assert_eq!(event["reason"], "bad_header");
 }
 
+/// A record with a route that relayed a response with `matches` scrub matches and sent `bytes`, answered `200`.
+fn relayed(matches: u64, bytes: u64) -> RequestRecord {
+    let mut record = record();
+    let facts = record.facts();
+    facts.route(&"fx".parse().unwrap(), &"fx-key".parse().unwrap(), &"api.example".parse().unwrap());
+    facts.scrub_matches(matches);
+    record.answered(200);
+    record.sent(bytes);
+    record
+}
+
 #[test]
-fn a_relayed_answer_writes_nothing_here() {
-    assert!(
-        events(|| {
-            let mut record = record();
-            record.answered(200);
-        })
-        .is_empty()
+fn a_clean_end_is_a_success_written_once() {
+    let event = the_event(|| {
+        let mut record = relayed(0, 12);
+        record.end(Ending::Clean);
+        record.end(Ending::Cut);
+    });
+    assert_eq!(
+        (
+            event["outcome"].as_str(),
+            event["status"].as_u64(),
+            event["response_bytes"].as_u64()
+        ),
+        (Some("success"), Some(200), Some(12))
     );
+    assert_eq!(event["scrubbed"], false);
+    assert!(event.get("reason").is_none(), "{event}");
+}
+
+#[test]
+fn a_cut_after_the_head_keeps_the_status_and_says_who_closed_it() {
+    let event = the_event(|| relayed(0, 3).end(Ending::Cut));
+    assert_eq!(
+        (event["status"].as_u64(), event["reason"].as_str()),
+        (Some(200), Some("caller_gone"))
+    );
+    let event = the_event(|| {
+        let mut record = relayed(0, 3);
+        record.facts().refuse(ReasonCode::BodyTruncated);
+        drop(record);
+    });
+    assert_eq!(event["reason"], "body_truncated");
+}
+
+#[test]
+fn a_scrubbed_response_also_writes_the_scrub_event_with_the_request_id() {
+    let out = capture(|| drop(relayed(3, 0)));
+    let records: Vec<_> = out.lines().map(parse).collect();
+    assert_eq!(records.len(), 2, "{out}");
+    let (request, scrub) = (&records[0], &records[1]);
+    assert_eq!(
+        (request["scrubbed"].as_bool(), scrub["event"].as_str()),
+        (Some(true), Some("response.scrubbed"))
+    );
+    assert_eq!((scrub["matches"].as_u64(), &scrub["request_id"]), (Some(3), &request["request_id"]));
+}
+
+#[test]
+fn a_replaced_answer_drops_the_scrub_flag_and_event() {
+    let event = the_event(|| {
+        let record = relayed(2, 0);
+        record.replace_answer(ReasonCode::RequestTooLarge);
+        record.facts().scrub_matches(5);
+    });
+    assert!(event.get("scrubbed").is_none(), "{event}");
 }
 
 #[test]
@@ -259,4 +325,15 @@ fn each_other_source_maps_to_its_reason() {
     ];
     form.into_iter()
         .for_each(|(violation, label)| assert_eq!(ReasonCode::from(violation).as_str(), label));
+    let relay = [
+        (RelayFailure::Corrupt, "body_corrupt"),
+        (RelayFailure::Truncated, "body_truncated"),
+        (RelayFailure::SizeLimit, "body_size_limit"),
+        (RelayFailure::RatioLimit, "body_ratio_limit"),
+        (RelayFailure::Encode, "body_encode"),
+        (RelayFailure::Upstream, "upstream_body"),
+    ];
+    relay
+        .into_iter()
+        .for_each(|(failure, label)| assert_eq!(ReasonCode::from(failure).as_str(), label));
 }

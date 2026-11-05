@@ -2,7 +2,7 @@
 
 use iron_vault_policy::{CredentialName, RouteName};
 
-use super::{AUDIT_TARGET, AuditEvent, EventName};
+use super::{AUDIT_TARGET, AuditEvent, EventName, RequestId};
 
 /// `route.pinned-ca-unavailable`: a route's pinned CA could not be loaded, so the route is unavailable. Neither the
 /// path, the PEM bytes nor the load error is recorded.
@@ -27,9 +27,11 @@ impl AuditEvent for PinnedCaUnavailable<'_> {
 }
 
 /// `response.scrubbed` (glossary: *Scrub event*): a scrub pattern matched in a relayed response. It counts matches and
-/// never records the matched bytes.
+/// never records the matched bytes. The request record writes it beside the request event.
 #[derive(Debug, Clone, Copy)]
 pub struct ResponseScrubbed<'a> {
+    /// The request whose response was scrubbed.
+    pub request_id: RequestId,
     /// The route that relayed the response.
     pub route: &'a RouteName,
     /// The credential whose secret matched.
@@ -45,6 +47,7 @@ impl AuditEvent for ResponseScrubbed<'_> {
         tracing::warn!(
             target: AUDIT_TARGET,
             event = Self::NAME.as_str(),
+            request_id = self.request_id.to_string().as_str(),
             route = self.route.as_str(),
             credential = self.credential.as_str(),
             matches = self.matches,

@@ -3,10 +3,9 @@
 //!
 //! The request server owns the event. It makes a [`RequestRecord`] for each request it receives and gives the handler a
 //! [`RequestFacts`] handle to fill in what it learns: the caller, the route and why it refused. The record is the only
-//! thing that writes the event, from its `Drop`, so a request that ends in any way writes it exactly once.
-//!
-//! A request answered by relaying an upstream response has no reason when its record drops, and writes nothing here:
-//! that event is written once the relayed body ends, with the outcome, the scrub flag and the response byte count.
+//! thing that writes the event. It travels in the outermost response body and writes the event when that body ends or
+//! is dropped, or from its own `Drop` when no response was ever produced, so a request that ends in any way writes it
+//! exactly once.
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,9 +15,11 @@ use std::time::Instant;
 use iron_vault_policy::{AssembleError, AuthzError, CallerName, ChargeError, CredentialName, Host, ListenerName, Refusal, RouteName};
 use uuid::Uuid;
 
+use super::route::ResponseScrubbed;
 use super::{AUDIT_TARGET, AuditEvent, EventName};
 use crate::connection_tags::ServiceClose;
 use crate::pipeline::PipelineRefusal;
+use crate::proxy_handler::RelayFailure;
 use crate::service_state::UnavailableReason;
 use crate::upstream::transport_error::TransportError;
 
@@ -84,6 +85,14 @@ pub enum ReasonCode {
     UpstreamTls,
     UpstreamProtocol,
     UpstreamBody,
+    UnsupportedCoding,
+    RedirectRefused,
+    BodyCorrupt,
+    BodyTruncated,
+    BodySizeLimit,
+    BodyRatioLimit,
+    BodyEncode,
+    Deadline,
     CallerGone,
     ServiceClosed,
 }
@@ -124,6 +133,14 @@ impl ReasonCode {
             Self::UpstreamTls => "upstream_tls",
             Self::UpstreamProtocol => "upstream_protocol",
             Self::UpstreamBody => "upstream_body",
+            Self::UnsupportedCoding => "unsupported_coding",
+            Self::RedirectRefused => "redirect_refused",
+            Self::BodyCorrupt => "body_corrupt",
+            Self::BodyTruncated => "body_truncated",
+            Self::BodySizeLimit => "body_size_limit",
+            Self::BodyRatioLimit => "body_ratio_limit",
+            Self::BodyEncode => "body_encode",
+            Self::Deadline => "deadline",
             Self::CallerGone => "caller_gone",
             Self::ServiceClosed => "service_closed",
         }
@@ -149,6 +166,19 @@ impl From<TransportError> for ReasonCode {
             TransportError::Tls => Self::UpstreamTls,
             TransportError::Protocol => Self::UpstreamProtocol,
             TransportError::Body => Self::UpstreamBody,
+        }
+    }
+}
+
+impl From<RelayFailure> for ReasonCode {
+    fn from(failure: RelayFailure) -> Self {
+        match failure {
+            RelayFailure::Corrupt => Self::BodyCorrupt,
+            RelayFailure::Truncated => Self::BodyTruncated,
+            RelayFailure::SizeLimit => Self::BodySizeLimit,
+            RelayFailure::RatioLimit => Self::BodyRatioLimit,
+            RelayFailure::Encode => Self::BodyEncode,
+            RelayFailure::Upstream => Self::UpstreamBody,
         }
     }
 }
@@ -190,6 +220,8 @@ struct State {
     credential: Option<CredentialName>,
     upstream_host: Option<Host>,
     reason: Option<ReasonCode>,
+    /// Scrub matches in the relayed response so far, once the handler built one; `None` when it relayed nothing.
+    scrub_matches: Option<u64>,
     /// Set when the request server replaces the handler's answer; the handler's later facts are ignored.
     sealed: bool,
 }
@@ -242,6 +274,15 @@ impl RequestFacts {
         }
     }
 
+    /// The running total of scrub matches in the relayed response's headers and body, recorded as they are found so a
+    /// body that fails or is dropped mid-stream still reports them.
+    pub fn scrub_matches(&self, total: u64) {
+        let mut state = self.state();
+        if !state.sealed {
+            state.scrub_matches = Some(total);
+        }
+    }
+
     /// Counts `bytes` of the request body read from the caller.
     pub fn add_request_bytes(&self, bytes: u64) {
         self.0.request_bytes.fetch_add(bytes, Ordering::Relaxed);
@@ -266,11 +307,22 @@ impl RequestFacts {
         let mut state = self.state();
         state.reason = Some(reason);
         state.upstream_host = None;
+        state.scrub_matches = None;
         state.sealed = true;
     }
 }
 
-/// One request's record, made when the request server receives it. It writes the request event when dropped.
+/// How the response body carrying a record ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ending {
+    /// The body reached its end, or was dropped unpolled because it had nothing to send.
+    Clean,
+    /// The body failed, or was dropped before its end; with no reason recorded, the caller or the service closed it.
+    Cut,
+}
+
+/// One request's record, made when the request server receives it. It writes the request event once: when the response
+/// body carrying it ends, or when it is dropped.
 #[derive(Debug)]
 pub struct RequestRecord {
     facts: RequestFacts,
@@ -279,6 +331,8 @@ pub struct RequestRecord {
     started: Instant,
     service_close: ServiceClose,
     status: Option<u16>,
+    response_bytes: u64,
+    written: bool,
 }
 
 impl RequestRecord {
@@ -296,6 +350,8 @@ impl RequestRecord {
             started: Instant::now(),
             service_close,
             status: None,
+            response_bytes: 0,
+            written: false,
         }
     }
 
@@ -320,7 +376,43 @@ impl RequestRecord {
         self.status = Some(status);
     }
 
-    /// Why a request with no recorded reason and no response ended: the service closed its connection, or the caller did.
+    /// Counts `bytes` of the response body handed to hyper.
+    pub fn sent(&mut self, bytes: u64) {
+        self.response_bytes = self.response_bytes.saturating_add(bytes);
+    }
+
+    /// Writes the request event, and the scrub event when a pattern matched in the relayed response, unless they were
+    /// written already. A cut with no reason recorded is the caller's or the service's close.
+    pub fn end(&mut self, ending: Ending) {
+        if std::mem::replace(&mut self.written, true) {
+            return;
+        }
+        let state = self.facts.state();
+        let reason = state.reason.or_else(|| (ending == Ending::Cut).then(|| self.dropped_reason()));
+        RequestEvent {
+            id: self.facts.id(),
+            listener: &self.listener,
+            http_method: &self.http_method,
+            state: &state,
+            status: self.status,
+            request_bytes: self.facts.0.request_bytes.load(Ordering::Relaxed),
+            response_bytes: self.response_bytes,
+            duration_ms: self.duration_ms(),
+            reason,
+        }
+        .emit();
+        if let (Some(matches @ 1..), Some(route), Some(credential)) = (state.scrub_matches, &state.route, &state.credential) {
+            ResponseScrubbed {
+                request_id: self.facts.id(),
+                route,
+                credential,
+                matches,
+            }
+            .emit();
+        }
+    }
+
+    /// Why a request with no recorded reason ended before its body did: the service closed its connection, or the caller did.
     fn dropped_reason(&self) -> ReasonCode {
         match self.service_close.is_set() {
             true => ReasonCode::ServiceClosed,
@@ -334,24 +426,9 @@ impl RequestRecord {
 }
 
 impl Drop for RequestRecord {
-    /// Writes the event unless the request was answered by a relayed response, whose body writes it when it ends.
+    /// Writes the event if no body ending has: the record was dropped before a response existed, or with its body.
     fn drop(&mut self) {
-        let state = self.facts.state();
-        let reason = state.reason.or_else(|| self.status.is_none().then(|| self.dropped_reason()));
-        if reason.is_none() {
-            return;
-        }
-        RequestEvent {
-            id: self.facts.id(),
-            listener: &self.listener,
-            http_method: &self.http_method,
-            state: &state,
-            status: self.status,
-            request_bytes: self.facts.0.request_bytes.load(Ordering::Relaxed),
-            duration_ms: self.duration_ms(),
-            reason,
-        }
-        .emit();
+        self.end(Ending::Cut);
     }
 }
 
@@ -363,6 +440,7 @@ struct RequestEvent<'a> {
     state: &'a State,
     status: Option<u16>,
     request_bytes: u64,
+    response_bytes: u64,
     duration_ms: u64,
     reason: Option<ReasonCode>,
 }
@@ -385,7 +463,9 @@ impl AuditEvent for RequestEvent<'_> {
             upstream_host = upstream_host.as_deref(),
             status = self.status.map(u64::from),
             request_bytes = self.request_bytes,
+            response_bytes = self.response_bytes,
             duration_ms = self.duration_ms,
+            scrubbed = state.scrub_matches.map(|matches| matches > 0),
             outcome = if self.reason.is_some() { "failure" } else { "success" },
             reason = self.reason.map(ReasonCode::as_str),
             "request completed",

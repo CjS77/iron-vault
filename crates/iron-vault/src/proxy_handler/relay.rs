@@ -19,17 +19,16 @@ use hyper::header::{CONNECTION, HeaderMap, HeaderName as HttpHeaderName, HeaderV
 use hyper::{Response, StatusCode};
 use iron_vault_kinds::ScrubPatterns;
 use iron_vault_policy::reserved_headers::HOP_BY_HOP_HEADERS;
-use iron_vault_policy::{CredentialName, HeaderName, Limits, LocationRewrite, Method, RouteConfig, RouteName, rewrite_location};
+use iron_vault_policy::{HeaderName, Limits, LocationRewrite, Method, RouteConfig, rewrite_location};
 use url::Url;
 
-use crate::audit::AuditEvent;
-use crate::audit::route::ResponseScrubbed;
+use crate::audit::{ReasonCode, RequestFacts};
 use crate::content_coding::{
     BudgetExceeded, ContentCoding, DecodeError, DecompressionBudget, EncodeError, ResponseDecoder, ResponseEncoder, choose_emitted,
     parse_content_encoding, rewrite_headers,
 };
 use crate::pipeline::RefusalResponse;
-use crate::request_server::{BoxError, ResponseBody};
+use crate::request_server::{BoxError, ResponseBody, has_no_body};
 use crate::scrub::{Scrubber, scrub_headers};
 use crate::upstream::client::{ResponseChunks, UpstreamResponse};
 
@@ -39,10 +38,8 @@ pub(crate) struct ResponseContext {
     pub(crate) method: Method,
     /// The forms of the injected secret to scrub; the response body owns them until it ends.
     pub(crate) patterns: ScrubPatterns,
-    /// The route the request was authorized on, for the scrub and failure events.
-    pub(crate) route: RouteName,
-    /// The credential injected, for the scrub event.
-    pub(crate) credential: CredentialName,
+    /// Where the response's refusal or failure reason and its scrub matches are recorded, for the request event.
+    pub(crate) facts: RequestFacts,
     /// The caller's own `Accept-Encoding`, which was never forwarded, for choosing the coding the caller gets.
     pub(crate) accept_encoding: Option<HttpHeaderValue>,
     /// The operational limits, for the decompression budget.
@@ -53,7 +50,8 @@ pub(crate) struct ResponseContext {
 /// `Location` rewritten, then scrubbed, then rewritten to describe the emitted body, and its body as a [`RelayedBody`].
 /// `token_header` is the caller-token header of the listener the request arrived on. `route` and `request_url` (the URL
 /// actually sent, which may hold the secret) decide the `Location`. A response whose coding the service cannot screen,
-/// or a `Location` that must not reach the caller, is refused with `502` and its body dropped unread.
+/// or a `Location` that must not reach the caller, is refused with `502` and its body dropped unread; the refusal's
+/// reason is recorded in the context's facts.
 pub(super) fn relay(
     upstream: UpstreamResponse,
     token_header: Option<HeaderName>,
@@ -62,9 +60,13 @@ pub(super) fn relay(
     request_url: &Url,
 ) -> Result<Response<ResponseBody>, RefusalResponse> {
     let (status, mut headers, chunks) = upstream.into_parts();
-    let coding = upstream_coding(&headers, status)?;
+    let refused = |reason| {
+        context.facts.refuse(reason);
+        RefusalResponse::fixed(StatusCode::BAD_GATEWAY.as_u16())
+    };
+    let coding = upstream_coding(&headers, status).map_err(|Unscreenable| refused(ReasonCode::UnsupportedCoding))?;
     strip_headers(&mut headers, token_header.as_ref());
-    rewrite_location_header(&mut headers, &context.route, route, request_url)?;
+    rewrite_location_header(&mut headers, route, request_url).map_err(|RedirectRefused| refused(ReasonCode::RedirectRefused))?;
     let header_matches = scrub_headers(&mut headers, &context.patterns);
     let emitted = choose_emitted(context.accept_encoding.as_ref());
     // A scrub may replace bytes, so a scrubbed body is changed even when no coding is: its length and integrity headers
@@ -73,7 +75,7 @@ pub(super) fn relay(
     // A response with no body gets the headers its `GET` would, so `Content-Encoding` and `Content-Length` describe that
     // body; with nothing to decode or encode it needs neither a decoder nor an encoder.
     rewrite_headers(&mut headers, emitted, body_changed);
-    let codings = match has_no_body(context.method, status) {
+    let codings = match has_no_body(context.method == Method::Head, status) {
         true => BodyCodings::default(),
         false => BodyCodings { upstream: coding, emitted },
     };
@@ -84,50 +86,46 @@ pub(super) fn relay(
     ))
 }
 
-/// The coding the upstream applied to the body, or `502` when the scrubber could not see through it: a content coding
+/// The upstream applied a coding the scrubber cannot see through.
+struct Unscreenable;
+
+/// The upstream's `Location` must not reach the caller.
+struct RedirectRefused;
+
+/// The coding the upstream applied to the body, or [`Unscreenable`] when the scrubber could not see through it: a content coding
 /// [`parse_content_encoding`] refuses, a transfer coding besides `chunked` (the only one hyper removes, so `gzip, chunked`
 /// would reach the scrubber still coded), or a coded `206`.
 ///
 /// Judged before stripping, which drops `Transfer-Encoding` and every header `Connection` names, `Content-Encoding`
 /// included: a coding hidden that way would still be in the body.
-fn upstream_coding(headers: &HeaderMap, status: StatusCode) -> Result<Option<ContentCoding>, RefusalResponse> {
-    let refused = || RefusalResponse::fixed(StatusCode::BAD_GATEWAY.as_u16());
+fn upstream_coding(headers: &HeaderMap, status: StatusCode) -> Result<Option<ContentCoding>, Unscreenable> {
     if !transfer_codings(headers).all(|coding| coding.eq_ignore_ascii_case(b"chunked")) {
-        return Err(refused());
+        return Err(Unscreenable);
     }
-    let coding = parse_content_encoding(headers).map_err(|_| refused())?;
+    let coding = parse_content_encoding(headers).map_err(|_| Unscreenable)?;
     // A byte range of a coded body starts mid-stream, without the coding's header and the window state before it, so it
     // cannot be decoded on its own and the scrubber could not screen it.
     if status == StatusCode::PARTIAL_CONTENT && coding.is_some() {
-        return Err(refused());
+        return Err(Unscreenable);
     }
     Ok(coding)
 }
 
 /// Applies [`rewrite_location`] to the response's `Location`, on any status. Several `Location` headers are ambiguous
-/// and refused like an out-of-base one. The warning names the route and the refusal kind, never the value or a URL.
-fn rewrite_location_header(
-    headers: &mut HeaderMap,
-    name: &RouteName,
-    route: &RouteConfig,
-    request_url: &Url,
-) -> Result<(), RefusalResponse> {
-    let refused = |reason: &dyn std::fmt::Display| {
-        tracing::warn!(route = %name, %reason, "refused an upstream redirect");
-        RefusalResponse::fixed(StatusCode::BAD_GATEWAY.as_u16())
-    };
+/// and refused like an out-of-base one.
+fn rewrite_location_header(headers: &mut HeaderMap, route: &RouteConfig, request_url: &Url) -> Result<(), RedirectRefused> {
     let mut values = headers.get_all(LOCATION).iter();
     let Some(location) = values.next() else {
         return Ok(());
     };
     if values.next().is_some() {
-        return Err(refused(&"more than one Location header"));
+        return Err(RedirectRefused);
     }
     match rewrite_location(route, request_url, location.as_bytes()) {
         LocationRewrite::PassThrough => Ok(()),
-        LocationRewrite::Refused(reason) => Err(refused(&reason)),
+        LocationRewrite::Refused(_) => Err(RedirectRefused),
         LocationRewrite::Rewritten(value) => {
-            let value = HttpHeaderValue::from_bytes(value.as_bytes()).map_err(|_| refused(&"unrepresentable rewritten Location"))?;
+            let value = HttpHeaderValue::from_bytes(value.as_bytes()).map_err(|_| RedirectRefused)?;
             headers.insert(LOCATION, value);
             Ok(())
         }
@@ -164,11 +162,6 @@ fn transfer_codings(headers: &HeaderMap) -> impl Iterator<Item = &[u8]> {
         .flat_map(|value| value.as_bytes().split(|b| *b == b','))
         .map(<[u8]>::trim_ascii)
         .filter(|coding| !coding.is_empty())
-}
-
-/// Whether the response has no body whatever its headers say (RFC 9110 §6.4.1): one to `HEAD`, a `204` or a `304`.
-fn has_no_body(method: Method, status: StatusCode) -> bool {
-    method == Method::Head || matches!(status, StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
 }
 
 fn response(status: StatusCode, headers: HeaderMap, body: RelayedBody) -> Response<ResponseBody> {
@@ -259,17 +252,16 @@ struct BodyCodings {
 ///
 /// A failure is returned as an error, never as the end of the body: a decode error, a truncated coded stream, an
 /// exceeded budget or an upstream body error. The held bytes are dropped unreleased, since they may be a secret prefix,
-/// the failure is logged with the route and its [kind](RelayFailure), and the request server's HTTP stack aborts the
-/// caller's connection instead of finishing the response, so a cut-off body never looks complete.
+/// the failure's [kind](RelayFailure) is recorded as the request's reason, and the request server's HTTP stack aborts
+/// the caller's connection instead of finishing the response, so a cut-off body never looks complete.
 ///
-/// Dropping it raises the scrub event if any pattern matched: drop is the one point every response reaches, whether it
-/// ended, failed or the caller went away, so the event is raised exactly once.
+/// It records its running match count in the request's facts after every poll, so the request record, which writes the
+/// scrub event, sees every match screened before the body ended, failed or was dropped.
 pub struct RelayedBody {
     chunks: ResponseChunks,
     /// `None` once the body has ended or failed, so the patterns are gone with the response.
     stages: Option<Stages>,
-    route: RouteName,
-    credential: CredentialName,
+    facts: RequestFacts,
     /// Matches replaced in the headers, and in the body once the stages are gone.
     matches: u64,
     /// Bytes the scrubber screened, once the body has ended.
@@ -361,11 +353,11 @@ fn len(bytes: &[u8]) -> u64 {
 
 impl RelayedBody {
     fn new(chunks: ResponseChunks, context: ResponseContext, codings: BodyCodings, header_matches: u64) -> Self {
+        context.facts.scrub_matches(header_matches);
         Self {
             chunks,
             stages: Some(Stages::new(context.patterns, &context.limits, codings)),
-            route: context.route,
-            credential: context.credential,
+            facts: context.facts,
             matches: header_matches,
             decoded: 0,
             ended: false,
@@ -414,9 +406,9 @@ impl RelayedBody {
     }
 
     /// Drops the stages without releasing the scrubber's held bytes, keeping its match count for the scrub event, and
-    /// logs the failure. Returns `failure` for the caller to pass on.
+    /// records the failure as the request's reason. Returns `failure` for the caller to pass on.
     fn fail(&mut self, failure: RelayFailure) -> RelayFailure {
-        tracing::warn!(route = %self.route, reason = %failure, "aborted a response body after its head was sent");
+        self.facts.refuse(failure.into());
         self.matches = self.total_matches();
         self.stages = None;
         failure
@@ -429,6 +421,16 @@ impl Body for RelayedBody {
 
     fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, RelayFailure>>> {
         let this = self.get_mut();
+        let frame = this.poll_stages(cx);
+        this.facts.scrub_matches(this.total_matches());
+        frame
+    }
+}
+
+impl RelayedBody {
+    /// The next frame through the body stages.
+    fn poll_stages(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, RelayFailure>>> {
+        let this = self;
         loop {
             let Some(stages) = this.stages.as_mut() else {
                 return Poll::Ready(None);
@@ -457,20 +459,6 @@ impl Body for RelayedBody {
     }
 }
 
-impl Drop for RelayedBody {
-    fn drop(&mut self) {
-        let matches = self.total_matches();
-        if matches > 0 {
-            ResponseScrubbed {
-                route: &self.route,
-                credential: &self.credential,
-                matches,
-            }
-            .emit();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::task::Waker;
@@ -478,6 +466,8 @@ mod tests {
     use hyper::header::HeaderValue;
 
     use super::*;
+    use crate::audit::RequestRecord;
+    use crate::connection_tags::ServiceClose;
     use crate::content_coding::PIECE_SIZE;
 
     /// A relayed body over `chunks` in `codings` with no scrub patterns, after `header_matches` matches in the headers.
@@ -485,8 +475,7 @@ mod tests {
         let context = ResponseContext {
             method: Method::Get,
             patterns: ScrubPatterns::default(),
-            route: "fx".parse().unwrap(),
-            credential: "fx_key".parse().unwrap(),
+            facts: RequestRecord::new("local".parse().unwrap(), "GET", ServiceClose::default()).facts(),
             accept_encoding: None,
             limits,
         };
@@ -710,14 +699,5 @@ mod tests {
         ]
         .iter()
         .for_each(|(pairs, status)| assert!(upstream_coding(&headers(pairs), *status).is_err(), "{pairs:?} {status}"));
-    }
-
-    #[test]
-    fn head_204_and_304_have_no_body() {
-        assert!(has_no_body(Method::Head, StatusCode::OK));
-        assert!(has_no_body(Method::Get, StatusCode::NO_CONTENT));
-        assert!(has_no_body(Method::Get, StatusCode::NOT_MODIFIED));
-        assert!(!has_no_body(Method::Get, StatusCode::OK));
-        assert!(!has_no_body(Method::Post, StatusCode::CREATED));
     }
 }

@@ -296,6 +296,7 @@ async fn no_token_query_or_header_value_reaches_the_record() {
         "upstream_host",
         "status",
         "request_bytes",
+        "response_bytes",
         "duration_ms",
         "outcome",
         "reason",

@@ -8,6 +8,7 @@ use bytes::Bytes;
 use hyper::body::{Body, Frame, SizeHint};
 use tokio_util::sync::WaitForCancellationFutureOwned;
 
+use crate::audit::{ReasonCode, RequestFacts};
 use crate::request_server::{BoxError, ResponseBody};
 use crate::serving_snapshot::ServingSnapshot;
 
@@ -17,8 +18,8 @@ use crate::serving_snapshot::ServingSnapshot;
 #[error("the serving snapshot was withdrawn")]
 struct Withdrawn;
 
-/// `inner` until `withdrawn` completes, then an error. The withdrawal is checked before the inner body on every poll,
-/// so a withdrawn snapshot releases no further bytes.
+/// `inner` until `withdrawn` completes, then an error, recorded as the request's `withdrawn` reason. The withdrawal is
+/// checked before the inner body on every poll, so a withdrawn snapshot releases no further bytes.
 ///
 /// It holds the snapshot for as long as it lives, because `inner` owns the request's secret patterns (the scrubber's)
 /// and a lock waits for the snapshot to drop before it reports the secrets cleared. `snapshot` is declared after
@@ -26,15 +27,17 @@ struct Withdrawn;
 pub(super) struct UntilWithdrawn {
     inner: ResponseBody,
     withdrawn: Pin<Box<WaitForCancellationFutureOwned>>,
+    facts: RequestFacts,
     /// Never read: held so the snapshot outlives the body.
     _snapshot: Arc<ServingSnapshot>,
 }
 
 impl UntilWithdrawn {
-    pub(super) fn new(inner: ResponseBody, snapshot: Arc<ServingSnapshot>) -> Self {
+    pub(super) fn new(inner: ResponseBody, snapshot: Arc<ServingSnapshot>, facts: RequestFacts) -> Self {
         Self {
             inner,
             withdrawn: Box::pin(snapshot.withdrawn()),
+            facts,
             _snapshot: snapshot,
         }
     }
@@ -46,7 +49,10 @@ impl Body for UntilWithdrawn {
 
     fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
         match self.withdrawn.as_mut().poll(cx) {
-            Poll::Ready(()) => Poll::Ready(Some(Err(Box::new(Withdrawn)))),
+            Poll::Ready(()) => {
+                self.facts.refuse(ReasonCode::Withdrawn);
+                Poll::Ready(Some(Err(Box::new(Withdrawn))))
+            }
             Poll::Pending => Pin::new(&mut self.inner).poll_frame(cx),
         }
     }
