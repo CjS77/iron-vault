@@ -34,8 +34,8 @@ use std::time::Instant;
 use iron_vault_kinds::{KindError, ScrubPatterns};
 use iron_vault_policy::{
     ActivePolicy, AssembleError, AuthorizedRequest, AuthzError, CallerName, ChargeError, CheckedRequest, CredentialName, FinalCheckError,
-    HeaderName, HeaderValue, ListenerName, Method, OutgoingHeaders, OutgoingRequest, RateLimiter, RequestTarget, RouteConfig, RouteName,
-    SanitizeError, TargetError, Unauthenticated, UpstreamTarget, authorize, final_check, identify_caller, sanitize,
+    HeaderName, HeaderValue, Host, ListenerName, Method, OutgoingHeaders, OutgoingRequest, RateLimiter, RequestTarget, RouteConfig,
+    RouteName, SanitizeError, TargetError, Unauthenticated, UpstreamTarget, authorize, final_check, identify_caller, sanitize,
 };
 use iron_vault_store::{CredentialRecord, ResolvedCredential};
 
@@ -73,8 +73,8 @@ impl fmt::Debug for RequestHead {
 pub struct Identified {
     /// The caller, once identified.
     pub caller: Option<CallerName>,
-    /// The route the request selected and its credential.
-    pub route: Option<(RouteName, CredentialName)>,
+    /// The route the request selected, its credential and its upstream's host as configured.
+    pub route: Option<(RouteName, CredentialName, Host)>,
 }
 
 /// A request the pipeline accepted: the checked request for the transport, the scrub patterns for its response, and
@@ -218,7 +218,7 @@ fn run(
     // Looked up before sanitizing, so every later refusal can name the route and credential, and before the charge, so
     // nothing that can fail runs after it except resolution onward.
     let route = selected_route(policy, &authorized)?;
-    identified.route = Some((authorized.route().clone(), route.credential().clone()));
+    identified.route = Some(selected(authorized.route(), route));
     let mut headers = sanitize(headers, &token_header(policy, tags.listener())?)?;
     ask_for_decodable_codings(&mut headers);
     charge_and_build(sources, &caller, route, &authorized, headers, now)
@@ -272,15 +272,18 @@ fn authorize_request(policy: &ActivePolicy, caller: &CallerName, method: &str, t
 
 /// The route and credential of an authorization refusal that names its route, so the refusal can still say which route the
 /// caller asked for.
-fn refused_route(policy: &ActivePolicy, refusal: &PipelineRefusal) -> Option<(RouteName, CredentialName)> {
+fn refused_route(policy: &ActivePolicy, refusal: &PipelineRefusal) -> Option<(RouteName, CredentialName, Host)> {
     match refusal {
-        PipelineRefusal::Authz(AuthzError::Forbidden { route, .. } | AuthzError::Unavailable { route }) => policy
-            .config()
-            .routes()
-            .get(route)
-            .map(|config| (route.clone(), config.credential().clone())),
+        PipelineRefusal::Authz(AuthzError::Forbidden { route, .. } | AuthzError::Unavailable { route }) => {
+            policy.config().routes().get(route).map(|config| selected(route, config))
+        }
         _ => None,
     }
+}
+
+/// What the request event says about the selected `route`.
+fn selected(route: &RouteName, config: &RouteConfig) -> (RouteName, CredentialName, Host) {
+    (route.clone(), config.credential().clone(), config.upstream().host().clone())
 }
 
 /// The header that carries a caller token on `listener`, which sanitizing strips.

@@ -120,7 +120,7 @@ async fn proxy(
     let head = request_head(&parts).ok_or_else(|| refused(facts, ReasonCode::BadHeader, StatusCode::BAD_REQUEST))?;
     let mut identified = Identified::default();
     let prepared = prepare(snapshot, tags, head, std::time::Instant::now(), &mut identified);
-    record_identity(facts, snapshot, &identified);
+    record_identity(facts, &identified);
     let prepared = prepared.map_err(|refusal| refuse_pipeline(facts, &refusal))?;
     let unavailable = || refused(facts, ReasonCode::RouteUnavailable, StatusCode::SERVICE_UNAVAILABLE);
     let client = snapshot.clients().for_route(prepared.route()).map_err(|_| unavailable())?;
@@ -146,13 +146,12 @@ async fn proxy(
 }
 
 /// Records the caller and route the pipeline found, with the route's upstream host as configured.
-fn record_identity(facts: &RequestFacts, snapshot: &ServingSnapshot, identified: &Identified) {
+fn record_identity(facts: &RequestFacts, identified: &Identified) {
     identified.caller.iter().for_each(|caller| facts.caller(caller));
-    if let Some((route, credential)) = &identified.route
-        && let Some(config) = snapshot.policy().config().routes().get(route)
-    {
-        facts.route(route, credential, config.upstream().host());
-    }
+    identified
+        .route
+        .iter()
+        .for_each(|(route, credential, host)| facts.route(route, credential, host));
 }
 
 /// The answer to a pipeline refusal. Its reason is recorded, and a service defect also raises its high-severity event.

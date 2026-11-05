@@ -46,7 +46,8 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use crate::audit::{ReasonCode, RequestFacts, RequestRecord};
-pub use crate::connection_tags::{ConnectionTags, ServiceClose};
+pub use crate::connection_tags::ConnectionTags;
+use crate::connection_tags::ServiceClose;
 use crate::library_error::LibraryError;
 use crate::request_listeners::{IncomingConnection, RequestListeners};
 
@@ -240,11 +241,11 @@ impl Connections {
     }
 }
 
-impl Drop for Connections {
-    /// Flags every listener before the sets abort their tasks. A listener task that panics drops its connections without
-    /// closing them, and that is still the service closing them, not the callers.
+impl Drop for ListenerConnections {
+    /// Flags the listener before its tasks abort, on every path that drops it: a close cancelled mid-wait, a listener task
+    /// that panics, or the end of `serve`. Each is the service closing the connections, not the callers.
     fn drop(&mut self) {
-        self.0.values().for_each(|set| set.closing.set());
+        self.closing.set();
     }
 }
 
