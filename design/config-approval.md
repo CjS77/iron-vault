@@ -238,8 +238,8 @@ not yet in place. Finishing a publish in a running service, and not only "on res
 ## Recovery
 
 Every config check runs recovery first. A config check is the work the service does in Checking: after an unlock,
-after a reload, after an approval's commit, and after an authorized repair. It needs the vault identity to open
-`approval.age`, so a locked service recovers when it is unlocked. Recovery reads `approval.age` and never writes it, so
+after a reload, after an approval's commit, after a vault change by `replace` or `rm`, and after an authorized
+repair. It needs the vault identity to open `approval.age`, so a locked service recovers when it is unlocked. Recovery reads `approval.age` and never writes it, so
 loading never advances a counter.
 
 The service context keeps the vault identity from unlock until lock or stop, in Checking, Ready and Unavailable alike.
@@ -423,7 +423,7 @@ adds none:
 
 | `UnavailableReason` (text) | When, in this design |
 |---|---|
-| `Checking` (`checking`) | throughout an approval's admission pause, and throughout a reload |
+| `Checking` (`checking`) | throughout an approval's admission pause, a reload, and the config check after a vault change ([credential-commands.md](credential-commands.md#reaching-serving)) |
 | `RecoveryNeeded` (`recovery needed`) | `approval.age` cannot be loaded; a config file is unreadable before the table (`Unreadable`); recovery rows 5 and 6; an uncertain commit could not be settled; a committed publish could not be finished |
 | `PolicyInvalid` (`policy invalid`) | recovery rows 7 and 8; nothing committed; the published config fails validation or activation |
 | `Locked` (`locked`) | not produced here; the vault is locked |
