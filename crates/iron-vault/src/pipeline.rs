@@ -212,7 +212,9 @@ fn run(
     let RequestHead { method, target, headers } = head;
     let caller = identify_caller(policy, tags.listener(), tags.peer_uid(), &headers)?;
     identified.caller = Some(caller.clone());
-    let authorized = authorize_request(policy, &caller, &method, &target)?;
+    let authorized = authorize_request(policy, &caller, &method, &target).inspect_err(|refusal| {
+        identified.route = refused_route(policy, refusal);
+    })?;
     // Looked up before sanitizing, so every later refusal can name the route and credential, and before the charge, so
     // nothing that can fail runs after it except resolution onward.
     let route = selected_route(policy, &authorized)?;
@@ -266,6 +268,19 @@ fn authorize_request(policy: &ActivePolicy, caller: &CallerName, method: &str, t
     let (path, query) = RequestTarget::parse(target)?.into_parts();
     let method = Method::try_from(method).map_err(|_| PipelineRefusal::Method)?;
     Ok(authorize(policy, caller, &method, &path, query)?)
+}
+
+/// The route and credential of an authorization refusal that names its route, so the refusal can still say which route the
+/// caller asked for.
+fn refused_route(policy: &ActivePolicy, refusal: &PipelineRefusal) -> Option<(RouteName, CredentialName)> {
+    match refusal {
+        PipelineRefusal::Authz(AuthzError::Forbidden { route, .. } | AuthzError::Unavailable { route }) => policy
+            .config()
+            .routes()
+            .get(route)
+            .map(|config| (route.clone(), config.credential().clone())),
+        _ => None,
+    }
 }
 
 /// The header that carries a caller token on `listener`, which sanitizing strips.

@@ -218,6 +218,15 @@ pub(crate) mod tests {
         String::from_utf8(bytes).unwrap_or_default()
     }
 
+    /// Routes this thread's records to the returned reader until the guard drops, for async tests on a current-thread
+    /// runtime, where every task runs on the test's thread.
+    pub(crate) fn capture_here() -> (tracing::subscriber::DefaultGuard, impl Fn() -> String) {
+        let out = Capture::default();
+        let guard = tracing::subscriber::set_default(subscriber(out.clone(), DeploymentProfile::Protected));
+        let read = move || String::from_utf8(out.0.lock().map(|b| b.clone()).unwrap_or_default()).unwrap_or_default();
+        (guard, read)
+    }
+
     pub(crate) fn parse(line: &str) -> serde_json::Value {
         serde_json::from_str(line).expect("valid JSON")
     }

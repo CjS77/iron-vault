@@ -148,10 +148,10 @@ async fn proxy(
 /// Records the caller and route the pipeline found, with the route's upstream host as configured.
 fn record_identity(facts: &RequestFacts, snapshot: &ServingSnapshot, identified: &Identified) {
     identified.caller.iter().for_each(|caller| facts.caller(caller));
-    if let Some((route, credential)) = &identified.route {
-        if let Some(config) = snapshot.policy().route(route) {
-            facts.route(route, credential, config.upstream().host());
-        }
+    if let Some((route, credential)) = &identified.route
+        && let Some(config) = snapshot.policy().config().routes().get(route)
+    {
+        facts.route(route, credential, config.upstream().host());
     }
 }
 

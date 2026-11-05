@@ -20,6 +20,8 @@ pub mod mock_upstream_h2;
 #[cfg(target_os = "linux")]
 pub mod proxy_harness;
 #[cfg(target_os = "linux")]
+pub mod request_log;
+#[cfg(target_os = "linux")]
 pub mod scrub_stream;
 
 /// How long a test waits for one response, or for a test upstream to record something, before failing.

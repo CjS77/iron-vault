@@ -339,3 +339,190 @@ async fn hyper_refuses_conflicting_content_lengths_before_the_handler_runs() {
     assert_eq!(response_of(&running, conflicting).await.0, Some(400));
     assert_eq!(running.calls(), 0);
 }
+
+/// The request events written so far, parsed.
+fn request_events(read: &impl Fn() -> String) -> Vec<serde_json::Value> {
+    read()
+        .lines()
+        .map(crate::logging::tests::parse)
+        .filter(|record| record["target"] == "iron-vault.request")
+        .collect()
+}
+
+/// The one request event, once it has been written.
+async fn the_request_event(read: &impl Fn() -> String) -> serde_json::Value {
+    let found = tokio::time::timeout(WAIT, async {
+        loop {
+            let events = request_events(read);
+            if !events.is_empty() {
+                return events;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("no request event was written");
+    assert_eq!(found.len(), 1, "{found:?}");
+    found.into_iter().next().unwrap()
+}
+
+/// What a request the server refused itself leaves out: the handler never had it, so nothing identifies the caller.
+fn assert_unidentified(event: &serde_json::Value) {
+    ["caller", "route", "credential", "upstream_host"]
+        .iter()
+        .for_each(|key| assert!(event.get(key).is_none(), "{key} in {event}"));
+    assert_eq!(
+        (event["event"].as_str(), event["outcome"].as_str()),
+        (Some("request.completed"), Some("failure"))
+    );
+    assert_eq!(
+        (event["listener"].as_str(), event["http_method"].as_str().is_some()),
+        (Some("a-unix"), true)
+    );
+}
+
+#[tokio::test]
+async fn a_form_refusal_writes_its_request_event() {
+    let (_guard, read) = crate::logging::tests::capture_here();
+    let running = Running::start("", Stub::default());
+    assert_eq!(
+        running.status(b"CONNECT example.com:443 HTTP/1.1\r\nHost: x\r\n\r\n").await,
+        Some(400)
+    );
+    let event = the_request_event(&read).await;
+    assert_unidentified(&event);
+    assert_eq!(
+        (event["status"].as_u64(), event["reason"].as_str()),
+        (Some(400), Some("connect_not_supported"))
+    );
+    assert_eq!(event["http_method"], "CONNECT");
+    assert_eq!(running.calls(), 0);
+}
+
+#[tokio::test]
+async fn a_declared_body_over_the_limit_writes_request_too_large_with_no_body_read() {
+    let (_guard, read) = crate::logging::tests::capture_here();
+    let running = Running::start("max_request_body_bytes = 10", Stub::default());
+    assert_eq!(
+        running
+            .status(b"POST /?k=SECRET HTTP/1.1\r\nHost: x\r\nContent-Length: 11\r\n\r\n")
+            .await,
+        Some(413)
+    );
+    let event = the_request_event(&read).await;
+    assert_unidentified(&event);
+    assert_eq!(
+        (event["status"].as_u64(), event["reason"].as_str()),
+        (Some(413), Some("request_too_large"))
+    );
+    assert_eq!(event["request_bytes"], 0);
+    assert!(!read().contains("SECRET"));
+}
+
+#[tokio::test]
+async fn a_streamed_body_over_the_limit_replaces_the_handlers_answer_and_counts_what_was_read() {
+    let (_guard, read) = crate::logging::tests::capture_here();
+    let running = Running::start("max_request_body_bytes = 10", Stub::default());
+    let over = b"POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\nworld!\r\n0\r\n\r\n";
+    assert_eq!(running.status(over).await, Some(413));
+    let event = the_request_event(&read).await;
+    assert_eq!(
+        (event["status"].as_u64(), event["reason"].as_str()),
+        (Some(413), Some("request_too_large"))
+    );
+    assert_eq!(event["request_bytes"], 5);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_request_unanswered_at_the_deadline_writes_request_timeout() {
+    let (_guard, read) = crate::logging::tests::capture_here();
+    let stalled = Stub {
+        stall: true,
+        ..Stub::default()
+    };
+    let running = Running::start("request_timeout_secs = 1\nupstream_timeout_secs = 1", stalled);
+    assert_eq!(running.status(GET).await, Some(408));
+    let event = the_request_event(&read).await;
+    assert_eq!(
+        (event["status"].as_u64(), event["reason"].as_str()),
+        (Some(408), Some("request_timeout"))
+    );
+    assert_eq!(event["http_method"], "GET");
+}
+
+#[tokio::test]
+async fn a_caller_that_hangs_up_on_a_pending_request_writes_caller_gone_without_a_status() {
+    let (_guard, read) = crate::logging::tests::capture_here();
+    let running = Running::start(
+        "",
+        Stub {
+            stall: true,
+            ..Stub::default()
+        },
+    );
+    let mut stream = running.unix().await;
+    stream.write_all(GET).await.unwrap();
+    wait_for_calls(&running, 1).await;
+    drop(stream);
+    let event = the_request_event(&read).await;
+    assert_eq!(event["reason"], "caller_gone");
+    assert!(event.get("status").is_none(), "{event}");
+}
+
+async fn wait_for_calls(running: &Running, calls: usize) {
+    tokio::time::timeout(WAIT, async {
+        while running.calls() < calls {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the handler never saw the request");
+}
+
+#[tokio::test]
+async fn a_request_cut_off_by_a_service_stop_writes_service_closed() {
+    let (_guard, read) = crate::logging::tests::capture_here();
+    let ca = TestCa::new();
+    let mut setup = ThreeListeners::new();
+    let listeners = setup.open(&ca, 0o600).unwrap();
+    let stub = Arc::new(Stub {
+        stall: true,
+        ..Stub::default()
+    });
+    let server = RequestServer::new(
+        *ParsedConfig::from_toml(b"schema_version = 1\n").unwrap().limits(),
+        Arc::clone(&stub),
+    );
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(async move { server.serve_until(&listeners, async { drop(stopped.await) }).await });
+    let mut stream = UnixStream::connect(setup.unix_path()).await.unwrap();
+    stream.write_all(GET).await.unwrap();
+    tokio::time::timeout(WAIT, async {
+        while stub.calls.load(Ordering::SeqCst) < 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    stop.send(()).unwrap();
+    task.await.unwrap();
+    assert_eq!(the_request_event(&read).await["reason"], "service_closed");
+}
+
+#[tokio::test]
+async fn dropping_the_connections_counts_as_the_service_closing_them() {
+    let (_guard, read) = crate::logging::tests::capture_here();
+    let running = Running::start(
+        "",
+        Stub {
+            stall: true,
+            ..Stub::default()
+        },
+    );
+    let mut stream = running.unix().await;
+    stream.write_all(GET).await.unwrap();
+    wait_for_calls(&running, 1).await;
+    // The serve future owns the `Connections`; aborting it drops them as a panic in the listener task would.
+    running.task.abort();
+    assert_eq!(the_request_event(&read).await["reason"], "service_closed");
+}
