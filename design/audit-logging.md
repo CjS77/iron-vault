@@ -706,6 +706,7 @@ follows the [library error](#library-errors) rule:
 | The uncommitted pending config or staged approval could not be removed (store `approval/transaction.rs` and `approval/recovery.rs`) | Nothing uncommitted is ever promoted; the next config check removes the file and records `config.recovery-discarded` |
 | An approval committed but its publish failed (`service_context/approval.rs`) | `config.approval-completed` is already written, and the config check that finishes the publish records `config.recovery-published` or `config.activation-failed` |
 | An admin connection's accept failed, or an exchange was cancelled or abandoned at shutdown (`admin/server.rs`) | No admin principal was identified, or `admin.command` already records the command |
+| An approval or config check task panicked or was cancelled (`service_context.rs` `log_task_crash`) | It reports a service defect, not an administrative or security fact, and the task fails closed; it stays an `ERROR` diagnostic record for the developer |
 
 ### Event names
 
