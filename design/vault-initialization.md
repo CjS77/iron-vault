@@ -383,6 +383,9 @@ service-generated summary", so this departs from its wording ([open question 3](
 
 ## Logging
 
+These are audit events in the audit log; [audit-logging.md](audit-logging.md#audit-events) gives each one's exact
+field names and types, and the record shape they share.
+
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `vault.init-discarded` | WARN | an unfinished initialization was discarded | the file names removed |
@@ -395,7 +398,7 @@ service-generated summary", so this departs from its wording ([open question 3](
 The two `config.` events are the [audit events](config-approval.md#audit-events) every approval raises (K-118), so
 version 1 is audited like any other. No event carries a passphrase, the recovery key's text, any key material or the
 config bytes. A refusal before any write (`wrong-state`, `already-initialized`, `passphrase-rejected`, `declined`)
-logs only the admin server's usual line: the principal and the command.
+records only the admin server's `admin.command` event: the principal and the command.
 
 ## Open questions
 

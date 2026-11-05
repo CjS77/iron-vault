@@ -531,9 +531,9 @@ command's result.
 
 ## Audit events
 
-Each event has a distinct name, so a reserved version is never mistaken for a completed approval ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). EP-26 adopts
-them for the audit log. Until then they are `tracing` events with these names. None carries config bytes, signature
-bytes, key material or a passphrase.
+Each event has a distinct name, so a reserved version is never mistaken for a completed approval ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). They are
+audit events in the audit log; [audit-logging.md](audit-logging.md#audit-events) gives each one's exact field names and
+types, and the record shape they share. None carries config bytes, signature bytes, key material or a passphrase.
 
 | Event | Level | When | Fields |
 |---|---|---|---|

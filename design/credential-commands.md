@@ -200,16 +200,16 @@ config check, so there is one path that decides what is served.
 
 ## Audit events
 
-Until EP-26 adopts them for the audit log, these are `tracing` events. None carries credential material or the
-approval passphrase.
+These are audit events in the audit log; [audit-logging.md](audit-logging.md#audit-events) gives each one's exact
+field names and types, and the record shape they share. None carries credential material or the approval passphrase.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `credential.replaced` | INFO | the replace committed | name, old and new record IDs, old and new kind and origins (the old ones only for a healthy record) |
 | `credential.removed` | INFO | the remove committed | name, record ID |
 
-A superseded record file the write could not remove is logged at WARN, from the write report; the next vault write
-removes it.
+A superseded record file the write could not remove is recorded as `vault.superseded-left` at WARN, from the write
+report; the next vault write removes it.
 
 ## Open questions
 
