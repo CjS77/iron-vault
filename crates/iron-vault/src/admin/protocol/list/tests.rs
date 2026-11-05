@@ -24,6 +24,14 @@ fn decoded(bytes: &[u8]) -> Result<AdminResponse, FrameError> {
     }
 }
 
+/// The list a decoded response carries. `AdminResponse` has no `PartialEq`, since it can hold a caller token.
+fn listed(response: AdminResponse) -> Option<Vec<CredentialStanding>> {
+    match response {
+        AdminResponse::List { credentials } => credentials,
+        other => panic!("expected a list, got {other:?}"),
+    }
+}
+
 fn encoded(credentials: Option<Vec<CredentialStanding>>) -> Result<Vec<u8>, FrameError> {
     let mut out = Vec::new();
     super::super::encode(&Frame::Response(AdminResponse::List { credentials }), &mut out).map(|()| out)
@@ -73,7 +81,7 @@ proptest! {
     #[test]
     fn a_list_round_trips(credentials in prop::option::of(prop::collection::vec(arbitrary_entry(), 0..5))) {
         let bytes = encoded(credentials.clone()).unwrap();
-        prop_assert_eq!(decoded(&bytes).unwrap(), AdminResponse::List { credentials });
+        prop_assert_eq!(listed(decoded(&bytes).unwrap()), credentials);
     }
 }
 
@@ -83,14 +91,14 @@ fn a_name_of_length_zero_or_sixty_five_is_refused() {
         let mut entries = vec![u8::try_from(len).unwrap()];
         entries.extend(std::iter::repeat_n(b'a', len));
         entries.extend([1, 1, 1, 1, b'h', 0x01, 0xbb]);
-        assert_eq!(decoded(&response_frame(&entries, 1)), Err(INVALID_ENTRIES), "length {len}");
+        assert_eq!(decoded(&response_frame(&entries, 1)).err(), Some(INVALID_ENTRIES), "length {len}");
     }
 }
 
 #[test]
 fn origins_with_an_unknown_kind_are_refused() {
     let entries = [1, b'a', 1, 0, 1, 1, b'h', 0x01, 0xbb];
-    assert_eq!(decoded(&response_frame(&entries, 1)), Err(INVALID_ENTRIES));
+    assert_eq!(decoded(&response_frame(&entries, 1)).err(), Some(INVALID_ENTRIES));
 }
 
 #[test]
@@ -98,26 +106,21 @@ fn a_healthy_entry_without_kind_or_origins_and_a_damaged_one_with_them_are_refus
     let healthy_unknown = [1, b'a', 0, 0, 0];
     let damaged_known = [1, b'a', 1, 1, 1, 1, b'h', 0x01, 0xbb];
     for entries in [&healthy_unknown[..], &damaged_known[..]] {
-        assert_eq!(decoded(&response_frame(entries, 1)), Err(INVALID_ENTRIES));
+        assert_eq!(decoded(&response_frame(entries, 1)).err(), Some(INVALID_ENTRIES));
     }
 }
 
 #[test]
 fn entries_without_an_open_vault_and_a_truncated_entry_are_refused() {
     let one = [1, b'a', 1, 1, 1, 1, b'h', 0x01, 0xbb];
-    assert_eq!(decoded(&response_frame(&one, 0)), Err(INVALID_ENTRIES));
-    assert_eq!(decoded(&response_frame(&one[..8], 1)), Err(INVALID_ENTRIES));
+    assert_eq!(decoded(&response_frame(&one, 0)).err(), Some(INVALID_ENTRIES));
+    assert_eq!(decoded(&response_frame(&one[..8], 1)).err(), Some(INVALID_ENTRIES));
 }
 
 #[test]
 fn a_closed_vault_has_the_flag_clear_and_no_entries() {
-    assert_eq!(decoded(&response_frame(&[], 0)).unwrap(), AdminResponse::List { credentials: None });
-    assert_eq!(
-        decoded(&response_frame(&[], 1)).unwrap(),
-        AdminResponse::List {
-            credentials: Some(Vec::new())
-        }
-    );
+    assert_eq!(listed(decoded(&response_frame(&[], 0)).unwrap()), None);
+    assert_eq!(listed(decoded(&response_frame(&[], 1)).unwrap()), Some(Vec::new()));
 }
 
 #[test]

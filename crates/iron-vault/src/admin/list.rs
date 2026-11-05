@@ -36,10 +36,10 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for List<F> {
 /// partial inventory would hide credentials from the owner.
 fn fit_one_frame(credentials: Option<Vec<CredentialStanding>>) -> AdminResponse {
     let count = credentials.as_ref().map_or(0, Vec::len);
-    let response = AdminResponse::List { credentials };
-    match protocol::encode(&Frame::Response(response.clone()), &mut Vec::new()) {
-        Ok(()) => response,
-        Err(_) => AdminResponse::Error {
+    let frame = Frame::Response(AdminResponse::List { credentials });
+    match (protocol::encode(&frame, &mut Vec::new()), frame) {
+        (Ok(()), Frame::Response(response)) => response,
+        _ => AdminResponse::Error {
             code: ErrorCode::ListTooLarge,
             message: format!(
                 "the list of {count} credentials does not fit one admin frame of {} bytes",
