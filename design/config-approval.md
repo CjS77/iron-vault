@@ -239,8 +239,8 @@ not yet in place. Finishing a publish in a running service, and not only "on res
 
 Every config check runs recovery first. A config check is the work the service does in Checking: after an unlock,
 after a reload, after an approval's commit, after a vault change by `replace` or `rm`, and after an authorized
-repair. It needs the vault identity to open `approval.age`, so a locked service recovers when it is unlocked. Recovery reads `approval.age` and never writes it, so
-loading never advances a counter.
+repair. It needs the vault identity to open `approval.age`, so a locked service recovers when it is unlocked.
+Recovery reads `approval.age` and never writes it, so loading never advances a counter.
 
 The service context keeps the vault identity from unlock until lock or stop, in Checking, Ready and Unavailable alike.
 Every config check opens a new vault from it: on success the vault moves into the serving snapshot, and on failure the
