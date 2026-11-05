@@ -634,7 +634,7 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `7` | `config-invalid` | `config approve`: the proposed config is invalid |
 | `8` | `declined` | the owner declined at a confirmation prompt |
 | `9` | `approval-denied` | `config approve`, `replace`, `rm`: owner presence failed: the approval passphrase did not open the approver key, or the key it opened is not the pinned approver |
-| `10` | `approval-unavailable` | `config approve`: the service cannot run an approval now |
+| `10` | `approval-unavailable` | `config approve`: the service cannot run an approval now; `replace`, `rm`: owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt; nothing was written |
 | `11` | `approval-failed` | `config approve`: failed after reserving a version, before committing it |
 | `12` | `committed-not-active` | `config approve`: committed, but not yet published or active; `replace`, `rm`: the change committed, but the config check after it left the service Unavailable |
 | `13` | `wrong-state` | the command is not allowed in the service's current state; the message names the state |

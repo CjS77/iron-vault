@@ -672,7 +672,7 @@ built from configured names. When the approval moves the log destination, the su
 |---|---|---|---|
 | `credential.added` | INFO | an `add` committed | `credential`, `record_id`, `kind`, `origins` |
 | `credential.replaced` | INFO | a `replace` committed (not yet emitted, K-152) | `credential`, `old_record_id`, `record_id`, `kind`, `origins`; `old_kind`, `old_origins` for a healthy old record |
-| `credential.removed` | INFO | an `rm` committed (not yet emitted, K-151) | `credential`, `record_id` |
+| `credential.removed` | INFO | an `rm` committed | `credential`, `record_id` |
 | `credential.short-secret` | WARN | a record just written has a short secret | `credential`, `secret_field`, `len` |
 | `vault.unindexed-removed` | WARN | a vault write removed an unindexed record file first (from its write report) | `file` |
 | `vault.superseded-left` | WARN | a vault write committed but could not remove the record file it superseded (from its write report) | `file`, `error_kind` |
