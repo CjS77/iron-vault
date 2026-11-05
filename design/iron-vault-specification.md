@@ -92,6 +92,7 @@ compromised desktop.
 | Config approval   | A service-generated signature binding a vault identifier, approval version, and exact configuration hash              |
 | Approval version  | A per-vault unsigned 64-bit counter that strictly increases for every reserved signing attempt                        |
 | Owner             | The person authorized to enroll credentials, approve policy, recover the vault, and authorize destructive changes     |
+| Owner presence    | Proof, collected for one admin exchange, that the owner takes part in it now, through the approval mechanism          |
 | Hardware key      | A removable device, initially a YubiKey, that protects keys and supports PIN and touch policies                       |
 | Source            | The origin of a credential imported into the vault, initially direct entry and later password-manager sync            |
 
