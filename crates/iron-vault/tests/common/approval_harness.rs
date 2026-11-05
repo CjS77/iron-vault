@@ -75,15 +75,20 @@ pub struct Fixture {
 
 impl Fixture {
     pub async fn new() -> Self {
+        Self::with_reply(Reply::Respond {
+            status: 200,
+            headers: Vec::new(),
+            body: b"ok".to_vec(),
+        })
+        .await
+    }
+
+    /// [`new`](Self::new) with an upstream that answers every request with `reply`.
+    pub async fn with_reply(reply: Reply) -> Self {
         let dir = TempDir::new();
         mkdir(&dir.path().join("state"));
         mkdir(&dir.path().join("etc"));
         let ca = TestCa::new("approve test CA");
-        let reply = Reply::Respond {
-            status: 200,
-            headers: Vec::new(),
-            body: b"ok".to_vec(),
-        };
         let upstream = MockUpstream::start(&ca, reply).await;
         let fixture = Self { dir, ca, upstream };
         let mut state = fixture.create_vault();

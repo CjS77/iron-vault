@@ -14,16 +14,21 @@ mod common;
 
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use common::WAIT;
 use common::approval_harness::{
     APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approve, approve_request, captured_logs, converse, error_code, get, identity,
     read_frame, send, serve_admin, the_two_prompts, versions,
 };
+use common::mock_upstream::Reply;
+use common::proxy_harness::{CallerRequest, TOKEN_HEADER, Via};
 use iron_vault::admin::protocol::{AdminResponse, ApprovalResult, ErrorCode, Frame, OwnerInput};
 use iron_vault::service_state::{FailureReason, ServiceEvent, ServiceState};
 use iron_vault_store::ConfigDigest;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
+use tokio::sync::Notify;
 use zeroize::Zeroizing;
 
 #[tokio::test]
@@ -279,4 +284,76 @@ async fn a_lock_and_an_unlock_at_the_prompt_of_an_approval_out_of_an_invalid_pol
     assert_eq!(service.state().await, invalid);
     assert!(!fixture.path("etc/config.toml.pending").exists());
     let _ = stop.send(());
+}
+
+/// The base config with a second Unix listener, `side`, which no caller uses.
+fn with_side_listener(fixture: &Fixture) -> String {
+    let side = fixture.path("side.sock");
+    let config = fixture.config("fx");
+    let (head, rest) = config.split_once("[callers.agent]").unwrap();
+    format!(
+        "{head}[listeners.side]\nunix_socket = \"{}\"\ntoken_header = \"{TOKEN_HEADER}\"\n\n[callers.agent]{rest}",
+        side.display()
+    )
+}
+
+/// Sends the token caller's `GET /fx/latest` on the local listener and reads until `wanted` has arrived.
+async fn start_streaming(fixture: &Fixture, wanted: &str) -> (UnixStream, String) {
+    let mut stream = UnixStream::connect(fixture.socket()).await.unwrap();
+    stream
+        .write_all(&CallerRequest::get("/fx/latest").signed(Via::Unix).to_bytes())
+        .await
+        .unwrap();
+    let mut raw = Vec::new();
+    while !String::from_utf8_lossy(&raw).contains(wanted) {
+        let mut buf = [0u8; 256];
+        let read = tokio::time::timeout(WAIT, stream.read(&mut buf)).await.unwrap().unwrap();
+        assert!(read > 0, "the connection closed before {wanted:?} arrived");
+        raw.extend_from_slice(&buf[..read]);
+    }
+    (stream, String::from_utf8_lossy(&raw).into_owned())
+}
+
+#[tokio::test]
+async fn an_approval_that_drops_a_listener_closes_only_that_socket_and_a_request_on_another_completes() {
+    let gate = Arc::new(Notify::new());
+    let reply = Reply::TwoChunks {
+        first: "data: first\n\n".to_owned(),
+        second: "data: second\n\n".to_owned(),
+        gate: Arc::clone(&gate),
+    };
+    let fixture = Fixture::with_reply(reply).await;
+    let service = fixture.ready().await;
+    let widened = approve(&service, &with_side_listener(&fixture), &["yes", APPROVAL_PASSPHRASE]).await;
+    assert!(
+        matches!(widened.response, AdminResponse::ConfigApprove(_)),
+        "{:?}",
+        widened.response
+    );
+    let mut idle = UnixStream::connect(fixture.path("side.sock")).await.unwrap();
+    let (mut streaming, mut raw) = start_streaming(&fixture, "data: first\n\n").await;
+
+    let narrowed = approve(&service, &fixture.config("fx"), &["yes", APPROVAL_PASSPHRASE]).await;
+
+    assert!(
+        matches!(narrowed.response, AdminResponse::ConfigApprove(_)),
+        "{:?}",
+        narrowed.response
+    );
+    assert!(
+        !fixture.path("side.sock").exists(),
+        "the dropped listener's socket file is still there"
+    );
+    let mut buf = [0u8; 16];
+    let read = tokio::time::timeout(WAIT, idle.read(&mut buf)).await.unwrap();
+    assert!(
+        matches!(read, Ok(0) | Err(_)),
+        "the dropped listener's connection is still open: {read:?}"
+    );
+    gate.notify_one();
+    let mut rest = Vec::new();
+    tokio::time::timeout(WAIT, streaming.read_to_end(&mut rest)).await.unwrap().unwrap();
+    raw.push_str(&String::from_utf8_lossy(&rest));
+    assert!(raw.contains("data: second"), "{raw}");
+    assert!(raw.ends_with("0\r\n\r\n"), "the response did not end cleanly: {raw}");
 }

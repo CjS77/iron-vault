@@ -14,6 +14,7 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -42,7 +43,7 @@ use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{LockOutcome, ServiceContext, ServiceLocks, ServiceSetup, StartError};
 use iron_vault::service_state::{FailureReason, IllegalTransition, ListenerProvenance, ServiceEvent, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, SnapshotHolder};
-use iron_vault::socket_activation::PassedSockets;
+use iron_vault::socket_activation::{AdoptedSocket, PassedSockets};
 use iron_vault::standing::{CredentialStanding, Standing};
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
@@ -240,6 +241,15 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
 
     /// [`start`](Self::start) with the vault and config files read through `fs`.
     fn start_on<F: StoreFs + Send + Sync + 'static>(&self, fs: F) -> Result<Arc<ServiceContext<F>>, StartError> {
+        self.start_passing(fs, PassedSockets::default())
+    }
+
+    /// [`start_on`](Self::start_on) with `passed` as the sockets systemd passed.
+    fn start_passing<F: StoreFs + Send + Sync + 'static>(
+        &self,
+        fs: F,
+        passed: PassedSockets,
+    ) -> Result<Arc<ServiceContext<F>>, StartError> {
         let paths = self.paths();
         let locks = ServiceLocks::acquire(&paths)?;
         locks.sweep_stale_temps(&OsFs);
@@ -256,9 +266,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
                 memory: MemoryProtection::Unsupported,
             },
         };
-        Ok(Arc::new(
-            ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap(),
-        ))
+        Ok(Arc::new(ServiceContext::start(locks, setup, &provisional, passed).unwrap()))
     }
 }
 
@@ -586,6 +594,24 @@ async fn a_verified_listener_the_provisional_set_lacked_is_bound_before_ready() 
     assert_eq!(service.listener_names().await, [listener("local"), listener("wide")]);
     let response = get_tcp(port).await;
     assert_served(&response);
+}
+
+#[tokio::test]
+async fn a_systemd_socket_the_unverified_config_lacks_is_adopted_once_the_verified_config_names_it() {
+    let mut fixture = approved().await;
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    fixture.approve(&fixture.config(&tcp_listener("wide", port)));
+    fixture.swap_config(&fixture.config(""));
+    let passed = PassedSockets::from(BTreeMap::from([(listener("wide"), AdoptedSocket::Tcp(socket))]));
+    let service = fixture.start_passing(OsFs, passed).unwrap();
+    assert_eq!(service.listener_names().await, [listener("local")]);
+
+    assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
+
+    // The passed socket holds the port, so the service could not have bound it itself: serving on it is adoption.
+    assert_eq!(service.listener_names().await, [listener("local"), listener("wide")]);
+    assert_served(&get_tcp(port).await);
 }
 
 #[tokio::test]
@@ -1465,6 +1491,39 @@ async fn a_reload_after_one_byte_of_whitespace_goes_unavailable_on_a_digest_mism
     fs::write(fixture.path("etc/config.toml"), edited).unwrap();
 
     assert_reload_fails(&fixture, &service, &before).await;
+}
+
+#[tokio::test]
+async fn a_response_streaming_through_a_reload_that_keeps_the_listeners_finishes_on_the_old_snapshot() {
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let reply = Reply::TwoChunks {
+        first: "data: first\n\n".to_owned(),
+        second: "data: second\n\n".to_owned(),
+        gate: Arc::clone(&gate),
+    };
+    let mut fixture = Fixture::with_reply(reply).await;
+    fixture.approve(&fixture.config(""));
+    let service = ready_service(&fixture).await;
+    let old = served_snapshot(&service);
+    let (mut stream, mut raw) = start_streaming(&fixture.socket(), "data: first\n\n").await;
+
+    assert_eq!(service.reload().await, Ok(ServiceState::Ready));
+
+    assert!(
+        !std::sync::Weak::ptr_eq(&old, &served_snapshot(&service)),
+        "the reload served no new snapshot"
+    );
+    assert!(
+        old.upgrade().is_some(),
+        "the streaming response lost the snapshot it was admitted to"
+    );
+    gate.notify_one();
+    let mut rest = Vec::new();
+    tokio::time::timeout(WAIT, stream.read_to_end(&mut rest)).await.unwrap().unwrap();
+    raw.push_str(&String::from_utf8_lossy(&rest));
+    assert!(raw.contains("data: second"), "{raw}");
+    assert!(raw.ends_with("0\r\n\r\n"), "the response did not end cleanly: {raw}");
+    eventually(|| old.upgrade().is_none().then_some(())).await;
 }
 
 #[tokio::test]
