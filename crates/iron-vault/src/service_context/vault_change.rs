@@ -142,26 +142,31 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
 }
 
 /// Records a committed `replace` or `rm` as its audit event (design/audit-logging.md), from the summary the owner
-/// approved, which alone holds the old record with the new kind and origins. Only a healthy old record's kind and
-/// origins are known.
+/// approved, which alone holds the old record with the new kind and origins. The planned change decides the event: a
+/// planned replace commits only as a replace, so it never logs a removal.
 fn log_committed(summary: &VaultChangeSummary, changed: &CredentialChanged) {
-    let (name, old_record_id) = (summary.change().name(), summary.current().record_id);
-    let (record_id, kind, origins) = match (changed, summary.change()) {
-        (CredentialChanged::Replaced(record_id), PlannedChange::Replace { kind, origins, .. }) => {
-            (record_id, kind, origins_text(origins.iter()))
+    match (summary.change(), changed) {
+        (PlannedChange::Remove(name), _) => log_removed(name, summary.current().record_id),
+        (PlannedChange::Replace { name, kind, origins }, CredentialChanged::Replaced(record_id)) => {
+            log_replaced(name, summary.current(), *record_id, kind, origins)
         }
-        // A removal's write is planned only as a removal; the second arm cannot be reached.
-        (CredentialChanged::Removed, _) | (CredentialChanged::Replaced(_), PlannedChange::Remove(_)) => {
-            tracing::info!(
-                event = "credential.removed",
-                credential = %name,
-                record_id = %old_record_id,
-                "credential `{name}` removed; no active route used it",
-            );
-            return;
-        }
-    };
-    match &summary.current().summary {
+        (PlannedChange::Replace { .. }, CredentialChanged::Removed) => {}
+    }
+}
+
+fn log_removed(name: &CredentialName, record_id: RecordId) {
+    tracing::info!(
+        event = "credential.removed",
+        credential = %name,
+        record_id = %record_id,
+        "credential `{name}` removed; no active route used it",
+    );
+}
+
+/// Only a healthy old record's kind and origins are known.
+fn log_replaced(name: &CredentialName, old: &CurrentRecord, record_id: RecordId, kind: &CredentialKind, origins: &PermittedOrigins) {
+    let (old_record_id, origins) = (old.record_id, origins_text(origins.iter()));
+    match &old.summary {
         Some(old) => tracing::info!(
             event = "credential.replaced",
             credential = %name,
