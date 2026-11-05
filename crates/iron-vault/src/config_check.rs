@@ -26,6 +26,7 @@ use iron_vault_store::{
     StoreFs, Vault, VaultError, VaultIdentity, recover_approval,
 };
 
+use crate::audit::config::{record_recovery, record_unverified_publish};
 use crate::audit::corruption::open_vault;
 use crate::audit::{AuditEvent, CheckFailed};
 use crate::deployment::DeploymentProfile;
@@ -362,7 +363,10 @@ fn run(
     accounts: &impl AccountDirectory,
     upstream: &UpstreamSettings,
 ) -> Result<ServingSnapshot, CheckFailure> {
-    let recovered = recover_approval(config_dir, fs, state).map_err(CheckFailure::Recovery)?;
+    let recovered = recover_approval(config_dir, fs, state)
+        .inspect_err(record_unverified_publish)
+        .map_err(CheckFailure::Recovery)?;
+    record_recovery(&recovered);
     let policy = activate_config(recovered.published().config(), capabilities, &vault, accounts).map_err(CheckFailure::Config)?;
     let clients = upstream
         .clients(&policy)

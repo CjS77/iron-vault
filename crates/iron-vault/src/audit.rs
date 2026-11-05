@@ -8,9 +8,11 @@
 //! The record's constant fields are the formatter's job ([`crate::logging::RecordFormat`]), so no event may use one of
 //! [`CONSTANT_FIELDS`] as a field name.
 
-// `service.started` names the log destination, which only Linux has.
+#[cfg(test)]
+mod config_events_tests;
 #[cfg(test)]
 mod corruption_tests;
+// `service.started` names the log destination, which only Linux has.
 #[cfg(test)]
 #[cfg(target_os = "linux")]
 mod tests;
@@ -18,6 +20,7 @@ mod tests;
 mod vault_events_tests;
 
 pub mod admin;
+pub mod config;
 pub mod corruption;
 pub mod credential;
 pub mod route;
@@ -26,7 +29,6 @@ pub mod vault;
 mod request;
 pub use request::{Ending, REQUEST_TARGET, ReasonCode, RequestFacts, RequestId, RequestRecord};
 
-use iron_vault_policy::ApprovalSummary;
 use iron_vault_store::{ApprovalError, ApprovalFailure, ApprovalStep, ApprovalVersion, ConfigDigest};
 
 use crate::config_check::{CheckFailure, InvalidConfig};
@@ -207,8 +209,9 @@ pub struct ApprovalCompleted<'a> {
     pub version: ApprovalVersion,
     /// The approved config's digest.
     pub digest: ConfigDigest,
-    /// The approval summary the owner confirmed; its configured names are already escaped.
-    pub summary: &'a ApprovalSummary,
+    /// The approval summary the owner confirmed, rendered; its configured names are already escaped. Init's version 1
+    /// has no summary but `initial config`.
+    pub summary: &'a str,
 }
 
 impl AuditEvent for ApprovalCompleted<'_> {
@@ -220,7 +223,7 @@ impl AuditEvent for ApprovalCompleted<'_> {
             event = Self::NAME.as_str(),
             version = self.version.get(),
             config_digest = self.digest.to_string().as_str(),
-            summary = self.summary.render().as_str(),
+            summary = self.summary,
             "config approval completed",
         );
     }

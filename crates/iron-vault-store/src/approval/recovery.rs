@@ -111,6 +111,8 @@ pub enum ApprovalRecoveryError {
     PublishNotVerified {
         /// The committed version.
         version: ApprovalVersion,
+        /// The renames that ran.
+        renames: PublishSet,
         /// Why the published pair does not verify.
         published: PublishedPairFault,
     },
@@ -135,6 +137,9 @@ pub struct DiscardedFile {
     pub file: ConfigFileName,
     /// For a staged approval signed by the pinned approver for this vault, the version it was signed for.
     pub signed_for: Option<ApprovalVersion>,
+    /// Whether this staged approval was signed for the committed version over another config, which only a second
+    /// signature over that version, or a file the service did not write, produces.
+    pub conflicting: bool,
 }
 
 /// Recovery passed: the published pair verifies as the committed approval, as read back.
@@ -263,11 +268,14 @@ fn publish_committed(
         }
         Err(cause) => return Err(ApprovalRecoveryError::PublishFailed { version, cause }),
     }
-    tracing::warn!(event = "config.recovery-published", %version, renames = ?set, "ran the publish renames of a committed approval");
     let published = PublishedPair::read(config_dir, fs)
         .map_err(PublishedPairFault::from)
         .and_then(|pair| pair.verify(state))
-        .map_err(|published| ApprovalRecoveryError::PublishNotVerified { version, published })?;
+        .map_err(|published| ApprovalRecoveryError::PublishNotVerified {
+            version,
+            renames: set,
+            published,
+        })?;
     Ok(serve_discarding_leftovers(config_dir, fs, state, files, published, Some(set)))
 }
 
@@ -289,51 +297,47 @@ fn serve_discarding_leftovers(
 }
 
 /// Durably removes the pending config and staged approval beside a published pair that verifies, best effort: a
-/// leftover is never promoted, so one left behind is discarded by the next config check. Reports and logs every file
-/// that was removed, even when the removal then failed. The counters are not touched.
+/// leftover is never promoted, so one left behind is discarded by the next config check. Reports every file that was
+/// removed, even when the removal then failed. The counters are not touched.
 fn discard_leftovers(config_dir: &ConfigDirLock, fs: &impl StoreFs, state: &ApprovalState, staged: Option<&[u8]>) -> Vec<DiscardedFile> {
     let removed = remove_pending_and_staged(config_dir, fs).unwrap_or_else(|error| {
-        let removed = &error.removed;
+        let removed = error.removed.iter().map(|file| file.as_str()).collect::<Vec<_>>().join(",");
         tracing::warn!(
-            %error,
-            ?removed,
+            error_kind = %error.cause.error_kind_label(),
+            removed = removed.as_str(),
             "cannot discard all of the uncommitted pending config and staged approval; the next config check retries"
         );
         error.removed
     });
-    let signed_for = || {
-        staged
-            .and_then(|envelope| staged_payload(state, envelope))
-            .map(|payload| payload.version())
-    };
-    let discarded: Vec<_> = removed
+    let staged = staged.and_then(|envelope| staged_payload(state, envelope));
+    removed
         .into_iter()
-        .map(|file| DiscardedFile {
-            file,
-            signed_for: (file == StagedSignature).then(signed_for).flatten(),
+        .map(|file| match (file, &staged) {
+            (StagedSignature, Some(payload)) => DiscardedFile {
+                file,
+                signed_for: Some(payload.version()),
+                conflicting: conflicts_with_committed(state, payload),
+            },
+            _ => DiscardedFile {
+                file,
+                signed_for: None,
+                conflicting: false,
+            },
         })
-        .collect();
-    discarded.iter().for_each(|d| {
-        tracing::info!(event = "config.recovery-discarded", file = %d.file, signed_for = ?d.signed_for.map(ApprovalVersion::get));
-    });
-    discarded
+        .collect()
 }
 
-/// The payload of a staged leftover the pinned approver signed for this vault. Logs at ERROR one that names the
-/// committed version with another digest, which only a misbehaving signer produces.
+/// The payload of a staged leftover the pinned approver signed for this vault.
 fn staged_payload(state: &ApprovalState, envelope: &[u8]) -> Option<ApprovalPayload> {
     let claimed = ApprovalEnvelope::decode(envelope).ok()?.payload().digest();
-    let payload = verify_signed(state, claimed, envelope).ok()?;
-    if state
+    verify_signed(state, claimed, envelope).ok()
+}
+
+/// Whether `payload` names the committed version with another digest, which only a misbehaving signer produces.
+fn conflicts_with_committed(state: &ApprovalState, payload: &ApprovalPayload) -> bool {
+    state
         .committed()
         .is_some_and(|(version, digest)| payload.version() == version && payload.digest() != digest)
-    {
-        let error = VerifyError::DigestNotCommitted {
-            version: payload.version(),
-        };
-        tracing::error!(%error, "discarding a staged approval for the committed version with another config");
-    }
-    Some(payload)
 }
 
 /// The four config files as read once. A missing, oversized or non-regular file is absent for every purpose.

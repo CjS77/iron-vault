@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::dir_lock::lock_file;
 use crate::durable::{ReadFailure, StepFailure, dir_sync_supported, read_in, remove_in, replace_in, unlink_in};
-use crate::{ConfigFileName, LockError, StoreFs, WriteStep};
+use crate::{ConfigFileName, ErrorKindLabel, LockError, StoreFs, WriteStep};
 
 /// Name of the lock file inside the config directory. It is not a [`ConfigFileName`]: no store call may write it.
 const CONFIG_LOCK_FILE: &str = "config.toml.lock";
@@ -72,6 +72,14 @@ pub enum ConfigWriteError {
 }
 
 impl ConfigWriteError {
+    /// The kind of the failure as a label that holds no file name or error text.
+    pub fn error_kind_label(&self) -> ErrorKindLabel {
+        match self {
+            Self::Io { kind, .. } | Self::ListConfigDir { kind } => ErrorKindLabel::from(*kind),
+            Self::TooLarge { .. } => ErrorKindLabel::fixed("too_large"),
+        }
+    }
+
     fn io(file: ConfigFileName) -> impl Fn(StepFailure) -> Self {
         move |f| Self::Io {
             step: f.step,
@@ -136,6 +144,11 @@ pub enum PublishSet {
 }
 
 impl PublishSet {
+    /// The files the renames put in place, in the order they run: what a record of the publish names.
+    pub fn published(self) -> impl Iterator<Item = ConfigFileName> {
+        self.renames().iter().map(|&(_, published)| published)
+    }
+
     /// The renames, as (source, destination) in the order they run.
     fn renames(self) -> &'static [(ConfigFileName, ConfigFileName)] {
         const CONFIG: (ConfigFileName, ConfigFileName) = (ConfigFileName::Pending, ConfigFileName::Active);

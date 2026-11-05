@@ -446,6 +446,7 @@ fn an_unreadable_config_file_reports_its_own_reason_and_the_fixed_body() {
 fn a_published_pair_unreadable_in_the_read_back_reports_the_unreadable_reason() {
     let failure = CheckFailure::Recovery(ApprovalRecoveryError::PublishNotVerified {
         version: ApprovalVersion::new(2).unwrap(),
+        renames: iron_vault_store::PublishSet::Both,
         published: PublishedPairFault::Unreadable {
             file: ConfigFileName::Active,
             kind: io::ErrorKind::PermissionDenied,
@@ -564,6 +565,70 @@ fn a_committed_but_unpublished_transaction_is_finished_by_the_check() {
     assert_eq!(fixture.read("config.toml"), next.as_bytes());
     assert!(!fixture.path("config.toml.pending").exists());
     assert!(!fixture.path("config.toml.sig.staged").exists());
+}
+
+/// The audit records of `check` whose event is one of the recovery events, as `(event, level, fields)` in order.
+fn recovery_records(fixture: &Fixture) -> Vec<(String, String, serde_json::Value)> {
+    let out = crate::logging::tests::capture(|| drop(fixture.check().unwrap()));
+    out.lines()
+        .map(crate::logging::tests::parse)
+        .filter(|record| {
+            record["event"]
+                .as_str()
+                .is_some_and(|event| event.starts_with("config.recovery-") || event.contains("conflicting"))
+        })
+        .map(|record| {
+            (
+                record["event"].as_str().unwrap().to_owned(),
+                record["level"].as_str().unwrap().to_owned(),
+                record,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_check_records_the_publish_it_ran_and_each_leftover_it_discarded() {
+    let mut fixture = Fixture::new(&["alpha", "beta"]);
+    fixture.approve(&v1());
+    fixture.commit_unpublished(&config(&[("alpha", "alpha"), ("beta", "beta")]));
+
+    let published = recovery_records(&fixture);
+
+    assert_eq!(published.len(), 1, "{published:?}");
+    let (event, level, record) = &published[0];
+    assert_eq!((event.as_str(), level.as_str()), ("config.recovery-published", "WARN"));
+    assert_eq!(
+        (record["version"].as_u64(), record["renames"].as_str()),
+        (Some(2), Some("config.toml,config.toml.sig"))
+    );
+
+    // A pending config, and a staged approval for the committed version over another config.
+    let vault = fixture.state.vault_id();
+    let committed = ApprovalVersion::new(2).unwrap();
+    fixture.write("config.toml.pending", b"# edited\n");
+    fixture.write(
+        "config.toml.sig.staged",
+        &TestSigner::new().envelope(&ApprovalPayload::new(vault, committed, ConfigDigest::of(b"# another\n"))),
+    );
+
+    let discarded = recovery_records(&fixture);
+
+    let events: Vec<_> = discarded.iter().map(|(event, level, _)| (event.as_str(), level.as_str())).collect();
+    assert_eq!(
+        events,
+        [
+            ("config.recovery-discarded", "INFO"),
+            ("config.conflicting-approval-discarded", "ERROR"),
+            ("config.recovery-discarded", "INFO"),
+        ]
+    );
+    assert_eq!(discarded[0].2["file"], "config.toml.pending");
+    assert_eq!(
+        (discarded[2].2["file"].as_str(), discarded[2].2["signed_for"].as_u64()),
+        (Some("config.toml.sig.staged"), Some(2))
+    );
+    assert_eq!(discarded[1].2["version"].as_u64(), Some(2));
 }
 
 #[test]

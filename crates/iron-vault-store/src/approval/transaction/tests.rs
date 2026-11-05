@@ -391,7 +391,9 @@ fn an_uncertain_commit_is_settled_by_a_second_durable_write_before_publishing() 
     let setup = Setup::new("txn-settle");
     let sync = commit_sync_index(&setup, &clean_calls(&setup));
     let (fs, state, result) = approve_new(&setup, |fs, base| fs.fail_call(base + sync, io::ErrorKind::StorageFull));
-    assert_eq!(result.unwrap().approval().version(), version(2));
+    let committed = result.unwrap();
+    assert_eq!(committed.approval().version(), version(2));
+    assert_eq!(committed.commit_uncertain().map(ErrorKindLabel::as_str), Some("storage_full"));
     let state_writes = fs
         .trace()
         .iter()
@@ -427,6 +429,11 @@ fn a_commit_that_cannot_be_settled_is_uncertain_and_leaves_its_files_in_place() 
         assert_eq!(
             (error.step(), error.progress()),
             (ApprovalStep::Commit, ApprovalProgress::CommitUncertain(version(2))),
+            "{context}"
+        );
+        assert_eq!(
+            error.commit_uncertain().map(ErrorKindLabel::as_str),
+            Some("storage_full"),
             "{context}"
         );
         assert_eq!(

@@ -202,10 +202,15 @@ fn every_leftover_beside_a_verified_pair_is_discarded_and_never_promoted() {
     let vault = seeded_state.vault_id();
     let new_digest = ConfigDigest::of(NEW_CONFIG);
     let other_digest = ConfigDigest::of(b"# another config\n");
-    let pending = |file| DiscardedFile { file, signed_for: None };
+    let pending = |file| DiscardedFile {
+        file,
+        signed_for: None,
+        conflicting: false,
+    };
     let staged = |v: Option<u64>| DiscardedFile {
         file: StagedSignature,
         signed_for: v.map(version),
+        conflicting: false,
     };
     let foreign = TestSigner::with_seed(9)
         .sign(&ApprovalPayload::new(vault, version(3), new_digest))
@@ -231,7 +236,10 @@ fn every_leftover_beside_a_verified_pair_is_discarded_and_never_promoted() {
             "digest not committed",
             None,
             Some(signed(ApprovalPayload::new(vault, version(2), other_digest))),
-            vec![staged(Some(2))],
+            vec![DiscardedFile {
+                conflicting: true,
+                ..staged(Some(2))
+            }],
         ),
         ("malformed", None, Some(b"not an envelope".to_vec()), vec![staged(None)]),
         ("foreign signer", None, Some(foreign), vec![staged(None)]),
@@ -279,10 +287,12 @@ fn a_staged_approval_never_committed_is_discarded_and_its_version_stays_consumed
         DiscardedFile {
             file: Pending,
             signed_for: None,
+            conflicting: false,
         },
         DiscardedFile {
             file: StagedSignature,
             signed_for: Some(version(2)),
+            conflicting: false,
         },
     ];
     assert_eq!(recovered.discarded(), discarded);
@@ -479,6 +489,7 @@ fn an_unreadable_read_back_after_publishing_is_publish_not_verified() {
     let error = recover(&setup, &fs, &state).unwrap_err();
     let expected = ApprovalRecoveryError::PublishNotVerified {
         version: version(2),
+        renames: PublishSet::Both,
         published: PublishedPairFault::Unreadable { file: Active, kind: eio() },
     };
     assert_eq!((&error, error.failure()), (&expected, RecoveryFailure::RecoveryNeeded));
@@ -515,10 +526,12 @@ fn a_partial_discard_still_reports_the_files_it_removed() {
     let pending = DiscardedFile {
         file: Pending,
         signed_for: None,
+        conflicting: false,
     };
     let staged = DiscardedFile {
         file: StagedSignature,
         signed_for: Some(version(3)),
+        conflicting: false,
     };
     // For each failing call: what recovery reports discarding, and whether the pending config is left.
     let cases = [

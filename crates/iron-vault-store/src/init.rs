@@ -18,9 +18,9 @@ use crate::initialization::INITIAL_CONFIG;
 use crate::passphrase::seal_at;
 use crate::{
     AdmissionPaused, ApprovalError, ApprovalPassphrase, ApprovalState, ApprovalStorage, ApprovalVersion, BeginError, ConfigDigest,
-    ConfigDirLock, EnvelopeError, InitStateError, InitializationState, PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig, ReadError,
-    RecipientIdentity, RecipientSet, RecipientSetError, SignError, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs, Vault,
-    VaultError, VaultId, VaultIdentity, WriteError, approval::seal_signer_key_at, begin_initialization, finish_initialization,
+    ConfigDirLock, EnvelopeError, ErrorKindLabel, InitStateError, InitializationState, PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig,
+    ReadError, RecipientIdentity, RecipientSet, RecipientSetError, SignError, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs,
+    Vault, VaultError, VaultId, VaultIdentity, WriteError, approval::seal_signer_key_at, begin_initialization, finish_initialization,
     open_signer_key, read_identity_envelope, read_signer_key, unwrap_identity, wrap_identity, write_identity_envelope,
     write_passphrase_envelope, write_signer_key,
 };
@@ -173,6 +173,10 @@ pub struct InitializedVault {
     pub vault_id: VaultId,
     /// The committed approval version, always 1.
     pub version: ApprovalVersion,
+    /// The digest of the initial config that version 1 approves.
+    pub digest: ConfigDigest,
+    /// The kind of the directory fsync failure that made the first commit uncertain until it was settled, if one did.
+    pub commit_uncertain: Option<ErrorKindLabel>,
     /// The files discarded from an unfinished initialization before step 1, for the `vault.init-discarded` log.
     pub discarded: Vec<String>,
 }
@@ -206,16 +210,18 @@ pub(crate) fn initialize_at<F: StoreFs>(
 ) -> Result<InitializedVault, InitError> {
     let discarded = begin(state, config, fs)?;
     match write_vault(state, config, fs, (keys, passphrases), paused, log_n) {
-        Ok((vault_id, version)) => Ok(InitializedVault {
+        Ok((vault_id, committed)) => Ok(InitializedVault {
             vault_id,
-            version,
+            version: committed.version,
+            digest: committed.digest,
+            commit_uncertain: committed.commit_uncertain,
             discarded,
         }),
         Err(error) => Err(InitError { discarded, ..error }),
     }
 }
 
-/// Steps 2 to 9, once step 1 is durable: the vault's ID and its committed version.
+/// Steps 2 to 9, once step 1 is durable: the vault's ID and its first approval.
 fn write_vault<F: StoreFs>(
     state: &StateDirLock,
     config: &ConfigDirLock,
@@ -223,7 +229,7 @@ fn write_vault<F: StoreFs>(
     (keys, passphrases): (SealingKeys, InitPassphrases),
     paused: &impl AdmissionPaused,
     log_n: u8,
-) -> Result<(VaultId, ApprovalVersion), InitError> {
+) -> Result<(VaultId, FirstApproval), InitError> {
     let SealingKeys {
         vault,
         operational,
@@ -246,9 +252,9 @@ fn write_vault<F: StoreFs>(
         identity: created.identity(),
         fs,
     };
-    let version = approve_initial_config(&storage, &mut approval, signer, paused).map_err(at(InitStep::FirstApproval))?;
+    let approved = approve_initial_config(&storage, &mut approval, signer, paused).map_err(at(InitStep::FirstApproval))?;
     finish_initialization(state, fs).map_err(at(InitStep::Finish))?;
-    Ok((created.manifest().vault_id(), version))
+    Ok((created.manifest().vault_id(), approved))
 }
 
 /// The discard and step 1. The state is read first only to name the step a failure belongs to: with the service-wide
@@ -317,13 +323,21 @@ fn open_signer(
     Ok(open_signer_key(&read_signer_key(state, fs)?, &passphrase, approval.approver())?)
 }
 
-/// Step 8: the approval transaction on the initial config, which a new vault's counters must commit as version 1.
+/// What step 8 committed.
+struct FirstApproval {
+    version: ApprovalVersion,
+    digest: ConfigDigest,
+    commit_uncertain: Option<ErrorKindLabel>,
+}
+
+/// Step 8: the approval transaction on the initial config, which a new vault's counters must commit as version 1. The
+/// service records its events from what the store returns, as for any approval.
 fn approve_initial_config<F: StoreFs>(
     storage: &ApprovalStorage<'_, F>,
     approval: &mut ApprovalState,
     signer: SoftwareSigner,
     paused: &impl AdmissionPaused,
-) -> Result<ApprovalVersion, InitFailure> {
+) -> Result<FirstApproval, InitFailure> {
     let committed = PendingConfig::write(storage, INITIAL_CONFIG.to_vec())?
         .prepare(storage, approval, signer)?
         .commit(storage, paused)?;
@@ -331,16 +345,11 @@ fn approve_initial_config<F: StoreFs>(
     if version != ApprovalVersion::FIRST {
         return Err(InitFailure::UnexpectedVersion(version));
     }
-    // The audit event every approval raises once its commit is durable; init has no summary but the config it approves.
-    let digest = ConfigDigest::of(INITIAL_CONFIG);
-    tracing::info!(
-        event = "config.approval-completed",
-        version = version.get(),
-        %digest,
-        summary = "initial config",
-        "config approval completed",
-    );
-    Ok(version)
+    Ok(FirstApproval {
+        version,
+        digest: ConfigDigest::of(INITIAL_CONFIG),
+        commit_uncertain: committed.commit_uncertain().cloned(),
+    })
 }
 
 fn at<E: Into<InitFailure>>(step: InitStep) -> impl FnOnce(E) -> InitError {

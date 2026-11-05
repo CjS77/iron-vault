@@ -177,7 +177,7 @@ fn approval_completed_records_version_digest_and_summary() {
     let event = ApprovalCompleted {
         version: version(3),
         digest,
-        summary: &summary,
+        summary: &summary.render(),
     };
     let record = record_of(event, "INFO", &["version", "config_digest", "summary"]);
     assert_eq!(record["version"], 3);
@@ -368,7 +368,7 @@ fn no_audit_event_records_a_constant_field() {
         ApprovalCompleted {
             version: version(1),
             digest: ConfigDigest::of(b""),
-            summary: &summary,
+            summary: &summary.render(),
         }
         .emit();
         ApprovalRefused {
@@ -389,6 +389,7 @@ fn no_audit_event_records_a_constant_field() {
         }
         .emit();
         super::vault_events_tests::emit_every_event();
+        super::config_events_tests::emit_every_event();
         emit_request_events();
     });
     let seen = names.0.lock().unwrap().clone();
@@ -419,6 +420,7 @@ fn event_names_have_the_subject_dot_kebab_form() {
     ]
     .iter()
     .chain(super::vault_events_tests::NAMES.iter())
+    .chain(super::config_events_tests::NAMES.iter())
     .for_each(|name| {
         let (subject, rest) = name.as_str().split_once('.').unwrap();
         assert!(!subject.is_empty() && subject.chars().all(|c| c.is_ascii_lowercase()), "{name:?}");

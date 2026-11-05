@@ -40,7 +40,7 @@ pub use state::{
 };
 pub use transaction::{
     AdmissionPaused, ApprovalError, ApprovalFailure, ApprovalProgress, ApprovalStep, ApprovalStorage, CommittedApproval, PendingConfig,
-    PreparedApproval,
+    PreparedApproval, ReservedApproval,
 };
 pub use verify::{VerifiedApproval, VerifyError, verify_approval};
 

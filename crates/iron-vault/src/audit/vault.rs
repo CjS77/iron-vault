@@ -1,7 +1,9 @@
 //! Audit events about the vault: its initialization, unlock refusals, lock drains and the facts of a write report
 //! (`design/audit-logging.md`, "Credentials and vault writes" and "Initialization").
 
-use iron_vault_store::{ErrorKindLabel, InitFailure, InitStep, StateFileName, UnlockError, VaultError, VaultId, WriteError};
+use iron_vault_store::{
+    ApprovalStateError, ErrorKindLabel, InitFailure, InitStep, StateFileName, UnlockError, VaultError, VaultId, WriteError,
+};
 
 use super::{AUDIT_TARGET, AuditEvent, EventName};
 use crate::service_context::{DenialKind, UnlockRefusal, step_names};
@@ -205,8 +207,8 @@ impl AuditEvent for SupersededLeft<'_> {
     }
 }
 
-/// `vault.commit-uncertain`: the vault manifest was replaced but its directory fsync failed, so the write may not
-/// survive power loss.
+/// `vault.commit-uncertain`: the vault manifest or the approval state was replaced but its directory fsync failed, so the
+/// write may not survive power loss.
 #[derive(Debug, Clone, Copy)]
 pub struct CommitUncertain<'a> {
     /// The file that was replaced.
@@ -224,16 +226,21 @@ impl AuditEvent for CommitUncertain<'_> {
             event = Self::NAME.as_str(),
             file = self.file.as_str(),
             error_kind = self.error_kind.as_str(),
-            "vault manifest was replaced but the state directory fsync failed; the write may not survive power loss",
+            "a state file was replaced but the state directory fsync failed; the change may not survive power loss",
         );
     }
 }
 
-/// Emits `vault.commit-uncertain` when a vault write failed at the commit's directory fsync, also when it is the cause
-/// of an unrecorded approval state. Any other error is for the caller to report.
+/// Emits `vault.commit-uncertain` when a vault or approval state write failed at the commit's directory fsync, also when
+/// it is the cause of an unrecorded approval state. Any other error is for the caller to report.
 pub fn emit_commit_uncertain(error: &VaultError) {
     match error {
         VaultError::CommitUncertain(cause @ WriteError::Io { file, .. }) => CommitUncertain {
+            file,
+            error_kind: &cause.error_kind_label(),
+        }
+        .emit(),
+        VaultError::ApprovalState(ApprovalStateError::WriteUncertain(cause @ WriteError::Io { file, .. })) => CommitUncertain {
             file,
             error_kind: &cause.error_kind_label(),
         }

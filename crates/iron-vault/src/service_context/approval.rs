@@ -24,8 +24,8 @@ use std::sync::Arc;
 
 use iron_vault_policy::{ActivePolicy, ApprovalSummary, ValidatedConfig, summarize};
 use iron_vault_store::{
-    ApprovalError, ApprovalPassphrase, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ApprovalVersion, ConfigDigest,
-    PendingConfig, SoftwareSigner, StoreFs, Vault, VaultIdentity,
+    ApprovalError, ApprovalPassphrase, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ApprovalVersion,
+    CommittedApproval, ConfigDigest, PendingConfig, PreparedApproval, SoftwareSigner, StoreFs, Vault, VaultIdentity,
 };
 use tokio::sync::OwnedMutexGuard;
 
@@ -33,6 +33,7 @@ use super::{
     DenialKind, Inner, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_destination, log_task_crash,
 };
 use crate::admin::protocol::ApprovalResult;
+use crate::audit::config::{VersionReserved, record_commit_uncertain, record_uncertain_writes};
 use crate::audit::corruption::open_vault;
 use crate::audit::{ActivationCause, ActivationFailed, ApprovalCompleted, ApprovalFailed, ApprovalRefused, AuditEvent};
 use crate::config_check::{InvalidConfig, activate_config};
@@ -302,7 +303,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         } = transaction;
         let storage = approval_storage(&self.locks, &self.setup.fs, &identity);
         let digest = pending.digest();
-        let prepared = match pending.prepare(&storage, &mut approval, signer) {
+        let prepared = match reserve_and_sign(&storage, pending, &mut approval, signer) {
             Ok(prepared) => prepared,
             Err(error) => {
                 // A reservation that took is consumed: `status` reports the counter as it now is.
@@ -324,13 +325,15 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         }
         let committed = {
             let pause = self.holder.pause();
-            prepared.commit(&storage, &pause).map(drop)
+            prepared.commit(&storage, &pause)
         };
+        record_commit(approved, &committed);
+        let committed = committed.map(drop);
         self.durable(inner, started, &identity, committed, digest).await?;
         ApprovalCompleted {
             version: approved,
             digest,
-            summary: &summary,
+            summary: &summary.render(),
         }
         .emit();
         match self.check_committed(inner, started, identity).await {
@@ -405,6 +408,34 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
                 Err(not_committed(error, digest))
             }
         }
+    }
+}
+
+/// Steps 2 to 4. The reservation is recorded before signing starts, so a signing failure, or a crash while the signer
+/// waits for the owner, follows it in the log.
+fn reserve_and_sign<'s, F: StoreFs, S: ApprovalSigner>(
+    storage: &ApprovalStorage<'_, F>,
+    pending: PendingConfig,
+    approval: &'s mut ApprovalState,
+    signer: S,
+) -> Result<PreparedApproval<'s>, ApprovalError> {
+    let reserved = pending.reserve(storage, approval).inspect_err(record_uncertain_writes)?;
+    VersionReserved {
+        version: reserved.version(),
+        digest: reserved.digest(),
+    }
+    .emit();
+    reserved.sign(storage, signer)
+}
+
+/// Records an uncertain commit, whether it was settled or not.
+fn record_commit(version: ApprovalVersion, committed: &Result<CommittedApproval, ApprovalError>) {
+    match committed {
+        Ok(committed) => committed
+            .commit_uncertain()
+            .into_iter()
+            .for_each(|kind| record_commit_uncertain(version, &kind)),
+        Err(error) => record_uncertain_writes(error),
     }
 }
 

@@ -113,6 +113,7 @@ pub struct ApprovalError {
     step: ApprovalStep,
     progress: ApprovalProgress,
     cause: ApprovalFailure,
+    commit_uncertain: Option<Box<ErrorKindLabel>>,
 }
 
 impl ApprovalError {
@@ -129,6 +130,12 @@ impl ApprovalError {
     /// Why the step failed.
     pub fn cause(&self) -> &ApprovalFailure {
         &self.cause
+    }
+
+    /// The kind of the directory fsync failure that made step 5's commit uncertain, whether or not it was settled
+    /// afterwards. `None` when the commit's rename and fsync both succeeded, or never ran.
+    pub fn commit_uncertain(&self) -> Option<&ErrorKindLabel> {
+        self.commit_uncertain.as_deref()
     }
 }
 
@@ -191,20 +198,62 @@ impl PendingConfig {
         discard_uncommitted(config_dir, fs);
     }
 
-    /// Steps 2 to 4: durably reserves the next version, signs it with `signer` (dropped once it has signed), checks
-    /// the envelope against the pinned approver, and durably stages it.
+    /// Step 2: durably reserves the next version. The caller records the reservation before it signs
+    /// ([`ReservedApproval::version`]), so a signing failure, or a signer that waits for the owner, follows it in the
+    /// audit log (spec §3.9).
     ///
     /// The `&mut` borrow of `state` lasts until the approval is committed or abandoned, so approvals are serialized.
-    /// On failure the pending config and any staged approval are removed. A failure after the reservation leaves its
-    /// version consumed.
+    /// On failure the pending config and any staged approval are removed, and a reservation whose directory fsync
+    /// failed leaves its version consumed.
+    pub fn reserve<'s, F: StoreFs>(
+        self,
+        storage: &ApprovalStorage<'_, F>,
+        state: &'s mut ApprovalState,
+    ) -> Result<ReservedApproval<'s>, ApprovalError> {
+        let version = reserve(storage, state)?;
+        let payload = ApprovalPayload::new(state.vault_id(), version, self.digest);
+        Ok(ReservedApproval { state, payload })
+    }
+
+    /// Steps 2 to 4 in one call, for callers with nothing to record between the reservation and the signature.
     pub fn prepare<'s, F: StoreFs, S: ApprovalSigner>(
         self,
         storage: &ApprovalStorage<'_, F>,
         state: &'s mut ApprovalState,
         signer: S,
     ) -> Result<PreparedApproval<'s>, ApprovalError> {
-        let version = reserve(storage, state, self.digest)?;
-        let payload = ApprovalPayload::new(state.vault_id(), version, self.digest);
+        self.reserve(storage, state)?.sign(storage, signer)
+    }
+}
+
+/// Step 2 done: the version is durably reserved, and nothing is signed or staged yet.
+#[derive(Debug)]
+pub struct ReservedApproval<'s> {
+    state: &'s mut ApprovalState,
+    payload: ApprovalPayload,
+}
+
+impl<'s> ReservedApproval<'s> {
+    /// The reserved version, consumed whatever happens next.
+    pub fn version(&self) -> ApprovalVersion {
+        self.payload.version()
+    }
+
+    /// The digest of the config the version was reserved for.
+    pub fn digest(&self) -> ConfigDigest {
+        self.payload.digest()
+    }
+
+    /// Steps 3 and 4: signs with `signer` (dropped once it has signed), checks the envelope against the pinned
+    /// approver, and durably stages it. On failure the pending config and any staged approval are removed, and the
+    /// version stays consumed.
+    pub fn sign<F: StoreFs, S: ApprovalSigner>(
+        self,
+        storage: &ApprovalStorage<'_, F>,
+        signer: S,
+    ) -> Result<PreparedApproval<'s>, ApprovalError> {
+        let Self { state, payload } = self;
+        let version = payload.version();
         let envelope = sign(state, &payload, signer).map_err(|e| fail(storage, ApprovalStep::Sign, Some(version), e))?;
         write_staged(storage.config_dir, storage.fs, &envelope).map_err(|e| fail(storage, ApprovalStep::Stage, Some(version), e.into()))?;
         Ok(PreparedApproval { state, payload })
@@ -244,17 +293,18 @@ impl PreparedApproval<'_> {
         _paused: &impl AdmissionPaused,
     ) -> Result<CommittedApproval, ApprovalError> {
         let (version, digest) = (self.version(), self.digest());
-        commit(storage, &mut *self.state, version, digest)?;
+        let uncertain = commit(storage, &mut *self.state, version, digest)?;
         let committed = |cause| ApprovalError {
             step: ApprovalStep::Publish,
             progress: ApprovalProgress::Committed(version),
             cause,
+            commit_uncertain: uncertain.clone(),
         };
         publish_both(storage, version).map_err(|e| committed(e.into()))?;
         let read = |name| read_config_file(storage.config_dir, storage.fs, name).map_err(|e| committed(e.into()));
         let (config, envelope) = (read(ConfigFileName::Active)?, read(ConfigFileName::ActiveSignature)?);
         let approval = verify_approval(self.state, &config, &envelope).map_err(|e| committed(ApprovalFailure::BadApproval(e)))?;
-        Ok(CommittedApproval::new(approval, config.into_boxed_slice()))
+        Ok(CommittedApproval::new(approval, config.into_boxed_slice()).with_commit_uncertain(uncertain))
     }
 }
 
@@ -262,12 +312,27 @@ impl PreparedApproval<'_> {
 pub struct CommittedApproval {
     approval: VerifiedApproval,
     config: Box<[u8]>,
+    commit_uncertain: Option<Box<ErrorKindLabel>>,
 }
 
 impl CommittedApproval {
     /// The published pair `config` as read back, which verified as `approval`.
     pub(super) fn new(approval: VerifiedApproval, config: Box<[u8]>) -> Self {
-        Self { approval, config }
+        Self {
+            approval,
+            config,
+            commit_uncertain: None,
+        }
+    }
+
+    fn with_commit_uncertain(self, commit_uncertain: Option<Box<ErrorKindLabel>>) -> Self {
+        Self { commit_uncertain, ..self }
+    }
+
+    /// The kind of the directory fsync failure that made this commit uncertain until it was settled, or `None` when the
+    /// commit was certain at once or the approval was found by recovery.
+    pub fn commit_uncertain(&self) -> Option<&ErrorKindLabel> {
+        self.commit_uncertain.as_deref()
     }
 
     /// The committed approval, verified over the published pair as read back.
@@ -301,23 +366,15 @@ impl fmt::Debug for CommittedApproval {
 }
 
 /// Step 2. Exhaustion and a failure before the rename reserve nothing; a failed directory fsync after the rename
-/// leaves the version consumed, because the next reservation reads it from disk.
-///
-/// A durable reservation is recorded as `config.version-reserved` here, before anything is signed, so a signing or
-/// staging failure follows its reservation in the audit log. A reservation whose directory fsync failed is consumed but
-/// not recorded here: it fails at this step, as `config.approval-failed`.
-fn reserve<F: StoreFs>(
-    storage: &ApprovalStorage<'_, F>,
-    state: &mut ApprovalState,
-    digest: ConfigDigest,
-) -> Result<ApprovalVersion, ApprovalError> {
+/// leaves the version consumed, because the next reservation reads it from disk. The caller records a durable
+/// reservation as `config.version-reserved`; a reservation whose directory fsync failed is consumed but not returned: it
+/// fails at this step, as `config.approval-failed`.
+fn reserve<F: StoreFs>(storage: &ApprovalStorage<'_, F>, state: &mut ApprovalState) -> Result<ApprovalVersion, ApprovalError> {
     let next = state.highest_reserved().checked_add(1).and_then(ApprovalVersion::new);
-    let version = state.reserve(storage.state_dir, storage.fs, storage.identity).map_err(|e| {
+    state.reserve(storage.state_dir, storage.fs, storage.identity).map_err(|e| {
         let consumed = matches!(e, ApprovalStateError::WriteUncertain(_)).then_some(next).flatten();
         fail(storage, ApprovalStep::Reserve, consumed, e.into())
-    })?;
-    tracing::info!(event = "config.version-reserved", %version, %digest, "approval version reserved");
-    Ok(version)
+    })
 }
 
 /// Step 3: signs `payload`, then checks the encoded envelope as the config check later will, so a misbehaving signer
@@ -332,24 +389,27 @@ fn sign<S: ApprovalSigner>(state: &ApprovalState, payload: &ApprovalPayload, sig
     }
 }
 
-/// Step 5, settling an uncertain commit with a second durable write. Only a failure before the rename of
-/// `approval.age` removes the pending config and staged approval: after it, they may belong to the committed approval.
+/// Step 5, settling an uncertain commit with a second durable write; the result is the uncertain commit's error kind.
+/// Only a failure before the rename of `approval.age` removes the pending config and staged approval: after it, they
+/// may belong to the committed approval.
 fn commit<F: StoreFs>(
     storage: &ApprovalStorage<'_, F>,
     state: &mut ApprovalState,
     version: ApprovalVersion,
     digest: ConfigDigest,
-) -> Result<(), ApprovalError> {
+) -> Result<Option<Box<ErrorKindLabel>>, ApprovalError> {
     match state.commit(storage.state_dir, storage.fs, storage.identity, version, digest) {
-        Ok(()) => Ok(()),
-        Err(ApprovalStateError::WriteUncertain(error)) => {
-            tracing::warn!(event = "config.commit-uncertain", %version, %error, "the commit landed but its directory fsync failed; settling it");
+        Ok(()) => Ok(None),
+        Err(ApprovalStateError::WriteUncertain(uncertain)) => {
+            let kind = Box::new(uncertain.error_kind_label());
             state
                 .settle_commit(storage.state_dir, storage.fs, storage.identity, (version, digest))
+                .map(|()| Some(kind.clone()))
                 .map_err(|e| ApprovalError {
                     step: ApprovalStep::Commit,
                     progress: ApprovalProgress::CommitUncertain(version),
                     cause: e.into(),
+                    commit_uncertain: Some(kind),
                 })
         }
         Err(other) => Err(fail(storage, ApprovalStep::Commit, Some(version), other.into())),
@@ -387,12 +447,21 @@ fn fail<F: StoreFs>(
 ) -> ApprovalError {
     discard_uncommitted(storage.config_dir, storage.fs);
     let progress = reserved.map_or(ApprovalProgress::NothingReserved, ApprovalProgress::Reserved);
-    ApprovalError { step, progress, cause }
+    ApprovalError {
+        step,
+        progress,
+        cause,
+        commit_uncertain: None,
+    }
 }
 
-/// Removes the pending config and the staged approval, best effort: the next config check discards a leftover.
+/// Removes the pending config and the staged approval, best effort: a leftover is discarded and recorded as
+/// `config.recovery-discarded` by the next config check.
 fn discard_uncommitted<F: StoreFs>(config_dir: &ConfigDirLock, fs: &F) {
     if let Err(error) = remove_pending_and_staged(config_dir, fs) {
-        tracing::warn!(%error, "cannot remove the uncommitted pending config and staged approval; the next config check discards them");
+        tracing::warn!(
+            error_kind = %error.cause.error_kind_label(),
+            "cannot remove the uncommitted pending config and staged approval; the next config check discards them"
+        );
     }
 }

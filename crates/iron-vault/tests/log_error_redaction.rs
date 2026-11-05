@@ -26,7 +26,7 @@ const LOG_MACROS: [&str; 6] = ["trace!(", "debug!(", "info!(", "warn!(", "error!
 /// file names and `io::ErrorKind`s, never a library error's text. Some also render a full configured path (`OpenError`,
 /// `AdoptError`, `InitError`), which the design does not yet rule on; this list is about library text only. Each is
 /// `(file, formatted expression)`, once per site.
-const DOMAIN_ERRORS: [(&str, &str); 12] = [
+const DOMAIN_ERRORS: [(&str, &str); 7] = [
     // `FrameError`: the admin protocol's own decoding errors.
     ("crates/iron-vault/src/admin/server.rs", "{e}"),
     // `HandshakeError`: a TLS handshake's timeout or its `io::ErrorKind`.
@@ -40,13 +40,6 @@ const DOMAIN_ERRORS: [(&str, &str); 12] = [
     ("crates/iron-vault/src/service_context.rs", "{error}"),
     // The store's `ApprovalError` of an approval that committed but whose publish failed.
     ("crates/iron-vault/src/service_context/approval.rs", "%error"),
-    // The store's `RemoveStagingError` and `VerifyError`.
-    ("crates/iron-vault-store/src/approval/recovery.rs", "%error"),
-    ("crates/iron-vault-store/src/approval/recovery.rs", "%error"),
-    // The store's `WriteError`.
-    ("crates/iron-vault-store/src/approval/state.rs", "%error"),
-    ("crates/iron-vault-store/src/approval/transaction.rs", "%error"),
-    ("crates/iron-vault-store/src/approval/transaction.rs", "%error"),
 ];
 
 fn workspace_root() -> PathBuf {

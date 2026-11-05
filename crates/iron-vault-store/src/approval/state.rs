@@ -554,14 +554,7 @@ fn replace_file(lock: &StateDirLock, fs: &impl StoreFs, bytes: &[u8]) -> Result<
     durable_replace(lock, fs, &StateFileName::approval_state(), bytes).map_err(|error| match error {
         WriteError::Io {
             step: WriteStep::SyncDir, ..
-        } => {
-            tracing::error!(
-                error = %error,
-                remediation = "reload the approval state: the change took effect only if the reloaded state shows it",
-                "approval state was replaced but the state directory fsync failed; the change may not survive power loss"
-            );
-            ApprovalStateError::WriteUncertain(error)
-        }
+        } => ApprovalStateError::WriteUncertain(error),
         other => ApprovalStateError::Write(other),
     })
 }

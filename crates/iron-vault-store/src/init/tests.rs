@@ -166,7 +166,6 @@ fn no_secret_reaches_a_file_or_the_log() {
     let dirs = Dirs::new("init-leaks");
     let ((result, secrets), events) = capture_logs(|| dirs.init_keeping(&OsFs));
     result.unwrap();
-    assert!(!events.is_empty(), "the approval's audit events were not captured");
     let logged = format!("{events:?}");
     let files = dirs.snapshot(&OsFs);
     [
@@ -254,17 +253,16 @@ fn a_step_failing_after_a_discard_still_names_the_discarded_files() {
     assert_eq!(error.discarded(), DISCARDED);
 }
 
+/// The store reports the first approval to the service, which records its events; the store logs none of them.
 #[test]
-fn the_first_approval_is_audited_as_completed_with_the_initial_config_digest() {
+fn the_first_approval_is_reported_with_the_initial_config_digest_and_not_logged() {
     let dirs = Dirs::new("init-audit");
     let (result, events) = capture_logs(|| dirs.init(&OsFs));
-    result.unwrap();
-    let logged = format!("{events:?}");
-    let digest = ConfigDigest::of(INITIAL_CONFIG).to_string();
-    assert!(
-        logged.contains("config.approval-completed") && logged.contains(&digest) && logged.contains("initial config"),
-        "{logged}"
-    );
+    let initialized = result.unwrap();
+    assert_eq!(initialized.version, ApprovalVersion::FIRST);
+    assert_eq!(initialized.digest, ConfigDigest::of(INITIAL_CONFIG));
+    assert_eq!(initialized.commit_uncertain, None);
+    assert!(events.is_empty(), "{events:?}");
 }
 
 /// The state a failure at `error`'s step must leave: untouched before the marker is durable, Unfinished after it, and

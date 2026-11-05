@@ -8,14 +8,15 @@
 use std::sync::Arc;
 
 use iron_vault_store::{
-    InitError, InitFailure, InitPassphrases, InitStateError, InitStep, InitializationState, InitializedVault, SealingKeys, StoreFs,
-    ensure_initializable, initialize,
+    ConfigDigest, INITIAL_CONFIG, InitError, InitFailure, InitPassphrases, InitStateError, InitStep, InitializationState, InitializedVault,
+    SealingKeys, StoreFs, ensure_initializable, initialize,
 };
 use tokio::task::JoinError;
 
 use super::ServiceContext;
-use crate::audit::AuditEvent;
+use crate::audit::config::{VersionReserved, record_commit_uncertain, record_failed_approval};
 use crate::audit::vault::{InitDiscarded, InitFailed, VaultInitialized, emit_commit_uncertain};
+use crate::audit::{ApprovalCompleted, AuditEvent};
 use crate::service_state::{AdminOperation, ServiceState};
 
 /// Why `init` wrote no vault, or may not have finished one. Each variant is one admin error code.
@@ -99,19 +100,56 @@ fn log_outcome(written: &Result<InitializedVault, InitError>) {
         InitDiscarded { files: discarded }.emit();
     }
     match written {
-        Ok(vault) => VaultInitialized { vault_id: vault.vault_id }.emit(),
+        Ok(vault) => {
+            record_first_approval(vault);
+            VaultInitialized { vault_id: vault.vault_id }.emit();
+        }
         Err(error) if begin_refusal(error).is_none() => {
+            record_uncertain_init_writes(error.cause());
             InitFailed::Step {
                 step: error.step(),
                 cause: error.cause(),
             }
             .emit();
-            if let InitFailure::Vault(vault_error) = error.cause() {
-                emit_commit_uncertain(vault_error);
-            }
         }
         Err(_) => {}
     }
+}
+
+/// Records the uncertain writes behind a failed step before its `vault.init-failed`, the order a success records its
+/// approval events in: the facts, then the outcome. Step 6's approval state creation fails as a vault error; step 8's
+/// transaction as an approval error, whose reservation (if durable) is recorded too.
+fn record_uncertain_init_writes(cause: &InitFailure) {
+    match cause {
+        InitFailure::Approval(approval) => record_failed_approval(approval, ConfigDigest::of(INITIAL_CONFIG)),
+        InitFailure::Vault(vault_error) => emit_commit_uncertain(vault_error),
+        _ => {}
+    }
+}
+
+/// Init's version 1 is audited like any approval: reserved, uncertain if its commit was, then completed. The store ran
+/// the transaction to its end before returning, so the events follow it in order.
+fn record_first_approval(vault: &InitializedVault) {
+    let InitializedVault {
+        version,
+        digest,
+        commit_uncertain,
+        ..
+    } = vault;
+    VersionReserved {
+        version: *version,
+        digest: *digest,
+    }
+    .emit();
+    commit_uncertain
+        .iter()
+        .for_each(|error_kind| record_commit_uncertain(*version, error_kind));
+    ApprovalCompleted {
+        version: *version,
+        digest: *digest,
+        summary: "initial config",
+    }
+    .emit();
 }
 
 /// Turns how the writing task ended into `init`'s answer. Only a task that ended without a result is logged here; the
