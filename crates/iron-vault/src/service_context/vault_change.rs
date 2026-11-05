@@ -13,7 +13,7 @@ pub use plan::{CredentialChanged, CurrentRecord, VaultChangePlan};
 use std::sync::Arc;
 
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::{CredentialKind, CredentialName};
+use iron_vault_policy::{CredentialKind, CredentialName, Host, Port};
 use iron_vault_store::{PermittedOrigins, RecordId, StoreFs, Vault, VaultError, VaultIdentity};
 
 use super::{Inner, ServiceContext, ServiceLocks};
@@ -100,7 +100,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         };
         let kind = kind_of(&material);
         let summary = summary_of(kind, &origins);
-        let logged = (name.clone(), origins_text(&origins));
+        let logged = (name.clone(), origins_text(origins.iter()));
         let written = self.write_on_blocking_pool(identity, name, material, origins).await;
         let (name, origins) = logged;
         match written {
@@ -218,10 +218,10 @@ fn kind_of(material: &CredentialMaterial) -> CredentialKind {
     }
 }
 
-/// The permitted origins as `host:port`, comma-separated in ascending order, for the audit log.
-fn origins_text(origins: &PermittedOrigins) -> String {
+/// Origins as `host:port`, comma-separated in the order given, which for permitted origins is ascending, for the audit
+/// log.
+fn origins_text<'a>(origins: impl Iterator<Item = &'a (Host, Port)>) -> String {
     origins
-        .iter()
         .map(|(host, port)| format!("{host}:{}", port.get()))
         .collect::<Vec<_>>()
         .join(",")

@@ -46,6 +46,7 @@ pub mod trusted_path;
 pub mod trusted_path_report;
 pub mod upstream;
 pub mod vault_change_check;
+pub mod vault_change_summary;
 
 #[cfg(test)]
 mod secret_types_tests;

@@ -27,11 +27,12 @@ use iron_vault_store::{
 use tokio::sync::OwnedMutexGuard;
 
 use super::super::{Inner, OpenVault, OwnerPresence, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, log_task_crash};
-use super::{VaultChangeRefusal, kind_of};
+use super::{VaultChangeRefusal, kind_of, origins_text};
 use crate::service_state::{AdminOperation, ServiceEvent, ServiceState};
 use crate::serving_snapshot::Admission;
-use crate::standing::{RecordSummary, Standing};
+use crate::standing::{CredentialStanding, RecordSummary, Standing};
 use crate::vault_change_check::{PlannedChange, vault_change_check};
+use crate::vault_change_summary::VaultChangeSummary;
 
 /// Steps 2 to 4 of a `replace` or `rm` done: the service-wide lock is held and the vault change check passed. See the
 /// module docs.
@@ -43,8 +44,8 @@ pub struct VaultChangePlan<'a, F> {
     checks: u64,
     /// The pinned approver owner presence must open, from the approval state the service holds.
     approver: PinnedApprover,
-    change: PlannedChange,
-    current: CurrentRecord,
+    /// The change the check passed, the record it acts on and the routes that use it, as the owner is shown them.
+    summary: VaultChangeSummary,
 }
 
 /// The record a `replace` or `rm` acts on, as the vault change summary describes it (design/credential-commands.md,
@@ -100,7 +101,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let (Some(open), Admission::Serve(snapshot), true) = (inner.open.as_ref(), self.holder.load(), ready) else {
             return Err(VaultChangeRefusal::WrongState(inner.state));
         };
-        let Some(current) = current_record(open, change.name()) else {
+        let Some((current, before)) = current_record(open, change.name()) else {
             return Err(VaultChangeRefusal::UnknownCredential(change.name().clone()));
         };
         let config = snapshot.policy().config();
@@ -115,8 +116,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             service_wide,
             checks: inner.checks,
             approver: open.approval.approver().clone(),
-            change,
-            current,
+            summary: VaultChangeSummary::new(change, current, before, snapshot.policy()),
         })
     }
 }
@@ -124,12 +124,17 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
 impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
     /// The change the check passed, which the summary describes.
     pub fn change(&self) -> &PlannedChange {
-        &self.change
+        self.summary.change()
     }
 
     /// The record the change replaces or removes, which the summary describes.
     pub fn current(&self) -> &CurrentRecord {
-        &self.current
+        self.summary.current()
+    }
+
+    /// The vault change summary the owner reads before owner presence, true until the write.
+    pub fn summary(&self) -> &VaultChangeSummary {
+        &self.summary
     }
 
     /// Completes once a `lock` is waiting for the service-wide lock this plan holds, so a prompt can end the change
@@ -168,10 +173,10 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
             service,
             service_wide,
             checks,
-            change,
+            summary,
             ..
         } = self;
-        let write = write_of(change, material)?;
+        let write = write_of(summary.change().clone(), material)?;
         let inner = Arc::clone(&service.inner).lock_owned().await;
         let Some(identity) = inner
             .identity
@@ -184,7 +189,7 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
         let running = tokio::spawn(async move {
             // Held until the task ends, so no approval or other vault write starts while this one settles.
             let _service_wide = service_wide;
-            settler.run_vault_change(&mut guard.inner, identity, write).await
+            settler.run_vault_change(&mut guard.inner, identity, write, &summary).await
         });
         match running.await {
             Ok(changed) => changed,
@@ -199,14 +204,15 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
     }
 }
 
-/// The record `open` holds under `name`, healthy or damaged.
-fn current_record(open: &OpenVault, name: &CredentialName) -> Option<CurrentRecord> {
+/// The record `open` holds under `name`, healthy or damaged, with its full standing.
+fn current_record<'a>(open: &'a OpenVault, name: &CredentialName) -> Option<(CurrentRecord, &'a CredentialStanding)> {
     let standing = open.credentials.iter().find(|standing| &standing.name == name)?;
-    Some(CurrentRecord {
+    let current = CurrentRecord {
         record_id: *open.record_ids.get(name)?,
         standing: standing.standing,
         summary: standing.summary.clone(),
-    })
+    };
+    Some((current, standing))
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
@@ -217,10 +223,16 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         inner: &mut Inner,
         identity: Arc<VaultIdentity>,
         write: Write,
+        summary: &VaultChangeSummary,
     ) -> Result<CredentialChanged, VaultChangeRefusal> {
         let committed = match self.write_on_blocking_pool(Arc::clone(&identity), write).await {
             Written::Refused(refusal) => return Err(refusal),
-            Written::Committed(changed) => Ok(changed),
+            Written::Committed(changed) => {
+                if let CredentialChanged::Replaced(record_id) = &changed {
+                    log_replaced(summary, record_id);
+                }
+                Ok(changed)
+            }
             Written::Uncertain(cause) => Err(cause),
         };
         let state = self
@@ -282,6 +294,39 @@ fn write_record(locks: &ServiceLocks, fs: &impl StoreFs, identity: Arc<VaultIden
         Err(VaultError::InvalidMaterial(error)) => Written::Refused(VaultChangeRefusal::Invalid(error.to_string())),
         Err(VaultError::CommitUncertain(error)) => Written::Uncertain(error.to_string()),
         Err(other) => Written::Refused(VaultChangeRefusal::Failed(other.to_string())),
+    }
+}
+
+/// Records a committed `replace` as `credential.replaced` (design/audit-logging.md). It is logged here, at the commit,
+/// because a config check that then fails answers `committed-not-active`, which carries no record ID, although the
+/// change is durable. A removal's `credential.removed` needs only the old record ID, so `rm`'s handler logs it. Only a
+/// healthy old record's kind and origins are known.
+fn log_replaced(summary: &VaultChangeSummary, record_id: &RecordId) {
+    let PlannedChange::Replace { name, kind, origins } = summary.change() else {
+        return;
+    };
+    let (old_record_id, origins) = (summary.current().record_id, origins_text(origins.iter()));
+    match &summary.current().summary {
+        Some(old) => tracing::info!(
+            event = "credential.replaced",
+            credential = %name,
+            old_record_id = %old_record_id,
+            record_id = %record_id,
+            kind = kind.as_str(),
+            origins = %origins,
+            old_kind = old.kind.as_str(),
+            old_origins = %origins_text(old.origins.iter()),
+            "credential `{name}` replaced by record {record_id}",
+        ),
+        None => tracing::info!(
+            event = "credential.replaced",
+            credential = %name,
+            old_record_id = %old_record_id,
+            record_id = %record_id,
+            kind = kind.as_str(),
+            origins = %origins,
+            "credential `{name}` replaced by record {record_id}; the old record was damaged",
+        ),
     }
 }
 
