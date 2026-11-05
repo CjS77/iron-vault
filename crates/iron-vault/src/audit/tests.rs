@@ -232,6 +232,36 @@ fn check_failed_records_its_failure_label_and_never_config_bytes() {
     assert!(!record.to_string().contains("toml"), "{record}");
 }
 
+#[test]
+fn log_destination_changed_names_both_destinations_and_the_version() {
+    let event = LogDestinationChanged {
+        destination: LogDestination::Directory(PathBuf::from("/srv/iron-vault/log")),
+        previous: LogDestination::Stdout,
+        version: Some(version(3)),
+    };
+    let record = record_of(event, "INFO", &["log_destination", "previous_log_destination", "version"]);
+    assert_eq!(record["log_destination"], "/srv/iron-vault/log");
+    assert_eq!(record["previous_log_destination"], "stdout");
+    assert_eq!(record["version"], 3);
+}
+
+#[test]
+fn check_failed_for_an_unusable_log_destination_names_it_beside_a_fixed_detail() {
+    let failure = CheckFailure::Config(InvalidConfig::LogDestination(crate::config_check::UnusableLog {
+        destination: "/srv/iron-vault/log".to_owned(),
+        phrase: "the log directory does not exist".to_owned(),
+    }));
+    let record = record_of(
+        CheckFailed { failure: &failure },
+        "WARN",
+        &["unavailable_reason", "failure", "detail", "log_destination"],
+    );
+    assert_eq!(record["unavailable_reason"], "policy_invalid");
+    assert_eq!(record["failure"], "log_destination_unusable");
+    assert_eq!(record["detail"], "the log directory does not exist");
+    assert_eq!(record["log_destination"], "/srv/iron-vault/log");
+}
+
 /// `detail` is the one field built from a `ClientBuildError`'s text; no rustls diagnostic may reach it.
 #[test]
 fn check_failed_for_an_invalid_client_config_holds_no_library_text() {
@@ -324,6 +354,12 @@ fn no_audit_event_records_a_constant_field() {
         }
         .emit();
         HardeningIncomplete::of(&unhardened).into_iter().for_each(|event| event.emit());
+        LogDestinationChanged {
+            destination: LogDestination::Stdout,
+            previous: LogDestination::Directory(PathBuf::from("/var/log/iron-vault")),
+            version: Some(version(2)),
+        }
+        .emit();
         LockTransition {
             from: ServiceState::Ready,
             to: ServiceState::Locked,
@@ -372,6 +408,7 @@ fn event_names_have_the_subject_dot_kebab_form() {
     [
         ServiceStarted::NAME,
         HardeningIncomplete::NAME,
+        LogDestinationChanged::NAME,
         LockTransition::NAME,
         ApprovalCompleted::NAME,
         ApprovalRefused::NAME,
