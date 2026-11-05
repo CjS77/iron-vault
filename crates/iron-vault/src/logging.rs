@@ -114,16 +114,30 @@ pub fn subscriber<W>(writer: W, profile: DeploymentProfile) -> impl Subscriber +
 where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
+    build(writer, profile, LevelFilter::INFO)
+}
+
+/// [`subscriber`] at another global level, so a test can log everything the service emits, `TRACE` included, with the
+/// dependency caps still in force.
+#[cfg(any(test, feature = "test-support"))]
+pub fn subscriber_at<W>(writer: W, profile: DeploymentProfile, level: LevelFilter) -> impl Subscriber + Send + Sync
+where
+    W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
+{
+    build(writer, profile, level)
+}
+
+fn build<W>(writer: W, profile: DeploymentProfile, level: LevelFilter) -> impl Subscriber + Send + Sync
+where
+    W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
+{
     let output = tracing_subscriber::fmt::layer()
         .event_format(RecordFormat::new(profile))
         .fmt_fields(JsonFields::new())
         .with_writer(writer)
         .with_ansi(false)
         .log_internal_errors(false);
-    tracing_subscriber::registry()
-        .with(LevelFilter::INFO)
-        .with(dependency_caps())
-        .with(output)
+    tracing_subscriber::registry().with(level).with(dependency_caps()).with(output)
 }
 
 /// Installs [`subscriber`] as the global default.

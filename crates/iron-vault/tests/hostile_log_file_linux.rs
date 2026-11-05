@@ -1,14 +1,16 @@
 //! The whole log file after a hostile run holds none of the never-log values (specification §3.15; `design/audit-logging.md`,
 //! "Never logged"; K-85 and K-95 do the same for the stderr log of the upstream client).
 //!
-//! The service logs through the rolling-file destination (`LogFile` in a verified directory) with the most verbose
-//! subscriber there is: the service's JSON format and dependency caps at global `TRACE`, where the service itself installs
-//! `INFO` and ignores `RUST_LOG`. The binary runs with `RUST_LOG=trace` too. The run sends requests that use a header
+//! The service logs through the rolling-file destination (`LogFile` in a verified directory) with the production
+//! subscriber at global `TRACE` (`subscriber_at`), where the service itself installs `INFO` and ignores `RUST_LOG`.
+//! The binary runs with `RUST_LOG=trace` too. The run sends requests that use a header
 //! slot, a query slot and Basic, with a caller token, a query string and header values the caller chose, to an upstream
 //! that echoes the credential, to one that fails mid-body (HTTP/2: resets the stream) and to one nobody listens on, and
 //! types a credential and approval passphrases at the binary's prompts. Then every file in the log directory is read.
 //!
-//! The harnesses run on a current-thread runtime, so the subscriber set for the test's thread sees every record.
+//! The subscriber is the process-wide default, so records written on the blocking pool (the passphrase, vault and approval
+//! work) reach the file too. One test runs the HTTP/1.1 session and then the HTTP/2 session, because a global default can
+//! be installed once per process.
 
 #![cfg(target_os = "linux")]
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.
@@ -25,18 +27,16 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
 use common::WAIT;
-use common::approval_harness::{APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, get, serve_admin};
+use common::approval_harness::{APPROVAL_PASSPHRASE, Fixture, IDENTITY, WRONG_PASSPHRASE, get, serve_admin};
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::mock_upstream_h2::{H2Reply, MockH2Upstream};
 use common::proxy_harness::{CallerRequest, Credential, Proxy, Setup, TOKEN_BYTES, Via, next_free_port, token_hash, token_of};
+use common::scrub_stream::url_forms;
 use iron_vault::deployment::DeploymentProfile;
-use iron_vault::logging::{LogDir, LogFailure, LogFile, RecordFormat, dependency_caps};
+use iron_vault::logging::{LogDir, LogFailure, LogFile, subscriber_at};
 use iron_vault::path_metadata::invoking_user;
 use iron_vault_kinds::CredentialMaterial;
-use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::fmt::format::JsonFields;
-use tracing_subscriber::layer::SubscriberExt;
 
 const HEADER_KEY: &str = "hdr-key-Vq7e2c91";
 /// Characters that percent-encoding and the query slot both change.
@@ -47,6 +47,8 @@ const CUT_KEY: &str = "cut-key-61fb08d4";
 const DEAD_KEY: &str = "dead-key-c3a5e7b0";
 const ADDED_KEY: &str = "ADDED-key/typed+5e0b=";
 const FIXTURE_KEY: &str = "fx-secret";
+/// In the body every upstream sends; a log never holds a response body.
+const BODY_MARKER: &str = "UPSTREAMBODY-marker-4d2e";
 
 /// What the caller chooses: a query string, header values, and credentials of its own that the service replaces.
 const CALLER_QUERY: &str = "callerqs-3f9a1c";
@@ -120,6 +122,21 @@ impl LogDirectory {
             .collect()
     }
 
+    /// The records written so far, leaving out a last line still being written.
+    fn finished_records(&self) -> Vec<serde_json::Value> {
+        self.files()
+            .iter()
+            .flat_map(|(_, text)| {
+                text.rsplit_once('\n')
+                    .map_or("", |(done, _)| done)
+                    .lines()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .map(|line| serde_json::from_str(&line).unwrap_or_else(|e| panic!("not JSON ({e}): {line}")))
+            .collect()
+    }
+
     fn text(&self) -> String {
         self.files().into_iter().map(|(_, text)| text).collect()
     }
@@ -131,21 +148,12 @@ impl Drop for LogDirectory {
     }
 }
 
-/// Routes this thread's records to the log file in `dir`, at global `TRACE` under the service's format and caps.
-fn log_to_file(dir: &LogDirectory) -> DefaultGuard {
+/// Installs the process-wide subscriber: the production one at global `TRACE`, writing to the log file in `dir`.
+fn log_to_file(dir: &LogDirectory) {
     let owner = invoking_user().unwrap();
     let file = LogFile::open(LogDir::open_leaf_only(&dir.0, owner).unwrap(), owner, LogFailure::default()).unwrap();
-    let output = tracing_subscriber::fmt::layer()
-        .event_format(RecordFormat::new(DeploymentProfile::Development))
-        .fmt_fields(JsonFields::new())
-        .with_writer(file)
-        .with_ansi(false)
-        .log_internal_errors(false);
-    let subscriber = tracing_subscriber::registry()
-        .with(LevelFilter::TRACE)
-        .with(dependency_caps())
-        .with(output);
-    tracing::subscriber::set_default(subscriber)
+    let subscriber = subscriber_at(file, DeploymentProfile::Development, LevelFilter::TRACE);
+    tracing::subscriber::set_global_default(subscriber).unwrap();
 }
 
 // ---- What must not appear ------------------------------------------------------------------------------------------
@@ -160,17 +168,10 @@ fn forms(secret: &str) -> Vec<String> {
         STANDARD_NO_PAD.encode(bytes),
         URL_SAFE.encode(bytes),
         URL_SAFE_NO_PAD.encode(bytes),
-        percent_encode(secret),
     ]
-}
-
-fn percent_encode(text: &str) -> String {
-    text.bytes()
-        .map(|byte| match byte.is_ascii_alphanumeric() {
-            true => char::from(byte).to_string(),
-            false => format!("%{byte:02X}"),
-        })
-        .collect()
+    .into_iter()
+    .chain(url_forms(secret))
+    .collect()
 }
 
 /// Everything the log must not hold, as `(what, text)`, with every form of each secret and the pieces of the upstream URL.
@@ -188,11 +189,15 @@ fn forbidden(ports: &[u16]) -> Vec<(String, String)> {
         FIXTURE_KEY,
         APPROVAL_PASSPHRASE,
         WRONG_PASSPHRASE,
+        IDENTITY,
+        BODY_MARKER,
     ];
-    let caller_values = CALLER_HEADERS
-        .iter()
-        .map(|(_, value)| *value)
-        .chain([CALLER_QUERY, CALLER_AUTHORIZATION]);
+    // Each marker alone, since a leak need not carry the whole header value or query string.
+    let caller_values =
+        CALLER_HEADERS
+            .iter()
+            .map(|(_, value)| *value)
+            .chain([CALLER_QUERY, CALLER_AUTHORIZATION, "callerhdr-", "callerqs-"]);
     let tokens = [token_of(TOKEN_BYTES), token_of(WRONG_TOKEN_BYTES)];
     // The log names the upstream host and, in an approval summary, the configured origin and route paths; it never names
     // a request's own path or query, nor the credential's query parameter.
@@ -208,7 +213,7 @@ fn forbidden(ports: &[u16]) -> Vec<(String, String)> {
         "tail-x9",
         "base=USD",
     ];
-    let ports = ports.iter().map(|port| format!("localhost:{port}/v1/"));
+    let ports = ports.iter().map(|port| format!("localhost:{port}/"));
     secrets
         .into_iter()
         .map(str::to_owned)
@@ -223,9 +228,9 @@ fn forbidden(ports: &[u16]) -> Vec<(String, String)> {
 /// A body that shows `key` the ways an upstream echoes one: plain, base64 and percent-encoded.
 fn echo_of(key: &str) -> String {
     format!(
-        "{{\"key\":\"{key}\",\"b64\":\"{}\",\"url\":\"{}\"}}",
+        "{{\"key\":\"{key}\",\"b64\":\"{}\",\"url\":\"{}\",\"note\":\"{BODY_MARKER}\"}}",
         STANDARD.encode(key),
-        percent_encode(key)
+        url_forms(key)[1]
     )
 }
 
@@ -248,7 +253,8 @@ impl Ports {
 
 fn route(name: &str, upstream: &str, slot: &str, paths: &str, port: u16, credential: &str) -> String {
     format!(
-        "[routes.{name}]\nprefix = \"/{name}\"\nupstream = \"https://localhost:{port}{upstream}\"\nca_file = \"/etc/iron-vault/ca/test.pem\"\n\
+        "[routes.{name}]\nprefix = \"/{name}\"\nupstream = \"https://localhost:{port}{upstream}\"\n\
+         ca_file = \"/etc/iron-vault/ca/test.pem\"\n\
          credential = \"{credential}\"\nslot = {slot}\nmethods = [\"GET\"]\npaths = [\"{paths}\"]\n\
          rate_limit = {{ requests = 1000, per_seconds = 1, burst = 1000 }}\n\n"
     )
@@ -309,7 +315,7 @@ async fn start_upstreams(ca: &TestCa, protocol: Upstream) -> (Upstreams, Ports) 
             for body in &echoes {
                 servers.push(MockUpstream::start(ca, echoing(body)).await);
             }
-            servers.push(MockUpstream::start(ca, Reply::Truncated { sent: "partial".into() }).await);
+            servers.push(MockUpstream::start(ca, Reply::Truncated { sent: BODY_MARKER.into() }).await);
             let p = |at: usize| servers[at].port();
             let ports = Ports {
                 header: p(0),
@@ -432,23 +438,25 @@ async fn administrative_run() -> usize {
 
 // ---- The checks --------------------------------------------------------------------------------------------------
 
+/// How many request events are in the log, counting finished lines only.
+fn request_events_written(dir: &LogDirectory) -> usize {
+    dir.finished_records()
+        .iter()
+        .filter(|record| record["target"] == "iron-vault.request")
+        .count()
+}
+
 /// Waits until `expected` request events are in the log, then until a pause shows no more come.
 async fn wait_for_request_events(dir: &LogDirectory, expected: usize) {
-    let count = || {
-        dir.records()
-            .iter()
-            .filter(|record| record["target"] == "iron-vault.request")
-            .count()
-    };
     tokio::time::timeout(WAIT, async {
-        while count() < expected {
+        while request_events_written(dir) < expected {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("{} of {expected} request events: {}", count(), dir.text()));
+    .unwrap_or_else(|_| panic!("{} of {expected} request events: {}", request_events_written(dir), dir.text()));
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(count(), expected, "{}", dir.text());
+    assert_eq!(request_events_written(dir), expected, "{}", dir.text());
 }
 
 fn assert_fixed_fields(record: &serde_json::Value) {
@@ -477,10 +485,69 @@ fn assert_one_request_event_each(records: &[serde_json::Value], requests: usize)
         .for_each(|scrub| assert!(ids.contains(&scrub["request_id"].to_string()), "no request event for {scrub}"));
 }
 
-/// Runs the hostile session with `protocol` upstreams and checks the whole log.
-async fn assert_the_log_holds_nothing_forbidden(protocol: Upstream) {
-    let dir = LogDirectory::new(&format!("{protocol:?}"));
-    let _guard = log_to_file(&dir);
+/// `(route, outcome, reason)` of each request event, in order of route then reason.
+fn endings(records: &[serde_json::Value]) -> Vec<(Option<String>, String, Option<String>)> {
+    let text = |value: &serde_json::Value| value.as_str().map(str::to_owned);
+    let mut endings: Vec<_> = records
+        .iter()
+        .filter(|record| record["target"] == "iron-vault.request")
+        .map(|event| {
+            (
+                text(&event["route"]),
+                text(&event["outcome"]).unwrap_or_default(),
+                text(&event["reason"]),
+            )
+        })
+        .collect();
+    endings.sort();
+    endings
+}
+
+/// Checks that each hostile path ran and ended the way it should: the routes answered, the failing upstreams failed with
+/// their reasons, both refusals were refused, and each echo was scrubbed once.
+fn assert_hostile_paths_ran(records: &[serde_json::Value], protocol: Upstream) {
+    let cut = match protocol {
+        Upstream::Http1 => "upstream_body",
+        Upstream::Http2 => "upstream_protocol",
+    };
+    let ending = |route: Option<&str>, outcome: &str, reason: Option<&str>| {
+        (route.map(str::to_owned), outcome.to_owned(), reason.map(str::to_owned))
+    };
+    let mut expected = vec![
+        ending(Some("hdr"), "success", None),
+        ending(Some("qry"), "success", None),
+        ending(Some("basic"), "success", None),
+        ending(Some("fx2"), "success", None),
+        ending(Some("cut"), "failure", Some(cut)),
+        ending(Some("dead"), "failure", Some("upstream_connect")),
+        ending(None, "failure", Some("unauthenticated")),
+        ending(None, "failure", Some("no_route")),
+    ];
+    expected.sort();
+    assert_eq!(endings(records), expected, "{records:?}");
+    ["hdr", "qry", "basic"].iter().for_each(|route| {
+        let scrubs = records
+            .iter()
+            .filter(|r| r["event"] == "response.scrubbed" && r["route"] == *route)
+            .count();
+        assert_eq!(scrubs, 1, "{route}: {records:?}");
+    });
+    let events = |name: &str| records.iter().filter(|record| record["event"] == name).count();
+    assert_eq!(events("credential.added"), 1, "{records:?}");
+    assert_eq!(events("config.approval-completed"), 1, "{records:?}");
+    let denied = records
+        .iter()
+        .filter(|record| record["message"].as_str().is_some_and(|m| m.starts_with(DENIAL)))
+        .count();
+    assert_eq!(denied, 1, "the wrong passphrase was not logged on the blocking pool: {records:?}");
+}
+
+/// The start of the warning a wrong approval passphrase logs, from a task on the blocking pool.
+const DENIAL: &str = "the approval passphrase check failed";
+
+/// One session against `protocol` upstreams: the proxy run and the administrative run. Returns the upstream ports and the
+/// number of requests sent.
+async fn hostile_session(protocol: Upstream) -> (Ports, usize) {
     let ca = TestCa::new("hostile log CA");
     let (_upstreams, ports) = start_upstreams(&ca, protocol).await;
     let proxy = Proxy::start(Setup {
@@ -491,30 +558,36 @@ async fn assert_the_log_holds_nothing_forbidden(protocol: Upstream) {
         request_timeout_secs: 30,
     })
     .await;
-
     let requests = hostile_requests(&proxy).await + administrative_run().await;
+    (ports, requests)
+}
 
-    wait_for_request_events(&dir, requests).await;
+#[tokio::test]
+async fn the_whole_log_file_holds_no_forbidden_value_after_a_hostile_run_over_http1_and_http2() {
+    let dir = LogDirectory::new("both");
+    log_to_file(&dir);
+    let (mut requests, mut seen, mut ports) = (0, 0, Vec::new());
+    for protocol in [Upstream::Http1, Upstream::Http2] {
+        let (session_ports, sent) = hostile_session(protocol).await;
+        requests += sent;
+        ports.extend(session_ports.all());
+        wait_for_request_events(&dir, requests).await;
+        let records = dir.records();
+        assert_hostile_paths_ran(&records[seen..], protocol);
+        seen = records.len();
+    }
+
     let records = dir.records();
     records.iter().for_each(assert_fixed_fields);
     assert_one_request_event_each(&records, requests);
     assert!(
-        records.iter().any(|record| record["event"] == "response.scrubbed"),
-        "the echo was not scrubbed: {}",
-        dir.text()
+        records
+            .iter()
+            .any(|record| ["DEBUG", "TRACE"].contains(&record["level"].as_str().unwrap())),
+        "the log holds nothing below INFO, so the verbose setting was not exercised"
     );
     let text = dir.text();
-    forbidden(&ports.all()).iter().for_each(|(what, form)| {
+    forbidden(&ports).iter().for_each(|(what, form)| {
         assert!(!text.contains(form.as_str()), "{what} appears in the log as {form:?}:\n{text}");
     });
-}
-
-#[tokio::test]
-async fn the_whole_log_file_holds_no_forbidden_value_after_a_hostile_run_over_http1() {
-    assert_the_log_holds_nothing_forbidden(Upstream::Http1).await;
-}
-
-#[tokio::test]
-async fn the_whole_log_file_holds_no_forbidden_value_after_a_hostile_run_over_http2() {
-    assert_the_log_holds_nothing_forbidden(Upstream::Http2).await;
 }
