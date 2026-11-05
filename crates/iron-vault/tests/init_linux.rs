@@ -641,9 +641,11 @@ fn init_passphrases() -> InitPassphrases {
 }
 
 /// Dropping the write step's future, as `abort_all` does at shutdown, leaves both locks with the blocking task that is
-/// still writing: another init is `busy` until it ends, and the vault it writes unlocks.
+/// still writing: another init is `busy` until it ends, the task still logs `vault.initialized`, and the vault it writes
+/// unlocks.
 #[tokio::test]
 async fn an_init_dropped_while_writing_keeps_its_locks_until_the_writes_end() {
+    let logs = captured_logs();
     let fixture = Fixture::new().await;
     let service = fixture.start();
     let marker = fixture.path("state/init.unfinished");
@@ -659,6 +661,13 @@ async fn an_init_dropped_while_writing_keeps_its_locks_until_the_writes_end() {
     assert!(matches!(second, Err(InitRefusal::Busy)), "{second:?}");
     wait_until(|| !marker.exists()).await;
     assert_response(&unlock(&service).await, &AdminResponse::Success);
+    let initialized = format!("vault_id={}", unlocked(&service).await.id);
+    let text = logs.text();
+    assert!(
+        text.lines()
+            .any(|line| line.contains("vault.initialized") && line.contains(&initialized)),
+        "{text}"
+    );
 }
 
 #[tokio::test]

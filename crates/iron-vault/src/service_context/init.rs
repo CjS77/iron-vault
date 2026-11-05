@@ -56,9 +56,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// and the pause keeps that reason; its guard is dropped without ending the pause, so requests go on being refused
     /// with `locked`.
     ///
-    /// The blocking task owns both guards and drops them only once the store returns. If this future is dropped first,
-    /// as `abort_all` does at shutdown, the task still runs to its end, and no approval, vault write, unlock or second
-    /// init can start while it writes.
+    /// The blocking task owns both guards and drops them only once the store has returned and the outcome is logged. If
+    /// this future is dropped first, as `abort_all` does at shutdown, the task still runs to its end and logs how it
+    /// ended, and no approval, vault write, unlock or second init can start while it writes.
     pub async fn initialize(&self, keys: SealingKeys, passphrases: InitPassphrases) -> Result<InitializedVault, InitRefusal> {
         let service_wide = Arc::clone(&self.service_wide).try_lock_owned().map_err(|_| InitRefusal::Busy)?;
         let inner = Arc::clone(&self.inner).lock_owned().await;
@@ -69,7 +69,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let written = tokio::task::spawn_blocking(move || {
             let _held = (service_wide, inner);
             let paused = holder.pause();
-            initialize(&locks.state, &locks.config, &setup.fs, keys, passphrases, &paused)
+            let written = initialize(&locks.state, &locks.config, &setup.fs, keys, passphrases, &paused);
+            log_outcome(&written);
+            written
         })
         .await;
         settled(written)
@@ -81,16 +83,9 @@ pub fn step_label(step: InitStep) -> String {
     step.number().map_or_else(|| "discard".to_owned(), |number| number.to_string())
 }
 
-/// Logs how the writes ended, and turns the store's refusal of the directories into the refusal `init` answers with.
-fn settled(written: Result<Result<InitializedVault, InitError>, JoinError>) -> Result<InitializedVault, InitRefusal> {
-    let Ok(written) = written else {
-        tracing::warn!(
-            event = "vault.init-failed",
-            step = "unknown",
-            "vault initialization did not finish: its task ended"
-        );
-        return Err(InitRefusal::Interrupted);
-    };
+/// Logs how the writes ended: the files a discard removed, then the new vault or the failed step. A refusal of the
+/// directories is not a failure, since nothing was written, and its caller is told why.
+fn log_outcome(written: &Result<InitializedVault, InitError>) {
     let discarded = written
         .as_ref()
         .map_or_else(InitError::discarded, |vault| vault.discarded.as_slice());
@@ -101,23 +96,35 @@ fn settled(written: Result<Result<InitializedVault, InitError>, JoinError>) -> R
     match written {
         Ok(vault) => {
             tracing::info!(event = "vault.initialized", vault_id = %vault.vault_id, "vault initialized; the service stays Locked");
-            Ok(vault)
         }
-        Err(error) => Err(refused_or_failed(error)),
+        Err(error) if begin_refusal(error).is_none() => {
+            let (step, cause) = (step_label(error.step()), error.cause());
+            tracing::warn!(event = "vault.init-failed", %step, error = %cause, "vault initialization failed");
+        }
+        Err(_) => {}
     }
 }
 
-/// Step 1's refusal of the directories, which writes nothing, or a failed step.
-fn refused_or_failed(error: InitError) -> InitRefusal {
-    let refusal = match (error.step(), error.cause()) {
+/// Turns how the writing task ended into `init`'s answer. Only a task that ended without a result is logged here; the
+/// task logs every other outcome itself.
+fn settled(written: Result<Result<InitializedVault, InitError>, JoinError>) -> Result<InitializedVault, InitRefusal> {
+    let Ok(written) = written else {
+        tracing::warn!(
+            event = "vault.init-failed",
+            step = "unknown",
+            "vault initialization did not finish: its task ended"
+        );
+        return Err(InitRefusal::Interrupted);
+    };
+    written.map_err(|error| begin_refusal(&error).unwrap_or(InitRefusal::Failed(error)))
+}
+
+/// Step 1's refusal of the directories, which writes nothing; `None` for a failed step.
+fn begin_refusal(error: &InitError) -> Option<InitRefusal> {
+    match (error.step(), error.cause()) {
         (InitStep::Begin, InitFailure::State(refused)) => directory_refusal(refused),
         _ => None,
-    };
-    refusal.unwrap_or_else(|| {
-        let (step, cause) = (step_label(error.step()), error.cause());
-        tracing::warn!(event = "vault.init-failed", %step, error = %cause, "vault initialization failed");
-        InitRefusal::Failed(error)
-    })
+    }
 }
 
 /// The refusal for directories init must not write to; `None` for any other error.
