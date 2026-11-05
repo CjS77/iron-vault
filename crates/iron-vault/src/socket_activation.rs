@@ -8,8 +8,8 @@
 //! systemd describes the sockets it passes in three variables: `LISTEN_PID` (the process they are for), `LISTEN_FDS`
 //! (how many, from fd 3 up) and `LISTEN_FDNAMES` (each socket's `FileDescriptorName=`, `:`-separated). The service
 //! reads them once at startup into an [`ActivationEnv`], and [`inheritance`] decides from that value alone which
-//! listener each fd belongs to, so the protocol rules are tested without systemd. [`adopt`] asks it, then takes the fds
-//! and checks each one against its listener's configured endpoint before anything uses it.
+//! listener each fd belongs to, so the protocol rules are tested without systemd. [`PassedSockets::take`] asks it and
+//! takes the fds; each is checked against its listener's configured endpoint only when that listener adopts it.
 //!
 //! The service never removes the variables itself: removing one needs `remove_var`, which is unsafe in edition 2024.
 //! `listenfd`, which takes ownership of the fds, removes `LISTEN_PID` and `LISTEN_FDS` as it does so, so adoption must
@@ -18,7 +18,7 @@
 //!
 //! An end-to-end run under `systemd-socket-activate` is EP-34's release test.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::os::fd::RawFd;
 
 use iron_vault_policy::{Endpoint, ListenerName};
@@ -26,7 +26,7 @@ use iron_vault_policy::{Endpoint, ListenerName};
 use crate::deployment::DeploymentProfile;
 
 mod adopt;
-pub use adopt::{AdoptError, AdoptedSocket, adopt, verify};
+pub use adopt::{AdoptError, AdoptedSocket, PassedSockets, verify};
 
 /// The first fd systemd passes; the rest follow in order.
 pub const FIRST_FD: RawFd = 3;
@@ -103,9 +103,9 @@ pub enum ActivationError {
         /// The socket's fd.
         fd: RawFd,
     },
-    /// A socket's name is not a configured listener, so the unit and the config disagree.
+    /// A socket's name cannot be a listener's, so no listener can claim it.
     #[error(
-        "the socket passed as fd {fd} is named {name}, which is not a listener in the config; make its .socket unit's \
+        "the socket passed as fd {fd} is named {name}, which cannot be a listener name; make its .socket unit's \
          FileDescriptorName= match a listener"
     )]
     UnknownName {
@@ -137,13 +137,13 @@ pub struct NotActivated {
     pub listener: ListenerName,
 }
 
-/// Decides which listener each fd in `env` belongs to, for the process `pid` whose config has the listeners `known`.
+/// Decides which listener each fd in `env` belongs to, for the process `pid`.
 ///
-/// Variables for another process are ignored. Variables for this one must name every socket, each after a different
-/// known listener; anything else means the `.socket` unit and the config disagree. `known` comes from the unverified
-/// config at startup, so `serve` then logs the disagreement at WARN and adopts nothing: the provisional listeners are
-/// bound by the service where the profile allows it, or stay closed, and the service still starts Locked.
-pub fn inheritance(env: &ActivationEnv, pid: u32, known: &BTreeSet<ListenerName>) -> Result<Inheritance, ActivationError> {
+/// Variables for another process are ignored. Variables for this one must name every socket, each with a different
+/// listener name; anything else is refused, `serve` logs it at WARN and takes nothing. Whether the config names each
+/// listener is not asked here: the config at startup is unverified, so a socket it does not name is still taken and held
+/// for the verified config to claim.
+pub fn inheritance(env: &ActivationEnv, pid: u32) -> Result<Inheritance, ActivationError> {
     let Some(listen_pid) = env.listen_pid.as_deref() else {
         return Ok(Inheritance::Nothing);
     };
@@ -160,7 +160,7 @@ pub fn inheritance(env: &ActivationEnv, pid: u32, known: &BTreeSet<ListenerName>
     let listeners = names
         .iter()
         .zip(FIRST_FD..)
-        .map(|(name, fd)| claim(name, fd, known))
+        .map(|(name, fd)| claim(name, fd))
         .collect::<Result<Vec<_>, _>>()?;
     check_unique(&listeners)?;
     Ok(Inheritance::Listeners(listeners))
@@ -196,15 +196,12 @@ fn fd_names(value: Option<&str>, count: usize) -> Result<Vec<&str>, ActivationEr
     }
 }
 
-/// The known listener named `name`, passed as `fd`.
-fn claim(name: &str, fd: RawFd, known: &BTreeSet<ListenerName>) -> Result<ListenerName, ActivationError> {
+/// The listener name `name`, passed as `fd`.
+fn claim(name: &str, fd: RawFd) -> Result<ListenerName, ActivationError> {
     if name.is_empty() {
         return Err(ActivationError::Unnamed { fd });
     }
-    ListenerName::try_from(name)
-        .ok()
-        .filter(|listener| known.contains(listener))
-        .ok_or_else(|| ActivationError::UnknownName { fd, name: quoted(name) })
+    ListenerName::try_from(name).map_err(|_| ActivationError::UnknownName { fd, name: quoted(name) })
 }
 
 /// Refuses the first name that two fds share.

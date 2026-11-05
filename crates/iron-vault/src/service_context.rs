@@ -12,8 +12,10 @@
 //!
 //! Outside Ready the request listeners come from the unverified `config.toml` and answer only `503` with the holder's
 //! reason, before any caller is identified (glossary: *Listener provenance*). Entering Ready rebuilds them from the
-//! verified config before the snapshot is served, so a socket the verified config does not name is closed before the
-//! snapshot could serve through it.
+//! verified config before the snapshot is served, so a socket the verified config does not name is closed, with its
+//! connections, before the snapshot could serve through it. The connections of the listeners kept stay open, so
+//! re-entering Ready after a reload or an approval lets the requests admitted before it finish on the old snapshot
+//! (design/config-approval.md, open question 1).
 
 mod approval;
 mod init;
@@ -39,7 +41,7 @@ use crate::hardening::HardeningReport;
 use crate::request_listeners::RequestListeners;
 use crate::service_state::{AdminOperation, IllegalTransition, RequestInterface, ServiceEvent, ServiceState, UnavailableReason, next};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder, Withdrawn};
-use crate::socket_activation::AdoptedSocket;
+use crate::socket_activation::PassedSockets;
 use crate::standing::{CredentialStanding, RouteFault};
 use crate::trusted_path_report::ServicePaths;
 use serving::Serving;
@@ -216,14 +218,16 @@ struct Inner {
     open: Option<OpenVault>,
     /// The request listeners and the task serving them; `None` only while they are being rebuilt or once stopped.
     serving: Option<Serving>,
+    /// The sockets systemd passed that no listener has adopted yet, for a later listener rebuild to adopt.
+    passed: PassedSockets,
     /// The check generation: how many config checks the service has run. An approval commits only at the generation it
     /// started at, because each check discards uncommitted pending files.
     checks: u64,
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Starts the service on `locks`: Starting, then Locked, with the provisional listener set open on `provisional` and
-    /// the sockets in `activated`. Call it inside the async runtime.
+    /// Starts the service on `locks`: Starting, then Locked, with the provisional listener set open on `provisional`,
+    /// adopting from the sockets systemd `passed`. Call it inside the async runtime.
     ///
     /// v0 stores the vault identity behind a passphrase only, so startup always needs an interactive unlock; a TPM or
     /// host unlock (EP-32) would move to Checking instead. A provisional listener that cannot be opened is logged at
@@ -232,9 +236,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         locks: ServiceLocks,
         setup: ServiceSetup<F>,
         provisional: &BTreeMap<ListenerName, ListenerConfig>,
-        activated: BTreeMap<ListenerName, AdoptedSocket>,
+        mut passed: PassedSockets,
     ) -> Result<Self, IllegalTransition> {
-        let (listeners, failures) = RequestListeners::open_each(provisional, &setup.paths, activated);
+        let (listeners, failures) = RequestListeners::open_each(provisional, &setup.paths, &mut passed);
         failures
             .iter()
             .for_each(|error| tracing::warn!("provisional request listener not open: {error}"));
@@ -248,6 +252,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 open: None,
                 checks: 0,
                 serving: Some(Serving::start(listeners, Limits::default(), Arc::clone(&holder))),
+                passed,
             }),
             setup: Arc::new(setup),
             locks: Arc::new(locks),
@@ -371,7 +376,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         inner.open = None;
         inner.identity = None;
         if let Some(serving) = inner.serving.take() {
-            drop(serving.stop().await);
+            serving.stop().await;
         }
     }
 
@@ -561,15 +566,18 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     async fn enter_ready(&self, inner: &mut Inner, snapshot: ServingSnapshot, open: OpenVault) -> Result<ServiceState, IllegalTransition> {
         let ready = next(inner.state, ServiceEvent::CheckPassed)?;
         let config = snapshot.policy().config();
-        let current = match inner.serving.take() {
-            Some(serving) => serving.stop().await,
-            None => RequestListeners::empty(),
-        };
-        let (listeners, failures) = current.rebuild(config.listeners(), &self.setup.paths);
+        let limits = *config.limits();
+        let current = inner
+            .serving
+            .take()
+            .unwrap_or_else(|| Serving::start(RequestListeners::empty(), limits, Arc::clone(&self.holder)));
+        let (serving, failures) = current
+            .rebuild(config.listeners(), limits, &self.setup.paths, &mut inner.passed)
+            .await;
         failures
             .iter()
             .for_each(|error| tracing::warn!("approved request listener missing until restart: {error}"));
-        inner.serving = Some(Serving::start(listeners, *config.limits(), Arc::clone(&self.holder)));
+        inner.serving = Some(serving);
         self.holder.serve(snapshot);
         inner.open = Some(open);
         inner.state = ready;

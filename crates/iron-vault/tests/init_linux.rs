@@ -13,7 +13,6 @@
 
 mod common;
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -36,6 +35,7 @@ use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
 use iron_vault::service_state::{ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::Admission;
+use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::{Capabilities, CredentialKind};
@@ -121,7 +121,7 @@ impl Fixture {
                 memory: MemoryProtection::Unsupported,
             },
         };
-        Arc::new(ServiceContext::start(locks, setup, &provisional, BTreeMap::new()).unwrap())
+        Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap())
     }
 
     /// The file names in the state and config directories, each sorted.

@@ -2,7 +2,6 @@
 //! the service context Locked with its provisional request listeners, and serves the admin socket until SIGTERM or
 //! SIGINT, then stops the service. SIGHUP reloads the config (§3.9).
 
-use std::collections::BTreeMap;
 use std::fs::DirBuilder;
 use std::io;
 use std::os::unix::fs::DirBuilderExt;
@@ -18,10 +17,10 @@ use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, OVERFLOW_UID_FILE, PasswdDirectory};
 use iron_vault::hardening::HardeningReport;
 use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
-use iron_vault::socket_activation::{ActivationEnv, AdoptedSocket, adopt};
+use iron_vault::socket_activation::{ActivationEnv, PassedSockets};
 use iron_vault::trusted_path_report::{self, ServicePaths, TrustedPathReport};
 use iron_vault::upstream::client::TransportLimits;
-use iron_vault_policy::{Capabilities, ListenerConfig, ListenerName};
+use iron_vault_policy::Capabilities;
 use iron_vault_store::OsFs;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -43,8 +42,8 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport)
     let locks = ServiceLocks::acquire(paths)?;
     locks.sweep_stale_temps(&OsFs);
     let provisional = locks.unverified_listeners(&OsFs);
-    // `listenfd` edits the environment as it takes the sockets, so adoption runs before the runtime starts a thread.
-    let activated = adopt_sockets(paths, &provisional);
+    // `listenfd` edits the environment as it takes the sockets, so taking them runs before the runtime starts a thread.
+    let passed = take_passed_sockets();
     let setup = ServiceSetup {
         paths: paths.clone(),
         fs: OsFs,
@@ -61,7 +60,7 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport)
         (stop_signal()?, signal(SignalKind::hangup())?)
     };
     runtime.block_on(async {
-        let service = Arc::new(ServiceContext::start(locks, setup, &provisional, activated)?);
+        let service = Arc::new(ServiceContext::start(locks, setup, &provisional, passed)?);
         let principals = AdminPrincipals::new(paths.profile, paths.owner.uid);
         let server = AdminServer::new(principals, Handlers::for_service(&service), Limits::default());
         let socket = AdminSocket::bind(runtime_dir, paths.owner)?;
@@ -75,13 +74,13 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport)
     Ok(())
 }
 
-/// The sockets systemd passed for the provisional listeners. Sockets that do not match the unverified config are
-/// logged at WARN and none is adopted, so a swapped `config.toml` cannot keep the service from starting; the listeners
-/// it names are then bound where the profile allows it, or stay closed.
-fn adopt_sockets(paths: &ServicePaths, listeners: &BTreeMap<ListenerName, ListenerConfig>) -> BTreeMap<ListenerName, AdoptedSocket> {
-    adopt(&ActivationEnv::from_process(), std::process::id(), listeners, paths.owner).unwrap_or_else(|error| {
-        tracing::warn!("no socket adopted from systemd: {error}");
-        BTreeMap::new()
+/// The sockets systemd passed, each held until a listener of its name adopts it, whether or not the unverified config
+/// names it. Variables that cannot be trusted to name each socket are logged at WARN and nothing is taken, so the
+/// service still starts; the listeners are then bound where the profile allows it, or stay closed.
+fn take_passed_sockets() -> PassedSockets {
+    PassedSockets::take(&ActivationEnv::from_process(), std::process::id()).unwrap_or_else(|error| {
+        tracing::warn!("no socket taken from systemd: {error}");
+        PassedSockets::default()
     })
 }
 

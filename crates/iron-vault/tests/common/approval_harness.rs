@@ -5,7 +5,6 @@
 //! The vault is built in a temporary directory that is also the runtime directory, with its base config approved as
 //! version 1. The service account is the test's own uid.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -30,6 +29,7 @@ use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
 use iron_vault::service_state::ServiceState;
 use iron_vault::service_state::UnavailableReason;
 use iron_vault::serving_snapshot::SnapshotHolder;
+use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
@@ -195,7 +195,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
                 memory: MemoryProtection::Unsupported,
             },
         };
-        let service = Arc::new(ServiceContext::start(locks, setup, &provisional, BTreeMap::new()).unwrap());
+        let service = Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap());
         service.enter_checking(identity()).await.unwrap();
         service
     }

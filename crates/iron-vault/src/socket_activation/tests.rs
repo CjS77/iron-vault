@@ -1,15 +1,9 @@
-use std::collections::BTreeSet;
-
 use super::*;
 
 const PID: u32 = 4242;
 
 fn name(s: &str) -> ListenerName {
     ListenerName::try_from(s).unwrap()
-}
-
-fn known() -> BTreeSet<ListenerName> {
-    ["local", "backoffice"].into_iter().map(name).collect()
 }
 
 fn env(pid: Option<&str>, fds: Option<&str>, names: Option<&str>) -> ActivationEnv {
@@ -22,7 +16,7 @@ fn env(pid: Option<&str>, fds: Option<&str>, names: Option<&str>) -> ActivationE
 }
 
 fn for_us(fds: &str, names: &str) -> Result<Inheritance, ActivationError> {
-    inheritance(&env(Some("4242"), Some(fds), Some(names)), PID, &known())
+    inheritance(&env(Some("4242"), Some(fds), Some(names)), PID)
 }
 
 #[test]
@@ -35,17 +29,14 @@ fn named_sockets_are_claimed_in_fd_order() {
 
 #[test]
 fn missing_listen_pid_inherits_nothing() {
-    assert_eq!(
-        inheritance(&env(None, Some("1"), Some("local")), PID, &known()),
-        Ok(Inheritance::Nothing)
-    );
+    assert_eq!(inheritance(&env(None, Some("1"), Some("local")), PID), Ok(Inheritance::Nothing));
 }
 
 #[test]
 fn another_process_or_no_process_inherits_nothing() {
     ["4243", "pid", "", "-4242", "4242 "].into_iter().for_each(|pid| {
         assert_eq!(
-            inheritance(&env(Some(pid), Some("1"), Some("local")), PID, &known()),
+            inheritance(&env(Some(pid), Some("1"), Some("local")), PID),
             Ok(Inheritance::OtherProcess {
                 listen_pid: format!("\"{}\"", pid.escape_default())
             }),
@@ -66,7 +57,7 @@ fn listen_fds_must_be_a_positive_number() {
         )
     });
     assert_eq!(
-        inheritance(&env(Some("4242"), None, Some("local")), PID, &known()),
+        inheritance(&env(Some("4242"), None, Some("local")), PID),
         Err(ActivationError::MissingCount)
     );
 }
@@ -85,20 +76,21 @@ fn every_socket_needs_a_name() {
     assert_eq!(for_us("1", ""), Err(ActivationError::Unnamed { fd: 3 }));
     assert_eq!(for_us("2", "local:"), Err(ActivationError::Unnamed { fd: 4 }));
     assert_eq!(
-        inheritance(&env(Some("4242"), Some("1"), None), PID, &known()),
+        inheritance(&env(Some("4242"), Some("1"), None), PID),
         Err(ActivationError::Unnamed { fd: 3 })
     );
 }
 
 #[test]
-fn unknown_names_are_refused() {
+fn a_name_the_config_may_lack_is_still_claimed() {
     assert_eq!(
         for_us("2", "local:other"),
-        Err(ActivationError::UnknownName {
-            fd: 4,
-            name: "\"other\"".to_string()
-        })
+        Ok(Inheritance::Listeners(vec![name("local"), name("other")]))
     );
+}
+
+#[test]
+fn names_that_cannot_be_listener_names_are_refused() {
     // systemd names an unnamed socket after its unit, which is never a listener name.
     assert_eq!(
         for_us("1", "iron-vault.socket"),
@@ -131,7 +123,7 @@ fn a_first_fd_other_than_systemds_is_refused() {
         listen_fds_first_fd: Some("0".to_string()),
         ..env(Some("4242"), Some("1"), Some("local"))
     };
-    assert_eq!(inheritance(&shifted, PID, &known()), Err(ActivationError::FirstFdSet));
+    assert_eq!(inheritance(&shifted, PID), Err(ActivationError::FirstFdSet));
 }
 
 #[test]
@@ -170,33 +162,21 @@ fn refusal_names_the_unit_to_add() {
     assert!(message.contains("add a .socket unit for listener local"), "{message}");
 }
 
-/// The listeners `local` and `backoffice` as a parsed config holds them.
-fn configured() -> BTreeMap<ListenerName, iron_vault_policy::ListenerConfig> {
-    let toml = "schema_version = 1\n[listeners.local]\nunix_socket = \"/run/iron-vault/proxy.sock\"\n\
-                [listeners.backoffice]\naddress = \"127.0.0.1:7878\"\n";
-    iron_vault_policy::ParsedConfig::from_toml(toml.as_bytes())
-        .unwrap()
-        .listeners()
-        .clone()
-}
-
 #[test]
-fn adopt_takes_nothing_when_the_variables_are_not_for_this_process() {
-    let owner = crate::trusted_path::ExpectedOwner { uid: 997 };
+fn take_takes_nothing_when_the_variables_are_not_for_this_process() {
     [env(None, Some("1"), Some("local")), env(Some("4243"), Some("1"), Some("local"))]
         .iter()
-        .for_each(|env| assert!(adopt(env, PID, &configured(), owner).unwrap().is_empty()));
+        .for_each(|env| assert_eq!(PassedSockets::take(env, PID).unwrap().names().count(), 0));
 }
 
 #[test]
-fn adopt_refuses_variables_that_disagree_with_the_config_before_taking_any_fd() {
-    let owner = crate::trusted_path::ExpectedOwner { uid: 997 };
-    let refused = adopt(&env(Some("4242"), Some("1"), Some("other")), PID, &configured(), owner).unwrap_err();
+fn take_refuses_a_name_no_listener_can_have_before_taking_any_fd() {
+    let refused = PassedSockets::take(&env(Some("4242"), Some("1"), Some("iron-vault.socket")), PID).unwrap_err();
     assert_eq!(
         refused,
         AdoptError::Activation(ActivationError::UnknownName {
             fd: FIRST_FD,
-            name: "\"other\"".to_string()
+            name: "\"iron-vault.socket\"".to_string()
         })
     );
 }

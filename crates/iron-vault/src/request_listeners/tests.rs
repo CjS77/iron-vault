@@ -7,7 +7,7 @@
 //!
 //! The request server's tests open their listeners through [`ThreeListeners`] too.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -201,7 +201,7 @@ impl ThreeListeners {
         let profile = DeploymentProfile::Development;
         let disk = ca.disk(key_mode);
         let sockets = std::mem::take(&mut self.sockets);
-        RequestListeners::open_with(&self.config, &self.dir.paths(profile), sockets, read_from(&disk, profile))
+        RequestListeners::open_with(&self.config, &self.dir.paths(profile), sockets.into(), read_from(&disk, profile))
     }
 
     pub(crate) fn unix_path(&self) -> PathBuf {
@@ -342,7 +342,7 @@ impl Activated {
 #[tokio::test]
 async fn activated_sockets_are_served_and_their_files_left_for_systemd() {
     let Activated { dir, tcp, config, sockets } = Activated::new();
-    let listeners = RequestListeners::open(&config, &dir.paths(DeploymentProfile::Protected), sockets).unwrap();
+    let listeners = RequestListeners::open(&config, &dir.paths(DeploymentProfile::Protected), sockets.into()).unwrap();
 
     let _unix_client = UnixStream::connect(dir.socket("activated.sock")).await.unwrap();
     let unix = accept(&listeners).await;
@@ -362,7 +362,7 @@ async fn activated_sockets_are_served_and_their_files_left_for_systemd() {
 async fn a_protected_install_refuses_to_bind_tcp_itself_and_closes_what_it_opened() {
     let Activated { dir, config, .. } = Activated::new();
     fs::remove_file(dir.socket("activated.sock")).unwrap();
-    let refused = RequestListeners::open(&config, &dir.paths(DeploymentProfile::Protected), BTreeMap::new()).unwrap_err();
+    let refused = RequestListeners::open(&config, &dir.paths(DeploymentProfile::Protected), PassedSockets::default()).unwrap_err();
     assert_eq!(
         refused,
         OpenError::NotActivated(NotActivated {
@@ -378,7 +378,11 @@ async fn a_protected_install_refuses_to_bind_tcp_itself_and_closes_what_it_opene
 #[test]
 fn opening_outside_the_runtime_is_an_error() {
     let dir = RuntimeDir::new();
-    let refused = RequestListeners::open(&BTreeMap::new(), &dir.paths(DeploymentProfile::Development), BTreeMap::new());
+    let refused = RequestListeners::open(
+        &BTreeMap::new(),
+        &dir.paths(DeploymentProfile::Development),
+        PassedSockets::default(),
+    );
     assert_eq!(refused.unwrap_err(), OpenError::NoRuntime);
 }
 
@@ -406,7 +410,8 @@ fn inode(path: &Path) -> u64 {
 async fn open_each_leaves_out_only_the_listener_that_fails() {
     let dir = RuntimeDir::new();
     let config = unix_listeners(&dir, &[("good", "good.sock", ""), ("bad", "missing/bad.sock", "")]);
-    let (listeners, failures) = RequestListeners::open_each(&config, &dir.paths(DeploymentProfile::Development), BTreeMap::new());
+    let (listeners, failures) =
+        RequestListeners::open_each(&config, &dir.paths(DeploymentProfile::Development), &mut PassedSockets::default());
     assert_eq!(listeners.names().cloned().collect::<Vec<_>>(), [name("good")]);
     assert!(
         matches!(failures.as_slice(), [OpenError::Unix { listener, .. }] if *listener == name("bad")),
@@ -426,7 +431,7 @@ async fn a_rebuild_keeps_identical_listeners_and_reopens_changed_ones_after_clos
             ("gone", "gone.sock", ""),
         ],
     );
-    let (listeners, failures) = RequestListeners::open_each(&before, &paths, BTreeMap::new());
+    let (listeners, failures) = RequestListeners::open_each(&before, &paths, &mut PassedSockets::default());
     assert!(failures.is_empty(), "{failures:?}");
     let kept_inode = inode(&dir.socket("kept.sock"));
     let after = unix_listeners(
@@ -438,11 +443,16 @@ async fn a_rebuild_keeps_identical_listeners_and_reopens_changed_ones_after_clos
         ],
     );
 
-    let (rebuilt, failures) = listeners.rebuild(&after, &paths);
+    let Rebuilt {
+        listeners: rebuilt,
+        kept,
+        failures,
+    } = listeners.rebuild(&after, &paths, &mut PassedSockets::default());
 
     assert!(failures.is_empty(), "{failures:?}");
     let names: Vec<_> = rebuilt.names().cloned().collect();
     assert_eq!(names, [name("added"), name("changed"), name("kept")]);
+    assert_eq!(kept, BTreeSet::from([name("kept")]));
     assert_eq!(inode(&dir.socket("kept.sock")), kept_inode, "the identical listener was rebound");
     assert!(
         fs::symlink_metadata(dir.socket("gone.sock")).is_err(),
@@ -450,4 +460,44 @@ async fn a_rebuild_keeps_identical_listeners_and_reopens_changed_ones_after_clos
     );
     UnixStream::connect(dir.socket("changed.sock")).await.unwrap();
     UnixStream::connect(dir.socket("added.sock")).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_rebuild_adopts_a_passed_socket_the_earlier_set_did_not_name() {
+    let Activated { dir, tcp, config, sockets } = Activated::new();
+    let paths = dir.paths(DeploymentProfile::Protected);
+    let mut passed = PassedSockets::from(sockets);
+    let (listeners, failures) = RequestListeners::open_each(&BTreeMap::new(), &paths, &mut passed);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(passed.names().count(), 2, "a socket no listener named was not held");
+
+    let Rebuilt { listeners, failures, .. } = listeners.rebuild(&config, &paths, &mut passed);
+
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(listeners.names().cloned().collect::<Vec<_>>(), [name("local"), name("loopback")]);
+    assert_eq!(passed.names().count(), 0);
+    let _client = TcpStream::connect(tcp).await.unwrap();
+    assert_eq!(accept(&listeners).await.listener(), &name("loopback"));
+}
+
+#[tokio::test]
+async fn a_passed_socket_that_fails_its_checks_is_held_for_a_later_rebuild() {
+    let Activated { dir, tcp, config, sockets } = Activated::new();
+    let paths = dir.paths(DeploymentProfile::Protected);
+    let mut passed = PassedSockets::from(sockets);
+    let elsewhere = format!(
+        "schema_version = 1\n[listeners.loopback]\naddress = \"127.0.0.1:{}\"\n",
+        tcp.port().wrapping_add(1)
+    );
+    let wrong = ParsedConfig::from_toml(elsewhere.as_bytes()).unwrap().listeners().clone();
+
+    let (listeners, failures) = RequestListeners::open_each(&wrong, &paths, &mut passed);
+
+    assert!(
+        matches!(failures.as_slice(), [OpenError::Adopt(AdoptError::AddressMismatch { .. })]),
+        "{failures:?}"
+    );
+    let Rebuilt { listeners, failures, .. } = listeners.rebuild(&config, &paths, &mut passed);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(listeners.names().cloned().collect::<Vec<_>>(), [name("local"), name("loopback")]);
 }

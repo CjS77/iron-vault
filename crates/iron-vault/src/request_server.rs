@@ -25,6 +25,7 @@
 //! The handler sees only the connection tags the transport set ([`ConnectionTags`]), never anything from the request
 //! that claims to be one (§3.4).
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
@@ -39,7 +40,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use iron_vault_policy::Limits;
+use iron_vault_policy::{Limits, ListenerName};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
@@ -112,7 +113,7 @@ impl<H: RequestHandler> RequestServer<H> {
     /// Accepts and serves connections on `listeners` until the returned future is dropped, which closes every
     /// connection it is serving. A connection over `max_connections` is closed before it is read.
     pub async fn serve(&self, listeners: &RequestListeners) -> Infallible {
-        let mut connections = JoinSet::new();
+        let mut connections = Connections::default();
         loop {
             let incoming = listeners.accept().await;
             self.admit(&mut connections, incoming);
@@ -123,23 +124,35 @@ impl<H: RequestHandler> RequestServer<H> {
     /// returns once each connection's task has ended, so nothing of the connections outlives the call, whatever runtime
     /// it runs on.
     pub async fn serve_until(&self, listeners: &RequestListeners, stop: impl Future<Output = ()>) {
-        let mut connections = JoinSet::new();
+        let mut connections = Connections::default();
+        self.accept_until(listeners, &mut connections, stop).await;
+        connections.close_all().await;
+    }
+
+    /// Accepts on `listeners` until `stop` completes, serving each connection in `connections`, and leaves every
+    /// connection open: a listener rebuild hands them to the next accept loop, so their requests are not cut off.
+    pub async fn accept_until(&self, listeners: &RequestListeners, connections: &mut Connections, stop: impl Future<Output = ()>) {
         let mut stop = std::pin::pin!(stop);
         loop {
             tokio::select! {
-                incoming = listeners.accept() => self.admit(&mut connections, incoming),
+                incoming = listeners.accept() => self.admit(connections, incoming),
                 () = &mut stop => break,
             }
         }
-        connections.shutdown().await;
+    }
+
+    /// The limits this server enforces.
+    pub fn limits(&self) -> &Limits {
+        &self.limits
     }
 
     /// Serves `incoming` in a task of its own, or closes it unread when `max_connections` are already open.
-    fn admit(&self, connections: &mut JoinSet<()>, incoming: IncomingConnection) {
-        while connections.try_join_next().is_some() {}
+    fn admit(&self, connections: &mut Connections, incoming: IncomingConnection) {
+        connections.reap();
         match Arc::clone(&self.connections).try_acquire_owned() {
             Ok(permit) => {
-                connections.spawn(self.connection(permit, incoming));
+                let listener = incoming.listener().clone();
+                connections.spawn(listener, self.connection(permit, incoming));
             }
             Err(_) => tracing::debug!(
                 "listener {}: connection closed: {} connections are already open",
@@ -165,6 +178,39 @@ impl<H: RequestHandler> RequestServer<H> {
                 tracing::debug!("listener {listener}: connection ended: {e}");
             }
         }
+    }
+}
+
+/// The connections a request server is serving, by the listener each arrived on, so a listener rebuild can close the
+/// connections of the listeners it closes and keep the rest. Dropping it aborts every connection.
+#[derive(Debug, Default)]
+pub struct Connections(BTreeMap<ListenerName, JoinSet<()>>);
+
+impl Connections {
+    /// Closes the connections of every listener not in `kept` and waits for each one's task to end.
+    pub async fn close_except(&mut self, kept: &BTreeSet<ListenerName>) {
+        let (kept, closed): (BTreeMap<_, _>, BTreeMap<_, _>) =
+            std::mem::take(&mut self.0).into_iter().partition(|(name, _)| kept.contains(name));
+        self.0 = kept;
+        // Each set aborts its own tasks and waits for them; awaiting needs a loop, since nothing here joins futures.
+        for mut set in closed.into_values() {
+            set.shutdown().await;
+        }
+    }
+
+    /// Closes every connection and waits for each one's task to end.
+    pub async fn close_all(&mut self) {
+        self.close_except(&BTreeSet::new()).await;
+    }
+
+    fn spawn(&mut self, listener: ListenerName, connection: impl Future<Output = ()> + Send + 'static) {
+        self.0.entry(listener).or_default().spawn(connection);
+    }
+
+    /// Forgets the connections that have ended, so the sets do not grow.
+    fn reap(&mut self) {
+        self.0.values_mut().for_each(|set| while set.try_join_next().is_some() {});
+        self.0.retain(|_, set| !set.is_empty());
     }
 }
 

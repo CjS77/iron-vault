@@ -12,7 +12,6 @@
 
 mod common;
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -40,6 +39,7 @@ use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
 use iron_vault::service_state::{FailureReason, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, SnapshotHolder};
+use iron_vault::socket_activation::PassedSockets;
 use iron_vault::standing::{CredentialStanding, Standing};
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
@@ -222,7 +222,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
                 memory: MemoryProtection::Unsupported,
             },
         };
-        let service = Arc::new(ServiceContext::start(locks, setup, &provisional, BTreeMap::new()).unwrap());
+        let service = Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap());
         service.enter_checking(identity()).await.unwrap();
         service
     }

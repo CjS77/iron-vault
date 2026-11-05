@@ -12,7 +12,7 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
-use iron_vault_policy::{Endpoint, ListenerConfig, ListenerName};
+use iron_vault_policy::{Endpoint, ListenerName};
 use listenfd::ListenFd;
 use rustix::io::FdFlags;
 use rustix::net::{AddressFamily, SocketAddrAny, SocketAddrUnix, SocketType, sockopt};
@@ -23,7 +23,8 @@ use crate::socket_file;
 use crate::trusted_path::ExpectedOwner;
 use crate::trusted_path_report::PathFailure;
 
-/// A listening socket systemd passed, checked against its listener's endpoint.
+/// A listening socket systemd passed. One handed out by [`PassedSockets::adopt`] has been checked against its
+/// listener's endpoint.
 #[derive(Debug)]
 pub enum AdoptedSocket {
     /// A TCP listener.
@@ -124,46 +125,69 @@ pub enum AdoptError {
     },
 }
 
-/// Takes the sockets systemd passed to the process `pid`, as `env` describes them, and checks each against its
-/// listener in `listeners`. Variables meant for another process, or none at all, give an empty map.
+/// The sockets systemd passed, by listener name, each held until a listener of its name adopts it.
 ///
-/// Every adopted fd is close-on-exec. Call it at most once, before the service starts any thread or async runtime:
-/// `listenfd` removes `LISTEN_PID` and `LISTEN_FDS` from the environment as it takes the fds.
-pub fn adopt(
-    env: &ActivationEnv,
-    pid: u32,
-    listeners: &BTreeMap<ListenerName, ListenerConfig>,
-    owner: ExpectedOwner,
-) -> Result<BTreeMap<ListenerName, AdoptedSocket>, AdoptError> {
-    let known = listeners.keys().cloned().collect();
-    match inheritance(env, pid, &known)? {
-        Inheritance::Listeners(inherited) => adopt_inherited(&inherited, listeners, owner),
-        Inheritance::Nothing | Inheritance::OtherProcess { .. } => Ok(BTreeMap::new()),
+/// None is checked when it is taken: the config at startup is unverified, so a socket is checked against the endpoint
+/// of the listener that adopts it, when it adopts it. That lets a listener rebuild adopt a socket the unverified config
+/// did not name, or named wrongly. Dropping the set closes every socket still held.
+#[derive(Debug, Default)]
+pub struct PassedSockets(BTreeMap<ListenerName, AdoptedSocket>);
+
+impl PassedSockets {
+    /// Takes every socket systemd passed to the process `pid`, as `env` describes them. Variables meant for another
+    /// process, or none at all, give an empty set.
+    ///
+    /// Every fd taken is close-on-exec. Call it at most once, before the service starts any thread or async runtime:
+    /// `listenfd` removes `LISTEN_PID` and `LISTEN_FDS` from the environment as it takes the fds.
+    pub fn take(env: &ActivationEnv, pid: u32) -> Result<Self, AdoptError> {
+        match inheritance(env, pid)? {
+            Inheritance::Listeners(inherited) => take_inherited(&inherited).map(Self),
+            Inheritance::Nothing | Inheritance::OtherProcess { .. } => Ok(Self::default()),
+        }
+    }
+
+    /// The socket passed for `listener`, once it passes [`verify`] against `endpoint`; `None` when none was passed.
+    /// A socket that fails is kept, so a later listener rebuild can adopt it against another endpoint.
+    pub fn adopt(
+        &mut self,
+        listener: &ListenerName,
+        endpoint: &Endpoint,
+        owner: ExpectedOwner,
+    ) -> Option<Result<AdoptedSocket, AdoptError>> {
+        let socket = self.0.remove(listener)?;
+        Some(match verify(listener, socket.as_fd(), endpoint, owner) {
+            Ok(()) => Ok(socket),
+            Err(error) => {
+                self.0.insert(listener.clone(), socket);
+                Err(error)
+            }
+        })
+    }
+
+    /// The names of the sockets still held, in name order.
+    pub fn names(&self) -> impl Iterator<Item = &ListenerName> {
+        self.0.keys()
     }
 }
 
-/// Takes the sockets in fd order as `inherited` names them, and checks each against its listener.
-fn adopt_inherited(
-    inherited: &[ListenerName],
-    listeners: &BTreeMap<ListenerName, ListenerConfig>,
-    owner: ExpectedOwner,
-) -> Result<BTreeMap<ListenerName, AdoptedSocket>, AdoptError> {
+/// Sockets bound some other way, such as a test's, held as if systemd had passed them.
+#[cfg(any(test, feature = "test-support"))]
+impl From<BTreeMap<ListenerName, AdoptedSocket>> for PassedSockets {
+    fn from(sockets: BTreeMap<ListenerName, AdoptedSocket>) -> Self {
+        Self(sockets)
+    }
+}
+
+/// Takes the sockets in fd order as `inherited` names them.
+fn take_inherited(inherited: &[ListenerName]) -> Result<BTreeMap<ListenerName, AdoptedSocket>, AdoptError> {
     let mut fds = ListenFd::from_env();
     inherited
         .iter()
         .zip(FIRST_FD..)
         .enumerate()
         .map(|(index, (name, fd))| {
-            let endpoint = listeners
-                .get(name)
-                .map(ListenerConfig::endpoint)
-                .ok_or_else(|| ActivationError::UnknownName {
-                    fd,
-                    name: format!("\"{name}\""),
-                })?;
             let socket = take(&mut fds, index, name, fd)?;
             set_cloexec(name, socket.as_fd())?;
-            verify(name, socket.as_fd(), endpoint, owner)?;
             Ok((name.clone(), socket))
         })
         .collect()

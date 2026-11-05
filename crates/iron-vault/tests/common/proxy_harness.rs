@@ -5,7 +5,6 @@
 //! [`TOKEN_HEADER`], on the TCP listener in `Proxy-Authorization`, so an upstream that echoes the header back is the
 //! case the relay must strip.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -20,6 +19,7 @@ use iron_vault::proxy_handler::ProxyHandler;
 use iron_vault::request_listeners::{OpenError, RequestListeners};
 use iron_vault::request_server::RequestServer;
 use iron_vault::serving_snapshot::{ServingSnapshot, SnapshotHolder};
+use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault::upstream::clients::UpstreamClients;
@@ -353,7 +353,7 @@ fn open_listeners(setup: &Setup<'_>, socket: &Path, dir: &Path) -> (ValidatedCon
     let attempt = || {
         let port = setup.tcp.then(next_free_port);
         let config = setup.config(socket, port);
-        let opened = RequestListeners::open(config.listeners(), &paths(dir), BTreeMap::new());
+        let opened = RequestListeners::open(config.listeners(), &paths(dir), PassedSockets::default());
         opened.map(|listeners| (config, listeners, port))
     };
     let mut result = attempt();
