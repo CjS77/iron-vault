@@ -7,7 +7,9 @@ use rustls::{CertificateError, ClientConnection, Connection, ServerConfig, Serve
 use rustls_pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime};
 
 use super::*;
+use crate::config_check::InvalidConfig;
 use crate::tls::provider;
+use crate::upstream::client::ClientBuildError;
 
 const UPSTREAM: &str = "upstream.test";
 const CA_PATH: &str = "/etc/iron-vault/ca/upstream.pem";
@@ -388,4 +390,30 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
         let refused = trust_for(&route, DeploymentProfile::Protected, ExpectedOwner { uid: 0 }).unwrap_err();
         assert!(matches!(refused, PinnedCaError::Unreadable(_)), "{refused:?}");
     }
+}
+
+const LIBRARY_TEXT: &str = "distinctive-rustls-text";
+
+/// One `ClientBuildError` per `ClientConfigError` variant, each over a library error whose text must never be rendered.
+fn client_build_errors() -> Vec<(ClientBuildError, String)> {
+    let protocol = rustls::Error::General(LIBRARY_TEXT.to_owned());
+    let verifier = VerifierBuilderError::NoRootAnchors;
+    let verifier_text = verifier.to_string();
+    vec![
+        (ClientConfigError::ProtocolVersions(protocol).into(), LIBRARY_TEXT.to_owned()),
+        (ClientConfigError::Verifier(verifier).into(), verifier_text),
+    ]
+}
+
+#[test]
+fn client_build_errors_render_without_the_library_error_text() {
+    client_build_errors().iter().for_each(|(error, library_text)| {
+        assert!(!error.to_string().contains(library_text.as_str()), "{error}");
+        assert!(
+            std::error::Error::source(error).is_some(),
+            "the chain still reaches the inner error"
+        );
+        let detail = InvalidConfig::Clients(error.clone()).detail();
+        assert!(!detail.contains(library_text.as_str()), "{detail}");
+    });
 }

@@ -12,6 +12,8 @@ use crate::hardening::LockUnavailable;
 use crate::logging::LogDestination;
 use crate::logging::tests::{capture, capture_as, parse};
 use crate::service_state::FailureReason;
+use crate::upstream::client::ClientBuildError;
+use crate::upstream::trust::ClientConfigError;
 
 /// Keys every record has besides an event's own fields.
 pub(super) const RECORD_KEYS: [&str; 5] = ["timestamp", "level", "target", "message", "event"];
@@ -216,6 +218,22 @@ fn check_failed_records_its_failure_label_and_never_config_bytes() {
     assert_eq!(record["unavailable_reason"], "policy_invalid");
     assert_eq!(record["failure"], "config_invalid");
     assert!(!record.to_string().contains("toml"), "{record}");
+}
+
+/// `detail` is the one field built from a `ClientBuildError`'s text; no rustls diagnostic may reach it.
+#[test]
+fn check_failed_for_an_invalid_client_config_holds_no_library_text() {
+    let library_text = "distinctive-rustls-text";
+    let build = ClientBuildError::from(ClientConfigError::ProtocolVersions(rustls::Error::General(library_text.to_owned())));
+    let failure = CheckFailure::Config(InvalidConfig::Clients(build));
+    let record = record_of(
+        CheckFailed { failure: &failure },
+        "WARN",
+        &["unavailable_reason", "failure", "detail"],
+    );
+    assert_eq!(record["failure"], "config_invalid");
+    assert!(record["detail"].as_str().is_some_and(|detail| !detail.is_empty()), "{record}");
+    assert!(!record.to_string().contains(library_text), "{record}");
 }
 
 #[test]
