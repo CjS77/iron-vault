@@ -238,8 +238,8 @@ The state is read again under the service context's mutex in step 2.
    Unavailable answers `unlocked-unavailable`, and the message names the redacted reason (`policy invalid` or
    `recovery needed`), never the check's detail, which goes to the log at WARN.
 
-Each state change is logged at INFO as a lock transition, under the target `iron_vault::lock_transition`, naming the two
-states and nothing the owner typed. scrypt and the config check take a few seconds, inside the CLI's 60-second timeout.
+Each state change is recorded at INFO as the audit event `service.lock-transition` under the target `iron-vault.audit`,
+with `from_state` and `to_state` and nothing the owner typed ([audit events](audit-logging.md#audit-events)). scrypt and the config check take a few seconds, inside the CLI's 60-second timeout.
 
 #### add
 
