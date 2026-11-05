@@ -392,7 +392,7 @@ field names and types, and the record shape they share.
 | `config.version-reserved` | INFO | step 8's reservation of version 1 is durable | version, config digest |
 | `config.approval-completed` | INFO | step 8's commit of version 1 is durable | version, config digest; the summary field reads `initial config` |
 | `vault.initialized` | INFO | step 9 is durable | the vault ID only |
-| `vault.init-failed` | WARN | a step failed | the step, the error, which names files and never their contents |
+| `vault.init-failed` | WARN | a step failed | the step and the error's fixed kind label, never a path or file contents |
 | `vault.foreign-file` | WARN | `unlock` read an Initialized state directory holding a file not on the [lists](#initialization-state) | the file's name |
 
 The two `config.` events are the [audit events](config-approval.md#audit-events) every approval raises (K-118), so
