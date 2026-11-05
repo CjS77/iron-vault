@@ -205,11 +205,13 @@ field names and types, and the record shape they share. None carries credential 
 
 | Event | Level | When | Fields |
 |---|---|---|---|
+| `credential.added` | INFO | the add committed | name, record ID, kind and origins |
 | `credential.replaced` | INFO | the replace committed | name, old and new record IDs, old and new kind and origins (the old ones only for a healthy record) |
 | `credential.removed` | INFO | the remove committed | name, record ID |
 
 A superseded record file the write could not remove is recorded as `vault.superseded-left` at WARN, from the write
-report; the next vault write removes it.
+report; the next vault write removes it. A write that removed an unindexed record file first records
+`vault.unindexed-removed` for each. The store returns both facts in its `WriteReport`; the binary emits the events.
 
 ## Open questions
 

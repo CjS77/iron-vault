@@ -384,7 +384,9 @@ service-generated summary", so this departs from its wording ([open question 3](
 ## Logging
 
 These are audit events in the audit log; [audit-logging.md](audit-logging.md#audit-events) gives each one's exact
-field names and types, and the record shape they share.
+field names and types, and the record shape they share. The binary emits them from what the store's init returns
+(`InitializedVault`, `InitError`); the failed step is logged as its number, or `discard`, and the cause as the variant's
+`error_kind` label.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
