@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use iron_vault_store::{
-    ConfigDigest, INITIAL_CONFIG, InitError, InitFailure, InitPassphrases, InitStateError, InitStep, InitializationState, InitializedVault,
-    SealingKeys, StoreFs, ensure_initializable, initialize,
+    ConfigDigest, FirstApproval, INITIAL_CONFIG, InitError, InitFailure, InitPassphrases, InitStateError, InitStep, InitializationState,
+    InitializedVault, SealingKeys, StoreFs, ensure_initializable, initialize,
 };
 use tokio::task::JoinError;
 
@@ -101,11 +101,14 @@ fn log_outcome(written: &Result<InitializedVault, InitError>) {
     }
     match written {
         Ok(vault) => {
-            record_first_approval(vault);
+            record_first_approval(&vault.approved());
             VaultInitialized { vault_id: vault.vault_id }.emit();
         }
         Err(error) if begin_refusal(error).is_none() => {
-            record_uncertain_init_writes(error.cause());
+            match error.approved() {
+                Some(approved) => record_first_approval(approved),
+                None => record_uncertain_init_writes(error.cause()),
+            }
             InitFailed::Step {
                 step: error.step(),
                 cause: error.cause(),
@@ -128,14 +131,14 @@ fn record_uncertain_init_writes(cause: &InitFailure) {
 }
 
 /// Init's version 1 is audited like any approval: reserved, uncertain if its commit was, then completed. The store ran
-/// the transaction to its end before returning, so the events follow it in order.
-fn record_first_approval(vault: &InitializedVault) {
-    let InitializedVault {
+/// the transaction to its end before returning, so the events follow it in order. A later step's failure records them
+/// too, before its own `vault.init-failed`.
+fn record_first_approval(approved: &FirstApproval) {
+    let FirstApproval {
         version,
         digest,
         commit_uncertain,
-        ..
-    } = vault;
+    } = approved;
     VersionReserved {
         version: *version,
         digest: *digest,

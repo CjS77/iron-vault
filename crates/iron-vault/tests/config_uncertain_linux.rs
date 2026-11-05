@@ -45,9 +45,15 @@ struct UncertainFs(Arc<Mutex<Armed>>);
 struct Armed {
     renames_left: Option<usize>,
     fail_next_sync: bool,
+    /// Fail the directory fsync after `init.unfinished` is removed, which is init's last step.
+    fail_finish: bool,
 }
 
 impl UncertainFs {
+    fn arm_finish(&self) {
+        self.0.lock().unwrap().fail_finish = true;
+    }
+
     fn arm(&self, nth_rename: usize) {
         self.0.lock().unwrap().renames_left = Some(nth_rename);
     }
@@ -79,7 +85,12 @@ impl StoreFs for UncertainFs {
     }
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
-        OsFs.remove_file(path)
+        OsFs.remove_file(path)?;
+        let mut armed = self.0.lock().unwrap();
+        if path.file_name().is_some_and(|name| name == "init.unfinished") {
+            armed.fail_next_sync |= armed.fail_finish;
+        }
+        Ok(())
     }
 
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
@@ -234,12 +245,15 @@ const INIT_EVENTS: [&str; 6] = [
     "vault.init-failed",
 ];
 
-async fn init_with_fault(nth_rename: usize) -> (Result<(), InitRefusal>, Vec<Value>) {
+async fn init_with_fault(nth_rename: usize, fail_finish: bool) -> (Result<(), InitRefusal>, Vec<Value>) {
     let fixture = InitFixture::new();
     let fs = UncertainFs::default();
     let service = fixture.start(fs.clone());
     let from = captured_logs().text().len();
     fs.arm(nth_rename);
+    if fail_finish {
+        fs.arm_finish();
+    }
     let vault = Passphrase::new(SecretString::from("INIT-vault-passphrase-41c7")).unwrap();
     let approval = ApprovalPassphrase::new(SecretString::from(APPROVAL_PASSPHRASE)).unwrap();
     let keys = NewVaultKeys::generate().unwrap().into_sealing();
@@ -254,7 +268,7 @@ async fn init_with_fault(nth_rename: usize) -> (Result<(), InitRefusal>, Vec<Val
 async fn an_uncertain_commit_at_init_step_8_logs_the_pair_before_the_vault_is_initialized() {
     let _turn = TURN.lock().await;
     // `approval.age` is created (1), version 1 reserved (2) and committed (3).
-    let (result, records) = init_with_fault(3).await;
+    let (result, records) = init_with_fault(3, false).await;
 
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(
@@ -279,10 +293,32 @@ async fn an_uncertain_commit_at_init_step_8_logs_the_pair_before_the_vault_is_in
 async fn an_uncertain_approval_state_creation_at_init_step_6_logs_the_write_before_the_failed_step() {
     let _turn = TURN.lock().await;
 
-    let (result, records) = init_with_fault(1).await;
+    let (result, records) = init_with_fault(1, false).await;
 
     assert!(matches!(result, Err(InitRefusal::Failed(_))), "{result:?}");
     assert_eq!(names(&records), ["vault.commit-uncertain", "vault.init-failed"], "{records:?}");
     assert_uncertain_state_record(&records[0]);
     assert_eq!(records[1]["step"], "6");
+}
+
+#[tokio::test]
+async fn a_failure_at_init_step_9_still_logs_the_committed_first_approval_before_the_failed_step() {
+    let _turn = TURN.lock().await;
+    // Step 8's commit is uncertain, then the fsync after the removal of `init.unfinished` fails.
+    let (result, records) = init_with_fault(3, true).await;
+
+    assert!(matches!(result, Err(InitRefusal::Failed(_))), "{result:?}");
+    assert_eq!(
+        names(&records),
+        [
+            "config.version-reserved",
+            "config.commit-uncertain",
+            "vault.commit-uncertain",
+            "config.approval-completed",
+            "vault.init-failed"
+        ],
+        "{records:?}"
+    );
+    assert_uncertain_state_record(&records[2]);
+    assert_eq!(records[4]["step"], "9");
 }

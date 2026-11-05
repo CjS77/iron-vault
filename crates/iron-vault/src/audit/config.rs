@@ -3,10 +3,10 @@
 
 use iron_vault_store::{
     ApprovalError, ApprovalFailure, ApprovalProgress, ApprovalRecoveryError, ApprovalStateError, ApprovalStep, ApprovalVersion,
-    ConfigDigest, ConfigFileName, DiscardedFile, ErrorKindLabel, PublishSet, RecoveredApproval, StateFileName,
+    ConfigDigest, ConfigFileName, DiscardedFile, ErrorKindLabel, PublishSet, RecoveredApproval,
 };
 
-use super::vault::CommitUncertain as StateCommitUncertain;
+use super::vault::emit_approval_state_uncertain;
 use super::{AUDIT_TARGET, AuditEvent, EventName};
 
 /// `config.version-reserved`: step 2's reservation is durable. Recorded before signing starts, so a signing failure, or
@@ -140,16 +140,7 @@ pub fn record_recovery(recovered: &RecoveredApproval) {
 /// Records an uncertain commit and the approval state write behind it.
 pub fn record_commit_uncertain(version: ApprovalVersion, error_kind: &ErrorKindLabel) {
     CommitUncertain { version, error_kind }.emit();
-    record_state_uncertain(error_kind);
-}
-
-/// `vault.commit-uncertain` for `approval.age`, which the approval transaction replaces.
-fn record_state_uncertain(error_kind: &ErrorKindLabel) {
-    StateCommitUncertain {
-        file: &StateFileName::approval_state(),
-        error_kind,
-    }
-    .emit();
+    emit_approval_state_uncertain(error_kind);
 }
 
 /// Records a publish whose renames ran but whose result did not verify; the renames happened either way.
@@ -178,7 +169,9 @@ fn reserved_version(error: &ApprovalError) -> Option<ApprovalVersion> {
 pub fn record_uncertain_writes(error: &ApprovalError) {
     match (reserved_version(error), error.commit_uncertain(), error.cause()) {
         (Some(version), Some(kind), _) => record_commit_uncertain(version, kind),
-        (_, _, ApprovalFailure::State(ApprovalStateError::WriteUncertain(write))) => record_state_uncertain(&write.error_kind_label()),
+        (_, _, ApprovalFailure::State(ApprovalStateError::WriteUncertain(write))) => {
+            emit_approval_state_uncertain(&write.error_kind_label())
+        }
         _ => {}
     }
 }

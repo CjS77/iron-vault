@@ -240,14 +240,19 @@ pub fn emit_commit_uncertain(error: &VaultError) {
             error_kind: &cause.error_kind_label(),
         }
         .emit(),
-        VaultError::ApprovalState(ApprovalStateError::WriteUncertain(cause @ WriteError::Io { file, .. })) => CommitUncertain {
-            file,
-            error_kind: &cause.error_kind_label(),
-        }
-        .emit(),
+        VaultError::ApprovalState(ApprovalStateError::WriteUncertain(cause)) => emit_approval_state_uncertain(&cause.error_kind_label()),
         VaultError::ApprovalStateUnrecorded(inner) => emit_commit_uncertain(inner),
         _ => {}
     }
+}
+
+/// `vault.commit-uncertain` for `approval.age`, the file the approval transaction and init's step 6 replace.
+pub fn emit_approval_state_uncertain(error_kind: &ErrorKindLabel) {
+    CommitUncertain {
+        file: &StateFileName::approval_state(),
+        error_kind,
+    }
+    .emit();
 }
 
 /// The failure's variant: none of the text it wraps reaches the record.

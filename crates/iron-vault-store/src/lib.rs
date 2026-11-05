@@ -66,8 +66,8 @@ pub use envelope::{
 };
 pub use error_kind::ErrorKindLabel;
 pub use init::{
-    InitError, InitFailure, InitPassphrases, InitPassphrasesError, InitStep, InitializedVault, MIN_PASSPHRASE_CHARS, NewVaultKeys,
-    SealingKeys, WhichPassphrase, initialize,
+    FirstApproval, InitError, InitFailure, InitPassphrases, InitPassphrasesError, InitStep, InitializedVault, MIN_PASSPHRASE_CHARS,
+    NewVaultKeys, SealingKeys, WhichPassphrase, initialize,
 };
 pub use initialization::{
     BeginError, INITIAL_CONFIG, InitStateError, InitializationState, begin_initialization, ensure_initializable, finish_initialization,

@@ -304,7 +304,7 @@ impl PreparedApproval<'_> {
         let read = |name| read_config_file(storage.config_dir, storage.fs, name).map_err(|e| committed(e.into()));
         let (config, envelope) = (read(ConfigFileName::Active)?, read(ConfigFileName::ActiveSignature)?);
         let approval = verify_approval(self.state, &config, &envelope).map_err(|e| committed(ApprovalFailure::BadApproval(e)))?;
-        Ok(CommittedApproval::new(approval, config.into_boxed_slice()).with_commit_uncertain(uncertain))
+        Ok(CommittedApproval::new(approval, config.into_boxed_slice()).with_commit_uncertain(uncertain.map(|kind| *kind)))
     }
 }
 
@@ -312,7 +312,7 @@ impl PreparedApproval<'_> {
 pub struct CommittedApproval {
     approval: VerifiedApproval,
     config: Box<[u8]>,
-    commit_uncertain: Option<Box<ErrorKindLabel>>,
+    commit_uncertain: Option<ErrorKindLabel>,
 }
 
 impl CommittedApproval {
@@ -325,14 +325,14 @@ impl CommittedApproval {
         }
     }
 
-    fn with_commit_uncertain(self, commit_uncertain: Option<Box<ErrorKindLabel>>) -> Self {
+    fn with_commit_uncertain(self, commit_uncertain: Option<ErrorKindLabel>) -> Self {
         Self { commit_uncertain, ..self }
     }
 
     /// The kind of the directory fsync failure that made this commit uncertain until it was settled, or `None` when the
     /// commit was certain at once or the approval was found by recovery.
     pub fn commit_uncertain(&self) -> Option<&ErrorKindLabel> {
-        self.commit_uncertain.as_deref()
+        self.commit_uncertain.as_ref()
     }
 
     /// The committed approval, verified over the published pair as read back.

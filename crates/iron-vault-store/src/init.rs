@@ -100,6 +100,7 @@ pub struct InitError {
     step: InitStep,
     cause: InitFailure,
     discarded: Vec<String>,
+    approved: Option<Box<FirstApproval>>,
 }
 
 impl InitError {
@@ -110,6 +111,7 @@ impl InitError {
             step,
             cause,
             discarded: Vec::new(),
+            approved: None,
         }
     }
 
@@ -127,6 +129,12 @@ impl InitError {
     /// removed before the failure when the discard itself failed part-way, and none when nothing was discarded.
     pub fn discarded(&self) -> &[String] {
         &self.discarded
+    }
+
+    /// Step 8's outcome, set only when the first approval was committed and a later step failed. Its events are the
+    /// caller's to record even though initialization did not finish.
+    pub fn approved(&self) -> Option<&FirstApproval> {
+        self.approved.as_deref()
     }
 }
 
@@ -179,6 +187,17 @@ pub struct InitializedVault {
     pub commit_uncertain: Option<ErrorKindLabel>,
     /// The files discarded from an unfinished initialization before step 1, for the `vault.init-discarded` log.
     pub discarded: Vec<String>,
+}
+
+impl InitializedVault {
+    /// The first approval's outcome, as an [`InitError`] that failed after it reports it.
+    pub fn approved(&self) -> FirstApproval {
+        FirstApproval {
+            version: self.version,
+            digest: self.digest,
+            commit_uncertain: self.commit_uncertain.clone(),
+        }
+    }
 }
 
 /// Initializes a vault in the locked state and config directories: discards an unfinished initialization, then runs
@@ -253,7 +272,10 @@ fn write_vault<F: StoreFs>(
         fs,
     };
     let approved = approve_initial_config(&storage, &mut approval, signer, paused).map_err(at(InitStep::FirstApproval))?;
-    finish_initialization(state, fs).map_err(at(InitStep::Finish))?;
+    finish_initialization(state, fs).map_err(|error| InitError {
+        approved: Some(Box::new(approved.clone())),
+        ..at(InitStep::Finish)(error)
+    })?;
     Ok((created.manifest().vault_id(), approved))
 }
 
@@ -268,6 +290,7 @@ fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Res
         step,
         cause: cause.into(),
         discarded,
+        approved: None,
     })
 }
 
@@ -324,10 +347,14 @@ fn open_signer(
 }
 
 /// What step 8 committed.
-struct FirstApproval {
-    version: ApprovalVersion,
-    digest: ConfigDigest,
-    commit_uncertain: Option<ErrorKindLabel>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstApproval {
+    /// The committed version, always 1.
+    pub version: ApprovalVersion,
+    /// The digest of the initial config that version approves.
+    pub digest: ConfigDigest,
+    /// The kind of the directory fsync failure that made the commit uncertain until it was settled, if one did.
+    pub commit_uncertain: Option<ErrorKindLabel>,
 }
 
 /// Step 8: the approval transaction on the initial config, which a new vault's counters must commit as version 1. The
@@ -357,5 +384,6 @@ fn at<E: Into<InitFailure>>(step: InitStep) -> impl FnOnce(E) -> InitError {
         step,
         cause: error.into(),
         discarded: Vec::new(),
+        approved: None,
     }
 }
