@@ -583,14 +583,14 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `21` | `credential-invalid` | `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
 | `22` | `vault-write-failed` | `add`: the vault write failed; the message says whether it may have committed |
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
-| `23` | `list-too-large` | `list`: the credential list does not fit one frame; the message names the count |
+| `26` | `list-too-large` | `list`: the credential list does not fit one frame; the message names the count |
 
 ## Versions
 
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
-`status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), error codes 7 to 23 and error code 25
+`status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), error codes 7 to 22, 25 and 26
 join it rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).

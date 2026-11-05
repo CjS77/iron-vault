@@ -424,7 +424,7 @@ pub enum ErrorCode {
     /// `caller-token`: the operating system's random source failed, so no token was made.
     RandomSourceFailed = 25,
     /// `list`: the credential list does not fit one frame; the message names the count.
-    ListTooLarge = 23,
+    ListTooLarge = 26,
 }
 
 impl ErrorCode {

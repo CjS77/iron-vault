@@ -624,7 +624,7 @@ fn malformed_fixed_width_values_and_flags_are_refused() {
 
 #[test]
 fn unknown_error_codes_are_refused() {
-    [0, 24, 0xffff].into_iter().for_each(|code: u16| {
+    [0, 27, 0xffff].into_iter().for_each(|code: u16| {
         let error = body(&[field(1, &code.to_be_bytes()), field(2, b"m")]);
         assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::UnknownErrorCode(code));
     });
@@ -794,7 +794,7 @@ fn list_has_command_id_9_no_arguments_and_its_own_error_code() {
     assert_eq!((AdminCommand::List as u16, AdminCommand::List.name()), (9, "list"));
     assert_eq!(
         (ErrorCode::ListTooLarge as u16, ErrorCode::ListTooLarge.name()),
-        (23, "list-too-large")
+        (26, "list-too-large")
     );
     assert_round_trips(&error(ErrorCode::ListTooLarge, "m"));
 }
