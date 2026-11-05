@@ -104,10 +104,11 @@ fn dechunked(raw: &[u8]) -> (Vec<u8>, bool) {
     (out, false)
 }
 
-/// The one request event, after a pause long enough for a second write to have shown up.
-async fn the_only_event(log: &RequestLog) -> serde_json::Value {
+/// The one request event. The proxy is dropped first, which ends every task it spawned, so no second event can follow the
+/// count.
+async fn the_only_event(log: &RequestLog, proxy: Proxy) -> serde_json::Value {
     let event = log.the_request_event().await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(proxy);
     assert_eq!(log.request_events().len(), 1, "{}", log.text());
     event
 }
@@ -139,7 +140,7 @@ async fn a_clean_relayed_response_is_one_success_with_its_size_and_whole_duratio
     gate.notify_one();
     let _ = tokio::time::timeout(WAIT, stream.read_to_end(&mut Vec::new())).await.unwrap();
 
-    let event = the_only_event(&log).await;
+    let event = the_only_event(&log, proxy).await;
     assert_eq!(
         (
             event["outcome"].as_str(),
@@ -163,7 +164,7 @@ async fn a_head_answer_hyper_never_polls_is_a_success() {
 
     assert_eq!(status_of(&send(&proxy, "HEAD", &[]).await), Some(200));
 
-    let event = the_only_event(&log).await;
+    let event = the_only_event(&log, proxy).await;
     assert_eq!(
         (event["outcome"].as_str(), event["response_bytes"].as_u64()),
         (Some("success"), Some(0)),
@@ -182,7 +183,7 @@ async fn a_compressed_scrubbed_response_counts_the_bytes_sent_and_writes_one_scr
 
     let (sent, ended) = dechunked(&raw);
     assert!(ended);
-    let event = the_only_event(&log).await;
+    let event = the_only_event(&log, proxy).await;
     assert_eq!(
         (
             event["outcome"].as_str(),
@@ -223,7 +224,7 @@ async fn each_relay_failure_after_the_head_is_one_event_with_its_reason() {
         let (_upstream, proxy) = start(&ca, upstream_reply, 30).await;
         let raw = send(&proxy, "GET", &[]).await;
         assert!(raw.is_empty() || !dechunked(&raw).1, "{reason}: the body ended cleanly");
-        assert_cut(&the_only_event(&log).await, reason);
+        assert_cut(&the_only_event(&log, proxy).await, reason);
         log.clear();
     }
 }
@@ -239,7 +240,7 @@ async fn a_refused_coding_or_redirect_is_one_event_with_its_reason() {
         let ca = TestCa::new("relay events CA");
         let (_upstream, proxy) = start(&ca, upstream_reply, 30).await;
         assert_eq!(status_of(&send(&proxy, "GET", &[]).await), Some(502));
-        let event = the_only_event(&log).await;
+        let event = the_only_event(&log, proxy).await;
         assert_eq!(
             (event["outcome"].as_str(), event["reason"].as_str(), event["status"].as_u64()),
             (Some("failure"), Some(reason), Some(502)),
@@ -285,7 +286,7 @@ async fn a_withdrawal_after_the_head_is_one_withdrawn_event_with_the_heads_statu
     proxy.holder().refuse(UnavailableReason::Locked);
 
     let _ = tokio::time::timeout(WAIT, stream.read_to_end(&mut Vec::new())).await.unwrap();
-    let event = the_only_event(&log).await;
+    let event = the_only_event(&log, proxy).await;
     assert_cut(&event, "withdrawn");
     assert_eq!(event["response_bytes"], 5, "{event}");
 }
@@ -297,10 +298,10 @@ async fn a_caller_that_hangs_up_mid_body_is_one_caller_gone_event() {
     let gate = Arc::new(Notify::new());
     let (_upstream, proxy) = start(&ca, two_chunks(&gate), 30).await;
 
+    // The gate stays shut: the second chunk never exists, so the cut can only be the caller's hang-up.
     drop(first_chunk(&proxy).await);
-    gate.notify_one();
 
-    assert_cut(&the_only_event(&log).await, "caller_gone");
+    assert_cut(&the_only_event(&log, proxy).await, "caller_gone");
 }
 
 #[tokio::test]
@@ -313,7 +314,7 @@ async fn a_body_still_streaming_at_the_deadline_is_one_deadline_event() {
 
     let _ = tokio::time::timeout(WAIT, stream.read_to_end(&mut Vec::new())).await.unwrap();
 
-    let event = the_only_event(&log).await;
+    let event = the_only_event(&log, proxy).await;
     assert_cut(&event, "deadline");
     assert!(event["duration_ms"].as_u64().unwrap() >= 1000, "{event}");
 }
