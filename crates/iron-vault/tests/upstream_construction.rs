@@ -15,6 +15,10 @@ const CONSTRUCTOR_FILE: &str = "crates/iron-vault/src/upstream/client.rs";
 /// replaces, so it cannot go through the constructor.
 const RETRY_CONTROL_FILE: &str = "crates/iron-vault/tests/reqwest_retry_control.rs";
 
+/// The one other test file that may build a reqwest client: it needs a raw `reqwest::Error`, which the constructor's
+/// client never hands out, to show that its error kind label drops the URL.
+const LIBRARY_ERROR_FILE: &str = "crates/iron-vault/tests/library_error_redaction.rs";
+
 /// Constructions clippy cannot refuse, which no file may contain.
 const REFUSED_EVERYWHERE: [&str; 2] = ["Client::default", "ClientBuilder::default"];
 
@@ -51,7 +55,7 @@ fn violations() -> Vec<String> {
         .flat_map(|path| {
             let relative = path.strip_prefix(&root).unwrap().to_string_lossy().into_owned();
             let text = fs::read_to_string(&path).unwrap();
-            let constructor = relative == CONSTRUCTOR_FILE || relative == RETRY_CONTROL_FILE;
+            let constructor = [CONSTRUCTOR_FILE, RETRY_CONTROL_FILE, LIBRARY_ERROR_FILE].contains(&relative.as_str());
             text.lines()
                 .enumerate()
                 .filter(|(_, line)| refused(line, constructor))

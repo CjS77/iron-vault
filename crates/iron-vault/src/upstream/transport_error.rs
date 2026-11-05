@@ -39,14 +39,30 @@ impl TransportError {
         }
     }
 
+    /// The class's error kind label, for a log record's `error_kind`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::Connect => "connect",
+            Self::Tls => "tls",
+            Self::Protocol => "protocol",
+            Self::Body => "body",
+        }
+    }
+
     /// Classifies `error` and drops it unformatted.
+    pub(crate) fn classify(error: reqwest::Error) -> Self {
+        Self::of(&error)
+    }
+
+    /// The class of `error`, read only through its predicates and source types.
     ///
     /// The timeout check comes first, since a connect timeout is also a connect error, and the TLS check before the
     /// connect check, since reqwest reports a failed handshake as a connect error.
-    pub(crate) fn classify(error: reqwest::Error) -> Self {
+    pub(crate) fn of(error: &reqwest::Error) -> Self {
         if error.is_timeout() {
             Self::Timeout
-        } else if has_tls_source(&error) {
+        } else if has_tls_source(error) {
             Self::Tls
         } else if error.is_connect() {
             Self::Connect
