@@ -358,13 +358,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     ///
     /// First it cancels an approval waiting at a prompt, which has reserved nothing, and waits for the service-wide lock:
     /// an approval past its prompts, or a config check, holds it for seconds. Then, under the context's mutex, it stops
-    /// admitting requests, withdraws the serving snapshot (cancelling the requests
-    /// running on it) and drops the approval state, the credential report and the context's copy of the vault identity,
-    /// so no later change interleaves. Unavailable has no snapshot to withdraw, so there the identity is cleared at once
-    /// unless something else still holds it. The mutex is then released and the call waits up to `drain` for the last
-    /// holder of the old snapshot, a streaming response body included, to drop it, so a slow request does not stall the
-    /// other admin commands. The vault in that snapshot holds the last reference to the identity, so the identity is
-    /// cleared with it. If the drain expires, or the identity is still held, it logs a warning and returns an outcome
+    /// admitting requests, withdraws the serving snapshot (cancelling the requests running on it) and drops the approval
+    /// state, the credential report and the context's copy of the vault identity, so no later change interleaves.
+    /// Unavailable has no snapshot to withdraw, so there the identity is cleared at once unless something else still
+    /// holds it. Both locks are then released and the call waits up to `drain` for the last holder of the old snapshot,
+    /// a streaming response body included, to drop it, so a slow request does not stall the other admin commands. The
+    /// vault in that snapshot holds the last reference to the identity, so the identity is cleared with it. If the drain expires, or the identity is still held, it logs a warning and returns an outcome
     /// other than [`LockOutcome::Cleared`], never claiming the secrets are cleared.
     pub async fn lock(&self, drain: Duration) -> Result<LockOutcome, IllegalTransition> {
         let (mut withdrawn, identity) = self.withdraw_for_lock().await?;
@@ -513,8 +512,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 
     /// [`Settler::check_and_settle`] in a spawned task that owns `inner` and the service-wide lock, so the move out of
-    /// Checking finishes even if this future is dropped (§3.12 leaves Checking only on a pass or a failure), and nothing
-    /// else takes the service-wide lock before it does. A task that ends without a result has already failed closed
+    /// Checking finishes even if this future is dropped (§3.12 leaves Checking only on a pass or a failure), and the
+    /// service-wide lock is held until the check ends. A task that ends without a result has already failed closed
     /// through its [`SettleGuard`], so the caller only reads the state it left.
     async fn check_and_settle_detached(
         &self,
