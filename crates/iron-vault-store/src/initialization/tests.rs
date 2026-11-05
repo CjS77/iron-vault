@@ -202,6 +202,45 @@ fn a_foreign_file_beside_a_manifest_is_still_initialized() {
 }
 
 #[test]
+fn require_initialized_returns_the_sorted_foreign_names_beside_a_manifest() {
+    let dirs = Dirs::new("init-require-foreign");
+    Vault::create(&dirs.state, &OsFs, VaultIdentity::generate()).unwrap();
+    assert_eq!(require_initialized(&dirs.state, &dirs.config, &OsFs), Ok(Vec::new()));
+    ["notes.txt", "backup~", "lost+found", ".stale.tmp"].iter().for_each(|file| {
+        std::fs::write(dirs.state_dir.path().join(file), b"x").unwrap();
+    });
+    assert_eq!(
+        require_initialized(&dirs.state, &dirs.config, &OsFs),
+        Ok(vec!["backup~".to_owned(), "notes.txt".to_owned()])
+    );
+}
+
+#[test]
+fn require_initialized_refuses_every_other_state_by_name() {
+    let fresh = Dirs::new("init-require-fresh");
+    assert_eq!(
+        require_initialized(&fresh.state, &fresh.config, &OsFs),
+        Err(UnlockError::NotInitialized)
+    );
+    let unfinished = Dirs::new("init-require-unfinished");
+    unfinished.crashed_after(&OsFs, 3);
+    assert_eq!(
+        require_initialized(&unfinished.state, &unfinished.config, &OsFs),
+        Err(UnlockError::InitializationUnfinished)
+    );
+    let alone = Dirs::new("init-require-alone");
+    alone.put(&OsFs, "operational.age");
+    let error = require_initialized(&alone.state, &alone.config, &OsFs).unwrap_err();
+    assert_eq!(
+        error,
+        UnlockError::Unrecognized {
+            files: vec!["operational.age".to_owned()]
+        }
+    );
+    assert!(error.to_string().contains("operational.age"));
+}
+
+#[test]
 fn a_foreign_file_beside_the_marker_or_without_a_manifest_is_unrecognized() {
     let beside_marker = Dirs::new("init-foreign-marker");
     beside_marker.crashed_after(&OsFs, 3);

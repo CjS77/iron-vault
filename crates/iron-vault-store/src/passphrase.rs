@@ -173,6 +173,15 @@ pub enum UnlockError {
     /// There is no vault in the state directory.
     #[error("there is no vault here; run `iron-vault init`")]
     NotInitialized,
+    /// The state and config directories hold files initialization did not write, so there is no vault to unlock.
+    #[error("the vault directories hold files that initialization did not write, first {files:?}; move them aside")]
+    Unrecognized {
+        /// The first offending names, sorted state-directory names first.
+        files: Vec<String>,
+    },
+    /// The initialization state could not be read, so it is unknown whether there is a vault.
+    #[error("the initialization state cannot be read: {0}")]
+    InitializationState(crate::InitStateError),
     /// Listing the state directory failed, so the initialization state is unknown.
     #[error("cannot list the state directory: {kind}")]
     ListStateDir {

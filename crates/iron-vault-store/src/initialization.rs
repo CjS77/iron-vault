@@ -162,6 +162,24 @@ pub fn finish_initialization(state: &StateDirLock, fs: &impl StoreFs) -> Result<
     })
 }
 
+/// Requires the Initialized state for an unlock and returns the names of the foreign files beside the manifest, sorted,
+/// so the caller can warn of them. Never refuses over a foreign file there: `Vault::open` ignores names it does not
+/// know, and a stray `lost+found` or an editor's backup must not lock the owner out of a working vault.
+///
+/// Any other state is refused with the file names only, before a passphrase is asked for: Uninitialized and Unfinished
+/// with their `iron-vault init` text, and Unrecognized naming its first offending files.
+pub fn require_initialized(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, UnlockError> {
+    let found = survey(state, config, fs).map_err(UnlockError::InitializationState)?;
+    match found.state {
+        InitializationState::Initialized => Ok(found.foreign),
+        InitializationState::Uninitialized => Err(UnlockError::NotInitialized),
+        InitializationState::Unfinished => Err(UnlockError::InitializationUnfinished),
+        InitializationState::Unrecognized => Err(UnlockError::Unrecognized {
+            files: found.blockers.into_iter().take(MAX_NAMED).collect(),
+        }),
+    }
+}
+
 /// Refuses an unlock that cannot succeed, before any envelope is read or scrypt runs.
 pub(crate) fn ensure_unlockable(lock: &StateDirLock, fs: &impl StoreFs) -> Result<(), UnlockError> {
     let names = fs.list_dir(lock.dir()).map_err(|e| UnlockError::ListStateDir { kind: e.kind() })?;
@@ -197,6 +215,8 @@ struct Survey {
     state: InitializationState,
     /// The names that made the state Unrecognized, empty otherwise.
     blockers: Vec<String>,
+    /// The sorted names of the foreign files beside a manifest, empty in every other state.
+    foreign: Vec<String>,
 }
 
 impl Survey {
@@ -206,7 +226,15 @@ impl Survey {
         } else {
             InitializationState::Unrecognized
         };
-        Self { state, blockers }
+        Self {
+            state,
+            blockers,
+            foreign: Vec::new(),
+        }
+    }
+
+    fn with_foreign(self, foreign: Vec<String>) -> Self {
+        Self { foreign, ..self }
     }
 }
 
@@ -249,7 +277,9 @@ fn survey(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Re
         return Ok(Survey::new(InitializationState::Unfinished, blockers));
     }
     if has(Entry::Manifest) {
-        return Ok(Survey::new(InitializationState::Initialized, Vec::new()));
+        let mut foreign: Vec<_> = names_where(|k| k == Entry::Foreign).collect();
+        foreign.sort();
+        return Ok(Survey::new(InitializationState::Initialized, Vec::new()).with_foreign(foreign));
     }
     let config_files = present_config_files(config, fs)?.into_iter().map(|f| f.to_string());
     let blockers = names_where(|k| k != Entry::Ignored).chain(config_files).collect();

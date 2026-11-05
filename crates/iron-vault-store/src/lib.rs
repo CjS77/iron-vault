@@ -68,6 +68,7 @@ pub use init::{
 };
 pub use initialization::{
     INITIAL_CONFIG, InitStateError, InitializationState, begin_initialization, ensure_initializable, finish_initialization,
+    require_initialized,
 };
 pub use manifest::{
     MAX_MANIFEST_ENTRIES, MAX_MANIFEST_LEN, ManifestEntry, ManifestError, VaultManifest, open_manifest, record_digest, seal_manifest,
