@@ -55,18 +55,18 @@ fn violations() -> Vec<String> {
         .flat_map(|path| {
             let relative = path.strip_prefix(&root).unwrap().to_string_lossy().into_owned();
             let text = fs::read_to_string(&path).unwrap();
-            let constructor = [CONSTRUCTOR_FILE, RETRY_CONTROL_FILE, LIBRARY_ERROR_FILE].contains(&relative.as_str());
+            let may_build_client = [CONSTRUCTOR_FILE, RETRY_CONTROL_FILE, LIBRARY_ERROR_FILE].contains(&relative.as_str());
             text.lines()
                 .enumerate()
-                .filter(|(_, line)| refused(line, constructor))
+                .filter(|(_, line)| refused(line, may_build_client))
                 .map(|(number, line)| format!("{relative}:{}: {}", number + 1, line.trim()))
                 .collect::<Vec<_>>()
         })
         .collect()
 }
 
-fn refused(line: &str, constructor: bool) -> bool {
-    REFUSED_EVERYWHERE.iter().any(|form| line.contains(form)) || (!constructor && names_reqwest_client(line))
+fn refused(line: &str, may_build_client: bool) -> bool {
+    REFUSED_EVERYWHERE.iter().any(|form| line.contains(form)) || (!may_build_client && names_reqwest_client(line))
 }
 
 fn names_reqwest_client(line: &str) -> bool {

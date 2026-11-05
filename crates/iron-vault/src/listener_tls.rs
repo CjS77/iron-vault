@@ -128,11 +128,13 @@ pub enum ListenerTlsError {
         key: PathBuf,
     },
     /// The crypto provider cannot serve rustls's default protocol versions.
-    #[error("listener {listener}: the TLS crypto provider cannot serve the default protocol versions: {source}")]
+    /// The rustls error is kept as the source only: its text is a library error's, and this message reaches the log.
+    #[error("listener {listener}: the TLS crypto provider cannot serve the default protocol versions")]
     ProtocolVersions {
         /// The listener being opened.
         listener: ListenerName,
         /// The rustls error.
+        #[source]
         source: rustls::Error,
     },
 }

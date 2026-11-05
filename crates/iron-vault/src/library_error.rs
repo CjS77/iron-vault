@@ -46,7 +46,7 @@ impl LibraryError for hyper::Error {
             (self.is_parse(), "parse"),
             (self.is_timeout(), "timeout"),
             (self.is_incomplete_message(), "incomplete_message"),
-            (self.is_canceled(), "canceled"),
+            (self.is_canceled(), "cancelled"),
             (self.is_closed(), "closed"),
             (self.is_body_write_aborted(), "body_write_aborted"),
             (self.is_user(), "user"),

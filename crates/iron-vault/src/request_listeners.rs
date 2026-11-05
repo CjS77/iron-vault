@@ -308,7 +308,11 @@ impl OpenListener {
             Accepted::Unix(stream) => match peer_identity(&stream) {
                 Ok(peer) => Some(IncomingConnection::unix(self.name.clone(), peer, stream)),
                 Err(e) => {
-                    tracing::warn!(error_kind = %e.kind_label(), "listener {}: connection closed: cannot read its peer credentials", self.name);
+                    let listener = &self.name;
+                    tracing::warn!(
+                        error_kind = %e.kind_label(),
+                        "listener {listener}: connection closed: cannot read its peer credentials"
+                    );
                     None
                 }
             },

@@ -255,7 +255,11 @@ fn publish_committed(
             kind,
             ..
         }) => {
-            tracing::warn!(%version, error_kind = %ErrorKindLabel::from(kind), "the config directory fsync failed while finishing a publish; the read-back decides")
+            tracing::warn!(
+                %version,
+                error_kind = %ErrorKindLabel::from(kind),
+                "the config directory fsync failed while finishing a publish; the read-back decides"
+            )
         }
         Err(cause) => return Err(ApprovalRecoveryError::PublishFailed { version, cause }),
     }
