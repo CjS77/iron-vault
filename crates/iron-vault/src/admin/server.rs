@@ -21,6 +21,7 @@ use super::protocol::{
     self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, Notice, OwnerInput, Prompt,
 };
 use super::socket::AdminSocket;
+use crate::library_error::{ErrorKindLabel, LibraryError};
 
 /// How long the server pauses after a failed accept, such as running out of file descriptors, so the loop cannot spin.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
@@ -81,7 +82,7 @@ impl AdminServer {
                 accepted = listener.accept() => match accepted {
                     Ok((stream, _)) => self.admit(stream, &mut open),
                     Err(e) => {
-                        tracing::warn!("admin socket accept failed: {e}");
+                        tracing::warn!(error_kind = %e.kind_label(), "admin socket accept failed");
                         tokio::time::sleep(ACCEPT_BACKOFF).await;
                     }
                 },
@@ -138,7 +139,7 @@ impl AdminServer {
         let peer = match peer_identity(&*stream) {
             Ok(peer) => peer,
             Err(e) => {
-                tracing::warn!("admin connection closed: cannot read its peer credentials: {e}");
+                tracing::warn!(error_kind = %e.kind_label(), "admin connection closed: cannot read its peer credentials");
                 return None;
             }
         };
@@ -187,8 +188,8 @@ pub enum ExchangeError {
     #[error("no owner input arrived before the deadline")]
     TimedOut,
     /// The connection failed.
-    #[error("the admin connection failed: {0}")]
-    Io(io::Error),
+    #[error("the admin connection failed: {}", ErrorKindLabel::from(*.0))]
+    Io(io::ErrorKind),
     /// The CLI answered with a frame that does not decode.
     #[error("the CLI answered a prompt with a malformed frame: {0}")]
     Malformed(FrameError),
@@ -269,7 +270,7 @@ impl Exchange {
             Ok(Ok(Frame::OwnerInput(input))) => Ok(input),
             Ok(Ok(_)) => Err(ExchangeError::Unexpected),
             Ok(Err(ReadError::Closed)) => Err(ExchangeError::Closed),
-            Ok(Err(ReadError::Io(e))) => Err(ExchangeError::Io(e)),
+            Ok(Err(ReadError::Io(e))) => Err(ExchangeError::Io(e.kind())),
             Ok(Err(ReadError::Frame(e))) => Err(ExchangeError::Malformed(e)),
             Err(_) => Err(ExchangeError::TimedOut),
         }
@@ -302,7 +303,7 @@ impl Exchange {
     async fn write(&mut self, bytes: &[u8]) -> Result<(), ExchangeError> {
         match tokio::time::timeout(self.limits.request_deadline, self.stream.write_all(bytes)).await {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(ExchangeError::Io(e)),
+            Ok(Err(e)) => Err(ExchangeError::Io(e.kind())),
             Err(_) => Err(ExchangeError::TimedOut),
         }
     }
@@ -325,7 +326,7 @@ impl Exchange {
                 Err(NoRequest::Answer(error(ErrorCode::for_frame_error(e), &e.to_string())))
             }
             Ok(Err(ReadError::Closed)) => Err(unanswered("the peer closed before sending a whole request")),
-            Ok(Err(ReadError::Io(e))) => Err(unanswered(&format!("reading the request failed: {e}"))),
+            Ok(Err(ReadError::Io(e))) => Err(unanswered(&format!("reading the request failed: {}", e.kind_label()))),
             Err(_) => Err(unanswered("no whole request arrived before the deadline")),
         }
     }

@@ -46,6 +46,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 pub use crate::connection_tags::ConnectionTags;
+use crate::library_error::LibraryError;
 use crate::request_listeners::{IncomingConnection, RequestListeners};
 
 mod body;
@@ -175,7 +176,7 @@ impl<H: RequestHandler> RequestServer<H> {
             let listener = tags.listener().clone();
             let service = service_fn(move |request| respond(Arc::clone(&handler), tags.clone(), limits, request));
             if let Err(e) = http.serve_connection(TokioIo::new(stream), service).await {
-                tracing::debug!("listener {listener}: connection ended: {e}");
+                tracing::debug!(error_kind = %e.kind_label(), "listener {listener}: connection ended");
             }
         }
     }

@@ -18,6 +18,7 @@ use super::server::{Exchange, ExchangeError};
 use super::unlock::Unlock;
 use crate::caller_token::generate_caller_token;
 use crate::deployment::DeploymentProfile;
+use crate::library_error::LibraryError;
 use crate::service_context::{LockOutcome, ServiceContext};
 use iron_vault_store::StoreFs;
 
@@ -156,7 +157,7 @@ impl AdminHandler for IssueCallerToken {
                 AdminResponse::CallerToken { token }
             }
             Err(e) => {
-                tracing::error!(event = "caller.token-failed", error = %e, "no caller token was issued");
+                tracing::error!(event = "caller.token-failed", error_kind = %e.kind_label(), "no caller token was issued");
                 AdminResponse::Error {
                     code: ErrorCode::RandomSourceFailed,
                     message: format!("no caller token was issued: {e}"),

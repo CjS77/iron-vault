@@ -29,6 +29,7 @@ use zeroize::Zeroizing;
 
 use crate::admin::ADMIN_SOCKET_NAME;
 use crate::admin_file::{self, AdminFile, AdminFileError};
+use crate::library_error::LibraryError;
 use crate::listener_tls::{DEFAULT_HANDSHAKE_TIMEOUT, ListenerTls, ListenerTlsError};
 use crate::peer::peer_identity;
 use crate::request_socket::{RequestBindError, RequestSocket, SocketFile};
@@ -307,7 +308,7 @@ impl OpenListener {
             Accepted::Unix(stream) => match peer_identity(&stream) {
                 Ok(peer) => Some(IncomingConnection::unix(self.name.clone(), peer, stream)),
                 Err(e) => {
-                    tracing::warn!("listener {}: connection closed: cannot read its peer credentials: {e}", self.name);
+                    tracing::warn!(error_kind = %e.kind_label(), "listener {}: connection closed: cannot read its peer credentials", self.name);
                     None
                 }
             },
@@ -338,10 +339,10 @@ impl Socket {
 async fn pause(listener: &ListenerName, error: &io::Error) {
     match error.kind() {
         io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset => {
-            tracing::debug!("listener {listener}: a connection was abandoned before it was accepted: {error}");
+            tracing::debug!(error_kind = %error.kind_label(), "listener {listener}: a connection was abandoned before it was accepted");
         }
         _ => {
-            tracing::warn!("listener {listener}: accept failed, pausing {ACCEPT_BACKOFF:?}: {error}");
+            tracing::warn!(error_kind = %error.kind_label(), "listener {listener}: accept failed, pausing {ACCEPT_BACKOFF:?}");
             tokio::time::sleep(ACCEPT_BACKOFF).await;
         }
     }

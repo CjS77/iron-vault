@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
 
+use crate::library_error::LibraryError;
 use crate::trusted_path::ExpectedOwner;
 
 /// Pending connections the kernel queues; a server refuses any beyond its connection cap as soon as it accepts them.
@@ -172,7 +173,7 @@ impl Drop for SocketFile {
             return;
         }
         if let Err(e) = self.remove_if_ours() {
-            tracing::warn!("cannot remove the {} {}: {e}", self.role, self.path.display());
+            tracing::warn!(error_kind = %e.kind_label(), "cannot remove the {} {}", self.role, self.path.display());
         }
     }
 }

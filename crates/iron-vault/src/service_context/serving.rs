@@ -8,6 +8,7 @@ use iron_vault_policy::{Limits, ListenerConfig, ListenerName};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+use crate::library_error::LibraryError;
 use crate::proxy_handler::ProxyHandler;
 use crate::request_listeners::{OpenError, Rebuilt, RequestListeners};
 use crate::request_server::{Connections, RequestServer};
@@ -115,7 +116,7 @@ impl Serving {
         // A failed send means the task has already ended, which `await` below reports.
         let _ = self.stop.send(());
         self.task.await.unwrap_or_else(|error| {
-            tracing::error!("the request listener task failed: {error}");
+            tracing::error!(error_kind = %error.kind_label(), "the request listener task failed");
             (RequestListeners::empty(), Connections::default())
         })
     }
