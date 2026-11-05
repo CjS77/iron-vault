@@ -47,7 +47,7 @@ use iron_vault::standing::{CredentialStanding, Standing};
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::{Capabilities, ListenerName};
+use iron_vault_policy::{Capabilities, CredentialKind, ListenerName};
 use iron_vault_store::{
     ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDirLock, LockError, OperationalIdentity, OsFs,
     Passphrase, PendingConfig, PermittedOrigins, PinnedApprover, RecipientSet, RecordDamage, SignError, SignatureAlgorithm, StateDirLock,
@@ -1911,4 +1911,100 @@ async fn locking_while_serving_gives_503_locked_and_unlock_restores_serving_at_t
         (before.committed, before.highest_reserved)
     );
     assert_eq!(after.id, before.id);
+}
+
+const BASIC_USER: &str = "basic-user-9f3a";
+const BASIC_PASSWORD: &str = "basic-pass-7c1e";
+
+/// Sends `list` over the admin protocol and returns the response frame's bytes with the decoded list.
+async fn list(service: &Arc<ServiceContext>) -> (Vec<u8>, Option<Vec<CredentialStanding>>) {
+    match admin(service, AdminRequest::List, "").await {
+        (bytes, _, AdminResponse::List { credentials }) => (bytes, credentials),
+        (_, _, other) => panic!("expected a credential list, got {other:?}"),
+    }
+}
+
+/// Adds the Basic credential `basic_key` to the fixture's vault, which sorts before the fixture's two.
+fn add_basic_record(fixture: &Fixture) {
+    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let (mut vault, _) = Vault::open(&lock, &OsFs, identity()).unwrap();
+    let port = fixture.upstream.port().to_string().parse().unwrap();
+    let origins = PermittedOrigins::new([("basic.example".parse().unwrap(), port), ("localhost".parse().unwrap(), port)].into()).unwrap();
+    let material = CredentialMaterial::Basic {
+        username: BASIC_USER.into(),
+        password: BASIC_PASSWORD.into(),
+    };
+    vault.add(&lock, &OsFs, "basic_key".parse().unwrap(), material, origins).unwrap();
+}
+
+#[tokio::test]
+async fn list_shows_each_credential_in_name_order_and_a_damaged_one_without_kind_or_origins() {
+    let mut fixture = Fixture::new().await;
+    add_basic_record(&fixture);
+    fixture.approve(&fixture.config(&brave_route(fixture.upstream.port())));
+    fs::remove_file(&fixture.brave_record).unwrap();
+    let service = fixture.start().unwrap();
+    assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
+    let port = fixture.upstream.port();
+
+    let (_, credentials) = list(&service).await;
+
+    let shown = credentials
+        .unwrap()
+        .into_iter()
+        .map(|credential| {
+            let summary = credential.summary.map(|summary| {
+                let origins = summary.origins.iter().map(|(host, port)| format!("{host}:{}", port.get()));
+                (summary.kind, origins.collect::<Vec<_>>())
+            });
+            (credential.name.to_string(), credential.standing, summary)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shown,
+        [
+            (
+                "basic_key".to_owned(),
+                Standing::Healthy,
+                Some((
+                    CredentialKind::Basic,
+                    vec![format!("basic.example:{port}"), format!("localhost:{port}")]
+                ))
+            ),
+            ("brave_key".to_owned(), Standing::Damaged(RecordDamage::Missing), None),
+            (
+                "fx_key".to_owned(),
+                Standing::Healthy,
+                Some((CredentialKind::Static, vec![format!("localhost:{port}")]))
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn list_while_no_vault_is_open_has_the_flag_clear_and_no_entries() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+
+    assert_eq!(list(&service).await.1, None);
+}
+
+#[tokio::test]
+async fn list_is_byte_identical_across_runs_and_holds_no_secret_username_or_password() {
+    let mut fixture = Fixture::new().await;
+    add_basic_record(&fixture);
+    fixture.approve(&fixture.config(&brave_route(fixture.upstream.port())));
+    let service = fixture.start().unwrap();
+    service.enter_checking(identity()).await.unwrap();
+
+    let (first, _) = list(&service).await;
+    let (second, _) = list(&service).await;
+
+    assert_eq!(first, second);
+    [SECRET, BASIC_USER, BASIC_PASSWORD].iter().for_each(|secret| {
+        assert!(
+            !first.windows(secret.len()).any(|window| window == secret.as_bytes()),
+            "{secret} leaked"
+        )
+    });
 }

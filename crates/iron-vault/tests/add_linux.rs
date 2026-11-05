@@ -858,3 +858,22 @@ async fn an_added_credential_serves_once_a_route_using_it_is_approved() {
     );
     logs.assert_no_secret();
 }
+
+#[tokio::test]
+async fn a_credential_added_to_a_running_service_is_listed_with_its_kind_and_origins_without_a_reload() {
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    let added_origins = fixture.origins().iter().cloned().collect::<Vec<_>>();
+
+    added(&add(&fixture, &service, "fx").await.response);
+
+    let listed = service.list().await.unwrap();
+    let entry = listed.iter().find(|credential| credential.name.as_str() == "fx").unwrap();
+    assert_eq!(entry.standing, Standing::Healthy);
+    let summary = entry.summary.as_ref().unwrap();
+    assert_eq!((summary.kind, &summary.origins), (CredentialKind::Static, &added_origins));
+    assert_eq!(
+        listed.iter().map(|credential| credential.name.as_str()).collect::<Vec<_>>(),
+        ["fx", "fx_key"]
+    );
+}

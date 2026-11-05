@@ -26,6 +26,7 @@ use iron_vault::admin::socket::AdminSocket;
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_state::ServiceState;
+use iron_vault::standing::{CredentialStanding, RecordSummary, Standing};
 use iron_vault_policy::{CallerToken, CredentialKind, Port, TokenHash};
 use iron_vault_store::RecordId;
 use tokio::sync::oneshot;
@@ -541,4 +542,52 @@ async fn a_failed_random_source_is_a_service_error() {
         "{}",
         text(&output.stderr)
     );
+}
+
+/// A test-only `list` handler that answers with a fixed list.
+struct FixedList(Option<Vec<CredentialStanding>>);
+
+impl AdminHandler for FixedList {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        let credentials = self.0.clone();
+        Box::pin(async move { Ok(AdminResponse::List { credentials }) })
+    }
+}
+
+async fn list_with(credentials: Option<Vec<CredentialStanding>>) -> Output {
+    let dir = TempDir::new();
+    let handlers = Handlers::default().with(AdminCommand::List, FixedList(credentials));
+    serve_and_run(&dir, invoking_user().unwrap().uid, handlers, "list", Vec::new()).await
+}
+
+fn fx_key() -> CredentialStanding {
+    CredentialStanding {
+        name: "fx_key".parse().unwrap(),
+        standing: Standing::Healthy,
+        unavailable_routes: Vec::new(),
+        summary: Some(RecordSummary {
+            kind: CredentialKind::Static,
+            origins: vec![("api.fx.example".parse().unwrap(), Port::try_from(443).unwrap())],
+        }),
+    }
+}
+
+#[tokio::test]
+async fn list_prints_one_line_per_credential_identically_on_every_run() {
+    let first = list_with(Some(vec![fx_key()])).await;
+    let second = list_with(Some(vec![fx_key()])).await;
+
+    assert_eq!(first.status.code(), Some(0), "stderr: {}", text(&first.stderr));
+    assert_eq!(text(&first.stdout), "fx_key  static  api.fx.example:443  healthy\n");
+    assert_eq!(first.stdout, second.stdout);
+    assert_eq!(text(&first.stderr), "");
+}
+
+#[tokio::test]
+async fn list_with_no_open_vault_says_the_credentials_are_unknown_and_exits_four() {
+    let output = list_with(None).await;
+
+    assert_eq!(output.status.code(), Some(4), "stderr: {}", text(&output.stderr));
+    assert_eq!(text(&output.stdout), "credentials: unknown while the vault is locked\n");
+    assert_eq!(text(&output.stderr), "");
 }
