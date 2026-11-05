@@ -80,7 +80,7 @@ impl VaultChangeSummary {
     /// The old kind and origins, or why they are unknown.
     fn old_kind_and_origins(&self) -> (String, String) {
         match (&self.current.standing, &self.current.summary) {
-            (_, Some(summary)) => (summary.kind.as_str().to_owned(), origins_line(&summary.origins)),
+            (_, Some(summary)) => (summary.kind.as_str().to_owned(), origins_line(summary.origins.iter())),
             (Standing::Damaged(damage), None) => {
                 let unknown = format!("unknown (record damaged: {damage})");
                 (unknown.clone(), unknown)
@@ -108,7 +108,6 @@ impl fmt::Display for VaultChangeSummary {
         let (old_kind, old_origins) = self.old_kind_and_origins();
         match &self.change {
             PlannedChange::Replace { kind, origins, .. } => {
-                let new_origins = origins.iter().cloned().collect::<Vec<_>>();
                 writeln!(f, "replace credential {name}")?;
                 writeln!(
                     f,
@@ -116,7 +115,7 @@ impl fmt::Display for VaultChangeSummary {
                     self.current.record_id
                 )?;
                 writeln!(f, "  kind: {old_kind} -> {}", kind.as_str())?;
-                writeln!(f, "  origins: {old_origins} -> {}", origins_line(&new_origins))?;
+                writeln!(f, "  origins: {old_origins} -> {}", origins_line(origins.iter()))?;
             }
             PlannedChange::Remove(_) => {
                 writeln!(f, "remove credential {name}")?;
@@ -134,8 +133,8 @@ impl fmt::Display for VaultChangeSummary {
 }
 
 /// Origins as `host:port`, separated by `, `.
-fn origins_line(origins: &[(Host, Port)]) -> String {
-    let origins = origins.iter().map(|(host, port)| format!("{host}:{}", port.get()));
+fn origins_line<'a>(origins: impl Iterator<Item = &'a (Host, Port)>) -> String {
+    let origins = origins.map(|(host, port)| format!("{host}:{}", port.get()));
     origins.collect::<Vec<_>>().join(", ")
 }
 

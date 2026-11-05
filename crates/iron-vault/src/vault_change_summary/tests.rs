@@ -167,7 +167,32 @@ fn a_removal_of_a_name_no_route_uses_says_none() {
     assert_eq!(
         summary.to_string(),
         format!(
-            "remove credential old_key\n  record: {RECORD_ID}\n  kind: static\n  origins: api.fx.example:443\n  routes using old_key: none\n"
+            "remove credential old_key\n  record: {RECORD_ID}\n  kind: static\n  origins: api.fx.example:443\n  \
+             routes using old_key: none\n"
+        )
+    );
+}
+
+#[test]
+fn a_damaged_removal_says_why_its_kind_and_origins_are_unknown_and_lists_no_routes_available_again() {
+    let standing = CredentialStanding {
+        name: "old_key".parse().unwrap(),
+        standing: Standing::Damaged(RecordDamage::Missing),
+        unavailable_routes: Vec::new(),
+        summary: None,
+    };
+    let summary = VaultChangeSummary::new(
+        PlannedChange::Remove("old_key".parse().unwrap()),
+        current(&standing),
+        &standing,
+        &policy(true),
+    );
+
+    assert_eq!(
+        summary.to_string(),
+        format!(
+            "remove credential old_key\n  record: {RECORD_ID}\n  kind: unknown (record damaged: missing)\n  \
+             origins: unknown (record damaged: missing)\n  routes using old_key: none\n"
         )
     );
 }

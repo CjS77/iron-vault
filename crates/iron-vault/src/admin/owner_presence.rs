@@ -7,7 +7,7 @@ use std::future::Future;
 use iron_vault_store::{ApprovalPassphrase, StoreFs};
 use secrecy::SecretString;
 
-use super::protocol::{OwnerInput, Prompt};
+use super::protocol::{AdminResponse, ErrorCode, OwnerInput, Prompt};
 use super::server::{Exchange, ExchangeError};
 use crate::service_context::{OwnerPresence, PresenceRefusal, VaultChangePlan};
 
@@ -81,6 +81,21 @@ async fn presence_passphrase(
         }
     };
     Ok(passphrase)
+}
+
+/// The answer when owner presence for `command` was not shown, so nothing was written: a wrong passphrase is
+/// `approval-denied`, and a key check that could not run or a `lock` at the passphrase prompt is
+/// `approval-unavailable` (design/admin-protocol.md).
+pub(super) fn no_presence(command: &str, none: NoPresence) -> AdminResponse {
+    let (code, message) = match none {
+        NoPresence::Refused(PresenceRefusal::Denied) => (ErrorCode::ApprovalDenied, PresenceRefusal::Denied.to_string()),
+        NoPresence::Refused(unavailable) => (ErrorCode::ApprovalUnavailable, unavailable.to_string()),
+        NoPresence::CancelledByLock => (
+            ErrorCode::ApprovalUnavailable,
+            format!("`{command}` was cancelled because a `lock` ran while it waited for the approval passphrase; nothing was written"),
+        ),
+    };
+    AdminResponse::Error { code, message }
 }
 
 /// The owner's input as an approval passphrase. The input's buffer is cleared when it drops here.

@@ -122,16 +122,6 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
-    /// The change the check passed, which the summary describes.
-    pub fn change(&self) -> &PlannedChange {
-        self.summary.change()
-    }
-
-    /// The record the change replaces or removes, which the summary describes.
-    pub fn current(&self) -> &CurrentRecord {
-        self.summary.current()
-    }
-
     /// The vault change summary the owner reads before owner presence, true until the write.
     pub fn summary(&self) -> &VaultChangeSummary {
         &self.summary
