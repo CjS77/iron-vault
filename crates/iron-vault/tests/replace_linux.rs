@@ -259,3 +259,45 @@ async fn a_lock_at_the_secret_prompt_cancels_the_change_with_nothing_written() {
     let _ = stop.send(());
     let _ = task.await;
 }
+
+#[tokio::test]
+async fn a_cli_gone_at_the_secret_prompt_writes_nothing_and_releases_the_service_wide_lock() {
+    let logs = captured_logs();
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    let before = manifest_bytes(&fixture);
+    let (path, stop, task) = spawn_admin(&service);
+    let mut stream = UnixStream::connect(&path).await.unwrap();
+    send(&mut stream, &replace_request(&[upstream_origin(&fixture)])).await;
+    let passphrase = loop {
+        if let Frame::Prompt(_) = read_frame(&mut stream).await {
+            break OwnerInput::new(Zeroizing::new(APPROVAL_PASSPHRASE.as_bytes().to_vec()));
+        }
+    };
+    send(&mut stream, &Frame::OwnerInput(passphrase)).await;
+    assert!(matches!(read_frame(&mut stream).await, Frame::Prompt(prompt) if prompt.label == "Secret for fx_key"));
+
+    drop(stream);
+    let next = tokio::time::timeout(WAIT, next_replace_not_busy(&path, &fixture)).await.unwrap();
+
+    assert_eq!(error_code(&next.response), ErrorCode::ApprovalDenied);
+    assert_eq!(manifest_bytes(&fixture), before);
+    assert_eq!(service.state().await, ServiceState::Ready);
+    assert_nothing_typed_leaked(&logs, &next);
+    let _ = stop.send(());
+    let _ = task.await;
+}
+
+/// A `replace` with the wrong passphrase over a new connection to `path`, retried while the abandoned one still holds
+/// the service-wide lock: the handler sees its CLI gone only when it next reads.
+async fn next_replace_not_busy(path: &std::path::Path, fixture: &Fixture) -> Exchanged {
+    loop {
+        let mut stream = UnixStream::connect(path).await.unwrap();
+        send(&mut stream, &replace_request(&[upstream_origin(fixture)])).await;
+        let exchanged = converse(&mut stream, &[WRONG_PASSPHRASE]).await;
+        if error_code(&exchanged.response) != ErrorCode::Busy {
+            return exchanged;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}

@@ -893,7 +893,8 @@ async fn replace_sends_add_s_arguments_answers_presence_then_the_secret_from_std
         [b"approval words".to_vec(), MARKER.as_bytes().to_vec()]
     );
     let requests = stub.requests.lock().unwrap();
-    assert!(
-        matches!(&requests[..], [AdminRequest::Replace { name, kind: CredentialKind::Static, origins }] if name == "fx" && origins.len() == 2)
-    );
+    let [AdminRequest::Replace { name, kind, origins }] = &requests[..] else {
+        panic!("expected one replace request, got {requests:?}");
+    };
+    assert_eq!((name.as_str(), *kind, origins.len()), ("fx", CredentialKind::Static, 2));
 }
