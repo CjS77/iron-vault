@@ -50,6 +50,11 @@ impl Mode {
         self.0 & 0o077 != 0
     }
 
+    /// Whether any bit outside `allowed` is set, in the permission bits only.
+    const fn exceeds(self, allowed: Self) -> bool {
+        self.0 & 0o777 & !allowed.0 != 0
+    }
+
     const fn sticky(self) -> bool {
         self.0 & 0o1000 != 0
     }
@@ -157,6 +162,10 @@ pub enum TrustedPathRule {
     /// root-owned `0640` file shared through a group would make every member of that group a key reader. So the key
     /// is the service account's, with no group or other permission bits.
     AdminPrivateKey,
+    /// The log directory holding the audit log. The leaf is the service account's, with no group write and no access at
+    /// all for others, so callers cannot read or change the log. Its ancestors differ from the other rules': a
+    /// root-owned one may be group-writable, as stock `/var/log` is, and none may be writable by others, sticky or not.
+    LogDir,
 }
 
 impl TrustedPathRule {
@@ -171,7 +180,18 @@ impl TrustedPathRule {
     /// Whether the leaf must be the file itself rather than a symlink to it. These files are opened with
     /// `O_NOFOLLOW`, so a symlinked leaf could never be read.
     const fn refuses_leaf_symlink(self) -> bool {
-        matches!(self, Self::StateFile | Self::AdminCertificate | Self::AdminPrivateKey)
+        matches!(
+            self,
+            Self::StateFile | Self::AdminCertificate | Self::AdminPrivateKey | Self::LogDir
+        )
+    }
+
+    /// The problem to report for a symlinked leaf that [`Self::refuses_leaf_symlink`] refuses.
+    const fn leaf_symlink_problem(self) -> Problem {
+        match self {
+            Self::LogDir => Problem::NotADirectory,
+            _ => Problem::NotARegularFile,
+        }
     }
 
     /// The file this rule's path cautions are about: only the binary must be root's alone, while the other rules
@@ -185,7 +205,8 @@ impl TrustedPathRule {
             | Self::RuntimeDir
             | Self::StateFile
             | Self::AdminCertificate
-            | Self::AdminPrivateKey => None,
+            | Self::AdminPrivateKey
+            | Self::LogDir => None,
         }
     }
 }
@@ -270,6 +291,13 @@ pub enum Problem {
     /// A root-owned, sticky directory that other users can write, such as `/tmp`, above a state directory or config;
     /// other users can create entries there, so neither may live under it.
     SharedStickyAncestor,
+    /// The component allows permission bits its rule forbids: it must be no more open than `allowed`.
+    ModeTooOpen {
+        /// The mode found.
+        found: Mode,
+        /// The most open mode the rule allows.
+        allowed: Mode,
+    },
     /// The component's mode is not the exact mode its rule requires.
     WrongMode {
         /// The mode found.
@@ -339,6 +367,10 @@ impl fmt::Display for UnsafePath {
                     "{path} has mode {found} but must have mode {expected}; run `chmod {expected} {path}`"
                 )
             }
+            Problem::ModeTooOpen { found, allowed } => write!(
+                f,
+                "{path} has mode {found} but must be no more open than {allowed}; run `chmod {allowed} {path}`"
+            ),
             Problem::NotADirectory => write!(f, "{path} is not a directory; replace it with a directory"),
             Problem::NotARegularFile => {
                 write!(
@@ -489,7 +521,7 @@ impl Walk {
             })
         };
         if role == Role::Leaf && self.rule.refuses_leaf_symlink() {
-            return unsafe_link(Problem::NotARegularFile);
+            return unsafe_link(self.rule.leaf_symlink_problem());
         }
         if link.uid != ROOT_UID || parent.is_none_or(|parent| parent.uid != ROOT_UID) {
             return unsafe_link(Problem::UntrustedSymlink);
@@ -537,6 +569,12 @@ impl Walk {
                 require_regular_file(component)?;
                 self.require_private_key(component)
             }
+            // The service writes the log, so no group may write it and no other account may so much as list it.
+            TrustedPathRule::LogDir => {
+                require_directory(component)?;
+                require_owner(component, service)?;
+                require_mode_within(component, Mode::new(0o750))
+            }
         }
     }
 
@@ -564,6 +602,9 @@ impl Walk {
     fn ancestor(self, component: &PathComponent) -> Result<Option<PathCaution>, Problem> {
         require_directory(component)?;
         require_owner(component, OwnerRequirement::root_or(self.owner.uid))?;
+        if self.rule == TrustedPathRule::LogDir {
+            return require_log_ancestor_writes(component).map(|()| None);
+        }
         match is_shared_sticky(component) {
             true if self.rule.allows_sticky_ancestor() => Ok(()),
             true => Err(Problem::SharedStickyAncestor),
@@ -647,6 +688,29 @@ fn resolved(component: &PathComponent) -> Option<&PathComponent> {
 const fn is_shared_sticky(component: &PathComponent) -> bool {
     let mode = component.mode;
     component.uid == ROOT_UID && mode.sticky() && (mode.group_writable() || mode.others_writable())
+}
+
+fn require_mode_within(component: &PathComponent, allowed: Mode) -> Result<(), Problem> {
+    match component.mode.exceeds(allowed) {
+        true => Err(Problem::ModeTooOpen {
+            found: component.mode,
+            allowed,
+        }),
+        false => Ok(()),
+    }
+}
+
+/// A log directory's ancestor: the group may write it only when root owns it, because stock Debian and Ubuntu ship
+/// `/var/log` as `drwxrwxr-x root syslog`; others may never write it, sticky or not, since any local account could then
+/// create entries beside the log directory. Sticky only narrows what a group can do, so it changes neither answer.
+fn require_log_ancestor_writes(component: &PathComponent) -> Result<(), Problem> {
+    if component.mode.others_writable() {
+        return Err(Problem::WritableByOthers);
+    }
+    match component.uid {
+        ROOT_UID => Ok(()),
+        _ => require_not_writable(component),
+    }
 }
 
 fn require_not_writable(component: &PathComponent) -> Result<(), Problem> {

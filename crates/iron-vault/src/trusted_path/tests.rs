@@ -703,6 +703,121 @@ fn ordering_cases() -> Vec<Case> {
     )]
 }
 
+fn log_dir_cases() -> Vec<Case> {
+    use TrustedPathRule::LogDir;
+    let var_log = |mode, uid| PathComponent {
+        gid: STAFF,
+        group_name: Some("syslog".to_string()),
+        ..dir("/var/log", uid, mode)
+    };
+    let chain =
+        |ancestor: PathComponent, leaf: PathComponent| vec![dir("/", ROOT_UID, 0o755), dir("/var", ROOT_UID, 0o755), ancestor, leaf];
+    let leaf = |uid, mode| dir("/var/log/iron-vault", uid, mode);
+    let refused = |problem| unsafe_at("/var/log/iron-vault", problem);
+    let too_open = |found| Problem::ModeTooOpen {
+        found: Mode::new(found),
+        allowed: Mode::new(0o750),
+    };
+    vec![
+        case("0750 leaf", LogDir, chain(var_log(0o755, ROOT_UID), leaf(SERVICE, 0o750)), Ok(())),
+        case("0700 leaf", LogDir, chain(var_log(0o755, ROOT_UID), leaf(SERVICE, 0o700)), Ok(())),
+        case(
+            "root-owned group-writable ancestor, as stock /var/log is",
+            LogDir,
+            chain(var_log(0o775, ROOT_UID), leaf(SERVICE, 0o750)),
+            Ok(()),
+        ),
+        case(
+            "root-owned sticky group-writable ancestor",
+            LogDir,
+            chain(var_log(0o1775, ROOT_UID), leaf(SERVICE, 0o750)),
+            Ok(()),
+        ),
+        case(
+            "root-owned ancestor writable by others, sticky or not",
+            LogDir,
+            chain(var_log(0o1777, ROOT_UID), leaf(SERVICE, 0o750)),
+            unsafe_at("/var/log", Problem::WritableByOthers),
+        ),
+        case(
+            "service-owned group-writable ancestor",
+            LogDir,
+            chain(var_log(0o775, SERVICE), leaf(SERVICE, 0o750)),
+            unsafe_at(
+                "/var/log",
+                Problem::WritableByGroup {
+                    gid: STAFF,
+                    name: Some("syslog".to_string()),
+                },
+            ),
+        ),
+        case(
+            "ancestor owned by a stranger",
+            LogDir,
+            chain(var_log(0o755, STRANGER), leaf(SERVICE, 0o750)),
+            unsafe_at("/var/log", wrong_owner(STRANGER, OwnerRequirement::RootOr(SERVICE))),
+        ),
+        case(
+            "group-writable leaf",
+            LogDir,
+            chain(var_log(0o755, ROOT_UID), leaf(SERVICE, 0o770)),
+            refused(too_open(0o770)),
+        ),
+        case(
+            "leaf readable by others",
+            LogDir,
+            chain(var_log(0o755, ROOT_UID), leaf(SERVICE, 0o755)),
+            refused(too_open(0o755)),
+        ),
+        case(
+            "leaf owned by root",
+            LogDir,
+            chain(var_log(0o755, ROOT_UID), leaf(ROOT_UID, 0o750)),
+            refused(wrong_owner(ROOT_UID, OwnerRequirement::Uid(SERVICE))),
+        ),
+        case(
+            "leaf owned by a caller",
+            LogDir,
+            chain(var_log(0o755, ROOT_UID), leaf(STRANGER, 0o750)),
+            refused(wrong_owner(STRANGER, OwnerRequirement::Uid(SERVICE))),
+        ),
+        case(
+            "leaf is a file",
+            LogDir,
+            chain(var_log(0o755, ROOT_UID), file("/var/log/iron-vault", SERVICE, 0o640)),
+            refused(Problem::NotADirectory),
+        ),
+        case(
+            "leaf is a symlink",
+            LogDir,
+            chain(
+                var_log(0o755, ROOT_UID),
+                link("/var/log/iron-vault", ROOT_UID, vec![leaf(SERVICE, 0o750)]),
+            ),
+            refused(Problem::NotADirectory),
+        ),
+        case(
+            "root-controlled symlink above the leaf",
+            LogDir,
+            vec![
+                dir("/", ROOT_UID, 0o755),
+                link(
+                    "/home",
+                    ROOT_UID,
+                    vec![
+                        dir("/", ROOT_UID, 0o755),
+                        dir("/var", ROOT_UID, 0o755),
+                        dir("/var/home", ROOT_UID, 0o755),
+                    ],
+                ),
+                dir("/home/dev", SERVICE, 0o700),
+                dir("/home/dev/log", SERVICE, 0o700),
+            ],
+            Ok(()),
+        ),
+    ]
+}
+
 #[test]
 fn every_rule_and_problem() {
     [
@@ -713,6 +828,7 @@ fn every_rule_and_problem() {
         symlink_cases(),
         certificate_cases(),
         private_key_cases(),
+        log_dir_cases(),
         ordering_cases(),
     ]
     .into_iter()
@@ -799,6 +915,10 @@ fn messages_cover_every_problem() {
         Problem::NotARegularFile,
         Problem::UntrustedSymlink,
         Problem::SymlinkLoop,
+        Problem::ModeTooOpen {
+            found: Mode::new(0o755),
+            allowed: Mode::new(0o750),
+        },
     ];
     problems.into_iter().for_each(|problem| {
         let message = UnsafePath {
