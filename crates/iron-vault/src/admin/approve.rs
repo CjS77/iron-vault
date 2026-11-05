@@ -8,17 +8,14 @@
 
 use std::sync::Arc;
 
-use iron_vault_store::{ApprovalPassphrase, SoftwareSigner, StoreFs};
-use secrecy::SecretString;
+use iron_vault_store::{SoftwareSigner, StoreFs};
 
 use super::dispatch::{AdminHandler, HandlerFuture};
+use super::owner_presence::{PassphraseAnswer, ask_approval_passphrase};
 use super::principal::AdminPrincipal;
-use super::protocol::{AdminRequest, AdminResponse, ErrorCode, OwnerInput, Prompt};
+use super::protocol::{AdminRequest, AdminResponse, ErrorCode, Prompt};
 use super::server::{Exchange, ExchangeError};
 use crate::service_context::{ApprovalEnd, ApprovalReview, ServiceContext};
-
-/// The label of the secret prompt for the approval passphrase.
-const PASSPHRASE_PROMPT: &str = "Approval passphrase";
 
 /// `config approve`'s handler, acting on the running service.
 pub(super) struct Approve<F> {
@@ -81,15 +78,10 @@ async fn authorize<F: StoreFs + Send + Sync + 'static>(
     if confirmation.expose_secret() != b"yes" {
         return Ok(Err(ApprovalEnd::Declined));
     }
-    let prompt = Prompt {
-        label: PASSPHRASE_PROMPT.to_owned(),
-        secret: true,
-    };
-    let Some(input) = exchange.prompt_unless(&prompt, review.lock_requested()).await? else {
-        return Ok(Err(cancelled_by_lock()));
-    };
-    let Some(passphrase) = approval_passphrase(input) else {
-        return Ok(Err(ApprovalEnd::Denied));
+    let passphrase = match ask_approval_passphrase(exchange, review.lock_requested()).await? {
+        PassphraseAnswer::Typed(passphrase) => passphrase,
+        PassphraseAnswer::Unusable => return Ok(Err(ApprovalEnd::Denied)),
+        PassphraseAnswer::CancelledByLock => return Ok(Err(cancelled_by_lock())),
     };
     Ok(review.open_signer(passphrase).await)
 }
@@ -97,13 +89,6 @@ async fn authorize<F: StoreFs + Send + Sync + 'static>(
 fn cancelled_by_lock() -> ApprovalEnd {
     tracing::warn!("config approval cancelled at its prompt by a lock; nothing was reserved");
     ApprovalEnd::CancelledByLock
-}
-
-/// The owner's input as an approval passphrase. Empty or non-UTF-8 input cannot be the passphrase, so it is refused as
-/// a wrong one. The input's buffer is cleared when it drops here.
-fn approval_passphrase(input: OwnerInput) -> Option<ApprovalPassphrase> {
-    let text = std::str::from_utf8(input.expose_secret()).ok()?;
-    ApprovalPassphrase::new(SecretString::from(text)).ok()
 }
 
 fn refused(end: ApprovalEnd) -> AdminResponse {

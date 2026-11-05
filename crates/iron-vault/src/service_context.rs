@@ -20,6 +20,7 @@
 
 mod approval;
 mod init;
+mod presence;
 mod serving;
 #[cfg(test)]
 mod tests;
@@ -53,7 +54,8 @@ use unlock::log_foreign_files;
 
 pub use approval::{ApprovalEnd, ApprovalReview};
 pub use init::{InitRefusal, step_names};
-pub use vault_change::VaultChangeRefusal;
+pub use presence::{OwnerPresence, PresenceRefusal};
+pub use vault_change::{CredentialChanged, VaultChangePlan, VaultChangeRefusal};
 
 /// The log target of lock transitions (glossary: *Lock transition*), so the audit design (EP-26) can route them as
 /// their own events.
@@ -510,6 +512,14 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 UnlockError::WrongPassphrase => UnlockRefusal::WrongPassphrase,
                 other => UnlockRefusal::Failed(other),
             })
+    }
+
+    /// Completes once a `lock` is waiting for the service-wide lock, at once when one already waits. An approval or a
+    /// vault change at a prompt holds that lock, and ends on this rather than make the `lock` wait for the owner.
+    async fn lock_requested(&self) {
+        let mut requests = self.lock_requests.subscribe();
+        // The sender is the service's, which outlives every caller, so the wait ends only on a request.
+        let _ = requests.wait_for(|waiting| *waiting > 0).await;
     }
 
     /// What the settle step needs of the context, owned, so the step can run in a task of its own.

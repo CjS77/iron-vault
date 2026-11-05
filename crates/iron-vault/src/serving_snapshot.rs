@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use iron_vault_policy::{ActivePolicy, CredentialName, RateLimiter, RouteName, UnavailableCause};
+use iron_vault_policy::{ActivePolicy, CatalogEntry, CredentialCatalog, CredentialName, RateLimiter, RouteName, UnavailableCause};
 use iron_vault_store::{CredentialRecord, OpenReport, Vault};
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
@@ -181,6 +181,14 @@ impl ServingSnapshot {
     #[cfg(test)]
     pub(crate) fn is_withdrawn(&self) -> bool {
         self.withdrawn.is_cancelled()
+    }
+}
+
+/// The catalog of the vault the snapshot's policy was activated against, which the vault change check overlays: it
+/// answers exactly for every name the policy's routes use.
+impl CredentialCatalog for ServingSnapshot {
+    fn entry(&self, name: &CredentialName) -> CatalogEntry {
+        self.vault.entry(name)
     }
 }
 

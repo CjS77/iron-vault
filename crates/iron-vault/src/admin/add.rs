@@ -134,6 +134,11 @@ fn refused(refusal: VaultChangeRefusal) -> AdminResponse {
         VaultChangeRefusal::NameTaken(_) => ErrorCode::NameTaken,
         VaultChangeRefusal::Invalid(_) => ErrorCode::CredentialInvalid,
         VaultChangeRefusal::Failed(_) | VaultChangeRefusal::Uncertain { .. } => ErrorCode::VaultWriteFailed,
+        // Only `replace` and `rm` plan a change of an existing record, so `add` never gets these.
+        VaultChangeRefusal::UnknownCredential(_)
+        | VaultChangeRefusal::InUse { .. }
+        | VaultChangeRefusal::NotActive(_)
+        | VaultChangeRefusal::ChangeUncertain { .. } => ErrorCode::VaultWriteFailed,
     };
     error(code, refusal.to_string())
 }

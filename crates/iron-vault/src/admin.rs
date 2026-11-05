@@ -12,6 +12,8 @@ pub mod dispatch;
 mod init;
 #[cfg(target_os = "linux")]
 mod list;
+#[cfg(target_os = "linux")]
+pub mod owner_presence;
 pub mod principal;
 pub mod protocol;
 #[cfg(target_os = "linux")]

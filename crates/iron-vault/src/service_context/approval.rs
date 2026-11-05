@@ -25,11 +25,11 @@ use std::sync::Arc;
 use iron_vault_policy::{ActivePolicy, ApprovalSummary, ValidatedConfig, summarize};
 use iron_vault_store::{
     ApprovalError, ApprovalPassphrase, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDigest, PendingConfig,
-    SignError, SoftwareSigner, StoreFs, Vault, VaultIdentity, open_signer_key, read_signer_key,
+    SoftwareSigner, StoreFs, Vault, VaultIdentity,
 };
 use tokio::sync::OwnedMutexGuard;
 
-use super::{Inner, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_task_crash};
+use super::{Inner, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_task_crash};
 use crate::admin::protocol::ApprovalResult;
 use crate::config_check::{InvalidConfig, activate_config};
 use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState, UnavailableReason};
@@ -183,29 +183,22 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
     /// Completes once a `lock` is waiting for the service-wide lock this review holds, so a prompt can end the approval
     /// rather than make the `lock` wait for the owner. It completes at once when a `lock` already waits.
     pub async fn lock_requested(&self) {
-        let mut requests = self.service.lock_requests.subscribe();
-        // The sender is the service's, which outlives this review, so the wait ends only on a request.
-        let _ = requests.wait_for(|waiting| *waiting > 0).await;
+        self.service.lock_requested().await;
     }
 
-    /// Opens `approver.age` with `passphrase` as the pinned approver's signer, on the blocking pool, since scrypt holds
-    /// a thread for seconds. A wrong passphrase, or a key that is not the pinned approver's, is [`ApprovalEnd::Denied`].
-    ///
-    /// The task owns the passphrase and drops it when it ends. A task that ends without a result refuses the approval
-    /// before anything is reserved; if this future is dropped first, the task still ends and drops the signer it opened.
+    /// Opens `approver.age` with `passphrase` as the pinned approver's signer, through the check owner presence makes
+    /// too. A wrong passphrase, or a key that is not the pinned approver's, is [`ApprovalEnd::Denied`]; a check that
+    /// cannot run or does not finish refuses the approval before anything is reserved.
     pub async fn open_signer(&self, passphrase: ApprovalPassphrase) -> Result<SoftwareSigner, ApprovalEnd> {
-        let (locks, setup, approver) = (
-            Arc::clone(&self.service.locks),
-            Arc::clone(&self.service.setup),
-            self.approval.approver().clone(),
-        );
-        let opened = tokio::task::spawn_blocking(move || {
-            let envelope = read_signer_key(&locks.state, &setup.fs).map_err(unavailable)?;
-            open_signer_key(&envelope, &passphrase, &approver).map_err(denied_or_unavailable)
-        });
-        opened
+        let pinned = self.approval.approver().clone();
+        self.service
+            .open_approver(passphrase, pinned)
             .await
-            .unwrap_or_else(|_| Err(unavailable("the approver key check was interrupted; nothing was reserved")))
+            .map_err(|refusal| match refusal {
+                PresenceRefusal::Denied => ApprovalEnd::Denied,
+                PresenceRefusal::CancelledByLock => ApprovalEnd::CancelledByLock,
+                PresenceRefusal::Unavailable(cause) => ApprovalEnd::Unavailable(format!("{cause}; nothing was reserved")),
+            })
     }
 
     /// Ends the approval before any reservation: removes the pending config and releases the service-wide lock.
@@ -413,18 +406,6 @@ fn not_committed(error: ApprovalError, digest: ConfigDigest) -> ApprovalEnd {
             }
         }
         _ => unavailable(error),
-    }
-}
-
-/// A wrong approval passphrase, or a key that is not the pinned approver's, is the owner's refusal; anything else is
-/// the service's.
-fn denied_or_unavailable(error: SignError) -> ApprovalEnd {
-    match error {
-        SignError::WrongPassphrase | SignError::KeyMismatch => {
-            tracing::warn!(%error, "config approval refused before any reservation");
-            ApprovalEnd::Denied
-        }
-        other => unavailable(other),
     }
 }
 

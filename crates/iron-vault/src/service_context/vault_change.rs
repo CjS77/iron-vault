@@ -1,9 +1,14 @@
-//! Vault writes through the running service (specification §3.3, §3.10, §3.12): `add` today.
+//! Vault writes through the running service (specification §3.3, §3.10, §3.12): `add` here, and `replace` and `rm`
+//! in [`plan`].
 //!
 //! The open vault lives inside the immutable serving snapshot, so a write never goes through it. It opens a fresh
 //! [`Vault`] from the kept vault identity under the service-wide lock and the context's mutex, writes through that and
 //! drops it, all on the blocking pool. The serving snapshot is left alone: activation refuses a route whose credential
 //! the manifest lacked, so no active route can use the new record, and the next config check opens the vault from disk.
+
+mod plan;
+
+pub use plan::{CredentialChanged, VaultChangePlan};
 
 use std::sync::Arc;
 
@@ -14,6 +19,7 @@ use iron_vault_store::{PermittedOrigins, RecordId, StoreFs, Vault, VaultError, V
 use super::{Inner, ServiceContext, ServiceLocks};
 use crate::service_state::{AdminOperation, ServiceState};
 use crate::standing::{CredentialStanding, RecordSummary, Standing};
+use crate::vault_change_check::AffectedRoute;
 
 /// Why a vault write changed nothing, or may not have. Each variant is one admin error code, and no message holds
 /// credential material.
@@ -28,6 +34,17 @@ pub enum VaultChangeRefusal {
     /// The manifest already lists the name, healthy or damaged.
     #[error("credential {0} already exists, healthy or damaged; `add` never overwrites")]
     NameTaken(CredentialName),
+    /// The manifest does not list the name that `replace` or `rm` changes.
+    #[error("credential {0} does not exist")]
+    UnknownCredential(CredentialName),
+    /// The vault change check failed: routes that use the name would not activate after the change. In route name order.
+    #[error("routes use credential {name} and would stop working: {}; approve a config without them first", in_use(.routes))]
+    InUse {
+        /// The credential changed.
+        name: CredentialName,
+        /// Each failing route with the rule it would break.
+        routes: Vec<AffectedRoute>,
+    },
     /// The material breaks its kind's rules.
     #[error("the credential is invalid: {0}")]
     Invalid(String),
@@ -40,6 +57,18 @@ pub enum VaultChangeRefusal {
     Uncertain {
         /// Whether the reopened vault lists the new record.
         present: Option<bool>,
+    },
+    /// A `replace` or `rm` committed, but the config check after it failed, so the service no longer serves.
+    #[error("the vault change was written, but the config check after it failed; the service is {0:?}")]
+    NotActive(ServiceState),
+    /// A `replace` or `rm` may have committed, and whether it is durable is unknown. The config check ran on what the
+    /// disk holds, and `state` is where the service settled.
+    #[error("the vault change may have been written, and may not survive power loss: {cause}; the service is {state:?}")]
+    ChangeUncertain {
+        /// Why it is uncertain.
+        cause: String,
+        /// The state the config check settled in.
+        state: ServiceState,
     },
 }
 
@@ -179,6 +208,15 @@ fn origins_text(origins: &PermittedOrigins) -> String {
         .map(|(host, port)| format!("{host}:{}", port.get()))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+/// Each affected route's reason, which names the route, separated by `; `.
+fn in_use(routes: &[AffectedRoute]) -> String {
+    routes
+        .iter()
+        .map(|affected| affected.reason.to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn uncertain_message(present: Option<bool>) -> String {
