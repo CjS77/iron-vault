@@ -499,8 +499,8 @@ The service writes the approval summary itself ([§3.2](iron-vault-specification
 owner reviews it, it goes to the audit log, and its headline is in the command's result. v0 has no owner notifications;
 from v1, the one for a completed approval carries the version and the headline
 ([owner-notifications.md](owner-notifications.md#which-events-notify)). It is a diff of the pending validated config
-against the active one: the config of the current serving snapshot, or, when the service is unavailable or this is the first
-approval, the empty config, in which case the summary says "no active config" and lists everything as added
+against the active one: the config of the current serving snapshot, or, when the service is unavailable or this is the
+first approval, the empty config, in which case the summary says "no active config" and lists everything as added
 ([open question 10](#open-questions)).
 
 The order is fixed, so the same two configs always give the same text:

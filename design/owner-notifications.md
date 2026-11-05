@@ -31,9 +31,9 @@ The audit log and `sudo iron-vault status` stay the authority, because
 [§1.2](iron-vault-specification.md#12-security-promise-and-limits) says no display on a compromised desktop can be
 trusted.
 
-Every owner notification is written to the audit log as the audit event [`owner.notified`](#the-ownernotified-audit-event),
-in every deployment. That record is the log-only fallback. It is also the record of what the owner was told, and the
-one event name a collector can alert on.
+Every owner notification is written to the audit log as the audit event
+[`owner.notified`](#the-ownernotified-audit-event), in every deployment. That record is the log-only fallback. It is
+also the record of what the owner was told, and the one event name a collector can alert on.
 
 Where the owner has a desktop, the service also streams each owner notification over the
 [notification socket](#notification-socket) to the [notification agent](#notification-agent), which shows it on the
@@ -41,18 +41,29 @@ desktop. The service never detects desktops: "a desktop is available" means only
 
 ## Which events notify
 
-Each notification topic is a fixed snake_case label (`NotificationTopic`). The source events are the typed audit events
-of the [audit log catalogue](audit-logging.md#catalogue).
+Each notification topic is a fixed snake_case label (`NotificationTopic`). The source events are the typed audit
+events of the [audit log catalogue](audit-logging.md#catalogue). Each row is one source event. Its body is built from
+that source event struct's domain-typed fields, and its remediation is a fixed phrase for that source (for
+`config.check-failed`, one per unavailable reason).
 
-| Topic | Raised by | Urgency | Body, built only from the source event's fields | Remediation |
+| Topic | Source event | Urgency | Body | Remediation |
 |---|---|---|---|---|
-| `approval_completed` | `config.approval-completed` | normal | `version <n>: <approval summary headline>` | If this is not the change you approved, read the audit log and run `sudo iron-vault status` |
-| `approval_refused` | `config.approval-refused` | normal | the refusal label (`wrong_passphrase`, `key_mismatch`) | If this was not you, someone can act as an admin principal: review who can use `sudo` |
-| `unlock_refused` | `vault.unlock-refused` | normal | the refusal label | as for `approval_refused` |
-| `vault_changed` | `credential.added`, `credential.replaced`, `credential.removed` | normal | `<credential>: <kind>; origins <host:port,...>`; for a replace, old → new | If you did not make this change, run `sudo iron-vault list` and read the audit log |
-| `service_unavailable` | `config.check-failed`; `config.activation-failed` only when an uncertain commit could not be settled | critical | `<unavailable_reason>: <failure label>` | a fixed phrase per unavailable reason, such as `run sudo iron-vault status` or `run sudo iron-vault unlock` |
-| `vault_damaged` | `vault.record-damaged`, `vault.shared-state-damaged`, `vault.commit-uncertain`, `config.commit-uncertain`, `config.conflicting-approval-discarded` | critical | the credential or file name and the damage label | the source event's own `remediation` where it has one, otherwise a fixed phrase |
-| `hardening_incomplete` | `service.hardening-incomplete` | critical | the labels of the missing protections | the source event's `remediation` |
+| `approval_completed` | `config.approval-completed` | normal | `version <version>: <headline>`, the headline of the struct's approval summary | If this is not the change you approved, read the audit log and run `sudo iron-vault status` |
+| `approval_refused` | `config.approval-refused` | normal | `<refusal>` (`wrong_passphrase` or `key_mismatch`) | If this was not you, someone can act as an admin principal: review who can use `sudo` |
+| `unlock_refused` | `vault.unlock-refused` | normal | `<refusal>` | If this was not you, someone can act as an admin principal: review who can use `sudo` |
+| `vault_changed` | `credential.added` | normal | `<credential>: added, <kind>; origins <host:port,...>` | If you did not make this change, run `sudo iron-vault list` and read the audit log |
+| `vault_changed` | `credential.replaced` | normal | `<credential>: replaced, <old_kind> → <kind>; origins <old origins> → <origins>`; for a damaged old record, `<credential>: replaced, <kind>; origins <origins>` | If you did not make this change, run `sudo iron-vault list` and read the audit log |
+| `vault_changed` | `credential.removed` | normal | `<credential>: removed` | If you did not make this change, run `sudo iron-vault list` and read the audit log |
+| `service_unavailable` | `config.check-failed` | critical | `<unavailable_reason>: <failure>` | For `policy_invalid`: Run `sudo iron-vault status`; approving a valid config makes the service ready again. For `recovery_needed`: Run `sudo iron-vault status` and read the audit log; the service needs an authorized repair or a restart |
+| `service_unavailable` | `config.activation-failed`, only for an uncertain commit that could not be settled | critical | `version <version>: <detail>`, where the detail is the cause's fixed phrase | Run `sudo iron-vault status` and read the audit log; the service needs an authorized repair or a restart |
+| `vault_damaged` | `vault.record-damaged` | critical | `<credential>: record <damage>; its routes are unavailable` | The fixed phrase the source records in its own `remediation`, one per damage kind |
+| `vault_damaged` | `vault.shared-state-damaged` | critical | `<file>: <damage>; the whole vault is unavailable` | The fixed phrase the source records in its own `remediation` |
+| `vault_damaged` | `vault.commit-uncertain` | critical | `<file>: replaced, but may not survive power loss (<error_kind>)` | Check the storage that holds the state directory, then run `sudo iron-vault status` |
+| `vault_damaged` | `config.commit-uncertain` | critical | `version <version>: committed, but may not survive power loss (<error_kind>)` | The service settles the commit itself; if a `service_unavailable` notification follows, run `sudo iron-vault status` |
+| `vault_damaged` | `config.conflicting-approval-discarded` | critical | `version <version>: a second approval for another config was discarded` | Find out who can write to the config directory, and read the audit log |
+| `hardening_incomplete` | `service.hardening-incomplete` | critical | `core dumps <core_dumps>; memory <memory_protection>` | The fixed phrases the source records in its own `remediation`, one per missing protection |
+| `recovery_reminder` | `recovery.reminder` | normal | `last checked <last_checked>`, or `never checked` | Run `sudo iron-vault recovery check` with your offline recovery key |
+| `recovery_check_failed` | `recovery.checked`, only when `recovery_outcome` is `failed` | critical | `the recovery key did not open the vault` | Check that you used the current recovery key; if it no longer opens the vault, replace it before you need it |
 
 `config.activation-failed` notifies only for an uncertain commit that could not be settled. Its other cause, a failed
 config check after a committed approval, already records `config.check-failed`, which notifies on its own.
@@ -63,16 +74,18 @@ Checking at once, without running the config check, and records `config.activati
 ([config-approval.md](config-approval.md#when-a-step-fails)). So `config.check-failed`, plus the unsettled commit,
 raises exactly one `service_unavailable` each time the service becomes Unavailable.
 
+The recovery topics are EP-40 work in v1. Their source events come with the recovery epic in v0
+([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)), which sends reminders through the
+log alone; EP-40 makes those events notify once both exist.
+
 ### Reserved topics
 
-These topics are designed here and built with their source events. Each gains its row in the table above when it is
-built:
+These topics are designed here and built by the epics that bring their source events. Each gains its row in the
+table above when it is built:
 
-- `recovery_reminder` and `recovery_check_failed`, from `recovery.reminder` and `recovery.checked`
-  ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration); the recovery epic). The source events
-  are v0's, and the topics are delivered from v1;
 - `needs_touch` ([§3.12](iron-vault-specification.md#312-service-states-and-errors),
-  [§5.1](iron-vault-specification.md#51-hardware-key-recipients-signers-and-touch-confirmation); the hardware-key phase);
+  [§5.1](iron-vault-specification.md#51-hardware-key-recipients-signers-and-touch-confirmation); the hardware-key
+  phase);
 - `needs_login` ([§4.3](iron-vault-specification.md#43-refresh-token-rotation-and-crash-recovery); v1).
 
 ### Deliberately not notifying
@@ -235,7 +248,10 @@ In Docker:
 
 ## No secrets
 
-An owner notification holds only what its source audit event holds, made from that event's domain-typed fields:
+An owner notification is made only from the source event struct's domain-typed fields. These are mostly the fields of
+the source's own record. The one exception is the approval summary's headline, which comes from the `summary` field of
+`audit::ApprovalCompleted` and is not in the `config.approval-completed` record, which holds the whole rendered summary
+instead. So a notification holds only:
 
 - configured names, kinds, `host:port` origins, versions, fixed labels and fixed phrases;
 - never a secret, token, passphrase, header value, URL, path, query, body, config bytes or library error text (the
@@ -246,7 +262,7 @@ record, which already passed those rules.
 
 ## Specification changes
 
-Approved by the owner in review, these apply from v1:
+Proposed for the owner's approval ([open question 7](#open-questions)); they apply from v1:
 
 - [§3.2](iron-vault-specification.md#32-service-and-cli-boundary) gains the one-way notification socket, a third
   interface: it sends owner notifications only to the notification account the approved config names, reads nothing
@@ -291,6 +307,12 @@ Questions for the owner. Each has a default, which the design above follows and 
    service never links a D-Bus client.
 8. **Platforms.** *Default:* Linux only. macOS and Windows are log-only until a later phase gives them an agent
    transport of their own.
+9. **Commit-uncertain alerts.** *Default:* `vault.commit-uncertain` and `config.commit-uncertain` each raise a
+   critical `vault_damaged`. A commit that settles a moment later still raises one. The alternative notifies only when
+   settling fails, which already raises `service_unavailable`.
+10. **The field name `body`.** *Default:* `owner.notified` records its text in `body`. The name reads close to the
+    never-logged rule for request and response bodies. The alternative is `message`, though every record already has
+    a `message` field, its fixed phrase, so it would need another name, such as `notification_text`.
 
 ## Spec check
 

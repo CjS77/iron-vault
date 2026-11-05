@@ -194,11 +194,12 @@ flowchart LR
     Service -->|operation summary| Audit[Command result and audit log]
 ```
 
-The service must produce its own approval summary, including changed callers, route grants, destinations,
-restrictions, and the committed version. In v0 the summary goes to the command's result and the audit log; owner
-notifications carrying it come in v1 ([§2](#2-release-plan)). The service must not treat the CLI's displayed summary as evidence
-of what it signed. Device enrollment and access controls must prevent untrusted processes from using Iron Vault's
-keys where the platform supports that restriction. They do not eliminate the compromised-display limit in [§1.2](#12-security-promise-and-limits).
+The service must produce its own approval summary, including changed callers, route grants, destinations, restrictions,
+and the committed version. In v0 the summary goes to the command's result and the audit log; owner notifications
+carrying it come in v1 ([§2](#2-release-plan)). The service must not treat the CLI's displayed summary as evidence of
+what it signed. Device enrollment and access controls must prevent untrusted processes from using Iron Vault's keys
+where the platform supports that restriction. They do not eliminate the compromised-display limit in
+[§1.2](#12-security-promise-and-limits).
 
 From v1, the service may also expose a one-way notification socket ([owner-notifications.md](owner-notifications.md)).
 It sends owner notifications only to the one notification account the approved config names. It reads nothing and

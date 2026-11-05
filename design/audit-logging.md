@@ -718,7 +718,7 @@ other approval.
 | `recovery.reminder` | INFO | a scheduled recovery reminder fell due | `last_checked`, left out when never checked |
 
 **Owner notifications** (v1; not emitted in v0.
-[owner-notifications.md](owner-notifications.md#the-ownernotified-audit-event) gives which events raise one):
+[owner-notifications.md](owner-notifications.md#which-events-notify) gives which events raise one):
 
 | Event | Level | When | Fields |
 |---|---|---|---|
