@@ -14,6 +14,7 @@ use super::principal::AdminPrincipal;
 use super::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode};
 use super::server::{Exchange, ExchangeError};
 use super::unlock::Unlock;
+use crate::caller_token::generate_caller_token;
 use crate::deployment::DeploymentProfile;
 use crate::service_context::{LockOutcome, ServiceContext};
 use iron_vault_store::StoreFs;
@@ -39,9 +40,11 @@ pub trait AdminHandler: Send + Sync {
 pub struct Handlers(BTreeMap<AdminCommand, Box<dyn AdminHandler>>);
 
 impl Handlers {
-    /// The service's handlers: `ping`, answering with `profile`.
+    /// The service's handlers that need no service context: `ping`, answering with `profile`, and `caller-token`.
     pub fn standard(profile: DeploymentProfile) -> Self {
-        Self::default().with(AdminCommand::Ping, Ping { profile })
+        Self::default()
+            .with(AdminCommand::Ping, Ping { profile })
+            .with(AdminCommand::CallerToken, IssueCallerToken)
     }
 
     /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile, then `status`,
@@ -130,6 +133,33 @@ struct Ping {
 impl AdminHandler for Ping {
     fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
         Box::pin(future::ready(Ok(AdminResponse::Ping { profile: self.profile })))
+    }
+}
+
+/// `caller-token`: a fresh caller token for the owner to enroll through `config approve`. The state gate allows it in
+/// every state the admin socket is served in, so it checks no state. It returns the token in the response and keeps no
+/// copy; the log names the event only, never the token or its hash, which would let a log reader tie it to a caller.
+struct IssueCallerToken;
+
+impl AdminHandler for IssueCallerToken {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        let response = match generate_caller_token() {
+            Ok(token) => {
+                tracing::info!(
+                    event = "caller.token-issued",
+                    "a caller token was issued; the service keeps no copy"
+                );
+                AdminResponse::CallerToken { token }
+            }
+            Err(e) => {
+                tracing::error!(event = "caller.token-failed", error = %e, "no caller token was issued");
+                AdminResponse::Error {
+                    code: ErrorCode::RandomSourceFailed,
+                    message: format!("no caller token was issued: {e}"),
+                }
+            }
+        };
+        Box::pin(future::ready(Ok(response)))
     }
 }
 

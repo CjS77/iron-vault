@@ -117,6 +117,12 @@ impl CallerToken {
         self.0
     }
 
+    /// Borrows the token's text for the one encoding that carries a newly issued token to the owner: the admin
+    /// protocol's `caller-token` result, which cannot consume the token because its encoder borrows the frame.
+    pub fn expose_secret(&self) -> &str {
+        self.0.expose_secret()
+    }
+
     /// The token's full text, prefix included: the input to its hash.
     pub(crate) fn text(&self) -> &str {
         self.0.expose_secret()

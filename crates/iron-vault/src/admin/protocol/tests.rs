@@ -7,7 +7,8 @@ use crate::deployment::DeploymentProfile;
 use crate::secret_types_tests::MARKER;
 use crate::service_state::{FailureReason, ServiceState};
 use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
-use iron_vault_policy::{CredentialKind, Port};
+use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
+use iron_vault_policy::{CallerToken, CredentialKind, Port, TokenHash};
 use iron_vault_store::{RecordDamage, RecordId, VaultId};
 
 /// The longest prompt label: the body bound less two field headers and the one-byte secret flag.
@@ -38,9 +39,27 @@ fn same(a: &Frame, b: &Frame) -> bool {
         (Frame::Request(a), Frame::Request(b)) => a == b,
         (Frame::Prompt(a), Frame::Prompt(b)) => a == b,
         (Frame::OwnerInput(a), Frame::OwnerInput(b)) => a.expose_secret() == b.expose_secret(),
-        (Frame::Response(a), Frame::Response(b)) => a == b,
+        (Frame::Response(a), Frame::Response(b)) => same_response(a, b),
         (Frame::Notice(a), Frame::Notice(b)) => a == b,
         (Frame::Reveal(a), Frame::Reveal(b)) => a.expose_secret() == b.expose_secret(),
+        _ => false,
+    }
+}
+
+/// Compares responses field by field; `AdminResponse` has no `PartialEq`, because `caller-token`'s result holds a
+/// token, which is compared by its hash.
+fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
+    use AdminResponse as R;
+    match (a, b) {
+        (R::Success, R::Success) => true,
+        (R::Ping { profile: a }, R::Ping { profile: b }) => a == b,
+        (R::Status(a), R::Status(b)) => a == b,
+        (R::ConfigApprove(a), R::ConfigApprove(b)) => a == b,
+        (R::Lock { cleared: a }, R::Lock { cleared: b }) => a == b,
+        (R::Add { record_id: a }, R::Add { record_id: b }) => a == b,
+        (R::CallerToken { token: a }, R::CallerToken { token: b }) => TokenHash::of(a) == TokenHash::of(b),
+        (R::Init { vault_id: a, version: v }, R::Init { vault_id: b, version: w }) => a == b && v == w,
+        (R::Error { code: a, message: m }, R::Error { code: b, message: n }) => a == b && m == n,
         _ => false,
     }
 }
@@ -121,6 +140,7 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::NameTaken),
         Just(ErrorCode::CredentialInvalid),
         Just(ErrorCode::VaultWriteFailed),
+        Just(ErrorCode::RandomSourceFailed),
     ]
 }
 
@@ -159,11 +179,14 @@ fn any_frame() -> impl Strategy<Value = Frame> {
         owner_bytes()
             .prop_filter("a reveal is never empty", |bytes| !bytes.is_empty())
             .prop_map(|bytes| reveal(&bytes)),
-        Just(AdminResponse::Success).prop_map(Frame::Response),
+        Just(()).prop_map(|()| Frame::Response(AdminResponse::Success)),
         prop_oneof![Just(DeploymentProfile::Protected), Just(DeploymentProfile::Development)]
             .prop_map(|profile| Frame::Response(AdminResponse::Ping { profile })),
         any::<bool>().prop_map(|cleared| Frame::Response(AdminResponse::Lock { cleared })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Add { record_id: v4(bytes) })),
+        any::<[u8; 32]>().prop_map(|bytes| Frame::Response(AdminResponse::CallerToken {
+            token: CallerToken::from_bytes(bytes)
+        })),
         (any::<[u8; 16]>(), any::<u64>()).prop_map(|(bytes, version)| Frame::Response(AdminResponse::Init {
             vault_id: VaultId::from_bytes(v4_bytes(bytes)).unwrap(),
             version
@@ -559,7 +582,7 @@ fn unknown_tags_are_refused() {
 
 #[test]
 fn unknown_commands_are_refused_whatever_follows() {
-    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 3]))), FrameError::UnknownCommand(3));
+    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 12]))), FrameError::UnknownCommand(12));
     let with_arguments = body(&[field(1, &[0xff, 0xff]), field(2, b"argument")]);
     assert_eq!(decode_err(&raw(1, 1, &with_arguments)), FrameError::UnknownCommand(0xffff));
 }
@@ -942,4 +965,61 @@ fn the_init_error_codes_have_their_documented_numbers_and_names() {
         assert_eq!((code as u16, code.name()), (number, name));
         assert_round_trips(&error(code, "m"));
     });
+}
+
+#[test]
+fn caller_token_has_command_id_3_and_takes_no_arguments() {
+    assert_eq!(
+        (AdminCommand::CallerToken as u16, AdminRequest::CallerToken.command().name()),
+        (3, "caller-token")
+    );
+    assert_eq!(encoded(&Frame::Request(AdminRequest::CallerToken)), raw(1, 1, &field(1, &[0, 3])));
+    let with_argument = body(&[field(1, &[0, 3]), field(2, b"x")]);
+    assert_eq!(decode_err(&raw(1, 1, &with_argument)), FrameError::UnknownTag(2));
+}
+
+/// A valid token's text: `ivt_`, then 43 base64url characters of which the last is a canonical ending.
+fn token_text() -> String {
+    format!("ivt_{}A", "Mk".repeat(21))
+}
+
+#[test]
+fn the_caller_token_result_carries_the_token_text_and_round_trips() {
+    let text = token_text();
+    assert_eq!(text.len(), CALLER_TOKEN_LEN);
+    let token = CallerToken::parse(text.as_bytes()).unwrap();
+    let result = Frame::Response(AdminResponse::CallerToken { token });
+    assert_eq!(encoded(&result), raw(1, 4, &body(&[field(1, &[0, 3]), field(2, text.as_bytes())])));
+    assert_round_trips(&result);
+}
+
+#[test]
+fn a_caller_token_result_with_an_invalid_token_is_malformed_and_names_no_token_byte() {
+    let text = token_text();
+    let replaced = |at: usize, byte: u8| {
+        let mut bytes = text.clone().into_bytes();
+        bytes[at] = byte;
+        bytes
+    };
+    let refused = [
+        text.as_bytes()[..CALLER_TOKEN_LEN - 1].to_vec(),
+        [text.as_bytes(), b"A"].concat(),
+        replaced(10, b'+'),
+        replaced(CALLER_TOKEN_LEN - 1, b'B'),
+        replaced(0, b'x'),
+    ];
+    refused.iter().for_each(|token| {
+        let error = decode_err(&raw(1, 4, &body(&[field(1, &[0, 3]), field(2, token)])));
+        assert_eq!(error, FrameError::InvalidValue(2));
+        assert_eq!(ErrorCode::for_frame_error(error), ErrorCode::MalformedFrame);
+        let message = error.to_string();
+        assert!(!message.contains("Mk") && !message.contains("ivt_"), "{message}");
+    });
+}
+
+#[test]
+fn the_caller_token_error_code_has_its_documented_number_and_name() {
+    let code = ErrorCode::RandomSourceFailed;
+    assert_eq!((code as u16, code.name()), (25, "random-source-failed"));
+    assert_round_trips(&error(code, "m"));
 }

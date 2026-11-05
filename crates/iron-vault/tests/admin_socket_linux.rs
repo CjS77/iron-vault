@@ -181,11 +181,15 @@ async fn ping_round_trips_and_the_connection_closes() {
     let server = start(&dir, Limits::default());
     let mut stream = UnixStream::connect(&server.path).await.unwrap();
     stream.write_all(&ping()).await.unwrap();
-    assert_eq!(
-        read_response(&mut stream).await,
-        AdminResponse::Ping {
-            profile: DeploymentProfile::Protected
-        }
+    let response = read_response(&mut stream).await;
+    assert!(
+        matches!(
+            response,
+            AdminResponse::Ping {
+                profile: DeploymentProfile::Protected
+            }
+        ),
+        "{response:?}"
     );
     assert_closed(&mut stream).await;
     server.stop().await.unwrap();
@@ -302,7 +306,7 @@ async fn an_accepted_peer_reaches_its_handler() {
     let (ours, mut theirs) = UnixStream::pair().unwrap();
     theirs.write_all(&ping()).await.unwrap();
     tokio::time::timeout(PATIENCE, server.serve_connection(ours)).await.unwrap();
-    assert_eq!(read_response(&mut theirs).await, AdminResponse::Success);
+    assert!(matches!(read_response(&mut theirs).await, AdminResponse::Success));
     assert!(ran.load(Ordering::SeqCst));
 }
 
@@ -493,7 +497,7 @@ async fn a_prompt_returns_the_owner_input_to_its_handler() {
     ping_until_prompted(&mut cli).await;
     let input = Frame::OwnerInput(OwnerInput::new(Zeroizing::new(b"typed value".to_vec())));
     cli.write_all(&frame_bytes(&input)).await.unwrap();
-    assert_eq!(read_response(&mut cli).await, AdminResponse::Success);
+    assert!(matches!(read_response(&mut cli).await, AdminResponse::Success));
     assert_eq!(handler_answer(&mut received).await, Ok(b"typed value".to_vec()));
     assert_closed(&mut cli).await;
     served.await.unwrap();

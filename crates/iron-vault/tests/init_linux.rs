@@ -18,6 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use common::admin_response::assert_response;
 use common::approval_harness::{Captured, captured_logs, mkdir, read_frame, send, spawn_admin};
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, token_hash};
@@ -299,7 +300,7 @@ async fn init_writes_a_vault_that_stays_locked_and_unlocks_to_ready_at_version_1
     assert_eq!((report.state, report.vault), (ServiceState::Locked, VaultStatus::Locked));
     assert!(matches!(service.holder().load(), Admission::Refuse(UnavailableReason::Locked)));
 
-    assert_eq!(unlock(&service).await, AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Success);
     let vault = unlocked(&service).await;
     assert_eq!((vault.id, vault.committed, vault.highest_reserved), (vault_id, Some(1), 1));
     assert!(vault.credentials.is_empty() && vault.route_faults.is_empty());
@@ -344,7 +345,7 @@ async fn after_a_restart_init_is_already_initialized_before_any_prompt_and_wrong
     assert_eq!(code, ErrorCode::AlreadyInitialized);
     assert!(message.contains("Initialized") && !message.contains("discard"), "{message}");
 
-    assert_eq!(unlock(&service).await, AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Success);
     let ready = init(&service, &COMPLETE).await;
     assert!(ready.prompts.is_empty(), "{ready:?}");
     assert_eq!(
@@ -456,7 +457,7 @@ async fn an_unfinished_initialization_refuses_unlock_and_the_next_init_discards_
                 .all(|name| line.contains(name))),
         "{text}"
     );
-    assert_eq!(unlock(&service).await, AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Success);
     assert_no_secret_logged(&logs, &[exchanged.recovery_key()]);
 }
 
@@ -512,7 +513,7 @@ async fn of_two_inits_confirmed_together_one_writes_and_the_other_is_busy() {
     assert!(message.ends_with("the recovery key shown opens nothing: discard it"), "{message}");
     let _ = stop.send(());
     task.await.unwrap();
-    assert_eq!(unlock(&service).await, AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Success);
     assert_no_secret_logged(&logs, &[&keys[0], &keys[1]]);
 }
 
@@ -569,7 +570,7 @@ async fn init_unlock_add_and_approve_lead_to_a_request_carrying_the_secret() {
     let service = fixture.start();
     let initialized = init(&service, &COMPLETE).await;
     initialized.vault_id();
-    assert_eq!(unlock(&service).await, AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Success);
 
     let add = AdminRequest::Add {
         name: "fx".to_owned(),

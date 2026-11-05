@@ -287,9 +287,10 @@ async fn status_prints_one_field_per_line_and_exits_zero_only_when_ready() {
 }
 
 /// A test-only `unlock` handler: prompts for the vault passphrase as the service does, records the value, and answers
-/// with a fixed response, so the CLI's report of each outcome is checked without a vault.
+/// with a fixed response, so the CLI's report of each outcome is checked without a vault. The response is taken by the
+/// one exchange each test runs.
 struct ScriptedUnlock {
-    response: AdminResponse,
+    response: Mutex<Option<AdminResponse>>,
     values: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
@@ -302,7 +303,7 @@ impl AdminHandler for ScriptedUnlock {
             };
             let input = exchange.prompt(&prompt).await?;
             self.values.lock().unwrap().push(input.expose_secret().to_vec());
-            Ok(self.response.clone())
+            Ok(self.response.lock().unwrap().take().expect("one exchange per test"))
         })
     }
 }
@@ -311,7 +312,7 @@ async fn scripted_unlock(response: AdminResponse) -> (Output, Vec<Vec<u8>>) {
     let dir = TempDir::new();
     let values = Arc::default();
     let handler = ScriptedUnlock {
-        response,
+        response: Mutex::new(Some(response)),
         values: Arc::clone(&values),
     };
     let handlers = Handlers::default().with(AdminCommand::Unlock, handler);

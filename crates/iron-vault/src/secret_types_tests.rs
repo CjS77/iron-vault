@@ -9,12 +9,14 @@ use serde::{Deserialize, Serialize};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 use zeroize::Zeroizing;
 
-use crate::admin::protocol::{Decoded, Frame, OwnerInput, RevealedSecret};
+use crate::admin::protocol::{AdminResponse, Decoded, Frame, OwnerInput, RevealedSecret};
 use crate::pipeline::{Prepared, RequestHead};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder};
+use iron_vault_policy::CallerToken;
 
 assert_not_impl_any!(OwnerInput: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(RevealedSecret: Clone, Copy, Display, Serialize, Deserialize<'static>);
+assert_not_impl_any!(AdminResponse: Clone, Copy, PartialEq, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Frame: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Decoded: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(ServingSnapshot: Clone, Copy, Display, Serialize, Deserialize<'static>);
@@ -78,6 +80,19 @@ fn frames_holding_a_revealed_secret_hide_the_value() {
         frame: Frame::Reveal(revealed_secret()),
         used: 0,
     });
+}
+
+/// A caller token whose text holds the marker: `ivt_`, the marker with its `-` kept and padded with `A` to 43
+/// base64url characters, which end canonically in `A`.
+fn marker_token() -> CallerToken {
+    let body = format!("{MARKER:A<43}");
+    CallerToken::parse(format!("ivt_{body}").as_bytes()).unwrap()
+}
+
+#[test]
+fn a_caller_token_response_hides_the_token() {
+    assert_hides_marker(&AdminResponse::CallerToken { token: marker_token() });
+    assert_hides_marker(&Frame::Response(AdminResponse::CallerToken { token: marker_token() }));
 }
 
 #[test]

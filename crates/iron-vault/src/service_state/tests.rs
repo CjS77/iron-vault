@@ -26,7 +26,7 @@ const EVENTS: [ServiceEvent; 11] = [
     E::Stop,
 ];
 
-const OPERATIONS: [AdminOperation; 9] = [
+const OPERATIONS: [AdminOperation; 10] = [
     AdminOperation::Ping,
     AdminOperation::Status,
     AdminOperation::Unlock,
@@ -36,6 +36,7 @@ const OPERATIONS: [AdminOperation; 9] = [
     AdminOperation::Repair,
     AdminOperation::VaultChange,
     AdminOperation::Initialize,
+    AdminOperation::IssueCallerToken,
 ];
 
 /// Every edge of the §3.12 diagram, and nothing else.
@@ -146,20 +147,31 @@ fn allowed(state: ServiceState) -> Vec<AdminOperation> {
 #[test]
 fn admin_commands_follow_the_state() {
     use AdminOperation as A;
-    assert_eq!(allowed(S::Starting), [A::Ping, A::Status]);
-    assert_eq!(allowed(S::Locked), [A::Ping, A::Status, A::Unlock, A::Initialize]);
-    assert_eq!(allowed(S::Checking), [A::Ping, A::Status]);
+    assert_eq!(allowed(S::Starting), [A::Ping, A::Status, A::IssueCallerToken]);
+    assert_eq!(
+        allowed(S::Locked),
+        [A::Ping, A::Status, A::Unlock, A::Initialize, A::IssueCallerToken]
+    );
+    assert_eq!(allowed(S::Checking), [A::Ping, A::Status, A::IssueCallerToken]);
     assert_eq!(
         allowed(S::Ready),
-        [A::Ping, A::Status, A::Lock, A::Reload, A::Approve, A::VaultChange]
+        [
+            A::Ping,
+            A::Status,
+            A::Lock,
+            A::Reload,
+            A::Approve,
+            A::VaultChange,
+            A::IssueCallerToken
+        ]
     );
     assert_eq!(
         allowed(S::Unavailable(FailureReason::PolicyInvalid)),
-        [A::Ping, A::Status, A::Lock, A::Approve]
+        [A::Ping, A::Status, A::Lock, A::Approve, A::IssueCallerToken]
     );
     assert_eq!(
         allowed(S::Unavailable(FailureReason::RecoveryNeeded)),
-        [A::Ping, A::Status, A::Lock, A::Repair]
+        [A::Ping, A::Status, A::Lock, A::Repair, A::IssueCallerToken]
     );
     assert!(allowed(S::Stopped).is_empty());
 }

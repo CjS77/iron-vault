@@ -14,7 +14,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::deployment::DeploymentProfile;
-use iron_vault_policy::{CredentialKind, Port};
+use iron_vault_policy::{CallerToken, CredentialKind, Port};
 use iron_vault_store::{RecordId, VaultId};
 
 pub use iron_vault_store::MAX_CONFIG_LEN;
@@ -38,6 +38,8 @@ pub enum AdminRequest {
     Ping,
     /// Runs the approval transaction on the proposed config. Command ID 2.
     ConfigApprove(ProposedConfig),
+    /// Generates a fresh caller token and returns it once; it touches neither the vault nor the policy. Command ID 3.
+    CallerToken,
     /// Reports service, vault, approval, memory protection and credential states; allowed in every state. Command ID 6.
     Status,
     /// Opens the vault with the passphrase the service prompts for; no arguments and no result. Command ID 4.
@@ -75,6 +77,7 @@ impl AdminRequest {
         match self {
             Self::Ping => AdminCommand::Ping,
             Self::ConfigApprove(_) => AdminCommand::ConfigApprove,
+            Self::CallerToken => AdminCommand::CallerToken,
             Self::Status => AdminCommand::Status,
             Self::Unlock => AdminCommand::Unlock,
             Self::Lock => AdminCommand::Lock,
@@ -91,7 +94,9 @@ pub enum AdminCommand {
     Ping = 1,
     /// `config approve`.
     ConfigApprove = 2,
-    /// `status`. ID 3 is reserved for `caller-token`.
+    /// `caller-token`.
+    CallerToken = 3,
+    /// `status`.
     Status = 6,
     /// `unlock`.
     Unlock = 4,
@@ -109,6 +114,7 @@ impl AdminCommand {
         match self {
             Self::Ping => "ping",
             Self::ConfigApprove => "config approve",
+            Self::CallerToken => "caller-token",
             Self::Status => "status",
             Self::Unlock => "unlock",
             Self::Lock => "lock",
@@ -128,15 +134,21 @@ mod no_external_signatures {
     /// Every argument `command` takes, by name.
     fn arguments(command: AdminCommand) -> &'static [&'static str] {
         match command {
-            AdminCommand::Ping | AdminCommand::Status | AdminCommand::Unlock | AdminCommand::Lock | AdminCommand::Init => &[],
+            AdminCommand::Ping
+            | AdminCommand::CallerToken
+            | AdminCommand::Status
+            | AdminCommand::Unlock
+            | AdminCommand::Lock
+            | AdminCommand::Init => &[],
             AdminCommand::ConfigApprove => &["config"],
             AdminCommand::Add => &["name", "kind", "origins"],
         }
     }
 
-    const COMMANDS: [AdminCommand; 7] = [
+    const COMMANDS: [AdminCommand; 8] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
+        AdminCommand::CallerToken,
         AdminCommand::Unlock,
         AdminCommand::Lock,
         AdminCommand::Status,
@@ -280,8 +292,9 @@ impl fmt::Debug for RevealedSecret {
     }
 }
 
-/// The final frame of an exchange.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The final frame of an exchange. It holds a secret when it is `caller-token`'s result, so it is secret-bearing: it has
+/// no `Clone`, `PartialEq` or `Display`, and its `Debug` shows no token byte, through [`CallerToken`]'s own.
+#[derive(Debug)]
 pub enum AdminResponse {
     /// The command completed, and it has no result.
     Success,
@@ -304,6 +317,11 @@ pub enum AdminResponse {
     Add {
         /// The ID of the record the service wrote.
         record_id: RecordId,
+    },
+    /// `caller-token` completed: a fresh caller token, shown to the owner once. The service keeps no copy.
+    CallerToken {
+        /// The new token.
+        token: CallerToken,
     },
     /// `init` completed: the vault is written and its first approval committed; the service is still Locked.
     Init {
@@ -387,6 +405,8 @@ pub enum ErrorCode {
     CredentialInvalid = 21,
     /// `add`: writing the vault failed; the message says whether the write may have committed.
     VaultWriteFailed = 22,
+    /// `caller-token`: the operating system's random source failed, so no token was made.
+    RandomSourceFailed = 25,
 }
 
 impl ErrorCode {
@@ -415,6 +435,7 @@ impl ErrorCode {
             Self::NameTaken => "name-taken",
             Self::CredentialInvalid => "credential-invalid",
             Self::VaultWriteFailed => "vault-write-failed",
+            Self::RandomSourceFailed => "random-source-failed",
         }
     }
 
@@ -428,8 +449,8 @@ impl ErrorCode {
     }
 }
 
-/// One message of the admin protocol. It holds a secret when it is an owner-input or a reveal frame, so it is
-/// secret-bearing and has no `Clone`.
+/// One message of the admin protocol. It holds a secret when it is an owner-input or a reveal frame, or `caller-token`'s
+/// result, so it is secret-bearing and has no `Clone`.
 #[derive(Debug)]
 pub enum Frame {
     /// Kind 1, CLI to service.
@@ -534,8 +555,8 @@ impl FrameKind {
     }
 }
 
-/// Appends `frame`'s one encoding to `out`. A caller sending owner input or a reveal passes a clearing buffer, because
-/// the encoding holds the value; `out` is grown once, before writing, so no partial copy is left behind in a freed allocation.
+/// Appends `frame`'s one encoding to `out`. A caller sending owner input, a reveal or `caller-token`'s result passes a
+/// clearing buffer, because the encoding holds the value; `out` is grown once, before writing, so no partial copy is left behind in a freed allocation.
 pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
     match frame {
         Frame::Request(request) => put_frame(out, FrameKind::Request, &body::encode_request(request)?),
@@ -546,6 +567,9 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::Status(report)) => put_frame(out, FrameKind::Success, &body::encode_status_result(report)),
         Frame::Response(AdminResponse::Lock { cleared }) => put_frame(out, FrameKind::Success, &body::encode_lock_result(*cleared)),
         Frame::Response(AdminResponse::Add { record_id }) => put_frame(out, FrameKind::Success, &body::encode_add_result(*record_id)),
+        Frame::Response(AdminResponse::CallerToken { token }) => {
+            put_frame(out, FrameKind::Success, &body::encode_caller_token_result(token))
+        }
         Frame::Response(AdminResponse::Init { vault_id, version }) => {
             put_frame(out, FrameKind::Success, &body::encode_init_result(*vault_id, *version))
         }

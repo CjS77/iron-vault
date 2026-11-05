@@ -179,6 +179,9 @@ pub enum AdminOperation {
     VaultChange,
     /// Create the vault and approve the initial config. It leaves the service Locked, so it needs no edge of its own.
     Initialize,
+    /// Generate a fresh caller token for the owner. It touches neither the vault nor the policy, so it is allowed while
+    /// Locked or Unavailable too: the owner can prepare the config that fixes an invalid policy.
+    IssueCallerToken,
 }
 
 impl ServiceState {
@@ -193,15 +196,15 @@ impl ServiceState {
         }
     }
 
-    /// Whether the admin interface accepts `operation` in this state. Status and ping are always answered while the
-    /// service runs; every operation that needs the vault waits for Ready, and approving is also offered for an invalid policy, and repair only for damaged state.
+    /// Whether the admin interface accepts `operation` in this state. Status, ping and issuing a caller token are always
+    /// answered while the service runs; every operation that needs the vault waits for Ready, and approving is also offered for an invalid policy, and repair only for damaged state.
     /// Initializing is offered only while Locked, the state a service without a vault starts in.
     /// Lock is offered wherever the vault identity is kept outside Checking: Ready and Unavailable.
     pub const fn admin_allows(self, operation: AdminOperation) -> bool {
         use AdminOperation as A;
         match (self, operation) {
             (Self::Stopped, _) => false,
-            (_, A::Ping | A::Status) => true,
+            (_, A::Ping | A::Status | A::IssueCallerToken) => true,
             (Self::Locked, A::Unlock | A::Initialize) => true,
             (Self::Ready, A::Lock | A::Reload | A::Approve | A::VaultChange) => true,
             (Self::Unavailable(_), A::Lock) => true,

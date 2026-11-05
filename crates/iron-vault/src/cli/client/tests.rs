@@ -146,28 +146,28 @@ fn closed() -> Answer {
 #[test]
 fn one_value_is_read_from_a_line_of_stdin() {
     let run = run(vec![secret()], b"s3cret\n");
-    assert_eq!(run.result.unwrap(), AdminResponse::Success);
+    assert!(matches!(run.result.unwrap(), AdminResponse::Success));
     assert_eq!(run.answers, [value(b"s3cret")]);
 }
 
 #[test]
 fn several_prompts_read_consecutive_lines() {
     let run = run(vec![secret(), plain()], b"first\nsecond\n");
-    assert_eq!(run.result.unwrap(), AdminResponse::Success);
+    assert!(matches!(run.result.unwrap(), AdminResponse::Success));
     assert_eq!(run.answers, [value(b"first"), value(b"second")]);
 }
 
 #[test]
 fn an_empty_line_is_an_empty_value() {
     let run = run(vec![secret()], b"\n");
-    assert_eq!(run.result.unwrap(), AdminResponse::Success);
+    assert!(matches!(run.result.unwrap(), AdminResponse::Success));
     assert_eq!(run.answers, [value(b"")]);
 }
 
 #[test]
 fn crlf_line_endings_are_stripped() {
     let run = run(vec![secret(), plain()], b"first\r\nsecond\r\n");
-    assert_eq!(run.result.unwrap(), AdminResponse::Success);
+    assert!(matches!(run.result.unwrap(), AdminResponse::Success));
     assert_eq!(run.answers, [value(b"first"), value(b"second")]);
 }
 
@@ -195,7 +195,7 @@ fn input_that_ends_before_a_value_cancels_the_command() {
 fn typed_values_appear_in_no_log_line_at_trace() {
     let input = format!("{MARKER}\n{MARKER}-plain\n");
     let run = run(vec![secret(), plain()], input.as_bytes());
-    assert_eq!(run.result.unwrap(), AdminResponse::Success);
+    assert!(matches!(run.result.unwrap(), AdminResponse::Success));
     assert_eq!(run.answers, [value(MARKER.as_bytes()), value(format!("{MARKER}-plain").as_bytes())]);
     assert!(run.logs.contains("admin command `ping`"), "the capture saw nothing: {}", run.logs);
     assert!(!run.logs.contains(MARKER), "{}", run.logs);
@@ -271,7 +271,7 @@ fn notices_reveals_and_prompts_reach_the_console_in_order_and_the_reveal_reaches
     let result = tracing::subscriber::with_default(capture(&logs), || converse(&mut client, AdminRequest::Ping, &mut console));
     drop(client);
     served.join().unwrap();
-    assert_eq!(result.unwrap(), AdminResponse::Success);
+    assert!(matches!(result.unwrap(), AdminResponse::Success));
     assert_eq!(
         console.0,
         [

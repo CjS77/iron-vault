@@ -11,6 +11,8 @@
 
 // The client's terminal handling uses rustix and tokio, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
+mod caller_token;
+#[cfg(target_os = "linux")]
 mod client;
 #[cfg(target_os = "linux")]
 mod console;
@@ -101,6 +103,9 @@ pub enum Command {
     /// controlling terminal, and once you confirm you saved it, writes the vault and approves the initial config as
     /// version 1. It needs a controlling terminal, and leaves the service Locked.
     Init,
+    /// Issue a fresh caller token: it goes to stdout once, and its token_hash line to stderr. The service keeps no copy;
+    /// the token works once a config naming the hash is approved with `config approve`.
+    CallerToken,
     /// Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so
     /// `pass show fx | iron-vault add fx --origin api.fx.example` works. It never overwrites an existing name.
     Add {
@@ -236,6 +241,18 @@ pub fn init(socket: Option<&Path>) -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn init(_socket: Option<&Path>) -> ExitCode {
+    unsupported_platform()
+}
+
+/// `iron-vault caller-token`: sends `caller-token`, writes the token alone to stdout and its `token_hash` line to stderr.
+#[cfg(target_os = "linux")]
+pub fn caller_token(socket: Option<&Path>) -> ExitCode {
+    caller_token::run(socket).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn caller_token(_socket: Option<&Path>) -> ExitCode {
     unsupported_platform()
 }
 

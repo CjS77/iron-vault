@@ -116,7 +116,7 @@ impl AdminServer {
             Err(NoRequest::Unanswered) => return,
             Err(NoRequest::Answer(response)) => response,
         };
-        exchange.respond(&response).await;
+        exchange.respond(response).await;
     }
 
     /// Starts serving `stream`, or answers `busy` when the connection cap is reached.
@@ -151,7 +151,7 @@ impl AdminServer {
                     peer.pid()
                 );
                 let response = error(ErrorCode::NotAdminPrincipal, &refused.to_string());
-                let _ = tokio::time::timeout(self.limits.request_deadline, write_and_close(stream, &response)).await;
+                let _ = tokio::time::timeout(self.limits.request_deadline, write_and_close(stream, response)).await;
                 None
             }
         }
@@ -342,7 +342,7 @@ impl Exchange {
 
     /// Sends the exchange's admin response within the request deadline and closes; a peer that has gone is not an
     /// error.
-    async fn respond(&mut self, response: &AdminResponse) {
+    async fn respond(&mut self, response: AdminResponse) {
         let sent = tokio::time::timeout(self.limits.request_deadline, write_and_close(&mut self.stream, response)).await;
         if !matches!(sent, Ok(Ok(()))) {
             tracing::warn!("the admin response could not be delivered");
@@ -351,15 +351,15 @@ impl Exchange {
 }
 
 /// Writes `response` and shuts down the writing half, so the peer reads the end of the exchange.
-async fn write_and_close(stream: &mut UnixStream, response: &AdminResponse) -> io::Result<()> {
-    stream.write_all(&encoded(&Frame::Response(response.clone()))).await?;
+async fn write_and_close(stream: &mut UnixStream, response: AdminResponse) -> io::Result<()> {
+    stream.write_all(&encoded(&Frame::Response(response))).await?;
     stream.shutdown().await
 }
 
-/// The bytes of a frame the service sends: a prompt, a notice or a response. None holds owner input, so an ordinary buffer is
-/// enough.
-fn encoded(frame: &Frame) -> Vec<u8> {
-    let mut out = Vec::new();
+/// The bytes of a frame the service sends: a prompt, a notice or a response. `caller-token`'s response holds the token,
+/// so every frame is encoded into a clearing buffer; `encode` sizes it once, so no partial copy is left behind.
+fn encoded(frame: &Frame) -> Zeroizing<Vec<u8>> {
+    let mut out = Zeroizing::new(Vec::new());
     if let Err(e) = protocol::encode(frame, &mut out) {
         // Only an oversized label or message fails, and the service writes every one itself, so this is a bug; the
         // peer then sees the connection close.

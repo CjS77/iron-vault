@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
+use common::admin_response::assert_response;
 use common::body_stream::eventually;
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, WAIT, next_free_port, token_hash};
@@ -498,7 +499,7 @@ async fn startup_without_an_unlock_is_locked_and_answers_503_before_reaching_the
     assert_eq!(service.state().await.listener_provenance(), Some(ListenerProvenance::Provisional));
     assert_refused(&get_unix(&fixture.socket(), false).await, UnavailableReason::Locked);
     assert!(fixture.upstream.requests().is_empty());
-    assert_eq!(ping(&service).await, PONG);
+    assert_response(&ping(&service).await, &PONG);
 }
 
 #[tokio::test]
@@ -610,7 +611,7 @@ async fn an_unparsable_config_starts_locked_with_no_request_listeners_and_a_work
     assert_eq!(service.state().await, ServiceState::Locked);
     assert_eq!(service.listener_names().await, []);
     assert!(!fixture.socket().exists());
-    assert_eq!(ping(&service).await, PONG);
+    assert_response(&ping(&service).await, &PONG);
 }
 
 #[tokio::test]
@@ -721,7 +722,7 @@ async fn a_sweep_that_fails_on_one_file_still_starts_the_service() {
     let service = fixture.start().unwrap();
 
     assert_eq!(service.state().await, ServiceState::Locked);
-    assert_eq!(ping(&service).await, PONG);
+    assert_response(&ping(&service).await, &PONG);
     assert!(stuck.is_dir());
     assert!(!fixture.path("state/.approval.age.tmp").exists(), "the state sweep did not run");
     assert!(
@@ -904,7 +905,7 @@ async fn unlock_with_the_right_passphrase_reaches_ready_and_a_request_reaches_th
     let fixture = approved().await;
     let service = fixture.start().unwrap();
 
-    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
 
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_served(&get_unix(&fixture.socket(), true).await);
@@ -926,12 +927,12 @@ async fn a_wrong_passphrase_leaves_the_service_locked() {
 
     let response = unlock(&service, WRONG_PASSPHRASE).await;
 
-    assert_eq!(response, error_response(ErrorCode::UnlockDenied, "wrong passphrase"));
+    assert_response(&response, &error_response(ErrorCode::UnlockDenied, "wrong passphrase"));
     assert_eq!(service.state().await, ServiceState::Locked);
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
     assert!(fixture.upstream.requests().is_empty());
     // A later unlock with the right passphrase still works: the refusal changed nothing.
-    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
     assert_no_passphrase_logged(&logs);
 }
 
@@ -940,9 +941,9 @@ async fn empty_input_is_a_wrong_passphrase() {
     let fixture = approved().await;
     let service = fixture.start().unwrap();
 
-    assert_eq!(
-        unlock(&service, "").await,
-        error_response(ErrorCode::UnlockDenied, "wrong passphrase")
+    assert_response(
+        &unlock(&service, "").await,
+        &error_response(ErrorCode::UnlockDenied, "wrong passphrase"),
     );
     assert_eq!(service.state().await, ServiceState::Locked);
 }
@@ -958,7 +959,7 @@ async fn unlock_while_ready_is_refused_before_any_prompt_and_changes_nothing() {
 
     assert_eq!(prompts, []);
     let message = "`unlock` is allowed only while the service is Locked; it is Ready";
-    assert_eq!(response, error_response(ErrorCode::WrongState, message));
+    assert_response(&response, &error_response(ErrorCode::WrongState, message));
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_served(&get_unix(&fixture.socket(), true).await);
     assert_no_passphrase_logged(&logs);
@@ -974,7 +975,7 @@ async fn unlock_with_an_invalid_approval_ends_unavailable_and_names_the_redacted
     let response = unlock(&service, PASSPHRASE).await;
 
     let message = "the vault unlocked, but the config check failed: the service is Unavailable (policy invalid)";
-    assert_eq!(response, error_response(ErrorCode::UnlockedUnavailable, message));
+    assert_response(&response, &error_response(ErrorCode::UnlockedUnavailable, message));
     assert_eq!(service.state().await, ServiceState::Unavailable(FailureReason::PolicyInvalid));
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::PolicyInvalid);
     assert!(
@@ -1041,7 +1042,7 @@ async fn lock_over_the_admin_socket_leaves_the_service_locked_answering_503_unti
 
     let response = admin(&service, AdminRequest::Lock, "").await.2;
 
-    assert_eq!(response, AdminResponse::Lock { cleared: true });
+    assert_response(&response, &AdminResponse::Lock { cleared: true });
     assert_eq!(service.state().await, ServiceState::Locked);
     // The approval state and the credential report go with the vault: status reports no vault and no credentials.
     let report = status(&service).await.1;
@@ -1050,7 +1051,7 @@ async fn lock_over_the_admin_socket_leaves_the_service_locked_answering_503_unti
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
     assert_eq!(fixture.upstream.requests().len(), 1, "the locked service sent nothing upstream");
     assert!(logs.text().contains("lock transition: Ready to Locked"), "{}", logs.text());
-    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_served(&get_unix(&fixture.socket(), true).await);
 }
@@ -1116,7 +1117,7 @@ async fn lock_from_unavailable_clears_the_kept_vault_identity() {
 
     let response = admin(&service, AdminRequest::Lock, "").await.2;
 
-    assert_eq!(response, AdminResponse::Lock { cleared: true });
+    assert_response(&response, &AdminResponse::Lock { cleared: true });
     assert!(kept.upgrade().is_none(), "the vault identity outlived the lock");
     assert!(service.identity_probe().await.is_none());
     let report = status(&service).await.1;
@@ -1136,7 +1137,7 @@ async fn unlock_after_a_lock_from_unavailable_rechecks_and_reaches_ready_once_th
     assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
     fs::write(fixture.path("etc/config.toml"), fixture.config("")).unwrap();
 
-    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
 
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_served(&get_unix(&fixture.socket(), true).await);
@@ -1172,7 +1173,7 @@ async fn a_request_that_ignores_cancellation_makes_lock_say_the_secrets_are_not_
 
     let response = admin_with(&service, handlers, AdminRequest::Lock, "").await.2;
 
-    assert_eq!(response, AdminResponse::Lock { cleared: false });
+    assert_response(&response, &AdminResponse::Lock { cleared: false });
     assert_eq!(service.state().await, ServiceState::Locked);
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
     assert!(
@@ -1666,7 +1667,7 @@ async fn a_request_gets_503_locked_at_once_while_an_unlock_is_in_scrypt() {
     assert!(started.elapsed() < PROMPTLY, "the refusal took {:?}", started.elapsed());
     assert_refused(&response, UnavailableReason::Locked);
     release.send(()).unwrap();
-    assert_eq!(unlocking.await.unwrap(), AdminResponse::Success);
+    assert_response(&unlocking.await.unwrap(), &AdminResponse::Success);
     assert_eq!(service.state().await, ServiceState::Ready);
     session.close().await;
 }
@@ -1677,14 +1678,14 @@ async fn ping_answers_at_once_and_status_waits_for_an_unlock_in_scrypt() {
     let (_service, session, unlocking, release) = unlock_held_in_its_task(&fixture).await;
 
     let started = Instant::now();
-    assert_eq!(session.send(AdminRequest::Ping, "").await.unwrap(), PONG);
+    assert_response(&session.send(AdminRequest::Ping, "").await.unwrap(), &PONG);
     assert!(started.elapsed() < PROMPTLY, "ping took {:?}", started.elapsed());
     let status = session.send(AdminRequest::Status, "");
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!status.is_finished(), "status did not wait for the unlock");
 
     release.send(()).unwrap();
-    assert_eq!(unlocking.await.unwrap(), AdminResponse::Success);
+    assert_response(&unlocking.await.unwrap(), &AdminResponse::Success);
     let AdminResponse::Status(report) = status.await.unwrap() else {
         panic!("expected a status report");
     };
@@ -1755,7 +1756,7 @@ async fn assert_safe_state(
     [SECRET, dir.as_str()]
         .iter()
         .for_each(|leak| assert!(!String::from_utf8_lossy(&bytes).contains(leak), "status leaked {leak}"));
-    assert_eq!(ping(service).await, PONG);
+    assert_response(&ping(service).await, &PONG);
 }
 
 #[tokio::test]
@@ -1764,9 +1765,9 @@ async fn locked_startup_stays_locked_after_a_wrong_passphrase() {
     let service = fixture.start().unwrap();
 
     assert_safe_state(&fixture, &service, ServiceState::Locked, UnavailableReason::Locked, 0).await;
-    assert_eq!(
-        unlock(&service, WRONG_PASSPHRASE).await,
-        error_response(ErrorCode::UnlockDenied, "wrong passphrase")
+    assert_response(
+        &unlock(&service, WRONG_PASSPHRASE).await,
+        &error_response(ErrorCode::UnlockDenied, "wrong passphrase"),
     );
     assert_safe_state(&fixture, &service, ServiceState::Locked, UnavailableReason::Locked, 0).await;
 }
@@ -1775,9 +1776,9 @@ async fn locked_startup_stays_locked_after_a_wrong_passphrase() {
 async fn unlocked_with_invalid_policy(fixture: &Fixture) {
     let service = fixture.start().unwrap();
     let message = "the vault unlocked, but the config check failed: the service is Unavailable (policy invalid)";
-    assert_eq!(
-        unlock(&service, PASSPHRASE).await,
-        error_response(ErrorCode::UnlockedUnavailable, message)
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &error_response(ErrorCode::UnlockedUnavailable, message),
     );
     let unavailable = ServiceState::Unavailable(FailureReason::PolicyInvalid);
     assert_safe_state(fixture, &service, unavailable, UnavailableReason::PolicyInvalid, 0).await;
@@ -1853,7 +1854,7 @@ async fn one_damaged_credential_record_gives_503_on_its_routes_while_unrelated_r
     fixture.approve(&config.replace("routes = [\"fx\"]", "routes = [\"fx\", \"brave\"]"));
     fs::write(&fixture.brave_record, b"not the record").unwrap();
     let service = fixture.start().unwrap();
-    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
 
     let damaged = get_path(&fixture.socket(), "/brave/latest").await;
 
@@ -1879,27 +1880,27 @@ async fn one_damaged_credential_record_gives_503_on_its_routes_while_unrelated_r
         ]
     );
     assert!(!String::from_utf8_lossy(&bytes).contains(SECRET));
-    assert_eq!(ping(&service).await, PONG);
+    assert_response(&ping(&service).await, &PONG);
 }
 
 #[tokio::test]
 async fn locking_while_serving_gives_503_locked_and_unlock_restores_serving_at_the_same_committed_version() {
     let fixture = approved().await;
     let service = fixture.start().unwrap();
-    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
     assert_served(&get_unix(&fixture.socket(), true).await);
     let served = fixture.upstream.connections();
     let VaultStatus::Unlocked(before) = status(&service).await.1.vault else {
         panic!("the serving vault should be unlocked");
     };
 
-    assert_eq!(
-        admin(&service, AdminRequest::Lock, "").await.2,
-        AdminResponse::Lock { cleared: true }
+    assert_response(
+        &admin(&service, AdminRequest::Lock, "").await.2,
+        &AdminResponse::Lock { cleared: true },
     );
     assert_safe_state(&fixture, &service, ServiceState::Locked, UnavailableReason::Locked, served).await;
 
-    assert_eq!(unlock(&service, PASSPHRASE).await, AdminResponse::Success);
+    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
     assert_served(&get_unix(&fixture.socket(), true).await);
     let VaultStatus::Unlocked(after) = status(&service).await.1.vault else {
         panic!("the restored vault should be unlocked");

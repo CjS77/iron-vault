@@ -5,7 +5,10 @@ use super::fields::{self, exact, first, read_flag, read_profile, read_text, read
 use super::status::{self, StatusReport};
 use super::{AdminCommand, AdminRequest, AdminResponse, ApprovalResult, ErrorCode, FrameError, Notice, Prompt, ProposedConfig};
 use crate::deployment::DeploymentProfile;
+use iron_vault_policy::CallerToken;
+use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
 use iron_vault_store::{RecordId, VaultId};
+use zeroize::Zeroizing;
 
 pub(super) const TAG_COMMAND: u16 = 1;
 const TAG_LABEL: u16 = 1;
@@ -20,10 +23,12 @@ const TAG_DIGEST: u16 = 3;
 const TAG_HEADLINE: u16 = 4;
 const TAG_VAULT_ID: u16 = 2;
 const TAG_COMMITTED: u16 = 3;
+const TAG_TOKEN: u16 = 2;
 const TAG_TEXT: u16 = 1;
 
 const COMMAND_PING: u16 = AdminCommand::Ping as u16;
 const COMMAND_CONFIG_APPROVE: u16 = AdminCommand::ConfigApprove as u16;
+const COMMAND_CALLER_TOKEN: u16 = AdminCommand::CallerToken as u16;
 const COMMAND_STATUS: u16 = AdminCommand::Status as u16;
 const COMMAND_UNLOCK: u16 = AdminCommand::Unlock as u16;
 const COMMAND_LOCK: u16 = AdminCommand::Lock as u16;
@@ -54,6 +59,7 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
                 .map(AdminRequest::ConfigApprove)
                 .ok_or(FrameError::InvalidValue(TAG_CONFIG))
         }
+        COMMAND_CALLER_TOKEN => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::CallerToken),
         COMMAND_STATUS => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Status),
         COMMAND_UNLOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Unlock),
         COMMAND_LOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Lock),
@@ -102,6 +108,24 @@ pub(super) fn encode_lock_result(cleared: bool) -> Vec<u8> {
 /// `add`'s success body: the command it answers, then the new record's ID.
 pub(super) fn encode_add_result(record_id: RecordId) -> Vec<u8> {
     add::encode_result(COMMAND_ADD, record_id)
+}
+
+/// `caller-token`'s success body: the command it answers, then the token's text. It holds the token, so it is built in a
+/// clearing buffer sized for it up front, which never reallocates.
+pub(super) fn encode_caller_token_result(token: &CallerToken) -> Zeroizing<Vec<u8>> {
+    let mut out = Zeroizing::new(Vec::with_capacity(2 * fields::FIELD_HEADER_LEN + 2 + CALLER_TOKEN_LEN));
+    fields::put(&mut out, TAG_COMMAND, &COMMAND_CALLER_TOKEN.to_be_bytes());
+    fields::put(&mut out, TAG_TOKEN, token.expose_secret().as_bytes());
+    out
+}
+
+/// The token is parsed straight from the read buffer into its own secret type. A wrong length or an invalid token is
+/// an invalid value: the error names the tag, and never the bytes.
+fn decode_caller_token_result(fields: &[fields::Field<'_>]) -> Result<AdminResponse, FrameError> {
+    let [_, token] = exact(fields, [TAG_COMMAND, TAG_TOKEN])?;
+    CallerToken::parse(token)
+        .map(|token| AdminResponse::CallerToken { token })
+        .map_err(|_| FrameError::InvalidValue(TAG_TOKEN))
 }
 
 /// `init`'s success body: the command it answers, the new vault's ID as its 16 raw bytes (as `status` sends it), then the
@@ -174,6 +198,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
             })
         }
         COMMAND_CONFIG_APPROVE => decode_approval_result(&fields),
+        COMMAND_CALLER_TOKEN => decode_caller_token_result(&fields),
         COMMAND_STATUS => status::decode(&fields).map(|report| AdminResponse::Status(Box::new(report))),
         COMMAND_LOCK => {
             let [_, cleared] = exact(&fields, [TAG_COMMAND, TAG_CLEARED])?;
@@ -226,6 +251,7 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::NameTaken,
         ErrorCode::CredentialInvalid,
         ErrorCode::VaultWriteFailed,
+        ErrorCode::RandomSourceFailed,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)
