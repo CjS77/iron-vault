@@ -2,9 +2,9 @@
 //!
 //! The recovery key is shown on the controlling terminal only, so the command checks for one before it sends the
 //! request: a CLI that could not show the key never has the service generate one. Once the key is shown, a command that
-//! ends without a service answer (a dropped or timed-out connection, or a signal while the terminal is open) must
-//! still tell the owner what to do with it, because the service cannot answer a closed connection
-//! (design/vault-initialization.md, "Failing after the reveal").
+//! ends without a service answer (a dropped or timed-out connection, or a signal) must still tell the owner what to do
+//! with it, because the service cannot answer a closed connection (design/vault-initialization.md, "Failing after the
+//! reveal").
 
 use std::path::Path;
 

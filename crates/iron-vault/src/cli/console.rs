@@ -5,6 +5,7 @@
 //! value goes from its clearing buffer straight to the terminal's descriptor. Neither passes through `String`,
 //! formatting, `Debug` or a log call, and no error names a byte of either.
 
+mod signals;
 mod tty;
 
 use std::fs::File;
@@ -58,6 +59,10 @@ pub enum InputError {
     /// A revealed value could not be written to the terminal.
     #[error("cannot show the service's secret value: {0}")]
     Reveal(io::Error),
+    /// The signal watcher could not be started, so a signal would end the command without restoring the terminal or
+    /// giving the owner's advice.
+    #[error("cannot watch for signals: {0}")]
+    Signals(io::Error),
 }
 
 /// Collects one value from the owner for each prompt, and shows the owner each notice and reveal.
@@ -121,9 +126,16 @@ impl OwnerConsole for ProcessConsole {
     }
 }
 
+/// Opens the console and starts the signal watcher, in either mode.
+fn open() -> Result<Box<dyn OwnerConsole>, InputError> {
+    let console = open_mode()?;
+    signals::watch()?;
+    Ok(console)
+}
+
 /// The terminal when stdin is one; otherwise stdin itself, so a piped value (`pass show fx | sudo iron-vault add fx`)
 /// is read from the pipe even when the shell has a terminal.
-fn open() -> Result<Box<dyn OwnerConsole>, InputError> {
+fn open_mode() -> Result<Box<dyn OwnerConsole>, InputError> {
     let stdin = io::stdin();
     if stdin.is_terminal() {
         return Ok(Box::new(tty::open()?));

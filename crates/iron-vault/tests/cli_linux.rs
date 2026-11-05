@@ -6,8 +6,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
+use std::io::{Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
 use iron_vault::admin::protocol::{
@@ -23,6 +22,7 @@ use iron_vault::admin::protocol::{
 };
 use iron_vault::admin::server::{AdminServer, Exchange, Limits};
 use iron_vault::admin::socket::AdminSocket;
+use iron_vault::admin::{ADMIN_SOCKET_NAME, DEAD_RECOVERY_KEY, UNCONFIRMED_RECOVERY_KEY};
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_state::ServiceState;
@@ -590,4 +590,205 @@ async fn list_with_no_open_vault_says_the_credentials_are_unknown_and_exits_four
     assert_eq!(output.status.code(), Some(4), "stderr: {}", text(&output.stderr));
     assert_eq!(text(&output.stdout), "credentials: unknown while the vault is locked\n");
     assert_eq!(text(&output.stderr), "");
+}
+
+/// A recovery key the scripted `init` reveals. It must reach the terminal and never stdout or stderr.
+const REVEALED_KEY: &str = "AGE-SECRET-KEY-1TESTONLYREVEALEDRECOVERYKEYQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ";
+
+/// The notice the scripted `init` sends after the reveal: once the CLI has shown it, the CLI has recorded the reveal.
+const KEY_SHOWN: &str = "the recovery key is shown";
+
+/// A test-only `init` handler: reveals a key, sends a notice, prompts for `yes` and reports the answer, then holds the
+/// exchange open until the test releases it, so the CLI is still waiting for a response when the signal arrives.
+struct ScriptedInit {
+    answered: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+impl AdminHandler for ScriptedInit {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            exchange.reveal(REVEALED_KEY.as_bytes()).await?;
+            exchange.notice(&format!("{KEY_SHOWN}\n")).await?;
+            let prompt = Prompt {
+                label: "Type yes".to_owned(),
+                secret: false,
+            };
+            let input = exchange.prompt(&prompt).await?;
+            let _ = self.answered.send(input.expose_secret().to_vec());
+            self.release.notified().await;
+            Ok(AdminResponse::Success)
+        })
+    }
+}
+
+/// Where the CLI under test reads the owner's answers from.
+#[derive(Clone, Copy)]
+enum ConsoleMode {
+    /// Stdin is a pipe; the pseudo-terminal is only its controlling terminal.
+    Piped,
+    /// Stdin is the pseudo-terminal.
+    Terminal,
+}
+
+/// A pseudo-terminal: the master end the test reads and types on, the slave end the CLI gets as its controlling
+/// terminal. The test holds the slave open too, so the master never reports a hangup while the CLI starts.
+struct Pty {
+    master: fs::File,
+    slave: fs::File,
+    path: String,
+}
+
+fn open_pty() -> Pty {
+    use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
+    let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC).unwrap();
+    grantpt(&master).unwrap();
+    unlockpt(&master).unwrap();
+    let path = ptsname(&master, Vec::new()).unwrap().into_string().unwrap();
+    let slave = fs::File::options()
+        .read(true)
+        .write(true)
+        .custom_flags(rustix::fs::OFlags::NOCTTY.bits() as i32)
+        .open(&path)
+        .unwrap();
+    Pty {
+        master: fs::File::from(master),
+        slave,
+        path,
+    }
+}
+
+/// Copies everything `from` yields into the returned buffer, on a thread of its own.
+fn collect(mut from: impl Read + Send + 'static) -> (Arc<Mutex<Vec<u8>>>, std::thread::JoinHandle<()>) {
+    let seen = Arc::<Mutex<Vec<u8>>>::default();
+    let sink = Arc::clone(&seen);
+    let reader = std::thread::spawn(move || {
+        let mut chunk = [0; 1024];
+        while let Ok(len @ 1..) = from.read(&mut chunk) {
+            sink.lock().unwrap().extend_from_slice(&chunk[..len]);
+        }
+    });
+    (seen, reader)
+}
+
+async fn wait_for(buffers: &[&Arc<Mutex<Vec<u8>>>], needle: &str) {
+    let found = || buffers.iter().any(|buffer| text(&buffer.lock().unwrap()).contains(needle));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !found() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the CLI never showed {needle:?}"));
+}
+
+/// Runs `iron-vault init` in a new session whose controlling terminal is a pseudo-terminal, against the scripted
+/// handler; answers `yes` when `confirm` is set; then sends `signal` while the CLI waits. `setsid` execs a shell that
+/// opens the terminal as session leader, which makes it the controlling terminal, then execs the CLI in its place, so
+/// the child's pid is the CLI's. Returns the exit code, stdout, stderr and what the terminal showed.
+async fn interrupt_init(mode: ConsoleMode, confirm: bool, signal: rustix::process::Signal) -> (Option<i32>, String, String, String) {
+    let dir = TempDir::new();
+    let me = invoking_user().unwrap();
+    let socket = AdminSocket::bind(&dir.0, me).unwrap();
+    let (answered, mut answers) = tokio::sync::mpsc::unbounded_channel();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let handler = ScriptedInit {
+        answered,
+        release: Arc::clone(&release),
+    };
+    let handlers = Handlers::default().with(AdminCommand::Init, handler);
+    let server = AdminServer::new(
+        AdminPrincipals::new(DeploymentProfile::Protected, me.uid),
+        handlers,
+        Limits::default(),
+    );
+    let (stop, stopped) = oneshot::channel::<()>();
+    let served = tokio::spawn(async move {
+        server
+            .serve(socket, async {
+                let _ = stopped.await;
+            })
+            .await
+    });
+
+    let pty = open_pty();
+    let stdin = match mode {
+        ConsoleMode::Piped => Stdio::piped(),
+        ConsoleMode::Terminal => Stdio::from(pty.slave.try_clone().unwrap()),
+    };
+    let mut child = Command::new("setsid")
+        .args(["sh", "-c", r#"exec 9<"$IV_PTS" && exec 9<&- && exec "$@""#, "sh"])
+        .arg(env!("CARGO_BIN_EXE_iron-vault"))
+        .args(command_args("init", &dir.socket()))
+        .env("IV_PTS", &pty.path)
+        .stdin(stdin)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut piped_stdin = child.stdin.take();
+    let (stdout, stdout_reader) = collect(child.stdout.take().unwrap());
+    let (stderr, stderr_reader) = collect(child.stderr.take().unwrap());
+    let (terminal, _) = collect(pty.master.try_clone().unwrap());
+
+    // A notice goes to stderr when stdin is piped and to the terminal otherwise.
+    wait_for(&[&stderr, &terminal], KEY_SHOWN).await;
+    if confirm {
+        match (mode, piped_stdin.as_mut()) {
+            (ConsoleMode::Piped, Some(input)) => input.write_all(b"yes\n").unwrap(),
+            _ => (&pty.master).write_all(b"yes\n").unwrap(),
+        }
+        let answer = tokio::time::timeout(Duration::from_secs(10), answers.recv()).await.unwrap();
+        assert_eq!(answer.as_deref(), Some(&b"yes"[..]));
+    }
+    rustix::process::kill_process(rustix::process::Pid::from_child(&child), signal).unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(10), tokio::task::spawn_blocking(move || child.wait()))
+        .await
+        .expect("the CLI exits on the signal")
+        .unwrap()
+        .unwrap();
+    drop(piped_stdin);
+
+    release.notify_one();
+    let _ = stop.send(());
+    served.await.unwrap().unwrap();
+    stdout_reader.join().unwrap();
+    stderr_reader.join().unwrap();
+    let read = |buffer: &Arc<Mutex<Vec<u8>>>| text(&buffer.lock().unwrap());
+    (status.code(), read(&stdout), read(&stderr), read(&terminal))
+}
+
+/// What every interrupted `init` shows: the key on the terminal only, nothing on stdout, and the advice last on stderr.
+fn assert_interrupted(outcome: &(Option<i32>, String, String, String), code: i32, advice: &str) {
+    let (status, stdout, stderr, terminal) = outcome;
+    assert_eq!(*status, Some(code), "stderr: {stderr}");
+    assert!(terminal.contains(REVEALED_KEY), "the key is shown on the terminal: {terminal}");
+    assert_eq!(stdout, "");
+    assert!(!stderr.contains(REVEALED_KEY), "{stderr}");
+    assert!(stderr.ends_with(&format!("{advice}\n")), "{stderr}");
+}
+
+#[tokio::test]
+async fn a_piped_init_interrupted_before_yes_says_the_key_is_dead() {
+    let outcome = interrupt_init(ConsoleMode::Piped, false, rustix::process::Signal::INT).await;
+    assert_interrupted(&outcome, 130, DEAD_RECOVERY_KEY);
+    assert!(outcome.2.contains("before the recovery key was confirmed"), "{}", outcome.2);
+}
+
+#[tokio::test]
+async fn a_piped_init_terminated_after_yes_says_to_keep_the_key() {
+    let outcome = interrupt_init(ConsoleMode::Piped, true, rustix::process::Signal::TERM).await;
+    assert_interrupted(&outcome, 143, UNCONFIRMED_RECOVERY_KEY);
+}
+
+#[tokio::test]
+async fn a_terminal_init_hung_up_after_yes_says_to_keep_the_key() {
+    let outcome = interrupt_init(ConsoleMode::Terminal, true, rustix::process::Signal::HUP).await;
+    assert_interrupted(&outcome, 129, UNCONFIRMED_RECOVERY_KEY);
+}
+
+#[tokio::test]
+async fn a_terminal_init_hung_up_before_yes_says_the_key_is_dead() {
+    let outcome = interrupt_init(ConsoleMode::Terminal, false, rustix::process::Signal::HUP).await;
+    assert_interrupted(&outcome, 129, DEAD_RECOVERY_KEY);
 }

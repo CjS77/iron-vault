@@ -738,7 +738,7 @@ after the last frame does not hide it.
 | `2` | usage error |
 | `3` | no admin response: no socket or nothing listening, permission denied, the exchange failed or timed out, a prompt got no value, or a reveal could not be shown on a terminal |
 | `4` | `status`: the service answered, and it is not Ready; `list`: the service answered, and no vault is open |
-| `128 + n` | signal `n` while the CLI had the terminal open for prompting: `130` for SIGINT, `131` for SIGQUIT, `143` for SIGTERM |
+| `128 + n` | signal `n` after the CLI opened its owner console: `129` for SIGHUP, `130` for SIGINT, `131` for SIGQUIT, `143` for SIGTERM |
 
 A `not-admin-principal` response or a permission-denied connect tells the owner that a protected install needs `sudo`.
 Diagnostics name the socket path, the error code and the service's message, never the request's arguments.
@@ -803,7 +803,8 @@ prompt, and the recovery key arrives in a reveal. Before it sends the request it
 and without a controlling terminal it reports that on stderr and exits with code 3, so the service never generates a
 key for a CLI that will refuse to show it. If the command ends after the reveal without a service answer (Ctrl-C, a
 closed terminal, a signal, a dropped or timed-out connection), the CLI says on stderr, before it exits, what to do
-with the key, because the service cannot say so over a closed connection. It tracks whether it has sent `yes`:
+with the key, because the service cannot say so over a closed connection; after SIGHUP it also logs it
+([Owner input](#owner-input)). It tracks whether it has sent `yes`:
 
 - **Before `yes`:** the service writes nothing, so the recovery key shown opens nothing and is to be discarded.
 - **After `yes`:** no prompt remains, so step 5 runs on and the outcome is unknown. The CLI says to keep the key and
@@ -859,11 +860,16 @@ command the service never prompts for touches neither the terminal nor stdin. No
 - **Stdin is a terminal:** the CLI opens `/dev/tty`, writes the label to it followed by `: `, and reads one line from
   it. For a secret prompt it turns echo off for the read with `tcsetattr`: `ECHO` off and `ECHONL` on, so the owner's
   Enter still moves to a new line, applied with `TCSAFLUSH` so anything typed before the prompt is discarded. A guard
-  restores the saved settings on every path out of the read, errors included. The CLI also registers handlers for
-  SIGINT, SIGQUIT and SIGTERM before the first read: on any of them a watcher thread restores the saved settings if
-  echo is off and exits with status 128 plus the signal number. Turning echo off and the watcher's restore are
-  serialised, and the watcher holds off further prompts until the process exits, so a signal never leaves echo off.
-  If echo cannot be turned off, nothing is read and the command is cancelled.
+  restores the saved settings on every path out of the read, errors included. If echo cannot be turned off, nothing
+  is read and the command is cancelled.
+- **Signals:** when the console opens, in either mode and before its first read or reveal, the CLI registers handlers
+  for SIGINT, SIGQUIT, SIGTERM and SIGHUP. On any of them a watcher thread restores the terminal's saved settings if
+  echo is off, writes to stderr any advice the command set (`init`'s, below), and exits with status 128 plus the
+  signal number. Turning echo off and the watcher's restore are serialised, and the watcher holds off further prompts
+  until the process exits, so a signal never leaves echo off. SIGHUP usually means the terminal has closed, and
+  stderr may have closed with it, so on SIGHUP the watcher also sends the advice to the system log (`/dev/log`,
+  facility user, severity warning). That is best effort: without a logger the line is lost. The advice is the
+  command's fixed text and never holds a secret.
 - **The terminal's line limit:** in canonical mode Linux keeps at most 4095 bytes of a line and silently discards the
   rest up to the newline, so a longer pasted value would arrive cut short. The CLI refuses a terminal line of 4095
   bytes or more, counted with its line ending, as possibly cut short, without sending or showing it, and says to pipe

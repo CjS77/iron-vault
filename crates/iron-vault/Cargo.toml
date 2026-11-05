@@ -89,6 +89,8 @@ log.workspace = true
 proptest.workspace = true
 # A CA and leaf certificates for the upstream-trust tests, generated offline.
 rcgen.workspace = true
+# A pseudo-terminal to be the CLI's controlling terminal, and the signals the CLI's signal tests deliver.
+rustix = { workspace = true, features = ["pty"] }
 serde.workspace = true
 static_assertions.workspace = true
 # Builds non-default `Limits` the way an installation does, from a `[limits]` table.

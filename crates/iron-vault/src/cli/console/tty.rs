@@ -1,17 +1,20 @@
-//! The controlling terminal, `/dev/tty`: echo is switched with `rustix::termios`, and restored by the guard, and by a
-//! watcher thread on SIGINT, SIGQUIT or SIGTERM.
+//! The controlling terminal, `/dev/tty`: echo is switched with `rustix::termios`, and restored by the guard, and by the
+//! signal watcher when a signal ends the command.
 
 use std::fs::File;
-use std::io::{self, Write};
+use std::io;
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use rustix::termios::{LocalModes, OptionalActions, Termios, tcgetattr, tcsetattr};
-use tokio::signal::unix::{SignalKind, signal};
 
 use super::{EchoControl, InputError, Terminal};
 
-/// Opens the controlling terminal for prompting, and starts the watcher that restores it on SIGINT, SIGQUIT or SIGTERM.
+/// The echo of the terminal [`open`] opened, where the signal watcher can restore it. Registered before any prompt can
+/// turn echo off, and held by the watcher until the process exits.
+static OPEN_ECHO: Mutex<Option<TtyEcho>> = Mutex::new(None);
+
+/// Opens the controlling terminal for prompting, and registers its echo for the signal watcher to restore.
 pub(super) fn open() -> Result<Terminal<File, TtyEcho>, InputError> {
     let tty = File::options()
         .read(true)
@@ -22,12 +25,12 @@ pub(super) fn open() -> Result<Terminal<File, TtyEcho>, InputError> {
         fd: tty.as_fd().try_clone_to_owned().map_err(InputError::Terminal)?,
         saved: Mutex::new(None),
     }));
-    restore_on_signal(echo.clone())?;
+    *OPEN_ECHO.lock().unwrap_or_else(PoisonError::into_inner) = Some(echo.clone());
     Ok(Terminal::new(tty, echo))
 }
 
 /// Opens the controlling terminal for writing only, to show a reveal when stdin is not a terminal. Nothing is read from
-/// it and echo is never switched, so no signal watcher is needed.
+/// it and echo is never switched, so there is nothing to restore.
 pub(super) fn open_for_reveal() -> io::Result<File> {
     File::options().write(true).open("/dev/tty")
 }
@@ -80,50 +83,16 @@ impl EchoControl for TtyEcho {
     }
 }
 
-/// Starts a thread that, on SIGINT, SIGQUIT or SIGTERM, restores the terminal if echo is off and exits.
-///
-/// The handlers are registered here, before any prompt is read, so none of these signals finds its default action,
-/// which would kill the process with echo still off. From then on each of them goes through the watcher.
-fn restore_on_signal(echo: TtyEcho) -> Result<(), InputError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_io()
-        .build()
-        .map_err(InputError::Terminal)?;
-    let (mut interrupt, mut quit, mut terminate) = {
-        let _context = runtime.enter();
-        let watch = |kind| signal(kind).map_err(InputError::Terminal);
-        (
-            watch(SignalKind::interrupt())?,
-            watch(SignalKind::quit())?,
-            watch(SignalKind::terminate())?,
-        )
-    };
-    std::thread::Builder::new()
-        .name("tty-signals".to_owned())
-        .spawn(move || {
-            let received = runtime.block_on(async {
-                tokio::select! {
-                    _ = interrupt.recv() => SignalKind::interrupt(),
-                    _ = quit.recv() => SignalKind::quit(),
-                    _ = terminate.recv() => SignalKind::terminate(),
-                }
-            });
-            restore_and_exit(&echo, received)
-        })
-        .map(drop)
-        .map_err(InputError::Terminal)
-}
-
-/// Restores the terminal if echo is off, gives the owner any advice the command set, and exits with the status a shell
-/// reports for a process `received` killed: 128 plus the signal number, 130 for SIGINT.
-fn restore_and_exit(echo: &TtyEcho, received: SignalKind) -> ! {
-    // Held until the process exits, so no later prompt can turn echo off again after the restore.
-    let mut slot = echo.saved();
-    let _ = echo.restore_from(&mut slot);
-    // The cursor sits after the label; the newline keeps the shell prompt off that line.
-    let _ = rustix::io::write(&echo.0.fd, b"\n");
-    if let Some(advice) = super::signal_advice() {
-        let _ = writeln!(io::stderr(), "iron-vault: {advice}");
-    }
-    std::process::exit(128 + received.as_raw_value())
+/// Restores the open terminal's echo if it is off and ends its line, then runs `exit`, which ends the process. Both
+/// locks are held until then, so neither [`open`] nor a later prompt can turn echo off again after the restore.
+pub(super) fn restore_then<T>(exit: impl FnOnce() -> T) -> T {
+    let registered = OPEN_ECHO.lock().unwrap_or_else(PoisonError::into_inner);
+    let _saved = registered.as_ref().map(|echo| {
+        let mut slot = echo.saved();
+        let _ = echo.restore_from(&mut slot);
+        // The cursor sits after the label; the newline keeps the shell prompt off that line.
+        let _ = rustix::io::write(&echo.0.fd, b"\n");
+        slot
+    });
+    exit()
 }
