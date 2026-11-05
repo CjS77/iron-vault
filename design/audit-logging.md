@@ -233,7 +233,7 @@ names, so every dashboard and alert would have to query both; `outcome` already 
 ### Request ID
 
 `request_id` is a random version 4 UUID in its hyphenated lowercase form, from the `uuid` crate's `Uuid::new_v4`,
-generated when the request handler receives the request. `uuid` is already a workspace dependency (with the `v4`
+generated when the request handler receives the request and held as the value object `audit::RequestId`. `uuid` is already a workspace dependency (with the `v4`
 feature) and in the lock file through `iron-vault-store`, so the binary adding it pulls in no new crate and no new
 version of `getrandom`. The ID is in the request event and in every audit event about the same request
 (`request.defect`, `response.scrubbed`), so they can be joined. It is never sent to the caller or the upstream.
@@ -340,7 +340,7 @@ field is needed.
 
 ## Audit events
 
-Each audit event is a typed struct in the binary's `audit` module with fixed fields, emitted under the target
+Each audit event is a typed struct in the binary's `audit` module, implementing `audit::AuditEvent`, with fixed fields, emitted under the target
 `iron_vault::audit` (`audit::AUDIT_TARGET`). Its `emit` makes one `tracing` call with its event name, its level, its
 fixed message and exactly its own fields. Its fields are domain types (`RouteName`, `CredentialName`,
 `ApprovalVersion`, `ConfigDigest`, `ReasonCode`), never a `&str` taken from a request, so a header value or a URL
@@ -491,7 +491,7 @@ defined once, as an `audit::EventName` constant beside its struct.
 
 ## Log destination
 
-Where the records go. One setting selects it, given by the service manager (see [open question 1](#open-questions)):
+Where the records go, `logging::LogDestination`. One setting selects it, given by the service manager (see [open question 1](#open-questions)):
 a directory, or stdout.
 
 | Deployment | Destination |
