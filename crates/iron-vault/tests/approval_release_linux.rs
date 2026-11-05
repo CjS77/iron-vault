@@ -39,18 +39,6 @@ use iron_vault_store::{
 
 // ---- Helpers shared by the tests below -------------------------------------------------------------------------
 
-/// The service's two config files, `config.toml` then `config.toml.sig`.
-fn published_pair(fixture: &Fixture) -> [Vec<u8>; 2] {
-    ["config.toml", "config.toml.sig"].map(|file| fs::read(fixture.path(&format!("etc/{file}"))).unwrap())
-}
-
-fn put_back(fixture: &Fixture, pair: &[Vec<u8>; 2]) {
-    ["config.toml", "config.toml.sig"]
-        .iter()
-        .zip(pair)
-        .for_each(|(file, bytes)| fs::write(fixture.path(&format!("etc/{file}")), bytes).unwrap());
-}
-
 /// Stops `service` and waits for the admin handlers and blocking tasks to drop it, which releases its directory locks
 /// so a restart can take them.
 async fn shutdown<F: StoreFs + Send + Sync + 'static>(service: Arc<ServiceContext<F>>) {
@@ -101,7 +89,7 @@ fn approved_version(response: &AdminResponse) -> u64 {
 /// Version 1 is approved, then version 2 through `config approve`; returns the service running version 2 and the
 /// version 1 pair, which the caller then puts back.
 async fn approved_twice(fixture: &Fixture) -> (Arc<ServiceContext>, [Vec<u8>; 2]) {
-    let first_pair = published_pair(fixture);
+    let first_pair = fixture.published_pair();
     let service = fixture.ready().await;
     let exchanged = approve(&service, &fixture.config("rates"), &["yes", APPROVAL_PASSPHRASE]).await;
     assert_eq!(approved_version(&exchanged.response), 2);
@@ -113,8 +101,8 @@ async fn approved_twice(fixture: &Fixture) -> (Arc<ServiceContext>, [Vec<u8>; 2]
 async fn a_version_1_pair_put_back_after_version_2_is_refused_on_sighup() {
     let fixture = Fixture::new().await;
     let (service, first_pair) = approved_twice(&fixture).await;
-    let second_pair = published_pair(&fixture);
-    put_back(&fixture, &first_pair);
+    let second_pair = fixture.published_pair();
+    fixture.put_back(&first_pair);
 
     // SIGHUP runs `reload`, which is `recheck(Reload)` from Ready.
     let reloaded = service.reload().await;
@@ -122,7 +110,7 @@ async fn a_version_1_pair_put_back_after_version_2_is_refused_on_sighup() {
     assert_eq!(reloaded, Ok(ServiceState::Unavailable(FailureReason::PolicyInvalid)));
     assert_refusing(&fixture, "policy invalid", "after the reload").await;
     // A second SIGHUP is no way out of Unavailable, even once the version 2 pair is back.
-    put_back(&fixture, &second_pair);
+    fixture.put_back(&second_pair);
     assert!(service.reload().await.is_err());
     assert_eq!(service.state().await, ServiceState::Unavailable(FailureReason::PolicyInvalid));
     assert_refusing(&fixture, "policy invalid", "after a second reload").await;
@@ -135,7 +123,7 @@ async fn a_version_1_pair_put_back_after_version_2_is_refused_on_restart() {
     let fixture = Fixture::new().await;
     let (service, first_pair) = approved_twice(&fixture).await;
     shutdown(service).await;
-    put_back(&fixture, &first_pair);
+    fixture.put_back(&first_pair);
 
     let restarted = fixture.start().await;
 
@@ -143,7 +131,7 @@ async fn a_version_1_pair_put_back_after_version_2_is_refused_on_restart() {
     assert_refusing(&fixture, "policy invalid", "after the restart").await;
     shutdown(restarted).await;
     assert_eq!(counters(&fixture), (Some(2), 2));
-    assert_eq!(published_pair(&fixture), first_pair, "recovery touches nothing when it refuses");
+    assert_eq!(fixture.published_pair(), first_pair, "recovery touches nothing when it refuses");
 }
 
 // ---- Counters ---------------------------------------------------------------------------------------------------
@@ -240,7 +228,7 @@ async fn replacing_the_approver_keeps_the_counters_and_the_active_signature_need
     shutdown(service).await;
     let before = counters(&fixture);
     assert_eq!(before, (Some(2), 2));
-    let replaced_pair = published_pair(&fixture);
+    let replaced_pair = fixture.published_pair();
     replace_approver(&fixture);
     assert_eq!(counters(&fixture), before, "replacing the approver keeps both counters");
     assert_eq!(verify_published(&fixture, &replaced_pair), Err(VerifyError::BadSignature));

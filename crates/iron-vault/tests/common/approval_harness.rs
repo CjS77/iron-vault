@@ -134,8 +134,26 @@ impl Fixture {
         &self.upstream
     }
 
+    /// The CA the service pins for upstreams, so a second test upstream it issues is trusted too.
+    pub fn ca(&self) -> &TestCa {
+        &self.ca
+    }
+
     pub fn path(&self, name: &str) -> PathBuf {
         self.dir.path().join(name)
+    }
+
+    /// The service's two config files, `config.toml` then `config.toml.sig`.
+    pub fn published_pair(&self) -> [Vec<u8>; 2] {
+        ["config.toml", "config.toml.sig"].map(|file| fs::read(self.path(&format!("etc/{file}"))).unwrap())
+    }
+
+    /// Writes `pair` back over the service's two config files, as someone rolling back an approval would.
+    pub fn put_back(&self, pair: &[Vec<u8>; 2]) {
+        ["config.toml", "config.toml.sig"]
+            .iter()
+            .zip(pair)
+            .for_each(|(file, bytes)| fs::write(self.path(&format!("etc/{file}")), bytes).unwrap());
     }
 
     pub fn socket(&self) -> PathBuf {
