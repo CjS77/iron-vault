@@ -39,6 +39,12 @@ fn lock_is_a_client_command() {
 }
 
 #[test]
+fn caller_token_is_a_client_command_without_arguments() {
+    assert_eq!(parse(&["caller-token"]).unwrap().command, Command::CallerToken);
+    assert_eq!(parse(&["caller-token", "fx-mcp"]).unwrap_err().exit_code(), 2);
+}
+
+#[test]
 fn init_is_a_client_command_without_arguments() {
     assert_eq!(parse(&["init"]).unwrap().command, Command::Init);
     assert_eq!(parse(&["init", "hunter2-correct"]).unwrap_err().exit_code(), 2);

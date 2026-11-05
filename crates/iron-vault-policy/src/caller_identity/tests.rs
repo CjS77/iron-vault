@@ -402,3 +402,43 @@ fn a_refusal_discloses_nothing() {
             });
     });
 }
+
+/// Token enrollment as the owner does it: `iron-vault caller-token` prints a token and its `token_hash` line, the owner
+/// pastes that line into a config, and once the config is active the printed token names the caller.
+#[test]
+fn an_enrolled_token_hash_validates_and_its_printed_token_names_the_caller() {
+    let issued = CallerToken::from_bytes(std::array::from_fn(|i| (i as u8).wrapping_mul(37).wrapping_add(11)));
+    let printed_hash = TokenHash::of(&issued).to_string();
+    let printed_token = issued.expose_once().expose_secret().to_owned();
+    let doc = format!(
+        r#"schema_version = 1
+
+[listeners.local]
+address = "127.0.0.1:7878"
+
+[callers.agent]
+listener = "local"
+token_hash = "{printed_hash}"
+routes = ["fx"]
+
+[routes.fx]
+prefix = "/fx"
+upstream = "https://api.fx.example"
+credential = "fx_key"
+slot = {{ query = "access_key" }}
+methods = ["GET"]
+paths = ["/**"]
+rate_limit = {{ requests = 60, per_seconds = 60, burst = 10 }}
+"#
+    );
+    let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
+    let policy = activate(&config, &Capabilities::default(), &NoCredentials, &FakeAccounts::host()).unwrap();
+    let authorization = format!("Bearer {printed_token}");
+    let caller = identify_caller(
+        &policy,
+        &"local".parse().unwrap(),
+        None,
+        &headers(&[("Proxy-Authorization", &authorization)]),
+    );
+    assert_eq!(caller.unwrap().as_str(), "agent");
+}

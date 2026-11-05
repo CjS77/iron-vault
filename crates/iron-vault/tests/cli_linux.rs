@@ -26,7 +26,7 @@ use iron_vault::admin::socket::AdminSocket;
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_state::ServiceState;
-use iron_vault_policy::{CredentialKind, Port};
+use iron_vault_policy::{CallerToken, CredentialKind, Port, TokenHash};
 use iron_vault_store::RecordId;
 use tokio::sync::oneshot;
 
@@ -505,5 +505,40 @@ async fn init_without_a_controlling_terminal_sends_nothing() {
     assert!(
         stderr.contains("controlling terminal only") && stderr.ends_with("nothing was sent\n") && !stderr.contains("not running"),
         "{stderr}"
+    );
+}
+
+/// `caller-token` against the standard handlers: stdout is the token alone, and stderr its hash and how to enroll it.
+#[tokio::test]
+async fn caller_token_prints_the_token_alone_on_stdout_and_its_hash_on_stderr() {
+    let dir = TempDir::new();
+    let handlers = Handlers::standard(DeploymentProfile::Protected);
+    let output = serve_and_run(&dir, invoking_user().unwrap().uid, handlers, "caller-token", Vec::new()).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+
+    let line = stdout.strip_suffix('\n').expect("one line");
+    assert!(!line.contains('\n'), "{stdout}");
+    let token = CallerToken::parse(line.as_bytes()).unwrap();
+    let hash_line = format!("token_hash = \"{}\"\n", TokenHash::of(&token));
+    assert!(stderr.starts_with(&hash_line), "{stderr}");
+    assert!(!stderr.contains(line), "the token reached stderr: {stderr}");
+    assert!(
+        stderr.contains("shown once and the service keeps no copy") && stderr.contains("iron-vault config approve"),
+        "{stderr}"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_random_source_is_a_service_error() {
+    let dir = TempDir::new();
+    let handlers = Handlers::default().with(AdminCommand::CallerToken, FixedError(ErrorCode::RandomSourceFailed));
+    let output = serve_and_run(&dir, invoking_user().unwrap().uid, handlers, "caller-token", Vec::new()).await;
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(text(&output.stdout), "");
+    assert!(
+        text(&output.stderr).contains("error 25 (random-source-failed)"),
+        "{}",
+        text(&output.stderr)
     );
 }
