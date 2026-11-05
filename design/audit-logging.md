@@ -97,10 +97,11 @@ Rejected:
 - **A separate event name for the request server's refusals.** Every dashboard would have to query two names for one
   stream; `reason` already says which check refused.
 
-### Owner notifications come after v0
+### Owner notifications come in v1
 
-On 2026-11-05 the owner dropped owner notifications from v0. They are designed and built after v0, in EP-40; this
-design has no notification channel, and every fact it records goes to the log only.
+v0 has no owner notifications: the owner placed them in v1, in EP-40. In v0 this design has no notification channel,
+and every fact it records goes to the log only. [owner-notifications.md](owner-notifications.md) designs them for v1,
+recording each one as the audit event `owner.notified` ([Catalogue](#catalogue)).
 
 ### Departure: no `tracing-appender`
 
@@ -716,6 +717,13 @@ other approval.
 | `recovery.checked` | INFO, or WARN when the key fails | `recovery check` finished | `recovery_outcome` (`opened` or `failed`) |
 | `recovery.reminder` | INFO | a scheduled recovery reminder fell due | `last_checked`, left out when never checked |
 
+**Owner notifications** (v1; not emitted in v0.
+[owner-notifications.md](owner-notifications.md#the-ownernotified-audit-event) gives which events raise one):
+
+| Event | Level | When | Fields |
+|---|---|---|---|
+| `owner.notified` | INFO | right after the record of an audit event that notifies the owner | `topic`, `source_event`, `urgency`, `title`, `body`, `remediation` |
+
 ### Event fields
 
 The fields that only one event uses, or that only audit events use:
@@ -747,6 +755,11 @@ The fields that only one event uses, or that only audit events use:
 | `defect` | string | The label of the check a service defect failed |
 | `recovery_outcome` | string | `opened` or `failed` |
 | `last_checked` | string | An RFC 3339 UTC timestamp |
+| `topic` | string | A notification topic label, such as `vault_changed` |
+| `source_event` | string | The event name of the audit event an owner notification was made from |
+| `urgency` | string | `normal` or `critical` |
+| `title` | string | An owner notification's title, a fixed phrase per topic |
+| `body` | string | An owner notification's body, built from its source event's fields; at most 1024 bytes |
 
 ### Renamed and retyped fields
 
@@ -781,8 +794,8 @@ follows the [library error](#library-errors) rule:
 
 ### Event names
 
-An event name is `<subject>.<name>`: a lowercase subject (`admin`, `caller`, `config`, `credential`, `recovery`,
-`request`, `response`, `route`, `service`, `vault`), a dot, and a kebab-case name, matching
+An event name is `<subject>.<name>`: a lowercase subject (`admin`, `caller`, `config`, `credential`, `owner`,
+`recovery`, `request`, `response`, `route`, `service`, `vault`), a dot, and a kebab-case name, matching
 `^[a-z]+\.[a-z]+(-[a-z]+)*$`. Event names keep the kebab-case already in use in the code and the design docs; only
 field names and label values are snake_case. Names are stable: renaming or removing one changes the schema version.
 Each name is defined once, as an `audit::EventName` constant beside its struct.
@@ -1135,5 +1148,6 @@ Checked against [§3.15](iron-vault-specification.md#315-logging-and-v0-acceptan
 [§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances). The request event carries every field
 §3.15 lists (time, caller, route, credential name, upstream host, method, status, sizes, duration, scrubbing), and
 every rejected request Iron Vault's code sees writes one. Owner notifications
-([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)) come after v0, in EP-40, and this design has none;
-the specification's release plan places them in the later phase.
+([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)) come in v1, in EP-40, as the specification's release
+plan places them; in v0 this design has none, and v1 adds the audit event `owner.notified`
+([owner-notifications.md](owner-notifications.md)).
