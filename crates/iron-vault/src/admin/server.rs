@@ -22,6 +22,7 @@ use super::protocol::{
 };
 use super::socket::AdminSocket;
 use crate::library_error::{ErrorKindLabel, LibraryError};
+use crate::logging::LogFailure;
 
 /// How long the server pauses after a failed accept, such as running out of file descriptors, so the loop cannot spin.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
@@ -57,6 +58,7 @@ pub struct AdminServer {
     principals: AdminPrincipals,
     handlers: Arc<Handlers>,
     limits: Limits,
+    log_failure: LogFailure,
 }
 
 impl AdminServer {
@@ -66,7 +68,16 @@ impl AdminServer {
             principals,
             handlers: Arc::new(handlers),
             limits,
+            log_failure: LogFailure::default(),
         }
+    }
+
+    /// Answers every command `wrong-state` once `log_failure` has tripped: the service never accepts a change it cannot
+    /// record, and it is stopping.
+    #[must_use]
+    pub fn with_log_failure(mut self, log_failure: LogFailure) -> Self {
+        self.log_failure = log_failure;
+        self
     }
 
     /// Serves `socket` until `shutdown` completes. Then it stops accepting, gives open exchanges the shutdown grace to
@@ -100,6 +111,10 @@ impl AdminServer {
         };
         let mut exchange = Exchange::new(stream, self.limits);
         let response = match exchange.read_request().await {
+            Ok(_) if self.log_failure.is_tripped() => {
+                tracing::warn!("admin command refused: a log write failed");
+                error(ErrorCode::WrongState, "the service is stopping because a log write failed")
+            }
             Ok(request) => {
                 let (uid, command) = (principal.peer().uid(), request.command().name());
                 tracing::info!("admin command `{command}` from uid {uid}");

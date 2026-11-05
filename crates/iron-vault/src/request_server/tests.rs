@@ -76,12 +76,17 @@ struct Running {
 impl Running {
     /// Serves with the `[limits]` table `limits` and the stub `stub`.
     fn start(limits: &str, stub: Stub) -> Self {
+        Self::start_with(limits, stub, LogFailure::default())
+    }
+
+    /// As [`start`](Self::start), refusing requests once `failure` has tripped.
+    fn start_with(limits: &str, stub: Stub, failure: LogFailure) -> Self {
         let ca = TestCa::new();
         let mut setup = ThreeListeners::new();
         let listeners = setup.open(&ca, 0o600).unwrap();
         let config = ParsedConfig::from_toml(format!("schema_version = 1\n[limits]\n{limits}").as_bytes()).unwrap();
         let stub = Arc::new(stub);
-        let server = RequestServer::new(*config.limits(), Arc::clone(&stub));
+        let server = RequestServer::new(*config.limits(), Arc::clone(&stub)).with_log_failure(failure);
         let task = tokio::spawn(async move {
             let _ = server.serve(&listeners).await;
         });
@@ -525,6 +530,27 @@ async fn dropping_the_connections_counts_as_the_service_closing_them() {
     // The serve future owns the `Connections`; aborting it drops them as a panic in the listener task would.
     running.task.abort();
     assert_eq!(the_request_event(&read).await["reason"], "service_closed");
+}
+
+#[tokio::test]
+async fn a_request_after_a_log_failure_is_closed_unanswered_and_never_reaches_the_handler() {
+    let failure = LogFailure::default();
+    let running = Running::start_with("", Stub::default(), failure.clone());
+    assert_eq!(running.status(GET).await, Some(200));
+    failure.trip();
+    assert_eq!(running.status(GET).await, None);
+    assert_eq!(running.calls(), 1);
+}
+
+#[tokio::test]
+async fn a_request_on_a_kept_alive_connection_after_a_log_failure_is_closed_unanswered() {
+    let failure = LogFailure::default();
+    let running = Running::start_with("", Stub::default(), failure.clone());
+    let mut stream = running.unix().await;
+    assert_eq!(status(&mut stream, GET).await, Some(200));
+    failure.trip();
+    assert_eq!(status(&mut stream, GET).await, None);
+    assert_eq!(running.calls(), 1);
 }
 
 #[test]

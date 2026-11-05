@@ -222,6 +222,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
                 core_dumps: CoreDumps::Disabled,
                 memory: MemoryProtection::Unsupported,
             },
+            log_failure: iron_vault::logging::LogFailure::default(),
         };
         let service = Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap());
         service.enter_checking(identity()).await.unwrap();

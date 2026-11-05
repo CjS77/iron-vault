@@ -22,6 +22,10 @@
 //! has started; once one has, its body fails at the deadline and the connection is dropped. Every `413` and `408`
 //! closes the connection, since the rest of that request is never read.
 //!
+//! A request that arrives once a log write has failed ([`LogFailure`]) is not answered: its connection is closed, as
+//! the audit design's stop-on-log-failure default requires (`design/audit-logging.md`, "Failure behaviour"). The
+//! service never serves a request it cannot record.
+//!
 //! The handler sees only the connection tags the transport set ([`ConnectionTags`]), never anything from the request
 //! that claims to be one (§3.4).
 
@@ -49,6 +53,7 @@ use crate::audit::{ReasonCode, RequestFacts, RequestRecord};
 pub use crate::connection_tags::ConnectionTags;
 use crate::connection_tags::ServiceClose;
 use crate::library_error::LibraryError;
+use crate::logging::LogFailure;
 use crate::request_listeners::{IncomingConnection, RequestListeners};
 
 mod body;
@@ -103,7 +108,13 @@ pub struct RequestServer<H> {
     limits: Limits,
     http: http1::Builder,
     connections: Arc<Semaphore>,
+    log_failure: LogFailure,
 }
+
+/// Why a request was not answered: the audit log can no longer record it. hyper closes the connection on this error.
+#[derive(Debug, thiserror::Error)]
+#[error("a log write failed; the request is not served")]
+struct LogUnwritable;
 
 impl<H: RequestHandler> RequestServer<H> {
     /// A server that hands each request within `limits` to `handler`.
@@ -114,7 +125,15 @@ impl<H: RequestHandler> RequestServer<H> {
             limits,
             http: http_builder(&limits),
             connections: Arc::new(Semaphore::new(permits)),
+            log_failure: LogFailure::default(),
         }
+    }
+
+    /// Refuses every request once `log_failure` has tripped, by closing its connection without a response.
+    #[must_use]
+    pub fn with_log_failure(mut self, log_failure: LogFailure) -> Self {
+        self.log_failure = log_failure;
+        self
     }
 
     /// Accepts and serves connections on `listeners` until the returned future is dropped, which closes every
@@ -178,6 +197,7 @@ impl<H: RequestHandler> RequestServer<H> {
         close: ServiceClose,
     ) -> impl Future<Output = ()> + Send + 'static {
         let (http, handler, limits) = (self.http.clone(), Arc::clone(&self.handler), self.limits);
+        let log_failure = self.log_failure.clone();
         async move {
             let _permit = permit;
             let tags = ConnectionTags::of(&incoming);
@@ -186,7 +206,16 @@ impl<H: RequestHandler> RequestServer<H> {
                 Err(e) => return tracing::debug!("listener {}: {e}", tags.listener()),
             };
             let listener = tags.listener().clone();
-            let service = service_fn(move |request| respond(Arc::clone(&handler), tags.clone(), close.clone(), limits, request));
+            let service = service_fn(move |request| {
+                respond(
+                    Arc::clone(&handler),
+                    tags.clone(),
+                    close.clone(),
+                    limits,
+                    log_failure.clone(),
+                    request,
+                )
+            });
             if let Err(e) = http.serve_connection(TokioIo::new(stream), service).await {
                 tracing::debug!(error_kind = %e.kind_label(), "listener {listener}: connection ended");
             }
@@ -269,8 +298,13 @@ async fn respond<H: RequestHandler>(
     tags: ConnectionTags,
     close: ServiceClose,
     limits: Limits,
+    log_failure: LogFailure,
     request: Request<Incoming>,
-) -> Result<Response<ResponseBody>, Infallible> {
+) -> Result<Response<ResponseBody>, LogUnwritable> {
+    // Before the record is made: it could not be written, and its drop would try.
+    if log_failure.is_tripped() {
+        return Err(LogUnwritable);
+    }
     let mut record = RequestRecord::new(tags.listener().clone(), request.method().as_str(), close);
     let head = request.method() == Method::HEAD;
     let response = answer(handler.as_ref(), &tags, &limits, request, &record).await;

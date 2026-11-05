@@ -9,6 +9,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::library_error::LibraryError;
+use crate::logging::LogFailure;
 use crate::proxy_handler::ProxyHandler;
 use crate::request_listeners::{OpenError, Rebuilt, RequestListeners};
 use crate::request_server::{Connections, RequestServer};
@@ -27,15 +28,22 @@ pub(super) struct Serving {
     server: Arc<RequestServer<ProxyHandler>>,
     /// What a server built for new limits admits requests by.
     holder: Arc<SnapshotHolder>,
+    /// What a server built for new limits refuses requests by once a log write has failed.
+    log_failure: LogFailure,
     stop: oneshot::Sender<()>,
     task: JoinHandle<(RequestListeners, Connections)>,
 }
 
 impl Serving {
     /// Serves `listeners` under `limits`, admitting each request by `holder`.
-    pub(super) fn start(listeners: RequestListeners, limits: Limits, holder: Arc<SnapshotHolder>) -> Self {
-        let server = Arc::new(RequestServer::new(limits, ProxyHandler::new(Arc::clone(&holder))));
-        Self::accept(listeners, Connections::default(), server, holder)
+    pub(super) fn start(listeners: RequestListeners, limits: Limits, holder: Arc<SnapshotHolder>, log_failure: LogFailure) -> Self {
+        let server = Self::server(limits, &holder, &log_failure);
+        Self::accept(listeners, Connections::default(), server, holder, log_failure)
+    }
+
+    fn server(limits: Limits, holder: &Arc<SnapshotHolder>, log_failure: &LogFailure) -> Arc<RequestServer<ProxyHandler>> {
+        let server = RequestServer::new(limits, ProxyHandler::new(Arc::clone(holder)));
+        Arc::new(server.with_log_failure(log_failure.clone()))
     }
 
     /// Accepts on `listeners` with `server`, adding to `connections`.
@@ -44,6 +52,7 @@ impl Serving {
         mut connections: Connections,
         server: Arc<RequestServer<ProxyHandler>>,
         holder: Arc<SnapshotHolder>,
+        log_failure: LogFailure,
     ) -> Self {
         let names = listeners.names().cloned().collect();
         let (stop, stopped) = oneshot::channel();
@@ -61,6 +70,7 @@ impl Serving {
             names,
             server,
             holder,
+            log_failure,
             stop,
             task,
         }
@@ -85,7 +95,7 @@ impl Serving {
         paths: &ServicePaths,
         passed: &mut PassedSockets,
     ) -> (Self, Vec<OpenError>) {
-        let (server, holder) = (Arc::clone(&self.server), Arc::clone(&self.holder));
+        let (server, holder, log_failure) = (Arc::clone(&self.server), Arc::clone(&self.holder), self.log_failure.clone());
         let (current, mut connections) = self.halt().await;
         let Rebuilt {
             listeners: rebuilt,
@@ -97,9 +107,9 @@ impl Serving {
             server
         } else {
             connections.close_all().await;
-            Arc::new(RequestServer::new(limits, ProxyHandler::new(Arc::clone(&holder))))
+            Self::server(limits, &holder, &log_failure)
         };
-        (Self::accept(rebuilt, connections, server, holder), failures)
+        (Self::accept(rebuilt, connections, server, holder, log_failure), failures)
     }
 
     /// Stops accepting, closes every connection being served and waits for each to end, then closes the listeners,

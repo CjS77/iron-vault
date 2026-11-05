@@ -123,6 +123,7 @@ impl Fixture {
                 core_dumps: CoreDumps::Disabled,
                 memory: MemoryProtection::Unsupported,
             },
+            log_failure: iron_vault::logging::LogFailure::default(),
         };
         Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap())
     }

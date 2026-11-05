@@ -1043,7 +1043,9 @@ log directory and `logging::LogStdout` for stdout, which writes each record with
 Rust ignores `SIGPIPE`, so a closed stdout returns `EPIPE` rather than killing the process, and `LogStdout` treats it
 as any other failed write. Either writer's first failed write trips a shared latch, `logging::LogFailure`. The
 request server checks the latch as it admits each request and the admin server as it reads each command, and refuses
-both once it is tripped; the `serve` loop's stop future completes on it beside SIGTERM.
+both once it is tripped: the request server closes the connection without a response, as it does over `max_connections`
+(stopping is the default of the [open question](#open-questions) below, so callers see no `503`), and the admin server
+answers `wrong-state`. The `serve` loop's stop future completes on it beside SIGTERM.
 
 The subscriber is built with `log_internal_errors(false)`. Otherwise, when an event fails to format, `fmt::Layer`
 writes a plain-text "Unable to format the following event" line into the log, which breaks JSON Lines. Audit and

@@ -53,6 +53,7 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport,
         capabilities: Capabilities::default(),
         upstream: UpstreamSettings::new(paths.profile, paths.owner, TransportLimits::default()),
         hardening,
+        log_failure: log_failure.clone(),
     };
     // Everything that can fail or be interrupted comes before binding the admin socket, so once its file exists the
     // server owns it and removes it on every exit.
@@ -64,7 +65,7 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport,
     runtime.block_on(async {
         let service = Arc::new(ServiceContext::start(locks, setup, &provisional, passed)?);
         let principals = AdminPrincipals::new(paths.profile, paths.owner.uid);
-        let server = AdminServer::new(principals, Handlers::for_service(&service), Limits::default());
+        let server = AdminServer::new(principals, Handlers::for_service(&service), Limits::default()).with_log_failure(log_failure.clone());
         let socket = AdminSocket::bind(runtime_dir, paths.owner)?;
         tokio::spawn(reload_on_sighup(hangup, Arc::clone(&service)));
         tracing::info!("admin socket listening at {}", socket.path().display());

@@ -21,6 +21,7 @@ use iron_vault::admin::protocol::{self, AdminCommand, AdminRequest, AdminRespons
 use iron_vault::admin::server::{AdminServer, Exchange, ExchangeError, Limits};
 use iron_vault::admin::socket::{AdminSocket, BindError};
 use iron_vault::deployment::DeploymentProfile;
+use iron_vault::logging::LogFailure;
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::trusted_path::ExpectedOwner;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -308,6 +309,32 @@ async fn an_accepted_peer_reaches_its_handler() {
     tokio::time::timeout(PATIENCE, server.serve_connection(ours)).await.unwrap();
     assert!(matches!(read_response(&mut theirs).await, AdminResponse::Success));
     assert!(ran.load(Ordering::SeqCst));
+}
+
+/// Sends a ping to a server whose `Ping` handler sets the returned flag, and returns the response and the flag.
+async fn ping_with(failure: &LogFailure) -> (AdminResponse, bool) {
+    let ran = Arc::new(AtomicBool::new(false));
+    let handlers = Handlers::default().with(AdminCommand::Ping, Recording(Arc::clone(&ran)));
+    let principals = AdminPrincipals::new(DeploymentProfile::Protected, me().uid);
+    let server = AdminServer::new(principals, handlers, Limits::default()).with_log_failure(failure.clone());
+    let (ours, mut theirs) = UnixStream::pair().unwrap();
+    theirs.write_all(&ping()).await.unwrap();
+    tokio::time::timeout(PATIENCE, server.serve_connection(ours)).await.unwrap();
+    (read_response(&mut theirs).await, ran.load(Ordering::SeqCst))
+}
+
+#[tokio::test]
+async fn a_command_after_a_log_failure_is_refused_and_reaches_no_handler() {
+    let failure = LogFailure::default();
+    let (before, ran) = ping_with(&failure).await;
+    assert!(
+        matches!(before, AdminResponse::Success) && ran,
+        "an untripped latch changed the exchange"
+    );
+    failure.trip();
+    let (after, ran) = ping_with(&failure).await;
+    assert_eq!(error_code(&after), ErrorCode::WrongState);
+    assert!(!ran, "the handler ran after the log failed");
 }
 
 #[tokio::test]

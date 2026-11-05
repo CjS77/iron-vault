@@ -46,6 +46,7 @@ use crate::audit::{AuditEvent, LockTransition, ReloadFailed};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
+use crate::logging::LogFailure;
 use crate::request_listeners::RequestListeners;
 use crate::service_state::{AdminOperation, IllegalTransition, RequestInterface, ServiceEvent, ServiceState, UnavailableReason, next};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder, Withdrawn};
@@ -183,6 +184,8 @@ pub struct ServiceSetup<F = OsFs> {
     pub upstream: UpstreamSettings,
     /// What process hardening achieved before anything secret existed.
     pub hardening: HardeningReport,
+    /// The latch a failed log write trips; the request server refuses requests once it has.
+    pub log_failure: LogFailure,
 }
 
 /// The running service. Shared by the admin handlers and the request side; see the module documentation.
@@ -264,7 +267,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 identity: None,
                 open: None,
                 checks: 0,
-                serving: Some(Serving::start(listeners, Limits::default(), Arc::clone(&holder))),
+                serving: Some(Serving::start(
+                    listeners,
+                    Limits::default(),
+                    Arc::clone(&holder),
+                    setup.log_failure.clone(),
+                )),
                 passed,
             })),
             setup: Arc::new(setup),
@@ -726,10 +734,14 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         let ready = next(inner.state, ServiceEvent::CheckPassed)?;
         let config = snapshot.policy().config();
         let limits = *config.limits();
-        let current = inner
-            .serving
-            .take()
-            .unwrap_or_else(|| Serving::start(RequestListeners::empty(), limits, Arc::clone(&self.holder)));
+        let current = inner.serving.take().unwrap_or_else(|| {
+            Serving::start(
+                RequestListeners::empty(),
+                limits,
+                Arc::clone(&self.holder),
+                self.setup.log_failure.clone(),
+            )
+        });
         let (serving, failures) = current
             .rebuild(config.listeners(), limits, &self.setup.paths, &mut inner.passed)
             .await;
