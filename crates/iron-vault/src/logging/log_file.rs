@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use rustix::fs::{AtFlags, FileType, Mode as FileMode, OFlags, Stat, fchmod, fstat, open, openat, statat};
-use rustix::io::Errno;
+use rustix::io::{Errno, pread};
 use tracing_subscriber::fmt::MakeWriter;
 
 use super::destination::LogOpenError;
@@ -111,6 +111,9 @@ fn file_id(stat: &Stat) -> FileId {
 struct OpenLog {
     file: File,
     id: FileId,
+    /// The file ended in a torn record when opened, so the next write starts with `\n`. A JSON Lines reader would
+    /// otherwise lose the next valid record along with the torn one.
+    pending_newline: bool,
 }
 
 /// Appends records to `iron-vault.log` in a verified directory, following a rotation without a signal.
@@ -144,7 +147,13 @@ impl LogFile {
         if self.renamed(&open)? {
             *open = open_log(&self.dir, self.owner).map_err(io::Error::other)?;
         }
-        open.file.write_all(record)
+        if !open.pending_newline {
+            return open.file.write_all(record);
+        }
+        let repaired: Vec<u8> = std::iter::once(b'\n').chain(record.iter().copied()).collect();
+        open.file.write_all(&repaired)?;
+        open.pending_newline = false;
+        Ok(())
     }
 
     /// Whether the name in the directory is no longer the open file. `AT_SYMLINK_NOFOLLOW` makes a planted symlink differ
@@ -166,17 +175,30 @@ fn open_log(dir: &LogDir, owner: ExpectedOwner) -> Result<OpenLog, LogOpenError>
     let fd = open_or_create(&dir.fd).map_err(file_error)?;
     let stat = fstat(&fd).map_err(file_error)?;
     verify_file(&stat, owner)?;
+    let pending_newline = ends_mid_record(&fd, &stat).map_err(file_error)?;
     Ok(OpenLog {
         file: File::from(fd),
         id: file_id(&stat),
+        pending_newline,
     })
+}
+
+/// Whether a non-empty file's last byte is not `\n`. Uses `pread`, since the descriptor is `O_APPEND` and a seek would
+/// not be needed or wanted.
+fn ends_mid_record(fd: &OwnedFd, stat: &Stat) -> Result<bool, Errno> {
+    let Some(last) = u64::try_from(stat.st_size).ok().and_then(|len| len.checked_sub(1)) else {
+        return Ok(false);
+    };
+    let mut byte = [0u8; 1];
+    let read = pread(fd, &mut byte, last)?;
+    Ok(read == 1 && byte[0] != b'\n')
 }
 
 /// Opens the name for appending without following a symlink. A missing name is created exclusively and given its mode
 /// explicitly, since the unit's umask would otherwise narrow it. Losing the creation race to another process falls back
 /// to opening what it made, which is then verified.
 fn open_or_create(dir: &OwnedFd) -> Result<OwnedFd, Errno> {
-    let existing = OFlags::WRONLY | OFlags::APPEND | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let existing = OFlags::RDWR | OFlags::APPEND | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mode = FileMode::from_raw_mode(LOG_FILE_MODE);
     match openat(dir, LOG_FILE_NAME, existing, FileMode::empty()) {
         Err(Errno::NOENT) => match openat(dir, LOG_FILE_NAME, existing | OFlags::CREATE | OFlags::EXCL, mode) {
@@ -372,6 +394,45 @@ mod tests {
         fs::remove_file(dir.log()).expect("remove");
         write(&file, "after\n").expect("write");
         assert_eq!(read(&dir.log()), "after\n");
+    }
+
+    #[test]
+    fn a_torn_record_gets_a_newline_before_the_next_record_on_every_open() {
+        let dir = Scratch::new();
+        fs::write(dir.log(), "{\"a\":1}\n{\"torn\"").expect("seed");
+        set_mode(&dir.log(), 0o640);
+        let file = open_file(&dir, &LogFailure::default());
+        write(&file, "{\"b\":2}\n").expect("write");
+        write(&file, "{\"c\":3}\n").expect("write");
+        let text = read(&dir.log());
+        assert_eq!(text, "{\"a\":1}\n{\"torn\"\n{\"b\":2}\n{\"c\":3}\n");
+        assert_eq!(
+            text.lines()
+                .filter(|l| serde_json::from_str::<serde_json::Value>(l).is_ok())
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn a_torn_record_in_a_file_reopened_after_rotation_is_terminated() {
+        let dir = Scratch::new();
+        let file = open_file(&dir, &LogFailure::default());
+        write(&file, "before\n").expect("write");
+        fs::rename(dir.log(), dir.0.join("iron-vault.log.1")).expect("rotate");
+        fs::write(dir.log(), "torn").expect("plant");
+        set_mode(&dir.log(), 0o640);
+        write(&file, "after\n").expect("write");
+        assert_eq!(read(&dir.log()), "torn\nafter\n");
+    }
+
+    #[test]
+    fn a_file_ending_in_a_newline_and_an_empty_file_get_no_extra_newline() {
+        let dir = Scratch::new();
+        write(&open_file(&dir, &LogFailure::default()), "one\n").expect("write");
+        assert_eq!(read(&dir.log()), "one\n");
+        write(&open_file(&dir, &LogFailure::default()), "two\n").expect("write");
+        assert_eq!(read(&dir.log()), "one\ntwo\n");
     }
 
     #[test]

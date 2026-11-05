@@ -20,7 +20,18 @@ use iron_vault::logging::{self, LogDestination, LogFailure};
 #[cfg(target_os = "linux")]
 use iron_vault::trusted_path_report::ServicePaths;
 
-fn main() -> anyhow::Result<ExitCode> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(code) => code,
+        // One line, not anyhow's `Error:` plus `Caused by:` block, so a collector reading stderr sees one event.
+        Err(e) => {
+            eprintln!("iron-vault: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse_args();
     match cli.command {
         Command::Serve { log_to_stdout } => run_service(log_to_stdout).map(|()| ExitCode::SUCCESS),

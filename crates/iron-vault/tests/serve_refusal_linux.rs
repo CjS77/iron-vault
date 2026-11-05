@@ -217,6 +217,11 @@ fn a_log_directory_other_accounts_can_read_stops_serve_before_any_record_or_sock
     assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
     assert!(stderr.contains("cannot use the log destination"), "{stderr}");
     assert!(stderr.contains("must be no more open than 0750"), "{stderr}");
+    assert_eq!(
+        stderr.trim_end().lines().count(),
+        1,
+        "a startup refusal is one stderr line:\n{stderr}"
+    );
     assert!(!dir.join("iron-vault.log").exists());
     assert!(!install.dir("run/iron-vault-dev/admin.sock").exists());
 }
