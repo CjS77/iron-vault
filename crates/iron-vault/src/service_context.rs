@@ -511,12 +511,17 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         match settling.await {
             Ok(settled) => settled,
             Err(crashed) => {
-                let ended = if crashed.is_panic() { "panicked" } else { "was cancelled" };
-                tracing::error!("the config check's settle task {ended} before it gave a result");
+                log_task_crash("the config check's settle task", &crashed);
                 Ok(self.inner.lock().await.state)
             }
         }
     }
+}
+
+/// Logs that `task`, a spawned settle or approval task, ended without a result, and whether it panicked or was cancelled.
+fn log_task_crash(task: &str, crashed: &tokio::task::JoinError) {
+    let ended = if crashed.is_panic() { "panicked" } else { "was cancelled" };
+    tracing::error!("{task} {ended} before it gave a result");
 }
 
 /// The settle task's hold on `inner`. The task owns it, so a crash fails closed even after the caller is gone: dropping
@@ -556,7 +561,8 @@ impl Drop for SettleGuard {
     }
 }
 
-/// The parts of the context the settle step reads, each shared, so the step can outlive the caller that started it.
+/// The parts of the context the settle step and the approval transaction ([`Settler::run_approval`]) read, each shared,
+/// so either can outlive the caller that started it.
 struct Settler<F> {
     setup: Arc<ServiceSetup<F>>,
     locks: Arc<ServiceLocks>,

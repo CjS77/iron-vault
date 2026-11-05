@@ -14,6 +14,10 @@
 //! [`ApprovalReview::commit`] runs steps 2 to 6 under the context's mutex: reserve, sign and stage, then the admission
 //! pause, the commit and publish, then the config check that ends the pause in Ready or Unavailable. A task of its own
 //! owns the mutex guard and runs all of it (see [`ApprovalReview::commit`] for what that guarantees).
+//!
+//! The service-wide guard moves into that task too, so it is held until the transaction ends, whether or not the caller
+//! is dropped meanwhile. A caller dropped before `commit` takes the context mutex releases it with the review, and the
+//! task never starts.
 
 use std::sync::Arc;
 
@@ -22,9 +26,9 @@ use iron_vault_store::{
     ApprovalError, ApprovalPassphrase, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDigest, PendingConfig,
     SignError, SoftwareSigner, StoreFs, Vault, VaultIdentity, open_signer_key, read_signer_key,
 };
-use tokio::sync::MutexGuard;
+use tokio::sync::OwnedMutexGuard;
 
-use super::{Inner, ServiceContext, ServiceLocks, SettleGuard, Settler, apply};
+use super::{Inner, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_task_crash};
 use crate::admin::protocol::ApprovalResult;
 use crate::config_check::{InvalidConfig, activate_config};
 use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState, UnavailableReason};
@@ -49,9 +53,11 @@ pub enum ApprovalEnd {
     /// The approval passphrase did not open the pinned approver's key.
     #[error("the approval passphrase does not open the approver key")]
     Denied,
-    /// Nothing was reserved, and the approval cannot run: the approval state, the approver key or a write failed. Also
-    /// the answer when the task running the transaction ended without a result, which leaves the service Unavailable
-    /// and a version possibly reserved or committed; its message says so.
+    /// The approval cannot run: the approval state, the approver key or a write failed, and nothing was reserved.
+    ///
+    /// One exception: when the task running the transaction ends without a result (it panicked, or the runtime is
+    /// shutting down), a version may already be reserved or committed. The message says so, and the service is
+    /// Unavailable if it was Checking.
     #[error("the service cannot approve now: {0}")]
     Unavailable(String),
     /// A version was reserved, and so consumed, but nothing was committed; the active config is unchanged.
@@ -75,7 +81,8 @@ pub enum ApprovalEnd {
 /// Step 1 done: the pending config is durable and valid, and the owner has yet to review it. See the module docs.
 pub struct ApprovalReview<'a, F> {
     service: &'a ServiceContext<F>,
-    _service_wide: MutexGuard<'a, ()>,
+    /// Owned, so [`ApprovalReview::commit`] can hand it to the transaction task.
+    service_wide: OwnedMutexGuard<()>,
     started: Started,
     pending: PendingConfig,
     approval: ApprovalState,
@@ -95,7 +102,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// kept vault identity, so a credential added since the last config check is in the catalog. The upstream clients
     /// are built too, so a config that cannot be served is invalid before any version is reserved.
     pub async fn review_approval(&self, config: Vec<u8>) -> Result<ApprovalReview<'_, F>, ApprovalEnd> {
-        let service_wide = self.service_wide.try_lock().map_err(|_| ApprovalEnd::Busy)?;
+        let service_wide = Arc::clone(&self.service_wide).try_lock_owned().map_err(|_| ApprovalEnd::Busy)?;
         let (started, identity, active) = self.approval_start().await?;
         let (vault, _) = Vault::open(&self.locks.state, &self.setup.fs, Arc::clone(&identity)).map_err(unavailable)?;
         let approval = vault.load_approval_state(&self.locks.state, &self.setup.fs).map_err(unavailable)?;
@@ -109,7 +116,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         };
         Ok(ApprovalReview {
             service: self,
-            _service_wide: service_wide,
+            service_wide,
             started,
             summary: summarize(active.as_ref(), policy.config()),
             pending,
@@ -200,15 +207,16 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
     /// Refuses before reserving unless the service is in the state, and at the check generation, the approval started
     /// at: a `lock`, or a `lock` and an `unlock`, while the owner was at a prompt ends it with nothing reserved.
     ///
-    /// Cancel-safe: from the first reservation on, a task of its own owns the context's guard and runs every step to
-    /// its end, as [`ServiceContext::unlock`] does for a config check. Dropping this future after the commit therefore
-    /// never leaves the service in Checking (§3.12): the task still settles in Ready on the new config, or in
-    /// Unavailable. A task that ends without a result fails closed through its [`SettleGuard`], and this call then
-    /// answers [`ApprovalEnd::Unavailable`].
+    /// Cancel-safe: once `commit` holds the context mutex, a task of its own owns that guard, and the service-wide guard
+    /// with it, and runs every step to its end, as [`ServiceContext::unlock`] does for a config check. Dropping this
+    /// future after the commit therefore never leaves the service in Checking (§3.12): the task still settles in Ready
+    /// on the new config, or in Unavailable. A task that ends without a result fails closed through its
+    /// [`SettleGuard`], and this call then answers [`ApprovalEnd::Unavailable`], whose message says a version may be
+    /// consumed or committed.
     pub async fn commit<S: ApprovalSigner + Send + 'static>(self, signer: S) -> Result<ApprovalResult, ApprovalEnd> {
         let Self {
             service,
-            _service_wide: _held,
+            service_wide,
             started: Started { state: started, checks },
             pending,
             approval,
@@ -230,10 +238,13 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
             summary,
             signer,
         };
-        let running = tokio::spawn(async move { settler.run(&mut guard.inner, transaction).await });
+        let running = tokio::spawn(async move {
+            // Held until the task ends, so no other approval or vault write starts while this one settles.
+            let _service_wide = service_wide;
+            settler.run_approval(&mut guard.inner, transaction).await
+        });
         running.await.unwrap_or_else(|crashed| {
-            let ended = if crashed.is_panic() { "panicked" } else { "was cancelled" };
-            tracing::error!("the approval transaction's task {ended} before it gave a result");
+            log_task_crash("the approval transaction's task", &crashed);
             Err(unavailable(
                 "the approval did not finish; a version may be consumed or committed, and the service is Unavailable if it was checking",
             ))
@@ -253,7 +264,7 @@ struct Transaction<S> {
 
 impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
     /// Steps 2 to 6 of `transaction` under `inner`, which the caller's task owns.
-    async fn run<S: ApprovalSigner>(&self, inner: &mut Inner, transaction: Transaction<S>) -> Result<ApprovalResult, ApprovalEnd> {
+    async fn run_approval<S: ApprovalSigner>(&self, inner: &mut Inner, transaction: Transaction<S>) -> Result<ApprovalResult, ApprovalEnd> {
         let Transaction {
             started,
             identity,

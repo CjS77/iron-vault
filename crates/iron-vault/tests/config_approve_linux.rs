@@ -25,6 +25,7 @@ use common::gated_fs::GatedFs;
 use common::mock_upstream::Reply;
 use common::proxy_harness::{CallerRequest, TOKEN_HEADER, Via};
 use iron_vault::admin::protocol::{AdminResponse, ApprovalResult, ErrorCode, Frame, OwnerInput};
+use iron_vault::service_context::ApprovalEnd;
 use iron_vault::service_state::{FailureReason, ServiceEvent, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::Admission;
 use iron_vault_store::ConfigDigest;
@@ -393,6 +394,9 @@ async fn an_approval_aborted_after_its_commit_still_settles_in_ready_on_the_new_
 
     approving.abort();
     assert!(approving.await.unwrap_err().is_cancelled());
+    // The service-wide lock went with the transaction task, so another approval is refused while the check is held.
+    let second = service.review_approval(fixture.config("other").into_bytes()).await;
+    assert!(matches!(second, Err(ApprovalEnd::Busy)));
     release.send(()).unwrap();
 
     // The state waits for the mutex the settle task holds.
