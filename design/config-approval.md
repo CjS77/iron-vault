@@ -121,11 +121,12 @@ prompts can each wait up to the 5-minute prompt deadline, so an approval can hol
 Meanwhile:
 
 - another approval or a vault write fails at once with `busy`;
-- SIGHUP is queued, and the reload runs once the approval ends;
-- `lock` cancels an approval that is still waiting at a prompt, which has reserved nothing, and then locks. An
-  approval past its passphrase prompt is not interrupted: `lock` waits for it, which takes seconds. A `lock` or a
-  reload that waited checks `admin_allows` again once it holds the service-wide lock, because the approval may have
-  left the service in a state that refuses it.
+- SIGHUP is queued, and the reload runs once the approval ends; an `unlock` waits the same way, and then finds the
+  service in a state that refuses it unless a `lock` came first;
+- `lock` cancels an approval that is still waiting at a prompt, which has reserved nothing and answers
+  `approval-unavailable`, and then locks. An approval past its passphrase prompt is not interrupted: `lock` waits for
+  it, which takes seconds. A `lock` or a reload that waited checks `admin_allows` again once it holds the
+  service-wide lock, because the approval may have left the service in a state that refuses it.
 
 These are defaults ([open question 8](#open-questions)).
 
@@ -167,7 +168,7 @@ consume their versions").
 |---|---|---|---|---|
 | step 1: validation, activation or the dry run | none reserved | pending removed | unchanged | `config-invalid` |
 | step 1: the write | none reserved | pending removed | unchanged | `approval-unavailable` |
-| step 2, before reserving: the owner declines or cancels, or the passphrase is wrong | none reserved | pending removed | unchanged | `declined`, `approval-denied`, or no response for a cancel |
+| step 2, before reserving: the owner declines or cancels, or the passphrase is wrong | none reserved | pending removed | unchanged | `declined`, `approval-denied`, `approval-unavailable` for a `lock`, or no response for a cancel |
 | step 2, the reservation: counter exhausted, or its write failed before the rename | none reserved | pending removed | unchanged | `approval-unavailable` |
 | step 2, the reservation: the directory fsync failed after the rename | consumed, unless power loss undoes it; nothing was signed under it, so reusing it after power loss is harmless | pending removed | unchanged; the in-memory approval state accepts no more writes until the next approval loads it again from disk, which restores consistency, not durability, and here only consistency matters | `approval-failed` |
 | step 3 or 4 | consumed | pending and staged removed | unchanged | `approval-failed` |

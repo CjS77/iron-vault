@@ -139,6 +139,8 @@ then waits for the last holder of the old snapshot, a request or a streaming res
 drain*, at most 10 seconds). The vault, which the snapshot owns, is dropped when that last holder releases it, so during
 the drain the vault may still be in memory. Unavailable has no snapshot to withdraw: there the service drops the vault
 identity it kept for a repair, which clears it at once unless a request still holds a vault from before the failed check.
+Before any of this, `lock` cancels a `config approve` waiting at a prompt, which then answers `approval-unavailable`,
+and waits for the service-wide lock ([config-approval.md](config-approval.md#the-service-wide-lock)).
 
 The success result:
 
@@ -204,7 +206,7 @@ Errors specific to `config approve`:
 | `config-invalid` | the proposed config fails parsing, validation or activation; the message names the rule and the configured names involved, escaped, and never quotes other config bytes | no |
 | `declined` | the owner did not answer the confirmation with `yes` | no |
 | `approval-denied` | the approval passphrase did not open the approver key, or the key it opened is not the pinned approver | no |
-| `approval-unavailable` | the service cannot approve now: its state does not allow it (only Ready and Unavailable with an invalid policy do), the approval state is damaged, the version counter is exhausted, or a write failed before any version was reserved; the message says which. Also when the task running the transaction ended without a result (it panicked, or the runtime was shutting down); the message then says a version may be consumed or committed | no, except after that crash: possibly |
+| `approval-unavailable` | the service cannot approve now: its state does not allow it (only Ready and Unavailable with an invalid policy do), the approval state is damaged, the version counter is exhausted, a write failed before any version was reserved, or a `lock` cancelled the approval at a prompt; the message says which. Also when the task running the transaction ended without a result (it panicked, or the runtime was shutting down); the message then says a version may be consumed or committed | no, except after that crash: possibly |
 | `approval-failed` | the transaction failed after its reservation and before its commit; the active policy is unchanged | yes; the message names it |
 | `committed-not-active` | the commit landed, or may have landed, but it could not be settled, published or activated; the service is Unavailable, and a reload does not leave that state: only an authorized repair (`Repaired`, then Checking) or a restart does | yes; the message names the version |
 
@@ -224,8 +226,10 @@ The state is read again under the service context's mutex in step 2.
 1. **Vault passphrase.** A prompt, secret: `Vault passphrase`. The value is the vault-unlock passphrase, never the
    approval passphrase: the two are separate types, and unlocking never implies authority to approve. Empty or
    non-UTF-8 input cannot be the passphrase and is answered as a wrong one.
-2. The service checks the state again under the service context's mutex, so two unlocks never both open the vault,
-   and opens `operational.age` with the passphrase, then `identity.age` with the operational identity, which is
+2. The service waits for the service-wide lock, as a reload does: in Locked only a `lock`, an `init` or a config check
+   holds it, each for seconds, so the passphrase already typed is not refused as `busy`. It then checks the state
+   again under the service context's mutex, so two unlocks never both open the vault, and opens `operational.age`
+   with the passphrase, then `identity.age` with the operational identity, which is
    dropped as soon as the vault identity is unwrapped ([§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). A wrong passphrase ends the exchange with
    `unlock-denied`, whose message is only `wrong passphrase`; an envelope that cannot be read or opened ends it with
    `unlock-failed`. Either way the service stays Locked, and no other storage is tried (R-22). There is no second try
