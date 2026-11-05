@@ -204,7 +204,7 @@ Errors specific to `config approve`:
 | `config-invalid` | the proposed config fails parsing, validation or activation; the message names the rule and the configured names involved, escaped, and never quotes other config bytes | no |
 | `declined` | the owner did not answer the confirmation with `yes` | no |
 | `approval-denied` | the approval passphrase did not open the approver key, or the key it opened is not the pinned approver | no |
-| `approval-unavailable` | the service cannot approve now: its state does not allow it (only Ready and Unavailable with an invalid policy do), the approval state is damaged, the version counter is exhausted, or a write failed before any version was reserved; the message says which | no |
+| `approval-unavailable` | the service cannot approve now: its state does not allow it (only Ready and Unavailable with an invalid policy do), the approval state is damaged, the version counter is exhausted, or a write failed before any version was reserved; the message says which. Also when the task running the transaction ended without a result (it panicked, or the runtime was shutting down); the message then says a version may be consumed or committed | no, except after that crash: possibly |
 | `approval-failed` | the transaction failed after its reservation and before its commit; the active policy is unchanged | yes; the message names it |
 | `committed-not-active` | the commit landed, or may have landed, but it could not be settled, published or activated; the service is Unavailable, and a reload does not leave that state: only an authorized repair (`Repaired`, then Checking) or a restart does | yes; the message names the version |
 

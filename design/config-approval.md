@@ -176,6 +176,7 @@ consume their versions").
 | step 6, a rename failed | committed | left in place | Checking: the config check's recovery retries the renames (rows 2-4); if that fails too, Unavailable with `RecoveryNeeded` | success, or `committed-not-active` |
 | step 6, the directory fsync failed | committed | renamed | Checking: the check goes on (see [Publish](#publish)) | success, or `committed-not-active` |
 | step 6, the config check fails | committed | as recovery leaves them | Unavailable, with the check's failure reason | `committed-not-active` |
+| any step 2 to 6: the task running the transaction panics | possibly consumed or committed | left in place for the next config check | Unavailable with `RecoveryNeeded` if it was Checking, otherwise unchanged; moving out of Checking logs `config.check-failed` | `approval-unavailable`, whose message says a version may be consumed or committed |
 
 The "Service afterwards" column above is for an approval started from Ready. From either starting state, steps 5
 and 6 move the service only along `next()` edges:
@@ -194,11 +195,12 @@ that could not be settled has no path to `RecoveryNeeded` but through Checking, 
 Unavailable(`PolicyInvalid`) to Unavailable(`RecoveryNeeded`). There `Repaired` still fires, and Checking ends at once
 with `CheckFailed(RecoveryNeeded)`. That is a default too ([open question 3](#open-questions)).
 
-**If the caller goes away.** From the first reservation on, a task of its own owns the context's guard and runs steps 2
-to 6, so dropping the `config approve` exchange after the commit (the admin server's drain at shutdown does) cannot
-leave the service in Checking: the task still ends in Ready, or in Unavailable. A task that panics fails closed from a
-guard it owns: a service still in Checking moves to Unavailable (`RecoveryNeeded`) and logs `config.check-failed`. The
-version may be consumed or committed then, and the next config check recovers a committed one.
+**If the caller goes away.** Once `commit` holds the context's mutex, a task of its own owns the guard, and the
+service-wide lock with it, and runs steps 2 to 6. Dropping the `config approve` exchange after the commit (the admin
+server's drain at shutdown does) therefore cannot leave the service in Checking: the task still ends in Ready, or in
+Unavailable, and no other approval or vault write starts until it does. A task that panics fails closed from a guard it
+owns: a service still in Checking moves to Unavailable (`RecoveryNeeded`) and logs `config.check-failed`. The version
+may be consumed or committed then, and the next config check recovers a committed one.
 
 Removing uncommitted files is best effort. One left behind is a leftover that the next config check discards (see the
 recovery table).
