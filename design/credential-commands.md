@@ -147,7 +147,7 @@ remove credential old_key
 | 3 | The manifest lists the name, healthy or damaged | as `replace` | `unknown-credential` |
 | 4 | Vault change check | as `replace` | `credential-in-use` |
 | 5 | Vault change summary | as `replace` | |
-| 6 | Owner presence | as `replace` | `approval-denied` |
+| 6 | Owner presence | as `replace` | `approval-denied`, `approval-unavailable` |
 | 7 | The secret prompts for the kind, as for `add` | | `credential-invalid` |
 | 8 | The service is still Ready, with the check generation recorded in step 2; then `Vault::replace` | as `replace`, then `Vault::remove` | `wrong-state`, `vault-write-failed` |
 | 9 | Config check with `ServiceEvent::VaultChanged`, then release the lock | as `replace` | `committed-not-active` |

@@ -7,6 +7,7 @@
 //! an approval.
 
 use std::collections::BTreeSet;
+use std::future::{self, Future};
 use std::sync::Arc;
 
 use iron_vault_kinds::CredentialMaterial;
@@ -20,7 +21,7 @@ use super::protocol::{AdminRequest, AdminResponse, ErrorCode, OwnerInput, Prompt
 use super::server::{Exchange, ExchangeError};
 use super::unlock::state_name;
 use crate::service_context::{ServiceContext, VaultChangeRefusal};
-use crate::service_state::AdminOperation;
+use crate::service_state::{AdminOperation, ServiceState};
 
 /// `add`'s handler, acting on the running service.
 pub(super) struct Add<F> {
@@ -54,9 +55,11 @@ impl<F: StoreFs + Send + Sync + 'static> Add<F> {
             Ok(checked) => checked,
             Err(rule) => return Ok(invalid(rule)),
         };
-        let material = match material(kind, &name, exchange).await? {
-            Ok(material) => material,
-            Err(rule) => return Ok(invalid(rule)),
+        // Nothing cancels `add`'s prompts: it takes the service-wide lock only once the material is in hand.
+        let material = match ask_material(kind, &name, exchange, future::pending).await? {
+            MaterialAnswer::Typed(material) => material,
+            MaterialAnswer::Invalid(rule) => return Ok(invalid(rule)),
+            MaterialAnswer::CancelledByLock => return Ok(refused(VaultChangeRefusal::WrongState(ServiceState::Locked))),
         };
         Ok(match self.service.add_credential(name, material, origins).await {
             Ok(record_id) => AdminResponse::Add { record_id },
@@ -66,7 +69,7 @@ impl<F: StoreFs + Send + Sync + 'static> Add<F> {
 }
 
 /// The name and the permitted origins, or the rule one of them breaks, without the value that broke it.
-fn checked_arguments(name: &str, origins: &[RequestedOrigin]) -> Result<(CredentialName, PermittedOrigins), String> {
+pub(super) fn checked_arguments(name: &str, origins: &[RequestedOrigin]) -> Result<(CredentialName, PermittedOrigins), String> {
     let name = CredentialName::try_from(name).map_err(|error| format!("invalid credential name: {}", name_rule(error.rule())))?;
     let origins = origins.iter().map(requested_origin).collect::<Result<BTreeSet<_>, _>>()?;
     let origins = PermittedOrigins::new(origins).map_err(|error| format!("invalid origins: {error}"))?;
@@ -88,33 +91,58 @@ pub(super) fn name_rule(rule: &NameRule) -> String {
     }
 }
 
-/// Prompts for `kind`'s fields and builds the material, or names the rule it breaks. The outer error is a prompt that
-/// got no owner input.
-async fn material(
+/// The owner's answer to the secret prompts for a kind.
+pub(super) enum MaterialAnswer {
+    /// Material that follows its kind's rules.
+    Typed(CredentialMaterial),
+    /// The rule the typed material breaks, without a typed byte.
+    Invalid(String),
+    /// The cancel future completed while the owner was at a prompt; for `replace`, a `lock` came for the service-wide
+    /// lock.
+    CancelledByLock,
+}
+
+/// Prompts for `kind`'s fields and builds the material. Each prompt ends early once the future `cancel` makes completes.
+/// The error is a prompt that got no owner input.
+pub(super) async fn ask_material<C: Future<Output = ()>>(
     kind: CredentialKind,
     name: &CredentialName,
     exchange: &mut Exchange,
-) -> Result<Result<CredentialMaterial, String>, ExchangeError> {
+    cancel: impl Fn() -> C,
+) -> Result<MaterialAnswer, ExchangeError> {
     let material = match kind {
-        CredentialKind::Static => secret_text(exchange, format!("Secret for {name}"))
-            .await?
-            .map(|key| CredentialMaterial::Static { key }),
+        CredentialKind::Static => {
+            let Some(key) = secret_text(exchange, format!("Secret for {name}"), cancel()).await? else {
+                return Ok(MaterialAnswer::CancelledByLock);
+            };
+            key.map(|key| CredentialMaterial::Static { key })
+        }
         CredentialKind::Basic => {
-            let username = secret_text(exchange, format!("Username for {name}")).await?;
-            let password = secret_text(exchange, format!("Password for {name}")).await?;
+            let Some(username) = secret_text(exchange, format!("Username for {name}"), cancel()).await? else {
+                return Ok(MaterialAnswer::CancelledByLock);
+            };
+            let Some(password) = secret_text(exchange, format!("Password for {name}"), cancel()).await? else {
+                return Ok(MaterialAnswer::CancelledByLock);
+            };
             username.and_then(|username| password.map(|password| CredentialMaterial::Basic { username, password }))
         }
     };
-    Ok(material.and_then(|material| match material.validate() {
+    let checked = material.and_then(|material| match material.validate() {
         Ok(()) => Ok(material),
         Err(error) => Err(format!("invalid credential material: {error}")),
-    }))
+    });
+    Ok(checked.map_or_else(MaterialAnswer::Invalid, MaterialAnswer::Typed))
 }
 
-/// Asks for one secret value. Both Basic fields are secret, since the username is the secret when the password is empty.
-async fn secret_text(exchange: &mut Exchange, label: String) -> Result<Result<SecretString, String>, ExchangeError> {
-    let input = exchange.prompt(&Prompt { label, secret: true }).await?;
-    Ok(secret_string(input).ok_or_else(|| "invalid credential material: a value must be UTF-8 text".to_owned()))
+/// Asks for one secret value, or `None` once `cancel` completes. Both Basic fields are secret, since the username is the
+/// secret when the password is empty.
+async fn secret_text(
+    exchange: &mut Exchange,
+    label: String,
+    cancel: impl Future<Output = ()>,
+) -> Result<Option<Result<SecretString, String>>, ExchangeError> {
+    let input = exchange.prompt_unless(&Prompt { label, secret: true }, cancel).await?;
+    Ok(input.map(|input| secret_string(input).ok_or_else(|| "invalid credential material: a value must be UTF-8 text".to_owned())))
 }
 
 /// The owner's input as text; `None` when it is not UTF-8. The input's buffer is cleared when it drops here.

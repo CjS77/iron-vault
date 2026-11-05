@@ -325,6 +325,8 @@ The old record ID was shown in the summary. Errors specific to `replace`:
 | `unknown-credential` | the manifest holds no credential of that name |
 | `credential-in-use` | a route that uses the name would not activate after the change; the message names each route and the rule it breaks |
 | `approval-denied` | owner presence failed |
+| `approval-unavailable` | owner presence could not be checked, or a `lock` cancelled the change at the passphrase prompt; nothing was written |
+| `wrong-state` | a `lock` cancelled the change at a secret prompt, or a `lock` and `unlock` ran during the prompts; nothing was written |
 | `credential-invalid` | the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
 | `vault-write-failed` | writing the record or the manifest failed; the message says whether the write may have committed, and, when it may have, the state the config check left |
 | `committed-not-active` | the change committed, but the config check after it left the service Unavailable; the message names the redacted reason |
