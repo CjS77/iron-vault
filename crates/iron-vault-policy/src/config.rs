@@ -16,6 +16,7 @@ use crate::caller::CallerConfig;
 use crate::display::escaped;
 use crate::limits::Limits;
 use crate::listener::ListenerConfig;
+use crate::log_destination::LogDestinationSetting;
 use crate::name::{CallerName, ListenerName, RouteName};
 use crate::route::RouteConfig;
 
@@ -33,6 +34,7 @@ pub struct ParsedConfig {
     callers: BTreeMap<CallerName, CallerConfig>,
     routes: BTreeMap<RouteName, RouteConfig>,
     limits: Limits,
+    log_destination: Option<LogDestinationSetting>,
 }
 
 /// Where in the input an error was found.
@@ -92,6 +94,7 @@ impl ParsedConfig {
             callers: raw.callers,
             routes: raw.routes,
             limits: raw.limits,
+            log_destination: raw.logging.destination,
         })
     }
 
@@ -118,6 +121,11 @@ impl ParsedConfig {
     /// Operational limits: the `[limits]` overrides, or the defaults when the table is absent.
     pub fn limits(&self) -> &Limits {
         &self.limits
+    }
+
+    /// The `[logging] destination`, or none when the table or key is absent, which means the bootstrap destination.
+    pub fn log_destination(&self) -> Option<&LogDestinationSetting> {
+        self.log_destination.as_ref()
     }
 }
 
@@ -167,6 +175,15 @@ struct RawConfig {
     routes: BTreeMap<RouteName, RouteConfig>,
     #[serde(default)]
     limits: Limits,
+    #[serde(default)]
+    logging: RawLogging,
+}
+
+/// The `[logging]` table as written.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLogging {
+    destination: Option<LogDestinationSetting>,
 }
 
 /// Just the version key, read before the rest of the document is interpreted.
@@ -287,6 +304,47 @@ mod tests {
         let config = parse(&format!("{SPEC_EXAMPLE}\n[limits]\nmax_connections = 16\n")).unwrap();
         assert_eq!(config.limits().max_connections(), 16);
         assert_eq!(config.limits().max_header_count(), Limits::default().max_header_count());
+    }
+
+    #[test]
+    fn logging_destination_is_optional() {
+        assert_eq!(parse(SPEC_EXAMPLE).unwrap().log_destination(), None);
+        assert_eq!(parse(&format!("{SPEC_EXAMPLE}\n[logging]\n")).unwrap().log_destination(), None);
+    }
+
+    #[test]
+    fn logging_destination_parses_stdout_and_directories() {
+        let stdout = parse(&format!("{SPEC_EXAMPLE}\n[logging]\ndestination = \"stdout\"\n")).unwrap();
+        assert_eq!(stdout.log_destination(), Some(&LogDestinationSetting::Stdout));
+        let dir = parse(&format!("{SPEC_EXAMPLE}\n[logging]\ndestination = \"/srv/log\"\n")).unwrap();
+        assert_eq!(
+            dir.log_destination().and_then(LogDestinationSetting::directory),
+            Some(std::path::Path::new("/srv/log"))
+        );
+    }
+
+    #[test]
+    fn bad_logging_destinations_and_keys_are_rejected_at_their_line() {
+        [
+            ("\"logs\"", "must be absolute"),
+            ("\"/var/log/../etc\"", "'..'"),
+            ("\"/var/log/a\\nb\"", "control character"),
+            ("\"/var/log/a\\u001bb\"", "control character"),
+            ("5", "invalid type"),
+        ]
+        .iter()
+        .for_each(|(value, expected)| {
+            invalid(
+                &format!("{SPEC_EXAMPLE}\n[logging]\ndestination = {value}\n"),
+                "destination",
+                expected,
+            );
+        });
+        invalid(
+            &format!("{SPEC_EXAMPLE}\n[logging]\nlevel = \"debug\"\n"),
+            "level",
+            "unknown field `level`",
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::display::joined;
 use crate::header_name::HeaderName;
 use crate::limits::Limits;
 use crate::listener::{Endpoint, ListenerConfig};
+use crate::log_destination::LogDestinationSetting;
 use crate::name::{CallerName, ListenerName, RouteName};
 use crate::rate_limit::RateLimit;
 use crate::route::RouteConfig;
@@ -210,6 +211,11 @@ impl ValidatedConfig {
     /// Operational limits.
     pub fn limits(&self) -> &Limits {
         self.0.limits()
+    }
+
+    /// The `[logging] destination`, or none for the bootstrap destination.
+    pub fn log_destination(&self) -> Option<&LogDestinationSetting> {
+        self.0.log_destination()
     }
 }
 
@@ -563,6 +569,13 @@ mod tests {
         assert_eq!(config.callers().len(), 3);
         assert_eq!(config.listeners().len(), 3);
         assert_eq!(config.limits(), &Limits::default());
+        assert_eq!(config.log_destination(), None);
+    }
+
+    #[test]
+    fn log_destination_is_carried_through_validation() {
+        let config = validate(&format!("{SPEC_EXAMPLE}\n[logging]\ndestination = \"stdout\"\n")).unwrap();
+        assert_eq!(config.log_destination(), Some(&LogDestinationSetting::Stdout));
     }
 
     #[test]
