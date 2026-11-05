@@ -237,7 +237,7 @@ fn log_destination_changed_names_both_destinations_and_the_version() {
     let event = LogDestinationChanged {
         destination: LogDestination::Directory(PathBuf::from("/srv/iron-vault/log")),
         previous: LogDestination::Stdout,
-        version: Some(version(3)),
+        version: version(3),
     };
     let record = record_of(event, "INFO", &["log_destination", "previous_log_destination", "version"]);
     assert_eq!(record["log_destination"], "/srv/iron-vault/log");
@@ -357,7 +357,7 @@ fn no_audit_event_records_a_constant_field() {
         LogDestinationChanged {
             destination: LogDestination::Stdout,
             previous: LogDestination::Directory(PathBuf::from("/var/log/iron-vault")),
-            version: Some(version(2)),
+            version: version(2),
         }
         .emit();
         LockTransition {

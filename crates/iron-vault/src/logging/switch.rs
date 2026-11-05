@@ -46,7 +46,7 @@ impl Append for LogWriter {
 
 /// What opening a log destination needs, kept so a config check opens a configured destination exactly as startup opened
 /// the bootstrap one, and with the same latch.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LogOpener {
     profile: DeploymentProfile,
     /// The service account a log directory must belong to; a stdout destination needs none, so a missing account fails
@@ -198,17 +198,12 @@ impl LogSwitch {
         Ok(OpenedLog { destination, writer })
     }
 
-    /// Sends every record that begins from now on to `opened`, and returns the destination it replaced.
-    pub fn switch(&self, opened: OpenedLog) -> LogDestination {
-        let mut current = self.0.current.write().unwrap_or_else(PoisonError::into_inner);
-        let replaced = std::mem::replace(
-            &mut *current,
-            Current {
-                destination: opened.destination,
-                writer: Arc::new(opened.writer),
-            },
-        );
-        replaced.destination
+    /// Sends every record that begins from now on to `opened`.
+    pub fn switch(&self, opened: OpenedLog) {
+        *self.0.current.write().unwrap_or_else(PoisonError::into_inner) = Current {
+            destination: opened.destination,
+            writer: Arc::new(opened.writer),
+        };
     }
 
     /// Reads the current destination. A poisoned lock still holds a whole value, since a switch only ever replaces it
@@ -292,12 +287,12 @@ mod tests {
     }
 
     #[test]
-    fn a_switch_sends_later_records_to_the_new_destination_and_returns_the_old_one() {
+    fn a_switch_sends_later_records_to_the_new_destination() {
         let (old, new) = (Scratch::new(), Scratch::new());
         let switch = LogSwitch::open(old.destination(), opener()).unwrap();
         write(&switch, "before\n").unwrap();
         let opened = switch.open_destination(new.destination()).unwrap();
-        assert_eq!(switch.switch(opened), old.destination());
+        switch.switch(opened);
         write(&switch, "after\n").unwrap();
         assert_eq!((old.log(), new.log()), ("before\n".to_owned(), "after\n".to_owned()));
         assert_eq!(switch.current(), new.destination());

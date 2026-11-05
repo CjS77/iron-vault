@@ -115,7 +115,9 @@ pub fn install(
     let owner = env.service_owner(profile);
     if let LogDestination::Directory(path) = destination {
         // A missing service account stops a directory destination before anything is created; stdout needs none.
-        owner.clone()?;
+        if let Err(missing) = &owner {
+            return Err(missing.clone().into());
+        }
         create_development_dir(profile, path)?;
     }
     let opener = LogOpener::new(profile, owner, journal_stream.map(OsStr::to_os_string), LogFailure::default());
@@ -160,7 +162,7 @@ const fn problem_phrase(problem: &Problem) -> &'static str {
         Problem::WritableByOthers => "the log directory, or a directory above it, is writable by others",
         Problem::ModeTooOpen { .. } | Problem::WrongMode { .. } => "the log directory's mode is too open",
         Problem::NotADirectory => "the log destination is not a directory",
-        Problem::UntrustedSymlink => "the log directory's path passes through a symlink root does not control",
+        Problem::UntrustedSymlink => "the log directory's path passes through a symlink not controlled by root",
         Problem::SymlinkLoop => "the log directory's path has a symlink loop",
         _ => "the log directory fails the log directory rule",
     }

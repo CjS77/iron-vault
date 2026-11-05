@@ -156,7 +156,7 @@ pub struct LogDestinationChanged {
     /// Where they went before.
     pub previous: LogDestination,
     /// The approval version whose config moved the log.
-    pub version: Option<ApprovalVersion>,
+    pub version: ApprovalVersion,
 }
 
 #[cfg(target_os = "linux")]
@@ -169,7 +169,7 @@ impl AuditEvent for LogDestinationChanged {
             event = Self::NAME.as_str(),
             log_destination = self.destination.to_string().as_str(),
             previous_log_destination = self.previous.to_string().as_str(),
-            version = self.version.map(ApprovalVersion::get),
+            version = self.version.get(),
             "log destination changed",
         );
     }

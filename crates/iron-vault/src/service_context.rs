@@ -752,8 +752,8 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         log: Option<OpenedLog>,
     ) -> Result<ServiceState, IllegalTransition> {
         let ready = next(inner.state, ServiceEvent::CheckPassed)?;
-        if let Some(opened) = log {
-            let version = open.approval.committed().map(|(version, _)| version);
+        // A passed check verified the committed config, so a committed version is always there.
+        if let Some((opened, (version, _))) = log.zip(open.approval.committed()) {
             log_destination::switch(&self.setup.log, opened, version);
         }
         let config = snapshot.policy().config();

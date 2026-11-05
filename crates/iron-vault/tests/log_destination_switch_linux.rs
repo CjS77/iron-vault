@@ -16,14 +16,20 @@ mod common;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use common::approval_harness::{APPROVAL_PASSPHRASE, Fixture, approve, error_code, versions};
-use iron_vault::admin::protocol::{AdminResponse, ApprovalResult, ErrorCode};
+use common::approval_harness::{
+    APPROVAL_PASSPHRASE, Exchanged, Fixture, approve, approve_request, converse, error_code, read_frame, send, spawn_admin, versions,
+};
+use iron_vault::admin::protocol::{AdminResponse, ApprovalResult, ErrorCode, Frame, OwnerInput};
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::logging::{LOG_FILE_NAME, LogDestination, LogFailure, LogOpener, LogSwitch, subscriber};
 use iron_vault::path_metadata::invoking_user;
+use iron_vault::service_context::ServiceContext;
 use iron_vault::service_state::{FailureReason, ServiceState};
 use iron_vault_store::OsFs;
+use tokio::net::UnixStream;
+use zeroize::Zeroizing;
 
 const APPROVE: [&str; 2] = ["yes", APPROVAL_PASSPHRASE];
 
@@ -65,6 +71,21 @@ fn assert_changed(dir: &Path, to: &Path, from: &Path, version: u64) {
     assert_eq!(changed[0]["version"], version);
 }
 
+/// `config approve` for `config`, running `change` while the confirmation prompt is open: after the pre-check, before
+/// the commit and the check at activation.
+async fn approve_changing(service: &Arc<ServiceContext>, config: &str, change: impl FnOnce()) -> Exchanged {
+    let (path, stop, task) = spawn_admin(service);
+    let mut stream = UnixStream::connect(path).await.unwrap();
+    send(&mut stream, &approve_request(config)).await;
+    while !matches!(read_frame(&mut stream).await, Frame::Prompt(_)) {}
+    change();
+    send(&mut stream, &Frame::OwnerInput(OwnerInput::new(Zeroizing::new(b"yes".to_vec())))).await;
+    let exchanged = converse(&mut stream, &[APPROVAL_PASSPHRASE]).await;
+    let _ = stop.send(());
+    let _ = task.await;
+    exchanged
+}
+
 #[tokio::test]
 async fn an_approved_destination_moves_the_log_and_an_unusable_one_leaves_it_where_it_is() {
     let fixture = Fixture::new().await;
@@ -104,10 +125,13 @@ async fn an_approved_destination_moves_the_log_and_an_unusable_one_leaves_it_whe
     assert_eq!(versions(&service).await, (Some(2), 2));
     assert!(fs::read_dir(&open_to_all).unwrap().next().is_none());
 
-    // A directory the service cannot create its log file in passes the pre-check, which creates nothing, and fails the
-    // check at activation; the log stays where it is.
-    let read_only = log_dir(&fixture, "log-read-only", 0o550);
-    let failed = approve(&service, &with_destination(&fixture, &read_only), &APPROVE).await;
+    // A directory that passes the pre-check, which creates nothing, and that others can write by the time the approval
+    // commits fails the check at activation; the log stays where it is.
+    let changed = log_dir(&fixture, "log-changed", 0o750);
+    let failed = approve_changing(&service, &with_destination(&fixture, &changed), || {
+        fs::set_permissions(&changed, fs::Permissions::from_mode(0o757)).unwrap();
+    })
+    .await;
     assert_eq!(error_code(&failed.response), ErrorCode::CommittedNotActive, "{:?}", failed.response);
     assert_eq!(service.state().await, ServiceState::Unavailable(FailureReason::PolicyInvalid));
     tracing::info!("after the failed move");
@@ -116,10 +140,10 @@ async fn an_approved_destination_moves_the_log_and_an_unusable_one_leaves_it_whe
     assert_eq!(check_failed.len(), 1, "{current:?}");
     assert_eq!(check_failed[0]["unavailable_reason"], "policy_invalid");
     assert_eq!(check_failed[0]["failure"], "log_destination_unusable");
-    assert_eq!(check_failed[0]["detail"], "the log file cannot be opened");
-    assert_eq!(check_failed[0]["log_destination"], read_only.display().to_string());
+    assert_eq!(check_failed[0]["detail"], "the log directory's mode is too open");
+    assert_eq!(check_failed[0]["log_destination"], changed.display().to_string());
     assert!(has_message(&moved, "after the failed move"));
-    assert!(!read_only.join(LOG_FILE_NAME).exists());
+    assert!(!changed.join(LOG_FILE_NAME).exists());
     assert_eq!(log.current(), LogDestination::Directory(moved.clone()));
 
     // Removing the setting returns to the bootstrap destination.
