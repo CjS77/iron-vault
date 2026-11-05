@@ -115,6 +115,9 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::UnlockDenied),
         Just(ErrorCode::UnlockFailed),
         Just(ErrorCode::UnlockedUnavailable),
+        Just(ErrorCode::AlreadyInitialized),
+        Just(ErrorCode::PassphraseRejected),
+        Just(ErrorCode::InitFailed),
         Just(ErrorCode::NameTaken),
         Just(ErrorCode::CredentialInvalid),
         Just(ErrorCode::VaultWriteFailed),
@@ -142,6 +145,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             Just(AdminRequest::Status),
             Just(AdminRequest::Unlock),
             Just(AdminRequest::Lock),
+            Just(AdminRequest::Init),
             add_request(),
             config_bytes().prop_map(|bytes| AdminRequest::ConfigApprove(ProposedConfig::new(bytes).unwrap())),
         ]
@@ -160,6 +164,10 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             .prop_map(|profile| Frame::Response(AdminResponse::Ping { profile })),
         any::<bool>().prop_map(|cleared| Frame::Response(AdminResponse::Lock { cleared })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Add { record_id: v4(bytes) })),
+        (any::<[u8; 16]>(), any::<u64>()).prop_map(|(bytes, version)| Frame::Response(AdminResponse::Init {
+            vault_id: VaultId::from_bytes(v4_bytes(bytes)).unwrap(),
+            version
+        })),
         status_report().prop_map(|report| Frame::Response(AdminResponse::Status(Box::new(report)))),
         (error_code(), text(MAX_MESSAGE)).prop_map(|(code, message)| Frame::Response(AdminResponse::Error { code, message })),
     ]
@@ -592,7 +600,7 @@ fn malformed_fixed_width_values_and_flags_are_refused() {
 
 #[test]
 fn unknown_error_codes_are_refused() {
-    [0, 17, 0xffff].into_iter().for_each(|code: u16| {
+    [0, 23, 0xffff].into_iter().for_each(|code: u16| {
         let error = body(&[field(1, &code.to_be_bytes()), field(2, b"m")]);
         assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::UnknownErrorCode(code));
     });
@@ -882,4 +890,56 @@ fn a_reveal_over_the_body_bound_is_refused_at_the_header() {
 fn an_empty_reveal_is_refused_both_ways() {
     assert_eq!(decode_err(&raw(1, 7, &[])), FrameError::EmptyBody(7));
     assert_eq!(encode(&reveal(b""), &mut Vec::new()), Err(FrameError::EmptyBody(7)));
+}
+
+#[test]
+fn init_has_command_id_7_and_takes_no_arguments() {
+    assert_eq!((AdminCommand::Init as u16, AdminRequest::Init.command().name()), (7, "init"));
+    assert_eq!(encoded(&Frame::Request(AdminRequest::Init)), raw(1, 1, &field(1, &[0, 7])));
+    let with_argument = body(&[field(1, &[0, 7]), field(2, b"x")]);
+    assert_eq!(decode_err(&raw(1, 1, &with_argument)), FrameError::UnknownTag(2));
+}
+
+#[test]
+fn the_init_result_carries_the_raw_vault_id_and_the_committed_version() {
+    let vault_id = VaultId::from_bytes(v4_bytes([9; 16])).unwrap();
+    let expected = body(&[field(1, &[0, 7]), field(2, vault_id.as_bytes()), field(3, &1u64.to_be_bytes())]);
+    let result = Frame::Response(AdminResponse::Init { vault_id, version: 1 });
+    assert_eq!(encoded(&result), raw(1, 4, &expected));
+    assert_round_trips(&result);
+    let refused = [
+        (
+            body(&[field(1, &[0, 7]), field(2, &[9; 15]), field(3, &[0; 8])]),
+            FrameError::InvalidValue(2),
+        ),
+        (
+            body(&[field(1, &[0, 7]), field(2, &[0; 16]), field(3, &[0; 8])]),
+            FrameError::InvalidValue(2),
+        ),
+        (
+            body(&[field(1, &[0, 7]), field(2, vault_id.as_bytes()), field(3, &[1])]),
+            FrameError::InvalidValue(3),
+        ),
+        (
+            body(&[field(1, &[0, 7]), field(2, vault_id.as_bytes())]),
+            FrameError::MissingField(3),
+        ),
+    ];
+    refused
+        .iter()
+        .for_each(|(result, error)| assert_eq!(decode_err(&raw(1, 4, result)), *error));
+}
+
+#[test]
+fn the_init_error_codes_have_their_documented_numbers_and_names() {
+    [
+        (ErrorCode::AlreadyInitialized, 17, "already-initialized"),
+        (ErrorCode::PassphraseRejected, 18, "passphrase-rejected"),
+        (ErrorCode::InitFailed, 19, "init-failed"),
+    ]
+    .into_iter()
+    .for_each(|(code, number, name)| {
+        assert_eq!((code as u16, code.name()), (number, name));
+        assert_round_trips(&error(code, "m"));
+    });
 }

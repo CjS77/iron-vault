@@ -146,11 +146,21 @@ pub fn lock(socket: Option<&Path>) -> Exit {
 /// One exchange, answering any prompt the service sends from the owner console: `answer` handles a success; an error
 /// response and a failed exchange are reported here.
 fn run(socket: Option<&Path>, request: AdminRequest, answer: impl FnOnce(AdminResponse) -> Exit) -> Exit {
+    run_on(socket, request, &mut ProcessConsole::default(), answer)
+}
+
+/// [`run`] with the prompts answered from `console`.
+pub(super) fn run_on(
+    socket: Option<&Path>,
+    request: AdminRequest,
+    console: &mut impl OwnerConsole,
+    answer: impl FnOnce(AdminResponse) -> Exit,
+) -> Exit {
     let path = match socket.map_or_else(installation_socket, |path| Ok(path.to_path_buf())) {
         Ok(path) => path,
         Err(e) => return fail(Exit::Unreachable, &format!("{e:#}")),
     };
-    match exchange(&path, request, &mut ProcessConsole::default()) {
+    match exchange(&path, request, console) {
         Ok(AdminResponse::Error { code, message }) => fail(Exit::CommandError, &service_error(code, &message)),
         Ok(response) => answer(response),
         Err(e) => fail(Exit::Unreachable, &e.to_string()),
@@ -230,7 +240,7 @@ fn approved(result: &ApprovalResult) -> String {
     )
 }
 
-fn unexpected() -> Exit {
+pub(super) fn unexpected() -> Exit {
     fail(Exit::Unreachable, &ClientError::Unexpected.to_string())
 }
 
@@ -360,7 +370,7 @@ fn profile_name(profile: DeploymentProfile) -> &'static str {
     }
 }
 
-fn fail(exit: Exit, message: &str) -> Exit {
+pub(super) fn fail(exit: Exit, message: &str) -> Exit {
     eprintln!("iron-vault: {message}");
     exit
 }

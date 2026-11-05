@@ -476,3 +476,33 @@ impl AdminHandler for FixedError {
         Box::pin(async move { Ok(response) })
     }
 }
+
+/// `init` shows the recovery key on the controlling terminal only, so without one it stops before connecting and the
+/// service never generates a key. `setsid` runs it in a new session, which has no controlling terminal; nothing listens
+/// at the socket path, and the CLI never gets as far as saying so.
+#[tokio::test]
+async fn init_without_a_controlling_terminal_sends_nothing() {
+    let dir = TempDir::new();
+    let args = command_args("init", &dir.socket());
+    let run = tokio::task::spawn_blocking(move || {
+        Command::new("setsid")
+            .arg("--wait")
+            .arg(env!("CARGO_BIN_EXE_iron-vault"))
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+    });
+    let output = tokio::time::timeout(Duration::from_secs(10), run)
+        .await
+        .expect("the CLI finishes")
+        .unwrap()
+        .expect("spawn setsid");
+
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(output.stdout.is_empty());
+    assert!(
+        stderr.contains("controlling terminal only") && stderr.ends_with("nothing was sent\n") && !stderr.contains("not running"),
+        "{stderr}"
+    );
+}

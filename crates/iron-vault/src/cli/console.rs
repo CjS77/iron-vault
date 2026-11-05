@@ -10,6 +10,7 @@ mod tty;
 use std::fs::File;
 use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::AsFd;
+use std::sync::{Mutex, PoisonError};
 
 use iron_vault::admin::protocol::{MAX_BODY_LEN, OwnerInput, Prompt, RevealedSecret};
 use qrcode::render::unicode::Dense1x2;
@@ -70,6 +71,25 @@ pub trait OwnerConsole {
     /// Shows a revealed value, then `\n`, then the value as a QR code, on the controlling terminal and nowhere else. A value with a byte outside
     /// printable ASCII is refused and nothing of it is shown.
     fn reveal(&mut self, secret: &RevealedSecret) -> Result<(), InputError>;
+}
+
+/// What the owner must be told if a signal ends the command now, such as what to do with a recovery key already shown.
+/// Process-wide, because the signal watcher that ends the process is.
+static SIGNAL_ADVICE: Mutex<Option<String>> = Mutex::new(None);
+
+/// Sets what the signal watcher tells the owner on stderr if a signal ends the command from now on.
+pub fn set_signal_advice(advice: Option<String>) {
+    *SIGNAL_ADVICE.lock().unwrap_or_else(PoisonError::into_inner) = advice;
+}
+
+/// What the signal watcher tells the owner if a signal ends the command now.
+pub(super) fn signal_advice() -> Option<String> {
+    SIGNAL_ADVICE.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+/// Checks that the controlling terminal opens, for a command that will reveal a secret, before it sends its request.
+pub fn ensure_terminal() -> io::Result<()> {
+    tty::open_for_reveal().map(drop)
 }
 
 /// The process's console, opened at the first prompt, notice or reveal, so a command the service never prompts for

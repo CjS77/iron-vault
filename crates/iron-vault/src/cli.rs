@@ -15,6 +15,8 @@ mod client;
 #[cfg(target_os = "linux")]
 mod console;
 #[cfg(target_os = "linux")]
+mod init;
+#[cfg(target_os = "linux")]
 mod status;
 
 use std::ffi::OsStr;
@@ -95,6 +97,10 @@ pub enum Command {
     Unlock,
     /// Clear the vault identity and every cached secret from the service's memory, leaving it Locked.
     Lock,
+    /// Create the vault: the service prompts for the vault and approval passphrases, shows the recovery key once on the
+    /// controlling terminal, and once you confirm you saved it, writes the vault and approves the initial config as
+    /// version 1. It needs a controlling terminal, and leaves the service Locked.
+    Init,
     /// Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so
     /// `pass show fx | iron-vault add fx --origin api.fx.example` works. It never overwrites an existing name.
     Add {
@@ -218,6 +224,19 @@ pub fn unlock(_socket: Option<&Path>) -> ExitCode {
 #[cfg(target_os = "linux")]
 pub fn lock(socket: Option<&Path>) -> ExitCode {
     client::lock(socket).into()
+}
+
+/// `iron-vault init`: checks for a controlling terminal, sends `init`, answers the service's prompts, shows the
+/// recovery key on the terminal only, and prints the new vault's ID.
+#[cfg(target_os = "linux")]
+pub fn init(socket: Option<&Path>) -> ExitCode {
+    init::run(socket).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn init(_socket: Option<&Path>) -> ExitCode {
+    unsupported_platform()
 }
 
 /// `iron-vault add`: sends `add` with the name, kind and origins, answers the service's secret prompts from the owner

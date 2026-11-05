@@ -15,7 +15,7 @@ use zeroize::Zeroizing;
 
 use crate::deployment::DeploymentProfile;
 use iron_vault_policy::{CredentialKind, Port};
-use iron_vault_store::RecordId;
+use iron_vault_store::{RecordId, VaultId};
 
 pub use iron_vault_store::MAX_CONFIG_LEN;
 pub use status::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
@@ -44,6 +44,9 @@ pub enum AdminRequest {
     Unlock,
     /// Clears the vault identity and every cached secret from memory. Command ID 5.
     Lock,
+    /// Creates the vault and approves the initial config as version 1; the service prompts for both passphrases and
+    /// reveals the recovery key. Command ID 7.
+    Init,
     /// Enrols a new credential under a name the manifest does not hold; the service prompts for the material. Command
     /// ID 8.
     Add {
@@ -75,6 +78,7 @@ impl AdminRequest {
             Self::Status => AdminCommand::Status,
             Self::Unlock => AdminCommand::Unlock,
             Self::Lock => AdminCommand::Lock,
+            Self::Init => AdminCommand::Init,
             Self::Add { .. } => AdminCommand::Add,
         }
     }
@@ -93,7 +97,9 @@ pub enum AdminCommand {
     Unlock = 4,
     /// `lock`.
     Lock = 5,
-    /// `add`. ID 7 is reserved for `init`.
+    /// `init`.
+    Init = 7,
+    /// `add`.
     Add = 8,
 }
 
@@ -106,6 +112,7 @@ impl AdminCommand {
             Self::Status => "status",
             Self::Unlock => "unlock",
             Self::Lock => "lock",
+            Self::Init => "init",
             Self::Add => "add",
         }
     }
@@ -121,18 +128,19 @@ mod no_external_signatures {
     /// Every argument `command` takes, by name.
     fn arguments(command: AdminCommand) -> &'static [&'static str] {
         match command {
-            AdminCommand::Ping | AdminCommand::Status | AdminCommand::Unlock | AdminCommand::Lock => &[],
+            AdminCommand::Ping | AdminCommand::Status | AdminCommand::Unlock | AdminCommand::Lock | AdminCommand::Init => &[],
             AdminCommand::ConfigApprove => &["config"],
             AdminCommand::Add => &["name", "kind", "origins"],
         }
     }
 
-    const COMMANDS: [AdminCommand; 6] = [
+    const COMMANDS: [AdminCommand; 7] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::Unlock,
         AdminCommand::Lock,
         AdminCommand::Status,
+        AdminCommand::Init,
         AdminCommand::Add,
     ];
 
@@ -297,6 +305,13 @@ pub enum AdminResponse {
         /// The ID of the record the service wrote.
         record_id: RecordId,
     },
+    /// `init` completed: the vault is written and its first approval committed; the service is still Locked.
+    Init {
+        /// The new vault's ID.
+        vault_id: VaultId,
+        /// The committed approval version, always 1.
+        version: u64,
+    },
     /// The command failed. The message is the service's own text and never contains owner input.
     Error {
         /// The stable code scripts act on.
@@ -360,6 +375,12 @@ pub enum ErrorCode {
     /// `unlock`: the vault unlocked, but the config check left the service Unavailable; the message names the redacted
     /// reason.
     UnlockedUnavailable = 16,
+    /// `init`: the directories hold an initialized vault, or files init did not write; nothing was changed.
+    AlreadyInitialized = 17,
+    /// `init`: a chosen passphrase broke a rule; the message names the rule, never the input.
+    PassphraseRejected = 18,
+    /// `init`: a write failed; the message names the step and what to do with the recovery key shown.
+    InitFailed = 19,
     /// `add`: the name is already in the manifest, healthy or damaged; `add` never overwrites.
     NameTaken = 20,
     /// `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte.
@@ -388,6 +409,9 @@ impl ErrorCode {
             Self::UnlockDenied => "unlock-denied",
             Self::UnlockFailed => "unlock-failed",
             Self::UnlockedUnavailable => "unlocked-unavailable",
+            Self::AlreadyInitialized => "already-initialized",
+            Self::PassphraseRejected => "passphrase-rejected",
+            Self::InitFailed => "init-failed",
             Self::NameTaken => "name-taken",
             Self::CredentialInvalid => "credential-invalid",
             Self::VaultWriteFailed => "vault-write-failed",
@@ -522,6 +546,9 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::Status(report)) => put_frame(out, FrameKind::Success, &body::encode_status_result(report)),
         Frame::Response(AdminResponse::Lock { cleared }) => put_frame(out, FrameKind::Success, &body::encode_lock_result(*cleared)),
         Frame::Response(AdminResponse::Add { record_id }) => put_frame(out, FrameKind::Success, &body::encode_add_result(*record_id)),
+        Frame::Response(AdminResponse::Init { vault_id, version }) => {
+            put_frame(out, FrameKind::Success, &body::encode_init_result(*vault_id, *version))
+        }
         Frame::Response(AdminResponse::ConfigApprove(result)) => put_frame(out, FrameKind::Success, &body::encode_approval_result(result)),
         Frame::Response(AdminResponse::Error { code, message }) => put_frame(out, FrameKind::Error, &body::encode_error(*code, message)),
         Frame::Notice(notice) => put_frame(out, FrameKind::Notice, &body::encode_notice(notice)),

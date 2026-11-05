@@ -21,6 +21,7 @@ fn main() -> anyhow::Result<ExitCode> {
         Command::Status => Ok(run_client(|| cli::status(cli.admin_socket.as_deref()))),
         Command::Unlock => Ok(run_client(|| cli::unlock(cli.admin_socket.as_deref()))),
         Command::Lock => Ok(run_client(|| cli::lock(cli.admin_socket.as_deref()))),
+        Command::Init => Ok(run_client(|| cli::init(cli.admin_socket.as_deref()))),
         Command::Add { name, kind, origins } => Ok(run_client(|| cli::add(cli.admin_socket.as_deref(), name, kind.into(), &origins))),
         Command::Config(ConfigCommand::Approve { file }) => Ok(run_client(|| cli::config_approve(cli.admin_socket.as_deref(), &file))),
     }

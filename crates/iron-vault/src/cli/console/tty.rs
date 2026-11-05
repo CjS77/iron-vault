@@ -2,7 +2,7 @@
 //! watcher thread on SIGINT, SIGQUIT or SIGTERM.
 
 use std::fs::File;
-use std::io;
+use std::io::{self, Write};
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -114,13 +114,16 @@ fn restore_on_signal(echo: TtyEcho) -> Result<(), InputError> {
         .map_err(InputError::Terminal)
 }
 
-/// Restores the terminal if echo is off and exits with the status a shell reports for a process `received` killed:
-/// 128 plus the signal number, 130 for SIGINT.
+/// Restores the terminal if echo is off, gives the owner any advice the command set, and exits with the status a shell
+/// reports for a process `received` killed: 128 plus the signal number, 130 for SIGINT.
 fn restore_and_exit(echo: &TtyEcho, received: SignalKind) -> ! {
     // Held until the process exits, so no later prompt can turn echo off again after the restore.
     let mut slot = echo.saved();
     let _ = echo.restore_from(&mut slot);
     // The cursor sits after the label; the newline keeps the shell prompt off that line.
     let _ = rustix::io::write(&echo.0.fd, b"\n");
+    if let Some(advice) = super::signal_advice() {
+        let _ = writeln!(io::stderr(), "iron-vault: {advice}");
+    }
     std::process::exit(128 + received.as_raw_value())
 }

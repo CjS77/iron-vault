@@ -26,7 +26,7 @@ const EVENTS: [ServiceEvent; 11] = [
     E::Stop,
 ];
 
-const OPERATIONS: [AdminOperation; 8] = [
+const OPERATIONS: [AdminOperation; 9] = [
     AdminOperation::Ping,
     AdminOperation::Status,
     AdminOperation::Unlock,
@@ -35,6 +35,7 @@ const OPERATIONS: [AdminOperation; 8] = [
     AdminOperation::Approve,
     AdminOperation::Repair,
     AdminOperation::VaultChange,
+    AdminOperation::Initialize,
 ];
 
 /// Every edge of the §3.12 diagram, and nothing else.
@@ -146,7 +147,7 @@ fn allowed(state: ServiceState) -> Vec<AdminOperation> {
 fn admin_commands_follow_the_state() {
     use AdminOperation as A;
     assert_eq!(allowed(S::Starting), [A::Ping, A::Status]);
-    assert_eq!(allowed(S::Locked), [A::Ping, A::Status, A::Unlock]);
+    assert_eq!(allowed(S::Locked), [A::Ping, A::Status, A::Unlock, A::Initialize]);
     assert_eq!(allowed(S::Checking), [A::Ping, A::Status]);
     assert_eq!(
         allowed(S::Ready),
