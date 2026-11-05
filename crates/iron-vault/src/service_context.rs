@@ -42,7 +42,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 
 use crate::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 use crate::audit::vault::{LockIncomplete, UnlockRefused};
-use crate::audit::{AuditEvent, LockTransition, ReloadFailed};
+use crate::audit::{AuditEvent, LockTransition, ReloadFailed, count_of};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
@@ -799,7 +799,7 @@ fn lock_outcome(snapshots: usize, identity_holders: usize) -> LockOutcome {
         }
         (snapshots, holders) => {
             LockIncomplete {
-                snapshots_held: u64::try_from(snapshots).unwrap_or(u64::MAX),
+                snapshots_held: count_of(snapshots),
                 identity_held: holders > 0,
             }
             .emit();

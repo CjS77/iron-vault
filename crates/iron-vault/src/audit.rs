@@ -47,6 +47,11 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// The fields the formatter adds to every record. An event that recorded one too would give its record a duplicate key.
 pub const CONSTANT_FIELDS: [&str; 4] = ["service", "service_version", "schema_version", "deployment_profile"];
 
+/// A length as a `u64` field; a length never exceeds `u64::MAX` on a supported target, so the fallback is unreachable.
+pub(crate) fn count_of(len: usize) -> u64 {
+    u64::try_from(len).unwrap_or(u64::MAX)
+}
+
 /// An event's stable name, `<subject>.<name>`, written in its `event` field. Renaming one changes the schema version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventName(&'static str);

@@ -13,7 +13,7 @@ use tokio::sync::Notify;
 use tokio::time::{Instant, Sleep};
 
 use super::{BoxError, ResponseBody};
-use crate::audit::{Ending, ReasonCode, RequestFacts, RequestRecord};
+use crate::audit::{Ending, ReasonCode, RequestFacts, RequestRecord, count_of};
 
 /// Why reading a request body failed.
 #[derive(Debug, thiserror::Error)]
@@ -76,7 +76,7 @@ impl RequestBody {
 
     /// Charges a data frame against the remaining allowance; trailers cost nothing, since the header limit bounds them.
     fn count(&mut self, frame: Frame<Bytes>) -> Result<Frame<Bytes>, RequestBodyError> {
-        let len = frame.data_ref().map_or(0, |data| u64::try_from(data.len()).unwrap_or(u64::MAX));
+        let len = frame.data_ref().map_or(0, |data| count_of(data.len()));
         match self.remaining.checked_sub(len) {
             Some(remaining) => {
                 self.remaining = remaining;
@@ -202,9 +202,7 @@ impl Body for Recorded {
         let this = self.get_mut();
         let frame = ready!(Pin::new(&mut this.body).poll_frame(cx));
         match &frame {
-            Some(Ok(frame)) => this
-                .record
-                .sent(frame.data_ref().map_or(0, |data| u64::try_from(data.len()).unwrap_or(u64::MAX))),
+            Some(Ok(frame)) => this.record.sent(frame.data_ref().map_or(0, |data| count_of(data.len()))),
             Some(Err(_)) => this.record.end(Ending::Cut),
             None => this.record.end(Ending::Clean),
         }

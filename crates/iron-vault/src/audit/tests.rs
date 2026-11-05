@@ -340,8 +340,8 @@ fn no_audit_event_records_a_constant_field() {
     });
     let seen = names.0.lock().unwrap().clone();
     assert!(seen.iter().any(|name| name == "event"), "{seen:?}");
-    // Every request event was seen: `reason` and `scrubbed` are the request event's, `defect` the defect event's and
-    // `matches` the scrub event's.
+    // A field only one of the three request-side events records was seen for each, so each of them was emitted:
+    // `reason` and `scrubbed` are the request event's, `defect` the defect event's and `matches` the scrub event's.
     ["reason", "scrubbed", "defect", "matches"]
         .iter()
         .for_each(|own| assert!(seen.iter().any(|name| name == own), "{own} in {seen:?}"));

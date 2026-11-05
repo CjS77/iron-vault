@@ -230,6 +230,22 @@ fn a_cut_after_the_head_keeps_the_status_and_says_who_closed_it() {
 }
 
 #[test]
+fn a_cut_after_the_head_while_the_service_closes_is_service_closed() {
+    let close = ServiceClose::default();
+    let event = the_event(|| {
+        let mut record = RequestRecord::new("local".parse().unwrap(), "GET", close.clone());
+        record.answered(200);
+        record.sent(3);
+        close.set();
+        record.end(Ending::Cut);
+    });
+    assert_eq!(
+        (event["status"].as_u64(), event["reason"].as_str(), event["response_bytes"].as_u64()),
+        (Some(200), Some("service_closed"), Some(3))
+    );
+}
+
+#[test]
 fn a_scrubbed_response_also_writes_the_scrub_event_with_the_request_id() {
     let out = capture(|| drop(relayed(3, 0)));
     let records: Vec<_> = out.lines().map(parse).collect();

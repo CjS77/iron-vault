@@ -22,7 +22,7 @@ use iron_vault_policy::reserved_headers::HOP_BY_HOP_HEADERS;
 use iron_vault_policy::{HeaderName, Limits, LocationRewrite, Method, RouteConfig, rewrite_location};
 use url::Url;
 
-use crate::audit::{ReasonCode, RequestFacts};
+use crate::audit::{ReasonCode, RequestFacts, count_of};
 use crate::content_coding::{
     BudgetExceeded, ContentCoding, DecodeError, DecompressionBudget, EncodeError, ResponseDecoder, ResponseEncoder, choose_emitted,
     parse_content_encoding, rewrite_headers,
@@ -264,6 +264,8 @@ pub struct RelayedBody {
     facts: RequestFacts,
     /// Matches replaced in the headers, and in the body once the stages are gone.
     matches: u64,
+    /// The match total last told to the request record, so it is told again only when it grows.
+    reported: u64,
     /// Bytes the scrubber screened, once the body has ended.
     decoded: u64,
     ended: bool,
@@ -304,7 +306,7 @@ impl Stages {
     fn feed(&mut self, chunk: Bytes) {
         match self.decoder.as_mut() {
             Some(decoder) => {
-                self.compressed = len(&chunk);
+                self.compressed = count_of(chunk.len());
                 decoder.feed(chunk);
             }
             None => self.identity = Some(chunk),
@@ -319,7 +321,7 @@ impl Stages {
     /// nothing, and the next is taken.
     fn next_output(&mut self) -> Result<Option<Bytes>, RelayFailure> {
         while let Some(piece) = self.next_piece()? {
-            self.budget.record(std::mem::take(&mut self.compressed), len(&piece))?;
+            self.budget.record(std::mem::take(&mut self.compressed), count_of(piece.len()))?;
             let scrubbed = self.scrubber.push(&piece);
             let out = self.encode(scrubbed)?;
             if !out.is_empty() {
@@ -346,11 +348,6 @@ impl Stages {
     }
 }
 
-/// A length as the budget counts it; a slice never holds more than `u64::MAX` bytes.
-fn len(bytes: &[u8]) -> u64 {
-    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-}
-
 impl RelayedBody {
     fn new(chunks: ResponseChunks, context: ResponseContext, codings: BodyCodings, header_matches: u64) -> Self {
         context.facts.scrub_matches(header_matches);
@@ -359,6 +356,7 @@ impl RelayedBody {
             stages: Some(Stages::new(context.patterns, &context.limits, codings)),
             facts: context.facts,
             matches: header_matches,
+            reported: header_matches,
             decoded: 0,
             ended: false,
         }
@@ -370,6 +368,15 @@ impl RelayedBody {
             scrubbed: self.matches > 0,
             decoded_bytes: self.decoded,
         })
+    }
+
+    /// Tells the request record the running match total, when it has grown since the last report.
+    fn report_matches(&mut self) {
+        let total = self.total_matches();
+        if total != self.reported {
+            self.reported = total;
+            self.facts.scrub_matches(total);
+        }
     }
 
     /// Every match replaced so far, in the headers and the body.
@@ -405,29 +412,6 @@ impl RelayedBody {
         Ok(tail)
     }
 
-    /// Drops the stages without releasing the scrubber's held bytes, keeping its match count for the scrub event, and
-    /// records the failure as the request's reason. Returns `failure` for the caller to pass on.
-    fn fail(&mut self, failure: RelayFailure) -> RelayFailure {
-        self.facts.refuse(failure.into());
-        self.matches = self.total_matches();
-        self.stages = None;
-        failure
-    }
-}
-
-impl Body for RelayedBody {
-    type Data = Bytes;
-    type Error = RelayFailure;
-
-    fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, RelayFailure>>> {
-        let this = self.get_mut();
-        let frame = this.poll_stages(cx);
-        this.facts.scrub_matches(this.total_matches());
-        frame
-    }
-}
-
-impl RelayedBody {
     /// The next frame through the body stages.
     fn poll_stages(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, RelayFailure>>> {
         let this = self;
@@ -456,6 +440,27 @@ impl RelayedBody {
                 Ok(out) => return Poll::Ready(Some(Ok(Frame::data(out)))),
             }
         }
+    }
+
+    /// Drops the stages without releasing the scrubber's held bytes, keeping its match count for the scrub event, and
+    /// records the failure as the request's reason. Returns `failure` for the caller to pass on.
+    fn fail(&mut self, failure: RelayFailure) -> RelayFailure {
+        self.facts.refuse(failure.into());
+        self.matches = self.total_matches();
+        self.stages = None;
+        failure
+    }
+}
+
+impl Body for RelayedBody {
+    type Data = Bytes;
+    type Error = RelayFailure;
+
+    fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, RelayFailure>>> {
+        let this = self.get_mut();
+        let frame = this.poll_stages(cx);
+        this.report_matches();
+        frame
     }
 }
 
