@@ -335,6 +335,58 @@ async fn a_lock_at_the_prompt_of_an_approval_out_of_an_invalid_policy_cancels_it
     let _ = stop.send(());
 }
 
+/// Answers `yes` and the passphrase to an approval at its confirmation prompt and checks that the commit's backstop
+/// refused it before reserving: no pending or staged file is left and the active config is unchanged.
+async fn refused_by_the_backstop(fixture: &Fixture, stream: &mut UnixStream, active: &[u8]) {
+    send(stream, &Frame::OwnerInput(OwnerInput::new(Zeroizing::new(b"yes".to_vec())))).await;
+    match converse(stream, &[APPROVAL_PASSPHRASE]).await.response {
+        AdminResponse::Error { code, message } => {
+            assert_eq!(code, ErrorCode::ApprovalUnavailable);
+            assert!(message.contains("nothing was reserved"), "{message}");
+        }
+        other => panic!("expected the backstop's refusal, got {other:?}"),
+    }
+    ["etc/config.toml.pending", "etc/config.toml.sig.staged"]
+        .iter()
+        .for_each(|file| assert!(!fixture.path(file).exists(), "{file} is left behind"));
+    assert_eq!(fs::read(fixture.path("etc/config.toml")).unwrap(), active);
+}
+
+#[tokio::test]
+async fn a_stop_while_the_owner_is_at_the_prompt_ends_the_approval_at_its_commit_with_nothing_reserved() {
+    let logs = captured_logs();
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    let active = fs::read(fixture.path("etc/config.toml")).unwrap();
+    let (path, stop) = serve_admin(&service);
+    let mut stream = at_confirmation(&path, &fixture.config("rates")).await;
+
+    // A stop takes only the context's mutex, so it does not cancel the approval at its prompt.
+    service.stop().await;
+    refused_by_the_backstop(&fixture, &mut stream, &active).await;
+
+    assert_eq!(service.state().await, ServiceState::Stopped);
+    logs.assert_no_passphrase();
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn a_check_generation_change_while_the_owner_is_at_the_prompt_ends_the_approval_with_nothing_reserved() {
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    let active = fs::read(fixture.path("etc/config.toml")).unwrap();
+    let (path, stop) = serve_admin(&service);
+    let mut stream = at_confirmation(&path, &fixture.config("rates")).await;
+
+    service.advance_check_generation().await;
+    refused_by_the_backstop(&fixture, &mut stream, &active).await;
+
+    assert_eq!(service.state().await, ServiceState::Ready);
+    assert_eq!(versions(&service).await, (Some(1), 1));
+    assert_eq!(get(&fixture, "fx").await.status, 200);
+    let _ = stop.send(());
+}
+
 /// The base config with a second Unix listener, `side`, which no caller uses.
 fn with_side_listener(fixture: &Fixture) -> String {
     let side = fixture.path("side.sock");

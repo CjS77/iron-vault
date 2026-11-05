@@ -472,6 +472,14 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         self.inner.lock().await.identity.as_ref().map(Arc::downgrade)
     }
 
+    /// Advances the check generation without running a check. A config check waits for the service-wide lock an
+    /// approval holds, so only this lets a test reach the generation half of the commit's backstop.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn advance_check_generation(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.checks = inner.checks.wrapping_add(1);
+    }
+
     /// The holder every request's admission is loaded from.
     pub fn holder(&self) -> &Arc<SnapshotHolder> {
         &self.holder
