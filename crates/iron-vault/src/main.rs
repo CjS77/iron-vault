@@ -71,8 +71,10 @@ fn warn_development(env: &ProfileEnv, accounts: &Accounts) -> anyhow::Result<()>
     Ok(())
 }
 
-/// Installs the service's log subscriber with the HTTP and TLS dependency caps. EP-26 replaces the global level with the
-/// configurable audit and logging design.
+/// Installs the service's log subscriber: JSON Lines records with the constant fields and the HTTP and TLS dependency
+/// caps. The destination is stderr until the log file and stdout writers arrive; EP-26 then replaces the global level
+/// with the configurable audit and logging design.
 fn init_logging() -> anyhow::Result<()> {
-    iron_vault::logging::init().map_err(|e| anyhow::anyhow!("could not install the log subscriber: {e}"))
+    iron_vault::logging::init(std::io::stderr, DeploymentProfile::current())
+        .map_err(|e| anyhow::anyhow!("could not install the log subscriber: {e}"))
 }

@@ -83,6 +83,8 @@ rustls = { version = "0.23.46", default-features = false, features = ["std", "tl
 rustls-pki-types = { version = "1.15.1", default-features = false, features = ["std"] }
 secrecy = "0.10.3"
 serde = { version = "1", features = ["derive"] }
+# Parses the log records the logging tests capture; dev-only, and the crate tracing-subscriber's `json` feature brings.
+serde_json = { version = "1", default-features = false, features = ["std"] }
 # Compile-time trait checks in tests: secret-bearing types must not gain Clone, Display or serde impls.
 static_assertions = "=1.1.0"
 # Constant-time equality for digests; std and i128 are not needed.
@@ -104,9 +106,10 @@ toml = "1"
 tokio-util = { version = "0.7.20", default-features = false }
 # A logging facade only: the binary installs the subscriber. Default features would pull in the attribute macros.
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
-# `registry` stacks the dependency log caps as their own layer. `tracing-log` stays off: with no `log` backend
-# installed, records that reqwest and rustls emit through the `log` crate are discarded rather than logged.
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "registry", "std"] }
+# `registry` stacks the dependency log caps as their own layer; `json` writes each record as one JSON Lines object.
+# `tracing-log` stays off: with no `log` backend installed, records that reqwest and rustls emit through the `log` crate
+# are discarded rather than logged.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json", "registry", "std"] }
 url = "2.5"
 # The built-in trust anchors for upstreams without a pinned CA. They are compiled in, so neither SSL_CERT_FILE,
 # SSL_CERT_DIR nor a desktop store can add to them.

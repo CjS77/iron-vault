@@ -63,6 +63,14 @@ impl DeploymentProfile {
             Self::Protected
         }
     }
+
+    /// The profile's name in a log record's `deployment_profile` field.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Protected => "protected",
+            Self::Development => "development",
+        }
+    }
 }
 
 /// Why the deployment profile could not be applied to this process.

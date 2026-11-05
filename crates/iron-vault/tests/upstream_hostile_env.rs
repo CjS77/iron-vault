@@ -140,7 +140,7 @@ async fn child_sends_the_request_its_parent_describes() {
     };
     let logging = std::env::var_os(LOGGING_VAR).is_some();
     if logging {
-        iron_vault::logging::init().unwrap();
+        iron_vault::logging::init(std::io::stderr, iron_vault::deployment::DeploymentProfile::current()).unwrap();
     }
     let slot = Slot::parse(&std::env::var(SLOT_VAR).unwrap());
     let request = checked(&origin, Method::Get, &slot.target(), &[], slot.marker());
