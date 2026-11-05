@@ -1,15 +1,17 @@
 //! The config check against real files in temporary directories: a vault, an approval state and a config directory
 //! built through the stores' public API, and the published pair tampered with by hand.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use ed25519_dalek::{Signer, SigningKey};
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{AccountDirectory, AccountName, Port, UnavailableCause};
 use iron_vault_store::{
-    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalStorage, ApprovalVersion, ConfigDigest, ConfigDirLock, OsFs, PendingConfig,
-    PermittedOrigins, PinnedApprover, PublishedPairFault, RecordId, SignError, SignatureAlgorithm, StateDirLock, StateFileName, VaultId,
-    VaultIdentity, VerifyError,
+    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalStorage, ApprovalVersion, ConfigDigest, ConfigDirLock, ConfigFileName, OsFs,
+    PendingConfig, PermittedOrigins, PinnedApprover, PublishedPairFault, RecordId, SignError, SignatureAlgorithm, StateDirLock,
+    StateFileName, StoreFs, VaultId, VaultIdentity, VerifyError,
 };
 
 use super::*;
@@ -373,6 +375,87 @@ fn a_committed_transaction_that_cannot_be_published_needs_recovery() {
     assert_eq!(failure.failure(), FailureReason::RecoveryNeeded);
     assert_eq!(failure.unavailable(), UnavailableReason::RecoveryNeeded);
     assert_eq!(failure.status(), "recovery needed: committed approval cannot be published");
+}
+
+/// An [`OsFs`] whose reads of a file ending in `name` fail with EIO.
+struct UnreadableFs(&'static str);
+
+impl StoreFs for UnreadableFs {
+    type File = <OsFs as StoreFs>::File;
+
+    fn create_private(&self, path: &Path) -> io::Result<Self::File> {
+        OsFs.create_private(path)
+    }
+    fn write_all(&self, file: &mut Self::File, bytes: &[u8]) -> io::Result<()> {
+        OsFs.write_all(file, bytes)
+    }
+    fn sync_file(&self, file: &Self::File) -> io::Result<()> {
+        OsFs.sync_file(file)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        OsFs.rename(from, to)
+    }
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        OsFs.remove_file(path)
+    }
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        OsFs.sync_dir(dir)
+    }
+    fn list_dir(&self, dir: &Path) -> io::Result<Vec<OsString>> {
+        OsFs.list_dir(dir)
+    }
+    fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>> {
+        if path.to_string_lossy().ends_with(self.0) {
+            return Err(io::Error::from_raw_os_error(5));
+        }
+        OsFs.read_bounded(path, max_len)
+    }
+}
+
+#[test]
+fn an_unreadable_config_file_reports_its_own_reason_and_the_fixed_body() {
+    let mut fixture = approved();
+    fixture.commit_unpublished(&config(&[("alpha", "alpha"), ("beta", "alpha")]));
+    let (vault, _) = Vault::open(&fixture.state_lock, &OsFs, identity()).unwrap();
+
+    let result = check_config(
+        &fixture.config_lock,
+        &UnreadableFs("config.toml.sig.staged"),
+        vault,
+        &fixture.state,
+        &Capabilities::default(),
+        &NoAccounts,
+        &development(),
+    );
+
+    let failure = failure(result);
+    assert!(
+        matches!(failure, CheckFailure::Recovery(ApprovalRecoveryError::Unreadable { .. })),
+        "{failure:?}"
+    );
+    assert_eq!(failure.unavailable(), UnavailableReason::RecoveryNeeded);
+    assert_eq!(failure.unavailable().as_str(), "recovery needed");
+    assert_eq!(
+        failure.status(),
+        "recovery needed: a config file cannot be read (permissions or disk)"
+    );
+    assert!(!failure.status().contains("config.toml"));
+}
+
+#[test]
+fn a_published_pair_unreadable_in_the_read_back_reports_the_unreadable_reason() {
+    let failure = CheckFailure::Recovery(ApprovalRecoveryError::PublishNotVerified {
+        version: ApprovalVersion::new(2).unwrap(),
+        published: PublishedPairFault::Unreadable {
+            file: ConfigFileName::Active,
+            kind: io::ErrorKind::PermissionDenied,
+        },
+    });
+
+    assert_eq!(
+        failure.status(),
+        "recovery needed: a config file cannot be read (permissions or disk)"
+    );
 }
 
 #[test]

@@ -21,8 +21,8 @@ use iron_vault_policy::{
     ValidationError, activate,
 };
 use iron_vault_store::{
-    ApprovalRecoveryError, ApprovalState, ApprovalStateError, ConfigDirLock, RecoveryFailure, StateDirLock, StoreFs, Vault, VaultError,
-    VaultIdentity, recover_approval,
+    ApprovalRecoveryError, ApprovalState, ApprovalStateError, ConfigDirLock, PublishedPairFault, RecoveryFailure, StateDirLock, StoreFs,
+    Vault, VaultError, VaultIdentity, recover_approval,
 };
 
 use crate::deployment::DeploymentProfile;
@@ -102,9 +102,10 @@ pub enum CheckFailure {
     /// The approval state could not be opened as a whole.
     #[error("recovery needed: shared state damaged")]
     ApprovalState(ApprovalStateError),
-    /// Approval recovery refused: a committed transaction cannot be completed, nothing is committed, or the published
-    /// pair does not verify as the committed approval.
-    #[error("{}", recovery_status(.0.failure()))]
+    /// Approval recovery refused: a config file cannot be read, a committed transaction cannot be completed, nothing is
+    /// committed, or the published pair does not verify as the committed approval. The status text names an unreadable
+    /// file's cause class, since the owner's fix is permissions or the disk and not the publish.
+    #[error("{}", recovery_status(.0))]
     Recovery(ApprovalRecoveryError),
     /// The approved config is not servable: it does not parse, validate or activate, or its parts cannot form a snapshot.
     #[error("policy invalid: config invalid")]
@@ -135,11 +136,19 @@ pub enum InvalidConfig {
     Snapshot(SnapshotError),
 }
 
-/// The status text for a recovery refusal.
-const fn recovery_status(failure: RecoveryFailure) -> &'static str {
-    match failure {
-        RecoveryFailure::RecoveryNeeded => "recovery needed: committed approval cannot be published",
-        RecoveryFailure::PolicyInvalid => "policy invalid: config approval does not verify",
+/// The status text for a recovery refusal. A file that cannot be read, before recovery or in the read-back after its
+/// publish, gets its own text and no path; the `503` body is still the fixed `recovery needed`.
+fn recovery_status(error: &ApprovalRecoveryError) -> &'static str {
+    match error {
+        ApprovalRecoveryError::Unreadable { .. }
+        | ApprovalRecoveryError::PublishNotVerified {
+            published: PublishedPairFault::Unreadable { .. },
+            ..
+        } => "recovery needed: a config file cannot be read (permissions or disk)",
+        other => match other.failure() {
+            RecoveryFailure::RecoveryNeeded => "recovery needed: committed approval cannot be published",
+            RecoveryFailure::PolicyInvalid => "policy invalid: config approval does not verify",
+        },
     }
 }
 

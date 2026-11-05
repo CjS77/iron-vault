@@ -25,7 +25,8 @@ use crate::{
 /// service maps each variant to its `FailureReason` of the same name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveryFailure {
-    /// A committed transaction is on disk that cannot be completed; only a repair or a restart leaves it.
+    /// A config file cannot be read, or a committed transaction is on disk that cannot be completed; only a repair, a
+    /// fix to the file's permissions or disk, or a restart leaves it.
     RecoveryNeeded,
     /// Nothing is committed, or the published pair does not verify as the committed approval; a new approval leaves it.
     PolicyInvalid,
