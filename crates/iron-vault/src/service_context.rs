@@ -7,8 +7,9 @@
 //!
 //! Every change takes one async mutex and goes through [`next`], so no two changes interleave and none makes a
 //! transition the §3.12 diagram lacks. Scrypt and the config check run on the blocking pool with the mutex held, so the
-//! runtime thread stays free to answer requests with `503`, serve other admin commands and handle signals (§3.12). Requests never take that mutex: each loads its admission from the snapshot
-//! holder, which every transition stores into.
+//! runtime thread stays free to answer requests with `503`, serve other admin commands and handle signals (§3.12).
+//! Requests never take that mutex: each loads its admission from the snapshot holder, which every transition stores
+//! into.
 //!
 //! Outside Ready the request listeners come from the unverified `config.toml` and answer only `503` with the holder's
 //! reason, before any caller is identified (glossary: *Listener provenance*). Entering Ready rebuilds them from the
@@ -363,8 +364,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Unavailable has no snapshot to withdraw, so there the identity is cleared at once unless something else still
     /// holds it. Both locks are then released and the call waits up to `drain` for the last holder of the old snapshot,
     /// a streaming response body included, to drop it, so a slow request does not stall the other admin commands. The
-    /// vault in that snapshot holds the last reference to the identity, so the identity is cleared with it. If the drain expires, or the identity is still held, it logs a warning and returns an outcome
-    /// other than [`LockOutcome::Cleared`], never claiming the secrets are cleared.
+    /// vault in that snapshot holds the last reference to the identity, so the identity is cleared with it. If the drain
+    /// expires, or the identity is still held, it logs a warning and returns an outcome other than
+    /// [`LockOutcome::Cleared`], never claiming the secrets are cleared.
     pub async fn lock(&self, drain: Duration) -> Result<LockOutcome, IllegalTransition> {
         let (mut withdrawn, identity) = self.withdraw_for_lock().await?;
         let snapshots = withdrawn.released(drain).await;

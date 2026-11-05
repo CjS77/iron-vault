@@ -35,8 +35,8 @@ use crate::config_check::{InvalidConfig, activate_config};
 use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState, UnavailableReason};
 use crate::serving_snapshot::Admission;
 
-/// How a `config approve` ended without an active new config. Each variant is one `config approve` error code, and no
-/// message holds config bytes or anything the owner typed.
+/// How a `config approve` ended without an active new config. Each variant maps to one `config approve` error code, and
+/// no message holds config bytes or anything the owner typed.
 #[derive(Debug, thiserror::Error)]
 pub enum ApprovalEnd {
     /// Another approval, vault write or reload holds the service-wide lock.
@@ -217,7 +217,8 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
     /// pause (from Ready, the move to Checking), the commit and publish; then the config check that ends the pause.
     ///
     /// Refuses before reserving unless the service is in the state, and at the check generation, the approval started
-    /// at: a `lock`, or a `lock` and an `unlock`, while the owner was at a prompt ends it with nothing reserved.
+    /// at. This is the backstop for a state or generation change made without the service-wide lock, which today is
+    /// only a `stop`: a `lock` cancels the approval at its prompt, and every config check waits for the lock.
     ///
     /// Cancel-safe: once `commit` holds the context mutex, a task of its own owns that guard, and the service-wide guard
     /// with it, and runs every step to its end, as [`ServiceContext::unlock`] does for a config check. Dropping this
@@ -238,7 +239,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         let Some(identity) = inner.identity.clone().filter(|_| inner.state == started && inner.checks == checks) else {
             pending.abandon(&service.locks.config, &service.setup.fs);
             return Err(ApprovalEnd::Unavailable(
-                "the service was locked or checked again while the owner was at a prompt; nothing was reserved".to_owned(),
+                "the service was stopped or checked again while the owner was at a prompt; nothing was reserved".to_owned(),
             ));
         };
         let (settler, mut guard) = (service.settler(), SettleGuard::new(inner, Arc::clone(&service.holder)));
