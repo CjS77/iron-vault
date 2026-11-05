@@ -12,7 +12,9 @@ use super::dispatch::{AdminHandler, HandlerFuture};
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode, OwnerInput, Prompt};
 use super::server::{Exchange, ExchangeError};
-use crate::service_context::{ServiceContext, UNLOCK_REFUSED, UnlockRefusal};
+use crate::audit::AuditEvent;
+use crate::audit::vault::UnlockRefused;
+use crate::service_context::{ServiceContext, UnlockRefusal};
 use crate::service_state::{AdminOperation, ServiceState, UnavailableReason};
 
 /// The label of the one prompt `unlock` sends.
@@ -51,8 +53,9 @@ impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
             secret: true,
         };
         let Some(passphrase) = vault_passphrase(exchange.prompt(&prompt).await?) else {
-            tracing::warn!("{UNLOCK_REFUSED}: wrong passphrase");
-            return Ok(refused(UnlockRefusal::WrongPassphrase));
+            let refusal = UnlockRefusal::WrongPassphrase;
+            UnlockRefused { refusal: &refusal }.emit();
+            return Ok(refused(refusal));
         };
         Ok(match self.service.unlock(passphrase).await {
             Ok(state) => settled(state),

@@ -41,6 +41,7 @@ use iron_vault_store::{
 use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 
 use crate::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
+use crate::audit::vault::{LockIncomplete, UnlockRefused};
 use crate::audit::{AuditEvent, LockTransition, ReloadFailed};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
@@ -58,9 +59,6 @@ pub use approval::{ApprovalEnd, ApprovalReview};
 pub use init::{InitRefusal, step_names};
 pub use presence::{OwnerPresence, PresenceRefusal};
 pub use vault_change::{CredentialChanged, CurrentRecord, VaultChangePlan, VaultChangeRefusal};
-
-/// The start of the WARN line an unlock refusal logs, whichever layer refuses it.
-pub(crate) const UNLOCK_REFUSED: &str = "unlock refused, the service stays Locked";
 
 /// Why an unlock left the service where it was. No variant holds passphrase text.
 #[derive(Debug, thiserror::Error)]
@@ -348,9 +346,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             return Err(UnlockRefusal::WrongState(locked));
         }
         log_foreign_files(&self.require_initialized().await?);
-        let identity = self.open_identity(passphrase).await.inspect_err(|refusal| {
-            tracing::warn!("{UNLOCK_REFUSED}: {refusal}");
-        })?;
+        let identity = self
+            .open_identity(passphrase)
+            .await
+            .inspect_err(|refusal| UnlockRefused { refusal }.emit())?;
         self.check_and_settle_detached(service_wide, inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
             .await
             .map_err(|illegal| UnlockRefusal::WrongState(illegal.state))
@@ -770,11 +769,19 @@ fn lock_outcome(snapshots: usize, identity_holders: usize) -> LockOutcome {
             LockOutcome::Cleared
         }
         (0, _) => {
-            tracing::warn!("lock incomplete: the vault identity is still held by a request that ignores cancellation");
+            LockIncomplete {
+                snapshots_held: 0,
+                identity_held: true,
+            }
+            .emit();
             LockOutcome::IdentityHeld
         }
-        (snapshots, _) => {
-            tracing::warn!("lock drain expired: {snapshots} serving snapshot(s) are still held by requests that ignore cancellation");
+        (snapshots, holders) => {
+            LockIncomplete {
+                snapshots_held: snapshots as u64,
+                identity_held: holders > 0,
+            }
+            .emit();
             LockOutcome::Held { snapshots }
         }
     }

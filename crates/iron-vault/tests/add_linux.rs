@@ -442,11 +442,7 @@ fn captured_logs() -> Captured {
     CAPTURED
         .get_or_init(|| {
             let captured = Captured::default();
-            let subscriber = tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::TRACE)
-                .with_writer(captured.clone())
-                .with_ansi(false)
-                .finish();
+            let subscriber = iron_vault::logging::subscriber(captured.clone(), DeploymentProfile::current());
             tracing::subscriber::set_global_default(subscriber).unwrap();
             captured
         })
@@ -457,6 +453,15 @@ fn captured_logs() -> Captured {
 struct Captured(Arc<Mutex<Vec<u8>>>);
 
 impl Captured {
+    /// Every JSON record whose `event` is `event`.
+    fn events(&self, event: &str) -> Vec<serde_json::Value> {
+        self.text()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|record| record["event"] == event)
+            .collect()
+    }
+
     fn text(&self) -> String {
         String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner)).into_owned()
     }
@@ -612,13 +617,36 @@ async fn an_add_in_ready_writes_a_record_and_leaves_the_served_snapshot_alone() 
         "the add withdrew the served snapshot"
     );
     assert_eq!(get(&fixture, "fx").await.status, 200);
-    let line = format!("record_id={record_id}");
+    let added = logs.events("credential.added");
+    let record = added.iter().find(|record| record["record_id"] == record_id.to_string().as_str());
+    let record = record.unwrap_or_else(|| panic!("no credential.added for {record_id}: {}", logs.text()));
+    assert_eq!(
+        (record["level"].as_str(), record["kind"].as_str(), record["credential"].as_str()),
+        (Some("INFO"), Some("static"), Some("fx"))
+    );
     assert!(
-        logs.text()
-            .lines()
-            .any(|l| l.contains("credential.added") && l.contains(&line) && l.contains("kind=\"static\"")),
-        "{}",
-        logs.text()
+        record["origins"].as_str().is_some_and(|origins| origins.starts_with("https://")),
+        "{record}"
+    );
+    let mut keys: Vec<&str> = record.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "credential",
+            "deployment_profile",
+            "event",
+            "kind",
+            "level",
+            "message",
+            "origins",
+            "record_id",
+            "schema_version",
+            "service",
+            "service_version",
+            "target",
+            "timestamp"
+        ]
     );
     logs.assert_no_secret();
 }

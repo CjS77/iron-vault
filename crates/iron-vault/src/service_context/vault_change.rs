@@ -13,10 +13,13 @@ pub use plan::{CredentialChanged, CurrentRecord, VaultChangePlan};
 use std::sync::Arc;
 
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::{CredentialKind, CredentialName, Host, Port};
-use iron_vault_store::{PermittedOrigins, RecordId, StoreFs, Vault, VaultError, VaultIdentity};
+use iron_vault_policy::{CredentialKind, CredentialName};
+use iron_vault_store::{PermittedOrigins, RecordId, StoreFs, Vault, VaultError, VaultIdentity, WriteReport};
 
 use super::{Inner, ServiceContext, ServiceLocks};
+use crate::audit::AuditEvent;
+use crate::audit::credential::{CredentialAdded, CredentialRemoved, CredentialReplaced, Stored};
+use crate::audit::vault::{SupersededLeft, UnindexedRemoved};
 use crate::service_state::{AdminOperation, ServiceState};
 use crate::standing::{CredentialStanding, RecordSummary, Standing};
 use crate::vault_change_check::{AffectedRoute, PlannedChange};
@@ -101,20 +104,21 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         };
         let kind = kind_of(&material);
         let summary = summary_of(kind, &origins);
-        let logged = (name.clone(), origins_text(origins.iter()));
+        let logged = (name.clone(), origins.iter().cloned().collect::<Vec<_>>());
         let written = self.write_on_blocking_pool(identity, name, material, origins).await;
         let (name, origins) = logged;
         match written {
             Written::Added(record_id) => {
                 show_healthy(&mut inner, name.clone(), record_id, summary);
-                tracing::info!(
-                    event = "credential.added",
-                    credential = %name,
-                    kind = kind.as_str(),
-                    record_id = %record_id,
-                    origins = %origins,
-                    "credential `{name}` added; routes can use it from the next approval",
-                );
+                CredentialAdded {
+                    credential: &name,
+                    record_id,
+                    stored: Stored {
+                        kind: kind.as_str(),
+                        origins: &origins,
+                    },
+                }
+                .emit();
                 Ok(record_id)
             }
             Written::AddedUncertain(record_id) => {
@@ -155,38 +159,38 @@ fn log_committed(summary: &VaultChangeSummary, changed: &CredentialChanged) {
 }
 
 fn log_removed(name: &CredentialName, record_id: RecordId) {
-    tracing::info!(
-        event = "credential.removed",
-        credential = %name,
-        record_id = %record_id,
-        "credential `{name}` removed; no active route used it",
-    );
+    CredentialRemoved {
+        credential: name,
+        record_id,
+    }
+    .emit();
 }
 
 /// Only a healthy old record's kind and origins are known.
 fn log_replaced(name: &CredentialName, old: &CurrentRecord, record_id: RecordId, kind: &CredentialKind, origins: &PermittedOrigins) {
-    let (old_record_id, origins) = (old.record_id, origins_text(origins.iter()));
-    match &old.summary {
-        Some(old) => tracing::info!(
-            event = "credential.replaced",
-            credential = %name,
-            old_record_id = %old_record_id,
-            record_id = %record_id,
-            kind = kind.as_str(),
-            origins = %origins,
-            old_kind = old.kind.as_str(),
-            old_origins = %origins_text(old.origins.iter()),
-            "credential `{name}` replaced by record {record_id}",
-        ),
-        None => tracing::info!(
-            event = "credential.replaced",
-            credential = %name,
-            old_record_id = %old_record_id,
-            record_id = %record_id,
-            kind = kind.as_str(),
-            origins = %origins,
-            "credential `{name}` replaced by record {record_id}; the old record was damaged",
-        ),
+    let origins = origins.iter().cloned().collect::<Vec<_>>();
+    CredentialReplaced {
+        credential: name,
+        old_record_id: old.record_id,
+        record_id,
+        stored: Stored {
+            kind: kind.as_str(),
+            origins: &origins,
+        },
+        old: old.summary.as_ref().map(|old| Stored {
+            kind: old.kind.as_str(),
+            origins: &old.origins,
+        }),
+    }
+    .emit();
+}
+
+/// Emits what a committed vault write did besides its change: the unindexed record files it removed first, and a
+/// superseded record file it could not remove (the next vault write removes it).
+fn audit_write_report(report: &WriteReport) {
+    report.removed_unindexed().iter().for_each(|file| UnindexedRemoved { file }.emit());
+    if let Some((file, error_kind)) = report.left_unindexed().zip(report.left_unindexed_error_kind()) {
+        SupersededLeft { file, error_kind }.emit();
     }
 }
 
@@ -206,7 +210,10 @@ fn add_record(
     let added = vault.add(&locks.state, fs, name.clone(), material, origins);
     drop(vault);
     match added {
-        Ok((record_id, _)) => Written::Added(record_id),
+        Ok((record_id, report)) => {
+            audit_write_report(&report);
+            Written::Added(record_id)
+        }
         Err(VaultError::NameTaken(name)) => Written::Refused(VaultChangeRefusal::NameTaken(name)),
         Err(VaultError::InvalidMaterial(error)) => Written::Refused(VaultChangeRefusal::Invalid(error.to_string())),
         Err(VaultError::CommitUncertain(_)) => match listed_after_reopen(locks, fs, identity, &name) {
@@ -266,15 +273,6 @@ fn kind_of(material: &CredentialMaterial) -> CredentialKind {
         CredentialMaterial::Static { .. } => CredentialKind::Static,
         CredentialMaterial::Basic { .. } => CredentialKind::Basic,
     }
-}
-
-/// Origins as `host:port`, comma-separated in the order given, which for permitted origins is ascending, for the audit
-/// log.
-fn origins_text<'a>(origins: impl Iterator<Item = &'a (Host, Port)>) -> String {
-    origins
-        .map(|(host, port)| format!("{host}:{}", port.get()))
-        .collect::<Vec<_>>()
-        .join(",")
 }
 
 /// Each affected route's reason, which names the route, separated by `; `.

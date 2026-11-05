@@ -267,8 +267,8 @@ async fn the_scrub_event_names_the_route_and_credential_and_holds_no_secret_form
     // The event is raised when the server drops the body, which may come just after the caller reads the end.
     let event = tokio::time::timeout(WAIT, async {
         loop {
-            if let Some(event) = captured.text().lines().find(|line| line.contains("route=scrubev")) {
-                return event.to_owned();
+            if let Some(event) = scrub_events(&captured).into_iter().next() {
+                return event;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -277,16 +277,45 @@ async fn the_scrub_event_names_the_route_and_credential_and_holds_no_secret_form
     .unwrap();
 
     assert_eq!(response.status, 200);
-    let events = captured.text().lines().filter(|line| line.contains("route=scrubev")).count();
-    assert_eq!(events, 1, "{}", captured.text());
-    ["WARN", "scrubbed a secret", "credential=fx_basic", "matches=4"]
-        .iter()
-        .for_each(|wanted| assert!(event.contains(wanted), "{wanted} missing from {event}"));
+    assert_eq!(scrub_events(&captured).len(), 1, "{}", captured.text());
+    assert_eq!(
+        (event["level"].as_str(), event["credential"].as_str(), event["matches"].as_u64()),
+        (Some("WARN"), Some("fx_basic"), Some(4))
+    );
+    let mut keys: Vec<&str> = event.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "credential",
+            "deployment_profile",
+            "event",
+            "level",
+            "matches",
+            "message",
+            "route",
+            "schema_version",
+            "service",
+            "service_version",
+            "target",
+            "timestamp"
+        ]
+    );
     let logged = captured.text();
     leaked_forms()
         .iter()
         .chain([&token])
         .for_each(|form| assert!(!logged.contains(form.as_str()), "{form} was logged: {logged}"));
+}
+
+/// The `response.scrubbed` records of this test's own route.
+fn scrub_events(captured: &Captured) -> Vec<serde_json::Value> {
+    captured
+        .text()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|record| record["event"] == "response.scrubbed" && record["route"] == "scrubev")
+        .collect()
 }
 
 /// Everything this test binary logs, from a global subscriber installed on first use.
@@ -298,7 +327,7 @@ fn captured_logs() -> Captured {
     CAPTURED
         .get_or_init(|| {
             let captured = Captured::default();
-            let subscriber = tracing_subscriber::fmt().with_writer(captured.clone()).with_ansi(false).finish();
+            let subscriber = iron_vault::logging::subscriber(captured.clone(), iron_vault::deployment::DeploymentProfile::current());
             tracing::subscriber::set_global_default(subscriber).unwrap();
             captured
         })

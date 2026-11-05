@@ -14,6 +14,8 @@ use iron_vault_store::{
 use tokio::task::JoinError;
 
 use super::ServiceContext;
+use crate::audit::AuditEvent;
+use crate::audit::vault::{InitDiscarded, InitFailed, VaultInitialized};
 use crate::service_state::{AdminOperation, ServiceState};
 
 /// Why `init` wrote no vault, or may not have finished one. Each variant is one admin error code.
@@ -94,17 +96,15 @@ fn log_outcome(written: &Result<InitializedVault, InitError>) {
         .as_ref()
         .map_or_else(InitError::discarded, |vault| vault.discarded.as_slice());
     if !discarded.is_empty() {
-        let files = discarded.join(",");
-        tracing::warn!(event = "vault.init-discarded", %files, "an unfinished initialization was discarded");
+        InitDiscarded { files: discarded }.emit();
     }
     match written {
-        Ok(vault) => {
-            tracing::info!(event = "vault.initialized", vault_id = %vault.vault_id, "vault initialized; the service stays Locked");
+        Ok(vault) => VaultInitialized { vault_id: vault.vault_id }.emit(),
+        Err(error) if begin_refusal(error).is_none() => InitFailed::Step {
+            step: error.step(),
+            cause: error.cause(),
         }
-        Err(error) if begin_refusal(error).is_none() => {
-            let ((step, _), cause) = (step_names(error.step()), error.cause());
-            tracing::warn!(event = "vault.init-failed", %step, error = %cause, "vault initialization failed");
-        }
+        .emit(),
         Err(_) => {}
     }
 }
@@ -113,11 +113,7 @@ fn log_outcome(written: &Result<InitializedVault, InitError>) {
 /// task logs every other outcome itself.
 fn settled(written: Result<Result<InitializedVault, InitError>, JoinError>) -> Result<InitializedVault, InitRefusal> {
     let Ok(written) = written else {
-        tracing::warn!(
-            event = "vault.init-failed",
-            step = "unknown",
-            "vault initialization did not finish: its task ended"
-        );
+        InitFailed::TaskEnded.emit();
         return Err(InitRefusal::Interrupted);
     };
     written.map_err(|error| begin_refusal(&error).unwrap_or(InitRefusal::Failed(error)))

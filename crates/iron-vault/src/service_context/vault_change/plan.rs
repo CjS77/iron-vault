@@ -21,13 +21,11 @@ use std::sync::Arc;
 
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::CredentialName;
-use iron_vault_store::{
-    ApprovalPassphrase, PermittedOrigins, PinnedApprover, RecordId, StoreFs, Vault, VaultError, VaultIdentity, WriteReport,
-};
+use iron_vault_store::{ApprovalPassphrase, PermittedOrigins, PinnedApprover, RecordId, StoreFs, Vault, VaultError, VaultIdentity};
 use tokio::sync::OwnedMutexGuard;
 
 use super::super::{Inner, OpenVault, OwnerPresence, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, log_task_crash};
-use super::{VaultChangeRefusal, kind_of, log_committed};
+use super::{VaultChangeRefusal, audit_write_report, kind_of, log_committed};
 use crate::service_state::{AdminOperation, ServiceEvent, ServiceState};
 use crate::serving_snapshot::Admission;
 use crate::standing::{CredentialStanding, RecordSummary, Standing};
@@ -277,19 +275,12 @@ fn write_record(locks: &ServiceLocks, fs: &impl StoreFs, identity: Arc<VaultIden
     drop(vault);
     match written {
         Ok((changed, report)) => {
-            warn_left_unindexed(&report);
+            audit_write_report(&report);
             Written::Committed(changed)
         }
         Err(VaultError::UnknownName(name)) => Written::Refused(VaultChangeRefusal::UnknownCredential(name)),
         Err(VaultError::InvalidMaterial(error)) => Written::Refused(VaultChangeRefusal::Invalid(error.to_string())),
         Err(VaultError::CommitUncertain(error)) => Written::Uncertain(error.to_string()),
         Err(other) => Written::Refused(VaultChangeRefusal::Failed(other.to_string())),
-    }
-}
-
-/// Warns of a superseded record file the write could not remove; the next vault write removes it.
-fn warn_left_unindexed(report: &WriteReport) {
-    if let Some(file) = report.left_unindexed() {
-        tracing::warn!(%file, "a superseded record file could not be removed; the next vault write removes it");
     }
 }

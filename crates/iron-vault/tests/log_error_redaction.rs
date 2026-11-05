@@ -26,7 +26,7 @@ const LOG_MACROS: [&str; 6] = ["trace!(", "debug!(", "info!(", "warn!(", "error!
 /// file names and `io::ErrorKind`s, never a library error's text. Some also render a full configured path (`OpenError`,
 /// `AdoptError`, `InitError`), which the design does not yet rule on; this list is about library text only. Each is
 /// `(file, formatted expression)`, once per site.
-const DOMAIN_ERRORS: [(&str, &str); 18] = [
+const DOMAIN_ERRORS: [(&str, &str); 16] = [
     // `FrameError`: the admin protocol's own decoding errors.
     ("crates/iron-vault/src/admin/server.rs", "{e}"),
     ("crates/iron-vault/src/admin/server.rs", "{e}"),
@@ -42,8 +42,6 @@ const DOMAIN_ERRORS: [(&str, &str); 18] = [
     // The store's `ApprovalError`, and its `SignError` for a wrong passphrase or key.
     ("crates/iron-vault/src/service_context/approval.rs", "%error"),
     ("crates/iron-vault/src/service_context/presence.rs", "%error"),
-    // The store's `InitError` cause.
-    ("crates/iron-vault/src/service_context/init.rs", "%cause"),
     // The store's `RemoveStagingError` and `VerifyError`.
     ("crates/iron-vault-store/src/approval/recovery.rs", "%error"),
     ("crates/iron-vault-store/src/approval/recovery.rs", "%error"),
@@ -54,7 +52,6 @@ const DOMAIN_ERRORS: [(&str, &str); 18] = [
     ("crates/iron-vault-store/src/approval/state.rs", "%error"),
     ("crates/iron-vault-store/src/approval/transaction.rs", "%error"),
     ("crates/iron-vault-store/src/approval/transaction.rs", "%error"),
-    ("crates/iron-vault-store/src/vault/write.rs", "%error"),
     ("crates/iron-vault-store/src/vault/write.rs", "%error"),
 ];
 

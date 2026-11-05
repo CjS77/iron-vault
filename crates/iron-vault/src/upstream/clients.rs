@@ -10,6 +10,8 @@ use iron_vault_policy::{ActivePolicy, RouteName};
 
 use super::client::{ClientBuildError, TransportLimits, UpstreamClient};
 use super::trust::{PinnedCaError, UpstreamTrust};
+use crate::audit::AuditEvent;
+use crate::audit::route::PinnedCaUnavailable;
 use crate::deployment::DeploymentProfile;
 use crate::trusted_path::ExpectedOwner;
 
@@ -108,12 +110,7 @@ impl UpstreamClients {
     pub fn mark_unusable_routes(&self, policy: ActivePolicy) -> ActivePolicy {
         let unusable: Vec<&RouteName> = self.unusable_routes().map(|(route, _)| route).collect();
         unusable.iter().for_each(|route| {
-            tracing::warn!(
-                event = "route.pinned-ca-unavailable",
-                route = %route,
-                field = "ca_file",
-                "the route's pinned CA could not be loaded; the route is unavailable",
-            );
+            PinnedCaUnavailable { route }.emit();
         });
         policy.with_pinned_ca_unavailable(unusable)
     }

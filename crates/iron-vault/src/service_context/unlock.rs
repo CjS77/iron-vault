@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use iron_vault_store::{StoreFs, require_initialized};
 
-use super::{ServiceContext, UNLOCK_REFUSED, UnlockRefusal};
+use super::{ServiceContext, UnlockRefusal};
+use crate::audit::AuditEvent;
+use crate::audit::vault::{ForeignFile, UnlockRefused};
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Reads the initialization state on the blocking pool under the service's own directory locks and returns the
@@ -18,14 +20,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             .await
             .map_err(|_| UnlockRefusal::Interrupted)?
             .map_err(UnlockRefusal::Failed)
-            .inspect_err(|refusal| tracing::warn!("{UNLOCK_REFUSED}: {refusal}"))
+            .inspect_err(|refusal| UnlockRefused { refusal }.emit())
     }
 }
 
-/// Logs each foreign file by name at WARN, `vault.foreign-file`, and never its contents. `unlock` goes on regardless:
+/// Records each foreign file by escaped name as `vault.foreign-file`, and never its contents. `unlock` goes on regardless:
 /// the manifest alone decides which files belong to the vault.
 pub(crate) fn log_foreign_files(files: &[String]) {
-    files.iter().for_each(
-        |file| tracing::warn!(event = "vault.foreign-file", file = %file.escape_debug(), "unlock found a file that is not the vault's"),
-    );
+    files.iter().for_each(|file| ForeignFile { file }.emit());
 }

@@ -12,6 +12,12 @@
 #[cfg(test)]
 #[cfg(target_os = "linux")]
 mod tests;
+#[cfg(test)]
+mod vault_events_tests;
+
+pub mod credential;
+pub mod route;
+pub mod vault;
 
 use iron_vault_policy::ApprovalSummary;
 use iron_vault_store::{ApprovalError, ApprovalFailure, ApprovalStep, ApprovalVersion, ConfigDigest};

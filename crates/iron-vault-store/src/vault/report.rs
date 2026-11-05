@@ -5,7 +5,7 @@ use std::fmt;
 
 use iron_vault_policy::CredentialName;
 
-use crate::StateFileName;
+use crate::{ErrorKindLabel, StateFileName};
 
 /// Why a record the manifest lists did not load (spec §3.10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -93,11 +93,11 @@ impl OpenReport {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WriteReport {
     removed_unindexed: BTreeSet<StateFileName>,
-    left_unindexed: Option<StateFileName>,
+    left_unindexed: Option<(StateFileName, ErrorKindLabel)>,
 }
 
 impl WriteReport {
-    pub(super) fn new(removed_unindexed: BTreeSet<StateFileName>, left_unindexed: Option<StateFileName>) -> Self {
+    pub(super) fn new(removed_unindexed: BTreeSet<StateFileName>, left_unindexed: Option<(StateFileName, ErrorKindLabel)>) -> Self {
         Self {
             removed_unindexed,
             left_unindexed,
@@ -111,6 +111,11 @@ impl WriteReport {
 
     /// The superseded record file the write could not remove after its commit; the next write removes it.
     pub fn left_unindexed(&self) -> Option<&StateFileName> {
-        self.left_unindexed.as_ref()
+        self.left_unindexed.as_ref().map(|(file, _)| file)
+    }
+
+    /// Why the superseded record file could not be removed, as a label that holds no error text.
+    pub fn left_unindexed_error_kind(&self) -> Option<&ErrorKindLabel> {
+        self.left_unindexed.as_ref().map(|(_, kind)| kind)
     }
 }

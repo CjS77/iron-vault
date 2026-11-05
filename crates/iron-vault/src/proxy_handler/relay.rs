@@ -22,6 +22,8 @@ use iron_vault_policy::reserved_headers::HOP_BY_HOP_HEADERS;
 use iron_vault_policy::{CredentialName, HeaderName, Limits, LocationRewrite, Method, RouteConfig, RouteName, rewrite_location};
 use url::Url;
 
+use crate::audit::AuditEvent;
+use crate::audit::route::ResponseScrubbed;
 use crate::content_coding::{
     BudgetExceeded, ContentCoding, DecodeError, DecompressionBudget, EncodeError, ResponseDecoder, ResponseEncoder, choose_emitted,
     parse_content_encoding, rewrite_headers,
@@ -459,7 +461,12 @@ impl Drop for RelayedBody {
     fn drop(&mut self) {
         let matches = self.total_matches();
         if matches > 0 {
-            tracing::warn!(route = %self.route, credential = %self.credential, matches, "scrubbed a secret from a response");
+            ResponseScrubbed {
+                route: &self.route,
+                credential: &self.credential,
+                matches,
+            }
+            .emit();
         }
     }
 }

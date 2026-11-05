@@ -8,7 +8,7 @@ use iron_vault_policy::Port;
 use secrecy::ExposeSecret;
 use tracing::Level;
 
-use super::tests::{assert_no_secret_logged, capture_logs, identity, init_test_tracing, n, record, sealed, secret};
+use super::tests::{capture_logs, identity, init_test_tracing, n, record, sealed, secret};
 use super::*;
 use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::test_dir::TestDir;
@@ -342,9 +342,8 @@ fn a_write_first_removes_unindexed_files_and_reports_them() {
     let (_, written) = written.unwrap();
     assert_eq!(written.removed_unindexed(), &[file.clone()].into());
     assert_eq!(fs.contents(&setup.path(&file)), None);
-    assert_eq!(events.len(), 1, "{events:?}");
-    assert_eq!((events[0].level, events[0].field("file")), (Level::WARN, file.as_str()));
-    assert_no_secret_logged(&events, &["planted", "fresh"]);
+    // The service emits the audit event from the report; the store logs nothing.
+    assert!(events.is_empty(), "{events:?}");
     let (_, report) = setup.open(&fs).unwrap();
     assert_eq!(report, OpenReport::default());
 }
@@ -358,12 +357,12 @@ fn a_superseded_file_that_cannot_be_removed_is_reported_and_removed_by_the_next_
     let (written, events) = capture_logs(|| setup.replace(&fs, &mut vault, "target", 2));
     let (_, written) = written.unwrap();
     assert_eq!(written.left_unindexed(), Some(&old));
-    assert_eq!(state(&vault), expected(&[("keep", 1), ("target", 2)]));
     assert_eq!(
-        (events.len(), events[0].level, events[0].field("file")),
-        (1, Level::WARN, old.as_str())
+        written.left_unindexed_error_kind().map(ErrorKindLabel::as_str),
+        Some("permission_denied")
     );
-    assert_no_secret_logged(&events, &SEEDED);
+    assert_eq!(state(&vault), expected(&[("keep", 1), ("target", 2)]));
+    assert!(events.is_empty(), "{events:?}");
 
     let (_, next) = setup.add(&fs, &mut vault, "fresh", 1).unwrap();
     assert_eq!(next.removed_unindexed(), &[old].into());

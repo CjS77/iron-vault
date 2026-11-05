@@ -16,6 +16,7 @@ use iron_vault_kinds::{CredentialMaterial, ShortSecret};
 use iron_vault_policy::CredentialName;
 
 use super::{Vault, VaultError, WriteReport, approval_generations, list_state_dir, refuse_partial_restore, unindexed_files};
+use crate::ErrorKindLabel;
 use crate::{
     ApprovalState, CredentialRecord, MAX_MANIFEST_LEN, ManifestEntry, PermittedOrigins, PinnedApprover, RecordId, Source, StateDirLock,
     StateFileName, StateGeneration, StoreFs, VaultIdentity, VaultManifest, WriteError, WriteStep, durable_remove, durable_replace, encode,
@@ -300,34 +301,28 @@ fn discard(lock: &StateDirLock, fs: &impl StoreFs, id: RecordId) {
 
 fn remove_unindexed_file(lock: &StateDirLock, fs: &impl StoreFs, file: &StateFileName) -> Result<(), VaultError> {
     match durable_remove(lock, fs, file) {
-        Ok(()) | Err(WriteError::NotFound { .. }) => {
-            tracing::warn!(
-                file = %file,
-                remediation = "none if a vault write was interrupted; otherwise investigate who can write to the state directory",
-                "removed a record file the vault manifest does not list"
-            );
-            Ok(())
-        }
+        Ok(()) | Err(WriteError::NotFound { .. }) => Ok(()),
         Err(error) => Err(VaultError::Write(error)),
     }
 }
 
 /// Removes the record file a committed write superseded, returning its name if it may remain. The write has already
-/// committed, so a failure here is not an error: the file is unindexed and the next write removes it.
-fn remove_superseded(lock: &StateDirLock, fs: &impl StoreFs, old: RecordId) -> Option<StateFileName> {
+/// committed, so a failure here is not an error: the file is unindexed and the next write removes it. The failure's kind
+/// goes into the write report, which the service audits.
+fn remove_superseded(lock: &StateDirLock, fs: &impl StoreFs, old: RecordId) -> Option<(StateFileName, ErrorKindLabel)> {
     let file = StateFileName::record(&old);
     match durable_remove(lock, fs, &file) {
         // A damaged record's file may already be missing.
         Ok(()) | Err(WriteError::NotFound { .. }) => None,
-        Err(error) => {
-            tracing::warn!(
-                file = %file,
-                error = %error,
-                remediation = "none: the next vault write removes it",
-                "superseded record file could not be removed after the vault write committed"
-            );
-            Some(file)
-        }
+        Err(error) => Some((file, write_error_label(&error))),
+    }
+}
+
+/// The kind of a failed state file operation, without its text.
+fn write_error_label(error: &WriteError) -> ErrorKindLabel {
+    match error {
+        WriteError::Io { kind, .. } | WriteError::ListStateDir { kind } => ErrorKindLabel::from(*kind),
+        WriteError::NotFound { .. } => ErrorKindLabel::fixed("not_found"),
     }
 }
 

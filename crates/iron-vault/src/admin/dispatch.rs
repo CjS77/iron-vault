@@ -17,6 +17,8 @@ use super::replace::Replace;
 use super::rm::Rm;
 use super::server::{Exchange, ExchangeError};
 use super::unlock::Unlock;
+use crate::audit::AuditEvent;
+use crate::audit::credential::{TokenFailed, TokenIssued};
 use crate::caller_token::generate_caller_token;
 use crate::deployment::DeploymentProfile;
 use crate::library_error::LibraryError;
@@ -152,14 +154,14 @@ impl AdminHandler for IssueCallerToken {
     fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
         let response = match generate_caller_token() {
             Ok(token) => {
-                tracing::info!(
-                    event = "caller.token-issued",
-                    "a caller token was issued; the service keeps no copy"
-                );
+                TokenIssued.emit();
                 AdminResponse::CallerToken { token }
             }
             Err(e) => {
-                tracing::error!(event = "caller.token-failed", error_kind = %e.kind_label(), "no caller token was issued");
+                TokenFailed {
+                    error_kind: &e.kind_label(),
+                }
+                .emit();
                 AdminResponse::Error {
                     code: ErrorCode::RandomSourceFailed,
                     message: format!("no caller token was issued: {e}"),

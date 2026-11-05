@@ -17,6 +17,7 @@ pub mod config_path;
 pub mod confirmation;
 pub mod credential_kind;
 mod display;
+pub use display::escaped;
 mod escape;
 pub mod final_check;
 pub mod header_name;
