@@ -519,7 +519,8 @@ The order is fixed, so the same two configs always give the same text:
    restart" ([open question 2](#open-questions)).
 6. **Limits**: each operational limit that changed, old → new.
 7. **Logging**: the log destination, old → new, when `[logging] destination` changes, including a change to or from
-   the default; a default is shown as the bootstrap destination it resolves to. A moved directory adds the line
+   the default; a default is shown as `default`, not as the bootstrap destination it resolves to, so the text depends
+   only on the two configs and not on the deployment profile. A moved directory adds the line
    "add a logrotate rule for the new directory", since the shipped rule names only the default
    ([audit-logging.md](audit-logging.md#log-destination)). The audit log is where every later change is recorded, so
    moving it is never hidden.
@@ -530,15 +531,16 @@ Within each section, entries are in name order (`BTreeMap` order). Each entry is
 changed. Every configured name is printed through the configured-name escaping, so a hostile name cannot forge a
 summary line ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)).
 
-The **headline** is one line of counts per section, such as `callers: 1 added, 2 changed; route grants: 3 added;
-routes: 1 changed; listeners: none; limits: none; logging: none`. It is bounded whatever the config size, so it fits in the
+The **headline** is one line of counts per section, such as `callers: 1 added, 2 changed; route grants: 3 added; routes:
+1 changed; listeners: none; limits: none; logging: none`. It is bounded whatever the config size, so it fits in the
 command's result.
 
 ## Audit events
 
-Each event has a distinct name, so a reserved version is never mistaken for a completed approval ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). They are
-audit events in the audit log; [audit-logging.md](audit-logging.md#audit-events) gives each one's exact field names and
-types, and the record shape they share. None carries config bytes, signature bytes, key material or a passphrase.
+Each event has a distinct name, so a reserved version is never mistaken for a completed approval
+([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). They are audit events in the audit log;
+[audit-logging.md](audit-logging.md#audit-events) gives each one's exact field names and types, and the record shape
+they share. None carries config bytes, signature bytes, key material or a passphrase.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
