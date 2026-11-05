@@ -138,6 +138,18 @@ pub enum InvalidConfig {
     /// The policy and the vault disagree about which routes are available.
     #[error(transparent)]
     Snapshot(SnapshotError),
+    /// The log destination the config chooses cannot be opened or verified.
+    #[error("the log destination is unusable")]
+    LogDestination(UnusableLog),
+}
+
+/// A log destination the config check, or `config approve`'s pre-check, refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnusableLog {
+    /// The destination in `log_destination`'s form: configuration the owner approved, recorded in a field of its own.
+    pub destination: String,
+    /// The fixed phrase of the check that refused it, which never holds the path.
+    pub phrase: String,
 }
 
 /// The status text for a recovery refusal. A file that cannot be read, before recovery or in the read-back after its
@@ -194,6 +206,14 @@ impl CheckFailure {
         }
     }
 
+    /// The log destination that failed the check, when that is why it failed.
+    pub fn log_destination(&self) -> Option<&str> {
+        match self {
+            Self::Config(InvalidConfig::LogDestination(unusable)) => Some(&unusable.destination),
+            _ => None,
+        }
+    }
+
     /// The failure of a check whose task ended without a result, logged as every check failure is.
     pub(crate) fn interrupted() -> Self {
         let failure = Self::Interrupted;
@@ -212,6 +232,7 @@ impl InvalidConfig {
             Self::Activation(errors) => errors.iter().map(activation_detail).collect::<Vec<_>>().join("; "),
             Self::Clients(error) => error.to_string(),
             Self::Snapshot(error) => error.to_string(),
+            Self::LogDestination(unusable) => unusable.phrase.clone(),
         }
     }
 }

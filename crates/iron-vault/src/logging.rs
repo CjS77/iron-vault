@@ -4,7 +4,8 @@
 //! values, so no value can start a second record. The writer is a parameter, so the destination can change without
 //! touching the format: [`LogFile`] appends to `iron-vault.log` in a verified log directory, [`LogStdout`] writes to
 //! stdout for Docker, and either trips [`LogFailure`] on its first failed write so `serve` stops rather than run without
-//! its audit log. [`install`] opens the destination and installs the subscriber on it.
+//! its audit log. [`install`] opens the bootstrap destination and installs the subscriber on a [`LogSwitch`] holding it,
+//! which a config check can later point at the destination the approved config chooses.
 //!
 //! At `DEBUG` and `TRACE`, `hyper` and `h2` log frames and headers, and those headers carry the injected credential
 //! (§3.7, §3.15). [`dependency_caps`] is installed as its own layer, so no global level, `RUST_LOG` value or trace
@@ -24,6 +25,8 @@ mod destination;
 mod log_file;
 #[cfg(target_os = "linux")]
 mod log_stdout;
+#[cfg(target_os = "linux")]
+mod switch;
 mod writer;
 
 #[cfg(target_os = "linux")]
@@ -32,6 +35,8 @@ pub use destination::{LogDestination, LogOpenError, install};
 pub use log_file::{FileProblem, LOG_FILE_NAME, LogDir, LogFile};
 #[cfg(target_os = "linux")]
 pub use log_stdout::{JOURNAL_STREAM, LogStdout};
+#[cfg(target_os = "linux")]
+pub use switch::{LogOpener, LogSwitch, LogWriter, OpenedLog, SwitchedWriter};
 pub use writer::LogFailure;
 
 use tracing::{Event, Subscriber};

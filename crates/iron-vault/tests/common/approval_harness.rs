@@ -24,6 +24,7 @@ use iron_vault::admin::socket::AdminSocket;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
+use iron_vault::logging::LogSwitch;
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
 use iron_vault::service_state::ServiceState;
@@ -202,6 +203,12 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
 
     /// [`start`](Self::start) with every vault and config file going through `fs`.
     pub async fn start_on<F: StoreFs + Send + Sync + 'static>(&self, fs: F) -> Arc<ServiceContext<F>> {
+        self.start_logging(fs, LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap())
+            .await
+    }
+
+    /// [`start_on`](Self::start_on), with the service moving its log through `log`.
+    pub async fn start_logging<F: StoreFs + Send + Sync + 'static>(&self, fs: F, log: LogSwitch) -> Arc<ServiceContext<F>> {
         let paths = ServicePaths {
             profile: DeploymentProfile::Development,
             owner: invoking_user().unwrap(),
@@ -222,7 +229,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
                 core_dumps: CoreDumps::Disabled,
                 memory: MemoryProtection::Unsupported,
             },
-            log_failure: iron_vault::logging::LogFailure::default(),
+            log,
         };
         let service = Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap());
         service.enter_checking(identity()).await.unwrap();

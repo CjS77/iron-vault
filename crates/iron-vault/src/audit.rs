@@ -29,7 +29,7 @@ pub use request::{Ending, REQUEST_TARGET, ReasonCode, RequestFacts, RequestId, R
 use iron_vault_policy::ApprovalSummary;
 use iron_vault_store::{ApprovalError, ApprovalFailure, ApprovalStep, ApprovalVersion, ConfigDigest};
 
-use crate::config_check::CheckFailure;
+use crate::config_check::{CheckFailure, InvalidConfig};
 use crate::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 #[cfg(target_os = "linux")]
 use crate::logging::LogDestination;
@@ -142,6 +142,35 @@ impl AuditEvent for HardeningIncomplete<'_> {
             memory_protection = memory_label(&self.hardening.memory),
             remediation = self.remediation().as_str(),
             "process hardening is incomplete",
+        );
+    }
+}
+
+/// `service.log-destination-changed`: an activated config moved the log. It is written to the old destination and again
+/// as the new one's first record, so each says where the log went or came from.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone)]
+pub struct LogDestinationChanged {
+    /// Where records go from now on.
+    pub destination: LogDestination,
+    /// Where they went before.
+    pub previous: LogDestination,
+    /// The approval version whose config moved the log.
+    pub version: Option<ApprovalVersion>,
+}
+
+#[cfg(target_os = "linux")]
+impl AuditEvent for LogDestinationChanged {
+    const NAME: EventName = EventName("service.log-destination-changed");
+
+    fn emit(&self) {
+        tracing::info!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            log_destination = self.destination.to_string().as_str(),
+            previous_log_destination = self.previous.to_string().as_str(),
+            version = self.version.map(ApprovalVersion::get),
+            "log destination changed",
         );
     }
 }
@@ -308,6 +337,7 @@ impl AuditEvent for CheckFailed<'_> {
             unavailable_reason = unavailable_label(self.failure.unavailable()),
             failure = check_failure_label(self.failure),
             detail = self.failure.detail().as_str(),
+            log_destination = self.failure.log_destination(),
             "the config check failed",
         );
     }
@@ -385,6 +415,7 @@ const fn check_failure_label(failure: &CheckFailure) -> &'static str {
         CheckFailure::Vault(_) => "vault_damaged",
         CheckFailure::ApprovalState(_) => "approval_state_damaged",
         CheckFailure::Recovery(_) => "recovery_refused",
+        CheckFailure::Config(InvalidConfig::LogDestination(_)) => "log_destination_unusable",
         CheckFailure::Config(_) => "config_invalid",
         CheckFailure::Interrupted => "check_interrupted",
     }

@@ -81,6 +81,21 @@ impl LogDir {
     }
 }
 
+impl LogDir {
+    /// Checks an existing `iron-vault.log` against the log file rule through this descriptor, opening nothing: a missing
+    /// file passes, since the service creates it when it switches. `AT_SYMLINK_NOFOLLOW` makes a planted symlink fail as
+    /// not a regular file.
+    pub fn check_log_file(&self, owner: ExpectedOwner) -> Result<(), LogOpenError> {
+        match statat(&self.fd, LOG_FILE_NAME, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) => verify_file(&stat, owner).map_err(LogOpenError::from),
+            Err(Errno::NOENT) => Ok(()),
+            Err(errno) => Err(LogOpenError::File {
+                kind: io::Error::from(errno).kind(),
+            }),
+        }
+    }
+}
+
 /// An open file or directory as a trusted-path component, from the metadata of its descriptor.
 fn describe(path: &Path, stat: &Stat) -> PathComponent {
     PathComponent {

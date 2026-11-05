@@ -13,10 +13,12 @@ use std::path::{Path, PathBuf};
 
 use tracing_subscriber::util::TryInitError;
 
-use super::log_file::{FileProblem, LogDir, LogFile};
-use super::log_stdout::LogStdout;
+use super::log_file::FileProblem;
+use super::switch::{LogOpener, LogSwitch};
 use super::writer::LogFailure;
 use crate::deployment::{DeploymentProfile, ProfileEnv, ProfileError, bootstrap_log_dir};
+use crate::path_metadata::CollectError;
+use crate::trusted_path::Problem;
 use crate::trusted_path_report::PathFailure;
 
 /// The mode of a development log directory the service creates, like the development state and config directories.
@@ -99,7 +101,8 @@ pub enum LogOpenError {
     AlreadyInstalled(#[from] TryInitError),
 }
 
-/// Opens `destination` and installs the subscriber on it, tripping `failure` on the first failed write.
+/// Opens `destination` and installs the subscriber on a [`LogSwitch`] holding it, tripping a new latch on the first failed
+/// write. The switch is returned so a config check can move the log, and its latch so `serve` can stop on it.
 ///
 /// A development build creates a missing log directory, like its state and config directories; a protected install's
 /// belongs to the package (`LogsDirectory=`), so a missing one fails the check.
@@ -108,17 +111,57 @@ pub fn install(
     profile: DeploymentProfile,
     env: &ProfileEnv,
     journal_stream: Option<&OsStr>,
-    failure: LogFailure,
-) -> Result<(), LogOpenError> {
-    match destination {
-        LogDestination::Stdout => super::init(LogStdout::open(journal_stream, failure)?, profile)?,
-        LogDestination::Directory(path) => {
-            let owner = env.service_owner(profile)?;
-            create_development_dir(profile, path)?;
-            super::init(LogFile::open(LogDir::open(path, profile, owner)?, owner, failure)?, profile)?
+) -> Result<LogSwitch, LogOpenError> {
+    let owner = env.service_owner(profile)?;
+    if let LogDestination::Directory(path) = destination {
+        create_development_dir(profile, path)?;
+    }
+    let opener = LogOpener::new(profile, owner, journal_stream.map(OsStr::to_os_string), LogFailure::default());
+    let switch = LogSwitch::open(destination.clone(), opener)?;
+    super::init(switch.clone(), profile)?;
+    Ok(switch)
+}
+
+impl LogOpenError {
+    /// The fixed phrase a config check's `detail` gives for this error. It never holds a path or an OS error's text, since
+    /// the destination is recorded in a field of its own.
+    pub fn phrase(&self) -> String {
+        match self {
+            Self::Owner(_) => "the service account cannot be found".to_owned(),
+            Self::Untrusted(PathFailure::Unsafe(path)) => problem_phrase(&path.problem).to_owned(),
+            Self::Untrusted(PathFailure::Uncollected(CollectError::Io { kind, .. })) | Self::Directory { kind, .. } => {
+                directory_phrase(*kind).to_owned()
+            }
+            Self::Untrusted(PathFailure::Uncollected(_)) => directory_phrase(io::ErrorKind::Other).to_owned(),
+            Self::DirectoryReplaced { .. } => "the log directory was replaced while it was being checked".to_owned(),
+            Self::File { .. } => "the log file cannot be opened".to_owned(),
+            Self::UnsafeFile(problem) => format!("the log file is {problem}"),
+            Self::Stdout { .. } => "stdout cannot be used".to_owned(),
+            Self::StdoutIsJournal => "stdout may be the systemd journal".to_owned(),
+            Self::AlreadyInstalled(_) => "a log subscriber is already installed".to_owned(),
         }
     }
-    Ok(())
+}
+
+const fn directory_phrase(kind: io::ErrorKind) -> &'static str {
+    match kind {
+        io::ErrorKind::NotFound => "the log directory does not exist",
+        _ => "the log directory cannot be opened",
+    }
+}
+
+/// One phrase per trusted-path problem a log directory can have; the problem's own text can name a uid, gid or mode.
+const fn problem_phrase(problem: &Problem) -> &'static str {
+    match problem {
+        Problem::WrongOwner { .. } => "the log directory, or a directory above it, has an owner the log directory rule refuses",
+        Problem::WritableByGroup { .. } => "the log directory, or a directory above it, is writable by its group",
+        Problem::WritableByOthers => "the log directory, or a directory above it, is writable by others",
+        Problem::ModeTooOpen { .. } | Problem::WrongMode { .. } => "the log directory's mode is too open",
+        Problem::NotADirectory => "the log destination is not a directory",
+        Problem::UntrustedSymlink => "the log directory's path passes through a symlink root does not control",
+        Problem::SymlinkLoop => "the log directory's path has a symlink loop",
+        _ => "the log directory fails the log directory rule",
+    }
 }
 
 /// Creates the development log directory and any missing parents at `0700`; an existing directory keeps its mode, so a

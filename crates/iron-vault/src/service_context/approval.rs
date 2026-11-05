@@ -29,7 +29,9 @@ use iron_vault_store::{
 };
 use tokio::sync::OwnedMutexGuard;
 
-use super::{DenialKind, Inner, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_task_crash};
+use super::{
+    DenialKind, Inner, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_destination, log_task_crash,
+};
 use crate::admin::protocol::ApprovalResult;
 use crate::audit::corruption::open_vault;
 use crate::audit::{ActivationCause, ActivationFailed, ApprovalCompleted, ApprovalFailed, ApprovalRefused, AuditEvent};
@@ -149,10 +151,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         Ok((started, identity, active))
     }
 
-    /// The pending config activated against `vault`, once its upstream clients build.
+    /// The pending config activated against `vault`, once its upstream clients build and the log destination it chooses
+    /// passes its pre-check.
     fn servable(&self, bytes: &[u8], vault: &Vault) -> Result<ActivePolicy, InvalidConfig> {
         let policy = activate_config(bytes, &self.setup.capabilities, vault, &self.setup.accounts)?;
         self.setup.upstream.clients(&policy).map_err(InvalidConfig::Clients)?;
+        log_destination::precheck(policy.config(), &self.setup.log, &self.setup.paths)?;
         Ok(policy)
     }
 

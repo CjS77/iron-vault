@@ -16,7 +16,7 @@ use iron_vault::admin::socket::AdminSocket;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, OVERFLOW_UID_FILE, PasswdDirectory};
 use iron_vault::hardening::HardeningReport;
-use iron_vault::logging::LogFailure;
+use iron_vault::logging::{LogFailure, LogSwitch};
 use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
 use iron_vault::socket_activation::{ActivationEnv, PassedSockets};
 use iron_vault::trusted_path_report::{self, ServicePaths, TrustedPathReport};
@@ -25,9 +25,10 @@ use iron_vault_policy::Capabilities;
 use iron_vault_store::OsFs;
 use tokio::signal::unix::{SignalKind, signal};
 
-/// Runs the service of the installation at `paths` until it is told to stop, or until a log write fails: the service
-/// never runs without its audit log, so that stops it as SIGTERM does and then fails the run.
-pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport, log_failure: LogFailure) -> anyhow::Result<()> {
+/// Runs the service of the installation at `paths`, logging through `log`, until it is told to stop, or until a log
+/// write fails: the service never runs without its audit log, so that stops it as SIGTERM does and then fails the run.
+pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport, log: LogSwitch) -> anyhow::Result<()> {
+    let log_failure = log.failure().clone();
     let runtime_dir = paths
         .runtime_dir
         .as_deref()
@@ -53,7 +54,7 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport,
         capabilities: Capabilities::default(),
         upstream: UpstreamSettings::new(paths.profile, paths.owner, TransportLimits::default()),
         hardening,
-        log_failure: log_failure.clone(),
+        log,
     };
     // Everything that can fail or be interrupted comes before binding the admin socket, so once its file exists the
     // server owns it and removes it on every exit.

@@ -16,7 +16,7 @@ use iron_vault::audit::{AuditEvent, HardeningIncomplete, ServiceStarted};
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::hardening;
 #[cfg(target_os = "linux")]
-use iron_vault::logging::{self, LogDestination, LogFailure};
+use iron_vault::logging::{self, LogDestination, LogSwitch};
 #[cfg(target_os = "linux")]
 use iron_vault::trusted_path_report::ServicePaths;
 
@@ -69,12 +69,12 @@ fn run_service(log_to_stdout: bool) -> anyhow::Result<()> {
     let accounts = Accounts::read()?;
     let env = ProfileEnv::from_process(&accounts)?;
     let destination = LogDestination::bootstrap(DeploymentProfile::current(), &env, log_to_stdout)?;
-    let failure = init_logging(&env, &destination)?;
+    let log = init_logging(&env, &destination)?;
     log_startup(&destination, &report);
     #[cfg(feature = "dev-mode")]
     warn_development(&env, &accounts)?;
     let paths = ServicePaths::for_profile(DeploymentProfile::current(), &env)?;
-    serve::run(&paths, accounts, report, failure)
+    serve::run(&paths, accounts, report, log)
 }
 
 /// The admin socket needs a peer-credential adapter, which only Linux has so far.
@@ -105,14 +105,11 @@ fn log_startup(destination: &LogDestination, report: &hardening::HardeningReport
     }
 }
 
-/// Opens the bootstrap log destination and installs the log subscriber on it, returning the latch its first failed write
-/// trips. A destination that cannot be used stops the service here, before any socket is bound.
+/// Opens the bootstrap log destination and installs the log subscriber on it, returning the switch that holds it. A
+/// destination that cannot be used stops the service here, before any socket is bound.
 #[cfg(target_os = "linux")]
-fn init_logging(env: &ProfileEnv, destination: &LogDestination) -> anyhow::Result<LogFailure> {
-    let profile = DeploymentProfile::current();
+fn init_logging(env: &ProfileEnv, destination: &LogDestination) -> anyhow::Result<LogSwitch> {
     let journal_stream = std::env::var_os(logging::JOURNAL_STREAM);
-    let failure = LogFailure::default();
-    logging::install(destination, profile, env, journal_stream.as_deref(), failure.clone())
-        .with_context(|| format!("cannot use the log destination {destination}"))?;
-    Ok(failure)
+    logging::install(destination, DeploymentProfile::current(), env, journal_stream.as_deref())
+        .with_context(|| format!("cannot use the log destination {destination}"))
 }

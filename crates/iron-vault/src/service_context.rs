@@ -20,6 +20,7 @@
 
 mod approval;
 mod init;
+mod log_destination;
 mod presence;
 mod serving;
 #[cfg(test)]
@@ -42,11 +43,11 @@ use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 
 use crate::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 use crate::audit::vault::{LockIncomplete, UnlockRefused};
-use crate::audit::{AuditEvent, LockTransition, ReloadFailed, count_of};
+use crate::audit::{AuditEvent, CheckFailed, LockTransition, ReloadFailed, count_of};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
-use crate::logging::LogFailure;
+use crate::logging::{LogSwitch, OpenedLog};
 use crate::request_listeners::RequestListeners;
 use crate::service_state::{AdminOperation, IllegalTransition, RequestInterface, ServiceEvent, ServiceState, UnavailableReason, next};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder, Withdrawn};
@@ -184,8 +185,9 @@ pub struct ServiceSetup<F = OsFs> {
     pub upstream: UpstreamSettings,
     /// What process hardening achieved before anything secret existed.
     pub hardening: HardeningReport,
-    /// The latch a failed log write trips; the request server refuses requests once it has.
-    pub log_failure: LogFailure,
+    /// The log's writer, which activation points at the destination the approved config chooses. Its latch trips on a
+    /// failed log write, and the request server refuses requests once it has.
+    pub log: LogSwitch,
 }
 
 /// The running service. Shared by the admin handlers and the request side; see the module documentation.
@@ -271,7 +273,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                     listeners,
                     Limits::default(),
                     Arc::clone(&holder),
-                    setup.log_failure.clone(),
+                    setup.log.failure().clone(),
                 )),
                 passed,
             })),
@@ -644,10 +646,10 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
     ///
     /// If this future is dropped first, the task still runs to its end and drops what it built, the vault and its
     /// decrypted records included. A task that ends without a result fails the check.
-    async fn run_check(&self, identity: Arc<VaultIdentity>) -> Result<Checked, CheckFailure> {
+    async fn run_check(&self, identity: Arc<VaultIdentity>) -> Result<(Checked, Option<OpenedLog>), CheckFailure> {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         tokio::task::spawn_blocking(move || {
-            open_and_check(
+            let checked = open_and_check(
                 &locks.state,
                 &locks.config,
                 &setup.fs,
@@ -655,7 +657,9 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
                 &setup.capabilities,
                 &setup.accounts,
                 &setup.upstream,
-            )
+            )?;
+            let log = open_chosen_log(&checked, &setup)?;
+            Ok((checked, log))
         })
         .await
         .unwrap_or_else(|_| Err(CheckFailure::interrupted()))
@@ -707,20 +711,23 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
     ) -> Result<ServiceState, IllegalTransition> {
         inner.checks = inner.checks.wrapping_add(1);
         match self.run_check(identity).await {
-            Ok(Checked {
-                snapshot,
-                approval,
-                credentials,
-                record_ids,
-                route_faults,
-            }) => {
+            Ok((
+                Checked {
+                    snapshot,
+                    approval,
+                    credentials,
+                    record_ids,
+                    route_faults,
+                },
+                log,
+            )) => {
                 let open = OpenVault {
                     approval,
                     credentials,
                     record_ids,
                     route_faults,
                 };
-                self.enter_ready(inner, snapshot, open).await
+                self.enter_ready(inner, snapshot, open, log).await
             }
             Err(failure) => {
                 if event == ServiceEvent::Reload {
@@ -735,9 +742,20 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         }
     }
 
-    /// Checking to Ready: the listener rebuild, then the snapshot, then the state.
-    async fn enter_ready(&self, inner: &mut Inner, snapshot: ServingSnapshot, open: OpenVault) -> Result<ServiceState, IllegalTransition> {
+    /// Checking to Ready: the log switch when the check opened a new destination, the listener rebuild, then the
+    /// snapshot, then the state. The switch comes first, so every record of the activation is in the new destination.
+    async fn enter_ready(
+        &self,
+        inner: &mut Inner,
+        snapshot: ServingSnapshot,
+        open: OpenVault,
+        log: Option<OpenedLog>,
+    ) -> Result<ServiceState, IllegalTransition> {
         let ready = next(inner.state, ServiceEvent::CheckPassed)?;
+        if let Some(opened) = log {
+            let version = open.approval.committed().map(|(version, _)| version);
+            log_destination::switch(&self.setup.log, opened, version);
+        }
         let config = snapshot.policy().config();
         let limits = *config.limits();
         let current = inner.serving.take().unwrap_or_else(|| {
@@ -745,7 +763,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
                 RequestListeners::empty(),
                 limits,
                 Arc::clone(&self.holder),
-                self.setup.log_failure.clone(),
+                self.setup.log.failure().clone(),
             )
         });
         let (serving, failures) = current
@@ -760,6 +778,14 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         inner.state = ready;
         Ok(ready)
     }
+}
+
+/// The config check's last step: opening the log destination the checked config chooses, when it moves the log. A
+/// destination that cannot be used fails the check, logged as every check failure is, and the log stays where it is.
+fn open_chosen_log<F>(checked: &Checked, setup: &ServiceSetup<F>) -> Result<Option<OpenedLog>, CheckFailure> {
+    log_destination::open_chosen(checked.snapshot.policy().config(), &setup.log, &setup.paths)
+        .map_err(CheckFailure::Config)
+        .inspect_err(|failure| CheckFailed { failure }.emit())
 }
 
 /// Moves to the state `event` leads to, storing that state's refusal in `holder`.
