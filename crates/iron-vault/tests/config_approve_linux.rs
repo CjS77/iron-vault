@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use common::WAIT;
 use common::approval_harness::{
-    APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approval_passphrase, approve, approve_request, captured_logs, converse, error_code,
-    get, identity, read_frame, send, serve_admin, the_two_prompts, versions,
+    APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approval_passphrase, approve, approve_request, assert_audit_record, captured_logs,
+    converse, error_code, get, identity, read_frame, send, serve_admin, the_two_prompts, versions,
 };
 use common::gated_fs::GatedFs;
 use common::mock_upstream::Reply;
@@ -107,6 +107,15 @@ async fn a_wrong_approval_passphrase_consumes_no_version() {
     assert_eq!(versions(&service).await, (Some(1), 1));
     assert!(!fixture.path("etc/config.toml.pending").exists());
     assert_eq!(get(&fixture, "fx").await.status, 200);
+    let digest = ConfigDigest::of(fixture.config("rates").as_bytes()).to_string();
+    let refused: Vec<_> = logs
+        .events("config.approval-refused")
+        .into_iter()
+        .filter(|record| record["config_digest"] == digest.as_str())
+        .collect();
+    assert_eq!(refused.len(), 1, "{}", logs.text());
+    assert_audit_record(&refused[0], "WARN", &["refusal", "config_digest"]);
+    assert_eq!(refused[0]["refusal"], "wrong_passphrase");
     logs.assert_no_passphrase();
 }
 

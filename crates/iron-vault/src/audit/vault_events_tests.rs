@@ -15,7 +15,7 @@ use super::vault::*;
 use super::{AuditEvent, EventName, RequestId};
 use crate::admin::protocol::{AdminCommand, FrameError};
 use crate::peer::PeerIdentity;
-use crate::service_context::UnlockRefusal;
+use crate::service_context::{DenialKind, UnlockRefusal};
 use crate::service_state::ServiceState;
 
 fn credential() -> CredentialName {
@@ -48,6 +48,16 @@ fn initialization_events_carry_ids_step_labels_and_kinds_only() {
         (Some("3"), Some("identity_mismatch"))
     );
     record_of(InitFailed::TaskEnded, "WARN", &[]);
+}
+
+#[test]
+fn a_presence_refusal_names_its_kind_and_nothing_else() {
+    [
+        (DenialKind::WrongPassphrase, "wrong_passphrase"),
+        (DenialKind::KeyMismatch, "key_mismatch"),
+    ]
+    .into_iter()
+    .for_each(|(refusal, label)| assert_eq!(record_of(PresenceRefused { refusal }, "WARN", &["refusal"])["refusal"], label));
 }
 
 #[test]
@@ -232,7 +242,7 @@ fn a_wrong_state_unlock_refusal_is_recorded() {
 }
 
 /// Every event of this module, for the test that no event records a constant field.
-pub(super) const NAMES: [EventName; 24] = [
+pub(super) const NAMES: [EventName; 25] = [
     AdminCommandRead::NAME,
     AdminRefused::NAME,
     VaultInitialized::NAME,
@@ -240,6 +250,7 @@ pub(super) const NAMES: [EventName; 24] = [
     InitFailed::NAME,
     ForeignFile::NAME,
     UnlockRefused::NAME,
+    PresenceRefused::NAME,
     LockIncomplete::NAME,
     UnindexedRemoved::NAME,
     SupersededLeft::NAME,
@@ -296,6 +307,10 @@ pub(super) fn emit_every_event() {
     ForeignFile { file: "x" }.emit();
     UnlockRefused {
         refusal: &UnlockRefusal::Interrupted,
+    }
+    .emit();
+    PresenceRefused {
+        refusal: DenialKind::KeyMismatch,
     }
     .emit();
     LockIncomplete {

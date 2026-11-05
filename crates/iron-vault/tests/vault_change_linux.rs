@@ -15,9 +15,11 @@ use std::fs;
 use std::sync::Arc;
 
 use common::WAIT;
-use common::approval_harness::{APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approval_passphrase, get};
+use common::approval_harness::{
+    APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approval_passphrase, assert_audit_record, captured_logs, get,
+};
 use common::gated_fs::GatedFs;
-use iron_vault::service_context::{CredentialChanged, PresenceRefusal, ServiceContext, VaultChangeRefusal};
+use iron_vault::service_context::{CredentialChanged, DenialKind, PresenceRefusal, ServiceContext, VaultChangeRefusal};
 use iron_vault::service_state::{ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, ServingSnapshot};
 use iron_vault::vault_change_check::PlannedChange;
@@ -47,6 +49,19 @@ fn approval_bytes(fixture: &Fixture) -> Vec<u8> {
     fs::read(fixture.path("state/approval.age")).unwrap()
 }
 
+/// Only the two refusal tests in this binary refuse presence, one for each kind, so the shared log holds exactly one
+/// `vault.presence-refused` of `kind`. It names the kind alone: no config digest, and no passphrase byte anywhere.
+fn assert_one_presence_refusal(logs: &common::approval_harness::Captured, kind: &str) {
+    let records: Vec<_> = logs
+        .events("vault.presence-refused")
+        .into_iter()
+        .filter(|record| record["refusal"] == kind)
+        .collect();
+    assert_eq!(records.len(), 1, "{}", logs.text());
+    assert_audit_record(&records[0], "WARN", &["refusal"]);
+    logs.assert_no_passphrase();
+}
+
 #[tokio::test]
 async fn the_approval_passphrase_proves_presence() {
     let fixture = Fixture::new().await;
@@ -59,6 +74,7 @@ async fn the_approval_passphrase_proves_presence() {
 
 #[tokio::test]
 async fn a_wrong_passphrase_is_refused_and_writes_nothing() {
+    let logs = captured_logs();
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
     add_unused(&service).await;
@@ -67,12 +83,14 @@ async fn a_wrong_passphrase_is_refused_and_writes_nothing() {
 
     let refused = plan.prove_presence(approval_passphrase(WRONG_PASSPHRASE)).await;
 
-    assert_eq!(refused.unwrap_err(), PresenceRefusal::Denied);
+    assert_eq!(refused.unwrap_err(), PresenceRefusal::Denied(DenialKind::WrongPassphrase));
     assert_eq!(approval_bytes(&fixture), before);
+    assert_one_presence_refusal(&logs, "wrong_passphrase");
 }
 
 #[tokio::test]
 async fn a_key_that_is_not_the_pinned_approver_is_refused_and_writes_nothing() {
+    let logs = captured_logs();
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
     add_unused(&service).await;
@@ -84,8 +102,9 @@ async fn a_key_that_is_not_the_pinned_approver_is_refused_and_writes_nothing() {
 
     let refused = plan.prove_presence(approval_passphrase(APPROVAL_PASSPHRASE)).await;
 
-    assert_eq!(refused.unwrap_err(), PresenceRefusal::Denied);
+    assert_eq!(refused.unwrap_err(), PresenceRefusal::Denied(DenialKind::KeyMismatch));
     assert_eq!(approval_bytes(&fixture), before);
+    assert_one_presence_refusal(&logs, "key_mismatch");
 }
 
 #[tokio::test]

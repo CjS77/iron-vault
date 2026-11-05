@@ -33,6 +33,7 @@ use crate::config_check::CheckFailure;
 use crate::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 #[cfg(target_os = "linux")]
 use crate::logging::LogDestination;
+use crate::service_context::DenialKind;
 use crate::service_state::{ServiceState, UnavailableReason};
 
 /// The `tracing` target of every audit event. A hyphen cannot appear in a Rust path, so no module's target starts with
@@ -192,6 +193,29 @@ impl AuditEvent for ApprovalCompleted<'_> {
             config_digest = self.digest.to_string().as_str(),
             summary = self.summary.render().as_str(),
             "config approval completed",
+        );
+    }
+}
+
+/// `config.approval-refused`: the approval passphrase was wrong or the key is not the pinned approver's; nothing was reserved.
+#[derive(Debug, Clone, Copy)]
+pub struct ApprovalRefused {
+    /// Which check of the approver key refused.
+    pub refusal: DenialKind,
+    /// The digest of the config that was being approved.
+    pub digest: ConfigDigest,
+}
+
+impl AuditEvent for ApprovalRefused {
+    const NAME: EventName = EventName("config.approval-refused");
+
+    fn emit(&self) {
+        tracing::warn!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            refusal = self.refusal.label(),
+            config_digest = self.digest.to_string().as_str(),
+            "config approval refused; nothing was reserved",
         );
     }
 }

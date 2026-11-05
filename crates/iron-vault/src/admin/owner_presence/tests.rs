@@ -59,7 +59,7 @@ async fn input_that_cannot_be_the_passphrase_is_denied_without_a_key_check() {
     let (prompt, outcome) = presence_with(Some(&[0xff, 0xfe]), future::pending()).await;
 
     assert_eq!(prompt, passphrase_prompt());
-    assert!(matches!(outcome, Err(NoPresence::Refused(PresenceRefusal::Denied))));
+    assert!(matches!(outcome, Err(NoPresence::Refused(PresenceRefusal::Denied(_)))));
 }
 
 #[tokio::test]

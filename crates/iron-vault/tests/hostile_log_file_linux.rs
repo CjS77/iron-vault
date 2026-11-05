@@ -535,15 +535,12 @@ fn assert_hostile_paths_ran(records: &[serde_json::Value], protocol: Upstream) {
     let events = |name: &str| records.iter().filter(|record| record["event"] == name).count();
     assert_eq!(events("credential.added"), 1, "{records:?}");
     assert_eq!(events("config.approval-completed"), 1, "{records:?}");
-    let denied = records
-        .iter()
-        .filter(|record| record["message"].as_str().is_some_and(|m| m.starts_with(DENIAL)))
-        .count();
-    assert_eq!(denied, 1, "the wrong passphrase was not logged on the blocking pool: {records:?}");
+    assert_eq!(
+        events("config.approval-refused"),
+        1,
+        "the wrong passphrase was not logged: {records:?}"
+    );
 }
-
-/// The start of the warning a wrong approval passphrase logs, from a task on the blocking pool.
-const DENIAL: &str = "the approval passphrase check failed";
 
 /// One session against `protocol` upstreams: the proxy run and the administrative run. Returns the upstream ports and the
 /// number of requests sent.

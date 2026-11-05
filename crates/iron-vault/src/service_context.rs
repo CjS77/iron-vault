@@ -58,7 +58,7 @@ use unlock::log_foreign_files;
 
 pub use approval::{ApprovalEnd, ApprovalReview};
 pub use init::{InitRefusal, step_names};
-pub use presence::{OwnerPresence, PresenceRefusal};
+pub use presence::{DenialKind, OwnerPresence, PresenceRefusal};
 pub use vault_change::{CredentialChanged, CurrentRecord, VaultChangePlan, VaultChangeRefusal};
 
 /// Why an unlock left the service where it was. No variant holds passphrase text.

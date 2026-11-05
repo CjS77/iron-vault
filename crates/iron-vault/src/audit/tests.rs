@@ -186,6 +186,18 @@ fn approval_completed_records_version_digest_and_summary() {
 }
 
 #[test]
+fn approval_refused_records_its_kind_and_the_digest() {
+    let digest = ConfigDigest::of(CONFIG.as_bytes());
+    let event = ApprovalRefused {
+        refusal: DenialKind::KeyMismatch,
+        digest,
+    };
+    let record = record_of(event, "WARN", &["refusal", "config_digest"]);
+    assert_eq!(record["refusal"], "key_mismatch");
+    assert_eq!(record["config_digest"], digest.to_string());
+}
+
+#[test]
 fn activation_failed_records_a_fixed_detail() {
     let event = ActivationFailed {
         version: version(4),
@@ -323,6 +335,11 @@ fn no_audit_event_records_a_constant_field() {
             summary: &summary,
         }
         .emit();
+        ApprovalRefused {
+            refusal: DenialKind::WrongPassphrase,
+            digest: ConfigDigest::of(b""),
+        }
+        .emit();
         ActivationFailed {
             version: version(1),
             state: ServiceState::Ready,
@@ -357,6 +374,7 @@ fn event_names_have_the_subject_dot_kebab_form() {
         HardeningIncomplete::NAME,
         LockTransition::NAME,
         ApprovalCompleted::NAME,
+        ApprovalRefused::NAME,
         ApprovalFailed::NAME,
         ActivationFailed::NAME,
         CheckFailed::NAME,

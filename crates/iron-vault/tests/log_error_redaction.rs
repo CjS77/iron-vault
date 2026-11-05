@@ -40,7 +40,6 @@ const DOMAIN_ERRORS: [(&str, &str); 13] = [
     ("crates/iron-vault/src/service_context.rs", "{error}"),
     // The store's `ApprovalError`, and its `SignError` for a wrong passphrase or key.
     ("crates/iron-vault/src/service_context/approval.rs", "%error"),
-    ("crates/iron-vault/src/service_context/presence.rs", "%error"),
     // The store's `RemoveStagingError` and `VerifyError`.
     ("crates/iron-vault-store/src/approval/recovery.rs", "%error"),
     ("crates/iron-vault-store/src/approval/recovery.rs", "%error"),

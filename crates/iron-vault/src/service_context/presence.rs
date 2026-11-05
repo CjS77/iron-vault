@@ -9,6 +9,7 @@ use std::sync::Arc;
 use iron_vault_store::{ApprovalPassphrase, PinnedApprover, SignError, SoftwareSigner, StoreFs, open_signer_key, read_signer_key};
 
 use super::ServiceContext;
+use crate::audit::{AuditEvent, vault::PresenceRefused};
 
 /// Proof that the owner typed the approval passphrase in this exchange, after the service described the change.
 ///
@@ -17,12 +18,31 @@ use super::ServiceContext;
 #[derive(Debug)]
 pub struct OwnerPresence(());
 
+/// Which check of the approver key refused, kept apart so the audit event can name it without the error's text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenialKind {
+    /// The passphrase does not open `approver.age`.
+    WrongPassphrase,
+    /// The key inside opened, but it is not the pinned approver's.
+    KeyMismatch,
+}
+
+impl DenialKind {
+    /// The snake_case label audit events record (`design/audit-logging.md`).
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::WrongPassphrase => "wrong_passphrase",
+            Self::KeyMismatch => "key_mismatch",
+        }
+    }
+}
+
 /// Why the approval passphrase check did not pass. Neither message holds anything the owner typed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PresenceRefusal {
     /// The passphrase does not open `approver.age`, or the key inside is not the pinned approver's.
     #[error("the approval passphrase does not open the approver key")]
-    Denied,
+    Denied(DenialKind),
     /// The approver key could not be read, or the check did not finish.
     #[error("the approver key cannot be checked: {0}")]
     Unavailable(String),
@@ -55,10 +75,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         passphrase: ApprovalPassphrase,
         pinned: PinnedApprover,
     ) -> Result<OwnerPresence, PresenceRefusal> {
-        self.open_approver(passphrase, pinned).await.map(|signer| {
-            drop(signer);
-            OwnerPresence(())
-        })
+        let signer = self.open_approver(passphrase, pinned).await.inspect_err(|refusal| {
+            if let PresenceRefusal::Denied(kind) = refusal {
+                PresenceRefused { refusal: *kind }.emit();
+            }
+        })?;
+        drop(signer);
+        Ok(OwnerPresence(()))
     }
 }
 
@@ -66,10 +89,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
 /// the service's.
 fn denied_or_unavailable(error: SignError) -> PresenceRefusal {
     match error {
-        SignError::WrongPassphrase | SignError::KeyMismatch => {
-            tracing::warn!(%error, "the approval passphrase check failed; nothing was reserved or written");
-            PresenceRefusal::Denied
-        }
+        SignError::WrongPassphrase => PresenceRefusal::Denied(DenialKind::WrongPassphrase),
+        SignError::KeyMismatch => PresenceRefusal::Denied(DenialKind::KeyMismatch),
         other => PresenceRefusal::Unavailable(other.to_string()),
     }
 }

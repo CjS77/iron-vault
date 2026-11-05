@@ -32,7 +32,7 @@ use tokio::sync::OwnedMutexGuard;
 use super::{Inner, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_task_crash};
 use crate::admin::protocol::ApprovalResult;
 use crate::audit::corruption::open_vault;
-use crate::audit::{ActivationCause, ActivationFailed, ApprovalCompleted, ApprovalFailed, AuditEvent};
+use crate::audit::{ActivationCause, ActivationFailed, ApprovalCompleted, ApprovalFailed, ApprovalRefused, AuditEvent};
 use crate::config_check::{InvalidConfig, activate_config};
 use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState};
 use crate::serving_snapshot::Admission;
@@ -193,11 +193,15 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
     /// cannot run or does not finish refuses the approval before anything is reserved.
     pub async fn open_signer(&self, passphrase: ApprovalPassphrase) -> Result<SoftwareSigner, ApprovalEnd> {
         let pinned = self.approval.approver().clone();
+        let digest = self.pending.digest();
         self.service
             .open_approver(passphrase, pinned)
             .await
             .map_err(|refusal| match refusal {
-                PresenceRefusal::Denied => ApprovalEnd::Denied,
+                PresenceRefusal::Denied(kind) => {
+                    ApprovalRefused { refusal: kind, digest }.emit();
+                    ApprovalEnd::Denied
+                }
                 PresenceRefusal::Unavailable(cause) => ApprovalEnd::Unavailable(format!("{cause}; nothing was reserved")),
             })
     }

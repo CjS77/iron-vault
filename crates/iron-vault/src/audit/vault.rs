@@ -4,7 +4,7 @@
 use iron_vault_store::{ErrorKindLabel, InitFailure, InitStep, StateFileName, UnlockError, VaultError, VaultId, WriteError};
 
 use super::{AUDIT_TARGET, AuditEvent, EventName};
-use crate::service_context::{UnlockRefusal, step_names};
+use crate::service_context::{DenialKind, UnlockRefusal, step_names};
 
 /// `vault.initialized`: init's last step is durable.
 #[derive(Debug, Clone, Copy)]
@@ -115,6 +115,26 @@ impl AuditEvent for UnlockRefused<'_> {
             event = Self::NAME.as_str(),
             refusal = unlock_refusal_label(self.refusal),
             "unlock refused, the service stays Locked",
+        );
+    }
+}
+
+/// `vault.presence-refused`: owner presence for a `replace` or `rm` was refused. No config is involved, so no digest.
+#[derive(Debug, Clone, Copy)]
+pub struct PresenceRefused {
+    /// Which check of the approver key refused.
+    pub refusal: DenialKind,
+}
+
+impl AuditEvent for PresenceRefused {
+    const NAME: EventName = EventName("vault.presence-refused");
+
+    fn emit(&self) {
+        tracing::warn!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            refusal = self.refusal.label(),
+            "owner presence refused; nothing was written",
         );
     }
 }

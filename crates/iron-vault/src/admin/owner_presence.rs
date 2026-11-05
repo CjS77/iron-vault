@@ -9,7 +9,7 @@ use secrecy::SecretString;
 
 use super::protocol::{AdminResponse, ErrorCode, OwnerInput, Prompt};
 use super::server::{Exchange, ExchangeError};
-use crate::service_context::{OwnerPresence, PresenceRefusal, VaultChangePlan};
+use crate::service_context::{DenialKind, OwnerPresence, PresenceRefusal, VaultChangePlan};
 
 /// The label of the secret prompt for the approval passphrase.
 const PASSPHRASE_PROMPT: &str = "Approval passphrase";
@@ -27,7 +27,7 @@ pub(super) enum PassphraseAnswer {
 /// Why owner presence was not shown. Nothing was written either way.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum NoPresence {
-    /// The passphrase was refused (`approval-denied` for [`PresenceRefusal::Denied`]), or the key check could not run.
+    /// The passphrase was refused (`approval-denied` for [`PresenceRefusal::Denied(_)`]), or the key check could not run.
     Refused(PresenceRefusal),
     /// A `lock` came for the service-wide lock while the owner was at the prompt; the key was never checked.
     CancelledByLock,
@@ -74,7 +74,7 @@ async fn presence_passphrase(
 ) -> Result<Result<ApprovalPassphrase, NoPresence>, ExchangeError> {
     let passphrase = match ask_approval_passphrase(exchange, lock_requested).await? {
         PassphraseAnswer::Typed(passphrase) => Ok(passphrase),
-        PassphraseAnswer::Unusable => Err(NoPresence::Refused(PresenceRefusal::Denied)),
+        PassphraseAnswer::Unusable => Err(NoPresence::Refused(PresenceRefusal::Denied(DenialKind::WrongPassphrase))),
         PassphraseAnswer::CancelledByLock => {
             tracing::warn!("vault change cancelled at its prompt by a lock; nothing was written");
             Err(NoPresence::CancelledByLock)
@@ -88,7 +88,7 @@ async fn presence_passphrase(
 /// `approval-unavailable` (design/admin-protocol.md).
 pub(super) fn no_presence(command: &str, none: NoPresence) -> AdminResponse {
     let (code, message) = match none {
-        NoPresence::Refused(PresenceRefusal::Denied) => (ErrorCode::ApprovalDenied, PresenceRefusal::Denied.to_string()),
+        NoPresence::Refused(denied @ PresenceRefusal::Denied(_)) => (ErrorCode::ApprovalDenied, denied.to_string()),
         NoPresence::Refused(unavailable) => (ErrorCode::ApprovalUnavailable, unavailable.to_string()),
         NoPresence::CancelledByLock => (
             ErrorCode::ApprovalUnavailable,
