@@ -185,7 +185,9 @@ impl CheckFailure {
             Self::ApprovalState(error) => error.to_string(),
             Self::Recovery(error) => error.to_string(),
             Self::Config(invalid) => invalid.detail(),
-            Self::Interrupted => "the config check crashed before it gave a result; the vault was not found damaged".to_owned(),
+            Self::Interrupted => {
+                "the config check crashed before it gave a result; nothing was checked, and the vault may be sound".to_owned()
+            }
         }
     }
 
