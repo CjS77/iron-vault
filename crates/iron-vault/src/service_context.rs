@@ -33,7 +33,7 @@ use iron_vault_store::{
     ApprovalState, ConfigDirLock, ConfigFileName, InitializationState, LockError, OsFs, Passphrase, StateDirLock, StateFileName, StoreFs,
     UnlockError, VaultIdentity, read_config_file, sweep_stale_config_temps, sweep_stale_temps, unlock_with_passphrase,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
@@ -195,7 +195,8 @@ pub struct ServiceContext<F = OsFs> {
     /// and fails at once with `busy` while another holds it; a recheck waits for it. A vault write takes it the same
     /// way, so an approval never sees the credential catalog change under it.
     service_wide: Mutex<()>,
-    inner: Mutex<Inner>,
+    /// Shared with the task that settles a check, which owns its guard so a dropped caller cannot strand Checking.
+    inner: Arc<Mutex<Inner>>,
 }
 
 /// What the context keeps of an open vault beside the snapshot. They are one value, so a lock, a stop or a failed check
@@ -247,25 +248,22 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         // Starting refuses as Locked does, before any listener accepts. The default limits bound the provisional set:
         // nothing of the unverified config but its listeners is used.
         let holder = Arc::new(SnapshotHolder::refusing(UnavailableReason::Locked));
-        let mut service = Self {
-            inner: Mutex::new(Inner {
-                state: ServiceState::Starting,
+        let state = next(ServiceState::Starting, ServiceEvent::InteractiveUnlockRequired)?;
+        store_refusal(&holder, state);
+        Ok(Self {
+            inner: Arc::new(Mutex::new(Inner {
+                state,
                 identity: None,
                 open: None,
                 checks: 0,
                 serving: Some(Serving::start(listeners, Limits::default(), Arc::clone(&holder))),
                 passed,
-            }),
+            })),
             setup: Arc::new(setup),
             locks: Arc::new(locks),
             holder,
             service_wide: Mutex::new(()),
-        };
-        let inner = service.inner.get_mut();
-        let state = next(inner.state, ServiceEvent::InteractiveUnlockRequired)?;
-        inner.state = state;
-        service.store_refusal(state);
-        Ok(service)
+        })
     }
 
     /// Unlocks with `identity` and runs the config check: Locked to Checking, then Ready or Unavailable.
@@ -275,9 +273,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// reason, the check has logged the detail at WARN, and the vault is dropped; the context keeps `identity` either
     /// way. Both state changes are logged as lock transitions, so a host unlock (EP-32) entering here is audited like a
     /// passphrase unlock.
+    ///
+    /// Cancel-safe: once the service enters Checking, a task of its own finishes the check and the move to Ready or
+    /// Unavailable even if this future is dropped, so the service never stays in Checking (§3.12).
     pub async fn enter_checking(&self, identity: VaultIdentity) -> Result<ServiceState, IllegalTransition> {
-        let mut inner = self.inner.lock().await;
-        self.check_and_settle(&mut inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
+        let inner = Arc::clone(&self.inner).lock_owned().await;
+        self.check_and_settle_detached(inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
             .await
     }
 
@@ -289,11 +290,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// needed: the check opens a new vault from the identity the context kept. An event that does not lead
     /// to Checking from the current state is refused and changes nothing, and so is any event without a kept identity
     /// (Starting, Locked, Stopped), since there is nothing to check with.
+    ///
+    /// Cancel-safe as [`enter_checking`](Self::enter_checking) is: a dropped future never leaves the service in Checking.
     pub async fn recheck(&self, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
         let _service_wide = self.service_wide.lock().await;
-        let mut inner = self.inner.lock().await;
+        let inner = Arc::clone(&self.inner).lock_owned().await;
         let identity = inner.identity.clone().ok_or(IllegalTransition { state: inner.state, event })?;
-        self.check_and_settle(&mut inner, event, identity).await
+        self.check_and_settle_detached(inner, event, identity).await
     }
 
     /// Reloads on SIGHUP (§3.9, Q-5): [`recheck`](Self::recheck) with [`ServiceEvent::Reload`], which only a Ready service
@@ -316,8 +319,11 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// state, which `unlock` also read before its prompt: only Initialized goes on. A wrong passphrase or an
     /// unreadable envelope leaves the service Locked: no other storage is ever tried (R-22). The operational identity
     /// the passphrase opens is dropped inside [`unlock_with_passphrase`], once it has unwrapped the vault identity.
+    ///
+    /// Cancel-safe: dropping this future during scrypt leaves the service Locked, and dropping it once the service has
+    /// entered Checking leaves a task of its own to finish the check, as [`enter_checking`](Self::enter_checking) does.
     pub async fn unlock(&self, passphrase: Passphrase) -> Result<ServiceState, UnlockRefusal> {
-        let mut inner = self.inner.lock().await;
+        let inner = Arc::clone(&self.inner).lock_owned().await;
         let locked = inner.state;
         if !locked.admin_allows(AdminOperation::Unlock) {
             return Err(UnlockRefusal::WrongState(locked));
@@ -326,7 +332,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let identity = self.open_identity(passphrase).await.inspect_err(|refusal| {
             tracing::warn!("{UNLOCK_REFUSED}: {refusal}");
         })?;
-        self.check_and_settle(&mut inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
+        self.check_and_settle_detached(inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
             .await
             .map_err(|illegal| UnlockRefusal::WrongState(illegal.state))
     }
@@ -477,6 +483,81 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             })
     }
 
+    /// What the settle step needs of the context, owned, so the step can run in a task of its own.
+    fn settler(&self) -> Settler<F> {
+        Settler {
+            setup: Arc::clone(&self.setup),
+            locks: Arc::clone(&self.locks),
+            holder: Arc::clone(&self.holder),
+        }
+    }
+
+    /// [`Settler::check_and_settle`] in place, under a guard the caller keeps.
+    async fn check_and_settle(
+        &self,
+        inner: &mut Inner,
+        event: ServiceEvent,
+        identity: Arc<VaultIdentity>,
+    ) -> Result<ServiceState, IllegalTransition> {
+        self.settler().check_and_settle(inner, event, identity).await
+    }
+
+    /// [`Settler::settle`] in place, under a guard the caller keeps.
+    async fn settle(
+        &self,
+        inner: &mut Inner,
+        identity: Arc<VaultIdentity>,
+        event: ServiceEvent,
+        committed: Option<u64>,
+    ) -> Result<ServiceState, IllegalTransition> {
+        self.settler().settle(inner, identity, event, committed).await
+    }
+
+    /// [`Settler::check_and_settle`] in a spawned task that owns `inner`, so the move out of Checking finishes even if
+    /// this future is dropped: §3.12 leaves Checking only on a pass or a failure. A task that ends without a result
+    /// fails closed through [`fail_interrupted`](Self::fail_interrupted).
+    async fn check_and_settle_detached(
+        &self,
+        mut inner: OwnedMutexGuard<Inner>,
+        event: ServiceEvent,
+        identity: Arc<VaultIdentity>,
+    ) -> Result<ServiceState, IllegalTransition> {
+        let settler = self.settler();
+        let settling = tokio::spawn(async move { settler.check_and_settle(&mut inner, event, identity).await });
+        match settling.await {
+            Ok(settled) => settled,
+            Err(_) => Ok(self.fail_interrupted().await),
+        }
+    }
+
+    /// Moves a service that a crashed settle task left in Checking to Unavailable, withdrawing anything it served and
+    /// logging `config.check-failed`. A task that crashed before entering Checking, or after settling, left a state
+    /// §3.12 allows, which stays.
+    async fn fail_interrupted(&self) -> ServiceState {
+        let mut inner = self.inner.lock().await;
+        if inner.state == ServiceState::Checking {
+            inner.open = None;
+            let failed = ServiceEvent::CheckFailed(CheckFailure::interrupted().failure());
+            // Cannot fail: Checking always leads to Unavailable on a failure.
+            let _ = apply(&self.holder, &mut inner, failed);
+        }
+        inner.state
+    }
+
+    /// Moves to the state `event` leads to, storing that state's refusal in the holder.
+    fn apply(&self, inner: &mut Inner, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
+        apply(&self.holder, inner, event)
+    }
+}
+
+/// The parts of the context the settle step reads, each shared, so the step can outlive the caller that started it.
+struct Settler<F> {
+    setup: Arc<ServiceSetup<F>>,
+    locks: Arc<ServiceLocks>,
+    holder: Arc<SnapshotHolder>,
+}
+
+impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
     /// Runs [`open_and_check`] with `identity` on the blocking pool, since it reads and decrypts every vault file.
     ///
     /// If this future is dropped first, the task still runs to its end and drops what it built, the vault and its
@@ -590,18 +671,23 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
 
     /// Moves to the state `event` leads to, storing that state's refusal in the holder.
     fn apply(&self, inner: &mut Inner, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
-        let state = next(inner.state, event)?;
-        inner.state = state;
-        self.store_refusal(state);
-        Ok(state)
+        apply(&self.holder, inner, event)
     }
+}
 
-    /// Stores the refusal `state`'s request interface gives, so a `503`'s reason has one source. Ready serves, which
-    /// [`enter_ready`](Self::enter_ready) stores itself, after the listener rebuild.
-    fn store_refusal(&self, state: ServiceState) {
-        if let RequestInterface::Refuse(reason) = state.request_interface() {
-            self.holder.refuse(reason);
-        }
+/// Moves to the state `event` leads to, storing that state's refusal in `holder`.
+fn apply(holder: &SnapshotHolder, inner: &mut Inner, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
+    let state = next(inner.state, event)?;
+    inner.state = state;
+    store_refusal(holder, state);
+    Ok(state)
+}
+
+/// Stores the refusal `state`'s request interface gives, so a `503`'s reason has one source. Ready serves, which
+/// [`Settler::enter_ready`] stores itself, after the listener rebuild.
+fn store_refusal(holder: &SnapshotHolder, state: ServiceState) {
+    if let RequestInterface::Refuse(reason) = state.request_interface() {
+        holder.refuse(reason);
     }
 }
 

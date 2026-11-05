@@ -1753,9 +1753,9 @@ async fn ping_answers_at_once_and_status_waits_for_an_unlock_in_scrypt() {
     session.close().await;
 }
 
-#[tokio::test]
-async fn a_cancelled_check_still_drops_the_vault_its_task_opened() {
-    let fixture = approved().await;
+/// A service on a [`GatedFs`] that has reached Ready once, with a reload held in its config check, then aborted.
+/// Returns the service, a probe on the kept vault identity and the gate's release.
+async fn reload_aborted_mid_check(fixture: &Fixture) -> (Arc<ServiceContext<GatedFs>>, std::sync::Weak<VaultIdentity>, mpsc::Sender<()>) {
     let fs = GatedFs::default();
     let service = fixture.start_on(fs.clone()).unwrap();
     assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
@@ -1768,18 +1768,58 @@ async fn a_cancelled_check_still_drops_the_vault_its_task_opened() {
     tokio::time::timeout(WAIT, reached).await.unwrap().unwrap();
     // The context's copy, and the vault the held task opened.
     assert_eq!(identity.strong_count(), 2);
-
     recheck.abort();
     assert!(recheck.await.unwrap_err().is_cancelled());
+    (service, identity, release)
+}
+
+/// The state once the settle task has finished: [`ServiceContext::state`] waits for the mutex the task holds.
+async fn settled<F: StoreFs + Send + Sync + 'static>(service: &ServiceContext<F>) -> ServiceState {
+    tokio::time::timeout(WAIT, service.state()).await.unwrap()
+}
+
+#[tokio::test]
+async fn a_cancelled_check_still_drops_the_vault_its_task_opened() {
+    let fixture = approved().await;
+    let (service, identity, release) = reload_aborted_mid_check(&fixture).await;
+
+    // A config that parses but is not the approved one, read once the gate opens.
+    fs::write(fixture.path("etc/config.toml"), fixture.config("# edited after approval\n")).unwrap();
     release.send(()).unwrap();
 
-    tokio::time::timeout(WAIT, async {
-        while identity.strong_count() > 1 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .expect("the cancelled check's task kept its vault");
+    assert_eq!(settled(&service).await, ServiceState::Unavailable(FailureReason::PolicyInvalid));
+    assert_eq!(identity.strong_count(), 1, "the cancelled check's task kept its vault");
+    assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::PolicyInvalid);
+}
+
+#[tokio::test]
+async fn a_cancelled_reload_still_settles_in_ready() {
+    let fixture = approved().await;
+    let (service, _identity, release) = reload_aborted_mid_check(&fixture).await;
+
+    release.send(()).unwrap();
+
+    assert_eq!(settled(&service).await, ServiceState::Ready);
+    assert_served(&get_unix(&fixture.socket(), true).await);
+}
+
+#[tokio::test]
+async fn a_cancelled_unlock_still_settles_in_ready() {
+    let fixture = approved().await;
+    let fs = GatedFs::default();
+    let service = fixture.start_on(fs.clone()).unwrap();
+    let (reached, release) = fs.arm("config.toml");
+    let unlocking = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move { service.unlock(Passphrase::new(SecretString::from(PASSPHRASE)).unwrap()).await }
+    });
+    tokio::time::timeout(WAIT, reached).await.unwrap().unwrap();
+
+    unlocking.abort();
+    assert!(unlocking.await.unwrap_err().is_cancelled());
+    release.send(()).unwrap();
+
+    assert_eq!(settled(&service).await, ServiceState::Ready);
 }
 
 // Safe states (specification §3.12, §3.15): each failure the service can meet at startup or while serving ends in an
