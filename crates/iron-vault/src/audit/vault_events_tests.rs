@@ -6,13 +6,17 @@ use iron_vault_store::{
     DamagedRecord, ErrorKindLabel, InitFailure, InitStep, RecordDamage, RecordId, SharedStateDamage, StateFileName, UnlockError, VaultId,
 };
 
+use super::admin::*;
 use super::corruption::*;
 use super::credential::*;
 use super::route::*;
 use super::tests::record_of;
 use super::vault::*;
 use super::{AuditEvent, EventName, RequestId};
+use crate::admin::protocol::{AdminCommand, FrameError};
+use crate::peer::PeerIdentity;
 use crate::service_context::UnlockRefusal;
+use crate::service_state::ServiceState;
 
 fn credential() -> CredentialName {
     "fx-key".parse().unwrap()
@@ -177,8 +181,60 @@ fn route_and_scrub_events_name_the_route_and_never_a_path_or_byte() {
     assert_eq!(record["matches"].as_u64(), Some(4));
 }
 
+#[test]
+fn admin_events_name_a_command_and_a_peer_and_never_an_argument() {
+    let peer = PeerIdentity::for_test(1000, 1000, 4242);
+    let record = record_of(
+        AdminCommandRead {
+            command: AdminCommand::ConfigApprove,
+            principal: peer,
+        },
+        "INFO",
+        &["command", "principal_uid"],
+    );
+    assert_eq!(
+        (record["command"].as_str(), record["principal_uid"].as_u64()),
+        (Some("config_approve"), Some(1000))
+    );
+    let known = record_of(
+        AdminRefused {
+            refusal: AdminRefusal::NotAdminPrincipal,
+            peer: Some(peer),
+        },
+        "WARN",
+        &["refusal", "peer_uid", "peer_pid"],
+    );
+    assert_eq!(
+        (known["refusal"].as_str(), known["peer_pid"].as_u64()),
+        (Some("not_admin_principal"), Some(4242))
+    );
+    let unknown = record_of(
+        AdminRefused {
+            refusal: AdminRefusal::of_frame(FrameError::UnsupportedVersion(9)),
+            peer: None,
+        },
+        "WARN",
+        &["refusal"],
+    );
+    assert_eq!(unknown["refusal"], "unsupported_version");
+}
+
+#[test]
+fn a_wrong_state_unlock_refusal_is_recorded() {
+    let record = record_of(
+        UnlockRefused {
+            refusal: &UnlockRefusal::WrongState(ServiceState::Ready),
+        },
+        "WARN",
+        &["refusal"],
+    );
+    assert_eq!(record["refusal"], "wrong_state");
+}
+
 /// Every event of this module, for the test that no event records a constant field.
-pub(super) const NAMES: [EventName; 22] = [
+pub(super) const NAMES: [EventName; 24] = [
+    AdminCommandRead::NAME,
+    AdminRefused::NAME,
     VaultInitialized::NAME,
     InitDiscarded::NAME,
     InitFailed::NAME,
@@ -214,6 +270,18 @@ pub(super) fn emit_every_event() {
     let file = StateFileName::record(&id);
     let kind = ErrorKindLabel::fixed("random_source");
     let files = ["identity.age".to_owned()];
+    AdminCommandRead {
+        command: AdminCommand::Ping,
+        principal: PeerIdentity::for_test(1, 1, 1),
+    }
+    .emit();
+    [None, Some(PeerIdentity::for_test(1, 1, 1))].into_iter().for_each(|peer| {
+        AdminRefused {
+            refusal: AdminRefusal::Busy,
+            peer,
+        }
+        .emit();
+    });
     VaultInitialized {
         vault_id: VaultId::new_random(),
     }

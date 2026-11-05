@@ -78,6 +78,15 @@ pub enum UnlockRefusal {
     Interrupted,
 }
 
+impl UnlockRefusal {
+    /// The refusal for an unlock attempted in `state`, recorded as `vault.unlock-refused` when it is made.
+    pub(crate) fn wrong_state(state: ServiceState) -> Self {
+        let refusal = Self::WrongState(state);
+        UnlockRefused { refusal: &refusal }.emit();
+        refusal
+    }
+}
+
 /// The state-directory lock and the config-directory lock, held for the service's lifetime: a second instance on
 /// either directory fails to start (§3.1).
 #[derive(Debug)]
@@ -351,7 +360,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let inner = Arc::clone(&self.inner).lock_owned().await;
         let locked = inner.state;
         if !locked.admin_allows(AdminOperation::Unlock) {
-            return Err(UnlockRefusal::WrongState(locked));
+            return Err(UnlockRefusal::wrong_state(locked));
         }
         log_foreign_files(&self.require_initialized().await?);
         let identity = self
@@ -360,7 +369,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             .inspect_err(|refusal| UnlockRefused { refusal }.emit())?;
         self.check_and_settle_detached(service_wide, inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
             .await
-            .map_err(|illegal| UnlockRefusal::WrongState(illegal.state))
+            .map_err(|illegal| UnlockRefusal::wrong_state(illegal.state))
     }
 
     /// Locks the service on an explicit `lock`: Ready or Unavailable to Locked, clearing the vault identity and every

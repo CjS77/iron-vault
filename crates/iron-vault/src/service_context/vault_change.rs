@@ -120,7 +120,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 Ok(record_id)
             }
             Written::AddedUncertain(record_id) => {
-                show_healthy(&mut inner, name, record_id, summary);
+                show_healthy(&mut inner, name.clone(), record_id, summary);
+                CredentialAdded {
+                    credential: &name,
+                    record_id,
+                    stored: Stored { kind, origins: &origins },
+                }
+                .emit();
                 Err(VaultChangeRefusal::Uncertain { present: Some(true) })
             }
             Written::Refused(refusal) => Err(refusal),

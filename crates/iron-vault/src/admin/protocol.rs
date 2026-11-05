@@ -155,6 +155,23 @@ impl AdminCommand {
             Self::Rm => "rm",
         }
     }
+
+    /// The command's ID in snake_case, as `admin.command` records it.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Ping => "ping",
+            Self::ConfigApprove => "config_approve",
+            Self::CallerToken => "caller_token",
+            Self::Status => "status",
+            Self::Unlock => "unlock",
+            Self::Lock => "lock",
+            Self::Init => "init",
+            Self::Add => "add",
+            Self::List => "list",
+            Self::Replace => "replace",
+            Self::Rm => "rm",
+        }
+    }
 }
 
 /// No command accepts an external signature (§3.2): the service signs only the pending config of its own approval

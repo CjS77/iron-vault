@@ -21,6 +21,8 @@ use super::protocol::{
     self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, Notice, OwnerInput, Prompt,
 };
 use super::socket::AdminSocket;
+use crate::audit::AuditEvent;
+use crate::audit::admin::{AdminCommandRead, AdminRefusal, AdminRefused};
 use crate::library_error::{ErrorKindLabel, LibraryError};
 use crate::logging::LogFailure;
 
@@ -116,8 +118,12 @@ impl AdminServer {
                 error(ErrorCode::WrongState, "the service is stopping because a log write failed")
             }
             Ok(request) => {
-                let (uid, command) = (principal.peer().uid(), request.command().name());
-                tracing::info!("admin command `{command}` from uid {uid}");
+                let command = request.command().name();
+                AdminCommandRead {
+                    command: request.command(),
+                    principal: principal.peer(),
+                }
+                .emit();
                 match self.handlers.dispatch(principal, request, &mut exchange).await {
                     Ok(response) => response,
                     Err(cancelled) => {
@@ -139,7 +145,11 @@ impl AdminServer {
     fn admit(&self, stream: UnixStream, open: &mut JoinSet<()>) {
         while open.try_join_next().is_some() {}
         if open.len() >= self.limits.max_connections {
-            tracing::warn!("admin connection refused: {} exchanges are already open", open.len());
+            AdminRefused {
+                refusal: AdminRefusal::Busy,
+                peer: None,
+            }
+            .emit();
             let busy = error(ErrorCode::Busy, "the service is busy with other admin commands; try again");
             // A short frame fits the empty send buffer of a new connection, so it is written without waiting.
             let _ = stream.try_write(&encoded(&Frame::Response(busy)));
@@ -153,19 +163,23 @@ impl AdminServer {
     async fn check_peer(&self, stream: &mut UnixStream) -> Option<AdminPrincipal> {
         let peer = match peer_identity(&*stream) {
             Ok(peer) => peer,
-            Err(e) => {
-                tracing::warn!(error_kind = %e.kind_label(), "admin connection closed: cannot read its peer credentials");
+            Err(_) => {
+                AdminRefused {
+                    refusal: AdminRefusal::PeerUnreadable,
+                    peer: None,
+                }
+                .emit();
                 return None;
             }
         };
         match self.principals.accepts(peer) {
             Ok(principal) => Some(principal),
             Err(refused) => {
-                tracing::warn!(
-                    "admin connection refused: uid {} (pid {}) is not an admin principal",
-                    peer.uid(),
-                    peer.pid()
-                );
+                AdminRefused {
+                    refusal: AdminRefusal::NotAdminPrincipal,
+                    peer: Some(peer),
+                }
+                .emit();
                 let response = error(ErrorCode::NotAdminPrincipal, &refused.to_string());
                 let _ = tokio::time::timeout(self.limits.request_deadline, write_and_close(stream, response)).await;
                 None
@@ -332,12 +346,20 @@ impl Exchange {
         };
         match read {
             Ok(Ok(Frame::Request(request))) => Ok(request),
-            Ok(Ok(_)) => Err(NoRequest::Answer(error(
-                ErrorCode::UnexpectedFrame,
-                "an exchange must start with an admin request",
-            ))),
+            Ok(Ok(_)) => Err(NoRequest::Answer({
+                AdminRefused {
+                    refusal: AdminRefusal::UnexpectedFrame,
+                    peer: None,
+                }
+                .emit();
+                error(ErrorCode::UnexpectedFrame, "an exchange must start with an admin request")
+            })),
             Ok(Err(ReadError::Frame(e))) => {
-                tracing::warn!("admin request refused: {e}");
+                AdminRefused {
+                    refusal: AdminRefusal::of_frame(e),
+                    peer: None,
+                }
+                .emit();
                 Err(NoRequest::Answer(error(ErrorCode::for_frame_error(e), &e.to_string())))
             }
             Ok(Err(ReadError::Closed)) => Err(unanswered("the peer closed before sending a whole request")),

@@ -17,6 +17,7 @@ mod tests;
 #[cfg(test)]
 mod vault_events_tests;
 
+pub mod admin;
 pub mod corruption;
 pub mod credential;
 pub mod route;
