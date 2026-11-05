@@ -106,9 +106,12 @@ fn chmod(path: &Path, mode: u32) {
 
 /// Asserts `serve` refused to start because `path` fails with `problem`, which tells it from a refusal of an ancestor, and bound no admin socket.
 ///
-/// `serve` checks its own executable first, so a checkout below a directory the build user's group can write is refused
+/// `serve` opens its log directory first, then checks its own executable, so a checkout below a directory the build user's group can write is refused
 /// at the binary before the tree under test is reached; the test then has nothing to say and returns.
 fn assert_refused_naming(install: &Install, output: &Output, path: &Path, problem: &str) {
+    if log_directory_untrusted_by_the_build_tree(output) {
+        return;
+    }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let binary_refused = format!("refusing to start: {} is not trusted", env!("CARGO_BIN_EXE_iron-vault"));
     if stderr.contains(&binary_refused) {
@@ -163,4 +166,57 @@ fn a_config_file_other_accounts_can_write_is_refused_by_path() {
     chmod(&config, 0o606);
 
     assert_refused_naming(&install, &install.serve(), &config, "has mode 0606 but must have mode 0600");
+}
+
+/// Whether `serve` could not use its log directory because an ancestor of this checkout fails the log directory rule, as
+/// a checkout below a directory the build user's group can write does. The test then has nothing to say.
+fn log_directory_untrusted_by_the_build_tree(output: &Output) -> bool {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let skipped = stderr.contains("cannot use the log destination") && stderr.contains("writable by");
+    if skipped {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "the build tree is not a trusted log path in CI:\n{stderr}"
+        );
+        eprintln!("skipped: the build tree is not a trusted log path on this host:\n{stderr}");
+    }
+    skipped
+}
+
+#[test]
+fn serve_creates_the_development_log_directory_and_writes_its_records_there() {
+    let install = Install::new();
+    mkdir(&install.state_dir(), 0o755);
+    let output = install.serve();
+    if log_directory_untrusted_by_the_build_tree(&output) {
+        return;
+    }
+    let dir = install.dir("state/iron-vault-dev-log");
+    let log = dir.join("iron-vault.log");
+    assert_eq!(fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+    assert_eq!(fs::metadata(&log).unwrap().permissions().mode() & 0o777, 0o640);
+    let text = fs::read_to_string(&log).unwrap();
+    assert!(!text.is_empty(), "no record in the log file");
+    text.lines().for_each(|line| {
+        let record: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("not a JSON line ({e}): {line}"));
+        assert_eq!(record["deployment_profile"], "development");
+    });
+    assert!(output.stdout.is_empty() && !String::from_utf8_lossy(&output.stderr).contains("development mode"));
+}
+
+#[test]
+fn a_log_directory_other_accounts_can_read_stops_serve_before_any_record_or_socket() {
+    let install = Install::new();
+    let dir = install.dir("state/iron-vault-dev-log");
+    mkdir(&dir, 0o755);
+    let output = install.serve();
+    if log_directory_untrusted_by_the_build_tree(&output) {
+        return;
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    assert!(stderr.contains("cannot use the log destination"), "{stderr}");
+    assert!(stderr.contains("must be no more open than 0750"), "{stderr}");
+    assert!(!dir.join("iron-vault.log").exists());
+    assert!(!install.dir("run/iron-vault-dev/admin.sock").exists());
 }

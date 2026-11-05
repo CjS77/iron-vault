@@ -40,18 +40,19 @@ fn a_protected_build_without_the_service_account_names_it() {
 fn a_development_build_warns_that_it_gives_no_isolation() {
     // The runtime directory's parent does not exist, so the service stops right after the warning instead of serving.
     let output = Command::new(env!("CARGO_BIN_EXE_iron-vault"))
-        .arg("serve")
+        .args(["serve", "--log-to-stdout"])
         .env("XDG_RUNTIME_DIR", "/nonexistent/iron-vault-test")
         .output()
         .expect("spawn iron-vault");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let (stdout, stderr) = (String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     assert!(!output.status.success(), "stderr: {stderr}");
     if rustix::process::getuid().is_root() {
         assert!(stderr.contains("must never be installed as the system service"), "{stderr}");
     } else {
+        // The warning is a log record, and `--log-to-stdout` puts the log on stdout.
         assert!(
-            stderr.contains("development mode: no isolation from malware running as "),
-            "{stderr}"
+            stdout.contains("development mode: no isolation from malware running as "),
+            "stdout: {stdout}\nstderr: {stderr}"
         );
     }
 }

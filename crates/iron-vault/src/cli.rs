@@ -92,7 +92,12 @@ pub struct Cli {
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
     /// Run the service until SIGTERM or SIGINT.
-    Serve,
+    Serve {
+        /// Write the log to stdout until an approved config names a destination, as the Docker image does. The service
+        /// refuses it when stdout is the systemd journal.
+        #[arg(long)]
+        log_to_stdout: bool,
+    },
     /// Check that the service is running and show its deployment profile.
     Ping,
     /// Show the service, vault, approval, memory protection and credential states, without secrets.
@@ -197,7 +202,7 @@ impl Cli {
         let cli = Self::try_parse_from(args)?;
         // The service binds its deployment's own socket; accepting the flag there would only mislead.
         match (&cli.command, &cli.admin_socket) {
-            (Command::Serve, Some(_)) => Err(Self::command().error(
+            (Command::Serve { .. }, Some(_)) => Err(Self::command().error(
                 ErrorKind::ArgumentConflict,
                 "`--admin-socket` is for client commands; `serve` always binds this installation's admin socket",
             )),

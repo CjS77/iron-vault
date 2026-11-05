@@ -11,8 +11,18 @@ fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
 #[test]
 fn serve_runs_the_service() {
     let cli = parse(&["serve"]).unwrap();
-    assert_eq!(cli.command, Command::Serve);
+    assert_eq!(cli.command, Command::Serve { log_to_stdout: false });
     assert_eq!(cli.admin_socket, None);
+}
+
+#[test]
+fn serve_log_to_stdout_selects_stdout_and_takes_no_path() {
+    assert_eq!(
+        parse(&["serve", "--log-to-stdout"]).unwrap().command,
+        Command::Serve { log_to_stdout: true }
+    );
+    assert_eq!(parse(&["serve", "--log-to-stdout=/tmp/x"]).unwrap_err().exit_code(), 2);
+    assert_eq!(parse(&["serve", "--log-destination", "/tmp/x"]).unwrap_err().exit_code(), 2);
 }
 
 #[test]

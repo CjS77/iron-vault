@@ -1,6 +1,6 @@
 //! `iron-vault serve`: checks the trusted paths, takes the directory locks and sweeps their stale temp files, starts
-//! the service context Locked with its provisional request listeners, and serves the admin socket until SIGTERM or
-//! SIGINT, then stops the service. SIGHUP reloads the config (§3.9).
+//! the service context Locked with its provisional request listeners, and serves the admin socket until SIGTERM, SIGINT
+//! or a failed log write, then stops the service. SIGHUP reloads the config (§3.9).
 
 use std::fs::DirBuilder;
 use std::io;
@@ -16,6 +16,7 @@ use iron_vault::admin::socket::AdminSocket;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, OVERFLOW_UID_FILE, PasswdDirectory};
 use iron_vault::hardening::HardeningReport;
+use iron_vault::logging::LogFailure;
 use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
 use iron_vault::socket_activation::{ActivationEnv, PassedSockets};
 use iron_vault::trusted_path_report::{self, ServicePaths, TrustedPathReport};
@@ -24,8 +25,9 @@ use iron_vault_policy::Capabilities;
 use iron_vault_store::OsFs;
 use tokio::signal::unix::{SignalKind, signal};
 
-/// Runs the service of the installation at `paths` until it is told to stop.
-pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport) -> anyhow::Result<()> {
+/// Runs the service of the installation at `paths` until it is told to stop, or until a log write fails: the service
+/// never runs without its audit log, so that stops it as SIGTERM does and then fails the run.
+pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport, log_failure: LogFailure) -> anyhow::Result<()> {
     let runtime_dir = paths
         .runtime_dir
         .as_deref()
@@ -57,7 +59,7 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport)
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     let (stop, hangup) = {
         let _context = runtime.enter();
-        (stop_signal()?, signal(SignalKind::hangup())?)
+        (stop_signal(log_failure.clone())?, signal(SignalKind::hangup())?)
     };
     runtime.block_on(async {
         let service = Arc::new(ServiceContext::start(locks, setup, &provisional, passed)?);
@@ -71,6 +73,7 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport)
         served.map_err(anyhow::Error::from)
     })?;
     tracing::info!("stopped");
+    anyhow::ensure!(!log_failure.is_tripped(), "stopped because a log write failed");
     Ok(())
 }
 
@@ -132,15 +135,17 @@ fn check_trusted_paths(paths: &ServicePaths) -> anyhow::Result<()> {
     }
 }
 
-/// Completes on the first SIGTERM or SIGINT. The handlers are installed before serving starts, so a stop request is
-/// never missed.
-fn stop_signal() -> io::Result<impl Future<Output = ()>> {
+/// Completes on the first SIGTERM or SIGINT, or when a log write fails. The handlers are installed before serving
+/// starts, so a stop request is never missed.
+fn stop_signal(log_failure: LogFailure) -> io::Result<impl Future<Output = ()>> {
     let mut terminate = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;
     Ok(async move {
         tokio::select! {
             _ = terminate.recv() => tracing::info!("stopping on SIGTERM"),
             _ = interrupt.recv() => tracing::info!("stopping on SIGINT"),
+            // The record of this stop is likely lost with the log, so it is also written to stderr.
+            () = log_failure.tripped() => eprintln!("iron-vault: stopping because a log write failed"),
         }
     })
 }
@@ -224,6 +229,14 @@ mod tests {
                 },
             )
             .collect()
+    }
+
+    #[tokio::test]
+    async fn a_failed_log_write_completes_the_stop_future() {
+        let failure = LogFailure::default();
+        let stop = stop_signal(failure.clone()).expect("signals");
+        failure.trip();
+        assert!(tokio::time::timeout(std::time::Duration::from_secs(5), stop).await.is_ok());
     }
 
     #[test]
