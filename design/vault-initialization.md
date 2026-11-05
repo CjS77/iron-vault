@@ -238,7 +238,7 @@ nothing: discard it*:
 | `already-initialized`: the re-check under the lock finds Initialized or Unrecognized, as when a second init finished first | the service |
 | `wrong-state`: the re-check under the lock finds the service has left Locked | the service |
 | `init-failed` at the discard or at any step before 9: a write failed | the service |
-| the command cancelled or lost before the CLI sent `yes`: Ctrl-C or a closed terminal, a signal, a dropped or timed-out connection | the CLI, on stderr before it exits; the service cannot answer a closed connection |
+| the command cancelled or lost before the CLI sent `yes`: Ctrl-C or a closed terminal, a signal, a dropped or timed-out connection | the CLI, on stderr before it exits, and after SIGHUP also in the system log; the service cannot answer a closed connection |
 
 **The outcome is unknown.** The owner's `yes` has been sent, or the vault may already stand, so step 5 may have
 finished, may still be running or may have failed, and the CLI cannot tell which. The advice is stated once, here:
@@ -256,7 +256,7 @@ designed and built, the owner cannot confirm the key and treats it as unconfirme
 | Ending | Who says it |
 |---|---|
 | `init-failed` at step 9: the unlink landed but the directory fsync failed, so a power loss may bring `init.unfinished` back | the service |
-| the command cancelled or lost after the CLI sent `yes`, including a timeout waiting for the result | the CLI, on stderr before it exits |
+| the command cancelled or lost after the CLI sent `yes`, including a timeout waiting for the result | the CLI, on stderr before it exits, and after SIGHUP also in the system log |
 
 The same errors raised before the reveal do not carry either sentence, because no key was shown. The service tracks
 whether it has sent the reveal, and the CLI whether it has shown one and whether it has sent `yes`, so each says only

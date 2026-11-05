@@ -396,8 +396,8 @@ The exchange, after the request:
    Unrecognized ends with `already-initialized` before any prompt. On Unfinished, a notice says that an unfinished
    initialization is discarded once the new recovery key is confirmed, and that a run another init is still writing is
    never discarded: this init then ends with `busy` or `already-initialized`
-   ([vault-initialization.md](vault-initialization.md#the-exchange), step 1). (The CLI has already checked for a controlling terminal, and never sends the
-   request without one; see [the CLI's `init`](#init-1).)
+   ([vault-initialization.md](vault-initialization.md#the-exchange), step 1). (The CLI has already checked for a
+   controlling terminal, and never sends the request without one; see [the CLI's `init`](#init-1).)
 2. **Passphrases.** Four prompts, all secret: `Vault passphrase`, `Repeat the vault passphrase`, `Approval passphrase`,
    `Repeat the approval passphrase`. A value that breaks a
    [passphrase rule](vault-initialization.md#passphrase-rules) ends the exchange with `passphrase-rejected`, whose
@@ -868,8 +868,8 @@ command the service never prompts for touches neither the terminal nor stdin. No
   signal number. Turning echo off and the watcher's restore are serialised, and the watcher holds off further prompts
   until the process exits, so a signal never leaves echo off. SIGHUP usually means the terminal has closed, and
   stderr may have closed with it, so on SIGHUP the watcher also sends the advice to the system log (`/dev/log`,
-  facility user, severity warning). That is best effort: without a logger the line is lost. The advice is the
-  command's fixed text and never holds a secret.
+  facility user, severity warning), before stderr, since a stalled stderr pipe would block the write. That is best
+  effort: without a logger the line is lost. The advice is the command's fixed text and never holds a secret.
 - **The terminal's line limit:** in canonical mode Linux keeps at most 4095 bytes of a line and silently discards the
   rest up to the newline, so a longer pasted value would arrive cut short. The CLI refuses a terminal line of 4095
   bytes or more, counted with its line ending, as possibly cut short, without sending or showing it, and says to pipe
