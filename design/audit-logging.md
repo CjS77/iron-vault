@@ -81,8 +81,9 @@ The owner relies on request events to debug bad route and credential setups, so 
 code writes `request.completed`, including the refusals the request server makes before or instead of the request
 handler: its request form gate's `400`, its `413` for a declared body over the limit, and its `408` and `413` after it
 has dropped the handler. A field the service cannot know at that point, such as the caller or route when the handler
-never ran, is left out; `request_id`, `listener` and `http_method` are always present. [Request event](#request-event)
-settles who writes the event so that no request yields zero events or two.
+never ran, is left out; `request_id`, `listener` and `http_method` are always present, and so is `status` but for one
+case ([`status`](#status)). [Request event](#request-event) settles who writes the event so that no request yields
+zero events or two.
 
 The only refusals without a request event are those made before Iron Vault's code sees a request: hyper's `431` and
 `414`, and a connection closed unread over `max_connections` ([Known limit](#known-limit)).
@@ -299,35 +300,47 @@ names, so every dashboard and alert would have to query both; `outcome` already 
 | `caller` | string | once the caller is identified | The caller's configured name |
 | `route` | string | once a route is selected | The route's configured name |
 | `credential` | string | once a route is selected | The route's credential's configured name |
-| `upstream_host` | string | once a route is selected | The route's upstream host, as configured; never the port, path or query |
-| `status` | number | once a response head was sent | The HTTP status sent to the caller |
+| `upstream_host` | string | once a route is selected, unless the answer was replaced | The route's upstream host, as configured; never the port, path or query |
+| `status` | number | once `respond` produced a response | The status of the response `respond` produced |
 | `request_bytes` | number | always | Body bytes read from the caller, as counted against `max_request_body_bytes` |
-| `response_bytes` | number | always | Body bytes sent to the caller, after scrubbing and any re-encoding |
-| `duration_ms` | number | always | Whole milliseconds from the request server receiving the request to the end of the response body |
-| `scrubbed` | boolean | once a response head was relayed | Whether any scrub pattern matched in its headers or body |
+| `response_bytes` | number | always | Body bytes handed to hyper for the caller, after scrubbing and any re-encoding |
+| `duration_ms` | number | always | Whole milliseconds from the request server receiving the request to the event being written |
+| `scrubbed` | boolean | once the handler's relayed response was sent | Whether any scrub pattern matched in its headers or body |
 | `outcome` | string | always | `success` or `failure` |
 | `reason` | string | when `outcome` is `failure` | The [reason code](#reason-codes) |
 
 - **`outcome`** is `success` when an upstream response was relayed and its body reached its end, whatever its status:
   an upstream `404` relayed in full is a success of the proxy. It is `failure` when a reason was recorded: the service
   refused the request, could not reach the upstream, refused the upstream's response, or the body did not reach its
-  end.
-- **`status`** is in every request event but one: a caller that closed its connection before any response head was
-  sent (reason `caller_gone`), since no status was sent. For a body that failed after its head was sent, it is the
-  status of that head, with `outcome` `failure`.
-- **`duration_ms` stops at the end of the streamed response body**, not at the response head, so a long streaming
-  response is counted for as long as it streams. It is measured on the monotonic clock and rounded down. It is an
-  integer, not a fraction, because Elastic maps a field from its first value, and a first value of `3` would make
-  `3.5` a type conflict.
-- **`response_bytes`** counts what crossed the wire to the caller, including a fixed refusal body such as the form
-  gate's. The response outcome's `decoded_bytes`, the bytes the scrubber screened, is not logged: for a compressed
-  response it is not what the caller received, and an operator comparing with the caller's own counts needs the wire
-  figure.
+  end. A body that hyper never polls because it has nothing to send reaches its end too
+  ([Bodies hyper never polls](#bodies-hyper-never-polls)).
+- **`duration_ms` stops when the record writes the event**: at the end of the streamed response body, or when the body
+  is dropped, not at the response head, so a long streaming response is counted for as long as it streams. hyper may
+  still be flushing the last bytes then. It is measured on the monotonic clock and rounded down. It is an integer, not
+  a fraction, because Elastic maps a field from its first value, and a first value of `3` would make `3.5` a type
+  conflict.
+- **`response_bytes`** counts the body bytes the outermost body layer handed to hyper, including a fixed refusal body
+  such as the form gate's. Bytes still in hyper's or the kernel's buffers when the connection closed are counted,
+  though the caller may never have received them. The response outcome's `decoded_bytes`, the bytes the scrubber
+  screened, is not logged: for a compressed response it is not what the caller was sent, and an operator comparing
+  with the caller's own counts needs the sent figure.
 - **`scrubbed`** comes from the relayed body's running match count, which the body records as each match is found
   (in the headers when the head is built, and in the body as each piece is screened). So a body that fails or is
   dropped mid-stream still reports whether a pattern matched in what was screened before it stopped. The response
   outcome gives the same flag for a body that ended cleanly; the relayed body must keep its count available after a
-  failure too.
+  failure too. It is left out when the handler's answer was replaced ([Which reason wins](#which-reason-wins)).
+
+### `status`
+
+`status` is the status of the response `respond` produced: its own refusal, or the handler's answer, after any
+replacement by the request server. The record sets it when `respond` wraps that response, so it does not say whether
+the head reached the wire; for a body that failed after its head, it is that head's status with `outcome` `failure`.
+
+Its one absence is a `respond` future dropped before any response existed: the caller closed the connection, or the
+service closed it, while the handler was still working. Then no status exists to record, and the reason is
+`caller_gone` or `service_closed`. This is this design's reading of D3's "`status` is always present", for the owner to
+confirm ([open question 4](#open-questions)); the alternative, a made-up status such as `499`, would be a status no
+one sent.
 
 ### Who writes the event
 
@@ -345,15 +358,66 @@ ones whose handler it drops. The design:
   handler's, in the outermost body layer, which also counts `response_bytes`. The record writes the event exactly once:
   when that body ends, cleanly or with an error, or when it is dropped. A refusal the request server makes itself sets
   its own reason on the record before the response leaves `respond`. If `respond`'s own future is dropped before a
-  response exists, the record's `Drop` writes the event with reason `caller_gone` and no status.
+  response exists, the record's `Drop` writes the event with no status and the drop's reason
+  ([Closes the service makes](#closes-the-service-makes)).
 - **One owner, one write.** The event is written from the record's `Drop`, or from the body's end, which consumes the
   facts, so a clean end followed by the drop writes once. `Drop` must not panic: no `unwrap`, indexing or fallible
   call.
 - **Facts are read when the event is written**, not when the record moves, so a body failure the relay or the
   request deadline records reaches the event. The scrub match count is recorded as matches are found, so it is
   already in the facts when the outer layer's `Drop` runs before the inner relayed body is dropped.
+- **The record writes `response.scrubbed` too**, beside `request.completed`, when the match count is above zero and
+  the handler's relayed response is the one sent. The relayed body never writes it, so a relayed body that is
+  discarded unsent writes nothing.
 
 K-173 builds the record and the handle; K-174 writes the event from the body.
+
+### Bodies hyper never polls
+
+hyper 1.x drops a response body without polling it in two cases (`proto/h1/dispatch.rs` `poll_write`, and the
+`can_have_body` rule in `proto/h1/role.rs`): the body's `is_end_stream()` is already true when the head is written, as
+for every fixed empty refusal; or the response cannot carry a body: an answer to `HEAD`, a `204` or a `304`. A drop
+there is a clean end, not a caller going away. So the outermost body layer:
+
+- forwards `is_end_stream()` and `size_hint()` from the body it wraps, so hyper sees the same body it would have seen
+  unwrapped;
+- records, when `respond` wraps the response, whether it can carry a body, from the request method and the status, by
+  the same rule as the relay's `has_no_body` (`proxy_handler/relay.rs`);
+- on a drop before the end, counts it as a clean end when the response cannot carry a body or the inner body reports
+  `is_end_stream()`. A relayed `HEAD` answer is then a `success`, and a fixed refusal keeps the reason it was given.
+  Any other drop before the end is a drop failure, below.
+
+### Closes the service makes
+
+The service closes connections itself: `Connections::close_except` and `close_all` (`request_server.rs`, called from
+`service_context/serving.rs`) abort the connections of a listener a rebuild drops, every connection when the limits
+change, and every connection at a stop. Each aborted task drops its record. Blaming the caller for those would send an
+administrator looking in the wrong place, so a drop failure has two codes:
+
+- `service_closed` when the service closed the connection;
+- `caller_gone` otherwise: the caller closed it, or hyper ended it on a connection error.
+
+The record learns which from a flag. Each listener's connection set holds a `ServiceClose` flag, a shared atomic
+boolean, and each connection's tags carry a clone of it into every request record on that connection. `close_except`
+sets the flag of each set it is about to close before it aborts the set's tasks, so every record those aborts drop
+reads `service_closed`.
+
+### Which reason wins
+
+A record holds at most one reason. The rules, in order:
+
+1. **The request server's own refusal after the handler had the request overrides the handler.** Its `413` when the
+   body passed the limit (in the `select!`, or by the `overflow.is_tripped()` check that replaces an answer the
+   handler gave in the same poll) and its `408` at the request timeout set their reason whatever the handler recorded.
+2. **Otherwise the first reason recorded wins.** A later reason is ignored: a body failure the relay records is not
+   replaced by the deadline that follows, and a drop never replaces a recorded reason.
+3. **A drop with no reason recorded** writes `service_closed` or `caller_gone` ([above](#closes-the-service-makes)),
+   unless it is a clean end ([Bodies hyper never polls](#bodies-hyper-never-polls)).
+
+When rule 1 replaces the handler's answer, the facts that describe that answer are discarded, since the caller never
+received it: `upstream_host` and `scrubbed` are left out of the event, and no `response.scrubbed` is written for the
+discarded relayed body. `caller`, `route` and `credential` are kept, since they say who asked for what. The handle is
+sealed at the replacement, so a handler still running cannot set them again.
 
 ### Request ID
 
@@ -383,8 +447,8 @@ A code names the check, never the caller's input: `bad_target` does not say whic
 | `FormViolation::Version` | 400 | `unsupported_version` |
 | A declared body (`Content-Length`) over `max_request_body_bytes` | 413 | `request_too_large` |
 
-**The request server, after the handler has the request** (its future is dropped, or its answer replaced; the facts
-it recorded are kept):
+**The request server, after the handler has the request** (its future is dropped, or its answer replaced; these
+override the handler's reason, [Which reason wins](#which-reason-wins)):
 
 | Source | Status | Code |
 |---|---|---|
@@ -462,7 +526,8 @@ Every `service_defect` is also a [`request.defect`](#request-defect) audit event
 | `RelayFailure::Encode` | head's | `body_encode` |
 | `RelayFailure::Upstream` | head's | `upstream_body` |
 | The request server failed the body at the request deadline | head's | `deadline` |
-| The caller closed the connection before the body ended | head's, or none | `caller_gone` |
+| The caller closed the connection, or hyper ended it on a connection error, before the body ended | head's, or none | `caller_gone` |
+| The service closed the connection (`close_except`, `close_all`) before the body ended | head's, or none | `service_closed` |
 
 `upstream_body` is one code for both `TransportError::Body` and `RelayFailure::Upstream`: both mean the upstream's
 body stopped before its end, before or after the head.
@@ -552,8 +617,8 @@ the hardening report writes today (`hardening::log_report`), with the same fix i
 failed core-dump setting carries is not logged, since it is an OS error's text. Every record carries
 `deployment_profile` as a constant field, so the startup event needs no profile field of its own. The state labels are
 fixed strings, never `ServiceState`'s `Debug` output, which writes `Unavailable(PolicyInvalid)`.
-`service.lock-transition` takes over the records written under `LOCK_TRANSITION_TARGET` today; that target is retired
-when it moves (K-171).
+`service.lock-transition` is the struct `audit::LockTransition`. It takes over the records written under
+`LOCK_TRANSITION_TARGET` today; that target stays in use until K-171 moves the records, which retires it.
 
 **Admin commands:**
 
@@ -581,7 +646,7 @@ completed approval ([§3.9](iron-vault-specification.md#39-configuration-approva
 | `config.commit-uncertain` | WARN | step 5's rename of `approval.age` landed, but its directory fsync failed | `version`, `error_kind` |
 | `config.approval-completed` | INFO | the commit is durable | `version`, `config_digest`, `summary` |
 | `config.activation-failed` | WARN | the config check after a committed approval failed, or an uncertain commit could not be settled | `version`, `unavailable_reason`, `detail` |
-| `config.check-failed` | WARN | any config check failed | `unavailable_reason`, `failure`, `detail` |
+| `config.check-failed` | WARN | any config check failed | `unavailable_reason`, `failure`, `detail`; `log_destination` when the log destination failed |
 | `config.reload-failed` | WARN | the config check of a SIGHUP reload failed | `committed_version`, `unavailable_reason`, `detail` |
 | `config.recovery-published` | WARN | a config check finished publishing a committed transaction | `version`, `renames` |
 | `config.recovery-discarded` | INFO | a config check removed an uncommitted file | `file`; `signed_for` for a staged approval whose version is known |
@@ -735,6 +800,27 @@ The development directory is beside the development state directory (`$XDG_STATE
 it: the vault's files stay alone in the state directory, and any other file there is a foreign file that makes `unlock`
 refuse.
 
+### Stdout is never the journal
+
+Under systemd a service's stdout is normally a stream into journald, so `stdout` there would break owner decision 3
+("no journald output, even on Linux"), and the journal's readers are not bound by the log directory's mode. So
+`stdout` is refused when stdout is the journal: systemd sets `JOURNAL_STREAM` to the `<dev>:<inode>` of the stream it
+connects to stdout or stderr (`systemd.exec(5)`), and the service refuses `stdout` when that variable is set and file
+descriptor 1's device and inode match it. The check runs at startup for `--log-to-stdout`, which then exits as for a
+destination that cannot be opened, and in the config check for `destination = "stdout"`, which then fails as for an
+unusable directory ([Switching at activation](#switching-at-activation)). The variable is read only to refuse; it can
+never select or move a destination, so it is not an ambient setting in the sense of
+[§3.7](iron-vault-specification.md#37-outbound-tls-and-environment).
+
+The alternatives were rejected. Detecting a container (`/.dockerenv`, `/run/.containerenv`, cgroup names) depends on
+each runtime's conventions and would refuse stdout piped to a collector outside one. Setting `StandardOutput=null` in
+the packaged unit would turn `stdout` into a destination that silently discards every record, since writes to
+`/dev/null` succeed. An administrator who points Docker's own `journald` log driver at the container's stdout makes
+that choice in the runtime, outside the service; the operations guide says not to.
+
+Stderr is not a log destination. Only the one line a startup failure writes before the subscriber is installed goes
+there ([Startup order](#startup-order)), as today; under systemd that line reaches the journal and the unit's status.
+
 ### Before an approved config is active
 
 The service writes to the bootstrap destination from startup until a config check activates an approved config. In a
@@ -750,13 +836,19 @@ one: after an approval, on an unlock's check, on a SIGHUP reload and on a recove
 It does not wait for a restart, which in a passphrase install would cost an unlock.
 
 - The config check opens the new destination, with every check below, as one of its own checks. If it cannot be
-  opened or fails a check, the config check fails (`config.check-failed`, `unavailable_reason` `policy_invalid`, a
-  `detail` naming the log destination), the service settles Unavailable as for any other invalid policy, and it keeps
-  writing to the current destination. There is no half-switch: until the new destination is open, every record goes
-  to the old one.
-- `config approve` runs the same checks on the proposed config before it reserves a version, so an approval naming an
-  unusable directory is refused as an invalid config and consumes nothing. The check at activation still runs, since
-  the directory can change in between.
+  opened or fails a check, the config check fails and writes `config.check-failed` with `unavailable_reason`
+  `policy_invalid`, `failure` `log_destination_unusable`, a `detail` that is the fixed phrase of the check that
+  refused (such as `not owned by the service account`), and the path in `log_destination`; `detail` never carries
+  the path. The service settles Unavailable as for any other invalid policy, and it keeps writing to the current
+  destination.
+- The writer switches only after every other part of the config check has passed, as the check's last step before
+  activation. There is no half-switch: a check that fails for any reason leaves the writer where it was, and until the
+  new destination is open, every record goes to the old one.
+- `config approve` checks the proposed destination before it reserves a version: the trusted-path check of the
+  directory ([Trust](#trust)), the journal check for `stdout`, and, when `iron-vault.log` exists, that it is a regular
+  file the service account owns. It creates nothing, opens no file for writing and does not switch the writer. An
+  approval naming an unusable destination is refused as an invalid config and consumes nothing. The check at
+  activation still runs, since the directory can change in between.
 - The order of records at a switch: `config.approval-completed` is written to the old destination, since the commit
   comes before activation. Then `service.log-destination-changed` is written to the old destination, the writer
   switches, and the same event is written again as the first record of the new one, so each file says where the log
@@ -774,11 +866,32 @@ A configured log directory must be:
 - an absolute path with no control characters, and no `..` component;
 - not inside, or equal to, the state directory or the config directory, so log files are never foreign files in the
   state directory and never sit beside `config.toml`;
-- a directory that passes the trusted-path rule for a service-owned directory: owned by the service account, not
-  readable or writable by others, and no ancestor writable by any account but root and the service account.
+- a directory that passes the trusted-path rule for a log directory, `TrustedPathRule::LogDir`, below.
 
-The trusted-path check runs before the writer opens the file, at startup for the bootstrap destination and in the
-config check for a configured one.
+The same rule applies to the bootstrap directory. The trusted-path check runs before the writer opens the file, at
+startup for the bootstrap destination and in the config check for a configured one.
+
+**The log directory rule** (`TrustedPathRule::LogDir`, in `trusted_path.rs`):
+
+- **The leaf** is a directory owned by the service account, with no write or read permission for others.
+- **No component is a symlink.** The check's `lstat` walk refuses a symlink anywhere in the path, leaf or ancestor,
+  so the directory the check passed is the directory written to.
+- **Each ancestor** is a directory owned by root or the service account, and not writable by others. It may be
+  writable by its group only when root owns it.
+- A root-owned shared sticky ancestor such as `/tmp` is refused, as for the state directory.
+
+The group-writable exception is the one difference from the state directory's rule, whose `require_not_writable`
+refuses any ancestor its group can write. It exists because stock Debian and Ubuntu ship `/var/log` as
+`drwxrwxr-x root syslog`, so the protected default `/var/log/iron-vault` could never pass the stricter rule.
+
+Residual risk, accepted: members of a group that can write an ancestor (`syslog` on Debian and Ubuntu) can rename the
+log directory's entry in that ancestor, or plant a directory in its place once it is renamed away. They cannot read
+or change the log, since the log directory is the service account's at `0750` and its files `0640`. A planted
+directory is theirs, so it fails the leaf check at the next startup or config check, which stops the service rather
+than writing into it. While the service runs, a rename or a planted directory cannot redirect the writer either,
+because `LogFile` opens the file relative to the directory it opened at the check, never by path
+([Log file and rotation](#log-file-and-rotation)). What they can do is move the log out of the collector's view or
+stop the next start: a denial of service by accounts that already administer the system log.
 
 The service creates a missing log directory only in development, as it creates the development state and config
 directories: `$XDG_STATE_HOME/iron-vault-dev-log` and any missing parents, at mode `0700`. A protected install's
@@ -800,29 +913,34 @@ gives for Compose.
 ### Startup order
 
 The bootstrap destination needs the deployment's paths, and in development those come from the invoking user's
-environment. So `serve` hardens the process first, as today, then reads the accounts and the profile environment,
-then creates the development log directory if needed, checks the bootstrap log directory's trusted path, opens it and
-installs the subscriber, then writes `service.started` (and `service.hardening-incomplete` when it applies), and only
-then resolves the other service paths and starts the service. An error before the subscriber is installed goes to
-stderr, as an error before logging does today.
+environment. So `serve` hardens the process first, as today, then reads the accounts and the profile environment, then
+creates the development log directory if needed, checks the bootstrap log directory's trusted path (or, for
+`--log-to-stdout`, that stdout is not the journal), opens it and installs the subscriber, then writes `service.started`
+(and `service.hardening-incomplete` when it applies), and only then resolves the other service paths and starts the
+service. An error before the subscriber is installed goes to stderr, as an error before logging does today.
 
 ## Log file and rotation
 
 The service writes one file, `iron-vault.log`, in the log directory, through `logging::LogFile`, a `MakeWriter` of the
 binary's own:
 
-- It opens the file with `O_APPEND`, creating it at mode `0640` when it is missing, so each record is appended whole
-  even if another process appends too.
+- It holds the log directory open (`O_DIRECTORY`), the directory the trusted-path check passed, and opens
+  `iron-vault.log` relative to it with `openat`, never by path, so renaming or replacing the directory cannot redirect
+  it.
+- It opens the file with `O_APPEND | O_NOFOLLOW`, creating it at mode `0640` when it is missing, so each record is
+  appended whole even if another process appends too, and a symlink planted as `iron-vault.log` is refused rather than
+  followed.
 - It holds the open file behind a mutex, and writes each record with one `write_all` under it, so records from
   different threads never interleave.
-- **It follows a rotation without a signal.** Before it writes a record, it compares the `(dev, inode)` of the path
-  with that of its open file. When they differ, or the path is missing, `logrotate` has renamed the file, so it opens
-  (and creates) the path again and writes there. A record written between the rename and the reopen lands in the
-  renamed file, which `delaycompress` leaves uncompressed until the next rotation, so no record is lost. A reopen that
-  fails is a write failure ([Failure behaviour](#failure-behaviour)).
+- **It follows a rotation without a signal.** Before it writes a record, it compares the `(dev, inode)` of
+  `iron-vault.log` in the directory (`fstatat` with `AT_SYMLINK_NOFOLLOW`) with that of its open file. When they
+  differ, or the name is missing, `logrotate` has renamed the file, so it opens (and, when missing, creates) the name
+  again and writes there. A record written between the rename and the reopen lands in the renamed file, which
+  `delaycompress` leaves uncompressed until the next rotation, so no record is lost. A reopen that fails is a write
+  failure ([Failure behaviour](#failure-behaviour)).
 - It reports every failed write ([below](#failure-behaviour)).
 
-The check costs one `stat` per record, which is small beside the write itself.
+The check costs one `fstatat` per record, which is small beside the write itself.
 
 ### The shipped rule
 
@@ -836,14 +954,18 @@ The package ships `/etc/logrotate.d/iron-vault`, owned by root, mode `0644`:
     delaycompress
     missingok
     notifempty
-    create 0640 iron-vault iron-vault
+    nocreate
     su iron-vault iron-vault
 }
 ```
 
-`create` makes the new file with the service account as owner before the service reopens it; `su` makes `logrotate`
-act as the service account in a directory root does not own. No `postrotate` script is needed. Size limits are a
-`maxsize` line in the same rule, for an administrator who wants one.
+`nocreate` overrides the global `create` in `/etc/logrotate.conf`, so `logrotate` only renames the file and the
+service creates the new one at its next record. A `create` rule would race the service: `logrotate` renames the file,
+then creates the new one with `O_EXCL`, and a record arriving between those steps makes `LogFile` create it first.
+`logrotate` then moves the service's new file aside as a `.backup` file it never compresses or prunes, and exits with
+an error. With `nocreate` nobody but the service creates `iron-vault.log`. `su` makes `logrotate` act as the service
+account in a directory root does not own. No `postrotate` script is needed. Size limits are a `maxsize` line in the
+same rule, for an administrator who wants one.
 
 The rule names the default directory only. When an approved config moves the log directory, the shipped rule matches
 nothing (`missingok` keeps it quiet), and the administrator adds a rule for the new directory; the approval summary's
@@ -876,7 +998,10 @@ writer that drops records when its channel is full is ruled out: audit records m
   and the restart then succeeds or fails at startup as above.
 
 `tracing-subscriber`'s `fmt::Layer` discards a writer's error: it only prints it to stderr. So the failure is seen in
-`LogFile`, the one place that has the error. Its first failed write trips a shared latch, `logging::LogFailure`. The
+the writer, the one place that has the error. Both writers are the binary's own `MakeWriter` wrappers: `LogFile` for a
+log directory and `logging::LogStdout` for stdout, which writes each record with one `write_all` to a locked stdout.
+Rust ignores `SIGPIPE`, so a closed stdout returns `EPIPE` rather than killing the process, and `LogStdout` treats it
+as any other failed write. Either writer's first failed write trips a shared latch, `logging::LogFailure`. The
 request server checks the latch as it admits each request and the admin server as it reads each command, and refuses
 both once it is tripped; the `serve` loop's stop future completes on it beside SIGTERM.
 
@@ -902,9 +1027,9 @@ a passphrase-only install one unlock after the disk is fixed. Whether stopping i
 
 In a protected install the log directory is owned by the service account, mode `0750`, and its files `0640`, so
 callers cannot read or change the audit log. The group is the service account's own unless the administrator chooses
-a group for a collector; a caller's account is never in it. The directory and every ancestor must pass the
-trusted-path rule for a service-owned directory ([Trust](#trust)). `LogFile` creates the file at `0640` itself, and
-the shipped `logrotate` rule creates each new file at `0640`, so neither depends on the unit's umask.
+a group for a collector; a caller's account is never in it. The directory and every ancestor must pass the log
+directory rule ([Trust](#trust)). `LogFile` creates every log file itself, at `0640` whatever the unit's umask; the
+shipped `logrotate` rule creates none.
 
 ## Dependency caps
 
@@ -930,8 +1055,8 @@ adds no further copy. The ticket that adds each crate checks `Cargo.lock` again.
 ## Operations
 
 K-177 writes the operations guide: the log directory's setup, the shipped `logrotate` rule and a rule for a moved
-directory, Docker's log-driver rotation, and collector settings for Grafana Alloy, Vector, Fluent Bit and Filebeat,
-with the Loki labels and the Elastic `@timestamp` rename above.
+directory, Docker's log-driver rotation (and a warning against its `journald` driver), and collector settings for
+Grafana Alloy, Vector, Fluent Bit and Filebeat, with the Loki labels and the Elastic `@timestamp` rename above.
 
 ## Open questions
 
@@ -949,6 +1074,9 @@ stated for each.
 3. **Confirm the departure from decision 2:** no `tracing-appender`
    ([Departure: no `tracing-appender`](#departure-no-tracing-appender)). *Default:* the binary's own `LogFile`
    writer.
+4. **D3 says `status` is always present. Is a request event without `status` acceptable when the connection closed
+   before any response existed?** No status was produced then, so none can be recorded ([`status`](#status)).
+   *Default:* leave `status` out in that one case, with reason `caller_gone` or `service_closed`.
 
 ## Spec check
 
