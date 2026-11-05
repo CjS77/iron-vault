@@ -17,10 +17,11 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::WAIT;
+use common::approval_harness::{Captured, assert_audit_record, captured_logs};
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, token_hash};
 use iron_vault::admin::ADMIN_SOCKET_NAME;
@@ -54,7 +55,6 @@ use secrecy::{ExposeSecret, SecretString};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::oneshot;
-use tracing_subscriber::fmt::MakeWriter;
 use zeroize::Zeroizing;
 
 const IDENTITY: &str = "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE";
@@ -436,61 +436,12 @@ fn secret_prompt(label: &str) -> Prompt {
     }
 }
 
-/// Everything this test binary logs at TRACE, from a global subscriber installed on first use.
-fn captured_logs() -> Captured {
-    static CAPTURED: OnceLock<Captured> = OnceLock::new();
-    CAPTURED
-        .get_or_init(|| {
-            let captured = Captured::default();
-            let subscriber = iron_vault::logging::subscriber(captured.clone(), DeploymentProfile::current());
-            tracing::subscriber::set_global_default(subscriber).unwrap();
-            captured
-        })
-        .clone()
-}
-
-#[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
-
-impl Captured {
-    /// Every JSON record whose `event` is `event`.
-    fn events(&self, event: &str) -> Vec<serde_json::Value> {
-        self.text()
-            .lines()
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .filter(|record| record["event"] == event)
-            .collect()
-    }
-
-    fn text(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner)).into_owned()
-    }
-
-    fn assert_no_secret(&self) {
-        let text = self.text();
-        [SECRET, USERNAME, PASSWORD, APPROVAL_PASSPHRASE]
-            .iter()
-            .for_each(|typed| assert!(!text.contains(typed), "a typed value reached the log:\n{text}"));
-    }
-}
-
-impl io::Write for Captured {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for Captured {
-    type Writer = Captured;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
+/// Nothing a prompt was typed with may reach the log.
+fn assert_no_secret(logs: &Captured) {
+    let text = logs.text();
+    [SECRET, USERNAME, PASSWORD, APPROVAL_PASSPHRASE]
+        .iter()
+        .for_each(|typed| assert!(!text.contains(typed), "a typed value reached the log:\n{text}"));
 }
 
 /// Which step of the next vault write fails; the last two stages are reached only through the one before each.
@@ -628,27 +579,8 @@ async fn an_add_in_ready_writes_a_record_and_leaves_the_served_snapshot_alone() 
         record["origins"].as_str().is_some_and(|origins| origins.starts_with("https://")),
         "{record}"
     );
-    let mut keys: Vec<&str> = record.as_object().unwrap().keys().map(String::as_str).collect();
-    keys.sort_unstable();
-    assert_eq!(
-        keys,
-        [
-            "credential",
-            "deployment_profile",
-            "event",
-            "kind",
-            "level",
-            "message",
-            "origins",
-            "record_id",
-            "schema_version",
-            "service",
-            "service_version",
-            "target",
-            "timestamp"
-        ]
-    );
-    logs.assert_no_secret();
+    assert_audit_record(record, "INFO", &["credential", "record_id", "kind", "origins"]);
+    assert_no_secret(&logs);
 }
 
 #[tokio::test]
@@ -671,7 +603,7 @@ async fn a_basic_credential_is_prompted_for_its_username_then_its_password() {
         }
         other => panic!("expected a Basic credential, got {other:?}"),
     }
-    logs.assert_no_secret();
+    assert_no_secret(&logs);
 }
 
 #[tokio::test]
@@ -884,7 +816,7 @@ async fn an_added_credential_serves_once_a_route_using_it_is_approved() {
             .any(|(name, value)| name.eq_ignore_ascii_case("x-api-key") && value == SECRET),
         "{injected:?}"
     );
-    logs.assert_no_secret();
+    assert_no_secret(&logs);
 }
 
 #[tokio::test]

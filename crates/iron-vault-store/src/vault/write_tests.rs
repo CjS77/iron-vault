@@ -362,7 +362,7 @@ fn a_failed_write_still_records_the_unindexed_files_it_removed() {
     let (written, events) = capture_logs(|| setup.add(&fs, &mut vault, "fresh", 1));
     assert!(written.is_err());
     assert_eq!(fs.contents(&setup.path(&file)), None);
-    let removed: Vec<_> = events.iter().filter(|e| e.field("event") == "vault.unindexed-removed").collect();
+    let removed: Vec<_> = events.iter().filter(|e| e.field("file") == file.as_str()).collect();
     assert_eq!(
         (removed.len(), removed[0].level, removed[0].field("file")),
         (1, Level::WARN, file.as_str())

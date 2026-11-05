@@ -10,15 +10,13 @@
 
 mod common;
 
-use std::io;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
+use common::approval_harness::{Captured, assert_audit_record, captured_logs};
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Credential, Proxy, Response, Setup, TOKEN_BYTES, Via, WAIT, token_hash};
 use iron_vault::scrub::SCRUB_REPLACEMENT;
 use iron_vault_kinds::CredentialMaterial;
-use tracing_subscriber::fmt::MakeWriter;
 
 const USERNAME: &str = "agent-user";
 const PASSWORD: &str = "pa/ss+word=9f3e";
@@ -282,25 +280,7 @@ async fn the_scrub_event_names_the_route_and_credential_and_holds_no_secret_form
         (event["level"].as_str(), event["credential"].as_str(), event["matches"].as_u64()),
         (Some("WARN"), Some("fx_basic"), Some(4))
     );
-    let mut keys: Vec<&str> = event.as_object().unwrap().keys().map(String::as_str).collect();
-    keys.sort_unstable();
-    assert_eq!(
-        keys,
-        [
-            "credential",
-            "deployment_profile",
-            "event",
-            "level",
-            "matches",
-            "message",
-            "route",
-            "schema_version",
-            "service",
-            "service_version",
-            "target",
-            "timestamp"
-        ]
-    );
+    assert_audit_record(&event, "WARN", &["credential", "matches", "route"]);
     let logged = captured.text();
     leaked_forms()
         .iter()
@@ -311,54 +291,8 @@ async fn the_scrub_event_names_the_route_and_credential_and_holds_no_secret_form
 /// The `response.scrubbed` records of this test's own route.
 fn scrub_events(captured: &Captured) -> Vec<serde_json::Value> {
     captured
-        .text()
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .filter(|record| record["event"] == "response.scrubbed" && record["route"] == "scrubev")
+        .events("response.scrubbed")
+        .into_iter()
+        .filter(|record| record["route"] == "scrubev")
         .collect()
-}
-
-/// Everything this test binary logs, from a global subscriber installed on first use.
-///
-/// Global, not per thread: tracing caches each callsite's interest process-wide, so a thread-local subscriber can miss
-/// an event whose callsite another test's thread registered first with no subscriber.
-fn captured_logs() -> Captured {
-    static CAPTURED: OnceLock<Captured> = OnceLock::new();
-    CAPTURED
-        .get_or_init(|| {
-            let captured = Captured::default();
-            let subscriber = iron_vault::logging::subscriber(captured.clone(), iron_vault::deployment::DeploymentProfile::current());
-            tracing::subscriber::set_global_default(subscriber).unwrap();
-            captured
-        })
-        .clone()
-}
-
-/// A log writer that keeps everything written to it.
-#[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
-
-impl Captured {
-    fn text(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner)).into_owned()
-    }
-}
-
-impl io::Write for Captured {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for Captured {
-    type Writer = Captured;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
 }

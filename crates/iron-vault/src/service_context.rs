@@ -778,7 +778,7 @@ fn lock_outcome(snapshots: usize, identity_holders: usize) -> LockOutcome {
         }
         (snapshots, holders) => {
             LockIncomplete {
-                snapshots_held: snapshots as u64,
+                snapshots_held: u64::try_from(snapshots).unwrap_or(u64::MAX),
                 identity_held: holders > 0,
             }
             .emit();

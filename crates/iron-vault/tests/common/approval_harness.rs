@@ -396,6 +396,38 @@ pub fn captured_logs() -> Captured {
         .clone()
 }
 
+/// Checks that `record` is an audit record of `level` whose own fields, besides the keys every record has, are exactly
+/// `own`.
+pub fn assert_audit_record(record: &serde_json::Value, level: &str, own: &[&str]) {
+    const SHARED: [&str; 9] = [
+        "timestamp",
+        "level",
+        "target",
+        "message",
+        "event",
+        "service",
+        "service_version",
+        "schema_version",
+        "deployment_profile",
+    ];
+    let mut keys: Vec<&str> = record
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !SHARED.contains(k))
+        .collect();
+    keys.sort_unstable();
+    let mut expected = own.to_vec();
+    expected.sort_unstable();
+    assert_eq!(
+        (record["level"].as_str(), record["target"].as_str()),
+        (Some(level), Some("iron-vault.audit")),
+        "{record}"
+    );
+    assert_eq!(keys, expected, "{record}");
+}
+
 #[derive(Clone, Default)]
 pub struct Captured(Arc<Mutex<Vec<u8>>>);
 

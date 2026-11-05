@@ -4,7 +4,7 @@
 use iron_vault_store::{ErrorKindLabel, InitFailure, InitStep, StateFileName, UnlockError, VaultId};
 
 use super::{AUDIT_TARGET, AuditEvent, EventName};
-use crate::service_context::UnlockRefusal;
+use crate::service_context::{UnlockRefusal, step_names};
 
 /// `vault.initialized`: init's last step is durable.
 #[derive(Debug, Clone, Copy)]
@@ -17,7 +17,12 @@ impl AuditEvent for VaultInitialized {
     const NAME: EventName = EventName("vault.initialized");
 
     fn emit(&self) {
-        tracing::info!(target: AUDIT_TARGET, event = Self::NAME.as_str(), vault_id = self.vault_id.to_string().as_str(), "vault initialized");
+        tracing::info!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            vault_id = self.vault_id.to_string().as_str(),
+            "vault initialized",
+        );
     }
 }
 
@@ -41,7 +46,8 @@ impl AuditEvent for InitDiscarded<'_> {
     }
 }
 
-/// `vault.init-failed`: an init step failed, or its task ended without a result.
+/// `vault.init-failed`: an init step failed, or its task ended without a result. `step` is the step number, or `discard`;
+/// it is left out when no step is known.
 #[derive(Debug, Clone, Copy)]
 pub enum InitFailed<'a> {
     /// A step failed with `cause`, recorded by its variant only.
@@ -60,10 +66,16 @@ impl AuditEvent for InitFailed<'_> {
 
     fn emit(&self) {
         let (step, error_kind) = match self {
-            Self::Step { step, cause } => (step_label(*step), Some(init_failure_label(cause))),
-            Self::TaskEnded => ("unknown", None),
+            Self::Step { step, cause } => (Some(step_names(*step).0), Some(init_failure_label(cause))),
+            Self::TaskEnded => (None, None),
         };
-        tracing::warn!(target: AUDIT_TARGET, event = Self::NAME.as_str(), step, error_kind, "vault initialization failed");
+        tracing::warn!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            step = step.as_deref(),
+            error_kind,
+            "vault initialization failed",
+        );
     }
 }
 
@@ -170,22 +182,6 @@ impl AuditEvent for SupersededLeft<'_> {
             error_kind = self.error_kind.as_str(),
             "a superseded record file could not be removed; the next vault write removes it",
         );
-    }
-}
-
-/// The step's number, or `discard`.
-fn step_label(step: InitStep) -> &'static str {
-    match step {
-        InitStep::Discard => "discard",
-        InitStep::Begin => "1",
-        InitStep::IdentityEnvelope => "2",
-        InitStep::PassphraseEnvelope => "3",
-        InitStep::ApproverKey => "4",
-        InitStep::Manifest => "5",
-        InitStep::ApprovalState => "6",
-        InitStep::OpenSigner => "7",
-        InitStep::FirstApproval => "8",
-        InitStep::Finish => "9",
     }
 }
 

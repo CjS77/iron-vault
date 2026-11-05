@@ -1,40 +1,14 @@
 //! The vault, credential, caller, route and response events: each writes its name, level and exactly its own fields.
 
-use std::collections::BTreeSet;
-
-use iron_vault_policy::{CredentialName, Host, Port, RouteName};
+use iron_vault_policy::{CredentialKind, CredentialName, Host, Port, RouteName};
 use iron_vault_store::{ErrorKindLabel, InitFailure, InitStep, RecordId, StateFileName, UnlockError, VaultId};
 
 use super::credential::*;
 use super::route::*;
+use super::tests::record_of;
 use super::vault::*;
-use super::{AUDIT_TARGET, AuditEvent, CONSTANT_FIELDS};
-use crate::logging::tests::{capture, parse};
+use super::{AuditEvent, EventName};
 use crate::service_context::UnlockRefusal;
-
-const RECORD_KEYS: [&str; 5] = ["timestamp", "level", "target", "message", "event"];
-
-/// The one record `event` writes, checked for its name, level, audit target and exactly `fields`.
-fn record_of<E: AuditEvent>(event: E, level: &str, fields: &[&str]) -> serde_json::Value {
-    let out = capture(|| event.emit());
-    assert_eq!(out.lines().count(), 1, "{out}");
-    let record = parse(&out);
-    assert_eq!(
-        (record["event"].as_str(), record["level"].as_str()),
-        (Some(E::NAME.as_str()), Some(level)),
-        "{out}"
-    );
-    assert_eq!(record["target"], AUDIT_TARGET, "{out}");
-    let own: BTreeSet<&str> = record
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .filter(|key| !RECORD_KEYS.contains(key) && !CONSTANT_FIELDS.contains(key))
-        .collect();
-    assert_eq!(own, fields.iter().copied().collect(), "{out}");
-    record
-}
 
 fn credential() -> CredentialName {
     "fx-key".parse().unwrap()
@@ -65,7 +39,7 @@ fn initialization_events_carry_ids_step_labels_and_kinds_only() {
         (record["step"].as_str(), record["error_kind"].as_str()),
         (Some("3"), Some("identity_mismatch"))
     );
-    assert_eq!(record_of(InitFailed::TaskEnded, "WARN", &["step"])["step"], "unknown");
+    record_of(InitFailed::TaskEnded, "WARN", &[]);
 }
 
 #[test]
@@ -126,7 +100,7 @@ fn credential_events_record_names_ids_kinds_and_origins() {
     let (name, id, old_id) = (credential(), RecordId::new_random(), RecordId::new_random());
     let origins = origins();
     let stored = Stored {
-        kind: "static",
+        kind: CredentialKind::Static,
         origins: &origins,
     };
     let record = record_of(
@@ -152,7 +126,10 @@ fn credential_events_record_names_ids_kinds_and_origins() {
     let fields = ["credential", "old_record_id", "record_id", "kind", "origins"];
     record_of(replaced(None), "INFO", &fields);
     let healthy = record_of(
-        replaced(Some(Stored { kind: "basic", ..stored })),
+        replaced(Some(Stored {
+            kind: CredentialKind::Basic,
+            ..stored
+        })),
         "INFO",
         &[&fields[..], &["old_kind", "old_origins"]].concat(),
     );
@@ -193,4 +170,93 @@ fn route_and_scrub_events_name_the_route_and_never_a_path_or_byte() {
         &["route", "credential", "matches"],
     );
     assert_eq!(record["matches"].as_u64(), Some(4));
+}
+
+/// Every event of this module, for the test that no event records a constant field.
+pub(super) const NAMES: [EventName; 15] = [
+    VaultInitialized::NAME,
+    InitDiscarded::NAME,
+    InitFailed::NAME,
+    ForeignFile::NAME,
+    UnlockRefused::NAME,
+    LockIncomplete::NAME,
+    UnindexedRemoved::NAME,
+    SupersededLeft::NAME,
+    CredentialAdded::NAME,
+    CredentialReplaced::NAME,
+    CredentialRemoved::NAME,
+    TokenIssued::NAME,
+    TokenFailed::NAME,
+    PinnedCaUnavailable::NAME,
+    ResponseScrubbed::NAME,
+];
+
+/// Emits every event of this module, with each optional field both set and left out.
+pub(super) fn emit_every_event() {
+    let (name, id, old_id) = (credential(), RecordId::new_random(), RecordId::new_random());
+    let (origins, route) = (origins(), "fx".parse::<RouteName>().unwrap());
+    let stored = Stored {
+        kind: CredentialKind::Static,
+        origins: &origins,
+    };
+    let file = StateFileName::record(&id);
+    let kind = ErrorKindLabel::fixed("random_source");
+    let files = ["identity.age".to_owned()];
+    VaultInitialized {
+        vault_id: VaultId::new_random(),
+    }
+    .emit();
+    InitDiscarded { files: &files }.emit();
+    InitFailed::Step {
+        step: InitStep::Finish,
+        cause: &InitFailure::IdentityMismatch,
+    }
+    .emit();
+    InitFailed::TaskEnded.emit();
+    ForeignFile { file: "x" }.emit();
+    UnlockRefused {
+        refusal: &UnlockRefusal::Interrupted,
+    }
+    .emit();
+    LockIncomplete {
+        snapshots_held: 1,
+        identity_held: false,
+    }
+    .emit();
+    UnindexedRemoved { file: &file }.emit();
+    SupersededLeft {
+        file: &file,
+        error_kind: &kind,
+    }
+    .emit();
+    CredentialAdded {
+        credential: &name,
+        record_id: id,
+        stored,
+    }
+    .emit();
+    [None, Some(stored)].into_iter().for_each(|old| {
+        CredentialReplaced {
+            credential: &name,
+            old_record_id: old_id,
+            record_id: id,
+            stored,
+            old,
+        }
+        .emit();
+    });
+    CredentialRemoved {
+        credential: &name,
+        record_id: id,
+    }
+    .emit();
+    TokenIssued.emit();
+    TokenFailed { error_kind: &kind }.emit();
+    PinnedCaUnavailable { route: &route }.emit();
+    ResponseScrubbed {
+        route: &route,
+        credential: &name,
+        matches: 1,
+    }
+    .emit();
 }

@@ -1,6 +1,6 @@
 //! Audit events about credentials and caller tokens (`design/audit-logging.md`, "Credentials and vault writes").
 
-use iron_vault_policy::{CredentialName, Host, Port};
+use iron_vault_policy::{CredentialKind, CredentialName, Host, Port};
 use iron_vault_store::{ErrorKindLabel, RecordId};
 
 use super::{AUDIT_TARGET, AuditEvent, EventName};
@@ -8,8 +8,8 @@ use super::{AUDIT_TARGET, AuditEvent, EventName};
 /// A credential's kind label and permitted origins, as the record states them.
 #[derive(Debug, Clone, Copy)]
 pub struct Stored<'a> {
-    /// The kind label, such as `static`.
-    pub kind: &'a str,
+    /// The credential's kind.
+    pub kind: CredentialKind,
     /// The permitted origins.
     pub origins: &'a [(Host, Port)],
 }
@@ -43,7 +43,7 @@ impl AuditEvent for CredentialAdded<'_> {
             event = Self::NAME.as_str(),
             credential = self.credential.as_str(),
             record_id = self.record_id.to_string().as_str(),
-            kind = self.stored.kind,
+            kind = self.stored.kind.as_str(),
             origins = origins_text(self.stored.origins).as_str(),
             "credential added; routes can use it from the next approval",
         );
@@ -75,9 +75,9 @@ impl AuditEvent for CredentialReplaced<'_> {
             credential = self.credential.as_str(),
             old_record_id = self.old_record_id.to_string().as_str(),
             record_id = self.record_id.to_string().as_str(),
-            kind = self.stored.kind,
+            kind = self.stored.kind.as_str(),
             origins = origins_text(self.stored.origins).as_str(),
-            old_kind = self.old.map(|old| old.kind),
+            old_kind = self.old.map(|old| old.kind.as_str()),
             old_origins = self.old.map(|old| origins_text(old.origins)).as_deref(),
             "credential replaced",
         );

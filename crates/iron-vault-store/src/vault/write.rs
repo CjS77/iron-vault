@@ -220,8 +220,8 @@ impl Vault {
     /// Runs the file steps of a prepared write, then updates memory once the manifest has committed.
     ///
     /// A success reports its removed unindexed files in the [`WriteReport`], which the service audits. A failure has no
-    /// report to carry them, so the store records each removal itself (`log_removed_before_failure`): the log must not
-    /// lose a deletion because a later step failed.
+    /// report to carry them, so the store records each removal itself (`log_removed_before_failure`) until the removals
+    /// are returned as facts (K-188).
     fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, prepared: Prepared) -> Result<WriteReport, VaultError> {
         let mut removed = BTreeSet::new();
         self.write_steps(lock, fs, prepared, &mut removed)
@@ -321,12 +321,13 @@ fn discard(lock: &StateDirLock, fs: &impl StoreFs, id: RecordId) {
     let _ = durable_remove(lock, fs, &StateFileName::record(&id));
 }
 
-/// Records the unindexed files a failed write had already removed, under the audit event's name and field so the log
-/// reads the same as a successful write's `vault.unindexed-removed`.
+/// Records the unindexed files a failed write had already removed, as a diagnostic record with a fixed message and the
+/// file name only. The store does not know the audit event names; the removals of a successful write travel in its
+/// `WriteReport` instead.
 fn log_removed_before_failure(removed: &BTreeSet<StateFileName>) {
-    removed.iter().for_each(
-        |file| tracing::warn!(event = "vault.unindexed-removed", file = %file, "a failed vault write had removed an unlisted record file"),
-    );
+    removed
+        .iter()
+        .for_each(|file| tracing::warn!(file = %file, "a failed vault write had removed a record file the vault manifest does not list"));
 }
 
 fn remove_unindexed_file(lock: &StateDirLock, fs: &impl StoreFs, file: &StateFileName) -> Result<(), VaultError> {

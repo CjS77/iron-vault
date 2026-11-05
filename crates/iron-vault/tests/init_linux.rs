@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use common::admin_response::assert_response;
-use common::approval_harness::{Captured, captured_logs, mkdir, read_frame, send, spawn_admin};
+use common::approval_harness::{Captured, assert_audit_record, captured_logs, mkdir, read_frame, send, spawn_admin};
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, token_hash};
 use iron_vault::admin::dispatch::Handlers;
@@ -472,19 +472,20 @@ async fn a_foreign_file_beside_the_manifest_is_logged_by_name_and_unlock_goes_on
     let fixture = Fixture::new().await;
     let service = fixture.start();
     init(&service, &COMPLETE).await.vault_id();
-    fs::write(fixture.path("state/editor-backup-9f3a.txt~"), b"SECRET-CONTENT").unwrap();
+    fs::write(fixture.path("state/editor-backup-9f3a\u{e9}.txt~"), b"SECRET-CONTENT").unwrap();
 
     let unlocked = exchange(&service, AdminRequest::Unlock, &[VAULT_PASSPHRASE.as_bytes()]).await;
 
     assert_eq!(unlocked.prompts.len(), 1, "{unlocked:?}");
     assert_response(&unlocked.response, &AdminResponse::Success);
-    let text = logs.text();
-    let warned: Vec<_> = text
-        .lines()
-        .filter(|line| line.contains("vault.foreign-file") && line.contains("editor-backup-9f3a.txt~"))
+    let warned: Vec<_> = logs
+        .events("vault.foreign-file")
+        .into_iter()
+        .filter(|record| record["file"] == "editor-backup-9f3a\\u{e9}.txt~")
         .collect();
-    assert_eq!(warned.len(), 1, "{text}");
-    assert!(warned[0].contains("WARN") && !text.contains("SECRET-CONTENT"), "{text}");
+    assert_eq!(warned.len(), 1, "{}", logs.text());
+    assert_audit_record(&warned[0], "WARN", &["file"]);
+    assert!(!logs.text().contains("SECRET-CONTENT"), "{}", logs.text());
 }
 
 #[tokio::test]
@@ -511,14 +512,17 @@ async fn an_unfinished_initialization_refuses_unlock_and_the_next_init_discards_
         "{}",
         exchanged.notices
     );
-    let text = logs.text();
-    assert!(
-        text.lines().any(|line| line.contains("vault.init-discarded")
-            && ["config.toml", "operational.age", "identity.age"]
-                .iter()
-                .all(|name| line.contains(name))),
-        "{text}"
-    );
+    let discarded: Vec<_> = logs
+        .events("vault.init-discarded")
+        .into_iter()
+        .filter(|record| record["files"].as_str().is_some_and(|files| files.contains("operational.age")))
+        .collect();
+    assert_eq!(discarded.len(), 1, "{}", logs.text());
+    assert_audit_record(&discarded[0], "WARN", &["files"]);
+    let files: Vec<&str> = discarded[0]["files"].as_str().unwrap().split(',').collect();
+    ["config.toml", "operational.age", "identity.age"]
+        .iter()
+        .for_each(|name| assert!(files.contains(name), "{name} not in {files:?}"));
     assert_response(&unlock(&service).await, &AdminResponse::Success);
     assert_no_secret_logged(&logs, &[exchanged.recovery_key()]);
 }

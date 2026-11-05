@@ -113,10 +113,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 CredentialAdded {
                     credential: &name,
                     record_id,
-                    stored: Stored {
-                        kind: kind.as_str(),
-                        origins: &origins,
-                    },
+                    stored: Stored { kind, origins: &origins },
                 }
                 .emit();
                 Ok(record_id)
@@ -174,11 +171,11 @@ fn log_replaced(name: &CredentialName, old: &CurrentRecord, record_id: RecordId,
         old_record_id: old.record_id,
         record_id,
         stored: Stored {
-            kind: kind.as_str(),
+            kind: *kind,
             origins: &origins,
         },
         old: old.summary.as_ref().map(|old| Stored {
-            kind: old.kind.as_str(),
+            kind: old.kind,
             origins: &old.origins,
         }),
     }

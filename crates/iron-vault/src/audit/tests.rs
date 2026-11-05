@@ -14,7 +14,7 @@ use crate::logging::tests::{capture, capture_as, parse};
 use crate::service_state::FailureReason;
 
 /// Keys every record has besides an event's own fields.
-const RECORD_KEYS: [&str; 5] = ["timestamp", "level", "target", "message", "event"];
+pub(super) const RECORD_KEYS: [&str; 5] = ["timestamp", "level", "target", "message", "event"];
 
 const CONFIG: &str = r#"schema_version = 1
 
@@ -60,7 +60,7 @@ fn policy_invalid() -> CheckFailure {
 }
 
 /// The one record `event` writes, checked for its name, its level, the audit target and exactly `fields`.
-fn record_of(event: impl AuditEvent, level: &str, fields: &[&str]) -> serde_json::Value {
+pub(super) fn record_of(event: impl AuditEvent, level: &str, fields: &[&str]) -> serde_json::Value {
     let out = capture(|| event.emit());
     assert_eq!(out.lines().count(), 1, "{out}");
     let record = parse(&out);
@@ -303,6 +303,7 @@ fn no_audit_event_records_a_constant_field() {
             failure: &failure,
         }
         .emit();
+        super::vault_events_tests::emit_every_event();
     });
     let seen = names.0.lock().unwrap().clone();
     assert!(seen.iter().any(|name| name == "event"), "{seen:?}");
@@ -324,6 +325,7 @@ fn event_names_have_the_subject_dot_kebab_form() {
         ReloadFailed::NAME,
     ]
     .iter()
+    .chain(super::vault_events_tests::NAMES.iter())
     .for_each(|name| {
         let (subject, rest) = name.as_str().split_once('.').unwrap();
         assert!(!subject.is_empty() && subject.chars().all(|c| c.is_ascii_lowercase()), "{name:?}");
