@@ -13,7 +13,7 @@ use iron_vault_store::{PermittedOrigins, RecordId, StoreFs, Vault, VaultError, V
 
 use super::{Inner, ServiceContext, ServiceLocks};
 use crate::service_state::{AdminOperation, ServiceState};
-use crate::standing::{CredentialStanding, Standing};
+use crate::standing::{CredentialStanding, RecordSummary, Standing};
 
 /// Why a vault write changed nothing, or may not have. Each variant is one admin error code, and no message holds
 /// credential material.
@@ -68,12 +68,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             _ => return Err(VaultChangeRefusal::WrongState(inner.state)),
         };
         let kind = kind_of(&material);
+        let summary = summary_of(kind, &origins);
         let logged = (name.clone(), origins_text(&origins));
         let written = self.write_on_blocking_pool(identity, name, material, origins).await;
         let (name, origins) = logged;
         match written {
             Written::Added(record_id) => {
-                show_healthy(&mut inner, name.clone());
+                show_healthy(&mut inner, name.clone(), summary);
                 tracing::info!(
                     event = "credential.added",
                     credential = %name,
@@ -85,7 +86,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 Ok(record_id)
             }
             Written::Refused(refusal @ VaultChangeRefusal::Uncertain { present: Some(true) }) => {
-                show_healthy(&mut inner, name);
+                show_healthy(&mut inner, name, summary);
                 Err(refusal)
             }
             Written::Refused(refusal) => Err(refusal),
@@ -142,7 +143,7 @@ fn listed_after_reopen(locks: &ServiceLocks, fs: &impl StoreFs, identity: Arc<Va
 
 /// Lists `name` as healthy with no unavailable routes in the context's credential view, in name order. No active route
 /// can use it before the next approval, so none is unavailable through it.
-fn show_healthy(inner: &mut Inner, name: CredentialName) {
+fn show_healthy(inner: &mut Inner, name: CredentialName, summary: RecordSummary) {
     let Some(open) = &mut inner.open else {
         return;
     };
@@ -151,8 +152,16 @@ fn show_healthy(inner: &mut Inner, name: CredentialName) {
             name,
             standing: Standing::Healthy,
             unavailable_routes: Vec::new(),
+            summary: Some(summary),
         };
         open.credentials.insert(at, standing);
+    }
+}
+
+fn summary_of(kind: CredentialKind, origins: &PermittedOrigins) -> RecordSummary {
+    RecordSummary {
+        kind,
+        origins: origins.iter().cloned().collect(),
     }
 }
 

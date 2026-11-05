@@ -760,6 +760,7 @@ fn standing(report: &StatusReport) -> Vec<(String, Standing, Vec<String>)> {
                  name,
                  standing,
                  unavailable_routes,
+                 ..
              }| {
                 (
                     name.to_string(),

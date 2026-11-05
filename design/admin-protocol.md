@@ -117,8 +117,9 @@ an error.
 | `6` | `status` | none | the [status report](#status) |
 | `7` | `init` | none | the vault ID and the committed version |
 | `8` | `add` | the credential name, kind and permitted origins | the [record ID](#add) |
+| `9` | `list` | none | the [credential list](#list) |
 
-Command IDs `9` to `11` are reserved for `list`, `replace` and `rm` (EP-25).
+Command IDs `10` and `11` are reserved for `replace` and `rm` (EP-25).
 
 **No command accepts an external signature** ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -501,6 +502,10 @@ The credential list is one entry per credential in the vault manifest, in creden
 
 A healthy credential makes no route unavailable. A needs-login standing joins this table with OAuth (v1).
 
+The credential list shares the [64 KiB frame bound](#frame) with the rest of the report. A report that would not fit
+is never truncated; `status` has no error to give for it yet, so the service closes the connection, which the CLI
+reports as a failed exchange. `list` answers `list-too-large` instead.
+
 The route fault list is one entry per route that is unavailable for a cause of its own, in route-name order. A route
 listed here is never listed under a healthy credential; one whose credential is also damaged appears in both lists.
 
@@ -511,6 +516,37 @@ listed here is never listed under a healthy credential; one whose credential is 
 | 1 | fault: `1` pinned CA unavailable |
 
 The entry names no CA path, PEM bytes or load error; the owner's log names the route and its `ca_file` field.
+
+#### list
+
+`list` shows the owner what the vault holds, so the owner can write routes that will activate and see what `rm` or
+`replace` would touch ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). It takes no arguments and changes nothing. Like `status` it is answered in every state
+([§3.12](iron-vault-specification.md#312-service-states-and-errors)), because it reads only what the service context holds of an open vault. It never carries a secret value or a
+record digest. `status` leaves permitted origins out; `list` is the one command that reports them.
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | vault open | flag: `1` when a vault is open |
+| 3 | entries | byte value: the entries below; empty while no vault is open, and for an open vault with no credentials |
+
+While no vault is open (Starting, Locked, Unavailable, and a vault not yet initialized) the flag is `0` and there are no
+entries. One entry per credential in the vault manifest, in credential-name order:
+
+| Size | Part |
+|---|---|
+| 1 | name length `n`, 1 to 64 |
+| `n` | credential name |
+| 1 | standing, with the codes of the [credential list](#status) |
+| 1 | kind: `0` unknown because the record is damaged, `1` static, `2` basic |
+| 1 | origin count `o`: `0` for a damaged record |
+| `o` times | host length (1 byte), the host, then the `u16` port, in ascending host and port order |
+
+A damaged record's origins cannot be trusted, so a damaged entry has kind `0` and no origins; a healthy entry has a
+kind and at least one origin. A decoder refuses any other combination, including an origin count above `0` with kind
+`0`.
+
+The encoded entries must fit the 64 KiB frame bound. If they would not, the service answers `list-too-large`, naming
+the count, and never sends a truncated list.
 
 ### Admin response: error (kind 5)
 
@@ -547,14 +583,15 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `21` | `credential-invalid` | `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
 | `22` | `vault-write-failed` | `add`: the vault write failed; the message says whether it may have committed |
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
+| `23` | `list-too-large` | `list`: the credential list does not fit one frame; the message names the count |
 
 ## Versions
 
 This document specifies protocol version 1, the only version the codec reads or writes. A frame of any other version
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
-`status` (command 6), `init` (command 7), `add` (command 8), error codes 7 to 22 and error code 25 join it rather than
-starting version 2.
+`status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), error codes 7 to 23 and error code 25
+join it rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
@@ -637,7 +674,7 @@ after the last frame does not hide it.
 | `1` | the service answered with an error response |
 | `2` | usage error |
 | `3` | no admin response: no socket or nothing listening, permission denied, the exchange failed or timed out, a prompt got no value, or a reveal could not be shown on a terminal |
-| `4` | `status`: the service answered, and it is not Ready |
+| `4` | `status`: the service answered, and it is not Ready; `list`: the service answered, and no vault is open |
 | `128 + n` | signal `n` while the CLI had the terminal open for prompting: `130` for SIGINT, `131` for SIGQUIT, `143` for SIGTERM |
 
 A `not-admin-principal` response or a permission-denied connect tells the owner that a protected install needs `sudo`.
@@ -680,6 +717,14 @@ profile line is exactly `profile: development — no isolation from malware runn
 runs as: in development the service account, the admin principal and the invoking user are the same account. The output
 is a function of the report, so two runs on the same state are byte-identical. It exits `0` when the service is Ready
 and `4` for any other state.
+
+### list
+
+`iron-vault list` prints one line per credential to stdout, in credential-name order: `<name>  <kind>  <host:port,...>
+<standing>`, the fields separated by two spaces. The standing is `healthy` or `damaged (<damage>)`. A damaged record
+prints `unknown` for its kind and hosts. With no open vault it prints `credentials: unknown while the vault is locked`
+and exits `4`; an open vault with no credentials prints nothing and exits `0`. The output is a function of the
+service's list, so two runs on the same state are byte-identical.
 
 ### unlock
 

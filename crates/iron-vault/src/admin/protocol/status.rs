@@ -258,12 +258,12 @@ fn encode_credentials(credentials: &[CredentialStanding]) -> Vec<u8> {
 }
 
 /// A name is at most 64 bytes, so its length fits the byte.
-fn put_name(out: &mut Vec<u8>, name: &str) {
+pub(super) fn put_name(out: &mut Vec<u8>, name: &str) {
     out.push(u8::try_from(name.len()).unwrap_or(u8::MAX));
     out.extend_from_slice(name.as_bytes());
 }
 
-fn standing_code(standing: Standing) -> u8 {
+pub(super) fn standing_code(standing: Standing) -> u8 {
     match standing {
         Standing::Healthy => 0,
         Standing::Damaged(RecordDamage::Missing) => 1,
@@ -272,7 +272,7 @@ fn standing_code(standing: Standing) -> u8 {
     }
 }
 
-fn read_standing(code: u8) -> Result<Standing, FrameError> {
+pub(super) fn read_standing(code: u8) -> Result<Standing, FrameError> {
     match code {
         0 => Ok(Standing::Healthy),
         1 => Ok(Standing::Damaged(RecordDamage::Missing)),
@@ -299,6 +299,7 @@ fn take_credential(rest: &mut &[u8]) -> Result<CredentialStanding, FrameError> {
         name,
         standing,
         unavailable_routes,
+        summary: None,
     })
 }
 
@@ -307,7 +308,7 @@ fn take_name<T: FromStr>(rest: &mut &[u8]) -> Result<T, FrameError> {
 }
 
 /// A length-prefixed name from the list in field `tag`.
-fn take_name_in<T: FromStr>(tag: u16, rest: &mut &[u8]) -> Result<T, FrameError> {
+pub(super) fn take_name_in<T: FromStr>(tag: u16, rest: &mut &[u8]) -> Result<T, FrameError> {
     let len = usize::from(take_in(tag, rest, 1)?[0]);
     let text = std::str::from_utf8(take_in(tag, rest, len)?).map_err(|_| FrameError::InvalidValue(tag))?;
     text.parse().map_err(|_| FrameError::InvalidValue(tag))
@@ -319,7 +320,7 @@ fn take<'a>(rest: &mut &'a [u8], n: usize) -> Result<&'a [u8], FrameError> {
 }
 
 /// [`take`] for the list in field `tag`.
-fn take_in<'a>(tag: u16, rest: &mut &'a [u8], n: usize) -> Result<&'a [u8], FrameError> {
+pub(super) fn take_in<'a>(tag: u16, rest: &mut &'a [u8], n: usize) -> Result<&'a [u8], FrameError> {
     let (head, tail) = rest.split_at_checked(n).ok_or(FrameError::InvalidValue(tag))?;
     *rest = tail;
     Ok(head)
@@ -376,6 +377,7 @@ mod tests {
             name: name.parse().unwrap(),
             standing,
             unavailable_routes: routes.iter().map(|route| route.parse().unwrap()).collect(),
+            summary: None,
         }
     }
 

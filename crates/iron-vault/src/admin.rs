@@ -10,6 +10,8 @@ mod approve;
 pub mod dispatch;
 #[cfg(target_os = "linux")]
 mod init;
+#[cfg(target_os = "linux")]
+mod list;
 pub mod principal;
 pub mod protocol;
 #[cfg(target_os = "linux")]

@@ -13,6 +13,7 @@ fn credential(name: &str, standing: Standing, routes: &[&str]) -> CredentialStan
         name: name.parse().unwrap(),
         standing,
         unavailable_routes: routes.iter().map(|route| route.parse().unwrap()).collect(),
+        summary: None,
     }
 }
 

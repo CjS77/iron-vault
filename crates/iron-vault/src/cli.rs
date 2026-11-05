@@ -19,6 +19,8 @@ mod console;
 #[cfg(target_os = "linux")]
 mod init;
 #[cfg(target_os = "linux")]
+mod list;
+#[cfg(target_os = "linux")]
 mod status;
 
 use std::ffi::OsStr;
@@ -45,7 +47,7 @@ Exit codes:
   2  usage error
   3  no answer from the service: it is not running, this account may not connect, the exchange failed, a prompt
      got no value, or a secret value the service sent could not be shown on a terminal
-  4  `status`: the service answered, and it is not Ready";
+  4  `status`: the service answered, and it is not Ready; `list`: no vault is open, so the credentials are unknown";
 
 /// The exit statuses listed in [`EXIT_CODES`]. Usage errors exit through clap, with its status 2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,7 +60,7 @@ pub enum Exit {
     Usage = 2,
     /// No admin response came back.
     Unreachable = 3,
-    /// `status` reached the service, which is in a state other than Ready.
+    /// `status` reached the service, which is in a state other than Ready; or `list` reached it with no vault open.
     NotReady = 4,
 }
 
@@ -95,6 +97,8 @@ pub enum Command {
     Ping,
     /// Show the service, vault, approval, memory protection and credential states, without secrets.
     Status,
+    /// List every credential with its kind, permitted origins and standing, never a secret. Needs an open vault.
+    List,
     /// Open the vault: the service prompts for the vault passphrase, read with echo off or from stdin.
     Unlock,
     /// Clear the vault identity and every cached secret from the service's memory, leaving it Locked.
@@ -212,6 +216,12 @@ pub fn status(socket: Option<&Path>) -> ExitCode {
     client::status(socket).into()
 }
 
+/// `iron-vault list`: sends `list` and prints one line per credential; exits 4 while no vault is open.
+#[cfg(target_os = "linux")]
+pub fn list(socket: Option<&Path>) -> ExitCode {
+    client::list(socket).into()
+}
+
 /// `iron-vault unlock`: sends `unlock` to the admin socket at `socket`, or this installation's, answers the passphrase
 /// prompt, and shows the state the service settled in.
 #[cfg(target_os = "linux")]
@@ -298,6 +308,12 @@ pub fn lock(_socket: Option<&Path>) -> ExitCode {
 fn unsupported_platform() -> ExitCode {
     eprintln!("iron-vault: client commands are not supported on this platform yet");
     Exit::Unreachable.into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn list(_socket: Option<&Path>) -> ExitCode {
+    unsupported_platform()
 }
 
 /// The client is Linux-only for now, like the service.

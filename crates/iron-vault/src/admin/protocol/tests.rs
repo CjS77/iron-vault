@@ -275,6 +275,7 @@ fn credential_standing() -> impl Strategy<Value = CredentialStanding> {
         name,
         standing,
         unavailable_routes,
+        summary: None,
     })
 }
 
@@ -444,8 +445,8 @@ fn wrong_state_is_error_code_13() {
 fn a_success_result_must_name_a_command_with_a_result_and_a_known_profile() {
     let no_command = field(2, &[1]);
     assert_eq!(decode_err(&raw(1, 4, &no_command)), FrameError::MissingField(1));
-    let unknown = body(&[field(1, &[0, 9]), field(2, &[1])]);
-    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(9));
+    let unknown = body(&[field(1, &[0, 12]), field(2, &[1])]);
+    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(12));
     let without_profile = field(1, &[0, 1]);
     assert_eq!(decode_err(&raw(1, 4, &without_profile)), FrameError::MissingField(2));
     [&[][..], &[0], &[3], &[1, 1]].into_iter().for_each(|profile| {
@@ -623,7 +624,7 @@ fn malformed_fixed_width_values_and_flags_are_refused() {
 
 #[test]
 fn unknown_error_codes_are_refused() {
-    [0, 23, 0xffff].into_iter().for_each(|code: u16| {
+    [0, 24, 0xffff].into_iter().for_each(|code: u16| {
         let error = body(&[field(1, &code.to_be_bytes()), field(2, b"m")]);
         assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::UnknownErrorCode(code));
     });
@@ -783,6 +784,19 @@ fn the_add_error_codes_have_their_documented_numbers_and_names() {
         assert_eq!((code as u16, code.name()), (number, name));
         assert_round_trips(&error(code, "m"));
     });
+}
+
+#[test]
+fn list_has_command_id_9_no_arguments_and_its_own_error_code() {
+    let request = Frame::Request(AdminRequest::List);
+    assert_eq!(encoded(&request), [0, 1, 1, 0, 0, 0, 8, 0, 1, 0, 0, 0, 2, 0, 9]);
+    assert_round_trips(&request);
+    assert_eq!((AdminCommand::List as u16, AdminCommand::List.name()), (9, "list"));
+    assert_eq!(
+        (ErrorCode::ListTooLarge as u16, ErrorCode::ListTooLarge.name()),
+        (23, "list-too-large")
+    );
+    assert_round_trips(&error(ErrorCode::ListTooLarge, "m"));
 }
 
 fn config_approve(config: &[u8]) -> Frame {

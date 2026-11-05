@@ -408,7 +408,14 @@ async fn credentials<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceCo
         StatusReport {
             vault: VaultStatus::Unlocked(vault),
             ..
-        } => vault.credentials,
+        } => vault
+            .credentials
+            .into_iter()
+            .map(|credential| CredentialStanding {
+                summary: None,
+                ..credential
+            })
+            .collect(),
         other => panic!("no open vault: {other:?}"),
     }
 }
@@ -418,6 +425,7 @@ fn healthy(name: &str) -> CredentialStanding {
         name: name.parse().unwrap(),
         standing: Standing::Healthy,
         unavailable_routes: Vec::new(),
+        summary: None,
     }
 }
 

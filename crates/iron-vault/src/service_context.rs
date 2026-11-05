@@ -414,6 +414,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
+    /// Every credential in the open vault's manifest, in name order, with its kind and permitted origins when its record is
+    /// healthy; `None` while no vault is open. Read under the mutex, so a completed `add` shows at once.
+    pub async fn list(&self) -> Option<Vec<CredentialStanding>> {
+        self.inner.lock().await.open.as_ref().map(|open| open.credentials.clone())
+    }
+
     /// What the directories say about a vault that is not open.
     async fn closed_vault_status(&self) -> VaultStatus {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));

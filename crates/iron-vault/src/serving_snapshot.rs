@@ -17,7 +17,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
 use crate::service_state::{FailureReason, UnavailableReason};
-use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
+use crate::standing::{CredentialStanding, RecordSummary, RouteFault, RouteFaultKind, Standing};
 use crate::upstream::clients::UpstreamClients;
 
 /// The active policy, the vault's healthy records, the upstream clients and the rate limiter for one activation.
@@ -55,6 +55,14 @@ pub enum SnapshotError {
         /// The route whose availability disagrees.
         route: RouteName,
     },
+}
+
+/// The kind and permitted origins of a healthy record, without its material.
+fn summary_of(record: &CredentialRecord) -> RecordSummary {
+    RecordSummary {
+        kind: record.kind(),
+        origins: record.origins().iter().cloned().collect(),
+    }
 }
 
 impl ServingSnapshot {
@@ -125,6 +133,7 @@ impl ServingSnapshot {
                 name: name.clone(),
                 standing: opened.damaged().get(name).copied().map_or(Standing::Healthy, Standing::Damaged),
                 unavailable_routes: self.unavailable_routes_of(name),
+                summary: self.vault.record(name).map(summary_of),
             })
             .collect()
     }

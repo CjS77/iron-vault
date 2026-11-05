@@ -1,14 +1,16 @@
 //! The bodies of every frame kind except owner input, which is never read as fields.
 
-use super::add;
 use super::fields::{self, exact, first, read_flag, read_profile, read_text, read_u16, read_u64};
 use super::status::{self, StatusReport};
 use super::{AdminCommand, AdminRequest, AdminResponse, ApprovalResult, ErrorCode, FrameError, Notice, Prompt, ProposedConfig};
+use super::{add, list};
 use crate::deployment::DeploymentProfile;
 use iron_vault_policy::CallerToken;
 use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
 use iron_vault_store::{RecordId, VaultId};
 use zeroize::Zeroizing;
+
+use crate::standing::CredentialStanding;
 
 pub(super) const TAG_COMMAND: u16 = 1;
 const TAG_LABEL: u16 = 1;
@@ -34,6 +36,7 @@ const COMMAND_UNLOCK: u16 = AdminCommand::Unlock as u16;
 const COMMAND_LOCK: u16 = AdminCommand::Lock as u16;
 const COMMAND_INIT: u16 = AdminCommand::Init as u16;
 const COMMAND_ADD: u16 = AdminCommand::Add as u16;
+const COMMAND_LIST: u16 = AdminCommand::List as u16;
 
 /// A request body; only `add`, whose origins have bounds, can be refused.
 pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameError> {
@@ -65,6 +68,7 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
         COMMAND_LOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Lock),
         COMMAND_INIT => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Init),
         COMMAND_ADD => add::decode_request(&fields),
+        COMMAND_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::List),
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
 }
@@ -126,6 +130,12 @@ fn decode_caller_token_result(fields: &[fields::Field<'_>]) -> Result<AdminRespo
     CallerToken::parse(token)
         .map(|token| AdminResponse::CallerToken { token })
         .map_err(|_| FrameError::InvalidValue(TAG_TOKEN))
+}
+
+/// `list`'s success body: the command it answers, whether a vault is open, then the entries. An entry the wire cannot
+/// carry is an error.
+pub(super) fn encode_list_result(credentials: Option<&[CredentialStanding]>) -> Result<Vec<u8>, FrameError> {
+    list::encode_result(COMMAND_LIST, credentials)
 }
 
 /// `init`'s success body: the command it answers, the new vault's ID as its 16 raw bytes (as `status` sends it), then the
@@ -208,6 +218,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
         }
         COMMAND_INIT => decode_init_result(&fields),
         COMMAND_ADD => add::decode_result(&fields),
+        COMMAND_LIST => list::decode_result(&fields),
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
 }
@@ -252,6 +263,7 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::CredentialInvalid,
         ErrorCode::VaultWriteFailed,
         ErrorCode::RandomSourceFailed,
+        ErrorCode::ListTooLarge,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

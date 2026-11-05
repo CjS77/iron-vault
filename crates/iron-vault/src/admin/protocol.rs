@@ -4,6 +4,7 @@
 mod add;
 mod body;
 mod fields;
+mod list;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -14,6 +15,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::deployment::DeploymentProfile;
+use crate::standing::CredentialStanding;
 use iron_vault_policy::{CallerToken, CredentialKind, Port};
 use iron_vault_store::{RecordId, VaultId};
 
@@ -49,6 +51,9 @@ pub enum AdminRequest {
     /// Creates the vault and approves the initial config as version 1; the service prompts for both passphrases and
     /// reveals the recovery key. Command ID 7.
     Init,
+    /// Lists every credential with its kind, permitted origins and standing; allowed in every state. No arguments.
+    /// Command ID 9.
+    List,
     /// Enrols a new credential under a name the manifest does not hold; the service prompts for the material. Command
     /// ID 8.
     Add {
@@ -83,6 +88,7 @@ impl AdminRequest {
             Self::Lock => AdminCommand::Lock,
             Self::Init => AdminCommand::Init,
             Self::Add { .. } => AdminCommand::Add,
+            Self::List => AdminCommand::List,
         }
     }
 }
@@ -106,6 +112,8 @@ pub enum AdminCommand {
     Init = 7,
     /// `add`.
     Add = 8,
+    /// `list`.
+    List = 9,
 }
 
 impl AdminCommand {
@@ -120,6 +128,7 @@ impl AdminCommand {
             Self::Lock => "lock",
             Self::Init => "init",
             Self::Add => "add",
+            Self::List => "list",
         }
     }
 }
@@ -139,7 +148,8 @@ mod no_external_signatures {
             | AdminCommand::Status
             | AdminCommand::Unlock
             | AdminCommand::Lock
-            | AdminCommand::Init => &[],
+            | AdminCommand::Init
+            | AdminCommand::List => &[],
             AdminCommand::ConfigApprove => &["config"],
             AdminCommand::Add => &["name", "kind", "origins"],
         }
@@ -154,6 +164,7 @@ mod no_external_signatures {
         AdminCommand::Status,
         AdminCommand::Init,
         AdminCommand::Add,
+        AdminCommand::List,
     ];
 
     #[test]
@@ -313,6 +324,11 @@ pub enum AdminResponse {
         /// its cancellation may still hold them, and the service has logged how many.
         cleared: bool,
     },
+    /// `list` completed.
+    List {
+        /// Every credential in the vault manifest, in name order; `None` while no vault is open.
+        credentials: Option<Vec<CredentialStanding>>,
+    },
     /// `add` completed: the new credential record's ID.
     Add {
         /// The ID of the record the service wrote.
@@ -407,6 +423,8 @@ pub enum ErrorCode {
     VaultWriteFailed = 22,
     /// `caller-token`: the operating system's random source failed, so no token was made.
     RandomSourceFailed = 25,
+    /// `list`: the credential list does not fit one frame; the message names the count.
+    ListTooLarge = 23,
 }
 
 impl ErrorCode {
@@ -436,6 +454,7 @@ impl ErrorCode {
             Self::CredentialInvalid => "credential-invalid",
             Self::VaultWriteFailed => "vault-write-failed",
             Self::RandomSourceFailed => "random-source-failed",
+            Self::ListTooLarge => "list-too-large",
         }
     }
 
@@ -566,6 +585,9 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::Ping { profile }) => put_frame(out, FrameKind::Success, &body::encode_ping_result(*profile)),
         Frame::Response(AdminResponse::Status(report)) => put_frame(out, FrameKind::Success, &body::encode_status_result(report)),
         Frame::Response(AdminResponse::Lock { cleared }) => put_frame(out, FrameKind::Success, &body::encode_lock_result(*cleared)),
+        Frame::Response(AdminResponse::List { credentials }) => {
+            put_frame(out, FrameKind::Success, &body::encode_list_result(credentials.as_deref())?)
+        }
         Frame::Response(AdminResponse::Add { record_id }) => put_frame(out, FrameKind::Success, &body::encode_add_result(*record_id)),
         Frame::Response(AdminResponse::CallerToken { token }) => {
             put_frame(out, FrameKind::Success, &body::encode_caller_token_result(token))

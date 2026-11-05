@@ -128,6 +128,18 @@ pub fn status(socket: Option<&Path>) -> Exit {
     })
 }
 
+/// Runs `list` and prints one line per credential on stdout. With no vault open the credentials are unknown and the exit
+/// is [`Exit::NotReady`], so a script cannot mistake an empty answer for an empty vault.
+pub fn list(socket: Option<&Path>) -> Exit {
+    run(socket, AdminRequest::List, |response| match response {
+        AdminResponse::List { credentials } => {
+            print!("{}", super::list::render(credentials.as_deref()));
+            if credentials.is_some() { Exit::Success } else { Exit::NotReady }
+        }
+        _ => unexpected(),
+    })
+}
+
 /// Runs `lock` and reports the new state. A drain that expired is a success with a warning on stderr: the service is
 /// Locked, but the owner must know that a request may still hold secrets.
 pub fn lock(socket: Option<&Path>) -> Exit {

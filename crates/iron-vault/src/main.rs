@@ -19,6 +19,7 @@ fn main() -> anyhow::Result<ExitCode> {
         // Client commands log nothing: what they report is their output.
         Command::Ping => Ok(run_client(|| cli::ping(cli.admin_socket.as_deref()))),
         Command::Status => Ok(run_client(|| cli::status(cli.admin_socket.as_deref()))),
+        Command::List => Ok(run_client(|| cli::list(cli.admin_socket.as_deref()))),
         Command::Unlock => Ok(run_client(|| cli::unlock(cli.admin_socket.as_deref()))),
         Command::Lock => Ok(run_client(|| cli::lock(cli.admin_socket.as_deref()))),
         Command::Init => Ok(run_client(|| cli::init(cli.admin_socket.as_deref()))),
