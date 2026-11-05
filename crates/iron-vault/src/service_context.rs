@@ -51,7 +51,7 @@ use serving::Serving;
 use unlock::log_foreign_files;
 
 pub use approval::{ApprovalEnd, ApprovalReview};
-pub use init::{InitRefusal, step_label};
+pub use init::{InitRefusal, step_names};
 pub use vault_change::VaultChangeRefusal;
 
 /// The log target of lock transitions (glossary: *Lock transition*), so the audit design (EP-26) can route them as

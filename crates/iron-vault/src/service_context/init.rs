@@ -78,9 +78,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// A failed step by its number, or `discard` for the discard of an unfinished initialization.
-pub fn step_label(step: InitStep) -> String {
-    step.number().map_or_else(|| "discard".to_owned(), |number| number.to_string())
+/// A failed step's two names, from one place so they cannot drift apart: the log's (`3`, or `discard` for the discard of
+/// an unfinished initialization) and the owner's (`step 3`, or `the discard`).
+pub fn step_names(step: InitStep) -> (String, String) {
+    step.number().map_or_else(
+        || ("discard".to_owned(), "the discard".to_owned()),
+        |number| (number.to_string(), format!("step {number}")),
+    )
 }
 
 /// Logs how the writes ended: the files a discard removed, then the new vault or the failed step. A refusal of the
@@ -98,7 +102,7 @@ fn log_outcome(written: &Result<InitializedVault, InitError>) {
             tracing::info!(event = "vault.initialized", vault_id = %vault.vault_id, "vault initialized; the service stays Locked");
         }
         Err(error) if begin_refusal(error).is_none() => {
-            let (step, cause) = (step_label(error.step()), error.cause());
+            let ((step, _), cause) = (step_names(error.step()), error.cause());
             tracing::warn!(event = "vault.init-failed", %step, error = %cause, "vault initialization failed");
         }
         Err(_) => {}

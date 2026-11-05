@@ -20,7 +20,7 @@ use super::protocol::{AdminRequest, AdminResponse, ErrorCode, OwnerInput, Prompt
 use super::server::{Exchange, ExchangeError};
 use super::unlock::state_name;
 use super::{DEAD_RECOVERY_KEY, UNCONFIRMED_RECOVERY_KEY};
-use crate::service_context::{InitRefusal, ServiceContext};
+use crate::service_context::{InitRefusal, ServiceContext, step_names};
 use crate::service_state::AdminOperation;
 
 /// The vault passphrase's two secret prompts: the entry, then its repeat.
@@ -215,10 +215,7 @@ fn failed(failure: &InitError) -> AdminResponse {
         InitFailure::State(InitStateError::FinishUncertain { .. }) => UNCONFIRMED_RECOVERY_KEY.to_owned(),
         _ => format!("run `iron-vault init` again, which discards the unfinished vault; {DEAD_RECOVERY_KEY}"),
     };
-    let at = failure
-        .step()
-        .number()
-        .map_or_else(|| "the discard".to_owned(), |n| format!("step {n}"));
+    let (_, at) = step_names(failure.step());
     error(ErrorCode::InitFailed, format!("init failed at {at}: {}; {advice}", failure.cause()))
 }
 
