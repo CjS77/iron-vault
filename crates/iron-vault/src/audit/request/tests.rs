@@ -222,7 +222,7 @@ fn a_cut_after_the_head_keeps_the_status_and_says_who_closed_it() {
         (Some(200), Some("caller_gone"))
     );
     let event = the_event(|| {
-        let mut record = relayed(0, 3);
+        let record = relayed(0, 3);
         record.facts().refuse(ReasonCode::BodyTruncated);
         drop(record);
     });
