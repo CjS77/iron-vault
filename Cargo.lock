@@ -1356,6 +1356,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
  "webpki-roots",
  "zeroize",
 ]

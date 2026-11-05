@@ -19,6 +19,9 @@ pub mod credential;
 pub mod route;
 pub mod vault;
 
+mod request;
+pub use request::{REQUEST_TARGET, ReasonCode, RequestFacts, RequestId, RequestRecord};
+
 use iron_vault_policy::ApprovalSummary;
 use iron_vault_store::{ApprovalError, ApprovalFailure, ApprovalStep, ApprovalVersion, ConfigDigest};
 

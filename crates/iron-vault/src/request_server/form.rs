@@ -7,6 +7,8 @@
 use hyper::header::{CONNECTION, UPGRADE};
 use hyper::{HeaderMap, Method, Uri, Version};
 
+use crate::audit::ReasonCode;
+
 /// The rule a request head broke. Its text names the rule and never the target, which may hold a secret in its query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum FormViolation {
@@ -22,6 +24,17 @@ pub enum FormViolation {
     /// The HTTP version is neither 1.0 nor 1.1.
     #[error("only HTTP/1.0 and HTTP/1.1 are supported")]
     Version,
+}
+
+impl From<FormViolation> for ReasonCode {
+    fn from(violation: FormViolation) -> Self {
+        match violation {
+            FormViolation::Connect => Self::ConnectNotSupported,
+            FormViolation::NotOriginForm => Self::NotOriginForm,
+            FormViolation::Upgrade => Self::UpgradeNotSupported,
+            FormViolation::Version => Self::UnsupportedVersion,
+        }
+    }
 }
 
 /// Checks the request line and headers against the form gate, returning the first rule broken.

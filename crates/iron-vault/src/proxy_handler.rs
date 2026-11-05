@@ -36,7 +36,8 @@ use hyper::{Request, Response, StatusCode};
 use iron_vault_policy::{HeaderName, HeaderValue, ListenerConfig};
 use tokio::time::Instant;
 
-use crate::pipeline::{RefusalResponse, RequestHead, prepare};
+use crate::audit::{ReasonCode, RequestFacts};
+use crate::pipeline::{Identified, PipelineRefusal, RefusalResponse, RequestHead, prepare};
 use crate::request_server::{ConnectionTags, RequestBody, RequestHandler, ResponseBody};
 use crate::service_state::UnavailableReason;
 use crate::serving_snapshot::{Admission, ServingSnapshot, SnapshotHolder};
@@ -68,14 +69,15 @@ impl RequestHandler for ProxyHandler {
         request: Request<RequestBody>,
         tags: &ConnectionTags,
         deadline: Instant,
+        facts: &RequestFacts,
     ) -> impl Future<Output = Response<ResponseBody>> + Send {
         // Loaded once, here, so the whole request runs on one activation even if a reload lands while it is in flight.
         let admission = self.snapshots.load();
-        let tags = tags.clone();
+        let (tags, facts) = (tags.clone(), facts.clone());
         async move {
             match admission {
-                Admission::Serve(snapshot) => serve(snapshot, &tags, request, deadline).await,
-                Admission::Refuse(reason) => unavailable(reason),
+                Admission::Serve(snapshot) => serve(snapshot, &tags, request, deadline, &facts).await,
+                Admission::Refuse(reason) => unavailable(reason, &facts),
             }
         }
     }
@@ -92,11 +94,12 @@ async fn serve(
     tags: &ConnectionTags,
     request: Request<RequestBody>,
     deadline: Instant,
+    facts: &RequestFacts,
 ) -> Response<ResponseBody> {
     let answer = tokio::select! {
         biased;
-        () = snapshot.withdrawn() => Err(RefusalResponse::fixed(StatusCode::SERVICE_UNAVAILABLE.as_u16())),
-        answer = proxy(&snapshot, tags, request, deadline) => answer,
+        () = snapshot.withdrawn() => Err(refused(facts, ReasonCode::Withdrawn, StatusCode::SERVICE_UNAVAILABLE)),
+        answer = proxy(&snapshot, tags, request, deadline, facts) => answer,
     };
     match answer {
         Ok(response) => response.map(|body| UntilWithdrawn::new(body, snapshot).boxed_unsync()),
@@ -104,25 +107,25 @@ async fn serve(
     }
 }
 
-/// Runs the pipeline, sends and relays; any failure before the response head is a fixed answer.
+/// Runs the pipeline, sends and relays; any failure before the response head is a fixed answer, whose reason is recorded
+/// in `facts` together with the caller and route as far as they were found.
 async fn proxy(
     snapshot: &ServingSnapshot,
     tags: &ConnectionTags,
     request: Request<RequestBody>,
     deadline: Instant,
+    facts: &RequestFacts,
 ) -> Result<Response<ResponseBody>, RefusalResponse> {
     let (parts, body) = request.into_parts();
-    let head = request_head(&parts).ok_or_else(|| RefusalResponse::fixed(StatusCode::BAD_REQUEST.as_u16()))?;
-    let prepared = prepare(snapshot, tags, head, std::time::Instant::now()).map_err(|refusal| refusal.respond())?;
-    let client = snapshot
-        .clients()
-        .for_route(prepared.route())
-        .map_err(|_| RefusalResponse::fixed(StatusCode::SERVICE_UNAVAILABLE.as_u16()))?;
+    let head = request_head(&parts).ok_or_else(|| refused(facts, ReasonCode::BadHeader, StatusCode::BAD_REQUEST))?;
+    let mut identified = Identified::default();
+    let prepared = prepare(snapshot, tags, head, std::time::Instant::now(), &mut identified);
+    record_identity(facts, snapshot, &identified);
+    let prepared = prepared.map_err(|refusal| refuse_pipeline(facts, &refusal))?;
+    let unavailable = || refused(facts, ReasonCode::RouteUnavailable, StatusCode::SERVICE_UNAVAILABLE);
+    let client = snapshot.clients().for_route(prepared.route()).map_err(|_| unavailable())?;
     let (route, credential) = (prepared.route().clone(), prepared.credential().clone());
-    let route_config = snapshot
-        .policy()
-        .route(&route)
-        .ok_or_else(|| RefusalResponse::fixed(StatusCode::SERVICE_UNAVAILABLE.as_u16()))?;
+    let route_config = snapshot.policy().route(&route).ok_or_else(unavailable)?;
     let (request, patterns) = prepared.into_parts();
     // The URL actually sent, which holds a query slot's secret: kept only until the response head is decided.
     let request_url = request.url().clone();
@@ -138,8 +141,31 @@ async fn proxy(
     let response = tokio::time::timeout_at(deadline, send)
         .await
         .unwrap_or(Err(TransportError::Timeout))
-        .map_err(|error| RefusalResponse::fixed(error.status().as_u16()))?;
+        .map_err(|error| refused(facts, error.into(), error.status()))?;
     relay::relay(response, token_header(snapshot, tags), context, route_config, &request_url)
+}
+
+/// Records the caller and route the pipeline found, with the route's upstream host as configured.
+fn record_identity(facts: &RequestFacts, snapshot: &ServingSnapshot, identified: &Identified) {
+    identified.caller.iter().for_each(|caller| facts.caller(caller));
+    if let Some((route, credential)) = &identified.route {
+        if let Some(config) = snapshot.policy().route(route) {
+            facts.route(route, credential, config.upstream().host());
+        }
+    }
+}
+
+/// The answer to a pipeline refusal. Its reason is recorded, and a service defect also raises its high-severity event.
+fn refuse_pipeline(facts: &RequestFacts, refusal: &PipelineRefusal) -> RefusalResponse {
+    facts.refuse(refusal.into());
+    refusal.defect().iter().for_each(|defect| facts.report_defect(defect));
+    refusal.respond()
+}
+
+/// The fixed answer with `status`, recording `reason` as why the request failed.
+fn refused(facts: &RequestFacts, reason: ReasonCode, status: StatusCode) -> RefusalResponse {
+    facts.refuse(reason);
+    RefusalResponse::fixed(status.as_u16())
 }
 
 /// The request head the pipeline reads, or `None` if a header does not convert, which hyper's parser should never let
@@ -225,7 +251,8 @@ fn token_header(snapshot: &ServingSnapshot, tags: &ConnectionTags) -> Option<Hea
 
 /// The `503` for a request refused at admission: the redacted reason as its whole body. It is given before the caller is
 /// identified, because with no snapshot there is no policy to identify the caller against (§3.12).
-fn unavailable(reason: UnavailableReason) -> Response<ResponseBody> {
+fn unavailable(reason: UnavailableReason, facts: &RequestFacts) -> Response<ResponseBody> {
+    facts.refuse(reason.into());
     text_response(StatusCode::SERVICE_UNAVAILABLE, reason.as_str())
 }
 

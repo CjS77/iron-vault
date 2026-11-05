@@ -1,10 +1,9 @@
-use std::io;
-use std::sync::{Arc, Mutex, PoisonError};
-
-use iron_vault_policy::{FinalCheckError, HeaderValueError, OutgoingHeadersError, UpstreamTargetError};
-use tracing_subscriber::fmt::MakeWriter;
+use iron_vault_policy::{FinalCheckError, HeaderValueError, OutgoingHeadersError, Refusal, UpstreamTargetError};
 
 use super::*;
+use crate::audit::{ReasonCode, RequestRecord};
+use crate::connection_tags::ServiceClose;
+use crate::logging::tests::{capture, parse};
 
 /// A refusal from the real pipeline, so the table holds the errors the steps produce.
 fn refused(head: RequestHead) -> PipelineRefusal {
@@ -21,7 +20,14 @@ fn credential(name: &str) -> CredentialName {
 
 fn rate_limited() -> PipelineRefusal {
     let sources = TestSources::new();
-    run(&sources, &loopback(), brave_search("placeholder", &[]), sources.start).unwrap_err()
+    run(
+        &sources,
+        &loopback(),
+        brave_search("placeholder", &[]),
+        sources.start,
+        &mut Identified::default(),
+    )
+    .unwrap_err()
 }
 
 fn unauthenticated() -> PipelineRefusal {
@@ -126,7 +132,7 @@ fn every_variant_has_its_status_body_and_headers() {
 }
 
 #[test]
-fn a_500_is_answered_exactly_when_the_event_is_logged() {
+fn a_500_is_answered_exactly_when_the_refusal_is_a_defect() {
     let token = bearer();
     let caller_errors = [
         unauthenticated(),
@@ -145,7 +151,7 @@ fn a_500_is_answered_exactly_when_the_event_is_logged() {
     defects()
         .into_iter()
         .chain(caller_errors)
-        .for_each(|refusal| assert_eq!(refusal.status() == 500, !logged(&refusal).is_empty(), "{refusal}"));
+        .for_each(|refusal| assert_eq!(refusal.status() == 500, refusal.defect().is_some(), "{refusal}"));
 }
 
 #[test]
@@ -198,55 +204,51 @@ fn no_body_repeats_a_route_a_scheme_or_a_header() {
     });
 }
 
-/// Collects what a `tracing` subscriber writes.
-#[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
-
-impl io::Write for Captured {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for Captured {
-    type Writer = Captured;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self.clone()
-    }
-}
-
-/// What `f` logs.
-fn capture<T>(f: impl FnOnce() -> T) -> (T, String) {
-    let captured = Captured::default();
-    let subscriber = tracing_subscriber::fmt().with_writer(captured.clone()).with_ansi(false).finish();
-    let value = tracing::subscriber::with_default(subscriber, f);
-    let bytes = captured.0.lock().unwrap_or_else(PoisonError::into_inner).clone();
-    (value, String::from_utf8(bytes).unwrap())
-}
-
-/// What `report` logs for `refusal` on the brave route.
-fn logged(refusal: &PipelineRefusal) -> String {
-    capture(|| refusal.report(&route("brave"), &credential("brave"))).1
+#[test]
+fn every_refusal_maps_to_its_reason_code() {
+    let token = bearer();
+    let forbidden_because = |reason| {
+        AuthzError::Forbidden {
+            route: route("brave"),
+            reason,
+        }
+        .into()
+    };
+    let caller_errors = [
+        (unauthenticated(), ReasonCode::Unauthenticated),
+        (target(), ReasonCode::BadTarget),
+        (PipelineRefusal::Method, ReasonCode::BadMethod),
+        (not_found(&token), ReasonCode::NoRoute),
+        (forbidden(&token), ReasonCode::NotGranted),
+        (forbidden_because(Refusal::NotGranted), ReasonCode::NotGranted),
+        (forbidden_because(Refusal::Method), ReasonCode::MethodNotAllowed),
+        (forbidden_because(Refusal::Path), ReasonCode::PathNotAllowed),
+        (unavailable(), ReasonCode::RouteUnavailable),
+        (sanitize(), ReasonCode::AmbiguousFraming),
+        (rate_limited(), ReasonCode::RateLimited),
+        (no_record(), ReasonCode::CredentialUnavailable),
+        (kind(), ReasonCode::CredentialUnusable),
+        (AssembleError::ForeignMarker.into(), ReasonCode::ForeignMarker),
+        (AssembleError::MalformedMarker.into(), ReasonCode::MalformedMarker),
+    ];
+    let defects = defects().into_iter().map(|refusal| (refusal, ReasonCode::ServiceDefect));
+    caller_errors
+        .into_iter()
+        .chain(defects)
+        .for_each(|(refusal, reason)| assert_eq!(ReasonCode::from(&refusal), reason, "{refusal}"));
 }
 
 #[test]
-fn running_into_a_defect_raises_the_event_without_the_request() {
+fn running_into_a_defect_leaves_the_route_and_credential_it_found() {
     // A limiter built without the brave route: authorization passes, the charge cannot find the route.
     let sources = TestSources::with_limiter_config(&without_brave_route());
-    let (result, event) = capture(|| sources.run(&loopback(), brave_search(MARKER, &[])));
+    let (result, identified) = sources.run_identified(&loopback(), brave_search(MARKER, &[]));
 
-    assert!(matches!(result, Err(PipelineRefusal::Charge(ChargeError::UnknownRoute { .. }))));
-    assert!(event.contains("ERROR"), "{event}");
-    assert!(event.contains("severity=\"high\""), "{event}");
-    assert!(event.contains("route=brave"), "{event}");
-    assert!(event.contains("credential=brave"), "{event}");
-    assert!(!event.contains(MARKER) && !event.contains("q=rust"), "{event}");
+    let refusal = result.unwrap_err();
+    assert!(matches!(refusal, PipelineRefusal::Charge(ChargeError::UnknownRoute { .. })));
+    assert_eq!(refusal.defect(), Some("charge_unknown_route"));
+    assert_eq!(identified.route, Some((route("brave"), credential("brave"))));
+    assert!(identified.caller.is_some());
 }
 
 /// The configuration without the brave route or any grant of it.
@@ -261,20 +263,35 @@ fn without_brave_route() -> String {
 
 #[test]
 fn a_final_check_failure_raises_a_high_severity_event_without_secrets() {
-    let event = logged(&FinalCheckError::CredentialOutsideSlot.into());
+    let refusal: PipelineRefusal = FinalCheckError::CredentialOutsideSlot.into();
+    let mut id = None;
+    let out = capture(|| {
+        let record = RequestRecord::new("local".parse().unwrap(), "GET", ServiceClose::default());
+        let facts = record.facts();
+        facts.route(&route("brave"), &credential("brave"), &"api.search.brave.com".parse().unwrap());
+        facts.report_defect(refusal.defect().unwrap());
+        id = Some(facts.id().to_string());
+        record.refuse(ReasonCode::ServiceDefect);
+    });
+    let event = out
+        .lines()
+        .map(parse)
+        .find(|record| record["event"] == "request.defect")
+        .expect(&out);
 
-    assert!(event.contains("ERROR"), "{event}");
-    assert!(event.contains("severity=\"high\""), "{event}");
-    assert!(event.contains("route=brave"), "{event}");
-    assert!(event.contains("credential=brave"), "{event}");
-    assert!(event.contains("defect=\"CredentialOutsideSlot\""), "{event}");
-    assert!(!event.contains(MARKER), "{event}");
+    assert_eq!(event["level"], "ERROR", "{out}");
+    assert_eq!(event["target"], "iron-vault.audit", "{out}");
+    assert_eq!(event["request_id"].as_str(), id.as_deref(), "{out}");
+    assert_eq!(event["route"], "brave", "{out}");
+    assert_eq!(event["credential"], "brave", "{out}");
+    assert_eq!(event["defect"], "credential_outside_slot", "{out}");
+    assert!(!out.contains(MARKER), "{out}");
 }
 
 #[test]
-fn a_construction_failure_raises_the_event_and_a_caller_error_does_not() {
-    assert!(logged(&construction()).contains("severity=\"high\""));
-    assert!(logged(&unknown_route()).contains("severity=\"high\""));
+fn a_construction_failure_has_a_defect_label_and_a_caller_error_does_not() {
+    assert_eq!(construction().defect(), Some("assemble_non_ascii_slot_value"));
+    assert_eq!(unknown_route().defect(), Some("charge_unknown_route"));
     [
         AssembleError::ForeignMarker.into(),
         no_record(),
@@ -283,5 +300,5 @@ fn a_construction_failure_raises_the_event_and_a_caller_error_does_not() {
         rate_limited(),
     ]
     .iter()
-    .for_each(|refusal| assert_eq!(logged(refusal), "", "{refusal}"));
+    .for_each(|refusal: &PipelineRefusal| assert_eq!(refusal.defect(), None, "{refusal}"));
 }

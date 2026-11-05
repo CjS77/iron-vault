@@ -1,4 +1,4 @@
-//! The §3.12 answer for each pipeline refusal: one status, one fixed body, and the high-severity event for a defect.
+//! The §3.12 answer for each pipeline refusal: one status, one fixed body, and the label of a service defect.
 //!
 //! The table in [`PipelineRefusal::status`] is the one place a refusal becomes a status, so the rules about what a
 //! refusal may reveal are reviewed together:
@@ -13,7 +13,7 @@
 //! Every body is a constant. No body repeats caller input, a route the caller is not granted, or a library error,
 //! whose text may hold a URL or a header value (§3.15).
 
-use iron_vault_policy::{AssembleError, AuthzError, ChargeError, CredentialName, RouteName};
+use iron_vault_policy::{AssembleError, AuthzError, ChargeError};
 
 use super::PipelineRefusal;
 
@@ -95,18 +95,9 @@ impl PipelineRefusal {
         response
     }
 
-    /// Raises the high-severity event if this refusal is a service defect; nothing for a caller error.
-    ///
-    /// The event holds the route and credential names and a fixed label for the defect, never the URL, a header or a
-    /// library error (§3.15). EP-26 replaces it with the audit event; keep the route, credential and defect label.
-    pub fn report(&self, route: &RouteName, credential: &CredentialName) {
-        if let Some(defect) = self.defect() {
-            tracing::error!(severity = "high", %route, %credential, defect, "request refused by a service defect");
-        }
-    }
-
-    /// A fixed label for a refusal that only a service defect can cause; `None` for a caller error or a route failure.
-    fn defect(&self) -> Option<&'static str> {
+    /// A fixed snake_case label for a refusal that only a service defect can cause, for the `request.defect` event;
+    /// `None` for a caller error or a route failure. The variants carry nothing, so the label discloses nothing (§3.15).
+    pub fn defect(&self) -> Option<&'static str> {
         match self {
             Self::FinalCheck(error) => Some(final_check_label(error)),
             Self::Assemble(error) => assemble_label(error),
@@ -141,18 +132,18 @@ fn body_for(status: u16) -> &'static str {
 fn final_check_label(error: &iron_vault_policy::FinalCheckError) -> &'static str {
     use iron_vault_policy::FinalCheckError as E;
     match error {
-        E::Scheme => "Scheme",
-        E::UserInfo => "UserInfo",
-        E::Fragment => "Fragment",
-        E::Host => "Host",
-        E::Port => "Port",
-        E::Origin => "Origin",
-        E::Path => "Path",
-        E::Method => "Method",
-        E::ReservedHeader => "ReservedHeader",
-        E::Slot => "Slot",
-        E::SlotValue => "SlotValue",
-        E::CredentialOutsideSlot => "CredentialOutsideSlot",
+        E::Scheme => "scheme",
+        E::UserInfo => "user_info",
+        E::Fragment => "fragment",
+        E::Host => "host",
+        E::Port => "port",
+        E::Origin => "origin",
+        E::Path => "path",
+        E::Method => "method",
+        E::ReservedHeader => "reserved_header",
+        E::Slot => "slot",
+        E::SlotValue => "slot_value",
+        E::CredentialOutsideSlot => "credential_outside_slot",
     }
 }
 
@@ -160,8 +151,8 @@ fn final_check_label(error: &iron_vault_policy::FinalCheckError) -> &'static str
 fn charge_label(error: &ChargeError) -> Option<&'static str> {
     match error {
         ChargeError::Limited(_) => None,
-        ChargeError::UnknownRoute { .. } => Some("ChargeUnknownRoute"),
-        ChargeError::NotGranted { .. } => Some("ChargeNotGranted"),
+        ChargeError::UnknownRoute { .. } => Some("charge_unknown_route"),
+        ChargeError::NotGranted { .. } => Some("charge_not_granted"),
     }
 }
 
@@ -169,9 +160,9 @@ fn charge_label(error: &ChargeError) -> Option<&'static str> {
 fn assemble_label(error: &AssembleError) -> Option<&'static str> {
     match error {
         AssembleError::ForeignMarker | AssembleError::MalformedMarker => None,
-        AssembleError::NonAsciiSlotValue => Some("AssembleNonAsciiSlotValue"),
-        AssembleError::HeaderValue(_) => Some("AssembleHeaderValue"),
-        AssembleError::Header(_) => Some("AssembleHeader"),
-        AssembleError::Target(_) => Some("AssembleTarget"),
+        AssembleError::NonAsciiSlotValue => Some("assemble_non_ascii_slot_value"),
+        AssembleError::HeaderValue(_) => Some("assemble_header_value"),
+        AssembleError::Header(_) => Some("assemble_header"),
+        AssembleError::Target(_) => Some("assemble_target"),
     }
 }

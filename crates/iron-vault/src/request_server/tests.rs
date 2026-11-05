@@ -32,6 +32,7 @@ impl RequestHandler for Arc<Stub> {
         request: Request<RequestBody>,
         tags: &ConnectionTags,
         deadline: Instant,
+        _facts: &RequestFacts,
     ) -> impl Future<Output = Response<ResponseBody>> + Send {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.tags.lock().unwrap().push(tags.clone());

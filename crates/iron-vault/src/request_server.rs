@@ -45,7 +45,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
-pub use crate::connection_tags::ConnectionTags;
+use crate::audit::{ReasonCode, RequestFacts, RequestRecord};
+pub use crate::connection_tags::{ConnectionTags, ServiceClose};
 use crate::library_error::LibraryError;
 use crate::request_listeners::{IncomingConnection, RequestListeners};
 
@@ -82,11 +83,15 @@ pub trait RequestHandler: Send + Sync + 'static {
     /// `deadline` is the request deadline. A handler that answers by then is heard, even at the deadline itself, so it
     /// can give its own status for what it was waiting on; otherwise the server answers `408`. A response body still
     /// streaming at the deadline fails there.
+    ///
+    /// `facts` is where the handler records who asked for what and why it refused, for the request's event. The server
+    /// writes the event, so the handler cannot forget it or write it twice.
     fn handle(
         &self,
         request: Request<RequestBody>,
         tags: &ConnectionTags,
         deadline: Instant,
+        facts: &RequestFacts,
     ) -> impl Future<Output = Response<ResponseBody>> + Send;
 }
 
@@ -153,7 +158,8 @@ impl<H: RequestHandler> RequestServer<H> {
         match Arc::clone(&self.connections).try_acquire_owned() {
             Ok(permit) => {
                 let listener = incoming.listener().clone();
-                connections.spawn(listener, self.connection(permit, incoming));
+                let close = connections.service_close(&listener);
+                connections.spawn(listener, self.connection(permit, incoming, close));
             }
             Err(_) => tracing::debug!(
                 "listener {}: connection closed: {} connections are already open",
@@ -164,7 +170,12 @@ impl<H: RequestHandler> RequestServer<H> {
     }
 
     /// Serves one connection, holding `permit` until it closes.
-    fn connection(&self, permit: OwnedSemaphorePermit, incoming: IncomingConnection) -> impl Future<Output = ()> + Send + 'static {
+    fn connection(
+        &self,
+        permit: OwnedSemaphorePermit,
+        incoming: IncomingConnection,
+        close: ServiceClose,
+    ) -> impl Future<Output = ()> + Send + 'static {
         let (http, handler, limits) = (self.http.clone(), Arc::clone(&self.handler), self.limits);
         async move {
             let _permit = permit;
@@ -174,7 +185,7 @@ impl<H: RequestHandler> RequestServer<H> {
                 Err(e) => return tracing::debug!("listener {}: {e}", tags.listener()),
             };
             let listener = tags.listener().clone();
-            let service = service_fn(move |request| respond(Arc::clone(&handler), tags.clone(), limits, request));
+            let service = service_fn(move |request| respond(Arc::clone(&handler), tags.clone(), close.clone(), limits, request));
             if let Err(e) = http.serve_connection(TokioIo::new(stream), service).await {
                 tracing::debug!(error_kind = %e.kind_label(), "listener {listener}: connection ended");
             }
@@ -185,7 +196,14 @@ impl<H: RequestHandler> RequestServer<H> {
 /// The connections a request server is serving, by the listener each arrived on, so a listener rebuild can close the
 /// connections of the listeners it closes and keep the rest. Dropping it aborts every connection.
 #[derive(Debug, Default)]
-pub struct Connections(BTreeMap<ListenerName, JoinSet<()>>);
+pub struct Connections(BTreeMap<ListenerName, ListenerConnections>);
+
+/// One listener's connection tasks, and the flag its requests read to tell the service's close from the caller's.
+#[derive(Debug, Default)]
+struct ListenerConnections {
+    tasks: JoinSet<()>,
+    closing: ServiceClose,
+}
 
 impl Connections {
     /// Closes the connections of every listener not in `kept` and waits for each one's task to end.
@@ -195,7 +213,9 @@ impl Connections {
         self.0 = kept;
         // Each set aborts its own tasks and waits for them; awaiting needs a loop, since nothing here joins futures.
         for mut set in closed.into_values() {
-            set.shutdown().await;
+            // Flagged first, so every request the abort cuts off records that the service closed it.
+            set.closing.set();
+            set.tasks.shutdown().await;
         }
     }
 
@@ -204,14 +224,27 @@ impl Connections {
         self.close_except(&BTreeSet::new()).await;
     }
 
+    /// The flag the connections of `listener` read to tell that the service closed them.
+    fn service_close(&mut self, listener: &ListenerName) -> ServiceClose {
+        self.0.entry(listener.clone()).or_default().closing.clone()
+    }
+
     fn spawn(&mut self, listener: ListenerName, connection: impl Future<Output = ()> + Send + 'static) {
-        self.0.entry(listener).or_default().spawn(connection);
+        self.0.entry(listener).or_default().tasks.spawn(connection);
     }
 
     /// Forgets the connections that have ended, so the sets do not grow.
     fn reap(&mut self) {
-        self.0.values_mut().for_each(|set| while set.try_join_next().is_some() {});
-        self.0.retain(|_, set| !set.is_empty());
+        self.0.values_mut().for_each(|set| while set.tasks.try_join_next().is_some() {});
+        self.0.retain(|_, set| !set.tasks.is_empty());
+    }
+}
+
+impl Drop for Connections {
+    /// Flags every listener before the sets abort their tasks. A listener task that panics drops its connections without
+    /// closing them, and that is still the service closing them, not the callers.
+    fn drop(&mut self) {
+        self.0.values().for_each(|set| set.closing.set());
     }
 }
 
@@ -227,36 +260,61 @@ fn http_builder(limits: &Limits) -> http1::Builder {
     http
 }
 
-/// Runs the handler on one request within the body limit and the whole-request deadline.
+/// Answers one request and records how it ended. The record writes the request event when it drops, which is also when
+/// this future is dropped before it has a response, because the caller or the service closed the connection.
 async fn respond<H: RequestHandler>(
     handler: Arc<H>,
     tags: ConnectionTags,
+    close: ServiceClose,
     limits: Limits,
     request: Request<Incoming>,
 ) -> Result<Response<ResponseBody>, Infallible> {
-    let deadline = Instant::now() + request_timeout(&limits);
+    let mut record = RequestRecord::new(tags.listener().clone(), request.method().as_str(), close);
+    let response = answer(handler.as_ref(), &tags, &limits, request, &record).await;
+    record.answered(response.status().as_u16());
+    Ok(response)
+}
+
+/// Runs the handler on one request within the body limit and the whole-request deadline.
+async fn answer<H: RequestHandler>(
+    handler: &H,
+    tags: &ConnectionTags,
+    limits: &Limits,
+    request: Request<Incoming>,
+    record: &RequestRecord,
+) -> Response<ResponseBody> {
+    let deadline = Instant::now() + request_timeout(limits);
     if let Err(violation) = check_form(request.method(), request.uri(), request.version(), request.headers()) {
-        return Ok(form_refusal(violation));
+        record.refuse(violation.into());
+        return form_refusal(violation);
     }
     let max_body = limits.max_request_body_bytes();
     if request.body().size_hint().lower() > max_body {
-        return Ok(refusal(StatusCode::PAYLOAD_TOO_LARGE));
+        record.refuse(ReasonCode::RequestTooLarge);
+        return refusal(StatusCode::PAYLOAD_TOO_LARGE);
     }
     let overflow = Arc::new(Overflow::default());
-    let request = request.map(|body| RequestBody::new(body, max_body, Arc::clone(&overflow)));
+    let facts = record.facts();
+    let request = request.map(|body| RequestBody::new(body, max_body, Arc::clone(&overflow), facts.clone()));
     // The handler is polled before the deadline, so one that times out its own wait at the same deadline is heard.
     let response = tokio::select! {
         biased;
-        () = overflow.tripped() => refusal(StatusCode::PAYLOAD_TOO_LARGE),
-        response = handler.handle(request, &tags, deadline) => response,
-        () = tokio::time::sleep_until(deadline) => refusal(StatusCode::REQUEST_TIMEOUT),
+        () = overflow.tripped() => replaced(record, ReasonCode::RequestTooLarge, StatusCode::PAYLOAD_TOO_LARGE),
+        response = handler.handle(request, tags, deadline, &facts) => response,
+        () = tokio::time::sleep_until(deadline) => replaced(record, ReasonCode::RequestTimeout, StatusCode::REQUEST_TIMEOUT),
     };
     // A handler may answer in the same poll in which its body passed the limit.
     let response = match overflow.is_tripped() {
-        true => refusal(StatusCode::PAYLOAD_TOO_LARGE),
+        true => replaced(record, ReasonCode::RequestTooLarge, StatusCode::PAYLOAD_TOO_LARGE),
         false => response,
     };
-    Ok(response.map(|body| Deadline::new(body, deadline).boxed_unsync()))
+    response.map(|body| Deadline::new(body, deadline).boxed_unsync())
+}
+
+/// The server's own refusal in place of the handler's answer, which the request's record then disowns.
+fn replaced(record: &RequestRecord, reason: ReasonCode, status: StatusCode) -> Response<ResponseBody> {
+    record.replace_answer(reason);
+    refusal(status)
 }
 
 /// An empty response with `status` that closes the connection.

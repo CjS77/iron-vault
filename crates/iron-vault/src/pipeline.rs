@@ -67,6 +67,16 @@ impl fmt::Debug for RequestHead {
     }
 }
 
+/// What the pipeline learned about a request before it stopped, for the request event: the caller once identified, and
+/// the route with its credential once selected. Left empty by a step that has not been reached.
+#[derive(Debug, Default)]
+pub struct Identified {
+    /// The caller, once identified.
+    pub caller: Option<CallerName>,
+    /// The route the request selected and its credential.
+    pub route: Option<(RouteName, CredentialName)>,
+}
+
 /// A request the pipeline accepted: the checked request for the transport, the scrub patterns for its response, and
 /// the route and credential names for its events.
 ///
@@ -154,9 +164,16 @@ pub enum PipelineRefusal {
 /// Runs §3.5 steps 3-8 for `head`, which arrived on the connection `tags` describes, against one serving snapshot at
 /// `now`.
 ///
-/// `now` is when the request is charged against its rate limits; the caller passes the current instant.
-pub fn prepare(snapshot: &ServingSnapshot, tags: &ConnectionTags, head: RequestHead, now: Instant) -> Result<Prepared, PipelineRefusal> {
-    run(snapshot, tags, head, now)
+/// `now` is when the request is charged against its rate limits; the caller passes the current instant. `identified`
+/// receives the caller and route as they are found, so a refusal still says who asked for what.
+pub fn prepare(
+    snapshot: &ServingSnapshot,
+    tags: &ConnectionTags,
+    head: RequestHead,
+    now: Instant,
+    identified: &mut Identified,
+) -> Result<Prepared, PipelineRefusal> {
+    run(snapshot, tags, head, now, identified)
 }
 
 /// What the pipeline reads from a serving snapshot. Tests supply their own to observe which records are looked up.
@@ -184,17 +201,25 @@ impl Sources for ServingSnapshot {
 }
 
 /// The steps in order; see the module documentation for why they run in this order.
-fn run(sources: &impl Sources, tags: &ConnectionTags, head: RequestHead, now: Instant) -> Result<Prepared, PipelineRefusal> {
+fn run(
+    sources: &impl Sources,
+    tags: &ConnectionTags,
+    head: RequestHead,
+    now: Instant,
+    identified: &mut Identified,
+) -> Result<Prepared, PipelineRefusal> {
     let policy = sources.policy();
     let RequestHead { method, target, headers } = head;
     let caller = identify_caller(policy, tags.listener(), tags.peer_uid(), &headers)?;
+    identified.caller = Some(caller.clone());
     let authorized = authorize_request(policy, &caller, &method, &target)?;
+    // Looked up before sanitizing, so every later refusal can name the route and credential, and before the charge, so
+    // nothing that can fail runs after it except resolution onward.
+    let route = selected_route(policy, &authorized)?;
+    identified.route = Some((authorized.route().clone(), route.credential().clone()));
     let mut headers = sanitize(headers, &token_header(policy, tags.listener())?)?;
     ask_for_decodable_codings(&mut headers);
-    // Looked up before the charge, so nothing that can fail runs after it except resolution onward.
-    let route = selected_route(policy, &authorized)?;
     charge_and_build(sources, &caller, route, &authorized, headers, now)
-        .inspect_err(|refusal| refusal.report(authorized.route(), route.credential()))
 }
 
 /// Replaces the caller's `Accept-Encoding` with [`UPSTREAM_ACCEPT_ENCODING`], the codings the response stage decodes
@@ -211,8 +236,8 @@ fn ask_for_decodable_codings(headers: &mut OutgoingHeaders) {
     debug_assert!(inserted.is_some(), "the service's Accept-Encoding could not be set");
 }
 
-/// Steps 5-8: charge, resolve, assemble and check. A defect here raises its high-severity event in the caller, where
-/// the route and credential are known.
+/// Steps 5-8: charge, resolve, assemble and check. A defect here is reported by the request handler, which knows the
+/// request's ID.
 fn charge_and_build(
     sources: &impl Sources,
     caller: &CallerName,

@@ -207,7 +207,13 @@ impl TestSources {
     }
 
     fn run(&self, tags: &ConnectionTags, head: RequestHead) -> Result<Prepared, PipelineRefusal> {
-        run(self, tags, head, self.one_token())
+        self.run_identified(tags, head).0
+    }
+
+    /// As [`run`](Self::run), with what the pipeline found before it stopped.
+    fn run_identified(&self, tags: &ConnectionTags, head: RequestHead) -> (Result<Prepared, PipelineRefusal>, Identified) {
+        let mut identified = Identified::default();
+        (run(self, tags, head, self.one_token(), &mut identified), identified)
     }
 
     fn looked_up(&self) -> Vec<String> {
@@ -383,7 +389,13 @@ fn an_ungranted_request_is_not_charged_or_resolved() {
 #[test]
 fn a_rate_limited_request_is_not_resolved() {
     let sources = TestSources::new();
-    let at_start = run(&sources, &loopback(), brave_search("placeholder", &[]), sources.start);
+    let at_start = run(
+        &sources,
+        &loopback(),
+        brave_search("placeholder", &[]),
+        sources.start,
+        &mut Identified::default(),
+    );
 
     assert!(matches!(at_start, Err(PipelineRefusal::Charge(ChargeError::Limited(_)))));
     assert!(sources.looked_up().is_empty());
@@ -521,6 +533,7 @@ fn prepare_reads_a_serving_snapshot() {
         &loopback(),
         brave_search("placeholder", &[]),
         start + Duration::from_secs(1),
+        &mut Identified::default(),
     )
     .unwrap();
 

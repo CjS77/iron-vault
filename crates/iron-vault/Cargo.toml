@@ -53,6 +53,8 @@ tokio = { workspace = true, features = ["time", "sync"] }
 tokio-util.workspace = true
 tracing.workspace = true
 url.workspace = true
+# The request ID: a random version 4 UUID, from the same `getrandom` the store already uses.
+uuid.workspace = true
 tracing-subscriber.workspace = true
 webpki-roots.workspace = true
 zeroize.workspace = true

@@ -12,6 +12,7 @@ use tokio::sync::Notify;
 use tokio::time::{Instant, Sleep};
 
 use super::{BoxError, ResponseBody};
+use crate::audit::RequestFacts;
 
 /// Why reading a request body failed.
 #[derive(Debug, thiserror::Error)]
@@ -58,15 +59,17 @@ pub struct RequestBody {
     limit: u64,
     remaining: u64,
     overflow: Arc<Overflow>,
+    facts: RequestFacts,
 }
 
 impl RequestBody {
-    pub(super) fn new(incoming: Incoming, limit: u64, overflow: Arc<Overflow>) -> Self {
+    pub(super) fn new(incoming: Incoming, limit: u64, overflow: Arc<Overflow>, facts: RequestFacts) -> Self {
         Self {
             incoming,
             limit,
             remaining: limit,
             overflow,
+            facts,
         }
     }
 
@@ -76,6 +79,7 @@ impl RequestBody {
         match self.remaining.checked_sub(len) {
             Some(remaining) => {
                 self.remaining = remaining;
+                self.facts.add_request_bytes(len);
                 Ok(frame)
             }
             None => {
