@@ -27,7 +27,8 @@ fn callers_and_routes(port: u16) -> String {
     let route = |name: &str, methods: &str, paths: &str, ca: &str, rate: &str| {
         format!(
             "[routes.{name}]\nprefix = \"/{name}\"\nupstream = \"https://localhost:{port}/v1\"\nca_file = \"{ca}\"\n\
-             credential = \"fx_key\"\nslot = {{ header = \"X-Api-Key\" }}\nmethods = [{methods}]\npaths = [{paths}]\nrate_limit = {rate}\n\n"
+             credential = \"fx_key\"\nslot = {{ header = \"X-Api-Key\" }}\n\
+             methods = [{methods}]\npaths = [{paths}]\nrate_limit = {rate}\n\n"
         )
     };
     let fast = "{ requests = 1000, per_seconds = 1, burst = 1000 }";

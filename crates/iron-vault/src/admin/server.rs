@@ -136,7 +136,14 @@ impl AdminServer {
                 }
             }
             Err(NoRequest::Unanswered) => return,
-            Err(NoRequest::Answer(response)) => response,
+            Err(NoRequest::Answer { refusal, response }) => {
+                AdminRefused {
+                    refusal,
+                    peer: Some(principal.peer()),
+                }
+                .emit();
+                response
+            }
         };
         exchange.respond(response).await;
     }
@@ -247,8 +254,8 @@ impl ExchangeError {
 enum NoRequest {
     /// The peer closed, timed out or failed; nothing is sent back.
     Unanswered,
-    /// The peer sent something other than a valid admin request, answered with this error.
-    Answer(AdminResponse),
+    /// The peer sent something other than a valid admin request: refused for `refusal`, answered with `response`.
+    Answer { refusal: AdminRefusal, response: AdminResponse },
 }
 
 /// Why a frame was not read.
@@ -346,22 +353,14 @@ impl Exchange {
         };
         match read {
             Ok(Ok(Frame::Request(request))) => Ok(request),
-            Ok(Ok(_)) => Err(NoRequest::Answer({
-                AdminRefused {
-                    refusal: AdminRefusal::UnexpectedFrame,
-                    peer: None,
-                }
-                .emit();
-                error(ErrorCode::UnexpectedFrame, "an exchange must start with an admin request")
-            })),
-            Ok(Err(ReadError::Frame(e))) => {
-                AdminRefused {
-                    refusal: AdminRefusal::of_frame(e),
-                    peer: None,
-                }
-                .emit();
-                Err(NoRequest::Answer(error(ErrorCode::for_frame_error(e), &e.to_string())))
-            }
+            Ok(Ok(_)) => Err(NoRequest::Answer {
+                refusal: AdminRefusal::UnexpectedFrame,
+                response: error(ErrorCode::UnexpectedFrame, "an exchange must start with an admin request"),
+            }),
+            Ok(Err(ReadError::Frame(e))) => Err(NoRequest::Answer {
+                refusal: AdminRefusal::of_frame(e),
+                response: error(ErrorCode::for_frame_error(e), &e.to_string()),
+            }),
             Ok(Err(ReadError::Closed)) => Err(unanswered("the peer closed before sending a whole request")),
             Ok(Err(ReadError::Io(e))) => Err(unanswered(&format!("reading the request failed: {}", e.kind_label()))),
             Err(_) => Err(unanswered("no whole request arrived before the deadline")),

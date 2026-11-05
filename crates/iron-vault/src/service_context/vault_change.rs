@@ -13,7 +13,7 @@ pub use plan::{CredentialChanged, CurrentRecord, VaultChangePlan};
 use std::sync::Arc;
 
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::{CredentialKind, CredentialName};
+use iron_vault_policy::{CredentialKind, CredentialName, Host, Port};
 use iron_vault_store::{PermittedOrigins, RecordId, StoreFs, VaultError, VaultIdentity, WriteReport};
 
 use super::{Inner, ServiceContext, ServiceLocks};
@@ -111,22 +111,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         match written {
             Written::Added(record_id) => {
                 show_healthy(&mut inner, name.clone(), record_id, summary);
-                CredentialAdded {
-                    credential: &name,
-                    record_id,
-                    stored: Stored { kind, origins: &origins },
-                }
-                .emit();
+                log_added(&name, record_id, kind, &origins);
                 Ok(record_id)
             }
             Written::AddedUncertain(record_id) => {
                 show_healthy(&mut inner, name.clone(), record_id, summary);
-                CredentialAdded {
-                    credential: &name,
-                    record_id,
-                    stored: Stored { kind, origins: &origins },
-                }
-                .emit();
+                log_added(&name, record_id, kind, &origins);
                 Err(VaultChangeRefusal::Uncertain { present: Some(true) })
             }
             Written::Refused(refusal) => Err(refusal),
@@ -160,6 +150,15 @@ fn log_committed(summary: &VaultChangeSummary, changed: &CredentialChanged) {
         }
         (PlannedChange::Replace { .. }, CredentialChanged::Removed) => {}
     }
+}
+
+fn log_added(name: &CredentialName, record_id: RecordId, kind: CredentialKind, origins: &[(Host, Port)]) {
+    CredentialAdded {
+        credential: name,
+        record_id,
+        stored: Stored { kind, origins },
+    }
+    .emit();
 }
 
 fn log_removed(name: &CredentialName, record_id: RecordId) {

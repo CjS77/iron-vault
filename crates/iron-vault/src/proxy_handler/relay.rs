@@ -370,7 +370,7 @@ impl RelayedBody {
         })
     }
 
-    /// Tells the request record the running match total, when it has grown since the last report.
+    /// Tells the request record the running match total, when it differs from the last report.
     fn report_matches(&mut self) {
         let total = self.total_matches();
         if total != self.reported {
@@ -414,27 +414,26 @@ impl RelayedBody {
 
     /// The next frame through the body stages.
     fn poll_stages(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, RelayFailure>>> {
-        let this = self;
         loop {
-            let Some(stages) = this.stages.as_mut() else {
+            let Some(stages) = self.stages.as_mut() else {
                 return Poll::Ready(None);
             };
             // The fed chunk's pieces go out one frame at a time before the next chunk is read.
             match stages.next_output() {
-                Err(failure) => return Poll::Ready(Some(Err(this.fail(failure)))),
+                Err(failure) => return Poll::Ready(Some(Err(self.fail(failure)))),
                 Ok(Some(out)) => return Poll::Ready(Some(Ok(Frame::data(out)))),
                 Ok(None) => {}
             }
-            let out = match ready!(Pin::new(&mut this.chunks).poll_next(cx)) {
+            let out = match ready!(Pin::new(&mut self.chunks).poll_next(cx)) {
                 Some(Ok(chunk)) => {
                     stages.feed(chunk);
                     continue;
                 }
                 Some(Err(_)) => Err(RelayFailure::Upstream),
-                None => this.end(),
+                None => self.end(),
             };
             match out {
-                Err(failure) => return Poll::Ready(Some(Err(this.fail(failure)))),
+                Err(failure) => return Poll::Ready(Some(Err(self.fail(failure)))),
                 // Nothing is left to send; the stages are gone, so the next poll ends the body.
                 Ok(out) if out.is_empty() => {}
                 Ok(out) => return Poll::Ready(Some(Ok(Frame::data(out)))),

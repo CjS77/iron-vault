@@ -43,7 +43,9 @@ impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
     async fn run(&self, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         let state = self.service.state().await;
         if !state.admin_allows(AdminOperation::Unlock) {
-            return Ok(refused(UnlockRefusal::wrong_state(state)));
+            let refusal = UnlockRefusal::WrongState(state);
+            UnlockRefused { refusal: &refusal }.emit();
+            return Ok(refused(refusal));
         }
         if let Err(refusal) = self.service.require_initialized().await {
             return Ok(refused(refusal));
