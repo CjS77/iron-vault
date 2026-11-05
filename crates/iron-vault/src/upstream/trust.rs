@@ -71,14 +71,17 @@ pub enum PinnedCaError {
 }
 
 /// Why the outbound client config could not be built.
+///
+/// The inner errors are sources only, never in the message: their text is a library error's, and the message reaches
+/// `config.check-failed`'s `detail` and the `config-invalid` answer through `InvalidConfig::detail`.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ClientConfigError {
     /// The crypto provider cannot serve rustls's default protocol versions.
-    #[error("the TLS crypto provider cannot serve the default protocol versions: {0}")]
-    ProtocolVersions(rustls::Error),
+    #[error("the TLS crypto provider cannot serve the default protocol versions")]
+    ProtocolVersions(#[source] rustls::Error),
     /// The certificate verifier could not be built over the trust anchors.
-    #[error("cannot build the upstream certificate verifier: {0}")]
-    Verifier(VerifierBuilderError),
+    #[error("cannot build the upstream certificate verifier")]
+    Verifier(#[source] VerifierBuilderError),
 }
 
 impl UpstreamTrust {

@@ -6,7 +6,9 @@
 //! A source search cannot see types, so the names stand in for them, as they do throughout the workspace. clippy cannot
 //! do better: `disallowed-macros` refuses a macro whatever its arguments, and `disallowed-methods` does not see the
 //! `Display::fmt` call a format macro expands to. The search is a backstop for review, not a proof: an error bound to
-//! another name, or formatted into a string before the macro, passes it.
+//! another name, or formatted into a string before the macro, passes it. Text built before the log site, such as a
+//! config check failure's `detail()`, is outside what the search can see; its error types must keep library text out of
+//! their messages themselves.
 
 // Test helpers outside `#[test]` functions: an unreadable source tree should stop the test where it happened.
 #![allow(clippy::unwrap_used)]
