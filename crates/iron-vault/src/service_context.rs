@@ -35,7 +35,7 @@ use iron_vault_store::{
     ApprovalState, ConfigDirLock, ConfigFileName, InitializationState, LockError, OsFs, Passphrase, StateDirLock, StateFileName, StoreFs,
     UnlockError, VaultIdentity, read_config_file, sweep_stale_config_temps, sweep_stale_temps, unlock_with_passphrase,
 };
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 
 use crate::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
@@ -194,10 +194,13 @@ pub struct ServiceContext<F = OsFs> {
     locks: Arc<ServiceLocks>,
     holder: Arc<SnapshotHolder>,
     /// The service-wide lock (glossary). `config approve` holds it from its request to its response, prompts included,
-    /// and fails at once with `busy` while another holds it; a recheck waits for it. A vault write takes it the same
-    /// way, so an approval never sees the credential catalog change under it. Shared, so a blocking task can own its
-    /// guard and keep it until the task ends, even if the future that started the task is dropped.
+    /// and fails at once with `busy` while another holds it. A vault write takes it the same way, so an approval never
+    /// sees the credential catalog change under it. A config check holds it to its end, so an unlock, a recheck and a
+    /// `lock` wait for it; each takes it before the context's mutex. Shared, so a blocking task can own its guard and
+    /// keep it until the task ends, even if the future that started the task is dropped.
     service_wide: Arc<Mutex<()>>,
+    /// How many `lock` calls are waiting for the service-wide lock. An approval at a prompt ends while it is non-zero.
+    lock_requests: watch::Sender<usize>,
     /// Shared for the same reason as `service_wide`: the task that settles a check, and init's write task, own their
     /// guards, so a dropped caller can neither strand Checking nor release the lock while the task still writes.
     inner: Arc<Mutex<Inner>>,
@@ -267,6 +270,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             locks: Arc::new(locks),
             holder,
             service_wide: Arc::new(Mutex::new(())),
+            lock_requests: watch::Sender::new(0),
         })
     }
 
@@ -278,11 +282,14 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// way. Both state changes are logged as lock transitions, so a host unlock (EP-32) entering here is audited like a
     /// passphrase unlock.
     ///
+    /// It waits for the service-wide lock, as [`recheck`](Self::recheck) does, so it never runs during an approval.
+    ///
     /// Cancel-safe: once the service enters Checking, a task of its own finishes the check and the move to Ready or
     /// Unavailable even if this future is dropped, so the service never stays in Checking (§3.12).
     pub async fn enter_checking(&self, identity: VaultIdentity) -> Result<ServiceState, IllegalTransition> {
+        let service_wide = Arc::clone(&self.service_wide).lock_owned().await;
         let inner = Arc::clone(&self.inner).lock_owned().await;
-        self.check_and_settle_detached(inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
+        self.check_and_settle_detached(service_wide, inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
             .await
     }
 
@@ -297,10 +304,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     ///
     /// Cancel-safe as [`enter_checking`](Self::enter_checking) is: a dropped future never leaves the service in Checking.
     pub async fn recheck(&self, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
-        let _service_wide = self.service_wide.lock().await;
+        let service_wide = Arc::clone(&self.service_wide).lock_owned().await;
         let inner = Arc::clone(&self.inner).lock_owned().await;
         let identity = inner.identity.clone().ok_or(IllegalTransition { state: inner.state, event })?;
-        self.check_and_settle_detached(inner, event, identity).await
+        self.check_and_settle_detached(service_wide, inner, event, identity).await
     }
 
     /// Reloads on SIGHUP (§3.9, Q-5): [`recheck`](Self::recheck) with [`ServiceEvent::Reload`], which only a Ready service
@@ -319,6 +326,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Unlocks with the owner's `passphrase` (§3.11) and runs the config check: Locked to Checking, then Ready or
     /// Unavailable, as [`enter_checking`](Self::enter_checking) does. Each state change is logged as a lock transition.
     ///
+    /// It waits for the service-wide lock, as [`recheck`](Self::recheck) does: the owner has already typed the passphrase,
+    /// and in Locked the lock is held only for seconds, by a `lock`, an `init` or a config check. Any approval at a prompt
+    /// was cancelled by the `lock` that left the service Locked.
+    ///
     /// The state is checked under the mutex, so two unlocks never both open the vault, and so is the initialization
     /// state, which `unlock` also read before its prompt: only Initialized goes on. A wrong passphrase or an
     /// unreadable envelope leaves the service Locked: no other storage is ever tried (R-22). The operational identity
@@ -327,6 +338,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Cancel-safe: dropping this future during scrypt leaves the service Locked, and dropping it once the service has
     /// entered Checking leaves a task of its own to finish the check, as [`enter_checking`](Self::enter_checking) does.
     pub async fn unlock(&self, passphrase: Passphrase) -> Result<ServiceState, UnlockRefusal> {
+        let service_wide = Arc::clone(&self.service_wide).lock_owned().await;
         let inner = Arc::clone(&self.inner).lock_owned().await;
         let locked = inner.state;
         if !locked.admin_allows(AdminOperation::Unlock) {
@@ -336,7 +348,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let identity = self.open_identity(passphrase).await.inspect_err(|refusal| {
             tracing::warn!("{UNLOCK_REFUSED}: {refusal}");
         })?;
-        self.check_and_settle_detached(inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
+        self.check_and_settle_detached(service_wide, inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
             .await
             .map_err(|illegal| UnlockRefusal::WrongState(illegal.state))
     }
@@ -344,7 +356,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Locks the service on an explicit `lock`: Ready or Unavailable to Locked, clearing the vault identity and every
     /// cached secret (§3.13, §3.11). §3.12 draws a lock only from those two states; from any other the event is refused.
     ///
-    /// Under the context's mutex it stops admitting requests, withdraws the serving snapshot (cancelling the requests
+    /// First it cancels an approval waiting at a prompt, which has reserved nothing, and waits for the service-wide lock:
+    /// an approval past its prompts, or a config check, holds it for seconds. Then, under the context's mutex, it stops
+    /// admitting requests, withdraws the serving snapshot (cancelling the requests
     /// running on it) and drops the approval state, the credential report and the context's copy of the vault identity,
     /// so no later change interleaves. Unavailable has no snapshot to withdraw, so there the identity is cleared at once
     /// unless something else still holds it. The mutex is then released and the call waits up to `drain` for the last
@@ -362,6 +376,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// of the vault. Returns the withdrawn snapshots and a weak reference to the dropped identity, to see whether it is
     /// cleared.
     async fn withdraw_for_lock(&self) -> Result<(Withdrawn, Weak<VaultIdentity>), IllegalTransition> {
+        let _request = LockRequest::announce(&self.lock_requests);
+        let _service_wide = self.service_wide.lock().await;
         let mut inner = self.inner.lock().await;
         let from = inner.state;
         let state = next(from, ServiceEvent::Lock)?;
@@ -496,18 +512,23 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// [`Settler::check_and_settle`] in a spawned task that owns `inner`, so the move out of Checking finishes even if
-    /// this future is dropped: §3.12 leaves Checking only on a pass or a failure. A task that ends without a result has
-    /// already failed closed through its [`SettleGuard`], so the caller only reads the state it left.
+    /// [`Settler::check_and_settle`] in a spawned task that owns `inner` and the service-wide lock, so the move out of
+    /// Checking finishes even if this future is dropped (§3.12 leaves Checking only on a pass or a failure), and nothing
+    /// else takes the service-wide lock before it does. A task that ends without a result has already failed closed
+    /// through its [`SettleGuard`], so the caller only reads the state it left.
     async fn check_and_settle_detached(
         &self,
+        service_wide: OwnedMutexGuard<()>,
         inner: OwnedMutexGuard<Inner>,
         event: ServiceEvent,
         identity: Arc<VaultIdentity>,
     ) -> Result<ServiceState, IllegalTransition> {
         let mut guard = SettleGuard::new(inner, Arc::clone(&self.holder));
         let settler = self.settler();
-        let settling = tokio::spawn(async move { settler.check_and_settle(&mut guard.inner, event, identity).await });
+        let settling = tokio::spawn(async move {
+            let _service_wide = service_wide;
+            settler.check_and_settle(&mut guard.inner, event, identity).await
+        });
         match settling.await {
             Ok(settled) => settled,
             Err(crashed) => {
@@ -522,6 +543,23 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
 fn log_task_crash(task: &str, crashed: &tokio::task::JoinError) {
     let ended = if crashed.is_panic() { "panicked" } else { "was cancelled" };
     tracing::error!("{task} {ended} before it gave a result");
+}
+
+/// A `lock` waiting for the service-wide lock, counted in [`ServiceContext::lock_requests`] until it is dropped, so a
+/// `lock` whose future is dropped stops cancelling approvals.
+struct LockRequest<'a>(&'a watch::Sender<usize>);
+
+impl<'a> LockRequest<'a> {
+    fn announce(requests: &'a watch::Sender<usize>) -> Self {
+        requests.send_modify(|waiting| *waiting = waiting.saturating_add(1));
+        Self(requests)
+    }
+}
+
+impl Drop for LockRequest<'_> {
+    fn drop(&mut self) {
+        self.0.send_modify(|waiting| *waiting = waiting.saturating_sub(1));
+    }
 }
 
 /// The settle task's hold on `inner`. The task owns it, so a crash fails closed even after the caller is gone: dropping

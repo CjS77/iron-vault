@@ -241,6 +241,30 @@ impl Exchange {
     /// within the prompt deadline. On an error the handler returns it, so its command is cancelled.
     pub async fn prompt(&mut self, prompt: &Prompt) -> Result<OwnerInput, ExchangeError> {
         self.send(&Frame::Prompt(prompt.clone())).await?;
+        self.owner_input().await
+    }
+
+    /// [`prompt`](Self::prompt), unless `cancel` completes while the owner's input is awaited: then `None`. The prompt
+    /// frame is always written whole and nothing more is read, so the exchange can still end with a response.
+    pub async fn prompt_unless(&mut self, prompt: &Prompt, cancel: impl Future<Output = ()>) -> Result<Option<OwnerInput>, ExchangeError> {
+        self.send(&Frame::Prompt(prompt.clone())).await?;
+        let answered = tokio::select! {
+            biased;
+            () = cancel => None,
+            input = self.owner_input() => Some(input),
+        };
+        match answered {
+            Some(input) => input.map(Some),
+            None => {
+                // The read it cut off may have left part of the owner's input in the buffer.
+                self.buffer.as_mut_slice().zeroize();
+                Ok(None)
+            }
+        }
+    }
+
+    /// The CLI's answer to the prompt just sent, within the prompt deadline.
+    async fn owner_input(&mut self) -> Result<OwnerInput, ExchangeError> {
         match tokio::time::timeout(self.limits.prompt_deadline, self.read_frame()).await {
             Ok(Ok(Frame::OwnerInput(input))) => Ok(input),
             Ok(Ok(_)) => Err(ExchangeError::Unexpected),

@@ -6,10 +6,11 @@
 //! credential catalog while the owner reads the summary. The review keeps no vault identity, so a `lock` while the owner
 //! is at a prompt leaves no copy of it behind.
 //!
-//! An unlock does not take the service-wide lock, so a `lock` and an `unlock` can both happen while the owner is at a
-//! prompt, and the unlock's config check discards this approval's pending config. The review therefore records the
-//! service state and the context's check generation when it starts, and the commit refuses before reserving anything
-//! unless both are unchanged.
+//! A `lock` cancels a review still at a prompt: [`ApprovalReview::lock_requested`] completes once a `lock` waits for the
+//! service-wide lock, and the prompt ends the approval with [`ApprovalEnd::CancelledByLock`]. Every other config check
+//! waits for the service-wide lock, so none runs during the review. As a backstop, the review records the service state
+//! and the context's check generation when it starts, and the commit refuses before reserving anything unless both are
+//! unchanged, since each check discards uncommitted pending files.
 //!
 //! [`ApprovalReview::commit`] runs steps 2 to 6 under the context's mutex: reserve, sign and stage, then the admission
 //! pause, the commit and publish, then the config check that ends the pause in Ready or Unavailable. A task of its own
@@ -47,6 +48,9 @@ pub enum ApprovalEnd {
     /// The proposed config does not parse, validate, activate or build its upstream clients.
     #[error("the proposed config is invalid: {0}")]
     Invalid(String),
+    /// A `lock` cancelled the approval while it waited at a prompt; nothing was reserved.
+    #[error("a `lock` cancelled the approval at its prompt; no version was reserved")]
+    CancelledByLock,
     /// The owner did not confirm the summary.
     #[error("the config was not approved: the confirmation was not `yes`")]
     Declined,
@@ -174,6 +178,14 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
     /// The version this approval will commit. Exact, because the service-wide lock keeps anything else from reserving.
     pub fn version(&self) -> u64 {
         self.approval.highest_reserved().saturating_add(1)
+    }
+
+    /// Completes once a `lock` is waiting for the service-wide lock this review holds, so a prompt can end the approval
+    /// rather than make the `lock` wait for the owner. It completes at once when a `lock` already waits.
+    pub async fn lock_requested(&self) {
+        let mut requests = self.service.lock_requests.subscribe();
+        // The sender is the service's, which outlives this review, so the wait ends only on a request.
+        let _ = requests.wait_for(|waiting| *waiting > 0).await;
     }
 
     /// Opens `approver.age` with `passphrase` as the pinned approver's signer, on the blocking pool, since scrypt holds

@@ -15,6 +15,7 @@ mod common;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use common::WAIT;
 use common::approval_harness::{
@@ -25,10 +26,11 @@ use common::gated_fs::GatedFs;
 use common::mock_upstream::Reply;
 use common::proxy_harness::{CallerRequest, TOKEN_HEADER, Via};
 use iron_vault::admin::protocol::{AdminResponse, ApprovalResult, ErrorCode, Frame, OwnerInput};
-use iron_vault::service_context::ApprovalEnd;
+use iron_vault::service_context::{ApprovalEnd, ServiceContext, UnlockRefusal};
 use iron_vault::service_state::{FailureReason, ServiceEvent, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::Admission;
-use iron_vault_store::ConfigDigest;
+use iron_vault_store::{ConfigDigest, Passphrase, StoreFs};
+use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::{Notify, oneshot};
@@ -215,25 +217,72 @@ async fn at_confirmation(path: &Path, config: &str) -> UnixStream {
     stream
 }
 
+/// Reads the response a `lock` cancelling the approval at its prompt sends, without answering the prompt.
+async fn cancelled_by_lock(stream: &mut UnixStream) {
+    match read_frame(stream).await {
+        Frame::Response(AdminResponse::Error { code, message }) => {
+            assert_eq!(code, ErrorCode::ApprovalUnavailable);
+            assert!(
+                message.contains("cancelled") && message.contains("no version was reserved"),
+                "{message}"
+            );
+        }
+        other => panic!("expected the cancellation, got {other:?}"),
+    }
+}
+
+/// Locks within [`WAIT`], so a `lock` that waited for the owner at the prompt fails the test.
+async fn lock_at_once<F: StoreFs + Send + Sync + 'static>(service: &ServiceContext<F>) {
+    let locked = tokio::time::timeout(WAIT, service.lock(WAIT)).await;
+    assert!(matches!(locked, Ok(Ok(_))), "the lock did not finish at once: {locked:?}");
+}
+
 #[tokio::test]
-async fn a_lock_and_an_unlock_at_the_prompt_end_the_approval_with_nothing_reserved() {
+async fn a_lock_at_the_summary_prompt_cancels_the_approval_at_once_with_nothing_reserved() {
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
     let (path, stop) = serve_admin(&service);
     let mut stream = at_confirmation(&path, &fixture.config("rates")).await;
 
-    service.lock(WAIT).await.unwrap();
-    assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
-    send(&mut stream, &Frame::OwnerInput(OwnerInput::new(Zeroizing::new(b"yes".to_vec())))).await;
-    let exchanged = converse(&mut stream, &[APPROVAL_PASSPHRASE]).await;
+    lock_at_once(&service).await;
+    cancelled_by_lock(&mut stream).await;
 
-    assert_eq!(error_code(&exchanged.response), ErrorCode::ApprovalUnavailable);
-    assert_eq!(versions(&service).await, (Some(1), 1));
-    assert_eq!(service.state().await, ServiceState::Ready);
-    assert_eq!(get(&fixture, "fx").await.status, 200);
     ["etc/config.toml.pending", "etc/config.toml.sig.staged"]
         .iter()
         .for_each(|file| assert!(!fixture.path(file).exists(), "{file} is left behind"));
+    assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
+    assert_eq!(versions(&service).await, (Some(1), 1));
+    assert_eq!(get(&fixture, "fx").await.status, 200);
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn an_unlock_waits_for_an_approval_at_its_prompt_and_a_lock_still_cancels_it() {
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    let (path, stop) = serve_admin(&service);
+    let mut stream = at_confirmation(&path, &fixture.config("rates")).await;
+
+    let unlock = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move { service.unlock(Passphrase::new(SecretString::from("unused")).unwrap()).await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!unlock.is_finished(), "the unlock did not wait for the service-wide lock");
+
+    lock_at_once(&service).await;
+    cancelled_by_lock(&mut stream).await;
+    // The unlock ran either side of the lock: from Ready, or from Locked with a passphrase that opens nothing.
+    let unlocked = tokio::time::timeout(WAIT, unlock).await.unwrap().unwrap();
+    assert!(
+        matches!(
+            unlocked,
+            Err(UnlockRefusal::WrongState(_) | UnlockRefusal::WrongPassphrase | UnlockRefusal::Failed(_))
+        ),
+        "{unlocked:?}"
+    );
+    assert_eq!(service.state().await, ServiceState::Locked);
+    assert!(!fixture.path("etc/config.toml.pending").exists());
     let _ = stop.send(());
 }
 
@@ -269,7 +318,7 @@ async fn a_client_that_goes_away_at_the_prompt_releases_the_service_wide_lock() 
 }
 
 #[tokio::test]
-async fn a_lock_and_an_unlock_at_the_prompt_of_an_approval_out_of_an_invalid_policy_reserve_nothing() {
+async fn a_lock_at_the_prompt_of_an_approval_out_of_an_invalid_policy_cancels_it_with_nothing_reserved() {
     let fixture = Fixture::new().await;
     fs::write(fixture.path("etc/config.toml"), fixture.config("edited")).unwrap();
     let service = fixture.start().await;
@@ -278,14 +327,11 @@ async fn a_lock_and_an_unlock_at_the_prompt_of_an_approval_out_of_an_invalid_pol
     let (path, stop) = serve_admin(&service);
     let mut stream = at_confirmation(&path, &fixture.config("rates")).await;
 
-    service.lock(WAIT).await.unwrap();
-    assert_eq!(service.enter_checking(identity()).await, Ok(invalid));
-    send(&mut stream, &Frame::OwnerInput(OwnerInput::new(Zeroizing::new(b"yes".to_vec())))).await;
-    let exchanged = converse(&mut stream, &[APPROVAL_PASSPHRASE]).await;
+    lock_at_once(&service).await;
+    cancelled_by_lock(&mut stream).await;
 
-    assert_eq!(error_code(&exchanged.response), ErrorCode::ApprovalUnavailable);
-    assert_eq!(service.state().await, invalid);
     assert!(!fixture.path("etc/config.toml.pending").exists());
+    assert_eq!(service.enter_checking(identity()).await, Ok(invalid));
     let _ = stop.send(());
 }
 

@@ -63,6 +63,9 @@ impl<F: StoreFs + Send + Sync + 'static> Approve<F> {
 
 /// Shows the summary, asks for the confirmation, then the approval passphrase, and opens the signer with it. The outer
 /// error is a prompt that got no owner input; the inner one ends the approval before any reservation.
+///
+/// A `lock` waiting for the service-wide lock ends the approval at either prompt with [`ApprovalEnd::CancelledByLock`].
+/// Once the passphrase is in, the approval is no longer at a prompt, and the `lock` waits for it to end.
 async fn authorize<F: StoreFs + Send + Sync + 'static>(
     review: &ApprovalReview<'_, F>,
     exchange: &mut Exchange,
@@ -72,17 +75,28 @@ async fn authorize<F: StoreFs + Send + Sync + 'static>(
         label: format!("Approve this config as version {}? Type yes to approve", review.version()),
         secret: false,
     };
-    if exchange.prompt(&confirm).await?.expose_secret() != b"yes" {
+    let Some(confirmation) = exchange.prompt_unless(&confirm, review.lock_requested()).await? else {
+        return Ok(Err(cancelled_by_lock()));
+    };
+    if confirmation.expose_secret() != b"yes" {
         return Ok(Err(ApprovalEnd::Declined));
     }
     let prompt = Prompt {
         label: PASSPHRASE_PROMPT.to_owned(),
         secret: true,
     };
-    let Some(passphrase) = approval_passphrase(exchange.prompt(&prompt).await?) else {
+    let Some(input) = exchange.prompt_unless(&prompt, review.lock_requested()).await? else {
+        return Ok(Err(cancelled_by_lock()));
+    };
+    let Some(passphrase) = approval_passphrase(input) else {
         return Ok(Err(ApprovalEnd::Denied));
     };
     Ok(review.open_signer(passphrase).await)
+}
+
+fn cancelled_by_lock() -> ApprovalEnd {
+    tracing::warn!("config approval cancelled at its prompt by a lock; nothing was reserved");
+    ApprovalEnd::CancelledByLock
 }
 
 /// The owner's input as an approval passphrase. Empty or non-UTF-8 input cannot be the passphrase, so it is refused as
@@ -95,7 +109,7 @@ fn approval_passphrase(input: OwnerInput) -> Option<ApprovalPassphrase> {
 fn refused(end: ApprovalEnd) -> AdminResponse {
     let code = match end {
         ApprovalEnd::Busy => ErrorCode::Busy,
-        ApprovalEnd::WrongState(_) | ApprovalEnd::Unavailable(_) => ErrorCode::ApprovalUnavailable,
+        ApprovalEnd::WrongState(_) | ApprovalEnd::Unavailable(_) | ApprovalEnd::CancelledByLock => ErrorCode::ApprovalUnavailable,
         ApprovalEnd::Invalid(_) => ErrorCode::ConfigInvalid,
         ApprovalEnd::Declined => ErrorCode::Declined,
         ApprovalEnd::Denied => ErrorCode::ApprovalDenied,
