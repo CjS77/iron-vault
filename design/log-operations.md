@@ -24,9 +24,10 @@ describes what [audit-logging.md](audit-logging.md#log-destination) requires the
 | Development build | `$XDG_STATE_HOME/iron-vault-dev-log/iron-vault.log` (default `~/.local/state/iron-vault-dev-log`) |
 | Docker or Compose | stdout ([Docker](#docker)) |
 
-An approved config can move the log: `[logging] destination` is an absolute directory path or `"stdout"`. It is a setting
-of the approved config, so it appears in the approval summary and takes effect when the config check activates it, never
-from the unverified `config.toml`. Moving the directory also needs a new rotation rule ([Rotation](#rotation)).
+An approved config can move the log: the `[logging] destination` key of `config.toml` is an absolute directory path or
+`"stdout"`. It takes effect only once the config is approved and a config check activates it; the service never reads it
+from an unapproved `config.toml`, and it appears in the approval summary.
+Moving the directory also needs a new rotation rule ([Rotation](#rotation)).
 
 **The log directory in a protected install:**
 
@@ -34,24 +35,28 @@ from the unverified `config.toml`. Moving the directory also needs a new rotatio
   edit the audit log.
 - The packaged unit's `LogsDirectory=iron-vault` and `LogsDirectoryMode=0750` make systemd create the directory for the
   service account before the service starts. The service never creates a protected log directory.
-- A directory set by the approved config is yours to create, with the same owner and mode. A missing directory, or one
-  that fails the [trusted-path rule](audit-logging.md#trust), stops `serve` at startup with one line on stderr, and fails
-  the config check when a config names it.
+- A missing bootstrap directory, or one that fails the [trusted-path rule](audit-logging.md#trust), stops `serve` at
+  startup with one line on stderr.
+- A directory set by the approved config is yours to create, with the same owner and mode. If it is missing or fails the
+  rule, the config check fails: the service writes `config.check-failed` with failure `log_destination_unusable`, settles
+  Unavailable (`policy_invalid`) and keeps writing to its current destination
+  ([Switching at activation](audit-logging.md#switching-at-activation)).
 - The service creates `iron-vault.log` itself, at `0640`. It refuses a file or directory that any group or other account
   can write, so never loosen the modes to give a tool access.
 
-**Giving a collector read access.** Create a group for the collector and have it read; it must never write.
+**Giving a collector read access.** Add the collector's account to the service account's group
+([Permissions](audit-logging.md#permissions)). The directory is `0750` and the files `0640`, so that group reads and never
+writes.
 
-- The collector's account, and no caller account, is a member of the group that owns the log directory and file. The
-  group is the service account's own unless you choose another for the collector ([Permissions](audit-logging.md#permissions)).
-- Keep the modes at `0750` and `0640`. A group that can write the directory could plant `iron-vault.log` after a rotation,
-  and the service would refuse to start.
-- Never add a caller account to the group, and never make the log world-readable. Anyone who can read it sees every route,
-  caller and refusal.
-- After any change, restart the unit and check `systemctl status iron-vault`: the service reports an unusable directory
-  there, not in the log.
+- Add only the collector's own service account. Never add a caller account or a login account: anyone who can read the log
+  sees every route, caller and refusal.
+- Keep the modes at `0750` and `0640`. The service refuses a directory or file that its group or others can write.
+- Restart the collector after changing its groups, and check `systemctl status iron-vault` after any change to the
+  directory: the service reports an unusable directory there, not in the log.
 
-How the group is assigned (the unit's `Group=`, or a group on the directory) is not fixed by the design yet.
+A separate reader group is undecided. Setting one up by hand fails today: systemd resets the directory's group to the
+unit's on every start (`LogsDirectory=`), the service creates each new file with its own primary group, and the rotation
+rule's `su` sets the group of rotated files.
 
 ## Rotation
 
@@ -74,8 +79,7 @@ The package ships `/etc/logrotate.d/iron-vault`, owned by root, mode `0644`:
 ```
 
 - **`nocreate`** is required. It overrides the global `create` in `/etc/logrotate.conf`, so `logrotate` only renames the
-  file and the service creates the new one with the right owner and mode. With `create`, `logrotate` and the service race
-  to create the file, and `logrotate` moves the service's new file aside as a `.backup` it never compresses or prunes.
+  file and the service creates the new one. With `create` the two race ([The shipped rule](audit-logging.md#the-shipped-rule)).
 - **`delaycompress`** leaves the renamed file uncompressed until the next rotation. A record written between the rename and
   the service's reopen lands in it, so no record is lost.
 - **`su iron-vault iron-vault`** runs `logrotate` as the service account, in a directory root does not own.
@@ -90,9 +94,9 @@ The package ships `/etc/logrotate.d/iron-vault`, owned by root, mode `0644`:
   window, and the rename-based rule above needs no copy.
 - **A `postrotate` signal.** `SIGHUP` means "reload the config" ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)),
   so a rotation script would trigger a reload. The service needs no signal to follow a rename.
-- **Rotating by hand** with `mv` is fine for the same reason; deleting the file under the service is too, and it creates
-  a new one. Never `touch` or create `iron-vault.log` yourself: the service refuses a file it did not create with the
-  right owner.
+- **Rotating by hand** with `mv` is fine for the same reason. Never delete the file, which destroys audit records. Never
+  `touch` or create `iron-vault.log` yourself: at its next record the service stops if the file is not owned by the
+  service account, or if its group or others can write it.
 
 In development nothing rotates the log; remove the file, or run a user `logrotate` with its own state file.
 
@@ -129,6 +133,9 @@ services:
 Each example follows the file at its default path, keeps up with `logrotate` renaming it, and reads the lines as JSON. The
 collector's account needs read access ([Location and permissions](#location-and-permissions)). Examples are checked by
 reading against the field names, not run against a live service.
+
+Anyone who can query the backend (Loki, Elastic or an OTLP store) reads every route, caller and refusal in the log. Give
+callers no access to it, and reach it over TLS. The examples use plain `http://` endpoints for brevity.
 
 **Loki labels** are `service`, `event` and `level`, and `route` if you want it. Never label `request_id` or `caller`: each
 distinct value would become its own stream. Keep them in the line and filter with `| json`. A diagnostic record has no
@@ -167,9 +174,6 @@ loki.write "default" {
 }
 ```
 
-Promtail takes the same stages under `pipeline_stages` (`json`, `timestamp`, `labels`) and a `static_configs` entry with
-`__path__`.
-
 ### Vector
 
 ```toml
@@ -183,7 +187,6 @@ inputs = ["iron_vault"]
 source = '''
 . = parse_json!(.message)
 .timestamp = parse_timestamp!(.timestamp, "%+")
-.event = .event ?? "diagnostic"
 '''
 
 [sinks.loki]
@@ -196,8 +199,7 @@ labels.event = "{{ event }}"
 labels.level = "{{ level }}"
 ```
 
-Vector's file source identifies a file by content, so it follows a rename. The `.event` line gives diagnostic records a
-label value; Vector's template would otherwise fail on the missing field.
+Vector's file source identifies a file by content, so it follows a rename.
 
 ### Fluent Bit
 
@@ -274,8 +276,8 @@ receivers:
       - type: json_parser
         timestamp:
           parse_from: attributes.timestamp
-          layout_type: strptime
-          layout: "%Y-%m-%dT%H:%M:%S.%LZ"
+          layout_type: gotime
+          layout: "2006-01-02T15:04:05.999999999Z07:00"
         severity:
           parse_from: attributes.level
 
@@ -301,10 +303,11 @@ service:
 
 ## Querying
 
-For local use with `jq`; reading the log needs the same group as a collector. Rotated files are the same format;
-`zcat iron-vault.log.*.gz | jq ...` reads the compressed ones.
+For local use with `jq`. Run it as root or as the collector's account; do not add a login or caller account to the log's
+group. Rotated files have the same format: `iron-vault.log.1` is uncompressed, so read it with `jq`, and read the older
+`iron-vault.log.*.gz` files with `zcat`.
 
-All refusals for a route (`brave` is a route name):
+Every failed request for a route (`brave` is a route name):
 
 ```sh
 jq -c 'select(.event == "request.completed" and .route == "brave" and .outcome == "failure")
@@ -317,11 +320,11 @@ Everything about one request, which includes `response.scrubbed` and `request.de
 jq -c 'select(.request_id == "0f8fad5b-d9cb-469f-a165-70867728950e")' /var/log/iron-vault/iron-vault.log
 ```
 
-Approvals in a time range (`timestamp` is UTC RFC 3339, so strings compare in time order):
+Approvals in a time range (`timestamp` is UTC RFC 3339 with fractional seconds, so date-only bounds compare correctly as strings):
 
 ```sh
 jq -c 'select(.event == "config.approval-completed"
-              and .timestamp >= "2026-11-01T00:00:00Z" and .timestamp < "2026-12-01T00:00:00Z")
+              and .timestamp >= "2026-11-01" and .timestamp < "2026-12-01")
        | {timestamp, version, config_digest}' /var/log/iron-vault/iron-vault.log
 ```
 

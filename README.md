@@ -25,7 +25,8 @@ release checks.
   PIN, a fresh YubiKey touch, or the original vault passphrase before migration, then protect the export bundle with
   a new passphrase without writing plaintext secrets to disk.
 - **Response handling and audit:** scrub supported secret representations from headers, compressed bodies, and
-  streamed responses. Record request and administrative events without logging secret values. See the [log operations guide](design/log-operations.md).
+  streamed responses. Record request and administrative events without logging secret values.
+  See the [log operations guide](design/log-operations.md).
 - **Managed deployment:** support desktop system services and administrator-controlled Docker Compose deployments,
   with separate caller and administrative interfaces.
 
