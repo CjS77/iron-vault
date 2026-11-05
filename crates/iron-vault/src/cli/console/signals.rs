@@ -53,11 +53,12 @@ pub(super) fn watch() -> Result<(), InputError> {
 fn end(received: SignalKind) -> ! {
     tty::restore_then(|| {
         if let Some(advice) = signal_advice() {
-            let _ = writeln!(io::stderr(), "iron-vault: {advice}");
-            // A hangup means the terminal has gone, and stderr may have gone with it.
+            // A hangup means the terminal has gone, and stderr may have gone with it. The logger goes first: a stderr
+            // pipe whose reader has stalled would block the write, and the log line would never be sent.
             if received == SignalKind::hangup() {
                 log_advice(Path::new(SYSLOG_SOCKET), &advice);
             }
+            let _ = writeln!(io::stderr(), "iron-vault: {advice}");
         }
         std::process::exit(128 + received.as_raw_value())
     })

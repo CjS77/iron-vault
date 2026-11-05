@@ -372,7 +372,8 @@ fn discard(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> R
     }
 }
 
-/// Whether a config file's removal unlinked it, and whether it failed.
+/// Whether a config file's removal unlinked it, and whether it failed. A failed `SyncDir` counts as unlinked because
+/// `remove_in` (durable.rs) unlinks before its directory fsync; if that order changes, so must this.
 fn config_removal(removed: Result<bool, ConfigWriteError>) -> (bool, Result<(), InitStateError>) {
     match removed {
         Ok(existed) => (existed, Ok(())),
@@ -389,7 +390,8 @@ fn config_removal(removed: Result<bool, ConfigWriteError>) -> (bool, Result<(), 
     }
 }
 
-/// Whether a state file's removal unlinked it, and whether it failed. An absent file is skipped.
+/// Whether a state file's removal unlinked it, and whether it failed. An absent file is skipped. A failed `SyncDir`
+/// counts as unlinked, as in [`config_removal`].
 fn state_removal(removed: Result<(), WriteError>) -> (bool, Result<(), InitStateError>) {
     match removed {
         Ok(()) => (true, Ok(())),
