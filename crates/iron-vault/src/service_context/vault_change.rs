@@ -19,7 +19,8 @@ use iron_vault_store::{PermittedOrigins, RecordId, StoreFs, Vault, VaultError, V
 use super::{Inner, ServiceContext, ServiceLocks};
 use crate::service_state::{AdminOperation, ServiceState};
 use crate::standing::{CredentialStanding, RecordSummary, Standing};
-use crate::vault_change_check::AffectedRoute;
+use crate::vault_change_check::{AffectedRoute, PlannedChange};
+use crate::vault_change_summary::VaultChangeSummary;
 
 /// Why a vault write changed nothing, or may not have. Each variant is one admin error code, and no message holds
 /// credential material.
@@ -137,6 +138,50 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         tokio::task::spawn_blocking(move || add_record(&locks, &setup.fs, identity, name, material, origins))
             .await
             .unwrap_or(Written::Refused(VaultChangeRefusal::Uncertain { present: None }))
+    }
+}
+
+/// Records a committed `replace` or `rm` as its audit event (design/audit-logging.md), from the summary the owner
+/// approved, which alone holds the old record with the new kind and origins. Only a healthy old record's kind and
+/// origins are known.
+fn log_committed(summary: &VaultChangeSummary, changed: &CredentialChanged) {
+    let (name, old_record_id) = (summary.change().name(), summary.current().record_id);
+    let (record_id, kind, origins) = match (changed, summary.change()) {
+        (CredentialChanged::Replaced(record_id), PlannedChange::Replace { kind, origins, .. }) => {
+            (record_id, kind, origins_text(origins.iter()))
+        }
+        // A removal's write is planned only as a removal; the second arm cannot be reached.
+        (CredentialChanged::Removed, _) | (CredentialChanged::Replaced(_), PlannedChange::Remove(_)) => {
+            tracing::info!(
+                event = "credential.removed",
+                credential = %name,
+                record_id = %old_record_id,
+                "credential `{name}` removed; no active route used it",
+            );
+            return;
+        }
+    };
+    match &summary.current().summary {
+        Some(old) => tracing::info!(
+            event = "credential.replaced",
+            credential = %name,
+            old_record_id = %old_record_id,
+            record_id = %record_id,
+            kind = kind.as_str(),
+            origins = %origins,
+            old_kind = old.kind.as_str(),
+            old_origins = %origins_text(old.origins.iter()),
+            "credential `{name}` replaced by record {record_id}",
+        ),
+        None => tracing::info!(
+            event = "credential.replaced",
+            credential = %name,
+            old_record_id = %old_record_id,
+            record_id = %record_id,
+            kind = kind.as_str(),
+            origins = %origins,
+            "credential `{name}` replaced by record {record_id}; the old record was damaged",
+        ),
     }
 }
 

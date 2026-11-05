@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use iron_vault_policy::CredentialName;
-use iron_vault_store::{RecordId, StoreFs};
+use iron_vault_store::StoreFs;
 
 use super::add::name_rule;
 use super::dispatch::{AdminHandler, HandlerFuture};
@@ -64,29 +64,17 @@ impl<F: StoreFs + Send + Sync + 'static> Rm<F> {
         };
         exchange.notice(&summary(&name, plan.current())).await?;
         match require_owner_presence(exchange, &plan).await? {
-            Ok(proof) => Ok(remove(plan, proof, name).await),
+            Ok(proof) => Ok(remove(plan, proof).await),
             Err(none) => Ok(no_presence(none)),
         }
     }
 }
 
 /// Writes the removal and settles the config check, then answers once it ends.
-async fn remove<F: StoreFs + Send + Sync + 'static>(
-    plan: VaultChangePlan<'_, F>,
-    proof: OwnerPresence,
-    name: CredentialName,
-) -> AdminResponse {
-    let record_id = plan.current().record_id;
+/// The service context logs `credential.removed` at the commit.
+async fn remove<F: StoreFs + Send + Sync + 'static>(plan: VaultChangePlan<'_, F>, proof: OwnerPresence) -> AdminResponse {
     match plan.change_credential(None, proof).await {
-        Ok(_) => {
-            log_removed(&name, &record_id);
-            AdminResponse::Success
-        }
-        Err(refusal @ VaultChangeRefusal::NotActive(_)) => {
-            // The remove committed even though the check after it left the service Unavailable.
-            log_removed(&name, &record_id);
-            refused(refusal)
-        }
+        Ok(_) => AdminResponse::Success,
         Err(refusal) => refused(refusal),
     }
 }
@@ -112,15 +100,6 @@ fn summary(name: &CredentialName, current: &CurrentRecord) -> String {
         "remove credential {name}\n  record: {}\n  kind: {kind}\n  origins: {origins}\n  routes using {name}: none\n",
         current.record_id
     )
-}
-
-fn log_removed(name: &CredentialName, record_id: &RecordId) {
-    tracing::info!(
-        event = "credential.removed",
-        credential = %name,
-        record_id = %record_id,
-        "credential `{name}` removed; no active route used it",
-    );
 }
 
 /// Owner presence was not shown: nothing was written.

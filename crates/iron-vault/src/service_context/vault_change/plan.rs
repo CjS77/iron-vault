@@ -27,7 +27,7 @@ use iron_vault_store::{
 use tokio::sync::OwnedMutexGuard;
 
 use super::super::{Inner, OpenVault, OwnerPresence, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, log_task_crash};
-use super::{VaultChangeRefusal, kind_of, origins_text};
+use super::{VaultChangeRefusal, kind_of, log_committed};
 use crate::service_state::{AdminOperation, ServiceEvent, ServiceState};
 use crate::serving_snapshot::Admission;
 use crate::standing::{CredentialStanding, RecordSummary, Standing};
@@ -228,9 +228,9 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         let committed = match self.write_on_blocking_pool(Arc::clone(&identity), write).await {
             Written::Refused(refusal) => return Err(refusal),
             Written::Committed(changed) => {
-                if let CredentialChanged::Replaced(record_id) = &changed {
-                    log_replaced(summary, record_id);
-                }
+                // Logged at the commit: a config check that then fails answers `committed-not-active`, which carries no
+                // record ID, although the change is durable.
+                log_committed(summary, &changed);
                 Ok(changed)
             }
             Written::Uncertain(cause) => Err(cause),
@@ -294,39 +294,6 @@ fn write_record(locks: &ServiceLocks, fs: &impl StoreFs, identity: Arc<VaultIden
         Err(VaultError::InvalidMaterial(error)) => Written::Refused(VaultChangeRefusal::Invalid(error.to_string())),
         Err(VaultError::CommitUncertain(error)) => Written::Uncertain(error.to_string()),
         Err(other) => Written::Refused(VaultChangeRefusal::Failed(other.to_string())),
-    }
-}
-
-/// Records a committed `replace` as `credential.replaced` (design/audit-logging.md). It is logged here, at the commit,
-/// because a config check that then fails answers `committed-not-active`, which carries no record ID, although the
-/// change is durable. A removal's `credential.removed` needs only the old record ID, so `rm`'s handler logs it. Only a
-/// healthy old record's kind and origins are known.
-fn log_replaced(summary: &VaultChangeSummary, record_id: &RecordId) {
-    let PlannedChange::Replace { name, kind, origins } = summary.change() else {
-        return;
-    };
-    let (old_record_id, origins) = (summary.current().record_id, origins_text(origins.iter()));
-    match &summary.current().summary {
-        Some(old) => tracing::info!(
-            event = "credential.replaced",
-            credential = %name,
-            old_record_id = %old_record_id,
-            record_id = %record_id,
-            kind = kind.as_str(),
-            origins = %origins,
-            old_kind = old.kind.as_str(),
-            old_origins = %origins_text(old.origins.iter()),
-            "credential `{name}` replaced by record {record_id}",
-        ),
-        None => tracing::info!(
-            event = "credential.replaced",
-            credential = %name,
-            old_record_id = %old_record_id,
-            record_id = %record_id,
-            kind = kind.as_str(),
-            origins = %origins,
-            "credential `{name}` replaced by record {record_id}; the old record was damaged",
-        ),
     }
 }
 
