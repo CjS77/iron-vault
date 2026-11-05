@@ -404,13 +404,15 @@ pub enum ErrorCode {
     ConfigInvalid = 7,
     /// The owner declined at a confirmation prompt.
     Declined = 8,
-    /// `config approve`: the approval passphrase did not open the pinned approver's key.
+    /// `config approve`, `replace`, `rm`: owner presence failed: the approval passphrase did not open the pinned approver's key.
     ApprovalDenied = 9,
-    /// `config approve`: the service cannot run an approval now; no version was reserved.
+    /// `config approve`: the service cannot run an approval now; no version was reserved. `replace`, `rm`: owner presence
+    /// could not be checked, or a `lock` cancelled the change at its passphrase prompt; nothing was written.
     ApprovalUnavailable = 10,
     /// `config approve`: failed after reserving a version, before committing it; the version is consumed.
     ApprovalFailed = 11,
-    /// `config approve`: committed, but not published or active; the service is Unavailable.
+    /// `config approve`: committed, but not published or active; the service is Unavailable. `replace`, `rm`: the change
+    /// committed, but the config check after it left the service Unavailable.
     CommittedNotActive = 12,
     /// The command is not allowed in the service's current state; the message names the state.
     WrongState = 13,

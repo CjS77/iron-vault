@@ -160,3 +160,6 @@ fn refused(refusal: VaultChangeRefusal) -> AdminResponse {
 fn error(code: ErrorCode, message: String) -> AdminResponse {
     AdminResponse::Error { code, message }
 }
+
+#[cfg(test)]
+mod tests;
