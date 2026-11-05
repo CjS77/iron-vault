@@ -209,6 +209,10 @@ field names and types, and the record shape they share. None carries credential 
 | `credential.replaced` | INFO | the replace committed | name, old and new record IDs, old and new kind and origins (the old ones only for a healthy record) |
 | `credential.removed` | INFO | the remove committed | name, record ID |
 
+A refused owner-presence check (step 2 of [Owner presence](#owner-presence)) is recorded as `vault.presence-refused` at WARN with
+`refusal` set to `wrong_passphrase` or `key_mismatch`, and nothing else. It carries no config digest; `config approve`'s
+refusal is the separate `config.approval-refused`.
+
 A superseded record file the write could not remove is recorded as `vault.superseded-left` at WARN, from the write
 report; the next vault write removes it. A write that removed an unindexed record file first records
 `vault.unindexed-removed` for each. The store returns both facts in its `WriteReport`; the binary emits the events.
