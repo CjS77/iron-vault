@@ -6,9 +6,9 @@
 //! The binary runs with `RUST_LOG=trace` too. The run first initializes a vault and unlocks it, after a wrong
 //! passphrase. Then it sends requests that use a header slot, a query slot and Basic, with a caller token, a query string,
 //! a `Proxy-Authorization` and header values the caller chose, and one POST with a body, to an upstream that echoes the
-//! credential, to one that fails mid-body (HTTP/2: resets the stream), to one nobody listens on and to two that redirect,
-//! and types a credential, approval passphrases and a config with a comment at the binary's prompts. Then every file in
-//! the log directory is read.
+//! credential, to one that fails mid-body (HTTP/2: resets the stream), to one nobody listens on and to three that
+//! redirect. It types a credential and approval passphrases at the binary's prompts, and passes `config approve` a
+//! config file holding a comment. Then every file in the log directory is read.
 //!
 //! The subscriber is the process-wide default. One test runs the HTTP/1.1 session and then the HTTP/2 session, because a
 //! global default can be installed once per process.
@@ -67,9 +67,12 @@ const FIXTURE_KEY: &str = "fx-secret";
 const BODY_MARKER: &str = "UPSTREAMBODY-marker-4d2e";
 const MOVED_KEY: &str = "moved-key-0c6e93";
 const ASTRAY_KEY: &str = "astray-key-b71f25";
-/// The `Location` of a cross-origin redirect, which the proxy relays, and of one outside the route's base, which it refuses.
+const REWRITE_KEY: &str = "rewrite-key-4e90a7";
+/// The `Location` of a cross-origin redirect, which the proxy relays; of one outside the route's base, which it refuses;
+/// and of one inside the base, which it rewrites under the route's prefix.
 const RELAYED_LOCATION: &str = "https://moved.example/redirmark-relayed-2b8d?to=redirmark-query-0e41";
 const REFUSED_LOCATION: &str = "/redirmark-refused-6a3c";
+const REWRITTEN_LOCATION: &str = "/v1/redirmark-rewritten-85f2?to=redirmark-rwquery-3a6c";
 /// In the body of the caller's POST; a log never holds a request body.
 const REQUEST_BODY_MARKER: &str = "REQBODY-marker-9e5f";
 /// In a comment of the config `config approve` approves; a log holds its digest, never its bytes.
@@ -81,14 +84,16 @@ const WRONG_UNLOCK_PASSPHRASE: &str = "UNLOCK-wrong-hostile-7f13";
 
 /// What the caller chooses: a query string, header values, and credentials of its own that the service replaces.
 const CALLER_QUERY: &str = "callerqs-3f9a1c";
-const CALLER_HEADERS: [(&str, &str); 5] = [
+const CALLER_HEADERS: [(&str, &str); 4] = [
     ("X-Caller-Note", "callerhdr-note-82d1"),
-    ("Proxy-Authorization", "Basic callerhdr-proxyauth-d3e7"),
     ("User-Agent", "callerhdr-agent-5b07"),
     ("Referer", "https://caller.example/callerhdr-ref-19ce"),
     ("Cookie", "session=callerhdr-cookie-a4f8"),
 ];
 const CALLER_AUTHORIZATION: &str = "Bearer callerhdr-auth-7e63";
+/// The user and password of the caller's own `Proxy-Authorization: Basic`, which the service never forwards.
+const PROXY_USER: &str = "callerproxy-user-61c0";
+const PROXY_PASSWORD: &str = "callerhdr-proxyauth-d3e7";
 const WRONG_TOKEN_BYTES: [u8; 32] = [9; 32];
 
 /// Fixed fields of every record, and the values the constant ones hold.
@@ -207,6 +212,7 @@ fn forms(secret: &str) -> Vec<String> {
 /// Everything the log must not hold, as `(what, text)`, with every form of each secret and the pieces of the upstream URL.
 fn forbidden(ports: &[u16], recovery_key: &str) -> Vec<(String, String)> {
     let basic = format!("{BASIC_USER}:{BASIC_PASSWORD}");
+    let proxy_credentials = format!("{PROXY_USER}:{PROXY_PASSWORD}");
     let secrets = [
         HEADER_KEY,
         QUERY_KEY,
@@ -223,6 +229,10 @@ fn forbidden(ports: &[u16], recovery_key: &str) -> Vec<(String, String)> {
         BODY_MARKER,
         MOVED_KEY,
         ASTRAY_KEY,
+        REWRITE_KEY,
+        REWRITTEN_LOCATION,
+        PROXY_USER,
+        &proxy_credentials,
         RELAYED_LOCATION,
         REFUSED_LOCATION,
         "redirmark-",
@@ -278,7 +288,7 @@ fn echo_of(key: &str) -> String {
 
 // ---- The proxy run -----------------------------------------------------------------------------------------------
 
-/// Ports of the seven upstreams.
+/// Ports of the eight upstreams.
 struct Ports {
     header: u16,
     query: u16,
@@ -287,11 +297,21 @@ struct Ports {
     dead: u16,
     moved: u16,
     astray: u16,
+    rewrite: u16,
 }
 
 impl Ports {
-    fn all(&self) -> [u16; 7] {
-        [self.header, self.query, self.basic, self.cut, self.dead, self.moved, self.astray]
+    fn all(&self) -> [u16; 8] {
+        [
+            self.header,
+            self.query,
+            self.basic,
+            self.cut,
+            self.dead,
+            self.moved,
+            self.astray,
+            self.rewrite,
+        ]
     }
 }
 
@@ -308,7 +328,7 @@ fn callers_and_routes(ports: &Ports) -> String {
     let hash = token_hash(TOKEN_BYTES);
     let header = "{ header = \"X-Api-Key\" }";
     let get = "[\"GET\"]";
-    let routes = "[\"hdr\", \"qry\", \"basic\", \"cut\", \"dead\", \"moved\", \"astray\"]";
+    let routes = "[\"hdr\", \"qry\", \"basic\", \"cut\", \"dead\", \"moved\", \"astray\", \"rewrite\"]";
     [
         format!("[callers.agent]\nlistener = \"local\"\ntoken_hash = \"{hash}\"\nroutes = {routes}\n\n"),
         route("hdr", "/v1", header, "/v1/**", ports.header, "hdr_key", "[\"GET\", \"POST\"]"),
@@ -318,6 +338,7 @@ fn callers_and_routes(ports: &Ports) -> String {
         route("dead", "/v1", header, "/v1/**", ports.dead, "dead_key", get),
         route("moved", "/v1", header, "/v1/**", ports.moved, "moved_key", get),
         route("astray", "/v1", header, "/v1/**", ports.astray, "astray_key", get),
+        route("rewrite", "/v1", header, "/v1/**", ports.rewrite, "rewrite_key", get),
     ]
     .concat()
 }
@@ -343,6 +364,7 @@ fn credentials(ports: &Ports) -> Vec<Credential> {
         fixed("dead_key", DEAD_KEY, ports.dead),
         fixed("moved_key", MOVED_KEY, ports.moved),
         fixed("astray_key", ASTRAY_KEY, ports.astray),
+        fixed("rewrite_key", REWRITE_KEY, ports.rewrite),
     ]
 }
 
@@ -353,37 +375,34 @@ enum Upstreams {
     Http2(Vec<MockH2Upstream>),
 }
 
-/// The two redirecting upstreams, kept alive for the run. They speak HTTP/1.1 in both sessions, since the HTTP/2 test
+/// The three redirecting upstreams, kept alive for the run. They speak HTTP/1.1 in both sessions, since the HTTP/2 test
 /// upstream sends no headers of a test's choosing.
 #[allow(dead_code)] // Held only so the servers keep running.
-struct Redirects([MockUpstream; 2]);
+struct Redirects([MockUpstream; 3]);
 
 impl Redirects {
     async fn start(ca: &TestCa) -> Self {
         Self([
             MockUpstream::start(ca, Reply::redirect(RELAYED_LOCATION)).await,
             MockUpstream::start(ca, Reply::redirect(REFUSED_LOCATION)).await,
+            MockUpstream::start(ca, Reply::redirect(REWRITTEN_LOCATION)).await,
         ])
     }
-
-    fn ports(&self) -> (u16, u16) {
-        (self.0[0].port(), self.0[1].port())
-    }
 }
 
-/// Starts the three echoing upstreams and the one that fails mid-body, in `protocol`, and the two redirecting ones; the
-/// fifth port has no listener.
+/// Starts the three redirecting upstreams, then the three echoing upstreams and the one that fails mid-body, in
+/// `protocol`; the fifth port has no listener.
 async fn start_upstreams(ca: &TestCa, protocol: Upstream) -> ((Upstreams, Redirects), Ports) {
-    let (upstreams, ports) = start_protocol_upstreams(ca, protocol).await;
     let redirects = Redirects::start(ca).await;
-    let (moved, astray) = redirects.ports();
-    ((upstreams, redirects), Ports { moved, astray, ..ports })
+    let (upstreams, ports) = start_protocol_upstreams(ca, protocol, &redirects).await;
+    ((upstreams, redirects), ports)
 }
 
-/// The upstreams of [`start_upstreams`] that speak `protocol`; the redirect ports are left at zero.
-async fn start_protocol_upstreams(ca: &TestCa, protocol: Upstream) -> (Upstreams, Ports) {
+/// The upstreams of [`start_upstreams`] that speak `protocol`, and every port of the run.
+async fn start_protocol_upstreams(ca: &TestCa, protocol: Upstream, redirects: &Redirects) -> (Upstreams, Ports) {
     let echoes = [HEADER_KEY, QUERY_KEY, BASIC_PASSWORD].map(echo_of);
     let dead = next_free_port();
+    let [moved, astray, rewrite] = redirects.0.each_ref().map(MockUpstream::port);
     match protocol {
         Upstream::Http1 => {
             let mut servers = Vec::new();
@@ -398,8 +417,9 @@ async fn start_protocol_upstreams(ca: &TestCa, protocol: Upstream) -> (Upstreams
                 basic: p(2),
                 cut: p(3),
                 dead,
-                moved: 0,
-                astray: 0,
+                moved,
+                astray,
+                rewrite,
             };
             (Upstreams::Http1(servers), ports)
         }
@@ -416,8 +436,9 @@ async fn start_protocol_upstreams(ca: &TestCa, protocol: Upstream) -> (Upstreams
                 basic: p(2),
                 cut: p(3),
                 dead,
-                moved: 0,
-                astray: 0,
+                moved,
+                astray,
+                rewrite,
             };
             (Upstreams::Http2(servers), ports)
         }
@@ -435,9 +456,11 @@ fn echoing(body: &str) -> Reply {
 
 /// `request` with the caller's own header values, a `Proxy-Authorization` and an `Authorization` of its own.
 fn hostile(request: CallerRequest) -> CallerRequest {
+    let proxy_authorization = format!("Basic {}", STANDARD.encode(format!("{PROXY_USER}:{PROXY_PASSWORD}")));
     CALLER_HEADERS
         .iter()
         .fold(request, |request, (name, value)| request.header(name, value))
+        .header("Proxy-Authorization", &proxy_authorization)
         .header("Authorization", CALLER_AUTHORIZATION)
         .header("X-Api-Key", CALLER_AUTHORIZATION)
 }
@@ -460,6 +483,7 @@ async fn hostile_requests(proxy: &Proxy) -> usize {
         post,
         signed("/moved/v1/rates"),
         signed("/astray/v1/rates"),
+        signed("/rewrite/v1/rates"),
         signed("/qry/latest"),
         signed("/basic/v1/ledger"),
         signed("/cut/v1/tail-x9"),
@@ -611,6 +635,9 @@ async fn vault_lifecycle_run() -> String {
 fn assert_lifecycle_ran(records: &[serde_json::Value]) {
     let has = |event: &str, field: &str, value: &str| records.iter().any(|r| r["event"] == event && r[field] == value);
     let has_number = |event: &str, field: &str, value: u64| records.iter().any(|r| r["event"] == event && r[field] == value);
+    ["init", "unlock"]
+        .iter()
+        .for_each(|command| assert!(has("admin.command", "command", command), "{command}: {records:?}"));
     assert!(records.iter().any(|r| r["event"] == "vault.initialized"), "{records:?}");
     assert!(has_number("config.approval-completed", "version", 1), "{records:?}");
     assert!(has("vault.unlock-refused", "refusal", "wrong_passphrase"), "{records:?}");
@@ -690,7 +717,7 @@ fn endings(records: &[serde_json::Value]) -> Vec<(Option<String>, String, Option
 }
 
 /// Checks that each hostile path ran and ended the way it should: the routes answered, the POST's body was read, the
-/// cross-origin redirect was relayed and the one outside the base refused, the failing upstreams failed with their reasons,
+/// cross-origin redirect was relayed, the one inside the base rewritten and the one outside it refused, the failing upstreams failed with their reasons,
 /// both refusals were refused, and each echo was scrubbed once for each request that drew it.
 fn assert_hostile_paths_ran(records: &[serde_json::Value], protocol: Upstream) {
     let cut = match protocol {
@@ -705,6 +732,7 @@ fn assert_hostile_paths_ran(records: &[serde_json::Value], protocol: Upstream) {
         ending(Some("hdr"), "success", None),
         ending(Some("moved"), "success", None),
         ending(Some("astray"), "failure", Some("redirect_refused")),
+        ending(Some("rewrite"), "success", None),
         ending(Some("qry"), "success", None),
         ending(Some("basic"), "success", None),
         ending(Some("fx2"), "success", None),
@@ -732,7 +760,9 @@ fn assert_hostile_paths_ran(records: &[serde_json::Value], protocol: Upstream) {
         request("hdr", "POST")["request_bytes"].as_u64().is_some_and(|bytes| bytes > 0),
         "{records:?}"
     );
-    assert_eq!(request("moved", "GET")["status"], 302, "{records:?}");
+    ["moved", "rewrite"]
+        .iter()
+        .for_each(|route| assert_eq!(request(route, "GET")["status"], 302, "{route}: {records:?}"));
     let events = |name: &str| records.iter().filter(|record| record["event"] == name).count();
     assert_eq!(events("credential.added"), 1, "{records:?}");
     assert_eq!(events("config.approval-completed"), 1, "{records:?}");
