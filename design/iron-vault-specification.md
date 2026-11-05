@@ -200,6 +200,11 @@ notifications carrying it come in v1 ([§2](#2-release-plan)). The service must 
 of what it signed. Device enrollment and access controls must prevent untrusted processes from using Iron Vault's
 keys where the platform supports that restriction. They do not eliminate the compromised-display limit in [§1.2](#12-security-promise-and-limits).
 
+From v1, the service may also expose a one-way notification socket ([owner-notifications.md](owner-notifications.md)).
+It sends owner notifications only to the one notification account the approved config names. It reads nothing and
+grants nothing, and naming an account there never makes it an admin principal. Notifications are informational; they
+never request input or serve as evidence of an operation.
+
 **Attack mitigated (R-3).** Keeping private keys and stored secrets in the service removes them from a compromised
 CLI's memory. Accepting only service-initiated approvals prevents an attacker from submitting a signature obtained
 through an unrelated device operation. Neither control protects newly typed secrets or makes a fake CLI display trustworthy.
@@ -885,7 +890,8 @@ from untrusted host users. Otherwise an attacker can change what a later adminis
 even without immediate daemon access. Bind-mounted Compose secret files still depend on host permissions. Use a
 dedicated host-mapped service identity and retain process-inspection and dump restrictions; a container boundary
 does not replace those host controls. Application containers must receive no vault mounts, unlock material,
-administrative socket, host PID namespace, privileged mode, or Docker management socket.
+administrative socket, notification socket (from v1), host PID namespace, privileged mode, or Docker management
+socket.
 
 Malware confined to a properly isolated sibling container can use that caller's authorized routes but must not
 extract provider credentials. An ordinary host account without runtime access must also remain outside private
@@ -1219,6 +1225,7 @@ bounded contexts before adding abstractions; crates must not reach into each oth
 | `iron-vault-kinds`  | Credential resolution, token lifecycle, provider signing rules, and constrained token-endpoint adapters                                |
 | `iron-vault-store`  | Vault identity, recipient envelopes, record files, manifests, approval metadata, durable transactions, recovery, and connector storage |
 | `iron-vault`        | Service binary, HTTP/admin interfaces, CLI client, config loading, deployment adapters, scrubbing, logging, and notifications          |
+| `iron-vault-notify` | From v1: desktop notification agent; runs as the owner's login account; no access to vault, config or admin interfaces                 |
 
 Use value objects that reject invalid hosts, ports, paths, names, versions, and slots on construction. Libraries
 return typed errors with `thiserror`; the binary may use `anyhow` for context. Avoid `unwrap`, `expect`, and `panic!`
