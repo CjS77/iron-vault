@@ -300,14 +300,15 @@ fn serve_discarding_leftovers(
 /// leftover is never promoted, so one left behind is discarded by the next config check. Reports every file that was
 /// removed, even when the removal then failed. The counters are not touched.
 fn discard_leftovers(config_dir: &ConfigDirLock, fs: &impl StoreFs, state: &ApprovalState, staged: Option<&[u8]>) -> Vec<DiscardedFile> {
-    let removed = remove_pending_and_staged(config_dir, fs).unwrap_or_else(|error| {
-        let removed = error.removed.iter().map(|file| file.as_str()).collect::<Vec<_>>().join(",");
+    let removed = remove_pending_and_staged(config_dir, fs).unwrap_or_else(|failed| {
+        let removed = failed.removed.iter().map(|file| file.as_str()).collect::<Vec<_>>().join(",");
+        let error_kind = failed.cause.error_kind_label();
         tracing::warn!(
-            error_kind = %error.cause.error_kind_label(),
+            %error_kind,
             removed = removed.as_str(),
             "cannot discard all of the uncommitted pending config and staged approval; the next config check retries"
         );
-        error.removed
+        failed.removed
     });
     let staged = staged.and_then(|envelope| staged_payload(state, envelope));
     removed

@@ -458,9 +458,10 @@ fn fail<F: StoreFs>(
 /// Removes the pending config and the staged approval, best effort: a leftover is discarded and recorded as
 /// `config.recovery-discarded` by the next config check.
 fn discard_uncommitted<F: StoreFs>(config_dir: &ConfigDirLock, fs: &F) {
-    if let Err(error) = remove_pending_and_staged(config_dir, fs) {
+    if let Err(failed) = remove_pending_and_staged(config_dir, fs) {
+        let error_kind = failed.cause.error_kind_label();
         tracing::warn!(
-            error_kind = %error.cause.error_kind_label(),
+            %error_kind,
             "cannot remove the uncommitted pending config and staged approval; the next config check discards them"
         );
     }

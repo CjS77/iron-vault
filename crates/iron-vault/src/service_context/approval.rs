@@ -434,7 +434,7 @@ fn record_commit(version: ApprovalVersion, committed: &Result<CommittedApproval,
         Ok(committed) => committed
             .commit_uncertain()
             .into_iter()
-            .for_each(|kind| record_commit_uncertain(version, &kind)),
+            .for_each(|kind| record_commit_uncertain(version, kind)),
         Err(error) => record_uncertain_writes(error),
     }
 }
