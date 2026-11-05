@@ -2,6 +2,7 @@
 
 pub mod admin;
 pub mod admin_file;
+pub mod audit;
 pub mod caller_token;
 pub mod config_check;
 pub mod connection_tags;

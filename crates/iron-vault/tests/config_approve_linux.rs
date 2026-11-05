@@ -126,6 +126,37 @@ async fn a_failure_after_the_reservation_consumes_the_version_and_the_next_appro
     let digest = ConfigDigest::of(proposed.as_bytes());
     assert!(logs.has_event("config.version-reserved", 2, &digest), "{}", logs.text());
     assert!(logs.has_event("config.approval-failed", 2, &digest), "{}", logs.text());
+    let failed = logs.events("config.approval-failed");
+    let record = failed
+        .iter()
+        .find(|record| record["config_digest"] == digest.to_string().as_str())
+        .unwrap();
+    assert_eq!(
+        (record["level"].as_str(), record["target"].as_str()),
+        (Some("WARN"), Some("iron-vault.audit"))
+    );
+    assert_eq!(
+        (record["step"].as_str(), record["error_kind"].as_str()),
+        (Some("stage"), Some("config_dir_write"))
+    );
+    let mut keys: Vec<&str> = record.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    let expected = [
+        "config_digest",
+        "deployment_profile",
+        "error_kind",
+        "event",
+        "level",
+        "message",
+        "schema_version",
+        "service",
+        "service_version",
+        "step",
+        "target",
+        "timestamp",
+        "version",
+    ];
+    assert_eq!(keys, expected, "{record}");
     assert_eq!(versions(&service).await, (Some(1), 2));
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_eq!(get(&fixture, "fx").await.status, 200);

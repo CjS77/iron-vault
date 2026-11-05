@@ -1,4 +1,4 @@
-//! Checks that `iron-vault serve --log-to-stdout` writes its startup hardening report to stdout as JSON Lines, and refuses
+//! Checks that `iron-vault serve --log-to-stdout` writes its startup event and missing hardening to stdout as JSON Lines, and refuses
 //! stdout when it may be the systemd journal. The process may then stop on a missing install account, which
 //! `deployment_profile.rs` covers.
 
@@ -27,23 +27,35 @@ fn serve_to_stdout(configure: impl FnOnce(&mut Command)) -> Output {
     command.output().expect("spawn iron-vault through sh")
 }
 
-#[test]
-fn reports_missing_swap_protection_as_a_json_line_on_stdout() {
-    let output = serve_to_stdout(|_| {});
+/// The one audit event named `event` that `serve` wrote to stdout; every line must be JSON.
+fn the_event(output: &Output, event: &str) -> serde_json::Value {
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let record: serde_json::Value = stdout
+    stdout
         .lines()
         .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("not a JSON line ({e}): {line}")))
-        .find(|record: &serde_json::Value| {
-            record["message"]
-                .as_str()
-                .is_some_and(|m| m.contains("swap protection is not in effect"))
-        })
-        .unwrap_or_else(|| panic!("no swap protection record on stdout: {stdout}"));
-    assert_eq!(record["level"], "ERROR");
+        .find(|record: &serde_json::Value| record["event"] == event && record["target"] == "iron-vault.audit")
+        .unwrap_or_else(|| panic!("no {event} record on stdout: {stdout}"))
+}
+
+#[test]
+fn the_startup_event_names_the_build_profile_and_the_destination() {
+    let started = the_event(&serve_to_stdout(|_| {}), "service.started");
+    let profile = if cfg!(feature = "dev-mode") { "development" } else { "protected" };
+    assert_eq!(started["deployment_profile"], profile, "{started}");
+    assert_eq!(started["level"], "INFO");
+    assert_eq!(started["log_destination"], "stdout");
+    assert_eq!(started["memory_protection"], "unavailable");
+}
+
+#[test]
+fn reports_missing_swap_protection_as_an_error_event_naming_the_fix() {
+    let incomplete = the_event(&serve_to_stdout(|_| {}), "service.hardening-incomplete");
+    assert_eq!(incomplete["level"], "ERROR");
+    assert_eq!(incomplete["memory_protection"], "unavailable");
+    let remediation = incomplete["remediation"].as_str().unwrap();
     assert!(
-        record["message"].as_str().unwrap().contains("LimitMEMLOCK=infinity"),
-        "record does not name the fix: {record}"
+        remediation.contains("LimitMEMLOCK=infinity"),
+        "record does not name the fix: {incomplete}"
     );
 }
 

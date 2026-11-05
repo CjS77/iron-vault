@@ -26,6 +26,7 @@ use iron_vault_store::{
     StoreFs, Vault, VaultError, VaultIdentity, recover_approval,
 };
 
+use crate::audit::{AuditEvent, CheckFailed};
 use crate::deployment::DeploymentProfile;
 use crate::service_state::{FailureReason, UnavailableReason};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotError};
@@ -327,13 +328,7 @@ pub fn check_config(
 }
 
 fn log_failure(failure: &CheckFailure) {
-    tracing::warn!(
-        event = "config.check-failed",
-        reason = failure.unavailable().as_str(),
-        status = %failure,
-        detail = %failure.detail(),
-        "the config check failed",
-    );
+    CheckFailed { failure }.emit();
 }
 
 fn run(

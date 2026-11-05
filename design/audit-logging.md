@@ -619,8 +619,8 @@ with these fields.
 | `vault.lock-incomplete` | WARN | a lock's drain ended with a serving snapshot or the vault identity still held | `snapshots_held`, `identity_held` |
 
 `service.started` carries the hardening report's outcome as fixed labels, so a run without its protections is visible
-in the startup record itself; `service.hardening-incomplete` is the record to alert on, and replaces the `ERROR` lines
-the hardening report writes today (`hardening::log_report`), with the same fix in `remediation`. The reason text a
+in the startup record itself; `service.hardening-incomplete` is the record to alert on, with the fix for each missing
+protection in `remediation`. The reason text a
 failed core-dump setting carries is not logged, since it is an OS error's text. Every record carries
 `deployment_profile` as a constant field, so the startup event needs no profile field of its own. The state labels are
 fixed strings, never `ServiceState`'s `Debug` output, which writes `Unavailable(PolicyInvalid)`.

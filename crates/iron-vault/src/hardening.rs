@@ -113,28 +113,6 @@ pub fn disable_core_dumps() -> CoreDumps {
     CoreDumps::Failed("unsupported platform".to_owned())
 }
 
-/// Logs the report: each missing protection at ERROR with its fix, and full success at INFO.
-pub fn log_report(report: &HardeningReport) {
-    if let CoreDumps::Failed(reason) = &report.core_dumps {
-        tracing::error!("core dumps are not disabled ({reason}); a crash could write secrets to disk");
-    }
-    match &report.memory {
-        MemoryProtection::Locked if report.core_dumps == CoreDumps::Disabled => tracing::info!("process hardened: {report}"),
-        MemoryProtection::Locked => {}
-        MemoryProtection::Unavailable(_) => tracing::error!(
-            "{}; swap protection is not in effect. Run the service with LimitMEMLOCK=infinity, or use encrypted swap as \
-             the install guide describes",
-            report.memory
-        ),
-        MemoryProtection::Unsupported => {
-            tracing::error!(
-                "{}; swap protection is not in effect. Use encrypted swap as the install guide describes",
-                report.memory
-            )
-        }
-    }
-}
-
 impl fmt::Display for HardeningReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}; {}", self.core_dumps, self.memory)

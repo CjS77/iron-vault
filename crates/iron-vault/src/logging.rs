@@ -46,11 +46,8 @@ use tracing_subscriber::{
     util::{SubscriberInitExt, TryInitError},
 };
 
+use crate::audit::SCHEMA_VERSION;
 use crate::deployment::DeploymentProfile;
-
-/// The record schema's version, written as `schema_version` in every record. It rises when a field or event name is
-/// removed or renamed or a field's type changes, so a dashboard can pin the version it was written for.
-pub const SCHEMA_VERSION: u32 = 1;
 
 /// Dependencies whose verbose logs can carry raw HTTP traffic or TLS secrets.
 pub const CAPPED_TARGETS: [&str; 8] = ["hyper", "hyper_util", "h2", "http", "reqwest", "rustls", "tokio_rustls", "webpki"];
@@ -69,7 +66,7 @@ pub fn dependency_caps() -> Targets {
 
 /// Formats a record as `tracing-subscriber`'s flat JSON and puts the constant fields first.
 ///
-/// The constants (`service`, `service_version`, `schema_version`, `deployment_profile`) are the same in every record,
+/// The constants ([`CONSTANT_FIELDS`](crate::audit::CONSTANT_FIELDS)) are the same in every record,
 /// diagnostic ones included, so they are added here rather than by each emitter. The JSON formatter's own output is
 /// reused, so escaping stays its job.
 pub struct RecordFormat {
@@ -138,7 +135,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
@@ -208,14 +205,20 @@ mod tests {
         }
     }
 
-    fn capture(emit: impl FnOnce()) -> String {
+    /// Everything `emit` logs through the service's subscriber, with the protected profile.
+    pub(crate) fn capture(emit: impl FnOnce()) -> String {
+        capture_as(DeploymentProfile::Protected, emit)
+    }
+
+    /// Everything `emit` logs through the service's subscriber, with `profile`.
+    pub(crate) fn capture_as(profile: DeploymentProfile, emit: impl FnOnce()) -> String {
         let out = Capture::default();
-        tracing::subscriber::with_default(subscriber(out.clone(), DeploymentProfile::Protected), emit);
+        tracing::subscriber::with_default(subscriber(out.clone(), profile), emit);
         let bytes = out.0.lock().map(|b| b.clone()).unwrap_or_default();
         String::from_utf8(bytes).unwrap_or_default()
     }
 
-    fn parse(line: &str) -> serde_json::Value {
+    pub(crate) fn parse(line: &str) -> serde_json::Value {
         serde_json::from_str(line).expect("valid JSON")
     }
 

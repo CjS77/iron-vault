@@ -436,7 +436,7 @@ fn captured_logs() -> Captured {
     CAPTURED
         .get_or_init(|| {
             let captured = Captured::default();
-            let subscriber = tracing_subscriber::fmt().with_writer(captured.clone()).with_ansi(false).finish();
+            let subscriber = iron_vault::logging::subscriber(captured.clone(), DeploymentProfile::current());
             tracing::subscriber::set_global_default(subscriber).unwrap();
             captured
         })
@@ -450,6 +450,22 @@ struct Captured(Arc<Mutex<Vec<u8>>>);
 impl Captured {
     fn text(&self) -> String {
         String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner)).into_owned()
+    }
+
+    /// Every audit event named `event`, as parsed records.
+    fn events(&self, event: &str) -> Vec<serde_json::Value> {
+        self.text()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|record| record["target"] == "iron-vault.audit" && record["event"] == event)
+            .collect()
+    }
+
+    /// Whether a `service.lock-transition` from `from` to `to` was recorded, with `reason` as its unavailable reason.
+    fn has_transition(&self, from: &str, to: &str, reason: Option<&str>) -> bool {
+        self.events("service.lock-transition")
+            .iter()
+            .any(|record| record["from_state"] == from && record["to_state"] == to && record["unavailable_reason"].as_str() == reason)
     }
 }
 
@@ -937,12 +953,9 @@ async fn unlock_with_the_right_passphrase_reaches_ready_and_a_request_reaches_th
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_served(&get_unix(&fixture.socket(), true).await);
     assert_eq!(fixture.upstream.requests().len(), 1);
-    let text = logs.text();
-    let transitions = ["lock transition: Locked to Checking", "lock transition: Checking to Ready"];
-    transitions
+    [("locked", "checking"), ("checking", "ready")]
         .iter()
-        .for_each(|line| assert!(text.contains(line), "{line} missing from:\n{text}"));
-    assert!(text.contains("iron_vault::lock_transition"), "{text}");
+        .for_each(|(from, to)| assert!(logs.has_transition(from, to, None), "{from} to {to} missing from:\n{}", logs.text()));
     assert_no_passphrase_logged(&logs);
 }
 
@@ -1006,7 +1019,7 @@ async fn unlock_with_an_invalid_approval_ends_unavailable_and_names_the_redacted
     assert_eq!(service.state().await, ServiceState::Unavailable(FailureReason::PolicyInvalid));
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::PolicyInvalid);
     assert!(
-        logs.text().contains("lock transition: Checking to Unavailable(PolicyInvalid)"),
+        logs.has_transition("checking", "unavailable", Some("policy_invalid")),
         "{}",
         logs.text()
     );
@@ -1077,7 +1090,7 @@ async fn lock_over_the_admin_socket_leaves_the_service_locked_answering_503_unti
     assert!(snapshot.upgrade().is_none(), "the snapshot holding the vault outlived lock");
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
     assert_eq!(fixture.upstream.requests().len(), 1, "the locked service sent nothing upstream");
-    assert!(logs.text().contains("lock transition: Ready to Locked"), "{}", logs.text());
+    assert!(logs.has_transition("ready", "locked", None), "{}", logs.text());
     assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_served(&get_unix(&fixture.socket(), true).await);
@@ -1150,11 +1163,7 @@ async fn lock_from_unavailable_clears_the_kept_vault_identity() {
     let report = status(&service).await.1;
     assert_eq!((report.state, report.vault), (ServiceState::Locked, VaultStatus::Locked));
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
-    assert!(
-        logs.text().contains("lock transition: Unavailable(PolicyInvalid) to Locked"),
-        "{}",
-        logs.text()
-    );
+    assert!(logs.has_transition("unavailable", "locked", None), "{}", logs.text());
 }
 
 #[tokio::test]
@@ -1461,7 +1470,13 @@ async fn a_reload_to_an_older_committed_pair_goes_unavailable_and_the_old_policy
     assert_reload_fails(&fixture, &service, &before).await;
 
     let text = logs.text();
-    assert!(text.contains("config.reload-failed"), "{text}");
+    let failed = logs.events("config.reload-failed");
+    assert!(
+        failed.iter().any(|record| record["level"] == "WARN"
+            && record["unavailable_reason"] == "policy_invalid"
+            && record["committed_version"] == 2),
+        "{text}"
+    );
     assert!(!text.contains(SECRET), "{text}");
 }
 

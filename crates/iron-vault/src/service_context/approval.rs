@@ -24,15 +24,16 @@ use std::sync::Arc;
 
 use iron_vault_policy::{ActivePolicy, ApprovalSummary, ValidatedConfig, summarize};
 use iron_vault_store::{
-    ApprovalError, ApprovalPassphrase, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDigest, PendingConfig,
-    SoftwareSigner, StoreFs, Vault, VaultIdentity,
+    ApprovalError, ApprovalPassphrase, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ApprovalVersion, ConfigDigest,
+    PendingConfig, SoftwareSigner, StoreFs, Vault, VaultIdentity,
 };
 use tokio::sync::OwnedMutexGuard;
 
 use super::{Inner, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_task_crash};
 use crate::admin::protocol::ApprovalResult;
+use crate::audit::{ActivationCause, ActivationFailed, ApprovalCompleted, ApprovalFailed, AuditEvent};
 use crate::config_check::{InvalidConfig, activate_config};
-use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState, UnavailableReason};
+use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState};
 use crate::serving_snapshot::Admission;
 
 /// How a `config approve` ended without an active new config. Each variant maps to one `config approve` error code, and
@@ -290,7 +291,8 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
                 return Err(not_committed(error, digest));
             }
         };
-        let version = prepared.version().get();
+        let approved = prepared.version();
+        let version = approved.get();
         if started == ServiceState::Ready {
             inner.open = None;
             // Cannot fail: the state was checked as Ready under this same guard. Were it to, the version is consumed.
@@ -304,13 +306,12 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
             prepared.commit(&storage, &pause).map(drop)
         };
         self.durable(inner, started, &identity, committed, digest).await?;
-        tracing::info!(
-            event = "config.approval-completed",
-            version,
-            %digest,
-            summary = %summary.render(),
-            "config approval completed",
-        );
+        ApprovalCompleted {
+            version: approved,
+            digest,
+            summary: &summary,
+        }
+        .emit();
         match self.check_committed(inner, started, identity).await {
             ServiceState::Ready => Ok(ApprovalResult {
                 version,
@@ -318,7 +319,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
                 headline: summary.headline(),
             }),
             state => {
-                activation_failed(version, state, "the config check after the commit failed; see config.check-failed");
+                activation_failed(approved, state, ActivationCause::CheckFailed);
                 Err(ApprovalEnd::NotActive { version, state })
             }
         }
@@ -368,7 +369,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
             }
             ApprovalProgress::CommitUncertain(version) => {
                 let state = self.recovery_needed(inner, started);
-                activation_failed(version.get(), state, &error);
+                activation_failed(version, state, ActivationCause::CommitUnsettled);
                 Err(ApprovalEnd::NotActive {
                     version: version.get(),
                     state,
@@ -390,17 +391,14 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
 fn not_committed(error: ApprovalError, digest: ConfigDigest) -> ApprovalEnd {
     match error.progress() {
         ApprovalProgress::Reserved(version) => {
-            let (version, step) = (version.get(), error.step());
-            tracing::warn!(
-                event = "config.approval-failed",
+            ApprovalFailed {
                 version,
-                %digest,
-                %step,
-                %error,
-                "config approval failed after its reservation"
-            );
+                digest,
+                error: &error,
+            }
+            .emit();
             ApprovalEnd::Failed {
-                version,
+                version: version.get(),
                 cause: error.to_string(),
             }
         }
@@ -408,13 +406,9 @@ fn not_committed(error: ApprovalError, digest: ConfigDigest) -> ApprovalEnd {
     }
 }
 
-/// Records that the committed `version` is not active: the service settled in `state`, for the reason `detail` gives.
-fn activation_failed(version: u64, state: ServiceState, detail: impl std::fmt::Display) {
-    let reason = match state {
-        ServiceState::Unavailable(reason) => UnavailableReason::from_failure(reason).as_str(),
-        _ => "not ready",
-    };
-    tracing::warn!(event = "config.activation-failed", version, reason, %detail, "the approved config is not active");
+/// Records that the committed `version` is not active: the service settled in `state`, for `cause`.
+fn activation_failed(version: ApprovalVersion, state: ServiceState, cause: ActivationCause) {
+    ActivationFailed { version, state, cause }.emit();
 }
 
 fn unavailable(error: impl std::fmt::Display) -> ApprovalEnd {

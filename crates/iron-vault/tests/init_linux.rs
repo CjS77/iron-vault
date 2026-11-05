@@ -316,18 +316,10 @@ async fn init_writes_a_vault_that_stays_locked_and_unlocks_to_ready_at_version_1
     assert_eq!(fs::read(fixture.path("etc/config.toml")).unwrap(), INITIAL_CONFIG);
 
     let text = logs.text();
-    let initialized = format!("vault_id={vault_id}");
-    assert!(
-        text.lines()
-            .any(|line| line.contains("vault.initialized") && line.contains(&initialized)),
-        "{text}"
-    );
-    ["config.version-reserved", "config.approval-completed"].iter().for_each(|event| {
-        assert!(
-            text.lines().any(|line| line.contains(event) && line.contains("version=1")),
-            "{event}"
-        )
-    });
+    assert!(logs.has_field("vault.initialized", "vault_id", &vault_id.to_string()), "{text}");
+    ["config.version-reserved", "config.approval-completed"]
+        .iter()
+        .for_each(|event| assert!(logs.has_field(event, "version", "1"), "{event}"));
     assert_no_secret_logged(&logs, &[exchanged.recovery_key()]);
 }
 
@@ -661,13 +653,8 @@ async fn an_init_dropped_while_writing_keeps_its_locks_until_the_writes_end() {
     assert!(matches!(second, Err(InitRefusal::Busy)), "{second:?}");
     wait_until(|| !marker.exists()).await;
     assert_response(&unlock(&service).await, &AdminResponse::Success);
-    let initialized = format!("vault_id={}", unlocked(&service).await.id);
-    let text = logs.text();
-    assert!(
-        text.lines()
-            .any(|line| line.contains("vault.initialized") && line.contains(&initialized)),
-        "{text}"
-    );
+    let initialized = unlocked(&service).await.id.to_string();
+    assert!(logs.has_field("vault.initialized", "vault_id", &initialized), "{}", logs.text());
 }
 
 #[tokio::test]

@@ -371,11 +371,7 @@ pub fn captured_logs() -> Captured {
     CAPTURED
         .get_or_init(|| {
             let captured = Captured::default();
-            let subscriber = tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::TRACE)
-                .with_writer(captured.clone())
-                .with_ansi(false)
-                .finish();
+            let subscriber = iron_vault::logging::subscriber(captured.clone(), DeploymentProfile::current());
             tracing::subscriber::set_global_default(subscriber).unwrap();
             captured
         })
@@ -390,13 +386,33 @@ impl Captured {
         String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner)).into_owned()
     }
 
-    /// Whether one log line names `event`, `version` and `digest`. The digest tells this test's approval apart from
-    /// another test's at the same version, since every test logs into this one buffer.
-    pub fn has_event(&self, event: &str, version: u64, digest: &ConfigDigest) -> bool {
-        let (version, digest) = (format!("version={version} "), digest.to_string());
+    /// Every record whose `event` is `event`.
+    pub fn events(&self, event: &str) -> Vec<serde_json::Value> {
         self.text()
             .lines()
-            .any(|line| line.contains(event) && line.contains(&version) && line.contains(&digest))
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|record| record["event"] == event)
+            .collect()
+    }
+
+    /// Whether a record of `event` has `field` equal to `value`, written as a string or a number.
+    pub fn has_field(&self, event: &str, field: &str, value: &str) -> bool {
+        self.events(event)
+            .iter()
+            .any(|record| record[field].as_str() == Some(value) || value.parse::<u64>().is_ok_and(|number| record[field] == number))
+    }
+
+    /// Whether a record of `event` names `version` and `digest`. The digest tells this test's approval apart from
+    /// another test's at the same version, since every test logs into this one buffer.
+    ///
+    /// The store's own records still write the version as a string and the digest as `digest`, until their facts move
+    /// to the binary's audit events; the binary's events write a number and `config_digest`.
+    pub fn has_event(&self, event: &str, version: u64, digest: &ConfigDigest) -> bool {
+        let digest = digest.to_string();
+        self.events(event).iter().any(|record| {
+            let version_matches = record["version"] == version || record["version"] == version.to_string().as_str();
+            version_matches && (record["config_digest"] == digest.as_str() || record["digest"] == digest.as_str())
+        })
     }
 
     pub fn assert_no_passphrase(&self) {

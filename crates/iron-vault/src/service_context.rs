@@ -34,12 +34,14 @@ use std::time::Duration;
 
 use iron_vault_policy::{Capabilities, CredentialName, Limits, ListenerConfig, ListenerName, ParsedConfig};
 use iron_vault_store::{
-    ApprovalState, ConfigDirLock, ConfigFileName, InitializationState, LockError, OsFs, Passphrase, RecordId, StateDirLock, StateFileName,
-    StoreFs, UnlockError, VaultIdentity, read_config_file, sweep_stale_config_temps, sweep_stale_temps, unlock_with_passphrase,
+    ApprovalState, ApprovalVersion, ConfigDirLock, ConfigFileName, InitializationState, LockError, OsFs, Passphrase, RecordId,
+    StateDirLock, StateFileName, StoreFs, UnlockError, VaultIdentity, read_config_file, sweep_stale_config_temps, sweep_stale_temps,
+    unlock_with_passphrase,
 };
 use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 
 use crate::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
+use crate::audit::{AuditEvent, LockTransition, ReloadFailed};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
@@ -56,10 +58,6 @@ pub use approval::{ApprovalEnd, ApprovalReview};
 pub use init::{InitRefusal, step_names};
 pub use presence::{OwnerPresence, PresenceRefusal};
 pub use vault_change::{CredentialChanged, CurrentRecord, VaultChangePlan, VaultChangeRefusal};
-
-/// The log target of lock transitions (glossary: *Lock transition*), so the audit design (EP-26) can route them as
-/// their own events.
-pub const LOCK_TRANSITION_TARGET: &str = "iron_vault::lock_transition";
 
 /// The start of the WARN line an unlock refusal logs, whichever layer refuses it.
 pub(crate) const UNLOCK_REFUSED: &str = "unlock refused, the service stays Locked";
@@ -671,7 +669,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
             .open
             .as_ref()
             .and_then(|open| open.approval.committed())
-            .map(|(version, _)| version.get());
+            .map(|(version, _)| version);
         inner.open = None;
         inner.identity = Some(Arc::clone(&identity));
         let leaving_locked = from == ServiceState::Locked;
@@ -692,7 +690,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         inner: &mut Inner,
         identity: Arc<VaultIdentity>,
         event: ServiceEvent,
-        committed: Option<u64>,
+        committed: Option<ApprovalVersion>,
     ) -> Result<ServiceState, IllegalTransition> {
         inner.checks = inner.checks.wrapping_add(1);
         match self.run_check(identity).await {
@@ -713,7 +711,11 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
             }
             Err(failure) => {
                 if event == ServiceEvent::Reload {
-                    log_reload_failed(committed, &failure);
+                    ReloadFailed {
+                        committed,
+                        failure: &failure,
+                    }
+                    .emit();
                 }
                 apply(&self.holder, inner, ServiceEvent::CheckFailed(failure.failure()))
             }
@@ -759,18 +761,6 @@ fn store_refusal(holder: &SnapshotHolder, state: ServiceState) {
     }
 }
 
-/// Warns the owner that a SIGHUP reload failed (design/config-approval.md, audit events). The detail names versions, routes
-/// and credentials only; EP-26 picks the event up by its name.
-fn log_reload_failed(committed: Option<u64>, failure: &CheckFailure) {
-    tracing::warn!(
-        event = "config.reload-failed",
-        committed_version = ?committed,
-        reason = failure.unavailable().as_str(),
-        detail = %failure.detail(),
-        "the reload failed, the service stops proxying",
-    );
-}
-
 /// The outcome of a lock whose drain left `snapshots` held and the vault identity with `identity_holders` strong
 /// references, logged at INFO when everything is cleared and at WARN otherwise.
 fn lock_outcome(snapshots: usize, identity_holders: usize) -> LockOutcome {
@@ -790,7 +780,7 @@ fn lock_outcome(snapshots: usize, identity_holders: usize) -> LockOutcome {
     }
 }
 
-/// Logs one lock transition at INFO. It names the two states only; nothing an unlock was given reaches the log.
+/// Records one lock transition.
 fn log_lock_transition(from: ServiceState, to: ServiceState) {
-    tracing::info!(target: LOCK_TRANSITION_TARGET, ?from, ?to, "lock transition: {from:?} to {to:?}");
+    LockTransition { from, to }.emit();
 }

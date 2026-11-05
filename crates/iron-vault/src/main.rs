@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use anyhow::Context;
 use cli::{Cli, Command, ConfigCommand};
 #[cfg(target_os = "linux")]
+use iron_vault::audit::{AuditEvent, HardeningIncomplete, ServiceStarted};
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::hardening;
 #[cfg(target_os = "linux")]
@@ -55,8 +56,9 @@ fn run_service(log_to_stdout: bool) -> anyhow::Result<()> {
     let report = hardening::harden_process();
     let accounts = Accounts::read()?;
     let env = ProfileEnv::from_process(&accounts)?;
-    let failure = init_logging(&env, log_to_stdout)?;
-    hardening::log_report(&report);
+    let destination = LogDestination::bootstrap(DeploymentProfile::current(), &env, log_to_stdout)?;
+    let failure = init_logging(&env, &destination)?;
+    log_startup(&destination, &report);
     #[cfg(feature = "dev-mode")]
     warn_development(&env, &accounts)?;
     let paths = ServicePaths::for_profile(DeploymentProfile::current(), &env)?;
@@ -78,15 +80,27 @@ fn warn_development(env: &ProfileEnv, accounts: &Accounts) -> anyhow::Result<()>
     Ok(())
 }
 
+/// Records the startup event, then the hardening that is missing, if any, as the record to alert on.
+#[cfg(target_os = "linux")]
+fn log_startup(destination: &LogDestination, report: &hardening::HardeningReport) {
+    ServiceStarted {
+        destination,
+        hardening: report,
+    }
+    .emit();
+    if let Some(incomplete) = HardeningIncomplete::of(report) {
+        incomplete.emit();
+    }
+}
+
 /// Opens the bootstrap log destination and installs the log subscriber on it, returning the latch its first failed write
 /// trips. A destination that cannot be used stops the service here, before any socket is bound.
 #[cfg(target_os = "linux")]
-fn init_logging(env: &ProfileEnv, log_to_stdout: bool) -> anyhow::Result<LogFailure> {
+fn init_logging(env: &ProfileEnv, destination: &LogDestination) -> anyhow::Result<LogFailure> {
     let profile = DeploymentProfile::current();
-    let destination = LogDestination::bootstrap(profile, env, log_to_stdout)?;
     let journal_stream = std::env::var_os(logging::JOURNAL_STREAM);
     let failure = LogFailure::default();
-    logging::install(&destination, profile, env, journal_stream.as_deref(), failure.clone())
+    logging::install(destination, profile, env, journal_stream.as_deref(), failure.clone())
         .with_context(|| format!("cannot use the log destination {destination}"))?;
     Ok(failure)
 }
