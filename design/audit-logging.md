@@ -375,17 +375,19 @@ K-173 builds the record and the handle; K-174 writes the event from the body.
 ### Bodies hyper never polls
 
 hyper 1.x drops a response body without polling it in two cases (`proto/h1/dispatch.rs` `poll_write`, and the
-`can_have_body` rule in `proto/h1/role.rs`): the body's `is_end_stream()` is already true when the head is written, as
-for every fixed empty refusal; or the response cannot carry a body: an answer to `HEAD`, a `204` or a `304`. A drop
-there is a clean end, not a caller going away. So the outermost body layer:
+`can_have_body` rule in `proto/h1/role.rs`): the body's `is_end_stream()` is already true, or its `size_hint()` is
+exactly 0, when the head is written, as for every fixed empty refusal; or the response cannot carry a body: an answer
+to `HEAD`, a `204` or a `304`. A drop there is a clean end, not a caller going away. `can_have_body` also covers a
+`1xx` and a `2xx` answer to `CONNECT`, but neither reaches the record: the form gate refuses `CONNECT`, and `respond`
+never produces a `1xx`. So the outermost body layer:
 
 - forwards `is_end_stream()` and `size_hint()` from the body it wraps, so hyper sees the same body it would have seen
   unwrapped;
 - records, when `respond` wraps the response, whether it can carry a body, from the request method and the status, by
   the same rule as the relay's `has_no_body` (`proxy_handler/relay.rs`);
-- on a drop before the end, counts it as a clean end when the response cannot carry a body or the inner body reports
-  `is_end_stream()`. A relayed `HEAD` answer is then a `success`, and a fixed refusal keeps the reason it was given.
-  Any other drop before the end is a drop failure, below.
+- on a drop before the end, counts it as a clean end when the response cannot carry a body, or the inner body reports
+  `is_end_stream()` or a `size_hint()` that is exactly 0. A relayed `HEAD` answer is then a `success`, and a fixed
+  refusal keeps the reason it was given. Any other drop before the end is a drop failure, below.
 
 ### Closes the service makes
 
@@ -398,9 +400,14 @@ administrator looking in the wrong place, so a drop failure has two codes:
 - `caller_gone` otherwise: the caller closed it, or hyper ended it on a connection error.
 
 The record learns which from a flag. Each listener's connection set holds a `ServiceClose` flag, a shared atomic
-boolean, and each connection's tags carry a clone of it into every request record on that connection. `close_except`
-sets the flag of each set it is about to close before it aborts the set's tasks, so every record those aborts drop
-reads `service_closed`.
+boolean. Each connection task holds a clone and passes it to `respond` beside the connection's `ConnectionTags`, not
+inside them: the tags are the pipeline's value object, compared by value, and a shared mutable flag has no place in
+one. `respond` puts the clone in every request record on that connection. `close_except` sets the flag of each set it
+is about to close before it aborts the set's tasks, so every record those aborts drop reads `service_closed`.
+
+`Connections` also sets every set's flag in its `Drop`, before its connection sets abort their tasks. A listener task
+that panics drops its `Connections` without calling `close_except` (`halt` in `service_context/serving.rs` then
+returns an empty set), and that is still the service closing the connections, not the callers.
 
 ### Which reason wins
 
@@ -802,21 +809,24 @@ refuse.
 
 ### Stdout is never the journal
 
-Under systemd a service's stdout is normally a stream into journald, so `stdout` there would break owner decision 3
-("no journald output, even on Linux"), and the journal's readers are not bound by the log directory's mode. So
-`stdout` is refused when stdout is the journal: systemd sets `JOURNAL_STREAM` to the `<dev>:<inode>` of the stream it
-connects to stdout or stderr (`systemd.exec(5)`), and the service refuses `stdout` when that variable is set and file
-descriptor 1's device and inode match it. The check runs at startup for `--log-to-stdout`, which then exits as for a
-destination that cannot be opened, and in the config check for `destination = "stdout"`, which then fails as for an
-unusable directory ([Switching at activation](#switching-at-activation)). The variable is read only to refuse; it can
-never select or move a destination, so it is not an ambient setting in the sense of
+Under systemd a service's stdout is normally a stream into journald, so `stdout` there would break owner decision 3 ("no
+journald output, even on Linux"), and the journal's readers are not bound by the log directory's mode. So `stdout` is
+refused when stdout is the journal: systemd sets `JOURNAL_STREAM` to the `<dev>:<inode>` of the stream it connects to
+stdout or stderr (`systemd.exec(5)`), and the service refuses `stdout` when that variable is set and file descriptor 1's
+device and inode match it. A `JOURNAL_STREAM` that is set but cannot be parsed as two decimal numbers joined by a colon
+is refused as if it matched: systemd never writes one, so the service cannot rule out the journal, and failing closed
+costs only an administrator clearing a stray variable. The check runs at startup for `--log-to-stdout`, which then exits
+as for a destination that cannot be opened, and in the config check for `destination = "stdout"`, which then fails as
+for an unusable directory ([Switching at activation](#switching-at-activation)). The variable is read only to refuse; it
+can never select or move a destination, so it is not an ambient setting in the sense of
 [§3.7](iron-vault-specification.md#37-outbound-tls-and-environment).
 
 The alternatives were rejected. Detecting a container (`/.dockerenv`, `/run/.containerenv`, cgroup names) depends on
 each runtime's conventions and would refuse stdout piped to a collector outside one. Setting `StandardOutput=null` in
 the packaged unit would turn `stdout` into a destination that silently discards every record, since writes to
-`/dev/null` succeed. An administrator who points Docker's own `journald` log driver at the container's stdout makes
-that choice in the runtime, outside the service; the operations guide says not to.
+`/dev/null` succeed. An administrator who points the container runtime's `journald` log driver at the container's stdout
+makes that choice in the runtime, outside the service; the operations guide says not to. Podman uses that driver by
+default on Fedora and RHEL, so the guide names it.
 
 Stderr is not a log destination. Only the one line a startup failure writes before the subscriber is installed goes
 there ([Startup order](#startup-order)), as today; under systemd that line reaches the journal and the unit's status.
@@ -835,20 +845,20 @@ The destination switches when a config check activates an approved config whose 
 one: after an approval, on an unlock's check, on a SIGHUP reload and on a recovery that publishes a committed config.
 It does not wait for a restart, which in a passphrase install would cost an unlock.
 
-- The config check opens the new destination, with every check below, as one of its own checks. If it cannot be
-  opened or fails a check, the config check fails and writes `config.check-failed` with `unavailable_reason`
-  `policy_invalid`, `failure` `log_destination_unusable`, a `detail` that is the fixed phrase of the check that
-  refused (such as `not owned by the service account`), and the path in `log_destination`; `detail` never carries
-  the path. The service settles Unavailable as for any other invalid policy, and it keeps writing to the current
-  destination.
+- The config check opens the new destination, verifying the directory's descriptor and the log file's as [Trust](#trust)
+  and [Log file and rotation](#log-file-and-rotation) describe, as one of its own checks. If it cannot be opened or
+  fails a check, the config check fails and writes `config.check-failed` with `unavailable_reason` `policy_invalid`,
+  `failure` `log_destination_unusable`, a `detail` that is the fixed phrase of the check that refused (such as
+  `not owned by the service account`), and the path in `log_destination`; `detail` never carries the path. The
+  service settles Unavailable as for any other invalid policy, and it keeps writing to the current destination.
 - The writer switches only after every other part of the config check has passed, as the check's last step before
   activation. There is no half-switch: a check that fails for any reason leaves the writer where it was, and until the
   new destination is open, every record goes to the old one.
-- `config approve` checks the proposed destination before it reserves a version: the trusted-path check of the
-  directory ([Trust](#trust)), the journal check for `stdout`, and, when `iron-vault.log` exists, that it is a regular
-  file the service account owns. It creates nothing, opens no file for writing and does not switch the writer. An
-  approval naming an unusable destination is refused as an invalid config and consumes nothing. The check at
-  activation still runs, since the directory can change in between.
+- `config approve` checks the proposed destination before it reserves a version: the directory, verified through a
+  descriptor it opens and closes ([Trust](#trust)); the journal check for `stdout`; and, when `iron-vault.log` exists,
+  the [log file rule](#log-file-and-rotation), read with `fstatat` through that descriptor. It creates nothing, opens
+  no file for writing and does not switch the writer. An approval naming an unusable destination is refused as an
+  invalid config and consumes nothing. The check at activation still runs, since the directory can change in between.
 - The order of records at a switch: `config.approval-completed` is written to the old destination, since the commit
   comes before activation. Then `service.log-destination-changed` is written to the old destination, the writer
   switches, and the same event is written again as the first record of the new one, so each file says where the log
@@ -868,30 +878,54 @@ A configured log directory must be:
   state directory and never sit beside `config.toml`;
 - a directory that passes the trusted-path rule for a log directory, `TrustedPathRule::LogDir`, below.
 
-The same rule applies to the bootstrap directory. The trusted-path check runs before the writer opens the file, at
-startup for the bootstrap destination and in the config check for a configured one.
+The same rule applies to the bootstrap directory.
 
 **The log directory rule** (`TrustedPathRule::LogDir`, in `trusted_path.rs`):
 
-- **The leaf** is a directory owned by the service account, with no write or read permission for others.
-- **No component is a symlink.** The check's `lstat` walk refuses a symlink anywhere in the path, leaf or ancestor,
-  so the directory the check passed is the directory written to.
-- **Each ancestor** is a directory owned by root or the service account, and not writable by others. It may be
-  writable by its group only when root owns it.
-- A root-owned shared sticky ancestor such as `/tmp` is refused, as for the state directory.
+- **The leaf** is a directory, not a symlink, owned by the service account, with no write permission for its group
+  and no permission at all for others: `0750` or stricter.
+- **Each ancestor** is a directory owned by root or the service account. Nobody but its owner may write it, except
+  that a root-owned ancestor may be writable by its group. No ancestor may be writable by others, sticky or not.
+- **A symlink above the leaf** is allowed only when root controls it, as for the state directory: the link and the
+  directory holding it are root-owned, and its target passes the same rule. A symlinked `/home`, as on Fedora Atomic,
+  then passes in development.
 
-The group-writable exception is the one difference from the state directory's rule, whose `require_not_writable`
-refuses any ancestor its group can write. It exists because stock Debian and Ubuntu ship `/var/log` as
-`drwxrwxr-x root syslog`, so the protected default `/var/log/iron-vault` could never pass the stricter rule.
+Two rules differ from the state directory's. Its `require_not_writable` refuses any ancestor its group can write; the
+log directory admits a root-owned one, because stock Debian and Ubuntu ship `/var/log` as `drwxrwxr-x root syslog`,
+so the protected default `/var/log/iron-vault` could never pass the stricter rule. And the state directory's
+`is_shared_sticky` test does not apply: it decides only whether a root-owned sticky directory that others or its group
+can write, such as `/tmp`, is refused, while the log directory's rule already settles both cases without the sticky
+bit. A root-owned ancestor its group can write passes whether or not it is sticky, since the sticky bit only narrows
+what the group can do; one that others can write is refused whether or not it is sticky, since any local account,
+callers included, could create entries in it.
+
+**The check verifies the descriptor it keeps.** A walk of the path by name and a later open by name would leave a gap:
+a member of a group that can write an ancestor (`syslog` on stock `/var/log`) could rename the directory away between
+the two and plant one of their own. So the check, at startup for the bootstrap directory and in the config check for
+a configured one, runs in this order:
+
+1. walk the path with `lstat`, applying the rule above to every ancestor and recording the leaf's `(dev, inode)`;
+2. open the leaf once, with `O_DIRECTORY | O_NOFOLLOW`;
+3. `fstat` that descriptor, require its `(dev, inode)` to be the one the walk recorded, and apply the leaf rule to its
+   own metadata;
+4. keep the descriptor: `LogFile` writes only through it ([Log file and rotation](#log-file-and-rotation)), and never
+   resolves the directory's path again.
+
+This is the pattern `admin_file::read` already follows for an administrator-installed file: open the leaf the walk
+checked without following a symlink, and refuse it unless `fstat` shows the same device, inode, owner and mode.
+
+`config approve`'s check of a proposed directory ([Switching at activation](#switching-at-activation)) verifies it the
+same way, then looks at `iron-vault.log` through the descriptor with `fstatat` and `AT_SYMLINK_NOFOLLOW`, and closes
+the descriptor. It opens nothing for writing.
 
 Residual risk, accepted: members of a group that can write an ancestor (`syslog` on Debian and Ubuntu) can rename the
-log directory's entry in that ancestor, or plant a directory in its place once it is renamed away. They cannot read
-or change the log, since the log directory is the service account's at `0750` and its files `0640`. A planted
-directory is theirs, so it fails the leaf check at the next startup or config check, which stops the service rather
-than writing into it. While the service runs, a rename or a planted directory cannot redirect the writer either,
-because `LogFile` opens the file relative to the directory it opened at the check, never by path
-([Log file and rotation](#log-file-and-rotation)). What they can do is move the log out of the collector's view or
-stop the next start: a denial of service by accounts that already administer the system log.
+log directory's entry in that ancestor, or plant a directory in its place once it is renamed away. That cannot
+redirect the writer: `LogFile` holds the directory descriptor the check verified, and every file it writes is opened
+through that descriptor and verified by `fstat` in turn, so records keep going to the service's own directory under
+whatever name it now has. They cannot read or change the log either, since the directory is the service account's at
+`0750`, with no group write, and its files `0640`. A planted directory is theirs, so the next startup or config check
+refuses it and the service stops rather than writing into it. What they can do is move the log out of the
+collector's view or stop the next start: a denial of service by accounts that already administer the system log.
 
 The service creates a missing log directory only in development, as it creates the development state and config
 directories: `$XDG_STATE_HOME/iron-vault-dev-log` and any missing parents, at mode `0700`. A protected install's
@@ -914,30 +948,37 @@ gives for Compose.
 
 The bootstrap destination needs the deployment's paths, and in development those come from the invoking user's
 environment. So `serve` hardens the process first, as today, then reads the accounts and the profile environment, then
-creates the development log directory if needed, checks the bootstrap log directory's trusted path (or, for
-`--log-to-stdout`, that stdout is not the journal), opens it and installs the subscriber, then writes `service.started`
-(and `service.hardening-incomplete` when it applies), and only then resolves the other service paths and starts the
-service. An error before the subscriber is installed goes to stderr, as an error before logging does today.
+creates the development log directory if needed, opens and verifies the bootstrap log directory and its log file
+([Trust](#trust)), or for `--log-to-stdout` checks that stdout is not the journal, and installs the subscriber, then
+writes `service.started` (and `service.hardening-incomplete` when it applies), and only then resolves the other service
+paths and starts the service. An error before the subscriber is installed goes to stderr, as an error before logging
+does today.
 
 ## Log file and rotation
 
 The service writes one file, `iron-vault.log`, in the log directory, through `logging::LogFile`, a `MakeWriter` of the
 binary's own:
 
-- It holds the log directory open (`O_DIRECTORY`), the directory the trusted-path check passed, and opens
+- It holds the directory descriptor the trust check opened and verified ([Trust](#trust)), and opens
   `iron-vault.log` relative to it with `openat`, never by path, so renaming or replacing the directory cannot redirect
   it.
 - It opens the file with `O_APPEND | O_NOFOLLOW`, creating it at mode `0640` when it is missing, so each record is
   appended whole even if another process appends too, and a symlink planted as `iron-vault.log` is refused rather than
   followed.
+- **It verifies every file it opens.** After each `openat`, the first and every reopen, it `fstat`s the new descriptor
+  and applies the log file rule: a regular file, owned by the service account, with no write permission for its group
+  or for others. A file that fails is closed unused, and the open is a failure: at startup the service exits, in the
+  config check the check fails, and mid-run it is a write failure ([Failure behaviour](#failure-behaviour)). The
+  directory's own rule leaves nobody else able to create the name, so a failure means the directory was tampered
+  with by its owner or by root, and the service stops rather than append to a file it did not create.
 - It holds the open file behind a mutex, and writes each record with one `write_all` under it, so records from
   different threads never interleave.
 - **It follows a rotation without a signal.** Before it writes a record, it compares the `(dev, inode)` of
-  `iron-vault.log` in the directory (`fstatat` with `AT_SYMLINK_NOFOLLOW`) with that of its open file. When they
-  differ, or the name is missing, `logrotate` has renamed the file, so it opens (and, when missing, creates) the name
-  again and writes there. A record written between the rename and the reopen lands in the renamed file, which
-  `delaycompress` leaves uncompressed until the next rotation, so no record is lost. A reopen that fails is a write
-  failure ([Failure behaviour](#failure-behaviour)).
+  `iron-vault.log` in the directory (`fstatat` with `AT_SYMLINK_NOFOLLOW`) with that of its open file. When they differ,
+  or the name is missing, `logrotate` has renamed the file, so it opens (and, when missing, creates) the name again,
+  verifies it as above, and writes there. A record written between the rename and the reopen lands in the renamed file,
+  which `delaycompress` leaves uncompressed until the next rotation, so no record is lost. A reopen that fails is a
+  write failure ([Failure behaviour](#failure-behaviour)).
 - It reports every failed write ([below](#failure-behaviour)).
 
 The check costs one `fstatat` per record, which is small beside the write itself.
@@ -1025,11 +1066,13 @@ a passphrase-only install one unlock after the disk is fixed. Whether stopping i
 
 ## Permissions
 
-In a protected install the log directory is owned by the service account, mode `0750`, and its files `0640`, so
-callers cannot read or change the audit log. The group is the service account's own unless the administrator chooses
-a group for a collector; a caller's account is never in it. The directory and every ancestor must pass the log
-directory rule ([Trust](#trust)). `LogFile` creates every log file itself, at `0640` whatever the unit's umask; the
-shipped `logrotate` rule creates none.
+In a protected install the log directory is owned by the service account, mode `0750`, and its files `0640`, so callers
+cannot read or change the audit log. The group is the service account's own unless the administrator chooses a group for
+a collector, and that group may only read: the directory is `0750` and its files `0640`, never `0770` or `0660`, since a
+group that could write the directory could plant `iron-vault.log` after a rotation, and the service refuses such a
+directory or file ([Trust](#trust), [Log file and rotation](#log-file-and-rotation)). A caller's account is never in the
+group. The directory and every ancestor must pass the log directory rule ([Trust](#trust)). `LogFile` creates every log
+file itself, at `0640` whatever the unit's umask; the shipped `logrotate` rule creates none.
 
 ## Dependency caps
 
@@ -1055,8 +1098,10 @@ adds no further copy. The ticket that adds each crate checks `Cargo.lock` again.
 ## Operations
 
 K-177 writes the operations guide: the log directory's setup, the shipped `logrotate` rule and a rule for a moved
-directory, Docker's log-driver rotation (and a warning against its `journald` driver), and collector settings for
-Grafana Alloy, Vector, Fluent Bit and Filebeat, with the Loki labels and the Elastic `@timestamp` rename above.
+directory, Docker's log-driver rotation, a warning against the `journald` log driver in Docker and in Podman, whose
+default log driver on Fedora and RHEL is `journald`, so a Podman deployment must select another driver (such as
+`k8s-file`) explicitly, and collector settings for Grafana Alloy, Vector, Fluent Bit and Filebeat, with the Loki labels
+and the Elastic `@timestamp` rename above.
 
 ## Open questions
 
