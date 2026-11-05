@@ -140,6 +140,8 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::NameTaken),
         Just(ErrorCode::CredentialInvalid),
         Just(ErrorCode::VaultWriteFailed),
+        Just(ErrorCode::UnknownCredential),
+        Just(ErrorCode::CredentialInUse),
         Just(ErrorCode::RandomSourceFailed),
     ]
 }
@@ -167,6 +169,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             Just(AdminRequest::Lock),
             Just(AdminRequest::Init),
             add_request(),
+            text(256).prop_map(|name| AdminRequest::Rm { name }),
             config_bytes().prop_map(|bytes| AdminRequest::ConfigApprove(ProposedConfig::new(bytes).unwrap())),
         ]
         .prop_map(Frame::Request),
@@ -797,6 +800,45 @@ fn list_has_command_id_9_no_arguments_and_its_own_error_code() {
         (26, "list-too-large")
     );
     assert_round_trips(&error(ErrorCode::ListTooLarge, "m"));
+}
+
+#[test]
+fn rm_has_command_id_11_carries_the_name_and_has_no_result() {
+    let request = Frame::Request(AdminRequest::Rm {
+        name: "old_key".to_owned(),
+    });
+    assert_eq!(encoded(&request), raw(1, 1, &body(&[field(1, &[0, 11]), field(2, b"old_key")])));
+    assert_round_trips(&request);
+    assert_eq!((AdminCommand::Rm as u16, AdminCommand::Rm.name()), (11, "rm"));
+    assert_eq!(request_command(&request), Some(AdminCommand::Rm));
+    assert_round_trips(&Frame::Response(AdminResponse::Success));
+}
+
+#[test]
+fn rm_refuses_a_request_without_exactly_a_name() {
+    let without_name = raw(1, 1, &field(1, &[0, 11]));
+    let extra = raw(1, 1, &body(&[field(1, &[0, 11]), field(2, b"a"), field(3, b"b")]));
+    [without_name, extra].iter().for_each(|bytes| assert!(decode(bytes).is_err()));
+}
+
+#[test]
+fn the_vault_change_error_codes_have_their_documented_numbers_and_names() {
+    [
+        (ErrorCode::UnknownCredential, 23, "unknown-credential"),
+        (ErrorCode::CredentialInUse, 24, "credential-in-use"),
+    ]
+    .into_iter()
+    .for_each(|(code, number, name)| {
+        assert_eq!((code as u16, code.name()), (number, name));
+        assert_round_trips(&error(code, "m"));
+    });
+}
+
+fn request_command(frame: &Frame) -> Option<AdminCommand> {
+    match frame {
+        Frame::Request(request) => Some(request.command()),
+        _ => None,
+    }
 }
 
 fn config_approve(config: &[u8]) -> Frame {

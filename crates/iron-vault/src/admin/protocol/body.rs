@@ -37,6 +37,8 @@ const COMMAND_LOCK: u16 = AdminCommand::Lock as u16;
 const COMMAND_INIT: u16 = AdminCommand::Init as u16;
 const COMMAND_ADD: u16 = AdminCommand::Add as u16;
 const COMMAND_LIST: u16 = AdminCommand::List as u16;
+const COMMAND_RM: u16 = AdminCommand::Rm as u16;
+const TAG_NAME: u16 = 2;
 
 /// A request body; only `add`, whose origins have bounds, can be refused.
 pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameError> {
@@ -45,8 +47,10 @@ pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameErr
     }
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &(request.command() as u16).to_be_bytes());
-    if let AdminRequest::ConfigApprove(config) = request {
-        fields::put(&mut out, TAG_CONFIG, config.bytes());
+    match request {
+        AdminRequest::ConfigApprove(config) => fields::put(&mut out, TAG_CONFIG, config.bytes()),
+        AdminRequest::Rm { name } => fields::put(&mut out, TAG_NAME, name.as_bytes()),
+        _ => {}
     }
     Ok(out)
 }
@@ -69,6 +73,12 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
         COMMAND_INIT => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Init),
         COMMAND_ADD => add::decode_request(&fields),
         COMMAND_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::List),
+        COMMAND_RM => {
+            let [_, name] = exact(&fields, [TAG_COMMAND, TAG_NAME])?;
+            Ok(AdminRequest::Rm {
+                name: read_text(TAG_NAME, name)?,
+            })
+        }
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
 }
@@ -262,6 +272,8 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::NameTaken,
         ErrorCode::CredentialInvalid,
         ErrorCode::VaultWriteFailed,
+        ErrorCode::UnknownCredential,
+        ErrorCode::CredentialInUse,
         ErrorCode::RandomSourceFailed,
         ErrorCode::ListTooLarge,
     ]

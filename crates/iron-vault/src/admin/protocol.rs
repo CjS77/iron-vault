@@ -64,6 +64,12 @@ pub enum AdminRequest {
         /// The permitted origins, 1 to [`MAX_ORIGINS`] of them.
         origins: Vec<RequestedOrigin>,
     },
+    /// Removes a credential record after owner presence, while no route of the active config uses the name; no result.
+    /// Command ID 11.
+    Rm {
+        /// The credential name, as the owner wrote it; the service validates it.
+        name: String,
+    },
 }
 
 /// A requested origin: one permitted origin as an `add` request carries it. The host stays text on the wire, at most
@@ -89,6 +95,7 @@ impl AdminRequest {
             Self::Init => AdminCommand::Init,
             Self::Add { .. } => AdminCommand::Add,
             Self::List => AdminCommand::List,
+            Self::Rm { .. } => AdminCommand::Rm,
         }
     }
 }
@@ -114,6 +121,8 @@ pub enum AdminCommand {
     Add = 8,
     /// `list`.
     List = 9,
+    /// `rm`.
+    Rm = 11,
 }
 
 impl AdminCommand {
@@ -129,6 +138,7 @@ impl AdminCommand {
             Self::Init => "init",
             Self::Add => "add",
             Self::List => "list",
+            Self::Rm => "rm",
         }
     }
 }
@@ -152,10 +162,11 @@ mod no_external_signatures {
             | AdminCommand::List => &[],
             AdminCommand::ConfigApprove => &["config"],
             AdminCommand::Add => &["name", "kind", "origins"],
+            AdminCommand::Rm => &["name"],
         }
     }
 
-    const COMMANDS: [AdminCommand; 9] = [
+    const COMMANDS: [AdminCommand; 10] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::CallerToken,
@@ -165,6 +176,7 @@ mod no_external_signatures {
         AdminCommand::Init,
         AdminCommand::Add,
         AdminCommand::List,
+        AdminCommand::Rm,
     ];
 
     #[test]
@@ -421,6 +433,11 @@ pub enum ErrorCode {
     CredentialInvalid = 21,
     /// `add`: writing the vault failed; the message says whether the write may have committed.
     VaultWriteFailed = 22,
+    /// `replace`, `rm`: the manifest holds no credential of that name.
+    UnknownCredential = 23,
+    /// `replace`, `rm`: a route of the active config uses the name and would not activate after the change; the message
+    /// names each route and why.
+    CredentialInUse = 24,
     /// `caller-token`: the operating system's random source failed, so no token was made.
     RandomSourceFailed = 25,
     /// `list`: the credential list does not fit one frame; the message names the count.
@@ -453,6 +470,8 @@ impl ErrorCode {
             Self::NameTaken => "name-taken",
             Self::CredentialInvalid => "credential-invalid",
             Self::VaultWriteFailed => "vault-write-failed",
+            Self::UnknownCredential => "unknown-credential",
+            Self::CredentialInUse => "credential-in-use",
             Self::RandomSourceFailed => "random-source-failed",
             Self::ListTooLarge => "list-too-large",
         }
