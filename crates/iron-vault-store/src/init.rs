@@ -17,12 +17,12 @@ use thiserror::Error;
 use crate::initialization::INITIAL_CONFIG;
 use crate::passphrase::seal_at;
 use crate::{
-    AdmissionPaused, ApprovalError, ApprovalPassphrase, ApprovalState, ApprovalStorage, ApprovalVersion, ConfigDigest, ConfigDirLock,
-    EnvelopeError, InitStateError, InitializationState, PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig, ReadError, RecipientIdentity,
-    RecipientSet, RecipientSetError, SignError, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs, Vault, VaultError, VaultId,
-    VaultIdentity, WriteError, approval::seal_signer_key_at, begin_initialization, finish_initialization, open_signer_key,
-    read_identity_envelope, read_signer_key, unwrap_identity, wrap_identity, write_identity_envelope, write_passphrase_envelope,
-    write_signer_key,
+    AdmissionPaused, ApprovalError, ApprovalPassphrase, ApprovalState, ApprovalStorage, ApprovalVersion, BeginError, ConfigDigest,
+    ConfigDirLock, EnvelopeError, InitStateError, InitializationState, PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig, ReadError,
+    RecipientIdentity, RecipientSet, RecipientSetError, SignError, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs, Vault,
+    VaultError, VaultId, VaultIdentity, WriteError, approval::seal_signer_key_at, begin_initialization, finish_initialization,
+    open_signer_key, read_identity_envelope, read_signer_key, unwrap_identity, wrap_identity, write_identity_envelope,
+    write_passphrase_envelope, write_signer_key,
 };
 
 pub use keys::{NewVaultKeys, SealingKeys};
@@ -103,6 +103,16 @@ pub struct InitError {
 }
 
 impl InitError {
+    /// A failure at `step` for `cause`, with nothing discarded, so the binary's tests can build each message.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_tests(step: InitStep, cause: InitFailure) -> Self {
+        Self {
+            step,
+            cause,
+            discarded: Vec::new(),
+        }
+    }
+
     /// The step that failed.
     pub fn step(&self) -> InitStep {
         self.step
@@ -113,8 +123,8 @@ impl InitError {
         &self.cause
     }
 
-    /// The files a completed discard removed before a later step failed, for the `vault.init-discarded` log; empty when
-    /// nothing was discarded or the discard itself failed.
+    /// The files the discard removed, for the `vault.init-discarded` log: all of them when a later step failed, those
+    /// removed before the failure when the discard itself failed part-way, and none when nothing was discarded.
     pub fn discarded(&self) -> &[String] {
         &self.discarded
     }
@@ -248,7 +258,11 @@ fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Res
         InitializationState::Unfinished => InitStep::Discard,
         _ => InitStep::Begin,
     };
-    begin_initialization(state, config, fs).map_err(at(step))
+    begin_initialization(state, config, fs).map_err(|BeginError { cause, discarded }| InitError {
+        step,
+        cause: cause.into(),
+        discarded,
+    })
 }
 
 /// Step 2. Both recipient paths are proved on the file as read back, before anything depends on it, while the recovery
@@ -319,7 +333,13 @@ fn approve_initial_config<F: StoreFs>(
     }
     // The audit event every approval raises once its commit is durable; init has no summary but the config it approves.
     let digest = ConfigDigest::of(INITIAL_CONFIG);
-    tracing::info!(event = "config.approval-completed", version = version.get(), %digest, summary = "initial config", "config approval completed");
+    tracing::info!(
+        event = "config.approval-completed",
+        version = version.get(),
+        %digest,
+        summary = "initial config",
+        "config approval completed",
+    );
     Ok(version)
 }
 

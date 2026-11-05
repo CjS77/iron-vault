@@ -67,7 +67,7 @@ pub use init::{
     SealingKeys, WhichPassphrase, initialize,
 };
 pub use initialization::{
-    INITIAL_CONFIG, InitStateError, InitializationState, begin_initialization, ensure_initializable, finish_initialization,
+    BeginError, INITIAL_CONFIG, InitStateError, InitializationState, begin_initialization, ensure_initializable, finish_initialization,
     require_initialized,
 };
 pub use manifest::{

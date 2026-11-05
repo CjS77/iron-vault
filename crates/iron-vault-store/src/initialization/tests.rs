@@ -38,7 +38,14 @@ impl Dirs {
     }
 
     fn begin(&self, fs: &impl StoreFs) -> Result<Vec<String>, InitStateError> {
-        begin_initialization(&self.state, &self.config, fs)
+        begin_initialization(&self.state, &self.config, fs).map_err(|e| e.cause)
+    }
+
+    /// The names in both directories, sorted, for comparing what a discard removed.
+    fn all_names(&self, fs: &impl StoreFs) -> Vec<String> {
+        let mut all: Vec<_> = self.state_names(fs).into_iter().chain(self.config_names(fs)).collect();
+        all.sort();
+        all
     }
 
     fn put(&self, fs: &impl StoreFs, name: &str) {
@@ -481,6 +488,32 @@ fn begin_on_an_unfinished_directory_fails_cleanly_at_every_call() {
     outcomes
         .iter()
         .for_each(|(i, _, state)| assert_eq!(*state, InitializationState::Unfinished, "call {i}"));
+}
+
+/// A discard that fails at any call still names every file it unlinked first, so `vault.init-discarded` can log them.
+#[test]
+fn a_discard_failing_part_way_names_the_files_it_removed() {
+    let dirs = Dirs::new("init-fault-discard-names");
+    let probe = dirs.fault_fs();
+    dirs.crashed_after(&probe, PUBLISHED);
+    let base = probe.trace().len();
+    dirs.begin(&probe).unwrap();
+    let partial = (0..probe.trace().len() - base)
+        .filter(|&i| {
+            let fs = dirs.fault_fs();
+            dirs.crashed_after(&fs, PUBLISHED);
+            let before = dirs.all_names(&fs);
+            fs.fail_call(fs.trace().len() + i, io::ErrorKind::Other);
+            let error = begin_initialization(&dirs.state, &dirs.config, &fs).unwrap_err();
+            let after = dirs.all_names(&fs);
+            let mut named = error.discarded.clone();
+            named.sort();
+            let gone: Vec<_> = before.into_iter().filter(|name| !after.contains(name)).collect();
+            assert_eq!(named, gone, "call {i}: {error:?}");
+            !named.is_empty()
+        })
+        .count();
+    assert!(partial >= 5, "only {partial} failures came after a removal");
 }
 
 #[test]

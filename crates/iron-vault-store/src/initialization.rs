@@ -8,7 +8,7 @@
 use std::ffi::OsStr;
 use std::io;
 
-use crate::config_dir::remove_config_files;
+use crate::config_dir::remove_config_file;
 use crate::durable::{ReadFailure, ensure_dir_sync_supported, read_in};
 use crate::state_dir::LOCK_FILE;
 use crate::vault::is_record_file_name;
@@ -103,6 +103,26 @@ pub enum InitStateError {
     },
 }
 
+/// Why [`begin_initialization`] stopped, with the files its discard removed before it did. A discard that fails part-way
+/// has still removed files, and the `vault.init-discarded` log must name them.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{cause}")]
+pub struct BeginError {
+    /// Why it stopped.
+    pub cause: InitStateError,
+    /// The files the discard unlinked before it stopped; empty unless a discard ran.
+    pub discarded: Vec<String>,
+}
+
+impl From<InitStateError> for BeginError {
+    fn from(cause: InitStateError) -> Self {
+        Self {
+            cause,
+            discarded: Vec::new(),
+        }
+    }
+}
+
 impl InitializationState {
     /// Reads the state from directory listings and file existence alone, plus, beside `init.unfinished`, the bytes of
     /// the config directory's own files.
@@ -133,14 +153,15 @@ pub fn ensure_initializable(
 ///
 /// On Uninitialized this durably writes an empty `init.unfinished`. On Unfinished it durably removes, in an order that
 /// never leaves a signature alone, every file an initialization writes, and keeps `init.unfinished`; it returns those
-/// file names for the `vault.init-discarded` log. On Initialized and Unrecognized it refuses and changes nothing.
-pub fn begin_initialization(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, InitStateError> {
+/// file names for the `vault.init-discarded` log, and a discard that fails part-way names them on its error. On
+/// Initialized and Unrecognized it refuses and changes nothing.
+pub fn begin_initialization(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, BeginError> {
     match ensure_initializable(state, config, fs)? {
         InitializationState::Unfinished => discard(state, config, fs),
         // Uninitialized: `ensure_initializable` returns no other state.
         _ => durable_replace(state, fs, &StateFileName::unfinished_initialization(), b"")
             .map(|()| Vec::new())
-            .map_err(InitStateError::State),
+            .map_err(|e| InitStateError::State(e).into()),
     }
 }
 
@@ -326,19 +347,64 @@ fn is_initial_config(config: &ConfigDirLock, fs: &impl StoreFs, file: ConfigFile
     }
 }
 
-/// Removes what an unfinished initialization wrote, config files first. `init.unfinished` stays, so a crash part-way
-/// reads Unfinished again and the next run discards again.
-fn discard(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, InitStateError> {
-    let config_removed = remove_config_files(config, fs, &DISCARD_ORDER).map_err(InitStateError::Config)?;
-    let state_removed = written_files()
+/// Removes what an unfinished initialization wrote, config files first, and stops at the first failure. `init.unfinished`
+/// stays, so a crash part-way reads Unfinished again and the next run discards again.
+///
+/// Every file unlinked is named, on success and on failure alike. A failed directory fsync comes after its unlink, so
+/// that file is named too: it is gone now, though power loss may bring it back.
+fn discard(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, BeginError> {
+    let config_files = DISCARD_ORDER
         .into_iter()
-        .filter_map(|file| match durable_remove(state, fs, &file) {
-            Ok(()) => Some(Ok(file.to_string())),
-            Err(WriteError::NotFound { .. }) => None,
-            Err(error) => Some(Err(InitStateError::State(error))),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(config_removed.into_iter().map(|f| f.to_string()).chain(state_removed).collect())
+        .map(|name| (name.to_string(), config_removal(remove_config_file(config, fs, name))));
+    let state_files = written_files()
+        .into_iter()
+        .map(|file| (file.to_string(), state_removal(durable_remove(state, fs, &file))));
+    let mut discarded = Vec::new();
+    let outcome = config_files.chain(state_files).try_for_each(|(name, (unlinked, result))| {
+        if unlinked {
+            discarded.push(name);
+        }
+        result
+    });
+    match outcome {
+        Ok(()) => Ok(discarded),
+        Err(cause) => Err(BeginError { cause, discarded }),
+    }
+}
+
+/// Whether a config file's removal unlinked it, and whether it failed.
+fn config_removal(removed: Result<bool, ConfigWriteError>) -> (bool, Result<(), InitStateError>) {
+    match removed {
+        Ok(existed) => (existed, Ok(())),
+        Err(error) => {
+            let unlinked = matches!(
+                error,
+                ConfigWriteError::Io {
+                    step: WriteStep::SyncDir,
+                    ..
+                }
+            );
+            (unlinked, Err(InitStateError::Config(error)))
+        }
+    }
+}
+
+/// Whether a state file's removal unlinked it, and whether it failed. An absent file is skipped.
+fn state_removal(removed: Result<(), WriteError>) -> (bool, Result<(), InitStateError>) {
+    match removed {
+        Ok(()) => (true, Ok(())),
+        Err(WriteError::NotFound { .. }) => (false, Ok(())),
+        Err(error) => {
+            let unlinked = matches!(
+                error,
+                WriteError::Io {
+                    step: WriteStep::SyncDir,
+                    ..
+                }
+            );
+            (unlinked, Err(InitStateError::State(error)))
+        }
+    }
 }
 
 #[cfg(test)]

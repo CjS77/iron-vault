@@ -217,26 +217,20 @@ pub fn remove_pending_and_staged(lock: &ConfigDirLock, fs: &impl StoreFs) -> Res
     }
 }
 
-/// Durably removes the config files `names`, in that order, with a directory fsync after each, and returns the ones
-/// that existed. A file already absent is skipped. Stops at the first failure.
+/// Durably removes the config file `name`, unlink then directory fsync, and says whether it existed. A file already
+/// absent is not an error.
 ///
-/// The fsync per file keeps the order durable: power loss cannot keep a later unlink and lose an earlier one.
-pub(crate) fn remove_config_files(
-    lock: &ConfigDirLock,
-    fs: &impl StoreFs,
-    names: &[ConfigFileName],
-) -> Result<Vec<ConfigFileName>, ConfigWriteError> {
-    names
-        .iter()
-        .filter_map(|&name| match remove_in(fs, lock.dir(), name.as_str()) {
-            Ok(()) => Some(Ok(name)),
-            Err(StepFailure {
-                step: WriteStep::Remove,
-                kind: io::ErrorKind::NotFound,
-            }) => None,
-            Err(failure) => Some(Err(ConfigWriteError::io(name)(failure))),
-        })
-        .collect()
+/// Removing several files one call each, with the fsync inside each call, keeps their order durable: power loss cannot
+/// keep a later unlink and lose an earlier one.
+pub(crate) fn remove_config_file(lock: &ConfigDirLock, fs: &impl StoreFs, name: ConfigFileName) -> Result<bool, ConfigWriteError> {
+    match remove_in(fs, lock.dir(), name.as_str()) {
+        Ok(()) => Ok(true),
+        Err(StepFailure {
+            step: WriteStep::Remove,
+            kind: io::ErrorKind::NotFound,
+        }) => Ok(false),
+        Err(failure) => Err(ConfigWriteError::io(name)(failure)),
+    }
 }
 
 /// Publishes the staged files chosen by `set`: renames `config.toml.pending` to `config.toml`, then
