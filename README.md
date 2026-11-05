@@ -45,7 +45,7 @@ release checks.
 | Phase | Scope |
 |---|---|
 | v0 | Base-URL proxy; static and Basic credentials; caller authentication; route restrictions and rate limits; encrypted storage; versioned approval; scrubbing; recovery and migration |
-| v1 | Service-owned OAuth consent, account identity, access-token caching, and safe refresh-token rotation |
+| v1 | Service-owned OAuth consent, account identity, access-token caching, and safe refresh-token rotation; owner notifications |
 | Later | YubiKey unlock/signing and per-request touch confirmation; additional credential kinds; password-manager sync |
 | Conditional | Forward-proxy interception if required callers cannot use base-URL mode |
 

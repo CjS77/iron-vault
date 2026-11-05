@@ -108,8 +108,8 @@ must never weaken policy to make a feature work.
 | Phase                            | Deliverable                                                                                                                                                                                                       | Release boundary                                                                             |
 |----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
 | v0: protected proxy              | Static and Basic credentials, base-URL routing, service installation, caller authentication, narrowing, rate limits, scrubbing, versioned approval, two-level vault, recovery, migration, and deployment controls | FX MCP, Brave, Venice, and Naomi's static-credential callers                                 |
-| v1: OAuth                        | Service-owned login, refresh-token storage, access-token caching, safe refresh recovery, and account identity                                                                                                     | Naomi Google integration can replace its existing credential broker behavior                 |
-| Later: hardware and integrations | YubiKey recipients and signers, touch confirmation, additional credential kinds, password-manager sync, and owner notifications                                                                                                   | Each backend ships only after its security and interoperability checks pass                  |
+| v1: OAuth                        | Service-owned login, refresh-token storage, access-token caching, safe refresh recovery, account identity, and owner notifications                                                                                | Naomi Google integration can replace its existing credential broker behavior                 |
+| Later: hardware and integrations | YubiKey recipients and signers, touch confirmation, additional credential kinds, and password-manager sync                                                                                                        | Each backend ships only after its security and interoperability checks pass                  |
 | Conditional: forward proxy       | HTTPS interception for callers that cannot override their base URL                                                                                                                                                | Requires a separate design and evidence that base-URL mode cannot serve the intended callers |
 
 v0 must include method/path narrowing, per-route rate limits, service installation, and the final outgoing-request
@@ -196,7 +196,7 @@ flowchart LR
 
 The service must produce its own approval summary, including changed callers, route grants, destinations,
 restrictions, and the committed version. In v0 the summary goes to the command's result and the audit log; owner
-notifications carrying it come in a later phase ([§2](#2-release-plan)). The service must not treat the CLI's displayed summary as evidence
+notifications carrying it come in v1 ([§2](#2-release-plan)). The service must not treat the CLI's displayed summary as evidence
 of what it signed. Device enrollment and access controls must prevent untrusted processes from using Iron Vault's
 keys where the platform supports that restriction. They do not eliminate the compromised-display limit in [§1.2](#12-security-promise-and-limits).
 
@@ -792,7 +792,8 @@ confirm that they saved it. Recommend an independent password manager or paper s
 recovery identity in its own passphrase-encrypted file. The service must not retain the offline recovery private
 key as an automatically usable local recovery path.
 
-Schedule recovery reminders every few months through redacted logs and desktop notifications when available.
+v0 schedules recovery reminders every few months through redacted logs; from v1, desktop notifications also carry
+them when available.
 `recovery check` must prove that the supplied key opens the current envelope, without changing recipients or
 approval state. Keep a service-owned plaintext inventory of names, kinds, permitted hosts, and provider reissue
 instructions; include no secrets. The inventory helps the owner rebuild after complete loss. Iron Vault is not
@@ -922,7 +923,7 @@ Escape caller-controlled labels and reject control characters in configured name
 
 Never log request or response bodies, header values, raw query strings, passwords, caller tokens, provider tokens,
 private keys, signature PINs, or unfiltered library errors containing URLs. No trace setting may re-enable raw
-HTTP/TLS traffic. When owner notifications ship (after v0), they contain the operation summary and remediation, not
+HTTP/TLS traffic. When owner notifications ship (v1), they contain the operation summary and remediation, not
 secrets.
 
 v0 release checks must demonstrate all of the following:
