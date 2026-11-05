@@ -3,10 +3,12 @@
 //!
 //! The service logs through the rolling-file destination (`LogFile` in a verified directory) with the production
 //! subscriber at global `TRACE` (`subscriber_at`), where the service itself installs `INFO` and ignores `RUST_LOG`.
-//! The binary runs with `RUST_LOG=trace` too. The run sends requests that use a header
-//! slot, a query slot and Basic, with a caller token, a query string and header values the caller chose, to an upstream
-//! that echoes the credential, to one that fails mid-body (HTTP/2: resets the stream) and to one nobody listens on, and
-//! types a credential and approval passphrases at the binary's prompts. Then every file in the log directory is read.
+//! The binary runs with `RUST_LOG=trace` too. The run first initializes a vault and unlocks it, after a wrong
+//! passphrase. Then it sends requests that use a header slot, a query slot and Basic, with a caller token, a query string,
+//! a `Proxy-Authorization` and header values the caller chose, and one POST with a body, to an upstream that echoes the
+//! credential, to one that fails mid-body (HTTP/2: resets the stream), to one nobody listens on and to two that redirect,
+//! and types a credential, approval passphrases and a config with a comment at the binary's prompts. Then every file in
+//! the log directory is read.
 //!
 //! The subscriber is the process-wide default. One test runs the HTTP/1.1 session and then the HTTP/2 session, because a
 //! global default can be installed once per process.
@@ -21,21 +23,36 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
 use common::WAIT;
-use common::approval_harness::{APPROVAL_PASSPHRASE, Fixture, IDENTITY, WRONG_PASSPHRASE, get, serve_admin};
+use common::approval_harness::{
+    APPROVAL_PASSPHRASE, Fixture, IDENTITY, WRONG_PASSPHRASE, get, mkdir, read_frame, send, serve_admin, spawn_admin,
+};
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::mock_upstream_h2::{H2Reply, MockH2Upstream};
-use common::proxy_harness::{CallerRequest, Credential, Proxy, Setup, TOKEN_BYTES, Via, next_free_port, token_hash, token_of};
+use common::proxy_harness::{CallerRequest, Credential, Proxy, Setup, TOKEN_BYTES, TempDir, Via, next_free_port, token_hash, token_of};
 use common::scrub_stream::url_forms;
-use iron_vault::deployment::DeploymentProfile;
+use iron_vault::admin::protocol::{AdminRequest, AdminResponse, Frame, OwnerInput};
+use iron_vault::config_check::UpstreamSettings;
+use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
+use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 use iron_vault::logging::{LogDir, LogFailure, LogFile, subscriber_at};
 use iron_vault::path_metadata::invoking_user;
+use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
+use iron_vault::service_state::ServiceState;
+use iron_vault::socket_activation::PassedSockets;
+use iron_vault::trusted_path_report::ServicePaths;
+use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
+use iron_vault_policy::Capabilities;
+use iron_vault_store::OsFs;
+use tokio::net::UnixStream;
 use tracing_subscriber::filter::LevelFilter;
+use zeroize::Zeroizing;
 
 const HEADER_KEY: &str = "hdr-key-Vq7e2c91";
 /// Characters that percent-encoding and the query slot both change.
@@ -48,11 +65,25 @@ const ADDED_KEY: &str = "ADDED-key/typed+5e0b=";
 const FIXTURE_KEY: &str = "fx-secret";
 /// In the body every upstream sends; a log never holds a response body.
 const BODY_MARKER: &str = "UPSTREAMBODY-marker-4d2e";
+const MOVED_KEY: &str = "moved-key-0c6e93";
+const ASTRAY_KEY: &str = "astray-key-b71f25";
+/// The `Location` of a cross-origin redirect, which the proxy relays, and of one outside the route's base, which it refuses.
+const RELAYED_LOCATION: &str = "https://moved.example/redirmark-relayed-2b8d?to=redirmark-query-0e41";
+const REFUSED_LOCATION: &str = "/redirmark-refused-6a3c";
+/// In the body of the caller's POST; a log never holds a request body.
+const REQUEST_BODY_MARKER: &str = "REQBODY-marker-9e5f";
+/// In a comment of the config `config approve` approves; a log holds its digest, never its bytes.
+const CONFIG_MARKER: &str = "CFGCOMMENT-marker-1d7b";
+/// The passphrases `init` is given, and a wrong one typed at `unlock` before the right one.
+const VAULT_PASSPHRASE: &str = "INIT-vault-hostile-58a0";
+const INIT_APPROVAL_PASSPHRASE: &str = "INIT-approval-hostile-c42d";
+const WRONG_UNLOCK_PASSPHRASE: &str = "UNLOCK-wrong-hostile-7f13";
 
 /// What the caller chooses: a query string, header values, and credentials of its own that the service replaces.
 const CALLER_QUERY: &str = "callerqs-3f9a1c";
-const CALLER_HEADERS: [(&str, &str); 4] = [
+const CALLER_HEADERS: [(&str, &str); 5] = [
     ("X-Caller-Note", "callerhdr-note-82d1"),
+    ("Proxy-Authorization", "Basic callerhdr-proxyauth-d3e7"),
     ("User-Agent", "callerhdr-agent-5b07"),
     ("Referer", "https://caller.example/callerhdr-ref-19ce"),
     ("Cookie", "session=callerhdr-cookie-a4f8"),
@@ -174,7 +205,7 @@ fn forms(secret: &str) -> Vec<String> {
 }
 
 /// Everything the log must not hold, as `(what, text)`, with every form of each secret and the pieces of the upstream URL.
-fn forbidden(ports: &[u16]) -> Vec<(String, String)> {
+fn forbidden(ports: &[u16], recovery_key: &str) -> Vec<(String, String)> {
     let basic = format!("{BASIC_USER}:{BASIC_PASSWORD}");
     let secrets = [
         HEADER_KEY,
@@ -190,6 +221,18 @@ fn forbidden(ports: &[u16]) -> Vec<(String, String)> {
         WRONG_PASSPHRASE,
         IDENTITY,
         BODY_MARKER,
+        MOVED_KEY,
+        ASTRAY_KEY,
+        RELAYED_LOCATION,
+        REFUSED_LOCATION,
+        "redirmark-",
+        "moved.example",
+        REQUEST_BODY_MARKER,
+        CONFIG_MARKER,
+        VAULT_PASSPHRASE,
+        INIT_APPROVAL_PASSPHRASE,
+        WRONG_UNLOCK_PASSPHRASE,
+        recovery_key,
     ];
     // Each marker alone, since a leak need not carry the whole header value or query string.
     let caller_values =
@@ -235,26 +278,28 @@ fn echo_of(key: &str) -> String {
 
 // ---- The proxy run -----------------------------------------------------------------------------------------------
 
-/// Ports of the five upstreams.
+/// Ports of the seven upstreams.
 struct Ports {
     header: u16,
     query: u16,
     basic: u16,
     cut: u16,
     dead: u16,
+    moved: u16,
+    astray: u16,
 }
 
 impl Ports {
-    fn all(&self) -> [u16; 5] {
-        [self.header, self.query, self.basic, self.cut, self.dead]
+    fn all(&self) -> [u16; 7] {
+        [self.header, self.query, self.basic, self.cut, self.dead, self.moved, self.astray]
     }
 }
 
-fn route(name: &str, upstream: &str, slot: &str, paths: &str, port: u16, credential: &str) -> String {
+fn route(name: &str, upstream: &str, slot: &str, paths: &str, port: u16, credential: &str, methods: &str) -> String {
     format!(
         "[routes.{name}]\nprefix = \"/{name}\"\nupstream = \"https://localhost:{port}{upstream}\"\n\
          ca_file = \"/etc/iron-vault/ca/test.pem\"\n\
-         credential = \"{credential}\"\nslot = {slot}\nmethods = [\"GET\"]\npaths = [\"{paths}\"]\n\
+         credential = \"{credential}\"\nslot = {slot}\nmethods = {methods}\npaths = [\"{paths}\"]\n\
          rate_limit = {{ requests = 1000, per_seconds = 1, burst = 1000 }}\n\n"
     )
 }
@@ -262,15 +307,17 @@ fn route(name: &str, upstream: &str, slot: &str, paths: &str, port: u16, credent
 fn callers_and_routes(ports: &Ports) -> String {
     let hash = token_hash(TOKEN_BYTES);
     let header = "{ header = \"X-Api-Key\" }";
+    let get = "[\"GET\"]";
+    let routes = "[\"hdr\", \"qry\", \"basic\", \"cut\", \"dead\", \"moved\", \"astray\"]";
     [
-        format!(
-            "[callers.agent]\nlistener = \"local\"\ntoken_hash = \"{hash}\"\nroutes = [\"hdr\", \"qry\", \"basic\", \"cut\", \"dead\"]\n\n"
-        ),
-        route("hdr", "/v1", header, "/v1/**", ports.header, "hdr_key"),
-        route("qry", "", "{ query = \"access_key\" }", "/latest", ports.query, "qry_key"),
-        route("basic", "/v1", "\"basic\"", "/v1/**", ports.basic, "basic_cred"),
-        route("cut", "/v1", header, "/v1/**", ports.cut, "cut_key"),
-        route("dead", "/v1", header, "/v1/**", ports.dead, "dead_key"),
+        format!("[callers.agent]\nlistener = \"local\"\ntoken_hash = \"{hash}\"\nroutes = {routes}\n\n"),
+        route("hdr", "/v1", header, "/v1/**", ports.header, "hdr_key", "[\"GET\", \"POST\"]"),
+        route("qry", "", "{ query = \"access_key\" }", "/latest", ports.query, "qry_key", get),
+        route("basic", "/v1", "\"basic\"", "/v1/**", ports.basic, "basic_cred", get),
+        route("cut", "/v1", header, "/v1/**", ports.cut, "cut_key", get),
+        route("dead", "/v1", header, "/v1/**", ports.dead, "dead_key", get),
+        route("moved", "/v1", header, "/v1/**", ports.moved, "moved_key", get),
+        route("astray", "/v1", header, "/v1/**", ports.astray, "astray_key", get),
     ]
     .concat()
 }
@@ -294,6 +341,8 @@ fn credentials(ports: &Ports) -> Vec<Credential> {
         },
         fixed("cut_key", CUT_KEY, ports.cut),
         fixed("dead_key", DEAD_KEY, ports.dead),
+        fixed("moved_key", MOVED_KEY, ports.moved),
+        fixed("astray_key", ASTRAY_KEY, ports.astray),
     ]
 }
 
@@ -304,8 +353,35 @@ enum Upstreams {
     Http2(Vec<MockH2Upstream>),
 }
 
-/// Starts the three echoing upstreams and the one that fails mid-body, in `protocol`; the fifth port has no listener.
-async fn start_upstreams(ca: &TestCa, protocol: Upstream) -> (Upstreams, Ports) {
+/// The two redirecting upstreams, kept alive for the run. They speak HTTP/1.1 in both sessions, since the HTTP/2 test
+/// upstream sends no headers of a test's choosing.
+#[allow(dead_code)] // Held only so the servers keep running.
+struct Redirects([MockUpstream; 2]);
+
+impl Redirects {
+    async fn start(ca: &TestCa) -> Self {
+        Self([
+            MockUpstream::start(ca, Reply::redirect(RELAYED_LOCATION)).await,
+            MockUpstream::start(ca, Reply::redirect(REFUSED_LOCATION)).await,
+        ])
+    }
+
+    fn ports(&self) -> (u16, u16) {
+        (self.0[0].port(), self.0[1].port())
+    }
+}
+
+/// Starts the three echoing upstreams and the one that fails mid-body, in `protocol`, and the two redirecting ones; the
+/// fifth port has no listener.
+async fn start_upstreams(ca: &TestCa, protocol: Upstream) -> ((Upstreams, Redirects), Ports) {
+    let (upstreams, ports) = start_protocol_upstreams(ca, protocol).await;
+    let redirects = Redirects::start(ca).await;
+    let (moved, astray) = redirects.ports();
+    ((upstreams, redirects), Ports { moved, astray, ..ports })
+}
+
+/// The upstreams of [`start_upstreams`] that speak `protocol`; the redirect ports are left at zero.
+async fn start_protocol_upstreams(ca: &TestCa, protocol: Upstream) -> (Upstreams, Ports) {
     let echoes = [HEADER_KEY, QUERY_KEY, BASIC_PASSWORD].map(echo_of);
     let dead = next_free_port();
     match protocol {
@@ -322,6 +398,8 @@ async fn start_upstreams(ca: &TestCa, protocol: Upstream) -> (Upstreams, Ports) 
                 basic: p(2),
                 cut: p(3),
                 dead,
+                moved: 0,
+                astray: 0,
             };
             (Upstreams::Http1(servers), ports)
         }
@@ -338,6 +416,8 @@ async fn start_upstreams(ca: &TestCa, protocol: Upstream) -> (Upstreams, Ports) 
                 basic: p(2),
                 cut: p(3),
                 dead,
+                moved: 0,
+                astray: 0,
             };
             (Upstreams::Http2(servers), ports)
         }
@@ -353,13 +433,18 @@ fn echoing(body: &str) -> Reply {
     }
 }
 
-/// A caller's `GET target` with the caller's own query string, header values and an `Authorization` of its own.
-fn hostile_get(target: &str) -> CallerRequest {
+/// `request` with the caller's own header values, a `Proxy-Authorization` and an `Authorization` of its own.
+fn hostile(request: CallerRequest) -> CallerRequest {
     CALLER_HEADERS
         .iter()
-        .fold(CallerRequest::get(target), |request, (name, value)| request.header(name, value))
+        .fold(request, |request, (name, value)| request.header(name, value))
         .header("Authorization", CALLER_AUTHORIZATION)
         .header("X-Api-Key", CALLER_AUTHORIZATION)
+}
+
+/// A caller's `GET target`, made [`hostile`].
+fn hostile_get(target: &str) -> CallerRequest {
+    hostile(CallerRequest::get(target))
 }
 
 /// Sends every request of the proxy run and returns how many it sent.
@@ -368,8 +453,13 @@ async fn hostile_requests(proxy: &Proxy) -> usize {
     let query = format!("callerqs={CALLER_QUERY}&base=USD");
     let signed = |target: &str| hostile_get(&format!("{target}?{query}")).signed(Via::Unix);
     let wrong_token = hostile_get(&format!("/hdr/v1/rates?{query}")).with_token(Via::Unix, WRONG_TOKEN_BYTES);
+    let body = format!("{{\"note\":\"{REQUEST_BODY_MARKER}\"}}");
+    let post = hostile(CallerRequest::post(&format!("/hdr/v1/rates?{query}"), body.as_bytes())).signed(Via::Unix);
     let requests = [
         signed("/hdr/v1/rates"),
+        post,
+        signed("/moved/v1/rates"),
+        signed("/astray/v1/rates"),
         signed("/qry/latest"),
         signed("/basic/v1/ledger"),
         signed("/cut/v1/tail-x9"),
@@ -406,8 +496,8 @@ async fn cli(socket: &Path, args: &[&str], input: &str) -> Option<i32> {
     .unwrap()
 }
 
-/// `add` with a typed key, a refused approval with a wrong passphrase, then an approval with the right one; returns the
-/// number of requests the run sent.
+/// `add` with a typed key, a refused approval with a wrong passphrase, then an approval with the right one of a config
+/// holding a comment marker; returns the number of requests the run sent.
 async fn administrative_run() -> usize {
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
@@ -418,7 +508,7 @@ async fn administrative_run() -> usize {
         Some(0)
     );
     let proposed = fixture.path("proposed.toml");
-    fs::write(&proposed, fixture.config("fx2")).unwrap();
+    fs::write(&proposed, format!("# {CONFIG_MARKER}\n{}", fixture.config("fx2"))).unwrap();
     let approve = |passphrase: &str| (["config", "approve"], format!("yes\n{passphrase}\n"));
     let (args, answers) = approve(WRONG_PASSPHRASE);
     assert_eq!(
@@ -433,6 +523,103 @@ async fn administrative_run() -> usize {
     assert_eq!(get(&fixture, "fx2").await.status, 200);
     let _ = stop.send(());
     1
+}
+
+// ---- The vault lifecycle run ---------------------------------------------------------------------------------------
+
+/// Starts the service on empty state and config directories in `dir`, which is also the runtime directory, as `serve`
+/// does without systemd sockets: Locked, waiting for an `init`.
+fn uninitialized_service(dir: &TempDir, ca: &TestCa) -> Arc<ServiceContext> {
+    ["state", "etc"].iter().for_each(|name| mkdir(&dir.path().join(name)));
+    let paths = ServicePaths {
+        profile: DeploymentProfile::Development,
+        owner: invoking_user().unwrap(),
+        config: dir.path().join("etc/config.toml"),
+        state_dir: dir.path().join("state"),
+        runtime_dir: Some(dir.path().to_path_buf()),
+    };
+    let locks = ServiceLocks::acquire(&paths).unwrap();
+    let provisional = locks.unverified_listeners(&OsFs);
+    let setup = ServiceSetup {
+        accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
+        paths,
+        fs: OsFs,
+        capabilities: Capabilities::default(),
+        upstream: UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default())
+            .with_pinned_trust(ca.trust()),
+        hardening: HardeningReport {
+            core_dumps: CoreDumps::Disabled,
+            memory: MemoryProtection::Unsupported,
+        },
+        log_failure: LogFailure::default(),
+    };
+    Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap())
+}
+
+/// Sends `init` over the admin socket at `socket`, answers its prompts with the two passphrases and `yes`, and returns
+/// the recovery key shown. The binary's `init` shows the key on a controlling terminal only, which a test has not got.
+async fn init(socket: &Path) -> String {
+    let mut answers = [
+        VAULT_PASSPHRASE,
+        VAULT_PASSPHRASE,
+        INIT_APPROVAL_PASSPHRASE,
+        INIT_APPROVAL_PASSPHRASE,
+        "yes",
+    ]
+    .into_iter();
+    let mut stream = UnixStream::connect(socket).await.unwrap();
+    send(&mut stream, &Frame::Request(AdminRequest::Init)).await;
+    let mut recovery_key = None;
+    loop {
+        match read_frame(&mut stream).await {
+            Frame::Response(AdminResponse::Init { version: 1, .. }) => return recovery_key.expect("no recovery key was shown"),
+            Frame::Notice(_) => {}
+            Frame::Reveal(secret) => recovery_key = Some(String::from_utf8(secret.expose_secret().to_vec()).unwrap()),
+            Frame::Prompt(_) => {
+                let answer = answers.next().expect("a prompt beyond the answers given");
+                send(
+                    &mut stream,
+                    &Frame::OwnerInput(OwnerInput::new(Zeroizing::new(answer.as_bytes().to_vec()))),
+                )
+                .await;
+            }
+            other => panic!("unexpected frame {other:?}"),
+        }
+    }
+}
+
+/// `init` with unique passphrases, then through the binary an `unlock` with a wrong passphrase and one with the right
+/// one; returns the recovery key `init` showed.
+async fn vault_lifecycle_run() -> String {
+    let dir = TempDir::new();
+    let ca = TestCa::new("hostile log lifecycle CA");
+    let service = uninitialized_service(&dir, &ca);
+    let (socket, stop, task) = spawn_admin(&service);
+    let recovery_key = init(&socket).await;
+    assert_eq!(service.state().await, ServiceState::Locked);
+    assert_eq!(cli(&socket, &["unlock"], &format!("{WRONG_UNLOCK_PASSPHRASE}\n")).await, Some(1));
+    assert_eq!(cli(&socket, &["unlock"], &format!("{VAULT_PASSPHRASE}\n")).await, Some(0));
+    assert_eq!(service.state().await, ServiceState::Ready);
+    let _ = stop.send(());
+    task.await.unwrap();
+    service.stop().await;
+    recovery_key
+}
+
+/// Checks that the lifecycle run's paths ran: `init` wrote the vault and approved version 1, the wrong passphrase was
+/// refused, and the right one took the service from Locked through Checking to Ready.
+fn assert_lifecycle_ran(records: &[serde_json::Value]) {
+    let has = |event: &str, field: &str, value: &str| records.iter().any(|r| r["event"] == event && r[field] == value);
+    let has_number = |event: &str, field: &str, value: u64| records.iter().any(|r| r["event"] == event && r[field] == value);
+    assert!(records.iter().any(|r| r["event"] == "vault.initialized"), "{records:?}");
+    assert!(has_number("config.approval-completed", "version", 1), "{records:?}");
+    assert!(has("vault.unlock-refused", "refusal", "wrong_passphrase"), "{records:?}");
+    let transition = |from: &str, to: &str| {
+        records
+            .iter()
+            .any(|r| r["event"] == "service.lock-transition" && r["from_state"] == from && r["to_state"] == to)
+    };
+    assert!(transition("locked", "checking") && transition("checking", "ready"), "{records:?}");
 }
 
 // ---- The checks --------------------------------------------------------------------------------------------------
@@ -502,8 +689,9 @@ fn endings(records: &[serde_json::Value]) -> Vec<(Option<String>, String, Option
     endings
 }
 
-/// Checks that each hostile path ran and ended the way it should: the routes answered, the failing upstreams failed with
-/// their reasons, both refusals were refused, and each echo was scrubbed once.
+/// Checks that each hostile path ran and ended the way it should: the routes answered, the POST's body was read, the
+/// cross-origin redirect was relayed and the one outside the base refused, the failing upstreams failed with their reasons,
+/// both refusals were refused, and each echo was scrubbed once for each request that drew it.
 fn assert_hostile_paths_ran(records: &[serde_json::Value], protocol: Upstream) {
     let cut = match protocol {
         Upstream::Http1 => "upstream_body",
@@ -514,6 +702,9 @@ fn assert_hostile_paths_ran(records: &[serde_json::Value], protocol: Upstream) {
     };
     let mut expected = vec![
         ending(Some("hdr"), "success", None),
+        ending(Some("hdr"), "success", None),
+        ending(Some("moved"), "success", None),
+        ending(Some("astray"), "failure", Some("redirect_refused")),
         ending(Some("qry"), "success", None),
         ending(Some("basic"), "success", None),
         ending(Some("fx2"), "success", None),
@@ -524,13 +715,24 @@ fn assert_hostile_paths_ran(records: &[serde_json::Value], protocol: Upstream) {
     ];
     expected.sort();
     assert_eq!(endings(records), expected, "{records:?}");
-    ["hdr", "qry", "basic"].iter().for_each(|route| {
+    [("hdr", 2), ("qry", 1), ("basic", 1)].iter().for_each(|(route, expected)| {
         let scrubs = records
             .iter()
             .filter(|r| r["event"] == "response.scrubbed" && r["route"] == *route)
             .count();
-        assert_eq!(scrubs, 1, "{route}: {records:?}");
+        assert_eq!(scrubs, *expected, "{route}: {records:?}");
     });
+    let request = |route: &str, method: &str| {
+        records
+            .iter()
+            .find(|r| r["target"] == "iron-vault.request" && r["route"] == route && r["http_method"] == method)
+            .unwrap_or_else(|| panic!("no {method} request event on {route}: {records:?}"))
+    };
+    assert!(
+        request("hdr", "POST")["request_bytes"].as_u64().is_some_and(|bytes| bytes > 0),
+        "{records:?}"
+    );
+    assert_eq!(request("moved", "GET")["status"], 302, "{records:?}");
     let events = |name: &str| records.iter().filter(|record| record["event"] == name).count();
     assert_eq!(events("credential.added"), 1, "{records:?}");
     assert_eq!(events("config.approval-completed"), 1, "{records:?}");
@@ -563,7 +765,10 @@ async fn hostile_session(protocol: Upstream) -> (Ports, usize) {
 async fn the_whole_log_file_holds_no_forbidden_value_after_a_hostile_run_over_http1_and_http2() {
     let dir = LogDirectory::new("both");
     log_to_file(&dir);
-    let (mut requests, mut seen, mut ports) = (0, 0, Vec::new());
+    let recovery_key = vault_lifecycle_run().await;
+    let lifecycle = dir.records();
+    assert_lifecycle_ran(&lifecycle);
+    let (mut requests, mut seen, mut ports) = (0, lifecycle.len(), Vec::new());
     for protocol in [Upstream::Http1, Upstream::Http2] {
         let (session_ports, sent) = hostile_session(protocol).await;
         requests += sent;
@@ -584,7 +789,7 @@ async fn the_whole_log_file_holds_no_forbidden_value_after_a_hostile_run_over_ht
         "the log holds nothing below INFO, so the verbose setting was not exercised"
     );
     let text = dir.text();
-    forbidden(&ports).iter().for_each(|(what, form)| {
+    forbidden(&ports, &recovery_key).iter().for_each(|(what, form)| {
         assert!(!text.contains(form.as_str()), "{what} appears in the log as {form:?}:\n{text}");
     });
 }
