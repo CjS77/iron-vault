@@ -544,7 +544,7 @@ with no credentials has a non-empty vault ID and an empty list.
 While no vault is open the service reads the state and config directories for the initialization state
 ([vault-initialization.md](vault-initialization.md)), without the vault identity. Nothing on disk reports `1`, an
 `init.unfinished` marker reports `2`, and an initialized vault reports `0`. Unrecognized files, or a directory that
-cannot be listed, also report `0`: `status` has no error to give, and `init` names the files when the owner runs it.
+cannot be listed, also report `0`: `status` has no error to give, and `unlock` and `init` name the files when the owner runs them.
 
 Memory protection is reported from the process hardening report and never claims swap protection unless `mlockall`
 succeeded ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)).

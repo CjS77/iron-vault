@@ -32,14 +32,14 @@ use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 use iron_vault::path_metadata::invoking_user;
-use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
+use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup, UnlockRefusal};
 use iron_vault::service_state::{ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::Admission;
 use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::{Capabilities, CredentialKind};
-use iron_vault_store::{INITIAL_CONFIG, OsFs, RecoveryKeySecret, VaultId, unwrap_identity};
+use iron_vault_store::{INITIAL_CONFIG, OsFs, Passphrase, RecoveryKeySecret, UnlockError, VaultId, unwrap_identity};
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -427,6 +427,72 @@ async fn a_passphrase_breaking_a_rule_is_rejected_by_name_and_nothing_is_written
 }
 
 #[tokio::test]
+async fn unlock_on_a_fresh_directory_is_refused_without_a_prompt() {
+    let fixture = Fixture::new().await;
+    let service = fixture.start();
+
+    let refused = exchange(&service, AdminRequest::Unlock, &[VAULT_PASSPHRASE.as_bytes()]).await;
+
+    assert!(refused.prompts.is_empty(), "{refused:?}");
+    let (code, message) = refused.error();
+    assert_eq!(code, ErrorCode::UnlockFailed);
+    assert!(message.contains("iron-vault init"), "{message}");
+    fixture.assert_only_lock_files();
+}
+
+#[tokio::test]
+async fn the_context_reads_the_initialization_state_again_before_it_unlocks() {
+    let fixture = Fixture::new().await;
+    let service = fixture.start();
+
+    let refusal = service
+        .unlock(Passphrase::new(SecretString::from(VAULT_PASSPHRASE)).unwrap())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(refusal, UnlockRefusal::Failed(UnlockError::NotInitialized)), "{refusal:?}");
+    assert_eq!(service.state().await, ServiceState::Locked);
+}
+
+#[tokio::test]
+async fn unlock_on_unrecognized_files_names_them_and_prompts_for_nothing() {
+    let fixture = Fixture::new().await;
+    fs::write(fixture.path("state/operational.age"), b"x").unwrap();
+    let service = fixture.start();
+
+    let refused = exchange(&service, AdminRequest::Unlock, &[VAULT_PASSPHRASE.as_bytes()]).await;
+
+    assert!(refused.prompts.is_empty(), "{refused:?}");
+    let (code, message) = refused.error();
+    assert_eq!(code, ErrorCode::UnlockFailed);
+    assert!(
+        message.contains("operational.age") && message.contains("did not write"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn a_foreign_file_beside_the_manifest_is_logged_by_name_and_unlock_goes_on() {
+    let logs = captured_logs();
+    let fixture = Fixture::new().await;
+    let service = fixture.start();
+    init(&service, &COMPLETE).await.vault_id();
+    fs::write(fixture.path("state/editor-backup-9f3a.txt~"), b"SECRET-CONTENT").unwrap();
+
+    let unlocked = exchange(&service, AdminRequest::Unlock, &[VAULT_PASSPHRASE.as_bytes()]).await;
+
+    assert_eq!(unlocked.prompts.len(), 1, "{unlocked:?}");
+    assert_response(&unlocked.response, &AdminResponse::Success);
+    let text = logs.text();
+    let warned: Vec<_> = text
+        .lines()
+        .filter(|line| line.contains("vault.foreign-file") && line.contains("editor-backup-9f3a.txt~"))
+        .collect();
+    assert_eq!(warned.len(), 1, "{text}");
+    assert!(warned[0].contains("WARN") && !text.contains("SECRET-CONTENT"), "{text}");
+}
+
+#[tokio::test]
 async fn an_unfinished_initialization_refuses_unlock_and_the_next_init_discards_it() {
     let logs = captured_logs();
     let fixture = Fixture::new().await;
@@ -441,6 +507,7 @@ async fn an_unfinished_initialization_refuses_unlock_and_the_next_init_discards_
     let (code, message) = refused.error();
     assert_eq!(code, ErrorCode::UnlockFailed);
     assert!(message.contains("iron-vault init"), "{message}");
+    assert!(refused.prompts.is_empty(), "{refused:?}");
 
     let exchanged = init(&service, &COMPLETE).await;
     exchanged.vault_id();

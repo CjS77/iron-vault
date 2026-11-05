@@ -36,12 +36,15 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Unlock<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
-    /// Refuses before prompting when the service is not Locked, so the owner is not asked for a passphrase that cannot
-    /// be used; the context checks the state again under its mutex.
+    /// Refuses before prompting when the service is not Locked or the vault is not Initialized, so the owner is not
+    /// asked for a passphrase that cannot be used; the context checks both again under its mutex.
     async fn run(&self, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         let state = self.service.state().await;
         if !state.admin_allows(AdminOperation::Unlock) {
             return Ok(refused(UnlockRefusal::WrongState(state)));
+        }
+        if let Err(refusal) = self.service.require_initialized().await {
+            return Ok(refused(refusal));
         }
         let prompt = Prompt {
             label: PASSPHRASE_PROMPT.to_owned(),

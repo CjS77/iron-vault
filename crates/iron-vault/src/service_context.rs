@@ -20,6 +20,7 @@
 mod approval;
 mod init;
 mod serving;
+mod unlock;
 mod vault_change;
 
 use std::collections::BTreeMap;
@@ -45,6 +46,7 @@ use crate::socket_activation::PassedSockets;
 use crate::standing::{CredentialStanding, RouteFault};
 use crate::trusted_path_report::ServicePaths;
 use serving::Serving;
+use unlock::log_foreign_files;
 
 pub use approval::{ApprovalEnd, ApprovalReview};
 pub use init::{InitRefusal, step_label};
@@ -310,7 +312,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Unlocks with the owner's `passphrase` (§3.11) and runs the config check: Locked to Checking, then Ready or
     /// Unavailable, as [`enter_checking`](Self::enter_checking) does. Each state change is logged as a lock transition.
     ///
-    /// The state is checked under the mutex, so two unlocks never both open the vault. A wrong passphrase or an
+    /// The state is checked under the mutex, so two unlocks never both open the vault, and so is the initialization
+    /// state, which `unlock` also read before its prompt: only Initialized goes on. A wrong passphrase or an
     /// unreadable envelope leaves the service Locked: no other storage is ever tried (R-22). The operational identity
     /// the passphrase opens is dropped inside [`unlock_with_passphrase`], once it has unwrapped the vault identity.
     pub async fn unlock(&self, passphrase: Passphrase) -> Result<ServiceState, UnlockRefusal> {
@@ -319,6 +322,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         if !locked.admin_allows(AdminOperation::Unlock) {
             return Err(UnlockRefusal::WrongState(locked));
         }
+        log_foreign_files(&self.require_initialized().await?);
         let identity = self.open_identity(passphrase).await.inspect_err(|refusal| {
             tracing::warn!("{UNLOCK_REFUSED}: {refusal}");
         })?;
@@ -398,7 +402,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     ///
     /// While no vault is open the directories are read for [`InitializationState`], on the blocking pool under the
     /// service's own locks. Unrecognized files, or a directory that cannot be listed, report as Locked: `status` has no
-    /// error to give, and `init` names the offending files when the owner runs it.
+    /// error to give, and `unlock` and `init` name the offending files when the owner runs them.
     pub async fn status(&self) -> StatusReport {
         let inner = self.inner.lock().await;
         let vault = match inner.open.as_ref() {
