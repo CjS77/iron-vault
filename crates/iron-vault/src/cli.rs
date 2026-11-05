@@ -128,6 +128,20 @@ pub enum Command {
         #[arg(long = "origin", value_name = "ORIGIN", required = true, value_parser = OriginParser)]
         origins: Vec<(Host, Port)>,
     },
+    /// Replace NAME's record with a new one, and with it the kind and the origins; the old record need not be readable,
+    /// so this also repairs a damaged one. The service shows what changes, asks for the approval passphrase as owner
+    /// presence, then prompts for the new secret. On stdin, the first line is the approval passphrase and the rest the
+    /// secret. Routes that use NAME keep working only if the new kind and origins suit them; otherwise nothing changes.
+    Replace {
+        /// The credential name.
+        name: String,
+        /// The new kind: a static key, or a Basic username and password.
+        #[arg(long, value_enum, default_value_t = KindArg::Static)]
+        kind: KindArg,
+        /// A new permitted origin, as for `add`. Repeat for each origin, up to 32; the old origins are not kept.
+        #[arg(long = "origin", value_name = "ORIGIN", required = true, value_parser = OriginParser)]
+        origins: Vec<(Host, Port)>,
+    },
     /// Remove the credential NAME after you type the approval passphrase. It refuses while a route of the active config
     /// uses the name: approve a config without those routes first.
     Rm {
@@ -139,7 +153,7 @@ pub enum Command {
     Config(ConfigCommand),
 }
 
-/// The credential kinds `add --kind` names.
+/// The credential kinds `add --kind` and `replace --kind` name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum KindArg {
     /// A provider key, sent as is.
@@ -206,13 +220,19 @@ impl Cli {
                 ErrorKind::ArgumentConflict,
                 "`--admin-socket` is for client commands; `serve` always binds this installation's admin socket",
             )),
-            (Command::Add { origins, .. }, _) if origins.len() > MAX_ORIGINS => Err(Self::command().error(
-                ErrorKind::TooManyValues,
-                format!("`add` takes at most {MAX_ORIGINS} --origin values"),
-            )),
+            (Command::Add { origins, .. }, _) if origins.len() > MAX_ORIGINS => Err(too_many_origins("add")),
+            (Command::Replace { origins, .. }, _) if origins.len() > MAX_ORIGINS => Err(too_many_origins("replace")),
             _ => Ok(cli),
         }
     }
+}
+
+/// The error for more `--origin` values than `command` sends.
+fn too_many_origins(command: &str) -> clap::Error {
+    Cli::command().error(
+        ErrorKind::TooManyValues,
+        format!("`{command}` takes at most {MAX_ORIGINS} --origin values"),
+    )
 }
 
 /// `iron-vault ping`: sends `ping` to the admin socket at `socket`, or this installation's, and shows the answer.
@@ -284,6 +304,13 @@ pub fn add(socket: Option<&Path>, name: String, kind: CredentialKind, origins: &
     client::add(socket, name, kind, origins).into()
 }
 
+/// `iron-vault replace`: sends `replace` with the name, kind and origins, answers the service's prompts from the owner
+/// console, and prints the new record's ID.
+#[cfg(target_os = "linux")]
+pub fn replace(socket: Option<&Path>, name: String, kind: CredentialKind, origins: &[(Host, Port)]) -> ExitCode {
+    client::replace(socket, name, kind, origins).into()
+}
+
 /// `iron-vault rm`: sends `rm` with the name, answers the approval passphrase prompt from the owner console, and prints
 /// `removed NAME`.
 #[cfg(target_os = "linux")]
@@ -301,6 +328,12 @@ pub fn config_approve(socket: Option<&Path>, file: &Path) -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn add(_socket: Option<&Path>, _name: String, _kind: CredentialKind, _origins: &[(Host, Port)]) -> ExitCode {
+    unsupported_platform()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn replace(_socket: Option<&Path>, _name: String, _kind: CredentialKind, _origins: &[(Host, Port)]) -> ExitCode {
     unsupported_platform()
 }
 

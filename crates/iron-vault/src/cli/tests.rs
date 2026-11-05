@@ -192,3 +192,35 @@ fn add_needs_an_origin_and_at_most_32() {
     let enough: Vec<&str> = std::iter::once("fx").chain(["--origin", "x"].repeat(32)).collect();
     assert_eq!(add(&enough).unwrap().2.len(), 32);
 }
+
+#[test]
+fn replace_takes_adds_arguments() {
+    let parsed = parse(&[
+        "replace",
+        "fx",
+        "--kind",
+        "basic",
+        "--origin",
+        "a.example",
+        "--origin",
+        "b.example:8443",
+    ])
+    .unwrap();
+    let Command::Replace { name, kind, origins } = parsed.command else {
+        panic!("parsed as {:?}", parsed.command);
+    };
+    let origins: Vec<_> = origins.iter().map(|(host, port)| (host.to_string(), port.get())).collect();
+    assert_eq!((name.as_str(), kind), ("fx", KindArg::Basic));
+    assert_eq!(origins, [("a.example".to_owned(), 443), ("b.example".to_owned(), 8443)]);
+    let defaulted = parse(&["replace", "fx", "--origin", "x"]).unwrap();
+    assert!(matches!(defaulted.command, Command::Replace { kind: KindArg::Static, .. }));
+}
+
+#[test]
+fn replace_needs_an_origin_and_at_most_32() {
+    assert_eq!(parse(&["replace", "fx"]).unwrap_err().kind(), ErrorKind::MissingRequiredArgument);
+    let too_many: Vec<&str> = ["replace", "fx"].into_iter().chain(["--origin", "x"].repeat(33)).collect();
+    let error = parse(&too_many).unwrap_err();
+    assert_eq!((error.kind(), error.exit_code()), (ErrorKind::TooManyValues, 2));
+    assert!(error.to_string().contains("`replace` takes at most 32"), "{error}");
+}

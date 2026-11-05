@@ -850,3 +850,50 @@ async fn a_terminal_init_hung_up_before_yes_says_the_key_is_dead() {
     let outcome = interrupt_init(ConsoleMode::Terminal, false, rustix::process::Signal::HUP).await;
     assert_interrupted(&outcome, 129, DEAD_RECOVERY_KEY);
 }
+
+/// A `replace` handler that shows a summary, asks for the approval passphrase and then the secret, and keeps what it
+/// received.
+struct StubReplace(Arc<AddLog>);
+
+impl AdminHandler for StubReplace {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            self.0.requests.lock().unwrap().push(request);
+            exchange.notice("replace credential fx\n").await?;
+            for label in ["Approval passphrase", "Secret for fx"] {
+                let prompt = Prompt {
+                    label: label.to_owned(),
+                    secret: true,
+                };
+                let input = exchange.prompt(&prompt).await?;
+                self.0.values.lock().unwrap().push(input.expose_secret().to_vec());
+            }
+            Ok(AdminResponse::Replace {
+                record_id: RECORD_ID.parse::<RecordId>().unwrap(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn replace_sends_add_s_arguments_answers_presence_then_the_secret_from_stdin_and_prints_the_new_record_id() {
+    let dir = TempDir::new();
+    let stub = Arc::new(AddLog::default());
+    let handlers = Handlers::default().with(AdminCommand::Replace, StubReplace(Arc::clone(&stub)));
+    let mut args = add_args(&dir.socket());
+    args[0] = "replace".to_owned();
+    let input = format!("approval words\n{MARKER}\n").into_bytes();
+    let output = serve_and_run_args(&dir, invoking_user().unwrap().uid, handlers, args, input).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(stdout, format!("replaced fx (static) as record {RECORD_ID}\n"));
+    assert!(stderr.contains("replace credential fx") && !stderr.contains(MARKER), "{stderr}");
+    assert_eq!(
+        *stub.values.lock().unwrap(),
+        [b"approval words".to_vec(), MARKER.as_bytes().to_vec()]
+    );
+    let requests = stub.requests.lock().unwrap();
+    assert!(
+        matches!(&requests[..], [AdminRequest::Replace { name, kind: CredentialKind::Static, origins }] if name == "fx" && origins.len() == 2)
+    );
+}

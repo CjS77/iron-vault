@@ -194,21 +194,31 @@ pub fn unlock(socket: Option<&Path>) -> Exit {
 /// Runs `add`. The service decides what to prompt for, by kind, and each answer comes from the owner console, so the
 /// secret never travels as an argument. On success the new record's ID goes to stdout.
 pub fn add(socket: Option<&Path>, name: String, kind: CredentialKind, origins: &[(Host, Port)]) -> Exit {
-    let origins = origins
-        .iter()
-        .map(|(host, port)| RequestedOrigin {
-            host: host.to_string(),
-            port: *port,
-        })
-        .collect();
     let request = AdminRequest::Add {
         name: name.clone(),
         kind,
-        origins,
+        origins: requested_origins(origins),
     };
     run(socket, request, |response| match response {
         AdminResponse::Add { record_id } => {
             println!("added {name} ({}) as record {record_id}", kind.as_str());
+            Exit::Success
+        }
+        _ => unexpected(),
+    })
+}
+
+/// Runs `replace`. The service shows its own summary of the change as notices, then prompts for the approval passphrase
+/// and the new material; each answer comes from the owner console. On success the new record's ID goes to stdout.
+pub fn replace(socket: Option<&Path>, name: String, kind: CredentialKind, origins: &[(Host, Port)]) -> Exit {
+    let request = AdminRequest::Replace {
+        name: name.clone(),
+        kind,
+        origins: requested_origins(origins),
+    };
+    run(socket, request, |response| match response {
+        AdminResponse::Replace { record_id } => {
+            println!("replaced {name} ({}) as record {record_id}", kind.as_str());
             Exit::Success
         }
         _ => unexpected(),
@@ -226,6 +236,15 @@ pub fn rm(socket: Option<&Path>, name: String) -> Exit {
         }
         _ => unexpected(),
     })
+}
+
+/// The parsed origins as the request carries them.
+fn requested_origins(origins: &[(Host, Port)]) -> Vec<RequestedOrigin> {
+    let requested = origins.iter().map(|(host, port)| RequestedOrigin {
+        host: host.to_string(),
+        port: *port,
+    });
+    requested.collect()
 }
 
 /// Runs `config approve` on the bytes of `file`. The service shows its own summary as notices and prompts for the
