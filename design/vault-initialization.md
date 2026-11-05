@@ -127,8 +127,12 @@ After the admin request, in order:
 
 1. **Check.** The service checks that it is Locked (`wrong-state` otherwise) and reads the initialization state:
    Initialized or Unrecognized ends with `already-initialized`, whose message names which, and for Unrecognized the
-   first offending file names. On Unfinished, the service sends a notice that an unfinished initialization will be
-   discarded, and that any recovery key it showed opens nothing.
+   first offending file names. On Unfinished, the service sends a notice that an unfinished initialization is here,
+   or that another init is writing its vault right now: the prompts take no lock (see **Locking** below), so the
+   service cannot tell the two apart. Once the owner confirms the new recovery key, an unfinished initialization is
+   discarded, and any recovery key it showed opens nothing. A run still writing holds the service-wide lock, so it is
+   never discarded: this init then writes nothing and ends with `busy`, or with `already-initialized` once that run
+   has finished.
 2. **Passphrases.** Four prompts, all secret: `Vault passphrase`, `Repeat the vault passphrase`,
    `Approval passphrase`, `Repeat the approval passphrase`. The [rules](#passphrase-rules) are checked once both
    entries of a passphrase are in; a broken rule ends with `passphrase-rejected`. There is no second try in the same
@@ -355,9 +359,10 @@ It does not report the initialization state until K-161 ([open question 6](#open
 | any step, with a foreign file in the state directory | Unrecognized | as the row above | as the row above |
 | 9 or later, with a foreign file in the state directory | Initialized | as row 9, and logs the file's name at WARN | `already-initialized` |
 
-Each discard also tells the owner, in its notice, that the recovery key from the unfinished run opens nothing. That
-settles an [unknown outcome](#failing-after-the-reveal): a run that starts over has discarded the vault the old key
-opened.
+Each discard's notice also tells the owner that, once discarded, the recovery key from the unfinished run opens
+nothing. That settles an [unknown outcome](#failing-after-the-reveal): a run that starts over has discarded the vault
+the old key opened. The notice also covers a run still writing, which is never discarded (step 1 of
+[the exchange](#the-exchange)).
 
 ## Initial config
 

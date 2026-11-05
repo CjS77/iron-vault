@@ -393,8 +393,10 @@ before any prompt. It leaves the service Locked.
 The exchange, after the request:
 
 1. The service reads the [initialization state](vault-initialization.md#initialization-state). Initialized or
-   Unrecognized ends with `already-initialized` before any prompt. On Unfinished, a notice says the unfinished
-   initialization will be discarded. (The CLI has already checked for a controlling terminal, and never sends the
+   Unrecognized ends with `already-initialized` before any prompt. On Unfinished, a notice says that an unfinished
+   initialization is discarded once the new recovery key is confirmed, and that a run another init is still writing is
+   never discarded: this init then ends with `busy` or `already-initialized`
+   ([vault-initialization.md](vault-initialization.md#the-exchange), step 1). (The CLI has already checked for a controlling terminal, and never sends the
    request without one; see [the CLI's `init`](#init-1).)
 2. **Passphrases.** Four prompts, all secret: `Vault passphrase`, `Repeat the vault passphrase`, `Approval passphrase`,
    `Repeat the approval passphrase`. A value that breaks a

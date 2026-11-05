@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use iron_vault_store::{
-    ApprovalPassphrase, InitError, InitFailure, InitPassphrases, InitStateError, InitializationState, NewVaultKeys, Passphrase, StoreFs,
-    WhichPassphrase,
+    ApprovalPassphrase, InitError, InitFailure, InitPassphrases, InitStateError, InitializationState, NewVaultKeys, Passphrase,
+    SealingKeys, StoreFs, WhichPassphrase,
 };
 use secrecy::{ExposeSecret, SecretString};
 use subtle::ConstantTimeEq;
@@ -20,7 +20,7 @@ use super::protocol::{AdminRequest, AdminResponse, ErrorCode, OwnerInput, Prompt
 use super::server::{Exchange, ExchangeError};
 use super::unlock::state_name;
 use super::{DEAD_RECOVERY_KEY, UNCONFIRMED_RECOVERY_KEY};
-use crate::service_context::{InitRefusal, ServiceContext, step_label};
+use crate::service_context::{InitRefusal, ServiceContext};
 use crate::service_state::AdminOperation;
 
 /// The vault passphrase's two secret prompts: the entry, then its repeat.
@@ -30,8 +30,12 @@ const APPROVAL_PROMPTS: [&str; 2] = ["Approval passphrase", "Repeat the approval
 /// The confirmation after the reveal; any answer but exactly `yes` writes nothing.
 const CONFIRMATION: &str = "Type yes once you have saved the recovery key";
 
-const UNFINISHED_NOTICE: &str = "An unfinished initialization is here. It is discarded once you confirm the new recovery key, \
-and any recovery key it showed opens nothing.\n";
+/// Sent on Unfinished. The prompts hold no lock, so the service cannot tell an initialization a crash left unfinished
+/// from one another init is writing now; the notice says what happens in either case.
+const UNFINISHED_NOTICE: &str = "An unfinished initialization is here, or another init is writing its vault right now. \
+Once you confirm the new recovery key, an unfinished initialization is discarded, and any recovery key it showed opens nothing. \
+A run still writing is never discarded: this init then writes nothing and ends with `busy`, or with `already-initialized` once \
+that run has finished.\n";
 
 const RECOVERY_NOTICE: &str = "\
 The recovery key follows. It is shown this once, and the service keeps no copy.
@@ -83,17 +87,10 @@ impl<F: StoreFs + Send + Sync + 'static> Init<F> {
                 ));
             }
         };
-        exchange.notice(RECOVERY_NOTICE).await?;
-        exchange.reveal(keys.recovery_secret().expose_secret().as_bytes()).await?;
-        let keys = keys.into_sealing();
-        let confirmation = Prompt {
-            label: CONFIRMATION.to_owned(),
-            secret: false,
+        let keys = match reveal_and_confirm(exchange, keys).await? {
+            Ok(keys) => keys,
+            Err(declined) => return Ok(declined),
         };
-        if exchange.prompt(&confirmation).await?.expose_secret() != b"yes" {
-            let message = format!("the recovery key was not confirmed as saved, so nothing was written; {DEAD_RECOVERY_KEY}");
-            return Ok(error(ErrorCode::Declined, message));
-        }
         Ok(match self.service.initialize(keys, passphrases).await {
             Ok(vault) => AdminResponse::Init {
                 vault_id: vault.vault_id,
@@ -102,6 +99,23 @@ impl<F: StoreFs + Send + Sync + 'static> Init<F> {
             Err(refusal) => refused(refusal, true),
         })
     }
+}
+
+/// Shows the recovery key once, after the notice, and asks the owner to confirm they saved it: the keys to seal once they
+/// answer exactly `yes`, or `declined`. The recovery key's text is dropped as soon as the reveal is written.
+async fn reveal_and_confirm(exchange: &mut Exchange, keys: NewVaultKeys) -> Result<Result<SealingKeys, AdminResponse>, ExchangeError> {
+    exchange.notice(RECOVERY_NOTICE).await?;
+    exchange.reveal(keys.recovery_secret().expose_secret().as_bytes()).await?;
+    let keys = keys.into_sealing();
+    let confirmation = Prompt {
+        label: CONFIRMATION.to_owned(),
+        secret: false,
+    };
+    if exchange.prompt(&confirmation).await?.expose_secret() != b"yes" {
+        let message = format!("the recovery key was not confirmed as saved, so nothing was written; {DEAD_RECOVERY_KEY}");
+        return Ok(Err(error(ErrorCode::Declined, message)));
+    }
+    Ok(Ok(keys))
 }
 
 /// The vault and approval passphrases, each entered twice, or the rule one broke. Each passphrase's rules are checked
@@ -201,13 +215,16 @@ fn failed(failure: &InitError) -> AdminResponse {
         InitFailure::State(InitStateError::FinishUncertain { .. }) => UNCONFIRMED_RECOVERY_KEY.to_owned(),
         _ => format!("run `iron-vault init` again, which discards the unfinished vault; {DEAD_RECOVERY_KEY}"),
     };
-    let step = step_label(failure.step());
-    error(
-        ErrorCode::InitFailed,
-        format!("init failed at step {step}: {}; {advice}", failure.cause()),
-    )
+    let at = failure
+        .step()
+        .number()
+        .map_or_else(|| "the discard".to_owned(), |n| format!("step {n}"));
+    error(ErrorCode::InitFailed, format!("init failed at {at}: {}; {advice}", failure.cause()))
 }
 
 fn error(code: ErrorCode, message: String) -> AdminResponse {
     AdminResponse::Error { code, message }
 }
+
+#[cfg(test)]
+mod tests;

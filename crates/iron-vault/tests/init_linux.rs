@@ -587,6 +587,38 @@ async fn of_two_inits_confirmed_together_one_writes_and_the_other_is_busy() {
     assert_no_secret_logged(&logs, &[&keys[0], &keys[1]]);
 }
 
+/// A second init that passed its first check confirms only after the first has finished: the re-check under the lock
+/// finds Initialized, writes nothing, and says the key it showed is dead.
+#[tokio::test]
+async fn a_second_init_confirmed_after_the_first_finished_is_already_initialized() {
+    let logs = captured_logs();
+    let fixture = Fixture::new().await;
+    let service = fixture.start();
+    let (path, stop, task) = spawn_admin(&service);
+    let (mut first, mut second) = (UnixStream::connect(&path).await.unwrap(), UnixStream::connect(&path).await.unwrap());
+    let keys = [to_confirmation(&mut first).await, to_confirmation(&mut second).await];
+
+    let AdminResponse::Init { vault_id, version: 1 } = confirm(&mut first).await else {
+        panic!("the first init writes the vault");
+    };
+    let refused = confirm(&mut second).await;
+
+    let AdminResponse::Error {
+        code: ErrorCode::AlreadyInitialized,
+        message,
+    } = &refused
+    else {
+        panic!("expected already-initialized: {refused:?}");
+    };
+    assert!(message.contains("Initialized"), "{message}");
+    assert!(message.ends_with("the recovery key shown opens nothing: discard it"), "{message}");
+    let _ = stop.send(());
+    task.await.unwrap();
+    assert_response(&unlock(&service).await, &AdminResponse::Success);
+    assert_eq!(unlocked(&service).await.id, vault_id);
+    assert_no_secret_logged(&logs, &[&keys[0], &keys[1]]);
+}
+
 /// Waits until `done` holds, polling, for at most [`common::WAIT`].
 async fn wait_until(done: impl Fn() -> bool) {
     tokio::time::timeout(common::WAIT, async {
