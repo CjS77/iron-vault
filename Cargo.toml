@@ -122,3 +122,12 @@ unsafe_code = "forbid"
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+
+# Unoptimized, one scrypt at `PASSPHRASE_WORK_FACTOR` takes about 18 seconds, so a debug build's `init` (three of them)
+# would run into the CLI's 60-second socket timeout, and the end-to-end tests could not use the real work factor.
+# Optimized, it takes about half a second. Release builds are unaffected.
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.dev.package.salsa20]
+opt-level = 3

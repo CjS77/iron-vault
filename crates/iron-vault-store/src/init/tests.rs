@@ -227,17 +227,44 @@ fn an_unfinished_initialization_is_discarded_and_started_over() {
     assert_eq!(dirs.read(&fs), InitializationState::Unfinished);
     let (result, secrets) = dirs.init_keeping(&fs);
     let initialized = result.unwrap();
-    let discarded = [
-        "config.toml.sig",
-        "config.toml",
-        "approval.age",
-        "manifest.age",
-        "approver.age",
-        "operational.age",
-        "identity.age",
-    ];
-    assert_eq!(initialized.discarded, discarded);
+    assert_eq!(initialized.discarded, DISCARDED);
     assert_initialized(&dirs, &fs, &initialized, &secrets.recovery);
+}
+
+/// What the discard of a run that failed only at its commit point removes, in order.
+const DISCARDED: [&str; 7] = [
+    "config.toml.sig",
+    "config.toml",
+    "approval.age",
+    "manifest.age",
+    "approver.age",
+    "operational.age",
+    "identity.age",
+];
+
+#[test]
+fn a_step_failing_after_a_discard_still_names_the_discarded_files() {
+    let dirs = Dirs::new("init-discard-then-fail");
+    let fs = dirs.fault_fs();
+    fs.fail_first(FsOp::RemoveFile, io::ErrorKind::Other);
+    assert!(dirs.init(&fs).unwrap_err().discarded().is_empty());
+    fs.fail_first(FsOp::Rename, io::ErrorKind::Other);
+    let error = dirs.init(&fs).unwrap_err();
+    assert_eq!(error.step(), InitStep::IdentityEnvelope);
+    assert_eq!(error.discarded(), DISCARDED);
+}
+
+#[test]
+fn the_first_approval_is_audited_as_completed_with_the_initial_config_digest() {
+    let dirs = Dirs::new("init-audit");
+    let (result, events) = capture_logs(|| dirs.init(&OsFs));
+    result.unwrap();
+    let logged = format!("{events:?}");
+    let digest = ConfigDigest::of(INITIAL_CONFIG).to_string();
+    assert!(
+        logged.contains("config.approval-completed") && logged.contains(&digest) && logged.contains("initial config"),
+        "{logged}"
+    );
 }
 
 /// The state a failure at `error`'s step must leave: untouched before the marker is durable, Unfinished after it, and

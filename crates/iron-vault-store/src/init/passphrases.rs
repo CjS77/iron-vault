@@ -55,11 +55,20 @@ pub enum InitPassphrasesError {
 impl InitPassphrases {
     /// Checks both rules, length first, then compares the two passphrases' bytes in constant time.
     pub fn new(vault: Passphrase, approval: ApprovalPassphrase) -> Result<Self, InitPassphrasesError> {
-        ensure_long_enough(vault.text(), WhichPassphrase::Vault)?;
-        ensure_long_enough(approval.text(), WhichPassphrase::Approval)?;
+        Self::ensure_long_enough(vault.text(), WhichPassphrase::Vault)?;
+        Self::ensure_long_enough(approval.text(), WhichPassphrase::Approval)?;
         match bool::from(vault.text().as_bytes().ct_eq(approval.text().as_bytes())) {
             true => Err(InitPassphrasesError::Same),
             false => Ok(Self { vault, approval }),
+        }
+    }
+
+    /// Checks the length rule on one passphrase alone, so the owner hears of a short vault passphrase before choosing
+    /// the approval passphrase. [`InitPassphrases::new`] checks it again.
+    pub fn ensure_long_enough(text: &str, which: WhichPassphrase) -> Result<(), InitPassphrasesError> {
+        match text.chars().nth(MIN_PASSPHRASE_CHARS - 1) {
+            Some(_) => Ok(()),
+            None => Err(InitPassphrasesError::TooShort { which }),
         }
     }
 
@@ -72,12 +81,5 @@ impl InitPassphrases {
 impl fmt::Debug for InitPassphrases {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("InitPassphrases([REDACTED])")
-    }
-}
-
-fn ensure_long_enough(text: &str, which: WhichPassphrase) -> Result<(), InitPassphrasesError> {
-    match text.chars().nth(MIN_PASSPHRASE_CHARS - 1) {
-        Some(_) => Ok(()),
-        None => Err(InitPassphrasesError::TooShort { which }),
     }
 }

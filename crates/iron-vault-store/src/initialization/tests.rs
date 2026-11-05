@@ -334,7 +334,25 @@ fn begin_refuses_and_writes_nothing_on_initialized_and_unrecognized() {
     ];
     cases.into_iter().for_each(|(dirs, expected)| {
         let before = (dirs.state_names(&OsFs), dirs.config_names(&OsFs));
+        assert_eq!(ensure_initializable(&dirs.state, &dirs.config, &OsFs), Err(expected.clone()));
         assert_eq!(dirs.begin(&OsFs), Err(expected));
+        assert_eq!((dirs.state_names(&OsFs), dirs.config_names(&OsFs)), before);
+    });
+}
+
+#[test]
+fn an_initializable_directory_is_named_and_left_as_it_was() {
+    let fresh = Dirs::new("init-ensure-fresh");
+    let unfinished = Dirs::new("init-ensure-unfinished");
+    unfinished.crashed_after(&OsFs, PUBLISHED);
+    [
+        (&fresh, InitializationState::Uninitialized),
+        (&unfinished, InitializationState::Unfinished),
+    ]
+    .into_iter()
+    .for_each(|(dirs, expected)| {
+        let before = (dirs.state_names(&OsFs), dirs.config_names(&OsFs));
+        assert_eq!(ensure_initializable(&dirs.state, &dirs.config, &OsFs), Ok(expected));
         assert_eq!((dirs.state_names(&OsFs), dirs.config_names(&OsFs)), before);
     });
 }

@@ -66,7 +66,9 @@ pub use init::{
     InitError, InitFailure, InitPassphrases, InitPassphrasesError, InitStep, InitializedVault, MIN_PASSPHRASE_CHARS, NewVaultKeys,
     SealingKeys, WhichPassphrase, initialize,
 };
-pub use initialization::{InitStateError, InitializationState, begin_initialization, finish_initialization};
+pub use initialization::{
+    INITIAL_CONFIG, InitStateError, InitializationState, begin_initialization, ensure_initializable, finish_initialization,
+};
 pub use manifest::{
     MAX_MANIFEST_ENTRIES, MAX_MANIFEST_LEN, ManifestEntry, ManifestError, VaultManifest, open_manifest, record_digest, seal_manifest,
 };

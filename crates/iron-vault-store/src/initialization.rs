@@ -17,9 +17,10 @@ use crate::{
     durable_remove, durable_replace,
 };
 
-/// The only bytes initialization ever writes to `config.toml` and `config.toml.pending`. A config file with any other
-/// bytes is the owner's and is never discarded.
-pub(crate) const INITIAL_CONFIG: &[u8] = b"schema_version = 1\n";
+/// The initial config: the only bytes initialization ever writes to `config.toml` and `config.toml.pending`, approved
+/// as version 1. It names no listener, caller or route, because a new vault holds no credential. A config file with any
+/// other bytes is the owner's and is never discarded.
+pub const INITIAL_CONFIG: &[u8] = b"schema_version = 1\n";
 
 /// The directory a filesystem check creates on a fresh volume; it is not a vault file, so the checks ignore it.
 const LOST_FOUND: &str = "lost+found";
@@ -110,22 +111,36 @@ impl InitializationState {
     }
 }
 
+/// Refuses, as [`begin_initialization`] does, directories init must not write to, and writes nothing: Initialized is
+/// [`InitStateError::AlreadyInitialized`], and Unrecognized names its first offending files. Otherwise it returns
+/// Uninitialized or Unfinished, so `init` can refuse, or warn of a discard, before it prompts for anything.
+pub fn ensure_initializable(
+    state: &StateDirLock,
+    config: &ConfigDirLock,
+    fs: &impl StoreFs,
+) -> Result<InitializationState, InitStateError> {
+    let found = survey(state, config, fs)?;
+    match found.state {
+        InitializationState::Initialized => Err(InitStateError::AlreadyInitialized),
+        InitializationState::Unrecognized => Err(InitStateError::Unrecognized {
+            files: found.blockers.into_iter().take(MAX_NAMED).collect(),
+        }),
+        initializable => Ok(initializable),
+    }
+}
+
 /// Starts an initialization: step 1 of the write order, plus the discard of an earlier unfinished one.
 ///
 /// On Uninitialized this durably writes an empty `init.unfinished`. On Unfinished it durably removes, in an order that
 /// never leaves a signature alone, every file an initialization writes, and keeps `init.unfinished`; it returns those
 /// file names for the `vault.init-discarded` log. On Initialized and Unrecognized it refuses and changes nothing.
 pub fn begin_initialization(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, InitStateError> {
-    let found = survey(state, config, fs)?;
-    match found.state {
-        InitializationState::Uninitialized => durable_replace(state, fs, &StateFileName::unfinished_initialization(), b"")
+    match ensure_initializable(state, config, fs)? {
+        InitializationState::Unfinished => discard(state, config, fs),
+        // Uninitialized: `ensure_initializable` returns no other state.
+        _ => durable_replace(state, fs, &StateFileName::unfinished_initialization(), b"")
             .map(|()| Vec::new())
             .map_err(InitStateError::State),
-        InitializationState::Unfinished => discard(state, config, fs),
-        InitializationState::Initialized => Err(InitStateError::AlreadyInitialized),
-        InitializationState::Unrecognized => Err(InitStateError::Unrecognized {
-            files: found.blockers.into_iter().take(MAX_NAMED).collect(),
-        }),
     }
 }
 

@@ -17,11 +17,12 @@ use thiserror::Error;
 use crate::initialization::INITIAL_CONFIG;
 use crate::passphrase::seal_at;
 use crate::{
-    AdmissionPaused, ApprovalError, ApprovalPassphrase, ApprovalState, ApprovalStorage, ApprovalVersion, ConfigDirLock, EnvelopeError,
-    InitStateError, InitializationState, PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig, ReadError, RecipientIdentity, RecipientSet,
-    RecipientSetError, SignError, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs, Vault, VaultError, VaultId, VaultIdentity,
-    WriteError, approval::seal_signer_key_at, begin_initialization, finish_initialization, open_signer_key, read_identity_envelope,
-    read_signer_key, unwrap_identity, wrap_identity, write_identity_envelope, write_passphrase_envelope, write_signer_key,
+    AdmissionPaused, ApprovalError, ApprovalPassphrase, ApprovalState, ApprovalStorage, ApprovalVersion, ConfigDigest, ConfigDirLock,
+    EnvelopeError, InitStateError, InitializationState, PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig, ReadError, RecipientIdentity,
+    RecipientSet, RecipientSetError, SignError, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs, Vault, VaultError, VaultId,
+    VaultIdentity, WriteError, approval::seal_signer_key_at, begin_initialization, finish_initialization, open_signer_key,
+    read_identity_envelope, read_signer_key, unwrap_identity, wrap_identity, write_identity_envelope, write_passphrase_envelope,
+    write_signer_key,
 };
 
 pub use keys::{NewVaultKeys, SealingKeys};
@@ -91,13 +92,14 @@ impl fmt::Display for InitStep {
     }
 }
 
-/// A failed initialization: the step it failed at, and why. It carries no key material, passphrase text or config
-/// bytes, because none of its causes do.
+/// A failed initialization: the step it failed at, why, and what its discard removed before the failure. It carries no
+/// key material, passphrase text or config bytes, because none of its causes do.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("vault initialization failed at {step}: {cause}")]
 pub struct InitError {
     step: InitStep,
     cause: InitFailure,
+    discarded: Vec<String>,
 }
 
 impl InitError {
@@ -109,6 +111,12 @@ impl InitError {
     /// Why it failed.
     pub fn cause(&self) -> &InitFailure {
         &self.cause
+    }
+
+    /// The files a completed discard removed before a later step failed, for the `vault.init-discarded` log; empty when
+    /// nothing was discarded or the discard itself failed.
+    pub fn discarded(&self) -> &[String] {
+        &self.discarded
     }
 }
 
@@ -187,6 +195,25 @@ pub(crate) fn initialize_at<F: StoreFs>(
     log_n: u8,
 ) -> Result<InitializedVault, InitError> {
     let discarded = begin(state, config, fs)?;
+    match write_vault(state, config, fs, (keys, passphrases), paused, log_n) {
+        Ok((vault_id, version)) => Ok(InitializedVault {
+            vault_id,
+            version,
+            discarded,
+        }),
+        Err(error) => Err(InitError { discarded, ..error }),
+    }
+}
+
+/// Steps 2 to 9, once step 1 is durable: the vault's ID and its committed version.
+fn write_vault<F: StoreFs>(
+    state: &StateDirLock,
+    config: &ConfigDirLock,
+    fs: &F,
+    (keys, passphrases): (SealingKeys, InitPassphrases),
+    paused: &impl AdmissionPaused,
+    log_n: u8,
+) -> Result<(VaultId, ApprovalVersion), InitError> {
     let SealingKeys {
         vault,
         operational,
@@ -211,11 +238,7 @@ pub(crate) fn initialize_at<F: StoreFs>(
     };
     let version = approve_initial_config(&storage, &mut approval, signer, paused).map_err(at(InitStep::FirstApproval))?;
     finish_initialization(state, fs).map_err(at(InitStep::Finish))?;
-    Ok(InitializedVault {
-        vault_id: created.manifest().vault_id(),
-        version,
-        discarded,
-    })
+    Ok((created.manifest().vault_id(), version))
 }
 
 /// The discard and step 1. The state is read first only to name the step a failure belongs to: with the service-wide
@@ -291,12 +314,19 @@ fn approve_initial_config<F: StoreFs>(
         .prepare(storage, approval, signer)?
         .commit(storage, paused)?;
     let version = committed.approval().version();
-    match version == ApprovalVersion::FIRST {
-        true => Ok(version),
-        false => Err(InitFailure::UnexpectedVersion(version)),
+    if version != ApprovalVersion::FIRST {
+        return Err(InitFailure::UnexpectedVersion(version));
     }
+    // The audit event every approval raises once its commit is durable; init has no summary but the config it approves.
+    let digest = ConfigDigest::of(INITIAL_CONFIG);
+    tracing::info!(event = "config.approval-completed", version = version.get(), %digest, summary = "initial config", "config approval completed");
+    Ok(version)
 }
 
 fn at<E: Into<InitFailure>>(step: InitStep) -> impl FnOnce(E) -> InitError {
-    move |error| InitError { step, cause: error.into() }
+    move |error| InitError {
+        step,
+        cause: error.into(),
+        discarded: Vec::new(),
+    }
 }
