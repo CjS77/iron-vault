@@ -1134,4 +1134,4 @@ Checked against [§3.15](iron-vault-specification.md#315-logging-and-v0-acceptan
 §3.15 lists (time, caller, route, credential name, upstream host, method, status, sizes, duration, scrubbing), and
 every rejected request Iron Vault's code sees writes one. Owner notifications
 ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)) come after v0, in EP-40, and this design has none;
-K-179 aligns the specification's wording.
+the specification's release plan places them in the later phase.
