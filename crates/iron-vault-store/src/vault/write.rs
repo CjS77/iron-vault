@@ -218,8 +218,24 @@ impl Vault {
     }
 
     /// Runs the file steps of a prepared write, then updates memory once the manifest has committed.
+    ///
+    /// A success reports its removed unindexed files in the [`WriteReport`], which the service audits. A failure has no
+    /// report to carry them, so the store records each removal itself (`log_removed_before_failure`): the log must not
+    /// lose a deletion because a later step failed.
     fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, prepared: Prepared) -> Result<WriteReport, VaultError> {
-        let removed = self.remove_unindexed(lock, fs)?;
+        let mut removed = BTreeSet::new();
+        self.write_steps(lock, fs, prepared, &mut removed)
+            .inspect_err(|_| log_removed_before_failure(&removed))
+    }
+
+    fn write_steps(
+        &mut self,
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        prepared: Prepared,
+        removed: &mut BTreeSet<StateFileName>,
+    ) -> Result<WriteReport, VaultError> {
+        self.remove_unindexed(lock, fs, removed)?;
         if let Some(new) = &prepared.new {
             write_record_file(lock, fs, new)?;
         }
@@ -233,17 +249,23 @@ impl Vault {
             (Some(name), None) => _ = self.healthy.remove(&name),
             (None, _) => {}
         };
-        Ok(WriteReport::new(removed, old.and_then(|old| remove_superseded(lock, fs, old))))
+        Ok(WriteReport::new(
+            std::mem::take(removed),
+            old.and_then(|old| remove_superseded(lock, fs, old)),
+        ))
     }
 
     /// Durably removes every record file the manifest does not list, so no interrupted write's file outlives the next one.
     ///
     /// Only names the manifest leaves out are touched, and the write has just checked that the disk manifest is the one
     /// in memory, so no indexed record file is ever removed.
-    fn remove_unindexed(&self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<BTreeSet<StateFileName>, VaultError> {
+    fn remove_unindexed(&self, lock: &StateDirLock, fs: &impl StoreFs, removed: &mut BTreeSet<StateFileName>) -> Result<(), VaultError> {
         let unindexed = unindexed_files(&self.manifest, &list_state_dir(lock, fs)?);
-        unindexed.iter().try_for_each(|file| remove_unindexed_file(lock, fs, file))?;
-        Ok(unindexed)
+        unindexed.into_iter().try_for_each(|file| {
+            remove_unindexed_file(lock, fs, &file)?;
+            removed.insert(file);
+            Ok(())
+        })
     }
 }
 
@@ -297,6 +319,14 @@ fn write_record_file(lock: &StateDirLock, fs: &impl StoreFs, new: &SealedRecord)
 /// removes it, so the write's own error is the one worth reporting.
 fn discard(lock: &StateDirLock, fs: &impl StoreFs, id: RecordId) {
     let _ = durable_remove(lock, fs, &StateFileName::record(&id));
+}
+
+/// Records the unindexed files a failed write had already removed, under the audit event's name and field so the log
+/// reads the same as a successful write's `vault.unindexed-removed`.
+fn log_removed_before_failure(removed: &BTreeSet<StateFileName>) {
+    removed.iter().for_each(
+        |file| tracing::warn!(event = "vault.unindexed-removed", file = %file, "a failed vault write had removed an unlisted record file"),
+    );
 }
 
 fn remove_unindexed_file(lock: &StateDirLock, fs: &impl StoreFs, file: &StateFileName) -> Result<(), VaultError> {
