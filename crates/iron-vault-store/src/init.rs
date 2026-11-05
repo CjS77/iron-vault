@@ -99,7 +99,7 @@ impl fmt::Display for InitStep {
 pub struct InitError {
     step: InitStep,
     cause: InitFailure,
-    discarded: Vec<String>,
+    discarded: Box<[String]>,
     approved: Option<Box<FirstApproval>>,
 }
 
@@ -110,7 +110,7 @@ impl InitError {
         Self {
             step,
             cause,
-            discarded: Vec::new(),
+            discarded: Box::default(),
             approved: None,
         }
     }
@@ -236,7 +236,10 @@ pub(crate) fn initialize_at<F: StoreFs>(
             commit_uncertain: committed.commit_uncertain,
             discarded,
         }),
-        Err(error) => Err(InitError { discarded, ..error }),
+        Err(error) => Err(InitError {
+            discarded: discarded.into(),
+            ..error
+        }),
     }
 }
 
@@ -289,7 +292,7 @@ fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Res
     begin_initialization(state, config, fs).map_err(|BeginError { cause, discarded }| InitError {
         step,
         cause: cause.into(),
-        discarded,
+        discarded: discarded.into(),
         approved: None,
     })
 }
@@ -383,7 +386,7 @@ fn at<E: Into<InitFailure>>(step: InitStep) -> impl FnOnce(E) -> InitError {
     move |error| InitError {
         step,
         cause: error.into(),
-        discarded: Vec::new(),
+        discarded: Box::default(),
         approved: None,
     }
 }
