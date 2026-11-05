@@ -110,11 +110,11 @@ fn dechunked(raw: &[u8]) -> (Vec<u8>, bool) {
     (out, false)
 }
 
-/// The one request event. The proxy is dropped first, which ends every task it spawned, so no second event can follow the
+/// The one request event. The proxy is stopped first, which joins every connection task, so no second event can follow the
 /// count.
 async fn the_only_event(log: &RequestLog, proxy: Proxy) -> serde_json::Value {
     let event = log.the_request_event().await;
-    drop(proxy);
+    proxy.stop().await;
     assert_eq!(log.request_events().len(), 1, "{}", log.text());
     event
 }

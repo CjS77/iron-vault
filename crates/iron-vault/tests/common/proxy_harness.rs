@@ -32,6 +32,7 @@ use iron_vault_store::{OsFs, PermittedOrigins, StateDirLock, Vault, VaultIdentit
 use secrecy::ExposeSecret;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use super::mock_upstream::TestCa;
@@ -376,6 +377,7 @@ pub struct Proxy {
     endpoints: Endpoints,
     holder: Arc<SnapshotHolder>,
     task: JoinHandle<()>,
+    stop: Option<oneshot::Sender<()>>,
 }
 
 impl Proxy {
@@ -388,8 +390,13 @@ impl Proxy {
         let snapshot = snapshot(setup, &config, &dir.path().join("state"));
         let holder = Arc::new(SnapshotHolder::new(snapshot));
         let server = RequestServer::new(*config.limits(), ProxyHandler::new(Arc::clone(&holder)));
+        let (stop, stopped) = oneshot::channel::<()>();
         let task = tokio::spawn(async move {
-            let _ = server.serve(&listeners).await;
+            server
+                .serve_until(&listeners, async {
+                    let _ = stopped.await;
+                })
+                .await;
         });
         let endpoints = Endpoints { socket, tcp_port };
         Self {
@@ -397,7 +404,17 @@ impl Proxy {
             endpoints,
             holder,
             task,
+            stop: Some(stop),
         }
+    }
+
+    /// Stops the server and returns once every connection task has ended, so no request record is still alive to write an
+    /// event after the caller counts them.
+    pub async fn stop(mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        let _ = (&mut self.task).await;
     }
 
     /// The holder the proxy admits requests by, for a test to pause, swap or withdraw.
