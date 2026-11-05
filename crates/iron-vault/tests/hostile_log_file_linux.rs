@@ -73,6 +73,8 @@ const REWRITE_KEY: &str = "rewrite-key-4e90a7";
 const RELAYED_LOCATION: &str = "https://moved.example/redirmark-relayed-2b8d?to=redirmark-query-0e41";
 const REFUSED_LOCATION: &str = "/redirmark-refused-6a3c";
 const REWRITTEN_LOCATION: &str = "/v1/redirmark-rewritten-85f2?to=redirmark-rwquery-3a6c";
+/// [`REWRITTEN_LOCATION`] as the proxy rebuilds it under the `rewrite` route's prefix.
+const REBUILT_LOCATION: &str = "/rewrite/redirmark-rewritten-85f2?to=redirmark-rwquery-3a6c";
 /// In the body of the caller's POST; a log never holds a request body.
 const REQUEST_BODY_MARKER: &str = "REQBODY-marker-9e5f";
 /// In a comment of the config `config approve` approves; a log holds its digest, never its bytes.
@@ -212,7 +214,7 @@ fn forms(secret: &str) -> Vec<String> {
 /// Everything the log must not hold, as `(what, text)`, with every form of each secret and the pieces of the upstream URL.
 fn forbidden(ports: &[u16], recovery_key: &str) -> Vec<(String, String)> {
     let basic = format!("{BASIC_USER}:{BASIC_PASSWORD}");
-    let proxy_credentials = format!("{PROXY_USER}:{PROXY_PASSWORD}");
+    let proxy_credentials = proxy_credentials();
     let secrets = [
         HEADER_KEY,
         QUERY_KEY,
@@ -231,7 +233,9 @@ fn forbidden(ports: &[u16], recovery_key: &str) -> Vec<(String, String)> {
         ASTRAY_KEY,
         REWRITE_KEY,
         REWRITTEN_LOCATION,
+        REBUILT_LOCATION,
         PROXY_USER,
+        PROXY_PASSWORD,
         &proxy_credentials,
         RELAYED_LOCATION,
         REFUSED_LOCATION,
@@ -454,9 +458,14 @@ fn echoing(body: &str) -> Reply {
     }
 }
 
+/// The `user:password` of the caller's own `Proxy-Authorization: Basic`.
+fn proxy_credentials() -> String {
+    format!("{PROXY_USER}:{PROXY_PASSWORD}")
+}
+
 /// `request` with the caller's own header values, a `Proxy-Authorization` and an `Authorization` of its own.
 fn hostile(request: CallerRequest) -> CallerRequest {
-    let proxy_authorization = format!("Basic {}", STANDARD.encode(format!("{PROXY_USER}:{PROXY_PASSWORD}")));
+    let proxy_authorization = format!("Basic {}", STANDARD.encode(proxy_credentials()));
     CALLER_HEADERS
         .iter()
         .fold(request, |request, (name, value)| request.header(name, value))
@@ -717,8 +726,9 @@ fn endings(records: &[serde_json::Value]) -> Vec<(Option<String>, String, Option
 }
 
 /// Checks that each hostile path ran and ended the way it should: the routes answered, the POST's body was read, the
-/// cross-origin redirect was relayed, the one inside the base rewritten and the one outside it refused, the failing upstreams failed with their reasons,
-/// both refusals were refused, and each echo was scrubbed once for each request that drew it.
+/// cross-origin redirect was relayed, the one inside the base rewritten and the one outside it refused, the failing
+/// upstreams failed with their reasons, both refusals were refused, and each echo was scrubbed once for each request that
+/// drew it.
 fn assert_hostile_paths_ran(records: &[serde_json::Value], protocol: Upstream) {
     let cut = match protocol {
         Upstream::Http1 => "upstream_body",
