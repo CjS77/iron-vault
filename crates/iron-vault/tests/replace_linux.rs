@@ -143,13 +143,13 @@ async fn a_healthy_replace_serves_the_new_secret_and_the_old_snapshot_drops_when
     let probe = Arc::downgrade(&old);
     drop(old);
     assert!(probe.upgrade().is_none(), "the old snapshot outlived its last request");
-    let (old_field, new_field) = (format!("old_record_id={old_id}"), format!("record_id={new_id}"));
+    let (old_field, new_field) = (format!("\"old_record_id\":\"{old_id}\""), format!("\"record_id\":\"{new_id}\""));
     let logged = logs.text();
     let line = logged
         .lines()
         .find(|line| line.contains("credential.replaced") && line.contains(&new_field));
     assert!(
-        line.is_some_and(|line| line.contains(&old_field) && line.contains("old_kind=\"static\"")),
+        line.is_some_and(|line| line.contains(&old_field) && line.contains("\"old_kind\":\"static\"")),
         "{logged}"
     );
     assert_nothing_typed_leaked(&logs, &exchanged);
