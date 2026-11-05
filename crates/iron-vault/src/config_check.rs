@@ -111,8 +111,9 @@ pub enum CheckFailure {
     #[error("policy invalid: config invalid")]
     Config(InvalidConfig),
     /// The check's task ended without a result: it panicked, or the runtime is shutting down. Nothing was checked, so
-    /// the service fails closed.
-    #[error("recovery needed: config check did not finish")]
+    /// the service fails closed. The status says the check crashed, so the owner retries it rather than recovering a
+    /// vault that may be sound.
+    #[error("recovery needed: config check crashed; lock and unlock to check again")]
     Interrupted,
 }
 
@@ -184,12 +185,12 @@ impl CheckFailure {
             Self::ApprovalState(error) => error.to_string(),
             Self::Recovery(error) => error.to_string(),
             Self::Config(invalid) => invalid.detail(),
-            Self::Interrupted => "the config check task ended without a result".to_owned(),
+            Self::Interrupted => "the config check crashed before it gave a result; the vault was not found damaged".to_owned(),
         }
     }
 
     /// The failure of a check whose task ended without a result, logged as every check failure is.
-    pub fn interrupted() -> Self {
+    pub(crate) fn interrupted() -> Self {
         let failure = Self::Interrupted;
         log_failure(&failure);
         failure
