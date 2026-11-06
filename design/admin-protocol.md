@@ -450,7 +450,7 @@ Errors specific to `init`:
 | `wrong-state` | the service is not Locked: at the request, before any prompt, or at the re-check under the lock after the reveal, when the message also says the recovery key shown opens nothing and is to be discarded |
 | `passphrase-rejected` | a passphrase broke a rule; the message names the rule |
 | `declined` | the owner did not answer the recovery key confirmation with `yes`; the message says the recovery key shown opens nothing and is to be discarded |
-| `init-failed` | a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: a start-over means the key is dead, and `already-initialized` with a vault that is Initialized means a vault stands, which the owner confirms with `iron-vault recovery check` once unlocked before relying on the key, because a concurrent init may have finished first. A failure of the discard of an unfinished initialization names `discard` as its step |
+| `init-failed` | a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: a start-over means the key is dead, and `already-initialized` with a vault that is Initialized means a vault stands, which the owner confirms with `iron-vault recovery check` before relying on the key, because a concurrent init may have finished first. A failure of the discard of an unfinished initialization names `discard` as its step |
 
 #### recovery check
 
@@ -886,8 +886,8 @@ with the key, because the service cannot say so over a closed connection; after 
 - **After `yes`:** no prompt remains, so step 5 runs on and the outcome is unknown. The CLI says to keep the key and
   run `iron-vault init` again. A start-over, with a new recovery key, means the old one is dead, and `busy` means the
   first run is still writing. `already-initialized` with a vault that is Initialized means a vault stands, but not
-  necessarily the one this key opens: a concurrent init may have finished first. The owner unlocks and confirms the
-  key with [`iron-vault recovery check`](#recovery-check-1) before relying on it.
+  necessarily the one this key opens: a concurrent init may have finished first. The owner confirms the key with
+  [`iron-vault recovery check`](#recovery-check-1), which needs no unlock, before relying on it.
 
 On success it prints `initialized vault <vault ID>: approval version 1 committed` and `run iron-vault unlock to start
 serving` to stdout; the recovery key never goes there. Otherwise it prints the service's error to stderr and exits

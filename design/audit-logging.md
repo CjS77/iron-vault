@@ -716,7 +716,7 @@ each fires):
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `recovery.checked` | INFO when opened, WARN otherwise | `recovery check` ended after its prompt | `recovery_outcome`; for `opened`, `vault_id` and `recorded`, with `error_kind` when not recorded; for `failed`, `recovery_failure`; for `unavailable`, `file` and `error_kind` |
+| `recovery.checked` | INFO when opened, WARN otherwise | `recovery check` ended with `invalid` at its prompt, or with any other outcome after the key parsed and the lock was taken; `busy` and the re-check's `wrong-state` and `recovery-check-unavailable` record only `admin.command` | `recovery_outcome`; for `opened`, `vault_id` and `recorded`, with `error_kind` when not recorded; for `failed`, `recovery_failure`; for `unavailable`, `file` and `error_kind` |
 | `recovery.reminder` | INFO | a reminder evaluation found a recovery reminder due | `recovery_record`; `last_checked` when `checked`; `reminders_since` when `never_checked`; `error_kind` when `unusable`; `reminder_days`; `remediation` |
 
 **Owner notifications** (v1; not emitted in v0.

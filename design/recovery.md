@@ -96,10 +96,11 @@ After the prompt, and once the text has parsed as a recovery key, the service **
 answers `busy` at once if it is taken, as `init` step 5 and `replace` do. It does not wait: a `config approve` holds
 the lock across its prompts, for up to ten minutes, which would outlast the CLI's 60-second timeout. Under the lock it
 reads the service state and the initialization state again, since an `init`, an `unlock` or a `lock` may have run
-during the prompt; Locked and Ready both go on. It holds the lock while it reads `identity.age` and `manifest.age`,
-so both come from the same vault state and no vault write lands between them, and while it writes the record, so the
-write never races a reminder evaluation. The work under the lock is two small reads, an X25519 unwrap, a MAC and one
-durable write: milliseconds, with no scrypt.
+during the prompt. Locked and Ready both go on; any other state ends with `wrong-state`, and a vault no longer
+Initialized ends with `recovery-check-unavailable`, both before any file is read. It holds the lock while it reads
+`identity.age` and `manifest.age`, so both come from the same vault state and no vault write lands between them, and
+while it writes the record, so the write never races a reminder evaluation. The work under the lock is two small
+reads, an X25519 unwrap, a MAC and one durable write: milliseconds, with no scrypt.
 
 ## The exchange
 
@@ -263,14 +264,20 @@ type. No event carries the recovery key's text, any key material or the record's
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `recovery.checked` | INFO when opened, WARN otherwise | a recovery check ended after its prompt | `recovery_outcome`, and by outcome: `opened` adds `vault_id` and `recorded`, with `error_kind` when the record was not written; `failed` adds `recovery_failure` (`not_a_recipient` or `identity_unverified`); `invalid` adds nothing; `unavailable` adds `file` and `error_kind` |
+| `recovery.checked` | INFO when opened, WARN otherwise | a recovery check ended with `invalid` at its prompt, or with any other outcome after the key parsed and the lock was taken | `recovery_outcome`, and by outcome: `opened` adds `vault_id` and `recorded`, with `error_kind` when the record was not written; `failed` adds `recovery_failure` (`not_a_recipient` or `identity_unverified`); `invalid` adds nothing; `unavailable` adds `file` and `error_kind` |
 | `recovery.reminder` | INFO | a reminder evaluation found a reminder due | `recovery_record` (`checked`, `never_checked` or `unusable`); `last_checked` when checked; `reminders_since` when never checked; `error_kind` when unusable; `reminder_days`; `remediation` |
 
 `recovery_outcome` is `opened`, `failed` (the text is a recovery key and does not open this vault), `invalid` (the text
 is not a recovery key) or `unavailable` (the check could not run). Only `failed` says the key is bad, so only it
-raises the v1 `recovery_check_failed` notification. A refusal before the prompt (`wrong-state`, `memory-unprotected`,
-`recovery-check-unavailable` for a vault that is not Initialized) and a `busy` record only the admin server's
-`admin.command` event, whose `command` is `recovery_check`.
+raises the v1 `recovery_check_failed` notification. `recovery.checked` is raised for `invalid` when the text does not
+parse, and otherwise only when the check ended after the key parsed and the lock was taken: `opened`, `failed`, or
+`unavailable` for a file the check read. Every other end records only the admin server's `admin.command` event, whose
+`command` is `recovery_check`:
+
+- a refusal before the prompt: `wrong-state`, `memory-unprotected`, or `recovery-check-unavailable` for a vault that
+  is not Initialized;
+- `busy`, when another operation held the lock;
+- the re-check under the lock: `wrong-state`, or `recovery-check-unavailable` for a vault no longer Initialized.
 
 The record write's failure on a successful check is in `recovery.checked` (`recorded` false, `error_kind`). A failed
 write of a new record by a reminder evaluation makes the record unusable for that evaluation, so its

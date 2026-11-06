@@ -248,9 +248,9 @@ finished, may still be running or may have failed, and the CLI cannot tell which
 *keep the recovery key and run `iron-vault init` again. If it starts over, with a new recovery key, the old key is
 dead: discard it. If it answers `busy`, the first run is still writing: wait a few seconds and run it again. If it
 answers `already-initialized` and the message says the vault is Initialized, a vault stands, but it may not be the
-one this key opens, so do not rely on the key yet: once the vault is unlocked, confirm it with
-`iron-vault recovery check` ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)) and keep
-the key only if that passes. If the message says Unrecognized, files init did not write are present and the key is
+one this key opens, so do not rely on the key yet: confirm it with `iron-vault recovery check`, which runs while the
+vault is locked ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)), and keep the key
+only if that passes. If the message says Unrecognized, files init did not write are present and the key is
 not confirmed either.* The case the check guards against is a concurrent init: a second init finished first, so the
 owner's own run was refused and its key is dead, yet the re-run answers `already-initialized` for the other run's
 vault. [recovery.md](recovery.md) designs `recovery check`; until it is built, the owner cannot confirm the key and
@@ -343,7 +343,9 @@ Discarding is logged; see [Logging](#logging).
 of a vault whose files are gone. Init removes it with `durable_remove`, under the service-wide lock and before step 1,
 so the new vault never starts with the old one's `last_checked` ([recovery.md](recovery.md#initialization)). It is
 the one file init removes from an Uninitialized directory, and the removal is not an audit event: the record holds
-no secret and decides nothing but a reminder.
+no secret and decides nothing but a reminder. A failed removal is handled as a failed discard of an unfinished
+initialization: init ends with `init-failed` naming `discard` and raises `vault.init-failed` with the step `discard`.
+Nothing else has been written, so the state is still Uninitialized and the next init tries the removal again.
 
 ## Crash table
 
@@ -354,7 +356,7 @@ It does not report the initialization state until K-161 ([open question 6](#open
 
 | Last step durable | Initialization state | `unlock` | `init` again |
 |---|---|---|---|
-| none | Uninitialized | `unlock-failed`: not initialized, run `iron-vault init` | proceeds from step 1 |
+| none | Uninitialized | `unlock-failed`: not initialized, run `iron-vault init` | removes a leftover `recovery.toml`, then proceeds from step 1 |
 | 1 `init.unfinished` | Unfinished | `unlock-failed`: initialization unfinished, an init may be in progress; run `iron-vault init` again if none is | notice, discards (nothing yet), proceeds |
 | 2 `identity.age` | Unfinished | as row 1 | discards `identity.age`, proceeds |
 | 3 `operational.age` | Unfinished | as row 1; the passphrase is never asked for, so the vault never reaches Checking | discards both envelopes, proceeds |
