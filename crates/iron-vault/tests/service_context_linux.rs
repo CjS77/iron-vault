@@ -36,10 +36,11 @@ use iron_vault::admin::protocol::{
 };
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
+use iron_vault::attempt_limit::FAILURE_THRESHOLD;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, LockUnavailable, MemoryProtection};
-use iron_vault::migration_authorization::{FAILURE_THRESHOLD, MigrationOperation, MigrationRefusal};
+use iron_vault::migration_authorization::{MigrationOperation, MigrationRefusal};
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{LockOutcome, ServiceContext, ServiceLocks, ServiceSetup, StartError, UnlockRefusal};
 use iron_vault::service_state::{FailureReason, IllegalTransition, ListenerProvenance, ServiceEvent, ServiceState, UnavailableReason};

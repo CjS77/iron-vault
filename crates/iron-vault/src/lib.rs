@@ -2,6 +2,7 @@
 
 pub mod admin;
 pub mod admin_file;
+pub mod attempt_limit;
 pub mod audit;
 pub mod caller_token;
 pub mod clock;

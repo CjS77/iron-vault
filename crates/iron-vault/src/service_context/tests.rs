@@ -4,9 +4,10 @@ use tokio::sync::Mutex;
 
 use super::unlock::memory_guard;
 use super::{Inner, SettleGuard, UnlockRefusal};
+use crate::attempt_limit::AttemptLimiter;
 use crate::deployment::DeploymentProfile;
 use crate::hardening::{LockUnavailable, MemoryProtection};
-use crate::migration_authorization::{AttemptLimiter, PendingMigration};
+use crate::migration_authorization::PendingMigration;
 use crate::service_state::{FailureReason, ServiceState, UnavailableReason};
 use crate::serving_snapshot::{Admission, SnapshotHolder};
 use crate::socket_activation::PassedSockets;

@@ -46,6 +46,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 use tokio::time::Instant;
 
 use crate::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
+use crate::attempt_limit::AttemptLimiter;
 use crate::audit::vault::{LockIncomplete, UnlockRefused};
 use crate::audit::{AuditEvent, CheckFailed, LockTransition, ReloadFailed, count_of};
 use crate::clock::{SystemClock, WallClock};
@@ -53,7 +54,7 @@ use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_chec
 use crate::deployment::PasswdDirectory;
 use crate::hardening::{HardeningReport, MemoryProtection};
 use crate::logging::{LogSwitch, OpenedLog};
-use crate::migration_authorization::{AttemptLimiter, PendingMigration};
+use crate::migration_authorization::PendingMigration;
 use crate::request_listeners::RequestListeners;
 use crate::service_state::{AdminOperation, IllegalTransition, RequestInterface, ServiceEvent, ServiceState, UnavailableReason, next};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder, Withdrawn};

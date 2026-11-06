@@ -19,9 +19,9 @@ use std::time::Duration;
 use common::approval_harness::{APPROVAL_PASSPHRASE, Fixture, identity};
 use common::gated_fs::GatedFs;
 use iron_vault::admin::protocol::{OwnerInput, VaultStatus};
+use iron_vault::attempt_limit::{AttemptsCoolingDown, BASE_COOLDOWN, FAILURE_THRESHOLD};
 use iron_vault::migration_authorization::{
-    AttemptsCoolingDown, BASE_COOLDOWN, BindingDigest, CHALLENGE_LIFETIME, FAILURE_THRESHOLD, MigrationAuthorization, MigrationOperation,
-    MigrationRefusal, OwnerRefusal, PendingMigration,
+    BindingDigest, CHALLENGE_LIFETIME, MigrationAuthorization, MigrationOperation, MigrationRefusal, OwnerRefusal, PendingMigration,
 };
 use iron_vault::service_context::{LockOutcome, ServiceContext};
 use iron_vault::service_state::ServiceState;

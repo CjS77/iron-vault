@@ -6,7 +6,6 @@
 //! under test. The source-owner methods that prove a challenge live in [`method`], whose one proving path is the only
 //! constructor of a [`MigrationAuthorization`].
 
-mod attempt_limit;
 mod challenge;
 mod method;
 mod pending;
@@ -15,11 +14,11 @@ mod tests;
 
 use iron_vault_store::{RecipientKey, VaultId};
 
+use crate::attempt_limit::AttemptsCoolingDown;
 use crate::service_state::ServiceState;
 use thiserror::Error;
 use tokio::time::Instant;
 
-pub use attempt_limit::{AttemptLimiter, AttemptsCoolingDown, BASE_COOLDOWN, FAILURE_THRESHOLD, MAX_COOLDOWN};
 pub use challenge::{BindingDigest, CHALLENGE_LIFETIME, MigrationChallenge};
 #[cfg(target_os = "linux")]
 pub use method::VaultPassphraseMethod;

@@ -1,10 +1,12 @@
-//! The passphrase attempt limit (design/migration-authorization.md, "Passphrase attempt limit"): a count of
-//! consecutive owner failures that refuses further attempts for a cooldown which doubles with each failure.
+//! The vault passphrase attempt limit (design/migration-authorization.md, "Passphrase attempt limit"): a count of
+//! consecutive owner failures that refuses further attempts for a cooldown which doubles with each failure. `unlock`
+//! and migration authorization prompt for the same passphrase and share one count.
 //!
 //! Pure: the clock is an argument, so the policy is deterministic under a paused tokio clock. Which outcomes count is
-//! the caller's decision, and it is fixed by the design: only `wrong_passphrase` and `not_this_vault` call
-//! [`AttemptLimiter::record_failure`]. An `unavailable` check, a `cancelled` prompt, a `lock`, a `rate_limited`
-//! refusal and a failure after a proof (`expired`, `not_pending`, `binding_mismatch`) record nothing.
+//! the caller's decision, and it is fixed by the design: only a wrong passphrase (`wrong_passphrase`, or
+//! `not_this_vault` in migration authorization) calls [`AttemptLimiter::record_failure`]. An `unavailable` check, a
+//! `cancelled` prompt, a `lock`, a `rate_limited` refusal and a failure after a proof (`expired`, `not_pending`,
+//! `binding_mismatch`) record nothing.
 
 use std::time::Duration;
 
@@ -18,8 +20,8 @@ pub const BASE_COOLDOWN: Duration = Duration::from_secs(30);
 /// The longest cooldown.
 pub const MAX_COOLDOWN: Duration = Duration::from_secs(15 * 60);
 
-/// An attempt was refused because the limiter is in a cooldown. The exchange ends with `migration-rate-limited`
-/// before any prompt, so the owner is not asked to type. Its audit refusal label is `rate_limited`, as the design's
+/// An attempt was refused because the limiter is in a cooldown. The exchange ends with `migration-rate-limited` or
+/// `unlock-rate-limited` before any prompt, so the owner is not asked to type. Its audit refusal label is `rate_limited`, as the design's
 /// tables name it; the type is named apart from a route's rate limiter, which is a different concept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("too many wrong vault passphrases; try again in {retry_after} seconds")]
