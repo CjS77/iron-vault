@@ -23,10 +23,9 @@ crate's default features, and never with `dev-mode`: the metadata names no featu
 packaged binary's `--version` and refuses a package whose feature list names `dev-mode`, as CI already does for the
 release build.
 
-A `.deb` alone is enough for v0:
+A `.deb` alone is enough for v0, by the owner's decision. It installs on Debian, Ubuntu and their derivatives, and
+it keeps the first package small:
 
-- Debian and Ubuntu cover the desktops and servers that v0's users run
-  ([§1.1](iron-vault-specification.md#11-intended-users)).
 - `cargo-deb` builds from the Cargo workspace with no separate packaging tree. It installs systemd units, `sysusers.d`
   and `tmpfiles.d` files, and adds the maintainer-script snippets that enable, start, restart and stop the units.
 - One format means one set of maintainer scripts to review and one release check on a real install.
@@ -89,9 +88,11 @@ systemd's per-unit directories do not fit three of them either:
 
 - **`ConfigurationDirectory=`** leaves the directory owned by root. The service must create and rename files in
   `/etc/iron-vault`, so the `ConfigDir` rule requires the service account to own it.
-- **`RuntimeDirectory=`** is deleted when the service stops. A request socket that a listener socket unit created in
-  it would be unlinked on every restart, while systemd still held the listening socket, so callers could no longer
-  reach it. The socket unit also starts before the service, so the directory must exist before the service first runs.
+- **`RuntimeDirectory=`** is created only when the service starts. A listener socket unit starts before the service
+  it names and binds its Unix socket in `/run/iron-vault`, so the directory must exist before the service first runs.
+  systemd also deletes the directory when the service stops, which would unlink the socket's file while systemd still
+  held the listening socket, so callers could no longer reach it. `RuntimeDirectoryPreserve=yes` would keep the
+  directory across a stop, but not create it before the socket unit at boot.
 - **`StateDirectory=`** would work for `/var/lib/iron-vault`, but `tmpfiles.d` already creates the other two, and one
   mechanism for all three is simpler to review.
 
@@ -252,8 +253,10 @@ Otherwise systemd keeps the port and passes a socket that nothing serves on.
 
 The maintainer scripts follow the dpkg contract
 ([Debian Policy §6.8](https://www.debian.org/doc/debian-policy/ch-maintainerscripts.html#details-of-removal-and-or-configuration-purging)).
-`cargo-deb` generates the unit snippets in the same form as `dh_installsystemd`. The package's own scripts add the
-rest.
+`cargo-deb` generates the snippets for `iron-vault.service` in the same form as `dh_installsystemd`
+([autoscripts](https://github.com/kornelski/cargo-deb/tree/main/autoscripts)). It generates none for the listener
+template, because it skips every unit whose name contains `@`: a template cannot be enabled or stopped without an
+instance name. The package's own scripts add the rest, including everything for the listener instances.
 
 ### Install
 
@@ -271,8 +274,21 @@ not restarted, so they keep their ports through the upgrade.
 
 ### Remove
 
-`prerm remove` stops and disables `iron-vault.service` and every `iron-vault-listener@*.socket` instance. dpkg then
-removes the binary, the units and the `sysusers.d` and `tmpfiles.d` files. Remove keeps:
+The service unit and the listener instances are taken out of use in different ways.
+
+- **`iron-vault.service`** is handled by the generated snippets. `prerm remove` stops it, and `postrm remove` masks
+  it with `deb-systemd-helper mask`, so nothing can start it while the package is removed. Its enablement symlink
+  and `deb-systemd-helper`'s record of it stay until purge, which runs `deb-systemd-helper purge` and then unmasks
+  it. A reinstall before purge therefore unmasks and enables it again, as an install does.
+- **Listener instances** are handled by the package's own `prerm remove`, in lines before its `#DEBHELPER#` token, so
+  they run ahead of the generated stop. It stops every loaded `iron-vault-listener@*.socket` instance (`systemctl
+  stop` matches the pattern against loaded units), so no connection can start the service again through socket
+  activation once it has stopped. It then disables each enabled instance by name. `systemctl disable` does not
+  expand patterns, so the script lists the instances from the `iron-vault-listener@*.socket` symlinks in
+  `/etc/systemd/system/sockets.target.wants` and passes each name. Disabling an instance removes its symlink, so the
+  boot no longer asks for a socket unit whose template is gone.
+
+dpkg then removes the binary, the units and the `sysusers.d` and `tmpfiles.d` files. Remove keeps:
 
 - `/etc/iron-vault`, `/var/lib/iron-vault` and `/var/log/iron-vault`;
 - the listener drop-ins under `/etc/systemd/system`;
@@ -291,7 +307,7 @@ dpkg removes the conffile `/etc/logrotate.d/iron-vault`, then `postrm purge`:
    files ([§10.8](https://www.debian.org/doc/debian-policy/ch-files.html#log-files)). Any TLS files the administrator
    put under `/etc/iron-vault` go with it.
 2. Deletes the drop-in directories `/etc/systemd/system/iron-vault-listener@*.socket.d`, which configure nothing but
-   this package.
+   this package. This step is a default for the owner to confirm ([open questions](#open-questions)).
 3. Asks whether to delete the vault, as below.
 4. Purges the package's debconf entries.
 
@@ -303,14 +319,23 @@ deleting the account could let a later account reuse its uid and gain the vault'
 The vault is the one directory a purge does not delete without asking. `/var/lib/iron-vault` holds the only copies of
 the encrypted credential records. The offline recovery key opens the vault's identity envelope, which lives in that
 same directory, so it cannot bring back deleted records. Losing them means reissuing every provider credential, and
-`apt purge` is easy to run by accident. Database packages handle this case the same way: `mariadb-server` asks
-`mariadb-server/postrm_remove_databases` ("Remove all MariaDB databases?") in `postrm purge`
-([template](https://salsa.debian.org/mariadb-team/mariadb-server/-/blob/debian/latest/debian/mariadb-server.templates)),
-and `slapd` asks `slapd/purge_database` ("Do you want the database to be removed when slapd is purged?")
-([template](https://salsa.debian.org/openldap-team/openldap/-/blob/master/debian/slapd.templates)). Both default to
-no.
+`apt purge` is easy to run by accident. Database packages guard their data with a debconf question that defaults to
+no, and they differ in when they ask:
 
-The template follows `mariadb-server`'s:
+- `slapd` asks `slapd/purge_database` ("Do you want the database to be removed when slapd is purged?") at priority
+  `low` while it is first configured, in its `config` script
+  ([source](https://salsa.debian.org/openldap-team/openldap/-/blob/master/debian/slapd.config)). Its `postrm purge`
+  only reads the stored answer
+  ([source](https://salsa.debian.org/openldap-team/openldap/-/blob/master/debian/slapd.postrm),
+  [template](https://salsa.debian.org/openldap-team/openldap/-/blob/master/debian/slapd.templates)).
+- `mariadb-server` asks `mariadb-server/postrm_remove_databases` ("Remove all MariaDB databases?") at priority `high`
+  in `postrm purge` itself
+  ([source](https://salsa.debian.org/mariadb-team/mariadb-server/-/blob/debian/latest/debian/mariadb-server.postrm),
+  [template](https://salsa.debian.org/mariadb-team/mariadb-server/-/blob/debian/latest/debian/mariadb-server.templates)).
+
+Iron Vault follows `mariadb-server` and asks at purge time, when the owner can see what is about to go. An answer
+given at install time, possibly years earlier and at a priority most installs never show, is a poor guard for the
+only copies of the credential records. The template also follows `mariadb-server`'s:
 
 ```
 Template: iron-vault/purge_vault
@@ -342,7 +367,18 @@ A kept vault opens with a later install, but its published config and signature 
 Admin commands run only through `sudo` ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The admin
 principals of a protected install are root and the service account, fixed by the deployment profile. `admin.sock` is
 the service account's with mode `0600`, and the service checks each connection's peer account before reading
-anything. The package creates no admin group. Adding a login account to the `iron-vault` group would grant nothing,
-because the socket's group has no access and the peer check refuses the account anyway. The owner runs
-`sudo iron-vault <command>`. The installation guide recommends per-terminal `sudo` credential caching or none, and a
-hardware-key factor where the platform supports one.
+anything. The package creates no admin group. Membership of the `iron-vault` group grants no admin access: the
+socket's group has no access, and the peer check refuses the account anyway. It does grant read access to the audit
+log, because `/var/log/iron-vault` is `0750` and `iron-vault.log` is `0640`, both with the service's group, and
+anyone who reads the log sees every route, caller and refusal. Only a log collector's own service account belongs in
+the group; never add a login account ([log-operations.md](log-operations.md#location-and-permissions)).
+
+The owner runs `sudo iron-vault <command>`. The installation guide recommends per-terminal `sudo` credential caching
+or none, and a hardware-key factor where the platform supports one.
+
+## Open questions
+
+1. **Purge deletes the listener drop-ins.** [Purge](#purge) step 2 deletes
+   `/etc/systemd/system/iron-vault-listener@*.socket.d`. The administrator wrote these files, not the package, and
+   the purge contract the owner set names only `/etc/iron-vault`, `/var/log/iron-vault` and the vault. Deleting them
+   is the default because they configure nothing once the template unit is gone; the owner should confirm it.

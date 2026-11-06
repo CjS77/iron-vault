@@ -223,7 +223,9 @@ and says to run `iron-vault init`. For Unfinished it adds that an init may be in
 names the first offending files instead. Files beside a manifest never refuse `unlock`: it logs their names at WARN.
 In a protected install whose memory is not locked, the exchange ends with `memory-unprotected` before any prompt, and
 the message names the `RLIMIT_MEMLOCK` soft limit or the locking error
-([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)); the service stays Locked.
+([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)); the service stays Locked. The checks run
+in this order: state, initialization state, memory. A vault that is not Initialized has no secret to protect, and
+`iron-vault init` is the step the owner needs first, so its `unlock-failed` comes before `memory-unprotected`.
 The state is read again under the service context's mutex in step 2.
 
 1. **Vault passphrase.** A prompt, secret: `Vault passphrase`. The value is the vault-unlock passphrase, never the
