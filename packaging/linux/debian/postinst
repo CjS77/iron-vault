@@ -1,19 +1,13 @@
 #!/bin/sh
-# Creates the service account and its directories, then (through the snippets cargo-deb generates) enables
-# iron-vault.service, starts it on a fresh install and restarts it on an upgrade. No listener socket unit is enabled:
-# the administrator creates those. Messages go to stderr because debconf's confmodule owns stdout.
+# The snippets cargo-deb generates (the debhelper token below) create the service account and its directories (sysusers.d and
+# tmpfiles.d), reload systemd, and enable and start iron-vault.service, or restart it on an upgrade. No listener socket
+# unit is enabled: the administrator creates those. Messages go to stderr because debconf's confmodule owns stdout.
 set -e
 
 # Registers the purge question's template with debconf; the question itself is asked by postrm.
 [ -e /usr/share/debconf/confmodule ] && . /usr/share/debconf/confmodule
 
-if [ "$1" = configure ]; then
-    # The directories must exist before any unit starts: a listener socket binds in /run/iron-vault ahead of the service.
-    systemd-sysusers iron-vault.conf
-    systemd-tmpfiles --create iron-vault.conf
-fi
-
-# The generated snippets reload systemd, then enable and start or restart the service.
+# The generated snippets create the account and directories before they enable and start the service.
 #DEBHELPER#
 
 if [ "$1" = configure ]; then

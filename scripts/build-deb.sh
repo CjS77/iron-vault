@@ -3,7 +3,7 @@
 #
 # Build tools (not workspace dependencies):
 #   cargo install cargo-deb --locked
-#   sudo apt install dpkg lintian        # dpkg-deb is required; lintian is run when present
+#   sudo apt install dpkg lintian        # both are required
 #
 # Usage: scripts/build-deb.sh [extra cargo-deb arguments]
 # The build uses the release profile and default features. Extra arguments exist so the check can be seen to fail:
@@ -14,7 +14,7 @@
 #  - every file's owner and mode match the design's ownership table, and nothing is owned by a non-root account;
 #  - nothing is shipped under the service's own directories, and the only conffile is the logrotate rule;
 #  - the maintainer scripts are present and executable;
-#  - lintian reports no error (skipped, loudly, when lintian is not installed).
+#  - lintian reports no error. A missing lintian fails the script; IRON_VAULT_SKIP_LINTIAN=1 opts out explicitly.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -87,6 +87,11 @@ echo "== lintian"
 if command -v lintian >/dev/null 2>&1; then
     lintian --fail-on error "$deb"
 else
-    echo "SKIPPED: lintian is not installed (sudo apt install lintian); the package was not linted" >&2
+    [ "${IRON_VAULT_SKIP_LINTIAN:-}" = 1 ] || {
+        echo "error: lintian is not installed; run: sudo apt install lintian (or set IRON_VAULT_SKIP_LINTIAN=1)" >&2
+        exit 2
+    }
+    echo "package checks passed WITHOUT lintian"
+    exit 0
 fi
 echo "package checks passed"

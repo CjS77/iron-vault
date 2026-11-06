@@ -285,8 +285,8 @@ The service unit and the listener instances are taken out of use in different wa
   stop` matches the pattern against loaded units), so no connection can start the service again through socket
   activation once it has stopped. It then disables each enabled instance by name. `systemctl disable` does not
   expand patterns, so the script lists the instances from the `iron-vault-listener@*.socket` symlinks in
-  any `/etc/systemd/system/*.wants` or `*.requires` directory, without duplicates, and passes each name. Disabling an instance removes its symlink, so the
-  boot no longer asks for a socket unit whose template is gone.
+  any `/etc/systemd/system/*.wants` or `*.requires` directory, without duplicates, and passes each name. Disabling an
+  instance removes its symlink, so the boot no longer asks for a socket unit whose template is gone.
 
 dpkg then removes the binary, the units and the `sysusers.d` and `tmpfiles.d` files. Remove keeps:
 
@@ -341,7 +341,7 @@ only copies of the credential records. The template also follows `mariadb-server
 Template: iron-vault/purge_vault
 Type: boolean
 Default: false
-_Description: Delete the vault and every stored credential?
+Description: Delete the vault and every stored credential?
  /var/lib/iron-vault holds the only copies of the encrypted credential
  records. The offline recovery key cannot bring back deleted records.
  .
@@ -365,7 +365,8 @@ A kept vault opens with a later install, but its published config and signature 
 ## Building and checking the package
 
 `scripts/build-deb.sh` builds the `.deb` with `cargo deb -p iron-vault` and checks it. It needs `cargo-deb`
-(`cargo install cargo-deb --locked`) and `dpkg-deb`; `lintian` is run when installed. It fails when:
+(`cargo install cargo-deb --locked`), `dpkg-deb` and `lintian` (`sudo apt install lintian`). Without `lintian` it exits non-zero;
+`IRON_VAULT_SKIP_LINTIAN=1` is the explicit opt-out, and the script then ends with "package checks passed WITHOUT lintian". It fails when:
 
 - the packaged binary's `--version` lists any feature, so a `dev-mode` package is refused;
 - a file's owner or mode differs from the [ownership table](#ownership), a path is owned by anyone but root, or
@@ -374,9 +375,7 @@ A kept vault opens with a later install, but its published config and signature 
 - `lintian --fail-on error` reports an error.
 
 The package's own scripts (`packaging/linux/debian/`) use `systemctl` rather than `deb-systemd-invoke` for the listener
-instances, because `deb-systemd-invoke` neither disables a unit nor takes a pattern. They guard each call with
-`[ -d /run/systemd/system ]` and `|| true`, as the generated snippets do, so remove works in a chroot. `prerm` reads
-instance names from both `*.wants` and `*.requires` directories under `/etc/systemd/system`.
+instances, because `deb-systemd-invoke` neither disables a unit nor takes a pattern.
 
 Accepted `lintian` warnings: none recorded yet. The first run on a machine with `lintian` installed must list any
 warning it keeps here with its reason.
