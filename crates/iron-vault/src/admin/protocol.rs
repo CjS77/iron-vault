@@ -74,6 +74,8 @@ pub enum AdminRequest {
         /// The new record's permitted origins, 1 to [`MAX_ORIGINS`] of them.
         origins: Vec<RequestedOrigin>,
     },
+    /// Proves that a recovery key opens the vault; the service prompts for the key. No arguments. Command ID 12.
+    RecoveryCheck,
     /// Removes a credential record after owner presence, while no route of the active config uses the name; no result.
     /// Command ID 11.
     Rm {
@@ -107,6 +109,7 @@ impl AdminRequest {
             Self::List => AdminCommand::List,
             Self::Replace { .. } => AdminCommand::Replace,
             Self::Rm { .. } => AdminCommand::Rm,
+            Self::RecoveryCheck => AdminCommand::RecoveryCheck,
         }
     }
 }
@@ -136,6 +139,8 @@ pub enum AdminCommand {
     Replace = 10,
     /// `rm`.
     Rm = 11,
+    /// `recovery check`.
+    RecoveryCheck = 12,
 }
 
 impl AdminCommand {
@@ -153,6 +158,7 @@ impl AdminCommand {
             Self::List => "list",
             Self::Replace => "replace",
             Self::Rm => "rm",
+            Self::RecoveryCheck => "recovery check",
         }
     }
 
@@ -170,6 +176,7 @@ impl AdminCommand {
             Self::List => "list",
             Self::Replace => "replace",
             Self::Rm => "rm",
+            Self::RecoveryCheck => "recovery_check",
         }
     }
 }
@@ -190,6 +197,7 @@ mod no_external_signatures {
             | AdminCommand::Unlock
             | AdminCommand::Lock
             | AdminCommand::Init
+            | AdminCommand::RecoveryCheck
             | AdminCommand::List => &[],
             AdminCommand::ConfigApprove => &["config"],
             AdminCommand::Add | AdminCommand::Replace => &["name", "kind", "origins"],
@@ -197,7 +205,7 @@ mod no_external_signatures {
         }
     }
 
-    const COMMANDS: [AdminCommand; 11] = [
+    const COMMANDS: [AdminCommand; 12] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::CallerToken,
@@ -209,6 +217,7 @@ mod no_external_signatures {
         AdminCommand::List,
         AdminCommand::Replace,
         AdminCommand::Rm,
+        AdminCommand::RecoveryCheck,
     ];
 
     #[test]
@@ -395,6 +404,15 @@ pub enum AdminResponse {
         /// The committed approval version, always 1.
         version: u64,
     },
+    /// `recovery check` completed: the key opens the vault.
+    RecoveryCheck {
+        /// The ID in the manifest the key opened.
+        vault_id: VaultId,
+        /// The check time, Unix seconds UTC, as written to the record.
+        checked_at: u64,
+        /// Whether the check record was written; false when the write failed, though the check passed.
+        recorded: bool,
+    },
     /// The command failed. The message is the service's own text and never contains owner input.
     Error {
         /// The stable code scripts act on.
@@ -484,6 +502,13 @@ pub enum ErrorCode {
     /// `unlock`: a protected install's memory is not locked, so the vault is not opened; the message names the
     /// memory-lock limit or the locking error, and the service stays Locked.
     MemoryUnprotected = 27,
+    /// `recovery check`: the text is not an `AGE-SECRET-KEY-1...` recovery key; the message holds nothing typed.
+    RecoveryKeyInvalid = 30,
+    /// `recovery check`: the key does not open this vault; the message is fixed.
+    RecoveryCheckFailed = 31,
+    /// `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the
+    /// key was not judged.
+    RecoveryCheckUnavailable = 32,
 }
 
 impl ErrorCode {
@@ -517,6 +542,9 @@ impl ErrorCode {
             Self::RandomSourceFailed => "random-source-failed",
             Self::ListTooLarge => "list-too-large",
             Self::MemoryUnprotected => "memory-unprotected",
+            Self::RecoveryKeyInvalid => "recovery-key-invalid",
+            Self::RecoveryCheckFailed => "recovery-check-failed",
+            Self::RecoveryCheckUnavailable => "recovery-check-unavailable",
         }
     }
 
@@ -660,6 +688,15 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::Init { vault_id, version }) => {
             put_frame(out, FrameKind::Success, &body::encode_init_result(*vault_id, *version))
         }
+        Frame::Response(AdminResponse::RecoveryCheck {
+            vault_id,
+            checked_at,
+            recorded,
+        }) => put_frame(
+            out,
+            FrameKind::Success,
+            &body::encode_recovery_check_result(*vault_id, *checked_at, *recorded),
+        ),
         Frame::Response(AdminResponse::ConfigApprove(result)) => put_frame(out, FrameKind::Success, &body::encode_approval_result(result)),
         Frame::Response(AdminResponse::Error { code, message }) => put_frame(out, FrameKind::Error, &body::encode_error(*code, message)),
         Frame::Notice(notice) => put_frame(out, FrameKind::Notice, &body::encode_notice(notice)),

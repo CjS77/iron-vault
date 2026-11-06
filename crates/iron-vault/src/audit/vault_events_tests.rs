@@ -419,3 +419,54 @@ fn emit_corruption_events(name: &CredentialName, id: RecordId, kind: &ErrorKindL
     .emit();
     StateDirUnreadable { error_kind: kind }.emit();
 }
+
+#[test]
+fn recovery_checked_carries_its_outcome_and_fixed_labels_only() {
+    use super::recovery::RecoveryChecked;
+    use iron_vault_store::{MalformedReason, RecoveryCheckError};
+    let id = VaultId::new_random();
+    let saved = record_of(
+        RecoveryChecked::Opened {
+            vault_id: id,
+            record_error: None,
+        },
+        "INFO",
+        &["recovery_outcome", "vault_id", "recorded"],
+    );
+    assert_eq!(
+        (saved["recovery_outcome"].as_str(), saved["recorded"].as_bool()),
+        (Some("opened"), Some(true))
+    );
+    let unsaved = record_of(
+        RecoveryChecked::Opened {
+            vault_id: id,
+            record_error: Some(ErrorKindLabel::fixed("permission_denied")),
+        },
+        "INFO",
+        &["recovery_outcome", "vault_id", "recorded", "error_kind"],
+    );
+    assert_eq!(
+        (unsaved["recorded"].as_bool(), unsaved["error_kind"].as_str()),
+        (Some(false), Some("permission_denied"))
+    );
+    let failed = record_of(
+        RecoveryChecked::Failed(&RecoveryCheckError::IdentityNotGenuine),
+        "WARN",
+        &["recovery_outcome", "recovery_failure"],
+    );
+    assert_eq!(failed["recovery_failure"], "identity_unverified");
+    record_of(RecoveryChecked::Invalid, "WARN", &["recovery_outcome"]);
+    let unreadable = RecoveryCheckError::EnvelopeMalformed {
+        file: StateFileName::manifest(),
+        reason: MalformedReason::TooLarge,
+    };
+    let unavailable = record_of(
+        RecoveryChecked::Unavailable(&unreadable),
+        "WARN",
+        &["recovery_outcome", "file", "error_kind"],
+    );
+    assert_eq!(
+        (unavailable["file"].as_str(), unavailable["error_kind"].as_str()),
+        (Some("manifest.age"), Some("too_large"))
+    );
+}

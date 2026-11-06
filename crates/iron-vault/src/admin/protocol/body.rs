@@ -39,6 +39,9 @@ const COMMAND_ADD: u16 = AdminCommand::Add as u16;
 const COMMAND_LIST: u16 = AdminCommand::List as u16;
 const COMMAND_REPLACE: u16 = AdminCommand::Replace as u16;
 const COMMAND_RM: u16 = AdminCommand::Rm as u16;
+const COMMAND_RECOVERY_CHECK: u16 = AdminCommand::RecoveryCheck as u16;
+const TAG_CHECKED_AT: u16 = 3;
+const TAG_RECORDED: u16 = 4;
 const TAG_NAME: u16 = 2;
 
 /// A request body; only `add` and `replace`, whose origins have bounds, can be refused.
@@ -74,6 +77,7 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
         COMMAND_UNLOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Unlock),
         COMMAND_LOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Lock),
         COMMAND_INIT => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Init),
+        COMMAND_RECOVERY_CHECK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::RecoveryCheck),
         COMMAND_ADD => add::decode_request(&fields, |name, kind, origins| AdminRequest::Add { name, kind, origins }),
         COMMAND_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::List),
         COMMAND_REPLACE => add::decode_request(&fields, |name, kind, origins| AdminRequest::Replace { name, kind, origins }),
@@ -178,6 +182,29 @@ fn decode_init_result(fields: &[fields::Field<'_>]) -> Result<AdminResponse, Fra
     })
 }
 
+/// `recovery check`'s success body: the command it answers, the vault ID as its 16 raw bytes, the check time in Unix
+/// seconds, then whether the check record was written.
+pub(super) fn encode_recovery_check_result(vault_id: VaultId, checked_at: u64, recorded: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    fields::put(&mut out, TAG_COMMAND, &COMMAND_RECOVERY_CHECK.to_be_bytes());
+    fields::put(&mut out, TAG_VAULT_ID, vault_id.as_bytes());
+    fields::put(&mut out, TAG_CHECKED_AT, &checked_at.to_be_bytes());
+    fields::put(&mut out, TAG_RECORDED, &[u8::from(recorded)]);
+    out
+}
+
+fn decode_recovery_check_result(fields: &[fields::Field<'_>]) -> Result<AdminResponse, FrameError> {
+    let [_, vault_id, checked_at, recorded] = exact(fields, [TAG_COMMAND, TAG_VAULT_ID, TAG_CHECKED_AT, TAG_RECORDED])?;
+    Ok(AdminResponse::RecoveryCheck {
+        vault_id: <[u8; 16]>::try_from(vault_id)
+            .ok()
+            .and_then(|bytes| VaultId::from_bytes(bytes).ok())
+            .ok_or(FrameError::InvalidValue(TAG_VAULT_ID))?,
+        checked_at: read_u64(TAG_CHECKED_AT, checked_at)?,
+        recorded: read_flag(TAG_RECORDED, recorded)?,
+    })
+}
+
 /// `config approve`'s success body: the command it answers, the committed version, the config digest and the headline.
 pub(super) fn encode_approval_result(result: &ApprovalResult) -> Vec<u8> {
     let mut out = Vec::new();
@@ -236,6 +263,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
             })
         }
         COMMAND_INIT => decode_init_result(&fields),
+        COMMAND_RECOVERY_CHECK => decode_recovery_check_result(&fields),
         COMMAND_ADD => add::decode_result(&fields).map(|record_id| AdminResponse::Add { record_id }),
         COMMAND_LIST => list::decode_result(&fields),
         COMMAND_REPLACE => add::decode_result(&fields).map(|record_id| AdminResponse::Replace { record_id }),
@@ -287,6 +315,9 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::RandomSourceFailed,
         ErrorCode::ListTooLarge,
         ErrorCode::MemoryUnprotected,
+        ErrorCode::RecoveryKeyInvalid,
+        ErrorCode::RecoveryCheckFailed,
+        ErrorCode::RecoveryCheckUnavailable,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

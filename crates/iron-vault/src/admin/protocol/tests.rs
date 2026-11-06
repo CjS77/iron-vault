@@ -59,6 +59,18 @@ fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
         (R::Add { record_id: a }, R::Add { record_id: b }) | (R::Replace { record_id: a }, R::Replace { record_id: b }) => a == b,
         (R::CallerToken { token: a }, R::CallerToken { token: b }) => TokenHash::of(a) == TokenHash::of(b),
         (R::Init { vault_id: a, version: v }, R::Init { vault_id: b, version: w }) => a == b && v == w,
+        (
+            R::RecoveryCheck {
+                vault_id: a,
+                checked_at: t,
+                recorded: r,
+            },
+            R::RecoveryCheck {
+                vault_id: b,
+                checked_at: u,
+                recorded: q,
+            },
+        ) => a == b && t == u && r == q,
         (R::Error { code: a, message: m }, R::Error { code: b, message: n }) => a == b && m == n,
         _ => false,
     }
@@ -145,6 +157,9 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::RandomSourceFailed),
         Just(ErrorCode::ListTooLarge),
         Just(ErrorCode::MemoryUnprotected),
+        Just(ErrorCode::RecoveryKeyInvalid),
+        Just(ErrorCode::RecoveryCheckFailed),
+        Just(ErrorCode::RecoveryCheckUnavailable),
     ]
 }
 
@@ -170,6 +185,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             Just(AdminRequest::Unlock),
             Just(AdminRequest::Lock),
             Just(AdminRequest::Init),
+            Just(AdminRequest::RecoveryCheck),
             add_request(),
             replace_request(),
             text(256).prop_map(|name| AdminRequest::Rm { name }),
@@ -198,6 +214,13 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             vault_id: VaultId::from_bytes(v4_bytes(bytes)).unwrap(),
             version
         })),
+        (any::<[u8; 16]>(), any::<u64>(), any::<bool>()).prop_map(|(bytes, checked_at, recorded)| {
+            Frame::Response(AdminResponse::RecoveryCheck {
+                vault_id: VaultId::from_bytes(v4_bytes(bytes)).unwrap(),
+                checked_at,
+                recorded,
+            })
+        }),
         status_report().prop_map(|report| Frame::Response(AdminResponse::Status(Box::new(report)))),
         (error_code(), text(MAX_MESSAGE)).prop_map(|(code, message)| Frame::Response(AdminResponse::Error { code, message })),
     ]
@@ -459,8 +482,8 @@ fn wrong_state_is_error_code_13() {
 fn a_success_result_must_name_a_command_with_a_result_and_a_known_profile() {
     let no_command = field(2, &[1]);
     assert_eq!(decode_err(&raw(1, 4, &no_command)), FrameError::MissingField(1));
-    let unknown = body(&[field(1, &[0, 12]), field(2, &[1])]);
-    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(12));
+    let unknown = body(&[field(1, &[0, 13]), field(2, &[1])]);
+    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(13));
     let without_profile = field(1, &[0, 1]);
     assert_eq!(decode_err(&raw(1, 4, &without_profile)), FrameError::MissingField(2));
     [&[][..], &[0], &[3], &[1, 1]].into_iter().for_each(|profile| {
@@ -598,7 +621,7 @@ fn unknown_tags_are_refused() {
 
 #[test]
 fn unknown_commands_are_refused_whatever_follows() {
-    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 12]))), FrameError::UnknownCommand(12));
+    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 13]))), FrameError::UnknownCommand(13));
     let with_arguments = body(&[field(1, &[0xff, 0xff]), field(2, b"argument")]);
     assert_eq!(decode_err(&raw(1, 1, &with_arguments)), FrameError::UnknownCommand(0xffff));
 }
@@ -1117,4 +1140,40 @@ fn the_caller_token_error_code_has_its_documented_number_and_name() {
     let code = ErrorCode::RandomSourceFailed;
     assert_eq!((code as u16, code.name()), (25, "random-source-failed"));
     assert_round_trips(&error(code, "m"));
+}
+
+#[test]
+fn recovery_check_has_the_documented_command_result_and_error_codes() {
+    assert_eq!(
+        (AdminCommand::RecoveryCheck as u16, AdminRequest::RecoveryCheck.command().name()),
+        (12, "recovery check")
+    );
+    assert_eq!(
+        encoded(&Frame::Request(AdminRequest::RecoveryCheck)),
+        raw(1, 1, &field(1, &[0, 12]))
+    );
+    let vault_id = VaultId::from_bytes(v4_bytes([7; 16])).unwrap();
+    let result = Frame::Response(AdminResponse::RecoveryCheck {
+        vault_id,
+        checked_at: 1_700_000_000,
+        recorded: false,
+    });
+    let expected = body(&[
+        field(1, &[0, 12]),
+        field(2, vault_id.as_bytes()),
+        field(3, &1_700_000_000u64.to_be_bytes()),
+        field(4, &[0]),
+    ]);
+    assert_eq!(encoded(&result), raw(1, 4, &expected));
+    assert_round_trips(&result);
+    [
+        (ErrorCode::RecoveryKeyInvalid, 30, "recovery-key-invalid"),
+        (ErrorCode::RecoveryCheckFailed, 31, "recovery-check-failed"),
+        (ErrorCode::RecoveryCheckUnavailable, 32, "recovery-check-unavailable"),
+    ]
+    .into_iter()
+    .for_each(|(code, number, name)| {
+        assert_eq!((code as u16, code.name()), (number, name));
+        assert_round_trips(&error(code, "m"));
+    });
 }

@@ -17,6 +17,8 @@ mod owner_presence;
 pub mod principal;
 pub mod protocol;
 #[cfg(target_os = "linux")]
+mod recovery_check;
+#[cfg(target_os = "linux")]
 mod replace;
 #[cfg(target_os = "linux")]
 mod rm;

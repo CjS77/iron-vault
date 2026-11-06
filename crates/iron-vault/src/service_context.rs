@@ -22,6 +22,7 @@ mod approval;
 mod init;
 mod log_destination;
 mod presence;
+mod recovery;
 mod serving;
 #[cfg(test)]
 mod tests;
@@ -62,6 +63,7 @@ use unlock::{log_foreign_files, unprotected_reason};
 pub use approval::{ApprovalEnd, ApprovalReview};
 pub use init::{InitRefusal, step_names};
 pub use presence::{DenialKind, OwnerPresence, PresenceRefusal};
+pub use recovery::{RecoveryProof, RecoveryRefusal};
 pub use vault_change::{CredentialChanged, CurrentRecord, VaultChangePlan, VaultChangeRefusal};
 
 /// Why an unlock left the service where it was. No variant holds passphrase text.

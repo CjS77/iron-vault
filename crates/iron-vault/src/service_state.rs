@@ -186,6 +186,9 @@ pub enum AdminOperation {
     /// Generate a fresh caller token for the owner. It touches neither the vault nor the policy, so it is allowed while
     /// Locked or Unavailable too: the owner can prepare the config that fixes an invalid policy.
     IssueCallerToken,
+    /// Prove that the owner's recovery key opens the vault. It changes no service state and keeps no key, so it is
+    /// allowed while Locked, where it is most useful, and Ready.
+    RecoveryCheck,
 }
 
 impl ServiceState {
@@ -210,6 +213,7 @@ impl ServiceState {
             (Self::Stopped, _) => false,
             (_, A::Ping | A::Status | A::IssueCallerToken) => true,
             (Self::Locked, A::Unlock | A::Initialize) => true,
+            (Self::Locked | Self::Ready, A::RecoveryCheck) => true,
             (Self::Ready, A::Lock | A::Reload | A::Approve | A::VaultChange) => true,
             (Self::Unavailable(_), A::Lock) => true,
             (Self::Unavailable(FailureReason::PolicyInvalid), A::Approve) => true,

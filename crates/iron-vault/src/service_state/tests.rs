@@ -27,7 +27,7 @@ const EVENTS: [ServiceEvent; 12] = [
     E::Stop,
 ];
 
-const OPERATIONS: [AdminOperation; 10] = [
+const OPERATIONS: [AdminOperation; 11] = [
     AdminOperation::Ping,
     AdminOperation::Status,
     AdminOperation::Unlock,
@@ -38,6 +38,7 @@ const OPERATIONS: [AdminOperation; 10] = [
     AdminOperation::VaultChange,
     AdminOperation::Initialize,
     AdminOperation::IssueCallerToken,
+    AdminOperation::RecoveryCheck,
 ];
 
 /// Every edge of the §3.12 diagram, and nothing else.
@@ -152,7 +153,7 @@ fn admin_commands_follow_the_state() {
     assert_eq!(allowed(S::Starting), [A::Ping, A::Status, A::IssueCallerToken]);
     assert_eq!(
         allowed(S::Locked),
-        [A::Ping, A::Status, A::Unlock, A::Initialize, A::IssueCallerToken]
+        [A::Ping, A::Status, A::Unlock, A::Initialize, A::IssueCallerToken, A::RecoveryCheck]
     );
     assert_eq!(allowed(S::Checking), [A::Ping, A::Status, A::IssueCallerToken]);
     assert_eq!(
@@ -164,7 +165,8 @@ fn admin_commands_follow_the_state() {
             A::Reload,
             A::Approve,
             A::VaultChange,
-            A::IssueCallerToken
+            A::IssueCallerToken,
+            A::RecoveryCheck
         ]
     );
     assert_eq!(
