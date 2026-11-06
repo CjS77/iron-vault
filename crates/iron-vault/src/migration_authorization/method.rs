@@ -8,7 +8,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use iron_vault_store::{Passphrase, PassphraseCheckError};
+use iron_vault_store::{CheckUnavailable, Passphrase, PassphraseCheckError};
 use thiserror::Error;
 
 use super::{MigrationAuthorization, MigrationChallenge};
@@ -129,9 +129,20 @@ fn method_refusal(error: PassphraseCheckError) -> MethodRefusal {
     match error {
         PassphraseCheckError::WrongPassphrase => MethodRefusal::Owner(OwnerRefusal::WrongSecret),
         PassphraseCheckError::NotThisVault => MethodRefusal::Owner(OwnerRefusal::NotThisVault),
-        PassphraseCheckError::Unavailable(cause) => {
-            tracing::warn!("the vault passphrase cannot be checked for migration authorization: {cause}");
+        PassphraseCheckError::Unavailable(unavailable) => {
+            let failure = unavailable_failure(&unavailable);
+            tracing::warn!(failure, "the vault passphrase cannot be checked for migration authorization");
             MethodRefusal::Unavailable
         }
+    }
+}
+
+/// Which part of the vault stopped the check, as a fixed label: the store's error text may carry library text, which
+/// a log never formats (`design/audit-logging.md`, "Library errors").
+fn unavailable_failure(unavailable: &CheckUnavailable) -> &'static str {
+    match unavailable {
+        CheckUnavailable::Read(_) => "envelope_unreadable",
+        CheckUnavailable::PassphraseEnvelope(_) => "passphrase_envelope_damaged",
+        CheckUnavailable::IdentityEnvelope(_) => "identity_envelope_damaged",
     }
 }
