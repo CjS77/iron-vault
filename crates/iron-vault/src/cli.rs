@@ -15,6 +15,7 @@ mod caller_token;
 #[cfg(target_os = "linux")]
 mod client;
 mod completions;
+pub use completions::completions;
 #[cfg(target_os = "linux")]
 mod console;
 #[cfg(target_os = "linux")]
@@ -248,8 +249,6 @@ fn too_many_origins(command: &str) -> clap::Error {
         format!("`{command}` takes at most {MAX_ORIGINS} --origin values"),
     )
 }
-
-pub use completions::completions;
 
 /// `iron-vault ping`: sends `ping` to the admin socket at `socket`, or this installation's, and shows the answer.
 #[cfg(target_os = "linux")]
