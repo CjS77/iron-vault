@@ -13,7 +13,7 @@ use cli::{Cli, Command, ConfigCommand};
 #[cfg(target_os = "linux")]
 use iron_vault::audit::{AuditEvent, HardeningIncomplete, ServiceStarted};
 #[cfg(target_os = "linux")]
-use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
+use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv, require_service_account};
 use iron_vault::hardening;
 #[cfg(target_os = "linux")]
 use iron_vault::logging::{self, LogDestination, LogSwitch};
@@ -68,6 +68,8 @@ fn run_service(log_to_stdout: bool) -> anyhow::Result<()> {
     let report = hardening::harden_process();
     let accounts = Accounts::read()?;
     let env = ProfileEnv::from_process(&accounts)?;
+    // Before the log destination opens, so a wrong account never creates the log file as itself.
+    require_service_account(DeploymentProfile::current(), &env)?;
     let destination = LogDestination::bootstrap(DeploymentProfile::current(), &env, log_to_stdout)?;
     let log = init_logging(&env, &destination)?;
     log_startup(&destination, &report);

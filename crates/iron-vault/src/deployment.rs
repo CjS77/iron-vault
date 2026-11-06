@@ -103,6 +103,12 @@ pub enum ProfileError {
     /// A development build was started as root.
     #[error("refusing to run as root: a development build must never be installed as the system service")]
     DevelopmentAsRoot,
+    /// A protected build was started as an account other than the service account.
+    #[error("a protected install runs only as the `iron-vault` account; start it through `systemctl start iron-vault`")]
+    NotServiceAccount {
+        /// The uid this process runs as. Kept out of the message; the log and the caller may report it.
+        uid: u32,
+    },
     /// The local account list could not be read.
     #[error("cannot read {PASSWD}: {kind}")]
     AccountsUnreadable {
@@ -269,6 +275,18 @@ impl ProfileEnv {
                 .ok_or(ProfileError::MissingServiceAccount { account: SERVICE_ACCOUNT }),
             DeploymentProfile::Development => Ok(ExpectedOwner { uid: self.invoking_uid }),
         }
+    }
+}
+
+/// Refuses a protected service that is not running as the service account. Root passes the trusted-path checks, which look at
+/// file ownership and not the process uid, and would then write vault files the service account cannot use. Development
+/// always passes: `development_banner` already refuses root.
+pub fn require_service_account(profile: DeploymentProfile, env: &ProfileEnv) -> Result<(), ProfileError> {
+    match profile {
+        DeploymentProfile::Protected if env.service_owner(profile)?.uid != env.invoking_uid => {
+            Err(ProfileError::NotServiceAccount { uid: env.invoking_uid })
+        }
+        _ => Ok(()),
     }
 }
 

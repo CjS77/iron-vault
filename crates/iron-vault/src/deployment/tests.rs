@@ -289,3 +289,48 @@ fn the_version_names_the_enabled_features() {
     let features = if cfg!(feature = "dev-mode") { "dev-mode" } else { "none" };
     assert_eq!(version(), format!("{} (features: {features})", env!("CARGO_PKG_VERSION")));
 }
+
+#[test]
+fn protected_runs_only_as_the_service_account() {
+    let as_uid = |invoking_uid| ProfileEnv { invoking_uid, ..env() };
+    assert_eq!(require_service_account(DeploymentProfile::Protected, &as_uid(SERVICE)), Ok(()));
+    assert_eq!(
+        require_service_account(DeploymentProfile::Protected, &as_uid(0)),
+        Err(ProfileError::NotServiceAccount { uid: 0 })
+    );
+    assert_eq!(
+        require_service_account(DeploymentProfile::Protected, &as_uid(USER)),
+        Err(ProfileError::NotServiceAccount { uid: USER })
+    );
+}
+
+#[test]
+fn protected_without_a_service_account_reports_it_missing() {
+    let env = ProfileEnv {
+        service_account_uid: None,
+        ..env()
+    };
+    assert_eq!(
+        require_service_account(DeploymentProfile::Protected, &env),
+        Err(ProfileError::MissingServiceAccount { account: SERVICE_ACCOUNT })
+    );
+}
+
+#[test]
+fn development_passes_for_any_non_root_uid() {
+    let env = ProfileEnv {
+        invoking_uid: 4242,
+        ..env()
+    };
+    assert_eq!(require_service_account(DeploymentProfile::Development, &env), Ok(()));
+}
+
+#[test]
+fn the_not_service_account_message_names_the_account_and_no_path() {
+    let message = require_service_account(DeploymentProfile::Protected, &env())
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains("`iron-vault`"), "{message}");
+    assert!(message.contains("systemctl start iron-vault"), "{message}");
+    assert!(!message.contains("/home/alice") && !message.contains("/run/user/1000"), "{message}");
+}
