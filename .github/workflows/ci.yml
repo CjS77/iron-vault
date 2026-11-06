@@ -43,3 +43,30 @@ jobs:
             echo "release build lists dev-mode" >&2
             exit 1
           fi
+
+  book:
+    runs-on: ubuntu-latest
+    env:
+      MDBOOK_VERSION: 0.5.4
+      MDBOOK_LINKCHECK2_VERSION: 0.13.0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Cache the book tools
+        id: book-tools
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.book-tools
+          key: book-tools-${{ runner.os }}-mdbook-${{ env.MDBOOK_VERSION }}-linkcheck2-${{ env.MDBOOK_LINKCHECK2_VERSION }}
+      - name: Install the book tools
+        if: steps.book-tools.outputs.cache-hit != 'true'
+        run: |
+          rustup toolchain install
+          cargo install mdbook --version "$MDBOOK_VERSION" --locked --root ~/.book-tools
+          cargo install mdbook-linkcheck2 --version "$MDBOOK_LINKCHECK2_VERSION" --locked --root ~/.book-tools
+      # The linkcheck2 renderer runs as part of the build, so a broken link between pages fails this step.
+      - name: Build the book and check links
+        run: |
+          export PATH="$HOME/.book-tools/bin:$PATH"
+          mdbook build book
