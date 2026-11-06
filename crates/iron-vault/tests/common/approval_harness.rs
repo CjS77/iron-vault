@@ -17,7 +17,8 @@ use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
 use iron_vault::admin::protocol::{
-    self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, OwnerInput, Prompt, ProposedConfig, StatusReport, VaultStatus,
+    self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, OwnerInput, Prompt, ProposedConfig, RevealedSecret, StatusReport,
+    VaultStatus,
 };
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
@@ -312,22 +313,32 @@ pub async fn approve<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceCo
     exchanged
 }
 
-/// Reads frames until the response, answering each prompt with the next of `answers`.
+/// Reads frames until the response, answering each prompt with the next of `answers`. Panics if the service reveals a
+/// secret, so a command that should never show one cannot start doing so unnoticed.
 pub async fn converse(stream: &mut UnixStream, answers: &[&str]) -> Exchanged {
-    let (mut notices, mut prompts) = (String::new(), Vec::new());
+    let (exchanged, revealed) = converse_revealing(stream, answers).await;
+    assert!(revealed.is_empty(), "unexpected reveal: {} secret(s) revealed", revealed.len());
+    exchanged
+}
+
+/// [`converse`] for a command that reveals secrets (`init`'s recovery key), returning them with the exchange.
+pub async fn converse_revealing(stream: &mut UnixStream, answers: &[&str]) -> (Exchanged, Vec<RevealedSecret>) {
+    let (mut notices, mut prompts, mut revealed) = (String::new(), Vec::new(), Vec::new());
     let mut answers = answers.iter();
     loop {
         match read_frame(stream).await {
             Frame::Response(response) => {
-                return Exchanged {
-                    notices,
-                    prompts,
-                    response,
-                };
+                return (
+                    Exchanged {
+                        notices,
+                        prompts,
+                        response,
+                    },
+                    revealed,
+                );
             }
             Frame::Notice(notice) => notices.push_str(&notice.text),
-            // `init` reveals the recovery key; callers that don't check it need not handle it.
-            Frame::Reveal(_) => {}
+            Frame::Reveal(secret) => revealed.push(secret),
             Frame::Prompt(prompt) => {
                 prompts.push(prompt);
                 let answer = answers.next().expect("a prompt beyond the answers given");

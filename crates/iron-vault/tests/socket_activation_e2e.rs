@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use common::WAIT;
-use common::approval_harness::{converse, send};
+use common::approval_harness::{converse, converse_revealing, send};
 use common::proxy_harness::next_free_port;
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, Frame, ProposedConfig};
 use rustix::process::{Pid, Signal, kill_process_group};
@@ -53,8 +53,9 @@ impl Install {
         let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("iv-act-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
+        chmod(&root, 0o700);
         let install = Self(root);
-        ["", "config", "state", "run"].iter().for_each(|name| {
+        ["config", "state", "run"].iter().for_each(|name| {
             let dir = install.dir(name);
             fs::create_dir_all(&dir).unwrap();
             chmod(&dir, 0o700);
@@ -121,9 +122,7 @@ impl Activated {
             .unwrap();
         Self(child)
     }
-}
 
-impl Activated {
     /// Asserts the service has not exited and its log records no panic.
     fn assert_running_without_panic(&mut self, install: &Install) {
         assert!(matches!(self.0.try_wait(), Ok(None)), "the service exited\n{}", install.log());
@@ -155,11 +154,20 @@ async fn exchange(install: &Install, request: AdminRequest, answers: &[&str]) ->
     converse(&mut stream, answers).await.response
 }
 
+/// [`exchange`] for `init`, which also reveals the recovery key.
+async fn exchange_init(install: &Install, answers: &[&str]) -> (AdminResponse, usize) {
+    let mut stream = UnixStream::connect(install.admin_socket()).await.unwrap();
+    send(&mut stream, &Frame::Request(AdminRequest::Init)).await;
+    let (exchanged, revealed) = converse_revealing(&mut stream, answers).await;
+    (exchanged.response, revealed.len())
+}
+
 /// `init`, `unlock`, then approves a config whose one listener is `loopback` at `configured`.
 async fn set_up(install: &Install, configured: SocketAddr) {
     wait_for(install, "the admin socket", || install.admin_socket().exists());
     let (vault, approval) = (VAULT_PASSPHRASE, APPROVAL_PASSPHRASE);
-    let init = exchange(install, AdminRequest::Init, &[vault, vault, approval, approval, "yes"]).await;
+    let (init, revealed) = exchange_init(install, &[vault, vault, approval, approval, "yes"]).await;
+    assert_eq!(revealed, 1, "init should reveal exactly the recovery key\n{}", install.log());
     assert!(
         matches!(init, AdminResponse::Init { version: 1, .. }),
         "{init:?}\n{}",
@@ -221,6 +229,13 @@ async fn serve_configured(passed: SocketAddr, fdname: &str, configured: SocketAd
     Some((install, service))
 }
 
+/// Two loopback addresses on different ports; `next_free_port` can return the same port twice in a row.
+fn distinct_ports() -> (SocketAddr, SocketAddr) {
+    let first = next_free_port();
+    let second = std::iter::repeat_with(next_free_port).find(|port| *port != first).unwrap();
+    (loopback(first), loopback(second))
+}
+
 #[tokio::test]
 async fn a_passed_socket_named_for_its_listener_serves_requests() {
     let address = loopback(next_free_port());
@@ -233,7 +248,7 @@ async fn a_passed_socket_named_for_its_listener_serves_requests() {
 
 #[tokio::test]
 async fn a_passed_socket_on_another_port_is_refused_and_the_listener_stays_unavailable() {
-    let (passed, configured) = (loopback(next_free_port()), loopback(next_free_port()));
+    let (passed, configured) = distinct_ports();
     let Some((install, mut service)) = serve_configured(passed, LISTENER, configured).await else {
         return;
     };
@@ -258,7 +273,7 @@ async fn a_passed_socket_on_another_port_is_refused_and_the_listener_stays_unava
 /// passed under another name is never adopted.
 #[tokio::test]
 async fn a_passed_socket_named_for_no_listener_is_not_adopted() {
-    let (passed, configured) = (loopback(next_free_port()), loopback(next_free_port()));
+    let (passed, configured) = distinct_ports();
     let Some((install, mut service)) = serve_configured(passed, "elsewhere", configured).await else {
         return;
     };
