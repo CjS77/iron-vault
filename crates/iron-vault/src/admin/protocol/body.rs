@@ -318,6 +318,7 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::RecoveryKeyInvalid,
         ErrorCode::RecoveryCheckFailed,
         ErrorCode::RecoveryCheckUnavailable,
+        ErrorCode::UnlockRateLimited,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

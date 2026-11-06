@@ -89,3 +89,31 @@ fn development_mode_never_refuses_unlock_for_memory() {
         .chain([MemoryProtection::Locked])
         .for_each(|memory| assert!(memory_guard(DeploymentProfile::Development, &memory).is_ok(), "{memory}"));
 }
+
+#[tokio::test(start_paused = true)]
+async fn only_a_wrong_passphrase_counts_toward_the_unlock_attempt_limit() {
+    use super::record_unlock_outcome;
+    use crate::attempt_limit::{AttemptsCoolingDown, FAILURE_THRESHOLD};
+    use iron_vault_store::UnlockError;
+
+    let uncounted = [
+        UnlockRefusal::WrongState(ServiceState::Ready),
+        UnlockRefusal::Interrupted,
+        UnlockRefusal::Failed(UnlockError::InitializationUnfinished),
+        UnlockRefusal::MemoryUnprotected(MemoryProtection::Unsupported),
+        UnlockRefusal::RateLimited(AttemptsCoolingDown { retry_after: 30 }),
+    ];
+    let mut attempts = AttemptLimiter::new();
+    (1..FAILURE_THRESHOLD).for_each(|_| attempts.record_failure(tokio::time::Instant::now()));
+
+    uncounted
+        .into_iter()
+        .for_each(|refusal| record_unlock_outcome(&mut attempts, &Err(refusal)));
+    assert!(
+        attempts.check(tokio::time::Instant::now()).is_ok(),
+        "an uncounted refusal added a failure"
+    );
+
+    record_unlock_outcome(&mut attempts, &Err(UnlockRefusal::WrongPassphrase));
+    assert!(attempts.check(tokio::time::Instant::now()).is_err());
+}

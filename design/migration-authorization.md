@@ -218,8 +218,13 @@ consecutive failures never limit.
   to a whole second.
 - **One count for every vault passphrase prompt.** `unlock` asks for the same secret, so a limit on migration alone
   would slow no one: a guesser could `lock` the service and guess through `unlock`. The count lives in the service
-  context, not in the migration slot, so `unlock` shares it. Migration authorization checks and records it;
-  `unlock` does not yet, so until it does the limit does not protect the vault passphrase.
+  context, not in the migration slot, so `unlock` shares it. Failures at either prompt add to the one count, and a
+  success at either clears it. `unlock` checks the limit after its state, initialization and memory checks and before
+  its prompt, and again under the context's mutex before it tests the passphrase, so two concurrent unlocks cannot both
+  test one. A limited `unlock` ends with `unlock-rate-limited`, whose message gives the seconds left, and the service
+  stays Locked. Only a wrong passphrase, including empty or non-UTF-8 input, counts as an `unlock` failure; an
+  unreadable envelope, an interrupted open, a cancelled prompt and a refusal for state, initialization or memory do
+  not. An open of the vault clears the count even when the config check then leaves the service Unavailable.
 - **Visible.** Every refused attempt is a WARN audit record: `migration.authorization-refused` with `wrong_passphrase`
   here, `vault.unlock-refused` for `unlock`. In v1 the `migration_refused` owner notification also shows it on the
   desktop.

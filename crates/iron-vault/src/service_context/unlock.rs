@@ -26,6 +26,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             .inspect_err(|refusal| UnlockRefused { refusal }.emit())
     }
 
+    /// Whether the vault passphrase attempt limit allows an `unlock` now, checked before the prompt so a limited owner is
+    /// not asked to type. Logged at WARN like every other unlock refusal.
+    pub(crate) async fn check_unlock_attempts(&self) -> Result<(), UnlockRefusal> {
+        super::check_unlock_attempts(&self.inner.lock().await.attempts)
+    }
+
     /// [`memory_guard`] for this service's profile and startup memory protection status, logged at WARN like every
     /// other unlock refusal.
     ///

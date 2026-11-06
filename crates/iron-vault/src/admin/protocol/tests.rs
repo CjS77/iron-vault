@@ -160,6 +160,7 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::RecoveryKeyInvalid),
         Just(ErrorCode::RecoveryCheckFailed),
         Just(ErrorCode::RecoveryCheckUnavailable),
+        Just(ErrorCode::UnlockRateLimited),
     ]
 }
 
@@ -1185,6 +1186,7 @@ fn recovery_check_has_the_documented_command_result_and_error_codes() {
         (ErrorCode::RecoveryKeyInvalid, 30, "recovery-key-invalid"),
         (ErrorCode::RecoveryCheckFailed, 31, "recovery-check-failed"),
         (ErrorCode::RecoveryCheckUnavailable, 32, "recovery-check-unavailable"),
+        (ErrorCode::UnlockRateLimited, 34, "unlock-rate-limited"),
     ]
     .into_iter()
     .for_each(|(code, number, name)| {

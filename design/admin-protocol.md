@@ -229,16 +229,24 @@ in this order: state, initialization state, memory. A vault that is not Initiali
 `iron-vault init` is the step the owner needs first, so its `unlock-failed` comes before `memory-unprotected`.
 The state is read again under the service context's mutex in step 2.
 
+After those checks and before the prompt, the service checks the
+[vault passphrase attempt limit](migration-authorization.md#passphrase-attempt-limit), which `unlock` shares with
+migration authorization. While it cools down, the exchange ends with `unlock-rate-limited` before any prompt, and the
+message gives the seconds left, rounded up. The service stays Locked, and the refusal is recorded as
+`vault.unlock-refused` with `rate_limited` and `retry_after`.
+
 1. **Vault passphrase.** A prompt, secret: `Vault passphrase`. The value is the vault-unlock passphrase, never the
    approval passphrase: the two are separate types, and unlocking never implies authority to approve. Empty or
    non-UTF-8 input cannot be the passphrase and is answered as a wrong one.
 2. The service waits for the service-wide lock, as a reload does: in Locked only a `lock`, an `init` or a config check
    holds it, each for seconds, so the passphrase already typed is not refused as `busy`. It then checks the state
-   again under the service context's mutex, so two unlocks never both open the vault, and opens `operational.age`
+   again under the service context's mutex, so two unlocks never both open the vault, checks the attempt limit again
+   (`unlock-rate-limited`), so two exchanges that passed the check before the prompt cannot both test a passphrase, and opens `operational.age`
    with the passphrase, then `identity.age` with the operational identity, which is
    dropped as soon as the vault identity is unwrapped ([§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). A wrong passphrase ends the exchange with
    `unlock-denied`, whose message is only `wrong passphrase`; an envelope that cannot be read or opened ends it with
-   `unlock-failed`. Either way the service stays Locked, and no other storage is tried (R-22). There is no second try
+   `unlock-failed`. Either way the service stays Locked, and no other storage is tried (R-22). A wrong passphrase adds
+   to the attempt count and an opened vault clears it; an envelope that cannot be read adds nothing. There is no second try
    in the same exchange.
 3. The service moves to Checking and runs the config check. Ready answers with a success without a result.
    Unavailable answers `unlocked-unavailable`, and the message names the redacted reason (`policy invalid` or
@@ -719,6 +727,8 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `30` | `recovery-key-invalid` | `recovery check`: the text is not an `AGE-SECRET-KEY-1…` recovery key; the message holds nothing typed |
 | `31` | `recovery-check-failed` | `recovery check`: the key does not open this vault; the message is fixed |
 | `32` | `recovery-check-unavailable` | `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the key was not judged; the message names the initialization state, or the file and error kind |
+
+| `34` | `unlock-rate-limited` | `unlock`: too many wrong vault passphrases, here or in migration authorization, so no prompt was sent; the message gives the seconds to wait, and the service stays Locked |
 
 Codes 28 and 29 are reserved for `migration-denied` and `migration-unavailable`, which
 [migration-authorization.md](migration-authorization.md#error-codes) defines and the migration commands add to this

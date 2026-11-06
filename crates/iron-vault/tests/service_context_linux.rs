@@ -2258,3 +2258,184 @@ async fn list_is_byte_identical_across_runs_and_holds_no_secret_username_or_pass
         )
     });
 }
+
+/// The refusal an `unlock` gets while the vault passphrase attempt limit cools down for `seconds`.
+fn rate_limited(seconds: u64) -> AdminResponse {
+    let message = format!("too many wrong vault passphrases; try again in {seconds} seconds; the service stays Locked");
+    error_response(ErrorCode::UnlockRateLimited, &message)
+}
+
+/// Advances the clock past a cooldown without pausing it for the rest of the test: scrypt runs on the blocking pool, and
+/// a paused clock would auto-advance past the harness's timeouts while it works.
+async fn skip_cooldown(by: Duration) {
+    tokio::time::pause();
+    tokio::time::advance(by).await;
+    tokio::time::resume();
+}
+
+/// A wrong `unlock`: the prompt is sent and the passphrase is refused.
+async fn wrong_unlock(service: &Arc<ServiceContext>) {
+    assert_response(
+        &unlock(service, WRONG_PASSPHRASE).await,
+        &error_response(ErrorCode::UnlockDenied, "wrong passphrase"),
+    );
+}
+
+/// `failures` failures recorded straight into the service's one attempt limiter.
+async fn seed_failures<F: StoreFs + Send + Sync + 'static>(service: &ServiceContext<F>, failures: u32) {
+    let mut limiter = service.attempt_limiter().await;
+    (0..failures).for_each(|_| limiter.record_failure(tokio::time::Instant::now()));
+}
+
+/// A wrong migration authorization against the Ready service: a failure in the same count.
+async fn wrong_migration_authorization(service: &Arc<ServiceContext>) {
+    let digest = service.issue_migration_challenge(MigrationOperation::Export).await.unwrap();
+    service.check_migration_attempts().await.unwrap();
+    let method = service.vault_passphrase_method().await.unwrap();
+    let wrong = OwnerInput::new(Zeroizing::new(WRONG_PASSPHRASE.as_bytes().to_vec()));
+    service.authorize_migration(&digest, &method, wrong).await.unwrap_err();
+}
+
+#[tokio::test]
+async fn five_wrong_unlocks_refuse_the_sixth_before_any_prompt_until_the_cooldown_passes() {
+    let logs = captured_logs();
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+    for _ in 0..FAILURE_THRESHOLD {
+        wrong_unlock(&service).await;
+    }
+
+    let (_, prompts, response) = admin(&service, AdminRequest::Unlock, PASSPHRASE).await;
+
+    assert_eq!(prompts, [], "a limited owner was asked to type");
+    assert_response(&response, &rate_limited(30));
+    assert_eq!(service.state().await, ServiceState::Locked);
+    let refused: Vec<_> = logs
+        .events("vault.unlock-refused")
+        .into_iter()
+        .filter(|record| record["refusal"] == "rate_limited" && record["retry_after"] == 30)
+        .collect();
+    assert!(!refused.is_empty(), "{}", logs.text());
+    assert_no_passphrase_logged(&logs);
+
+    // A failure after the cooldown counts again, and the next cooldown is the doubled one.
+    skip_cooldown(Duration::from_secs(30)).await;
+    wrong_unlock(&service).await;
+    assert_response(&admin(&service, AdminRequest::Unlock, PASSPHRASE).await.2, &rate_limited(60));
+}
+
+#[tokio::test]
+async fn unlock_and_migration_authorization_share_one_attempt_count() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+    seed_failures(&service, FAILURE_THRESHOLD).await;
+    assert_response(&admin(&service, AdminRequest::Unlock, PASSPHRASE).await.2, &rate_limited(30));
+
+    // Two migration failures while Ready, then three unlock failures, make five between them.
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+    assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
+    wrong_migration_authorization(&service).await;
+    wrong_migration_authorization(&service).await;
+    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+    for _ in 0..3 {
+        wrong_unlock(&service).await;
+    }
+    assert_response(&admin(&service, AdminRequest::Unlock, PASSPHRASE).await.2, &rate_limited(30));
+    assert!(matches!(
+        service.check_migration_attempts().await,
+        Err(MigrationRefusal::AttemptsCoolingDown(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_successful_unlock_clears_the_count_migration_authorization_reads() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+    seed_failures(&service, FAILURE_THRESHOLD - 1).await;
+
+    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+
+    seed_failures(&service, FAILURE_THRESHOLD - 1).await;
+    service.check_migration_attempts().await.unwrap();
+}
+
+#[tokio::test]
+async fn lock_does_not_clear_a_count_built_since_the_last_success() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+    for _ in 0..FAILURE_THRESHOLD {
+        wrong_unlock(&service).await;
+    }
+    skip_cooldown(Duration::from_secs(30)).await;
+    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    for _ in 0..FAILURE_THRESHOLD {
+        wrong_migration_authorization(&service).await;
+    }
+    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+
+    let (_, prompts, response) = admin(&service, AdminRequest::Unlock, PASSPHRASE).await;
+
+    assert_eq!(prompts, []);
+    assert_response(&response, &rate_limited(30));
+}
+
+#[tokio::test]
+async fn an_unreadable_envelope_and_a_cancelled_prompt_record_no_failure() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+    seed_failures(&service, FAILURE_THRESHOLD - 1).await;
+
+    // Unreadable envelope: the passphrase was not judged.
+    let operational = fixture.dir.path().join("state/operational.age");
+    let aside = fixture.dir.path().join("operational.age.aside");
+    fs::rename(&operational, &aside).unwrap();
+    let (_, _, response) = admin(&service, AdminRequest::Unlock, PASSPHRASE).await;
+    assert!(
+        matches!(
+            response,
+            AdminResponse::Error {
+                code: ErrorCode::UnlockFailed,
+                ..
+            }
+        ),
+        "{response:?}"
+    );
+    fs::rename(&aside, &operational).unwrap();
+
+    // Cancelled prompt: the connection drops while the service waits for the passphrase.
+    let session = AdminSession::open(&service);
+    let mut stream = UnixStream::connect(&session.socket).await.unwrap();
+    send(&mut stream, &Frame::Request(AdminRequest::Unlock)).await;
+    assert!(matches!(read_frame(&mut stream).await.1, Frame::Prompt(_)));
+    drop(stream);
+    session.close().await;
+
+    assert!(service.attempt_limiter().await.check(tokio::time::Instant::now()).is_ok());
+    seed_failures(&service, 1).await;
+    assert!(service.attempt_limiter().await.check(tokio::time::Instant::now()).is_err());
+}
+
+#[tokio::test]
+async fn concurrent_unlocks_on_the_last_free_attempt_test_at_most_one_passphrase() {
+    let fixture = approved().await;
+    let fs = GatedFs::default();
+    let (reached, release) = fs.arm("operational.age");
+    let service = fixture.start_on(fs).unwrap();
+    seed_failures(&service, FAILURE_THRESHOLD - 1).await;
+    let session = AdminSession::open(&service);
+    let (first, second) = (
+        session.send(AdminRequest::Unlock, WRONG_PASSPHRASE),
+        session.send(AdminRequest::Unlock, WRONG_PASSPHRASE),
+    );
+    tokio::time::timeout(WAIT, reached).await.unwrap().unwrap();
+    release.send(()).unwrap();
+
+    let mut responses = [first.await.unwrap(), second.await.unwrap()].map(|response| format!("{response:?}"));
+    responses.sort();
+
+    let denied = format!("{:?}", error_response(ErrorCode::UnlockDenied, "wrong passphrase"));
+    let limited = format!("{:?}", rate_limited(30));
+    assert_eq!(responses, [denied, limited]);
+    session.close().await;
+}

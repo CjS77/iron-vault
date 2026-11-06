@@ -35,12 +35,14 @@ Done in v0:
   responses.
 - **Recovery key check:** `recovery check` proves the offline recovery key still opens the vault, in Locked or Ready, and
   records when.
+- **Vault passphrase attempt limit:** after 5 wrong vault passphrases, `unlock` and migration authorization share one
+  cooldown, starting at 30 s and doubling to 15 min. A limited owner is refused before any prompt, and `lock` does not
+  clear the count.
 - **Audit logging:** typed JSON records of request and administrative events, which never log secret values. See the
   [log operations guide](design/log-operations.md).
 
 Still to come in v0:
 
-- vault passphrase attempt limits;
 - recipient add and remove, migration, and reset;
 - TPM unlock and TPM approval signing;
 - a Docker Compose profile;

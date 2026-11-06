@@ -46,7 +46,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 use tokio::time::Instant;
 
 use crate::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
-use crate::attempt_limit::AttemptLimiter;
+use crate::attempt_limit::{AttemptLimiter, AttemptsCoolingDown};
 use crate::audit::vault::{LockIncomplete, UnlockRefused};
 use crate::audit::{AuditEvent, CheckFailed, LockTransition, ReloadFailed, count_of};
 use crate::clock::{SystemClock, WallClock};
@@ -90,6 +90,10 @@ pub enum UnlockRefusal {
     /// protection status, which names the `RLIMIT_MEMLOCK` soft limit or the locking error; never `Locked`.
     #[error("memory is not locked against swap ({}), so a protected install does not open the vault", unprotected_reason(.0))]
     MemoryUnprotected(MemoryProtection),
+    /// Too many wrong vault passphrases, here or in migration authorization, so no attempt is made until the cooldown
+    /// ends. Refused before any prompt, and again under the lock before the passphrase is tested.
+    #[error(transparent)]
+    RateLimited(AttemptsCoolingDown),
 }
 
 /// The state-directory lock and the config-directory lock, held for the service's lifetime: a second instance on
@@ -385,17 +389,18 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// entered Checking leaves a task of its own to finish the check, as [`enter_checking`](Self::enter_checking) does.
     pub async fn unlock(&self, passphrase: Passphrase) -> Result<ServiceState, UnlockRefusal> {
         let service_wide = Arc::clone(&self.service_wide).lock_owned().await;
-        let inner = Arc::clone(&self.inner).lock_owned().await;
+        let mut inner = Arc::clone(&self.inner).lock_owned().await;
         let locked = inner.state;
         if !locked.admin_allows(AdminOperation::Unlock) {
             return Err(refuse_unlock(UnlockRefusal::WrongState(locked)));
         }
         log_foreign_files(&self.require_initialized().await?);
         self.require_locked_memory()?;
-        let identity = self
-            .open_identity(passphrase)
-            .await
-            .inspect_err(|refusal| UnlockRefused { refusal }.emit())?;
+        // Under the mutex, so two exchanges that passed the check before the prompt cannot both test a passphrase.
+        check_unlock_attempts(&inner.attempts)?;
+        let opened = self.open_identity(passphrase).await;
+        record_unlock_outcome(&mut inner.attempts, &opened);
+        let identity = opened.inspect_err(|refusal| UnlockRefused { refusal }.emit())?;
         let settled = self
             .check_and_settle_detached(service_wide, inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
             .await
@@ -620,6 +625,25 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 Ok(self.inner.lock().await.state)
             }
         }
+    }
+}
+
+/// The vault passphrase attempt limit's answer now, logged at WARN like every other unlock refusal. `unlock` and
+/// migration authorization share the one limiter.
+fn check_unlock_attempts(attempts: &AttemptLimiter) -> Result<(), UnlockRefusal> {
+    attempts
+        .check(tokio::time::Instant::now())
+        .map_err(UnlockRefusal::RateLimited)
+        .inspect_err(|refusal| UnlockRefused { refusal }.emit())
+}
+
+/// Counts what the design counts: a wrong passphrase is a failure, and an opened vault clears the count, whatever state
+/// the config check then settles in. An unreadable envelope or an interrupted task shows nothing about a guess.
+fn record_unlock_outcome(attempts: &mut AttemptLimiter, opened: &Result<VaultIdentity, UnlockRefusal>) {
+    match opened {
+        Ok(_) => attempts.record_success(),
+        Err(UnlockRefusal::WrongPassphrase) => attempts.record_failure(tokio::time::Instant::now()),
+        Err(_) => {}
     }
 }
 

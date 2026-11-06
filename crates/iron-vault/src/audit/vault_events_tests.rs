@@ -82,6 +82,16 @@ fn an_unlock_refusal_is_a_snake_case_label() {
 }
 
 #[test]
+fn a_rate_limited_refusal_records_how_long_to_wait() {
+    let refusal = UnlockRefusal::RateLimited(crate::attempt_limit::AttemptsCoolingDown { retry_after: 30 });
+    let record = record_of(UnlockRefused { refusal: &refusal }, "WARN", &["refusal", "retry_after"]);
+    assert_eq!(
+        (record["refusal"].as_str(), record["retry_after"].as_u64()),
+        (Some("rate_limited"), Some(30))
+    );
+}
+
+#[test]
 fn a_memory_unprotected_refusal_records_its_label_and_the_memory_protection_label() {
     [
         (

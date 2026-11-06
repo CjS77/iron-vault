@@ -118,6 +118,7 @@ impl AuditEvent for UnlockRefused<'_> {
             event = Self::NAME.as_str(),
             refusal = unlock_refusal_label(self.refusal),
             memory_protection = unprotected_memory(self.refusal).map(memory_label),
+            retry_after = retry_after(self.refusal),
             "unlock refused, the service stays Locked",
         );
     }
@@ -282,6 +283,14 @@ const fn unprotected_memory(refusal: &UnlockRefusal) -> Option<&MemoryProtection
     }
 }
 
+/// Whole seconds until another attempt is allowed, recorded beside a `rate_limited` refusal.
+const fn retry_after(refusal: &UnlockRefusal) -> Option<u64> {
+    match refusal {
+        UnlockRefusal::RateLimited(cooling) => Some(cooling.retry_after),
+        _ => None,
+    }
+}
+
 const fn unlock_refusal_label(refusal: &UnlockRefusal) -> &'static str {
     match refusal {
         UnlockRefusal::WrongState(_) => "wrong_state",
@@ -295,5 +304,6 @@ const fn unlock_refusal_label(refusal: &UnlockRefusal) -> &'static str {
         UnlockRefusal::Failed(UnlockError::InitializationState(_) | UnlockError::ListStateDir { .. }) => "state_unreadable",
         UnlockRefusal::Interrupted => "interrupted",
         UnlockRefusal::MemoryUnprotected(_) => "memory_unprotected",
+        UnlockRefusal::RateLimited(_) => "rate_limited",
     }
 }

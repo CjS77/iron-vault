@@ -53,6 +53,9 @@ impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
         if let Err(refusal) = self.service.require_locked_memory() {
             return Ok(refused(refusal));
         }
+        if let Err(refusal) = self.service.check_unlock_attempts().await {
+            return Ok(refused(refusal));
+        }
         let prompt = Prompt {
             label: PASSPHRASE_PROMPT.to_owned(),
             secret: true,
@@ -93,6 +96,7 @@ fn refused(refusal: UnlockRefusal) -> AdminResponse {
         failed @ (UnlockRefusal::Failed(_) | UnlockRefusal::Interrupted) => {
             error(ErrorCode::UnlockFailed, format!("{failed}; the service stays Locked"))
         }
+        UnlockRefusal::RateLimited(cooling) => error(ErrorCode::UnlockRateLimited, format!("{cooling}; the service stays Locked")),
         unprotected @ UnlockRefusal::MemoryUnprotected(_) => {
             error(ErrorCode::MemoryUnprotected, format!("{unprotected}; the service stays Locked"))
         }

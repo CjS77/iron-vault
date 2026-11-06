@@ -520,6 +520,9 @@ pub enum ErrorCode {
     /// `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the
     /// key was not judged.
     RecoveryCheckUnavailable = 32,
+    /// `unlock`: too many wrong vault passphrases, here or in migration authorization; no prompt was sent. The message
+    /// gives the whole seconds to wait, and the service stays Locked.
+    UnlockRateLimited = 34,
 }
 
 impl ErrorCode {
@@ -556,6 +559,7 @@ impl ErrorCode {
             Self::RecoveryKeyInvalid => "recovery-key-invalid",
             Self::RecoveryCheckFailed => "recovery-check-failed",
             Self::RecoveryCheckUnavailable => "recovery-check-unavailable",
+            Self::UnlockRateLimited => "unlock-rate-limited",
         }
     }
 
