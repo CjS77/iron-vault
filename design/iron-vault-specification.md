@@ -714,9 +714,15 @@ future service-account adapter, not a fallback into the desktop user's keyring. 
 passes its release checks, use interactive passphrase unlock and state its startup requirement.
 
 The service must hold secret values in types that suppress debugging and clear buffers on release, using
-`secrecy`/`zeroize` or equivalent. It must minimize copies, clear cached values on lock or replacement, lock secret
-pages with `mlock` or a platform equivalent, and report failure to obtain the required memory protection. Production
-profiles must not silently claim swap protection when memory locking failed.
+`secrecy`/`zeroize` or equivalent. It must minimize copies, clear cached values on lock or replacement, and lock its
+memory with `mlockall` or a platform equivalent before any secret enters it. A protected install must not unlock
+the vault unless memory locking succeeded. Its service stays Locked, attempts no unattended unlock, refuses every
+authorized unlock with an error naming the memory-lock limit or the locking error, and reports the cause in `status`
+and the audit log. The Linux package sets `LimitMEMLOCK=infinity` and the Docker Compose profile sets
+`ulimits: memlock: -1`, so a locking failure there means the installation was changed or the host refused the lock.
+Development mode reports the failure and continues. No profile may claim swap protection when memory locking
+failed. v0 has no override: an approved config can't be verified until the vault is unlocked, and unlocking is the
+moment the protection is needed.
 
 Disable core dumps and crash reporters that capture service memory. On Linux set `PR_SET_DUMPABLE` to zero and
 `LimitCORE=0`. Memory locking does not prevent hibernation from capturing RAM; installation guidance must require
@@ -726,7 +732,8 @@ encrypted swap and hibernation storage, normally through full-disk encryption, w
 and ordinary recipients. A generated recovery recipient keeps hardware failure from making the only copy unusable.
 
 **Leak mitigated (R-20).** Disabling dumps, locking secret pages, and encrypting swap and hibernation storage reduce
-the chance that OS memory capture leaves plaintext credentials on disk for later collection.
+the chance that OS memory capture leaves plaintext credentials on disk for later collection. Refusing to unlock
+without locked memory keeps a changed unit or container limit from silently removing the protection.
 
 **Attack mitigated (R-30).** A pre-boot PIN or interactive vault-unlock factor prevents a thief from relying only
 on a similarly trusted boot image to use a stolen laptop's TPM. PCR 7 alone does not distinguish that image from
@@ -742,8 +749,8 @@ The admin interface must remain available for authorized recovery where the serv
 stateDiagram-v2
     [*] --> Starting
     Starting --> Locked: interactive unlock required
-    Starting --> Checking: TPM or host unlock succeeds
-    Locked --> Checking: authorized unlock succeeds
+    Starting --> Checking: TPM or host unlock succeeds and memory is locked
+    Locked --> Checking: authorized unlock succeeds and memory is locked
     Checking --> Ready: storage and current approval verify
     Checking --> Unavailable: invalid policy or damaged shared state
     Ready --> Checking: explicit reload
@@ -769,6 +776,11 @@ A healthy TPM service restarts unattended using a policy such as `Restart=on-fai
 YubiKey-only profiles remain locked until the owner supplies the required input. The YubiKey profile reports
 `locked: needs a touch` and notifies the owner. The implementation must verify how unclean power loss affects its
 chosen TPM session and dictionary-attack state; it must not assume that repeated power loss cannot cause lockout.
+
+In a protected install whose memory is not locked, the service remains Locked. Requests receive `503` with reason
+`locked`, `status` reports the memory protection failure, and `unlock` is refused with `memory-unprotected` before
+any unlock factor is used. The service has not failed, so `Restart=on-failure` does not restart it. It waits for an
+administrator to correct the limit and restart it.
 
 **Failure prevented (R-22).** Explicit startup states keep a missing interactive unlock from becoming a silent
 fallback to weaker storage or an unexplained service failure. Hardware-specific power-loss behavior remains a

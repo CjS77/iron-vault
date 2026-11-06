@@ -221,6 +221,9 @@ also needs an initialized vault: unless the [initialization state](vault-initial
 Initialized, the exchange ends with `unlock-failed` before any prompt, and the message names the initialization state
 and says to run `iron-vault init`. For Unfinished it adds that an init may be in progress, and for Unrecognized it
 names the first offending files instead. Files beside a manifest never refuse `unlock`: it logs their names at WARN.
+In a protected install whose memory is not locked, the exchange ends with `memory-unprotected` before any prompt, and
+the message names the `RLIMIT_MEMLOCK` soft limit or the locking error
+([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)); the service stays Locked.
 The state is read again under the service context's mutex in step 2.
 
 1. **Vault passphrase.** A prompt, secret: `Vault passphrase`. The value is the vault-unlock passphrase, never the
@@ -653,6 +656,7 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `24` | `credential-in-use` | `replace`, `rm`: a route of the active config uses the name and would not activate after the change; the message names each route and why |
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
 | `26` | `list-too-large` | `list`: the credential list does not fit one frame; the message names the count |
+| `27` | `memory-unprotected` | `unlock`: a protected install's memory is not locked, so the vault is not opened; the message names the memory-lock limit or the locking error, and the service stays Locked |
 
 ## Versions
 
@@ -660,7 +664,7 @@ This document specifies protocol version 1, the only version the codec reads or 
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
 `status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), `replace` (command 10), `rm`
-(command 11) and error codes 7 to 26 join it rather than starting version 2.
+(command 11) and error codes 7 to 27 join it rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
