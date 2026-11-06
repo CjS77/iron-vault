@@ -10,8 +10,8 @@ use std::io;
 use thiserror::Error;
 
 use crate::{
-    EnvelopeError, MAX_MANIFEST_LEN, ManifestError, ReadError, StateDirLock, StateFileName, StoreFs, VaultId, open_manifest,
-    read_identity_envelope, read_state_file, recipient::RecipientIdentity, unwrap_identity,
+    EnvelopeError, ErrorKindLabel, MAX_MANIFEST_LEN, ManifestError, ReadError, StateDirLock, StateFileName, StoreFs, VaultId,
+    open_manifest, read_identity_envelope, read_state_file, recipient::RecipientIdentity, unwrap_identity,
 };
 
 /// A recovery key that was proved to open the vault on disk.
@@ -62,8 +62,14 @@ pub enum RecoveryCheckError {
     Unreadable {
         /// The file that could not be read.
         file: StateFileName,
-        /// The underlying error kind; a file that is not a regular file is reported as [`io::ErrorKind::InvalidInput`].
+        /// The underlying error kind.
         kind: io::ErrorKind,
+    },
+    /// `identity.age` or `manifest.age` is a symlink, directory or other entry that is not a regular file, so it was not read.
+    #[error("{file} is not a regular file")]
+    NotARegularFile {
+        /// The entry that is not a regular file.
+        file: StateFileName,
     },
     /// `identity.age` or `manifest.age` was read but cannot be used.
     #[error("{file} cannot be used: {reason}")]
@@ -106,6 +112,37 @@ pub fn check_recovery_key(
     })
 }
 
+impl RecoveryCheckError {
+    /// Whether the key was judged and found not to open the vault, as opposed to the check not being run.
+    pub fn is_key_rejected(&self) -> bool {
+        matches!(self, Self::NotARecipient | Self::IdentityNotGenuine)
+    }
+
+    /// The file the check could not use, for the errors that name one.
+    pub fn file(&self) -> Option<&StateFileName> {
+        match self {
+            Self::Unreadable { file, .. } | Self::NotARegularFile { file } | Self::EnvelopeMalformed { file, .. } => Some(file),
+            Self::NotARecipient | Self::IdentityNotGenuine => None,
+        }
+    }
+
+    /// The error as a label that holds no file name or error text, for a log record.
+    pub fn error_kind_label(&self) -> ErrorKindLabel {
+        match self {
+            Self::Unreadable { kind, .. } => ErrorKindLabel::from(*kind),
+            Self::NotARegularFile { .. } => ErrorKindLabel::fixed("not_a_regular_file"),
+            Self::EnvelopeMalformed { reason, .. } => ErrorKindLabel::fixed(match reason {
+                MalformedReason::TooLarge => "too_large",
+                MalformedReason::Malformed => "malformed",
+                MalformedReason::UnexpectedStanza => "unexpected_stanza",
+                MalformedReason::UnknownVersion => "unknown_version",
+            }),
+            Self::NotARecipient => ErrorKindLabel::fixed("not_a_recipient"),
+            Self::IdentityNotGenuine => ErrorKindLabel::fixed("identity_unverified"),
+        }
+    }
+}
+
 fn malformed(file: StateFileName, reason: MalformedReason) -> RecoveryCheckError {
     RecoveryCheckError::EnvelopeMalformed { file, reason }
 }
@@ -114,10 +151,7 @@ fn malformed(file: StateFileName, reason: MalformedReason) -> RecoveryCheckError
 fn unreadable(file: StateFileName, error: ReadError) -> RecoveryCheckError {
     match error {
         ReadError::TooLarge { .. } => malformed(file, MalformedReason::TooLarge),
-        ReadError::NotARegularFile { .. } => RecoveryCheckError::Unreadable {
-            file,
-            kind: io::ErrorKind::InvalidInput,
-        },
+        ReadError::NotARegularFile { .. } => RecoveryCheckError::NotARegularFile { file },
         ReadError::Io { kind, .. } => RecoveryCheckError::Unreadable { file, kind },
     }
 }
@@ -299,6 +333,20 @@ mod tests {
             "{:?}",
             fs.trace()
         );
+    }
+
+    #[test]
+    fn an_entry_that_is_not_a_regular_file_is_named_as_such() {
+        let f = fixture("rc-not-regular");
+        let path = f.path(&StateFileName::manifest());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let expected = RecoveryCheckError::NotARegularFile {
+            file: StateFileName::manifest(),
+        };
+        assert_eq!(f.check(&f.recovery), Err(expected.clone()));
+        assert_eq!(expected.error_kind_label().as_str(), "not_a_regular_file");
+        assert!(!expected.is_key_rejected());
     }
 
     #[test]
