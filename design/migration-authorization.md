@@ -187,37 +187,45 @@ method lands.
 A hardware device's own lockout applies as the device enforces it, such as the TPM's dictionary-attack protection
 for the approval key ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)) and its
 dictionary-attack state across power loss ([§3.12](iron-vault-specification.md#312-service-states-and-errors)). The
-service adds no limit of its own in v0.
+service adds no limit of its own for a device. The vault passphrase has the
+[attempt limit](#passphrase-attempt-limit) below.
 
 ## Passphrase attempt limit
 
-v0 has no passphrase attempt limit. The limit is on the v1 roadmap
-([§2](iron-vault-specification.md#2-release-plan)). The deferral does not rest on trusting whoever holds an admin
-connection: R-23 treats that holder as possibly hostile, and in development mode every process running as the owner
-can open one. It rests on these:
+Guessing the vault passphrase is bounded in v0 by a limit that counts consecutive owner failures and refuses further
+attempts for a growing cooldown. The glossary calls it the *passphrase attempt limit*. Each guess already costs an
+scrypt run at the vault's work factor (2^18, about half a second to a second and 256 MiB of memory), and exchanges run
+one at a time ([Admin exchange](#admin-exchange)); the limit makes sustained guessing impractical on top of that.
 
-- **Each guess is slow.** Each attempt costs an scrypt run at the vault's work factor (2^18, about half a second to a
-  second and 256 MiB of memory).
-- **One attempt per exchange.** There is no second try in the same exchange, so each guess also costs a new summary,
-  challenge and prompt.
-- **One exchange at a time.** Each exchange holds the service-wide lock from before its summary to its response
-  ([Admin exchange](#admin-exchange)), so attempts run one after another however many connections a guesser opens:
-  one or two a second at best.
-- **`unlock` is equally unlimited in v0.** A guesser can `lock` the service and guess through `unlock` at the same
-  cost, so a limit on migration alone would slow no one. A useful limit has to cover every prompt for the vault
-  passphrase, which is a v1 design.
-- **Guessing is visible.** Every refused attempt is a WARN audit record: `migration.authorization-refused` with
-  `wrong_passphrase` here, `vault.unlock-refused` for `unlock`. In v1 the `migration_refused` owner notification also
-  shows it on the desktop.
-- **The passphrase is long.** `init` accepts no vault passphrase shorter than 12 characters
-  ([passphrase rules](vault-initialization.md#passphrase-rules)), so at one or two guesses a second, guessing finds only
-  a passphrase drawn from a small, predictable set.
+| Constant | Value | Meaning |
+|---|---|---|
+| threshold | 5 | consecutive failures after which attempts are refused |
+| base cooldown | 30 seconds | the cooldown after the fifth failure |
+| cap | 15 minutes | the longest cooldown |
 
-**v1 direction, not decided.** One count across every vault passphrase prompt (`unlock` and migration
-authorization). After 5 consecutive failures, further attempts are refused for a cooldown that doubles with each
-further failure, capped at 15 minutes. The count is held in memory, survives `lock`, and resets on success and on a
-restart. The `rate_limited` refusal and its error case arrive with it. Whether the limit is configurable is decided
-then.
+The cooldown after the *n*th consecutive failure, for *n* of 5 or more, is the base cooldown doubled *n* - 5 times,
+capped: 30 s, 1 min, 2 min, 4 min, 8 min, then 15 min for every further failure. It runs from the failure. Fewer than 5
+consecutive failures never limit.
+
+- **What counts.** Only an owner refusal: `wrong_passphrase` and `not_this_vault`. An `unavailable` check, a
+  `cancelled` prompt, a `lock` and a refusal for `rate_limited` itself do not, because none shows a wrong guess.
+  `expired`, `not_pending` and `binding_mismatch` follow a proof and are not guesses.
+- **What resets it.** A success, and a restart. The count is held in memory, and `lock` does not clear it: otherwise
+  a guesser could `lock` after every fourth failure.
+- **When it is checked.** At step 6, before the `Vault passphrase` prompt, so a limited owner is not asked to type. A
+  limited exchange retires its challenge, records `migration.authorization-refused` with `rate_limited` and ends with
+  `migration-rate-limited`. The message and the record carry `retry_after`, the seconds left in the cooldown, rounded up
+  to a whole second.
+- **One count for every vault passphrase prompt.** `unlock` asks for the same secret, so a limit on migration alone
+  would slow no one: a guesser could `lock` the service and guess through `unlock`. The count lives in the service
+  context, not in the migration slot, so `unlock` shares it. The migration authorization ticket (K-208) applies it to
+  migration authorization only; `unlock` adopts it in its own ticket, and the limit does not protect the vault
+  passphrase until then.
+- **Visible.** Every refused attempt is a WARN audit record: `migration.authorization-refused` with `wrong_passphrase`
+  here, `vault.unlock-refused` for `unlock`. In v1 the `migration_refused` owner notification also shows it on the
+  desktop.
+
+Whether the limit is configurable is not decided; v0 fixes the constants.
 
 ## Admin exchange
 
@@ -231,7 +239,7 @@ their epics'. In order:
 | 3 | The command's own checks, such as that the destination recipient is not already enrolled | the command's own |
 | 4 | The command's summary, as one or more notices | |
 | 5 | Issue the migration challenge, recorded as `migration.challenge-issued` | `busy`, `migration-unavailable` |
-| 6 | A secret prompt, `Vault passphrase` | none (cancelled), `migration-unavailable` (a `lock`) |
+| 6 | The attempt limit allows another attempt; then a secret prompt, `Vault passphrase` | `migration-rate-limited`, none (cancelled), `migration-unavailable` (a `lock`) |
 | 7 | Take the challenge out of the slot and run the method; on success, `migration.authorized` | `migration-denied`, `migration-unavailable` |
 | 8 | The command's own prompts: for `export`, the new export passphrase | the command's own |
 | 9 | The service is still in the recorded state and check generation; consume the authorization | `wrong-state`, `migration-denied` |
@@ -269,15 +277,16 @@ not been authorized.
 
 ### Error codes
 
-Two new codes join the [admin protocol's table](admin-protocol.md#admin-response-error-kind-5). They start at 28,
+Three new codes join the [admin protocol's table](admin-protocol.md#admin-response-error-kind-5). They start at 28,
 because 27 is taken by `memory-unprotected` (K-198, not yet landed).
 
 | Code | Name | Meaning |
 |---|---|---|
 | `28` | `migration-denied` | `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing was exported or rewrapped |
 | `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its vault passphrase prompt; nothing was exported or rewrapped |
+| `30` | `migration-rate-limited` | `export`, `recipient add`: too many wrong vault passphrases in a row; the [attempt limit](#passphrase-attempt-limit) refused the attempt before any prompt, and the message gives the whole seconds to wait; nothing was exported or rewrapped |
 
-The messages are fixed phrases, and none holds owner input. Each refusal ends the exchange as follows:
+The messages are fixed phrases, apart from the seconds to wait, and none holds owner input. Each refusal ends the exchange as follows:
 
 | Refusal | When | The exchange ends with |
 |---|---|---|
@@ -287,6 +296,7 @@ The messages are fixed phrases, and none holds owner input. Each refusal ends th
 | `not_pending` | the slot does not hold the challenge: it was already taken or retired | `migration-denied` |
 | `binding_mismatch` | the consuming operation's vault ID, operation or destination is not the authorization's | `migration-denied` |
 | `unavailable` | an envelope could not be read or opened for a reason other than the passphrase | `migration-unavailable` |
+| `rate_limited` | the attempt limit is in a cooldown; no prompt was sent | `migration-rate-limited` |
 | `locked` | a `lock` cancelled the command at its vault passphrase prompt | `migration-unavailable` |
 | `cancelled` | the prompt got no owner input: the CLI closed, the connection failed, the prompt deadline passed, or the answer was not owner input | as for any prompt without owner input ([prompts](admin-protocol.md#admin-socket)): no response, `unexpected-frame` (code 4) for a well-formed frame out of turn, or the error an undecodable answer maps to |
 
@@ -304,7 +314,7 @@ carries owner input.
 |---|---|---|---|
 | `migration.challenge-issued` | INFO | a migration challenge was issued (step 5) | `operation`, `method`; `destination_recipient` for `add_recipient` |
 | `migration.authorized` | INFO | a source-owner method proved the challenge (step 7) | `operation`, `method`; `destination_recipient` for `add_recipient` |
-| `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled (steps 6–7), or the authorization was refused when consumed (step 9) | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `error_kind` for `unavailable` |
+| `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled (steps 6–7), or the authorization was refused when consumed (step 9) | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `error_kind` for `unavailable`; `retry_after` for `rate_limited` |
 
 | Field | Type | Form |
 |---|---|---|
@@ -312,12 +322,13 @@ carries owner input.
 | `method` | string | A source-owner method's label: `vault_passphrase` in v0 |
 | `destination_recipient` | string | The destination recipient key's `age1…` text, which is public |
 | `refusal` | string | One of the refusal labels [above](#error-codes) |
+| `retry_after` | integer | Whole seconds left in the attempt limit's cooldown, rounded up |
 
 The records of one exchange follow two rules, so the log shows how each attempt ended:
 
 - **One closing record per challenge.** Each `migration.challenge-issued` is followed by exactly one closing record
   for steps 6 and 7: `migration.authorized`, or `migration.authorization-refused` with `wrong_passphrase`,
-  `not_this_vault`, `expired`, `not_pending`, `unavailable`, `locked` or `cancelled`.
+  `not_this_vault`, `expired`, `not_pending`, `unavailable`, `rate_limited`, `locked` or `cancelled`.
 - **At most one consume-time refusal, after `migration.authorized`.** Consuming the authorization at step 9 adds
   either nothing or one `migration.authorization-refused` with `expired` or `binding_mismatch`. It never follows a
   refused challenge, and those two labels are the only ones it uses.

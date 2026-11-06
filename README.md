@@ -40,12 +40,13 @@ Done in v0:
 
 Still to come in v0:
 
+- vault passphrase attempt limits;
 - recipient add and remove, migration, and reset;
 - TPM unlock and TPM approval signing;
 - a Docker Compose profile;
 - the v0 release acceptance suite.
 
-Later phases add OAuth login and refresh, owner notifications, vault passphrase attempt limits, more credential kinds
+Later phases add OAuth login and refresh, owner notifications, more credential kinds
 (JWT, GitHub App, HMAC, AWS Signature Version 4), YubiKey recipients with PIN/touch policies, and macOS and Windows
 services.
 
@@ -63,8 +64,8 @@ services.
 
 | Phase       | Scope                                                                                                                                                                                                                                                                              |
 |-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| v0          | Base-URL proxy; static and Basic credentials; caller authentication; route restrictions and rate limits; encrypted storage; versioned approval; scrubbing; recovery and migration                                                                                                  |
-| v1          | Service-owned OAuth consent, account identity, access-token caching, and safe refresh-token rotation; owner notifications; request-content restrictions (allow-lists on query parameters and JSON body fields, such as the models a key may call); vault passphrase attempt limits |
+| v0          | Base-URL proxy; static and Basic credentials; caller authentication; route restrictions and rate limits; encrypted storage; versioned approval; vault passphrase attempt limits; scrubbing; recovery and migration                                                                                                  |
+| v1          | Service-owned OAuth consent, account identity, access-token caching, and safe refresh-token rotation; owner notifications; request-content restrictions (allow-lists on query parameters and JSON body fields, such as the models a key may call) |
 | Later       | YubiKey unlock/signing and per-request touch confirmation; additional credential kinds; password-manager sync                                                                                                                                                                      |
 | Conditional | Forward-proxy interception if required callers cannot use base-URL mode                                                                                                                                                                                                            |
 
