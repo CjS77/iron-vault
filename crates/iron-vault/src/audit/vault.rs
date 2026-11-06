@@ -5,7 +5,8 @@ use iron_vault_store::{
     ApprovalStateError, ErrorKindLabel, InitFailure, InitStep, StateFileName, UnlockError, VaultError, VaultId, WriteError,
 };
 
-use super::{AUDIT_TARGET, AuditEvent, EventName};
+use super::{AUDIT_TARGET, AuditEvent, EventName, memory_label};
+use crate::hardening::MemoryProtection;
 use crate::service_context::{DenialKind, UnlockRefusal, step_names};
 
 /// `vault.initialized`: init's last step is durable.
@@ -116,6 +117,7 @@ impl AuditEvent for UnlockRefused<'_> {
             target: AUDIT_TARGET,
             event = Self::NAME.as_str(),
             refusal = unlock_refusal_label(self.refusal),
+            memory_protection = unprotected_memory(self.refusal).map(memory_label),
             "unlock refused, the service stays Locked",
         );
     }
@@ -271,6 +273,15 @@ const fn init_failure_label(failure: &InitFailure) -> &'static str {
     }
 }
 
+/// The memory protection status a `memory_unprotected` refusal records beside its label, as a fixed label: the locking
+/// error is an OS error's text, so it is not logged.
+const fn unprotected_memory(refusal: &UnlockRefusal) -> Option<&MemoryProtection> {
+    match refusal {
+        UnlockRefusal::MemoryUnprotected(memory) => Some(memory),
+        _ => None,
+    }
+}
+
 const fn unlock_refusal_label(refusal: &UnlockRefusal) -> &'static str {
     match refusal {
         UnlockRefusal::WrongState(_) => "wrong_state",
@@ -283,5 +294,6 @@ const fn unlock_refusal_label(refusal: &UnlockRefusal) -> &'static str {
         UnlockRefusal::Failed(UnlockError::Unrecognized { .. }) => "unrecognized_files",
         UnlockRefusal::Failed(UnlockError::InitializationState(_) | UnlockError::ListStateDir { .. }) => "state_unreadable",
         UnlockRefusal::Interrupted => "interrupted",
+        UnlockRefusal::MemoryUnprotected(_) => "memory_unprotected",
     }
 }

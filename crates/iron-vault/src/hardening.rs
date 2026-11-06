@@ -12,6 +12,11 @@ use std::fmt;
 #[cfg(target_os = "linux")]
 mod linux;
 
+/// How to give the service an unlimited `RLIMIT_MEMLOCK`, so it can lock its memory: the fix the startup audit record
+/// and the CLI's `memory-unprotected` message both name.
+pub const MEMLOCK_REMEDIATION: &str =
+    "run the service with LimitMEMLOCK=infinity on its systemd unit, or with `ulimits: memlock: -1` under Docker Compose";
+
 /// What process hardening achieved, reported at startup and later in `status`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HardeningReport {

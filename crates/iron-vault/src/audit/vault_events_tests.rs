@@ -14,6 +14,7 @@ use super::tests::record_of;
 use super::vault::*;
 use super::{AuditEvent, EventName, RequestId};
 use crate::admin::protocol::{AdminCommand, FrameError};
+use crate::hardening::{LockUnavailable, MemoryProtection};
 use crate::peer::PeerIdentity;
 use crate::service_context::{DenialKind, UnlockRefusal};
 use crate::service_state::ServiceState;
@@ -78,6 +79,34 @@ fn an_unlock_refusal_is_a_snake_case_label() {
         record_of(UnlockRefused { refusal: &unfinished }, "WARN", &["refusal"])["refusal"],
         "initialization_unfinished"
     );
+}
+
+#[test]
+fn a_memory_unprotected_refusal_records_its_label_and_the_memory_protection_label() {
+    [
+        (
+            MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 }),
+            "unavailable",
+        ),
+        (
+            MemoryProtection::Unavailable(LockUnavailable::LockFailed {
+                error: "Cannot allocate memory".to_owned(),
+            }),
+            "unavailable",
+        ),
+        (MemoryProtection::Unsupported, "unsupported"),
+    ]
+    .into_iter()
+    .for_each(|(memory, label)| {
+        let refusal = UnlockRefusal::MemoryUnprotected(memory);
+        let record = record_of(UnlockRefused { refusal: &refusal }, "WARN", &["refusal", "memory_protection"]);
+        assert_eq!(
+            (record["refusal"].as_str(), record["memory_protection"].as_str()),
+            (Some("memory_unprotected"), Some(label))
+        );
+        // The locking error is an OS error's text, so it stays out of the log.
+        assert!(!record.to_string().contains("Cannot allocate memory"), "{record}");
+    });
 }
 
 #[test]

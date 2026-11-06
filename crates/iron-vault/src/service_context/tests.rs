@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use super::{Inner, SettleGuard};
+use super::unlock::memory_guard;
+use super::{Inner, SettleGuard, UnlockRefusal};
+use crate::deployment::DeploymentProfile;
+use crate::hardening::{LockUnavailable, MemoryProtection};
 use crate::migration_authorization::PendingMigration;
 use crate::service_state::{FailureReason, ServiceState, UnavailableReason};
 use crate::serving_snapshot::{Admission, SnapshotHolder};
@@ -46,4 +49,41 @@ fn dropping_the_settle_guard_after_settling_keeps_the_state() {
     let (state, admission) = drop_guard(&inner, &holder);
     assert_eq!(state, ServiceState::Unavailable(FailureReason::PolicyInvalid));
     assert!(matches!(admission, Admission::Refuse(reason) if reason == refused));
+}
+
+/// Every memory protection status but `Locked`, each with the reason its refusal message names.
+fn unprotected() -> [(MemoryProtection, &'static str); 3] {
+    [
+        (
+            MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 }),
+            "RLIMIT_MEMLOCK soft limit is 65536 bytes, not unlimited",
+        ),
+        (
+            MemoryProtection::Unavailable(LockUnavailable::LockFailed {
+                error: "Cannot allocate memory".to_owned(),
+            }),
+            "mlockall failed: Cannot allocate memory",
+        ),
+        (MemoryProtection::Unsupported, "this platform has no memory-locking adapter"),
+    ]
+}
+
+#[test]
+fn a_protected_install_refuses_unlock_unless_memory_is_locked() {
+    unprotected().into_iter().for_each(|(memory, reason)| {
+        let refusal = memory_guard(DeploymentProfile::Protected, &memory).unwrap_err();
+        let expected = format!("memory is not locked against swap ({reason}), so a protected install does not open the vault");
+        assert_eq!(refusal.to_string(), expected);
+        assert!(matches!(refusal, UnlockRefusal::MemoryUnprotected(held) if held == memory));
+    });
+    assert!(memory_guard(DeploymentProfile::Protected, &MemoryProtection::Locked).is_ok());
+}
+
+#[test]
+fn development_mode_never_refuses_unlock_for_memory() {
+    unprotected()
+        .into_iter()
+        .map(|(memory, _)| memory)
+        .chain([MemoryProtection::Locked])
+        .for_each(|memory| assert!(memory_guard(DeploymentProfile::Development, &memory).is_ok(), "{memory}"));
 }

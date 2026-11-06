@@ -616,7 +616,7 @@ with these fields.
 | `service.hardening-incomplete` | ERROR | at startup, when core dumps are not disabled or memory is not locked | `core_dumps`, `memory_protection`, `remediation` |
 | `service.log-destination-changed` | INFO | an activated config moved the log destination; written to both destinations | `log_destination`, `previous_log_destination`, `version` |
 | `service.lock-transition` | INFO | a lock transition: Locked to Checking, the outcome of the check that follows, and Ready or Unavailable to Locked | `from_state`, `to_state`; `unavailable_reason` when `to_state` is `unavailable` |
-| `vault.unlock-refused` | WARN | an unlock was refused | `refusal`, such as `wrong_passphrase` |
+| `vault.unlock-refused` | WARN | an unlock was refused | `refusal`, such as `wrong_passphrase`; `memory_protection` when `refusal` is `memory_unprotected`, a protected install whose memory is not locked |
 | `vault.presence-refused` | WARN | owner presence for `replace` or `rm` was refused: the approval passphrase was wrong or the key is not the pinned approver's; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`); no `config_digest`, since no config is involved |
 | `vault.lock-incomplete` | WARN | a lock's drain ended with a serving snapshot or the vault identity still held | `snapshots_held`, `identity_held` |
 

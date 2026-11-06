@@ -38,8 +38,9 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Unlock<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
-    /// Refuses before prompting when the service is not Locked or the vault is not Initialized, so the owner is not
-    /// asked for a passphrase that cannot be used; the context checks both again under its mutex.
+    /// Refuses before prompting when the service is not Locked, the vault is not Initialized, or a protected install's
+    /// memory is not locked, in that order, so the owner is not asked for a passphrase that cannot be used; the context
+    /// checks all three again under its mutex.
     async fn run(&self, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         let state = self.service.state().await;
         if !state.admin_allows(AdminOperation::Unlock) {
@@ -48,6 +49,9 @@ impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
             return Ok(refused(refusal));
         }
         if let Err(refusal) = self.service.require_initialized().await {
+            return Ok(refused(refusal));
+        }
+        if let Err(refusal) = self.service.require_locked_memory() {
             return Ok(refused(refusal));
         }
         let prompt = Prompt {
@@ -96,6 +100,9 @@ fn refused(refusal: UnlockRefusal) -> AdminResponse {
         UnlockRefusal::WrongPassphrase => error(ErrorCode::UnlockDenied, "wrong passphrase".to_owned()),
         failed @ (UnlockRefusal::Failed(_) | UnlockRefusal::Interrupted) => {
             error(ErrorCode::UnlockFailed, format!("{failed}; the service stays Locked"))
+        }
+        unprotected @ UnlockRefusal::MemoryUnprotected(_) => {
+            error(ErrorCode::MemoryUnprotected, format!("{unprotected}; the service stays Locked"))
         }
     }
 }

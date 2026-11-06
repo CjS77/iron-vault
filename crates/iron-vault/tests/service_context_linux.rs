@@ -38,10 +38,10 @@ use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
-use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
+use iron_vault::hardening::{CoreDumps, HardeningReport, LockUnavailable, MemoryProtection};
 use iron_vault::migration_authorization::{MigrationOperation, MigrationRefusal};
 use iron_vault::path_metadata::invoking_user;
-use iron_vault::service_context::{LockOutcome, ServiceContext, ServiceLocks, ServiceSetup, StartError};
+use iron_vault::service_context::{LockOutcome, ServiceContext, ServiceLocks, ServiceSetup, StartError, UnlockRefusal};
 use iron_vault::service_state::{FailureReason, IllegalTransition, ListenerProvenance, ServiceEvent, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, SnapshotHolder};
 use iron_vault::socket_activation::{AdoptedSocket, PassedSockets};
@@ -252,7 +252,18 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
         fs: F,
         passed: PassedSockets,
     ) -> Result<Arc<ServiceContext<F>>, StartError> {
-        let paths = self.paths();
+        self.start_as(fs, passed, DeploymentProfile::Development, MemoryProtection::Unsupported)
+    }
+
+    /// [`start_passing`](Self::start_passing) as a `profile` install whose hardening left `memory`.
+    fn start_as<F: StoreFs + Send + Sync + 'static>(
+        &self,
+        fs: F,
+        passed: PassedSockets,
+        profile: DeploymentProfile,
+        memory: MemoryProtection,
+    ) -> Result<Arc<ServiceContext<F>>, StartError> {
+        let paths = ServicePaths { profile, ..self.paths() };
         let locks = ServiceLocks::acquire(&paths)?;
         locks.sweep_stale_temps(&OsFs);
         let provisional = locks.unverified_listeners(&OsFs);
@@ -265,7 +276,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
                 .with_pinned_trust(self.ca.trust()),
             hardening: HardeningReport {
                 core_dumps: CoreDumps::Disabled,
-                memory: MemoryProtection::Unsupported,
+                memory,
             },
             log: iron_vault::logging::LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
         };
@@ -1016,6 +1027,78 @@ async fn unlock_while_ready_is_refused_before_any_prompt_and_changes_nothing() {
     assert_no_passphrase_logged(&logs);
 }
 
+/// A protected service on a [`GatedFs`] armed on `operational.age` whose memory is not locked, with an admin session the
+/// test's account can use. Returns the service, the session and the signal that the passphrase envelope was read.
+fn protected_without_locked_memory(
+    fixture: &Fixture,
+    memory: MemoryProtection,
+) -> (Arc<ServiceContext<GatedFs>>, AdminSession, oneshot::Receiver<()>) {
+    let fs = GatedFs::default();
+    let (reached, _release) = fs.arm("operational.age");
+    let service = fixture
+        .start_as(fs, PassedSockets::default(), DeploymentProfile::Protected, memory)
+        .unwrap();
+    let session = AdminSession::open_for(&service, DeploymentProfile::Development);
+    (service, session, reached)
+}
+
+#[tokio::test]
+async fn a_protected_install_without_locked_memory_refuses_unlock_before_any_prompt_and_stays_locked() {
+    let logs = captured_logs();
+    let fixture = approved().await;
+    let memory = MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 });
+    let (service, session, mut reached) = protected_without_locked_memory(&fixture, memory);
+
+    let (_, prompts, response) = converse(&session.socket, AdminRequest::Unlock, PASSPHRASE.to_owned()).await;
+
+    assert_eq!(prompts, []);
+    let message = "memory is not locked against swap (RLIMIT_MEMLOCK soft limit is 65536 bytes, not unlimited), so a \
+                   protected install does not open the vault; the service stays Locked";
+    assert_response(&response, &error_response(ErrorCode::MemoryUnprotected, message));
+    // The context refuses on its own too, before the passphrase envelope is read, so scrypt never runs.
+    let refused = service.unlock(Passphrase::new(SecretString::from(PASSPHRASE)).unwrap()).await;
+    assert!(matches!(refused, Err(UnlockRefusal::MemoryUnprotected(_))), "{refused:?}");
+    assert!(reached.try_recv().is_err(), "the passphrase envelope was read");
+    assert_eq!(service.state().await, ServiceState::Locked);
+    assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
+    let AdminResponse::Status(report) = session.send(AdminRequest::Status, "").await.unwrap() else {
+        panic!("expected a status report");
+    };
+    assert_eq!(
+        report.memory,
+        MemoryStatus::Unavailable("RLIMIT_MEMLOCK soft limit is 65536 bytes, not unlimited".to_owned())
+    );
+    // Only this test refuses for memory, so the shared buffer holds its two refusals alone: the handler's and the context's.
+    let refusals: Vec<_> = logs
+        .events("vault.unlock-refused")
+        .into_iter()
+        .filter(|record| record["refusal"] == "memory_unprotected")
+        .collect();
+    assert_eq!(refusals.len(), 2, "{}", logs.text());
+    assert!(
+        refusals.iter().all(|record| record["memory_protection"] == "unavailable"),
+        "{refusals:?}"
+    );
+    assert_no_passphrase_logged(&logs);
+    session.close().await;
+}
+
+#[tokio::test]
+async fn an_uninitialized_protected_install_names_init_before_its_memory() {
+    let fixture = Fixture::new().await;
+    fs::remove_dir_all(fixture.path("state")).unwrap();
+    mkdir(&fixture.path("state"), 0o700);
+    let (_service, session, _reached) = protected_without_locked_memory(&fixture, MemoryProtection::Unsupported);
+
+    let response = session.send(AdminRequest::Unlock, PASSPHRASE).await.unwrap();
+
+    let AdminResponse::Error { code, .. } = response else {
+        panic!("expected an error, got {response:?}");
+    };
+    assert_eq!(code, ErrorCode::UnlockFailed);
+    session.close().await;
+}
+
 #[tokio::test]
 async fn unlock_with_an_invalid_approval_ends_unavailable_and_names_the_redacted_reason() {
     let logs = captured_logs();
@@ -1641,11 +1724,17 @@ struct AdminSession {
 
 impl AdminSession {
     fn open<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> Self {
+        Self::open_for(service, service.paths().profile)
+    }
+
+    /// [`open`](Self::open) admitting the admin principals of `principals` rather than the service's own profile, so a
+    /// protected service's admin socket can be reached by the test's account.
+    fn open_for<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>, principals: DeploymentProfile) -> Self {
         let paths = service.paths().clone();
         let runtime_dir = paths.runtime_dir.clone().unwrap();
         let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
         let handlers = Handlers::for_service(service);
-        let server = AdminServer::new(AdminPrincipals::new(paths.profile, paths.owner.uid), handlers, Limits::default());
+        let server = AdminServer::new(AdminPrincipals::new(principals, paths.owner.uid), handlers, Limits::default());
         let (stop, stopped) = oneshot::channel::<()>();
         let served = tokio::spawn(async move {
             server

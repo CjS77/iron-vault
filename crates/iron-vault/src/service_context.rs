@@ -47,7 +47,7 @@ use crate::audit::vault::{LockIncomplete, UnlockRefused};
 use crate::audit::{AuditEvent, CheckFailed, LockTransition, ReloadFailed, count_of};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
-use crate::hardening::HardeningReport;
+use crate::hardening::{HardeningReport, MemoryProtection};
 use crate::logging::{LogSwitch, OpenedLog};
 use crate::migration_authorization::PendingMigration;
 use crate::request_listeners::RequestListeners;
@@ -57,7 +57,7 @@ use crate::socket_activation::PassedSockets;
 use crate::standing::{CredentialStanding, RouteFault};
 use crate::trusted_path_report::ServicePaths;
 use serving::Serving;
-use unlock::log_foreign_files;
+use unlock::{log_foreign_files, unprotected_reason};
 
 pub use approval::{ApprovalEnd, ApprovalReview};
 pub use init::{InitRefusal, step_names};
@@ -79,6 +79,10 @@ pub enum UnlockRefusal {
     /// The unlock task ended without a result (it panicked, or the runtime is shutting down); the service stays Locked.
     #[error("the vault could not be unlocked: the unlock did not finish")]
     Interrupted,
+    /// A protected install's memory is not locked against swap, so the vault is not opened (§3.11). Holds the memory
+    /// protection status, which names the `RLIMIT_MEMLOCK` soft limit or the locking error; never `Locked`.
+    #[error("memory is not locked against swap ({}), so a protected install does not open the vault", unprotected_reason(.0))]
+    MemoryUnprotected(MemoryProtection),
 }
 
 /// The state-directory lock and the config-directory lock, held for the service's lifetime: a second instance on
@@ -297,7 +301,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// served and the set approved. When it fails, the provisional listeners keep answering `503` with the failure's
     /// reason, the check has logged the detail at WARN, and the vault is dropped; the context keeps `identity` either
     /// way. Both state changes are logged as lock transitions, so a host unlock (EP-32) entering here is audited like a
-    /// passphrase unlock.
+    /// passphrase unlock. A host unlock must pass `require_locked_memory`, the memory guard `unlock` takes, before it
+    /// unwraps `identity`.
     ///
     /// It waits for the service-wide lock, as [`recheck`](Self::recheck) does, so it never runs during an approval.
     ///
@@ -348,7 +353,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// was cancelled by the `lock` that left the service Locked.
     ///
     /// The state is checked under the mutex, so two unlocks never both open the vault, and so is the initialization
-    /// state, which `unlock` also read before its prompt: only Initialized goes on. A wrong passphrase or an
+    /// state, which `unlock` also read before its prompt: only Initialized goes on. A protected install whose memory is
+    /// not locked is refused next, before scrypt runs, so the passphrase is never used. A wrong passphrase or an
     /// unreadable envelope leaves the service Locked: no other storage is ever tried (R-22). The operational identity
     /// the passphrase opens is dropped inside [`unlock_with_passphrase`], once it has unwrapped the vault identity.
     ///
@@ -362,6 +368,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             return Err(refuse_unlock(UnlockRefusal::WrongState(locked)));
         }
         log_foreign_files(&self.require_initialized().await?);
+        self.require_locked_memory()?;
         let identity = self
             .open_identity(passphrase)
             .await

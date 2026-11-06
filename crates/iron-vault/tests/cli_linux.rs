@@ -352,6 +352,29 @@ async fn unlock_into_an_unavailable_service_shows_the_redacted_reason() {
 }
 
 #[tokio::test]
+async fn an_unlock_refused_for_unlocked_memory_names_the_memory_lock_fix() {
+    let message = "memory is not locked against swap (RLIMIT_MEMLOCK soft limit is 65536 bytes, not unlimited), so a protected \
+                   install does not open the vault; the service stays Locked";
+    let response = AdminResponse::Error {
+        code: ErrorCode::MemoryUnprotected,
+        message: message.to_owned(),
+    };
+    let (output, _) = scripted_unlock(response).await;
+    let stderr = text(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    assert!(
+        stderr.starts_with(&format!(
+            "iron-vault: the service answered error 27 (memory-unprotected): {message}\n"
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("LimitMEMLOCK=infinity") && stderr.contains("`ulimits: memlock: -1`"),
+        "{stderr}"
+    );
+}
+
+#[tokio::test]
 async fn a_wrong_passphrase_is_reported_without_the_passphrase() {
     let response = AdminResponse::Error {
         code: ErrorCode::UnlockDenied,

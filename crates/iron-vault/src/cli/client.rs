@@ -14,6 +14,7 @@ use iron_vault::admin::protocol::{
     OwnerInput, PROTOCOL_VERSION, ProposedConfig, RequestedOrigin, digest_text,
 };
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
+use iron_vault::hardening::MEMLOCK_REMEDIATION;
 use iron_vault::service_state::ServiceState;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault_policy::{CredentialKind, Host, Port};
@@ -396,8 +397,11 @@ fn read_frame(stream: &mut impl Read) -> Result<Frame, ClientError> {
 /// act on.
 fn service_error(code: ErrorCode, message: &str) -> String {
     let hint = match code {
-        ErrorCode::NotAdminPrincipal => Some(SUDO_HINT),
-        ErrorCode::UnsupportedVersion => Some("The CLI and the service versions differ; install matching versions."),
+        ErrorCode::NotAdminPrincipal => Some(SUDO_HINT.to_owned()),
+        ErrorCode::UnsupportedVersion => Some("The CLI and the service versions differ; install matching versions.".to_owned()),
+        ErrorCode::MemoryUnprotected => Some(format!(
+            "A protected install unlocks only once its memory is locked against swap: {MEMLOCK_REMEDIATION}, then restart it."
+        )),
         _ => None,
     };
     let line = format!("the service answered error {} ({}): {message}", code as u16, code.name());

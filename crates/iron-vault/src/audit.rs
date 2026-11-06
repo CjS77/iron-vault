@@ -32,7 +32,7 @@ pub use request::{Ending, REQUEST_TARGET, ReasonCode, RequestFacts, RequestId, R
 use iron_vault_store::{ApprovalError, ApprovalFailure, ApprovalStep, ApprovalVersion, ConfigDigest};
 
 use crate::config_check::{CheckFailure, InvalidConfig};
-use crate::hardening::{CoreDumps, HardeningReport, MemoryProtection};
+use crate::hardening::{CoreDumps, HardeningReport, MEMLOCK_REMEDIATION, MemoryProtection};
 #[cfg(target_os = "linux")]
 use crate::logging::LogDestination;
 use crate::service_context::DenialKind;
@@ -123,13 +123,18 @@ impl<'a> HardeningIncomplete<'a> {
             .then_some("core dumps are not disabled, so a crash could write secrets to disk: run the service where it may set RLIMIT_CORE");
         let memory = match self.hardening.memory {
             MemoryProtection::Locked => None,
-            MemoryProtection::Unavailable(_) => Some(
-                "swap protection is not in effect: run the service with LimitMEMLOCK=infinity, or use encrypted swap as the \
-                 install guide describes",
-            ),
-            MemoryProtection::Unsupported => Some("swap protection is not in effect: use encrypted swap as the install guide describes"),
+            MemoryProtection::Unavailable(_) => Some(format!(
+                "swap protection is not in effect: {MEMLOCK_REMEDIATION}, or use encrypted swap as the install guide describes"
+            )),
+            MemoryProtection::Unsupported => {
+                Some("swap protection is not in effect: use encrypted swap as the install guide describes".to_owned())
+            }
         };
-        [core, memory].into_iter().flatten().collect::<Vec<_>>().join("; ")
+        [core.map(str::to_owned), memory]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 }
 
@@ -377,7 +382,8 @@ const fn core_dumps_label(core_dumps: &CoreDumps) -> &'static str {
     }
 }
 
-const fn memory_label(memory: &MemoryProtection) -> &'static str {
+/// The memory protection status as the fixed `memory_protection` label.
+pub(crate) const fn memory_label(memory: &MemoryProtection) -> &'static str {
     match memory {
         MemoryProtection::Locked => "locked",
         MemoryProtection::Unavailable(_) => "unavailable",
