@@ -10,8 +10,6 @@
 mod common;
 
 use std::fs;
-use std::future::{self, Future};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,38 +32,30 @@ use iron_vault_store::{
 use secrecy::SecretString;
 use tokio::net::UnixStream;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 const PASSPHRASE: &str = "VAULT-correct-5d1a";
 const WRONG_PASSPHRASE: &str = "VAULT-wrong-0b77";
-/// The command the stand-in handler is registered as; a `lock` request reaches it, and its success answer is `cleared`.
+/// The name the stand-in command answers to in its messages. It is registered as `ping`, whose request reaches it; its
+/// success answer is `cleared`.
 const COMMAND: &str = "export";
 
-/// What the stand-in command does at the prompt.
-#[derive(Clone, Copy)]
-enum Lock {
-    /// No `lock` comes: the exchange waits for the owner.
-    Never,
-    /// A `lock` is already waiting when the prompt is sent.
-    AtPrompt,
-}
-
-/// A command that runs the migration authorization step and nothing else. Its success answer is `cleared: true` when the
-/// authorization it got is valid for `operation`.
+/// A command that begins a migration session and runs the migration authorization step and nothing else. Its success
+/// answer is `cleared: true` when the authorization it got is valid for `operation`.
 struct Authorizing {
     service: Arc<ServiceContext>,
     operation: MigrationOperation,
-    lock: Lock,
 }
 
 impl AdminHandler for Authorizing {
     fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
         Box::pin(async move {
-            let lock_requested: Pin<Box<dyn Future<Output = ()> + Send>> = match self.lock {
-                Lock::Never => Box::pin(future::pending()),
-                Lock::AtPrompt => Box::pin(future::ready(())),
+            let session = match self.service.begin_migration().await {
+                Ok(session) => session,
+                Err(refusal) => return Ok(no_authorization(COMMAND, NoAuthorization(refusal))),
             };
-            let authorization = require_migration_authorization(exchange, &self.service, self.operation.clone(), lock_requested).await?;
+            let authorization = require_migration_authorization(exchange, &session, self.operation.clone()).await?;
             Ok(match authorization {
                 Ok(authorization) => {
                     let vault = vault_id(&self.service).await;
@@ -113,10 +103,15 @@ struct Served {
     operation: MigrationOperation,
     logs: Captured,
     stop: Option<oneshot::Sender<()>>,
+    server: Option<JoinHandle<()>>,
 }
 
 impl Served {
-    async fn new(lock: Lock) -> Self {
+    async fn new() -> Self {
+        Self::with_limits(Limits::default()).await
+    }
+
+    async fn with_limits(limits: Limits) -> Self {
         let logs = captured_logs();
         let fixture = Fixture::new().await;
         write_envelopes(&fixture);
@@ -125,17 +120,17 @@ impl Served {
         let paths = service.paths().clone();
         let runtime_dir = paths.runtime_dir.clone().unwrap();
         let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
-        let handlers = Handlers::default().with(
-            AdminCommand::Lock,
+        // The real handlers, so a `lock` request is the service's own, with the stand-in command beside them.
+        let handlers = Handlers::for_service(&service).with(
+            AdminCommand::Ping,
             Authorizing {
                 service: Arc::clone(&service),
                 operation: operation.clone(),
-                lock,
             },
         );
-        let server = AdminServer::new(AdminPrincipals::new(paths.profile, paths.owner.uid), handlers, Limits::default());
+        let server = AdminServer::new(AdminPrincipals::new(paths.profile, paths.owner.uid), handlers, limits);
         let (stop, stopped) = oneshot::channel::<()>();
-        tokio::spawn(async move {
+        let server = tokio::spawn(async move {
             let _ = server
                 .serve(socket, async {
                     let _ = stopped.await;
@@ -148,13 +143,19 @@ impl Served {
             operation,
             logs,
             stop: Some(stop),
+            server: Some(server),
         }
     }
 
+    /// A connection that has sent the stand-in command's request.
     async fn connect(&self) -> UnixStream {
+        self.connect_with(AdminRequest::Ping).await
+    }
+
+    async fn connect_with(&self, request: AdminRequest) -> UnixStream {
         let runtime_dir = self.service.paths().runtime_dir.clone().unwrap();
         let mut stream = UnixStream::connect(runtime_dir.join(ADMIN_SOCKET_NAME)).await.unwrap();
-        send(&mut stream, &Frame::Request(AdminRequest::Lock)).await;
+        send(&mut stream, &Frame::Request(request)).await;
         stream
     }
 
@@ -231,6 +232,18 @@ impl Served {
     }
 }
 
+impl Served {
+    /// Stops the server and waits until it has ended, abandoning any exchange still open after the grace.
+    async fn shutdown(&mut self) {
+        self.stop.take().into_iter().for_each(|stop| {
+            let _ = stop.send(());
+        });
+        if let Some(server) = self.server.take() {
+            server.await.unwrap();
+        }
+    }
+}
+
 impl Drop for Served {
     fn drop(&mut self) {
         self.stop.take().into_iter().for_each(|stop| {
@@ -255,7 +268,7 @@ fn error_of(response: &AdminResponse) -> (ErrorCode, &str) {
 
 #[tokio::test]
 async fn the_right_passphrase_gives_an_authorization_for_the_operation() {
-    let served = Served::new(Lock::Never).await;
+    let served = Served::new().await;
 
     let (prompts, response) = served.run(PASSPHRASE).await;
 
@@ -271,7 +284,7 @@ async fn the_right_passphrase_gives_an_authorization_for_the_operation() {
 
 #[tokio::test]
 async fn a_wrong_passphrase_is_denied_with_one_refusal_event() {
-    let served = Served::new(Lock::Never).await;
+    let served = Served::new().await;
 
     let (_, response) = served.run(WRONG_PASSPHRASE).await;
 
@@ -284,7 +297,7 @@ async fn a_wrong_passphrase_is_denied_with_one_refusal_event() {
 
 #[tokio::test]
 async fn input_that_cannot_be_a_passphrase_is_denied_as_a_wrong_one() {
-    let served = Served::new(Lock::Never).await;
+    let served = Served::new().await;
 
     let (_, response) = served.run("").await;
 
@@ -294,7 +307,7 @@ async fn input_that_cannot_be_a_passphrase_is_denied_as_a_wrong_one() {
 
 #[tokio::test]
 async fn no_owner_input_cancels_with_no_authorization_and_retires_the_challenge() {
-    let served = Served::new(Lock::Never).await;
+    let served = Served::new().await;
     served.fail_to_the_brink().await;
     let mut stream = served.connect().await;
     assert!(matches!(read_frame(&mut stream).await, Frame::Prompt(_)));
@@ -309,15 +322,21 @@ async fn no_owner_input_cancels_with_no_authorization_and_retires_the_challenge(
 
 #[tokio::test]
 async fn a_lock_at_the_prompt_is_unavailable_and_records_no_failure() {
-    let served = Served::new(Lock::AtPrompt).await;
+    let served = Served::new().await;
     served.fail_to_the_brink().await;
     let mut stream = served.connect().await;
 
-    // The prompt is always written, and the lock ends the wait for its answer, so none is sent.
+    // The prompt is always written. A real `lock` then waits for the service-wide lock the session holds, which ends the
+    // wait for the answer, so none is sent.
     assert!(matches!(read_frame(&mut stream).await, Frame::Prompt(_)));
+    let mut lock = served.connect_with(AdminRequest::Lock).await;
     let Frame::Response(response) = read_frame(&mut stream).await else {
         panic!("expected the response after the prompt");
     };
+    assert!(matches!(
+        read_frame(&mut lock).await,
+        Frame::Response(AdminResponse::Lock { cleared: true })
+    ));
 
     let (code, message) = error_of(&response);
     assert_eq!((code as u16, code.name()), (29, "migration-unavailable"));
@@ -329,7 +348,7 @@ async fn a_lock_at_the_prompt_is_unavailable_and_records_no_failure() {
 
 #[tokio::test]
 async fn the_attempt_limit_answers_before_any_prompt_and_retires_the_challenge() {
-    let served = Served::new(Lock::Never).await;
+    let served = Served::new().await;
     {
         let mut limiter = served.service.attempt_limiter().await;
         (0..FAILURE_THRESHOLD).for_each(|_| limiter.record_failure(Instant::now()));
@@ -353,7 +372,7 @@ async fn the_attempt_limit_answers_before_any_prompt_and_retires_the_challenge()
 
 #[tokio::test]
 async fn an_unavailable_check_is_unavailable_and_records_no_failure() {
-    let served = Served::new(Lock::Never).await;
+    let served = Served::new().await;
     served.fail_to_the_brink().await;
     fs::remove_file(served.fixture.path("state/operational.age")).unwrap();
 
@@ -367,7 +386,7 @@ async fn an_unavailable_check_is_unavailable_and_records_no_failure() {
 
 #[tokio::test]
 async fn the_log_holds_no_typed_bytes() {
-    let served = Served::new(Lock::Never).await;
+    let served = Served::new().await;
     served.run(WRONG_PASSPHRASE).await;
     served.run(PASSPHRASE).await;
 
@@ -392,11 +411,44 @@ fn each_refusal_maps_to_its_code_with_a_fixed_message() {
         (cooling, ErrorCode::MigrationRateLimited),
     ];
     table.into_iter().for_each(|(refusal, expected)| {
-        let response = no_authorization(COMMAND, NoAuthorization::Refused(refusal));
+        let response = no_authorization(COMMAND, NoAuthorization(refusal));
         assert_eq!(error_of(&response).0, expected, "{refusal:?}");
     });
-    let response = no_authorization(COMMAND, NoAuthorization::Refused(cooling));
+    let response = no_authorization(COMMAND, NoAuthorization(cooling));
     assert!(error_of(&response).1.contains("45 seconds"), "{response:?}");
-    let response = no_authorization(COMMAND, NoAuthorization::CancelledByLock);
+    let response = no_authorization(COMMAND, NoAuthorization(MigrationRefusal::WrongState(ServiceState::Locked)));
     assert_eq!(error_of(&response).0, ErrorCode::MigrationUnavailable);
+}
+
+#[tokio::test]
+async fn a_session_holds_the_service_wide_lock_until_it_drops() {
+    let served = Served::new().await;
+    let session = served.service.begin_migration().await.unwrap();
+
+    let second = served.service.begin_migration().await.err().unwrap();
+    assert_eq!(second.label(), "busy");
+    let (_, response) = served.run(PASSPHRASE).await;
+    assert_eq!(error_of(&response).0, ErrorCode::Busy);
+
+    drop(session);
+    served.service.begin_migration().await.unwrap();
+}
+
+#[tokio::test]
+async fn dropping_the_exchange_mid_prompt_retires_the_challenge() {
+    let limits = Limits {
+        shutdown_grace: Duration::from_millis(50),
+        ..Limits::default()
+    };
+    let mut served = Served::with_limits(limits).await;
+    let mut stream = served.connect().await;
+    assert!(matches!(read_frame(&mut stream).await, Frame::Prompt(_)));
+    assert!(served.service.pending_migration().await.is_pending());
+
+    // Shutdown abandons the exchange still waiting at its prompt after the grace, dropping the handler's future.
+    served.shutdown().await;
+
+    served.assert_retired().await;
+    let _session = served.service.begin_migration().await.unwrap();
+    served.service.issue_migration_challenge(MigrationOperation::Export).await.unwrap();
 }

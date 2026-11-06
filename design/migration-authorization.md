@@ -251,7 +251,9 @@ their epics'. In order:
 
 **The service-wide lock is held from step 2 to the response, prompts included,** as `replace` and `rm` hold it. The
 summary therefore stays true until the operation, and the challenge in the slot always belongs to the one exchange
-that can take it. A `lock` cancels the exchange at any of its prompts.
+that can take it. A `lock` cancels the exchange at any of its prompts. The service context hands out the lock as a
+`MigrationSession` (`ServiceContext::begin_migration`, step 2), which the authorization step requires and whose drop
+retires any pending challenge, so a dropped exchange leaves none behind.
 
 **The summary names what the challenge binds:** the operation, the vault ID and the destination recipient when there
 is one. It also says which factor is asked for, and for `export` that a new export passphrase follows. The command

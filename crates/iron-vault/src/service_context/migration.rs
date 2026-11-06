@@ -5,14 +5,19 @@
 //! The context's mutex is never held across a method's check, which runs scrypt for about a second: it is taken to
 //! check the limit and take the challenge, released for the check, and taken again to record the outcome.
 //!
-//! **The caller holds the service-wide lock from step 2 until its response, prompts included.** The attempt limit
+//! **The caller holds the service-wide lock from step 2 until its response, and the type enforces it.** The attempt limit
 //! depends on it: with the mutex released during the check, two exchanges without that lock could each issue and take
-//! a challenge, and guess in parallel before the first failure is recorded. The context cannot check that the caller
-//! holds it, so `export` and `recipient add` must take it before step 5. A `lock` waits for the service-wide lock, so
-//! it ends such an exchange at a prompt, not mid-check. Should the vault identity still go during the check, the
-//! outcome is discarded unrecorded and the authorization never leaves.
+//! a challenge, and guess in parallel before the first failure is recorded. [`ServiceContext::begin_migration`] takes the
+//! lock and returns a [`MigrationSession`] that owns it, and the admin step takes the session, so it cannot run without
+//! the lock. A `lock` waits for the service-wide lock, so it ends such an exchange at a prompt, not mid-check. Should the
+//! vault identity still go during the check, the outcome is discarded unrecorded and the authorization never leaves.
+//!
+//! The session's drop retires any pending challenge, so an exchange whose future is dropped (a connection task aborted at
+//! shutdown) leaves none behind: no challenge outlives its exchange.
 
 use std::sync::{Arc, Weak};
+
+use tokio::sync::OwnedMutexGuard;
 
 use iron_vault_store::{StoreFs, VaultId, VaultIdentity, verify_vault_passphrase};
 use rand_core::{OsRng, RngCore};
@@ -22,12 +27,39 @@ use super::{Inner, ServiceContext};
 use crate::admin::protocol::OwnerInput;
 use crate::attempt_limit::AttemptLimiter;
 use crate::migration_authorization::{
-    BindingDigest, MethodRefusal, MigrationAuthorization, MigrationChallenge, MigrationOperation, MigrationRefusal, SourceOwnerMethod,
-    VaultPassphraseMethod, prove_challenge,
+    BindingDigest, ChallengeBusy, MethodRefusal, MigrationAuthorization, MigrationChallenge, MigrationOperation, MigrationRefusal,
+    SourceOwnerMethod, VaultPassphraseMethod, prove_challenge,
 };
 use crate::service_state::ServiceState;
 
+/// Steps 1 and 2 of a migration exchange done: the service is Ready holding the vault identity, and the service-wide lock
+/// is held until this session drops. See the module docs.
+pub struct MigrationSession<'a, F> {
+    service: &'a ServiceContext<F>,
+    /// Taken out in `drop`, so a contended retire can carry it into a task and keep the lock until the slot is empty.
+    service_wide: Option<OwnedMutexGuard<()>>,
+    /// The service state and check generation at step 2, which step 9 checks again.
+    state: ServiceState,
+    checks: u64,
+}
+
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
+    /// Step 2: takes the service-wide lock, refusing at once with `Busy` while another command holds it, then checks that
+    /// the service is Ready holding the vault identity (step 1) and records its state and check generation.
+    pub async fn begin_migration(&self) -> Result<MigrationSession<'_, F>, MigrationRefusal> {
+        let service_wide = Arc::clone(&self.service_wide)
+            .try_lock_owned()
+            .map_err(|_| MigrationRefusal::Busy(ChallengeBusy))?;
+        let inner = self.inner.lock().await;
+        ready_identity(&inner)?;
+        Ok(MigrationSession {
+            service: self,
+            service_wide: Some(service_wide),
+            state: inner.state,
+            checks: inner.checks,
+        })
+    }
+
     /// Issues the migration challenge for `operation` (step 5), with a nonce from the operating system's random source,
     /// and returns its binding digest, which names it when the owner's input arrives.
     ///
@@ -57,8 +89,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 
     /// The vault passphrase method, checking against the state directory and the vault identity the service holds now.
-    /// Build it in the exchange that takes the challenge, after issuing it: a method built under an earlier unlock checks
-    /// against that unlock's vault identity.
+    /// Build it in the exchange that takes the challenge, under the session's service-wide lock: a method built under an
+    /// earlier unlock checks against that unlock's vault identity. Building it just before issuing the challenge is as
+    /// fresh as just after, and leaves nothing to fail between the challenge and its closing record.
     pub async fn vault_passphrase_method(&self) -> Result<VaultPassphraseMethod, MigrationRefusal> {
         let inner = self.inner.lock().await;
         let held = inner
@@ -155,5 +188,48 @@ fn record_outcome(attempts: &mut AttemptLimiter, outcome: Result<(), &MethodRefu
         Ok(()) => attempts.record_success(),
         Err(MethodRefusal::Owner(_)) => attempts.record_failure(Instant::now()),
         Err(MethodRefusal::Unavailable) => {}
+    }
+}
+
+impl<F: StoreFs + Send + Sync + 'static> MigrationSession<'_, F> {
+    /// The service the session holds the lock of.
+    pub(crate) fn service(&self) -> &ServiceContext<F> {
+        self.service
+    }
+
+    /// Completes once a `lock` is waiting for the service-wide lock this session holds, so a prompt can end the exchange
+    /// rather than make the `lock` wait for the owner.
+    pub async fn lock_requested(&self) {
+        self.service.lock_requested().await;
+    }
+
+    /// Step 9's check: the service is still in the state and at the check generation recorded at step 2, so the summary
+    /// the owner confirmed is still true. The refusal names the state the service is in now.
+    pub async fn ensure_unchanged(&self) -> Result<(), MigrationRefusal> {
+        let inner = self.service.inner.lock().await;
+        ready_identity(&inner)?;
+        match inner.state == self.state && inner.checks == self.checks {
+            true => Ok(()),
+            false => Err(MigrationRefusal::WrongState(inner.state)),
+        }
+    }
+}
+
+impl<F> Drop for MigrationSession<'_, F> {
+    /// Retires any challenge this exchange left pending. When the context's mutex is contended the retire runs in a task
+    /// that owns the service-wide guard, so a later session cannot issue a challenge that the late retire then removes.
+    fn drop(&mut self) {
+        let Some(service_wide) = self.service_wide.take() else { return };
+        let inner = Arc::clone(&self.service.inner);
+        if let Ok(mut held) = inner.try_lock() {
+            held.migration.retire();
+            return;
+        }
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                inner.lock().await.migration.retire();
+                drop(service_wide);
+            });
+        }
     }
 }
