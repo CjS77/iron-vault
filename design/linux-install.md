@@ -35,9 +35,9 @@ ends.
 
 - **Add a hardware key where you have one.** `pam_u2f` (Debian and Ubuntu package `libpam-u2f`) makes `sudo` ask for a
   touch on a FIDO2 key as well as the password.
-  1. Keep a root shell open (`su -` in a spare terminal) until the last step. Without the key file, every `sudo` is
-     refused.
-  2. Register the key; `pamu2fcfg` prints to stdout and touches nothing, so redirect it:
+  1. Before editing `/etc/pam.d/sudo`, open a spare terminal and run `sudo -i` in it, and keep that root shell open until
+     the last step. (`su -` fails on Ubuntu, where root is locked.) Without the key file, every later `sudo` is refused.
+  2. Register the key; `pamu2fcfg` prints to stdout, writes no file and needs a touch on the key, so redirect it:
 
      ```sh
      mkdir -p ~/.config/Yubico && pamu2fcfg > ~/.config/Yubico/u2f_keys
@@ -45,7 +45,7 @@ ends.
 
      Malware running as you can rewrite that file and register its own key. A central `authfile=` under `/etc`, owned by
      root (`auth required pam_u2f.so authfile=/etc/u2f_mappings`), keeps the registration out of its reach. Register with
-     `pamu2fcfg -u "$USER" | sudo tee /etc/u2f_mappings` instead.
+     `pamu2fcfg -u "$USER" | sudo tee -a /etc/u2f_mappings` instead.
   3. In `/etc/pam.d/sudo`, add `auth required pam_u2f.so` after the `@include common-auth` line.
   4. From a second terminal, check that `sudo true` asks for the touch, and only then close the root shell.
 
@@ -69,8 +69,8 @@ swapon --show
 lsblk -o NAME,TYPE,FSTYPE
 ```
 
-A swap partition should sit on a `crypt` device (TYPE column) in the `lsblk` tree, with `swap` in FSTYPE for the partition
-itself. A swap partition directly on a plain disk partition is unencrypted.
+In the `lsblk` tree, the partition should show `crypto_LUKS` in FSTYPE, with a `crypt` device (TYPE column) beneath it
+and `swap` in FSTYPE on that `crypt` device. A swap partition directly on a plain disk partition is unencrypted.
 
 `lsblk` lists no swap files, and Ubuntu's default swap is the file `/swap.img`. For a swap file, find the device that holds
 it and check that device in the `lsblk` tree for `crypt`:
@@ -79,9 +79,9 @@ it and check that device in the `lsblk` tree for `crypt`:
 findmnt -no SOURCE -T /swap.img
 ```
 
-A `zram` swap device is RAM-backed and never reaches disk, so it needs no encryption. If `swapon --show` prints nothing and
-you never hibernate, there is no swap to protect. If you hibernate, the resume device is the swap device: check it the
-same way.
+A `zram` swap device without a writeback device is RAM-backed and never reaches disk, so it needs no encryption.
+If `swapon --show` prints nothing and you never hibernate, there is no swap to protect.
+If you hibernate, the resume device is the swap device: check it the same way.
 
 ## Install
 
@@ -113,7 +113,7 @@ packaged unit sets `LimitMEMLOCK=infinity`, which is what allows the lock, so th
 that lowers the limit. Fix the limit (after a hand edit of a unit or drop-in, run `sudo systemctl daemon-reload` first) and
 `sudo systemctl restart iron-vault`; the service does not restart itself, because it has not failed.
 
-Then add credentials, write a config and approve it, as in [multiuser-linux.md](multiuser-linux.md#setting-it-up):
+Then add each credential the config names, write a config and approve it, as in [multiuser-linux.md](multiuser-linux.md#setting-it-up):
 
 ```sh
 sudo iron-vault add github --origin api.github.com

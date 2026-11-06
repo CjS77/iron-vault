@@ -131,8 +131,9 @@ sudo iron-vault unlock
 
 > **Why `sudo`, and not just `alice`?** Admin commands only work for root or the `iron-vault` account. If plain
 > `alice` could run them, malware in `alice`'s account could too. Going through `sudo` means typing your password
-> each time, if you set `sudo` up as [linux-install.md](linux-install.md#harden-sudo) recommends. Approving a config
-> change *also* needs your approval passphrase, so a hijacked `sudo` session alone isn't enough.
+> every time, if you set `sudo` up with `timestamp_timeout=0` as [linux-install.md](linux-install.md#harden-sudo) recommends
+> (with `tty` it is once per terminal per timeout). Approving a config change *also* needs your approval passphrase,
+> so a hijacked `sudo` session alone isn't enough.
 
 ### 3. Add the credentials
 
@@ -262,9 +263,11 @@ For a program that has a "base URL" setting, set it to the route. A Python scrip
 `/gh` in place of `https://api.github.com`. Not every tool can talk to a socket file; for those, use the
 `http://127.0.0.1` listener with a caller token. The step-4 config has no such listener. Add one as described in
 [linux-install.md](linux-install.md#add-a-tcp-listener): it needs a listener socket unit, a `[listeners.<name>]` table
-with the same address, and a caller with `token_hash`. Get the token with `sudo iron-vault caller-token`: the token goes to
-stdout and the `token_hash` line for the caller's table goes to the terminal. The service keeps only the hash. Some command-line tools, such as `gh`, need more
-than a base URL change and are not supported yet (specification [§6](iron-vault-specification.md#6-conditional-phase-forward-proxy-and-cli-compatibility)).
+with the same address, and a caller with `token_hash`. Get the token with
+`(umask 077; sudo iron-vault caller-token > ~/.iron-vault-token)`: the token goes to a file only the caller can read, and
+the `token_hash` line for the caller's table goes to the terminal. The service keeps only the hash.
+Some command-line tools, such as `gh`, need more than a base URL change and are not supported yet
+(specification [§6](iron-vault-specification.md#6-conditional-phase-forward-proxy-and-cli-compatibility)).
 
 ## What each account can and can't do
 
