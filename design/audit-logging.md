@@ -711,8 +711,8 @@ other approval.
 | `response.scrubbed` | WARN | a relayed response ended, cleanly or not, and a scrub pattern matched in its headers or body (the scrub event) | `request_id`, `route`, `credential`, `matches` |
 | `request.defect` | ERROR | a request was refused by a service defect | `request_id`, `route`, `credential`, `defect` |
 
-**Recovery** (not yet emitted; the recovery epic's tickets emit them. [recovery.md](recovery.md#logging) gives when
-each fires):
+**Recovery** (`recovery.checked` is emitted; `recovery.reminder` is not yet, and the recovery epic's tickets emit it.
+[recovery.md](recovery.md#logging) gives when each fires):
 
 | Event | Level | When | Fields |
 |---|---|---|---|

@@ -253,8 +253,7 @@ vault is locked ([§3.13](iron-vault-specification.md#313-administration-recover
 only if that passes. If the message says Unrecognized, files init did not write are present and the key is
 not confirmed either.* The case the check guards against is a concurrent init: a second init finished first, so the
 owner's own run was refused and its key is dead, yet the re-run answers `already-initialized` for the other run's
-vault. [recovery.md](recovery.md) designs `recovery check`; until it is built, the owner cannot confirm the key and
-treats it as unconfirmed. The endings are:
+vault. [recovery.md](recovery.md) designs `recovery check`. The endings are:
 
 | Ending | Who says it |
 |---|---|

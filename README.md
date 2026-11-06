@@ -230,6 +230,19 @@ credentials: none
 
 Run `unlock` again each time you restart the service. `iron-vault lock` clears the secrets from memory.
 
+#### Check the recovery key
+
+Once the vault exists, prove that the offline recovery key you saved still opens it. The service asks for the key with
+echo off, or reads it from stdin, and the check works whether the service is Locked or Ready:
+
+```sh
+iron-vault recovery check    # prompts for the recovery key
+# the recovery key opens vault 2a682de7-b14d-4900-9ea9-0c968e1a6589; checked at 2026-11-06T09:49:13Z
+```
+
+The check changes nothing in the vault. It records only the time, in `recovery.toml` beside the vault, and logs a
+`recovery.checked` event that never holds the key. Run it again after you move the key to a new place.
+
 ### 5. Store a credential
 
 `add` takes the credential's name and the origins it may ever be sent to. The secret is prompted for, never given as

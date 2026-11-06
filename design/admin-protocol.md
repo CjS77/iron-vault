@@ -894,6 +894,16 @@ On success it prints `initialized vault <vault ID>: approval version 1 committed
 serving` to stdout; the recovery key never goes there. Otherwise it prints the service's error to stderr and exits
 with code 1.
 
+### recovery check
+
+`iron-vault recovery check` takes no argument: the recovery key is the answer to the service's secret prompt, read from
+the terminal with echo off or as the next line of stdin, so `pass show iron-vault-recovery | sudo iron-vault recovery
+check` works. On success it prints `the recovery key opens vault <vault ID>; checked at <time>` to stdout, the time in
+the record's form (`2026-11-06T09:49:13Z`). When the result's `recorded` flag is `0`, it also warns on stderr that the
+check time was not saved, so reminders still count from the last recorded check; the exit code is still `0`, because the
+key was proved. Otherwise it prints the service's error to stderr and exits with code 1. It disables core dumps first,
+like every client command, because the key passes through its memory.
+
 ### caller-token
 
 `iron-vault caller-token` takes no argument. On success it writes exactly the token and a newline to stdout, so
