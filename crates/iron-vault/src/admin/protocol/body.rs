@@ -286,6 +286,7 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::CredentialInUse,
         ErrorCode::RandomSourceFailed,
         ErrorCode::ListTooLarge,
+        ErrorCode::MemoryUnprotected,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

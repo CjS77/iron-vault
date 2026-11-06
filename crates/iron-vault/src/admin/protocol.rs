@@ -481,6 +481,9 @@ pub enum ErrorCode {
     RandomSourceFailed = 25,
     /// `list`: the credential list does not fit one frame; the message names the count.
     ListTooLarge = 26,
+    /// `unlock`: a protected install's memory is not locked, so the vault is not opened; the message names the
+    /// memory-lock limit or the locking error, and the service stays Locked.
+    MemoryUnprotected = 27,
 }
 
 impl ErrorCode {
@@ -513,6 +516,7 @@ impl ErrorCode {
             Self::CredentialInUse => "credential-in-use",
             Self::RandomSourceFailed => "random-source-failed",
             Self::ListTooLarge => "list-too-large",
+            Self::MemoryUnprotected => "memory-unprotected",
         }
     }
 

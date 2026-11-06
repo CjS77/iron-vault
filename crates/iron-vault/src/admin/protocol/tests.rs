@@ -143,6 +143,8 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::UnknownCredential),
         Just(ErrorCode::CredentialInUse),
         Just(ErrorCode::RandomSourceFailed),
+        Just(ErrorCode::ListTooLarge),
+        Just(ErrorCode::MemoryUnprotected),
     ]
 }
 
@@ -504,6 +506,7 @@ fn the_unlock_error_codes_have_their_documented_numbers_and_names() {
         (ErrorCode::UnlockDenied, 14, "unlock-denied"),
         (ErrorCode::UnlockFailed, 15, "unlock-failed"),
         (ErrorCode::UnlockedUnavailable, 16, "unlocked-unavailable"),
+        (ErrorCode::MemoryUnprotected, 27, "memory-unprotected"),
     ]
     .into_iter()
     .for_each(|(code, number, name)| {
@@ -636,7 +639,7 @@ fn malformed_fixed_width_values_and_flags_are_refused() {
 
 #[test]
 fn unknown_error_codes_are_refused() {
-    [0, 27, 0xffff].into_iter().for_each(|code: u16| {
+    [0, 28, 0xffff].into_iter().for_each(|code: u16| {
         let error = body(&[field(1, &code.to_be_bytes()), field(2, b"m")]);
         assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::UnknownErrorCode(code));
     });
