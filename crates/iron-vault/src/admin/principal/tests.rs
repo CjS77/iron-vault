@@ -1,4 +1,5 @@
 use super::*;
+use crate::deployment::DEFAULT_OVERFLOW_UID;
 
 const SERVICE: u32 = 997;
 const OTHER: u32 = 1000;
@@ -47,6 +48,22 @@ fn development_refuses_root_even_as_the_service_account() {
         Err(NotAnAdminPrincipal::Development { uid: 0 })
     );
     assert!(accepts(DeploymentProfile::Development, 0, OTHER).is_err());
+}
+
+#[test]
+fn container_accepts_only_root() {
+    assert_eq!(accepts(DeploymentProfile::Container, SERVICE, 0).unwrap().peer(), peer(0));
+}
+
+#[test]
+fn container_refuses_the_service_account_a_login_and_the_overflow_uid_and_points_at_host_sudo() {
+    [SERVICE, OTHER, DEFAULT_OVERFLOW_UID].into_iter().for_each(|uid| {
+        let refused = accepts(DeploymentProfile::Container, SERVICE, uid).unwrap_err();
+        assert_eq!(refused, NotAnAdminPrincipal::Container { uid });
+        assert_eq!(refused.uid(), uid);
+        let message = refused.to_string();
+        assert!(message.contains("host") && message.contains("sudo"), "{message}");
+    });
 }
 
 #[test]

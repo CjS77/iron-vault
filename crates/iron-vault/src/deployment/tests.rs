@@ -16,12 +16,46 @@ fn env() -> ProfileEnv {
 
 #[test]
 fn the_current_profile_follows_the_dev_mode_feature() {
-    let expected = if cfg!(feature = "dev-mode") {
-        DeploymentProfile::Development
-    } else {
-        DeploymentProfile::Protected
+    let expected = match (cfg!(feature = "dev-mode"), cfg!(feature = "container")) {
+        (true, _) => DeploymentProfile::Development,
+        (false, true) => DeploymentProfile::Container,
+        (false, false) => DeploymentProfile::Protected,
     };
     assert_eq!(DeploymentProfile::current(), expected);
+}
+
+#[test]
+fn container_resolves_the_protected_paths_and_service_account() {
+    let protected = ServicePaths::for_profile(DeploymentProfile::Protected, &env()).unwrap();
+    let container = ServicePaths::for_profile(DeploymentProfile::Container, &env()).unwrap();
+    assert_eq!(
+        container,
+        ServicePaths {
+            profile: DeploymentProfile::Container,
+            ..protected
+        }
+    );
+    assert_eq!(DeploymentProfile::Container.label(), "container");
+    assert_eq!(
+        bootstrap_log_dir(DeploymentProfile::Container, &env()),
+        Ok(PathBuf::from("/var/log/iron-vault"))
+    );
+    assert_eq!(
+        env().service_owner(DeploymentProfile::Container),
+        Ok(ExpectedOwner { uid: SERVICE })
+    );
+}
+
+#[test]
+fn container_runs_only_as_the_service_account() {
+    let as_uid = |invoking_uid| ProfileEnv { invoking_uid, ..env() };
+    assert_eq!(require_service_account(DeploymentProfile::Container, &as_uid(SERVICE)), Ok(()));
+    [0, USER].into_iter().for_each(|uid| {
+        assert_eq!(
+            require_service_account(DeploymentProfile::Container, &as_uid(uid)),
+            Err(ProfileError::NotServiceAccount { uid })
+        )
+    });
 }
 
 #[test]
@@ -288,6 +322,7 @@ fn a_malformed_overflow_uid_file_is_an_error_naming_the_file_but_not_its_content
 fn the_version_names_the_enabled_features() {
     let enabled: Vec<&str> = [
         ("dev-mode", cfg!(feature = "dev-mode")),
+        ("container", cfg!(feature = "container")),
         ("test-support", cfg!(feature = "test-support")),
     ]
     .into_iter()

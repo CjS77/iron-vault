@@ -48,14 +48,18 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// Refuses an unlock in a protected install unless `memory` is `Locked` (§3.11). No secret is in memory before unlock,
+/// Refuses an unlock in a protected or container install unless `memory` is `Locked` (§3.11). No secret is in memory before unlock,
 /// so the service stays Locked with nothing to leak, and `status` says why. An `Unsupported` platform refuses too: no
 /// protected platform ships without a locking adapter. Development mode has reported the failure at startup and goes
 /// on.
 pub(crate) fn memory_guard(profile: DeploymentProfile, memory: &MemoryProtection) -> Result<(), UnlockRefusal> {
     match (profile, memory) {
-        (DeploymentProfile::Development, _) | (DeploymentProfile::Protected, MemoryProtection::Locked) => Ok(()),
-        (DeploymentProfile::Protected, unprotected) => Err(UnlockRefusal::MemoryUnprotected(unprotected.clone())),
+        (DeploymentProfile::Development, _) | (DeploymentProfile::Protected | DeploymentProfile::Container, MemoryProtection::Locked) => {
+            Ok(())
+        }
+        (DeploymentProfile::Protected | DeploymentProfile::Container, unprotected) => {
+            Err(UnlockRefusal::MemoryUnprotected(unprotected.clone()))
+        }
     }
 }
 

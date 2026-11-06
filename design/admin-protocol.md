@@ -576,7 +576,7 @@ an unknown command, is an error.
 
 | Tag | Field | Value |
 |---|---|---|
-| 2 | deployment profile | `u8`: `1` protected, `2` development |
+| 2 | deployment profile | `u8`: `1` protected, `2` development, `3` container |
 
 #### status
 
@@ -589,7 +589,7 @@ digest or permitted origin.
 |---|---|---|
 | 2 | service state | `u8`: `1` starting, `2` locked, `3` checking, `4` ready, `5` unavailable, `6` stopped |
 | 3 | unavailable reason | `u8`: `0` none, `1` policy invalid, `2` recovery needed; non-zero exactly when the state is `5` |
-| 4 | deployment profile | `u8`: `1` protected, `2` development |
+| 4 | deployment profile | `u8`: `1` protected, `2` development, `3` container |
 | 5 | vault ID | byte value: empty while the vault is locked, otherwise the 16 raw bytes of the vault ID |
 | 6 | committed approval version | `u64`: `0` when none is committed, and while the vault is locked |
 | 7 | highest reserved approval version | `u64`: `0` while the vault is locked |
@@ -866,7 +866,7 @@ credential (or `credentials` alone when there are none or they are unknown), the
 (pinned CA unavailable)` line per route fault. A value sealed behind a locked vault prints as `unknown while the vault
 is locked`. Under the development profile the profile line is exactly `profile: development — no isolation from
 malware running as <user>`, with the user the CLI runs as: in development the service account, the admin principal and
-the invoking user are the same account. The output is a function of the report, so two runs on the same state are
+the invoking user are the same account. Under the container profile the line is `profile: container`. The output is a function of the report, so two runs on the same state are
 byte-identical. It exits `0` when the service is Ready and `4` for any other state.
 
 ### list

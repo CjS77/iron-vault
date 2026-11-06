@@ -82,6 +82,16 @@ fn a_protected_install_refuses_unlock_unless_memory_is_locked() {
 }
 
 #[test]
+fn a_container_install_refuses_unlock_unless_memory_is_locked() {
+    unprotected().into_iter().for_each(|(memory, _)| {
+        assert!(
+            matches!(memory_guard(DeploymentProfile::Container, &memory), Err(UnlockRefusal::MemoryUnprotected(held)) if held == memory)
+        )
+    });
+    assert!(memory_guard(DeploymentProfile::Container, &MemoryProtection::Locked).is_ok());
+}
+
+#[test]
 fn development_mode_never_refuses_unlock_for_memory() {
     unprotected()
         .into_iter()

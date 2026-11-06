@@ -172,7 +172,7 @@ const fn problem_phrase(problem: &Problem) -> &'static str {
 /// wrong one is refused by the trust check rather than repaired.
 fn create_development_dir(profile: DeploymentProfile, path: &Path) -> Result<(), LogOpenError> {
     match profile {
-        DeploymentProfile::Protected => Ok(()),
+        DeploymentProfile::Protected | DeploymentProfile::Container => Ok(()),
         DeploymentProfile::Development => DirBuilder::new()
             .recursive(true)
             .mode(DEVELOPMENT_DIR_MODE)

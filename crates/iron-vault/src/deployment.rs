@@ -1,8 +1,9 @@
 //! The deployment profile: how this build is installed, and the install paths and service account that follow from it.
 //!
 //! A packaged binary must never be switchable into development mode, which gives no isolation from malware running as
-//! the user (specification §3.1). So the profile is fixed at build time by the `dev-mode` feature, never chosen by
-//! config or flag, and without that feature the development code paths are not compiled in.
+//! the user (specification §3.1). So the profile is fixed at build time by the `dev-mode` or `container` feature, never
+//! chosen by config, flag or detection. Without `dev-mode` the development code paths are not compiled in, and the two
+//! features cannot be combined.
 //!
 //! Resolution is pure: [`ServicePaths::for_profile`] takes what it needs from the process as a [`ProfileEnv`] value,
 //! and only [`ProfileEnv::from_process`], [`Accounts::read`] and [`PasswdDirectory::new`] touch the system. Library crates take the resolved
@@ -16,6 +17,9 @@ use iron_vault_policy::{AccountDirectory, AccountName};
 use crate::path_metadata::{self, CollectError};
 use crate::trusted_path::ExpectedOwner;
 use crate::trusted_path_report::ServicePaths;
+
+#[cfg(all(feature = "dev-mode", feature = "container"))]
+compile_error!("the `dev-mode` and `container` features select different deployment profiles and cannot be combined");
 
 /// The account a protected installation runs as, created by the package.
 pub const SERVICE_ACCOUNT: &str = "iron-vault";
@@ -56,19 +60,33 @@ pub enum DeploymentProfile {
     /// A user-level installation with no isolation from that user's malware: the invoking user runs the service and
     /// may own the binary.
     Development,
+    /// A Docker Compose stack: `Protected`'s paths, service account, trusted-path rules and locked-memory rule, except
+    /// that root is the only admin principal (a host `sudo` reaches the service through the bind-mounted admin socket)
+    /// and the service binds its own TCP listeners, because Docker cannot pass a socket into a container.
+    Container,
 }
 
 impl DeploymentProfile {
-    /// The profile this binary was built for: `Development` only with the `dev-mode` feature.
+    /// The profile this binary was built for: `Development` with the `dev-mode` feature, `Container` with the
+    /// `container` feature, else `Protected`.
     pub const fn current() -> Self {
         #[cfg(feature = "dev-mode")]
         {
             Self::Development
         }
-        #[cfg(not(feature = "dev-mode"))]
+        #[cfg(all(feature = "container", not(feature = "dev-mode")))]
+        {
+            Self::Container
+        }
+        #[cfg(not(any(feature = "dev-mode", feature = "container")))]
         {
             Self::Protected
         }
+    }
+
+    /// Whether the profile keeps its files and runs as the packaged `iron-vault` service account, as `Protected` does.
+    pub const fn is_service_account_install(self) -> bool {
+        matches!(self, Self::Protected | Self::Container)
     }
 
     /// The profile's name in a log record's `deployment_profile` field.
@@ -76,6 +94,7 @@ impl DeploymentProfile {
         match self {
             Self::Protected => "protected",
             Self::Development => "development",
+            Self::Container => "container",
         }
     }
 }
@@ -103,8 +122,10 @@ pub enum ProfileError {
     /// A development build was started as root.
     #[error("refusing to run as root: a development build must never be installed as the system service")]
     DevelopmentAsRoot,
-    /// A protected build was started as an account other than the service account.
-    #[error("a protected install runs only as the `iron-vault` account; start it through `systemctl start iron-vault`")]
+    /// A protected or container build was started as an account other than the service account.
+    #[error(
+        "a protected or container install runs only as the `iron-vault` account; start it through `systemctl start iron-vault`, or run the container as that account's uid"
+    )]
     NotServiceAccount {
         /// The uid this process runs as. Kept out of the message; the log and the caller may report it.
         uid: u32,
@@ -269,7 +290,7 @@ impl ProfileEnv {
     /// in development.
     pub fn service_owner(&self, profile: DeploymentProfile) -> Result<ExpectedOwner, ProfileError> {
         match profile {
-            DeploymentProfile::Protected => self
+            DeploymentProfile::Protected | DeploymentProfile::Container => self
                 .service_account_uid
                 .map(|uid| ExpectedOwner { uid })
                 .ok_or(ProfileError::MissingServiceAccount { account: SERVICE_ACCOUNT }),
@@ -278,12 +299,12 @@ impl ProfileEnv {
     }
 }
 
-/// Refuses a protected service that is not running as the service account. Root passes the trusted-path checks, which look at
+/// Refuses a protected or container service that is not running as the service account. Root passes the trusted-path checks, which look at
 /// file ownership and not the process uid, and would then write vault files the service account cannot use. Development
 /// always passes: `development_banner` already refuses root.
 pub fn require_service_account(profile: DeploymentProfile, env: &ProfileEnv) -> Result<(), ProfileError> {
     match profile {
-        DeploymentProfile::Protected if env.service_owner(profile)?.uid != env.invoking_uid => {
+        DeploymentProfile::Protected | DeploymentProfile::Container if env.service_owner(profile)?.uid != env.invoking_uid => {
             Err(ProfileError::NotServiceAccount { uid: env.invoking_uid })
         }
         _ => Ok(()),
@@ -293,7 +314,7 @@ pub fn require_service_account(profile: DeploymentProfile, env: &ProfileEnv) -> 
 /// The log directory a deployment writes to until an approved config names another: its bootstrap directory.
 pub fn bootstrap_log_dir(profile: DeploymentProfile, env: &ProfileEnv) -> Result<PathBuf, ProfileError> {
     match profile {
-        DeploymentProfile::Protected => Ok(PathBuf::from(PROTECTED_LOG_DIR)),
+        DeploymentProfile::Protected | DeploymentProfile::Container => Ok(PathBuf::from(PROTECTED_LOG_DIR)),
         DeploymentProfile::Development => development_log_dir(env),
     }
 }
@@ -313,16 +334,17 @@ impl ServicePaths {
     /// Resolves the install paths and service account of `profile` from `env`.
     pub fn for_profile(profile: DeploymentProfile, env: &ProfileEnv) -> Result<Self, ProfileError> {
         match profile {
-            DeploymentProfile::Protected => protected_paths(env),
+            DeploymentProfile::Protected | DeploymentProfile::Container => protected_paths(profile, env),
             DeploymentProfile::Development => development_paths(env),
         }
     }
 }
 
-fn protected_paths(env: &ProfileEnv) -> Result<ServicePaths, ProfileError> {
+/// The paths of a service-account install, which `Protected` and `Container` share; `profile` is kept in the result.
+fn protected_paths(profile: DeploymentProfile, env: &ProfileEnv) -> Result<ServicePaths, ProfileError> {
     Ok(ServicePaths {
-        profile: DeploymentProfile::Protected,
-        owner: env.service_owner(DeploymentProfile::Protected)?,
+        profile,
+        owner: env.service_owner(profile)?,
         config: PathBuf::from(PROTECTED_CONFIG),
         state_dir: PathBuf::from(PROTECTED_STATE_DIR),
         runtime_dir: Some(PathBuf::from(PROTECTED_RUNTIME_DIR)),
@@ -398,6 +420,7 @@ pub fn version() -> String {
 /// names with `Cargo.toml`'s `[features]` table, so a new feature cannot be left out of `--version`.
 const CARGO_FEATURES: &[(&str, bool)] = &[
     ("dev-mode", cfg!(feature = "dev-mode")),
+    ("container", cfg!(feature = "container")),
     ("test-support", cfg!(feature = "test-support")),
 ];
 

@@ -206,8 +206,12 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             .prop_filter("a reveal is never empty", |bytes| !bytes.is_empty())
             .prop_map(|bytes| reveal(&bytes)),
         Just(()).prop_map(|()| Frame::Response(AdminResponse::Success)),
-        prop_oneof![Just(DeploymentProfile::Protected), Just(DeploymentProfile::Development)]
-            .prop_map(|profile| Frame::Response(AdminResponse::Ping { profile })),
+        prop_oneof![
+            Just(DeploymentProfile::Protected),
+            Just(DeploymentProfile::Development),
+            Just(DeploymentProfile::Container)
+        ]
+        .prop_map(|profile| Frame::Response(AdminResponse::Ping { profile })),
         any::<bool>().prop_map(|cleared| Frame::Response(AdminResponse::Lock { cleared })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Add { record_id: v4(bytes) })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Replace { record_id: v4(bytes) })),
@@ -253,7 +257,11 @@ fn status_report() -> impl Strategy<Value = StatusReport> {
         Just(ServiceState::Unavailable(FailureReason::RecoveryNeeded)),
         Just(ServiceState::Stopped),
     ];
-    let profile = prop_oneof![Just(DeploymentProfile::Protected), Just(DeploymentProfile::Development)];
+    let profile = prop_oneof![
+        Just(DeploymentProfile::Protected),
+        Just(DeploymentProfile::Development),
+        Just(DeploymentProfile::Container)
+    ];
     let memory = prop_oneof![
         Just(MemoryStatus::Locked),
         "\\PC{0,64}".prop_map(MemoryStatus::Unavailable),
@@ -467,6 +475,13 @@ fn ping_result_has_the_documented_encoding() {
             profile: DeploymentProfile::Development
         })
     ));
+    let (container, _) = decoded(&raw(1, 4, &body(&[field(1, &[0, 1]), field(2, &[3])])));
+    assert!(same(
+        &container,
+        &Frame::Response(AdminResponse::Ping {
+            profile: DeploymentProfile::Container
+        })
+    ));
 }
 
 #[test]
@@ -505,7 +520,7 @@ fn a_success_result_must_name_a_command_with_a_result_and_a_known_profile() {
     assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(13));
     let without_profile = field(1, &[0, 1]);
     assert_eq!(decode_err(&raw(1, 4, &without_profile)), FrameError::MissingField(2));
-    [&[][..], &[0], &[3], &[1, 1]].into_iter().for_each(|profile| {
+    [&[][..], &[0], &[4], &[1, 1]].into_iter().for_each(|profile| {
         let bad = body(&[field(1, &[0, 1]), field(2, profile)]);
         assert_eq!(decode_err(&raw(1, 4, &bad)), FrameError::InvalidValue(2));
     });

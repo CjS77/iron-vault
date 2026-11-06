@@ -51,14 +51,17 @@ impl AdminPrincipals {
         Self { profile, service_uid }
     }
 
-    /// Accepts `peer` when its uid is an admin principal: root or the service account in a protected install, and only
-    /// the service account in development, never root, because a development build refuses to run as root.
+    /// Accepts `peer` when its uid is an admin principal: root or the service account in a protected install, only
+    /// the service account in development, never root, because a development build refuses to run as root, and only
+    /// root in a container, whose service account holds no host login to administer from.
     pub fn accepts(&self, peer: PeerIdentity) -> Result<AdminPrincipal, NotAnAdminPrincipal> {
         match self.profile {
             DeploymentProfile::Protected if peer.uid() == 0 || peer.uid() == self.service_uid => Ok(AdminPrincipal { peer }),
             DeploymentProfile::Development if peer.uid() != 0 && peer.uid() == self.service_uid => Ok(AdminPrincipal { peer }),
+            DeploymentProfile::Container if peer.uid() == 0 => Ok(AdminPrincipal { peer }),
             DeploymentProfile::Protected => Err(NotAnAdminPrincipal::Protected { uid: peer.uid() }),
             DeploymentProfile::Development => Err(NotAnAdminPrincipal::Development { uid: peer.uid() }),
+            DeploymentProfile::Container => Err(NotAnAdminPrincipal::Container { uid: peer.uid() }),
         }
     }
 }
@@ -78,13 +81,19 @@ pub enum NotAnAdminPrincipal {
         /// The refused uid.
         uid: u32,
     },
+    /// A container install refused the peer; the owner reaches the service from the host, where root owns the admin socket.
+    #[error("uid {uid} may not use the admin socket; run the command on the host through `sudo`")]
+    Container {
+        /// The refused uid.
+        uid: u32,
+    },
 }
 
 impl NotAnAdminPrincipal {
     /// The refused uid.
     pub const fn uid(&self) -> u32 {
         match self {
-            Self::Protected { uid } | Self::Development { uid } => *uid,
+            Self::Protected { uid } | Self::Development { uid } | Self::Container { uid } => *uid,
         }
     }
 }

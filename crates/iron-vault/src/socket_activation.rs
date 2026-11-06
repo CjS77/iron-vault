@@ -166,8 +166,9 @@ pub fn inheritance(env: &ActivationEnv, pid: u32) -> Result<Inheritance, Activat
     Ok(Inheritance::Listeners(listeners))
 }
 
-/// Refuses a TCP listener the service would bind itself in a protected install; development builds and Unix sockets
-/// may bind.
+/// Refuses a TCP listener the service would bind itself in a protected install; development and container builds and
+/// Unix sockets may bind. A container cannot receive a socket from the host, and its listener addresses exist only in
+/// its own network namespace.
 pub fn check_origin(profile: DeploymentProfile, listener: &ListenerName, endpoint: &Endpoint, adopted: bool) -> Result<(), NotActivated> {
     match (profile, endpoint, adopted) {
         (DeploymentProfile::Protected, Endpoint::Tcp { .. }, false) => Err(NotActivated {

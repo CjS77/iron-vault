@@ -1034,6 +1034,19 @@ fn a_service_owned_folder_above_a_protected_binary_is_cautioned() {
 }
 
 #[test]
+fn container_applies_the_protected_owner_rules() {
+    let in_container =
+        |chain: &[PathComponent]| check_with_cautions(TrustedPathRule::Binary, DeploymentProfile::Container, SERVICE_OWNER, chain);
+    assert_eq!(
+        in_container(&opt_binary_chain(SERVICE)),
+        Ok(vec![caution(CautionedFile::Binary, "/opt/iron-vault", SERVICE)])
+    );
+    let service_owned = vec![dir("/", ROOT_UID, 0o755), file("/iron-vault", SERVICE, 0o755)];
+    let refused = in_container(&service_owned).unwrap_err();
+    assert_eq!(refused.problem, wrong_owner(SERVICE, OwnerRequirement::Root));
+}
+
+#[test]
 fn a_service_owned_folder_above_the_config_is_not_cautioned() {
     let mut chain = config_chain(config_file());
     chain[2] = dir("/etc/iron-vault", SERVICE, 0o700);

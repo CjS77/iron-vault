@@ -87,6 +87,7 @@ pub(super) const fn profile_code(profile: DeploymentProfile) -> u8 {
     match profile {
         DeploymentProfile::Protected => 1,
         DeploymentProfile::Development => 2,
+        DeploymentProfile::Container => 3,
     }
 }
 
@@ -95,6 +96,7 @@ pub(super) fn read_profile(tag: u16, value: &[u8]) -> Result<DeploymentProfile, 
     match value {
         [1] => Ok(DeploymentProfile::Protected),
         [2] => Ok(DeploymentProfile::Development),
+        [3] => Ok(DeploymentProfile::Container),
         _ => Err(FrameError::InvalidValue(tag)),
     }
 }

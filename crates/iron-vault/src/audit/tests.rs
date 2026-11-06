@@ -107,7 +107,11 @@ fn service_started_names_the_build_profile() {
         hardening: &report,
     };
     let record = parse(&capture_as(DeploymentProfile::current(), || event.emit()));
-    let expected = if cfg!(feature = "dev-mode") { "development" } else { "protected" };
+    let expected = match (cfg!(feature = "dev-mode"), cfg!(feature = "container")) {
+        (true, _) => "development",
+        (false, true) => "container",
+        (false, false) => "protected",
+    };
     assert_eq!(record["deployment_profile"], expected);
     assert_eq!(record["log_destination"], "stdout");
 }

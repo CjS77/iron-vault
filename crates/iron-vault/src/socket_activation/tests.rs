@@ -145,6 +145,9 @@ fn profile_rule_table() {
         (DeploymentProfile::Development, &tcp, false, Ok(())),
         (DeploymentProfile::Development, &tcp, true, Ok(())),
         (DeploymentProfile::Development, &unix, false, Ok(())),
+        (DeploymentProfile::Container, &tcp, false, Ok(())),
+        (DeploymentProfile::Container, &tcp, true, Ok(())),
+        (DeploymentProfile::Container, &unix, false, Ok(())),
     ]
     .into_iter()
     .for_each(|(profile, endpoint, adopted, expected)| {

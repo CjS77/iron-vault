@@ -593,7 +593,7 @@ impl Walk {
     /// The account the service runs as: the packaged service account, or the invoking user's uid in development.
     fn service_account_name(self) -> String {
         match self.profile {
-            DeploymentProfile::Protected => SERVICE_ACCOUNT.to_string(),
+            DeploymentProfile::Protected | DeploymentProfile::Container => SERVICE_ACCOUNT.to_string(),
             DeploymentProfile::Development => self.owner.uid.to_string(),
         }
     }
@@ -616,7 +616,7 @@ impl Walk {
     /// A passing ancestor's caution: in the protected profile, the binary must be root's alone, so an ancestor the
     /// service account owns lets that account replace it.
     fn caution(self, component: &PathComponent) -> Option<PathCaution> {
-        let cautioned = self.profile == DeploymentProfile::Protected && component.uid != ROOT_UID;
+        let cautioned = self.profile.is_service_account_install() && component.uid != ROOT_UID;
         self.rule.cautioned_file().filter(|_| cautioned).map(|file| PathCaution {
             file,
             path: component.path.clone(),
@@ -629,7 +629,7 @@ impl Walk {
     /// reach, so it is never less safe than one the user owns.
     const fn binary_owner(self) -> OwnerRequirement {
         match self.profile {
-            DeploymentProfile::Protected => OwnerRequirement::Root,
+            DeploymentProfile::Protected | DeploymentProfile::Container => OwnerRequirement::Root,
             DeploymentProfile::Development => OwnerRequirement::root_or(self.owner.uid),
         }
     }

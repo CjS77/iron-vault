@@ -18,6 +18,7 @@ fn version_names_the_enabled_features() {
     assert!(output.status.success(), "exit status {:?}", output.status);
     let enabled: Vec<&str> = [
         ("dev-mode", cfg!(feature = "dev-mode")),
+        ("container", cfg!(feature = "container")),
         ("test-support", cfg!(feature = "test-support")),
     ]
     .into_iter()

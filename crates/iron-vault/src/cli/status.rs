@@ -41,6 +41,7 @@ fn reason_text(reason: FailureReason) -> &'static str {
 fn profile_line(profile: DeploymentProfile, user: impl FnOnce() -> String) -> String {
     match profile {
         DeploymentProfile::Protected => "profile: protected".to_owned(),
+        DeploymentProfile::Container => "profile: container".to_owned(),
         DeploymentProfile::Development => format!("profile: development — {}", no_isolation_warning(&user())),
     }
 }

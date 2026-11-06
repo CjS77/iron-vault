@@ -443,6 +443,7 @@ fn profile_name(profile: DeploymentProfile) -> &'static str {
     match profile {
         DeploymentProfile::Protected => "protected",
         DeploymentProfile::Development => "development",
+        DeploymentProfile::Container => "container",
     }
 }
 

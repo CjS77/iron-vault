@@ -10,6 +10,10 @@ rust-version.workspace = true
 # Builds the Development deployment profile: the invoking user runs the service, with no isolation from that user's
 # malware. Never enable it in a packaged build; CI refuses a release build whose `--version` names it.
 dev-mode = []
+# Builds the Container profile for a Docker Compose stack: `Protected`'s paths and service account, but root is the only
+# admin principal and the service binds its own TCP listeners. Never enable it in a packaged build; the package check
+# refuses a binary whose `--version` names it. It cannot be combined with `dev-mode`.
+container = []
 # Test hooks for integration tests: pinning a test CA from PEM bytes (`UpstreamTrust::pinned_from_pem`), skipping the
 # trusted-path rule that a test tree under a group-writable directory cannot pass, and the service context's
 # `identity_probe`, `advance_check_generation` and `pending_migration`. Only this crate's own dev-dependency enables it.
