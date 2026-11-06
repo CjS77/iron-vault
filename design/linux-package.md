@@ -36,7 +36,7 @@ units by itself, so it would also need an install script.
 
 The package depends on `systemd`, which must be the init system, and on `debconf` for the
 [purge question](#purge). It recommends `logrotate`, which reads the rotation file it ships
-([log-operations.md](log-operations.md#rotation)).
+([log-operations.md](../book/src/reference/log-operations.md#rotation)).
 
 ## Ownership
 
@@ -162,7 +162,7 @@ WantedBy=multi-user.target
 | `LimitCORE=0` | No core dump can hold service memory ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)). The service also sets `RLIMIT_CORE` to 0 and clears `PR_SET_DUMPABLE` itself. |
 | `LimitMEMLOCK=infinity` | `hardening.rs` calls `mlockall` only when the `RLIMIT_MEMLOCK` soft limit is unlimited, because locking future mappings under a finite limit makes allocations fail once the service grows past it. A protected install does not unlock without locked memory ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)). Locking needs no capability once the limit allows it. |
 | `UMask=0077` | Any file the service creates without an explicit mode is its own alone. Files that need another mode set it explicitly: the log file `0640`, request sockets `0666`. |
-| `LogsDirectory=`, `LogsDirectoryMode=0750` | systemd creates `/var/log/iron-vault`, owned by the service account, before each start, and makes it writable under `ProtectSystem=strict` ([log-operations.md](log-operations.md)). Without `LogsDirectoryMode=` the mode would be `0755`, which the `LogDir` rule refuses. |
+| `LogsDirectory=`, `LogsDirectoryMode=0750` | systemd creates `/var/log/iron-vault`, owned by the service account, before each start, and makes it writable under `ProtectSystem=strict` ([log-operations.md](../book/src/reference/log-operations.md)). Without `LogsDirectoryMode=` the mode would be `0755`, which the `LogDir` rule refuses. |
 | No `Environment=`, `EnvironmentFile=` or `PassEnvironment=` | The service gets only the environment systemd builds for a unit, never the environment of the administrator who started it. The service does not depend on this: it ignores proxy, trust-root and log-level variables in code ([§3.7](iron-vault-specification.md#37-outbound-tls-and-environment)). |
 | `ProtectSystem=strict`, `ReadWritePaths=` | The whole filesystem is read-only to the service except its config, state and runtime directories and its log directory. `/run` is read-only under `strict` too, so the runtime directory must be listed: the service binds `admin.sock` there. An approved config whose `[logging] destination` names another directory needs a drop-in adding that directory to `ReadWritePaths=`. |
 | `ProtectHome=yes` | `/home`, `/root` and `/run/user` are invisible. The service has no reason to read a login account's files. |
@@ -405,7 +405,7 @@ anything. The package creates no admin group. Membership of the `iron-vault` gro
 socket's group has no access, and the peer check refuses the account anyway. It does grant read access to the audit
 log, because `/var/log/iron-vault` is `0750` and `iron-vault.log` is `0640`, both with the service's group, and
 anyone who reads the log sees every route, caller and refusal. Only a log collector's own service account belongs in
-the group; never add a login account ([log-operations.md](log-operations.md#location-and-permissions)).
+the group; never add a login account ([log-operations.md](../book/src/reference/log-operations.md#location-and-permissions)).
 
 The owner runs `sudo iron-vault <command>`. The installation guide recommends per-terminal `sudo` credential caching
 or none, and a hardware-key factor where the platform supports one.

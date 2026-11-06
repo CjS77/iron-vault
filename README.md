@@ -39,7 +39,7 @@ Done in v0:
   cooldown, starting at 30 s and doubling to 15 min. A limited owner is refused before any prompt, and `lock` does not
   clear the count.
 - **Audit logging:** typed JSON records of request and administrative events, which never log secret values. See the
-  [log operations guide](design/log-operations.md).
+  [log operations guide](book/src/reference/log-operations.md).
 
 Still to come in v0:
 
@@ -58,7 +58,7 @@ services.
 |---------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
 | AI agents and MCP servers       | Use FX, Brave, Venice, and other configured APIs without real keys in agent-readable configuration or environment variables                               |
 | Naomi back-office applications  | Share installation credentials through isolated routes; add Google consent and token refresh in the OAuth phase                                           |
-| Shared Linux workstations       | Give each OS account only its own routes, recognised from the connecting account, with no keys in any home directory ([guide](design/multiuser-linux.md)) |
+| Shared Linux workstations       | Give each OS account only its own routes, recognised from the connecting account, with no keys in any home directory ([guide](book/src/installation/multiuser-linux.md)) |
 | Server and Compose applications | Keep credentials in one protected service while application containers receive only the proxy access they need                                            |
 | Developer CLI tools             | Avoid provider credentials in application files where a tested base-URL integration supports the complete workflow                                        |
 
@@ -100,10 +100,10 @@ sudo iron-vault init
 sudo iron-vault unlock
 ```
 
-The [installation guide](design/linux-install.md) covers what the protection depends on: `sudo` credential caching and a
+The [installation guide](book/src/installation/linux-install.md) covers what the protection depends on: `sudo` credential caching and a
 second factor, encrypted swap and hibernation storage. It also covers adding a TCP listener, upgrading (the service
 restarts Locked, so run `unlock` again), and uninstalling and purging (the vault is kept unless you say otherwise). The
-[multi-user guide](design/multiuser-linux.md) shows a complete setup.
+[multi-user guide](book/src/installation/multiuser-linux.md) shows a complete setup.
 
 ## Development mode
 

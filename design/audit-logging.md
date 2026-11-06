@@ -206,7 +206,7 @@ The rules below keep the records readable by Loki, Elastic and other tools witho
   cannot hold an array.
 - **Loki labels:** only `service`, `event`, `level` and, if wanted, `route`. Never a field with many distinct values,
   such as `request_id` or `caller`, which Loki would turn into a separate stream each. The
-  [log operations guide](log-operations.md#collectors) gives the collector settings.
+  [log operations guide](../book/src/reference/log-operations.md#collectors) gives the collector settings.
 - **Elastic:** a collector can rename `timestamp` to `@timestamp`; the service keeps the name `timestamp`.
 - **Collectors read the file as it is.** Grafana Alloy (and Promtail), Vector, Fluent Bit and Filebeat each read
   JSON Lines files natively, need no plugin, and follow a file that `logrotate` renames.
@@ -855,7 +855,7 @@ The alternatives were rejected. Detecting a container (`/.dockerenv`, `/run/.con
 each runtime's conventions and would refuse stdout piped to a collector outside one. Setting `StandardOutput=null` in
 the packaged unit would turn `stdout` into a destination that silently discards every record, since writes to
 `/dev/null` succeed. An administrator who points the container runtime's `journald` log driver at the container's stdout
-makes that choice in the runtime, outside the service; the [log operations guide](log-operations.md#docker) says not to.
+makes that choice in the runtime, outside the service; the [log operations guide](../book/src/reference/log-operations.md#docker) says not to.
 Podman uses that driver by default on Fedora and RHEL, so the guide names it.
 
 Stderr is not a log destination. Only the one line a startup failure writes before the subscriber is installed goes
@@ -972,7 +972,7 @@ and the container runtime collects the records. The flag only selects stdout and
 log anywhere else. An approved config's `[logging] destination` still wins once it is active; a Docker deployment
 normally leaves it unset, or sets `"stdout"` so that removing the flag from the Compose file changes nothing. Rotation
 in Docker is the runtime's: its log driver's `max-size` and `max-file` options, which the
-[log operations guide](log-operations.md#docker) gives for Compose.
+[log operations guide](../book/src/reference/log-operations.md#docker) gives for Compose.
 
 ### Startup order
 
@@ -1129,7 +1129,7 @@ adds no further copy. The ticket that adds each crate checks `Cargo.lock` again.
 
 ## Operations
 
-The [log operations guide](log-operations.md) covers: the log directory's setup, the shipped `logrotate` rule and a rule for a moved
+The [log operations guide](../book/src/reference/log-operations.md) covers: the log directory's setup, the shipped `logrotate` rule and a rule for a moved
 directory, Docker's log-driver rotation, a warning against the `journald` log driver in Docker and in Podman, whose
 default log driver on Fedora and RHEL is `journald`, so a Podman deployment must select another driver (such as
 `k8s-file`) explicitly, and collector settings for Grafana Alloy, Vector, Fluent Bit and Filebeat, with the Loki labels

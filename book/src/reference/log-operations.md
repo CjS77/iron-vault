@@ -1,20 +1,20 @@
 # Log operations guide
 
-How to run, rotate, collect and query the Iron Vault log. [Audit logging](audit-logging.md) defines what the log holds;
+How to run, rotate, collect and query the Iron Vault log. [Audit logging](../../../design/audit-logging.md) defines what the log holds;
 this guide covers the host and the tools around it (specification
-[§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)). Terms follow the [glossary](glossary.md). Field,
-event and reason names below are those of [audit-logging.md](audit-logging.md); when the two disagree, that document wins.
+[§3.15](../../../design/iron-vault-specification.md#315-logging-and-v0-acceptance)). Terms follow the [glossary](../glossary.md). Field,
+event and reason names below are those of [audit-logging.md](../../../design/audit-logging.md); when the two disagree, that document wins.
 
 The log is JSON Lines: one JSON object per line, UTF-8, in one file, `iron-vault.log`. A line is a request event
 (`request.completed`), an audit event (`config.approval-completed`, `service.lock-transition` and so on) or a diagnostic
 record with no `event` field. Every line has `timestamp`, `level`, `target`, `service`, `service_version`,
-`schema_version`, `deployment_profile` and `message` ([Record shape](audit-logging.md#record-shape)).
+`schema_version`, `deployment_profile` and `message` ([Record shape](../../../design/audit-logging.md#record-shape)).
 
 **Implementation status.** The service writes the bootstrap destination, follows a rename by `logrotate` and stops when a
 write fails. The packaged unit (`LogsDirectory=iron-vault`, `LogsDirectoryMode=0750`), the shipped
 `/etc/logrotate.d/iron-vault`, the Docker image and the Compose file are not in the repository yet, and the service does
 not yet switch destination from the approved config's `[logging] destination`. Where this guide describes them, it
-describes what [audit-logging.md](audit-logging.md#log-destination) requires them to be.
+describes what [audit-logging.md](../../../design/audit-logging.md#log-destination) requires them to be.
 
 ## Location and permissions
 
@@ -35,17 +35,17 @@ Moving the directory also needs a new rotation rule ([Rotation](#rotation)).
   edit the audit log.
 - The packaged unit's `LogsDirectory=iron-vault` and `LogsDirectoryMode=0750` make systemd create the directory for the
   service account before the service starts. The service never creates a protected log directory.
-- A missing bootstrap directory, or one that fails the [trusted-path rule](audit-logging.md#trust), stops `serve` at
+- A missing bootstrap directory, or one that fails the [trusted-path rule](../../../design/audit-logging.md#trust), stops `serve` at
   startup with one line on stderr.
 - A directory set by the approved config is yours to create, with the same owner and mode. If it is missing or fails the
   rule, the config check fails: the service writes `config.check-failed` with failure `log_destination_unusable`, settles
   Unavailable (`policy_invalid`) and keeps writing to its current destination
-  ([Switching at activation](audit-logging.md#switching-at-activation)).
+  ([Switching at activation](../../../design/audit-logging.md#switching-at-activation)).
 - The service creates `iron-vault.log` itself, at `0640`. It refuses a file or directory that any group or other account
   can write, so never loosen the modes to give a tool access.
 
 **Giving a collector read access.** Add the collector's account to the service account's group
-([Permissions](audit-logging.md#permissions)). The directory is `0750` and the files `0640`, so that group reads and never
+([Permissions](../../../design/audit-logging.md#permissions)). The directory is `0750` and the files `0640`, so that group reads and never
 writes.
 
 - Add only the collector's own service account. Never add a caller account or a login account: anyone who can read the log
@@ -79,7 +79,7 @@ The package ships `/etc/logrotate.d/iron-vault`, owned by root, mode `0644`:
 ```
 
 - **`nocreate`** is required. It overrides the global `create` in `/etc/logrotate.conf`, so `logrotate` only renames the
-  file and the service creates the new one. With `create` the two race ([The shipped rule](audit-logging.md#the-shipped-rule)).
+  file and the service creates the new one. With `create` the two race ([The shipped rule](../../../design/audit-logging.md#the-shipped-rule)).
 - **`delaycompress`** leaves the renamed file uncompressed until the next rotation. A record written between the rename and
   the service's reopen lands in it, so no record is lost.
 - **`su iron-vault iron-vault`** runs `logrotate` as the service account, in a directory root does not own.
@@ -92,7 +92,7 @@ The package ships `/etc/logrotate.d/iron-vault`, owned by root, mode `0644`:
 
 - **`copytruncate`.** It loses every record written between its copy and its truncate. An audit log must not have that
   window, and the rename-based rule above needs no copy.
-- **A `postrotate` signal.** `SIGHUP` means "reload the config" ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)),
+- **A `postrotate` signal.** `SIGHUP` means "reload the config" ([§3.9](../../../design/iron-vault-specification.md#39-configuration-approval-and-reload)),
   so a rotation script would trigger a reload. The service needs no signal to follow a rename.
 - **Rotating by hand** with `mv` is fine for the same reason. Never delete the file, which destroys audit records. Never
   `touch` or create `iron-vault.log` yourself: at its next record the service stops if the file is not owned by the
@@ -123,7 +123,7 @@ services:
 - The `json-file` driver wraps each line in its own JSON object (`{"log":"...","stream":"stdout","time":"..."}`). A
   collector must unwrap `log` before it reads the record.
 - Whoever controls the Docker daemon can read these logs, replace the service and run commands in its container
-  ([§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances)). A collector that reads container logs
+  ([§3.14](../../../design/iron-vault-specification.md#314-docker-remote-servers-and-appliances)). A collector that reads container logs
   through the daemon's socket holds that control; prefer a host agent that reads the driver's files, owned by root.
 - The service refuses `stdout` when stdout is the systemd journal, so `--log-to-stdout` is for containers and pipes, not
   for a unit.
@@ -262,7 +262,7 @@ output.elasticsearch:
 The `timestamp` processor writes the record's `timestamp` to `@timestamp`, so the service keeps its own field name. The
 `target` keeps the record under `iron_vault`: Filebeat's index template (ECS) maps `event` and `service` as objects, and
 Iron Vault's `event` and `service` are strings, which Elasticsearch would reject. Field types are stable across events by
-rule ([Field rules](audit-logging.md#field-rules)), so a mapping built from the first record holds.
+rule ([Field rules](../../../design/audit-logging.md#field-rules)), so a mapping built from the first record holds.
 
 ### OpenTelemetry Collector
 
@@ -339,6 +339,6 @@ jq -c 'select(.event == "recovery.reminder")
 ## Not supported
 
 - **journald output.** The owner chose files. JSON inside journald's `MESSAGE` field loses journald's own field queries,
-  and the journal's readers are not bound by the log directory's mode ([Owner decisions](audit-logging.md#owner-decisions)).
+  and the journal's readers are not bound by the log directory's mode ([Owner decisions](../../../design/audit-logging.md#owner-decisions)).
 - **OTLP export from the service.** It brings heavy dependencies, possibly another copy of `rand`, and a further network
   path out of the process that holds the secrets. Use the [OpenTelemetry Collector](#opentelemetry-collector) outside it.

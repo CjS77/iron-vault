@@ -241,7 +241,7 @@ nothing, and `owner.notified` in the log still records that one was raised.
 ## Where there is no desktop
 
 On servers, in Docker and on macOS and Windows, leave `[notifications]` out. Every owner notification is then only its
-`owner.notified` record. In v1 the [log operations guide](log-operations.md) gains a collector alert rule on
+`owner.notified` record. In v1 the [log operations guide](../book/src/reference/log-operations.md) gains a collector alert rule on
 `event="owner.notified"`, keyed by `urgency`.
 
 In Docker:

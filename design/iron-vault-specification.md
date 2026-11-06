@@ -334,7 +334,7 @@ service's user namespace and so cannot identify one account. Any local account m
 peer account or token decides what it may use.
 OS peer credentials can enforce account boundaries but must not prove trust in a named executable.
 Inspecting `/proc/<pid>/exe` or launching the real application does not distinguish the owner from malware.
-[`multiuser-linux.md`](multiuser-linux.md) walks through a workstation that separates work by OS account.
+[`multiuser-linux.md`](../book/src/installation/multiuser-linux.md) walks through a workstation that separates work by OS account.
 
 **Attack mitigated (R-1).** Peer-account identity bounds malware in one account to that account's granted routes,
 without a token file for it to steal.
