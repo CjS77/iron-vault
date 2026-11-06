@@ -383,6 +383,30 @@ the next `init` discards the files the unfinished run wrote and starts over. See
 - **Temp file.** A crash during its durable replace can leave `.init.unfinished.tmp`, a stale temp file that the
   startup sweep removes like any other.
 
+## Recovery check record
+
+The [recovery check record](glossary.md), state-directory file `recovery.toml`, holds when the recovery reminder
+schedule started counting and when the last successful recovery check ran. It is plaintext TOML, written by the
+service with a durable replace and read back by the same code, so its bytes are fixed. Rust:
+`iron_vault_store::RecoveryCheckRecord`. See [recovery.md](recovery.md#the-recovery-check-record).
+
+```toml
+since = 2026-11-06T09:49:13Z
+last_checked = 2027-02-01T10:00:00Z
+```
+
+- **Content.** One line `since = <time>`, then, after a successful check, one line `last_checked = <time>`, each
+  ending in a newline, in that order. Each time is a TOML offset date-time in UTC, written with `Z` and whole seconds.
+- **Reading.** The file must be a regular file of at most 1 KiB and valid TOML holding `since` and at most
+  `last_checked`, each an offset date-time with offset `Z` and no fractional seconds. Any other key, value, offset or
+  size makes the record unusable; a reader never repairs it. Key order and whitespace are not checked, since TOML
+  ignores them, but the writer's bytes are always the ones above.
+- **No MAC and no version.** It is not sealed, MAC'd or versioned, so a locked service can read it. Forging it can
+  only move a reminder, and only the service account can write the state directory. A key a later release adds makes
+  the record unusable to this one, which then counts a reminder as due until the next check rewrites it.
+- **Temp file.** A crash during its durable replace can leave `.recovery.toml.tmp`, a stale temp file that the
+  startup sweep removes like any other.
+
 ## Approver key envelope
 
 The [approver key envelope](glossary.md), state-directory file `approver.age`, holds the
