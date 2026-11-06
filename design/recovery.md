@@ -155,8 +155,8 @@ That is safe, because of what forging it can do:
 
 **Unusable records.** A record that cannot be read, is too large or is malformed is **unusable**. It is left in place
 for the owner to inspect, a reminder counts as due, and the next successful check replaces it. A missing record is not
-unusable: the next reminder evaluation creates it. Like `init.unfinished` the record is part of the vault's state but not of its secrets: it is not in the
-manifest and not in the identity envelope, so a vault restored without it works, and starts counting again.
+unusable: the next reminder evaluation creates it. The record is not in the manifest, so a vault restored without it
+opens as before and starts counting again.
 
 **Clock.** Times come from the wall clock. A record time in the future, as after the clock was set back, counts as
 zero days, so a clock fault delays a reminder by at most the size of the jump and never makes the service fail.
