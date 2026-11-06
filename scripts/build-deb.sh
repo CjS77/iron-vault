@@ -10,6 +10,8 @@
 # `scripts/build-deb.sh --features dev-mode` must be refused, because the packaged binary reports the feature.
 #
 # The checks, each of which fails the script:
+#  - the package version is the crate version with the first `-` turned into `~`, plus the revision `-1`
+#    (`0.2.0-alpha` becomes `0.2.0~alpha-1`), so a pre-release sorts below the final release; no `-` may precede the revision;
 #  - the packaged binary's `--version` lists no feature;
 #  - every file's owner and mode match the design's ownership table, and nothing is owned by a non-root account;
 #  - nothing is shipped under the service's own directories, and the only conffile is the logrotate rule;
@@ -25,12 +27,25 @@ fail() { echo "error: $*" >&2; exit 1; }
 command -v dpkg-deb >/dev/null 2>&1 || { echo "error: dpkg-deb is not installed; install dpkg" >&2; exit 2; }
 cargo deb --version >/dev/null 2>&1 || { echo "error: cargo-deb is not installed; run: cargo install cargo-deb --locked" >&2; exit 2; }
 
+crate_version=$(cargo metadata --no-deps --locked --format-version 1 \
+    | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "iron-vault"))')
+# dpkg sorts `0.2.0-alpha-1` above `0.2.0-1`; Debian writes a pre-release with `~`.
+deb_version="${crate_version/-/\~}-1"
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 echo "== cargo deb -p iron-vault $*"
-cargo deb -p iron-vault --locked -o "$work/pkg.deb" "$@"
+cargo deb -p iron-vault --locked --deb-version "$deb_version" -o "$work/pkg.deb" "$@"
 deb="$work/pkg.deb"
+
+echo "== package version"
+built_version=$(dpkg-deb -f "$deb" Version)
+echo "$built_version"
+[ "$built_version" = "$deb_version" ] || fail "package version is $built_version, expected $deb_version"
+case "${built_version%-1}" in
+    *-*) fail "package version $built_version has a '-' before the revision; a pre-release must use '~'" ;;
+esac
 
 echo "== packaged binary reports no features"
 dpkg-deb --fsys-tarfile "$deb" | tar -xO ./usr/bin/iron-vault >"$work/iron-vault"

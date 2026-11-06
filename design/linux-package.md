@@ -368,11 +368,17 @@ A kept vault opens with a later install, but its published config and signature 
 (`cargo install cargo-deb --locked`), `dpkg-deb` and `lintian` (`sudo apt install lintian`). Without `lintian` it exits non-zero;
 `IRON_VAULT_SKIP_LINTIAN=1` is the explicit opt-out, and the script then ends with "package checks passed WITHOUT lintian". It fails when:
 
+- the package `Version:` is not the crate version with its first `-` turned into `~` plus the revision `-1`, or still holds a
+  `-` before the revision (see below);
 - the packaged binary's `--version` lists any feature, so a `dev-mode` package is refused;
 - a file's owner or mode differs from the [ownership table](#ownership), a path is owned by anyone but root, or
   anything is shipped under `/etc/iron-vault`, `/var/lib/iron-vault`, `/var/log/iron-vault` or `/run/iron-vault`;
 - the conffiles are anything but `/etc/logrotate.d/iron-vault`, or a maintainer script is missing or not executable;
 - `lintian --fail-on error` reports an error.
+
+The script passes `--deb-version` to `cargo deb`. cargo-deb would turn the crate version `0.2.0-alpha` into `0.2.0-alpha-1`,
+which dpkg sorts above `0.2.0-1`, so the final release would not upgrade an alpha. Debian writes a pre-release with `~`:
+`0.2.0-alpha` becomes `0.2.0~alpha-1`, which sorts below `0.2.0-1`.
 
 The package's own scripts (`packaging/linux/debian/`) use `systemctl` rather than `deb-systemd-invoke` for the listener
 instances, because `deb-systemd-invoke` neither disables a unit nor takes a pattern.
