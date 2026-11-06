@@ -9,7 +9,7 @@ use crate::service_state::{FailureReason, ServiceState};
 use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
 use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
 use iron_vault_policy::{CallerToken, CredentialKind, Port, TokenHash};
-use iron_vault_store::{RecordDamage, RecordId, VaultId};
+use iron_vault_store::{RecordDamage, RecordId, UtcSecond, VaultId};
 
 /// The longest prompt label: the body bound less two field headers and the one-byte secret flag.
 const MAX_LABEL: usize = MAX_BODY_LEN - 2 * FIELD_HEADER_LEN - 1;
@@ -261,12 +261,23 @@ fn status_report() -> impl Strategy<Value = StatusReport> {
         Just(VaultStatus::InitializationUnfinished),
         unlocked_vault().prop_map(VaultStatus::Unlocked)
     ];
-    (state, profile, vault, memory).prop_map(|(state, profile, vault, memory)| StatusReport {
+    (state, profile, vault, memory, recovery_status()).prop_map(|(state, profile, vault, memory, recovery)| StatusReport {
         state,
         profile,
         vault,
         memory,
+        recovery,
     })
+}
+
+/// Any recovery check part of a report.
+fn recovery_status() -> impl Strategy<Value = RecoveryStatus> {
+    let time = (0..=253_402_300_799u64).prop_map(|seconds| UtcSecond::from_unix_seconds(seconds).unwrap());
+    prop_oneof![
+        ("\\PC{1,64}", any::<bool>()).prop_map(|(detail, due)| RecoveryStatus::Unknown { detail, due }),
+        (time.clone(), any::<u64>(), any::<bool>()).prop_map(|(since, days, due)| RecoveryStatus::NeverChecked { since, days, due }),
+        (time, any::<u64>(), any::<bool>()).prop_map(|(last_checked, days, due)| RecoveryStatus::Checked { last_checked, days, due }),
+    ]
 }
 
 /// A credential or route name: 1 to 64 bytes of `[a-z0-9_-]`, starting with a letter.
@@ -420,15 +431,19 @@ fn a_status_result_with_a_field_missing_or_extra_is_refused() {
         profile: DeploymentProfile::Protected,
         vault: VaultStatus::Locked,
         memory: MemoryStatus::Locked,
+        recovery: RecoveryStatus::Unknown {
+            detail: "no check record yet".to_owned(),
+            due: false,
+        },
     };
     let frame = Frame::Response(AdminResponse::Status(Box::new(report)));
     assert_round_trips(&frame);
     let mut full = encoded(&frame);
-    let extra = field(13, b"x");
+    let extra = field(18, b"x");
     full.extend_from_slice(&extra);
     let length = u32::try_from(full.len() - HEADER_LEN).unwrap().to_be_bytes();
     full[3..HEADER_LEN].copy_from_slice(&length);
-    assert_eq!(decode_err(&full), FrameError::UnknownTag(13));
+    assert_eq!(decode_err(&full), FrameError::UnknownTag(18));
     assert_eq!(decode_err(&raw(1, 4, &field(1, &[0, 6]))), FrameError::MissingField(2));
 }
 

@@ -18,7 +18,7 @@ use std::time::Duration;
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
 use iron_vault::admin::protocol::{
-    AdminCommand, AdminRequest, AdminResponse, ErrorCode, MemoryStatus, Prompt, RequestedOrigin, StatusReport, VaultStatus,
+    AdminCommand, AdminRequest, AdminResponse, ErrorCode, MemoryStatus, Prompt, RecoveryStatus, RequestedOrigin, StatusReport, VaultStatus,
 };
 use iron_vault::admin::server::{AdminServer, Exchange, Limits};
 use iron_vault::admin::socket::AdminSocket;
@@ -260,6 +260,10 @@ impl AdminHandler for FixedStatus {
             profile: DeploymentProfile::Protected,
             vault: VaultStatus::Locked,
             memory: MemoryStatus::Unsupported,
+            recovery: RecoveryStatus::Unknown {
+                detail: "no check record yet".to_owned(),
+                due: false,
+            },
         };
         Box::pin(async move { Ok(AdminResponse::Status(Box::new(report))) })
     }

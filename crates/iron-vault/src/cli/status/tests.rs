@@ -1,6 +1,6 @@
 use iron_vault::hardening::MemoryProtection;
 use iron_vault::standing::RouteFaultKind;
-use iron_vault_store::{RecordDamage, VaultId};
+use iron_vault_store::{RecordDamage, UtcSecond, VaultId};
 
 use super::*;
 
@@ -29,6 +29,10 @@ fn ready(credentials: Vec<CredentialStanding>) -> StatusReport {
             route_faults: Vec::new(),
         }),
         memory: MemoryStatus::Locked,
+        recovery: RecoveryStatus::Unknown {
+            detail: "no check record yet".to_owned(),
+            due: false,
+        },
     }
 }
 
@@ -49,7 +53,8 @@ fn a_locked_service_shows_what_is_sealed_as_unknown() {
     assert_eq!(lines[2..4], ["vault: locked", "vault id: unknown"]);
     assert!(lines[4].ends_with("unknown while the vault is locked"), "{text}");
     assert!(lines[5].ends_with("unknown while the vault is locked"), "{text}");
-    assert_eq!(lines[7], "credentials: unknown while the vault is locked");
+    assert_eq!(lines[7], "recovery last checked: unknown (no check record yet)");
+    assert_eq!(lines[8], "credentials: unknown while the vault is locked");
 }
 
 #[test]
@@ -85,6 +90,7 @@ fn a_ready_service_lists_each_credential_in_the_order_given() {
          approval committed: 3\n\
          approval highest reserved: 4\n\
          memory protection: locked against swap\n\
+         recovery last checked: unknown (no check record yet)\n\
          credential brave: damaged (missing); unavailable routes: brave, brave-alt\n\
          credential fx: healthy\n\
          credential venice: damaged (unreadable); unavailable routes: none\n"
@@ -188,4 +194,59 @@ fn an_uninitialized_or_unfinished_vault_says_what_to_run() {
         assert_eq!(text.lines().nth(2), Some(line), "{text}");
         assert_eq!(render(&report, alice), text);
     });
+}
+
+fn recovery_line_of(recovery: RecoveryStatus) -> String {
+    let report = StatusReport {
+        recovery,
+        ..ready(Vec::new())
+    };
+    let text = render(&report, alice);
+    text.lines().nth(7).unwrap_or_default().to_owned()
+}
+
+fn at(date_seconds: u64) -> UtcSecond {
+    UtcSecond::from_unix_seconds(date_seconds).unwrap()
+}
+
+/// 2027-02-01T00:00:00Z.
+const FEBRUARY_FIRST: u64 = 1_801_440_000;
+
+#[test]
+fn every_recovery_form_and_due_state_gives_its_exact_line() {
+    let checked = |days, due| RecoveryStatus::Checked {
+        last_checked: at(FEBRUARY_FIRST + 3_600),
+        days,
+        due,
+    };
+    let never = |due| RecoveryStatus::NeverChecked {
+        since: at(1_793_000_000),
+        days: 12,
+        due,
+    };
+    let unknown = |detail: &str, due| RecoveryStatus::Unknown {
+        detail: detail.to_owned(),
+        due,
+    };
+    [
+        (checked(37, false), "recovery last checked: 2027-02-01 (37 days ago)"),
+        (checked(97, true), "recovery last checked: 2027-02-01 (97 days ago, overdue)"),
+        (checked(0, false), "recovery last checked: 2027-02-01 (today)"),
+        (checked(1, false), "recovery last checked: 2027-02-01 (1 day ago)"),
+        (never(false), "recovery last checked: never (reminders counting since 2026-10-26)"),
+        (
+            never(true),
+            "recovery last checked: never (reminders counting since 2026-10-26, overdue)",
+        ),
+        (
+            unknown("the vault is not initialized", false),
+            "recovery last checked: unknown (the vault is not initialized)",
+        ),
+        (
+            unknown("the check record is unusable (not_toml)", true),
+            "recovery last checked: unknown (the check record is unusable (not_toml), overdue)",
+        ),
+    ]
+    .into_iter()
+    .for_each(|(recovery, line)| assert_eq!(recovery_line_of(recovery), line));
 }

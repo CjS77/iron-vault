@@ -69,7 +69,8 @@ pub fn reminder_due(
     })
 }
 
-fn whole_days_between(earlier: UtcSecond, later: UtcSecond) -> u64 {
+/// Whole days from `earlier` to `later`; zero when `later` is the earlier time.
+pub fn whole_days_between(earlier: UtcSecond, later: UtcSecond) -> u64 {
     later.unix_seconds().saturating_sub(earlier.unix_seconds()) / SECONDS_PER_DAY
 }
 

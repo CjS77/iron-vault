@@ -32,6 +32,9 @@ pub struct UtcSecond(u64);
 pub struct UtcSecondError;
 
 impl UtcSecond {
+    /// 1970-01-01T00:00:00Z.
+    pub const EPOCH: Self = Self(0);
+
     /// The time `seconds` after the Unix epoch.
     pub fn from_unix_seconds(seconds: u64) -> Result<Self, UtcSecondError> {
         (seconds <= MAX_UNIX_SECONDS).then_some(Self(seconds)).ok_or(UtcSecondError)

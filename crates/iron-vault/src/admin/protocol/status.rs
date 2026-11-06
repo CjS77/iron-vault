@@ -8,6 +8,7 @@ use std::str::FromStr;
 use iron_vault_store::{RecordDamage, VaultId};
 
 use super::fields::{self, exact, read_profile, read_text, read_u64};
+use super::recovery_status::{self, RecoveryStatus};
 use super::{FrameError, body::TAG_COMMAND};
 use crate::deployment::DeploymentProfile;
 use crate::hardening::MemoryProtection;
@@ -37,6 +38,8 @@ pub struct StatusReport {
     pub vault: VaultStatus,
     /// What process hardening achieved.
     pub memory: MemoryStatus,
+    /// What the recovery check record says; known in every state, because the record is plaintext.
+    pub recovery: RecoveryStatus,
 }
 
 /// The vault's lock state, and what is known only while it is unlocked.
@@ -123,6 +126,7 @@ pub(super) fn encode(command: u16, report: &StatusReport) -> Vec<u8> {
     fields::put(&mut out, TAG_CREDENTIALS, &credentials);
     fields::put(&mut out, TAG_ROUTE_FAULTS, &faults);
     fields::put(&mut out, TAG_INITIALIZATION, &[initialization]);
+    recovery_status::encode(&mut out, &report.recovery);
     out
 }
 
@@ -141,6 +145,11 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
         credentials,
         faults,
         initialization,
+        recovery,
+        recovery_time,
+        recovery_days,
+        recovery_due,
+        recovery_detail,
     ] = exact(
         fields,
         [
@@ -156,6 +165,11 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
             TAG_CREDENTIALS,
             TAG_ROUTE_FAULTS,
             TAG_INITIALIZATION,
+            recovery_status::TAG_RECORD,
+            recovery_status::TAG_TIME,
+            recovery_status::TAG_DAYS,
+            recovery_status::TAG_DUE,
+            recovery_status::TAG_DETAIL,
         ],
     )?;
     Ok(StatusReport {
@@ -169,6 +183,13 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
             SealedLists { credentials, faults },
         )?,
         memory: read_memory(memory, detail)?,
+        recovery: recovery_status::decode(recovery_status::Raw {
+            record: recovery,
+            time: recovery_time,
+            days: recovery_days,
+            due: recovery_due,
+            detail: recovery_detail,
+        })?,
     })
 }
 
@@ -357,6 +378,8 @@ fn take_route_fault(rest: &mut &[u8]) -> Result<RouteFault, FrameError> {
 
 #[cfg(test)]
 mod tests {
+    use iron_vault_store::UtcSecond;
+
     use super::*;
 
     fn report(vault: VaultStatus) -> StatusReport {
@@ -365,6 +388,11 @@ mod tests {
             profile: DeploymentProfile::Protected,
             vault,
             memory: MemoryStatus::Locked,
+            recovery: RecoveryStatus::NeverChecked {
+                since: UtcSecond::from_unix_seconds(1_800_000_000).unwrap(),
+                days: 3,
+                due: false,
+            },
         }
     }
 
@@ -447,6 +475,70 @@ mod tests {
                 });
             });
         });
+    }
+
+    #[test]
+    fn every_recovery_shape_round_trips() {
+        let time = UtcSecond::from_unix_seconds(1_800_000_000).unwrap();
+        [
+            RecoveryStatus::Unknown {
+                detail: "no check record yet".to_owned(),
+                due: false,
+            },
+            RecoveryStatus::Unknown {
+                detail: "the check record is unusable (not_toml)".to_owned(),
+                due: true,
+            },
+            RecoveryStatus::NeverChecked {
+                since: time,
+                days: 0,
+                due: false,
+            },
+            RecoveryStatus::NeverChecked {
+                since: time,
+                days: 97,
+                due: true,
+            },
+            RecoveryStatus::Checked {
+                last_checked: time,
+                days: 37,
+                due: false,
+            },
+            RecoveryStatus::Checked {
+                last_checked: time,
+                days: 97,
+                due: true,
+            },
+        ]
+        .into_iter()
+        .for_each(|recovery| {
+            let report = StatusReport {
+                recovery,
+                ..report(VaultStatus::Locked)
+            };
+            assert_eq!(decoded(&encode(6, &report)), Ok(report));
+        });
+    }
+
+    #[test]
+    fn an_unknown_record_with_a_time_or_no_detail_is_refused() {
+        let unknown = |time: u64, detail: &[u8]| decode_recovery([0], time.to_be_bytes(), [0; 8], detail);
+        assert_eq!(unknown(5, b"x"), Err(FrameError::InvalidValue(recovery_status::TAG_RECORD)));
+        assert_eq!(unknown(0, b""), Err(FrameError::InvalidValue(recovery_status::TAG_RECORD)));
+        assert_eq!(
+            decode_recovery([3], [0; 8], [0; 8], b""),
+            Err(FrameError::InvalidValue(recovery_status::TAG_RECORD))
+        );
+    }
+
+    fn decode_recovery(record: [u8; 1], time: [u8; 8], days: [u8; 8], detail: &[u8]) -> Result<RecoveryStatus, FrameError> {
+        recovery_status::decode(recovery_status::Raw {
+            record: &record,
+            time: &time,
+            days: &days,
+            due: &[0],
+            detail,
+        })
     }
 
     #[test]

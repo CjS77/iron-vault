@@ -1,10 +1,11 @@
 //! `iron-vault status` output: one field per line, in a fixed order, from the service's status report. Pure, so the same
 //! report always prints the same bytes.
 
-use iron_vault::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
+use iron_vault::admin::protocol::{MemoryStatus, RecoveryStatus, StatusReport, UnlockedVault, VaultStatus};
 use iron_vault::deployment::{DeploymentProfile, no_isolation_warning};
 use iron_vault::service_state::{FailureReason, ServiceState, UnavailableReason};
 use iron_vault::standing::{CredentialStanding, RouteFault, Standing};
+use iron_vault_store::UtcSecond;
 
 /// What a value sealed behind the vault identity shows while the vault is locked.
 const UNKNOWN: &str = "unknown while the vault is locked";
@@ -16,6 +17,7 @@ pub fn render(report: &StatusReport, user: impl FnOnce() -> String) -> String {
     lines.push(profile_line(report.profile, user));
     lines.extend(vault_lines(&report.vault));
     lines.push(memory_line(&report.memory));
+    lines.push(recovery_line(&report.recovery));
     lines.extend(credential_lines(&report.vault));
     lines.extend(route_fault_lines(&report.vault));
     lines.iter().map(|line| format!("{line}\n")).collect()
@@ -86,6 +88,34 @@ fn memory_line(memory: &MemoryStatus) -> String {
         MemoryStatus::Locked => "memory protection: locked against swap".to_owned(),
         MemoryStatus::Unavailable(why) => format!("memory protection: NOT protected, swap protection unavailable ({why})"),
         MemoryStatus::Unsupported => "memory protection: NOT protected, unsupported on this platform".to_owned(),
+    }
+}
+
+/// The recovery check line. The service counted the days and decided the due flag, so this reads no clock.
+fn recovery_line(recovery: &RecoveryStatus) -> String {
+    let overdue = |due: bool| if due { ", overdue" } else { "" };
+    let text = match recovery {
+        RecoveryStatus::Unknown { detail, due } => format!("unknown ({detail}{})", overdue(*due)),
+        RecoveryStatus::NeverChecked { since, due, .. } => {
+            format!("never (reminders counting since {}{})", date(*since), overdue(*due))
+        }
+        RecoveryStatus::Checked { last_checked, days, due } => {
+            format!("{} ({}{})", date(*last_checked), days_ago(*days), overdue(*due))
+        }
+    };
+    format!("recovery last checked: {text}")
+}
+
+/// The UTC date of a time: the first ten characters of its RFC 3339 form.
+fn date(time: UtcSecond) -> String {
+    time.to_string().chars().take(10).collect()
+}
+
+fn days_ago(days: u64) -> String {
+    match days {
+        0 => "today".to_owned(),
+        1 => "1 day ago".to_owned(),
+        n => format!("{n} days ago"),
     }
 }
 

@@ -485,6 +485,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// service's own locks. Unrecognized files, or a directory that cannot be listed, report as Locked: `status` has no
     /// error to give, and `unlock` and `init` name the offending files when the owner runs them.
     pub async fn status(&self) -> StatusReport {
+        let recovery = self.recovery_status().await;
         let inner = self.inner.lock().await;
         let vault = match inner.open.as_ref() {
             Some(open) => VaultStatus::Unlocked(UnlockedVault {
@@ -501,6 +502,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             profile: self.setup.paths.profile,
             vault,
             memory: MemoryStatus::from(&self.setup.hardening.memory),
+            recovery,
         }
     }
 

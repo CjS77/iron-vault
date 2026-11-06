@@ -5,6 +5,7 @@ mod add;
 mod body;
 mod fields;
 mod list;
+mod recovery_status;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -20,6 +21,7 @@ use iron_vault_policy::{CallerToken, CredentialKind, Port};
 use iron_vault_store::{RecordId, VaultId};
 
 pub use iron_vault_store::MAX_CONFIG_LEN;
+pub use recovery_status::RecoveryStatus;
 pub use status::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 
 /// The protocol version this code writes and the only one it reads.

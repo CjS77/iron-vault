@@ -196,6 +196,7 @@ vault id: unknown
 approval committed: unknown while the vault is locked
 approval highest reserved: unknown while the vault is locked
 memory protection: NOT protected, swap protection unavailable (RLIMIT_MEMLOCK soft limit is 8315834368 bytes, not unlimited)
+recovery last checked: unknown (the vault is not initialized)
 credentials: unknown while the vault is locked
 ```
 
@@ -228,6 +229,7 @@ vault id: 2a682de7-b14d-4900-9ea9-0c968e1a6589
 approval committed: 1
 approval highest reserved: 1
 memory protection: NOT protected, swap protection unavailable (RLIMIT_MEMLOCK soft limit is 8315834368 bytes, not unlimited)
+recovery last checked: never (reminders counting since 2026-11-06)
 credentials: none
 ```
 

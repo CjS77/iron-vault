@@ -10,14 +10,17 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use iron_vault_policy::ReminderInterval;
-use iron_vault_store::{InitializationState, RecoveryCheckRecord, StoreFs, UtcSecond, read_recovery_check, write_recovery_check};
+use iron_vault_store::{
+    ErrorKindLabel, InitializationState, RecoveryCheckRecord, StoreFs, UtcSecond, read_recovery_check, write_recovery_check,
+};
 use tokio::time::Instant;
 
 use super::recovery::synced_late;
 use super::{ServiceContext, ServiceLocks};
+use crate::admin::protocol::RecoveryStatus;
 use crate::audit::AuditEvent;
 use crate::audit::recovery::RecoveryReminder;
-use crate::recovery_reminder::{Due, RecordState, reminder_due};
+use crate::recovery_reminder::{Due, RecordState, reminder_due, whole_days_between};
 
 /// How often the service evaluates the schedule, on the monotonic clock, counted from startup.
 const EVALUATION_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
@@ -80,6 +83,18 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         if let Some(due) = with_schedule(&self.reminders, |schedule| schedule.due(&record, now)) {
             RecoveryReminder(&due).emit();
         }
+    }
+
+    /// What `status` reports of the recovery check record. It reads `recovery.toml` on the blocking pool without the
+    /// service-wide lock and writes nothing, so a missing record stays missing until the schedule creates it. The due flag
+    /// ignores the 7-day spacing, which limits log lines, not what `status` may say. A record that cannot be read gives
+    /// `unknown`, never an error.
+    pub async fn recovery_status(&self) -> RecoveryStatus {
+        // A clock outside 1970 to 9999 reads as the epoch, which makes every day count zero and so never raises a reminder.
+        let now = self.clock.now().unwrap_or(UtcSecond::EPOCH);
+        let loaded = self.on_pool(|locks, fs| load(locks, fs)).await;
+        let interval = with_schedule(&self.reminders, |schedule| schedule.interval);
+        recovery_status_of(loaded, interval, now)
     }
 
     /// Evaluates the schedule every 24 hours of the monotonic clock from now, until the runtime ends.
@@ -152,4 +167,32 @@ fn write_first(locks: &ServiceLocks, fs: &impl StoreFs, now: UtcSecond) -> Recor
                 .map_err(|error| error.error_kind_label())
         });
     written.map_or_else(RecordState::Unusable, |()| RecordState::NeverChecked(now))
+}
+
+/// The report for what [`load`] found; `None` is a read task that ended without a result.
+fn recovery_status_of(loaded: Option<Loaded>, interval: ReminderInterval, now: UtcSecond) -> RecoveryStatus {
+    let unknown = |detail: &str, due: bool| RecoveryStatus::Unknown {
+        detail: detail.to_owned(),
+        due,
+    };
+    let is_due = |state: &RecordState| reminder_due(state, interval, None, now).is_some();
+    match loaded {
+        Some(Loaded::NotInitialized) => unknown("the vault is not initialized", false),
+        Some(Loaded::Missing) => unknown("no check record yet", false),
+        Some(Loaded::Record(RecordState::Unusable(kind))) => unknown(&format!("the check record is unusable ({kind})"), true),
+        None => unknown(
+            &format!("the check record is unusable ({})", ErrorKindLabel::fixed("read_interrupted")),
+            true,
+        ),
+        Some(Loaded::Record(state @ RecordState::Checked(last_checked))) => RecoveryStatus::Checked {
+            last_checked,
+            days: whole_days_between(last_checked, now),
+            due: is_due(&state),
+        },
+        Some(Loaded::Record(state @ RecordState::NeverChecked(since))) => RecoveryStatus::NeverChecked {
+            since,
+            days: whole_days_between(since, now),
+            due: is_due(&state),
+        },
+    }
 }
