@@ -526,9 +526,10 @@ The order is fixed, so the same two configs always give the same text:
    "add a logrotate rule for the new directory", since the shipped rule names only the default
    ([audit-logging.md](audit-logging.md#log-destination)). The audit log is where every later change is recorded, so
    moving it is never hidden.
-8. **Recovery**: the [recovery reminder](recovery.md#reminders) interval, old → new, when `[recovery] reminder_days`
-   changes, a default shown as `default`, as for logging. A longer interval delays the owner's reminders, so it is
-   shown like any other change.
+8. **Recovery**: the [recovery reminder](recovery.md#reminders) interval, as `reminder every <old> -> <new> days`,
+   when `[recovery] reminder_days` changes. An absent table is the 90-day default, so adding, removing or editing the
+   table shows a line only when the number of days differs, and an explicit 90 is the same as no table. A longer
+   interval delays the owner's reminders, so it is shown like any other change.
 9. **Text only**: when the bytes differ but no section above has an entry, the line "no policy change; text changed"
    (whitespace or comments), so the summary is never empty.
 

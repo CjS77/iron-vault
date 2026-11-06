@@ -18,6 +18,7 @@ use crate::limits::Limits;
 use crate::listener::ListenerConfig;
 use crate::log_destination::LogDestinationSetting;
 use crate::name::{CallerName, ListenerName, RouteName};
+use crate::reminder_interval::ReminderInterval;
 use crate::route::RouteConfig;
 
 /// The only configuration schema version this release understands.
@@ -35,6 +36,7 @@ pub struct ParsedConfig {
     routes: BTreeMap<RouteName, RouteConfig>,
     limits: Limits,
     log_destination: Option<LogDestinationSetting>,
+    recovery_reminder: ReminderInterval,
 }
 
 /// Where in the input an error was found.
@@ -95,6 +97,7 @@ impl ParsedConfig {
             routes: raw.routes,
             limits: raw.limits,
             log_destination: raw.logging.destination,
+            recovery_reminder: raw.recovery.reminder_days.unwrap_or_default(),
         })
     }
 
@@ -126,6 +129,11 @@ impl ParsedConfig {
     /// The `[logging] destination`, or none when the table or key is absent, which means the bootstrap destination.
     pub fn log_destination(&self) -> Option<&LogDestinationSetting> {
         self.log_destination.as_ref()
+    }
+
+    /// The `[recovery] reminder_days`, or 90 days when the table or key is absent.
+    pub fn recovery_reminder(&self) -> ReminderInterval {
+        self.recovery_reminder
     }
 }
 
@@ -177,6 +185,8 @@ struct RawConfig {
     limits: Limits,
     #[serde(default)]
     logging: RawLogging,
+    #[serde(default)]
+    recovery: RawRecovery,
 }
 
 /// The `[logging]` table as written.
@@ -184,6 +194,13 @@ struct RawConfig {
 #[serde(deny_unknown_fields)]
 struct RawLogging {
     destination: Option<LogDestinationSetting>,
+}
+
+/// The `[recovery]` table as written.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRecovery {
+    reminder_days: Option<ReminderInterval>,
 }
 
 /// Just the version key, read before the rest of the document is interpreted.
@@ -344,6 +361,42 @@ mod tests {
             &format!("{SPEC_EXAMPLE}\n[logging]\nlevel = \"debug\"\n"),
             "level",
             "unknown field `level`",
+        );
+    }
+
+    #[test]
+    fn recovery_reminder_defaults_to_ninety_days() {
+        assert_eq!(parse(SPEC_EXAMPLE).unwrap().recovery_reminder().days(), 90);
+        assert_eq!(
+            parse(&format!("{SPEC_EXAMPLE}\n[recovery]\n")).unwrap().recovery_reminder().days(),
+            90
+        );
+    }
+
+    #[test]
+    fn recovery_reminder_days_is_read() {
+        let config = parse(&format!("{SPEC_EXAMPLE}\n[recovery]\nreminder_days = 30\n")).unwrap();
+        assert_eq!(config.recovery_reminder().days(), 30);
+    }
+
+    #[test]
+    fn bad_recovery_settings_are_rejected_at_their_line() {
+        ["6", "366", "0", "-5"].iter().for_each(|value| {
+            invalid(
+                &format!("{SPEC_EXAMPLE}\n[recovery]\nreminder_days = {value}\n"),
+                "reminder_days",
+                &format!("recovery.reminder_days must be a whole number of days from 7 to 365, not {value}"),
+            );
+        });
+        invalid(
+            &format!("{SPEC_EXAMPLE}\n[recovery]\nreminder_days = 30.5\n"),
+            "reminder_days",
+            "invalid type",
+        );
+        invalid(
+            &format!("{SPEC_EXAMPLE}\n[recovery]\nremind = 30\n"),
+            "remind",
+            "unknown field `remind`",
         );
     }
 

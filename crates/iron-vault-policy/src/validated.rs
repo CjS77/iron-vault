@@ -19,6 +19,7 @@ use crate::listener::{Endpoint, ListenerConfig};
 use crate::log_destination::LogDestinationSetting;
 use crate::name::{CallerName, ListenerName, RouteName};
 use crate::rate_limit::RateLimit;
+use crate::reminder_interval::ReminderInterval;
 use crate::route::RouteConfig;
 use crate::route_prefix::RoutePrefix;
 use crate::token_hash::TOKEN_DIGEST_LEN;
@@ -216,6 +217,11 @@ impl ValidatedConfig {
     /// The `[logging] destination`, or none for the bootstrap destination.
     pub fn log_destination(&self) -> Option<&LogDestinationSetting> {
         self.0.log_destination()
+    }
+
+    /// The `[recovery] reminder_days`, or 90 days when absent.
+    pub fn recovery_reminder(&self) -> ReminderInterval {
+        self.0.recovery_reminder()
     }
 }
 

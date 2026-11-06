@@ -17,6 +17,7 @@ use crate::listener::{Endpoint, ListenerConfig};
 use crate::log_destination::LogDestinationSetting;
 use crate::name::{CallerName, RouteName};
 use crate::rate_limit::RateLimit;
+use crate::reminder_interval::ReminderInterval;
 use crate::route::RouteConfig;
 use crate::slot::Slot;
 use crate::validated::ValidatedConfig;
@@ -75,6 +76,7 @@ pub struct ApprovalSummary {
     listeners: Vec<Entry>,
     limits: Vec<Entry>,
     logging: Vec<Entry>,
+    recovery: Vec<Entry>,
 }
 
 /// Diffs `pending` against `active`; `None` means nothing is active, so everything is listed as added.
@@ -95,11 +97,15 @@ pub fn summarize(active: Option<&ValidatedConfig>, pending: &ValidatedConfig) ->
         listeners: diff_maps(old_listeners, pending.listeners(), listener_fields, |_, _| None),
         limits: limit_entries(&old_limits, pending.limits()),
         logging: logging_entries(active.and_then(ValidatedConfig::log_destination), pending.log_destination()),
+        recovery: recovery_entries(
+            active.map_or_else(ReminderInterval::default, ValidatedConfig::recovery_reminder),
+            pending.recovery_reminder(),
+        ),
     }
 }
 
 impl ApprovalSummary {
-    fn sections(&self) -> [(&'static str, &Vec<Entry>); 6] {
+    fn sections(&self) -> [(&'static str, &Vec<Entry>); 7] {
         [
             ("callers", &self.callers),
             ("route grants", &self.grants),
@@ -107,6 +113,7 @@ impl ApprovalSummary {
             ("listeners", &self.listeners),
             ("limits", &self.limits),
             ("logging", &self.logging),
+            ("recovery", &self.recovery),
         ]
     }
 
@@ -373,6 +380,21 @@ fn logging_entries(old: Option<&LogDestinationSetting>, new: Option<&LogDestinat
         .collect()
 }
 
+/// One line when the reminder interval changed. An absent table is the 90-day default, so removing it, or writing 90
+/// explicitly, is a change only when the value differs.
+fn recovery_entries(old: ReminderInterval, new: ReminderInterval) -> Vec<Entry> {
+    (old != new)
+        .then(|| {
+            entry(
+                Mark::Changed,
+                "reminder".to_owned(),
+                format!("every {} -> {} days", old.days(), new.days()),
+            )
+        })
+        .into_iter()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,7 +432,7 @@ mod tests {
         assert!(!text.contains(TEXT_ONLY));
         assert_eq!(
             summary.headline(),
-            "callers: 3 added; route grants: 3 added; routes: 3 added; listeners: 3 added; limits: none; logging: none"
+            "callers: 3 added; route grants: 3 added; routes: 3 added; listeners: 3 added; limits: none; logging: none; recovery: none"
         );
     }
 
@@ -561,12 +583,66 @@ mod tests {
         assert_eq!(lines(&pending), ["limits:", "  ~ max_connections: 256 -> 512"]);
     }
 
+    fn with_recovery(days: Option<i64>) -> ValidatedConfig {
+        let table = days.map_or_else(String::new, |d| format!("\n[recovery]\nreminder_days = {d}\n"));
+        config(&format!("{SPEC_EXAMPLE}{table}"))
+    }
+
+    fn recovery_lines(active: &ValidatedConfig, pending: &ValidatedConfig) -> Vec<String> {
+        let summary = summarize(Some(active), pending);
+        summary
+            .render()
+            .lines()
+            .skip_while(|l| *l != "recovery:")
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn recovery_added_changed_and_removed_each_give_one_line() {
+        assert_eq!(
+            recovery_lines(&spec(), &with_recovery(Some(30))),
+            ["recovery:", "  ~ reminder: every 90 -> 30 days"]
+        );
+        assert_eq!(
+            recovery_lines(&with_recovery(Some(30)), &with_recovery(Some(200))),
+            ["recovery:", "  ~ reminder: every 30 -> 200 days"]
+        );
+        assert_eq!(
+            recovery_lines(&with_recovery(Some(30)), &spec()),
+            ["recovery:", "  ~ reminder: every 30 -> 90 days"]
+        );
+        let headline = summarize(Some(&spec()), &with_recovery(Some(30))).headline();
+        assert!(headline.ends_with("logging: none; recovery: 1 changed"), "{headline}");
+    }
+
+    #[test]
+    fn unchanged_recovery_interval_gives_no_line() {
+        [(None, Some(90)), (Some(90), None), (Some(30), Some(30)), (None, None)]
+            .into_iter()
+            .for_each(|(old, new)| {
+                let summary = summarize(Some(&with_recovery(old)), &with_recovery(new));
+                assert!(!summary.render().contains("recovery:"));
+                assert!(summary.headline().ends_with("recovery: none"));
+            });
+    }
+
+    #[test]
+    fn recovery_follows_logging_in_the_fixed_order() {
+        let pending = config(&format!(
+            "{SPEC_EXAMPLE}\n[logging]\ndestination = \"stdout\"\n[recovery]\nreminder_days = 30\n"
+        ));
+        let text = summarize(Some(&spec()), &pending).render();
+        assert!(text.find("logging:") < text.find("recovery:"));
+        assert_eq!(text, summarize(Some(&spec()), &pending).render());
+    }
+
     #[test]
     fn headline_counts_each_section() {
         let pending = config(&format!("{SPEC_EXAMPLE}\n[limits]\nmax_connections = 512\n").replace("\"/latest\"", "\"/new\""));
         assert_eq!(
             summarize(Some(&spec()), &pending).headline(),
-            "callers: none; route grants: none; routes: 1 changed; listeners: none; limits: 1 changed; logging: none"
+            "callers: none; route grants: none; routes: 1 changed; listeners: none; limits: 1 changed; logging: none; recovery: none"
         );
     }
 

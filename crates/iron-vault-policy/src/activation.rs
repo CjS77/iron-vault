@@ -16,6 +16,7 @@ use crate::display::joined;
 use crate::host::Host;
 use crate::name::{CallerName, CredentialName, ListenerName, RouteName};
 use crate::port::Port;
+use crate::reminder_interval::ReminderInterval;
 use crate::route::RouteConfig;
 use crate::validated::ValidatedConfig;
 
@@ -183,6 +184,11 @@ impl ActivePolicy {
     /// Its routes include unavailable ones; serve requests through [`ActivePolicy::route`], which omits them.
     pub fn config(&self) -> &ValidatedConfig {
         &self.config
+    }
+
+    /// The interval between recovery reminders in the approved config.
+    pub fn recovery_reminder(&self) -> ReminderInterval {
+        self.config.recovery_reminder()
     }
 
     /// The route named `route`, if it exists and is available.
