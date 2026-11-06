@@ -39,7 +39,7 @@ use iron_vault::admin::socket::AdminSocket;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, LockUnavailable, MemoryProtection};
-use iron_vault::migration_authorization::{MigrationOperation, MigrationRefusal};
+use iron_vault::migration_authorization::{FAILURE_THRESHOLD, MigrationOperation, MigrationRefusal};
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{LockOutcome, ServiceContext, ServiceLocks, ServiceSetup, StartError, UnlockRefusal};
 use iron_vault::service_state::{FailureReason, IllegalTransition, ListenerProvenance, ServiceEvent, ServiceState, UnavailableReason};
@@ -1351,6 +1351,22 @@ async fn lock_retires_the_pending_migration_challenge() {
     assert_eq!(
         pending.take(&digest, tokio::time::Instant::now()).unwrap_err(),
         MigrationRefusal::NotPending
+    );
+}
+
+#[tokio::test]
+async fn lock_does_not_reset_the_passphrase_attempt_limit() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    let mut limiter = service.attempt_limiter().await;
+    (0..FAILURE_THRESHOLD).for_each(|_| limiter.record_failure(tokio::time::Instant::now()));
+    drop(limiter);
+    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+
+    let limiter = service.attempt_limiter().await;
+    assert!(
+        limiter.check(tokio::time::Instant::now()).is_err(),
+        "lock cleared the failure count"
     );
 }
 

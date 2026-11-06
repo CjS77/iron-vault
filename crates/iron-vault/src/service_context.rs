@@ -52,7 +52,7 @@ use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_chec
 use crate::deployment::PasswdDirectory;
 use crate::hardening::{HardeningReport, MemoryProtection};
 use crate::logging::{LogSwitch, OpenedLog};
-use crate::migration_authorization::PendingMigration;
+use crate::migration_authorization::{AttemptLimiter, PendingMigration};
 use crate::request_listeners::RequestListeners;
 use crate::service_state::{AdminOperation, IllegalTransition, RequestInterface, ServiceEvent, ServiceState, UnavailableReason, next};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder, Withdrawn};
@@ -257,6 +257,12 @@ struct Inner {
     /// The one pending migration challenge, measured from the clock origin fixed when the service starts. `lock`
     /// retires it, so no challenge outlives the vault identity it was issued under.
     migration: PendingMigration,
+    /// The passphrase attempt limit. Unlike the pending slot, `lock` leaves it alone, so locking cannot reset a guesser's count.
+    #[allow(
+        dead_code,
+        reason = "the migration source-owner methods (K-209) are its first callers outside tests"
+    )]
+    attempts: AttemptLimiter,
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
@@ -288,6 +294,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 open: None,
                 checks: 0,
                 migration: PendingMigration::new(Instant::now()),
+                attempts: AttemptLimiter::new(),
                 serving: Some(Serving::start(
                     listeners,
                     Limits::default(),
@@ -519,6 +526,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     #[cfg(any(test, feature = "test-support"))]
     pub async fn identity_probe(&self) -> Option<std::sync::Weak<VaultIdentity>> {
         self.inner.lock().await.identity.as_ref().map(Arc::downgrade)
+    }
+
+    /// The passphrase attempt limiter, so a test can see that `lock` leaves its count alone.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn attempt_limiter(&self) -> tokio::sync::MappedMutexGuard<'_, AttemptLimiter> {
+        tokio::sync::MutexGuard::map(self.inner.lock().await, |inner| &mut inner.attempts)
     }
 
     /// The pending migration slot, so a test can issue a challenge before any command does and see `lock` retire it.

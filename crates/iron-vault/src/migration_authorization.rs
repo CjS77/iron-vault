@@ -6,6 +6,7 @@
 //! under test. The source-owner methods that prove a challenge live beside this module and construct an authorization
 //! through it; nothing else can.
 
+mod attempt_limit;
 mod challenge;
 mod pending;
 #[cfg(test)]
@@ -15,6 +16,7 @@ use iron_vault_store::{RecipientKey, VaultId};
 use thiserror::Error;
 use tokio::time::Instant;
 
+pub use attempt_limit::{AttemptLimiter, BASE_COOLDOWN, FAILURE_THRESHOLD, MAX_COOLDOWN, RateLimited};
 pub use challenge::{BindingDigest, CHALLENGE_LIFETIME, MigrationChallenge};
 pub use pending::{ChallengeBusy, PendingMigration};
 
