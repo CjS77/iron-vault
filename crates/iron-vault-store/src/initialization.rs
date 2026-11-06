@@ -95,7 +95,7 @@ pub enum InitStateError {
     State(#[from] WriteError),
     /// Removing a leftover `recovery.toml` from an Uninitialized directory failed; nothing else was written.
     #[error("cannot remove the leftover recovery check record: {0}")]
-    LeftoverRecord(WriteError),
+    LeftoverRecoveryCheck(WriteError),
     /// Removing a config file failed.
     #[error(transparent)]
     Config(ConfigWriteError),
@@ -157,16 +157,16 @@ pub fn ensure_initializable(
 /// Starts an initialization: step 1 of the write order, plus the discard of an earlier unfinished one.
 ///
 /// On Uninitialized this durably removes a leftover `recovery.toml`, so the new vault does not inherit the old vault's
-/// `last_checked`, then durably writes an empty `init.unfinished`. The removal is no audit event, so it is not reported. On Unfinished it durably removes, in an order that
-/// never leaves a signature alone, every file an initialization writes, and keeps `init.unfinished`; it returns those
-/// file names for the `vault.init-discarded` log, and a discard that fails part-way names them on its error. On
-/// Initialized and Unrecognized it refuses and changes nothing.
+/// `last_checked`, then durably writes an empty `init.unfinished`. The removal is not an audit event, so it is not
+/// reported. On Unfinished it durably removes, in an order that never leaves a signature alone, every file an
+/// initialization writes, and keeps `init.unfinished`; it returns those file names for the `vault.init-discarded` log, and
+/// a discard that fails part-way names them on its error. On Initialized and Unrecognized it refuses and changes nothing.
 pub fn begin_initialization(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, BeginError> {
     match ensure_initializable(state, config, fs)? {
         InitializationState::Unfinished => discard(state, config, fs),
         // Uninitialized: `ensure_initializable` returns no other state.
         _ => remove_recovery_check(state, fs)
-            .map_err(InitStateError::LeftoverRecord)
+            .map_err(InitStateError::LeftoverRecoveryCheck)
             .and_then(|_| durable_replace(state, fs, &StateFileName::unfinished_initialization(), b"").map_err(InitStateError::State))
             .map(|()| Vec::new())
             .map_err(Into::into),

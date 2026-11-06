@@ -367,7 +367,7 @@ fn begin_leaves_no_marker_when_the_leftover_record_cannot_be_removed() {
     let fs = dirs.fault_fs();
     dirs.put(&fs, "recovery.toml");
     fs.fail_first(FsOp::RemoveFile, io::ErrorKind::Other);
-    assert!(matches!(dirs.begin(&fs), Err(InitStateError::LeftoverRecord(_))));
+    assert!(matches!(dirs.begin(&fs), Err(InitStateError::LeftoverRecoveryCheck(_))));
     assert_eq!(dirs.state_names(&fs), ["lock", "recovery.toml"]);
     assert_eq!(dirs.read(&fs), InitializationState::Uninitialized);
 }

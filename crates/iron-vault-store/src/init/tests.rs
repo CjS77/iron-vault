@@ -280,7 +280,7 @@ fn the_first_approval_is_reported_with_the_initial_config_digest_and_not_logged(
 fn assert_left_by(dirs: &Dirs, fs: &FaultFs, error: &InitError, call: usize) {
     let state = dirs.read(fs);
     let expected: &[InitializationState] = match (error.step(), error.cause()) {
-        (InitStep::Discard, InitFailure::State(InitStateError::LeftoverRecord(_))) => &[InitializationState::Uninitialized],
+        (InitStep::Discard, InitFailure::State(InitStateError::LeftoverRecoveryCheck(_))) => &[InitializationState::Uninitialized],
         (InitStep::Begin, _) => &[InitializationState::Uninitialized, InitializationState::Unfinished],
         (InitStep::Finish, InitFailure::State(InitStateError::FinishUncertain { .. })) => &[InitializationState::Initialized],
         _ => &[InitializationState::Unfinished],
