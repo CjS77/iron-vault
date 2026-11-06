@@ -42,8 +42,9 @@ Still to come in v0:
 - a Linux system-service package (the protected installation) and a Docker Compose profile;
 - the v0 release acceptance suite.
 
-Later phases add OAuth login and refresh, owner notifications, passphrase attempt limits, more credential kinds (JWT,
-GitHub App, HMAC, AWS Signature Version 4), YubiKey recipients with PIN/touch policies, and macOS and Windows services.
+Later phases add OAuth login and refresh, owner notifications, vault passphrase attempt limits, more credential kinds
+(JWT, GitHub App, HMAC, AWS Signature Version 4), YubiKey recipients with PIN/touch policies, and macOS and Windows
+services.
 
 ## Use cases
 
@@ -57,12 +58,12 @@ GitHub App, HMAC, AWS Signature Version 4), YubiKey recipients with PIN/touch po
 
 ## Roadmap
 
-| Phase       | Scope                                                                                                                                                                                                                                                                                                    |
-|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| v0          | Base-URL proxy; static and Basic credentials; caller authentication; route restrictions and rate limits; encrypted storage; versioned approval; scrubbing; recovery and migration                                                                                                                        |
-| v1          | Service-owned OAuth consent, account identity, access-token caching, and safe refresh-token rotation; owner notifications; request-content restrictions (allow-lists on query parameters and JSON body fields, such as the models a key may call); passphrase attempt limits for migration authorization |
-| Later       | YubiKey unlock/signing and per-request touch confirmation; additional credential kinds; password-manager sync                                                                                                                                                                                            |
-| Conditional | Forward-proxy interception if required callers cannot use base-URL mode                                                                                                                                                                                                                                  |
+| Phase       | Scope                                                                                                                                                                                                                                                                              |
+|-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| v0          | Base-URL proxy; static and Basic credentials; caller authentication; route restrictions and rate limits; encrypted storage; versioned approval; scrubbing; recovery and migration                                                                                                  |
+| v1          | Service-owned OAuth consent, account identity, access-token caching, and safe refresh-token rotation; owner notifications; request-content restrictions (allow-lists on query parameters and JSON body fields, such as the models a key may call); vault passphrase attempt limits |
+| Later       | YubiKey unlock/signing and per-request touch confirmation; additional credential kinds; password-manager sync                                                                                                                                                                      |
+| Conditional | Forward-proxy interception if required callers cannot use base-URL mode                                                                                                                                                                                                            |
 
 Integrations with `gh`, `npm`, and `cargo` require end-to-end compatibility checks. Setting `HTTPS_PROXY` alone does
 not enable credential injection in base-URL mode. Routes that require touch must stay unavailable until a supported

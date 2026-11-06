@@ -105,12 +105,12 @@ Each phase inherits the requirements of earlier phases. A feature must meet all 
 release enables it. A missing optional backend must produce an explicit unsupported or locked state; the service
 must never weaken policy to make a feature work.
 
-| Phase                            | Deliverable                                                                                                                                                                                                             | Release boundary                                                                             |
-|----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| v0: protected proxy              | Static and Basic credentials, base-URL routing, service installation, caller authentication, narrowing, rate limits, scrubbing, versioned approval, two-level vault, recovery, migration, and deployment controls       | FX MCP, Brave, Venice, and Naomi's static-credential callers                                 |
-| v1: OAuth                        | Service-owned login, refresh-token storage, access-token caching, safe refresh recovery, account identity, owner notifications, request-content restrictions, and passphrase attempt limits for migration authorization | Naomi Google integration can replace its existing credential broker behavior                 |
-| Later: hardware and integrations | YubiKey recipients and signers, touch confirmation, additional credential kinds, and password-manager sync                                                                                                              | Each backend ships only after its security and interoperability checks pass                  |
-| Conditional: forward proxy       | HTTPS interception for callers that cannot override their base URL                                                                                                                                                      | Requires a separate design and evidence that base-URL mode cannot serve the intended callers |
+| Phase                            | Deliverable                                                                                                                                                                                                       | Release boundary                                                                             |
+|----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
+| v0: protected proxy              | Static and Basic credentials, base-URL routing, service installation, caller authentication, narrowing, rate limits, scrubbing, versioned approval, two-level vault, recovery, migration, and deployment controls | FX MCP, Brave, Venice, and Naomi's static-credential callers                                 |
+| v1: OAuth                        | Service-owned login, refresh-token storage, access-token caching, safe refresh recovery, account identity, owner notifications, request-content restrictions, and vault passphrase attempt limits                 | Naomi Google integration can replace its existing credential broker behavior                 |
+| Later: hardware and integrations | YubiKey recipients and signers, touch confirmation, additional credential kinds, and password-manager sync                                                                                                        | Each backend ships only after its security and interoperability checks pass                  |
+| Conditional: forward proxy       | HTTPS interception for callers that cannot override their base URL                                                                                                                                                | Requires a separate design and evidence that base-URL mode cannot serve the intended callers |
 
 v0 must include method/path narrowing, per-route rate limits, service installation, and the final outgoing-request
 check. Later integrations must not defer these controls.
@@ -842,7 +842,7 @@ destination recipient when applicable, and a short-lived, single-use challenge. 
 hardware proof itself. Failed, cancelled, expired, replayed, or unavailable authorization must deny migration
 before creating or releasing a usable export bundle or rewrapping the identity for a destination. The service
 must not reuse a cached PIN, prior touch, or previous migration authorization. Clear typed secrets after use. In
-v0 the service applies a hardware device's own lockout; passphrase-attempt limits arrive in v1.
+v0 the service applies a hardware device's own lockout; vault passphrase attempt limits arrive in v1.
 
 Only after this source-owner check succeeds may the service accept a new passphrase to protect the transfer.
 That export passphrase encrypts the bundle; it does not establish authority over the source vault. Import on the

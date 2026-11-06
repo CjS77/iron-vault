@@ -145,7 +145,8 @@ The operation that needs it consumes it, at the moment the operation starts:
 
 Consuming it checks that the vault ID, the operation and the destination recipient are the consuming operation's own,
 and that the challenge's expiry has not passed. A mismatch is refused as `binding_mismatch` and an expired proof as
-`expired`, both with `migration-denied`. For an expired proof the owner runs the command again, which issues a new
+`expired`, both with `migration-denied`, and recorded after the proof's `migration.authorized` (see
+[Audit events](#audit-events)). For an expired proof the owner runs the command again, which issues a new
 challenge and asks again: §3.13 step 1, "if the authorization expires before export begins, repeat the check"
 ([open question 2](#open-questions)).
 
@@ -183,24 +184,34 @@ factor; the approval passphrase; an earlier unlock or migration authorization; a
 passphrase. Which method to ask for when a vault has more than one enrolled is EP-33's decision, made when the TPM
 method lands.
 
-A hardware device's own lockout applies as the device enforces it, such as the TPM's dictionary-attack lockout
-([§3.12](iron-vault-specification.md#312-service-states-and-errors)). The service adds no limit of its own in v0.
+A hardware device's own lockout applies as the device enforces it, such as the TPM's dictionary-attack protection
+for the approval key ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)) and its
+dictionary-attack state across power loss ([§3.12](iron-vault-specification.md#312-service-states-and-errors)). The
+service adds no limit of its own in v0.
 
 ## Passphrase attempt limit
 
 v0 has no passphrase attempt limit. The limit is on the v1 roadmap
-([§2](iron-vault-specification.md#2-release-plan)). Deferring it is acceptable for these reasons:
+([§2](iron-vault-specification.md#2-release-plan)). The deferral does not rest on trusting whoever holds an admin
+connection: R-23 treats that holder as possibly hostile, and in development mode every process running as the owner
+can open one. It rests on these:
 
-- **Each guess is slow.** One exchange allows one attempt, and each attempt costs an scrypt run at the vault's work
-  factor (2^18, about half a second to a second and 256 MiB of memory). Each attempt also holds the service-wide lock,
-  so attempts run one at a time: about one a second at best.
-- **Only an admin principal can guess.** The admin socket accepts only admin principals. In a protected installation
-  that means acting through `sudo`, and host administrators are already trusted
-  ([§1.2](iron-vault-specification.md#12-security-promise-and-limits)).
-- **A limit on migration alone would slow no one.** An admin principal can `lock` the service and guess through
-  `unlock` at the same cost. A useful limit has to cover every prompt for the vault passphrase, which is a v1 design.
-- **Guessing is visible.** Every refused attempt is a WARN audit record (`migration.authorization-refused` with
-  `wrong_passphrase`), and in v1 the `migration_refused` owner notification shows it on the desktop.
+- **Each guess is slow.** Each attempt costs an scrypt run at the vault's work factor (2^18, about half a second to a
+  second and 256 MiB of memory).
+- **One attempt per exchange.** There is no second try in the same exchange, so each guess also costs a new summary,
+  challenge and prompt.
+- **One exchange at a time.** Each exchange holds the service-wide lock from before its summary to its response
+  ([Admin exchange](#admin-exchange)), so attempts run one after another however many connections a guesser opens:
+  one or two a second at best.
+- **`unlock` is equally unlimited in v0.** A guesser can `lock` the service and guess through `unlock` at the same
+  cost, so a limit on migration alone would slow no one. A useful limit has to cover every prompt for the vault
+  passphrase, which is a v1 design.
+- **Guessing is visible.** Every refused attempt is a WARN audit record: `migration.authorization-refused` with
+  `wrong_passphrase` here, `vault.unlock-refused` for `unlock`. In v1 the `migration_refused` owner notification also
+  shows it on the desktop.
+- **The passphrase is long.** `init` accepts no vault passphrase shorter than 12 characters
+  ([passphrase rules](vault-initialization.md#passphrase-rules)), so at one or two guesses a second, guessing finds only
+  a passphrase drawn from a small, predictable set.
 
 **v1 direction, not decided.** One count across every vault passphrase prompt (`unlock` and migration
 authorization). After 5 consecutive failures, further attempts are refused for a cooldown that doubles with each
@@ -277,7 +288,7 @@ The messages are fixed phrases, and none holds owner input. Each refusal ends th
 | `binding_mismatch` | the consuming operation's vault ID, operation or destination is not the authorization's | `migration-denied` |
 | `unavailable` | an envelope could not be read or opened for a reason other than the passphrase | `migration-unavailable` |
 | `locked` | a `lock` cancelled the command at its vault passphrase prompt | `migration-unavailable` |
-| `cancelled` | the prompt got no owner input: the CLI closed, the connection failed, or the prompt deadline passed | no response, as for any prompt without owner input |
+| `cancelled` | the prompt got no owner input: the CLI closed, the connection failed, the prompt deadline passed, or the answer was not owner input | as for any prompt without owner input ([prompts](admin-protocol.md#admin-socket)): no response, `unexpected-frame` (code 4) for a well-formed frame out of turn, or the error an undecodable answer maps to |
 
 `not_pending` and `binding_mismatch` cannot be reached through a command, which issues and consumes its own
 challenge. They exist so that a defect fails closed and so that the release checks can drive them. Neither is a reason
@@ -293,7 +304,7 @@ carries owner input.
 |---|---|---|---|
 | `migration.challenge-issued` | INFO | a migration challenge was issued (step 5) | `operation`, `method`; `destination_recipient` for `add_recipient` |
 | `migration.authorized` | INFO | a source-owner method proved the challenge (step 7) | `operation`, `method`; `destination_recipient` for `add_recipient` |
-| `migration.authorization-refused` | WARN | the challenge or the authorization was refused, or the prompt was cancelled | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `error_kind` for `unavailable` |
+| `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled (steps 6–7), or the authorization was refused when consumed (step 9) | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `error_kind` for `unavailable` |
 
 | Field | Type | Form |
 |---|---|---|
@@ -302,9 +313,20 @@ carries owner input.
 | `destination_recipient` | string | The destination recipient key's `age1…` text, which is public |
 | `refusal` | string | One of the refusal labels [above](#error-codes) |
 
-Every issued challenge is followed by exactly one `migration.authorized` or `migration.authorization-refused`, so the
-log shows how each attempt ended. `migration.authorized` records the proof, not the migration. `export` and
-`recipient add` each record their own completion.
+The records of one exchange follow two rules, so the log shows how each attempt ended:
+
+- **One closing record per challenge.** Each `migration.challenge-issued` is followed by exactly one closing record
+  for steps 6 and 7: `migration.authorized`, or `migration.authorization-refused` with `wrong_passphrase`,
+  `not_this_vault`, `expired`, `not_pending`, `unavailable`, `locked` or `cancelled`.
+- **At most one consume-time refusal, after `migration.authorized`.** Consuming the authorization at step 9 adds
+  either nothing or one `migration.authorization-refused` with `expired` or `binding_mismatch`. It never follows a
+  refused challenge, and those two labels are the only ones it uses.
+
+`migration.authorized` records the proof, not the migration. A consumed authorization adds no migration record:
+`export` and `recipient add` each record their own completion. An exchange that ends after `migration.authorized`
+without consuming the authorization, at its own step 8 or with `wrong-state` at step 9, drops the authorization unused
+and adds no migration record. An exchange refused before it issues a challenge, at step 5 or earlier, records no
+migration event.
 
 The owner notification topic `migration_refused` is reserved for `migration.authorization-refused`
 ([owner-notifications.md](owner-notifications.md#reserved-topics)). It is v1 work, like every owner notification.
@@ -317,7 +339,8 @@ the vault is already unlocked". Each case maps to a mechanism above:
 
 | §3.15 case | How it is refused | Refusal |
 |---|---|---|
-| Missing | The operation takes a migration authorization by value, and only a method's proof constructs one | none: the code cannot be written |
+| Missing: no authorization in the code | The operation takes a migration authorization by value, and only a method's proof constructs one | none: the code cannot be written |
+| Missing: no answer at the prompt | The vault passphrase prompt gets no owner input: a client that never answers is cancelled at the prompt deadline, and one that sends a frame out of turn gets `unexpected-frame` (code 4) | `cancelled` |
 | Incorrect: a wrong passphrase, or the approval passphrase in its place | The passphrase does not open `operational.age` | `wrong_passphrase` |
 | Incorrect: another vault's envelopes | The unwrapped identity is not the one the service holds | `not_this_vault` |
 | Expired | The challenge is taken, or the authorization consumed, after its expiry | `expired` |
@@ -328,7 +351,7 @@ the vault is already unlocked". Each case maps to a mechanism above:
 | A new export passphrase never authorizes on its own | It is asked for only after step 7 and is never checked as a source factor | none: the passphrase is never offered to a method |
 | An earlier unlock never authorizes on its own | Nothing held in memory counts; every exchange runs the method again | none: the method always runs |
 
-The epic's rejection suite names one test per row.
+The epic's rejection suite names one test per row, except the type-level "Missing" row, which the compiler enforces.
 
 ## Open questions
 
