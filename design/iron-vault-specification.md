@@ -108,7 +108,7 @@ must never weaken policy to make a feature work.
 | Phase                            | Deliverable                                                                                                                                                                                                       | Release boundary                                                                             |
 |----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
 | v0: protected proxy              | Static and Basic credentials, base-URL routing, service installation, caller authentication, narrowing, rate limits, scrubbing, versioned approval, two-level vault, recovery, migration, and deployment controls | FX MCP, Brave, Venice, and Naomi's static-credential callers                                 |
-| v1: OAuth                        | Service-owned login, refresh-token storage, access-token caching, safe refresh recovery, account identity, and owner notifications                                                                                | Naomi Google integration can replace its existing credential broker behavior                 |
+| v1: OAuth                        | Service-owned login, refresh-token storage, access-token caching, safe refresh recovery, account identity, owner notifications, and request-content restrictions                                                  | Naomi Google integration can replace its existing credential broker behavior                 |
 | Later: hardware and integrations | YubiKey recipients and signers, touch confirmation, additional credential kinds, and password-manager sync                                                                                                        | Each backend ships only after its security and interoperability checks pass                  |
 | Conditional: forward proxy       | HTTPS interception for callers that cannot override their base URL                                                                                                                                                | Requires a separate design and evidence that base-URL mode cannot serve the intended callers |
 
@@ -958,7 +958,8 @@ v0 release checks must demonstrate all of the following:
 
 v1 adds `oauth_refresh` and targets Naomi's Google integration. It inherits every v0 destination, ownership,
 approval, response, and logging rule. Neither the caller nor the CLI receives a refresh token or access token.
-The route still supplies a placeholder; the service resolves a fresh access token into its slot.
+The route still supplies a placeholder; the service resolves a fresh access token into its slot. v1 also lets a route
+restrict request content ([§4.4](#44-request-content-restrictions)), for every credential kind.
 
 ### 4.1 Service-owned consent
 
@@ -1037,7 +1038,36 @@ owner and fail affected routes with `503`; keep unrelated credentials available.
 implementation can establish that replay does not reuse a potentially retired token. If it cannot establish that,
 require a new login. A fresh, owner-authorized login replaces the failed token record and clears the marker.
 
-### 4.4 v1 release checks
+### 4.4 Request-content restrictions
+
+v0 narrows a route by method and path only; it never reads query parameters or the request body. A caller granted
+a chat route can therefore ask for any model the provider offers on that path, including one far more expensive
+than the route's owner intended. v1 adds two optional route restrictions:
+
+- **Query parameters:** an allow-list of values for each named parameter. A route may also refuse any parameter it
+  does not name.
+- **JSON body fields:** an allow-list of values for each named field, addressed by a simple path such as `model`.
+
+The design for the v1 configuration syntax names the TOML keys. Whatever the syntax, these rules apply:
+
+- The check runs in the request pipeline after method and path narrowing, before the credential is resolved and
+  before anything leaves the machine. A request that fails it is refused with `403` and its own reason code.
+- Matching is exact and case-sensitive, after percent-decoding a query value once. A restricted parameter that
+  appears more than once, a restricted field whose key is duplicated in a JSON object, or a restricted field whose
+  value is not a string, number or boolean is refused: the upstream might read a different copy than the check did.
+- A route with body restrictions reads the body into memory up to an explicit size limit before forwarding it. A
+  body over the limit, a body that is not valid UTF-8 JSON, a `Content-Type` other than JSON, and any
+  `Content-Encoding` are refused rather than forwarded unchecked.
+- A restricted field that the request leaves out is refused, unless the route explicitly allows the provider's
+  default.
+- Restrictions are route policy: they take effect only through versioned approval, and the approval summary lists
+  each added, removed or changed allow-list.
+- Audit records name the route and the parameter or field that failed, never the value the caller sent.
+
+Like method and path narrowing, these restrictions bound what a compromised caller can do with a route; they do not
+make every allowed call safe.
+
+### 4.5 v1 release checks
 
 - Run authorization-code/PKCE and headless device-code login through the service, including a remote deployment.
 - Prove that the CLI and callers never receive verifier, authorization code, refresh token, or minted access token through an admin
@@ -1046,6 +1076,8 @@ require a new login. A fresh, owner-authorized login replaces the failed token r
 - Exercise concurrent refresh, expiry-margin behavior, one permitted `401` retry, and a body that cannot be replayed.
 - Cut power or inject failures before the refresh request, after the provider response, during record replacement, and after directory
   fsync. Recover to either a valid durable token or `needs login`, never an uncertain old-token retry.
+- Refuse a disallowed query value or body field, a repeated parameter, a duplicated JSON key, a missing restricted
+  field, an oversized body and a compressed body, each before the credential is resolved.
 - Validate the actual Google OAuth application status, consent setup, refresh-token lifetime, and requested scopes for Naomi before
   documenting unattended operation. Verify whether tokens for the selected Google OAuth “Testing” configuration expire after seven days;
   do not treat that lifetime as a universal guarantee.
@@ -1265,7 +1297,7 @@ Only the following follow-up work remains in this section:
 
 | Follow-up | Remaining work | Release gate |
 |---|---|---|
-| R-19: OAuth refresh-token rotation | Implement and fault-test the durable refresh transaction and `needs login` recovery in [§4.3](#43-refresh-token-rotation-and-crash-recovery)–[§4.4](#44-v1-release-checks). A provider can rotate a token before the service persists its replacement; an unresolved operation must never retry the old token. | v1 |
+| R-19: OAuth refresh-token rotation | Implement and fault-test the durable refresh transaction and `needs login` recovery in [§4.3](#43-refresh-token-rotation-and-crash-recovery) and [§4.5](#45-v1-release-checks). A provider can rotate a token before the service persists its replacement; an unresolved operation must never retry the old token. | v1 |
 | R-31: CLI and MCP compatibility | Verify complete base-URL workflows for each advertised client ([§6](#6-conditional-phase-forward-proxy-and-cli-compatibility)). If a required workflow cannot use those overrides, decide between a client patch and the conditional interception phase before claiming support. | Each integration claim |
 
 ### 8.2 Product decisions and resulting behavior
