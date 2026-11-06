@@ -79,14 +79,20 @@ pub fn wrap_identity(identity: &VaultIdentity, recipients: &RecipientSet) -> Res
 /// cleanly. The identity returned here is therefore trusted only once the vault manifest's MAC, keyed from this
 /// identity, verifies; a forged envelope can only yield an identity that fails that check.
 pub fn unwrap_identity(envelope: &[u8], recipient: &RecipientIdentity) -> Result<VaultIdentity, EnvelopeError> {
+    check_identity_envelope(envelope)?;
+    let secret = open_as(recipient.as_age(), envelope, SECRET_TEXT_LEN).map_err(map_open_error)?;
+    VaultIdentity::from_secret_text(&secret).ok_or(EnvelopeError::Malformed)
+}
+
+/// The checks on `identity.age` that need no key: the size bound, then that the header holds only X25519 stanzas.
+///
+/// The header is read here and again by `age` when the envelope is opened. This read refuses an scrypt or plugin stanza
+/// before any key work; `age`'s parse is the one that authenticates the header. Neither replaces the other.
+pub(crate) fn check_identity_envelope(envelope: &[u8]) -> Result<(), EnvelopeError> {
     if envelope.len() > MAX_IDENTITY_ENVELOPE_LEN {
         return Err(EnvelopeError::TooLarge);
     }
-    // The header is read here and again by `age` inside `open_as`. This read is the one that refuses an scrypt or
-    // plugin stanza before any key work; `age`'s parse is the one that authenticates the header. Neither replaces the other.
-    check_x25519_only(&stanza_kinds(envelope)?)?;
-    let secret = open_as(recipient.as_age(), envelope, SECRET_TEXT_LEN).map_err(map_open_error)?;
-    VaultIdentity::from_secret_text(&secret).ok_or(EnvelopeError::Malformed)
+    check_x25519_only(&stanza_kinds(envelope)?)
 }
 
 /// The kinds of the stanzas in an `age` file's header, in header order, read without decrypting anything.

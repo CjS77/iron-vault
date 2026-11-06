@@ -18,7 +18,7 @@ use zeroize::Zeroizing;
 use crate::{
     EnvelopeError, StateDirLock, StateFileName, StoreFs,
     durable::{ReadError, WriteError, durable_replace, read_state_file},
-    envelope::{read_identity_envelope, unwrap_identity},
+    envelope::{check_identity_envelope, read_identity_envelope, unwrap_identity},
     recipient::{RecipientIdentity, RecipientKey},
     sealed::read_bounded,
     stanza::{StanzaKind, parse_header},
@@ -248,13 +248,16 @@ pub fn verify_vault_passphrase(
 ) -> Result<(), PassphraseCheckError> {
     use PassphraseCheckError::{NotThisVault, Unavailable, WrongPassphrase};
     let read = |error: ReadError| Unavailable(CheckUnavailable::Read(error));
-    let operational =
-        open_passphrase_envelope(&read_passphrase_envelope(lock, fs).map_err(read)?, passphrase).map_err(|error| match error {
-            EnvelopeError::WrongPassphrase => WrongPassphrase,
-            other => Unavailable(CheckUnavailable::PassphraseEnvelope(other)),
-        })?;
+    let identity_unavailable = |error: EnvelopeError| Unavailable(CheckUnavailable::IdentityEnvelope(error));
+    let passphrase_envelope = read_passphrase_envelope(lock, fs).map_err(read)?;
     let identity_envelope = read_identity_envelope(lock, fs).map_err(read)?;
-    let unwrapped = unwrap_identity(&identity_envelope, &operational).map_err(|e| Unavailable(CheckUnavailable::IdentityEnvelope(e)))?;
+    // Every check that needs no passphrase runs before scrypt, so a planted identity.age costs no key-stretching work.
+    check_identity_envelope(&identity_envelope).map_err(identity_unavailable)?;
+    let operational = open_passphrase_envelope(&passphrase_envelope, passphrase).map_err(|error| match error {
+        EnvelopeError::WrongPassphrase => WrongPassphrase,
+        other => Unavailable(CheckUnavailable::PassphraseEnvelope(other)),
+    })?;
+    let unwrapped = unwrap_identity(&identity_envelope, &operational).map_err(identity_unavailable)?;
     match unwrapped.public_key() == *held {
         true => Ok(()),
         false => Err(NotThisVault),
@@ -636,22 +639,38 @@ mod tests {
         ));
     }
 
+    /// The on-disk `operational.age` raised to the largest work factor `open_passphrase_envelope` accepts, so any scrypt run
+    /// on it takes far longer than the timing assertions allow.
+    fn slow_passphrase_envelope(lock: &StateDirLock) -> Vec<u8> {
+        with_work_factor(
+            &read_passphrase_envelope(lock, &OsFs).unwrap(),
+            &MAX_PASSPHRASE_WORK_FACTOR.to_string(),
+        )
+    }
+
+    fn assert_fast(started: Instant) {
+        let elapsed = started.elapsed();
+        assert!(elapsed < Duration::from_millis(100), "took {elapsed:?}");
+    }
+
     #[test]
     fn verify_reports_an_oversized_passphrase_envelope_without_running_scrypt() {
         let dir = TestDir::new("verify-oversized");
         let (lock, vault) = vault_on_disk(&dir, "correct horse");
-        write_passphrase_envelope(&lock, &OsFs, &vec![0; MAX_PASSPHRASE_ENVELOPE_LEN + 1]).unwrap();
+        let slow = slow_passphrase_envelope(&lock);
+        let padded = [slow.as_slice(), &vec![0; MAX_PASSPHRASE_ENVELOPE_LEN + 1 - slow.len()]].concat();
+        write_passphrase_envelope(&lock, &OsFs, &padded).unwrap();
         let started = Instant::now();
         let cause = unavailable(check(&lock, "correct horse", &vault));
         assert!(matches!(cause, CheckUnavailable::Read(ReadError::TooLarge { .. })), "{cause:?}");
-        assert!(started.elapsed() < Duration::from_millis(100));
+        assert_fast(started);
     }
 
     #[test]
     fn verify_refuses_a_passphrase_envelope_with_an_extra_stanza_before_scrypt() {
         let dir = TestDir::new("verify-extra");
         let (lock, vault) = vault_on_disk(&dir, "correct horse");
-        let (_, envelope) = sealed("correct horse");
+        let envelope = slow_passphrase_envelope(&lock);
         let mac = envelope.windows(5).position(|w| w == b"\n--- ").unwrap() + 1;
         let planted = [&envelope[..mac], b"-> piv-p256 AAAA\nAAAA\n", &envelope[mac..]].concat();
         write_passphrase_envelope(&lock, &OsFs, &planted).unwrap();
@@ -661,20 +680,33 @@ mod tests {
             matches!(cause, CheckUnavailable::PassphraseEnvelope(EnvelopeError::UnexpectedStanza(_))),
             "{cause:?}"
         );
-        assert!(started.elapsed() < Duration::from_millis(100));
+        assert_fast(started);
     }
 
     #[test]
-    fn verify_reports_an_identity_envelope_with_an_scrypt_stanza_as_unavailable() {
+    fn verify_reports_an_identity_envelope_with_an_scrypt_stanza_as_unavailable_before_scrypt() {
         let dir = TestDir::new("verify-scrypt-identity");
         let (lock, vault) = vault_on_disk(&dir, "correct horse");
+        write_passphrase_envelope(&lock, &OsFs, &slow_passphrase_envelope(&lock)).unwrap();
         let (_, scrypt_file) = sealed("correct horse");
         write_identity_envelope(&lock, &OsFs, &scrypt_file).unwrap();
+        let started = Instant::now();
         let cause = unavailable(check(&lock, "correct horse", &vault));
         assert_eq!(
             cause,
             CheckUnavailable::IdentityEnvelope(EnvelopeError::UnexpectedStanza(StanzaKind::Scrypt))
         );
+        assert_fast(started);
+    }
+
+    #[test]
+    fn verify_reports_an_unenrolled_operational_identity_as_unavailable() {
+        let dir = TestDir::new("verify-unenrolled");
+        let (lock, vault) = vault_on_disk(&dir, "correct horse");
+        let (_, stranger) = sealed("correct horse");
+        write_passphrase_envelope(&lock, &OsFs, &stranger).unwrap();
+        let cause = unavailable(check(&lock, "correct horse", &vault));
+        assert_eq!(cause, CheckUnavailable::IdentityEnvelope(EnvelopeError::NotARecipient));
     }
 
     #[test]
