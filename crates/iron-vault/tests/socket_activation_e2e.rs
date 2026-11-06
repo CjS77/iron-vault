@@ -14,7 +14,7 @@ mod common;
 
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -23,11 +23,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use common::WAIT;
-use common::approval_harness::{read_frame, send};
-use iron_vault::admin::protocol::{AdminRequest, AdminResponse, Frame, OwnerInput, ProposedConfig};
+use common::approval_harness::{converse, send};
+use common::proxy_harness::next_free_port;
+use iron_vault::admin::protocol::{AdminRequest, AdminResponse, Frame, ProposedConfig};
 use rustix::process::{Pid, Signal, kill_process_group};
 use tokio::net::UnixStream;
-use zeroize::Zeroizing;
 
 const VAULT_PASSPHRASE: &str = "ACT-vault-passphrase-52a1";
 const APPROVAL_PASSPHRASE: &str = "ACT-approval-passphrase-7c4d";
@@ -35,17 +35,12 @@ const LISTENER: &str = "loopback";
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
-/// A free loopback port: bound to find it, then released. A race with another process is possible but unlikely.
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
-}
-
 fn socket_activate() -> Option<PathBuf> {
-    std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-        .map(|dir| dir.join("systemd-socket-activate"))
-        .find(|candidate| candidate.is_file())
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join("systemd-socket-activate"))
+            .find(|candidate| candidate.is_file())
+    })
 }
 
 /// A private tree with the XDG bases and a copy of the service binary, removed on drop. The copy is `0500` in a `0700`
@@ -59,18 +54,18 @@ impl Install {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let install = Self(root);
-        ["", "config", "state", "run"]
-            .iter()
-            .for_each(|name| chmod(&install.dir(name), 0o700));
+        ["", "config", "state", "run"].iter().for_each(|name| {
+            let dir = install.dir(name);
+            fs::create_dir_all(&dir).unwrap();
+            chmod(&dir, 0o700);
+        });
         fs::copy(env!("CARGO_BIN_EXE_iron-vault"), install.binary()).unwrap();
         chmod(&install.binary(), 0o500);
         install
     }
 
     fn dir(&self, name: &str) -> PathBuf {
-        let dir = self.0.join(name);
-        fs::create_dir_all(&dir).unwrap();
-        dir
+        self.0.join(name)
     }
 
     fn binary(&self) -> PathBuf {
@@ -128,6 +123,14 @@ impl Activated {
     }
 }
 
+impl Activated {
+    /// Asserts the service has not exited and its log records no panic.
+    fn assert_running_without_panic(&mut self, install: &Install) {
+        assert!(matches!(self.0.try_wait(), Ok(None)), "the service exited\n{}", install.log());
+        assert!(!install.log().contains("panicked at"), "the service panicked\n{}", install.log());
+    }
+}
+
 impl Drop for Activated {
     fn drop(&mut self) {
         let group = Pid::from_raw(i32::try_from(self.0.id()).unwrap()).unwrap();
@@ -145,25 +148,11 @@ fn wait_for(install: &Install, what: &str, done: impl Fn() -> bool) {
     }
 }
 
-/// Sends `request` to the service and answers its prompts in turn, ignoring the recovery key it reveals.
+/// Sends `request` to the service and answers its prompts in turn.
 async fn exchange(install: &Install, request: AdminRequest, answers: &[&str]) -> AdminResponse {
     let mut stream = UnixStream::connect(install.admin_socket()).await.unwrap();
     send(&mut stream, &Frame::Request(request)).await;
-    let mut answers = answers.iter();
-    loop {
-        match read_frame(&mut stream).await {
-            Frame::Response(response) => return response,
-            Frame::Prompt(_) => {
-                let answer = answers.next().expect("a prompt beyond the answers given");
-                send(
-                    &mut stream,
-                    &Frame::OwnerInput(OwnerInput::new(Zeroizing::new(answer.as_bytes().to_vec()))),
-                )
-                .await;
-            }
-            _ => {}
-        }
-    }
+    converse(&mut stream, answers).await.response
 }
 
 /// `init`, `unlock`, then approves a config whose one listener is `loopback` at `configured`.
@@ -215,10 +204,11 @@ async fn serve_configured(passed: SocketAddr, fdname: &str, configured: SocketAd
     // systemd-socket-activate, like a socket unit, starts the service on the first connection to the socket.
     wait_for(&install, "the socket to listen", || install.log().contains("Listening on"));
     drop(TcpStream::connect(passed).unwrap());
+    let untrusted = format!("refusing to start: {} is not trusted", install.binary().display());
     wait_for(&install, "the service to start", || {
-        install.log().contains("service started") || install.log().contains("refusing to start")
+        install.log().contains("service started") || install.log().contains(&untrusted)
     });
-    if install.log().contains("refusing to start") {
+    if install.log().contains(&untrusted) {
         assert!(
             std::env::var_os("CI").is_none(),
             "the build tree is not a trusted path in CI:\n{}",
@@ -233,7 +223,7 @@ async fn serve_configured(passed: SocketAddr, fdname: &str, configured: SocketAd
 
 #[tokio::test]
 async fn a_passed_socket_named_for_its_listener_serves_requests() {
-    let address = loopback(free_port());
+    let address = loopback(next_free_port());
     let Some((install, _service)) = serve_configured(address, LISTENER, address).await else {
         return;
     };
@@ -243,11 +233,13 @@ async fn a_passed_socket_named_for_its_listener_serves_requests() {
 
 #[tokio::test]
 async fn a_passed_socket_on_another_port_is_refused_and_the_listener_stays_unavailable() {
-    let (passed, configured) = (loopback(free_port()), loopback(free_port()));
-    let Some((install, _service)) = serve_configured(passed, LISTENER, configured).await else {
+    let (passed, configured) = (loopback(next_free_port()), loopback(next_free_port()));
+    let Some((install, mut service)) = serve_configured(passed, LISTENER, configured).await else {
         return;
     };
-    wait_for(&install, "the mismatch to be logged", || install.log().contains("is bound to"));
+    wait_for(&install, "the mismatch to be logged", || {
+        install.log().contains("approved request listener missing until restart")
+    });
     assert!(
         status_line(configured, WAIT).is_err(),
         "the configured address answers\n{}",
@@ -258,6 +250,7 @@ async fn a_passed_socket_on_another_port_is_refused_and_the_listener_stays_unava
         "{}",
         install.log()
     );
+    service.assert_running_without_panic(&install);
 }
 
 /// In a development build a listener no passed socket is named for binds its configured address itself (`check_origin` refuses
@@ -265,8 +258,8 @@ async fn a_passed_socket_on_another_port_is_refused_and_the_listener_stays_unava
 /// passed under another name is never adopted.
 #[tokio::test]
 async fn a_passed_socket_named_for_no_listener_is_not_adopted() {
-    let (passed, configured) = (loopback(free_port()), loopback(free_port()));
-    let Some((install, _service)) = serve_configured(passed, "elsewhere", configured).await else {
+    let (passed, configured) = (loopback(next_free_port()), loopback(next_free_port()));
+    let Some((install, mut service)) = serve_configured(passed, "elsewhere", configured).await else {
         return;
     };
     let own = status_line(configured, WAIT).unwrap();
@@ -277,4 +270,5 @@ async fn a_passed_socket_named_for_no_listener_is_not_adopted() {
         "the unmatched passed socket answered: {unserved}\n{}",
         install.log()
     );
+    service.assert_running_without_panic(&install);
 }

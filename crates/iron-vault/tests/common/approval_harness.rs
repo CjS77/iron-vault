@@ -326,6 +326,8 @@ pub async fn converse(stream: &mut UnixStream, answers: &[&str]) -> Exchanged {
                 };
             }
             Frame::Notice(notice) => notices.push_str(&notice.text),
+            // `init` reveals the recovery key; callers that don't check it need not handle it.
+            Frame::Reveal(_) => {}
             Frame::Prompt(prompt) => {
                 prompts.push(prompt);
                 let answer = answers.next().expect("a prompt beyond the answers given");
