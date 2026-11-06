@@ -15,7 +15,7 @@ use iron_vault_store::{
 };
 
 use super::unlock::memory_guard;
-use super::{ServiceContext, ServiceLocks, UnlockRefusal};
+use super::{ServiceContext, ServiceLocks};
 use crate::audit::AuditEvent;
 use crate::audit::recovery::RecoveryChecked;
 use crate::service_state::{AdminOperation, ServiceState};
@@ -54,10 +54,14 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// The checks that come before the key prompt, in order: the service state, the initialization state, then memory.
     pub async fn recovery_check_allowed(&self) -> Result<(), RecoveryRefusal> {
         self.require_checkable().await?;
-        match memory_guard(self.setup.paths.profile, &self.setup.hardening.memory) {
-            Err(refusal @ UnlockRefusal::MemoryUnprotected(_)) => Err(RecoveryRefusal::MemoryUnprotected(refusal.to_string())),
-            _ => Ok(()),
-        }
+        self.require_locked_memory_for_check()
+    }
+
+    /// The memory rule `unlock` is held to (§3.11): the check unwraps the vault identity into memory. Every refusal
+    /// `memory_guard` gives counts, so a refusal added to it later fails closed here.
+    fn require_locked_memory_for_check(&self) -> Result<(), RecoveryRefusal> {
+        memory_guard(self.setup.paths.profile, &self.setup.hardening.memory)
+            .map_err(|refusal| RecoveryRefusal::MemoryUnprotected(refusal.to_string()))
     }
 
     /// Proves that `recipient`, parsed from the key the owner typed, opens the vault, and records the check.
@@ -65,11 +69,14 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Fails with [`RecoveryRefusal::Busy`] at once if the service-wide lock is taken. Under it, the state and the
     /// initialization state are read again, since an `init`, `unlock` or `lock` may have run during the prompt. The
     /// blocking task owns the lock guard, so the record write cannot race a reminder evaluation even if this future is
-    /// dropped. It logs `recovery.checked` for every end after the lock was taken and the state held.
+    /// dropped. The memory rule is applied here too, before any file is read, so no caller can unwrap the identity in
+    /// unprotected memory. It logs `recovery.checked` for every end of the store check; a task that ended without a
+    /// result has no outcome to log.
     pub async fn check_recovery(&self, recipient: RecipientIdentity) -> Result<RecoveryProof, RecoveryRefusal> {
+        let now = UtcSecond::from_system_time(SystemTime::now()).map_err(|_| RecoveryRefusal::ClockUnusable)?;
         let service_wide = Arc::clone(&self.service_wide).try_lock_owned().map_err(|_| RecoveryRefusal::Busy)?;
         self.require_checkable().await?;
-        let now = UtcSecond::from_system_time(SystemTime::now()).map_err(|_| RecoveryRefusal::ClockUnusable)?;
+        self.require_locked_memory_for_check()?;
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let ran = tokio::task::spawn_blocking(move || {
             let _held = service_wide;

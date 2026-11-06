@@ -33,12 +33,14 @@ Done in v0:
 - **Credential commands:** `add`, `replace`, `rm` and `list`; `replace` and `rm` need the approval passphrase.
 - **Response scrubbing:** removes the credential's known forms from response headers, compressed bodies and streamed
   responses.
+- **Recovery key check:** `recovery check` proves the offline recovery key still opens the vault, in Locked or Ready, and
+  records when.
 - **Audit logging:** typed JSON records of request and administrative events, which never log secret values. See the
   [log operations guide](design/log-operations.md).
 
 Still to come in v0:
 
-- recovery-key check, recipient add and remove, migration, and reset;
+- recipient add and remove, migration, and reset;
 - TPM unlock and TPM approval signing;
 - a Docker Compose profile;
 - the v0 release acceptance suite.
@@ -237,7 +239,7 @@ echo off, or reads it from stdin, and the check works whether the service is Loc
 
 ```sh
 iron-vault recovery check    # prompts for the recovery key
-# the recovery key opens vault 2a682de7-b14d-4900-9ea9-0c968e1a6589; checked at 2026-11-06T09:49:13Z
+# the recovery key opens vault 2a682de7-b14d-4900-9ea9-0c968e1a6589: checked 2026-11-06T09:49:13Z
 ```
 
 The check changes nothing in the vault. It records only the time, in `recovery.toml` beside the vault, and logs a

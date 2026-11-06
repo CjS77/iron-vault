@@ -1043,6 +1043,38 @@ fn protected_without_locked_memory(
 }
 
 #[tokio::test]
+async fn a_protected_install_without_locked_memory_refuses_recovery_check_before_any_prompt_and_reads_nothing() {
+    let fixture = approved().await;
+    let memory = MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 });
+    let fs = GatedFs::default();
+    let (mut reached, _release) = fs.arm("identity.age");
+    let service = fixture
+        .start_as(fs, PassedSockets::default(), DeploymentProfile::Protected, memory)
+        .unwrap();
+    let session = AdminSession::open_for(&service, DeploymentProfile::Development);
+    let (key, _) = iron_vault_store::RecoveryKey::generate();
+    let key = secrecy::ExposeSecret::expose_secret(&key).to_owned();
+
+    let (_, prompts, response) = converse(&session.socket, AdminRequest::RecoveryCheck, key.clone()).await;
+
+    assert_eq!(prompts, []);
+    let AdminResponse::Error { code, message } = response else {
+        panic!("expected an error, got {response:?}")
+    };
+    assert_eq!(code, ErrorCode::MemoryUnprotected);
+    assert!(message.contains("memory is not locked against swap"), "{message}");
+    // The context refuses on its own too, so no caller can unwrap the identity in unprotected memory.
+    let recipient = iron_vault_store::RecoveryKeySecret::parse(SecretString::from(key)).unwrap();
+    let refused = service.check_recovery(recipient).await;
+    assert!(
+        matches!(refused, Err(iron_vault::service_context::RecoveryRefusal::MemoryUnprotected(_))),
+        "{refused:?}"
+    );
+    assert!(reached.try_recv().is_err(), "identity.age was read");
+    assert_eq!(service.state().await, ServiceState::Locked);
+}
+
+#[tokio::test]
 async fn a_protected_install_without_locked_memory_refuses_unlock_before_any_prompt_and_stays_locked() {
     let logs = captured_logs();
     let fixture = approved().await;

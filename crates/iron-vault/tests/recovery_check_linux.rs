@@ -11,7 +11,12 @@
 
 mod common;
 
+use std::ffi::OsString;
 use std::fs;
+use std::io;
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use common::approval_harness::{CONFIRM, Exchanged, Fixture, captured_logs, converse, error_code, identity, read_frame, send, serve_admin};
@@ -19,7 +24,8 @@ use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame,
 use iron_vault::service_context::ServiceContext;
 use iron_vault::service_state::{FailureReason, ServiceState};
 use iron_vault_store::{
-    OsFs, RecipientSet, RecoveryCheckRecord, RecoveryKey, StateDirLock, VaultId, open_manifest, wrap_identity, write_identity_envelope,
+    OsFs, RecipientSet, RecoveryCheckRecord, RecoveryKey, StateDirLock, StoreFs, VaultId, open_manifest, wrap_identity,
+    write_identity_envelope,
 };
 use secrecy::ExposeSecret;
 use zeroize::Zeroizing;
@@ -155,18 +161,21 @@ async fn a_second_check_keeps_the_record_start_and_moves_the_check_time() {
 async fn another_vaults_key_fails_with_the_fixed_message_and_leaves_the_record() {
     let logs = captured_logs();
     let fixture = Fixture::new().await;
-    with_recovery_key(&fixture);
+    let key = with_recovery_key(&fixture);
     let (foreign, _) = RecoveryKey::generate();
     let foreign = foreign.expose_secret().to_owned();
     let service = fixture.ready().await;
     let (path, stop) = serve_admin(&service);
+    // A record exists from an earlier good check, so the failed one has bytes to leave unchanged.
+    opened(&check(&path, &[&key]).await);
+    let saved = fs::read(fixture.path("state/recovery.toml")).unwrap();
     let before = files(&fixture);
 
     let failed = check(&path, &[&foreign]).await;
 
     assert_eq!(error_code(&failed.response), ErrorCode::RecoveryCheckFailed);
     assert_eq!(message(&failed.response), "the recovery key does not open this vault");
-    assert_eq!(record(&fixture), None);
+    assert_eq!(fs::read(fixture.path("state/recovery.toml")).unwrap(), saved);
     assert_eq!(files(&fixture), before);
     let warned = logs
         .events("recovery.checked")
@@ -274,5 +283,119 @@ async fn a_held_service_wide_lock_is_busy_and_the_check_does_not_wait() {
     assert_eq!(error_code(&busy.response), ErrorCode::Busy);
     assert_eq!(record(&fixture), None);
     send(&mut approval, &Frame::OwnerInput(OwnerInput::new(Zeroizing::new(b"no".to_vec())))).await;
+    let _ = stop.send(());
+}
+
+/// The real filesystem, except that once armed the rename onto `recovery.toml`, or the directory fsync after it, fails.
+#[derive(Clone, Default)]
+struct RecordFailingFs {
+    armed: Arc<AtomicBool>,
+    fail_rename: bool,
+    fail_sync_dir: bool,
+}
+
+impl RecordFailingFs {
+    fn failing(fail_rename: bool, fail_sync_dir: bool) -> Self {
+        Self {
+            fail_rename,
+            fail_sync_dir,
+            ..Self::default()
+        }
+    }
+
+    fn armed(&self) -> bool {
+        self.armed.load(Ordering::SeqCst)
+    }
+}
+
+impl StoreFs for RecordFailingFs {
+    type File = fs::File;
+
+    fn create_private(&self, path: &Path) -> io::Result<fs::File> {
+        OsFs.create_private(path)
+    }
+
+    fn write_all(&self, file: &mut fs::File, bytes: &[u8]) -> io::Result<()> {
+        OsFs.write_all(file, bytes)
+    }
+
+    fn sync_file(&self, file: &fs::File) -> io::Result<()> {
+        OsFs.sync_file(file)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if self.armed() && self.fail_rename && to.file_name().is_some_and(|name| name == "recovery.toml") {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        OsFs.rename(from, to)
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        OsFs.remove_file(path)
+    }
+
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        if self.armed() && self.fail_sync_dir {
+            return Err(io::ErrorKind::Other.into());
+        }
+        OsFs.sync_dir(dir)
+    }
+
+    fn list_dir(&self, dir: &Path) -> io::Result<Vec<OsString>> {
+        OsFs.list_dir(dir)
+    }
+
+    fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>> {
+        OsFs.read_bounded(path, max_len)
+    }
+}
+
+#[tokio::test]
+async fn a_failed_record_rename_still_answers_success_unrecorded_and_leaves_the_record() {
+    let logs = captured_logs();
+    let fixture = Fixture::new().await;
+    let key = with_recovery_key(&fixture);
+    let id = vault_id(&fixture);
+    let fs = RecordFailingFs::failing(true, false);
+    let service = fixture.ready_on(fs.clone()).await;
+    let (path, stop) = serve_admin(&service);
+    opened(&check(&path, &[&key]).await);
+    let saved = fs::read(fixture.path("state/recovery.toml")).unwrap();
+    fs.armed.store(true, Ordering::SeqCst);
+
+    let exchanged = check(&path, &[&key]).await;
+
+    let (checked, _, recorded) = opened(&exchanged);
+    assert_eq!((checked, recorded), (id, false));
+    assert_eq!(fs::read(fixture.path("state/recovery.toml")).unwrap(), saved);
+    let unsaved = logs
+        .events("recovery.checked")
+        .into_iter()
+        .find(|e| e["vault_id"] == id.to_string().as_str() && e["recorded"] == false)
+        .unwrap();
+    assert_eq!(
+        (
+            unsaved["level"].as_str(),
+            unsaved["recovery_outcome"].as_str(),
+            unsaved["error_kind"].as_str()
+        ),
+        (Some("INFO"), Some("opened"), Some("permission_denied"))
+    );
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn a_failed_directory_fsync_after_the_rename_counts_as_recorded() {
+    let fixture = Fixture::new().await;
+    let key = with_recovery_key(&fixture);
+    let fs = RecordFailingFs::failing(false, true);
+    let service = fixture.ready_on(fs.clone()).await;
+    let (path, stop) = serve_admin(&service);
+    fs.armed.store(true, Ordering::SeqCst);
+
+    let (_, at, recorded) = opened(&check(&path, &[&key]).await);
+
+    assert!(recorded);
+    assert_eq!(record(&fixture).unwrap().last_checked().unwrap().unix_seconds(), at);
     let _ = stop.send(());
 }

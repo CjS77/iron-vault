@@ -250,7 +250,7 @@ pub fn recovery_check(socket: Option<&Path>) -> Exit {
             checked_at,
             recorded,
         } => {
-            println!("the recovery key opens vault {vault_id}; checked at {}", check_time(checked_at));
+            println!("the recovery key opens vault {vault_id}: checked {}", check_time(checked_at));
             if !recorded {
                 eprintln!(
                     "iron-vault: warning: the check time was not saved, so recovery reminders still count from the last recorded check"

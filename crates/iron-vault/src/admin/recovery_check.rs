@@ -1,8 +1,9 @@
 //! `recovery check`: proves that the owner's recovery key opens the vault (specification §3.13; design/recovery.md).
 //!
 //! The service prompts for the key with echo off, so no argument carries it. The checks that need no key run before the
-//! prompt; the lock, the store check and the record write are the service context's. The key's text lives only in the
-//! cleared input buffer and the parsed identity, and no error or log record repeats it.
+//! prompt; the lock, the store check and the record write are the service context's. The key's text lives in three
+//! places, each cleared on drop: the owner-input buffer, the `SecretString` copy that `RecoveryKeySecret::parse` reads,
+//! and the parsed identity. No error or log record repeats it.
 
 use std::sync::Arc;
 
