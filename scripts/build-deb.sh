@@ -7,12 +7,13 @@
 #
 # Usage: scripts/build-deb.sh [extra cargo-deb arguments]
 # The build uses the release profile and default features. Extra arguments exist so the check can be seen to fail:
-# `scripts/build-deb.sh --features dev-mode` must be refused, because the packaged binary reports the feature.
+# `scripts/build-deb.sh --features dev-mode` (or `--features container`) must be refused, because the packaged binary
+# reports the feature.
 #
 # The checks, each of which fails the script:
 #  - the package version is the crate version with the first `-` turned into `~`, plus the revision `-1`
 #    (`0.2.0-alpha` becomes `0.2.0~alpha-1`), so a pre-release sorts below the final release; no `-` may precede the revision;
-#  - the packaged binary's `--version` lists no feature;
+#  - the packaged binary's `--version` lists no feature, so neither `dev-mode` nor `container` is packaged;
 #  - every file's owner and mode match the design's ownership table, and nothing is owned by a non-root account;
 #  - nothing is shipped under the service's own directories, and the only conffile is the logrotate rule;
 #  - the maintainer scripts are present and executable;

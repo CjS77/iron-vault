@@ -33,14 +33,26 @@ jobs:
         run: cargo test -p iron-vault --features dev-mode --locked
       - name: Clippy development mode
         run: cargo clippy -p iron-vault --all-targets --features dev-mode --locked -- -D warnings
-      # A packaged binary must never contain development mode; --version lists every enabled build feature.
+      - name: Test container profile
+        run: cargo test -p iron-vault --features container --locked
+      - name: Clippy container profile
+        run: cargo clippy -p iron-vault --all-targets --features container --locked -- -D warnings
+      # The two profile features select different deployment profiles; the build must refuse both at once.
+      - name: Profile features are exclusive
+        run: |
+          if cargo build -p iron-vault --features dev-mode,container --locked 2>build.log; then
+            echo "dev-mode and container built together" >&2
+            exit 1
+          fi
+          grep -q 'cannot be combined' build.log
+      # A packaged binary must never contain development mode or the container profile; --version lists every enabled build feature.
       - name: Release build has no development mode
         run: |
           cargo build --release -p iron-vault --locked
           version="$(target/release/iron-vault --version)"
           echo "$version"
-          if printf '%s' "$version" | grep -q 'dev-mode'; then
-            echo "release build lists dev-mode" >&2
+          if printf '%s' "$version" | grep -q -e 'dev-mode' -e 'container'; then
+            echo "release build lists dev-mode or container" >&2
             exit 1
           fi
 
