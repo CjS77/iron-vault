@@ -22,6 +22,7 @@ use iron_vault::admin::protocol::{
 };
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
+use iron_vault::clock::{SystemClock, TestClock, WallClock};
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
@@ -210,6 +211,23 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
 
     /// [`start_on`](Self::start_on), with the service moving its log through `log`.
     pub async fn start_logging<F: StoreFs + Send + Sync + 'static>(&self, fs: F, log: LogSwitch) -> Arc<ServiceContext<F>> {
+        self.start_clocked(fs, log, Arc::new(SystemClock)).await
+    }
+
+    /// [`start`](Self::start), checked to have reached Ready, with the service reading the time from `clock`.
+    pub async fn ready_at(&self, clock: Arc<TestClock>) -> Arc<ServiceContext> {
+        let log = LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap();
+        let service = self.start_clocked(OsFs, log, clock).await;
+        assert_eq!(service.state().await, ServiceState::Ready);
+        service
+    }
+
+    async fn start_clocked<F: StoreFs + Send + Sync + 'static>(
+        &self,
+        fs: F,
+        log: LogSwitch,
+        clock: Arc<dyn WallClock>,
+    ) -> Arc<ServiceContext<F>> {
         let paths = ServicePaths {
             profile: DeploymentProfile::Development,
             owner: invoking_user().unwrap(),
@@ -232,7 +250,8 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
             },
             log,
         };
-        let service = Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap());
+        let service = ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap();
+        let service = Arc::new(service.with_clock(clock));
         service.enter_checking(identity()).await.unwrap();
         service
     }

@@ -23,6 +23,7 @@ mod init;
 mod log_destination;
 mod presence;
 mod recovery;
+mod reminder;
 mod serving;
 #[cfg(test)]
 mod tests;
@@ -31,7 +32,7 @@ mod vault_change;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
 use iron_vault_policy::{Capabilities, CredentialName, Limits, ListenerConfig, ListenerName, ParsedConfig};
@@ -46,6 +47,7 @@ use tokio::time::Instant;
 use crate::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 use crate::audit::vault::{LockIncomplete, UnlockRefused};
 use crate::audit::{AuditEvent, CheckFailed, LockTransition, ReloadFailed, count_of};
+use crate::clock::{SystemClock, WallClock};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::{HardeningReport, MemoryProtection};
@@ -57,6 +59,7 @@ use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder, Withdrawn};
 use crate::socket_activation::PassedSockets;
 use crate::standing::{CredentialStanding, RouteFault};
 use crate::trusted_path_report::ServicePaths;
+use reminder::{ReminderSchedule, SharedSchedule, with_schedule};
 use serving::Serving;
 use unlock::{log_foreign_files, unprotected_reason};
 
@@ -216,6 +219,10 @@ pub struct ServiceContext<F = OsFs> {
     /// Shared for the same reason as `service_wide`: the task that settles a check, and init's write task, own their
     /// guards, so a dropped caller can neither strand Checking nor release the lock while the task still writes.
     inner: Arc<Mutex<Inner>>,
+    /// The time every record this context writes is stamped with.
+    clock: Arc<dyn WallClock>,
+    /// The recovery reminder schedule's memory: the interval in force and when it last reminded.
+    reminders: SharedSchedule,
 }
 
 /// What the context keeps of an open vault beside the snapshot. They are one value, so a lock, a stop or a failed check
@@ -294,7 +301,16 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             holder,
             service_wide: Arc::new(Mutex::new(())),
             lock_requests: watch::Sender::new(0),
+            clock: Arc::new(SystemClock),
+            reminders: Arc::new(StdMutex::new(ReminderSchedule::default())),
         })
+    }
+
+    /// The context reading the time from `clock` instead of the system's, so a test sets the time.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_clock(mut self, clock: Arc<dyn WallClock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Unlocks with `identity` and runs the config check: Locked to Checking, then Ready or Unavailable.
@@ -375,9 +391,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             .open_identity(passphrase)
             .await
             .inspect_err(|refusal| UnlockRefused { refusal }.emit())?;
-        self.check_and_settle_detached(service_wide, inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
+        let settled = self
+            .check_and_settle_detached(service_wide, inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
             .await
-            .map_err(|illegal| refuse_unlock(UnlockRefusal::WrongState(illegal.state)))
+            .map_err(|illegal| refuse_unlock(UnlockRefusal::WrongState(illegal.state)))?;
+        // The settle task has released the service-wide lock, which a missing record's first write needs.
+        self.evaluate_recovery_reminder().await;
+        Ok(settled)
     }
 
     /// Locks the service on an explicit `lock`: Ready or Unavailable to Locked, clearing the vault identity and every
@@ -559,6 +579,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             setup: Arc::clone(&self.setup),
             locks: Arc::clone(&self.locks),
             holder: Arc::clone(&self.holder),
+            reminders: Arc::clone(&self.reminders),
         }
     }
 
@@ -661,6 +682,7 @@ struct Settler<F> {
     setup: Arc<ServiceSetup<F>>,
     locks: Arc<ServiceLocks>,
     holder: Arc<SnapshotHolder>,
+    reminders: SharedSchedule,
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
@@ -780,6 +802,9 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         }
         let config = snapshot.policy().config();
         let limits = *config.limits();
+        with_schedule(&self.reminders, |schedule| {
+            schedule.set_interval(config.effective_recovery_reminder())
+        });
         let current = inner.serving.take().unwrap_or_else(|| {
             Serving::start(
                 RequestListeners::empty(),

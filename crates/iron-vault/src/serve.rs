@@ -65,6 +65,10 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport,
     };
     runtime.block_on(async {
         let service = Arc::new(ServiceContext::start(locks, setup, &provisional, passed)?);
+        // The first evaluation comes before the admin socket opens, so a due reminder is the first thing the owner can see.
+        service.evaluate_recovery_reminder().await;
+        let daily = Arc::clone(&service);
+        tokio::spawn(async move { daily.remind_daily().await });
         let principals = AdminPrincipals::new(paths.profile, paths.owner.uid);
         let server = AdminServer::new(principals, Handlers::for_service(&service), Limits::default()).with_log_failure(log_failure.clone());
         let socket = AdminSocket::bind(runtime_dir, paths.owner)?;

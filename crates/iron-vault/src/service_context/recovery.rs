@@ -6,14 +6,13 @@
 //! blocking pool. It changes no service state, holds no vault identity beyond the store call, and never takes the
 //! context's mutex for longer than a state read, so requests and `status` go on throughout.
 
-use std::sync::Arc;
-use std::time::SystemTime;
-
 use iron_vault_store::{
     ErrorKindLabel, RecipientIdentity, RecoveryCheckError, RecoveryCheckRecord, StateDirLock, StoreFs, UtcSecond, VaultId, WriteError,
     WriteStep, check_recovery_key, read_recovery_check, require_initialized, write_recovery_check,
 };
+use std::sync::Arc;
 
+use super::reminder::{ReminderSchedule, with_schedule};
 use super::unlock::memory_guard;
 use super::{ServiceContext, ServiceLocks};
 use crate::audit::AuditEvent;
@@ -73,14 +72,18 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// unprotected memory. It logs `recovery.checked` for every end of the store check; a task that ended without a
     /// result has no outcome to log.
     pub async fn check_recovery(&self, recipient: RecipientIdentity) -> Result<RecoveryProof, RecoveryRefusal> {
-        let now = UtcSecond::from_system_time(SystemTime::now()).map_err(|_| RecoveryRefusal::ClockUnusable)?;
+        let now = self.clock.now().map_err(|_| RecoveryRefusal::ClockUnusable)?;
         let service_wide = Arc::clone(&self.service_wide).try_lock_owned().map_err(|_| RecoveryRefusal::Busy)?;
         self.require_checkable().await?;
         self.require_locked_memory_for_check()?;
-        let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
+        let (locks, setup, reminders) = (Arc::clone(&self.locks), Arc::clone(&self.setup), Arc::clone(&self.reminders));
         let ran = tokio::task::spawn_blocking(move || {
             let _held = service_wide;
-            check_and_record(&locks, &setup.fs, &recipient, now)
+            let ran = check_and_record(&locks, &setup.fs, &recipient, now);
+            if ran.is_ok() {
+                with_schedule(&reminders, ReminderSchedule::clear_spacing);
+            }
+            ran
         })
         .await
         .map_err(|_| RecoveryRefusal::Interrupted)?;
@@ -145,7 +148,7 @@ fn record_check(lock: &StateDirLock, fs: &impl StoreFs, now: UtcSecond) -> Resul
 }
 
 /// A failed directory fsync comes after the rename, so the record holds the new bytes: it counts as recorded.
-fn synced_late(error: WriteError) -> Result<(), WriteError> {
+pub(super) fn synced_late(error: WriteError) -> Result<(), WriteError> {
     match error {
         WriteError::Io {
             step: WriteStep::SyncDir, ..

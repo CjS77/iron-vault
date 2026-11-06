@@ -328,6 +328,14 @@ jq -c 'select(.event == "config.approval-completed"
        | {timestamp, version, config_digest}' /var/log/iron-vault/iron-vault.log
 ```
 
+Recovery reminders. `recovery.reminder` (INFO, at most one a week) is a v0 owner's only prompt to run `iron-vault recovery
+check`, so alert on it in the collector:
+
+```sh
+jq -c 'select(.event == "recovery.reminder")
+       | {timestamp, recovery_record, last_checked, reminders_since, error_kind}' /var/log/iron-vault/iron-vault.log
+```
+
 ## Not supported
 
 - **journald output.** The owner chose files. JSON inside journald's `MESSAGE` field loses journald's own field queries,

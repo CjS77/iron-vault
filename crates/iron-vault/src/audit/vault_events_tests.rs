@@ -470,3 +470,53 @@ fn recovery_checked_carries_its_outcome_and_fixed_labels_only() {
         (Some("manifest.age"), Some("too_large"))
     );
 }
+
+#[test]
+fn recovery_reminder_carries_the_fields_of_its_record_form() {
+    use super::recovery::{REMINDER_REMEDIATION, RecoveryReminder};
+    use crate::recovery_reminder::{Due, RecordState};
+    use iron_vault_store::UtcSecond;
+    let time = UtcSecond::from_unix_seconds(1_793_958_553).unwrap();
+    let fields = |extra: &'static str| ["recovery_record", extra, "reminder_days", "remediation"];
+
+    let checked = record_of(
+        RecoveryReminder(&Due {
+            record: RecordState::Checked(time),
+            reminder_days: 90,
+        }),
+        "INFO",
+        &fields("last_checked"),
+    );
+    assert_eq!(checked["recovery_record"], "checked");
+    assert_eq!(checked["last_checked"], "2026-11-06T09:49:13Z");
+    assert_eq!(
+        (checked["reminder_days"].as_u64(), checked["remediation"].as_str()),
+        (Some(90), Some(REMINDER_REMEDIATION))
+    );
+
+    let never = record_of(
+        RecoveryReminder(&Due {
+            record: RecordState::NeverChecked(time),
+            reminder_days: 7,
+        }),
+        "INFO",
+        &fields("reminders_since"),
+    );
+    assert_eq!(
+        (never["recovery_record"].as_str(), never["reminders_since"].as_str()),
+        (Some("never_checked"), Some("2026-11-06T09:49:13Z"))
+    );
+
+    let unusable = record_of(
+        RecoveryReminder(&Due {
+            record: RecordState::Unusable(ErrorKindLabel::fixed("not_toml")),
+            reminder_days: 90,
+        }),
+        "INFO",
+        &fields("error_kind"),
+    );
+    assert_eq!(
+        (unusable["recovery_record"].as_str(), unusable["error_kind"].as_str()),
+        (Some("unusable"), Some("not_toml"))
+    );
+}
