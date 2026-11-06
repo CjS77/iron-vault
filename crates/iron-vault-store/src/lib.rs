@@ -80,9 +80,9 @@ pub use partial_restore::PartialRestore;
 #[cfg(any(test, feature = "test-support"))]
 pub use passphrase::seal_passphrase_envelope_for_tests;
 pub use passphrase::{
-    MAX_PASSPHRASE_ENVELOPE_LEN, MAX_PASSPHRASE_WORK_FACTOR, OperationalIdentity, PASSPHRASE_WORK_FACTOR, Passphrase, PassphraseError,
-    UnlockError, open_passphrase_envelope, read_passphrase_envelope, reseal_passphrase_envelope, seal_passphrase_envelope,
-    unlock_with_passphrase, write_passphrase_envelope,
+    CheckUnavailable, MAX_PASSPHRASE_ENVELOPE_LEN, MAX_PASSPHRASE_WORK_FACTOR, OperationalIdentity, PASSPHRASE_WORK_FACTOR, Passphrase,
+    PassphraseCheckError, PassphraseError, UnlockError, open_passphrase_envelope, read_passphrase_envelope, reseal_passphrase_envelope,
+    seal_passphrase_envelope, unlock_with_passphrase, verify_vault_passphrase, write_passphrase_envelope,
 };
 pub use permitted_origins::{PermittedOrigins, PermittedOriginsError};
 pub use recipient::{

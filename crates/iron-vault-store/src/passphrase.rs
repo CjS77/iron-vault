@@ -6,8 +6,7 @@
 //! any other, and keeps its secret text in `operational.age`, encrypted to the passphrase alone. Unlocking goes
 //! passphrase, then operational identity, then vault identity.
 //!
-//! Attempt limits and lockout are not enforced here: they belong to the lock and unlock epic (EP-23) and to migration
-//! authorization (EP-29), which call into this module.
+//! Attempt limits and lockout are not enforced here: the service owns them (`design/migration-authorization.md`).
 
 use std::{fmt, iter};
 
@@ -23,7 +22,7 @@ use crate::{
     recipient::{RecipientIdentity, RecipientKey},
     sealed::read_bounded,
     stanza::{StanzaKind, parse_header},
-    vault_identity::VaultIdentity,
+    vault_identity::{VaultIdentity, VaultPublicKey},
 };
 
 /// The scrypt work factor, as `log2(N)`, that new passphrase envelopes are sealed with.
@@ -204,6 +203,62 @@ pub fn unlock_with_passphrase(lock: &StateDirLock, fs: &impl StoreFs, passphrase
         other => UnlockError::PassphraseEnvelope(other),
     })?;
     unwrap_identity(&read_identity_envelope(lock, fs)?, &operational).map_err(UnlockError::IdentityEnvelope)
+}
+
+/// Why the passphrase could not be checked against the envelopes on disk. No variant carries key material or passphrase text.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PassphraseCheckError {
+    /// The passphrase does not open `operational.age`.
+    #[error("wrong passphrase")]
+    WrongPassphrase,
+    /// The envelopes open, but to a vault identity other than the one held.
+    #[error("the envelopes on disk belong to another vault")]
+    NotThisVault,
+    /// The envelopes could not be read or are damaged, so the passphrase cannot be judged either way.
+    #[error("the passphrase cannot be checked: {0}")]
+    Unavailable(CheckUnavailable),
+}
+
+/// The part of the vault on disk that stopped a passphrase check.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum CheckUnavailable {
+    /// `operational.age` or `identity.age` could not be read, or is longer than its bound.
+    #[error(transparent)]
+    Read(#[from] ReadError),
+    /// `operational.age` is damaged, oversized or not a passphrase envelope.
+    #[error("the passphrase envelope cannot be opened: {0}")]
+    PassphraseEnvelope(EnvelopeError),
+    /// `identity.age` is damaged, or the operational identity is not one of its recipients.
+    #[error("the identity envelope cannot be opened with the operational identity: {0}")]
+    IdentityEnvelope(EnvelopeError),
+}
+
+/// Proves that `passphrase` opens the envelopes on disk to the vault identity whose public key is `held`.
+///
+/// Both envelopes are read fresh, so the answer is about the files and not about anything the service holds in memory.
+/// The unwrapped identity is dropped (and so cleared) before returning; only the yes or no leaves. Unlike
+/// [`unlock_with_passphrase`] it does not consult the initialization state: the caller already holds a vault.
+///
+/// A match of public keys is the whole proof here. The caller's `held` key comes from a manifest that already verified.
+pub fn verify_vault_passphrase(
+    lock: &StateDirLock,
+    fs: &impl StoreFs,
+    passphrase: &Passphrase,
+    held: &VaultPublicKey,
+) -> Result<(), PassphraseCheckError> {
+    use PassphraseCheckError::{NotThisVault, Unavailable, WrongPassphrase};
+    let read = |error: ReadError| Unavailable(CheckUnavailable::Read(error));
+    let operational =
+        open_passphrase_envelope(&read_passphrase_envelope(lock, fs).map_err(read)?, passphrase).map_err(|error| match error {
+            EnvelopeError::WrongPassphrase => WrongPassphrase,
+            other => Unavailable(CheckUnavailable::PassphraseEnvelope(other)),
+        })?;
+    let identity_envelope = read_identity_envelope(lock, fs).map_err(read)?;
+    let unwrapped = unwrap_identity(&identity_envelope, &operational).map_err(|e| Unavailable(CheckUnavailable::IdentityEnvelope(e)))?;
+    match unwrapped.public_key() == *held {
+        true => Ok(()),
+        false => Err(NotThisVault),
+    }
 }
 
 /// [`reseal_passphrase_envelope`] sealing at work factor `log_n`, which must be in `1..64`.
@@ -532,6 +587,105 @@ mod tests {
         let lock = StateDirLock::acquire(dir.path()).unwrap();
         write_passphrase_envelope(&lock, &OsFs, &vec![0; MAX_PASSPHRASE_ENVELOPE_LEN + 1]).unwrap();
         assert!(matches!(read_passphrase_envelope(&lock, &OsFs), Err(ReadError::TooLarge { .. })));
+    }
+
+    fn check(lock: &StateDirLock, text: &str, held: &VaultIdentity) -> Result<(), PassphraseCheckError> {
+        verify_vault_passphrase(lock, &OsFs, &passphrase(text), &held.public_key())
+    }
+
+    fn unavailable(result: Result<(), PassphraseCheckError>) -> CheckUnavailable {
+        match result {
+            Err(PassphraseCheckError::Unavailable(cause)) => cause,
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_accepts_the_right_passphrase_for_the_held_vault() {
+        let dir = TestDir::new("verify-ok");
+        let (lock, vault) = vault_on_disk(&dir, "correct horse");
+        assert_eq!(check(&lock, "correct horse", &vault), Ok(()));
+    }
+
+    #[test]
+    fn verify_rejects_a_wrong_passphrase() {
+        let dir = TestDir::new("verify-wrong");
+        let (lock, vault) = vault_on_disk(&dir, "correct horse");
+        assert_eq!(check(&lock, "battery staple", &vault), Err(PassphraseCheckError::WrongPassphrase));
+    }
+
+    #[test]
+    fn verify_rejects_envelopes_planted_from_another_vault() {
+        let dir = TestDir::new("verify-planted");
+        let (lock, held) = vault_on_disk(&dir, "correct horse");
+        let other_dir = TestDir::new("verify-planted-other");
+        let (other_lock, _) = vault_on_disk(&other_dir, "correct horse");
+        write_identity_envelope(&lock, &OsFs, &read_identity_envelope(&other_lock, &OsFs).unwrap()).unwrap();
+        write_passphrase_envelope(&lock, &OsFs, &read_passphrase_envelope(&other_lock, &OsFs).unwrap()).unwrap();
+        assert_eq!(check(&lock, "correct horse", &held), Err(PassphraseCheckError::NotThisVault));
+    }
+
+    #[test]
+    fn verify_reports_a_missing_passphrase_envelope_as_unavailable() {
+        let dir = TestDir::new("verify-missing");
+        let (lock, vault) = vault_on_disk(&dir, "correct horse");
+        std::fs::remove_file(dir.path().join("operational.age")).unwrap();
+        assert!(matches!(
+            unavailable(check(&lock, "correct horse", &vault)),
+            CheckUnavailable::Read(_)
+        ));
+    }
+
+    #[test]
+    fn verify_reports_an_oversized_passphrase_envelope_without_running_scrypt() {
+        let dir = TestDir::new("verify-oversized");
+        let (lock, vault) = vault_on_disk(&dir, "correct horse");
+        write_passphrase_envelope(&lock, &OsFs, &vec![0; MAX_PASSPHRASE_ENVELOPE_LEN + 1]).unwrap();
+        let started = Instant::now();
+        let cause = unavailable(check(&lock, "correct horse", &vault));
+        assert!(matches!(cause, CheckUnavailable::Read(ReadError::TooLarge { .. })), "{cause:?}");
+        assert!(started.elapsed() < Duration::from_millis(100));
+    }
+
+    #[test]
+    fn verify_refuses_a_passphrase_envelope_with_an_extra_stanza_before_scrypt() {
+        let dir = TestDir::new("verify-extra");
+        let (lock, vault) = vault_on_disk(&dir, "correct horse");
+        let (_, envelope) = sealed("correct horse");
+        let mac = envelope.windows(5).position(|w| w == b"\n--- ").unwrap() + 1;
+        let planted = [&envelope[..mac], b"-> piv-p256 AAAA\nAAAA\n", &envelope[mac..]].concat();
+        write_passphrase_envelope(&lock, &OsFs, &planted).unwrap();
+        let started = Instant::now();
+        let cause = unavailable(check(&lock, "correct horse", &vault));
+        assert!(
+            matches!(cause, CheckUnavailable::PassphraseEnvelope(EnvelopeError::UnexpectedStanza(_))),
+            "{cause:?}"
+        );
+        assert!(started.elapsed() < Duration::from_millis(100));
+    }
+
+    #[test]
+    fn verify_reports_an_identity_envelope_with_an_scrypt_stanza_as_unavailable() {
+        let dir = TestDir::new("verify-scrypt-identity");
+        let (lock, vault) = vault_on_disk(&dir, "correct horse");
+        let (_, scrypt_file) = sealed("correct horse");
+        write_identity_envelope(&lock, &OsFs, &scrypt_file).unwrap();
+        let cause = unavailable(check(&lock, "correct horse", &vault));
+        assert_eq!(
+            cause,
+            CheckUnavailable::IdentityEnvelope(EnvelopeError::UnexpectedStanza(StanzaKind::Scrypt))
+        );
+    }
+
+    #[test]
+    fn verify_follows_a_passphrase_change() {
+        let dir = TestDir::new("verify-reseal");
+        let (lock, vault) = vault_on_disk(&dir, "correct horse");
+        let (old, new) = (passphrase("correct horse"), passphrase("battery staple"));
+        let resealed = reseal_at(&read_passphrase_envelope(&lock, &OsFs).unwrap(), &old, &new, TEST_WORK_FACTOR).unwrap();
+        write_passphrase_envelope(&lock, &OsFs, &resealed).unwrap();
+        assert_eq!(check(&lock, "correct horse", &vault), Err(PassphraseCheckError::WrongPassphrase));
+        assert_eq!(check(&lock, "battery staple", &vault), Ok(()));
     }
 
     proptest! {
