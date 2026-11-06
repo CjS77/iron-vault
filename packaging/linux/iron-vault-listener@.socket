@@ -1,0 +1,9 @@
+[Unit]
+Description=Iron Vault request listener %i
+
+[Socket]
+FileDescriptorName=%i
+Service=iron-vault.service
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,28 @@
+[Unit]
+Description=Iron Vault credential proxy
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/iron-vault serve
+ExecReload=/bin/kill -HUP $MAINPID
+User=iron-vault
+Group=iron-vault
+Restart=on-failure
+LimitCORE=0
+LimitMEMLOCK=infinity
+UMask=0077
+LogsDirectory=iron-vault
+LogsDirectoryMode=0750
+ProtectSystem=strict
+ReadWritePaths=/etc/iron-vault /var/lib/iron-vault /run/iron-vault
+ProtectHome=yes
+PrivateDevices=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target
