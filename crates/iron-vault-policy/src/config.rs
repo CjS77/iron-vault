@@ -36,7 +36,7 @@ pub struct ParsedConfig {
     routes: BTreeMap<RouteName, RouteConfig>,
     limits: Limits,
     log_destination: Option<LogDestinationSetting>,
-    recovery_reminder: ReminderInterval,
+    recovery_reminder: Option<ReminderInterval>,
 }
 
 /// Where in the input an error was found.
@@ -97,7 +97,7 @@ impl ParsedConfig {
             routes: raw.routes,
             limits: raw.limits,
             log_destination: raw.logging.destination,
-            recovery_reminder: raw.recovery.reminder_days.unwrap_or_default(),
+            recovery_reminder: raw.recovery.reminder_days,
         })
     }
 
@@ -131,8 +131,9 @@ impl ParsedConfig {
         self.log_destination.as_ref()
     }
 
-    /// The `[recovery] reminder_days`, or 90 days when the table or key is absent.
-    pub fn recovery_reminder(&self) -> ReminderInterval {
+    /// The `[recovery] reminder_days` as written; `None` when the table or key is absent, which is not the same config as
+    /// an explicit 90.
+    pub fn recovery_reminder(&self) -> Option<ReminderInterval> {
         self.recovery_reminder
     }
 }
@@ -365,18 +366,17 @@ mod tests {
     }
 
     #[test]
-    fn recovery_reminder_defaults_to_ninety_days() {
-        assert_eq!(parse(SPEC_EXAMPLE).unwrap().recovery_reminder().days(), 90);
-        assert_eq!(
-            parse(&format!("{SPEC_EXAMPLE}\n[recovery]\n")).unwrap().recovery_reminder().days(),
-            90
-        );
+    fn absent_recovery_reminder_is_none() {
+        assert_eq!(parse(SPEC_EXAMPLE).unwrap().recovery_reminder(), None);
+        assert_eq!(parse(&format!("{SPEC_EXAMPLE}\n[recovery]\n")).unwrap().recovery_reminder(), None);
+        let explicit = parse(&format!("{SPEC_EXAMPLE}\n[recovery]\nreminder_days = 90\n")).unwrap();
+        assert_eq!(explicit.recovery_reminder(), Some(ReminderInterval::default()));
     }
 
     #[test]
     fn recovery_reminder_days_is_read() {
         let config = parse(&format!("{SPEC_EXAMPLE}\n[recovery]\nreminder_days = 30\n")).unwrap();
-        assert_eq!(config.recovery_reminder().days(), 30);
+        assert_eq!(config.recovery_reminder().map(ReminderInterval::days), Some(30));
     }
 
     #[test]
@@ -388,15 +388,29 @@ mod tests {
                 &format!("recovery.reminder_days must be a whole number of days from 7 to 365, not {value}"),
             );
         });
-        invalid(
-            &format!("{SPEC_EXAMPLE}\n[recovery]\nreminder_days = 30.5\n"),
-            "reminder_days",
-            "invalid type",
-        );
+        [("30.5", "30.5"), ("\"soon\"", "\"soon\""), ("true", "true")]
+            .iter()
+            .for_each(|(written, shown)| {
+                invalid(
+                    &format!("{SPEC_EXAMPLE}\n[recovery]\nreminder_days = {written}\n"),
+                    "reminder_days",
+                    &format!("recovery.reminder_days must be a whole number of days from 7 to 365, not {shown}"),
+                );
+            });
         invalid(
             &format!("{SPEC_EXAMPLE}\n[recovery]\nremind = 30\n"),
             "remind",
             "unknown field `remind`",
+        );
+    }
+
+    #[test]
+    fn recovery_value_above_i64_max_is_refused_with_the_fixed_message() {
+        // The TOML parser hands integers above i64::MAX to the visitor as u64, so the value is reported as written.
+        invalid(
+            &format!("{SPEC_EXAMPLE}\n[recovery]\nreminder_days = 9223372036854775808\n"),
+            "reminder_days",
+            "recovery.reminder_days must be a whole number of days from 7 to 365, not 9223372036854775808",
         );
     }
 

@@ -97,10 +97,7 @@ pub fn summarize(active: Option<&ValidatedConfig>, pending: &ValidatedConfig) ->
         listeners: diff_maps(old_listeners, pending.listeners(), listener_fields, |_, _| None),
         limits: limit_entries(&old_limits, pending.limits()),
         logging: logging_entries(active.and_then(ValidatedConfig::log_destination), pending.log_destination()),
-        recovery: recovery_entries(
-            active.map_or_else(ReminderInterval::default, ValidatedConfig::recovery_reminder),
-            pending.recovery_reminder(),
-        ),
+        recovery: recovery_entries(active.and_then(ValidatedConfig::recovery_reminder), pending.recovery_reminder()),
     }
 }
 
@@ -380,16 +377,18 @@ fn logging_entries(old: Option<&LogDestinationSetting>, new: Option<&LogDestinat
         .collect()
 }
 
-/// One line when the reminder interval changed. An absent table is the 90-day default, so removing it, or writing 90
-/// explicitly, is a change only when the value differs.
-fn recovery_entries(old: ReminderInterval, new: ReminderInterval) -> Vec<Entry> {
+/// How an interval reads in the summary. `None` is shown as `default`, not as 90, so adding an explicit 90 is a visible
+/// change, as it is for the log destination.
+fn interval_text(interval: Option<ReminderInterval>) -> String {
+    interval.map_or_else(|| "default".to_owned(), |i| i.days().to_string())
+}
+
+/// One line when the `[recovery]` setting changed, including a change to or from the default.
+fn recovery_entries(old: Option<ReminderInterval>, new: Option<ReminderInterval>) -> Vec<Entry> {
     (old != new)
         .then(|| {
-            entry(
-                Mark::Changed,
-                "reminder".to_owned(),
-                format!("every {} -> {} days", old.days(), new.days()),
-            )
+            let detail = format!("every {} -> {} days", interval_text(old), interval_text(new));
+            entry(Mark::Changed, "reminder".to_owned(), detail)
         })
         .into_iter()
         .collect()
@@ -602,7 +601,7 @@ mod tests {
     fn recovery_added_changed_and_removed_each_give_one_line() {
         assert_eq!(
             recovery_lines(&spec(), &with_recovery(Some(30))),
-            ["recovery:", "  ~ reminder: every 90 -> 30 days"]
+            ["recovery:", "  ~ reminder: every default -> 30 days"]
         );
         assert_eq!(
             recovery_lines(&with_recovery(Some(30)), &with_recovery(Some(200))),
@@ -610,15 +609,27 @@ mod tests {
         );
         assert_eq!(
             recovery_lines(&with_recovery(Some(30)), &spec()),
-            ["recovery:", "  ~ reminder: every 30 -> 90 days"]
+            ["recovery:", "  ~ reminder: every 30 -> default days"]
         );
         let headline = summarize(Some(&spec()), &with_recovery(Some(30))).headline();
         assert!(headline.ends_with("logging: none; recovery: 1 changed"), "{headline}");
     }
 
     #[test]
+    fn explicit_ninety_and_an_absent_table_differ() {
+        assert_eq!(
+            recovery_lines(&spec(), &with_recovery(Some(90))),
+            ["recovery:", "  ~ reminder: every default -> 90 days"]
+        );
+        assert_eq!(
+            recovery_lines(&with_recovery(Some(90)), &spec()),
+            ["recovery:", "  ~ reminder: every 90 -> default days"]
+        );
+    }
+
+    #[test]
     fn unchanged_recovery_interval_gives_no_line() {
-        [(None, Some(90)), (Some(90), None), (Some(30), Some(30)), (None, None)]
+        [(None, None), (Some(30), Some(30)), (Some(90), Some(90))]
             .into_iter()
             .for_each(|(old, new)| {
                 let summary = summarize(Some(&with_recovery(old)), &with_recovery(new));
@@ -633,7 +644,9 @@ mod tests {
             "{SPEC_EXAMPLE}\n[logging]\ndestination = \"stdout\"\n[recovery]\nreminder_days = 30\n"
         ));
         let text = summarize(Some(&spec()), &pending).render();
-        assert!(text.find("logging:") < text.find("recovery:"));
+        let (logging, recovery) = (text.find("logging:"), text.find("recovery:"));
+        assert!(logging.is_some() && recovery.is_some(), "both sections present: {text}");
+        assert!(logging < recovery);
         assert_eq!(text, summarize(Some(&spec()), &pending).render());
     }
 

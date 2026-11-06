@@ -219,9 +219,15 @@ impl ValidatedConfig {
         self.0.log_destination()
     }
 
-    /// The `[recovery] reminder_days`, or 90 days when absent.
-    pub fn recovery_reminder(&self) -> ReminderInterval {
+    /// The `[recovery] reminder_days` as written, `None` when absent. The approval summary diffs this, so an absent
+    /// table shows as `default` rather than as 90.
+    pub fn recovery_reminder(&self) -> Option<ReminderInterval> {
         self.0.recovery_reminder()
+    }
+
+    /// The interval in force: the configured one, or 90 days when absent. The service reads this one.
+    pub fn effective_recovery_reminder(&self) -> ReminderInterval {
+        self.recovery_reminder().unwrap_or_default()
     }
 }
 

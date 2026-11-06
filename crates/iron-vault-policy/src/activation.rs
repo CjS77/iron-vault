@@ -188,7 +188,7 @@ impl ActivePolicy {
 
     /// The interval between recovery reminders in the approved config.
     pub fn recovery_reminder(&self) -> ReminderInterval {
-        self.config.recovery_reminder()
+        self.config.effective_recovery_reminder()
     }
 
     /// The route named `route`, if it exists and is available.
