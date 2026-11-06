@@ -15,36 +15,52 @@ The protection depends on the host, not only the package. Do the two checks unde
 
 Every admin command runs through `sudo` ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)): your login
 account is never an admin principal, so malware running as you cannot reach the admin socket. That barrier is only as
-strong as your `sudo` setup. By default `sudo` remembers your password for 5 minutes, and for every terminal of the same
-login, so malware that can type into a terminal you used a moment ago may run admin commands without a prompt.
+strong as your `sudo` setup. After you enter your password, `sudo` remembers it for a timeout that depends on the
+distribution: 5 minutes upstream, 15 on Ubuntu. Since sudo 1.8.21 the cache is per terminal (`timestamp_type=tty`) by
+default, so anything running in that terminal, malware included, can run admin commands without a prompt until the timeout
+ends.
 
 - **Cache per terminal, or not at all.** Create `/etc/sudoers.d/iron-vault-sudo` with `sudo visudo -f` and put one of these
-  in it:
+  in it. The first sets the per-terminal cache explicitly, so a distribution default cannot change it:
 
   ```
   Defaults timestamp_type=tty
   ```
 
-  or, to ask for the password every time:
+  or, the stronger choice, to ask for the password every time:
 
   ```
   Defaults timestamp_timeout=0
   ```
 
 - **Add a hardware key where you have one.** `pam_u2f` (Debian and Ubuntu package `libpam-u2f`) makes `sudo` ask for a
-  touch on a FIDO2 key as well as the password. Register the key with `pamu2fcfg`, then add `auth required pam_u2f.so` to
-  `/etc/pam.d/sudo`. Test it from a second terminal before closing the first, so a mistake doesn't lock you out of `sudo`.
+  touch on a FIDO2 key as well as the password.
+  1. Keep a root shell open (`su -` in a spare terminal) until the last step. Without the key file, every `sudo` is
+     refused.
+  2. Register the key; `pamu2fcfg` prints to stdout and touches nothing, so redirect it:
 
-Approving a config also needs the approval passphrase, so a borrowed `sudo` session alone cannot approve one. Still,
-anyone who can run `sudo` as you can unlock the vault and use every route.
+     ```sh
+     mkdir -p ~/.config/Yubico && pamu2fcfg > ~/.config/Yubico/u2f_keys
+     ```
+
+     Malware running as you can rewrite that file and register its own key. A central `authfile=` under `/etc`, owned by
+     root (`auth required pam_u2f.so authfile=/etc/u2f_mappings`), keeps the registration out of its reach. Register with
+     `pamu2fcfg -u "$USER" | sudo tee /etc/u2f_mappings` instead.
+  3. In `/etc/pam.d/sudo`, add `auth required pam_u2f.so` after the `@include common-auth` line.
+  4. From a second terminal, check that `sudo true` asks for the touch, and only then close the root shell.
+
+Approving a config also needs the approval passphrase, and unlocking needs the vault passphrase, so a borrowed `sudo`
+session alone can do neither. It is still a host administrator ([§1.2](iron-vault-specification.md#12-security-promise-and-limits)):
+it can read the unlocked service's memory, lock the service, and run as any caller account to use that account's routes.
 
 ### Encrypt swap and hibernation storage
 
 Iron Vault locks its memory with `mlockall`, so the service's secrets are not paged out to swap. Locking does not stop
 hibernation: the kernel writes all of RAM to the hibernation image, locked pages included
 ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)). Swap and hibernation storage must therefore be
-encrypted whenever either is enabled, normally by full-disk encryption. Encrypted swap is also a second layer if memory
-locking is ever off, since the page lock is a property of the unit and a changed unit loses it.
+encrypted whenever either is enabled, normally by full-disk encryption. Swap matters beyond the service too: the CLI
+(`sudo iron-vault init`, `unlock`, `add`, `replace` and `config approve`) holds the passphrases and keys you type, and
+does not call `mlockall`, so those pages can be swapped out.
 
 Check what the machine uses:
 
@@ -53,20 +69,33 @@ swapon --show
 lsblk -o NAME,TYPE,FSTYPE
 ```
 
-Every swap device or file listed by `swapon --show` should sit on a `crypt` device (TYPE column) in the `lsblk` tree, with
-`swap` in FSTYPE for the swap partition itself. A swap partition directly on a plain disk partition is unencrypted. If
-`swapon --show` prints nothing and you never hibernate, there is no swap to protect. If you hibernate, the resume device is
-the swap device: check it the same way.
+A swap partition should sit on a `crypt` device (TYPE column) in the `lsblk` tree, with `swap` in FSTYPE for the partition
+itself. A swap partition directly on a plain disk partition is unencrypted.
+
+`lsblk` lists no swap files, and Ubuntu's default swap is the file `/swap.img`. For a swap file, find the device that holds
+it and check that device in the `lsblk` tree for `crypt`:
+
+```sh
+findmnt -no SOURCE -T /swap.img
+```
+
+A `zram` swap device is RAM-backed and never reaches disk, so it needs no encryption. If `swapon --show` prints nothing and
+you never hibernate, there is no swap to protect. If you hibernate, the resume device is the swap device: check it the
+same way.
 
 ## Install
 
-Build the package from source, or use one you were given. `scripts/build-deb.sh` builds it with `cargo-deb` and checks it;
-it needs `lintian` (`sudo apt install lintian`), or `IRON_VAULT_SKIP_LINTIAN=1` to skip that one check
-([details](linux-package.md#building-and-checking-the-package)).
+Build the package from source, or use one you were given. Building needs `cargo-deb`:
 
 ```sh
-sudo apt install ./iron-vault_*.deb
+cargo install cargo-deb --locked
+cargo deb -p iron-vault --locked
+sudo apt install ./target/debian/iron-vault_*.deb
 ```
+
+`scripts/build-deb.sh` builds the package into a temporary directory and checks it, but leaves no `.deb` behind. It needs
+`lintian` (`sudo apt install lintian`), or `IRON_VAULT_SKIP_LINTIAN=1` to skip that one check
+([details](linux-package.md#building-and-checking-the-package)).
 
 The package creates the `iron-vault` account and its directories, and enables and starts `iron-vault.service`. The
 service starts Locked with no vault, and the installer prints the next command.
@@ -81,8 +110,8 @@ sudo iron-vault status    # service: ready
 
 `unlock` is refused with `memory-unprotected` if the service could not lock its memory, and `status` names the cause. The
 packaged unit sets `LimitMEMLOCK=infinity`, which is what allows the lock, so the usual cause is an edited unit or a drop-in
-that lowers the limit. Fix the limit and `sudo systemctl restart iron-vault`; the service does not restart itself, because
-it has not failed.
+that lowers the limit. Fix the limit (after a hand edit of a unit or drop-in, run `sudo systemctl daemon-reload` first) and
+`sudo systemctl restart iron-vault`; the service does not restart itself, because it has not failed.
 
 Then add credentials, write a config and approve it, as in [multiuser-linux.md](multiuser-linux.md#setting-it-up):
 
@@ -96,11 +125,15 @@ The config can be anywhere `sudo` can read it. The service publishes the approve
 ## Send a request
 
 A config with a Unix socket listener needs no listener socket unit: the service binds the socket itself in
-`/run/iron-vault`.
+`/run/iron-vault`. This example assumes the [multi-user config](multiuser-linux.md#4-write-the-config), which grants the
+`gh` route to the `code` account by its peer account. Run it as `code`:
 
 ```sh
 curl --unix-socket /run/iron-vault/proxy.sock http://localhost/gh/user
 ```
+
+Your own login gets `401` unless the config names it as a caller. `sudo curl ...` is refused: the service never accepts
+root as a caller ([§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners)).
 
 ## Add a TCP listener
 
@@ -151,8 +184,10 @@ a socket unit can remove a listener but never widen one. To remove a listener, a
 
 ## Upgrade
 
+Build the new package as under [Install](#install), then:
+
 ```sh
-sudo apt install ./iron-vault_*.deb
+sudo apt install ./target/debian/iron-vault_*.deb
 sudo iron-vault unlock
 ```
 

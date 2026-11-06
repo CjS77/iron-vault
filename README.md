@@ -88,7 +88,9 @@ On Linux the `.deb` package runs Iron Vault as the `iron-vault` system service, 
 out of reach of ordinary accounts:
 
 ```sh
-sudo apt install ./iron-vault_*.deb    # build it with scripts/build-deb.sh
+cargo install cargo-deb --locked       # once; scripts/build-deb.sh then checks the package
+cargo deb -p iron-vault --locked
+sudo apt install ./target/debian/iron-vault_*.deb
 sudo iron-vault init
 sudo iron-vault unlock
 ```

@@ -123,7 +123,7 @@ sudo iron-vault init
 
 This creates the encryption keys, asks you to choose a vault passphrase and an approval passphrase, and shows you a
 **recovery key** once. Write the recovery key down or store it in your password manager: it is how you get back in if you
-forget the passphrase. Then unlock the vault, which you do again after every restart or upgrade:
+forget the vault passphrase. Then unlock the vault, which you do again after every restart or upgrade:
 
 ```sh
 sudo iron-vault unlock
@@ -132,7 +132,7 @@ sudo iron-vault unlock
 > **Why `sudo`, and not just `alice`?** Admin commands only work for root or the `iron-vault` account. If plain
 > `alice` could run them, malware in `alice`'s account could too. Going through `sudo` means typing your password
 > each time, if you set `sudo` up as [linux-install.md](linux-install.md#harden-sudo) recommends. Approving a config
-> change *also* needs your Iron Vault passphrase, so a hijacked `sudo` session alone isn't enough.
+> change *also* needs your approval passphrase, so a hijacked `sudo` session alone isn't enough.
 
 ### 3. Add the credentials
 
@@ -229,12 +229,14 @@ rate_limit = { requests = 300, per_seconds = 60, burst = 30 }
 
 ### 5. Approve the config
 
+Save the config above as `config.toml`, then approve it:
+
 ```sh
 sudo iron-vault config approve config.toml
 ```
 
-Save the config above as `config.toml`. Iron Vault reads it, checks it, and shows you its own summary of what will change. If it looks right,
-you approve it. Approving needs your Iron Vault passphrase.
+Iron Vault reads it, checks it, and shows you its own summary of what will change. If it looks right, you approve it.
+Approving needs your approval passphrase.
 
 Iron Vault only ever runs a config you approved. If someone edits the file behind your back, or puts back an older
 one, Iron Vault refuses to use it.
@@ -258,7 +260,10 @@ file.
 
 For a program that has a "base URL" setting, set it to the route. A Python script, for example, would use
 `/gh` in place of `https://api.github.com`. Not every tool can talk to a socket file; for those, use the
-`http://127.0.0.1` listener with a caller token, described above. Some command-line tools, such as `gh`, need more
+`http://127.0.0.1` listener with a caller token. The step-4 config has no such listener. Add one as described in
+[linux-install.md](linux-install.md#add-a-tcp-listener): it needs a listener socket unit, a `[listeners.<name>]` table
+with the same address, and a caller with `token_hash`. Get the token with `sudo iron-vault caller-token`: the token goes to
+stdout and the `token_hash` line for the caller's table goes to the terminal. The service keeps only the hash. Some command-line tools, such as `gh`, need more
 than a base URL change and are not supported yet (specification [§6](iron-vault-specification.md#6-conditional-phase-forward-proxy-and-cli-compatibility)).
 
 ## What each account can and can't do
@@ -267,7 +272,7 @@ than a base URL change and are not supported yet (specification [§6](iron-vault
 |-------------------------|----------------------------------------------------------------|-----------------------------------------------|
 | `code`                  | Make GitHub requests the `gh` route allows, at its rate limit  | Read the GitHub token; reach the trading APIs |
 | `trading`               | Make TradingDesk and CoinGecko requests their routes allow     | Read those keys; reach GitHub                 |
-| `alice`                 | Use any route granted to `alice`, if you grant her any         | Read any key; run admin commands without `sudo`; approve a config without your passphrase |
+| `alice`                 | Use any route granted to `alice`, if you grant her any         | Read any key; run admin commands without `sudo`; approve a config without your approval passphrase |
 
 Iron Vault logs every request with the account, route and result, but never the key, so you can see afterwards what
 was done in each account's name.
