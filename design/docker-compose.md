@@ -10,16 +10,8 @@ The decisions that need the specification to change are collected under
 [Proposed specification changes](#proposed-specification-changes), which await the owner's approval. Everything
 else follows the specification as it stands.
 
-Terms used here, each with a [glossary](glossary.md) entry:
-
-- **Container profile**: the deployment profile of a build made with the `container` Cargo feature, for a Compose
-  stack on a server or appliance.
-- **Caller network**: an internal Docker network that holds Iron Vault and exactly one caller container, so the
-  listener address Iron Vault binds on it identifies that caller.
-- **Host unlock identity**: a generated X25519 recipient identity, sealed by the host's TPM, whose recipient key is
-  enrolled in `identity.age`, so the service can unlock at startup without a passphrase.
-- **Unlock handoff**: the file `/run/iron-vault-unlock/host-unlock`, through which the host gives the service the host
-  unlock identity's secret text.
+This document introduces four terms, defined in the [glossary](glossary.md): *Container profile*, *Caller network*,
+*Host unlock identity* and *Unlock handoff*.
 
 ## Scope
 
@@ -116,7 +108,10 @@ flowchart LR
 ```
 
 - **One caller network per caller.** Each is `internal: true`, so it has no route out, with a small fixed IPv4
-  subnet (a `/29`) and IPv6 off. It holds Iron Vault at a static `ipv4_address` and that one caller, and nothing else.
+  subnet (a `/29`) and IPv6 off. It holds Iron Vault and that one caller, and nothing else, each at its own static
+  `ipv4_address`. Docker reserves a static address only while its container is attached, so while Iron Vault is
+  stopped its address is free to any container that asks for one. Pinning the caller to its own address means no
+  container on the network is ever given Iron Vault's.
 - **Gateway mode `isolated`** on every caller network (`com.docker.network.bridge.gateway_mode_ipv4: isolated`).
   Docker normally gives an internal network's bridge an address on the host, so any host process could reach Iron
   Vault's listener on it and be taken for that caller. In `isolated` mode the bridge has no address, and only the
@@ -125,6 +120,10 @@ flowchart LR
 - **One `egress` network,** not internal, for Iron Vault alone. It carries the upstream requests. No caller joins it.
 - **No shared caller bridge.** No network holds two callers, and no caller joins another caller's network or
   `egress`. A caller may join other networks of its own that Iron Vault is not on.
+- **No shared network namespace.** No container uses `network_mode: "service:iron-vault"` or
+  `network_mode: "container:<iron-vault>"`. Such a container shares Iron Vault's interfaces, so every listener address
+  is one of its local addresses: it could reach any caller's listener and be taken for that caller, and it could bind
+  the addresses while Iron Vault restarts.
 
 Each caller has its own listener, bound to Iron Vault's address on that caller's network, with TLS and
 `auth = "isolated-network"`:
@@ -161,19 +160,24 @@ local process can take the port, collect caller tokens and forge responses. In t
 use that gap can reach it:
 
 - **The addresses live in Iron Vault's own network namespace.** Each listener address is an interface address of Iron
-  Vault's container, which no other container or host process shares. The service is the only process in that
-  namespace: callers cannot `docker exec`, and nothing else runs in the container.
+  Vault's container. This holds only while no container joins that namespace with `network_mode: "service:…"` or
+  `"container:…"`, which the [checklists](#hardening-checklist) forbid. The service is then the only process in the
+  namespace: nothing else runs in its container, and getting a process in, with `docker exec` or otherwise, takes
+  control of the runtime.
 - **Callers cannot claim the address on their network.** A caller container has neither `NET_ADMIN`, so it cannot add
   the address or a route, nor `NET_RAW`, so it cannot send raw frames, such as ARP replies claiming the address or
-  packets addressed to it on another interface. Docker gives a static address to one container only.
-- **Every listener uses TLS.** Whoever does take an address while Iron Vault is down, which only a runtime administrator
-  can arrange, still cannot present Iron Vault's certificate, because the key is only in Iron Vault's mounts. The caller
-  refuses the connection before sending anything. An isolated-network caller has no token to steal, and TLS keeps its
-  request bodies and Iron Vault's responses out of reach.
+  packets addressed to it on another interface. Every container on a caller network is pinned to its own static
+  address, so Docker never hands Iron Vault's address to a caller that starts while Iron Vault is stopped.
+- **Every non-loopback listener uses TLS,** as §3.4 already requires, and every isolated-network listener is
+  non-loopback. Whoever does take an address while Iron Vault is down, which only a runtime administrator can arrange,
+  still cannot present Iron Vault's certificate, because the key is only in Iron Vault's mounts. The caller refuses the
+  connection before sending anything. An isolated-network caller has no token to steal, and TLS keeps its request
+  bodies and Iron Vault's responses out of reach. A loopback listener needs no TLS, because it is reachable only from
+  inside Iron Vault's network namespace.
 
-A restart of the service is a restart of its container. Docker brings it back with the same addresses on the same
-networks, and the provisional listener set binds them again before any unlock
-([Locked](glossary.md)).
+A restart of the service is a restart of its container. Docker reattaches it to the same networks at its pinned
+addresses, which no other container is configured to use, and the provisional listener set binds them again before
+any unlock ([Locked](glossary.md)).
 
 Linux accepts a packet for any of its addresses on any interface. So a caller that could write raw frames could send a
 packet to another caller's listener address through its own network, and be identified as the other caller. Dropping
@@ -191,7 +195,7 @@ reference Compose file applies every line.
 | Setting | Why | Threat |
 |---|---|---|
 | `user: "<uid>:<gid>"`, the fixed service account | The service runs as the account that owns its files and is refused as any other ([Service identity](#service-identity)). | R-25 |
-| `read_only: true` | The image's files cannot be changed from inside; the service writes only to its volumes and `/run/iron-vault`. | R-25 |
+| `read_only: true` | The image's files cannot be changed from inside; the service writes only to its volumes and `/run/iron-vault`. The log directory `/var/log/iron-vault` is therefore not writable: the log goes to stdout, and a `[logging]` file destination would need a volume mounted there. | R-25 |
 | `cap_drop: [ALL]` | The service needs no capability. Without `CAP_DAC_OVERRIDE`, even root inside the container cannot open the vault's files or the admin socket. | R-25 |
 | `security_opt: [no-new-privileges:true]` | No set-uid program or file capability can raise the service's privileges. | R-25 |
 | `ulimits: memlock: -1` | `hardening.rs` locks memory only when `RLIMIT_MEMLOCK` is unlimited, and unlock requires locked memory. | R-20 |
@@ -203,6 +207,7 @@ reference Compose file applies every line.
 | `restart: unless-stopped` | The service comes back after a crash and at boot, unattended ([§3.12](iron-vault-specification.md#312-service-states-and-errors)). `on-failure` would not restart it when the daemon starts. A Locked service has not failed and keeps running. | — |
 | `image:` pinned by digest | A retagged image cannot change what a later recreation runs. | R-28 |
 | Networks: `egress` and every caller network, each with a static `ipv4_address` | Each listener's address is fixed and on its caller's network alone. | R-27 |
+| No other container names it in `network_mode: "service:…"` or `"container:…"` | A container sharing Iron Vault's network namespace has every listener address as its own, so it could pose as any isolated-network caller and bind the addresses while Iron Vault restarts. | R-6, R-27 |
 
 ### Mounts
 
@@ -225,6 +230,8 @@ removes the vault's only copy, as purging the Linux package's state directory do
 | `cap_drop: [ALL]`, and never `NET_ADMIN` | Without `NET_RAW` a caller cannot forge frames or source addresses; without `NET_ADMIN` it cannot take another address or add a route. Docker grants `NET_RAW` by default, so it must be dropped. | R-27 |
 | `security_opt: [no-new-privileges:true]` | A set-uid binary in the caller's image cannot regain a dropped capability. | R-27 |
 | Its own caller network only, never `egress` or another caller's | The listener address identifies the caller only while no other container can reach it. | R-27 |
+| Never `network_mode: "service:iron-vault"`, `"container:…"` naming Iron Vault, or `host` | Sharing Iron Vault's network namespace makes every caller's listener address local to it. | R-6, R-27 |
+| A static `ipv4_address` of its own on its caller network | While Iron Vault is stopped its address is free; a caller with a dynamic address could be given it, and bind it. | R-6 |
 | No `config` or `state` volume, no `/run/iron-vault`, `/run/iron-vault-unlock` or TLS key mount, no Docker socket | A compromised caller can read nothing of the vault, reach no admin or unlock interface, and cannot control the daemon. | R-25 |
 | No `privileged`, `pid: host` or `ipc: host` | A caller must not see or enter Iron Vault's processes or memory. | R-25 |
 | Trusts only the CA that issued its listener's certificate | It talks to Iron Vault only if Iron Vault answers. | R-26 |
@@ -261,8 +268,10 @@ accepting it would grant nothing an administrator needs and would admit anything
 The owner reaches the socket the way §3.2 intends, by becoming a host administrator.
 
 The admin socket in the bind-mounted runtime directory is `0600`, owned by the service account. Host root opens it
-with `CAP_DAC_OVERRIDE`; root inside a container started with `cap_drop: [ALL]` cannot, so a plain `docker exec`
-into Iron Vault's container is not a way in either.
+with `CAP_DAC_OVERRIDE`. A plain `docker exec` into Iron Vault's container runs as the container's `user:`, the service
+uid, which owns the socket and can connect; it is refused because `AdminPrincipals::accepts` rejects the service
+account in this profile. `docker exec -u 0` arrives as root but, under `cap_drop: [ALL]`, without
+`CAP_DAC_OVERRIDE`, so it cannot open the socket.
 
 Remote administration takes one of two forms:
 
@@ -279,7 +288,8 @@ specification change this needs is under [§3.2](#32-service-and-cli-boundary).
 ## Host unlock
 
 §3.14 prefers a host adapter that unseals with `systemd-creds` and hands the result to the container, and warns that
-`systemd-creds` does not implement an `age` recipient. The handoff therefore carries an
+`systemd-creds` does not implement an `age` recipient. §3.14 speaks of unsealing "the vault identity" into a "tmpfs
+secret file"; this design reads that deliberately as an intermediate identity on a ramfs. The handoff therefore carries an
 [intermediate identity](glossary.md) in the sense of [§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes),
 never the vault identity: the **host unlock identity**, a generated X25519 identity whose recipient key is an
 ordinary recipient of `identity.age`, beside the operational identity and the recovery key. `systemd-creds` only
@@ -300,20 +310,36 @@ flowchart LR
 ### Its role among the recipients
 
 The host unlock identity enters the recipient inventory of [`recipients.md`](recipients.md) with the role
-`host-unlock`, role code 6. It is a machine-bound recipient: its secret exists only sealed to this host's TPM, and it
+`host-unlock`, role code 6, which that design reserves; the Compose epic makes the inventory decoder accept it. It is a machine-bound recipient: its secret exists only sealed to this host's TPM, and it
 is lost with the TPM, the motherboard, a TPM clear or a change to the PCR it is bound to.
 
-Under the inventory's independence rule it never substitutes for the recovery key. A recipient change keeps the
-recipient the current unlock used, at least one `recovery` recipient, and 2 to 64 recipients in all. How the host unlock
-identity counts follows from that:
+[`recipients.md`](recipients.md) puts `host-unlock` in the unlock class. Two parts of its independence rule decide
+how the host unlock identity counts. The inventory after any change must hold:
 
-- it is never a `recovery` recipient: it is generated on the host, not by the service, and it dies with the machine, so
-  a vault with one still needs its own `recovery` recipient;
-- while the service was unlocked by the host unlock identity, that identity is the recipient the unlock used and cannot
-  be removed; after a passphrase `unlock`, the operational identity is, and the host unlock identity can be removed;
-- passphrase `unlock` is the fallback when the handoff fails, so the operational identity must stay a recipient. The
-  rule as stated does not refuse removing it while the service was unlocked by the host unlock identity
-  ([open question 8](#open-questions)).
+> 1. **the `operational` recipient, in every profile.** Passphrase `unlock` and the vault passphrase method of
+>    migration authorization both go through it, and it is the fallback when any other unlock method fails. It is never
+>    removed, and no other recipient takes its place;
+> 2. **the recipient of each configured unlock method, in addition to `operational`, never in its place.** In v0
+>    passphrase unlock is the only method, so this part adds nothing yet. A `host-unlock` recipient never replaces
+>    `operational`: passphrase `unlock` stays the fallback when the host unlock handoff fails;
+
+Part 3 requires at least one `recovery` recipient, and part 4 between 2 and 64 recipients. For the host unlock
+identity:
+
+- **Part 1 keeps the operational identity beside it.** Enrolling a host unlock identity never makes the operational
+  identity removable, so passphrase `unlock` is always there when the handoff fails.
+- **Part 2 keeps the host unlock identity while the host unlock adapter is configured.** That design leaves "configured"
+  to this epic. Here, the adapter is configured for the host unlock identity whose recipient key the current unlock
+  handoff holds. In the Container profile, `recipient remove` reads the handoff before any prompt, as Starting does,
+  and part 2 keeps that one recipient. Any other `host-unlock` recipient, such as an old host's or one whose TPM was
+  replaced, is not configured and can be removed. With no readable handoff, no host unlock is configured.
+  Whether a recipient can be removed depends on the host's handoff at the time of the command, never on how the
+  service was last unlocked.
+- **To retire host unlock,** the host administrator stops and disables the handoff unit and removes
+  `host-unlock.cred`, then runs `recipient remove`. Part 2 no longer applies to the identity, and the service keeps
+  working through the passphrase.
+- **It never counts toward part 3.** Its secret lives on the host and dies with the machine, so a vault with one still
+  needs its own `recovery` recipient. It does count toward part 4's floor of two and limit of 64.
 
 It is not a source-owner method for migration authorization. Like unattended TPM unwrap in
 [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration), it opens the vault but proves no owner
@@ -323,7 +349,10 @@ took part, so it never authorizes `export` or `recipient add`.
 
 The handoff holds the recovery key's secret-text format: the 74 ASCII bytes of `AGE-SECRET-KEY-1…`, uppercase Bech32,
 optionally followed by one newline. It is parsed by the same code as the recovery key,
-`RecipientIdentity::from_secret_text`, after at most one trailing newline is removed. That is how the handoff is
+`RecipientIdentity::from_secret_text`, after at most one trailing newline is removed. It does not share
+`RecoveryKeySecret::parse`'s trim of all surrounding whitespace, which is for a key typed at a prompt: a program writes
+the handoff, so anything more than one newline means the wrong file. Letter case is whatever `age`'s parser accepts;
+`age-keygen` writes uppercase, and nothing here relies on lowercase being refused. That is how the handoff is
 "validated against the vault's recovery format" (§3.14): the host unlock identity and the recovery key are the same
 kind of key in the same text, and the identity envelope cannot tell them apart. Anything else is refused: comment
 lines such as `age-keygen` writes, other whitespace, a public key, or a file longer than 128 bytes.
@@ -332,14 +361,18 @@ lines such as `age-keygen` writes, other whitespace, a public key, or a file lon
 
 The host administrator provisions the identity once, as root. The secret text exists only in a pipe:
 
-```sh
+```bash
+set -euo pipefail
 umask 077
+cred=/etc/iron-vault-host/host-unlock.cred
+[ -e "$cred" ] && { echo "$cred exists; enrol a new identity under another name first" >&2; exit 1; }
 age-keygen 2>/dev/null \
   | grep '^AGE-SECRET-KEY-1' \
   | tee >(age-keygen -y >&2) \
-  | systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs=7 --name=host-unlock - /etc/iron-vault-host/host-unlock.cred
+  | systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs=7 --name=host-unlock - "$cred"
 ```
 
+- The block needs `bash`, for the `>(…)` process substitution. It stops if the credential already exists.
 - `grep` keeps only the secret-key line, dropping `age-keygen`'s comment lines.
 - `age-keygen -y` prints the recipient key, `age1…`, so the administrator can compare it with what `init` or
   `recipient add` enrols.
@@ -351,8 +384,9 @@ age-keygen 2>/dev/null \
 - `--name=host-unlock` embeds the credential's name. Decryption fails when the name it is loaded under differs, so the
   file cannot be reused as another credential.
 
-The result is `/etc/iron-vault-host/host-unlock.cred`, root, `0600`. Provisioning refuses to overwrite an existing
-credential. Replacing one means a new identity, which must be enrolled before the old one is removed.
+The result is `/etc/iron-vault-host/host-unlock.cred`, root, `0600`. Replacing it means a new identity, which must be
+enrolled before the old one is removed: the host setup moves the old credential aside only once the new recipient is
+in `identity.age`.
 
 ### At boot
 
@@ -369,8 +403,7 @@ ConditionPathExists=/etc/iron-vault-host/host-unlock.cred
 Type=oneshot
 RemainAfterExit=yes
 LoadCredentialEncrypted=host-unlock:/etc/iron-vault-host/host-unlock.cred
-ExecStart=/bin/mount -t ramfs -o mode=0700,nosuid,nodev,noexec ramfs /run/iron-vault-unlock
-ExecStart=/bin/chown iron-vault:iron-vault /run/iron-vault-unlock
+ExecStart=/bin/mount -t ramfs -o mode=0711,nosuid,nodev,noexec ramfs /run/iron-vault-unlock
 ExecStart=/usr/bin/install -o iron-vault -g iron-vault -m 0400 %d/host-unlock /run/iron-vault-unlock/host-unlock
 ExecStopPost=-/bin/rm -f /run/iron-vault-unlock/host-unlock
 ExecStopPost=-/bin/umount /run/iron-vault-unlock
@@ -385,8 +418,9 @@ WantedBy=docker.service
   failure fails the unit. systemd places it in the unit's credentials directory, `%d`, in non-swappable memory where it
   can.
 - **ramfs**, not tmpfs: ramfs pages are never written to swap, and only root can write the mount
-  ([ramfs](https://docs.kernel.org/filesystems/ramfs-rootfs-initramfs.html)). The handoff is the service account's,
-  `0400`, in a `0700` directory the service account owns.
+  ([ramfs](https://docs.kernel.org/filesystems/ramfs-rootfs-initramfs.html)). The mount's root stays root's, `0711`:
+  the service account can open the one file it knows the name of, but cannot list, add or remove anything, or change
+  the directory's mode. That matters because a ramfs has no size limit. The handoff is the service account's, `0400`.
 - **No sandboxing directives.** The unit has no `PrivateMounts=`, `ProtectSystem=` or other setting that gives it its
   own mount namespace, so its ramfs mount is visible to Docker. The [release check](#release-checks) confirms it with
   `findmnt` ([open question 2](#open-questions)).
@@ -449,8 +483,12 @@ handoff takes effect at the next restart.
   prompt, as Starting does, and refuses `init` if it is absent or refused, naming the reason. Init then wraps
   `identity.age` for the operational identity, the recovery key and the host unlock identity, and proves that each
   opens it. Init's summary and the `vault.initialized` record name the kinds enrolled, never a key.
-- **An existing vault:** `recipient add` ([`recipients.md`](recipients.md)), with the role `host-unlock` and the same
-  read of the handoff, under that command's owner authorization.
+- **An existing vault:** `iron-vault recipient add --host-unlock --label <text>`, a third form of `recipient add` to add
+  to [`recipients.md`](recipients.md)'s command table for K-231. It takes no key argument. The service reads the
+  handoff as Starting does, derives its recipient key, and runs migration authorization with `AddRecipient(<that key>)`,
+  like the other forms, then enrolls the key with role `host-unlock`. Like every recipient command, it maps onto the admin
+operation `AdminOperation::VaultChange`, so it runs only in Ready. Without a readable handoff it is refused, naming
+  the reason, before any prompt.
 
 ### Against the §9 gate
 
@@ -484,11 +522,11 @@ TPM approval key waits for EP-33's signer. The wording is under [§3.14](#314-do
 
 | Threat | Controls here | What remains |
 |---|---|---|
-| R-6: another process claims a listener during a restart | Addresses in Iron Vault's own network namespace; callers without `NET_ADMIN` or `NET_RAW`; TLS on every listener | A runtime administrator can start anything at the address; callers refuse it without Iron Vault's key |
+| R-6: another process claims a listener during a restart | Addresses in a network namespace no other container shares; callers without `NET_ADMIN` or `NET_RAW`, each at its own static address; TLS on every non-loopback listener | A runtime administrator can start anything at the address; callers refuse it without Iron Vault's key |
 | R-20: memory capture leaves credentials on disk | `memlock: -1` and unlock only with locked memory; `core: 0` and no dumpability; the handoff on ramfs; encrypted swap and hibernation on the host | Locked memory does not stop hibernation; the host's disk encryption must |
 | R-25: a sibling container enters Iron Vault or reads its vault identity | No caller mounts of volumes, runtime directory, unlock directory or Docker socket; no `privileged` or `pid: host`; the service container's dropped capabilities and read-only image | A caller can use its own routes, as §1.2 allows |
-| R-26: a network observer reads or changes caller traffic | TLS on every listener; callers trust only Iron Vault's CA | — |
-| R-27: a caller impersonates another caller | One internal caller network per caller, gateway mode `isolated`, a dedicated listener per caller, no `NET_RAW` or `NET_ADMIN` in callers | A caller given `NET_RAW` back, or put on a second caller's network, defeats it; the release check looks for both |
+| R-26: a network observer reads or changes caller traffic | TLS on every non-loopback listener, which includes every isolated-network listener; callers trust only Iron Vault's CA | — |
+| R-27: a caller impersonates another caller | One internal caller network per caller, gateway mode `isolated`, a dedicated listener per caller, no `NET_RAW` or `NET_ADMIN` in callers, no container sharing Iron Vault's network namespace | A caller given `NET_RAW` back, put on a second caller's network, or joined to Iron Vault's network namespace defeats it; the release check looks for all three |
 | R-28: an ordinary host user changes what a later recreation runs | Compose files, overrides, `.env`, image sources, the unit and the sealed credential all root-owned and closed to other accounts; the image pinned by digest | — |
 | Runtime administrator | Outside the threat model ([§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances)) | Can replace the image, `docker exec` with any capability, read the handoff, and capture the vault identity from memory after unlock |
 
@@ -497,7 +535,9 @@ TPM approval key waits for EP-33's signer. The wording is under [§3.14](#314-do
 Two release checks run on a disposable host and are the evidence for this profile:
 
 - **Caller isolation and hardening:** every caller drops `NET_RAW`, each caller network holds one caller and Iron Vault
-  and has no host address, no caller reaches another's listener, the service runs as the fixed uid with locked memory,
+  and has no host address, every container on a caller network has the static address the Compose file gives it, no
+  container's `NetworkMode` names Iron Vault's container (from `docker inspect`, and from `docker compose config` on the
+  reference file), no caller reaches another's listener, the service runs as the fixed uid with locked memory,
   the admin socket refuses a non-root host account and accepts `sudo iron-vault ping`, and the named volumes have the
   modes the image gave them.
 - **The host unlock gate:** after provisioning and `init --host-unlock`, a restart and a reboot reach Ready with no
@@ -547,9 +587,11 @@ with:
 
 > For TCP on Linux, use systemd socket activation so the manager holds the port from boot and across restarts. A
 > container installation cannot receive sockets from the host, so it binds its TCP listeners itself, inside its own
-> network namespace. The addresses exist only in that namespace, where no other process runs; caller containers have
-> neither `NET_ADMIN` nor `NET_RAW`, so they cannot take an address; and every such listener uses TLS, so whoever
-> claims an address while the service restarts still cannot present Iron Vault's certificate.
+> network namespace. The addresses exist only in that namespace, which no other container shares and where no other
+> process runs; caller containers have neither `NET_ADMIN` nor `NET_RAW` and each has its own static address, so they
+> cannot take the service's address; and every non-loopback listener uses TLS, so whoever claims an address while
+> the service restarts still cannot present Iron Vault's certificate. A loopback listener is reachable only inside
+> that namespace.
 
 Replace:
 
@@ -560,8 +602,8 @@ with:
 
 > **Attack prevented (R-6).** Protected socket paths and manager-owned TCP listeners stop another local process from
 > claiming Iron Vault's endpoint during downtime and collecting caller tokens or forging responses. In a container
-> installation, a private network namespace, callers without address or raw-socket privileges, and TLS on every
-> listener do the same.
+> installation, a network namespace no other container shares, callers without address or raw-socket privileges and
+> with static addresses of their own, and TLS on every non-loopback listener do the same.
 
 ### §3.14 Docker, remote servers, and appliances
 
@@ -579,10 +621,9 @@ with:
 
 ### Glossary
 
-These depend on the §3.2 and §3.12 decisions above, so they wait with them:
+These depend on the §3.2 decision above, so they wait with it. The *Container profile* entry is marked pending on the
+same decisions.
 
-- **Starting:** replace "Checking when a TPM or host unlock succeeded (not reachable in v0)" with "Checking when a TPM
-  or host unlock succeeded".
 - **Admin principal:** replace "root or the service account in a protected install, the invoking user in development"
   with "root or the service account in a protected install, root alone in a container install, the invoking user in
   development".
@@ -623,8 +664,3 @@ These depend on the §3.2 and §3.12 decisions above, so they wait with them:
    policy update then makes the handoff fail; the service waits Locked, passphrase `unlock` works, and the
    administrator provisions and enrols a new identity. Binding no PCR would survive such updates but would let any OS
    booted on the machine unseal the credential.
-8. **Removing the operational identity from a host-unlocked vault.** The independence rule in
-   [`recipients.md`](recipients.md) keeps the recipient the current unlock used, which in a host-unlocked service is
-   the host unlock identity, so it would allow removing the operational identity and with it passphrase `unlock`, the
-   only fallback when the handoff fails. *Default:* `recipient remove` refuses to remove the operational identity in
-   any profile; a vault without one is a migration, not a recipient change. This needs K-226's rule to say so.
