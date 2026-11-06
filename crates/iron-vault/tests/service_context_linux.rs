@@ -974,6 +974,43 @@ async fn unlock_with_the_right_passphrase_reaches_ready_and_a_request_reaches_th
 }
 
 #[tokio::test]
+async fn unlock_evaluates_the_recovery_reminder_schedule_and_starts_the_check_record() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+    assert!(!fixture.path("state/recovery.toml").exists());
+
+    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+
+    let record = iron_vault_store::RecoveryCheckRecord::decode(&fs::read(fixture.path("state/recovery.toml")).unwrap()).unwrap();
+    assert_eq!(record.last_checked(), None);
+}
+
+#[tokio::test]
+async fn the_reminder_interval_is_the_one_the_activated_config_sets() {
+    let logs = captured_logs();
+    let mut fixture = Fixture::new().await;
+    fixture.approve(&fixture.config("\n[recovery]\nreminder_days = 7\n"));
+    // Eight days is overdue at 7 days and not at the default 90.
+    let since = iron_vault_store::UtcSecond::from_system_time(std::time::SystemTime::now() - Duration::from_secs(8 * 86_400)).unwrap();
+    fs::write(
+        fixture.path("state/recovery.toml"),
+        iron_vault_store::RecoveryCheckRecord::new(since, None).unwrap().encode(),
+    )
+    .unwrap();
+    let service = fixture.start().unwrap();
+
+    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+
+    let ours: Vec<_> = logs
+        .events("recovery.reminder")
+        .into_iter()
+        .filter(|e| e["reminders_since"] == since.to_string().as_str())
+        .collect();
+    assert_eq!(ours.len(), 1);
+    assert_eq!(ours[0]["reminder_days"], 7);
+}
+
+#[tokio::test]
 async fn a_wrong_passphrase_leaves_the_service_locked() {
     let logs = captured_logs();
     let fixture = approved().await;
