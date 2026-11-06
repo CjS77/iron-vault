@@ -338,3 +338,31 @@ async fn an_unavailable_check_a_cancelled_prompt_and_a_lock_record_no_failure() 
         "the count was not one short of the threshold"
     );
 }
+
+#[tokio::test]
+async fn an_authorization_dropped_mid_check_retires_the_challenge_and_records_nothing() {
+    let fixture = fixture().await;
+    let fs = GatedFs::default();
+    let service = fixture.ready_on(fs.clone()).await;
+    for _ in 1..FAILURE_THRESHOLD {
+        attempt(&service, MigrationOperation::Export, WRONG_PASSPHRASE).await.1.unwrap_err();
+    }
+    let digest = service.issue_migration_challenge(MigrationOperation::Export).await.unwrap();
+    let method = service.vault_passphrase_method().await.unwrap();
+    let (reached, release) = fs.arm("operational.age");
+    let checking = {
+        let service = Arc::clone(&service);
+        tokio::spawn(async move { service.authorize_migration(&digest, &method, input(WRONG_PASSPHRASE)).await })
+    };
+    reached.await.unwrap();
+
+    checking.abort();
+    assert!(checking.await.unwrap_err().is_cancelled());
+    release.send(()).unwrap();
+
+    assert_retired(&service, &digest).await;
+    assert!(
+        service.attempt_limiter().await.check(Instant::now()).is_ok(),
+        "a dropped check counted as a failure"
+    );
+}

@@ -3,8 +3,14 @@
 //! on the challenge the owner answers.
 //!
 //! The context's mutex is never held across a method's check, which runs scrypt for about a second: it is taken to
-//! check the limit and take the challenge, released for the check, and taken again to record the outcome. A `lock`
-//! can therefore land mid-check; the outcome is then discarded unrecorded and the authorization never leaves.
+//! check the limit and take the challenge, released for the check, and taken again to record the outcome.
+//!
+//! **The caller holds the service-wide lock from step 2 until its response, prompts included.** The attempt limit
+//! depends on it: with the mutex released during the check, two exchanges without that lock could each issue and take
+//! a challenge, and guess in parallel before the first failure is recorded. The context cannot check that the caller
+//! holds it, so `export` and `recipient add` must take it before step 5. A `lock` waits for the service-wide lock, so
+//! it ends such an exchange at a prompt, not mid-check. Should the vault identity still go during the check, the
+//! outcome is discarded unrecorded and the authorization never leaves.
 
 use std::sync::{Arc, Weak};
 
@@ -26,6 +32,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     ///
     /// Refused unless the service is Ready with the vault identity held, while a challenge is pending (`Busy`), and when
     /// the random source fails (`Unavailable`).
+    ///
+    /// The caller holds the service-wide lock from step 2 until its response (see the module documentation).
     pub async fn issue_migration_challenge(&self, operation: MigrationOperation) -> Result<BindingDigest, MigrationRefusal> {
         let mut inner = self.inner.lock().await;
         let vault_id = open_vault_id(&inner)?;
@@ -48,6 +56,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 
     /// The vault passphrase method, checking against the state directory and the vault identity the service holds now.
+    /// Build it in the exchange that takes the challenge, after issuing it: a method built under an earlier unlock checks
+    /// against that unlock's vault identity.
     pub async fn vault_passphrase_method(&self) -> Result<VaultPassphraseMethod, MigrationRefusal> {
         let inner = self.inner.lock().await;
         let held = inner
@@ -69,6 +79,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// attempt limit: an owner refusal counts as a failure and a proof resets the count, while an unavailable check
     /// records nothing. If the service locked, or holds another vault identity, by the time the method ends, the outcome
     /// is discarded unrecorded and the refusal is `WrongState`.
+    ///
+    /// The caller holds the service-wide lock from step 2 until its response, so no other exchange guesses while this
+    /// one's outcome is unrecorded (see the module documentation). If this future is dropped mid-check, the challenge
+    /// is already gone and nothing is recorded.
     pub async fn authorize_migration<M: SourceOwnerMethod>(
         &self,
         digest: &BindingDigest,

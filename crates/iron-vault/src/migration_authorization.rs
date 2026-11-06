@@ -89,7 +89,7 @@ pub enum MigrationRefusal {
     #[error(transparent)]
     AttemptsCoolingDown(AttemptsCoolingDown),
     /// The service is not Ready holding the vault identity, or it locked while the method ran.
-    #[error("migration authorization is not allowed while the service is {0:?}")]
+    #[error("migration authorization needs the service ready, holding the vault identity")]
     WrongState(ServiceState),
     /// The source-owner factor could not be checked, or the random source failed, so nothing was judged.
     #[error("migration authorization could not be checked")]
