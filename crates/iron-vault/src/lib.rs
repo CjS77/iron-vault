@@ -14,6 +14,7 @@ pub mod library_error;
 #[cfg(target_os = "linux")]
 pub mod listener_tls;
 pub mod logging;
+pub mod migration_authorization;
 pub mod path_metadata;
 pub mod peer;
 pub mod pipeline;

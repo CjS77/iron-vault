@@ -1318,6 +1318,7 @@ version = "0.2.0-alpha"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "blake2",
  "brotli",
  "bytes",
  "clap",

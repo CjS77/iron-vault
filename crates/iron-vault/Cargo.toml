@@ -17,6 +17,8 @@ test-support = []
 
 [dependencies]
 anyhow.workspace = true
+# The migration challenge's binding digest, personalized BLAKE2b-256 as the store's digests are.
+blake2.workspace = true
 # The brotli response encoder and decoder.
 brotli.workspace = true
 # The upstream client's response body chunks, and the bytes the scrubber releases from them.
