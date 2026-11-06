@@ -380,6 +380,16 @@ instances, because `deb-systemd-invoke` neither disables a unit nor takes a patt
 Accepted `lintian` warnings: none recorded yet. The first run on a machine with `lintian` installed must list any
 warning it keeps here with its reason.
 
+### Checking a real install
+
+`scripts/release/linux-install-check.sh` is the release check for an installed package. It runs as root on a disposable
+VM, takes an ordinary test account, and prints a PASS or FAIL line per check. It reads the [ownership table](#ownership)
+from this file, then checks the service's account, locked memory, core limit and dumpability, that the test account
+cannot reach the admin socket, `/proc/<pid>/mem`, `/proc/<pid>/environ` or the vault, that a group-writable
+`/etc/iron-vault` stops a restart, that a second `serve` fails on the state lock, and that a listener socket unit keeps
+its port across a service restart. It refuses to run without `--i-know-this-is-a-disposable-vm`. The refusal of the
+group-writable directory is read from the journal, because the service's startup error goes to stderr.
+
 ## Admin access
 
 Admin commands run only through `sudo` ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The admin
