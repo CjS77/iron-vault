@@ -86,7 +86,11 @@ table above when it is built:
 - `needs_touch` ([§3.12](iron-vault-specification.md#312-service-states-and-errors),
   [§5.1](iron-vault-specification.md#51-hardware-key-recipients-signers-and-touch-confirmation); the hardware-key
   phase);
-- `needs_login` ([§4.3](iron-vault-specification.md#43-refresh-token-rotation-and-crash-recovery); v1).
+- `needs_login` ([§4.3](iron-vault-specification.md#43-refresh-token-rotation-and-crash-recovery); v1);
+- `migration_refused`, from `migration.authorization-refused`
+  ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration),
+  [migration-authorization.md](migration-authorization.md#audit-events); v1, once the migration authorization epic
+  emits its source event in v0). A refused migration authorization can mean someone is guessing the vault passphrase.
 
 ### Deliberately not notifying
 
