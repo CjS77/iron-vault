@@ -203,7 +203,7 @@ reference Compose file applies every line.
 | No `privileged`, `pid: host`, `ipc: host`, `network_mode: host`, `devices` or Docker socket | Each would let the container, or whatever compromises it, reach the host or other containers. | R-25 |
 | No `seccomp=unconfined` or `apparmor=unconfined` | Docker's default profiles allow what the service needs (`mlockall`, `prctl`) and refuse the rest. | R-25 |
 | No `environment` or `env_file` holding a secret | Environment variables are visible to `docker inspect` and inherited by children; §3.14 forbids secrets there. | R-25 |
-| `command: ["serve", "--log-to-stdout"]` and `logging: driver: json-file` with `max-size` and `max-file`, never `journald` | As [log-operations.md](log-operations.md#docker) says: the runtime keeps and rotates the log, and the journal's readers are not bound by the log's permissions. | — ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)) |
+| `command: ["serve", "--log-to-stdout"]` and `logging: driver: json-file` with `max-size` and `max-file`, never `journald` | As [the log operations guide](../book/src/reference/log-operations.md#docker) says: the runtime keeps and rotates the log, and the journal's readers are not bound by the log's permissions. | — ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)) |
 | `restart: unless-stopped` | The service comes back after a crash and at boot, unattended ([§3.12](iron-vault-specification.md#312-service-states-and-errors)). `on-failure` would not restart it when the daemon starts. A Locked service has not failed and keeps running. | — |
 | `image:` pinned by digest | A retagged image cannot change what a later recreation runs. | R-28 |
 | Networks: `egress` and every caller network, each with a static `ipv4_address` | Each listener's address is fixed and on its caller's network alone. | R-27 |
@@ -245,8 +245,8 @@ removes the vault's only copy, as purging the Linux package's state directory do
 | `host-unlock.cred` root, `0600`; the handoff unit and its scripts root-owned | Only a host administrator can change how the vault is unlocked. | R-28 |
 | The Docker socket reachable only by root: no ordinary account in the `docker` group, no passwordless `sudo docker` | Daemon access is runtime administration, which reaches everything ([§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances)). | R-25 |
 | The host `iron-vault` account has no shell, and nothing on the host runs as it | Only the container's service may read the handoff and the TLS keys. | R-25 |
-| Encrypted swap and hibernation storage | Locked memory does not stop hibernation from capturing RAM ([linux-install.md](linux-install.md)). | R-20 |
-| `sudo` hardened as [linux-install.md](linux-install.md) says | Every admin command passes through `sudo` ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). | — |
+| Encrypted swap and hibernation storage | Locked memory does not stop hibernation from capturing RAM ([the Linux install guide](../book/src/installation/linux-install.md)). | R-20 |
+| `sudo` hardened as [the Linux install guide](../book/src/installation/linux-install.md) says | Every admin command passes through `sudo` ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). | — |
 
 ## Admin access
 
