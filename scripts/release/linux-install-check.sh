@@ -16,9 +16,11 @@
 #   --table       the markdown file holding the ownership table (default: design/linux-package.md next to this script).
 #
 # Prints one PASS or FAIL line per check, with the reason under a FAIL, and exits 1 if any check failed. Exit 2 means
-# the script could not start (not root, no opt-in, a missing tool, the package not installed or the service not active).
-# The script never edits a vault file. Its only changes are the /etc/iron-vault mode, restored on every exit path, and
-# one listener drop-in, removed on every exit path. Both cleanups are idempotent.
+# the script could not start (bad arguments, not root, no opt-in, a missing tool, the package not installed, the service not
+# active, runuser not working, the port busy or the drop-in present). That happens before the script changes anything.
+# The script never edits a vault file. Its only changes are the /etc/iron-vault mode, restored to the table's mode on every
+# exit path, and one listener drop-in, removed on every exit path. Both cleanups are idempotent, and each restarts the
+# service, so it ends Locked and no longer holds the listener socket's file descriptor.
 set -euo pipefail
 
 BINARY=/usr/bin/iron-vault
@@ -28,13 +30,14 @@ CONFIG_DIR=/etc/iron-vault
 LISTENER_NAME=irvcheck
 LISTENER_UNIT="iron-vault-listener@$LISTENER_NAME.socket"
 DROPIN_DIR="/etc/systemd/system/$LISTENER_UNIT.d"
-FS_ROOT=${FS_ROOT:-} # prefix for the table check, so tests can point it at a fake tree
 
 PORT=7899
 TABLE=""
 ACCOUNT=""
 WORK=""
-ORIGINAL_CONFIG_MODE=""
+CONFIG_MODE=""
+CONFIG_CHANGED=0
+SAMPLER=""
 DROPIN_MADE=0
 PASSED=0
 FAILED=0
@@ -67,6 +70,12 @@ attrs_match() {
     [ "$want_mode" = "$got_mode" ] || { echo "mode is $got_mode, want $want_mode"; return 1; }
 }
 
+# Prints the mode the table gives the path, or nothing when the path has no row.
+table_mode_of() { parse_table | awk -F'\t' -v want="$1" '$1 == want { print $3 }'; }
+
+# Succeeds when the argument is a decimal TCP port, 1 to 65535, with no sign or leading zero.
+valid_port() { [[ $1 =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]; }
+
 # Succeeds when neither the group nor others have the write bit in the given octal mode.
 not_group_or_other_writable() { [ $(((8#$1) & 8#022)) -eq 0 ]; }
 
@@ -92,10 +101,10 @@ check() {
 # --- Cleanup ------------------------------------------------------------------------------------------------------------
 
 restore_config_mode() {
-    [ -n "$ORIGINAL_CONFIG_MODE" ] || return 0
-    chmod "$ORIGINAL_CONFIG_MODE" "$CONFIG_DIR" || true
-    ORIGINAL_CONFIG_MODE=""
-    # The refused restarts exhausted the start limit; bring the service back so the VM is left as it was found.
+    [ "$CONFIG_CHANGED" = 1 ] || return 0
+    chmod "$CONFIG_MODE" "$CONFIG_DIR" || true
+    CONFIG_CHANGED=0
+    # The refused restarts exhausted the start limit; bring the service back.
     systemctl reset-failed "$SERVICE" || true
     systemctl restart "$SERVICE" || true
 }
@@ -107,10 +116,13 @@ remove_listener() {
     rmdir "$DROPIN_DIR" || true
     systemctl daemon-reload || true
     DROPIN_MADE=0
+    # The service still holds the file descriptor systemd passed it; a restart drops it.
+    systemctl restart "$SERVICE" || true
 }
 
 cleanup() {
     set +e
+    [ -z "$SAMPLER" ] || kill "$SAMPLER" 2>/dev/null
     restore_config_mode
     remove_listener
     [ -z "$WORK" ] || rm -rf "$WORK"
@@ -120,7 +132,7 @@ cleanup() {
 
 path_matches() {
     local path=$1 got
-    got=$(stat -c '%U:%G %a' -- "$FS_ROOT$path" 2>/dev/null) || { echo "$path is missing"; return 1; }
+    got=$(stat -c '%U:%G %a' -- "$path" 2>/dev/null) || { echo "$path is missing"; return 1; }
     attrs_match "$2" "$3" "${got% *}" "${got#* }"
 }
 
@@ -178,19 +190,27 @@ process_not_dumpable() {
 
 as_account() { runuser -u "$ACCOUNT" -- "$@"; }
 
+# Succeeds when the test account's attempt to open the path for reading fails with "Permission denied". Any other failure
+# (a missing path, a wrong pid) does not count, so the check cannot pass by looking at the wrong thing. A directory opens
+# for reading the same way a file does.
+open_is_denied() {
+    local out
+    if out=$(as_account sh -c 'exec 3<"$1"' _ "$1" 2>&1); then echo "$ACCOUNT opened $1"; return 1; fi
+    echo "$out"
+    case "$out" in *"Permission denied"*) ;; *) echo "not refused with 'Permission denied'"; return 1 ;; esac
+}
+
+# The refusal must be one of the two real ones from cli/client.rs, so a stopped service or a broken runuser cannot pass.
 ping_is_refused() {
     local out
     if out=$(as_account "$BINARY" ping 2>&1); then echo "ping succeeded: $out"; return 1; fi
-    echo "refused: $out"
-    case "$out" in *"the service is running"*) return 1 ;; esac
-}
-
-cannot_read() {
-    if as_account head -c 1 -- "$1" >/dev/null 2>&1; then echo "$ACCOUNT read $1"; return 1; fi
-}
-
-cannot_list() {
-    if as_account ls -- "$1" >/dev/null 2>&1; then echo "$ACCOUNT listed $1"; return 1; fi
+    echo "$out"
+    case "$out" in
+        *"permission denied connecting to the admin socket"*)
+            echo "refused by the filesystem: admin.sock is not open to $ACCOUNT, so the peer-account check was not reached" ;;
+        *"(not-admin-principal)"*) echo "refused by the service's peer-account check" ;;
+        *) echo "not refused by either the socket's permissions or the peer-account check"; return 1 ;;
+    esac
 }
 
 # --- Checks that restart the service ------------------------------------------------------------------------------------
@@ -200,26 +220,30 @@ journal_since() { journalctl -u "$SERVICE" --since "$1" --no-pager -o cat; }
 # grep -q exits at the first match, which under pipefail would fail the pipeline it ends, so output goes via a variable.
 has_line() { grep -q "$1" <<<"$2"; }
 
+# Type=exec reports a successful start, so the service is briefly active before it exits; the failed run is what counts.
+service_has_failed() {
+    [ "$(systemctl show -p Result --value "$SERVICE")" != success ] || [ "$(systemctl show -p ActiveState --value "$SERVICE")" = failed ]
+}
+
 # A writable config directory is refused at startup. Type=exec reports a successful start, so the refusal is read from
 # the journal, where the service's one-line startup error goes.
 group_writable_config_is_refused() {
-    local since text
+    local since text refusal="refusing to start: $CONFIG_DIR is not trusted"
     since=$(date '+%Y-%m-%d %H:%M:%S')
-    ORIGINAL_CONFIG_MODE=$(stat -c %a "$CONFIG_DIR")
+    CONFIG_CHANGED=1
     chmod g+w "$CONFIG_DIR"
     systemctl restart "$SERVICE" || true
     for _ in $(seq 20); do
         text=$(journal_since "$since")
-        has_line "not trusted" "$text" && break
+        has_line "$refusal" "$text" && service_has_failed && break
         sleep 0.5
     done
-    grep -F "$CONFIG_DIR" <<<"$text" | grep -q 'not trusted' || {
-        echo "the journal has no 'not trusted' line naming $CONFIG_DIR:"
+    has_line "$refusal" "$text" || {
+        echo "the journal has no line '$refusal':"
         tail -n 5 <<<"$text"
         return 1
     }
-    sleep 1
-    ! systemctl is-active --quiet "$SERVICE" || { echo "$SERVICE is active with $CONFIG_DIR group-writable"; return 1; }
+    service_has_failed || { echo "$SERVICE did not fail with $CONFIG_DIR group-writable"; return 1; }
 }
 
 second_instance_fails_on_lock() {
@@ -234,8 +258,6 @@ second_instance_fails_on_lock() {
 port_owner_is_systemd() { has_line 'pid=1,' "$(ss -H -ltnp "sport = :$PORT")"; }
 
 add_listener() {
-    [ -z "$(ss -H -ltn "sport = :$PORT")" ] || die "port $PORT is already in use; pass --port"
-    [ ! -e "$DROPIN_DIR" ] || die "$DROPIN_DIR already exists"
     mkdir "$DROPIN_DIR"
     DROPIN_MADE=1
     printf '[Socket]\nListenStream=127.0.0.1:%s\n' "$PORT" >"$DROPIN_DIR/override.conf"
@@ -245,15 +267,16 @@ add_listener() {
 
 # Samples the port every 50 ms across a restart, because a gap shorter than the restart would not show in a before/after look.
 port_stays_bound_across_restart() {
-    local stop="$WORK/stop" gaps="$WORK/gaps" before after sampler
+    local stop="$WORK/stop" gaps="$WORK/gaps" before after
     port_owner_is_systemd || { echo "port $PORT is not bound by systemd (pid 1) before the restart"; return 1; }
     before=$(main_pid)
     rm -f "$stop" "$gaps"
-    ( while [ ! -e "$stop" ]; do port_owner_is_systemd || echo gap >>"$gaps"; sleep 0.05; done ) &
-    sampler=$!
+    ( while [ -d "$WORK" ] && [ ! -e "$stop" ]; do port_owner_is_systemd || echo gap >>"$gaps"; sleep 0.05; done ) &
+    SAMPLER=$!
     systemctl restart "$SERVICE" || true
     touch "$stop"
-    wait "$sampler"
+    wait "$SAMPLER"
+    SAMPLER=""
     after=$(main_pid)
     [ "$before" != "$after" ] || { echo "the service did not restart (pid $before)"; return 1; }
     [ ! -s "$gaps" ] || { echo "port $PORT was unbound in $(wc -l <"$gaps") samples during the restart"; return 1; }
@@ -274,6 +297,7 @@ parse_args() {
         esac
         shift
     done
+    valid_port "$PORT" || die "--port must be an integer from 1 to 65535, not '$PORT'"
     [ "$(id -u)" -eq 0 ] || die "run as root, on a disposable VM"
     [ "$opted_in" = 1 ] || die "this changes a live install; on a disposable VM, pass --i-know-this-is-a-disposable-vm"
     [ -n "$ACCOUNT" ] || die "usage: $0 --i-know-this-is-a-disposable-vm [--port PORT] [--table FILE] TEST_ACCOUNT"
@@ -290,6 +314,12 @@ preflight() {
     id "$ACCOUNT" >/dev/null 2>&1 || die "no account $ACCOUNT"
     [ "$(id -u "$ACCOUNT")" -ne 0 ] && [ "$ACCOUNT" != "$SERVICE_ACCOUNT" ] || die "TEST_ACCOUNT must be an ordinary login account"
     systemctl is-active --quiet "$SERVICE" || die "$SERVICE is not active"
+    CONFIG_MODE=$(table_mode_of "$CONFIG_DIR" <"$TABLE")
+    [ -n "$CONFIG_MODE" ] || die "$TABLE has no row for $CONFIG_DIR"
+    # Positive control: if runuser silently fails, every "the account cannot" check below would pass for the wrong reason.
+    [ "$(as_account id -u 2>/dev/null)" = "$(id -u "$ACCOUNT")" ] || die "runuser did not run a command as $ACCOUNT"
+    [ -z "$(ss -H -ltn "sport = :$PORT")" ] || die "port $PORT is already in use; pass --port"
+    [ ! -e "$DROPIN_DIR" ] || die "$DROPIN_DIR already exists"
 }
 
 run_checks() {
@@ -303,9 +333,9 @@ run_checks() {
     check "LimitCORE is 0" core_dumps_are_off "$pid"
     check "the service process is not dumpable" process_not_dumpable "$pid"
     check "$ACCOUNT: iron-vault ping is refused" ping_is_refused
-    check "$ACCOUNT cannot read /proc/$pid/mem" cannot_read "/proc/$pid/mem"
-    check "$ACCOUNT cannot read /proc/$pid/environ" cannot_read "/proc/$pid/environ"
-    check "$ACCOUNT cannot list /var/lib/iron-vault" cannot_list /var/lib/iron-vault
+    check "$ACCOUNT cannot open /proc/$pid/mem" open_is_denied "/proc/$pid/mem"
+    check "$ACCOUNT cannot open /proc/$pid/environ" open_is_denied "/proc/$pid/environ"
+    check "$ACCOUNT cannot open /var/lib/iron-vault" open_is_denied /var/lib/iron-vault
     check "a second iron-vault serve fails on the state lock" second_instance_fails_on_lock
     check "a group-writable $CONFIG_DIR is refused at restart" group_writable_config_is_refused
     restore_config_mode
