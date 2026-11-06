@@ -4,6 +4,7 @@ pub mod admin;
 pub mod admin_file;
 pub mod audit;
 pub mod caller_token;
+pub mod clock;
 pub mod config_check;
 pub mod connection_tags;
 pub mod content_coding;
@@ -21,6 +22,7 @@ pub mod pipeline;
 // The proxy handler answers through hyper on tokio, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
 pub mod proxy_handler;
+pub mod recovery_reminder;
 // The request listeners accept on tokio, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
 pub mod request_listeners;

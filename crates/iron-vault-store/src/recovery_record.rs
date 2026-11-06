@@ -9,7 +9,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use toml::value::{Datetime, Offset};
 
-use crate::{ReadError, StateDirLock, StateFileName, StoreFs, WriteError, durable_remove, durable_replace, read_state_file};
+use crate::{
+    ErrorKindLabel, ReadError, StateDirLock, StateFileName, StoreFs, WriteError, durable_remove, durable_replace, read_state_file,
+};
 
 /// The longest `recovery.toml` a reader accepts. The record is two lines of under 50 bytes; a larger file is not one.
 pub const MAX_RECOVERY_CHECK_RECORD_LEN: u64 = 1024;
@@ -183,6 +185,33 @@ pub enum RecoveryCheckReadError {
     /// The file was read and is not a record.
     #[error(transparent)]
     Decode(#[from] RecoveryCheckRecordError),
+}
+
+impl RecoveryCheckReadError {
+    /// The error as a label that holds no file name, path or file text, for a log record.
+    pub fn error_kind_label(&self) -> ErrorKindLabel {
+        match self {
+            Self::Read(ReadError::Io { kind, .. }) => ErrorKindLabel::from(*kind),
+            Self::Read(ReadError::TooLarge { .. }) | Self::Decode(RecoveryCheckRecordError::TooLarge) => ErrorKindLabel::fixed("too_large"),
+            Self::Read(ReadError::NotARegularFile { .. }) => ErrorKindLabel::fixed("not_a_regular_file"),
+            Self::Decode(decode) => ErrorKindLabel::fixed(decode.label()),
+        }
+    }
+}
+
+impl RecoveryCheckRecordError {
+    /// A fixed snake_case name for the reason, for `error_kind_label`.
+    fn label(self) -> &'static str {
+        match self {
+            Self::TooLarge => "too_large",
+            Self::NotUtf8 => "not_utf8",
+            Self::NotToml => "not_toml",
+            Self::UnknownKey => "unknown_key",
+            Self::MissingSince => "missing_since",
+            Self::BadTime => "bad_time",
+            Self::CheckedBeforeSince => "checked_before_since",
+        }
+    }
 }
 
 /// The state file `recovery.toml`.

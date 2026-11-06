@@ -105,6 +105,33 @@ fn error_messages_are_fixed() {
     );
 }
 
+#[test]
+fn an_unusable_record_has_a_label_without_file_text() {
+    let label = |error: RecoveryCheckReadError| error.error_kind_label().to_string();
+    assert_eq!(label(E::UnknownKey.into()), "unknown_key");
+    assert_eq!(label(E::TooLarge.into()), "too_large");
+    let file = StateFileName::recovery_check_record();
+    assert_eq!(
+        label(
+            ReadError::TooLarge {
+                file: file.clone(),
+                max_len: 1
+            }
+            .into()
+        ),
+        "too_large"
+    );
+    assert_eq!(
+        label(ReadError::NotARegularFile { file: file.clone() }.into()),
+        "not_a_regular_file"
+    );
+    let denied = ReadError::Io {
+        file,
+        kind: io::ErrorKind::PermissionDenied,
+    };
+    assert_eq!(label(denied.into()), "permission_denied");
+}
+
 fn setup(label: &str) -> (TestDir, StateDirLock) {
     let dir = TestDir::new(label);
     let lock = StateDirLock::acquire(dir.path()).unwrap();
