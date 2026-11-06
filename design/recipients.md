@@ -57,8 +57,9 @@ Each recipient has a **recipient label**: owner text that says which device or c
 `alice laptop 2026` or `paper copy, safe`. The service never interprets it. The rule:
 
 - 1 to 64 bytes of UTF-8;
-- no control character (Unicode general category Cc), so a label cannot start a new log line or move the cursor
-  ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance));
+- no control or format character (Unicode general categories Cc and Cf), so a label cannot start a new log line, move
+  the cursor ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)), or reorder the summary shown before
+  a prompt with a bidirectional control such as U+202E;
 - no leading or trailing whitespace.
 
 Labels need not be unique: commands name a recipient by its key, never its label. The audit log writes a label through
@@ -75,14 +76,18 @@ replace. The inventory is the only place the service learns the recipient set it
 It is a [MAC'd file](storage-formats.md#macd-file-frame), sealed to the vault public key and authenticated with a MAC
 keyed from the vault identity, for the reason the vault manifest is one: anyone who knows the vault public key can seal
 a list, and a forged list would let them choose which keys the next rewrap enrolls. The store ticket adds the sections
-below to [storage-formats.md](storage-formats.md), with a worked example.
+below to [storage-formats.md](storage-formats.md), with a worked example. It also narrows the
+[state generation](storage-formats.md#state-generation) section's sentence that every MAC'd file payload carries two
+`u64` counters right after its vault ID to the manifest and the approval state: the inventory carries its envelope
+digest there.
 
 **It is not part of the state generation.** The state generation detects one MAC'd file restored without the other. An
 inventory restored alone no longer matches `identity.age`'s digest and is refused as damaged, so it needs no counter.
 Restoring `identity.age` and the inventory together brings back an older recipient set, removed keys included. That is
 an old copy of the envelope put back by someone who can write the state directory, which
 [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) already says removal cannot reach
-([open question 5](#open-questions)).
+([open question 5](#open-questions)). It gives a removed key nothing new: the vault identity never rotates, so whoever
+holds that key and any old copy of `identity.age` already holds the vault identity.
 
 ### Recipient inventory file v1
 
@@ -196,7 +201,8 @@ when it matches the envelope on disk, as approval recovery publishes a committed
 The check runs only in the recipient commands ([open question 4](#open-questions)). Nothing else reads the inventory:
 `unlock`, migration authorization's vault passphrase method and `recovery check` read `identity.age` alone, and serving
 never depends on the recipient list. A damaged inventory therefore leaves the service Ready and the vault usable, and
-blocks only recipient changes. The owner recovers through migration or `reset`.
+blocks only recipient changes. The owner recovers through `export` and `import` (EP-30), or `reset`: `recipient add`,
+the other migration path, is blocked by the same damage.
 
 ### The recipient change
 
@@ -245,27 +251,34 @@ succeeds, with a notice that the inventory is finished at the next recipient com
 independent recovery paths. The **independence rule** turns that into a check on the inventory a change would write.
 The inventory after the change must hold:
 
-1. **the recipient the service's unlock uses.** In v0 that is the one `operational` recipient: `unlock` and the vault
-   passphrase method both go through it. It cannot be removed;
-2. **at least one `recovery` recipient**, an offline key the owner keeps apart from this machine and its passphrase;
-3. **at least two recipients, and at most `MAX_RECIPIENTS` (64).**
+1. **the `operational` recipient, in every profile.** Passphrase `unlock` and the vault passphrase method of
+   migration authorization both go through it, and it is the fallback when any other unlock method fails. It is never
+   removed, and no other recipient takes its place;
+2. **the recipient of each configured unlock method, in addition to `operational`, never in its place.** In v0
+   passphrase unlock is the only method, so this part adds nothing yet. A `host-unlock` recipient never replaces
+   `operational`: passphrase `unlock` stays the fallback when the host unlock handoff fails;
+3. **at least one `recovery` recipient**, an offline key the owner keeps apart from this machine and its passphrase;
+4. **at least two recipients, and at most `MAX_RECIPIENTS` (64).**
 
-In v0, 1 and 2 already make 2's floor hold. It stays explicit so the rule still means two paths when later roles join.
-A refusal names which part failed: the operational recipient, the last recovery recipient, or the limit of 64.
+In v0, parts 1 and 3 already make part 4's floor hold. It stays explicit so the rule still means two paths when later
+roles join. A refusal names which part failed: the operational recipient, a configured unlock method's recipient, the
+last recovery recipient, or the limit of 64.
 
 The rule is pure and lives in the store, beside the inventory, so `remove` and `add` apply it in memory before any
 prompt and the recipient change applies it again before it writes.
 
 **How later roles join.** Each role is in the unlock class, the recovery class or neither (the
-[roles table](#recipient-roles)). Part 1 becomes "the recipient the configured unlock method uses" and part 2 stays "at
-least one recipient of the recovery class":
+[roles table](#recipient-roles)). An unlock-class recipient that a configured unlock method uses is kept by part 2,
+and part 3 becomes "at least one recipient of the recovery class". Part 1 does not change:
 
-- **`tpm`** joins the unlock class. A TPM vault's unlock uses it, so it cannot be removed while TPM unlock is
-  configured. It never counts as recovery, because it is bound to one machine and fails with it (R-15). The TPM epic
-  decides whether the `operational` recipient may then be removed.
+- **`tpm`** joins the unlock class. Part 2 keeps it while TPM unlock is configured. It never counts as recovery, because
+  it is bound to one machine and fails with it (R-15).
+  [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory) allows a TPM vault with no interactive-unlock
+  recipient; this rule still keeps `operational` beside the TPM, and relaxing that needs an owner or specification
+  decision ([open question 11](#open-questions)).
 - **`hardware`** joins the unlock class. Whether a second hardware key may count as recovery is that phase's decision.
-- **`host-unlock`** joins the unlock class, and never counts as recovery, because its secret lives on the host. The
-  Docker Compose epic says when its unlock uses it.
+- **`host-unlock`** joins the unlock class. Part 2 keeps it while the host unlock adapter is configured, and part 1
+  still keeps `operational` beside it. It never counts as recovery, because its secret lives on the host.
 
 ## Commands
 
@@ -291,12 +304,15 @@ migration authorization, steps 1 to 10, with the operation `AddRecipient` naming
 `--recovery` that is the new key's recipient key, so the challenge binds the very key that is revealed.
 
 **`recipient remove` requires owner presence**, the approval passphrase
-([credential-commands.md](credential-commands.md#owner-presence)), and nothing else. Removal grants nobody access, so
-the attack R-23 names does not apply. What removal can do is lose a way in, which the independence rule bounds, and a
-change that can lose something is a destructive change, which the owner authorizes through owner presence
-([§1.3](iron-vault-specification.md#13-terms)), as for `rm`. This settles
-[open question 3 of migration-authorization.md](migration-authorization.md#open-questions): removal is not a migration
-operation, and no third operation tag is added ([open question 10](#open-questions)).
+([credential-commands.md](credential-commands.md#owner-presence)), and nothing else.
+[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) asks "fresh existing-owner authorization"
+of both commands. Owner presence is that for removal: it is proof that the owner takes part in this exchange now,
+collected for this one change and never reused ([§1.3](iron-vault-specification.md#13-terms)). Removal grants nobody
+access, so the attack R-23 names does not apply. What removal can do is lose a way in, which the independence rule
+bounds, and a change that can lose something is a destructive change, which the owner authorizes through owner presence
+([§1.3](iron-vault-specification.md#13-terms)), as for `rm`. This settles [open question 3 of
+migration-authorization.md](migration-authorization.md#open-questions): removal is not a migration operation, and no
+third operation tag is added ([open question 10](#open-questions)).
 
 `recipient list` needs nothing beyond the admin principal, as credential `list` does: it shows public keys and owner
 labels only.
@@ -305,8 +321,10 @@ labels only.
 
 Every recipient command needs Ready. Each needs the vault identity: to open the inventory, whose MAC is keyed from it,
 and, for a change, to rewrap it. Locked holds no vault identity, Checking is transient, and Unavailable is for repair.
-In any other state the exchange ends with `wrong-state` before any prompt. A new admin operation,
-`AdminOperation::Recipients`, maps the three commands onto the service state gate, which offers it only in Ready.
+In any other state the exchange ends with `wrong-state` before any prompt. The three commands map onto the existing
+admin operation `AdminOperation::VaultChange`, which the service state gate offers only in Ready, as it does for `add`,
+`replace` and `rm`. `list` maps there too, unlike credential `list`, which shares `status`: it opens a file keyed from
+the vault identity, which only Ready holds.
 
 Each command holds the service-wide lock from its checks to its response, prompts included, as `replace` and `rm` do.
 It tries the lock and answers `busy` at once if it is taken. Holding it is what keeps the inventory check, the summary
@@ -614,9 +632,11 @@ The design takes the default stated for each, until the owner decides.
    the commit point, and let the inventory check finish or discard the change from the staged file
    ([The inventory check](#the-inventory-check)). Any other mismatch is still damage, never repaired.
 4. **Where the inventory is checked.** *Default:* only the recipient commands open it; `unlock`, the config check and
-   `status` do not, so a damaged inventory never stops serving and is reported when a recipient command runs. The
-   alternative checks it at every config check and reports it in `status`, at the cost of writes during a config
-   check to finish a staged change.
+   `status` do not, so a damaged inventory never stops serving and is reported when a recipient command runs. This
+   departs from [§3.12](iron-vault-specification.md#312-service-states-and-errors), where damaged shared state makes the
+   service Unavailable: serving never reads the inventory, so taking every route down would protect nothing. The
+   alternative checks it at every config check and reports it in `status`, at the cost of writes during a config check
+   to finish a staged change.
 5. **Outside the state generation.** *Default:* the inventory does not take part in the
    [state generation](storage-formats.md#state-generation); the envelope digest already refuses an inventory restored
    alone. Restoring `identity.age` and the inventory together restores removed recipients, which is the old copy
@@ -641,5 +661,12 @@ The design takes the default stated for each, until the owner decides.
    a key that may have been removed.
 10. **Authorizing removal.** This settles [open question 3 of
     migration-authorization.md](migration-authorization.md#open-questions). *Default:* owner presence, the approval
-    passphrase, because removal grants no access and is a destructive change. The alternative also requires migration
-    authorization with a third operation tag, so removal needs the vault passphrase.
+    passphrase, because removal grants no access and is a destructive change, and owner presence is the "fresh
+    existing-owner authorization" §3.13 asks for. The alternative also requires migration authorization with a third
+    operation tag, so removal needs the vault passphrase.
+11. **`operational` beside a TPM.** [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory) enrolls "the
+    primary TPM or interactive-unlock recipient" plus a recovery recipient, so it allows a TPM vault with no
+    `operational` recipient. *Default:* the [independence rule](#independence-rule) keeps `operational` in every
+    profile, so passphrase `unlock` stays the fallback when another unlock method fails, and the TPM epic cannot drop
+    it without an owner or specification decision. The alternative lets a TPM vault remove `operational` once the TPM
+    recipient and a recovery recipient are enrolled, as §3.11 allows.
