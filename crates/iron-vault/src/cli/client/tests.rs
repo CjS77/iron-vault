@@ -325,3 +325,9 @@ fn an_approval_prints_the_service_version_digest_and_headline() {
         format!("approved version 3 (blake2b:{})\ncallers: none\n", "ab".repeat(32))
     );
 }
+
+#[test]
+fn a_check_time_is_shown_as_the_record_writes_it() {
+    assert_eq!(check_time(1_700_000_000), "2023-11-14T22:13:20Z");
+    assert!(check_time(u64::MAX).ends_with("seconds since the epoch"));
+}

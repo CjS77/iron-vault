@@ -61,6 +61,16 @@ fn init_is_a_client_command_without_arguments() {
 }
 
 #[test]
+fn recovery_check_is_a_client_command_without_arguments() {
+    assert_eq!(
+        parse(&["recovery", "check"]).unwrap().command,
+        Command::Recovery(RecoveryCommand::Check)
+    );
+    assert_eq!(parse(&["recovery", "check", "AGE-SECRET-KEY-1X"]).unwrap_err().exit_code(), 2);
+    assert_eq!(parse(&["recovery"]).unwrap_err().exit_code(), 2);
+}
+
+#[test]
 fn config_approve_takes_one_required_file() {
     let command = Command::Config(ConfigCommand::Approve {
         file: PathBuf::from("proposed.toml"),

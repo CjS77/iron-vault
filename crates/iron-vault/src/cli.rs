@@ -153,6 +153,9 @@ pub enum Command {
     /// Change the approved configuration.
     #[command(subcommand)]
     Config(ConfigCommand),
+    /// Check the owner's offline recovery key.
+    #[command(subcommand)]
+    Recovery(RecoveryCommand),
     /// Print a shell completion script to stdout. It never contacts the service, so it also runs at build time.
     Completions {
         /// The shell to generate the script for.
@@ -214,6 +217,15 @@ pub enum ConfigCommand {
         /// The proposed config file.
         file: PathBuf,
     },
+}
+
+/// `iron-vault recovery`'s commands.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum RecoveryCommand {
+    /// Prove that your offline recovery key opens this vault: the service prompts for the key, read with echo off or
+    /// from stdin, so `pass show iron-vault-recovery | sudo iron-vault recovery check` works. It works while the service
+    /// is Locked or Ready, changes nothing but the time it records, and keeps no copy of the key.
+    Check,
 }
 
 impl Cli {
@@ -349,6 +361,19 @@ pub fn add(_socket: Option<&Path>, _name: String, _kind: CredentialKind, _origin
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn replace(_socket: Option<&Path>, _name: String, _kind: CredentialKind, _origins: &[(Host, Port)]) -> ExitCode {
+    unsupported_platform()
+}
+
+/// `iron-vault recovery check`: sends `recovery check`, answers the key prompt from the owner console, and prints the
+/// vault the key opened and the check time.
+#[cfg(target_os = "linux")]
+pub fn recovery_check(socket: Option<&Path>) -> ExitCode {
+    client::recovery_check(socket).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn recovery_check(_socket: Option<&Path>) -> ExitCode {
     unsupported_platform()
 }
 

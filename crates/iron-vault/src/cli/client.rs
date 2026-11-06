@@ -18,6 +18,7 @@ use iron_vault::hardening::MEMLOCK_REMEDIATION;
 use iron_vault::service_state::ServiceState;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault_policy::{CredentialKind, Host, Port};
+use iron_vault_store::UtcSecond;
 use zeroize::Zeroizing;
 
 use super::Exit;
@@ -237,6 +238,33 @@ pub fn rm(socket: Option<&Path>, name: String) -> Exit {
         }
         _ => unexpected(),
     })
+}
+
+/// Runs `recovery check`, answering the key prompt from the owner console. A success names the vault the key opened and
+/// the check time on stdout; when the check record could not be written, stderr says reminders still count from the last
+/// recorded check.
+pub fn recovery_check(socket: Option<&Path>) -> Exit {
+    run(socket, AdminRequest::RecoveryCheck, |response| match response {
+        AdminResponse::RecoveryCheck {
+            vault_id,
+            checked_at,
+            recorded,
+        } => {
+            println!("the recovery key opens vault {vault_id}; checked at {}", check_time(checked_at));
+            if !recorded {
+                eprintln!(
+                    "iron-vault: warning: the check time was not saved, so recovery reminders still count from the last recorded check"
+                );
+            }
+            Exit::Success
+        }
+        _ => unexpected(),
+    })
+}
+
+/// The check time as the record writes it, or the raw seconds for a time outside its range.
+fn check_time(unix_seconds: u64) -> String {
+    UtcSecond::from_unix_seconds(unix_seconds).map_or_else(|_| format!("{unix_seconds} seconds since the epoch"), |t| t.to_string())
 }
 
 /// The parsed origins as the request carries them.

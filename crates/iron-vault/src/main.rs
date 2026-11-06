@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 #[cfg(target_os = "linux")]
 use anyhow::Context;
-use cli::{Cli, Command, ConfigCommand};
+use cli::{Cli, Command, ConfigCommand, RecoveryCommand};
 #[cfg(target_os = "linux")]
 use iron_vault::audit::{AuditEvent, HardeningIncomplete, ServiceStarted};
 #[cfg(target_os = "linux")]
@@ -50,6 +50,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Rm { name } => Ok(run_client(|| cli::rm(cli.admin_socket.as_deref(), name))),
         // Not a client command: it reads nothing from the service, so it skips the admin socket and core-dump handling.
         Command::Completions { shell } => cli::completions(shell).map(|()| ExitCode::SUCCESS).map_err(Into::into),
+        Command::Recovery(RecoveryCommand::Check) => Ok(run_client(|| cli::recovery_check(cli.admin_socket.as_deref()))),
         Command::Config(ConfigCommand::Approve { file }) => Ok(run_client(|| cli::config_approve(cli.admin_socket.as_deref(), &file))),
     }
 }
