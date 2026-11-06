@@ -242,8 +242,8 @@ fn bash_script() -> String {
     String::from_utf8(completions::script(CompletionShell::Bash)).unwrap()
 }
 
-#[test]
 // clap_complete turns the `-` in the binary name into `__` in the function name.
+#[test]
 fn bash_script_defines_the_function_and_names_every_command() {
     let script = bash_script();
     assert!(script.contains("_iron__vault()"), "{script}");
@@ -272,14 +272,6 @@ fn bash_script_passes_bash_syntax_check() {
     };
     child.stdin.take().unwrap().write_all(bash_script().as_bytes()).unwrap();
     assert!(child.wait().unwrap().success());
-}
-
-#[test]
-fn completions_need_no_runtime_directory_or_service() {
-    // The generator takes no environment and no socket; writing to a buffer must succeed regardless.
-    let mut out = Vec::new();
-    completions::write_script(&mut out, CompletionShell::Bash).unwrap();
-    assert!(!out.is_empty());
 }
 
 #[test]

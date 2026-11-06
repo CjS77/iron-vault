@@ -921,3 +921,15 @@ async fn replace_sends_add_s_arguments_answers_presence_then_the_secret_from_std
     };
     assert_eq!((name.as_str(), *kind, origins.len()), ("fx", CredentialKind::Static, 2));
 }
+
+#[test]
+fn completions_bash_prints_the_script_with_no_runtime_directory_or_service() {
+    let output = Command::new(env!("CARGO_BIN_EXE_iron-vault"))
+        .args(["completions", "bash"])
+        .env_remove("XDG_RUNTIME_DIR")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", text(&output.stderr));
+    assert!(text(&output.stdout).contains("_iron__vault()"));
+    assert!(output.stderr.is_empty(), "stderr: {}", text(&output.stderr));
+}
