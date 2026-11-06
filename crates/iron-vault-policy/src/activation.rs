@@ -186,7 +186,7 @@ impl ActivePolicy {
         &self.config
     }
 
-    /// The interval between recovery reminders in the approved config.
+    /// The interval between recovery reminders in the approved config: 90 days when the config has no `[recovery] reminder_days`.
     pub fn recovery_reminder(&self) -> ReminderInterval {
         self.config.effective_recovery_reminder()
     }

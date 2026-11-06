@@ -32,7 +32,7 @@ impl ReminderIntervalError {
 /// The days between recovery reminders: a whole number from 7 to 365, valid on construction.
 ///
 /// It is part of the approved config, so a change that silences reminders needs the approval passphrase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReminderInterval(u16);
 
 impl ReminderInterval {
@@ -60,10 +60,12 @@ impl TryFrom<i64> for ReminderInterval {
     }
 }
 
-/// Reads any TOML value, so a string, float or boolean gets the fixed message instead of serde's generic type error.
+/// Reads any TOML value, so every type gets the fixed message instead of serde's generic type error: integers (including
+/// ones outside the `i64`/`u64` range), floats, booleans, strings, arrays, and tables or date-times (the toml
+/// deserializer presents a date-time as a map).
 struct IntervalVisitor;
 
-impl Visitor<'_> for IntervalVisitor {
+impl<'de> Visitor<'de> for IntervalVisitor {
     type Value = ReminderInterval;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -80,8 +82,29 @@ impl Visitor<'_> for IntervalVisitor {
             .and_then(|v| self.visit_i64(v))
     }
 
+    fn visit_i128<E: de::Error>(self, v: i128) -> Result<Self::Value, E> {
+        i64::try_from(v)
+            .map_err(|_| E::custom(ReminderIntervalError::new(v)))
+            .and_then(|v| self.visit_i64(v))
+    }
+
+    fn visit_u128<E: de::Error>(self, v: u128) -> Result<Self::Value, E> {
+        i64::try_from(v)
+            .map_err(|_| E::custom(ReminderIntervalError::new(v)))
+            .and_then(|v| self.visit_i64(v))
+    }
+
     fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
-        Err(E::custom(ReminderIntervalError::new(v)))
+        // Debug formatting keeps the fraction, so `30.0` is shown as written rather than as `30`.
+        Err(E::custom(ReminderIntervalError::new(format!("{v:?}"))))
+    }
+
+    fn visit_seq<A: de::SeqAccess<'de>>(self, _seq: A) -> Result<Self::Value, A::Error> {
+        Err(de::Error::custom(ReminderIntervalError::new("an array")))
+    }
+
+    fn visit_map<A: de::MapAccess<'de>>(self, _map: A) -> Result<Self::Value, A::Error> {
+        Err(de::Error::custom(ReminderIntervalError::new("a table or date-time")))
     }
 
     fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {

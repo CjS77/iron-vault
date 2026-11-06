@@ -340,7 +340,7 @@ listeners:
 Approve this config as version 2? Type yes to approve: yes
 Approval passphrase: *******
 approved version 2 (blake2b:fb3cab486064ce8f6e556725607e2f096cdfe1c917d4e6c4c6e6d54f4736cba6)
-callers: 1 added; route grants: 1 added; routes: 1 added; listeners: 1 added; limits: none; logging: none
+callers: 1 added; route grants: 1 added; routes: 1 added; listeners: 1 added; limits: none; logging: none; recovery: none
 ```
 
 ### 8. Send requests
@@ -640,7 +640,7 @@ routes:
 Approve this config as version 4? Type yes to approve: yes
 Approval passphrase:
 approved version 4 (blake2b:d6e2499b5a240bded34e0806751f1f5c4722cb190d8f6e9519f1b5171b54e5b4)
-callers: 1 changed; route grants: none; routes: 1 changed; listeners: none; limits: none; logging: none
+callers: 1 changed; route grants: none; routes: 1 changed; listeners: none; limits: none; logging: none; recovery: none
 ```
 
 The old token stopped working at that moment:

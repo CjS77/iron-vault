@@ -520,6 +520,19 @@ mod tests {
     const LOOPBACK: &str = "[listeners.lo]\naddress = \"127.0.0.1:7878\"\n";
     const LIMIT: &str = "{ requests = 60, per_seconds = 60, burst = 10 }";
 
+    #[test]
+    fn effective_recovery_reminder_defaults_to_ninety_days() {
+        let days = |extra: &str| {
+            validate(&format!("{SPEC_EXAMPLE}{extra}"))
+                .unwrap()
+                .effective_recovery_reminder()
+                .days()
+        };
+        assert_eq!(days(""), 90);
+        assert_eq!(days("\n[recovery]\n"), 90);
+        assert_eq!(days("\n[recovery]\nreminder_days = 30\n"), 30);
+    }
+
     fn validate(doc: &str) -> Result<ValidatedConfig, Vec<ValidationError>> {
         ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap())
     }

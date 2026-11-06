@@ -388,15 +388,25 @@ mod tests {
                 &format!("recovery.reminder_days must be a whole number of days from 7 to 365, not {value}"),
             );
         });
-        [("30.5", "30.5"), ("\"soon\"", "\"soon\""), ("true", "true")]
-            .iter()
-            .for_each(|(written, shown)| {
-                invalid(
-                    &format!("{SPEC_EXAMPLE}\n[recovery]\nreminder_days = {written}\n"),
-                    "reminder_days",
-                    &format!("recovery.reminder_days must be a whole number of days from 7 to 365, not {shown}"),
-                );
-            });
+        [
+            ("30.5", "30.5"),
+            ("30.0", "30.0"),
+            ("\"soon\"", "\"soon\""),
+            ("true", "true"),
+            ("[30]", "an array"),
+            ("{ days = 30 }", "a table or date-time"),
+            ("1979-05-27", "a table or date-time"),
+            ("-9223372036854775809", "-9223372036854775809"),
+            ("18446744073709551616", "18446744073709551616"),
+        ]
+        .iter()
+        .for_each(|(written, shown)| {
+            invalid(
+                &format!("{SPEC_EXAMPLE}\n[recovery]\nreminder_days = {written}\n"),
+                "reminder_days",
+                &format!("recovery.reminder_days must be a whole number of days from 7 to 365, not {shown}"),
+            );
+        });
         invalid(
             &format!("{SPEC_EXAMPLE}\n[recovery]\nremind = 30\n"),
             "remind",
