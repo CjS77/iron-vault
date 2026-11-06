@@ -140,6 +140,8 @@ The Linux state directory must have mode `0700`. The package must make the binar
 root-owned and unwritable by desktop users. The service must check ownership, permissions, containing directories,
 and unsafe symlinks before trusting its binary, config, state, or socket paths. It must refuse an unsafe installation
 and explain which path failed. Equivalent ACL checks apply on Windows and macOS.
+[`linux-package.md`](linux-package.md) defines the Linux package: its format, the owner and mode of every path it
+installs or creates, its systemd units, and what install, upgrade, remove and purge do.
 
 A user-level installation or user-controlled container may serve development, but it must explicitly report that
 it provides no isolation from malware running as that user. It does not qualify as a supported protected deployment.

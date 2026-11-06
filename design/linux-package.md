@@ -42,7 +42,7 @@ The package depends on `systemd`, which must be the init system, and on `debconf
 ## Ownership
 
 Every path the package installs, and every directory it creates, with the rule that checks it. "Package" in the
-Created by column means a file in the `.deb`'s data archive, so dpkg owns it and removes it on remove.
+Created by column means a file in the `.deb`'s data archive, which dpkg owns and removes.
 
 | Path | Owner:group | Mode | Created by | Trusted-path rule |
 |---|---|---|---|---|
@@ -70,7 +70,8 @@ package installs none of it. The service owns each file, with mode `0600` unless
 - `/etc/iron-vault`: `config.toml`, `config.toml.sig`, `config.toml.lock`, and the approval transaction's pending and
   staged files ([config-approval.md](config-approval.md#where-the-files-live)).
 - `/var/lib/iron-vault`: the vault's files and `lock` ([storage-formats.md](storage-formats.md)).
-- `/run/iron-vault`: `admin.sock`, and any request socket the service binds itself, mode `0666`.
+- `/run/iron-vault`: `admin.sock`, and request sockets with mode `0666`. A request socket that a listener socket unit
+  creates is owned by root instead, which the service also accepts.
 - `/var/log/iron-vault`: `iron-vault.log`, mode `0640`.
 
 Because none of these is a dpkg conffile or in the data archive, dpkg never removes them, which is why
