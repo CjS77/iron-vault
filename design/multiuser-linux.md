@@ -4,9 +4,10 @@ This guide explains one setup from start to finish: a single Linux machine where
 different user accounts, and Iron Vault hands each account only the API access it needs. It assumes no knowledge of
 cryptography, systemd or Linux permissions beyond "each user has their own files".
 
-> **Status:** Iron Vault is still being built. This guide describes the planned behaviour in the
-> [specification](iron-vault-specification.md) ([§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners) for how callers are recognised). Command names and config
-> fields may still change.
+> **Status:** this guide describes the protected Linux installation, which the `.deb` package installs. For the install,
+> `sudo` hardening, encrypted swap, upgrade and uninstall, see [linux-install.md](linux-install.md). Callers are
+> recognised as in [§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners) of the
+> [specification](iron-vault-specification.md).
 
 ## The situation
 
@@ -100,12 +101,13 @@ account's routes, and only within that account's limits. You can replace it with
 
 ## Setting it up
 
-The steps below are the planned flow. Run the `sudo` commands from `alice`'s terminal.
+Run the `sudo` commands from `alice`'s terminal.
 
 ### 1. Install the package
 
-The package creates the `iron-vault` account and its private directories, and installs Iron Vault as a system
-service that starts at boot:
+Follow [linux-install.md](linux-install.md#before-you-install) to harden `sudo` and check that swap is encrypted, then
+install the `.deb`. The package creates the `iron-vault` account and its private directories, and installs Iron Vault as
+a system service that starts at boot, Locked:
 
 | Path                         | Owner        | Who else can get in                                |
 |------------------------------|--------------|----------------------------------------------------|
@@ -119,24 +121,29 @@ service that starts at boot:
 sudo iron-vault init
 ```
 
-This creates the encryption keys, asks you to choose a passphrase, and shows you a **recovery key** once. Write the
-recovery key down or store it in your password manager: it is how you get back in if you forget the passphrase.
+This creates the encryption keys, asks you to choose a vault passphrase and an approval passphrase, and shows you a
+**recovery key** once. Write the recovery key down or store it in your password manager: it is how you get back in if you
+forget the passphrase. Then unlock the vault, which you do again after every restart or upgrade:
+
+```sh
+sudo iron-vault unlock
+```
 
 > **Why `sudo`, and not just `alice`?** Admin commands only work for root or the `iron-vault` account. If plain
 > `alice` could run them, malware in `alice`'s account could too. Going through `sudo` means typing your password
-> each time. Approving a config change *also* needs your Iron Vault passphrase, so a hijacked `sudo` session alone
-> isn't enough.
+> each time, if you set `sudo` up as [linux-install.md](linux-install.md#harden-sudo) recommends. Approving a config
+> change *also* needs your Iron Vault passphrase, so a hijacked `sudo` session alone isn't enough.
 
 ### 3. Add the credentials
 
 ```sh
-sudo iron-vault add github
-sudo iron-vault add tradingdesk
-sudo iron-vault add coingecko
+sudo iron-vault add github --origin api.github.com
+sudo iron-vault add tradingdesk --origin api.tradingdesk.example
+sudo iron-vault add coingecko --origin api.coingecko.com
 ```
 
-Iron Vault asks for each key at a prompt, not on the command line, so it never lands in your shell history. It also
-asks which website the key may be sent to (for example `api.github.com`). That choice is locked in with the key: a
+Iron Vault asks for each key at a prompt, not on the command line, so it never lands in your shell history. The
+`--origin` option names the website the key may be sent to. That choice is locked in with the key: a
 later config change can never send the GitHub token anywhere else.
 
 Once a key is in, delete the old copies from config files and environment variables.
@@ -223,10 +230,10 @@ rate_limit = { requests = 300, per_seconds = 60, burst = 30 }
 ### 5. Approve the config
 
 ```sh
-sudo iron-vault config approve
+sudo iron-vault config approve config.toml
 ```
 
-Iron Vault reads the new config, checks it, and shows you its own summary of what will change. If it looks right,
+Save the config above as `config.toml`. Iron Vault reads it, checks it, and shows you its own summary of what will change. If it looks right,
 you approve it. Approving needs your Iron Vault passphrase.
 
 Iron Vault only ever runs a config you approved. If someone edits the file behind your back, or puts back an older

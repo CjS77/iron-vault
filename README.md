@@ -7,8 +7,9 @@ authenticates the caller, checks its route, adds the credential, and forwards th
 The application holds at most a local caller token that grants specific routes; it never needs the provider secret.
 
 **Status:** v0 in progress, Linux only. The proxy works end to end in [development mode](#development-mode): you
-can create a vault, store credentials, approve a config and send requests through it. There is no protected
-installation package yet, so don't rely on it to protect real secrets. The
+can create a vault, store credentials, approve a config and send requests through it. The Debian package for a
+[protected Linux installation](#protected-installation-linux) is built from this repository, but it has not had a release
+check on a real machine yet, so don't rely on it to protect real secrets. The
 [product specification](design/iron-vault-specification.md) defines the requirements, roadmap, threat mitigations, and
 release checks.
 
@@ -39,7 +40,7 @@ Still to come in v0:
 
 - recovery-key check, recipient add and remove, migration, and reset;
 - TPM unlock and TPM approval signing;
-- a Linux system-service package (the protected installation) and a Docker Compose profile;
+- a Docker Compose profile;
 - the v0 release acceptance suite.
 
 Later phases add OAuth login and refresh, owner notifications, vault passphrase attempt limits, more credential kinds
@@ -80,6 +81,22 @@ inspect it; TPM encryption does not protect secrets after the service unwraps th
 must keep vault storage, unlock material, and deployment files outside ordinary callers' control. See the
 [security requirements](design/iron-vault-specification.md#12-security-promise-and-limits) and
 [deployment requirements](design/iron-vault-specification.md#314-docker-remote-servers-and-appliances).
+
+## Protected installation (Linux)
+
+On Linux the `.deb` package runs Iron Vault as the `iron-vault` system service, with its vault in `/var/lib/iron-vault`
+out of reach of ordinary accounts:
+
+```sh
+sudo apt install ./iron-vault_*.deb    # build it with scripts/build-deb.sh
+sudo iron-vault init
+sudo iron-vault unlock
+```
+
+The [installation guide](design/linux-install.md) covers what the protection depends on: `sudo` credential caching and a
+second factor, encrypted swap and hibernation storage. It also covers adding a TCP listener, upgrading (the service
+restarts Locked, so run `unlock` again), and uninstalling and purging (the vault is kept unless you say otherwise). The
+[multi-user guide](design/multiuser-linux.md) shows a complete setup.
 
 ## Development mode
 
