@@ -224,3 +224,77 @@ fn replace_needs_an_origin_and_at_most_32() {
     assert_eq!((error.kind(), error.exit_code()), (ErrorKind::TooManyValues, 2));
     assert!(error.to_string().contains("`replace` takes at most 32"), "{error}");
 }
+
+#[test]
+fn completions_bash_parses_and_unknown_shell_lists_bash() {
+    assert_eq!(
+        parse(&["completions", "bash"]).unwrap().command,
+        Command::Completions {
+            shell: CompletionShell::Bash
+        }
+    );
+    let err = parse(&["completions", "tcsh"]).unwrap_err();
+    assert_eq!(err.exit_code(), 2);
+    assert!(err.to_string().contains("bash"), "{err}");
+}
+
+fn bash_script() -> String {
+    String::from_utf8(completions::script(CompletionShell::Bash)).unwrap()
+}
+
+#[test]
+// clap_complete turns the `-` in the binary name into `__` in the function name.
+fn bash_script_defines_the_function_and_names_every_command() {
+    let script = bash_script();
+    assert!(script.contains("_iron__vault()"), "{script}");
+    let command = Cli::command();
+    let missing: Vec<_> = command
+        .get_subcommands()
+        .map(|c| c.get_name())
+        .chain(["approve"])
+        .filter(|name| !script.contains(name))
+        .collect();
+    assert!(missing.is_empty(), "missing {missing:?}");
+}
+
+#[test]
+fn bash_script_is_deterministic() {
+    assert_eq!(bash_script(), bash_script());
+}
+
+#[test]
+fn bash_script_passes_bash_syntax_check() {
+    use std::io::Write as _;
+    use std::process::{Command as Process, Stdio};
+    let Ok(mut child) = Process::new("bash").arg("-n").stdin(Stdio::piped()).spawn() else {
+        eprintln!("skipped: bash is not on PATH");
+        return;
+    };
+    child.stdin.take().unwrap().write_all(bash_script().as_bytes()).unwrap();
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn completions_need_no_runtime_directory_or_service() {
+    // The generator takes no environment and no socket; writing to a buffer must succeed regardless.
+    let mut out = Vec::new();
+    completions::write_script(&mut out, CompletionShell::Bash).unwrap();
+    assert!(!out.is_empty());
+}
+
+#[test]
+fn a_closed_pipe_is_a_typed_error() {
+    struct Closed;
+    impl std::io::Write for Closed {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    assert!(matches!(
+        completions::write_script(&mut Closed, CompletionShell::Bash),
+        Err(completions::CompletionsError::Write(_))
+    ));
+}

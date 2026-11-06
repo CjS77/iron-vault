@@ -111,6 +111,16 @@ must be owned by you or root, and none may be writable by group or others. A bui
 under a `0775` checkout) is refused with a message naming the directory. Installing under
 `~/.local` usually avoids this.
 
+### Shell completion
+
+Bash completion is generated from the same command definitions the CLI parses, and needs no running service:
+
+```sh
+iron-vault completions bash > ~/.local/share/bash-completion/completions/iron-vault
+```
+
+or add `source <(iron-vault completions bash)` to `~/.bashrc`.
+
 ### Harden the install
 
 THe vault service won't start unless the executable chain is owner-only, so remove group write access to the vault chain:

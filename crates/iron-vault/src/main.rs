@@ -48,6 +48,8 @@ fn run() -> anyhow::Result<ExitCode> {
             cli::replace(cli.admin_socket.as_deref(), name, kind.into(), &origins)
         })),
         Command::Rm { name } => Ok(run_client(|| cli::rm(cli.admin_socket.as_deref(), name))),
+        // Not a client command: it reads nothing from the service, so it skips the admin socket and core-dump handling.
+        Command::Completions { shell } => cli::completions(shell).map(|()| ExitCode::SUCCESS).map_err(Into::into),
         Command::Config(ConfigCommand::Approve { file }) => Ok(run_client(|| cli::config_approve(cli.admin_socket.as_deref(), &file))),
     }
 }

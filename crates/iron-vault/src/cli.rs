@@ -14,6 +14,7 @@
 mod caller_token;
 #[cfg(target_os = "linux")]
 mod client;
+mod completions;
 #[cfg(target_os = "linux")]
 mod console;
 #[cfg(target_os = "linux")]
@@ -151,6 +152,19 @@ pub enum Command {
     /// Change the approved configuration.
     #[command(subcommand)]
     Config(ConfigCommand),
+    /// Print a shell completion script to stdout. It never contacts the service, so it also runs at build time.
+    Completions {
+        /// The shell to generate the script for.
+        #[arg(value_enum)]
+        shell: CompletionShell,
+    },
+}
+
+/// The shells `completions` can generate a script for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CompletionShell {
+    /// Bash, through the bash-completion framework.
+    Bash,
 }
 
 /// The credential kinds `add --kind` and `replace --kind` name.
@@ -234,6 +248,8 @@ fn too_many_origins(command: &str) -> clap::Error {
         format!("`{command}` takes at most {MAX_ORIGINS} --origin values"),
     )
 }
+
+pub use completions::completions;
 
 /// `iron-vault ping`: sends `ping` to the admin socket at `socket`, or this installation's, and shows the answer.
 #[cfg(target_os = "linux")]

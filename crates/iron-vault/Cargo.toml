@@ -24,6 +24,8 @@ brotli.workspace = true
 # The upstream client's response body chunks, and the bytes the scrubber releases from them.
 bytes.workspace = true
 clap.workspace = true
+# `completions` generates the shell script from the same `Cli` definition the parser uses.
+clap_complete.workspace = true
 # The gzip and deflate response decoders.
 flate2.workspace = true
 # The `Stream` trait of the upstream client's upstream body.

@@ -24,6 +24,7 @@ brotli = { version = "8.0.4", default-features = false, features = ["std"] }
 bytes = "1.12.1"
 # The binary's argument parser. Default features are off: colour, suggestions and terminal-width detection are not
 # needed, and leaving them out keeps their dependencies out of the build.
+clap_complete = { version = "4.6", default-features = false }
 clap = { version = "4.6", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
 # Approval signing and verification. zeroize clears the software signer's private key and its expanded form on drop;
 # std, fast tables and rand_core stay off: verify_strict needs no feature, and key generation fills the seed from
