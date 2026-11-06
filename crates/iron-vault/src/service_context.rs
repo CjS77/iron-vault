@@ -40,6 +40,7 @@ use iron_vault_store::{
     unlock_with_passphrase,
 };
 use tokio::sync::{Mutex, OwnedMutexGuard, watch};
+use tokio::time::Instant;
 
 use crate::admin::protocol::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 use crate::audit::vault::{LockIncomplete, UnlockRefused};
@@ -48,6 +49,7 @@ use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_chec
 use crate::deployment::PasswdDirectory;
 use crate::hardening::HardeningReport;
 use crate::logging::{LogSwitch, OpenedLog};
+use crate::migration_authorization::PendingMigration;
 use crate::request_listeners::RequestListeners;
 use crate::service_state::{AdminOperation, IllegalTransition, RequestInterface, ServiceEvent, ServiceState, UnavailableReason, next};
 use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder, Withdrawn};
@@ -239,6 +241,9 @@ struct Inner {
     /// The check generation: how many config checks the service has run. An approval commits only at the generation it
     /// started at, because each check discards uncommitted pending files.
     checks: u64,
+    /// The one pending migration challenge, measured from the clock origin fixed when the service starts. `lock`
+    /// retires it, so no challenge outlives the vault identity it was issued under.
+    migration: PendingMigration,
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
@@ -269,6 +274,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 identity: None,
                 open: None,
                 checks: 0,
+                migration: PendingMigration::new(Instant::now()),
                 serving: Some(Serving::start(
                     listeners,
                     Limits::default(),
@@ -370,10 +376,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     ///
     /// First it cancels an approval waiting at a prompt, which has reserved nothing, and waits for the service-wide lock:
     /// an approval past its prompts, or a config check, holds it for seconds. Then, under the context's mutex, it stops
-    /// admitting requests, withdraws the serving snapshot (cancelling the requests running on it) and drops the approval
-    /// state, the credential report and the context's copy of the vault identity, so no later change interleaves.
-    /// Unavailable has no snapshot to withdraw, so there the identity is cleared at once unless something else still
-    /// holds it. Both locks are then released and the call waits up to `drain` for the last holder of the old snapshot,
+    /// admitting requests, withdraws the serving snapshot (cancelling the requests running on it), drops the approval
+    /// state, the credential report and the context's copy of the vault identity, and retires any pending migration
+    /// challenge, so no later change interleaves. Unavailable has no snapshot to withdraw, so there the identity is
+    /// cleared at once unless something else still holds it. Both locks are then released and the call waits up to `drain` for the last holder of the old snapshot,
     /// a streaming response body included, to drop it, so a slow request does not stall the other admin commands. The
     /// vault in that snapshot holds the last reference to the identity, so the identity is cleared with it. If the drain
     /// expires, or the identity is still held, it logs a warning and returns an outcome other than
@@ -384,8 +390,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         Ok(lock_outcome(snapshots, identity.strong_count()))
     }
 
-    /// The locked half of [`lock`](Self::lock): moves to Locked, withdraws the snapshot and drops what the context keeps
-    /// of the vault. Returns the withdrawn snapshots and a weak reference to the dropped identity, to see whether it is
+    /// The locked half of [`lock`](Self::lock): moves to Locked, withdraws the snapshot, drops what the context keeps
+    /// of the vault and retires the pending migration challenge. Returns the withdrawn snapshots and a weak reference to the dropped identity, to see whether it is
     /// cleared.
     async fn withdraw_for_lock(&self) -> Result<(Withdrawn, Weak<VaultIdentity>), IllegalTransition> {
         let _request = LockRequest::announce(&self.lock_requests);
@@ -396,6 +402,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         // Refusing first closes the gate and cancels the in-flight requests before anything else changes.
         let withdrawn = self.holder.refuse(UnavailableReason::Locked);
         inner.open = None;
+        inner.migration.retire();
         let identity = inner.identity.take().as_ref().map_or_else(Weak::new, Arc::downgrade);
         inner.state = state;
         log_lock_transition(from, state);
@@ -483,6 +490,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     #[cfg(any(test, feature = "test-support"))]
     pub async fn identity_probe(&self) -> Option<std::sync::Weak<VaultIdentity>> {
         self.inner.lock().await.identity.as_ref().map(Arc::downgrade)
+    }
+
+    /// The pending migration slot, so a test can issue a challenge before any command does and see `lock` retire it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn pending_migration(&self) -> tokio::sync::MappedMutexGuard<'_, PendingMigration> {
+        tokio::sync::MutexGuard::map(self.inner.lock().await, |inner| &mut inner.migration)
     }
 
     /// Advances the check generation without running a check. A config check waits for the service-wide lock an

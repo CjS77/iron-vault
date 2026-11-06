@@ -39,6 +39,7 @@ use iron_vault::admin::socket::AdminSocket;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
+use iron_vault::migration_authorization::{MigrationOperation, MigrationRefusal};
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{LockOutcome, ServiceContext, ServiceLocks, ServiceSetup, StartError};
 use iron_vault::service_state::{FailureReason, IllegalTransition, ListenerProvenance, ServiceEvent, ServiceState, UnavailableReason};
@@ -52,7 +53,8 @@ use iron_vault_policy::{Capabilities, CredentialKind, ListenerName};
 use iron_vault_store::{
     ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDirLock, LockError, OperationalIdentity, OsFs,
     Passphrase, PendingConfig, PermittedOrigins, PinnedApprover, RecipientSet, RecordDamage, SignError, SignatureAlgorithm, StateDirLock,
-    StoreFs, Vault, VaultIdentity, seal_passphrase_envelope_for_tests, wrap_identity, write_identity_envelope, write_passphrase_envelope,
+    StoreFs, Vault, VaultId, VaultIdentity, seal_passphrase_envelope_for_tests, wrap_identity, write_identity_envelope,
+    write_passphrase_envelope,
 };
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1173,6 +1175,31 @@ async fn lock_from_unavailable_clears_the_kept_vault_identity() {
     assert_eq!((report.state, report.vault), (ServiceState::Locked, VaultStatus::Locked));
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
     assert!(logs.has_transition("unavailable", "locked", None), "{}", logs.text());
+}
+
+#[tokio::test]
+async fn lock_retires_the_pending_migration_challenge() {
+    let fixture = approved().await;
+    let service = ready_service(&fixture).await;
+    let digest = service
+        .pending_migration()
+        .await
+        .issue(
+            VaultId::new_random(),
+            MigrationOperation::Export,
+            tokio::time::Instant::now(),
+            [7; 32],
+        )
+        .unwrap();
+
+    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+
+    let mut pending = service.pending_migration().await;
+    assert!(!pending.is_pending(), "the challenge outlived the lock");
+    assert_eq!(
+        pending.take(&digest, tokio::time::Instant::now()).unwrap_err(),
+        MigrationRefusal::NotPending
+    );
 }
 
 #[tokio::test]

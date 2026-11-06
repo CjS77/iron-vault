@@ -12,7 +12,7 @@ rust-version.workspace = true
 dev-mode = []
 # Test hooks for integration tests: pinning a test CA from PEM bytes (`UpstreamTrust::pinned_from_pem`), skipping the
 # trusted-path rule that a test tree under a group-writable directory cannot pass, and the service context's
-# `identity_probe` and `advance_check_generation`. Only this crate's own dev-dependency enables it.
+# `identity_probe`, `advance_check_generation` and `pending_migration`. Only this crate's own dev-dependency enables it.
 test-support = []
 
 [dependencies]
