@@ -3,21 +3,26 @@
 //! the owner authorized that one migration operation.
 //!
 //! Pure domain logic: the clock and the nonce are arguments, so the replay, expiry and binding rules are deterministic
-//! under test. The source-owner methods that prove a challenge live beside this module and construct an authorization
-//! through it; nothing else can.
+//! under test. The source-owner methods that prove a challenge live in [`method`], whose one proving path is the only
+//! constructor of a [`MigrationAuthorization`].
 
 mod attempt_limit;
 mod challenge;
+mod method;
 mod pending;
 #[cfg(test)]
 mod tests;
 
 use iron_vault_store::{RecipientKey, VaultId};
+
+use crate::service_state::ServiceState;
 use thiserror::Error;
 use tokio::time::Instant;
 
-pub use attempt_limit::{AttemptLimiter, BASE_COOLDOWN, FAILURE_THRESHOLD, MAX_COOLDOWN, RateLimited};
+pub use attempt_limit::{AttemptLimiter, AttemptsCoolingDown, BASE_COOLDOWN, FAILURE_THRESHOLD, MAX_COOLDOWN};
 pub use challenge::{BindingDigest, CHALLENGE_LIFETIME, MigrationChallenge};
+pub(crate) use method::prove_challenge;
+pub use method::{MethodRefusal, OwnerRefusal, SourceOwnerMethod, VaultPassphraseMethod};
 pub use pending::{ChallengeBusy, PendingMigration};
 
 /// What a migration authorization permits (glossary: *Migration operation*).
@@ -58,8 +63,12 @@ impl MigrationOperation {
     }
 }
 
-/// Why the pending slot or a consuming operation refused a migration authorization. Each ends the exchange with
-/// `migration-denied`; the messages are fixed phrases and hold no owner input.
+/// Why a migration authorization was refused, at its issue, its proof or its consumption. The messages are fixed phrases
+/// and hold no owner input.
+///
+/// `Expired`, `NotPending`, `BindingMismatch` and `Denied` end the exchange with `migration-denied`, `Unavailable` and a
+/// `WrongState` of Locked (a `lock` during the check) with `migration-unavailable`, `AttemptsCoolingDown` with
+/// `migration-rate-limited`, and `Busy` and any other `WrongState` with the admin protocol's `busy` and `wrong-state`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MigrationRefusal {
     /// The challenge was taken, or the authorization consumed, at or after its expiry.
@@ -71,15 +80,46 @@ pub enum MigrationRefusal {
     /// The consuming operation's vault ID, operation or destination is not the authorization's.
     #[error("the migration authorization is for another migration")]
     BindingMismatch,
+    /// The source-owner method checked the owner's input, and it proves no authority.
+    #[error("migration authorization was refused: {0}")]
+    Denied(OwnerRefusal),
+    /// The passphrase attempt limit is in a cooldown, so no input was asked for or checked.
+    #[error(transparent)]
+    AttemptsCoolingDown(AttemptsCoolingDown),
+    /// The service is not Ready holding the vault identity, or it locked while the method ran.
+    #[error("migration authorization is not allowed while the service is {0:?}")]
+    WrongState(ServiceState),
+    /// The source-owner factor could not be checked, or the random source failed, so nothing was judged.
+    #[error("migration authorization could not be checked")]
+    Unavailable,
+    /// A challenge is already pending, so no other is issued.
+    #[error(transparent)]
+    Busy(#[from] ChallengeBusy),
 }
 
 impl MigrationRefusal {
-    /// The label the audit events' `refusal` field records.
+    /// The label the audit events' `refusal` field records. A `lock` during the check is the design's `locked`;
+    /// `busy` and any other wrong state end an exchange before its challenge is issued, so no audit event carries them.
     pub fn label(self) -> &'static str {
         match self {
             Self::Expired => "expired",
             Self::NotPending => "not_pending",
             Self::BindingMismatch => "binding_mismatch",
+            Self::Denied(refusal) => refusal.label(),
+            Self::AttemptsCoolingDown(_) => "rate_limited",
+            Self::WrongState(ServiceState::Locked) => "locked",
+            Self::WrongState(_) => "wrong_state",
+            Self::Unavailable => "unavailable",
+            Self::Busy(_) => "busy",
+        }
+    }
+}
+
+impl From<MethodRefusal> for MigrationRefusal {
+    fn from(refusal: MethodRefusal) -> Self {
+        match refusal {
+            MethodRefusal::Owner(owner) => Self::Denied(owner),
+            MethodRefusal::Unavailable => Self::Unavailable,
         }
     }
 }
@@ -89,13 +129,50 @@ impl MigrationRefusal {
 /// Only this module and the source-owner methods beside it construct one, from a challenge a method has just proved.
 /// It has no `Clone` or `Copy` and is never serialized, so it is consumed exactly once, by the operation it permits.
 /// Its `Debug` shows only the operation and the expiry.
+///
+/// Being unlocked is not enough: nothing about the service's state makes one. Code outside this crate cannot build one
+/// from its field, cannot call its private constructor, and cannot write a source-owner method that proves every
+/// challenge, because the trait is sealed:
+///
+/// ```compile_fail,E0451
+/// use iron_vault::migration_authorization::{MigrationAuthorization, MigrationChallenge};
+///
+/// fn forge(challenge: MigrationChallenge) -> MigrationAuthorization {
+///     MigrationAuthorization { challenge }
+/// }
+/// ```
+///
+/// ```compile_fail,E0624
+/// use iron_vault::migration_authorization::{MigrationAuthorization, MigrationChallenge};
+///
+/// fn forge(challenge: MigrationChallenge) -> MigrationAuthorization {
+///     MigrationAuthorization::proved(challenge)
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// use iron_vault::admin::protocol::OwnerInput;
+/// use iron_vault::migration_authorization::{MethodRefusal, MigrationChallenge, SourceOwnerMethod};
+///
+/// struct AlwaysYes;
+///
+/// impl SourceOwnerMethod for AlwaysYes {
+///     fn label(&self) -> &'static str {
+///         "always_yes"
+///     }
+///
+///     async fn prove(&self, _: &MigrationChallenge, _: OwnerInput) -> Result<(), MethodRefusal> {
+///         Ok(())
+///     }
+/// }
+/// ```
 pub struct MigrationAuthorization {
     challenge: MigrationChallenge,
 }
 
 impl MigrationAuthorization {
     /// The authorization a source-owner method yields once it has proved `challenge`, taken out of the pending slot.
-    #[allow(dead_code, reason = "the source-owner methods (K-209) are its first callers outside tests")]
+    /// Private, so [`method::prove_challenge`] is the only way to one.
     fn proved(challenge: MigrationChallenge) -> Self {
         Self { challenge }
     }

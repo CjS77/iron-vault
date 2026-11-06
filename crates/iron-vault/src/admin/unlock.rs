@@ -72,7 +72,7 @@ impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
 
 /// The owner's input as a vault passphrase. Empty or non-UTF-8 input cannot be the passphrase, which was sealed as
 /// non-empty text, so it is refused as a wrong one. The input's buffer is cleared when it drops here.
-fn vault_passphrase(input: OwnerInput) -> Option<Passphrase> {
+pub(crate) fn vault_passphrase(input: OwnerInput) -> Option<Passphrase> {
     let text = std::str::from_utf8(input.expose_secret()).ok()?;
     Passphrase::new(SecretString::from(text)).ok()
 }

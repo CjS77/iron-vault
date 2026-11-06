@@ -27,7 +27,7 @@ pub mod server;
 #[cfg(target_os = "linux")]
 pub mod socket;
 #[cfg(target_os = "linux")]
-mod unlock;
+pub(crate) mod unlock;
 
 /// The admin socket's file name in the runtime directory, where the service binds it and the CLI looks for it.
 pub const ADMIN_SOCKET_NAME: &str = "admin.sock";

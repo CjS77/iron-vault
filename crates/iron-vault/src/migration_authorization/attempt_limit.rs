@@ -19,10 +19,11 @@ pub const BASE_COOLDOWN: Duration = Duration::from_secs(30);
 pub const MAX_COOLDOWN: Duration = Duration::from_secs(15 * 60);
 
 /// An attempt was refused because the limiter is in a cooldown. The exchange ends with `migration-rate-limited`
-/// before any prompt, so the owner is not asked to type.
+/// before any prompt, so the owner is not asked to type. Its audit refusal label is `rate_limited`, as the design's
+/// tables name it; the type is named apart from a route's rate limiter, which is a different concept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("too many wrong vault passphrases; try again in {retry_after} seconds")]
-pub struct RateLimited {
+pub struct AttemptsCoolingDown {
     /// Whole seconds until an attempt is allowed again, rounded up so waiting this long is always enough.
     pub retry_after: u64,
 }
@@ -44,12 +45,12 @@ impl AttemptLimiter {
     }
 
     /// Whether an attempt may start at `now`. Call it before any prompt.
-    pub fn check(&self, now: Instant) -> Result<(), RateLimited> {
+    pub fn check(&self, now: Instant) -> Result<(), AttemptsCoolingDown> {
         let Some(last) = self.last_failure else { return Ok(()) };
         let remaining = self.cooldown().saturating_sub(now.saturating_duration_since(last));
         match remaining.is_zero() {
             true => Ok(()),
-            false => Err(RateLimited {
+            false => Err(AttemptsCoolingDown {
                 retry_after: remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0),
             }),
         }

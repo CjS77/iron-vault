@@ -1,10 +1,15 @@
 use std::time::Duration;
 
-use iron_vault_store::{RecipientKey, VaultId};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use iron_vault_store::{CheckUnavailable, EnvelopeError, PassphraseCheckError, RecipientKey, VaultId};
 use static_assertions::assert_not_impl_any;
 use tokio::time::{Instant, advance};
+use zeroize::Zeroizing;
 
 use super::*;
+use crate::admin::protocol::OwnerInput;
 
 /// The `age` specification's example recipient, which the design's summary shows.
 const RECIPIENT_A: &str = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p";
@@ -133,9 +138,27 @@ fn labels_are_the_audit_events_own() {
         MigrationRefusal::Expired,
         MigrationRefusal::NotPending,
         MigrationRefusal::BindingMismatch,
+        MigrationRefusal::Denied(OwnerRefusal::WrongSecret),
+        MigrationRefusal::Denied(OwnerRefusal::NotThisVault),
+        MigrationRefusal::AttemptsCoolingDown(AttemptsCoolingDown { retry_after: 30 }),
+        MigrationRefusal::WrongState(ServiceState::Locked),
+        MigrationRefusal::Unavailable,
     ]
     .map(MigrationRefusal::label);
-    assert_eq!(labels, ["expired", "not_pending", "binding_mismatch"]);
+    assert_eq!(
+        labels,
+        [
+            "expired",
+            "not_pending",
+            "binding_mismatch",
+            "wrong_passphrase",
+            "not_this_vault",
+            "rate_limited",
+            "locked",
+            "unavailable"
+        ]
+    );
+    assert_eq!(VaultPassphraseMethod::new(|_| Ok(())).label(), "vault_passphrase");
 }
 
 #[test]
@@ -285,4 +308,67 @@ fn an_authorization_for_a_recipient_authorizes_that_recipient() {
         authorized.operation().destination().map(ToString::to_string).as_deref(),
         Some(RECIPIENT_A)
     );
+}
+
+fn input(bytes: &[u8]) -> OwnerInput {
+    OwnerInput::new(Zeroizing::new(bytes.to_vec()))
+}
+
+/// Proves a fresh `Export` challenge with a passphrase method whose store check answers `answer`.
+async fn prove_with(answer: Result<(), PassphraseCheckError>) -> Result<MigrationAuthorization, MethodRefusal> {
+    let method = VaultPassphraseMethod::new(move |_| answer.clone());
+    let (_, challenge) = taken(MigrationOperation::Export);
+    prove_challenge(&method, challenge, input(b"correct horse")).await
+}
+
+#[tokio::test]
+async fn a_proof_yields_an_authorization_for_the_challenge_it_proved() {
+    let authorization = prove_with(Ok(())).await.unwrap();
+    assert!(
+        authorization
+            .authorize(vault(), &MigrationOperation::Export, Instant::now())
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn the_store_check_maps_to_owner_refusals_or_unavailable() {
+    let unavailable = PassphraseCheckError::Unavailable(CheckUnavailable::PassphraseEnvelope(EnvelopeError::Malformed));
+    assert_eq!(
+        prove_with(Err(PassphraseCheckError::WrongPassphrase)).await.unwrap_err(),
+        MethodRefusal::Owner(OwnerRefusal::WrongSecret)
+    );
+    assert_eq!(
+        prove_with(Err(PassphraseCheckError::NotThisVault)).await.unwrap_err(),
+        MethodRefusal::Owner(OwnerRefusal::NotThisVault)
+    );
+    assert_eq!(prove_with(Err(unavailable)).await.unwrap_err(), MethodRefusal::Unavailable);
+}
+
+#[tokio::test]
+async fn empty_or_non_utf8_input_is_a_wrong_secret_and_never_reaches_the_store() {
+    let checked = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&checked);
+    let method = VaultPassphraseMethod::new(move |_| {
+        seen.store(true, Ordering::SeqCst);
+        Ok(())
+    });
+    for typed in [b"".as_slice(), &[0xff, 0xfe]] {
+        let (_, challenge) = taken(MigrationOperation::Export);
+        let refusal = prove_challenge(&method, challenge, input(typed)).await.unwrap_err();
+        assert_eq!(refusal, MethodRefusal::Owner(OwnerRefusal::WrongSecret));
+    }
+    assert!(
+        !checked.load(Ordering::SeqCst),
+        "the store check ran on input that cannot be the passphrase"
+    );
+}
+
+#[test]
+fn a_method_refusal_ends_as_its_migration_refusal() {
+    assert_eq!(
+        MigrationRefusal::from(MethodRefusal::Owner(OwnerRefusal::NotThisVault)),
+        MigrationRefusal::Denied(OwnerRefusal::NotThisVault)
+    );
+    assert_eq!(MigrationRefusal::from(MethodRefusal::Unavailable), MigrationRefusal::Unavailable);
 }

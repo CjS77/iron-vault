@@ -21,6 +21,7 @@
 mod approval;
 mod init;
 mod log_destination;
+mod migration;
 mod presence;
 mod recovery;
 mod reminder;
@@ -258,10 +259,6 @@ struct Inner {
     /// retires it, so no challenge outlives the vault identity it was issued under.
     migration: PendingMigration,
     /// The passphrase attempt limit. Unlike the pending slot, `lock` leaves it alone, so locking cannot reset a guesser's count.
-    #[allow(
-        dead_code,
-        reason = "the migration source-owner methods (K-209) are its first callers outside tests"
-    )]
     attempts: AttemptLimiter,
 }
 

@@ -36,7 +36,7 @@ iron-vault-kinds = { path = "../iron-vault-kinds" }
 iron-vault-policy = { path = "../iron-vault-policy" }
 # The vault whose healthy credential records a serving snapshot holds.
 iron-vault-store = { path = "../iron-vault-store" }
-# OsRng for caller-token generation; only the binary reaches for the operating system's random source.
+# OsRng for caller-token generation and migration challenge nonces; only the binary reaches for the operating system's random source.
 rand_core = { workspace = true, features = ["getrandom"] }
 # The QR code the owner console draws beside a revealed value.
 qrcode.workspace = true
