@@ -50,11 +50,12 @@ impl UtcSecond {
     fn from_toml(value: &Datetime) -> Option<Self> {
         let (date, time) = (value.date?, value.time?);
         let valid = value.offset == Some(Offset::Z) && time.nanosecond.is_none() && time.second.is_some_and(|s| s <= 59);
+        if !valid {
+            return None;
+        }
         let days = u64::try_from(days_from_civil(i64::from(date.year), i64::from(date.month), i64::from(date.day))).ok()?;
         let seconds = u64::from(time.hour) * 3600 + u64::from(time.minute) * 60 + u64::from(time.second?);
-        valid
-            .then(|| Self::from_unix_seconds(days * SECONDS_PER_DAY + seconds).ok())
-            .flatten()
+        Self::from_unix_seconds(days * SECONDS_PER_DAY + seconds).ok()
     }
 }
 
@@ -207,9 +208,9 @@ pub fn write_recovery_check(lock: &StateDirLock, fs: &impl StoreFs, record: &Rec
     durable_replace(lock, fs, &file(), &record.encode())
 }
 
-/// Removes `recovery.toml` durably and says whether it was there. `init` calls this on an Uninitialized vault, so a new
-/// vault never starts with the `last_checked` of a vault that is gone.
-pub fn remove_recovery_check(lock: &StateDirLock, fs: &impl StoreFs) -> Result<bool, WriteError> {
+/// Removes `recovery.toml` durably and says whether it was there. `begin_initialization` calls this on an Uninitialized
+/// directory, so a new vault never starts with the `last_checked` of a vault that is gone.
+pub(crate) fn remove_recovery_check(lock: &StateDirLock, fs: &impl StoreFs) -> Result<bool, WriteError> {
     match durable_remove(lock, fs, &file()) {
         Ok(()) => Ok(true),
         Err(WriteError::NotFound { .. }) => Ok(false),

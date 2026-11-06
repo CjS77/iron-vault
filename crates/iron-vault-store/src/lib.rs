@@ -96,7 +96,7 @@ pub use recovery::{RecoveryError, RecoveryKey, RecoveryKeySecret};
 pub use recovery_check::{MalformedReason, RecoveryCheck, RecoveryCheckError, check_recovery_key};
 pub use recovery_record::{
     MAX_RECOVERY_CHECK_RECORD_LEN, RecoveryCheckReadError, RecoveryCheckRecord, RecoveryCheckRecordError, UtcSecond, UtcSecondError,
-    read_recovery_check, remove_recovery_check, write_recovery_check,
+    read_recovery_check, write_recovery_check,
 };
 pub use sealed::{OpenError, SealError, open, seal};
 pub use stale_temps::sweep_stale_temps;

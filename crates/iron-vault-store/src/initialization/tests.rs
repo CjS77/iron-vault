@@ -6,7 +6,7 @@ use secrecy::SecretString;
 
 use super::*;
 use crate::ConfigFileName::{Active, ActiveSignature, Pending, StagedSignature};
-use crate::fault_fs::{FaultFs, FsCall};
+use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::test_dir::TestDir;
 use crate::{
     OperationalIdentity, OsFs, Passphrase, PinnedApprover, PublishSet, RecipientIdentity, RecipientSet, Vault, VaultIdentity, publish,
@@ -351,6 +351,25 @@ fn begin_on_a_fresh_directory_writes_only_the_empty_marker() {
     assert_eq!(dirs.state_names(&OsFs), ["init.unfinished", "lock"]);
     assert_eq!(std::fs::read(dirs.marker_path()).unwrap(), b"");
     assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished);
+}
+
+#[test]
+fn begin_removes_a_leftover_recovery_record_without_reporting_it() {
+    let dirs = Dirs::new("init-begin-leftover");
+    dirs.put(&OsFs, "recovery.toml");
+    assert_eq!(dirs.begin(&OsFs), Ok(Vec::new()));
+    assert_eq!(dirs.state_names(&OsFs), ["init.unfinished", "lock"]);
+}
+
+#[test]
+fn begin_leaves_no_marker_when_the_leftover_record_cannot_be_removed() {
+    let dirs = Dirs::new("init-begin-leftover-fault");
+    let fs = dirs.fault_fs();
+    dirs.put(&fs, "recovery.toml");
+    fs.fail_first(FsOp::RemoveFile, io::ErrorKind::Other);
+    assert!(matches!(dirs.begin(&fs), Err(InitStateError::LeftoverRecord(_))));
+    assert_eq!(dirs.state_names(&fs), ["lock", "recovery.toml"]);
+    assert_eq!(dirs.read(&fs), InitializationState::Uninitialized);
 }
 
 #[test]

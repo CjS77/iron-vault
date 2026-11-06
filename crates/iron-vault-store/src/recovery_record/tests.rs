@@ -40,6 +40,10 @@ fn time_text_round_trips_at_the_edges() {
     .iter()
     .for_each(|text| assert_eq!(at(text).to_string(), *text));
     assert_eq!(at("1970-01-01T00:00:00Z").unix_seconds(), 0);
+    // Fixed anchors, so a conversion error cannot hide behind a round trip.
+    assert_eq!(at("2000-03-01T00:00:00Z").unix_seconds(), 951_868_800);
+    assert_eq!(at("2100-03-01T00:00:00Z").unix_seconds(), 4_107_542_400);
+    assert_eq!(at("9999-12-31T23:59:59Z").unix_seconds(), MAX_UNIX_SECONDS);
     assert_eq!(UtcSecond::from_unix_seconds(MAX_UNIX_SECONDS + 1), Err(UtcSecondError));
     assert_eq!(
         UtcSecond::from_system_time(UNIX_EPOCH - std::time::Duration::from_secs(1)),
@@ -70,7 +74,7 @@ fn each_refusal_has_its_own_error() {
         Err(E::CheckedBeforeSince)
     );
     assert_eq!(RecoveryCheckRecord::decode(&vec![b'#'; 1025]), Err(E::TooLarge));
-    assert!(RecoveryCheckRecord::decode(&[b'#'; 1024]).is_err());
+    assert_eq!(RecoveryCheckRecord::decode(&[b'#'; 1024]), Err(E::MissingSince));
 }
 
 #[test]

@@ -10,6 +10,7 @@ use std::io;
 
 use crate::config_dir::remove_config_file;
 use crate::durable::{ReadFailure, ensure_dir_sync_supported, read_in};
+use crate::recovery_record::remove_recovery_check;
 use crate::state_dir::LOCK_FILE;
 use crate::vault::is_record_file_name;
 use crate::{
@@ -43,8 +44,8 @@ const MAX_NAMED: usize = 5;
 /// The checks run in this order and the first that matches decides: `init.unfinished` present (Unfinished, unless a
 /// record file, a foreign file or a config file that is not the initial config is there), else `manifest.age` present
 /// (Initialized, whatever else is there), else only the lock file, `lost+found`, temp files and a recovery check record
-/// (`recovery.toml`) and no config file
-/// (Uninitialized), else Unrecognized. `init` proceeds only on Uninitialized and Unfinished.
+/// (`recovery.toml`) and no config file (Uninitialized), else Unrecognized. `init` proceeds only on Uninitialized and
+/// Unfinished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitializationState {
     /// Nothing of a vault or its config is there.
@@ -92,6 +93,9 @@ pub enum InitStateError {
     /// Writing or removing a state file failed.
     #[error(transparent)]
     State(#[from] WriteError),
+    /// Removing a leftover `recovery.toml` from an Uninitialized directory failed; nothing else was written.
+    #[error("cannot remove the leftover recovery check record: {0}")]
+    LeftoverRecord(WriteError),
     /// Removing a config file failed.
     #[error(transparent)]
     Config(ConfigWriteError),
@@ -152,7 +156,8 @@ pub fn ensure_initializable(
 
 /// Starts an initialization: step 1 of the write order, plus the discard of an earlier unfinished one.
 ///
-/// On Uninitialized this durably writes an empty `init.unfinished`. On Unfinished it durably removes, in an order that
+/// On Uninitialized this durably removes a leftover `recovery.toml`, so the new vault does not inherit the old vault's
+/// `last_checked`, then durably writes an empty `init.unfinished`. The removal is no audit event, so it is not reported. On Unfinished it durably removes, in an order that
 /// never leaves a signature alone, every file an initialization writes, and keeps `init.unfinished`; it returns those
 /// file names for the `vault.init-discarded` log, and a discard that fails part-way names them on its error. On
 /// Initialized and Unrecognized it refuses and changes nothing.
@@ -160,9 +165,11 @@ pub fn begin_initialization(state: &StateDirLock, config: &ConfigDirLock, fs: &i
     match ensure_initializable(state, config, fs)? {
         InitializationState::Unfinished => discard(state, config, fs),
         // Uninitialized: `ensure_initializable` returns no other state.
-        _ => durable_replace(state, fs, &StateFileName::unfinished_initialization(), b"")
+        _ => remove_recovery_check(state, fs)
+            .map_err(InitStateError::LeftoverRecord)
+            .and_then(|_| durable_replace(state, fs, &StateFileName::unfinished_initialization(), b"").map_err(InitStateError::State))
             .map(|()| Vec::new())
-            .map_err(|e| InitStateError::State(e).into()),
+            .map_err(Into::into),
     }
 }
 
@@ -262,8 +269,9 @@ impl Survey {
     }
 }
 
-/// The files a discard removes from the state directory, in order: the recovery check record, which the service wrote
-/// after the vault was initialized, then what an initialization writes except the marker.
+/// The files a discard removes from the state directory, in order: a recovery check record, which beside the marker was
+/// left by an earlier vault and was not written after this one was initialized, then what an initialization writes
+/// except the marker.
 fn written_files() -> [StateFileName; 6] {
     [
         StateFileName::recovery_check_record(),

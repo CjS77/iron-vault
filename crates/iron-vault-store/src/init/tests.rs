@@ -4,6 +4,7 @@ use std::path::Path;
 use secrecy::{ExposeSecret, SecretString};
 
 use super::*;
+use crate::durable_replace;
 use crate::fault_fs::{FaultFs, FsOp};
 use crate::test_dir::TestDir;
 use crate::vault::tests::capture_logs;
@@ -216,11 +217,20 @@ fn an_unrecognized_directory_is_refused_unchanged() {
     });
 }
 
+/// Fails the unlink of `init.unfinished` that ends an initialization. The first unlink is `begin`'s removal of a
+/// leftover recovery check record, so the call is found from a clean run's trace.
+fn fail_finish_unlink(dirs: &Dirs, fs: &FaultFs) {
+    let probe = dirs.fault_fs();
+    dirs.init(&probe).unwrap();
+    let last = probe.trace().iter().rposition(|call| call.op() == FsOp::RemoveFile);
+    last.iter().for_each(|&i| fs.fail_call(fs.trace().len() + i, io::ErrorKind::Other));
+}
+
 #[test]
 fn an_unfinished_initialization_is_discarded_and_started_over() {
     let dirs = Dirs::new("init-discard");
     let fs = dirs.fault_fs();
-    fs.fail_first(FsOp::RemoveFile, io::ErrorKind::Other);
+    fail_finish_unlink(&dirs, &fs);
     let error = dirs.init(&fs).unwrap_err();
     assert_eq!(error.step(), InitStep::Finish);
     assert_eq!(dirs.read(&fs), InitializationState::Unfinished);
@@ -245,7 +255,7 @@ const DISCARDED: [&str; 7] = [
 fn a_step_failing_after_a_discard_still_names_the_discarded_files() {
     let dirs = Dirs::new("init-discard-then-fail");
     let fs = dirs.fault_fs();
-    fs.fail_first(FsOp::RemoveFile, io::ErrorKind::Other);
+    fail_finish_unlink(&dirs, &fs);
     assert!(dirs.init(&fs).unwrap_err().discarded().is_empty());
     fs.fail_first(FsOp::Rename, io::ErrorKind::Other);
     let error = dirs.init(&fs).unwrap_err();
@@ -270,6 +280,7 @@ fn the_first_approval_is_reported_with_the_initial_config_digest_and_not_logged(
 fn assert_left_by(dirs: &Dirs, fs: &FaultFs, error: &InitError, call: usize) {
     let state = dirs.read(fs);
     let expected: &[InitializationState] = match (error.step(), error.cause()) {
+        (InitStep::Discard, InitFailure::State(InitStateError::LeftoverRecord(_))) => &[InitializationState::Uninitialized],
         (InitStep::Begin, _) => &[InitializationState::Uninitialized, InitializationState::Unfinished],
         (InitStep::Finish, InitFailure::State(InitStateError::FinishUncertain { .. })) => &[InitializationState::Initialized],
         _ => &[InitializationState::Unfinished],
@@ -348,12 +359,28 @@ fn a_fault_at_any_call_of_a_fresh_initialization_is_recoverable() {
 fn a_fault_while_discarding_an_unfinished_initialization_is_recoverable() {
     let dirs = Dirs::new("init-faults-unfinished");
     let unfinished = |fs: &FaultFs| {
-        fs.fail_first(FsOp::RemoveFile, io::ErrorKind::Other);
+        fail_finish_unlink(&dirs, fs);
         assert_eq!(dirs.init(fs).unwrap_err().step(), InitStep::Finish);
     };
     let calls = calls_of(&dirs, &unfinished, |fs| drop(begin(&dirs.state, &dirs.config, fs).unwrap()));
     let failed = fail_each_call(&dirs, unfinished, calls);
     assert_every_step_failed(&failed, &[InitStep::Discard]);
+}
+
+/// A failed removal of a leftover `recovery.toml` is a failed discard; the marker is never written.
+#[test]
+fn a_fault_removing_a_leftover_recovery_record_fails_the_discard_step() {
+    let dirs = Dirs::new("init-faults-leftover-record");
+    let fs = dirs.fault_fs();
+    durable_replace(&dirs.state, &fs, &StateFileName::recovery_check_record(), b"x").unwrap();
+    fs.fail_first(FsOp::RemoveFile, io::ErrorKind::Other);
+    let error = dirs.init(&fs).unwrap_err();
+    assert_eq!(error.step(), InitStep::Discard);
+    assert_eq!(
+        InitializationState::read(&dirs.state, &dirs.config, &fs),
+        Ok(InitializationState::Uninitialized)
+    );
+    assert!(!fs.list_dir(dirs.state_dir.path()).unwrap().iter().any(|n| n == "init.unfinished"));
 }
 
 #[test]

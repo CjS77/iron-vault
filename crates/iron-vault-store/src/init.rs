@@ -286,12 +286,14 @@ fn write_vault<F: StoreFs>(
 /// The discard and step 1. The state is read first only to name the step a failure belongs to: with the service-wide
 /// lock held, nothing else changes it before `begin_initialization` reads it again.
 fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, InitError> {
-    let step = match InitializationState::read(state, config, fs).map_err(at(InitStep::Begin))? {
-        InitializationState::Unfinished => InitStep::Discard,
-        _ => InitStep::Begin,
-    };
+    let unfinished = InitializationState::read(state, config, fs).map_err(at(InitStep::Begin))? == InitializationState::Unfinished;
     begin_initialization(state, config, fs).map_err(|BeginError { cause, discarded }| InitError {
-        step,
+        // Removing a leftover recovery check record is part of the discard; a failed marker write is `Begin`.
+        step: if unfinished || matches!(cause, InitStateError::LeftoverRecord(_)) {
+            InitStep::Discard
+        } else {
+            InitStep::Begin
+        },
         cause: cause.into(),
         discarded: discarded.into(),
         approved: None,
