@@ -42,7 +42,8 @@ const MAX_NAMED: usize = 5;
 ///
 /// The checks run in this order and the first that matches decides: `init.unfinished` present (Unfinished, unless a
 /// record file, a foreign file or a config file that is not the initial config is there), else `manifest.age` present
-/// (Initialized, whatever else is there), else only the lock file, `lost+found` and temp files and no config file
+/// (Initialized, whatever else is there), else only the lock file, `lost+found`, temp files and a recovery check record
+/// (`recovery.toml`) and no config file
 /// (Uninitialized), else Unrecognized. `init` proceeds only on Uninitialized and Unfinished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitializationState {
@@ -226,6 +227,8 @@ enum Entry {
     Manifest,
     /// Another file an initialization writes.
     InitFile,
+    /// `recovery.toml`: part of the vault beside a manifest, removed by the discard, and never a foreign file.
+    RecoveryRecord,
     /// A `record-*.age` file.
     Record,
     /// Anything else.
@@ -259,9 +262,11 @@ impl Survey {
     }
 }
 
-/// The files an initialization writes to the state directory except the marker, in the order a discard removes them.
-fn written_files() -> [StateFileName; 5] {
+/// The files a discard removes from the state directory, in order: the recovery check record, which the service wrote
+/// after the vault was initialized, then what an initialization writes except the marker.
+fn written_files() -> [StateFileName; 6] {
     [
+        StateFileName::recovery_check_record(),
         StateFileName::approval_state(),
         StateFileName::manifest(),
         StateFileName::approver_key(),
@@ -278,6 +283,7 @@ fn classify(name: &OsStr) -> Entry {
     match StateFileName::new(text) {
         Ok(file) if file == StateFileName::unfinished_initialization() => Entry::Marker,
         Ok(file) if file == StateFileName::manifest() => Entry::Manifest,
+        Ok(file) if file == StateFileName::recovery_check_record() => Entry::RecoveryRecord,
         Ok(file) if written_files().contains(&file) => Entry::InitFile,
         Ok(file) if is_record_file_name(file.as_str()) => Entry::Record,
         _ => Entry::Foreign,
@@ -303,7 +309,9 @@ fn survey(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Re
         return Ok(Survey::new(InitializationState::Initialized, Vec::new()).with_foreign(foreign));
     }
     let config_files = present_config_files(config, fs)?.into_iter().map(|f| f.to_string());
-    let blockers = names_where(|k| k != Entry::Ignored).chain(config_files).collect();
+    let blockers = names_where(|k| !matches!(k, Entry::Ignored | Entry::RecoveryRecord))
+        .chain(config_files)
+        .collect();
     Ok(Survey::new(InitializationState::Uninitialized, blockers))
 }
 

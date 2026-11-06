@@ -74,6 +74,11 @@ impl StateFileName {
         Self("init.unfinished".to_owned())
     }
 
+    /// The recovery check record's file, `recovery.toml`.
+    pub fn recovery_check_record() -> Self {
+        Self("recovery.toml".to_owned())
+    }
+
     /// The file of the credential record with ID `id`: `record-<id>.age`. A record ID's text uses only `[0-9a-f-]`, so
     /// the name always passes [`StateFileName::new`].
     pub fn record(id: &RecordId) -> Self {

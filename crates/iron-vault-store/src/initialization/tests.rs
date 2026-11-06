@@ -209,6 +209,35 @@ fn a_foreign_file_beside_a_manifest_is_still_initialized() {
 }
 
 #[test]
+fn the_recovery_record_is_never_a_foreign_file() {
+    let dirs = Dirs::new("init-recovery-record");
+    Vault::create(&dirs.state, &OsFs, VaultIdentity::generate()).unwrap();
+    dirs.put(&OsFs, "recovery.toml");
+    assert_eq!(dirs.read(&OsFs), InitializationState::Initialized);
+    assert_eq!(require_initialized(&dirs.state, &dirs.config, &OsFs), Ok(Vec::new()));
+}
+
+#[test]
+fn a_leftover_recovery_record_leaves_the_state_uninitialized() {
+    let dirs = Dirs::new("init-recovery-leftover");
+    dirs.put(&OsFs, "recovery.toml");
+    assert_eq!(dirs.read(&OsFs), InitializationState::Uninitialized);
+    dirs.put(&OsFs, "identity.age");
+    assert_eq!(dirs.read(&OsFs), InitializationState::Unrecognized);
+}
+
+#[test]
+fn a_recovery_record_beside_the_marker_is_discarded() {
+    let dirs = Dirs::new("init-recovery-discard");
+    dirs.crashed_after(&OsFs, 2);
+    dirs.put(&OsFs, "recovery.toml");
+    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished);
+    let removed = dirs.begin(&OsFs).unwrap();
+    assert!(removed.contains(&"recovery.toml".to_owned()), "{removed:?}");
+    assert_eq!(dirs.state_names(&OsFs), ["init.unfinished", "lock"]);
+}
+
+#[test]
 fn require_initialized_returns_the_sorted_foreign_names_beside_a_manifest() {
     let dirs = Dirs::new("init-require-foreign");
     Vault::create(&dirs.state, &OsFs, VaultIdentity::generate()).unwrap();

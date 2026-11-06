@@ -16,6 +16,7 @@ iron-vault-policy = { path = "../iron-vault-policy" }
 secrecy.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+toml.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
