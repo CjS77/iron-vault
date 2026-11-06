@@ -120,6 +120,7 @@ an error.
 | `9` | `list` | none | the [credential list](#list) |
 | `10` | `replace` | the credential name, kind and permitted origins, as `add` | the new [record ID](#replace) |
 | `11` | `rm` | the credential name | none |
+| `12` | `recovery check` | none | the vault ID, the check time and whether the [check was recorded](#recovery-check) |
 
 **No command accepts an external signature** ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -451,6 +452,48 @@ Errors specific to `init`:
 | `declined` | the owner did not answer the recovery key confirmation with `yes`; the message says the recovery key shown opens nothing and is to be discarded |
 | `init-failed` | a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: a start-over means the key is dead, and `already-initialized` with a vault that is Initialized means a vault stands, which the owner confirms with `iron-vault recovery check` once unlocked before relying on the key, because a concurrent init may have finished first. A failure of the discard of an unfinished initialization names `discard` as its step |
 
+#### recovery check
+
+Proves that the owner's offline recovery key opens the current vault (spec
+[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). The design, including what the check
+proves, its record and the reminders that prompt it, is [recovery.md](recovery.md). It takes no arguments. It is
+allowed while the service is Locked or Ready; in any other state the exchange ends with `wrong-state` before any
+prompt. It never changes the service state. Before the prompt it also needs an Initialized
+[initialization state](vault-initialization.md#initialization-state), or the exchange ends with
+`recovery-check-unavailable` naming the state, and in a protected install whose memory is not locked it ends with
+`memory-unprotected`, as `unlock` does. The checks run in this order: state, initialization state, memory.
+
+1. **Recovery key.** A prompt, secret: `Recovery key`. Empty, non-UTF-8 or unparsable input ends the exchange with
+   `recovery-key-invalid`, whose message says the text is not an `AGE-SECRET-KEY-1…` recovery key and holds nothing
+   typed. There is no second try in the same exchange.
+2. The service tries the service-wide lock, failing at once with `busy` if it is taken, and checks the service state
+   (Locked or Ready) and the initialization state again under it. It reads `identity.age` and unwraps it with the key,
+   then opens `manifest.age` with the unwrapped identity. A key that is not a recipient of the envelope, or whose
+   unwrapped identity does not verify the manifest's MAC, ends the exchange with `recovery-check-failed`, whose
+   message is only `the recovery key does not open this vault`. A file that cannot be read, or is malformed in a way
+   that says nothing about the key, ends it with `recovery-check-unavailable`, naming the file and the error kind.
+   The unwrapped identity is dropped either way, and nothing but the recovery check record is written.
+3. On success the service writes the [recovery check record](recovery.md#the-recovery-check-record) and answers.
+
+The success result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | vault ID | byte value, exactly 16 bytes: the ID in the manifest the key opened |
+| 3 | check time | `u64`: Unix seconds, UTC, of the check, as written to the record |
+| 4 | recorded | flag: `0` when writing the record failed; the check still passed, and reminders count from the last recorded check |
+
+Errors specific to `recovery check`:
+
+| Code | When |
+|---|---|
+| `wrong-state` | the service is not Locked or Ready: at the request, before any prompt, or at the re-check under the lock |
+| `recovery-check-unavailable` | the vault is not Initialized, before any prompt or at the re-check, or the check could not be run; the message names the initialization state or the file and error kind |
+| `memory-unprotected` | a protected install's memory is not locked, before any prompt |
+| `recovery-key-invalid` | the text is not a recovery key |
+| `busy` | the service-wide lock is taken (an approval, a vault write, an init, a reload or a config check); try again |
+| `recovery-check-failed` | the key does not open this vault |
+
 ### Prompt (kind 2)
 
 | Tag | Field | Value |
@@ -514,7 +557,8 @@ A command without a result answers with an empty body. A command with a result a
 | 2 and up | result | defined with the command |
 
 `config approve`'s result is defined [with the command](#config-approve), `caller-token`'s [with its
-command](#caller-token), `init`'s [with its command](#init), and `replace`'s [with its command](#replace).
+command](#caller-token), `init`'s [with its command](#init), `replace`'s [with its command](#replace), and
+`recovery check`'s [with its command](#recovery-check).
 
 Naming the command keeps the codec context-free: a success body decodes on its own, without knowing which request it
 answers, and the CLI can check that it answers the request it sent. A body that names a command without a result, or
@@ -546,6 +590,11 @@ digest or permitted origin.
 | 10 | credentials | byte value: the credential list below; empty while the vault is locked |
 | 11 | route faults | byte value: the route fault list below; empty while the vault is locked or no route has a fault |
 | 12 | initialization | `u8`: `0` initialized (locked or open), `1` not initialized, `2` initialization unfinished; non-zero only while no vault is open |
+| 13 | recovery check record | `u8`: `0` unknown, `1` never checked, `2` checked |
+| 14 | recovery check time | `u64`: Unix seconds, UTC: `last_checked` when tag 13 is `2`, `since` when it is `1`, `0` when it is `0` |
+| 15 | days since recovery check | `u64`: whole days from tag 14's time to the service's clock, `0` for a time in the future and when tag 13 is `0` |
+| 16 | recovery reminder due | flag: `1` when a [recovery reminder](recovery.md#reminders) is due |
+| 17 | recovery check detail | UTF-8 text: why tag 13 is `0`, a fixed phrase; empty otherwise |
 
 The vault ID, both approval versions, the credentials and the route faults are sealed behind the vault identity
 (`approval.age`, the manifest), so they are unknown while no vault is open. No vault is open in Starting, Locked and
@@ -561,6 +610,14 @@ cannot be listed, also report `0`: `status` has no error to give, and `unlock` a
 
 Memory protection is reported from the process hardening report and never claims swap protection unless `mlockall`
 succeeded ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)).
+
+The recovery check fields are known in every state, because the
+[recovery check record](recovery.md#the-recovery-check-record) is plaintext: the service reads `recovery.toml` on each
+`status`, bounded and without the service-wide lock, and computes the days and the due flag with its own clock and the
+reminder interval in force ([recovery.md](recovery.md#status)). Tag 13 is `0` when the vault is not Initialized
+(detail `the vault is not initialized`), when the record is missing (`no check record yet`) and when it is unusable
+(`the check record is unusable (<error kind>)`); only an unusable record sets the due flag while tag 13 is `0`. A
+missing or unreadable record never fails `status`.
 
 The credential list is one entry per credential in the vault manifest, in credential-name order:
 
@@ -658,7 +715,12 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `24` | `credential-in-use` | `replace`, `rm`: a route of the active config uses the name and would not activate after the change; the message names each route and why |
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
 | `26` | `list-too-large` | `list`: the credential list does not fit one frame; the message names the count |
-| `27` | `memory-unprotected` | `unlock`: a protected install's memory is not locked, so the vault is not opened; the message names the memory-lock limit or the locking error, and the service stays Locked |
+| `27` | `memory-unprotected` | `unlock`, `recovery check`: a protected install's memory is not locked, so the vault identity is not unwrapped; the message names the memory-lock limit or the locking error, and the service state is unchanged |
+| `30` | `recovery-key-invalid` | `recovery check`: the text is not an `AGE-SECRET-KEY-1…` recovery key; the message holds nothing typed |
+| `31` | `recovery-check-failed` | `recovery check`: the key does not open this vault; the message is fixed |
+| `32` | `recovery-check-unavailable` | `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the key was not judged; the message names the initialization state, or the file and error kind |
+
+Codes 28 and 29 are reserved for the migration commands' `migration-denied` and `migration-unavailable`.
 
 ## Versions
 
@@ -666,7 +728,8 @@ This document specifies protocol version 1, the only version the codec reads or 
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
 `status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), `replace` (command 10), `rm`
-(command 11) and error codes 7 to 27 join it rather than starting version 2.
+(command 11), `recovery check` (command 12), `status` tags 13 to 17, and error codes 7 to 27 and 30 to 32 join it
+rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
@@ -784,10 +847,10 @@ when no file is given ([open question 12](config-approval.md#open-questions)).
 
 `iron-vault status` prints one field per line, in this order, to stdout: `service`, `reason` (only when Unavailable),
 `profile`, `vault` (`locked`, `unlocked`, `not initialized (run iron-vault init)` or `initialization unfinished (run
-iron-vault init again)`), `vault id`, `approval committed`, `approval highest reserved`, `memory protection`, then one
-`credential <name>` line per credential (or `credentials` alone when there are none or they are unknown), then one
-`route <name>: unavailable (pinned CA unavailable)` line per route fault. A value
-sealed behind a locked vault prints as `unknown while the vault is locked`. Under the development profile the
+iron-vault init again)`), `vault id`, `approval committed`, `approval highest reserved`, `memory protection`,
+`recovery last checked` (in the [forms recovery.md gives](recovery.md#status)), then one `credential <name>` line
+per credential (or `credentials` alone when there are none or they are unknown), then one `route <name>: unavailable
+(pinned CA unavailable)` line per route fault. A value sealed behind a locked vault prints as `unknown while the vault is locked`. Under the development profile the
 profile line is exactly `profile: development — no isolation from malware running as <user>`, with the user the CLI
 runs as: in development the service account, the admin principal and the invoking user are the same account. The output
 is a function of the report, so two runs on the same state are byte-identical. It exits `0` when the service is Ready
@@ -823,7 +886,7 @@ with the key, because the service cannot say so over a closed connection; after 
   run `iron-vault init` again. A start-over, with a new recovery key, means the old one is dead, and `busy` means the
   first run is still writing. `already-initialized` with a vault that is Initialized means a vault stands, but not
   necessarily the one this key opens: a concurrent init may have finished first. The owner unlocks and confirms the
-  key with `iron-vault recovery check` (specification §3.13, which has no design document yet) before relying on it.
+  key with [`iron-vault recovery check`](#recovery-check-1) before relying on it.
 
 On success it prints `initialized vault <vault ID>: approval version 1 committed` and `run iron-vault unlock to start
 serving` to stdout; the recovery key never goes there. Otherwise it prints the service's error to stderr and exits
@@ -861,6 +924,15 @@ a service error goes to stderr with exit code 1.
 `iron-vault rm <name>` sends the name. The approval passphrase is the answer to the service's prompt. On success it
 prints `removed <name>` to stdout; a service error goes to stderr with exit code 1, and for `credential-in-use` the
 message names the routes to remove from the config first.
+
+### recovery check
+
+`iron-vault recovery check` takes no argument: the recovery key is the answer to the service's secret prompt, read
+from the terminal with echo off or as the next line of stdin, so `pass show iron-vault-recovery | sudo iron-vault
+recovery check` works. On success it prints `the recovery key opens vault <vault ID>: checked <YYYY-MM-DDTHH:MM:SSZ>`
+to stdout and exits `0`; when the result says the check was not recorded, it also warns on stderr that the check
+passed but was not recorded, so recovery reminders still count from the last recorded check. A service error goes to
+stderr with exit code 1.
 
 ### Owner input
 
