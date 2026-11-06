@@ -102,7 +102,7 @@ Venice parts also need two Venice API keys.
 ```sh
 cargo install --path crates/iron-vault --features dev-mode --root ~/.local/iron-vault-dev
 export PATH="$HOME/.local/iron-vault-dev/bin:$PATH"
-iron-vault --version    # iron-vault 0.1.0 (features: dev-mode)
+iron-vault --version    # iron-vault 0.2.0-alpha (features: dev-mode)
 ```
 
 The service refuses to run a binary that another account could replace. The binary and every directory above it
@@ -342,7 +342,7 @@ The corresponding log entries look like:
 ```json lines
 {
   "service": "iron-vault",
-  "service_version": "0.1.0",
+  "service_version": "0.2.0-alpha",
   "schema_version": 1,
   "deployment_profile": "development",
   "timestamp": "2026-11-06T09:49:13.984094Z",
@@ -366,7 +366,7 @@ The corresponding log entries look like:
 }
 {
   "service": "iron-vault",
-  "service_version": "0.1.0",
+  "service_version": "0.2.0-alpha",
   "schema_version": 1,
   "deployment_profile": "development",
   "timestamp": "2026-11-06T09:49:13.984112Z",
