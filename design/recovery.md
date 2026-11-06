@@ -176,8 +176,8 @@ reminder_days = 90
 ```
 
 `reminder_days` is a whole number of days from 7 to 365, and 90 when absent, which meets the specification's "every
-few months". The policy crate holds it as the value object `ReminderDays`, valid on construction; a value outside the
-range makes the config invalid, naming the key and the range. The approval summary shows a change to it
+few months". The policy crate holds it as the value object `ReminderInterval`, valid on construction; a value outside
+the range makes the config invalid, naming the key and the range. The approval summary shows a change to it
 ([config-approval.md](config-approval.md#approval-summary)).
 
 The interval in force is the one in the active approved config, or, while no config is active, the one in the last
@@ -279,12 +279,12 @@ days.
 
 ## Where the code lives
 
-- **`iron-vault-store`:** `RecoveryCheckRecord`, its file name, read and write; the check itself, as one function
-  that takes the state directory lock, the recipient identity and nothing else, reads both files, and returns the
-  vault ID or a typed error (`RecoveryCheckError`) whose variants map onto `failed` and `unavailable` with their
-  labels. It holds the unwrapped identity only inside that function. The `Entry` class for `recovery.toml` and the
-  discard.
-- **`iron-vault-policy`:** `ReminderDays` and the `[recovery]` table, carried in the validated config, and its
+- **`iron-vault-store`:** `RecoveryCheckRecord`, its file name, read and write; the check itself, as one function,
+  `check_recovery_key`, that takes the state directory lock, the recipient identity and nothing else, reads both
+  files, and returns the vault ID or a typed error (`RecoveryCheckError`) whose variants map onto `failed` and
+  `unavailable` with their labels. It holds the unwrapped identity only inside that function. The `Entry` class for
+  `recovery.toml` and the discard.
+- **`iron-vault-policy`:** `ReminderInterval` and the `[recovery]` table, carried in the validated config, and its
   approval summary section.
 - **`iron-vault`:** `AdminOperation::RecoveryCheck`, the handler and its prompt, the reminder schedule and its
   in-memory spacing, the status fields, the audit events and the CLI.
