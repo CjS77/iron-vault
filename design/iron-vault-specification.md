@@ -815,11 +815,12 @@ key as an automatically usable local recovery path.
 v0 schedules recovery reminders every few months through redacted logs; from v1, desktop notifications also carry
 them when available.
 `recovery check` must prove that the supplied key opens the current envelope, without changing recipients or
-approval state. Keep a service-owned plaintext inventory of names, kinds, permitted hosts, and provider reissue
-instructions; include no secrets. The inventory helps the owner rebuild after complete loss. Iron Vault is not
-the system of record for irreplaceable secrets: providers must be able to reissue enrolled credentials.
+approval state. The approved config names every routed credential and its upstream host, and `iron-vault list`
+names every credential while the vault is open. The owner's copies of both are the list to rebuild from after
+complete loss. The service keeps no separate inventory. Iron Vault is not the system of record for irreplaceable
+secrets: providers must be able to reissue enrolled credentials.
 
-**Loss mitigated (R-15).** Independent recipients, recovery checks, reminders, and a reissue inventory reduce
+**Loss mitigated (R-15).** Independent recipients, recovery checks, and reminders reduce
 permanent lockout when a device fails or the owner loses an infrequently used recovery secret. They do not replace
 the owner's responsibility to retain a working recovery path.
 
