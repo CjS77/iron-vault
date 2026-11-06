@@ -720,7 +720,8 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `31` | `recovery-check-failed` | `recovery check`: the key does not open this vault; the message is fixed |
 | `32` | `recovery-check-unavailable` | `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the key was not judged; the message names the initialization state, or the file and error kind |
 
-Codes 28 and 29 are reserved for the migration commands' `migration-denied` and `migration-unavailable`.
+Codes 28 and 29 are reserved for `migration-denied` and `migration-unavailable`, which
+[migration-authorization.md](migration-authorization.md#error-codes) defines and the migration commands add to this table.
 
 ## Versions
 
