@@ -241,8 +241,8 @@ message gives the seconds left, rounded up. The service stays Locked, and the re
 2. The service waits for the service-wide lock, as a reload does: in Locked only a `lock`, an `init` or a config check
    holds it, each for seconds, so the passphrase already typed is not refused as `busy`. It then checks the state
    again under the service context's mutex, so two unlocks never both open the vault, checks the attempt limit again
-   (`unlock-rate-limited`), so two exchanges that passed the check before the prompt cannot both test a passphrase, and opens `operational.age`
-   with the passphrase, then `identity.age` with the operational identity, which is
+   (`unlock-rate-limited`), so two exchanges that passed the check before the prompt cannot both test a passphrase,
+   and opens `operational.age` with the passphrase, then `identity.age` with the operational identity, which is
    dropped as soon as the vault identity is unwrapped ([§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). A wrong passphrase ends the exchange with
    `unlock-denied`, whose message is only `wrong passphrase`; an envelope that cannot be read or opened ends it with
    `unlock-failed`. Either way the service stays Locked, and no other storage is tried (R-22). A wrong passphrase adds

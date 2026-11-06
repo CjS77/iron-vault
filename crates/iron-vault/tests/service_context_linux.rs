@@ -2439,3 +2439,45 @@ async fn concurrent_unlocks_on_the_last_free_attempt_test_at_most_one_passphrase
     assert_eq!(responses, [denied, limited]);
     session.close().await;
 }
+
+#[tokio::test]
+async fn empty_unlock_input_counts_toward_the_attempt_limit() {
+    let fixture = approved().await;
+    let service = fixture.start().unwrap();
+    for _ in 0..FAILURE_THRESHOLD {
+        assert_response(
+            &unlock(&service, "").await,
+            &error_response(ErrorCode::UnlockDenied, "wrong passphrase"),
+        );
+    }
+
+    let (_, prompts, response) = admin(&service, AdminRequest::Unlock, PASSPHRASE).await;
+
+    assert_eq!(prompts, []);
+    assert_response(&response, &rate_limited(30));
+}
+
+#[tokio::test]
+async fn the_context_rechecks_the_attempt_limit_under_its_lock_before_testing_a_passphrase() {
+    let fixture = approved().await;
+    let fs = GatedFs::default();
+    let (reached, release) = fs.arm("operational.age");
+    let service = fixture.start_on(fs).unwrap();
+    seed_failures(&service, FAILURE_THRESHOLD - 1).await;
+    let wrong = || Passphrase::new(SecretString::from(WRONG_PASSPHRASE)).unwrap();
+    // Both calls stand where two exchanges stand after passing the check before the prompt.
+    let first = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move { service.unlock(wrong()).await }
+    });
+    tokio::time::timeout(WAIT, reached).await.unwrap().unwrap();
+    let second = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move { service.unlock(wrong()).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    release.send(()).unwrap();
+
+    assert!(matches!(first.await.unwrap(), Err(UnlockRefusal::WrongPassphrase)));
+    assert!(matches!(second.await.unwrap(), Err(UnlockRefusal::RateLimited(_))));
+}

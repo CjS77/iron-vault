@@ -32,6 +32,11 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         super::check_unlock_attempts(&self.inner.lock().await.attempts)
     }
 
+    /// Counts a wrong vault passphrase that `unlock` refused without testing it: input that cannot be a passphrase.
+    pub(crate) async fn record_unlock_failure(&self) {
+        self.inner.lock().await.attempts.record_failure(tokio::time::Instant::now());
+    }
+
     /// [`memory_guard`] for this service's profile and startup memory protection status, logged at WARN like every
     /// other unlock refusal.
     ///

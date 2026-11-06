@@ -61,6 +61,8 @@ impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
             secret: true,
         };
         let Some(passphrase) = exchange.prompt(&prompt).await?.into_vault_passphrase() else {
+            // Empty or non-UTF-8 input never reaches the context's unlock, but it is a wrong guess all the same.
+            self.service.record_unlock_failure().await;
             let refusal = UnlockRefusal::WrongPassphrase;
             UnlockRefused { refusal: &refusal }.emit();
             return Ok(refused(refusal));
