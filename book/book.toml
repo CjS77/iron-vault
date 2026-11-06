@@ -1,0 +1,23 @@
+[book]
+title = "Iron Vault"
+description = "The Iron Vault user manual: installation, cookbook recipes and reference."
+authors = ["CjS77"]
+language = "en"
+src = "src"
+
+# Replaces the {{#glossary}} marker with design/glossary.md and points links that leave the book at the repository.
+[preprocessor.repo-links]
+command = "python3 preprocessors/repo_links.py"
+
+[output.html]
+git-repository-url = "https://github.com/CjS77/iron-vault"
+edit-url-template = "https://github.com/CjS77/iron-vault/edit/main/book/{path}"
+
+[output.html.search]
+enable = true
+
+# Checks every link between pages of the book. Web links are not fetched, so the check needs no network.
+[output.linkcheck2]
+follow-web-links = false
+traverse-parent-directories = false
+warning-policy = "error"
