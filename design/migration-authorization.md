@@ -218,9 +218,8 @@ consecutive failures never limit.
   to a whole second.
 - **One count for every vault passphrase prompt.** `unlock` asks for the same secret, so a limit on migration alone
   would slow no one: a guesser could `lock` the service and guess through `unlock`. The count lives in the service
-  context, not in the migration slot, so `unlock` shares it. The migration authorization ticket (K-208) applies it to
-  migration authorization only; `unlock` adopts it in its own ticket, and the limit does not protect the vault
-  passphrase until then.
+  context, not in the migration slot, so `unlock` shares it. Migration authorization checks and records it;
+  `unlock` does not yet, so until it does the limit does not protect the vault passphrase.
 - **Visible.** Every refused attempt is a WARN audit record: `migration.authorization-refused` with `wrong_passphrase`
   here, `vault.unlock-refused` for `unlock`. In v1 the `migration_refused` owner notification also shows it on the
   desktop.
@@ -284,7 +283,7 @@ because 27 is taken by `memory-unprotected` (K-198, not yet landed).
 |---|---|---|
 | `28` | `migration-denied` | `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing was exported or rewrapped |
 | `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its vault passphrase prompt; nothing was exported or rewrapped |
-| `30` | `migration-rate-limited` | `export`, `recipient add`: too many wrong vault passphrases in a row; the [attempt limit](#passphrase-attempt-limit) refused the attempt before any prompt, and the message gives the whole seconds to wait; nothing was exported or rewrapped |
+| `33` | `migration-rate-limited` | `export`, `recipient add`: too many wrong vault passphrases in a row; the [attempt limit](#passphrase-attempt-limit) refused the attempt before any prompt, and the message gives the whole seconds to wait; nothing was exported or rewrapped |
 
 The messages are fixed phrases, apart from the seconds to wait, and none holds owner input. Each refusal ends the exchange as follows:
 
