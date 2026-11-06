@@ -721,7 +721,8 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `32` | `recovery-check-unavailable` | `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the key was not judged; the message names the initialization state, or the file and error kind |
 
 Codes 28 and 29 are reserved for `migration-denied` and `migration-unavailable`, which
-[migration-authorization.md](migration-authorization.md#error-codes) defines and the migration commands add to this table.
+[migration-authorization.md](migration-authorization.md#error-codes) defines and the migration commands add to this
+table.
 
 ## Versions
 
@@ -849,13 +850,13 @@ when no file is given ([open question 12](config-approval.md#open-questions)).
 `iron-vault status` prints one field per line, in this order, to stdout: `service`, `reason` (only when Unavailable),
 `profile`, `vault` (`locked`, `unlocked`, `not initialized (run iron-vault init)` or `initialization unfinished (run
 iron-vault init again)`), `vault id`, `approval committed`, `approval highest reserved`, `memory protection`,
-`recovery last checked` (in the [forms recovery.md gives](recovery.md#status)), then one `credential <name>` line
-per credential (or `credentials` alone when there are none or they are unknown), then one `route <name>: unavailable
-(pinned CA unavailable)` line per route fault. A value sealed behind a locked vault prints as `unknown while the vault is locked`. Under the development profile the
-profile line is exactly `profile: development — no isolation from malware running as <user>`, with the user the CLI
-runs as: in development the service account, the admin principal and the invoking user are the same account. The output
-is a function of the report, so two runs on the same state are byte-identical. It exits `0` when the service is Ready
-and `4` for any other state.
+`recovery last checked` (in the [forms recovery.md gives](recovery.md#status)), then one `credential <name>` line per
+credential (or `credentials` alone when there are none or they are unknown), then one `route <name>: unavailable
+(pinned CA unavailable)` line per route fault. A value sealed behind a locked vault prints as `unknown while the vault
+is locked`. Under the development profile the profile line is exactly `profile: development — no isolation from
+malware running as <user>`, with the user the CLI runs as: in development the service account, the admin principal and
+the invoking user are the same account. The output is a function of the report, so two runs on the same state are
+byte-identical. It exits `0` when the service is Ready and `4` for any other state.
 
 ### list
 

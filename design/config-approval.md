@@ -537,8 +537,8 @@ changed. Every configured name is printed through the configured-name escaping, 
 summary line ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)).
 
 The **headline** is one line of counts per section, such as `callers: 1 added, 2 changed; route grants: 3 added; routes:
-1 changed; listeners: none; limits: none; logging: none; recovery: none`. It is bounded whatever the config size, so it fits in the
-command's result.
+1 changed; listeners: none; limits: none; logging: none; recovery: none`. It is bounded whatever the config size, so it
+fits in the command's result.
 
 ## Audit events
 
