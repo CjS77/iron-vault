@@ -22,7 +22,8 @@ Three rules drive the design:
 - **Every step is durable before the next one starts**, and one durable remove is the commit point
   ([§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)).
 - **Init never overwrites or removes what it did not write.** It removes only the files an unfinished initialization
-  can have written (a config file only when its bytes are the initial config), and refuses anything else.
+  can have written (a config file only when its bytes are the initial config) and a leftover
+  [recovery check record](recovery.md#initialization), and refuses anything else.
 
 Every default this design picks where the specification is silent, or where it departs from the specification's
 wording, is listed under [Open questions](#open-questions); the owner has accepted all but the last.
@@ -58,14 +59,15 @@ vault identity, so it is known while the vault is locked. The one exception is t
 bytes are compared with the initial config (below). The checks run in this order, and the first that matches decides:
 
 1. **`init.unfinished` is present.** The state is Unfinished if the state directory holds no file but the lock file
-   (`lock`), a `lost+found` directory, stale temp files (`.<name>.tmp`) and the files an initialization writes
-   (`init.unfinished`, `identity.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`), and the
-   config directory passes the [config test](#the-config-test). Otherwise it is Unrecognized.
+   (`lock`), a `lost+found` directory, stale temp files (`.<name>.tmp`), the files an initialization writes
+   (`init.unfinished`, `identity.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`) and the
+   recovery check record (`recovery.toml`), and the config directory passes the [config test](#the-config-test).
+   Otherwise it is Unrecognized.
 2. **`manifest.age` is present.** The state is Initialized, whatever else the directories hold: an Initialized vault
    never depends on the absence of other files.
-3. **The state directory holds only the lock file, a `lost+found` directory and stale temp files**, and none of
-   `config.toml`, `config.toml.sig`, `config.toml.pending` and `config.toml.sig.staged` is in the config directory.
-   The state is Uninitialized.
+3. **The state directory holds only the lock file, a `lost+found` directory, stale temp files and the recovery check
+   record**, and none of `config.toml`, `config.toml.sig`, `config.toml.pending` and `config.toml.sig.staged` is in
+   the config directory. The state is Uninitialized.
 4. **Otherwise** the state is Unrecognized.
 
 | State | Meaning |
@@ -77,7 +79,8 @@ bytes are compared with the initial config (below). The checks run in this order
 
 A **foreign file** is a file in the state directory that is not on the lists above: the lock file, `lost+found`, temp
 files, the vault's own files (`identity.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`,
-`init.unfinished`) and record files (`record-*.age`). It matters only beside `init.unfinished`, where it makes the state
+`init.unfinished`), record files (`record-*.age`) and the recovery check record (`recovery.toml`), which
+[recovery.md](recovery.md#initialization) describes. It matters only beside `init.unfinished`, where it makes the state
 Unrecognized so the discard never sweeps it into the new vault, and in a state directory with no manifest, where it
 makes Uninitialized impossible. Beside a manifest it changes nothing: `unlock` logs its name at WARN
 (`vault.foreign-file`) and goes on, because `Vault::open` already ignores names it does not know and the manifest alone
@@ -250,8 +253,8 @@ one this key opens, so do not rely on the key yet: once the vault is unlocked, c
 the key only if that passes. If the message says Unrecognized, files init did not write are present and the key is
 not confirmed either.* The case the check guards against is a concurrent init: a second init finished first, so the
 owner's own run was refused and its key is dead, yet the re-run answers `already-initialized` for the other run's
-vault. `recovery check` has no design of its own yet, only the specification's §3.13 requirement; until it is
-designed and built, the owner cannot confirm the key and treats it as unconfirmed. The endings are:
+vault. [recovery.md](recovery.md) designs `recovery check`; until it is built, the owner cannot confirm the key and
+treats it as unconfirmed. The endings are:
 
 | Ending | Who says it |
 |---|---|
@@ -310,8 +313,8 @@ writes, each durably, and only those present:
   `config.toml.pending`, each removed durably (unlink, then directory fsync). All signatures go before any config,
   because a signature with no config beside it makes the state Unrecognized and `publish` can leave `config.toml`
   beside `config.toml.sig.staged`;
-- in the state directory: `approval.age`, `manifest.age`, `approver.age`, `operational.age` and `identity.age`, each
-  with `durable_remove`.
+- in the state directory: `recovery.toml`, `approval.age`, `manifest.age`, `approver.age`, `operational.age` and
+  `identity.age`, each with `durable_remove`.
 
 `init.unfinished` stays, and step 1 then rewrites it, so a crash during the discard leaves the state Unfinished and
 the next init discards again. Nothing else is left to touch: the state is Unfinished only if the state directory holds
@@ -335,6 +338,12 @@ vault". This design reads a re-run as creating a new vault, not resetting an old
   vault cannot verify: its payload names the old vault ID, and its signature is the old approver key's.
 
 Discarding is logged; see [Logging](#logging).
+
+**A leftover recovery check record.** On Uninitialized the state directory may still hold `recovery.toml`, the record
+of a vault whose files are gone. Init removes it with `durable_remove`, under the service-wide lock and before step 1,
+so the new vault never starts with the old one's `last_checked` ([recovery.md](recovery.md#initialization)). It is
+the one file init removes from an Uninitialized directory, and the removal is not an audit event: the record holds
+no secret and decides nothing but a reminder.
 
 ## Crash table
 
