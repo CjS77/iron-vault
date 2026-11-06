@@ -1,8 +1,10 @@
 //! Checks that `iron-vault serve --log-to-stdout` writes its startup event and missing hardening to stdout as JSON Lines, and refuses
-//! stdout when it may be the systemd journal. The process may then stop on a missing install account, which
-//! `deployment_profile.rs` covers.
+//! stdout when it may be the systemd journal.
+//!
+//! Development builds only: a protected build refuses to start as any account but `iron-vault` before its log opens, which
+//! `deployment_profile.rs` covers. The log destination code is the same in both profiles.
 
-#![cfg(target_os = "linux")]
+#![cfg(all(target_os = "linux", feature = "dev-mode"))]
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -40,8 +42,7 @@ fn the_event(output: &Output, event: &str) -> serde_json::Value {
 #[test]
 fn the_startup_event_names_the_build_profile_and_the_destination() {
     let started = the_event(&serve_to_stdout(|_| {}), "service.started");
-    let profile = if cfg!(feature = "dev-mode") { "development" } else { "protected" };
-    assert_eq!(started["deployment_profile"], profile, "{started}");
+    assert_eq!(started["deployment_profile"], "development", "{started}");
     assert_eq!(started["level"], "INFO");
     assert_eq!(started["log_destination"], "stdout");
     assert_eq!(started["memory_protection"], "unavailable");
