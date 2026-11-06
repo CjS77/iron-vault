@@ -62,7 +62,7 @@ that source event struct's domain-typed fields, and its remediation is a fixed p
 | `vault_damaged` | `config.commit-uncertain` | critical | `version <version>: committed, but may not survive power loss (<error_kind>)` | The service settles the commit itself; if a `service_unavailable` notification follows, run `sudo iron-vault status` |
 | `vault_damaged` | `config.conflicting-approval-discarded` | critical | `version <version>: a second approval for another config was discarded` | Find out who can write to the config directory, and read the audit log |
 | `hardening_incomplete` | `service.hardening-incomplete` | critical | `core dumps <core_dumps>; memory <memory_protection>` | The fixed phrases the source records in its own `remediation`, one per missing protection |
-| `recovery_reminder` | `recovery.reminder` | normal | `last checked <last_checked>`, or `never checked` | Run `sudo iron-vault recovery check` with your offline recovery key |
+| `recovery_reminder` | `recovery.reminder` | normal | by `recovery_record`: `last checked <last_checked>`, `never checked (counting since <reminders_since>)`, or `check record unusable (<error_kind>)` | The fixed phrase the source records in its own `remediation`: run the recovery check, and keep copies of the approved config and of `iron-vault list` with the recovery key ([recovery.md](recovery.md#reminders)) |
 | `recovery_check_failed` | `recovery.checked`, only when `recovery_outcome` is `failed` | critical | `the recovery key did not open the vault` | Check that you used the current recovery key; if it no longer opens the vault, replace it before you need it |
 
 `config.activation-failed` notifies only for an uncertain commit that could not be settled. Its other cause, a failed

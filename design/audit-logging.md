@@ -711,12 +711,13 @@ other approval.
 | `response.scrubbed` | WARN | a relayed response ended, cleanly or not, and a scrub pattern matched in its headers or body (the scrub event) | `request_id`, `route`, `credential`, `matches` |
 | `request.defect` | ERROR | a request was refused by a service defect | `request_id`, `route`, `credential`, `defect` |
 
-**Recovery** (not yet emitted; the recovery epic's tickets emit them):
+**Recovery** (not yet emitted; the recovery epic's tickets emit them. [recovery.md](recovery.md#logging) gives when
+each fires):
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `recovery.checked` | INFO, or WARN when the key fails | `recovery check` finished | `recovery_outcome` (`opened` or `failed`) |
-| `recovery.reminder` | INFO | a scheduled recovery reminder fell due | `last_checked`, left out when never checked |
+| `recovery.checked` | INFO when opened, WARN otherwise | `recovery check` ended after its prompt | `recovery_outcome`; for `opened`, `vault_id` and `recorded`, with `error_kind` when not recorded; for `failed`, `recovery_failure`; for `unavailable`, `file` and `error_kind` |
+| `recovery.reminder` | INFO | a reminder evaluation found a recovery reminder due | `recovery_record`; `last_checked` when `checked`; `reminders_since` when `never_checked`; `error_kind` when `unusable`; `reminder_days`; `remediation` |
 
 **Owner notifications** (v1; not emitted in v0.
 [owner-notifications.md](owner-notifications.md#which-events-notify) gives which events raise one):
@@ -754,8 +755,13 @@ The fields that only one event uses, or that only audit events use:
 | `config_field` | string | The config key a fact is about, such as `ca_file` |
 | `matches` | number | Scrub pattern matches in one response |
 | `defect` | string | The label of the check a service defect failed |
-| `recovery_outcome` | string | `opened` or `failed` |
-| `last_checked` | string | An RFC 3339 UTC timestamp |
+| `recovery_outcome` | string | `opened`, `failed` (the key does not open this vault), `invalid` (the text is not a recovery key) or `unavailable` (the check could not run) |
+| `recovery_failure` | string | Why a recovery key failed: `not_a_recipient` or `identity_unverified` |
+| `recorded` | boolean | Whether a successful recovery check's record was written |
+| `recovery_record` | string | The recovery check record's form: `checked`, `never_checked` or `unusable` |
+| `last_checked` | string | The record's last successful recovery check, an RFC 3339 UTC timestamp to the second |
+| `reminders_since` | string | When the reminder schedule started counting, an RFC 3339 UTC timestamp to the second |
+| `reminder_days` | number | The reminder interval in force, in days |
 | `topic` | string | A notification topic label, such as `vault_changed` |
 | `source_event` | string | The event name of the audit event an owner notification was made from |
 | `urgency` | string | `normal` or `critical` |
