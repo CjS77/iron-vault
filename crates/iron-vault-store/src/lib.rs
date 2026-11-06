@@ -25,6 +25,7 @@ mod recipient;
 mod record;
 mod record_id;
 mod recovery;
+mod recovery_check;
 mod sealed;
 #[cfg(test)]
 mod secret_types_tests;
@@ -91,6 +92,7 @@ pub use recipient::{
 pub use record::{CredentialRecord, RecordError, ResolvedCredential, Source, decode, encode};
 pub use record_id::{RecordId, RecordIdError};
 pub use recovery::{RecoveryError, RecoveryKey, RecoveryKeySecret};
+pub use recovery_check::{MalformedReason, RecoveryCheck, RecoveryCheckError, check_recovery_key};
 pub use sealed::{OpenError, SealError, open, seal};
 pub use stale_temps::sweep_stale_temps;
 pub use stanza::StanzaKind;
