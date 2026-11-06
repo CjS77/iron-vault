@@ -13,6 +13,8 @@ mod init;
 #[cfg(target_os = "linux")]
 mod list;
 #[cfg(target_os = "linux")]
+pub mod migration_authorization;
+#[cfg(target_os = "linux")]
 mod owner_presence;
 pub mod principal;
 pub mod protocol;

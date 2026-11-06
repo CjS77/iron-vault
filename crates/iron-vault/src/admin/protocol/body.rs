@@ -315,9 +315,12 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::RandomSourceFailed,
         ErrorCode::ListTooLarge,
         ErrorCode::MemoryUnprotected,
+        ErrorCode::MigrationDenied,
+        ErrorCode::MigrationUnavailable,
         ErrorCode::RecoveryKeyInvalid,
         ErrorCode::RecoveryCheckFailed,
         ErrorCode::RecoveryCheckUnavailable,
+        ErrorCode::MigrationRateLimited,
         ErrorCode::UnlockRateLimited,
     ]
     .into_iter()

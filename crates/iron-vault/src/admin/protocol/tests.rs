@@ -157,9 +157,12 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::RandomSourceFailed),
         Just(ErrorCode::ListTooLarge),
         Just(ErrorCode::MemoryUnprotected),
+        Just(ErrorCode::MigrationDenied),
+        Just(ErrorCode::MigrationUnavailable),
         Just(ErrorCode::RecoveryKeyInvalid),
         Just(ErrorCode::RecoveryCheckFailed),
         Just(ErrorCode::RecoveryCheckUnavailable),
+        Just(ErrorCode::MigrationRateLimited),
         Just(ErrorCode::UnlockRateLimited),
     ]
 }
@@ -678,7 +681,7 @@ fn malformed_fixed_width_values_and_flags_are_refused() {
 
 #[test]
 fn unknown_error_codes_are_refused() {
-    [0, 28, 0xffff].into_iter().for_each(|code: u16| {
+    [0, 40, 0xffff].into_iter().for_each(|code: u16| {
         let error = body(&[field(1, &code.to_be_bytes()), field(2, b"m")]);
         assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::UnknownErrorCode(code));
     });
@@ -1186,6 +1189,9 @@ fn recovery_check_has_the_documented_command_result_and_error_codes() {
         (ErrorCode::RecoveryKeyInvalid, 30, "recovery-key-invalid"),
         (ErrorCode::RecoveryCheckFailed, 31, "recovery-check-failed"),
         (ErrorCode::RecoveryCheckUnavailable, 32, "recovery-check-unavailable"),
+        (ErrorCode::MigrationDenied, 28, "migration-denied"),
+        (ErrorCode::MigrationUnavailable, 29, "migration-unavailable"),
+        (ErrorCode::MigrationRateLimited, 33, "migration-rate-limited"),
         (ErrorCode::UnlockRateLimited, 34, "unlock-rate-limited"),
     ]
     .into_iter()

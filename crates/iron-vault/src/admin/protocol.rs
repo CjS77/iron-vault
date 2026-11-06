@@ -513,6 +513,14 @@ pub enum ErrorCode {
     /// `unlock`: a protected install's memory is not locked, so the vault is not opened; the message names the
     /// memory-lock limit or the locking error, and the service stays Locked.
     MemoryUnprotected = 27,
+    /// `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it
+    /// opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing
+    /// was exported or rewrapped.
+    MigrationDenied = 28,
+    /// `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a
+    /// reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its prompt;
+    /// nothing was exported or rewrapped.
+    MigrationUnavailable = 29,
     /// `recovery check`: the text is not an `AGE-SECRET-KEY-1...` recovery key; the message holds nothing typed.
     RecoveryKeyInvalid = 30,
     /// `recovery check`: the key does not open this vault; the message is fixed.
@@ -520,6 +528,9 @@ pub enum ErrorCode {
     /// `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the
     /// key was not judged.
     RecoveryCheckUnavailable = 32,
+    /// `export`, `recipient add`: too many wrong vault passphrases in a row; the attempt limit refused the attempt before any
+    /// prompt, and the message gives the whole seconds to wait; nothing was exported or rewrapped.
+    MigrationRateLimited = 33,
     /// `unlock`: too many wrong vault passphrases, here or in migration authorization; no prompt was sent. The message
     /// gives the whole seconds to wait, and the service stays Locked.
     UnlockRateLimited = 34,
@@ -556,9 +567,12 @@ impl ErrorCode {
             Self::RandomSourceFailed => "random-source-failed",
             Self::ListTooLarge => "list-too-large",
             Self::MemoryUnprotected => "memory-unprotected",
+            Self::MigrationDenied => "migration-denied",
+            Self::MigrationUnavailable => "migration-unavailable",
             Self::RecoveryKeyInvalid => "recovery-key-invalid",
             Self::RecoveryCheckFailed => "recovery-check-failed",
             Self::RecoveryCheckUnavailable => "recovery-check-unavailable",
+            Self::MigrationRateLimited => "migration-rate-limited",
             Self::UnlockRateLimited => "unlock-rate-limited",
         }
     }

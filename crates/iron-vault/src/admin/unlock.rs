@@ -17,7 +17,7 @@ use crate::service_context::{ServiceContext, UnlockRefusal};
 use crate::service_state::{AdminOperation, ServiceState, UnavailableReason};
 
 /// The label of the one prompt `unlock` sends.
-const PASSPHRASE_PROMPT: &str = "Vault passphrase";
+pub(super) const PASSPHRASE_PROMPT: &str = "Vault passphrase";
 
 /// `unlock`'s handler, acting on the running service.
 pub(super) struct Unlock<F> {
