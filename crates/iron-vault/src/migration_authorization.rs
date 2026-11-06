@@ -21,8 +21,10 @@ use tokio::time::Instant;
 
 pub use attempt_limit::{AttemptLimiter, AttemptsCoolingDown, BASE_COOLDOWN, FAILURE_THRESHOLD, MAX_COOLDOWN};
 pub use challenge::{BindingDigest, CHALLENGE_LIFETIME, MigrationChallenge};
+#[cfg(target_os = "linux")]
+pub use method::VaultPassphraseMethod;
 pub(crate) use method::prove_challenge;
-pub use method::{MethodRefusal, OwnerRefusal, SourceOwnerMethod, VaultPassphraseMethod};
+pub use method::{MethodRefusal, OwnerRefusal, SourceOwnerMethod};
 pub use pending::{ChallengeBusy, PendingMigration};
 
 /// What a migration authorization permits (glossary: *Migration operation*).

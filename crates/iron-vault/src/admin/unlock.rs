@@ -5,12 +5,11 @@
 
 use std::sync::Arc;
 
-use iron_vault_store::{Passphrase, StoreFs};
-use secrecy::SecretString;
+use iron_vault_store::StoreFs;
 
 use super::dispatch::{AdminHandler, HandlerFuture};
 use super::principal::AdminPrincipal;
-use super::protocol::{AdminRequest, AdminResponse, ErrorCode, OwnerInput, Prompt};
+use super::protocol::{AdminRequest, AdminResponse, ErrorCode, Prompt};
 use super::server::{Exchange, ExchangeError};
 use crate::audit::AuditEvent;
 use crate::audit::vault::UnlockRefused;
@@ -58,7 +57,7 @@ impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
             label: PASSPHRASE_PROMPT.to_owned(),
             secret: true,
         };
-        let Some(passphrase) = vault_passphrase(exchange.prompt(&prompt).await?) else {
+        let Some(passphrase) = exchange.prompt(&prompt).await?.into_vault_passphrase() else {
             let refusal = UnlockRefusal::WrongPassphrase;
             UnlockRefused { refusal: &refusal }.emit();
             return Ok(refused(refusal));
@@ -68,13 +67,6 @@ impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
             Err(refusal) => refused(refusal),
         })
     }
-}
-
-/// The owner's input as a vault passphrase. Empty or non-UTF-8 input cannot be the passphrase, which was sealed as
-/// non-empty text, so it is refused as a wrong one. The input's buffer is cleared when it drops here.
-pub(crate) fn vault_passphrase(input: OwnerInput) -> Option<Passphrase> {
-    let text = std::str::from_utf8(input.expose_secret()).ok()?;
-    Passphrase::new(SecretString::from(text)).ok()
 }
 
 /// The response for the state a successful unlock settled in: Ready succeeds; Unavailable names its redacted reason.

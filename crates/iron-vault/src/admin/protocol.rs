@@ -18,7 +18,8 @@ use zeroize::Zeroizing;
 use crate::deployment::DeploymentProfile;
 use crate::standing::CredentialStanding;
 use iron_vault_policy::{CallerToken, CredentialKind, Port};
-use iron_vault_store::{RecordId, VaultId};
+use iron_vault_store::{Passphrase, RecordId, VaultId};
+use secrecy::SecretString;
 
 pub use iron_vault_store::MAX_CONFIG_LEN;
 pub use recovery_status::RecoveryStatus;
@@ -323,6 +324,14 @@ impl OwnerInput {
     /// The typed bytes, for the operation that turns them into its own secret type.
     pub fn expose_secret(&self) -> &[u8] {
         &self.0
+    }
+
+    /// The input as a vault passphrase, for `unlock` and the vault passphrase source-owner method. Empty or non-UTF-8
+    /// input cannot be the passphrase, which was sealed as non-empty text, so it is `None`, which both refuse as a wrong
+    /// passphrase. The input's buffer is cleared when it drops here.
+    pub fn into_vault_passphrase(self) -> Option<Passphrase> {
+        let text = std::str::from_utf8(self.expose_secret()).ok()?;
+        Passphrase::new(SecretString::from(text)).ok()
     }
 }
 
