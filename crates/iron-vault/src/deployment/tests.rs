@@ -286,8 +286,29 @@ fn a_malformed_overflow_uid_file_is_an_error_naming_the_file_but_not_its_content
 
 #[test]
 fn the_version_names_the_enabled_features() {
-    let features = if cfg!(feature = "dev-mode") { "dev-mode" } else { "none" };
+    let enabled: Vec<&str> = [
+        ("dev-mode", cfg!(feature = "dev-mode")),
+        ("test-support", cfg!(feature = "test-support")),
+    ]
+    .into_iter()
+    .filter_map(|(name, on)| on.then_some(name))
+    .collect();
+    let features = if enabled.is_empty() {
+        "none".to_string()
+    } else {
+        enabled.join(", ")
+    };
     assert_eq!(version(), format!("{} (features: {features})", env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn the_version_knows_every_cargo_feature() {
+    let manifest: toml::Table = include_str!("../../Cargo.toml").parse().unwrap();
+    let mut declared: Vec<&str> = manifest["features"].as_table().unwrap().keys().map(String::as_str).collect();
+    let mut known: Vec<&str> = CARGO_FEATURES.iter().map(|(name, _)| *name).collect();
+    declared.sort_unstable();
+    known.sort_unstable();
+    assert_eq!(known, declared, "add each feature in Cargo.toml's [features] to CARGO_FEATURES");
 }
 
 #[test]

@@ -382,21 +382,23 @@ pub fn no_isolation_warning(user: &str) -> String {
     format!("no isolation from malware running as {user}")
 }
 
-/// `<version> (features: <list>)`, naming every enabled build feature so a release check can refuse a build that has
-/// development mode. `--version` prints it after the binary's name.
+/// `<version> (features: <list>)`, naming every enabled non-default build feature so a release check can refuse a build
+/// that has development mode or the test hooks. `--version` prints it after the binary's name.
 pub fn version() -> String {
-    let features = if BUILD_FEATURES.is_empty() {
+    let enabled: Vec<&str> = CARGO_FEATURES.iter().filter(|(_, on)| *on).map(|(name, _)| *name).collect();
+    let features = if enabled.is_empty() {
         "none".to_string()
     } else {
-        BUILD_FEATURES.join(", ")
+        enabled.join(", ")
     };
     format!("{} (features: {features})", env!("CARGO_PKG_VERSION"))
 }
 
-/// The enabled Cargo features of this build.
-const BUILD_FEATURES: &[&str] = &[
-    #[cfg(feature = "dev-mode")]
-    "dev-mode",
+/// Every Cargo feature of this crate, in `Cargo.toml` order, with whether this build enables it. A test compares the
+/// names with `Cargo.toml`'s `[features]` table, so a new feature cannot be left out of `--version`.
+const CARGO_FEATURES: &[(&str, bool)] = &[
+    ("dev-mode", cfg!(feature = "dev-mode")),
+    ("test-support", cfg!(feature = "test-support")),
 ];
 
 #[cfg(test)]

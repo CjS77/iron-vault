@@ -16,7 +16,18 @@ fn run(args: &[&str]) -> Output {
 fn version_names_the_enabled_features() {
     let output = run(&["--version"]);
     assert!(output.status.success(), "exit status {:?}", output.status);
-    let features = if cfg!(feature = "dev-mode") { "dev-mode" } else { "none" };
+    let enabled: Vec<&str> = [
+        ("dev-mode", cfg!(feature = "dev-mode")),
+        ("test-support", cfg!(feature = "test-support")),
+    ]
+    .into_iter()
+    .filter_map(|(name, on)| on.then_some(name))
+    .collect();
+    let features = if enabled.is_empty() {
+        "none".to_string()
+    } else {
+        enabled.join(", ")
+    };
     let expected = format!("iron-vault {} (features: {features})\n", env!("CARGO_PKG_VERSION"));
     assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
     assert_eq!(String::from_utf8_lossy(&output.stderr), "", "--version must not log");
