@@ -281,8 +281,7 @@ not been authorized.
 
 ### Error codes
 
-Three new codes join the [admin protocol's table](admin-protocol.md#admin-response-error-kind-5). They start at 28,
-because 27 is taken by `memory-unprotected` (K-198, not yet landed).
+Three codes join the [admin protocol's table](admin-protocol.md#admin-response-error-kind-5), numbered 28, 29 and 33.
 
 | Code | Name | Meaning |
 |---|---|---|
@@ -310,15 +309,14 @@ to try again.
 
 ## Audit events
 
-These are audit events in the audit log. When the migration authorization ticket emits them, it adds their rows to
-the [catalogue](audit-logging.md#catalogue), adds `migration` to the event subjects and types the new fields there. None
-carries owner input.
+These are audit events in the audit log, catalogued in [audit-logging.md](audit-logging.md#catalogue). None carries
+owner input.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `migration.challenge-issued` | INFO | a migration challenge was issued (step 5) | `operation`, `method`; `destination_recipient` for `add_recipient` |
 | `migration.authorized` | INFO | a source-owner method proved the challenge (step 7) | `operation`, `method`; `destination_recipient` for `add_recipient` |
-| `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled (steps 6–7), or the authorization was refused when consumed (step 9) | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `error_kind` for `unavailable`; `retry_after` for `rate_limited` |
+| `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled (steps 6–7), or the authorization was refused when consumed (step 9) | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
 
 | Field | Type | Form |
 |---|---|---|

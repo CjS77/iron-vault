@@ -227,7 +227,7 @@ These are the fields more than one event uses:
 | `config_digest` | string | A config digest, as `blake2b:` and 64 lowercase hex digits |
 | `file` | string | A state or config file name, never a path |
 | `step` | string | A fixed step label, such as an approval step or an init step |
-| `refusal` | string | Why an admin connection, request or command was refused: a fixed label |
+| `refusal` | string | Why an admin connection, request, command or migration authorization was refused: a fixed label |
 | `unavailable_reason` | string | An unavailable reason: `locked`, `policy_invalid`, `checking` or `recovery_needed` |
 | `detail` | string | A check failure's detail: fixed phrases with versions and configured names only |
 | `error_kind` | string | A [library error's](#library-errors) fixed kind label |
@@ -718,6 +718,14 @@ other approval.
 | `recovery.checked` | INFO when opened, WARN otherwise | `recovery check` ended with `invalid` at its prompt, or with any other outcome after the key parsed and the lock was taken; `busy` and the re-check's `wrong-state` and `recovery-check-unavailable` record only `admin.command` | `recovery_outcome`; for `opened`, `vault_id` and `recorded`, with `error_kind` when not recorded; for `failed`, `recovery_failure`; for `unavailable`, `file` and `error_kind` |
 | `recovery.reminder` | INFO | a reminder evaluation found a recovery reminder due | `recovery_record`; `last_checked` when `checked`; `reminders_since` when `never_checked`; `error_kind` when `unusable`; `reminder_days`; `remediation` |
 
+**Migration authorization** ([migration-authorization.md](migration-authorization.md#audit-events) gives the order of the records of one exchange):
+
+| Event | Level | When | Fields |
+|---|---|---|---|
+| `migration.challenge-issued` | INFO | a migration challenge was issued | `operation`, `method`; `destination_recipient` for `add_recipient` |
+| `migration.authorized` | INFO | a source-owner method proved the challenge | `operation`, `method`; `destination_recipient` for `add_recipient` |
+| `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled, or the authorization was refused when consumed | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
+
 **Owner notifications** (v1; not emitted in v0.
 [owner-notifications.md](owner-notifications.md#which-events-notify) gives which events raise one):
 
@@ -761,6 +769,10 @@ The fields that only one event uses, or that only audit events use:
 | `last_checked` | string | The record's last successful recovery check, an RFC 3339 UTC timestamp to the second |
 | `reminders_since` | string | When the reminder schedule started counting, an RFC 3339 UTC timestamp to the second |
 | `reminder_days` | number | The reminder interval in force, in days |
+| `operation` | string | A migration operation: `export` or `add_recipient` |
+| `method` | string | A source-owner method's label: `vault_passphrase` in v0 |
+| `destination_recipient` | string | The recipient key a migration adds, in its `age1…` text, which is public |
+| `retry_after` | number | Whole seconds left in the passphrase attempt limit's cooldown, rounded up |
 | `topic` | string | A notification topic label, such as `vault_changed` |
 | `source_event` | string | The event name of the audit event an owner notification was made from |
 | `urgency` | string | `normal` or `critical` |
@@ -800,8 +812,8 @@ follows the [library error](#library-errors) rule:
 
 ### Event names
 
-An event name is `<subject>.<name>`: a lowercase subject (`admin`, `caller`, `config`, `credential`, `owner`,
-`recovery`, `request`, `response`, `route`, `service`, `vault`), a dot, and a kebab-case name, matching
+An event name is `<subject>.<name>`: a lowercase subject (`admin`, `caller`, `config`, `credential`, `migration`,
+`owner`, `recovery`, `request`, `response`, `route`, `service`, `vault`), a dot, and a kebab-case name, matching
 `^[a-z]+\.[a-z]+(-[a-z]+)*$`. Event names keep the kebab-case already in use in the code and the design docs; only
 field names and label values are snake_case. Names are stable: renaming or removing one changes the schema version.
 Each name is defined once, as an `audit::EventName` constant beside its struct.

@@ -724,15 +724,16 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
 | `26` | `list-too-large` | `list`: the credential list does not fit one frame; the message names the count |
 | `27` | `memory-unprotected` | `unlock`, `recovery check`: a protected install's memory is not locked, so the vault identity is not unwrapped; the message names the memory-lock limit or the locking error, and the service state is unchanged |
+| `28` | `migration-denied` | `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing was exported or rewrapped |
+| `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its vault passphrase prompt; nothing was exported or rewrapped |
 | `30` | `recovery-key-invalid` | `recovery check`: the text is not an `AGE-SECRET-KEY-1…` recovery key; the message holds nothing typed |
 | `31` | `recovery-check-failed` | `recovery check`: the key does not open this vault; the message is fixed |
 | `32` | `recovery-check-unavailable` | `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the key was not judged; the message names the initialization state, or the file and error kind |
-
+| `33` | `migration-rate-limited` | `export`, `recipient add`: too many wrong vault passphrases in a row; the [attempt limit](migration-authorization.md#passphrase-attempt-limit) refused the attempt before any prompt, and the message gives the whole seconds to wait; nothing was exported or rewrapped |
 | `34` | `unlock-rate-limited` | `unlock`: too many wrong vault passphrases, here or in migration authorization, so no prompt was sent; the message gives the seconds to wait, and the service stays Locked |
 
-Codes 28 and 29 are reserved for `migration-denied` and `migration-unavailable`, which
-[migration-authorization.md](migration-authorization.md#error-codes) defines and the migration commands add to this
-table.
+The migration codes 28, 29 and 33 are raised by the migration authorization step that `export` and `recipient add`
+share ([migration-authorization.md](migration-authorization.md#error-codes)).
 
 ## Versions
 
@@ -740,7 +741,7 @@ This document specifies protocol version 1, the only version the codec reads or 
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
 `status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), `replace` (command 10), `rm`
-(command 11), `recovery check` (command 12), `status` tags 13 to 17, and error codes 7 to 27 and 30 to 32 join it
+(command 11), `recovery check` (command 12), `status` tags 13 to 17, and error codes 7 to 34 join it
 rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
