@@ -1,0 +1,25 @@
+#!/bin/sh
+# On remove, stops and disables the listener socket instances before the generated snippet stops the service.
+# cargo-deb generates nothing for the template unit (its name contains '@'). The listeners go first so that no
+# connection can start the service again through socket activation once it has stopped.
+#
+# systemctl is used instead of deb-systemd-invoke: the latter takes no unit patterns and cannot disable. The
+# directory test and '|| true' keep remove working in a chroot or container without a running systemd.
+set -e
+
+# Instance names enabled by any WantedBy= or RequiredBy= symlink, one per line, without duplicates.
+listener_instances() {
+    find /etc/systemd/system -mindepth 2 -maxdepth 2 \( -path '*.wants/*' -o -path '*.requires/*' \) \
+        -name 'iron-vault-listener@*.socket' -printf '%f\n' 2>/dev/null | sort -u
+}
+
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+    systemctl stop 'iron-vault-listener@*.socket' || true
+    listener_instances | while read -r unit; do
+        systemctl disable "$unit" || true
+    done
+fi
+
+#DEBHELPER#
+
+exit 0

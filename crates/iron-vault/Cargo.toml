@@ -106,3 +106,24 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync
 
 [lints]
 workspace = true
+
+# The Linux package: `scripts/build-deb.sh` runs `cargo deb -p iron-vault` and checks the result against
+# `design/linux-package.md`. It names no features, so `dev-mode` is never built in. The service's directories under
+# /etc, /var and /run are created by tmpfiles.d, not shipped, and the only conffile is the logrotate rule.
+[package.metadata.deb]
+name = "iron-vault"
+maintainer = "Iron Vault maintainers <noreply@example.invalid>"
+section = "admin"
+priority = "optional"
+depends = "$auto, systemd, debconf (>= 0.5) | debconf-2.0"
+recommends = "logrotate"
+maintainer-scripts = "../../packaging/linux/debian"
+# Installs iron-vault.service and generates its enable, start, restart and stop snippets. The template unit (its name contains '@') gets no generated snippets; prerm handles its instances.
+systemd-units = { unit-scripts = "../../packaging/linux", enable = true, start = true, restart-after-upgrade = true }
+assets = [
+    ["target/release/iron-vault", "usr/bin/iron-vault", "755"],
+    ["../../packaging/linux/iron-vault-listener@.socket", "usr/lib/systemd/system/iron-vault-listener@.socket", "644"],
+    ["../../packaging/linux/sysusers.d/iron-vault.conf", "usr/lib/sysusers.d/iron-vault.conf", "644"],
+    ["../../packaging/linux/tmpfiles.d/iron-vault.conf", "usr/lib/tmpfiles.d/iron-vault.conf", "644"],
+    ["../../packaging/linux/logrotate.d/iron-vault", "etc/logrotate.d/iron-vault", "644"],
+]

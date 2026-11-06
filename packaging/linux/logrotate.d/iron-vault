@@ -1,0 +1,10 @@
+/var/log/iron-vault/iron-vault.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    nocreate
+    su iron-vault iron-vault
+}

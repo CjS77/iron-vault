@@ -1,0 +1,8 @@
+Template: iron-vault/purge_vault
+Type: boolean
+Default: false
+_Description: Delete the vault and every stored credential?
+ /var/lib/iron-vault holds the only copies of the encrypted credential
+ records. The offline recovery key cannot bring back deleted records.
+ .
+ If you keep the vault, a later install of iron-vault opens it again.

@@ -1,0 +1,43 @@
+#!/bin/sh
+# Purge deletes what the service wrote outside dpkg's knowledge: /etc/iron-vault, /var/log/iron-vault and the listener
+# drop-ins. It deletes the vault only if the owner answers yes to the debconf question, asked now as mariadb-server
+# does; no answer, a non-interactive purge or a missing debconf keeps it. Messages go to stderr (see postinst).
+set -e
+
+[ "$1" = purge ] && [ -e /usr/share/debconf/confmodule ] && . /usr/share/debconf/confmodule
+
+vault=/var/lib/iron-vault
+
+# Whether the owner said to delete the vault; false when the question cannot be asked.
+delete_vault_requested() {
+    command -v db_input >/dev/null 2>&1 || return 1
+    db_input high iron-vault/purge_vault || true
+    db_go || true
+    RET=false
+    db_get iron-vault/purge_vault || true
+    [ "$RET" = true ]
+}
+
+purge_vault_question() {
+    [ -d "$vault" ] || return 0
+    if delete_vault_requested; then
+        rm -rf "$vault"
+    else
+        echo "iron-vault: kept $vault, which holds the encrypted credentials." >&2
+        echo "iron-vault: to delete it: sudo rm -rf $vault" >&2
+    fi
+}
+
+if [ "$1" = purge ]; then
+    rm -rf /etc/iron-vault /var/log/iron-vault
+    # Globs expand to nothing when no drop-in exists, and rm -f ignores the literal pattern.
+    rm -rf /etc/systemd/system/iron-vault-listener@*.socket.d
+    purge_vault_question
+    if command -v db_purge >/dev/null 2>&1; then
+        db_purge || true
+    fi
+fi
+
+#DEBHELPER#
+
+exit 0

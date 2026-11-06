@@ -1,0 +1,28 @@
+#!/bin/sh
+# Creates the service account and its directories, then (through the snippets cargo-deb generates) enables
+# iron-vault.service, starts it on a fresh install and restarts it on an upgrade. No listener socket unit is enabled:
+# the administrator creates those. Messages go to stderr because debconf's confmodule owns stdout.
+set -e
+
+# Registers the purge question's template with debconf; the question itself is asked by postrm.
+[ -e /usr/share/debconf/confmodule ] && . /usr/share/debconf/confmodule
+
+if [ "$1" = configure ]; then
+    # The directories must exist before any unit starts: a listener socket binds in /run/iron-vault ahead of the service.
+    systemd-sysusers iron-vault.conf
+    systemd-tmpfiles --create iron-vault.conf
+fi
+
+# The generated snippets reload systemd, then enable and start or restart the service.
+#DEBHELPER#
+
+if [ "$1" = configure ]; then
+    if [ -z "$2" ]; then
+        next="sudo iron-vault init"
+    else
+        next="sudo iron-vault unlock"
+    fi
+    echo "iron-vault: the service is Locked until you run '$next'." >&2
+fi
+
+exit 0
