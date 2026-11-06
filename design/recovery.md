@@ -331,3 +331,12 @@ picked. Each takes its default until the owner decides.
 9. **The record has no format version.** *Default:* like `init.unfinished`, `recovery.toml` carries no version, and
    a key a later release adds makes the record unusable to an older one, which then counts a reminder as due until the
    next check rewrites it. The alternative adds `version = 1`.
+10. **The vault a check opens in Ready.** In Ready the check proves the key against the files on disk and never
+    compares the vault ID it opened with the vault ID of the vault the service holds, as migration's `not_this_vault`
+    does ([migration-authorization.md](migration-authorization.md#error-codes)). A writer of the state directory could
+    plant an `identity.age` wrapped for the recovery key's recipient and a `manifest.age` MAC'd by the identity inside
+    it, and the check would pass against that pair. *Default:* no comparison: such a writer has already defeated the
+    vault, as [The recovery check record](#the-recovery-check-record) and the README's
+    [security boundary](../README.md#security-boundary) say. The alternative ends a check in Ready with
+    `recovery-check-failed` when the vault ID it opened is not the one the service holds, which catches a pair swapped
+    in while the service runs; in Locked no vault ID is held, so there is nothing to compare.
