@@ -23,7 +23,8 @@ use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
 use iron_vault::admin::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode, Frame, Prompt};
 use iron_vault::admin::server::{AdminServer, Exchange, Limits};
 use iron_vault::admin::socket::AdminSocket;
-use iron_vault::migration_authorization::{AttemptsCoolingDown, FAILURE_THRESHOLD, MigrationOperation, MigrationRefusal, OwnerRefusal};
+use iron_vault::attempt_limit::{AttemptsCoolingDown, FAILURE_THRESHOLD};
+use iron_vault::migration_authorization::{MigrationOperation, MigrationRefusal, OwnerRefusal};
 use iron_vault::service_context::ServiceContext;
 use iron_vault::service_state::ServiceState;
 use iron_vault_store::{

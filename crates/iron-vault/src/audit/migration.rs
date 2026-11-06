@@ -122,8 +122,9 @@ mod tests {
     use iron_vault_store::RecipientKey;
 
     use super::*;
+    use crate::attempt_limit::AttemptsCoolingDown;
     use crate::audit::tests::record_of;
-    use crate::migration_authorization::{AttemptsCoolingDown, OwnerRefusal};
+    use crate::migration_authorization::OwnerRefusal;
 
     const RECIPIENT: &str = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p";
 

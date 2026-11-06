@@ -1189,10 +1189,21 @@ fn recovery_check_has_the_documented_command_result_and_error_codes() {
         (ErrorCode::RecoveryKeyInvalid, 30, "recovery-key-invalid"),
         (ErrorCode::RecoveryCheckFailed, 31, "recovery-check-failed"),
         (ErrorCode::RecoveryCheckUnavailable, 32, "recovery-check-unavailable"),
+        (ErrorCode::UnlockRateLimited, 34, "unlock-rate-limited"),
+    ]
+    .into_iter()
+    .for_each(|(code, number, name)| {
+        assert_eq!((code as u16, code.name()), (number, name));
+        assert_round_trips(&error(code, "m"));
+    });
+}
+
+#[test]
+fn the_migration_error_codes_have_their_documented_numbers_and_names() {
+    [
         (ErrorCode::MigrationDenied, 28, "migration-denied"),
         (ErrorCode::MigrationUnavailable, 29, "migration-unavailable"),
         (ErrorCode::MigrationRateLimited, 33, "migration-rate-limited"),
-        (ErrorCode::UnlockRateLimited, 34, "unlock-rate-limited"),
     ]
     .into_iter()
     .for_each(|(code, number, name)| {
