@@ -227,7 +227,7 @@ These are the fields more than one event uses:
 | `config_digest` | string | A config digest, as `blake2b:` and 64 lowercase hex digits |
 | `file` | string | A state or config file name, never a path |
 | `step` | string | A fixed step label, such as an approval step or an init step |
-| `refusal` | string | Why an admin connection, request, command or migration authorization was refused: a fixed label |
+| `refusal` | string | Why an admin connection, request, command, migration authorization or host unlock was refused: a fixed label |
 | `unavailable_reason` | string | An unavailable reason: `locked`, `policy_invalid`, `checking` or `recovery_needed` |
 | `detail` | string | A check failure's detail: fixed phrases with versions and configured names only |
 | `error_kind` | string | A [library error's](#library-errors) fixed kind label |
@@ -615,8 +615,9 @@ with these fields.
 | `service.started` | INFO | the log destination is open, before the admin socket is bound | `log_destination`, `core_dumps`, `memory_protection` |
 | `service.hardening-incomplete` | ERROR | at startup, when core dumps are not disabled or memory is not locked | `core_dumps`, `memory_protection`, `remediation` |
 | `service.log-destination-changed` | INFO | an activated config moved the log destination; written to both destinations | `log_destination`, `previous_log_destination`, `version` |
-| `service.lock-transition` | INFO | a lock transition: Locked to Checking, the outcome of the check that follows, and Ready or Unavailable to Locked | `from_state`, `to_state`; `unavailable_reason` when `to_state` is `unavailable` |
+| `service.lock-transition` | INFO | a lock transition: Locked to Checking, or Starting to Checking on a host unlock, the outcome of the check that follows, and Ready or Unavailable to Locked | `from_state`, `to_state`; `unavailable_reason` when `to_state` is `unavailable` |
 | `vault.unlock-refused` | WARN | an unlock was refused | `refusal`, such as `wrong_passphrase` or `rate_limited`; `memory_protection` when `refusal` is `memory_unprotected`, a protected install whose memory is not locked; `retry_after` (whole seconds) when `refusal` is `rate_limited`, the vault passphrase attempt limit |
+| `vault.host-unlock` | INFO, or WARN when refused | a Container-profile service tried the unlock handoff at startup; other profiles never write it | `host_unlock_outcome`; `refusal` when refused: `memory_unprotected`, `untrusted`, `unreadable`, `not_an_identity`, `not_initialized` or `not_a_recipient` |
 | `vault.presence-refused` | WARN | owner presence for `replace` or `rm` was refused: the approval passphrase was wrong or the key is not the pinned approver's; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`); no `config_digest`, since no config is involved |
 | `vault.lock-incomplete` | WARN | a lock's drain ended with a serving snapshot or the vault identity still held | `snapshots_held`, `identity_held` |
 
@@ -626,7 +627,10 @@ protection in `remediation`. The reason text a
 failed core-dump setting carries is not logged, since it is an OS error's text. Every record carries
 `deployment_profile` as a constant field, so the startup event needs no profile field of its own. The state labels are
 fixed strings, never `ServiceState`'s `Debug` output, which writes `Unavailable(PolicyInvalid)`.
-`service.lock-transition` is the struct `audit::LockTransition`.
+`service.lock-transition` is the struct `audit::LockTransition`. `vault.host-unlock` is `audit::vault::HostUnlock`; it
+never holds the handoff's bytes or its recipient key, and a `memory_unprotected` refusal also writes the
+`vault.unlock-refused` record every unlock path's memory guard writes
+([docker-compose.md](docker-compose.md#in-the-container)).
 
 **Admin commands:**
 
@@ -762,6 +766,7 @@ The fields that only one event uses, or that only audit events use:
 | `config_field` | string | The config key a fact is about, such as `ca_file` |
 | `matches` | number | Scrub pattern matches in one response |
 | `defect` | string | The label of the check a service defect failed |
+| `host_unlock_outcome` | string | `unlocked`, `absent` (no unlock handoff) or `refused` |
 | `recovery_outcome` | string | `opened`, `failed` (the key does not open this vault), `invalid` (the text is not a recovery key) or `unavailable` (the check could not run) |
 | `recovery_failure` | string | Why a recovery key failed: `not_a_recipient` or `identity_unverified` |
 | `recorded` | boolean | Whether a successful recovery check's record was written |

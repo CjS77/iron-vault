@@ -336,6 +336,15 @@ jq -c 'select(.event == "recovery.reminder")
        | {timestamp, recovery_record, last_checked, reminders_since, error_kind}' /var/log/iron-vault/iron-vault.log
 ```
 
+Host unlocks, in the Container profile. Each start writes one `vault.host-unlock`: `unlocked` and `absent` (no unlock
+handoff) at INFO, and `refused` at WARN with its `refusal`, such as `untrusted` or `not_a_recipient`. A refused or absent
+host unlock leaves the service Locked until a passphrase `unlock`, so alert on `refused`:
+
+```sh
+docker compose logs --no-log-prefix iron-vault \
+  | jq -c 'select(.event == "vault.host-unlock") | {timestamp, host_unlock_outcome, refusal}'
+```
+
 ## Not supported
 
 - **journald output.** The owner chose files. JSON inside journald's `MESSAGE` field loses journald's own field queries,
