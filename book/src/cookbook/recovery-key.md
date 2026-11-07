@@ -25,7 +25,7 @@ Keep it apart from the vault and from the machine:
 - **An independent password manager**, one this machine doesn't sync from, or **paper**, kept somewhere safe. `init`
   also shows the key as a QR code, which you can print.
 - If you like, also in a passphrase-encrypted file of your own, such as `age -p`.
-- Never beside the vault, in the same backup, or in a file the service's machine can read.
+- Never beside the vault or in the same backup. An encrypted file must live off this machine too.
 
 Keep two more things with it: a copy of your approved config, and the output of `iron-vault list`. If the vault is
 ever lost, they are your list of which credentials to reissue from each provider. The service keeps no other
@@ -104,7 +104,8 @@ Run the check again whenever you move the key to a new place.
 - **`recovery-check-unavailable`.** The check could not run, because a vault file could not be read. This says
   nothing about the key. `status` and the log name the file.
 
-Each check logs a `recovery.checked` record with `recovery_outcome` `opened`, `invalid` or `failed`. It never holds
+Each check logs a `recovery.checked` record with `recovery_outcome` `opened`, `invalid`, `failed` or
+`unavailable`. It never holds
 the key.
 
 ## Reference

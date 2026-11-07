@@ -26,7 +26,7 @@ service to reload:
 ```sh
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/iron-vault-dev/config.toml"
 sed -i 's/burst = 2 }/burst = 500 }/' "$CONFIG"
-kill -HUP "$(pgrep -x iron-vault)"
+pkill -HUP -u "$USER" -f 'iron-vault serve'
 ```
 
 ### 2. See what the service does
@@ -38,7 +38,7 @@ iron-vault status
 ```text
 service: unavailable
 reason: policy invalid
-profile: development — no isolation from malware running as code
+profile: development — no isolation from malware running as alice
 vault: locked
 vault id: unknown
 approval committed: unknown while the vault is locked
@@ -122,7 +122,7 @@ iron-vault status | head -6
 
 ```text
 service: ready
-profile: development — no isolation from malware running as code
+profile: development — no isolation from malware running as alice
 vault: unlocked
 vault id: 8c597c79-…
 approval committed: 10
@@ -134,8 +134,10 @@ request may get `429`.
 
 ## What can go wrong
 
-- **`status` shows `vault: locked` while Unavailable.** That is how `status` reports an Unavailable service; the
-  approval above still worked without an `unlock`.
+- **`status` shows `vault: locked` while Unavailable, but the secrets are not out of memory.** Unavailable keeps the
+  vault identity in memory; it holds no policy and no credential records. That is why the approval above worked
+  without an `unlock`. To clear the vault identity while you investigate, run `iron-vault lock`, then `iron-vault
+  unlock` before you approve. See [service states](../reference/states.md).
 - **You don't have the config you last approved.** Write a new one from scratch and approve it. The summary lists it
   all as added either way.
 

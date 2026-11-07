@@ -62,7 +62,9 @@ shown once. [Store and check the recovery key](recovery-key.md) now. `status` sh
 ### 4. Add credentials and a peer-authenticated caller
 
 Store each credential with `sudo iron-vault add`. Then write a config whose callers are recognised by their account
-on a Unix socket listener, with no token:
+on a Unix socket listener, with no token. This is a fragment of the
+[multi-user config](../installation/multiuser-linux.md#4-write-the-config), not a whole config: on its own it has no
+`schema_version` and grants a `gh` route it doesn't define, so it would be refused.
 
 ```toml
 [listeners.local]

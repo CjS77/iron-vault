@@ -26,7 +26,7 @@ iron-vault status
 ```text
 locked
 service: locked
-profile: development — no isolation from malware running as code
+profile: development — no isolation from malware running as alice
 vault: locked
 vault id: unknown
 approval committed: unknown while the vault is locked
@@ -104,7 +104,7 @@ curl -si -H "$AUTH" http://127.0.0.1:7878/httpbin/headers | head -1
 
 ```text
 service: locked
-profile: development — no isolation from malware running as code
+profile: development — no isolation from malware running as alice
 vault: locked
 HTTP/1.1 503 Service Unavailable
 ```
@@ -120,7 +120,7 @@ iron-vault status
 Vault passphrase:
 the vault is unlocked: the service is Ready
 service: ready
-profile: development — no isolation from malware running as code
+profile: development — no isolation from malware running as alice
 vault: unlocked
 vault id: 8c597c79-…
 approval committed: 9

@@ -56,7 +56,7 @@ What each one points at:
 | `unauthenticated` | 401 | a missing, wrong or [revoked](caller-token.md) caller token; such records name no caller |
 | `not_granted`, `method_not_allowed`, `path_not_allowed` | 403 | the caller's `routes`, or the route's `methods` and `paths` ([widen or narrow a route](change-route.md)) |
 | `no_route` | 404 | a base URL missing the route prefix |
-| `rate_limited` | 429 | the route's `rate_limit`; a burst of these straight after an approval or unlock is the bucket [starting empty](getting-started.md#rate-limits-start-empty) |
+| `rate_limited` | 429 | the route's `rate_limit`; a burst of these straight after an unlock, approval, reload, `replace` or `rm` is the bucket [starting empty](getting-started.md#rate-limits-start-empty) |
 | `locked` | 503 | the service is Locked: [unlock it](lock-unlock-restart.md) |
 | `policy_invalid` | 503 | the config check failed: see [tamper detection](tamper-detection.md) |
 
@@ -118,9 +118,9 @@ Credential changes, issued tokens, approvals, config checks, recovery checks, re
 with only the fields each one has:
 
 ```sh
-jq -c 'select(.event | strings | test("^(credential|caller|vault|recovery)\\.|^config\\.(approval|reload|check)|^service\\.lock"))
+jq -c 'select(.event | strings | test("^(credential|caller|vault|recovery)\\.|^admin\\.refused|^config\\.(approval|reload|check)|^service\\.lock"))
        | {timestamp, event}
-         + ({credential, version, refusal, recovery_outcome, unavailable_reason, from_state, to_state}
+         + ({credential, version, refusal, peer_uid, recovery_outcome, unavailable_reason, from_state, to_state}
             | with_entries(select(.value != null)))' $LOG
 ```
 
@@ -139,9 +139,14 @@ jq -c 'select(.event | strings | test("^(credential|caller|vault|recovery)\\.|^c
 {"timestamp":"2026-11-07T10:24:32.584363Z","event":"config.approval-completed","version":10}
 ```
 
-Things to look for: a `vault.presence-refused` or `vault.unlock-refused` you didn't cause (someone tried a
-passphrase), an approval or `credential.replaced` you didn't make, and a `config.reload-failed` (someone changed the
-published config).
+Things to look for:
+
+- an `admin.refused` with refusal `not_admin_principal`: an account that is not the admin tried the admin socket, and
+  `peer_uid` names it;
+- a `vault.presence-refused` or `vault.unlock-refused` you didn't cause: someone tried the vault passphrase;
+- a `config.approval-refused` you didn't cause: someone tried the approval passphrase;
+- an approval or `credential.replaced` you didn't make;
+- a `config.reload-failed`: someone changed the published config.
 
 Every admin connection also writes an `admin.command` record with the command and the connecting account's
 `principal_uid`. A declined or invalid approval writes only that record.

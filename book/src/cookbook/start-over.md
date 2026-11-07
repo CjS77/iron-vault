@@ -54,7 +54,7 @@ iron-vault status
 ```text
 the service is running: development profile, admin protocol version 1
 service: locked
-profile: development — no isolation from malware running as code
+profile: development — no isolation from malware running as alice
 vault: not initialized (run iron-vault init)
 vault id: unknown
 approval committed: unknown while the vault is locked
