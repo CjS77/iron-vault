@@ -19,13 +19,15 @@ The CLI prints a refused command as one line on stderr and exits with status `1`
 iron-vault: the service answered error 13 (wrong-state): ...
 ```
 
-The number and the name are fixed; the text after them is the service's message. A message never repeats anything
-you typed, so it is safe to paste into a ticket. For three codes the CLI adds a line saying what to do:
-`not-admin-principal`, `unsupported-version` and `memory-unprotected`.
+The number and the name are fixed; the text after them is the service's message. A message never repeats a secret or
+passphrase you typed, so it is safe to paste into a ticket, though it may name routes, credentials and hosts. For
+three codes the CLI adds a line saying what to do: `not-admin-principal`, `unsupported-version` and
+`memory-unprotected`.
 
 The other exit statuses are `0` for success, `2` for a usage error caught before anything was sent, `3` when no answer
-came back (the service is not running, this account may not connect, or the exchange failed), and `4` when `status`
-found the service in a state other than Ready, or `list` found no vault open.
+came back (the service is not running, this account may not connect, the exchange failed, a prompt got no value, or a
+secret value the service sent could not be shown on a terminal), and `4` when `status` found the service in a state
+other than Ready, or `list` found no vault open.
 
 ### Protocol and connection
 
@@ -37,7 +39,7 @@ These can happen on any command.
 | `2` | `malformed-frame` | A message on the admin socket broke the protocol's rules. | This is a bug, or something other than the `iron-vault` CLI is talking to the socket. Report it with the command you ran. |
 | `3` | `unknown-command` | The service does not know the command. | The CLI is newer than the service. Restart the service on the new binary. |
 | `4` | `unexpected-frame` | A message arrived out of turn in the exchange. | As for `malformed-frame`. |
-| `5` | `not-admin-principal` | The account you ran the command as may not use the admin socket. Nothing it sent was read. | In a protected install, run the command with `sudo`: only root and the `iron-vault` account are admin principals. In development, run it as the account that runs `iron-vault serve`. |
+| `5` | `not-admin-principal` | The account you ran the command as may not use the admin socket. Nothing it sent was read. | In a protected install, run the command with `sudo`: only root and the `iron-vault` account are admin principals. In a container, only root is: run `sudo iron-vault …` on the host, against the bind-mounted admin socket. A plain `docker exec` arrives as the service's own uid and is refused. In development, run it as the account that runs `iron-vault serve`. |
 | `6` | `busy` | The service is already serving as many admin connections as it allows, or another command holds the lock this one needs. | Wait for the other command to finish, then try again. |
 | `13` | `wrong-state` | The command is not allowed in the service's current state. The message names the state. | See [which commands run in which state](states.md#admin-commands-by-state). For example, `unlock` needs Locked, `add` needs Ready, and `init` needs Locked with no vault. |
 
@@ -57,7 +59,7 @@ These can happen on any command.
 | `14` | `unlock-denied` | The vault passphrase was wrong. | Try again. After 5 wrong passphrases the attempt limit applies (`unlock-rate-limited`). |
 | `15` | `unlock-failed` | The vault did not open for a reason other than the passphrase, such as a damaged or unreadable file. The service stays Locked. | Read the message and the log's `vault.*` events. `iron-vault recovery check` tells you whether the recovery key still opens the vault. |
 | `16` | `unlocked-unavailable` | The vault opened, but the config check failed, so the service is Unavailable. The message names the redacted reason. | Run `status`, and read the `config.check-failed` event in the log. For `policy invalid`, approve a good config with `config approve`. |
-| `27` | `memory-unprotected` | A protected install's memory is not locked against swap, so the vault was not opened. The service stays Locked. `recovery check` refuses with this code too. | Raise the memory-lock limit: `LimitMEMLOCK=infinity` on the systemd unit, or `ulimits: memlock: -1` under Docker Compose. Then restart the service and unlock again. |
+| `27` | `memory-unprotected` | A protected or container install's memory is not locked against swap, so the vault was not opened. The service stays Locked. `recovery check` refuses with this code too. | Raise the memory-lock limit: `LimitMEMLOCK=infinity` on the systemd unit, or `ulimits: memlock: -1` under Docker Compose. Then restart the service and unlock again. |
 | `34` | `unlock-rate-limited` | Too many wrong vault passphrases, here or in migration authorization. No prompt was sent. The message gives the seconds to wait. | Wait that long. The cooldown starts at 30 seconds and doubles up to 15 minutes. `lock` does not clear it. |
 
 ### `config approve`
@@ -67,7 +69,7 @@ These can happen on any command.
 | `7` | `config-invalid` | The proposed config does not parse, does not validate, or would not activate. Nothing was reserved, and the active config is unchanged. | Fix what the message names and approve again. A common case: a route sends a credential to a host its record does not permit, which only `replace` can change. |
 | `8` | `declined` | You did not type `yes` at the summary. | Nothing was changed. |
 | `9` | `approval-denied` | The approval passphrase did not open the approver key, or the key it opened is not the vault's pinned approver. Nothing was reserved. | Type the approval passphrase, not the vault passphrase. |
-| `10` | `approval-unavailable` | The service cannot run an approval now. No version was reserved. | Read the message; the service may be in a state that cannot approve. Try again once `status` shows Ready, or Unavailable with `policy invalid`. |
+| `10` | `approval-unavailable` | The service cannot run an approval now, or a `lock` cancelled the approval at its prompt. No version was reserved. | Read the message; the service may be in a state that cannot approve. Try again once `status` shows Ready, or Unavailable with `policy invalid`. |
 | `11` | `approval-failed` | The approval failed after it reserved a version and before it committed. That version number is used up. | Read `config.approval-failed` in the log for the step, fix it and approve again. The next approval gets a higher version. |
 | `12` | `committed-not-active` | The approval committed, but it was not published or did not activate, so the service is Unavailable. | Run `status` and read `config.activation-failed` in the log. Approve a corrected config to recover. |
 
