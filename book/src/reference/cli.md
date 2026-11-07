@@ -1,3 +1,243 @@
 # CLI
 
-This page is not written yet.
+Every `iron-vault` command and option, with what each one does. The sections after the introduction are generated
+from the same definitions the CLI parses, the way `iron-vault completions` is, so they say what
+`iron-vault COMMAND --help` says.
+
+## Secrets are never arguments
+
+No argument or option ever takes a secret value. Arguments end up in shell history, process listings and error
+messages, where a passphrase or a provider key must never appear
+([§3.2](../../../design/iron-vault-specification.md#32-service-and-cli-boundary)). A command that needs one has the
+service prompt for it, and the CLI reads the answer in one of two ways:
+
+- **From a terminal**, with echo off.
+- **From stdin**, one line per prompt, when stdin is not a terminal. Pipe a secret in from a password manager, so it
+  never reaches your shell history: `pass show fx | iron-vault add fx --origin api.fx.example`.
+
+`init` is the exception: it shows the recovery key, so it needs a controlling terminal and refuses to run without
+one.
+
+## The admin socket
+
+The CLI is a thin client. It opens nothing itself: each command sends one admin request to the service over the
+**admin socket** and shows the answer
+([admin protocol](../../../design/admin-protocol.md)). The service decides what to prompt for, and judges whoever
+connects by the account the connection comes from. `serve` is the only command that runs the service; `completions`
+is the only one that never contacts it.
+
+The socket is `admin.sock` in the service's runtime directory: `/run/iron-vault/` in a protected installation, and
+`$XDG_RUNTIME_DIR/iron-vault-dev/` in development mode ([Files and locations](files.md)). `--admin-socket PATH`
+connects to another one, such as a socket forwarded over SSH; the service at the other end still judges the account
+the connection arrives as.
+
+## `sudo` in a protected installation
+
+In a protected installation your login account is never an admin principal, so malware running as you cannot reach
+the admin socket. Only root and the `iron-vault` service account may connect, so you run every client command
+through `sudo`:
+
+```sh
+sudo iron-vault unlock
+sudo iron-vault status
+```
+
+That barrier is only as strong as your `sudo` setup; the [installation guide](../installation/linux-install.md)
+covers credential caching and a second factor. In development mode the service runs as you, and you run the same
+commands without `sudo`.
+
+## Build features
+
+Every build has the same commands and options. The `dev-mode` and `container` Cargo features change the deployment
+profile, and with it the paths, the service account and which accounts may administer the service, but no command
+or option. `iron-vault --version` lists the features a binary was built with.
+
+`--help` (`-h` for a summary) works on every command and is not repeated below.
+
+<!-- Generated from the CLI definition below this line. Do not edit by hand. -->
+
+## `iron-vault`
+
+```text
+iron-vault [OPTIONS] <COMMAND>
+```
+
+Iron Vault: a local proxy that holds API credentials so the programs that use them never do.
+
+- `--admin-socket <PATH>`: Use the admin socket at PATH instead of this installation's, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation's socket.
+  - global: it may also follow the command
+
+```text
+Exit codes:
+  0  success
+  1  the service answered with an error
+  2  usage error
+  3  no answer from the service: it is not running, this account may not connect, the exchange failed, a prompt
+     got no value, or a secret value the service sent could not be shown on a terminal
+  4  `status`: the service answered, and it is not Ready; `list`: no vault is open, so the credentials are unknown
+```
+
+## `iron-vault serve`
+
+```text
+iron-vault serve [OPTIONS]
+```
+
+Run the service until SIGTERM or SIGINT.
+
+In a protected installation systemd starts it as the `iron-vault` service account, so you never run it yourself. It starts Locked: run `unlock` after each start.
+
+- `--log-to-stdout`: Write the log to stdout until an approved config names a destination, as the Docker image does. The service refuses it when stdout is the systemd journal.
+
+## `iron-vault ping`
+
+```text
+iron-vault ping [OPTIONS]
+```
+
+Check that the service is running and show its deployment profile.
+
+## `iron-vault status`
+
+```text
+iron-vault status [OPTIONS]
+```
+
+Show the service, vault, approval, memory protection and credential states, without secrets. It exits 4 when the service answers and is not Ready.
+
+## `iron-vault list`
+
+```text
+iron-vault list [OPTIONS]
+```
+
+List every credential with its kind, permitted origins and standing, never a secret. It needs an open vault, and exits 4 while none is open.
+
+## `iron-vault unlock`
+
+```text
+iron-vault unlock [OPTIONS]
+```
+
+Open the vault: the service prompts for the vault passphrase, read with echo off or from stdin.
+
+## `iron-vault lock`
+
+```text
+iron-vault lock [OPTIONS]
+```
+
+Clear the vault identity and every cached secret from the service's memory, leaving it Locked.
+
+## `iron-vault init`
+
+```text
+iron-vault init [OPTIONS]
+```
+
+Create the vault: the service prompts for the vault and approval passphrases, shows the recovery key once on the controlling terminal, and once you confirm you saved it, writes the vault and approves the initial config as version 1. It needs a controlling terminal, and leaves the service Locked.
+
+## `iron-vault caller-token`
+
+```text
+iron-vault caller-token [OPTIONS]
+```
+
+Issue a fresh caller token: it goes to stdout once, and its token_hash line to stderr. The service keeps no copy; the token works once a config naming the hash is approved with `config approve`.
+
+## `iron-vault add`
+
+```text
+iron-vault add [OPTIONS] --origin <ORIGIN> <NAME>
+```
+
+Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron-vault add fx --origin api.fx.example` works. It never overwrites an existing name.
+
+- `<NAME>`: The credential name, which routes reference.
+  - required
+- `--kind <KIND>`: The credential's kind: a static key, or a Basic username and password.
+  - default: `static`
+  - possible values:
+    - `static`: A provider key, sent as is.
+    - `basic`: A username and password, sent as `Authorization: Basic`.
+- `--origin <ORIGIN>`: A permitted origin: `host`, `host:port`, `[v6]` or `[v6]:port`, without a scheme (HTTPS is implied); the port defaults to 443. Repeat for each origin, up to 32.
+  - required
+  - repeatable
+
+## `iron-vault replace`
+
+```text
+iron-vault replace [OPTIONS] --origin <ORIGIN> <NAME>
+```
+
+Replace NAME's record with a new one, and with it the kind and the origins; the old record need not be readable, so this also repairs a damaged one. The service shows what changes, asks for the approval passphrase as owner presence, then prompts for the new secret. On stdin, the first line is the approval passphrase and the rest the secret. Routes that use NAME keep working only if the new kind and origins suit them; otherwise nothing changes.
+
+- `<NAME>`: The credential name.
+  - required
+- `--kind <KIND>`: The new kind: a static key, or a Basic username and password.
+  - default: `static`
+  - possible values:
+    - `static`: A provider key, sent as is.
+    - `basic`: A username and password, sent as `Authorization: Basic`.
+- `--origin <ORIGIN>`: A new permitted origin, as for `add`. Repeat for each origin, up to 32; the old origins are not kept.
+  - required
+  - repeatable
+
+## `iron-vault rm`
+
+```text
+iron-vault rm [OPTIONS] <NAME>
+```
+
+Remove the credential NAME after you type the approval passphrase. It refuses while a route of the active config uses the name: approve a config without those routes first.
+
+- `<NAME>`: The credential name to remove.
+  - required
+
+## `iron-vault config`
+
+```text
+iron-vault config [OPTIONS] <COMMAND>
+```
+
+Change the approved configuration.
+
+## `iron-vault config approve`
+
+```text
+iron-vault config approve [OPTIONS] <FILE>
+```
+
+Propose FILE as the new config: the service shows its summary, asks for confirmation and the approval passphrase, then commits, publishes and activates it. Stdin is not read for the config, because it carries the answers to the prompts when it is not a terminal.
+
+- `<FILE>`: The proposed config file.
+  - required
+
+## `iron-vault recovery`
+
+```text
+iron-vault recovery [OPTIONS] <COMMAND>
+```
+
+Check the owner's offline recovery key.
+
+## `iron-vault recovery check`
+
+```text
+iron-vault recovery check [OPTIONS]
+```
+
+Prove that your offline recovery key opens this vault: the service prompts for the key, read with echo off or from stdin, so `pass show iron-vault-recovery | sudo iron-vault recovery check` works. It works while the service is Locked or Ready, changes nothing but the time it records, and keeps no copy of the key.
+
+## `iron-vault completions`
+
+```text
+iron-vault completions [OPTIONS] <SHELL>
+```
+
+Print a shell completion script to stdout. It never contacts the service, so it also runs at build time.
+
+- `<SHELL>`: The shell to generate the script for.
+  - required
+  - possible values:
+    - `bash`: Bash, through the bash-completion framework.

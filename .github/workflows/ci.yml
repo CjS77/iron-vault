@@ -29,6 +29,11 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test --workspace --locked
+      # The command reference in the book is generated from the CLI definition; this fails when the committed page is
+      # stale. The Test step runs it too; this step names the failure. Regenerate with
+      # IRON_VAULT_BLESS_CLI_REFERENCE=1 cargo test -p iron-vault --bin iron-vault cli::reference
+      - name: CLI reference is current
+        run: cargo test -p iron-vault --bin iron-vault --locked cli::reference
       - name: Test development mode
         run: cargo test -p iron-vault --features dev-mode --locked
       - name: Clippy development mode
