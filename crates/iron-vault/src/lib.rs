@@ -49,6 +49,7 @@ pub mod standing;
 mod tls;
 pub mod trusted_path;
 pub mod trusted_path_report;
+pub mod unlock_handoff;
 pub mod upstream;
 pub mod vault_change_check;
 pub mod vault_change_summary;
