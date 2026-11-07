@@ -27,7 +27,8 @@ tls_key = "/etc/iron-vault/tls/server.key"
 
 # --- Callers: who may use which routes --------------------------------------------------------------------------
 
-# Identified by OS account. The account must exist on the host, and must not be root or the service account.
+# Identified by OS account. The account must exist on the host, and must not be root, the service account or the
+# overflow uid (`nobody`).
 [callers.fx-mcp]
 listener = "local"
 auth = "peer"

@@ -40,13 +40,13 @@ the config file {path} is longer than 61440 bytes
 
 ## Reading a refusal
 
-A refused config ends `config approve` with one line:
+A refused config ends `config approve` with one line on stderr:
 
 ```text
-the service answered error 7 (config-invalid): the proposed config is invalid: <detail>
+iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: <detail>
 ```
 
-The checks run in three stages, and the detail depends on which stage refused the config.
+The checks run in four stages, and the detail depends on which stage refused the config.
 
 1. **Parsing** reads each table and checks each key on its own: its type, its value, and that no key is unknown. The
    detail gives only the position of the first fault, because the parser's message may quote a value from your file:
@@ -68,6 +68,10 @@ The checks run in three stages, and the detail depends on which stage refused th
 
 3. **Activation** checks the config against the vault and the host: that each credential exists and permits the
    route's upstream, and that each peer caller's account exists. It also reports every fault in full.
+
+4. **Serving checks** run last. The service builds the upstream HTTP clients the routes need and, when the config moves
+   the log, checks the new [log destination](#logging). A failure here gives one fixed phrase, such as
+   `the upstream HTTP client could not be built` or `the log directory does not exist`, and never a path.
 
 ## The example
 
@@ -128,9 +132,9 @@ same name in a log record; it is a different number.)
 schema_version = 1
 ```
 
-| Fault          | Parser message                                                                                 |
-|----------------|------------------------------------------------------------------------------------------------|
-| missing        | `configuration has no schema_version at line 1, column 1; expected schema_version = 1`         |
+| Fault           | Parser message                                                                                |
+|-----------------|-----------------------------------------------------------------------------------------------|
+| missing         | `configuration has no schema_version at line 1, column 1; expected schema_version = 1`         |
 | any other value | `unsupported schema version 2 at line 1, column 18; this release reads schema_version = 1`    |
 
 ## `[listeners.<name>]`
@@ -177,7 +181,7 @@ header before forwarding, so the upstream never sees it. The header must not be 
 [reserved header](#reserved-headers), apart from `Proxy-Authorization` itself, and must not be the slot header of a
 route that this listener's callers can use.
 
-| Fault                                  | Message                                                                                                        |
+| Fault                                  | Parser message                                                                                                 |
 |----------------------------------------|----------------------------------------------------------------------------------------------------------------|
 | neither `unix_socket` nor `address`    | `listener needs exactly one of unix_socket or address; neither is set`                                         |
 | both                                   | `listener needs exactly one of unix_socket or address; both are set`                                           |
@@ -189,7 +193,7 @@ route that this listener's callers can use.
 | reserved `token_header`                | `token_header X-Forwarded-Token is a reserved header; choose a dedicated header such as X-Iron-Vault-Token`    |
 | malformed header name                  | `header name "X Token" contains ' ', which is not allowed in an HTTP token`                                    |
 
-These are parser messages. One validation refusal, shown in full:
+One validation refusal, shown in full:
 
 ```text
 listener loopback token_header x-key is the credential slot of route brave, which its callers can use
@@ -269,7 +273,7 @@ github = { requests = 30, per_seconds = 60, burst = 5 }
 
 Parser messages:
 
-| Fault                                   | Message                                                                                                          |
+| Fault                                   | Parser message                                                                                                   |
 |-----------------------------------------|------------------------------------------------------------------------------------------------------------------|
 | token caller without `token_hash`       | `caller uses token authentication but has no token_hash`                                                         |
 | hash without the prefix                 | `token hash must start with "blake2b:"`                                                                          |
@@ -278,7 +282,7 @@ Parser messages:
 | peer caller without `user`              | `caller uses auth = "peer" but has no user`                                                                      |
 | `token_hash` on a peer caller           | `caller sets token_hash but uses auth = "peer"; token_hash applies only to auth = "token"`                       |
 | `user` on a token caller                | `caller sets user but uses auth = "token"; user applies only to auth = "peer"`                                   |
-| unknown `auth`                          | ``unknown variant `password`, expected one of `token`, `isolated-network`, `peer` ``                             |
+| unknown `auth`                          | `` unknown variant `password`, expected one of `token`, `isolated-network`, `peer` ``                             |
 | empty `routes`                          | `caller must be granted at least one route`                                                                      |
 | repeated route                          | `caller lists route fx more than once`                                                                           |
 | limit for a route not granted           | `caller sets a rate limit for route brave, which is not in its routes`                                           |
@@ -345,12 +349,12 @@ the path to the upstream. A prefix matches whole segments: `/fx` matches `/fx` a
 A prefix is made of literal segments, with the same characters as a [path pattern](#paths-and-the-base-path). It must
 not be `/`, contain a wildcard, end in a slash or contain `%`.
 
-| Fault          | Message                                                                                                     |
+| Fault          | Parser message                                                                                              |
 |----------------|-------------------------------------------------------------------------------------------------------------|
 | `/`            | `route prefix must not be "/"; it would match every request path`                                           |
 | trailing slash | `route prefix breaks a path-pattern literal rule: path pattern "/r/" contains an empty segment or trailing slash` |
 | wildcard       | `route prefix "/r/*" must not contain a wildcard segment`                                                   |
-| overlap        | `route fx prefix overlaps route fx-v2 prefix` (validation)                                                  |
+| overlap (a validation message) | `route fx prefix overlaps route fx-v2 prefix`                                                  |
 
 ### `upstream`
 
@@ -358,7 +362,7 @@ The HTTPS URL that requests are sent to, with an optional base path. It must sta
 no user-info, query or fragment. An IP address host must be written in its canonical form, and the base path has no
 dot segments. A trailing slash is dropped. The port defaults to 443.
 
-| Fault             | Message                                                                                                                        |
+| Fault             | Parser message                                                                                                                 |
 |-------------------|--------------------------------------------------------------------------------------------------------------------------------|
 | not HTTPS         | `upstream URL must start with "https://"`                                                                                      |
 | user-info         | `upstream URL must not contain user-info`                                                                                      |
@@ -386,7 +390,7 @@ The HTTP methods the route allows: any of `GET`, `HEAD`, `POST`, `PUT`, `PATCH`,
 case. `CONNECT` and `TRACE` are never allowed. The list must not be empty or repeat a method. A request with another
 method is refused before anything is sent.
 
-| Fault         | Message                                                                                |
+| Fault         | Parser message                                                                         |
 |---------------|----------------------------------------------------------------------------------------|
 | empty         | `route must allow at least one method`                                                 |
 | repeated      | `route lists method GET more than once`                                                |
@@ -407,13 +411,14 @@ see the query string.
 - `*` matches exactly one segment: `/repos/*/*/issues` matches `/repos/octo/demo/issues`, not `/repos/octo/issues`.
 - `**` matches zero or more segments: `/historical/**` matches `/historical`, `/historical/2024` and
   `/historical/2024/01/02`.
+- `/` alone has no segments and matches only the root path.
 - `["/**"]` allows every path. It must be written out; an empty list is refused.
 
 A pattern starts with `/`, has no empty segment or trailing slash, and no dot segment. A wildcard must be the whole
 segment, so `a*` is refused. Literal segments may hold letters, digits and `- . _ ~ ! $ & ' ( ) + , ; = : @`; `%` and
 other characters are refused. Each pattern may be listed only once.
 
-| Fault             | Message                                                                       |
+| Fault             | Parser message                                                                |
 |-------------------|-------------------------------------------------------------------------------|
 | empty list        | `path patterns must not be empty; use ["/**"] to allow every path explicitly` |
 | repeated          | `path pattern "/v1" is listed more than once`                                 |
@@ -441,17 +446,17 @@ placeholder key in the application is replaced, never forwarded. There are three
 - **`query`** is a parameter name made only of `A-Z a-z 0-9 - . _ ~`.
 - **`"basic"`** is for a credential added with a username and password.
 
-| Fault                          | Message                                                                                                         |
+| Fault                          | Parser message                                                                                                  |
 |--------------------------------|-----------------------------------------------------------------------------------------------------------------|
 | reserved header                | `header Host is reserved for caller authentication or transport control and cannot be a slot`                   |
 | format without `{}`            | `slot format "Bearer" has no {} substitution point`                                                             |
 | format with two `{}`           | `slot format "{} {}" must contain exactly one {} and no other braces`                                           |
 | format not printable ASCII     | `slot format "B\u{e9} {}" contains '\u{e9}'; only printable ASCII is allowed`                                   |
 | `format` on a query slot       | `` `format` applies only to header slots ``                                                                        |
-| both or neither of header, query | ``a slot table must name exactly one of `header` or `query` ``                                                |
+| both or neither of header, query | `` a slot table must name exactly one of `header` or `query` ``                                                |
 | query name with another character | `query parameter name "api key" contains ' '; only A-Z a-z 0-9 - . _ ~ are allowed`                          |
 | empty query name               | `query parameter name is empty`                                                                                 |
-| any other string               | ``invalid value: string "bearer", expected "basic" or a table with `header` (and optional `format`) or `query` `` |
+| any other string               | `` invalid value: string "bearer", expected "basic" or a table with `header` (and optional `format`) or `query` `` |
 
 ### `rate_limit`: the token bucket
 
@@ -465,17 +470,19 @@ The limit is a token bucket. The bucket holds at most `burst` tokens and refills
 `per_seconds` seconds. Each request takes one token, and a request that finds the bucket empty gets `429`. The example
 above allows one request a second on average, and up to 10 at once after a quiet spell.
 
-**The bucket starts empty** when the service starts and when a config is put into force, and fills from there. So a
-restart never hands out a fresh burst. In the example, the first request is allowed after one second, and the full burst
-of 10 only after ten quiet seconds.
+**Every bucket starts empty** each time the service becomes Ready, and fills from there: after `unlock`, an approval, a
+SIGHUP reload, a repair, or a `replace` or `rm`. Each of these runs a config check, and every config check builds new
+buckets. A service that has just started is Locked, so in practice its buckets begin at `unlock`. Neither a restart nor
+a reload ever hands out a fresh burst. In the example, the first request is allowed one second after the service
+becomes Ready, and the full burst of 10 only after ten quiet seconds.
 
 All the route's callers share its bucket. A caller's `rate_limits` entry adds a second bucket of its own, and a request
 needs a token from both. A route that should be effectively unlimited still gets a limit, a generous one.
 
-| Fault       | Message                                            |
+| Fault       | Parser message                                     |
 |-------------|----------------------------------------------------|
 | zero        | ``invalid value: integer `0`, expected a nonzero u32`` |
-| missing key | ``missing field `burst` ``                         |
+| missing key | `` missing field `burst` ``                         |
 
 ### `confirm`
 
@@ -486,7 +493,7 @@ confirmation provider exists in v0, so a config with a touch route is refused at
 route github sets confirm = "touch", but no touch confirmation provider is available
 ```
 
-Any other value: ``unknown variant `always`, expected `none` or `touch` ``.
+Any other value: `` unknown variant `always`, expected `none` or `touch` ``.
 
 ### `ca_file`
 
@@ -537,7 +544,7 @@ request_timeout_secs = 120
 upstream_timeout_secs = 60
 ```
 
-| Fault             | Message                                                                                  |
+| Fault             | Parser message                                                                           |
 |-------------------|------------------------------------------------------------------------------------------|
 | zero              | `limits.max_connections must not be zero`                                                |
 | above the ceiling | `limits.max_connections is 70000; the maximum is 65536`                                  |
@@ -554,8 +561,21 @@ set, the bootstrap destination applies: `/var/log/iron-vault` in a protected ins
 `$XDG_STATE_HOME/iron-vault-dev-log` in development, or stdout when `serve` has `--log-to-stdout`.
 
 A directory must be absolute, with no control characters and no `..`, and outside the state and config directories.
-It must also pass the log directory's trusted-path rule, and you create it yourself; the
-[log operations guide](log-operations.md#location-and-permissions) gives the owner and modes.
+It must also pass the log directory's trusted-path rule; the
+[log operations guide](log-operations.md#location-and-permissions) gives the owner and modes. Create it before you
+approve. A development build creates its missing bootstrap log directory at `0700` when `serve` starts, but never a
+directory that a config names.
+
+**Checked at approval.** When the config changes the destination, `config approve` checks the new one before it
+reserves a version: that the directory exists, resolves to a canonical path outside the state and config directories,
+and passes the trusted-path rule. It creates and writes nothing. A failure is `config-invalid` with a fixed phrase,
+for example:
+
+```text
+the log directory is, or is inside, the state directory
+the log directory does not exist
+the log directory, or a directory above it, is writable by others
+```
 
 ```toml
 [logging]
@@ -566,9 +586,10 @@ destination = "/var/log/iron-vault"
 log destination must be "stdout" or an absolute directory: path "logs" must be absolute
 ```
 
-**Not applied yet.** The service checks this key and shows it in the approval summary, but doesn't yet switch to it;
-it keeps writing to the bootstrap destination. See the log operations guide's
-[implementation status](log-operations.md).
+**Switching.** When the service becomes Ready with a config that moves the log, it checks the destination again,
+then switches to it. It writes `service.log-destination-changed` to the old destination and then to the new one, so
+each file records where the log went. Removing the key moves the log back to the bootstrap destination the same way.
+If the check fails at that point, the service stays Unavailable (`policy invalid`) and keeps writing where it was.
 
 ## `[recovery]`
 
