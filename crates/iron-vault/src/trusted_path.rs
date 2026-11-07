@@ -166,6 +166,11 @@ pub enum TrustedPathRule {
     /// all for others, so callers cannot read or change the log. Its ancestors differ from the other rules': a
     /// root-owned one may be group-writable, as stock `/var/log` is, and none may be writable by others, sticky or not.
     LogDir,
+    /// The host unlock handoff file, which holds the host unlock identity's secret text (`design/docker-compose.md`). The
+    /// service account owns it with no group or other permission bits, so only the service can read it and nobody else
+    /// could have planted it. The directory holding it may be root's or the service account's, which the ancestor rule
+    /// already allows, as long as neither group nor others can write it.
+    UnlockHandoff,
 }
 
 impl TrustedPathRule {
@@ -173,7 +178,7 @@ impl TrustedPathRule {
     const fn allows_sticky_ancestor(self) -> bool {
         !matches!(
             self,
-            Self::StateDir | Self::ConfigDir | Self::Config | Self::AdminCertificate | Self::AdminPrivateKey
+            Self::StateDir | Self::ConfigDir | Self::Config | Self::AdminCertificate | Self::AdminPrivateKey | Self::UnlockHandoff
         )
     }
 
@@ -182,7 +187,7 @@ impl TrustedPathRule {
     const fn refuses_leaf_symlink(self) -> bool {
         matches!(
             self,
-            Self::StateFile | Self::AdminCertificate | Self::AdminPrivateKey | Self::LogDir
+            Self::StateFile | Self::AdminCertificate | Self::AdminPrivateKey | Self::LogDir | Self::UnlockHandoff
         )
     }
 
@@ -206,7 +211,8 @@ impl TrustedPathRule {
             | Self::StateFile
             | Self::AdminCertificate
             | Self::AdminPrivateKey
-            | Self::LogDir => None,
+            | Self::LogDir
+            | Self::UnlockHandoff => None,
         }
     }
 }
@@ -568,6 +574,12 @@ impl Walk {
             TrustedPathRule::AdminPrivateKey => {
                 require_regular_file(component)?;
                 self.require_private_key(component)
+            }
+            // A secret only the service reads: its own, with nothing for group or others. Execute is refused too.
+            TrustedPathRule::UnlockHandoff => {
+                require_regular_file(component)?;
+                require_owner(component, service)?;
+                require_mode_within(component, Mode::new(0o600))
             }
             // The service writes the log, so no group may write it and no other account may so much as list it.
             TrustedPathRule::LogDir => {

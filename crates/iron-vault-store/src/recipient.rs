@@ -133,7 +133,8 @@ impl RecipientIdentity {
     /// The identity whose `age` secret-key text is `text`, or `None` when `text` is not one.
     ///
     /// `text` is borrowed from the caller's cleared buffer and parsed in place, so no uncleared copy of it is made here.
-    pub(crate) fn from_secret_text(text: &[u8]) -> Option<Self> {
+    /// It is parsed exactly as written: no whitespace is trimmed, which is for the caller to decide.
+    pub fn from_secret_text(text: &[u8]) -> Option<Self> {
         let secret = std::str::from_utf8(text).ok()?.parse().ok()?;
         Some(Self { secret })
     }

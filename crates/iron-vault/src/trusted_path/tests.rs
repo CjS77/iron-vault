@@ -688,6 +688,87 @@ fn private_key_cases() -> Vec<Case> {
     accepted.into_iter().chain(refused).chain(others).collect()
 }
 
+const HANDOFF_DIR: &str = "/run/iron-vault-unlock";
+const HANDOFF: &str = "/run/iron-vault-unlock/host-unlock";
+
+fn handoff_chain(directory: PathComponent, leaf: PathComponent) -> Vec<PathComponent> {
+    vec![dir("/", ROOT_UID, 0o755), dir("/run", ROOT_UID, 0o755), directory, leaf]
+}
+
+fn handoff_cases() -> Vec<Case> {
+    use TrustedPathRule::UnlockHandoff;
+    let container = |name, chain, expected| Case {
+        profile: DeploymentProfile::Container,
+        ..case(name, UnlockHandoff, chain, expected)
+    };
+    let with_leaf = |leaf| handoff_chain(dir(HANDOFF_DIR, ROOT_UID, 0o755), leaf);
+    let with_dir = |directory| handoff_chain(directory, file(HANDOFF, SERVICE, 0o400));
+    let too_open = |found| {
+        unsafe_at(
+            HANDOFF,
+            Problem::ModeTooOpen {
+                found: Mode::new(found),
+                allowed: Mode::new(0o600),
+            },
+        )
+    };
+    vec![
+        container("0400 service-owned file", with_leaf(file(HANDOFF, SERVICE, 0o400)), Ok(())),
+        container("0600 service-owned file", with_leaf(file(HANDOFF, SERVICE, 0o600)), Ok(())),
+        container("group-readable file", with_leaf(file(HANDOFF, SERVICE, 0o440)), too_open(0o440)),
+        container("other-readable file", with_leaf(file(HANDOFF, SERVICE, 0o404)), too_open(0o404)),
+        container("executable file", with_leaf(file(HANDOFF, SERVICE, 0o700)), too_open(0o700)),
+        container(
+            "root-owned file",
+            with_leaf(file(HANDOFF, ROOT_UID, 0o400)),
+            unsafe_at(HANDOFF, wrong_owner(ROOT_UID, OwnerRequirement::Uid(SERVICE))),
+        ),
+        container(
+            "file owned by another user",
+            with_leaf(file(HANDOFF, STRANGER, 0o400)),
+            unsafe_at(HANDOFF, wrong_owner(STRANGER, OwnerRequirement::Uid(SERVICE))),
+        ),
+        container(
+            "symlink to a safe file",
+            with_leaf(link(
+                HANDOFF,
+                ROOT_UID,
+                handoff_chain(
+                    dir(HANDOFF_DIR, ROOT_UID, 0o755),
+                    file("/run/iron-vault-unlock/real", SERVICE, 0o400),
+                ),
+            )),
+            unsafe_at(HANDOFF, Problem::NotARegularFile),
+        ),
+        container(
+            "directory in place of the file",
+            with_leaf(dir(HANDOFF, SERVICE, 0o400)),
+            unsafe_at(HANDOFF, Problem::NotARegularFile),
+        ),
+        container("service-owned directory", with_dir(dir(HANDOFF_DIR, SERVICE, 0o755)), Ok(())),
+        container(
+            "directory owned by another user",
+            with_dir(dir(HANDOFF_DIR, STRANGER, 0o755)),
+            unsafe_at(HANDOFF_DIR, wrong_owner(STRANGER, OwnerRequirement::RootOr(SERVICE))),
+        ),
+        container(
+            "group-writable directory",
+            with_dir(staff_writable(HANDOFF_DIR)),
+            unsafe_at(HANDOFF_DIR, staff_problem()),
+        ),
+        container(
+            "world-writable directory",
+            with_dir(dir(HANDOFF_DIR, ROOT_UID, 0o757)),
+            unsafe_at(HANDOFF_DIR, Problem::WritableByOthers),
+        ),
+        container(
+            "file under sticky /tmp",
+            tmp_chain(file("/tmp/host-unlock", SERVICE, 0o400)),
+            unsafe_at("/tmp", Problem::SharedStickyAncestor),
+        ),
+    ]
+}
+
 fn ordering_cases() -> Vec<Case> {
     let both_bad = vec![
         dir("/", ROOT_UID, 0o755),
@@ -828,6 +909,7 @@ fn every_rule_and_problem() {
         symlink_cases(),
         certificate_cases(),
         private_key_cases(),
+        handoff_cases(),
         log_dir_cases(),
         ordering_cases(),
     ]
