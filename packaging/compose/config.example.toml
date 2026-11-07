@@ -1,0 +1,43 @@
+# Example Iron Vault config for packaging/compose/compose.yaml: two isolated-network callers, one TLS listener each.
+# Each listener binds Iron Vault's address on that caller's network (the `ipv4_address` in compose.yaml) and is
+# that caller's only listener. Certificates and keys are under the read-only mount /etc/iron-vault-tls; the
+# certificate names the listener address as an IP subject alternative name. See design/docker-compose.md.
+schema_version = 1
+
+[listeners.caller-a]
+address = "172.30.1.2:8443"
+tls_certificate = "/etc/iron-vault-tls/caller-a.crt"
+tls_key = "/etc/iron-vault-tls/caller-a.key"
+
+[listeners.caller-b]
+address = "172.30.2.2:8443"
+tls_certificate = "/etc/iron-vault-tls/caller-b.crt"
+tls_key = "/etc/iron-vault-tls/caller-b.key"
+
+[callers.caller-a]
+listener = "caller-a"
+auth = "isolated-network"
+routes = ["venice-chat"]
+
+[callers.caller-b]
+listener = "caller-b"
+auth = "isolated-network"
+routes = ["brave-search"]
+
+[routes.venice-chat]
+prefix = "/venice-chat"
+upstream = "https://api.venice.ai/api/v1"
+credential = "venice_chat"
+slot = { header = "Authorization", format = "Bearer {}" }
+methods = ["POST"]
+paths = ["/api/v1/chat/completions"]
+rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
+
+[routes.brave-search]
+prefix = "/brave-search"
+upstream = "https://api.search.brave.com"
+credential = "brave"
+slot = { header = "X-Subscription-Token" }
+methods = ["GET"]
+paths = ["/res/v1/web/search"]
+rate_limit = { requests = 60, per_seconds = 60, burst = 10 }

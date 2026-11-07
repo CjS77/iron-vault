@@ -1,0 +1,116 @@
+# Reference Compose file for Iron Vault with two isolated-network callers.
+#
+# Read design/docker-compose.md first (the install guide, when it lands, is book/src/installation/docker-install.md).
+# Each setting below is a line of that document's hardening checklist; the comment says why it is there. Keep the
+# file at /etc/iron-vault-host/compose.yaml, root-owned, 0600, with no compose.override.yaml or .env beside it.
+#
+# Replace before use: the three image digests (placeholders here), the callers (placeholders), and the subnets if
+# they clash with your host. The uid and gid 460 must equal the image's and the host's `iron-vault` account.
+
+name: iron-vault
+
+services:
+  iron-vault:
+    # Pinned by digest so a retagged image cannot change what a recreation runs (R-28).
+    image: iron-vault@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    # The fixed service account, the same uid:gid in the image and on the host; the service refuses any other (R-25).
+    user: "460:460"
+    # The image's files cannot be changed from inside; the log goes to stdout, not /var/log/iron-vault (R-25).
+    read_only: true
+    # The service needs no capability; without CAP_DAC_OVERRIDE even container root cannot open the vault (R-25).
+    cap_drop: [ALL]
+    # No set-uid program or file capability can raise the service's privileges (R-25).
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      # Memory is locked only when RLIMIT_MEMLOCK is unlimited, and unlock requires locked memory (R-20).
+      memlock: -1
+      # No core dump holds service memory (R-20).
+      core: 0
+    # The image's default command, stated so the log destination is visible. The runtime keeps the log, never journald.
+    command: ["serve", "--log-to-stdout"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "30"
+    # Comes back after a crash and at boot; a Locked service has not failed and keeps running.
+    restart: unless-stopped
+    # Not set, on purpose: privileged, pid, ipc, network_mode, devices, the Docker socket, seccomp or apparmor
+    # unconfined, and any environment or env_file. None may hold a secret or widen the container (R-25).
+    networks:
+      # The only container on egress: it carries the upstream requests.
+      egress: {}
+      # A static address per caller network, so each listener address is fixed and on that network alone (R-27).
+      caller-a:
+        ipv4_address: 172.30.1.2
+      caller-b:
+        ipv4_address: 172.30.2.2
+    volumes:
+      # Config and state directories. Docker copies the image's owner and 0700 mode into each empty volume (R-25).
+      - config:/etc/iron-vault
+      - state:/var/lib/iron-vault
+      # admin.sock lives here so host root reaches it; the host's 0711 directory keeps other accounts out (R-25).
+      - /run/iron-vault:/run/iron-vault
+      # The unlock handoff, read-only. The directory is mounted, not the file, so a missing or replaced file is seen (R-25, R-28).
+      - type: bind
+        source: /run/iron-vault-unlock
+        target: /run/iron-vault-unlock
+        read_only: true
+      # Listener certificates and the service account's keys, read-only (R-26).
+      - type: bind
+        source: /etc/iron-vault-host/tls
+        target: /etc/iron-vault-tls
+        read_only: true
+
+  # Placeholder callers: replace the image and command with the real application.
+  caller-a:
+    image: alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    command: ["sleep", "infinity"]
+    # Without NET_RAW a caller cannot forge frames or source addresses; without NET_ADMIN it cannot take another
+    # address or add a route. Docker grants NET_RAW by default, so everything is dropped (R-27).
+    cap_drop: [ALL]
+    # A set-uid binary in the caller's image cannot regain a dropped capability (R-27).
+    security_opt:
+      - no-new-privileges:true
+    # Its own caller network only, never egress or another caller's; no volumes, so nothing of the vault is visible (R-25, R-27).
+    networks:
+      caller-a:
+        # Its own static address: while Iron Vault is stopped its address is free, and a dynamic caller could be given it (R-6).
+        ipv4_address: 172.30.1.3
+
+  caller-b:
+    image: alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    command: ["sleep", "infinity"]
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      caller-b:
+        ipv4_address: 172.30.2.3
+
+networks:
+  # Not internal: Iron Vault's route to the upstream APIs. No caller joins it.
+  egress: {}
+  caller-a:
+    # No route out of the network.
+    internal: true
+    driver_opts:
+      # The bridge gets no host address, so host processes cannot reach the listener and be taken for this caller.
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 172.30.1.0/29
+  caller-b:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 172.30.2.0/29
+
+volumes:
+  config: {}
+  state: {}
