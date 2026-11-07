@@ -30,6 +30,8 @@
 # Which unlock path: the stack is unlocked with the vault passphrase over the admin socket, as `iron-vault unlock` does. The
 # host unlock handoff (K-252) is not used, so /run/iron-vault-unlock is an empty directory and this check does not depend on it.
 # The stack is left Ready only for the checks that need to send requests through it.
+# The jq programs are single-quoted on purpose: $name in them is jq's, not the shell's.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 SERVICE_UID=460
@@ -218,6 +220,415 @@ run_static_checks() {
     check "static: the resolved config holds no AGE-SECRET-KEY" config_holds_no_recovery_key
 }
 
+# --- Live setup: runs before the stack exists; a failure here is exit 2 ---------------------------------------------------
+
+as_account() { runuser -u "$ACCOUNT" -- "$@"; }
+
+# Names the host, kernel and Docker versions at the top of the output, because the release record needs them (design open
+# question 6: the minimum Docker Engine version is recorded by this check).
+banner() {
+    # shellcheck source=/dev/null
+    echo "compose-check on $(. /etc/os-release && echo "$PRETTY_NAME"), kernel $(uname -r), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "docker $(docker version --format '{{.Server.Version}}'), compose $(docker compose version --short)"
+}
+
+preflight() {
+    local tool path
+    for tool in openssl script runuser sudo curl getent useradd groupadd userdel groupdel ip; do
+        command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
+    done
+    docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"
+    for path in "$HOST_CLI" "$HOST_DIR" "$RUN_DIR" "$UNLOCK_DIR"; do
+        [ ! -e "$path" ] || die "$path already exists; this check needs a host with nothing of Iron Vault's on it"
+    done
+    # getent with two keys fails when either is missing, so each key is asked on its own.
+    for path in "$SERVICE_ACCOUNT" "$SERVICE_UID"; do
+        ! getent passwd "$path" >/dev/null || die "an account named or numbered $path exists"
+        ! getent group "$path" >/dev/null || die "a group named or numbered $path exists"
+    done
+    id "$ACCOUNT" >/dev/null 2>&1 || die "no account $ACCOUNT"
+    [ "$(id -u "$ACCOUNT")" -ne 0 ] || die "TEST_ACCOUNT must not be root"
+    # Positive control: if runuser silently fails, "the account is refused" would pass for the wrong reason.
+    [ "$(as_account id -u 2>/dev/null)" = "$(id -u "$ACCOUNT")" ] || die "runuser did not run a command as $ACCOUNT"
+}
+
+build_images() {
+    if [ -n "$IMAGE" ]; then
+        SERVICE_IMAGE=$IMAGE
+    else
+        BUILT_SERVICE=1
+        docker build -q -f "$REPO/packaging/compose/Dockerfile" -t "$SERVICE_IMAGE" "$REPO" >/dev/null || die "the service image did not build"
+    fi
+    BUILT_CALLER=1
+    # curl and python3 are the caller's tools for the checks; the Compose file's placeholder callers only sleep.
+    docker build -q -t "$CALLER_IMAGE" - >/dev/null <<'DOCKERFILE' || die "the caller image did not build"
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl python3 && rm -rf /var/lib/apt/lists/*
+DOCKERFILE
+}
+
+# The Compose file's image digests are all-zero placeholders, so the images built here replace them in a merged file.
+add_image_override() {
+    cat >"$WORK/images.yaml" <<YAML
+services:
+  iron-vault: { image: $SERVICE_IMAGE, pull_policy: never }
+  caller-a: { image: $CALLER_IMAGE, pull_policy: never }
+  caller-b: { image: $CALLER_IMAGE, pull_policy: never }
+YAML
+    COMPOSE_ARGS+=(-f "$WORK/images.yaml")
+}
+
+# The layout design/docker-compose.md "Host layout" gives, less the files only the host unlock needs.
+create_host_layout() {
+    CREATED_ACCOUNT=1
+    groupadd --system --gid "$SERVICE_UID" "$SERVICE_ACCOUNT"
+    useradd --system --uid "$SERVICE_UID" --gid "$SERVICE_UID" --no-create-home --home-dir /nonexistent \
+        --shell /usr/sbin/nologin "$SERVICE_ACCOUNT"
+    CREATED_HOST=1
+    install -d -m 0711 -o "$SERVICE_ACCOUNT" -g "$SERVICE_ACCOUNT" "$RUN_DIR"
+    install -d -m 0755 "$UNLOCK_DIR"
+    install -d -m 0700 "$HOST_DIR"
+    install -d -m 0755 "$HOST_TLS"
+}
+
+# One CA and one server certificate naming both listener addresses; only iron-vault holds the key.
+create_certificates() {
+    local ext="$WORK/san.ext" curve="-newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes" name
+    # shellcheck disable=SC2086
+    {
+        openssl req -x509 $curve -keyout "$WORK/ca.key" -out "$WORK/ca.crt" -subj /CN=ivcheck-ca -days 2 \
+            -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign
+        openssl req -new $curve -keyout "$WORK/server.key" -out "$WORK/server.csr" -subj /CN=iron-vault
+    } 2>/dev/null
+    printf 'subjectAltName=IP:%s,IP:%s\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n' "$LISTENER_A" "$LISTENER_B" >"$ext"
+    openssl x509 -req -in "$WORK/server.csr" -CA "$WORK/ca.crt" -CAkey "$WORK/ca.key" -CAcreateserial -days 2 \
+        -extfile "$ext" -out "$WORK/server.crt" 2>/dev/null
+    for name in caller-a caller-b; do
+        install -m 0644 "$WORK/server.crt" "$HOST_TLS/$name.crt"
+        install -m 0600 -o "$SERVICE_ACCOUNT" -g "$SERVICE_ACCOUNT" "$WORK/server.key" "$HOST_TLS/$name.key"
+    done
+}
+
+# The host CLI is the image's own binary, copied out as the design's host setup does.
+install_host_cli() {
+    local ctr
+    ctr=$(docker create "$SERVICE_IMAGE") || die "cannot create a container from $SERVICE_IMAGE"
+    docker cp "$ctr:/usr/bin/iron-vault" "$WORK/iron-vault" >/dev/null || die "cannot copy the binary out of $SERVICE_IMAGE"
+    docker rm "$ctr" >/dev/null
+    CREATED_CLI=1
+    install -m 0755 -o root -g root "$WORK/iron-vault" "$HOST_CLI"
+}
+
+run_live_setup() {
+    preflight
+    banner
+    build_images
+    add_image_override
+    create_host_layout
+    create_certificates
+    install_host_cli
+}
+
+# --- Bringing the stack up and making it Ready ---------------------------------------------------------------------------
+
+cid() { compose ps -q "$1"; }
+
+wait_for_admin_socket() {
+    local _
+    for _ in $(seq 60); do
+        "$HOST_CLI" ping >/dev/null 2>&1 && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
+stack_comes_up() {
+    STACK_UP=1
+    compose up -d --no-build 2>&1 || return 1
+    wait_for_admin_socket || { echo "no answer on the admin socket"; compose logs --tail 20 iron-vault; return 1; }
+}
+
+# `init` shows the recovery key on the controlling terminal only, so it runs under script(1), which gives it a pty while its
+# stdin stays the answers file. The key is redacted from any output this prints.
+run_init() {
+    printf '%s\n' "$VAULT_PASS" "$VAULT_PASS" "$APPROVAL_PASS" "$APPROVAL_PASS" yes >"$WORK/init.in"
+    HOST_CLI=$HOST_CLI INIT_IN=$WORK/init.in script -qec '"$HOST_CLI" init <"$INIT_IN"' /dev/null </dev/null >"$WORK/init.out" 2>&1 \
+        || { sed 's/AGE-SECRET-KEY-[A-Z0-9]*/[recovery key]/' "$WORK/init.out" | tail -n 5; return 1; }
+}
+
+# The callers trust the CA by a file copied into them, not a mount: a caller has no host mounts at all.
+trust_ca() { local c; for c in caller-a caller-b; do docker cp "$WORK/ca.crt" "$(cid "$c"):/ca.crt" || return 1; done; }
+
+# Unlock is by passphrase over the admin socket, so the check does not depend on the host unlock handoff.
+provision() {
+    run_init || return 1
+    printf '%s\n' "$VAULT_PASS" | "$HOST_CLI" unlock || return 1
+    printf '%s\n' ivcheck-not-a-real-key | "$HOST_CLI" add venice_chat --origin api.venice.ai || return 1
+    printf '%s\n' ivcheck-not-a-real-key | "$HOST_CLI" add brave --origin api.search.brave.com || return 1
+    printf '%s\n' yes "$APPROVAL_PASS" | "$HOST_CLI" config approve "$REPO/packaging/compose/config.example.toml" || return 1
+    trust_ca
+}
+
+# --- Live checks: the service process ------------------------------------------------------------------------------------
+
+service_pid() { docker inspect -f '{{.State.Pid}}' "$(cid iron-vault)"; }
+
+runs_as_fixed_uid() {
+    local got
+    got=$(awk '/^Uid:/ { print $2, $3, $4, $5 }' "/proc/$1/status")
+    [ "$got" = "$SERVICE_UID $SERVICE_UID $SERVICE_UID $SERVICE_UID" ] || { echo "uids are '$got', want $SERVICE_UID four times"; return 1; }
+}
+
+memory_is_locked() {
+    local kb
+    kb=$(awk '/^VmLck:/ { print $2 }' "/proc/$1/status")
+    echo "VmLck: ${kb:-missing} kB"
+    [ "${kb:-0}" -gt 0 ]
+}
+
+# The kernel makes /proc/PID/* of a non-dumpable process belong to root, whatever account runs the process.
+process_not_dumpable() {
+    local owner
+    owner=$(stat -c %u "/proc/$1")
+    [ "$owner" = 0 ] || { echo "/proc/$1 belongs to uid $owner, so the process is dumpable"; return 1; }
+}
+
+# --- Live checks: callers ------------------------------------------------------------------------------------------------
+
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# The request.completed records the service has logged since $1, one JSON object per line.
+requests_since() { docker logs --since "$1" "$(cid iron-vault)" 2>&1 | jq -R -c 'fromjson? | select(.event == "request.completed")'; }
+
+# Waits for a request record naming this caller, route and reason. The status alone cannot tell "reached its route" from "not
+# granted": both are 403. The reason in the audit record can.
+expect_record() {
+    local since=$1 caller=$2 route=$3 reason=$4 recs="" _
+    for _ in $(seq 20); do
+        recs=$(requests_since "$since")
+        jq -e -s --arg c "$caller" --arg r "$route" --arg why "$reason" \
+            'any(.[]; .caller == $c and .route == $r and .reason == $why)' <<<"$recs" >/dev/null && return 0
+        sleep 0.5
+    done
+    echo "no request.completed record with caller $caller, route $route, reason $reason; the last ones:"
+    jq -c '{caller, route, status, reason}' <<<"$recs" | tail -n 5
+    return 1
+}
+
+# curl inside a caller, trusting only the check's CA; prints the HTTP status.
+caller_status() { docker exec "$(cid "$1")" curl -sS --max-time 10 --cacert /ca.crt -o /dev/null -w '%{http_code}' "https://$2$3"; }
+
+# A GET on venice-chat is refused for its method, and only a caller identified as caller-a and granted the route gets that far.
+caller_a_reaches_its_route() {
+    local since status
+    since=$(now)
+    status=$(caller_status caller-a "$LISTENER_A:8443" /venice-chat/models) || { echo "the TLS request failed: $status"; return 1; }
+    [ "$status" = 403 ] || { echo "status $status, want 403"; return 1; }
+    expect_record "$since" caller-a venice-chat method_not_allowed
+}
+
+caller_a_is_not_granted_caller_b_route() {
+    local since status
+    since=$(now)
+    status=$(caller_status caller-a "$LISTENER_A:8443" /brave-search/res/v1/web/search) || { echo "the TLS request failed: $status"; return 1; }
+    [ "$status" = 403 ] || { echo "status $status, want 403"; return 1; }
+    expect_record "$since" caller-a brave-search not_granted
+}
+
+# Exit 7 is "no route to host", 28 a timeout. Anything else (a TLS error, a status) means the listener answered.
+unreachable() {
+    local rc=0
+    "$@" >&2 || rc=$?
+    case $rc in 7|28) ;; *) echo "curl exited $rc, want 7 or 28"; return 1 ;; esac
+}
+
+caller_b_listener_unreachable_from_caller_a() {
+    unreachable docker exec "$(cid caller-a)" curl -sS --max-time 5 --cacert /ca.crt -o /dev/null "https://$LISTENER_B:8443/"
+}
+
+# The bridge has no host address (gateway mode isolated), so the host reaches no listener.
+host_reaches_no_listener() {
+    local found
+    found=$(ip -4 -o addr show | awk '$4 ~ /^172\.30\.[12]\./')
+    [ -z "$found" ] || { echo "the host has an address on a caller network: $found"; return 1; }
+    unreachable curl -sS --max-time 5 -k -o /dev/null "https://$LISTENER_A:8443/"
+}
+
+raw_socket_is_refused() {
+    docker exec -i "$(cid "$1")" python3 - <<'PY'
+import errno, socket, sys
+for family, proto in ((socket.AF_INET, socket.IPPROTO_RAW), (socket.AF_PACKET, 0)):
+    try:
+        socket.socket(family, socket.SOCK_RAW, proto)
+    except OSError as e:
+        if e.errno != errno.EPERM:
+            print(f"{family.name}: errno {e.errno}, want EPERM"); sys.exit(1)
+        continue
+    print(f"{family.name}: a raw socket opened"); sys.exit(1)
+PY
+}
+
+# Sends hand-built TCP SYNs as raw Ethernet frames straight to iron-vault's MAC on caller-a's network. First from its own
+# address to caller-a's listener (the control: the sender and the sniffer work, so silence later means something), then from
+# caller-b's address to caller-b's listener. The SYN-ACK to a forged source is routed to the real owner of that address, on
+# another network, so the forger sees nothing and has no connection to send a request on.
+write_spoof_script() {
+    cat >"$WORK/spoof.py" <<'PY'
+import select, socket, struct, sys, time
+iface, target_mac, own_ip, own_listener, other_listener, spoofed = sys.argv[1:7]
+PORT = 8443
+target = bytes.fromhex(target_mac.replace(":", ""))
+own_mac = bytes.fromhex(open(f"/sys/class/net/{iface}/address").read().strip().replace(":", ""))
+
+def checksum(data):
+    data += b"\0" * (len(data) % 2)
+    total = sum(struct.unpack(f"!{len(data) // 2}H", data))
+    while total >> 16:
+        total = (total & 0xFFFF) + (total >> 16)
+    return ~total & 0xFFFF
+
+def syn_frame(src, dst, sport):
+    tcp = struct.pack("!HHIIBBHHH", sport, PORT, 1000, 0, 5 << 4, 0x02, 65535, 0, 0)
+    pseudo = socket.inet_aton(src) + socket.inet_aton(dst) + struct.pack("!BBH", 0, 6, len(tcp))
+    tcp = tcp[:16] + struct.pack("!H", checksum(pseudo + tcp)) + tcp[18:]
+    ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(tcp), 0x1234, 0, 64, 6, 0, socket.inet_aton(src), socket.inet_aton(dst))
+    ip = ip[:10] + struct.pack("!H", checksum(ip)) + ip[12:]
+    return target + own_mac + b"\x08\x00" + ip + tcp
+
+def tcp_flags_to(frame, sport):
+    if frame[6:12] != target or frame[12:14] != b"\x08\x00" or frame[23] != 6:
+        return None
+    ihl = (frame[14] & 15) * 4
+    dport = struct.unpack("!H", frame[14 + ihl + 2:14 + ihl + 4])[0]
+    return frame[14 + ihl + 13] if dport == sport else None
+
+def probe(src, dst, sport):
+    sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
+    sock.bind((iface, 0))
+    sock.send(syn_frame(src, dst, sport))
+    end = time.time() + 3
+    while time.time() < end:
+        if select.select([sock], [], [], 0.2)[0]:
+            flags = tcp_flags_to(sock.recv(2048), sport)
+            if flags is not None:
+                return flags
+    return None
+
+control = probe(own_ip, own_listener, 40001)
+spoof = probe(spoofed, other_listener, 40002)
+print(f"control: SYN from {own_ip} to {own_listener}: reply flags {control}")
+print(f"spoof: SYN from {spoofed} to {other_listener}: reply flags {spoof}")
+sys.exit(0 if control == 0x12 and spoof is None else 1)
+PY
+}
+
+# A throwaway container with NET_RAW added back, on caller-a's network at an unused address.
+spoofing_caller_b_gets_no_connection() {
+    local mac since
+    mac=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJECT}_caller-a\").MacAddress}}" "$(cid iron-vault)")
+    write_spoof_script
+    since=$(now)
+    docker run --rm -i --name "$SPOOFER" --network "${PROJECT}_caller-a" --ip "$SPOOF_IP" --pull never \
+        --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true "$CALLER_IMAGE" \
+        python3 - eth0 "$mac" "$SPOOF_IP" "$LISTENER_A" "$LISTENER_B" "$SPOOFED_B" <"$WORK/spoof.py" || return 1
+    sleep 1
+    [ -z "$(requests_since "$since" | jq -r 'select(.caller == "caller-b") | .route')" ] || { echo "a request was recorded for caller-b"; return 1; }
+}
+
+caller_has_none_of_the_vault() {
+    local path bad=0
+    for path in /var/lib/iron-vault /run/iron-vault /run/iron-vault-unlock /etc/iron-vault /etc/iron-vault-tls /var/run/docker.sock; do
+        if docker exec "$(cid caller-a)" test -e "$path"; then echo "$path exists in caller-a"; bad=1; fi
+    done
+    return $bad
+}
+
+# --- Live checks: the stack as docker sees it ----------------------------------------------------------------------------
+
+inspect_holds_no_recovery_key() {
+    local ids out
+    mapfile -t ids < <(compose ps -aq)
+    [ "${#ids[@]}" -ge 3 ] || { echo "expected 3 containers, found ${#ids[@]}"; return 1; }
+    out=$(docker inspect "${ids[@]}")
+    ! has_line 'AGE-SECRET-KEY' "$out" || { echo "docker inspect shows AGE-SECRET-KEY"; return 1; }
+}
+
+no_container_shares_a_network_namespace() {
+    local id mode bad=0
+    for id in $(compose ps -aq); do
+        mode=$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$id")
+        case "$mode" in host | container:* | service:*) echo "$id has NetworkMode $mode"; bad=1 ;; esac
+    done
+    return $bad
+}
+
+addresses_match_the_compose_file() {
+    local svc net want got rows=0 bad=0
+    while read -r svc net want; do
+        rows=$((rows + 1))
+        got=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJECT}_$net\").IPAddress}}" "$(cid "$svc")")
+        [ "$got" = "$want" ] || { echo "$svc on $net has $got, want $want"; bad=1; }
+    done < <(jq -r '.services | to_entries[] | .key as $s | (.value.networks // {}) | to_entries[]
+                    | select(.value.ipv4_address) | "\($s) \(.key) \(.value.ipv4_address)"' "$CONFIG_JSON")
+    [ "$rows" -ge 5 ] || { echo "only $rows addresses in the config"; return 1; }
+    return $bad
+}
+
+# Docker copies the image directory's owner and mode into an empty named volume (design open question 5).
+volumes_have_the_images_modes() {
+    local out
+    out=$(docker exec "$(cid iron-vault)" stat -c '%n %u:%g %a' /etc/iron-vault /var/lib/iron-vault)
+    echo "$out"
+    [ "$(grep -c " $SERVICE_UID:$SERVICE_UID 700$" <<<"$out")" -eq 2 ]
+}
+
+# --- Live checks: the admin socket ---------------------------------------------------------------------------------------
+
+# The refusal must be one of the two real ones from cli/client.rs, so a stopped service or a broken runuser cannot pass.
+other_account_ping_is_refused() {
+    local out
+    if out=$(as_account "$HOST_CLI" ping 2>&1); then echo "ping succeeded: $out"; return 1; fi
+    echo "$out"
+    case "$out" in
+        *"permission denied connecting to the admin socket"*) echo "refused by the filesystem" ;;
+        *"(not-admin-principal)"*) echo "refused by the service's peer-account check" ;;
+        *) echo "not refused by the socket's permissions or the peer-account check"; return 1 ;;
+    esac
+}
+
+sudo_ping_is_accepted() {
+    local out
+    out=$(sudo -n "$HOST_CLI" ping 2>&1) || { echo "$out"; return 1; }
+    echo "$out"
+    has_line 'container profile' "$out"
+}
+
+run_live_checks() {
+    local pid
+    check "the stack comes up and answers on the admin socket" stack_comes_up
+    # Nothing else can run without the stack; the FAIL above says why.
+    [ "$STACK_UP" = 1 ] && [ -n "$(cid iron-vault)" ] || return 0
+    check "the vault is initialised, unlocked and holds the example config" provision
+    pid=$(service_pid)
+    check "the service runs as uid $SERVICE_UID" runs_as_fixed_uid "$pid"
+    check "VmLck is above zero" memory_is_locked "$pid"
+    check "the service process is not dumpable" process_not_dumpable "$pid"
+    check "caller-a reaches its own route over TLS on its own listener" caller_a_reaches_its_route
+    check "caller-a is not granted caller-b's route" caller_a_is_not_granted_caller_b_route
+    check "caller-b's listener is unreachable from caller-a" caller_b_listener_unreachable_from_caller_a
+    check "the host reaches no listener and has no caller-network address" host_reaches_no_listener
+    check "caller-a cannot open a raw socket (EPERM)" raw_socket_is_refused caller-a
+    check "caller-b cannot open a raw socket (EPERM)" raw_socket_is_refused caller-b
+    check "NET_RAW added back, spoofing caller-b's address still gets no connection to caller-b's listener" spoofing_caller_b_gets_no_connection
+    check "caller-a has no vault, runtime, unlock, TLS or Docker socket path" caller_has_none_of_the_vault
+    check "docker inspect shows no AGE-SECRET-KEY" inspect_holds_no_recovery_key
+    check "no container shares another's network namespace" no_container_shares_a_network_namespace
+    check "every container has the address the Compose file gives it" addresses_match_the_compose_file
+    check "the named volumes have the image's owner and mode" volumes_have_the_images_modes
+    check "$ACCOUNT: iron-vault ping is refused" other_account_ping_is_refused
+    check "sudo iron-vault ping is accepted" sudo_ping_is_accepted
+}
+
 # --- Driver -------------------------------------------------------------------------------------------------------------
 
 usage() {
@@ -261,8 +672,7 @@ resolve_config() {
 
 cleanup() {
     set +e
-    docker rm -f "$SPOOFER" >/dev/null 2>&1
-    [ "$STACK_UP" = 0 ] || compose down --volumes --remove-orphans >/dev/null 2>&1
+    [ "$STACK_UP" = 0 ] || { docker rm -f "$SPOOFER"; compose down --volumes --remove-orphans; } >/dev/null 2>&1
     [ "$BUILT_SERVICE" = 0 ] || docker rmi "$SERVICE_IMAGE" >/dev/null 2>&1
     [ "$BUILT_CALLER" = 0 ] || docker rmi "$CALLER_IMAGE" >/dev/null 2>&1
     [ "$CREATED_CLI" = 0 ] || rm -f "$HOST_CLI"
