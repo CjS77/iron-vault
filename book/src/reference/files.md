@@ -61,6 +61,19 @@ Docker copies those owners and modes into new named volumes. The binary is `/usr
 `0755`. The image runs `serve --log-to-stdout`, so the log goes to the container runtime
 ([log operations](log-operations.md#docker)). See [docker-compose.md](../../../design/docker-compose.md).
 
+The Container profile has one more file, the host unlock handoff:
+
+| Path | Owner | Mode | Made by | What it is |
+|---|---|---|---|---|
+| `/run/iron-vault-unlock/` | root | `0711` on its ramfs; neither group nor others may write it | the host's handoff unit | The host directory, bind-mounted read-only into the container at the same path. The directory is mounted, not the file, so a file missing or replaced on the host is seen as such. |
+| `/run/iron-vault-unlock/host-unlock` | `iron-vault` | `0400` (no group or other bits; at most `0600` is accepted) | the host's handoff unit | The host unlock identity's secret text, one `AGE-SECRET-KEY-1…` line of at most 128 bytes. It lets the service unlock at startup without a passphrase. |
+
+The file must be a regular file, never a symlink, and no directory above it may be writable by group or others, not
+even a sticky one such as `/tmp`. A file that breaks the rule is refused, not read. A missing file means no handoff,
+and the service waits Locked for a passphrase `unlock`. The code that reads the handoff exists, but startup does not
+call it yet. The host side, which unseals the identity from the TPM onto a ramfs, is in
+[docker-compose.md](../../../design/docker-compose.md#host-unlock).
+
 ## The config directory
 
 | File | What it is |
