@@ -1,6 +1,6 @@
 # Getting started in development mode
 
-*Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main`.*
+*Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `cc59b80`.*
 
 At the end of this recipe you will have Iron Vault running as your own user, with a vault, one stored credential and
 one route to [httpbin.org](https://httpbin.org). You will send a request through it, see that httpbin received the
@@ -100,7 +100,8 @@ initialized vault 4b3faa85-…: approval version 1 committed
 run iron-vault unlock to start serving
 ```
 
-`init` needs a controlling terminal, so it cannot be scripted through a pipe. The service stays Locked.
+`init` refuses to run without a controlling terminal, because it shows the recovery key there. With one, the
+passphrases may also be piped in on stdin, one per line. The service stays Locked.
 
 ### 4. Unlock
 
@@ -178,7 +179,7 @@ iron-vault caller-token > ~/.iron-vault-tokens/me
 The token goes to the file. The terminal shows the line the config needs:
 
 ```text
-token_hash = "blake2b:8e22b77d4f3dda8a6474d413db56a8d5a5eb179dc73370d3c572ddffdb7d0ba6"
+token_hash = "blake2b:…"
 This token is shown once and the service keeps no copy of it.
 Put the token_hash line on the caller's [callers.<name>] table and run `iron-vault config approve <file>`.
 The token works only once that config is approved and active; the caller's old token, if any, keeps working until then.
@@ -305,22 +306,31 @@ forbidden
 Each one is refused before anything leaves the machine. The response says only `unauthorized` or `forbidden`; the
 log says why, in the `reason` field: `unauthenticated`, `method_not_allowed` and `path_not_allowed`.
 
+## Rate limits start empty
+
+Each route's token bucket starts **empty** every time the service becomes Ready: when you unlock, after each
+`config approve`, after a reload on SIGHUP, and after `replace` or `rm`. (`add` doesn't reset it.) The bucket then
+refills at `requests / per_seconds` up to `burst`. The `httpbin` route above refills at one request every 2 seconds, so
+straight after an approval its first request may get `429 Too Many Requests`, and its full burst of 5 is there after
+10 seconds. This stops a restart or a reload from handing out a fresh allowance.
+
 ## What can go wrong
 
-- **`refusing to start: … is not trusted: /home/alice/projects is writable by group 1001; run chmod g-w
-  /home/alice/projects`.** The binary, or a directory above it, can be replaced by another account. A build run straight
-  from `target/` in a group-writable checkout gets this. Install under `~/.local` and run the `chmod` in step 1.
-- **`refusing to start: … is not trusted: /tmp is a shared directory other users can write`.** `XDG_CONFIG_HOME` or
+- **``iron-vault: refusing to start: /home/alice/projects/iron-vault/target/debug/iron-vault is not trusted:
+  /home/alice/projects is writable by group 1001; run `chmod g-w /home/alice/projects` ``.** The binary, or a directory above it, could be replaced by
+  another account. A build run straight from `target/` in a group-writable checkout gets this. Install under
+  `~/.local` and run the `chmod` in step 1. A group with a name is shown quoted, as in `group 'alice'`.
+- **`iron-vault: refusing to start: … is not trusted: /tmp is a shared directory other users can write; move the state
+  directory, config, TLS key or certificate out of /tmp rather than changing its permissions`.** `XDG_CONFIG_HOME` or
   `XDG_STATE_HOME` points under `/tmp`. Use directories in your home.
-- **`the Iron Vault service is not running: there is no admin socket at …`.** The service is not running, or it was
-  started with a different `XDG_RUNTIME_DIR`.
-- **`error 14 (unlock-denied): wrong passphrase`.** After 5 wrong vault passphrases, `unlock` is refused for a cooldown
-  that starts at 30 s and doubles up to 15 min.
-- **`error 20 (name-taken): credential httpbin_key already exists, healthy or damaged; add never overwrites`.** Use
-  `replace` to change an existing credential.
-- **`429 Too Many Requests` on the first requests after an approval.** Every approval and every restart starts the
-  route's token bucket empty. It refills at `requests / per_seconds`, so this route allows its first request after
-  2 seconds and its full burst of 5 after 10.
+- **`iron-vault: the Iron Vault service is not running: there is no admin socket at …`.** The service is not running,
+  or it was started with a different `XDG_RUNTIME_DIR`.
+- **`iron-vault: the service answered error 14 (unlock-denied): wrong passphrase`.** After 5 wrong vault passphrases,
+  `unlock` is refused for a cooldown that starts at 30 s and doubles up to 15 min.
+- **``iron-vault: the service answered error 20 (name-taken): credential httpbin_key already exists, healthy or
+  damaged; `add` never overwrites``.** Use `replace` to change an existing credential.
+- **`429 Too Many Requests` on the first requests after an approval.** The route's bucket
+  [starts empty](#rate-limits-start-empty).
 - **`503` from the proxy.** The service is Locked: run `iron-vault unlock`.
 
 ## Reference

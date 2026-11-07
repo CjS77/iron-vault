@@ -1,6 +1,6 @@
 # Two keys, two callers, different permissions
 
-*Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main`.*
+*Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `cc59b80`.*
 
 At the end of this recipe two Venice API keys each have one job, each used by its own caller:
 
@@ -12,7 +12,8 @@ At the end of this recipe two Venice API keys each have one job, each used by it
 A program holding the `chat` token can chat, slowly, and do nothing else. A program holding the `dev` token can use
 the rest of the API with the other key.
 
-**What was really run.** Every command below was run, with dummy Venice keys. So the chat requests that Iron Vault
+**What was really run.** Each `pass show` below was replaced by `echo` with a dummy Venice key; every other command
+was run as shown. So the chat requests that Iron Vault
 forwarded got Venice's real `401` refusal, and the model list, which Venice serves without a key, came back for real.
 With real keys, the chat requests get answers instead.
 
@@ -48,10 +49,10 @@ head -1 chat.hash dev.hash
 
 ```text
 ==> chat.hash <==
-token_hash = "blake2b:ccff966fb87e696dc4f2a37c6d913576821374851ee92e6725754cdb02df1c53"
+token_hash = "blake2b:…"
 
 ==> dev.hash <==
-token_hash = "blake2b:24dec9fbb2f69fcb590cdb79f13759e0c490e45a1dd7872c5f4e13246ea17abe"
+token_hash = "blake2b:…"
 ```
 
 The hash files hold no secret; delete them once the config holds the hashes.
@@ -180,7 +181,8 @@ The log says why (fields trimmed):
 
 ### 6. Check the rate limit
 
-Wait a minute after the approval, so the chat bucket is full, then send seven requests at once:
+The route's bucket [starts empty](getting-started.md#rate-limits-start-empty) when the approval makes the service
+Ready, so wait a minute for it to fill, then send seven requests at once:
 
 ```sh
 for i in 1 2 3 4 5 6 7; do
@@ -208,13 +210,13 @@ log record has `"reason":"rate_limited"`.
 
 ## What can go wrong
 
-- **All seven requests get `429`.** The bucket was not full. Every approval and every restart starts each route's
-  bucket empty, and it refills at `requests / per_seconds`: one request every 10 seconds on this route, a full burst
-  after a minute. Sent straight after the approval, all seven were refused.
+- **All seven requests get `429`.** The bucket was not full. It [starts empty](getting-started.md#rate-limits-start-empty)
+  each time the service becomes Ready and refills at one request every 10 seconds on this route, a full burst after a
+  minute. Sent straight after the approval, all seven were refused.
 - **`401 Unauthorized` from Iron Vault, `unauthorized` in the body.** The token is missing, wrong, or was replaced
   by a newer approval. The log's `reason` is `unauthenticated`.
-- **`error 7 (config-invalid): the proposed config is invalid: caller chat is granted route venice-admin, which is
-  not defined`.** A caller's `routes` names a route the config does not define. Add the route or take it out of the
+- **`iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: caller chat is
+  granted route venice-admin, which is not defined`.** A caller's `routes` names a route the config does not define. Add the route or take it out of the
   list.
 - **`403` with `path_not_allowed` on the chat route.** `paths` must include the `/api/v1` base path.
 

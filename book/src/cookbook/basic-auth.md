@@ -1,10 +1,12 @@
 # Basic authentication upstreams
 
-*Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main`.*
+*Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `cc59b80`.*
 
 At the end of this recipe Iron Vault holds a username and password and sends them to an upstream as
-`Authorization: Basic …`. The caller holds neither. The recipe uses httpbin's `/basic-auth/<user>/<password>`
-endpoint, which answers `200` only when the request carries exactly that username and password.
+`Authorization: Basic …`. With a real upstream the caller holds neither. The recipe uses httpbin's
+`/basic-auth/<user>/<password>` endpoint, which answers `200` only when the request carries exactly that username and
+password. That demo endpoint needs both in its own path, so here the caller does know them; a real upstream checks
+the header alone, and the caller's requests carry neither value.
 
 Every command below was run against the real httpbin.org.
 
@@ -147,8 +149,9 @@ www-authenticate: Basic realm="Fake Realm"
   because the username is then the secret.
 - **`403` with `path_not_allowed`.** This route allows only `alice`'s path; `/basic-auth/bob/x` is refused before
   anything leaves the machine.
-- **`429` right after the approval.** The route's token bucket starts empty at each approval and restart, and refills
-  at one request every 2 seconds. In this run the wrong-password request, sent straight after the other two, got
+- **`429` right after the approval.** The route's token bucket
+  [starts empty](getting-started.md#rate-limits-start-empty) each time the service becomes Ready, and refills at one
+  request every 2 seconds. In this run the wrong-password request, sent straight after the other two, got
   `429` and went through a few seconds later.
 - **`401` from the upstream.** The stored username or password is wrong. `replace httpbin_basic --kind basic
   --origin httpbin.org` stores new ones.

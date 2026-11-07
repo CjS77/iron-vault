@@ -1,6 +1,6 @@
 # Give an AI agent or MCP server an API key
 
-*Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main`.*
+*Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `cc59b80`.*
 
 At the end of this recipe an agent or MCP server can call Brave Search, Venice and an FX API through Iron Vault. Its
 configuration holds a base URL, a placeholder key and a caller token, never a provider key. The three routes show the
@@ -13,11 +13,16 @@ three slot shapes:
 | An FX API    | a query parameter: `access_key`                              | `http://127.0.0.1:7878/fx`      |
 
 The routes are the ones in the [specification's example config](../../../design/iron-vault-specification.md#33-credential-records-and-configuration),
-with one change: the spec's FX upstream, `api.fx.example`, is a placeholder that doesn't resolve, so this recipe uses
-[exchangerate.host](https://exchangerate.host), which takes its key in an `access_key` query parameter.
+with one change to the FX route. The spec's FX upstream, `api.fx.example`, is a placeholder that doesn't resolve, so
+this recipe uses [exchangerate.host](https://exchangerate.host), which takes its key in an `access_key` query
+parameter. Its endpoints are named differently, so the paths change too: the spec allows `/latest` and
+`/historical/**`, while this recipe allows exchangerate.host's `/live` (current rates) and `/historical` (past
+rates), which take their options as query parameters rather than path segments. Set `paths` to the endpoints your
+own FX provider uses.
 
-**What was really run.** Every command below was run, but with dummy keys, because no real Brave, Venice or FX key was
-at hand. So each request reached the real provider, carrying a dummy key, and the provider's real refusal is shown.
+**What was really run.** No real Brave, Venice or FX key was at hand, so each `pass show` below was replaced by
+`echo` with a dummy key; every other command was run as shown. Each request reached the real provider carrying a
+dummy key, and the provider's real refusal is shown.
 With a real key in the vault, the same request gets the provider's answer instead.
 
 ## Prerequisites
@@ -57,7 +62,7 @@ iron-vault caller-token > ~/.iron-vault-tokens/agent
 ```
 
 ```text
-token_hash = "blake2b:2c3b325980a405f812d41b70987be2f655dd5901800661867224821271ec6a02"
+token_hash = "blake2b:…"
 This token is shown once and the service keeps no copy of it.
 …
 ```
@@ -202,11 +207,11 @@ Give the agent three things:
 - **API key:** any placeholder, such as `placeholder`. Many SDKs refuse to start without a key. Iron Vault removes
   every copy of the slot's header or query parameter and writes the real one.
 - **Caller token:** sent as `Proxy-Authorization: Bearer <token>` on every request. If the agent can only add a header
-  with a fixed name, see [point a real application at Iron Vault](real-application.md#send-the-caller-token).
+  with a fixed name, see [point a real application at Iron Vault](real-application.md#3-send-the-caller-token).
 
 The client settings above were not tried with a particular agent or MCP server; the `curl` requests in step 4 were.
 Before relying on an agent, check that it really uses the base URL for every request, as
-[point a real application at Iron Vault](real-application.md#check-that-a-client-supports-base-url-mode) describes.
+[point a real application at Iron Vault](real-application.md#4-check-that-a-client-supports-base-url-mode) describes.
 
 In a [protected install](../installation/linux-install.md), run the agent as its own OS account and make it a peer
 caller on the Unix socket. The kernel then identifies it, and there is no token file to steal:
@@ -221,8 +226,8 @@ routes = ["fx"]
 
 ## What can go wrong
 
-- **`error 7 (config-invalid): the proposed config is invalid: route fx sends credential fx_key to an origin its
-  record does not permit`.** The route's upstream is not one of the credential's origins; this is what the spec's
+- **`iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: route fx sends
+  credential fx_key to an origin its record does not permit`.** The route's upstream is not one of the credential's origins; this is what the spec's
   `https://api.fx.example` upstream gets against a key added for `api.exchangerate.host`. Fix the upstream, or
   `replace` the credential with the right `--origin`. No version is used up.
 - **`403 Forbidden` from Iron Vault.** The method or path is not in the route. The log's `reason` says which:
@@ -231,8 +236,8 @@ routes = ["fx"]
   it. Check the key, or `replace` it.
 - **`400 Bad Request` with `foreign_marker` in the log.** The agent sent a marker such as `{iv:brave}` in a route
   whose credential is another one.
-- **`429 Too Many Requests` right after an approval.** Every approval starts each route's token bucket empty; wait a
-  few seconds.
+- **`429 Too Many Requests` right after an approval or unlock.** Each route's token bucket
+  [starts empty](getting-started.md#rate-limits-start-empty) whenever the service becomes Ready; wait a few seconds.
 
 ## Reference
 

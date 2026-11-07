@@ -1,6 +1,6 @@
 # Point a real application at Iron Vault
 
-*Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main`.*
+*Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `cc59b80`.*
 
 At the end of this recipe you will know how to configure an application to reach its API through Iron Vault, how to
 send its caller token, and how to tell whether the application really sends every request through the route. The
@@ -73,7 +73,16 @@ bad request
 ```
 
 The second is logged with `"reason":"foreign_marker"`. A marker never selects a credential; the route does. Outside
-the slot a marker is plain text: in a query parameter httpbin echoed `"note": "{iv:httpbin_key}"` unchanged.
+the slot a marker is plain text, passed on unchanged:
+
+```sh
+curl -s -H "$AUTH" 'http://127.0.0.1:7878/httpbin/anything/x?note=%7Biv:httpbin_key%7D' | grep -E 'note|Authorization'
+```
+
+```text
+    "note": "{iv:httpbin_key}"
+    "Authorization": "Bearer [iron-vault:scrubbed]",
+```
 
 ### 3. Send the caller token
 
@@ -83,7 +92,13 @@ Every request needs the caller's token, in one of two places:
 - **A header of the listener's choosing**, for an application that can add a custom header but not
   `Proxy-Authorization`. Name it on the listener with `token_header`; the token goes in it bare, with no `Bearer`.
 
-This listener and caller were added to `dev-config.toml` and approved:
+Issue the application its own token:
+
+```sh
+iron-vault caller-token > ~/.iron-vault-tokens/app
+```
+
+Add a listener and a caller to `dev-config.toml`, with the `token_hash` line that printed:
 
 ```toml
 [listeners.app]
@@ -96,10 +111,32 @@ token_hash = "blake2b:<app's hash>"
 routes = ["httpbin"]
 ```
 
+`token_header` is set per listener and a caller arrives on exactly one, so the application gets a listener of its own
+on another port. Approve it:
+
+```sh
+iron-vault config approve dev-config.toml
+```
+
 ```text
+Approval summary
+vault: 4b3faa85-…
+version to commit: 6
+config digest: blake2b:2dbc74a7…
+committed version: 5
+callers:
+  + app: listener app, auth token, rate limits none
+route grants:
+  + app: granted httpbin
 listeners:
   + app: endpoint tcp 127.0.0.1:7879, no tls, token header X-Iron-Vault-Token
+Approve this config as version 6? Type yes to approve: yes
+Approval passphrase:
+approved version 6 (blake2b:2dbc74a7…)
+callers: 1 added; route grants: 1 added; routes: none; listeners: 1 added; limits: none; logging: none; recovery: none
 ```
+
+Then send a request with the token in `X-Iron-Vault-Token`, and one with it in `Proxy-Authorization`:
 
 ```sh
 APP_TOKEN=$(cat ~/.iron-vault-tokens/app)
@@ -161,8 +198,9 @@ HTTPS_PROXY=http://127.0.0.1:7878 curl -sv https://httpbin.org/headers
 ```
 
 The body is `CONNECT is not supported`, and the log reason is `connect_not_supported`. Iron Vault must see the
-request to add the credential, and a tunnel hides it. So tools that only offer a proxy setting, such as `gh`, `npm`
-and `cargo`, are supported only where a tested base-URL integration covers the whole workflow.
+request to add the credential, and a tunnel hides it. Setting `HTTPS_PROXY` alone does not enable credential
+injection in base-URL mode. Integrations with `gh`, `npm` and `cargo` need end-to-end compatibility checks before
+anyone claims they work.
 
 ## What can go wrong
 
