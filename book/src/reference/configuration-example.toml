@@ -1,0 +1,130 @@
+# An annotated Iron Vault configuration.
+#
+# It uses every table and every kind of listener, caller and slot. A test in the iron-vault-policy crate parses and
+# validates this file, so it stays valid as the schema changes. Before approving a copy of it, make the names, hashes,
+# accounts, files and credentials match your own installation.
+
+schema_version = 1
+
+# --- Listeners: where callers connect ---------------------------------------------------------------------------
+
+# A Unix socket. Any local account may connect; the account the kernel reports for the connecting process decides
+# which caller it is.
+[listeners.local]
+unix_socket = "/run/iron-vault/proxy.sock"
+
+# Plain HTTP on loopback. TCP reports no account, so every caller here presents a caller token. This listener reads
+# the token from its own header instead of `Proxy-Authorization: Bearer <token>`.
+[listeners.loopback]
+address = "127.0.0.1:7878"
+token_header = "X-Iron-Vault-Token"
+
+# An address on one container network. It is not loopback, so TLS is required.
+[listeners.backoffice]
+address = "10.20.0.2:7878"
+tls_certificate = "/etc/iron-vault/tls/server.crt"
+tls_key = "/etc/iron-vault/tls/server.key"
+
+# --- Callers: who may use which routes --------------------------------------------------------------------------
+
+# Identified by OS account. The account must exist on the host, and must not be root or the service account.
+[callers.fx-mcp]
+listener = "local"
+auth = "peer"
+user = "fx-mcp"
+routes = ["fx"]
+
+# A second peer caller on the same socket, as a different account.
+[callers.code]
+listener = "local"
+auth = "peer"
+user = "code"
+routes = ["github"]
+
+# A limit for this caller alone, applied on top of the route's own. It may be stricter, never looser.
+[callers.code.rate_limits]
+github = { requests = 30, per_seconds = 60, burst = 5 }
+
+# Identified by caller token; `auth = "token"` is the default. Put the line `iron-vault caller-token` printed here.
+[callers.brave-cli]
+listener = "loopback"
+token_hash = "blake2b:0123456789abcdef00112233445566778899aabbccddeeff0f1e2d3c4b5a6978"
+routes = ["brave", "venice"]
+
+# Identified by the listener it arrives on: it must be that listener's only caller.
+[callers.backoffice]
+listener = "backoffice"
+auth = "isolated-network"
+routes = ["venice", "tickets"]
+
+# --- Routes: where requests go, and with which credential -------------------------------------------------------
+
+# A query slot: the key is sent as `?access_key=<key>`.
+[routes.fx]
+prefix = "/fx"
+upstream = "https://api.fx.example"
+credential = "fx_key"
+slot = { query = "access_key" }
+methods = ["GET"]
+paths = ["/latest", "/historical/**"]
+rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
+
+# A header slot with a format. The upstream has a base path, so `paths` starts with it: a request for
+# /venice/chat/completions is sent to /api/v1/chat/completions.
+[routes.venice]
+prefix = "/venice"
+upstream = "https://api.venice.ai/api/v1"
+credential = "venice"
+slot = { header = "Authorization", format = "Bearer {}" }
+methods = ["POST"]
+paths = ["/api/v1/chat/completions"]
+rate_limit = { requests = 120, per_seconds = 60, burst = 20 }
+
+# A header slot without a format: the header holds the key alone.
+[routes.brave]
+prefix = "/brave"
+upstream = "https://api.search.brave.com"
+credential = "brave"
+slot = { header = "X-Subscription-Token" }
+methods = ["GET"]
+paths = ["/res/v1/web/search"]
+rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
+
+# `*` matches exactly one path segment: here the owner and the repository.
+[routes.github]
+prefix = "/github"
+upstream = "https://api.github.com"
+credential = "github"
+slot = { header = "Authorization", format = "Bearer {}" }
+methods = ["GET", "POST"]
+paths = ["/user/repos", "/repos/*/*/issues"]
+rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
+confirm = "none"
+
+# A Basic slot, for a credential added with a username and password. The upstream is self-hosted, so the route trusts
+# an administrator-installed CA instead of the built-in roots.
+[routes.tickets]
+prefix = "/tickets"
+upstream = "https://tickets.internal.example/rest/api/2"
+credential = "tickets"
+slot = "basic"
+methods = ["GET", "POST", "PUT"]
+paths = ["/rest/api/2/issue", "/rest/api/2/issue/*", "/rest/api/2/search"]
+rate_limit = { requests = 20, per_seconds = 60, burst = 5 }
+ca_file = "/etc/iron-vault/ca/tickets.pem"
+
+# --- Service-wide settings --------------------------------------------------------------------------------------
+
+# Overrides for some operational limits; the rest keep their defaults.
+[limits]
+max_request_body_bytes = 1048576
+request_timeout_secs = 120
+upstream_timeout_secs = 60
+
+# Where the log goes. This is the protected install's default, written out.
+[logging]
+destination = "/var/log/iron-vault"
+
+# Remind the owner to check the recovery key every 30 days instead of every 90.
+[recovery]
+reminder_days = 30
