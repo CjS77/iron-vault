@@ -79,9 +79,12 @@ The Container profile has one more file, the host unlock handoff:
 | `/run/iron-vault-unlock/host-unlock` | `iron-vault` | `0400` (no group or other bits; at most `0600` is accepted) | the host's handoff unit | The host unlock identity's secret text, one `AGE-SECRET-KEY-1…` line of at most 128 bytes. It lets the service unlock at startup without a passphrase. |
 
 The file must be a regular file, never a symlink, and no directory above it may be writable by group or others, not
-even a sticky one such as `/tmp`. A file that breaks the rule is refused, not read. A missing file means no handoff,
-and the service waits Locked for a passphrase `unlock`. The code that reads the handoff exists, but startup does not
-call it yet. The host side, which unseals the identity from the TPM onto a ramfs, is in
+even a sticky one such as `/tmp`. A file that breaks the rule is refused, not read. At startup a
+Container-profile service reads this file. When it opens the vault, the service goes from Starting to Checking with no
+passphrase. A missing file means no handoff, and a refused one (an unsafe path, an unreadable file, a key that is not
+one of the vault's recipients, or memory not locked against swap) is not: either way the service stays
+Locked, and a passphrase `unlock` still works. Each start writes one `vault.host-unlock` record
+([audit log](audit-log.md#service-and-lock-state)). The host side, which unseals the identity from the TPM onto a ramfs, is in
 [docker-compose.md](../../../design/docker-compose.md#host-unlock).
 
 ## The config directory
