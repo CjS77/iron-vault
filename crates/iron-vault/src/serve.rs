@@ -1,6 +1,7 @@
 //! `iron-vault serve`: checks the trusted paths, takes the directory locks and sweeps their stale temp files, starts
-//! the service context Locked with its provisional request listeners, and serves the admin socket until SIGTERM, SIGINT
-//! or a failed log write, then stops the service. SIGHUP reloads the config (§3.9).
+//! the service context with its provisional request listeners, Locked or, in the Container profile, unlocked from the
+//! host's unlock handoff, and serves the admin socket until SIGTERM, SIGINT or a failed log write, then stops the
+//! service. SIGHUP reloads the config (§3.9).
 
 use std::fs::DirBuilder;
 use std::io;
@@ -20,6 +21,7 @@ use iron_vault::logging::{LogFailure, LogSwitch};
 use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
 use iron_vault::socket_activation::{ActivationEnv, PassedSockets};
 use iron_vault::trusted_path_report::{self, ServicePaths, TrustedPathReport};
+use iron_vault::unlock_handoff::HANDOFF_PATH;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::Capabilities;
 use iron_vault_store::OsFs;
@@ -65,6 +67,8 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport,
     };
     runtime.block_on(async {
         let service = Arc::new(ServiceContext::start(locks, setup, &provisional, passed)?);
+        // Before the admin socket opens, so no `unlock` can race the handoff.
+        service.unlock_at_start(Path::new(HANDOFF_PATH)).await;
         // The first evaluation comes before the admin socket opens, so a due reminder is the first thing the owner can see.
         service.evaluate_recovery_reminder().await;
         let daily = Arc::clone(&service);

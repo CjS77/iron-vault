@@ -7,7 +7,7 @@ use iron_vault_store::{
 
 use super::{AUDIT_TARGET, AuditEvent, EventName, memory_label};
 use crate::hardening::MemoryProtection;
-use crate::service_context::{DenialKind, UnlockRefusal, step_names};
+use crate::service_context::{DenialKind, HostUnlockOutcome, UnlockRefusal, step_names};
 
 /// `vault.initialized`: init's last step is durable.
 #[derive(Debug, Clone, Copy)]
@@ -121,6 +121,40 @@ impl AuditEvent for UnlockRefused<'_> {
             retry_after = retry_after(self.refusal),
             "unlock refused, the service stays Locked",
         );
+    }
+}
+
+/// `vault.host-unlock`: a container-profile service tried the unlock handoff while Starting. It never holds the
+/// handoff's bytes or its recipient key. Its outcome is `host_unlock_outcome`, since `outcome` is the request event's.
+#[derive(Debug, Clone, Copy)]
+pub struct HostUnlock {
+    /// What the attempt came to; a refusal names its fixed reason in `refusal`.
+    pub outcome: HostUnlockOutcome,
+}
+
+impl AuditEvent for HostUnlock {
+    const NAME: EventName = EventName("vault.host-unlock");
+
+    fn emit(&self) {
+        let host_unlock_outcome = self.outcome.label();
+        match self.outcome {
+            HostUnlockOutcome::Unlocked => {
+                tracing::info!(target: AUDIT_TARGET, event = Self::NAME.as_str(), host_unlock_outcome, "host unlock opened the vault");
+            }
+            HostUnlockOutcome::Absent => tracing::info!(
+                target: AUDIT_TARGET,
+                event = Self::NAME.as_str(),
+                host_unlock_outcome,
+                "no unlock handoff, the service stays Locked",
+            ),
+            HostUnlockOutcome::Refused(refusal) => tracing::warn!(
+                target: AUDIT_TARGET,
+                event = Self::NAME.as_str(),
+                host_unlock_outcome,
+                refusal = refusal.label(),
+                "host unlock refused, the service stays Locked",
+            ),
+        }
     }
 }
 

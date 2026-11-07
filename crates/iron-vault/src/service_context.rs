@@ -19,6 +19,7 @@
 //! (design/config-approval.md, open question 1).
 
 mod approval;
+mod host_unlock;
 mod init;
 mod log_destination;
 mod migration;
@@ -61,11 +62,13 @@ use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder, Withdrawn};
 use crate::socket_activation::PassedSockets;
 use crate::standing::{CredentialStanding, RouteFault};
 use crate::trusted_path_report::ServicePaths;
+use host_unlock::tries_host_unlock;
 use reminder::{ReminderSchedule, SharedSchedule, with_schedule};
 use serving::Serving;
 use unlock::{log_foreign_files, unprotected_reason};
 
 pub use approval::{ApprovalEnd, ApprovalReview};
+pub use host_unlock::{HostUnlockOutcome, HostUnlockRefusal};
 pub use init::{InitRefusal, step_names};
 pub use migration::MigrationSession;
 pub use presence::{DenialKind, OwnerPresence, PresenceRefusal};
@@ -269,12 +272,13 @@ struct Inner {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Starts the service on `locks`: Starting, then Locked, with the provisional listener set open on `provisional`,
-    /// adopting from the sockets systemd `passed`. Call it inside the async runtime.
+    /// Starts the service on `locks` in Starting, with the provisional listener set open on `provisional`, adopting from
+    /// the sockets systemd `passed`. Call it inside the async runtime.
     ///
-    /// v0 stores the vault identity behind a passphrase only, so startup always needs an interactive unlock; a TPM or
-    /// host unlock (EP-32) would move to Checking instead. A provisional listener that cannot be opened is logged at
-    /// WARN and left out.
+    /// A profile with no host unlock needs an interactive unlock, so it moves on to Locked here. The Container profile
+    /// stays in Starting, refusing requests as Locked does, until [`unlock_at_start`](Self::unlock_at_start) tries the
+    /// unlock handoff: that needs the blocking pool and the detached config check, which this synchronous constructor
+    /// cannot await. A provisional listener that cannot be opened is logged at WARN and left out.
     pub fn start(
         locks: ServiceLocks,
         setup: ServiceSetup<F>,
@@ -288,7 +292,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         // Starting refuses as Locked does, before any listener accepts. The default limits bound the provisional set:
         // nothing of the unverified config but its listeners is used.
         let holder = Arc::new(SnapshotHolder::refusing(UnavailableReason::Locked));
-        let state = next(ServiceState::Starting, ServiceEvent::InteractiveUnlockRequired)?;
+        let state = match tries_host_unlock(setup.paths.profile) {
+            true => ServiceState::Starting,
+            false => next(ServiceState::Starting, ServiceEvent::InteractiveUnlockRequired)?,
+        };
         store_refusal(&holder, state);
         Ok(Self {
             inner: Arc::new(Mutex::new(Inner {
@@ -328,9 +335,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// When the check passes, the listener set is rebuilt from the verified config, and only then is the snapshot
     /// served and the set approved. When it fails, the provisional listeners keep answering `503` with the failure's
     /// reason, the check has logged the detail at WARN, and the vault is dropped; the context keeps `identity` either
-    /// way. Both state changes are logged as lock transitions, so a host unlock (EP-32) entering here is audited like a
-    /// passphrase unlock. A host unlock must pass `require_locked_memory`, the memory guard `unlock` takes, before it
-    /// unwraps `identity`.
+    /// way. Both state changes are logged as lock transitions. The caller has already opened `identity`, so it must
+    /// have passed `require_locked_memory`, the memory guard every unlock path takes, before it did.
     ///
     /// It waits for the service-wide lock, as [`recheck`](Self::recheck) does, so it never runs during an approval.
     ///
@@ -683,18 +689,14 @@ impl Drop for LockRequest<'_> {
 struct SettleGuard {
     inner: OwnedMutexGuard<Inner>,
     holder: Arc<SnapshotHolder>,
-    /// The check started from Locked, so leaving Checking is a lock transition too.
-    leaving_locked: bool,
+    /// The check started from an unlock, so leaving Checking is a lock transition too.
+    unlocking: bool,
 }
 
 impl SettleGuard {
     fn new(inner: OwnedMutexGuard<Inner>, holder: Arc<SnapshotHolder>) -> Self {
-        let leaving_locked = inner.state == ServiceState::Locked;
-        Self {
-            inner,
-            holder,
-            leaving_locked,
-        }
+        let unlocking = is_unlocking_from(inner.state);
+        Self { inner, holder, unlocking }
     }
 }
 
@@ -707,7 +709,7 @@ impl Drop for SettleGuard {
         let failed = ServiceEvent::CheckFailed(CheckFailure::interrupted().failure());
         // Checking always leads to Unavailable on a failure, so the transition is always made.
         if let Ok(unavailable) = apply(&self.holder, &mut self.inner, failed)
-            && self.leaving_locked
+            && self.unlocking
         {
             log_lock_transition(ServiceState::Checking, unavailable);
         }
@@ -747,9 +749,9 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         .unwrap_or_else(|_| Err(CheckFailure::interrupted()))
     }
 
-    /// Moves into Checking on `event` (an unlock, a reload, an approval's commit or a repair), keeps `identity`, runs the
-    /// config check with it ([`open_and_check`]), and settles in Ready or Unavailable. Leaving Locked, both changes are
-    /// logged as lock transitions.
+    /// Moves into Checking on `event` (an unlock, a host unlock, a reload, an approval's commit or a repair), keeps
+    /// `identity`, runs the config check with it ([`open_and_check`]), and settles in Ready or Unavailable. Leaving Locked
+    /// or Starting, both changes are logged as lock transitions.
     ///
     /// An event that does not lead to Checking is refused before the state, the snapshot or the kept identity changes.
     /// Entering Checking withdraws any served snapshot, so the context drops what it kept of that vault with it.
@@ -771,12 +773,12 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
             .map(|(version, _)| version);
         inner.open = None;
         inner.identity = Some(Arc::clone(&identity));
-        let leaving_locked = from == ServiceState::Locked;
-        if leaving_locked {
+        let unlocking = is_unlocking_from(from);
+        if unlocking {
             log_lock_transition(from, checking);
         }
         let outcome = self.settle(inner, identity, event, committed).await?;
-        if leaving_locked {
+        if unlocking {
             log_lock_transition(checking, outcome);
         }
         Ok(outcome)
@@ -914,6 +916,12 @@ fn lock_outcome(snapshots: usize, identity_holders: usize) -> LockOutcome {
             LockOutcome::Held { snapshots }
         }
     }
+}
+
+/// Whether entering Checking from `from` brings the vault identity into memory: an unlock from Locked, or a host unlock
+/// from Starting. Those checks are lock transitions; a reload, an approval or a repair already held the identity.
+const fn is_unlocking_from(from: ServiceState) -> bool {
+    matches!(from, ServiceState::Locked | ServiceState::Starting)
 }
 
 /// Records one lock transition.

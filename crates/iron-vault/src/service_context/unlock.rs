@@ -40,9 +40,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// [`memory_guard`] for this service's profile and startup memory protection status, logged at WARN like every
     /// other unlock refusal.
     ///
-    /// Every path that opens the vault identity takes this guard first. When unattended TPM or host unlock arrives
-    /// (Starting to Checking, EP-32), it must refuse here too, before it unwraps the identity: a protected install never
-    /// holds a secret in swappable memory, whatever unlocked it.
+    /// Every path that opens the vault identity takes this guard first, the host unlock at startup included, before it
+    /// opens the unlock handoff; a TPM unlock (EP-32) must too. A protected install never holds a secret in swappable
+    /// memory, whatever unlocked it.
     pub(crate) fn require_locked_memory(&self) -> Result<(), UnlockRefusal> {
         memory_guard(self.setup.paths.profile, &self.setup.hardening.memory).inspect_err(|refusal| UnlockRefused { refusal }.emit())
     }

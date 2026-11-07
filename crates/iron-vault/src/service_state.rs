@@ -85,7 +85,8 @@ pub enum ServiceState {
 pub enum ServiceEvent {
     /// Startup found that an interactive unlock is required.
     InteractiveUnlockRequired,
-    /// A TPM or host unlock succeeded at startup (not reachable in v0 until EP-32).
+    /// A host unlock succeeded at startup: the Container profile's unlock handoff opened the vault. A TPM unlock (EP-32)
+    /// will send it too.
     HostUnlockSucceeded,
     /// An authorized unlock succeeded.
     UnlockSucceeded,
