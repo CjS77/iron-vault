@@ -228,8 +228,22 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
         log: LogSwitch,
         clock: Arc<dyn WallClock>,
     ) -> Arc<ServiceContext<F>> {
+        let service = self.start_as(fs, log, DeploymentProfile::Development, MemoryProtection::Unsupported);
+        let service = Arc::new(service.with_clock(clock));
+        service.enter_checking(identity()).await.unwrap();
+        service
+    }
+
+    /// The service started as a `profile` install whose hardening left `memory`, as `start` leaves it: no unlock.
+    pub fn start_as<F: StoreFs + Send + Sync + 'static>(
+        &self,
+        fs: F,
+        log: LogSwitch,
+        profile: DeploymentProfile,
+        memory: MemoryProtection,
+    ) -> ServiceContext<F> {
         let paths = ServicePaths {
-            profile: DeploymentProfile::Development,
+            profile,
             owner: invoking_user().unwrap(),
             config: self.path("etc/config.toml"),
             state_dir: self.path("state"),
@@ -246,14 +260,11 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
                 .with_pinned_trust(self.ca.trust()),
             hardening: HardeningReport {
                 core_dumps: CoreDumps::Disabled,
-                memory: MemoryProtection::Unsupported,
+                memory,
             },
             log,
         };
-        let service = ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap();
-        let service = Arc::new(service.with_clock(clock));
-        service.enter_checking(identity()).await.unwrap();
-        service
+        ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap()
     }
 
     /// [`start`](Self::start), checked to have reached Ready.
