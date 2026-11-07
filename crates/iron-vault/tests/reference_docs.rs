@@ -46,17 +46,22 @@ fn error_names(protocol: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Every `.rs` file under `dir`, at any depth, so an event declared in a nested submodule is not missed.
+fn rust_sources(dir: &Path) -> Vec<PathBuf> {
+    fs::read_dir(dir)
+        .expect("source dir")
+        .map(|entry| entry.expect("dir entry").path())
+        .flat_map(|path| match path.is_dir() {
+            true => rust_sources(&path),
+            false => vec![path],
+        })
+        .collect()
+}
+
 /// Every `EventName("...")` in the audit module's sources.
 fn event_names() -> Vec<String> {
-    let audit_dir = crate_path("src/audit");
-    let mut sources = vec![crate_path("src/audit.rs")];
-    sources.extend(
-        fs::read_dir(&audit_dir)
-            .expect("audit dir")
-            .map(|entry| entry.expect("dir entry").path()),
-    );
-    sources
-        .iter()
+    std::iter::once(crate_path("src/audit.rs"))
+        .chain(rust_sources(&crate_path("src/audit")))
         .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
         .map(|path| fs::read_to_string(path).expect("audit source"))
         .flat_map(|source| {
