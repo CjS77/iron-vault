@@ -82,7 +82,8 @@ impl From<Exit> for ExitCode {
     arg_required_else_help = true
 )]
 pub struct Cli {
-    /// Use the admin socket at PATH instead of this installation's, for example one forwarded over SSH.
+    /// Use the admin socket at PATH instead of this installation's, for example one forwarded over SSH. Every client
+    /// command takes it; `serve` refuses it, because the service always binds its own installation's socket.
     #[arg(long, global = true, value_name = "PATH")]
     pub admin_socket: Option<PathBuf>,
     /// What to do.
@@ -94,6 +95,9 @@ pub struct Cli {
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
     /// Run the service until SIGTERM or SIGINT.
+    ///
+    /// In a protected installation systemd starts it as the `iron-vault` service account, so you never run it yourself.
+    /// It starts Locked: run `unlock` after each start.
     Serve {
         /// Write the log to stdout until an approved config names a destination, as the Docker image does. The service
         /// refuses it when stdout is the systemd journal.
@@ -102,9 +106,11 @@ pub enum Command {
     },
     /// Check that the service is running and show its deployment profile.
     Ping,
-    /// Show the service, vault, approval, memory protection and credential states, without secrets.
+    /// Show the service, vault, approval, memory protection and credential states, without secrets. It exits 4 when
+    /// the service answers and is not Ready.
     Status,
-    /// List every credential with its kind, permitted origins and standing, never a secret. Needs an open vault.
+    /// List every credential with its kind, permitted origins and standing, never a secret. It needs an open vault,
+    /// and exits 4 while none is open.
     List,
     /// Open the vault: the service prompts for the vault passphrase, read with echo off or from stdin.
     Unlock,
