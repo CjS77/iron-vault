@@ -9,9 +9,15 @@ src = "src"
 [preprocessor.repo-links]
 command = "python3 preprocessors/repo_links.py"
 
+# Draws ```mermaid blocks in the browser. `mdbook-mermaid install book` writes the two scripts named in
+# additional-js; they are not committed, so they always match the pinned preprocessor version.
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
 [output.html]
 git-repository-url = "https://github.com/CjS77/iron-vault"
 edit-url-template = "https://github.com/CjS77/iron-vault/edit/main/book/{path}"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
 
 [output.html.search]
 enable = true

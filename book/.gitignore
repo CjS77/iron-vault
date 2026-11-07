@@ -1,1 +1,4 @@
 book/
+# Written by `mdbook-mermaid install book`.
+mermaid.min.js
+mermaid-init.js

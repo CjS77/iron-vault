@@ -5,12 +5,17 @@ sets their order.
 
 ## Tools
 
-CI pins both tools; install the same versions:
+CI pins the tools; install the same versions:
 
 ```sh
 cargo install mdbook --version 0.5.4 --locked
 cargo install mdbook-linkcheck2 --version 0.13.0 --locked
+cargo install mdbook-mermaid --version 0.17.1 --locked
+mdbook-mermaid install book    # once: writes the Mermaid scripts the site loads
 ```
+
+The Mermaid scripts are not committed. Run `mdbook-mermaid install book` again after changing the mdbook-mermaid
+version, so the scripts match it; without them the build fails.
 
 The build also runs `preprocessors/repo_links.py`, so it needs `python3`.
 
