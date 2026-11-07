@@ -25,6 +25,20 @@
 - [Check and store your recovery key](cookbook/recovery-key.md)
 - [Tamper detection and recovery](cookbook/tamper-detection.md)
 - [Start over in development mode](cookbook/start-over.md)
+- [Not yet available](cookbook/roadmap/index.md)
+    - [Unlock at boot with a TPM](cookbook/roadmap/tpm-unlock.md)
+    - [Approve configs with a TPM PIN](cookbook/roadmap/tpm-approval.md)
+    - [Add or remove a recipient](cookbook/roadmap/recipients.md)
+    - [Move a vault to a new machine](cookbook/roadmap/migration.md)
+    - [Retire a machine, or reset the vault](cookbook/roadmap/reset.md)
+    - [Run Iron Vault in Docker Compose](cookbook/roadmap/docker-compose.md)
+    - [Log in to an OAuth provider](cookbook/roadmap/oauth.md)
+    - [Get owner notifications on the desktop](cookbook/roadmap/notifications.md)
+    - [Restrict what a request may contain](cookbook/roadmap/request-content.md)
+    - [Use a YubiKey](cookbook/roadmap/yubikey.md)
+    - [Other credential kinds](cookbook/roadmap/credential-kinds.md)
+    - [Sync from a password manager](cookbook/roadmap/password-manager-sync.md)
+    - [macOS and Windows](cookbook/roadmap/macos-windows.md)
 
 # Reference
 
