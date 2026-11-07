@@ -29,7 +29,6 @@
 #
 # Which unlock path: the stack is unlocked with the vault passphrase over the admin socket, as `iron-vault unlock` does. The
 # host unlock handoff (K-252) is not used, so /run/iron-vault-unlock is an empty directory and this check does not depend on it.
-# The stack is left Ready only for the checks that need to send requests through it.
 # The jq programs are single-quoted on purpose: $name in them is jq's, not the shell's.
 # shellcheck disable=SC2016
 set -euo pipefail
@@ -96,15 +95,19 @@ compose() { docker compose -p "$PROJECT" "${COMPOSE_ARGS[@]}" "$@"; }
 
 # --- Static checks: read `docker compose config --format json` ----------------------------------------------------------
 
-# Shared jq definitions. A caller is any service but iron-vault. Compose renders `core: 0` as `{}`, so a missing soft or hard
+# Shared jq definitions. A caller is any service but iron-vault. A caller network is one that iron-vault and a caller share; a
+# caller may have other networks of its own, but never a non-internal one. `covers` is true for a host path that is, or contains,
+# one of the Docker socket and vault paths, so mounting /var/run or /var/lib/docker is caught as well as the socket itself. Compose renders `core: 0` as `{}`, so a missing soft or hard
 # limit in an object counts as 0.
 JQ_DEFS='
 def callers: .services | to_entries | map(select(.key != "iron-vault"));
 def caps(l): (l // []) | map(ltrimstr("CAP_") | ascii_upcase);
 def nets(s): (s.networks // {}) | keys;
 def members($n): .services | to_entries | map(select(nets(.value) | index($n))) | map(.key) | sort;
-def callernets: [callers[] | nets(.value)[]] | unique;
+def callernets: . as $root | [callers[] | nets(.value)[]] | unique | map(. as $n | select($root | members($n) | index("iron-vault") != null));
 def iv: .services["iron-vault"];
+def protected: ["/run/docker.sock", "/var/run/docker.sock", "/run/iron-vault", "/run/iron-vault-unlock", "/etc/iron-vault-host", "/var/lib/docker"];
+def covers($src): ($src | sub("/+$"; "")) as $s | protected | any(. == $s or $s == "" or startswith($s + "/"));
 . as $r |
 '
 
@@ -139,12 +142,13 @@ no_service_is_privileged() {
            if (caps($v.cap_add) | any(. == "NET_ADMIN")) then "\($k) adds NET_ADMIN" else empty end)'
 }
 
-# A caller shares no mount with iron-vault (the state, config, runtime, unlock and TLS mounts) and never mounts the Docker socket.
+# A caller shares no mount with iron-vault (the state, config, runtime, unlock and TLS mounts), and mounts neither the Docker
+# socket, /var/lib/docker, a vault path, nor any directory that contains one.
 callers_mount_nothing_of_the_vault() {
     no_violations '(iv.volumes // [] | map(.source)) as $ivsrc
         | callers[] | .key as $k | (.value.volumes // [])[]
         | select((.source // "" | test("docker\\.sock|iron-vault")) or (.target | test("docker\\.sock|iron-vault"))
-                 or (.source as $s | $ivsrc | index($s)))
+                 or (.type == "bind" and covers(.source)) or (.source as $s | $ivsrc | index($s)))
         | "\($k) mounts \(.source // "an anonymous volume") at \(.target)"'
 }
 
@@ -152,9 +156,10 @@ caller_networks_are_internal() {
     no_violations 'callernets[] as $n | select($r.networks[$n].internal != true) | "network \($n) is not internal"'
 }
 
-# Each caller network holds iron-vault and exactly one caller.
+# Each caller network holds iron-vault and exactly one caller, and every caller has one.
 caller_networks_hold_one_caller() {
-    no_violations '(callers[] | select(nets(.value) | length == 0) | "\(.key) is on no network of its own"),
+    no_violations '(callers[] | select((nets(.value) | map(. as $n | $r | members($n) | index("iron-vault") != null) | any) | not)
+         | "\(.key) shares no network with iron-vault"),
         (callernets[] as $n | members($n) as $m | select(($m | index("iron-vault") | not) or (($m - ["iron-vault"]) | length) != 1)
          | "network \($n) holds \($m | join(", ")); want iron-vault and exactly one caller")'
 }
@@ -200,8 +205,6 @@ iron_vault_runs_as_the_fixed_uid() {
     no_violations "select(iv.user != \"$SERVICE_UID:$SERVICE_UID\") | \"user is \(iv.user | tojson)\""
 }
 
-config_holds_no_recovery_key() { no_violations 'tojson | select(test("AGE-SECRET-KEY")) | "the resolved config contains AGE-SECRET-KEY"'; }
-
 run_static_checks() {
     check "the resolved config has iron-vault and a caller" config_has_the_stack
     check "static: every caller drops NET_RAW" callers_drop_net_raw
@@ -217,7 +220,6 @@ run_static_checks() {
     check "static: iron-vault is read_only" iron_vault_is_read_only
     check "static: iron-vault drops ALL capabilities" iron_vault_drops_all_capabilities
     check "static: iron-vault runs as $SERVICE_UID:$SERVICE_UID" iron_vault_runs_as_the_fixed_uid
-    check "static: the resolved config holds no AGE-SECRET-KEY" config_holds_no_recovery_key
 }
 
 # --- Live setup: runs before the stack exists; a failure here is exit 2 ---------------------------------------------------
@@ -230,6 +232,19 @@ banner() {
     # shellcheck source=/dev/null
     echo "compose-check on $(. /etc/os-release && echo "$PRETTY_NAME"), kernel $(uname -r), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "docker $(docker version --format '{{.Server.Version}}'), compose $(docker compose version --short)"
+}
+
+# Cleanup removes by name and by project label, so anything of that name already here would be deleted with the check's own.
+refuse_leftovers() {
+    local label="label=com.docker.compose.project=$PROJECT" kind image
+    for kind in "container ls -a" "volume ls" "network ls"; do
+        # shellcheck disable=SC2086
+        [ -z "$(docker $kind -q --filter "$label")" ] || die "a Docker ${kind%% *} labelled com.docker.compose.project=$PROJECT already exists"
+    done
+    ! docker container inspect "$SPOOFER" >/dev/null 2>&1 || die "a container named $SPOOFER already exists"
+    for image in "$SERVICE_IMAGE" "$CALLER_IMAGE"; do
+        ! docker image inspect "$image" >/dev/null 2>&1 || die "the image $image already exists"
+    done
 }
 
 preflight() {
@@ -246,6 +261,7 @@ preflight() {
         ! getent passwd "$path" >/dev/null || die "an account named or numbered $path exists"
         ! getent group "$path" >/dev/null || die "a group named or numbered $path exists"
     done
+    refuse_leftovers
     id "$ACCOUNT" >/dev/null 2>&1 || die "no account $ACCOUNT"
     [ "$(id -u "$ACCOUNT")" -ne 0 ] || die "TEST_ACCOUNT must not be root"
     # Positive control: if runuser silently fails, "the account is refused" would pass for the wrong reason.
@@ -313,7 +329,7 @@ create_certificates() {
 install_host_cli() {
     local ctr
     ctr=$(docker create "$SERVICE_IMAGE") || die "cannot create a container from $SERVICE_IMAGE"
-    docker cp "$ctr:/usr/bin/iron-vault" "$WORK/iron-vault" >/dev/null || die "cannot copy the binary out of $SERVICE_IMAGE"
+    docker cp "$ctr:/usr/bin/iron-vault" "$WORK/iron-vault" >/dev/null || { docker rm "$ctr" >/dev/null; die "cannot copy the binary out"; }
     docker rm "$ctr" >/dev/null
     CREATED_CLI=1
     install -m 0755 -o root -g root "$WORK/iron-vault" "$HOST_CLI"
@@ -371,16 +387,21 @@ provision() {
 
 # --- Live checks: the service process ------------------------------------------------------------------------------------
 
-service_pid() { docker inspect -f '{{.State.Pid}}' "$(cid iron-vault)"; }
+# Empty when docker cannot say, and 0 for a container that is not running; require_pid turns both into a FAIL.
+service_pid() { docker inspect -f '{{.State.Pid}}' "$(cid iron-vault)" 2>/dev/null || true; }
+
+require_pid() { [[ ${1:-} =~ ^[1-9][0-9]*$ ]] || { echo "no running service process (pid '${1:-}')"; return 1; }; }
 
 runs_as_fixed_uid() {
     local got
+    require_pid "$1" || return 1
     got=$(awk '/^Uid:/ { print $2, $3, $4, $5 }' "/proc/$1/status")
     [ "$got" = "$SERVICE_UID $SERVICE_UID $SERVICE_UID $SERVICE_UID" ] || { echo "uids are '$got', want $SERVICE_UID four times"; return 1; }
 }
 
 memory_is_locked() {
     local kb
+    require_pid "$1" || return 1
     kb=$(awk '/^VmLck:/ { print $2 }' "/proc/$1/status")
     echo "VmLck: ${kb:-missing} kB"
     [ "${kb:-0}" -gt 0 ]
@@ -389,7 +410,8 @@ memory_is_locked() {
 # The kernel makes /proc/PID/* of a non-dumpable process belong to root, whatever account runs the process.
 process_not_dumpable() {
     local owner
-    owner=$(stat -c %u "/proc/$1")
+    require_pid "$1" || return 1
+    owner=$(stat -c %u "/proc/$1") || return 1
     [ "$owner" = 0 ] || { echo "/proc/$1 belongs to uid $owner, so the process is dumpable"; return 1; }
 }
 
@@ -416,34 +438,36 @@ expect_record() {
 }
 
 # curl inside a caller, trusting only the check's CA; prints the HTTP status.
-caller_status() { docker exec "$(cid "$1")" curl -sS --max-time 10 --cacert /ca.crt -o /dev/null -w '%{http_code}' "https://$2$3"; }
+caller_status() { docker exec "$(cid "$1")" curl -sS --max-time 10 --cacert /ca.crt -X "$3" -o /dev/null -w '%{http_code}' "https://$2$4"; }
 
-# A GET on venice-chat is refused for its method, and only a caller identified as caller-a and granted the route gets that far.
-caller_a_reaches_its_route() {
-    local since status
+# The positive control for a caller: a request its route refuses for its method. Only a caller identified from its own listener
+# and granted the route gets that far, and the status cannot tell that from "not granted" (both are 403), so the audit record's
+# reason decides. Without it, "the other listener is unreachable" would also pass if this listener never came up.
+caller_reaches_its_route() {
+    local caller=$1 listener=$2 route=$3 method=$4 path=$5 since status
     since=$(now)
-    status=$(caller_status caller-a "$LISTENER_A:8443" /venice-chat/models) || { echo "the TLS request failed: $status"; return 1; }
+    status=$(caller_status "$caller" "$listener:8443" "$method" "$path") || { echo "the TLS request failed: $status"; return 1; }
     [ "$status" = 403 ] || { echo "status $status, want 403"; return 1; }
-    expect_record "$since" caller-a venice-chat method_not_allowed
+    expect_record "$since" "$caller" "$route" method_not_allowed
 }
 
-caller_a_is_not_granted_caller_b_route() {
-    local since status
-    since=$(now)
-    status=$(caller_status caller-a "$LISTENER_A:8443" /brave-search/res/v1/web/search) || { echo "the TLS request failed: $status"; return 1; }
-    [ "$status" = 403 ] || { echo "status $status, want 403"; return 1; }
-    expect_record "$since" caller-a brave-search not_granted
-}
-
-# Exit 7 is "no route to host", 28 a timeout. Anything else (a TLS error, a status) means the listener answered.
+# Runs a curl -v command and succeeds only when it found no way to the address: a timeout (28), or exit 7 with a missing route in
+# its text. Exit 7 alone is not enough: it is also "Connection refused", which means something answered at the address. curl -sS
+# words every exit 7 as "Couldn't connect to server", so the reason is read from the -v line ("Network unreachable", "Network is
+# unreachable" or "No route to host", by version).
 unreachable() {
-    local rc=0
-    "$@" >&2 || rc=$?
-    case $rc in 7|28) ;; *) echo "curl exited $rc, want 7 or 28"; return 1 ;; esac
+    local rc=0 out
+    out=$("$@" 2>&1) || rc=$?
+    echo "$out"
+    case $rc in
+        28) ;;
+        7) has_line 'unreachable\|No route to host' "$out" || { echo "exit 7 without a missing-route reason (a refusal means the address answered)"; return 1; } ;;
+        *) echo "curl exited $rc, want 28, or 7 for a missing route"; return 1 ;;
+    esac
 }
 
 caller_b_listener_unreachable_from_caller_a() {
-    unreachable docker exec "$(cid caller-a)" curl -sS --max-time 5 --cacert /ca.crt -o /dev/null "https://$LISTENER_B:8443/"
+    unreachable docker exec "$(cid caller-a)" curl -sSv --max-time 5 --cacert /ca.crt -o /dev/null "https://$LISTENER_B:8443/"
 }
 
 # The bridge has no host address (gateway mode isolated), so the host reaches no listener.
@@ -451,7 +475,7 @@ host_reaches_no_listener() {
     local found
     found=$(ip -4 -o addr show | awk '$4 ~ /^172\.30\.[12]\./')
     [ -z "$found" ] || { echo "the host has an address on a caller network: $found"; return 1; }
-    unreachable curl -sS --max-time 5 -k -o /dev/null "https://$LISTENER_A:8443/"
+    unreachable curl -sSv --max-time 5 -k -o /dev/null "https://$LISTENER_A:8443/"
 }
 
 raw_socket_is_refused() {
@@ -524,21 +548,28 @@ PY
 
 # A throwaway container with NET_RAW added back, on caller-a's network at an unused address.
 spoofing_caller_b_gets_no_connection() {
-    local mac since
+    local mac
     mac=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJECT}_caller-a\").MacAddress}}" "$(cid iron-vault)")
     write_spoof_script
-    since=$(now)
     docker run --rm -i --name "$SPOOFER" --network "${PROJECT}_caller-a" --ip "$SPOOF_IP" --pull never \
         --cap-drop ALL --cap-add NET_RAW --security-opt no-new-privileges:true "$CALLER_IMAGE" \
-        python3 - eth0 "$mac" "$SPOOF_IP" "$LISTENER_A" "$LISTENER_B" "$SPOOFED_B" <"$WORK/spoof.py" || return 1
-    sleep 1
-    [ -z "$(requests_since "$since" | jq -r 'select(.caller == "caller-b") | .route')" ] || { echo "a request was recorded for caller-b"; return 1; }
+        python3 - eth0 "$mac" "$SPOOF_IP" "$LISTENER_A" "$LISTENER_B" "$SPOOFED_B" <"$WORK/spoof.py"
 }
 
+# Only exit 1 from `test -e` means absent; a docker exec that fails (exit 125, 126, 127, a stopped container) must not read as
+# absent, so `test -e /` has to answer 0 first.
 caller_has_none_of_the_vault() {
-    local path bad=0
+    local path rc bad=0 caller
+    caller=$(cid caller-a)
+    docker exec "$caller" test -e / || { echo "docker exec test -e / failed in caller-a"; return 1; }
     for path in /var/lib/iron-vault /run/iron-vault /run/iron-vault-unlock /etc/iron-vault /etc/iron-vault-tls /var/run/docker.sock; do
-        if docker exec "$(cid caller-a)" test -e "$path"; then echo "$path exists in caller-a"; bad=1; fi
+        rc=0
+        docker exec "$caller" test -e "$path" || rc=$?
+        case $rc in
+            0) echo "$path exists in caller-a"; bad=1 ;;
+            1) ;;
+            *) echo "docker exec test -e $path exited $rc"; bad=1 ;;
+        esac
     done
     return $bad
 }
@@ -549,7 +580,8 @@ inspect_holds_no_recovery_key() {
     local ids out
     mapfile -t ids < <(compose ps -aq)
     [ "${#ids[@]}" -ge 3 ] || { echo "expected 3 containers, found ${#ids[@]}"; return 1; }
-    out=$(docker inspect "${ids[@]}")
+    out=$(docker inspect "${ids[@]}") || { echo "docker inspect failed"; return 1; }
+    [ -n "$out" ] || { echo "docker inspect printed nothing"; return 1; }
     ! has_line 'AGE-SECRET-KEY' "$out" || { echo "docker inspect shows AGE-SECRET-KEY"; return 1; }
 }
 
@@ -613,8 +645,10 @@ run_live_checks() {
     check "the service runs as uid $SERVICE_UID" runs_as_fixed_uid "$pid"
     check "VmLck is above zero" memory_is_locked "$pid"
     check "the service process is not dumpable" process_not_dumpable "$pid"
-    check "caller-a reaches its own route over TLS on its own listener" caller_a_reaches_its_route
-    check "caller-a is not granted caller-b's route" caller_a_is_not_granted_caller_b_route
+    check "caller-a reaches its own route over TLS on its own listener" \
+        caller_reaches_its_route caller-a "$LISTENER_A" venice-chat GET /venice-chat/models
+    check "caller-b reaches its own route over TLS on its own listener" \
+        caller_reaches_its_route caller-b "$LISTENER_B" brave-search POST /brave-search/res/v1/web/search
     check "caller-b's listener is unreachable from caller-a" caller_b_listener_unreachable_from_caller_a
     check "the host reaches no listener and has no caller-network address" host_reaches_no_listener
     check "caller-a cannot open a raw socket (EPERM)" raw_socket_is_refused caller-a
