@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verifies the Linux package's systemd units and prints the service's exposure score.
+# Verifies the Linux package's and the Compose host's systemd units and prints the service's exposure score.
 #
 # `systemd-analyze verify` is the gate: any complaint fails the script. `systemd-analyze security` only reports a
 # score to read, and never fails the script.
@@ -11,6 +11,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 units="$root/packaging/linux"
+host_unit="$root/packaging/compose/host/iron-vault-host-unlock.service"
 
 if ! command -v systemd-analyze >/dev/null 2>&1; then
     echo "error: systemd-analyze is not installed; install systemd to check the units" >&2
@@ -31,7 +32,7 @@ mkdir "$socket.d"
 printf '[Socket]\nListenStream=/run/iron-vault/probe.sock\n' >"$socket.d/listen.conf"
 
 echo "== systemd-analyze verify"
-systemd-analyze verify "$service" "$socket"
+systemd-analyze verify "$service" "$socket" "$host_unit"
 echo "ok"
 
 echo

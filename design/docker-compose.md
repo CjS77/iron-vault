@@ -635,7 +635,7 @@ same decisions.
 1. **The fixed uid and gid.** The image, the Compose file's `user:` and the host's `sysusers.d` line must carry the
    same value. *Default:* uid and gid 460, in the system range and far from where `adduser` (counting up from 100) and
    `systemd-sysusers` (counting down from 999) allocate. The value is a Docker build argument with that default, the
-   host file is `u iron-vault 460:460 "Iron Vault credential proxy" - /usr/sbin/nologin`, and the host setup checks
+   host file is `g iron-vault 460` and `u iron-vault 460:460 "Iron Vault credential proxy" - /usr/sbin/nologin` (systemd 255 refuses the `u` line alone with "please create GID 460"), and the host setup checks
    after `systemd-sysusers` that `id -u iron-vault` is 460, since `systemd-sysusers` may pick another uid when one is
    taken. A test compares the three literals in the repository.
 2. **ramfs, or the credentials directory bind-mounted directly.** *Default:* the unit's own ramfs. systemd documents
