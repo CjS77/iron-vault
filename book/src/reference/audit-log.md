@@ -91,6 +91,7 @@ Every audit event has the target `iron-vault.audit`. The fields are those beyond
 | `service.log-destination-changed` | INFO | An approved config moved the log; written to both the old and the new destination | `log_destination`, `previous_log_destination`, `version` |
 | `service.lock-transition` | INFO | Locked to Checking on an unlock, the check's outcome, and Ready or Unavailable to Locked | `from_state`, `to_state` (`starting`, `locked`, `checking`, `ready`, `unavailable` or `stopped`); `unavailable_reason` when `to_state` is `unavailable` |
 | `vault.unlock-refused` | WARN | An unlock was refused | `refusal`: `wrong_passphrase`, `rate_limited`, `memory_unprotected`, `wrong_state`, `state_read`, `passphrase_envelope`, `identity_envelope`, `initialization_unfinished`, `not_initialized`, `unrecognized_files`, `state_unreadable` or `interrupted`; `memory_protection` for `memory_unprotected`; `retry_after` (whole seconds) for `rate_limited` |
+| `vault.foreign-file` | WARN | `unlock` found a file beside the manifest that the vault does not use; the file is never read, and the unlock goes on | `file`, escaped |
 | `vault.presence-refused` | WARN | The approval passphrase for `replace` or `rm` was refused; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`) |
 | `vault.lock-incomplete` | WARN | A lock finished while a request still held a snapshot or the vault identity | `snapshots_held` (number), `identity_held` (boolean) |
 
@@ -148,7 +149,6 @@ Each of these also has `remediation`.
 | `vault.approval-state-unrecorded` | WARN | The approval state exists but the manifest does not record it | none beyond `remediation` |
 | `vault.shared-state-damaged` | ERROR | The vault's shared state is damaged | `file`, `damage` |
 | `vault.state-dir-unreadable` | ERROR | The state directory cannot be listed | `error_kind` |
-| `vault.foreign-file` | WARN | `unlock` found a file in the state directory that is not the vault's | `file`, escaped |
 
 ### Initialization
 

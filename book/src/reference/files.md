@@ -6,9 +6,10 @@ binary is built ([Service states](states.md#development-mode-and-a-protected-ins
 directory are the same for every profile.
 
 Before the service unlocks anything, it checks each path it reads: every directory above the file must be owned by
-root or the service account and not writable by anyone else, and the file must have the owner and mode below. It
-refuses to start on an unsafe path and names the path that failed. An existing directory with the wrong mode is
-refused, never repaired.
+root or the service account and not writable by anyone else, and the file must have the owner and mode below. The log
+directory is the exception: a directory above it may be group-writable when root owns it, because Debian and Ubuntu
+ship `/var/log` as `drwxrwxr-x root syslog`. The service refuses to start on an unsafe path and names the path that
+failed. An existing directory with the wrong mode is refused, never repaired.
 
 ## Protected install
 
@@ -56,10 +57,19 @@ socket path must be under 108 bytes, so keep these directories short.
 ## Container
 
 A build with `--features container` uses the protected install's paths inside the container: `/etc/iron-vault`,
-`/var/lib/iron-vault` and `/run/iron-vault`, owned by `iron-vault` with the same modes. The image creates them, so
-Docker copies those owners and modes into new named volumes. The binary is `/usr/bin/iron-vault`, owned by root,
-`0755`. The image runs `serve --log-to-stdout`, so the log goes to the container runtime
-([log operations](log-operations.md#docker)). See [docker-compose.md](../../../design/docker-compose.md).
+`/var/lib/iron-vault` and `/run/iron-vault`, owned by `iron-vault` with the same modes. They are mounted in two ways:
+
+- **The config and state directories are named volumes.** The image creates both directories, so Docker copies their
+  owners and modes into new volumes.
+- **`/run/iron-vault` is a host directory**, bind-mounted read-write. The host's tmpfiles.d creates it at boot, owned
+  by `iron-vault` with mode `0711`, and the mount hides the image's copy. The service binds `admin.sock` there, so
+  host root reaches it.
+
+Listener TLS certificates and keys are mounted read-only at `/etc/iron-vault-tls`. The binary is
+`/usr/bin/iron-vault`, owned by root, `0755`. The image runs `serve --log-to-stdout`, so the log goes to the
+container runtime ([log operations](log-operations.md#docker)). The
+[host layout](../../../design/docker-compose.md#host-layout) and [mounts](../../../design/docker-compose.md#mounts)
+tables in docker-compose.md list every host path and mount.
 
 The Container profile has one more file, the host unlock handoff:
 
@@ -107,9 +117,16 @@ writes its own copy.
 | `lock` | The lock that keeps one writer at a time. |
 | `.<name>.tmp` | A temporary file a durable write uses before its rename. |
 
-All are `0600` and owned by the service account. Any other file in the state directory is a foreign file: `unlock`
-refuses with `unrecognized-files` and logs `vault.foreign-file`, so nothing is opened beside a file the service did
-not write. [How the vault is locked](../../../README.md#how-the-vault-is-locked) explains the envelopes.
+All are `0600` and owned by the service account. Any other file in the state directory is a foreign file, except
+`lost+found`, which is ignored. What a foreign file does depends on whether the manifest is there:
+
+- **With `manifest.age`,** the foreign file is never read, and the unlock goes on without it. `unlock` logs
+  `vault.foreign-file` for each one.
+- **Without it,** the service cannot tell a vault from files someone else left there, so it touches nothing. `unlock`
+  refuses with `unlock-failed` (`15`), naming up to five of the files, and logs `vault.unlock-refused` with refusal
+  `unrecognized_files`. `init` refuses with `already-initialized`.
+
+[How the vault is locked](../../../README.md#how-the-vault-is-locked) explains the envelopes.
 
 ## The log
 
@@ -120,8 +137,10 @@ in both places. The [audit log reference](audit-log.md) lists what it holds, and
 
 ## Never edit these files by hand
 
-Every file the service writes is either signed or sealed, so a change the service did not make is caught, not obeyed.
-Editing one by hand, even to fix a typo, makes the service refuse it.
+The config pair is signed and the `.age` vault files are sealed, so a change the service did not make to any of them
+is caught, not obeyed. Editing one by hand, even to fix a typo, makes the service refuse it. `recovery.toml`,
+`init.unfinished`, the lock files, the temporary files and the log are neither signed nor sealed: only the owner and
+mode rules above protect them.
 
 - **`config.toml` and `config.toml.sig`.** On a SIGHUP, or at unlock, the service reads the pair and checks the
   signature against the vault ID and the committed approval version. A config changed without approval does not
@@ -137,6 +156,9 @@ Editing one by hand, even to fix a typo, makes the service refuse it.
   a good record.
 - **`identity.age`, `operational.age`, `approver.age` and `approval.age`.** Damage to the shared state makes `unlock`
   refuse, or sends the service to Unavailable (`recovery needed`), with `vault.shared-state-damaged` in the log.
+- **`recovery.toml`** is plain text, so reminders work while the vault is locked. It holds only two times, when
+  reminders started counting and when the last recovery check ran, so an edit can change no more than when `status`
+  reminds you to check the recovery key.
 - **The lock files and temporary files.** Removing them while the service runs can let two writers race. Leave them;
   the service cleans up after itself.
 
