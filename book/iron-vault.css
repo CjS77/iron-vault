@@ -1,0 +1,314 @@
+/* ==========================================================================
+   IronVault. manual skin
+   Gives the mdbook manual the landing page's look: a dark forge menu bar with the
+   lockup, Michroma display headings, Geist text, and dark code panels in both themes.
+   Every colour and face comes from assets/ironvault.css, loaded by theme/head.hbs.
+
+   mdbook sets the root font size to 62.5% (1rem = 10px), so sizes here use mdbook's
+   scale rather than the brand's --iv-text-* tokens, which assume 1rem = 16px.
+   ========================================================================== */
+
+/* ---- Themes ----------------------------------------------------------------
+   Light and Dark are the brand themes. Rust maps to light, Navy and Ayu to dark,
+   so a theme saved by another mdbook on the same origin still looks on-brand.
+   The :root prefix outranks the brand's prefers-color-scheme rule, so the theme
+   picked in the book wins over the OS setting. */
+
+:root {
+    --mono-font: var(--iv-font-mono);
+    --code-font-size: 0.875em;
+    --menu-bar-height: 56px;
+
+    /* the menu bar and code panels are dark in both themes, like the landing page's band */
+    --ivb-band-bg: var(--iv-ink);
+    --ivb-band-fg: var(--iv-paper);
+    --ivb-band-muted: var(--iv-steel);
+    --ivb-band-line: var(--iv-neutral-800);
+    --ivb-code-bg: var(--iv-neutral-950);
+    --ivb-code-fg: var(--iv-paper);
+    --ivb-code-line: var(--iv-neutral-800);
+}
+
+:root.light, :root.rust, :root:not(.js) {
+    --bg: var(--iv-paper);
+    --fg: var(--iv-ink);
+    --ivb-muted: var(--iv-steel-deep);
+    --ivb-border: var(--iv-neutral-200);
+    --ivb-surface: var(--iv-neutral-0);
+    --ivb-inline-code-bg: var(--iv-neutral-100);
+
+    --sidebar-bg: var(--iv-neutral-0);
+    --sidebar-fg: var(--iv-ink);
+    --sidebar-non-existant: var(--iv-neutral-400);
+    --sidebar-active: var(--iv-red-500);
+    --sidebar-spacer: var(--iv-neutral-200);
+    --sidebar-header-border-color: var(--iv-red-500);
+    --scrollbar: var(--iv-neutral-300);
+
+    --icons: var(--iv-steel-deep);
+    --icons-hover: var(--iv-ink);
+    --links: var(--iv-red-500);
+    --inline-code-color: var(--iv-ink);
+
+    --quote-bg: var(--iv-neutral-0);
+    --quote-border: var(--iv-neutral-300);
+    --warning-border: var(--iv-warning);
+
+    --table-border-color: var(--iv-neutral-200);
+    --table-header-bg: var(--iv-neutral-100);
+    --table-alternate-bg: var(--iv-neutral-0);
+
+    --searchbar-border-color: var(--iv-neutral-300);
+    --searchbar-bg: var(--iv-neutral-0);
+    --searchbar-fg: var(--iv-ink);
+    --searchbar-shadow-color: transparent;
+    --searchresults-header-fg: var(--iv-steel-deep);
+    --searchresults-border-color: var(--iv-neutral-200);
+    --searchresults-li-bg: var(--iv-red-50);
+    --search-mark-bg: var(--iv-red-100);
+
+    --footnote-highlight: var(--iv-red-400);
+    --overlay-bg: rgb(14 15 17 / 0.35);
+
+    --blockquote-note-color: var(--iv-info);
+    --blockquote-tip-color: var(--iv-success);
+    --blockquote-important-color: var(--iv-neutral-700);
+    --blockquote-warning-color: var(--iv-warning);
+    --blockquote-caution-color: var(--iv-red-500);
+
+    --color-scheme: light;
+}
+
+:root.coal, :root.navy, :root.ayu {
+    --bg: var(--iv-ink);
+    --fg: var(--iv-paper);
+    --ivb-muted: var(--iv-steel);
+    --ivb-border: var(--iv-neutral-800);
+    --ivb-surface: var(--iv-neutral-900);
+    --ivb-inline-code-bg: var(--iv-neutral-850);
+
+    --sidebar-bg: var(--iv-neutral-900);
+    --sidebar-fg: var(--iv-neutral-200);
+    --sidebar-non-existant: var(--iv-neutral-600);
+    --sidebar-active: var(--iv-red-300);
+    --sidebar-spacer: var(--iv-neutral-800);
+    --sidebar-header-border-color: var(--iv-red-300);
+    --scrollbar: var(--iv-neutral-700);
+
+    --icons: var(--iv-steel);
+    --icons-hover: var(--iv-paper);
+    --links: var(--iv-red-300);
+    --inline-code-color: var(--iv-paper);
+
+    --quote-bg: var(--iv-neutral-900);
+    --quote-border: var(--iv-neutral-700);
+    --warning-border: var(--iv-warning-dark);
+
+    --table-border-color: var(--iv-neutral-800);
+    --table-header-bg: var(--iv-neutral-850);
+    --table-alternate-bg: var(--iv-neutral-900);
+
+    --searchbar-border-color: var(--iv-neutral-700);
+    --searchbar-bg: var(--iv-neutral-900);
+    --searchbar-fg: var(--iv-paper);
+    --searchbar-shadow-color: transparent;
+    --searchresults-header-fg: var(--iv-steel);
+    --searchresults-border-color: var(--iv-neutral-800);
+    --searchresults-li-bg: var(--iv-neutral-850);
+    --search-mark-bg: var(--iv-red-800);
+
+    --footnote-highlight: var(--iv-red-300);
+    --overlay-bg: rgb(0 0 0 / 0.5);
+
+    --blockquote-note-color: var(--iv-info-dark);
+    --blockquote-tip-color: var(--iv-success-dark);
+    --blockquote-important-color: var(--iv-neutral-300);
+    --blockquote-warning-color: var(--iv-warning-dark);
+    --blockquote-caution-color: var(--iv-red-300);
+
+    --color-scheme: dark;
+}
+
+/* Only the two brand themes are offered; Auto follows the OS. */
+#mdbook-theme-list li:has(#mdbook-theme-rust),
+#mdbook-theme-list li:has(#mdbook-theme-navy),
+#mdbook-theme-list li:has(#mdbook-theme-ayu) {
+    display: none;
+}
+
+/* ---- Base type ----------------------------------------------------------- */
+html {
+    font-family: var(--iv-font-body);
+    -webkit-font-smoothing: antialiased;
+}
+::selection { background: color-mix(in srgb, var(--iv-red) 30%, transparent); }
+:focus-visible { outline: 2px solid var(--links); outline-offset: 3px; border-radius: 2px; }
+
+.content { line-height: 1.6; }
+.content p, .content ol, .content ul { line-height: 1.65em; }
+.content main { --content-max-width: 780px; }
+
+.content h1, .content h2 {
+    font-family: var(--iv-font-display);
+    font-weight: 400;
+    text-transform: uppercase;
+    line-height: 1.3;
+    text-wrap: balance;
+}
+.content h1 { font-size: 2.6rem; letter-spacing: 0.02em; margin-block: 1.2em 0.9em; }
+.content h2 { font-size: 1.9rem; letter-spacing: 0.03em; }
+.content h1 code, .content h2 code { text-transform: none; letter-spacing: 0; }
+/* the red full stop from the wordmark closes each page title */
+.content main > h1:first-of-type::after {
+    content: "";
+    display: inline-block;
+    width: 0.2em;
+    height: 0.2em;
+    margin-left: 0.08em;
+    border-radius: 50%;
+    background: var(--iv-red);
+}
+.content h3, .content h4, .content h5 {
+    font-family: var(--iv-font-body);
+    font-weight: 600;
+    line-height: 1.3;
+}
+.content h3 { font-size: 2rem; }
+.content h4 { font-size: 1.7rem; }
+
+.content a:link, .content a:visited { text-underline-offset: 3px; }
+.content a:hover { text-decoration-thickness: 1px; }
+
+/* ---- Menu bar: the landing page's top bar -------------------------------- */
+#mdbook-menu-bar {
+    background: color-mix(in srgb, var(--ivb-band-bg) 92%, transparent);
+    backdrop-filter: blur(8px);
+    border-block-end: 1px solid var(--ivb-band-line);
+    color: var(--ivb-band-muted);
+}
+#mdbook-menu-bar.bordered { border-block-end-color: var(--ivb-band-line); }
+#mdbook-menu-bar .icon-button,
+#mdbook-menu-bar a .fa-svg { color: var(--ivb-band-muted); }
+#mdbook-menu-bar .icon-button:hover,
+#mdbook-menu-bar .fa-svg:hover { color: var(--ivb-band-fg); }
+
+.menu-title {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--iv-font-display);
+    font-size: 1.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ivb-band-fg);
+}
+.ivb-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    text-decoration: none;
+    border-radius: var(--iv-radius-sm);
+}
+.ivb-brand img { display: block; height: 26px; width: auto; }
+.ivb-brand .ivb-mark { display: none; }
+.ivb-section {
+    font-family: var(--iv-font-display);
+    font-size: 1.1rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ivb-band-muted);
+    padding-left: 14px;
+    border-left: 1px solid var(--ivb-band-line);
+    line-height: 2;
+}
+.ivb-brand:hover .ivb-section { color: var(--ivb-band-fg); }
+@media (max-width: 560px) {
+    .ivb-brand .ivb-lockup { display: none; }
+    .ivb-brand .ivb-mark { display: block; }
+}
+
+.theme-popup {
+    font-family: var(--iv-font-body);
+    background: var(--iv-neutral-900);
+    border-color: var(--ivb-band-line);
+    border-radius: var(--iv-radius-md);
+    color: var(--ivb-band-fg);
+    --theme-hover: var(--iv-neutral-850);
+}
+.theme-popup .default { color: var(--ivb-band-muted); }
+.theme-popup .theme-selected::before { color: var(--iv-red-300); }
+
+/* ---- Sidebar ------------------------------------------------------------- */
+.sidebar {
+    font-family: var(--iv-font-body);
+    border-inline-end: 1px solid var(--ivb-border);
+}
+.sidebar .sidebar-scrollbox { padding-top: 16px; }
+.chapter li.part-title {
+    font-family: var(--iv-font-display);
+    font-size: 1.1rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ivb-muted);
+    margin-block: 24px 6px;
+}
+.chapter li a.active { font-weight: 600; }
+
+/* ---- Code: dark panels in both themes, like the landing page ------------- */
+/* JetBrains Mono's ligatures draw `--origin` as a dash and space out `://`; commands must read as typed. */
+code { font-variant-ligatures: none; }
+.content :not(pre) > code {
+    background: var(--ivb-inline-code-bg);
+    color: var(--inline-code-color);
+    padding: 0.1em 0.35em;
+    border-radius: var(--iv-radius-sm);
+}
+pre:not(.mermaid) {
+    background: var(--ivb-code-bg);
+    border: 1px solid var(--ivb-code-line);
+    border-radius: var(--iv-radius-md);
+    --copy-button-filter: invert(62%);
+    --copy-button-filter-hover: invert(95%);
+}
+pre:not(.mermaid) > code,
+pre:not(.mermaid) > code.hljs {
+    background: transparent;
+    color: var(--ivb-code-fg);
+    line-height: 1.7;
+    padding: 1.4rem 1.6rem;
+}
+pre .hljs-comment, pre .hljs-quote { color: var(--iv-steel); }
+pre .hljs-keyword, pre .hljs-selector-tag, pre .hljs-attr, pre .hljs-attribute,
+pre .hljs-name, pre .hljs-tag, pre .hljs-section, pre .hljs-built_in { color: var(--iv-red-300); }
+pre .hljs-string, pre .hljs-symbol, pre .hljs-bullet, pre .hljs-addition { color: var(--iv-success-dark); }
+pre .hljs-number, pre .hljs-literal, pre .hljs-type, pre .hljs-meta { color: var(--iv-warning-dark); }
+pre .hljs-title, pre .hljs-variable, pre .hljs-template-variable, pre .hljs-params,
+pre .hljs-link, pre .hljs-regexp { color: var(--iv-info-dark); }
+pre .hljs-deletion { color: var(--iv-red-300); background: none; }
+pre .hljs-addition { background: none; }
+pre .buttons button { color: var(--ivb-band-muted); }
+
+/* ---- Tables, quotes, search ---------------------------------------------- */
+.content table { margin: 1.6em 0; font-size: 0.95em; }
+.content table td, .content table th { padding: 8px 14px; border: 1px solid var(--table-border-color); }
+.content table thead th, .content table thead td { font-weight: 600; text-align: start; }
+
+blockquote {
+    background: var(--quote-bg);
+    border: 1px solid var(--ivb-border);
+    border-inline-start: 2px solid var(--quote-border);
+    border-radius: 0 var(--iv-radius-sm) var(--iv-radius-sm) 0;
+}
+.blockquote-tag {
+    background: none;
+    border-block: none;
+    border-inline-end: none;
+    border-inline-start-width: 2px;
+    border-radius: 0;
+}
+
+#mdbook-searchbar { border-radius: var(--iv-radius-sm); font-family: var(--iv-font-body); }
+
+/* ---- Previous / next ----------------------------------------------------- */
+.nav-chapters { color: var(--ivb-muted); }
+.nav-chapters:hover { color: var(--links); }

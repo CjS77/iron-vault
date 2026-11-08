@@ -1,0 +1,64 @@
+name: Website
+
+# Publishes the landing page (site/) and the manual (book/) to GitHub Pages.
+# Enable it once under Settings → Pages → Build and deployment → Source: GitHub Actions.
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "book/**", "assets/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      MDBOOK_VERSION: 0.5.4
+      MDBOOK_LINKCHECK2_VERSION: 0.13.0
+      MDBOOK_MERMAID_VERSION: 0.17.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Cache the book tools
+        id: book-tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.book-tools
+          key: book-tools-${{ runner.os }}-mdbook-${{ env.MDBOOK_VERSION }}-linkcheck2-${{ env.MDBOOK_LINKCHECK2_VERSION }}-mermaid-${{ env.MDBOOK_MERMAID_VERSION }}
+      - name: Install the book tools
+        if: steps.book-tools.outputs.cache-hit != 'true'
+        run: |
+          rustup toolchain install
+          cargo install mdbook --version "$MDBOOK_VERSION" --locked --root ~/.book-tools
+          cargo install mdbook-linkcheck2 --version "$MDBOOK_LINKCHECK2_VERSION" --locked --root ~/.book-tools
+          cargo install mdbook-mermaid --version "$MDBOOK_MERMAID_VERSION" --locked --root ~/.book-tools
+      - name: Build the manual
+        run: |
+          export PATH="$HOME/.book-tools/bin:$PATH"
+          mdbook-mermaid install book
+          mdbook build book
+      - name: Assemble the site
+        run: site/build.sh
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

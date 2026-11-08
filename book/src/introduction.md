@@ -38,7 +38,7 @@ release check on a real machine yet, so don't rely on it to protect real secrets
 
 ## How this manual is organised
 
-- **Installation:** development mode, and the protected Linux install.
-- **Cookbook:** short recipes, each ending with something that works.
-- **Reference:** every command, config key, error, service state, audit event and file.
+- **[Installation](installation/development-mode.md):** development mode, and the protected Linux install.
+- **[Cookbook](cookbook/getting-started.md):** short recipes, each ending with something that works.
+- **[Reference](reference/cli.md):** every command, config key, error, service state, audit event and file.
 - **[Glossary](glossary.md):** the terms this manual and the code share, one name per concept.
