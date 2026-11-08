@@ -111,6 +111,7 @@ writes its own copy.
 |---|---|
 | `identity.age` | The identity envelope: the vault identity, sealed to each recipient. |
 | `recipients.age` | The recipient inventory: who can open the vault (the vault passphrase and the recovery key), each with its role, label and enrolment time. `init` writes it. |
+| `recipients.age.staged` | A recipient change being committed. The next recipient command finishes or discards it. |
 | `operational.age` | The passphrase envelope: the operational identity, sealed with the vault passphrase. |
 | `approver.age` | The approver key envelope: the key that signs config approvals, sealed with the approval passphrase. |
 | `approval.age` | The approval state: the committed and highest reserved approval versions. |

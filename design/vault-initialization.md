@@ -78,9 +78,11 @@ bytes are compared with the initial config (below). The checks run in this order
 | Unrecognized | No check matched: a foreign file or a config file that is not init's own beside `init.unfinished`, or files of a vault without its manifest, or anything else in a directory with no manifest. |
 
 A **foreign file** is a file in the state directory that is not on the lists above: the lock file, `lost+found`, temp
-files, the vault's own files (`identity.age`, `recipients.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`,
-`init.unfinished`), record files (`record-*.age`) and the recovery check record (`recovery.toml`), which
-[recovery.md](recovery.md#initialization) describes. It matters only beside `init.unfinished`, where it makes the state
+files, the vault's own files (`identity.age`, `recipients.age`, `recipients.age.staged`, `operational.age`,
+`approver.age`, `manifest.age`, `approval.age`, `init.unfinished`), record files (`record-*.age`) and the recovery check
+record (`recovery.toml`), which [recovery.md](recovery.md#initialization) describes. The staged inventory
+(`recipients.age.staged`) is a vault file only beside a manifest: `init` never writes it, so beside `init.unfinished` it
+is foreign ([recipients.md](recipients.md#initialization)). It matters only beside `init.unfinished`, where it makes the state
 Unrecognized so the discard never sweeps it into the new vault, and in a state directory with no manifest, where it
 makes Uninitialized impossible. Beside a manifest it changes nothing: `unlock` logs its name at WARN
 (`vault.foreign-file`) and goes on, because `Vault::open` already ignores names it does not know and the manifest alone

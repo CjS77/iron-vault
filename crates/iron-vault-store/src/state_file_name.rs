@@ -69,6 +69,12 @@ impl StateFileName {
         Self("recipients.age".to_owned())
     }
 
+    /// The staged inventory's file, `recipients.age.staged`: the inventory a recipient change writes before the identity
+    /// envelope, so a change interrupted after its commit point can be finished from it.
+    pub fn staged_recipient_inventory() -> Self {
+        Self("recipients.age.staged".to_owned())
+    }
+
     /// The approver key envelope's file, `approver.age`.
     pub fn approver_key() -> Self {
         Self("approver.age".to_owned())
@@ -163,6 +169,10 @@ mod tests {
         assert_eq!(StateFileName::new("operational.age"), Ok(StateFileName::passphrase_envelope()));
         assert_eq!(StateFileName::new("approval.age"), Ok(StateFileName::approval_state()));
         assert_eq!(StateFileName::new("recipients.age"), Ok(StateFileName::recipient_inventory()));
+        assert_eq!(
+            StateFileName::new("recipients.age.staged"),
+            Ok(StateFileName::staged_recipient_inventory())
+        );
         assert_eq!(StateFileName::new("approver.age"), Ok(StateFileName::approver_key()));
         assert_eq!(
             StateFileName::new("init.unfinished"),

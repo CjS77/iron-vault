@@ -236,6 +236,8 @@ enum Entry {
     InitFile,
     /// `recovery.toml`: part of the vault beside a manifest, removed by the discard, and never a foreign file.
     RecoveryRecord,
+    /// `recipients.age.staged`: part of the vault beside a manifest. `init` never writes it, so anywhere else it is foreign.
+    StagedInventory,
     /// A `record-*.age` file.
     Record,
     /// Anything else.
@@ -293,6 +295,7 @@ fn classify(name: &OsStr) -> Entry {
         Ok(file) if file == StateFileName::unfinished_initialization() => Entry::Marker,
         Ok(file) if file == StateFileName::manifest() => Entry::Manifest,
         Ok(file) if file == StateFileName::recovery_check_record() => Entry::RecoveryRecord,
+        Ok(file) if file == StateFileName::staged_recipient_inventory() => Entry::StagedInventory,
         Ok(file) if written_files().contains(&file) => Entry::InitFile,
         Ok(file) if is_record_file_name(file.as_str()) => Entry::Record,
         _ => Entry::Foreign,
@@ -307,7 +310,7 @@ fn survey(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Re
     let has = |wanted: Entry| entries.iter().any(|(kind, _)| *kind == wanted);
     let names_where = |keep: fn(Entry) -> bool| entries.iter().filter(move |(k, _)| keep(*k)).map(|(_, n)| n.clone());
     if has(Entry::Marker) {
-        let blockers = names_where(|k| matches!(k, Entry::Record | Entry::Foreign))
+        let blockers = names_where(|k| matches!(k, Entry::Record | Entry::Foreign | Entry::StagedInventory))
             .chain(config_test_failures(config, fs)?)
             .collect();
         return Ok(Survey::new(InitializationState::Unfinished, blockers));

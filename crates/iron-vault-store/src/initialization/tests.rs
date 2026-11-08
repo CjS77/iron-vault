@@ -218,6 +218,21 @@ fn the_recovery_record_is_never_a_foreign_file() {
 }
 
 #[test]
+fn a_staged_inventory_is_the_vaults_own_file_beside_a_manifest_and_foreign_elsewhere() {
+    let vault = Dirs::new("init-staged-vault");
+    Vault::create(&vault.state, &OsFs, VaultIdentity::generate()).unwrap();
+    vault.put(&OsFs, "recipients.age.staged");
+    assert_eq!(require_initialized(&vault.state, &vault.config, &OsFs), Ok(Vec::new()));
+    let beside_marker = Dirs::new("init-staged-marker");
+    beside_marker.crashed_after(&OsFs, 3);
+    beside_marker.put(&OsFs, "recipients.age.staged");
+    assert_eq!(beside_marker.read(&OsFs), InitializationState::Unrecognized);
+    let alone = Dirs::new("init-staged-alone");
+    alone.put(&OsFs, "recipients.age.staged");
+    assert_eq!(alone.read(&OsFs), InitializationState::Unrecognized);
+}
+
+#[test]
 fn a_leftover_recovery_record_leaves_the_state_uninitialized() {
     let dirs = Dirs::new("init-recovery-leftover");
     dirs.put(&OsFs, "recovery.toml");
