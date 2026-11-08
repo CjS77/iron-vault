@@ -16,6 +16,7 @@ mod error_kind;
 pub mod fault_fs;
 mod init;
 mod initialization;
+mod inventory_check;
 mod mac_file;
 mod manifest;
 mod partial_restore;
@@ -41,6 +42,8 @@ mod store_fs;
 mod test_dir;
 #[cfg(test)]
 mod test_request;
+#[cfg(test)]
+mod test_vault;
 mod vault;
 mod vault_id;
 mod vault_identity;
@@ -76,6 +79,7 @@ pub use initialization::{
     BeginError, INITIAL_CONFIG, InitStateError, InitializationState, begin_initialization, ensure_initializable, finish_initialization,
     require_initialized,
 };
+pub use inventory_check::{ChangeRecovery, CheckedInventory, InventoryCheckError, InventoryDamage, check_recipient_inventory};
 pub use manifest::{
     MAX_MANIFEST_ENTRIES, MAX_MANIFEST_LEN, ManifestEntry, ManifestError, VaultManifest, open_manifest, record_digest, seal_manifest,
 };
