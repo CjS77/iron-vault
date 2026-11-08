@@ -155,7 +155,9 @@ Opening a MAC'd file does the cheap, key-free checks first and decrypts last:
 
 ### State generation
 
-The manifest and the approval state, the MAC'd files that carry one, put two `u64` counters right after the vault ID in their payloads (the recipient inventory is not part of the state generation and carries its envelope digest there instead):
+The manifest and the approval state, the MAC'd files that carry one, put two `u64` counters right after the vault ID in
+their payloads (the recipient inventory is not part of the state generation and carries its envelope digest there
+instead):
 
 - the **state generation**: the vault-wide count of MAC'd file writes at which this file was written;
 - the **peer generation**: the state generation the other MAC'd file had at that moment.
@@ -720,6 +722,22 @@ Each entry:
 | var  | Label: a field holding the recipient label, 1 to 64 bytes of UTF-8                               |
 | 8    | Enrolled at: `u64` Unix seconds, at most 253402300799 (9999-12-31T23:59:59Z)                      |
 
+### One encoding per inventory
+
+The same inventory always encodes to the same bytes: entries are written in ascending key order. Decoding enforces the
+reverse, so a payload is accepted only if it is the encoding of the inventory it decodes to:
+
+- the vault ID is a version 4, RFC 9562 variant UUID and equals the header's;
+- the entry count is from 2 to 64, and is checked before any entry is read;
+- every recipient key is 62 bytes, parses as an X25519 recipient key and is in canonical lowercase form;
+- keys are strictly ascending, so none repeats;
+- every role code is 1, 2 or 3; a reserved or unknown code is refused;
+- every label is valid UTF-8 and follows the label rule;
+- every enrolment time is within the UTC second range.
+
+Decoding rejects a wrong magic, an unknown version, truncation and trailing bytes. It does not apply the independence
+rule: that rule governs changes, and every inventory the service writes already satisfies it.
+
 ### Example
 
 Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b`, whose `identity.age` has an illustrative digest of 32 bytes of `ab`, with
@@ -741,9 +759,10 @@ age1q73he0q5yzfu3d64msd3p6rvksnrwjk3d2598mgtmlqt9wrdr37q2vrn72
 00 00 00 00 6a ed a8 1d                            enrolled at 1793959965
 ```
 
-The second entry is the `recovery` key `age1tp56laz2jtn9ja2a409m7dnpfk6x89su46zht266js6w6835eascutqdx`, label `recovery key`, enrolled at the same second, with role `02`. The
-third is the `added` key `age1vjcsrvwshedgwp9aq78e39gqrlqrar5lj530rzxaz2xes3k5s3nqxdc696`, label `alice laptop 2026`, enrolled at 1794000000 (`6a ee 44 80`), with role `03`. The
-complete payload, as the store's tests check it:
+The second entry is the `recovery` key `age1tp56lazs2jtn9ja2a409m7dnpfk6x89su46zht266js6w6835eascutqdx`, label
+`recovery key`, enrolled at the same second, with role `02`. The third is the `added` key
+`age1vjcsrvwshedgwp9aq78e39gqrlqrar5lj530rzxaz2xes3k5s3nqxdc696`, label `alice laptop 2026`, enrolled at 1794000000
+(`6a ee 44 80`), with role `03`. The complete payload, as the store's tests check it:
 
 ```text
 49565250013f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6babababababababababababababababababababababababababababababababab0000000000000003000000000000003e616765317137336865307135797a6675336436346d736433703672766b736e72776a6b3364323539386d67746d6c717439777264723337713276726e37320100000000000000107661756c742070617373706872617365000000006aeda81d000000000000003e61676531747035366c617a73326a746e396a6132613430396d37646e70666b36783839737534367a68743236366a7336773638333565617363757471647802000000000000000c7265636f76657279206b6579000000006aeda81d000000000000003e61676531766a63737276777368656467777039617137386533396771726c71726172356c6a353330727a78617a32786573336b3573336e71786463363936030000000000000011616c696365206c6170746f702032303236000000006aee4480
