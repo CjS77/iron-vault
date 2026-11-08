@@ -6,8 +6,8 @@ account, the caller networks, how TCP listeners are bound, the hardening of ever
 access, and how a host TPM unlocks the vault at startup. The [Linux package](linux-package.md) is the model for the
 host side, and the paths and modes here are the ones the trusted-path checks (`trusted_path.rs`) accept.
 
-The decisions that need the specification to change are collected under
-[Proposed specification changes](#proposed-specification-changes), which await the owner's approval. Everything
+The one decision that still needs the specification to change, the §3.14 software signer, is under
+[Proposed specification changes](#proposed-specification-changes) and awaits the owner's approval. Everything
 else follows the specification as it stands.
 
 This document introduces four terms, defined in the [glossary](glossary.md): *Container profile*, *Caller network*,
@@ -152,8 +152,7 @@ IP subject alternative name. One certificate may name every listener's address, 
 
 Docker cannot pass a listening socket from the host into a container, so the Container profile binds its TCP
 listeners itself: `socket_activation::check_origin` lets `Container` bind an unadopted TCP endpoint, where `Protected`
-refuses it. This needs a [specification change](#34-caller-authentication-and-listeners), because §3.4 requires
-socket activation for TCP on Linux.
+refuses it. [§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners) allows this for a container installation.
 
 Socket activation exists for R-6: a service that binds its own port leaves a gap at each restart in which another
 local process can take the port, collect caller tokens and forge responses. In the Container profile no one who could
@@ -282,8 +281,7 @@ Remote administration takes one of two forms:
   `iron-vault --admin-socket ~/.iv-admin.sock <command>` locally. Any process of the local account can use the
   forwarded socket while it is open, as root on the server, so close the forward when done.
 
-`docker exec` and any other use of the daemon is runtime administration, outside the threat model (§3.14). The
-specification change this needs is under [§3.2](#32-service-and-cli-boundary).
+`docker exec` and any other use of the daemon is runtime administration, outside the threat model (§3.14). [§3.2](iron-vault-specification.md#32-service-and-cli-boundary) covers the admin principal.
 
 ## Host unlock
 
@@ -547,63 +545,15 @@ Two release checks run on a disposable host and are the evidence for this profil
 
 ## Proposed specification changes
 
-**Awaiting the owner's approval.** These are not applied to
-[`iron-vault-specification.md`](iron-vault-specification.md) or the glossary. Each gives the text to replace and its
+**The §3.14 change still awaits the owner's approval.** It is not applied to
+[`iron-vault-specification.md`](iron-vault-specification.md) or the glossary. It gives the text to replace and its
 replacement, word for word.
 
-### §3.2 Service and CLI boundary
+### §3.2 and §3.4
 
-Replace:
-
-> The local admin socket authenticates the connecting OS account from its peer credentials
-> and accepts only an admin principal: root or the service account in a protected installation, and the invoking user
-> in a development installation.
-
-with:
-
-> The local admin socket authenticates the connecting OS account from its peer credentials
-> and accepts only an admin principal: root or the service account in a protected installation, root alone in a
-> container installation, and the invoking user in a development installation.
-
-Replace:
-
-> A connection
-> forwarded over SSH is judged by the account it arrives as on the service host.
-
-with:
-
-> A connection
-> forwarded over SSH is judged by the account it arrives as on the service host. In a container installation that is
-> the forwarding process's uid as the container's user namespace maps it, which without remapping is its host uid; the
-> service account is not an admin principal there, because only the service itself runs as it.
-
-### §3.4 Caller authentication and listeners
-
-Replace:
-
-> For TCP on Linux, use systemd socket activation so the manager holds the port from boot and across restarts.
-
-with:
-
-> For TCP on Linux, use systemd socket activation so the manager holds the port from boot and across restarts. A
-> container installation cannot receive sockets from the host, so it binds its TCP listeners itself, inside its own
-> network namespace. The addresses exist only in that namespace, which no other container shares and where no other
-> process runs; caller containers have neither `NET_ADMIN` nor `NET_RAW` and each has its own static address, so they
-> cannot take the service's address; and every non-loopback listener uses TLS, so whoever claims an address while
-> the service restarts still cannot present Iron Vault's certificate. A loopback listener is reachable only inside
-> that namespace.
-
-Replace:
-
-> **Attack prevented (R-6).** Protected socket paths and manager-owned TCP listeners stop another local process from
-> claiming Iron Vault's endpoint during downtime and collecting caller tokens or forging responses.
-
-with:
-
-> **Attack prevented (R-6).** Protected socket paths and manager-owned TCP listeners stop another local process from
-> claiming Iron Vault's endpoint during downtime and collecting caller tokens or forging responses. In a container
-> installation, a network namespace no other container shares, callers without address or raw-socket privileges and
-> with static addresses of their own, and TLS on every non-loopback listener do the same.
+The owner approved the §3.2 and §3.4 changes on 2026-11-07, and they are applied to
+[`iron-vault-specification.md`](iron-vault-specification.md): root alone is the admin principal in a container
+installation, and the service binds its own TCP listeners.
 
 ### §3.14 Docker, remote servers, and appliances
 
@@ -621,8 +571,7 @@ with:
 
 ### Glossary
 
-These depend on the §3.2 decision above, so they wait with it. The *Container profile* entry is marked pending on the
-same decisions.
+These follow from the §3.2 change, now applied.
 
 - **Admin principal:** replace "root or the service account in a protected install, the invoking user in development"
   with "root or the service account in a protected install, root alone in a container install, the invoking user in
