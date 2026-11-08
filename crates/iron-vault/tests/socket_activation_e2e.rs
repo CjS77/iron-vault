@@ -157,7 +157,7 @@ async fn exchange(install: &Install, request: AdminRequest, answers: &[&str]) ->
 /// [`exchange`] for `init`, which also reveals the recovery key.
 async fn exchange_init(install: &Install, answers: &[&str]) -> (AdminResponse, usize) {
     let mut stream = UnixStream::connect(install.admin_socket()).await.unwrap();
-    send(&mut stream, &Frame::Request(AdminRequest::Init)).await;
+    send(&mut stream, &Frame::Request(AdminRequest::Init { host_unlock: false })).await;
     let (exchanged, revealed) = converse_revealing(&mut stream, answers).await;
     (exchanged.response, revealed.len())
 }

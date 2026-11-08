@@ -56,8 +56,18 @@ fn caller_token_is_a_client_command_without_arguments() {
 
 #[test]
 fn init_is_a_client_command_without_arguments() {
-    assert_eq!(parse(&["init"]).unwrap().command, Command::Init);
+    assert_eq!(parse(&["init"]).unwrap().command, Command::Init { host_unlock: false });
     assert_eq!(parse(&["init", "hunter2-correct"]).unwrap_err().exit_code(), 2);
+}
+
+/// Only a Container build has a host unlock to enrol, so every other build's parser does not know the flag.
+#[test]
+fn init_host_unlock_is_accepted_only_by_a_container_build() {
+    let parsed = parse(&["init", "--host-unlock"]);
+    match cfg!(feature = "container") {
+        true => assert_eq!(parsed.unwrap().command, Command::Init { host_unlock: true }),
+        false => assert_eq!(parsed.unwrap_err().exit_code(), 2),
+    }
 }
 
 #[test]

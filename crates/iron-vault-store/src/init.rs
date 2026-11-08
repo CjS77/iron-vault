@@ -359,7 +359,7 @@ fn write_checked_identity(
     write_identity_envelope(state, fs, &wrap_identity(vault, &recipients)?)?;
     let envelope = read_identity_envelope(state, fs)?;
     enrolments.iter().try_for_each(
-        |(identity, ..)| match unwrap_identity(&envelope, *identity)?.public_key() == vault.public_key() {
+        |(identity, ..)| match unwrap_identity(&envelope, identity)?.public_key() == vault.public_key() {
             true => Ok(()),
             false => Err(InitFailure::IdentityMismatch),
         },

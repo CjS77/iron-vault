@@ -601,7 +601,7 @@ async fn init(socket: &Path) -> String {
     ]
     .into_iter();
     let mut stream = UnixStream::connect(socket).await.unwrap();
-    send(&mut stream, &Frame::Request(AdminRequest::Init)).await;
+    send(&mut stream, &Frame::Request(AdminRequest::Init { host_unlock: false })).await;
     let mut recovery_key = None;
     loop {
         match read_frame(&mut stream).await {

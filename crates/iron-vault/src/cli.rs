@@ -122,7 +122,13 @@ pub enum Command {
     /// Create the vault: the service prompts for the vault and approval passphrases, shows the recovery key once on the
     /// controlling terminal, and once you confirm you saved it, writes the vault and approves the initial config as
     /// version 1. It needs a controlling terminal, and leaves the service Locked.
-    Init,
+    Init {
+        /// Also enrol the identity in the unlock handoff as a recipient, so a restart unlocks with no owner present. The
+        /// service refuses to start `init` if the handoff is absent or untrusted. Only a Container build accepts this flag.
+        #[cfg_attr(feature = "container", arg(long))]
+        #[cfg_attr(not(feature = "container"), arg(skip))]
+        host_unlock: bool,
+    },
     /// Issue a fresh caller token: it goes to stdout once, and its token_hash line to stderr. The service keeps no copy;
     /// the token works once a config naming the hash is approved with `config approve`.
     CallerToken,
@@ -311,13 +317,13 @@ pub fn lock(socket: Option<&Path>) -> ExitCode {
 /// `iron-vault init`: checks for a controlling terminal, sends `init`, answers the service's prompts, shows the
 /// recovery key on the terminal only, and prints the new vault's ID.
 #[cfg(target_os = "linux")]
-pub fn init(socket: Option<&Path>) -> ExitCode {
-    init::run(socket).into()
+pub fn init(socket: Option<&Path>, host_unlock: bool) -> ExitCode {
+    init::run(socket, host_unlock).into()
 }
 
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
-pub fn init(_socket: Option<&Path>) -> ExitCode {
+pub fn init(_socket: Option<&Path>, _host_unlock: bool) -> ExitCode {
     unsupported_platform()
 }
 

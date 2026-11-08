@@ -9,15 +9,17 @@ use std::sync::Arc;
 
 use iron_vault_store::{
     ConfigDigest, FirstApproval, INITIAL_CONFIG, InitError, InitFailure, InitPassphrases, InitStateError, InitStep, InitializationState,
-    InitializedVault, SealingKeys, StoreFs, ensure_initializable, initialize,
+    InitializedVault, RecipientIdentity, SealingKeys, StoreFs, ensure_initializable, initialize,
 };
 use tokio::task::JoinError;
 
 use super::ServiceContext;
+use super::host_unlock::tries_host_unlock;
 use crate::audit::config::{VersionReserved, record_commit_uncertain, record_failed_approval};
 use crate::audit::vault::{InitDiscarded, InitFailed, VaultInitialized, emit_commit_uncertain};
 use crate::audit::{ApprovalCompleted, AuditEvent};
 use crate::service_state::{AdminOperation, ServiceState};
+use crate::unlock_handoff::{HandoffError, read_handoff};
 
 /// Why `init` wrote no vault, or may not have finished one. Each variant is one admin error code.
 #[derive(Debug)]
@@ -34,13 +36,46 @@ pub enum InitRefusal {
     Unreadable(String),
     /// The service clock could not be read for the first approval's enrolment time, before any write.
     Clock(String),
+    /// `init --host-unlock` found no identity to enrol, before any prompt.
+    HostUnlock(HostUnlockUnavailable),
     /// A step of the write order, or the discard before it, failed.
     Failed(InitError),
     /// The task writing the vault ended without a result, so how far it got is unknown.
     Interrupted,
 }
 
+/// Why `init --host-unlock` has no host unlock identity to enrol. No variant carries the handoff's bytes.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum HostUnlockUnavailable {
+    /// Only a Container-profile service has a host unlock.
+    #[error("this build has no host unlock")]
+    NotContainer,
+    /// Nothing is at the handoff path.
+    #[error("there is no unlock handoff")]
+    Absent,
+    /// The handoff was there and was refused.
+    #[error(transparent)]
+    Refused(#[from] HandoffError),
+}
+
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
+    /// The host unlock identity in the unlock handoff, read on the blocking pool before `init` prompts for anything, so a
+    /// missing or untrusted handoff ends the exchange with nothing written.
+    pub async fn read_host_unlock(&self) -> Result<RecipientIdentity, InitRefusal> {
+        let setup = Arc::clone(&self.setup);
+        if !tries_host_unlock(setup.paths.profile) {
+            return Err(InitRefusal::HostUnlock(HostUnlockUnavailable::NotContainer));
+        }
+        let path = self.handoff.clone();
+        let read = tokio::task::spawn_blocking(move || read_handoff(setup.paths.profile, setup.paths.owner, &path)).await;
+        match read {
+            Ok(Ok(Some(identity))) => Ok(identity),
+            Ok(Ok(None)) => Err(InitRefusal::HostUnlock(HostUnlockUnavailable::Absent)),
+            Ok(Err(refused)) => Err(InitRefusal::HostUnlock(refused.into())),
+            Err(_) => Err(InitRefusal::Unreadable("the read did not finish".to_owned())),
+        }
+    }
+
     /// Whether init may write here, read on the blocking pool under the service's own directory locks: Uninitialized
     /// or Unfinished, or the refusal naming what is there.
     pub async fn initializable(&self) -> Result<InitializationState, InitRefusal> {
@@ -105,7 +140,11 @@ fn log_outcome(written: &Result<InitializedVault, InitError>) {
     match written {
         Ok(vault) => {
             record_first_approval(&vault.approved());
-            VaultInitialized { vault_id: vault.vault_id }.emit();
+            VaultInitialized {
+                vault_id: vault.vault_id,
+                recipients: &vault.recipients,
+            }
+            .emit();
         }
         Err(error) if begin_refusal(error).is_none() => {
             match error.approved() {

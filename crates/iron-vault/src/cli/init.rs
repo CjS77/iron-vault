@@ -15,21 +15,34 @@ use super::Exit;
 use super::client::{fail, run_on, unexpected};
 use super::console::{self, InputError, OwnerConsole, ProcessConsole};
 
-/// Runs `init` and prints the new vault's ID. The recovery key never goes to stdout.
-pub fn run(socket: Option<&Path>) -> Exit {
+/// Runs `init` and prints the new vault's ID and the kinds of recipient enrolled. The recovery key never goes to stdout.
+pub fn run(socket: Option<&Path>, host_unlock: bool) -> Exit {
     if let Err(e) = console::ensure_terminal() {
         let message = format!("`init` shows the recovery key on the controlling terminal only, and there is none ({e}); nothing was sent");
         return fail(Exit::Unreachable, &message);
     }
     let mut console = RecoveryKeyWatch::new(ProcessConsole::default());
-    let exit = run_on(socket, AdminRequest::Init, &mut console, |response| match response {
-        AdminResponse::Init { vault_id, version } => {
-            println!("initialized vault {vault_id}: approval version {version} committed");
-            println!("run iron-vault unlock to start serving");
-            Exit::Success
-        }
-        _ => unexpected(),
-    });
+    let exit = run_on(
+        socket,
+        AdminRequest::Init { host_unlock },
+        &mut console,
+        |response| match response {
+            AdminResponse::Init {
+                vault_id,
+                version,
+                recipients,
+            } => {
+                println!("initialized vault {vault_id}: approval version {version} committed");
+                println!(
+                    "recipients: {}",
+                    recipients.iter().map(|role| role.name()).collect::<Vec<_>>().join(", ")
+                );
+                println!("run iron-vault unlock to start serving");
+                Exit::Success
+            }
+            _ => unexpected(),
+        },
+    );
     match (exit, console.advice()) {
         (Exit::Unreachable, Some(advice)) => fail(exit, &advice),
         _ => exit,

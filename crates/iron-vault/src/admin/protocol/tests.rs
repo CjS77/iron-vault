@@ -9,7 +9,7 @@ use crate::service_state::{FailureReason, ServiceState};
 use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
 use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
 use iron_vault_policy::{CallerToken, CredentialKind, Port, TokenHash};
-use iron_vault_store::{RecordDamage, RecordId, UtcSecond, VaultId};
+use iron_vault_store::{RecipientRole, RecordDamage, RecordId, UtcSecond, VaultId};
 
 /// The longest prompt label: the body bound less two field headers and the one-byte secret flag.
 const MAX_LABEL: usize = MAX_BODY_LEN - 2 * FIELD_HEADER_LEN - 1;
@@ -58,7 +58,18 @@ fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
         (R::Lock { cleared: a }, R::Lock { cleared: b }) => a == b,
         (R::Add { record_id: a }, R::Add { record_id: b }) | (R::Replace { record_id: a }, R::Replace { record_id: b }) => a == b,
         (R::CallerToken { token: a }, R::CallerToken { token: b }) => TokenHash::of(a) == TokenHash::of(b),
-        (R::Init { vault_id: a, version: v }, R::Init { vault_id: b, version: w }) => a == b && v == w,
+        (
+            R::Init {
+                vault_id: a,
+                version: v,
+                recipients: r,
+            },
+            R::Init {
+                vault_id: b,
+                version: w,
+                recipients: s,
+            },
+        ) => a == b && v == w && r == s,
         (
             R::RecoveryCheck {
                 vault_id: a,
@@ -188,7 +199,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             Just(AdminRequest::Status),
             Just(AdminRequest::Unlock),
             Just(AdminRequest::Lock),
-            Just(AdminRequest::Init),
+            any::<bool>().prop_map(|host_unlock| AdminRequest::Init { host_unlock }),
             Just(AdminRequest::RecoveryCheck),
             add_request(),
             replace_request(),
@@ -218,9 +229,10 @@ fn any_frame() -> impl Strategy<Value = Frame> {
         any::<[u8; 32]>().prop_map(|bytes| Frame::Response(AdminResponse::CallerToken {
             token: CallerToken::from_bytes(bytes)
         })),
-        (any::<[u8; 16]>(), any::<u64>()).prop_map(|(bytes, version)| Frame::Response(AdminResponse::Init {
+        (any::<[u8; 16]>(), any::<u64>(), any::<bool>()).prop_map(|(bytes, version, host)| Frame::Response(AdminResponse::Init {
             vault_id: VaultId::from_bytes(v4_bytes(bytes)).unwrap(),
-            version
+            version,
+            recipients: enrolled(host),
         })),
         (any::<[u8; 16]>(), any::<u64>(), any::<bool>()).prop_map(|(bytes, checked_at, recorded)| {
             Frame::Response(AdminResponse::RecoveryCheck {
@@ -1067,37 +1079,75 @@ fn an_empty_reveal_is_refused_both_ways() {
     assert_eq!(encode(&reveal(b""), &mut Vec::new()), Err(FrameError::EmptyBody(7)));
 }
 
-#[test]
-fn init_has_command_id_7_and_takes_no_arguments() {
-    assert_eq!((AdminCommand::Init as u16, AdminRequest::Init.command().name()), (7, "init"));
-    assert_eq!(encoded(&Frame::Request(AdminRequest::Init)), raw(1, 1, &field(1, &[0, 7])));
-    let with_argument = body(&[field(1, &[0, 7]), field(2, b"x")]);
-    assert_eq!(decode_err(&raw(1, 1, &with_argument)), FrameError::UnknownTag(2));
+/// The roles a vault is initialized with, with the host unlock role when `host` is set.
+fn enrolled(host: bool) -> Vec<RecipientRole> {
+    [RecipientRole::Operational, RecipientRole::Recovery]
+        .into_iter()
+        .chain(host.then_some(RecipientRole::HostUnlock))
+        .collect()
 }
 
 #[test]
-fn the_init_result_carries_the_raw_vault_id_and_the_committed_version() {
+fn init_has_command_id_7_and_takes_the_host_unlock_flag() {
+    let init = |host_unlock| AdminRequest::Init { host_unlock };
+    assert_eq!((AdminCommand::Init as u16, init(false).command().name()), (7, "init"));
+    [false, true].iter().for_each(|flag| {
+        let request = Frame::Request(init(*flag));
+        assert_eq!(
+            encoded(&request),
+            raw(1, 1, &body(&[field(1, &[0, 7]), field(2, &[u8::from(*flag)])]))
+        );
+        assert_round_trips(&request);
+    });
+    let refused = [
+        (body(&[field(1, &[0, 7])]), FrameError::MissingField(2)),
+        (body(&[field(1, &[0, 7]), field(2, &[2])]), FrameError::InvalidValue(2)),
+        (
+            body(&[field(1, &[0, 7]), field(2, &[0]), field(3, b"x")]),
+            FrameError::UnknownTag(3),
+        ),
+    ];
+    refused
+        .iter()
+        .for_each(|(request, error)| assert_eq!(decode_err(&raw(1, 1, request)), *error));
+}
+
+#[test]
+fn the_init_result_carries_the_raw_vault_id_the_committed_version_and_the_recipient_roles() {
     let vault_id = VaultId::from_bytes(v4_bytes([9; 16])).unwrap();
-    let expected = body(&[field(1, &[0, 7]), field(2, vault_id.as_bytes()), field(3, &1u64.to_be_bytes())]);
-    let result = Frame::Response(AdminResponse::Init { vault_id, version: 1 });
+    let expected = body(&[
+        field(1, &[0, 7]),
+        field(2, vault_id.as_bytes()),
+        field(3, &1u64.to_be_bytes()),
+        field(4, &[1, 2, 6]),
+    ]);
+    let result = Frame::Response(AdminResponse::Init {
+        vault_id,
+        version: 1,
+        recipients: enrolled(true),
+    });
     assert_eq!(encoded(&result), raw(1, 4, &expected));
     assert_round_trips(&result);
     let refused = [
         (
-            body(&[field(1, &[0, 7]), field(2, &[9; 15]), field(3, &[0; 8])]),
+            body(&[field(1, &[0, 7]), field(2, &[9; 15]), field(3, &[0; 8]), field(4, &[1])]),
             FrameError::InvalidValue(2),
         ),
         (
-            body(&[field(1, &[0, 7]), field(2, &[0; 16]), field(3, &[0; 8])]),
+            body(&[field(1, &[0, 7]), field(2, &[0; 16]), field(3, &[0; 8]), field(4, &[1])]),
             FrameError::InvalidValue(2),
         ),
         (
-            body(&[field(1, &[0, 7]), field(2, vault_id.as_bytes()), field(3, &[1])]),
+            body(&[field(1, &[0, 7]), field(2, vault_id.as_bytes()), field(3, &[1]), field(4, &[1])]),
             FrameError::InvalidValue(3),
         ),
         (
-            body(&[field(1, &[0, 7]), field(2, vault_id.as_bytes())]),
-            FrameError::MissingField(3),
+            body(&[field(1, &[0, 7]), field(2, vault_id.as_bytes()), field(3, &[0; 8]), field(4, &[4])]),
+            FrameError::InvalidValue(4),
+        ),
+        (
+            body(&[field(1, &[0, 7]), field(2, vault_id.as_bytes()), field(3, &[0; 8])]),
+            FrameError::MissingField(4),
         ),
     ];
     refused

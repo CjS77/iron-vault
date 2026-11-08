@@ -208,7 +208,7 @@ impl Exchanged {
 
     fn vault_id(&self) -> VaultId {
         match self.response {
-            AdminResponse::Init { vault_id, version: 1 } => vault_id,
+            AdminResponse::Init { vault_id, version: 1, .. } => vault_id,
             ref other => panic!("expected init at version 1, got {other:?}"),
         }
     }
@@ -227,7 +227,7 @@ async fn exchange(service: &Arc<ServiceContext>, request: AdminRequest, answers:
 }
 
 async fn init(service: &Arc<ServiceContext>, answers: &[&[u8]]) -> Exchanged {
-    exchange(service, AdminRequest::Init, answers).await
+    exchange(service, AdminRequest::Init { host_unlock: false }, answers).await
 }
 
 async fn unlock(service: &Arc<ServiceContext>) -> AdminResponse {
@@ -562,7 +562,7 @@ async fn an_unfinished_initialization_refuses_unlock_and_the_next_init_discards_
 
 /// Drives one init over `stream` up to its confirmation prompt, with the recovery key shown.
 async fn to_confirmation(stream: &mut UnixStream) -> String {
-    send(stream, &Frame::Request(AdminRequest::Init)).await;
+    send(stream, &Frame::Request(AdminRequest::Init { host_unlock: false })).await;
     let mut answers = COMPLETE.iter();
     let mut recovery = None;
     loop {
@@ -627,7 +627,7 @@ async fn a_second_init_confirmed_after_the_first_finished_is_already_initialized
     let (mut first, mut second) = (UnixStream::connect(&path).await.unwrap(), UnixStream::connect(&path).await.unwrap());
     let keys = [to_confirmation(&mut first).await, to_confirmation(&mut second).await];
 
-    let AdminResponse::Init { vault_id, version: 1 } = confirm(&mut first).await else {
+    let AdminResponse::Init { vault_id, version: 1, .. } = confirm(&mut first).await else {
         panic!("the first init writes the vault");
     };
     let refused = confirm(&mut second).await;

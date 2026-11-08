@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use iron_vault_store::{
     ApprovalPassphrase, InitError, InitFailure, InitPassphrases, InitStateError, InitializationState, NewVaultKeys, Passphrase,
-    SealingKeys, StoreFs, WhichPassphrase,
+    RecipientIdentity, SealingKeys, StoreFs, WhichPassphrase,
 };
 use secrecy::{ExposeSecret, SecretString};
 use subtle::ConstantTimeEq;
@@ -56,23 +56,31 @@ impl<F> Init<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Init<F> {
-    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
-        Box::pin(self.run(exchange))
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        let host_unlock = matches!(request, AdminRequest::Init { host_unlock: true });
+        Box::pin(self.run(exchange, host_unlock))
     }
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Init<F> {
-    /// Checks the state and the directories before any prompt, collects both passphrases, reveals the recovery key, and
-    /// writes only once the owner answers `yes`; the service context checks the state again under its locks.
-    async fn run(&self, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
+    /// Checks the state and the directories, and with `host_unlock` reads the handoff, all before any prompt; collects
+    /// both passphrases, reveals the recovery key, and writes only once the owner answers `yes`; the service context
+    /// checks the state again under its locks.
+    async fn run(&self, exchange: &mut Exchange, host_unlock: bool) -> Result<AdminResponse, ExchangeError> {
         let state = self.service.state().await;
         if !state.admin_allows(AdminOperation::Initialize) {
             return Ok(refused(InitRefusal::WrongState(state), false));
         }
-        match self.service.initializable().await {
-            Ok(InitializationState::Unfinished) => exchange.notice(UNFINISHED_NOTICE).await?,
-            Ok(_) => {}
+        let existing = match self.service.initializable().await {
+            Ok(existing) => existing,
             Err(refusal) => return Ok(refused(refusal, false)),
+        };
+        let host = match self.host_identity(host_unlock).await {
+            Ok(host) => host,
+            Err(refusal) => return Ok(refused(refusal, false)),
+        };
+        if existing == InitializationState::Unfinished {
+            exchange.notice(UNFINISHED_NOTICE).await?;
         }
         let passphrases = match chosen_passphrases(exchange).await? {
             Ok(passphrases) => passphrases,
@@ -91,13 +99,23 @@ impl<F: StoreFs + Send + Sync + 'static> Init<F> {
             Ok(keys) => keys,
             Err(declined) => return Ok(declined),
         };
+        let keys = host.into_iter().fold(keys, SealingKeys::with_host_unlock);
         Ok(match self.service.initialize(keys, passphrases).await {
             Ok(vault) => AdminResponse::Init {
                 vault_id: vault.vault_id,
                 version: vault.version.get(),
+                recipients: vault.recipients,
             },
             Err(refusal) => refused(refusal, true),
         })
+    }
+
+    /// The identity in the unlock handoff when `--host-unlock` asked for it, `None` when it did not.
+    async fn host_identity(&self, host_unlock: bool) -> Result<Option<RecipientIdentity>, InitRefusal> {
+        match host_unlock {
+            true => self.service.read_host_unlock().await.map(Some),
+            false => Ok(None),
+        }
     }
 }
 
@@ -199,6 +217,10 @@ fn refused(refusal: InitRefusal, revealed: bool) -> AdminResponse {
         InitRefusal::Unreadable(detail) => error(
             ErrorCode::InitFailed,
             format!("cannot read the initialization state, so nothing was written: {detail}"),
+        ),
+        InitRefusal::HostUnlock(reason) => error(
+            ErrorCode::InitFailed,
+            format!("cannot enrol the host unlock identity, so nothing was written: {reason}"),
         ),
         InitRefusal::Clock(detail) => error(
             ErrorCode::InitFailed,

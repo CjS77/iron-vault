@@ -2,8 +2,8 @@
 //! (`design/audit-logging.md`, "Credentials and vault writes" and "Initialization").
 
 use iron_vault_store::{
-    ApprovalStateError, ErrorKindLabel, InitFailure, InitStep, RecipientInventoryWriteError, StateFileName, UnlockError, VaultError,
-    VaultId, WriteError,
+    ApprovalStateError, ErrorKindLabel, InitFailure, InitStep, RecipientInventoryWriteError, RecipientRole, StateFileName, UnlockError,
+    VaultError, VaultId, WriteError,
 };
 
 use super::{AUDIT_TARGET, AuditEvent, EventName, memory_label};
@@ -12,12 +12,14 @@ use crate::service_context::{DenialKind, HostUnlockOutcome, UnlockRefusal, step_
 
 /// `vault.initialized`: init's last step is durable.
 #[derive(Debug, Clone, Copy)]
-pub struct VaultInitialized {
+pub struct VaultInitialized<'a> {
     /// The new vault's ID.
     pub vault_id: VaultId,
+    /// The roles of the recipients enrolled: kinds, never keys.
+    pub recipients: &'a [RecipientRole],
 }
 
-impl AuditEvent for VaultInitialized {
+impl AuditEvent for VaultInitialized<'_> {
     const NAME: EventName = EventName("vault.initialized");
 
     fn emit(&self) {
@@ -25,6 +27,7 @@ impl AuditEvent for VaultInitialized {
             target: AUDIT_TARGET,
             event = Self::NAME.as_str(),
             vault_id = self.vault_id.to_string().as_str(),
+            recipients = self.recipients.iter().map(|role| role.name()).collect::<Vec<_>>().join(",").as_str(),
             "vault initialized",
         );
     }

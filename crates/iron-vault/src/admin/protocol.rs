@@ -18,7 +18,7 @@ use zeroize::Zeroizing;
 use crate::deployment::DeploymentProfile;
 use crate::standing::CredentialStanding;
 use iron_vault_policy::{CallerToken, CredentialKind, Port};
-use iron_vault_store::{Passphrase, RecordId, VaultId};
+use iron_vault_store::{Passphrase, RecipientRole, RecordId, VaultId};
 use secrecy::SecretString;
 
 pub use iron_vault_store::MAX_CONFIG_LEN;
@@ -53,7 +53,10 @@ pub enum AdminRequest {
     Lock,
     /// Creates the vault and approves the initial config as version 1; the service prompts for both passphrases and
     /// reveals the recovery key. Command ID 7.
-    Init,
+    Init {
+        /// Also enrol the identity in the unlock handoff as a recipient, which only a Container-profile service accepts.
+        host_unlock: bool,
+    },
     /// Lists every credential with its kind, permitted origins and standing; allowed in every state. No arguments.
     /// Command ID 9.
     List,
@@ -107,7 +110,7 @@ impl AdminRequest {
             Self::Status => AdminCommand::Status,
             Self::Unlock => AdminCommand::Unlock,
             Self::Lock => AdminCommand::Lock,
-            Self::Init => AdminCommand::Init,
+            Self::Init { .. } => AdminCommand::Init,
             Self::Add { .. } => AdminCommand::Add,
             Self::List => AdminCommand::List,
             Self::Replace { .. } => AdminCommand::Replace,
@@ -199,9 +202,9 @@ mod no_external_signatures {
             | AdminCommand::Status
             | AdminCommand::Unlock
             | AdminCommand::Lock
-            | AdminCommand::Init
             | AdminCommand::RecoveryCheck
             | AdminCommand::List => &[],
+            AdminCommand::Init => &["host_unlock"],
             AdminCommand::ConfigApprove => &["config"],
             AdminCommand::Add | AdminCommand::Replace => &["name", "kind", "origins"],
             AdminCommand::Rm => &["name"],
@@ -414,6 +417,8 @@ pub enum AdminResponse {
         vault_id: VaultId,
         /// The committed approval version, always 1.
         version: u64,
+        /// The roles of the recipients the identity envelope was wrapped for: kinds, never keys.
+        recipients: Vec<RecipientRole>,
     },
     /// `recovery check` completed: the key opens the vault.
     RecoveryCheck {
@@ -714,9 +719,11 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::CallerToken { token }) => {
             put_frame(out, FrameKind::Success, &body::encode_caller_token_result(token))
         }
-        Frame::Response(AdminResponse::Init { vault_id, version }) => {
-            put_frame(out, FrameKind::Success, &body::encode_init_result(*vault_id, *version))
-        }
+        Frame::Response(AdminResponse::Init {
+            vault_id,
+            version,
+            recipients,
+        }) => put_frame(out, FrameKind::Success, &body::encode_init_result(*vault_id, *version, recipients)),
         Frame::Response(AdminResponse::RecoveryCheck {
             vault_id,
             checked_at,

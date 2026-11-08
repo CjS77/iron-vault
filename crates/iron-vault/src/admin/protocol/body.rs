@@ -7,7 +7,7 @@ use super::{add, list};
 use crate::deployment::DeploymentProfile;
 use iron_vault_policy::CallerToken;
 use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
-use iron_vault_store::{RecordId, VaultId};
+use iron_vault_store::{RecipientRole, RecordId, VaultId};
 use zeroize::Zeroizing;
 
 use crate::standing::CredentialStanding;
@@ -25,6 +25,8 @@ const TAG_DIGEST: u16 = 3;
 const TAG_HEADLINE: u16 = 4;
 const TAG_VAULT_ID: u16 = 2;
 const TAG_COMMITTED: u16 = 3;
+const TAG_RECIPIENTS: u16 = 4;
+const TAG_HOST_UNLOCK: u16 = 2;
 const TAG_TOKEN: u16 = 2;
 const TAG_TEXT: u16 = 1;
 
@@ -56,6 +58,7 @@ pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameErr
     match request {
         AdminRequest::ConfigApprove(config) => fields::put(&mut out, TAG_CONFIG, config.bytes()),
         AdminRequest::Rm { name } => fields::put(&mut out, TAG_NAME, name.as_bytes()),
+        AdminRequest::Init { host_unlock } => fields::put(&mut out, TAG_HOST_UNLOCK, &[u8::from(*host_unlock)]),
         _ => {}
     }
     Ok(out)
@@ -76,7 +79,12 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
         COMMAND_STATUS => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Status),
         COMMAND_UNLOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Unlock),
         COMMAND_LOCK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Lock),
-        COMMAND_INIT => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Init),
+        COMMAND_INIT => {
+            let [_, host_unlock] = exact(&fields, [TAG_COMMAND, TAG_HOST_UNLOCK])?;
+            Ok(AdminRequest::Init {
+                host_unlock: read_flag(TAG_HOST_UNLOCK, host_unlock)?,
+            })
+        }
         COMMAND_RECOVERY_CHECK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::RecoveryCheck),
         COMMAND_ADD => add::decode_request(&fields, |name, kind, origins| AdminRequest::Add { name, kind, origins }),
         COMMAND_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::List),
@@ -161,24 +169,33 @@ pub(super) fn encode_list_result(credentials: Option<&[CredentialStanding]>) -> 
     list::encode_result(COMMAND_LIST, credentials)
 }
 
-/// `init`'s success body: the command it answers, the new vault's ID as its 16 raw bytes (as `status` sends it), then the
-/// committed version.
-pub(super) fn encode_init_result(vault_id: VaultId, version: u64) -> Vec<u8> {
+/// `init`'s success body: the command it answers, the new vault's ID as its 16 raw bytes (as `status` sends it), the
+/// committed version, then the code of each recipient role enrolled, one byte each.
+pub(super) fn encode_init_result(vault_id: VaultId, version: u64, recipients: &[RecipientRole]) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &COMMAND_INIT.to_be_bytes());
     fields::put(&mut out, TAG_VAULT_ID, vault_id.as_bytes());
     fields::put(&mut out, TAG_COMMITTED, &version.to_be_bytes());
+    fields::put(
+        &mut out,
+        TAG_RECIPIENTS,
+        &recipients.iter().map(|role| role.code()).collect::<Vec<_>>(),
+    );
     out
 }
 
 fn decode_init_result(fields: &[fields::Field<'_>]) -> Result<AdminResponse, FrameError> {
-    let [_, vault_id, version] = exact(fields, [TAG_COMMAND, TAG_VAULT_ID, TAG_COMMITTED])?;
+    let [_, vault_id, version, recipients] = exact(fields, [TAG_COMMAND, TAG_VAULT_ID, TAG_COMMITTED, TAG_RECIPIENTS])?;
     Ok(AdminResponse::Init {
         vault_id: <[u8; 16]>::try_from(vault_id)
             .ok()
             .and_then(|bytes| VaultId::from_bytes(bytes).ok())
             .ok_or(FrameError::InvalidValue(TAG_VAULT_ID))?,
         version: read_u64(TAG_COMMITTED, version)?,
+        recipients: recipients
+            .iter()
+            .map(|code| RecipientRole::from_code(*code).ok_or(FrameError::InvalidValue(TAG_RECIPIENTS)))
+            .collect::<Result<_, _>>()?,
     })
 }
 

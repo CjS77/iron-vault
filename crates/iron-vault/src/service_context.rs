@@ -62,6 +62,7 @@ use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder, Withdrawn};
 use crate::socket_activation::PassedSockets;
 use crate::standing::{CredentialStanding, RouteFault};
 use crate::trusted_path_report::ServicePaths;
+use crate::unlock_handoff::HANDOFF_PATH;
 use host_unlock::tries_host_unlock;
 use reminder::{ReminderSchedule, SharedSchedule, with_schedule};
 use serving::Serving;
@@ -69,7 +70,7 @@ use unlock::{log_foreign_files, unprotected_reason};
 
 pub use approval::{ApprovalEnd, ApprovalReview};
 pub use host_unlock::{HostUnlockOutcome, HostUnlockRefusal};
-pub use init::{InitRefusal, step_names};
+pub use init::{HostUnlockUnavailable, InitRefusal, step_names};
 pub use migration::MigrationSession;
 pub use presence::{DenialKind, OwnerPresence, PresenceRefusal};
 pub use recovery::{RecoveryProof, RecoveryRefusal};
@@ -233,6 +234,8 @@ pub struct ServiceContext<F = OsFs> {
     clock: Arc<dyn WallClock>,
     /// The recovery reminder schedule's memory: the interval in force and when it last reminded.
     reminders: SharedSchedule,
+    /// Where `init --host-unlock` reads the unlock handoff.
+    handoff: PathBuf,
 }
 
 /// What the context keeps of an open vault beside the snapshot. They are one value, so a lock, a stop or a failed check
@@ -320,7 +323,16 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             lock_requests: watch::Sender::new(0),
             clock: Arc::new(SystemClock),
             reminders: Arc::new(StdMutex::new(ReminderSchedule::default())),
+            handoff: PathBuf::from(HANDOFF_PATH),
         })
+    }
+
+    /// The context reading the unlock handoff for `init --host-unlock` at `handoff` instead of [`HANDOFF_PATH`], so a
+    /// test stages one in a directory the trusted-path rule accepts.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_handoff_path(mut self, handoff: PathBuf) -> Self {
+        self.handoff = handoff;
+        self
     }
 
     /// The context reading the time from `clock` instead of the system's, so a test sets the time.

@@ -15,9 +15,16 @@ mod common;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use common::approval_harness::{Captured, Fixture, assert_audit_record, captured_logs, get, identity};
+use common::approval_harness::{Captured, Fixture, assert_audit_record, captured_logs, converse_revealing, get, identity, send};
+use iron_vault::admin::ADMIN_SOCKET_NAME;
+use iron_vault::admin::dispatch::Handlers;
+use iron_vault::admin::principal::AdminPrincipals;
+use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame};
+use iron_vault::admin::server::{AdminServer, Limits};
+use iron_vault::admin::socket::AdminSocket;
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::hardening::{LockUnavailable, MemoryProtection};
 use iron_vault::logging::LogSwitch;
@@ -25,10 +32,11 @@ use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::ServiceContext;
 use iron_vault::service_state::ServiceState;
 use iron_vault_store::{
-    OperationalIdentity, OsFs, Passphrase, RecipientSet, RecoveryKey, StateDirLock, seal_passphrase_envelope_for_tests, wrap_identity,
-    write_identity_envelope, write_passphrase_envelope,
+    OperationalIdentity, OsFs, Passphrase, RecipientRole, RecipientSet, RecoveryKey, StateDirLock, seal_passphrase_envelope_for_tests,
+    wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
 use secrecy::{ExposeSecret, SecretString};
+use tokio::net::UnixStream;
 use tokio::sync::{Mutex, MutexGuard};
 
 const PASSPHRASE: &str = "PASSPHRASE-host-unlock-5d1a";
@@ -239,4 +247,133 @@ fn empty(dir: &Path) {
     fs::read_dir(dir)
         .unwrap()
         .for_each(|entry| fs::remove_file(entry.unwrap().path()).unwrap());
+}
+
+/// The passphrases and confirmation of an owner who chooses both passphrases and confirms the recovery key.
+const APPROVAL_PASSPHRASE: &str = "APPROVAL-host-unlock-7e3c";
+const INIT_ANSWERS: [&str; 5] = [PASSPHRASE, PASSPHRASE, APPROVAL_PASSPHRASE, APPROVAL_PASSPHRASE, "yes"];
+
+/// A fresh vault directory and a service of `profile` that reads `init --host-unlock`'s handoff at `handoff`, Locked.
+async fn uninitialized(fixture: &Fixture, profile: DeploymentProfile, handoff: &Path) -> Arc<ServiceContext> {
+    ["state", "etc"].into_iter().for_each(|name| empty(&fixture.path(name)));
+    let service = start(fixture, profile, MemoryProtection::Locked).with_handoff_path(handoff.to_path_buf());
+    service.unlock_at_start(handoff).await;
+    assert_eq!(service.state().await, ServiceState::Locked);
+    Arc::new(service)
+}
+
+/// Sends `init` with the host unlock flag as `host_unlock` says and answers its prompts in turn. The admin principal is the
+/// test's own account whatever the service's profile, since the Container profile admits root only.
+async fn init(service: &Arc<ServiceContext>, host_unlock: bool) -> (AdminResponse, Vec<String>, usize) {
+    let paths = service.paths().clone();
+    let runtime_dir = paths.runtime_dir.clone().unwrap();
+    let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
+    let principals = AdminPrincipals::new(DeploymentProfile::Development, paths.owner.uid);
+    let server = AdminServer::new(principals, Handlers::for_service(service), Limits::default());
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(async move { server.serve(socket, async { drop(stopped.await) }).await });
+    let mut stream = UnixStream::connect(runtime_dir.join(ADMIN_SOCKET_NAME)).await.unwrap();
+    send(&mut stream, &Frame::Request(AdminRequest::Init { host_unlock })).await;
+    let (exchanged, revealed) = converse_revealing(&mut stream, &INIT_ANSWERS).await;
+    let _ = stop.send(());
+    let _ = task.await;
+    let prompts = exchanged.prompts.into_iter().map(|prompt| prompt.label).collect();
+    (exchanged.response, prompts, revealed.len())
+}
+
+fn file_names(fixture: &Fixture, dir: &str) -> Vec<String> {
+    fs::read_dir(fixture.path(dir))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn init_host_unlock_with_no_handoff_is_refused_before_any_prompt_and_writes_nothing() {
+    let (_turn, _logs, _before) = turn().await;
+    let fixture = Fixture::new().await;
+    let dir = HandoffDir::new();
+    let service = uninitialized(&fixture, DeploymentProfile::Container, &dir.path()).await;
+
+    let (response, prompts, revealed) = init(&service, true).await;
+
+    let AdminResponse::Error { code, message } = response else {
+        panic!("expected a refusal, got {response:?}");
+    };
+    assert_eq!(code, ErrorCode::InitFailed);
+    assert!(
+        message.contains("no unlock handoff") && message.contains("nothing was written"),
+        "{message}"
+    );
+    assert_eq!((prompts.len(), revealed), (0, 0));
+    assert_eq!(file_names(&fixture, "state"), ["lock"]);
+    assert_eq!(file_names(&fixture, "etc"), ["config.toml.lock"]);
+}
+
+#[tokio::test]
+async fn init_host_unlock_with_an_untrusted_handoff_names_the_reason_and_not_the_key() {
+    let (_turn, logs, _before) = turn().await;
+    let fixture = Fixture::new().await;
+    let (secret, _) = RecoveryKey::generate();
+    let dir = HandoffDir::new();
+    let handoff = dir.write(secret.expose_secret());
+    fs::set_permissions(&handoff, fs::Permissions::from_mode(0o644)).unwrap();
+    let service = uninitialized(&fixture, DeploymentProfile::Container, &dir.path()).await;
+
+    let (response, prompts, _) = init(&service, true).await;
+
+    let AdminResponse::Error { code, message } = response else {
+        panic!("expected a refusal, got {response:?}");
+    };
+    assert_eq!((code, prompts.len()), (ErrorCode::InitFailed, 0));
+    assert!(message.contains("not trusted"), "{message}");
+    assert!(!message.contains(secret.expose_secret()), "{message}");
+    assert_not_logged(&logs, secret.expose_secret());
+}
+
+#[tokio::test]
+async fn init_host_unlock_is_refused_by_a_service_that_has_no_host_unlock() {
+    let (_turn, _logs, _before) = turn().await;
+    let fixture = Fixture::new().await;
+    let (secret, _) = RecoveryKey::generate();
+    let dir = HandoffDir::new();
+    dir.write(secret.expose_secret());
+    let service = uninitialized(&fixture, DeploymentProfile::Development, &dir.path()).await;
+
+    let (response, prompts, _) = init(&service, true).await;
+
+    let AdminResponse::Error { code, message } = response else {
+        panic!("expected a refusal, got {response:?}");
+    };
+    assert_eq!((code, prompts.len()), (ErrorCode::InitFailed, 0));
+    assert!(message.contains("no host unlock"), "{message}");
+}
+
+#[tokio::test]
+async fn init_host_unlock_then_a_restart_reaches_ready_with_no_unlock() {
+    let (_turn, logs, _before) = turn().await;
+    let fixture = Fixture::new().await;
+    let (secret, _) = RecoveryKey::generate();
+    let dir = HandoffDir::new();
+    let handoff = dir.write(secret.expose_secret());
+    let service = uninitialized(&fixture, DeploymentProfile::Container, &handoff).await;
+
+    let (response, prompts, revealed) = init(&service, true).await;
+
+    let AdminResponse::Init { vault_id, recipients, .. } = response else {
+        panic!("expected init to succeed, got {response:?}");
+    };
+    assert_eq!((prompts.len(), revealed), (5, 1));
+    assert_eq!(
+        recipients,
+        [RecipientRole::Operational, RecipientRole::Recovery, RecipientRole::HostUnlock]
+    );
+    assert!(logs.has_field("vault.initialized", "vault_id", &vault_id.to_string()));
+    assert!(logs.has_field("vault.initialized", "recipients", "operational,recovery,host-unlock"));
+    service.stop().await;
+    drop(service);
+
+    let restarted = container(&fixture);
+    assert_eq!(restarted.unlock_at_start(&handoff).await, ServiceState::Ready);
+    assert_not_logged(&logs, secret.expose_secret());
 }

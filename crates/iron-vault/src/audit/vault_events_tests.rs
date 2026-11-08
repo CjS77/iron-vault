@@ -3,8 +3,8 @@
 use iron_vault_kinds::SecretField;
 use iron_vault_policy::{CredentialKind, CredentialName, Host, Port, RouteName};
 use iron_vault_store::{
-    DamagedRecord, ErrorKindLabel, InitFailure, InitStep, RecordDamage, RecordId, SealError, SharedStateDamage, StateFileName, UnlockError,
-    VaultId, WriteError,
+    DamagedRecord, ErrorKindLabel, InitFailure, InitStep, RecipientRole, RecordDamage, RecordId, SealError, SharedStateDamage,
+    StateFileName, UnlockError, VaultId, WriteError,
 };
 
 use super::admin::*;
@@ -31,10 +31,17 @@ fn origins() -> Vec<(Host, Port)> {
 #[test]
 fn initialization_events_carry_ids_step_labels_and_kinds_only() {
     let id = VaultId::new_random();
-    assert_eq!(
-        record_of(VaultInitialized { vault_id: id }, "INFO", &["vault_id"])["vault_id"],
-        id.to_string().as_str()
+    let roles = [RecipientRole::Operational, RecipientRole::Recovery, RecipientRole::HostUnlock];
+    let initialized = record_of(
+        VaultInitialized {
+            vault_id: id,
+            recipients: &roles,
+        },
+        "INFO",
+        &["vault_id", "recipients"],
     );
+    assert_eq!(initialized["vault_id"], id.to_string().as_str());
+    assert_eq!(initialized["recipients"], "operational,recovery,host-unlock");
     let files = ["init.unfinished".to_owned(), "identity.age".to_owned()];
     assert_eq!(
         record_of(InitDiscarded { files: &files }, "WARN", &["files"])["files"],
@@ -362,6 +369,7 @@ pub(super) fn emit_every_event() {
     });
     VaultInitialized {
         vault_id: VaultId::new_random(),
+        recipients: &[],
     }
     .emit();
     InitDiscarded { files: &files }.emit();
