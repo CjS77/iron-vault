@@ -15,7 +15,7 @@ rm -rf "$out"
 mkdir -p "$out/assets"
 
 cp "$root/site/index.html" "$root/site/site.css" "$out/"
-for f in ironvault.css ironvault-lockup-dark.svg ironvault-lockup-light.svg ironvault-mark.svg banner-forge.webp banner-forge.png; do
+for f in ironvault.css ironvault-lockup-dark.svg ironvault-lockup-light.svg ironvault-mark.svg banner-forge.webp; do
   cp "$root/assets/$f" "$out/assets/"
 done
 

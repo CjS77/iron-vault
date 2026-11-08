@@ -17,7 +17,12 @@ command = "mdbook-mermaid"
 [output.html]
 git-repository-url = "https://github.com/CjS77/iron-vault"
 edit-url-template = "https://github.com/CjS77/iron-vault/edit/main/book/{path}"
-additional-js = ["mermaid.min.js", "mermaid-init.js"]
+default-theme = "light"
+preferred-dark-theme = "coal"
+# The brand skin: iron-vault.css restyles mdbook to match the landing page and iron-vault.js puts the lockup, linking
+# back to the landing page, in the menu bar. theme/head.hbs loads the brand stylesheet from src/assets.
+additional-css = ["iron-vault.css"]
+additional-js = ["mermaid.min.js", "mermaid-init.js", "iron-vault.js"]
 
 [output.html.search]
 enable = true

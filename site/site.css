@@ -133,6 +133,7 @@ body::before {
   letter-spacing: 0.01em;
   text-transform: uppercase;
 }
+.hero .altcolor { color: var(--iv-red); }
 .hero h1 .quiet { color: var(--band-muted); }
 .lede { font-size: var(--iv-text-lg); line-height: 1.55; color: var(--band-fg); margin: 0; max-width: 34em; }
 .lede code { font-family: var(--iv-font-mono); font-size: 0.85em; color: var(--band-fg); background: var(--iv-neutral-850); padding: 0.1em 0.35em; border-radius: var(--iv-radius-sm); }
