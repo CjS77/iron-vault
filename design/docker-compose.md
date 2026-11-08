@@ -503,7 +503,9 @@ persistent plaintext or exposing a signing oracle":
 - **No signing oracle.** The host unlock identity can unwrap `identity.age` and nothing else. The host offers no
   interface that signs or decrypts on request; the unit runs once at boot.
 
-The evidence is the [release check](#release-checks) on a host with a TPM.
+The evidence is the [host unlock release check](#release-checks), [`compose-unlock-check.sh`](../scripts/release/compose-unlock-check.sh),
+run on a host with a TPM. **The evidence is pending:** the script has not yet been run on a VM with `swtpm` or on TPM
+hardware, so the gate stays open until its two-part output is attached to K-254 and linked here.
 
 ## Approval signing
 
@@ -544,6 +546,10 @@ Two release checks run on a disposable host and are the evidence for this profil
   `unlock`; the recovery key opens the same vault; `identity.age` has three X25519 stanzas; the handoff is on a ramfs
   that `findmnt` shows on the host; no `AGE-SECRET-KEY` appears in the image, the environment, the volumes, `/etc`,
   `/var` or swap; and a missing or wrong handoff leaves the service Locked with passphrase `unlock` still working.
+  [`scripts/release/compose-unlock-check.sh`](../scripts/release/compose-unlock-check.sh) runs it in two parts around a
+  reboot, behind the same `--i-know-this-is-a-disposable-vm` opt-in as the isolation check, and prints one PASS or
+  FAIL line per item. Its last check is that nothing but the admin socket and the request listeners listens on the host
+  or in the container, so there is no signing oracle.
 
 ## Proposed specification changes
 
