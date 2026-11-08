@@ -29,6 +29,7 @@ mod record_id;
 mod recovery;
 mod recovery_check;
 mod recovery_record;
+mod rewrap;
 mod sealed;
 #[cfg(test)]
 mod secret_types_tests;
@@ -107,6 +108,10 @@ pub use recovery_check::{MalformedReason, RecoveryCheck, RecoveryCheckError, che
 pub use recovery_record::{
     MAX_RECOVERY_CHECK_RECORD_LEN, RecoveryCheckReadError, RecoveryCheckRecord, RecoveryCheckRecordError, UtcSecond, UtcSecondError,
     read_recovery_check, write_recovery_check,
+};
+pub use rewrap::{
+    ChangeCommitted, RecipientChangeError, RecipientChangeFault, RecipientChangeStep, RecipientChangeWriteError, RewrappedIdentity,
+    rewrap_identity,
 };
 pub use sealed::{OpenError, SealError, open, seal};
 pub use stale_temps::sweep_stale_temps;
