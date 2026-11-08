@@ -64,7 +64,7 @@ services.
 | AI agents and MCP servers       | Use FX, Brave, Venice, and other configured APIs without real keys in agent-readable configuration or environment variables ([recipe](book/src/cookbook/agent-api-key.md))                                   |
 | Naomi back-office applications  | Share installation credentials through isolated routes ([recipe](book/src/cookbook/two-callers.md)); add Google consent and token refresh in the OAuth phase ([planned](book/src/cookbook/roadmap/oauth.md)) |
 | Shared Linux workstations       | Give each OS account only its own routes, recognised from the connecting account, with no keys in any home directory ([guide](book/src/installation/multiuser-linux.md))                                     |
-| Server and Compose applications | Keep credentials in one protected service while application containers receive only the proxy access they need ([guide](book/src/installation/compose-install.md))                                      |
+| Server and Compose applications | Keep credentials in one protected service while application containers receive only the proxy access they need ([guide](book/src/installation/compose-install.md))                                           |
 | Developer CLI tools             | Avoid provider credentials in application files where a tested base-URL integration supports the complete workflow ([recipe](book/src/cookbook/real-application.md))                                         |
 
 ## Roadmap

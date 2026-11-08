@@ -101,7 +101,7 @@ skip the build. A digest pin needs a registry digest: push a local build to a re
 Copy the host CLI out of the image. It is the same binary as the service, which is how the two stay in step:
 
 ```sh
-ctr=$(sudo docker create iron-vault)
+ctr=$(sudo docker create IMAGE)
 sudo docker cp "$ctr:/usr/bin/iron-vault" /usr/local/bin/iron-vault
 sudo docker rm "$ctr"
 sudo chown root:root /usr/local/bin/iron-vault && sudo chmod 0755 /usr/local/bin/iron-vault
@@ -210,13 +210,15 @@ the matching example for the reference Compose file: one TLS listener per caller
 The approval must come after the certificates are in place, because the config names them.
 
 ```sh
+cp packaging/compose/config.example.toml config.toml
+$EDITOR config.toml        # your callers, listener addresses, routes and credential names
 sudo iron-vault add venice_chat --origin api.venice.ai
 sudo iron-vault add brave --origin api.search.brave.com
 sudo iron-vault config approve config.toml
 ```
 
-An isolated-network caller needs no token. A listener must have a dedicated address on a TLS listener, with that caller
-as its only caller; the approval refuses a config that breaks it. It cannot see Docker's networks, so keeping each
+An isolated-network caller needs no token. It must have its own TLS listener on a dedicated address, as that listener's
+only caller; the approval refuses a config that breaks it. The approval cannot see Docker's networks, so keeping each
 address on its own network is the Compose file's job.
 
 ### 10. Send a request
@@ -225,7 +227,7 @@ A caller reaches its own listener over TLS, trusting the CA from step 6 and send
 From a caller container that has `curl` and `ca.crt`:
 
 ```sh
-curl --cacert /ca.crt -X POST https://172.30.1.2:8443/venice-chat/api/v1/chat/completions
+curl --cacert /ca.crt -X POST https://172.30.1.2:8443/venice-chat/chat/completions
 ```
 
 Use the body your application sends. A request outside the caller's routes is refused.
@@ -319,7 +321,8 @@ network.
   root on the server.
 
 An `ssh -L` forward through a non-root login is refused. `sshd` connects to the socket as the login account, so the
-service sees that account's uid and accepts only uid 0. Use the first form, or log in as root with a key.
+kernel refuses the `connect()` first: the socket is `0600` and owned by the service account, in a `0711` directory, so
+only root can open it. Even a login that got through would be refused, because the service accepts only uid 0. Use the first form, or log in as root with a key.
 
 ## Restarts and reboots
 
@@ -339,7 +342,8 @@ service sees that account's uid and accepts only uid 0. Use the first form, or l
 The host unlock identity lives only sealed to this host's TPM. It is lost with the TPM, the motherboard, a TPM clear, or
 a change to Secure Boot's policy (PCR 7). Then the stack starts Locked, and the vault is intact.
 
-1. Open the vault with the vault passphrase, or with the recovery key to prove it is safe:
+1. Open the vault with the vault passphrase, which `recipient add` needs. Optionally run `recovery check` to confirm the
+   offline recovery key still opens it; it does not unlock the vault.
 
    ```sh
    sudo iron-vault unlock
@@ -372,7 +376,8 @@ a change to Secure Boot's policy (PCR 7). Then the stack starts Locked, and the 
    sudo iron-vault status
    ```
 
-5. Remove the recipient that is gone, by its key as `recipient list` prints it, and delete the old credential:
+5. Remove the old entry, the one with the role `host-unlock` (not the `added` key from step 3), by its key as
+   `recipient list` prints it, and delete the old credential:
 
    ```sh
    sudo iron-vault recipient list
