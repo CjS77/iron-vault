@@ -896,8 +896,8 @@ redacted reason, and exits with code 1.
 ### init
 
 `iron-vault init` takes one option, `--host-unlock`, which only a `container` build accepts (any other build's parser
-reports an unexpected argument) and which sets the request's host unlock flag. The passphrases are answers to the service's secret prompts, read as for any
-prompt, and the recovery key arrives in a reveal. Before it sends the request it checks that it can open `/dev/tty`,
+reports an unexpected argument) and which sets the request's host unlock flag. The passphrases are answers to the
+service's secret prompts, read as for any prompt, and the recovery key arrives in a reveal. Before it sends the request it checks that it can open `/dev/tty`,
 and without a controlling terminal it reports that on stderr and exits with code 3, so the service never generates a
 key for a CLI that will refuse to show it. If the command ends after the reveal without a service answer (Ctrl-C, a
 closed terminal, a signal, a dropped or timed-out connection), the CLI says on stderr, before it exits, what to do

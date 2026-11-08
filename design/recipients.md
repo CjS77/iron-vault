@@ -570,8 +570,8 @@ not repeated in `recipient.change-failed`: migration authorization records `migr
 
 `init` writes the first inventory: the `operational` and `recovery` recipients, with the labels `vault passphrase` and
 `recovery key` and the init time. A container build's `init --host-unlock` adds a third entry, role `host-unlock`,
-labelled `host unlock`, for the identity in the unlock handoff. It is the only moment the service knows the recovery key's recipient key, so a vault
-whose `init` did not write one can never have one.
+labelled `host unlock`, for the identity in the unlock handoff. It is the only moment the service knows the recovery
+key's recipient key, so a vault whose `init` did not write one can never have one.
 
 The inventory needs the vault ID, for its header and payload, and step 5 (`Vault::create`) is where the vault ID is
 generated today. The vault ID therefore joins the [new vault keys](glossary.md), generated before anything is written,
