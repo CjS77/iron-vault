@@ -179,18 +179,20 @@ Each of these also has `remediation`.
 ### Recipients
 
 The first two are written by the inventory check that every recipient command, `recipient list` included, runs first;
-neither carries a recipient key or label. `recipient remove` writes the other two, which name the public recipient key.
+neither carries a recipient key or label. `recipient add` and `recipient remove` write the other three, which name the public
+recipient key; `recipient.added` and `recipient.removed` also carry the label, escaped.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
+| `recipient.added` | INFO | A `recipient add` committed | `recipient`, `recipient_role` (`added`), `recipient_label` (escaped), `recipients` (the count after the change) |
 | `recipient.inventory-damaged` | WARN | The inventory check found the recipient inventory missing or damaged, and wrote nothing | `inventory_damage`: `envelope_unreadable`, `missing`, `unreadable`, `mac`, `malformed`, `unknown_role`, `other_vault`, `envelope_mismatch` or `count_mismatch` |
 | `recipient.change-recovered` | WARN | The inventory check finished a committed recipient change or removed a staged inventory | `recovery`: `completed` or `discarded` |
 | `recipient.removed` | INFO | A removal committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` (the count after the removal) |
-| `recipient.change-failed` | WARN | A removal was refused because the key is not enrolled or its removal breaks the independence rule, or it failed while written | `change` (`remove`), `recipient`, `failure`: `unknown_recipient`, `set_invalid` or `write_failed`; for `write_failed` also `step`, `error_kind` and `committed` (`no`, `unknown` or `yes`) |
+| `recipient.change-failed` | WARN | An add or a removal was refused because the key is already enrolled, is not enrolled or would break the independence rule, or it failed while written | `change` (`add` or `remove`), `recipient`, `failure`: `already_enrolled`, `unknown_recipient`, `set_invalid` or `write_failed`; for `write_failed` also `step`, `error_kind` and `committed` (`no`, `unknown` or `yes`) |
 
 ### Migration authorization
 
-`export` and `recipient add` are not CLI commands yet; these events are written by the authorization step they share.
+`recipient add` writes these events, and `export` will: they come from the authorization step the two share.
 
 | Event | Level | When | Fields |
 |---|---|---|---|

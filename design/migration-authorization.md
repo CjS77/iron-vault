@@ -373,9 +373,8 @@ The epic's rejection suite names one test per row, except the type-level "Missin
 The specification leaves each point below open. The design takes the default stated for each, until the owner
 decides.
 
-1. **Code without a caller.** Until `recipient add` (EP-28) or `export` (EP-30) lands, nothing outside tests calls
-   the migration authorization modules. *Default:* expect `dead_code` allowances on them, or land this epic just
-   before EP-30's first command ticket.
+1. **Code without a caller.** `recipient add` calls the migration authorization modules; until `export` (EP-30) lands,
+   its code paths (the `export` operation) have no caller outside tests.
 2. **Expiry within one exchange.** [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) step
    1 says that if the authorization expires before export begins, the check is repeated. *Default:* the exchange ends
    with `migration-denied` (`expired`), and running the command again repeats the check, with a new challenge. The

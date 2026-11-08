@@ -252,6 +252,18 @@ iron-vault recipient list [OPTIONS]
 
 List every enrolled recipient, one line each: its `age1...` key, role, enrolment time and label. It works while the service is Ready, and refuses a missing or damaged recipient inventory without changing it.
 
+## `iron-vault recipient add`
+
+```text
+iron-vault recipient add [OPTIONS] --label <LABEL> <RECIPIENT>
+```
+
+Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not affected.
+
+- `<RECIPIENT>`: The `age1...` public key to enroll.
+  - required
+- `--label <LABEL>`: Which device or copy the key is, 1 to 64 characters: `alice laptop 2026`.
+
 ## `iron-vault recipient remove`
 
 ```text

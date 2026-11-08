@@ -101,22 +101,23 @@ These can happen on any command.
 | `31` | `recovery-check-failed` | The key does not open this vault. | This is not the key for this vault. Find the right one; if you cannot, the vault has no working recovery key. See [Check and store your recovery key](../cookbook/recovery-key.md). |
 | `32` | `recovery-check-unavailable` | The vault is not initialized, or a file the check reads could not be read or is malformed, so the key was not judged. | Read the message, which names the file and error kind. |
 
-### `recipient list` and `recipient remove`
+### `recipient list`, `recipient add` and `recipient remove`
 
 | Code | Name | Meaning | What to do |
 |---|---|---|---|
-| `35` | `recipient-invalid` | `recipient remove`: the argument is not an `age1...` X25519 recipient key. | Copy the key from `recipient list`. |
+| `35` | `recipient-invalid` | The key is not an `age1...` X25519 recipient key, or (for `recipient add`) the label breaks its rule. The message names the rule. | Copy the key from `recipient list`, or check the key and the label you typed. |
+| `36` | `recipient-enrolled` | `recipient add`: the key is already enrolled. It was refused before any prompt. Nothing was changed. | Run `recipient list` to see the enrolled keys. |
 | `37` | `unknown-recipient` | `recipient remove`: no enrolled recipient has this key. Nothing was changed. | Run `recipient list` and copy the key from it. |
-| `38` | `recipient-set-invalid` | `recipient remove`: the vault would be left without its operational recipient or without a recovery recipient. The message names which. Nothing was changed. | Keep that recipient: the vault always needs its operational recipient and one recovery recipient. |
+| `38` | `recipient-set-invalid` | `recipient add`: the set after the change would break the independence rule or hold more than 64 recipients. `recipient remove`: the vault would be left without its operational recipient or without a recovery recipient. The message names which part. Nothing was changed. | Read the message. The vault always needs its operational recipient and one recovery recipient. |
 | `39` | `recipient-inventory-damaged` | The recipient inventory (`recipients.age`) is missing or damaged, or does not describe the `identity.age` on disk. The message names the damage. Nothing was changed, and the service stays Ready. | Do not delete or rewrite either file. A vault initialized before recipient commands has no inventory, and the message says so. Keep your recovery key, which opens the vault without the inventory. |
 
-Both commands also answer `wrong-state` outside Ready, `busy` while another command holds the service-wide lock, and
-`vault-write-failed` when settling a staged recipient change failed or, for `recipient remove`, the removal itself did.
+All three commands also answer `wrong-state` outside Ready, `busy` while another command holds the service-wide lock, and
+`vault-write-failed` when settling a staged recipient change failed or, for `recipient add` and `recipient remove`, the
+change itself did; the message says whether it may have committed.
 
 ### Migration authorization
 
-`export` and `recipient add` are not CLI commands yet. These codes are part of the protocol already, for the step the
-two commands share.
+`recipient add` and `export` share these codes. `export` is not a CLI command yet.
 
 | Code | Name | Meaning | What to do |
 |---|---|---|---|

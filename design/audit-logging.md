@@ -723,14 +723,15 @@ other approval.
 | `recovery.reminder` | INFO | a reminder evaluation found a recovery reminder due | `recovery_record`; `last_checked` when `checked`; `reminders_since` when `never_checked`; `error_kind` when `unusable`; `reminder_days`; `remediation` |
 
 **Recipients** ([recipients.md](recipients.md#audit-events) gives the whole family; the inventory check writes
-`recipient.inventory-damaged` and `recipient.change-recovered`, and `recipient remove` the other two):
+`recipient.inventory-damaged` and `recipient.change-recovered`; `recipient add` and `recipient remove` write the others):
 
 | Event | Level | When | Fields |
 |---|---|---|---|
+| `recipient.added` | INFO | a recipient change that adds committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` |
 | `recipient.inventory-damaged` | WARN | the inventory check found the recipient inventory missing or damaged | `inventory_damage` |
 | `recipient.change-recovered` | WARN | the inventory check finished a committed recipient change or removed a staged inventory | `recovery` |
 | `recipient.removed` | INFO | a recipient change that removes a recipient committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` |
-| `recipient.change-failed` | WARN | a removal was refused at its own step 3 (`unknown_recipient`, `set_invalid`), or its recipient change failed (`write_failed`) | `change`, `recipient`, `failure`; `step`, `error_kind` and `committed` for `write_failed` |
+| `recipient.change-failed` | WARN | an add or a removal was refused at its own step 3 (`already_enrolled`, `unknown_recipient`, `set_invalid`), or its recipient change failed (`write_failed`) | `change`, `recipient`, `failure`; `step`, `error_kind` and `committed` for `write_failed` |
 
 **Migration authorization** ([migration-authorization.md](migration-authorization.md#audit-events) gives the order of the records of one exchange):
 
