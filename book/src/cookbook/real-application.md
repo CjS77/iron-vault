@@ -214,7 +214,9 @@ anyone claims they work.
 
 ## Reference
 
-- [Configuration](../reference/configuration.md): listeners, `token_header`, slots and markers.
+- [Configuration](../reference/configuration.md): listeners, `token_header`, slots and markers. Its
+  [example](../reference/configuration.md#the-example) has routes for Brave Search (a header slot), Venice (a Bearer
+  token) and an FX API (a query parameter).
 - [Audit log](../reference/audit-log.md): `request.completed` and its `reason` values.
 - [Errors](../reference/errors.md).
 - The [use cases in the README](../../../README.md#use-cases), and the

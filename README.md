@@ -115,7 +115,7 @@ Rust toolchain and `curl`.
 ```sh
 cargo install --path crates/iron-vault --features dev-mode --root ~/.local/iron-vault-dev
 chmod -R go-w ~/.local/iron-vault-dev && export PATH="$HOME/.local/iron-vault-dev/bin:$PATH"
-iron-vault serve &                                   # or in a terminal of its own
+iron-vault serve &                                   # or in a terminal of its own; give it a second to start
 iron-vault init                                      # sets two passphrases and shows the recovery key once
 iron-vault unlock
 iron-vault add httpbin_key --origin httpbin.org      # type any test value: httpbin checks no keys
@@ -153,7 +153,7 @@ curl -s -H "Proxy-Authorization: Bearer $(cat ~/.iron-vault-tokens/me)" http://1
 
 httpbin echoes the request it received: its `Authorization` header reads `Bearer [iron-vault:scrubbed]`, because
 Iron Vault added the key and then scrubbed it from the response. The route's bucket starts empty after the approval,
-so a request sent at once may get `429`; wait a few seconds. The
+so a request sent at once may get `429`; wait a few seconds. Stop the service with `kill %1` when you're done. The
 [getting started recipe](book/src/cookbook/getting-started.md) walks through each step and what it prints.
 
 ## The manual
