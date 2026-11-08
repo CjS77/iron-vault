@@ -158,7 +158,7 @@ fn run_blocking(argv: &[String], input: &str) -> Ran {
     let mut stdin = child.stdin.take().unwrap();
     // A command refused before it reads closes the pipe, so a failed write is not the test's failure.
     let _ = stdin.write_all(early.as_bytes());
-    let cmdline = argv_of(&mut child);
+    let cmdline = argv_of(&mut child, program);
     let _ = stdin.write_all(last.as_bytes());
     drop(stdin);
     let output = child.wait_with_output().unwrap();
@@ -170,17 +170,41 @@ fn run_blocking(argv: &[String], input: &str) -> Ran {
     }
 }
 
-/// `child`'s argv as `/proc/<pid>/cmdline` shows it, or nothing once it has exited. The kernel lets `spawn` return as soon
-/// as the new program's memory is in place, before its arguments are copied in, so an empty read is retried while the
-/// child runs.
-fn argv_of(child: &mut Child) -> Vec<u8> {
+/// `child`'s own argv as `/proc/<pid>/cmdline` shows it after it has exec'd `program`, or nothing once it has exited.
+///
+/// `spawn` can return while the child is still mid-exec, in one of two states that are not its argv. The kernel wakes
+/// the vfork parent before it switches the child onto the new program's memory, so the child can still show this test
+/// process's argv; once switched, it shows an empty one until the arguments are copied in. The kernel renames the
+/// child after the switch, so once `/proc/<pid>/comm` names `program`, the cmdline read after it is the new program's:
+/// empty, or its argv in full. (`/proc/<pid>/exe` would say the same, but the binary makes itself unreadable there.)
+fn argv_of(child: &mut Child, program: &str) -> Vec<u8> {
+    let proc = PathBuf::from(format!("/proc/{}", child.id()));
+    let name = exec_name(program);
     loop {
-        let cmdline = fs::read(format!("/proc/{}/cmdline", child.id())).unwrap_or_default();
-        if !cmdline.is_empty() || child.try_wait().unwrap().is_some() {
+        if let Some(cmdline) = exec_argv(&proc, &name) {
             return cmdline;
+        }
+        if child.try_wait().unwrap().is_some() {
+            return Vec::new();
         }
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+/// The name the kernel gives a process that execs `program`: its file name, cut to the 15 bytes `comm` holds.
+fn exec_name(program: &str) -> Vec<u8> {
+    let name = Path::new(program).file_name().unwrap().as_encoded_bytes();
+    name[..name.len().min(15)].to_vec()
+}
+
+/// The process's argv once it runs a program called `name` and its arguments are in place; `None` before then or
+/// after it exits.
+fn exec_argv(proc: &Path, name: &[u8]) -> Option<Vec<u8>> {
+    let comm = fs::read(proc.join("comm")).ok()?;
+    if comm.strip_suffix(b"\n") != Some(name) {
+        return None;
+    }
+    fs::read(proc.join("cmdline")).ok().filter(|cmdline| !cmdline.is_empty())
 }
 
 /// Where the last line of `input` starts.
