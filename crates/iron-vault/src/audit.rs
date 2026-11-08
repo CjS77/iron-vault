@@ -24,6 +24,7 @@ pub mod config;
 pub mod corruption;
 pub mod credential;
 pub mod migration;
+pub mod recipient;
 pub mod recovery;
 pub mod route;
 pub mod vault;

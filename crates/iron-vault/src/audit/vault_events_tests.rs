@@ -566,3 +566,13 @@ fn recovery_reminder_carries_the_fields_of_its_record_form() {
         (Some("unusable"), Some("not_toml"))
     );
 }
+
+#[test]
+fn recipient_inventory_events_carry_fixed_labels_only() {
+    use super::recipient::*;
+    use iron_vault_store::{ChangeRecovery, InventoryDamage};
+    let record = record_of(InventoryDamaged(InventoryDamage::EnvelopeMismatch), "WARN", &["inventory_damage"]);
+    assert_eq!(record["inventory_damage"], "envelope_mismatch");
+    let record = record_of(ChangeRecovered(ChangeRecovery::Discarded), "WARN", &["recovery"]);
+    assert_eq!(record["recovery"], "discarded");
+}

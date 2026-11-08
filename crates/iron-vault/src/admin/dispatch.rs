@@ -13,6 +13,7 @@ use super::init::Init;
 use super::list::List;
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode};
+use super::recipient_list::RecipientList;
 use super::recovery_check::RecoveryCheck;
 use super::replace::Replace;
 use super::rm::Rm;
@@ -55,7 +56,7 @@ impl Handlers {
     }
 
     /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile, then `status`,
-    /// `unlock`, `lock`, `config approve`, `add`, `replace`, `init`, `list`, `rm` and `recovery check`. A command that acts on the service
+    /// `unlock`, `lock`, `config approve`, `add`, `replace`, `init`, `list`, `rm`, `recovery check` and `recipient list`. A command that acts on the service
     /// registers here with a clone of `service`.
     pub fn for_service<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> Self {
         Self::standard(service.paths().profile)
@@ -68,6 +69,7 @@ impl Handlers {
             .with(AdminCommand::List, List::new(Arc::clone(service)))
             .with(AdminCommand::Rm, Rm::new(Arc::clone(service)))
             .with(AdminCommand::RecoveryCheck, RecoveryCheck::new(Arc::clone(service)))
+            .with(AdminCommand::RecipientList, RecipientList::new(Arc::clone(service)))
             .with_lock_drain(service, LOCK_DRAIN)
     }
 

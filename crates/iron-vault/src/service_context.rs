@@ -24,6 +24,7 @@ mod init;
 mod log_destination;
 mod migration;
 mod presence;
+mod recipients;
 mod recovery;
 mod reminder;
 mod serving;
@@ -73,6 +74,7 @@ pub use host_unlock::{HostUnlockOutcome, HostUnlockRefusal};
 pub use init::{HostUnlockUnavailable, InitRefusal, step_names};
 pub use migration::MigrationSession;
 pub use presence::{DenialKind, OwnerPresence, PresenceRefusal};
+pub use recipients::RecipientRefusal;
 pub use recovery::{RecoveryProof, RecoveryRefusal};
 pub use vault_change::{CredentialChanged, CurrentRecord, VaultChangePlan, VaultChangeRefusal};
 
