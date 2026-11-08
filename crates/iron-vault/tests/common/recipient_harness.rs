@@ -9,6 +9,7 @@ use std::sync::Arc;
 use super::approval_harness::{mkdir, read_frame, send, spawn_admin};
 use super::proxy_harness::TempDir;
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, OwnerInput};
+use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 use iron_vault::path_metadata::invoking_user;
@@ -43,6 +44,15 @@ impl Fixture {
 
     /// Starts the service as `serve` does, without systemd sockets: Locked, waiting for an unlock or an init.
     pub fn start(&self) -> Arc<ServiceContext> {
+        self.start_with(UpstreamSettings::new(
+            DeploymentProfile::Development,
+            invoking_user().unwrap(),
+            TransportLimits::default(),
+        ))
+    }
+
+    /// [`start`](Self::start) with `upstream` settings, such as a pinned test CA for a mock upstream.
+    pub fn start_with(&self, upstream: UpstreamSettings) -> Arc<ServiceContext> {
         let paths = ServicePaths {
             profile: DeploymentProfile::Development,
             owner: invoking_user().unwrap(),
@@ -57,11 +67,7 @@ impl Fixture {
             paths,
             fs: OsFs,
             capabilities: Capabilities::default(),
-            upstream: iron_vault::config_check::UpstreamSettings::new(
-                DeploymentProfile::Development,
-                invoking_user().unwrap(),
-                TransportLimits::default(),
-            ),
+            upstream,
             hardening: HardeningReport {
                 core_dumps: CoreDumps::Disabled,
                 memory: MemoryProtection::Unsupported,
