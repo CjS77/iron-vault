@@ -506,7 +506,9 @@ Points to note:
   `/venice-chat/chat/completions` becomes `/api/v1/chat/completions` at Venice, and that is what `paths` names.
 - **Every route needs a rate limit.** A route that should be effectively unlimited gets a generous one.
 - **The rate limit is a token bucket.** The bucket holds up to `burst` requests and refills at `requests` every
-  `per_seconds`. The chat route can send 6 at once, then one every 10 seconds.
+  `per_seconds`. Every bucket starts empty each time the service becomes Ready: after `unlock`, an approval, a reload,
+  or an `add`, `replace` or `rm`. So the chat route allows its first request 10 seconds after this approval, and
+  six at once only after a quiet minute. See [`rate_limit`](book/src/reference/configuration.md#rate_limit-the-token-bucket).
 
 Approve it with `iron-vault config approve dev-config.toml`. The summary lists the new callers and routes, and the
 config becomes version 3.
@@ -582,7 +584,8 @@ You can verify that only the `dev` account can make this call:
 curl -si -H "$CHAT" http://127.0.0.1:7878/venice-chat/models
 # chat may not use dev's route: its caller isn't granted it
 curl -si -H "$CHAT" http://127.0.0.1:7878/venice-dev/models
-# the rate limit: seven simultaneous chat requests (with &). The last should return immediately with 429
+# the rate limit: seven simultaneous chat requests (with &), sent right after an approval or unlock.
+# The bucket starts empty, so each returns 429 at once. Wait a minute and run it again: six get 200, the seventh 429
 for i in 1 2 3 4 5 6 7; do
   curl -s -o /dev/null -w '%{http_code}\n' \
     -H "$CHAT" -H 'Content-Type: application/json' \
@@ -730,7 +733,7 @@ iron-vault config approve dev-config.toml
 The service refuses before asking anything, with `config-invalid` and the reason:
 
 ```text
-route httpbin sends credential httpbin_key to postman-echo.com:443, which its record does not permit
+iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: route httpbin sends credential httpbin_key to an origin its record does not permit
 ```
 
 No version is used up, and the active config doesn't change. Put the upstream back to `https://httpbin.org`.

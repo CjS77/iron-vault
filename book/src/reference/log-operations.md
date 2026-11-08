@@ -10,11 +10,11 @@ The log is JSON Lines: one JSON object per line, UTF-8, in one file, `iron-vault
 record with no `event` field. Every line has `timestamp`, `level`, `target`, `service`, `service_version`,
 `schema_version`, `deployment_profile` and `message` ([Record shape](../../../design/audit-logging.md#record-shape)).
 
-**Implementation status.** The service writes the bootstrap destination, follows a rename by `logrotate` and stops when a
-write fails. The packaged unit (`LogsDirectory=iron-vault`, `LogsDirectoryMode=0750`), the shipped
-`/etc/logrotate.d/iron-vault`, the Docker image and the Compose file are not in the repository yet, and the service does
-not yet switch destination from the approved config's `[logging] destination`. Where this guide describes them, it
-describes what [audit-logging.md](../../../design/audit-logging.md#log-destination) requires them to be.
+**Implementation status.** The service writes the bootstrap destination, switches to the approved config's
+`[logging] destination`, follows a rename by `logrotate` and stops when a write fails. The packaged unit
+(`packaging/linux/iron-vault.service`, with `LogsDirectory=iron-vault` and `LogsDirectoryMode=0750`), the shipped
+`/etc/logrotate.d/iron-vault` (`packaging/linux/logrotate.d/iron-vault`), the Docker image and the Compose file
+(`packaging/compose/`) are in the repository.
 
 ## Location and permissions
 
