@@ -211,9 +211,9 @@ setup_part_one() {
 
 # --- Part 1: checks -----------------------------------------------------------------------------------------------------------
 
-# Replaces every age secret key, and anything after the marker that looks like one, with a placeholder. sed -E: in basic mode {58}
-# would be literal and nothing would be redacted.
-redact_keys() { sed -E "s/$KEY_MARKER[A-Za-z0-9]*/[recovery key]/g"; }
+# Replaces every age secret key, and anything after the marker that looks like one, with a placeholder, and drops the rows of block
+# characters that draw the key as a QR code. sed -E: in basic mode {58} would be literal and nothing would be redacted.
+redact_keys() { sed -E "s/$KEY_MARKER[A-Za-z0-9]*/[recovery key]/g" | { grep -avE '█|▀|▄' || true; }; }
 
 # `init --host-unlock` shows the recovery key on the controlling terminal only; script(1) gives it a pty. The transcript is on the
 # ramfs, and the key goes to a file there for the recovery check.
@@ -354,14 +354,19 @@ scanner_finds_a_planted_key() {
     [ "$(wc -l <<<"$stream")" -eq 1 ] && [ -n "$stream" ] && [ -n "$tree" ]
 }
 
+# Prints stdin with "$1: " in front of every line.
+prefix_lines() { local line; while IFS= read -r line; do printf '%s: %s\n' "$1" "$line"; done; }
+
 # Runs the command $2... and scans its output for stray keys. A command that fails scanned nothing, which is a failure, not a pass.
 scan_command() {
     local label=$1 rc out
     shift
+    rm -f "$WORK/scan.rc"
     out=$({ "$@"; echo $? >"$WORK/scan.rc"; } | stream_strays)
-    rc=$(cat "$WORK/scan.rc")
+    rc=$(cat "$WORK/scan.rc" 2>/dev/null)
     [ "$rc" = 0 ] || { echo "$label: the command exited $rc, so nothing was scanned"; return 1; }
-    [ -z "$out" ] || { sed "s/^/$label: /" <<<"$out"; return 1; }
+    # Not sed: a label such as a swap device path holds a slash.
+    [ -z "$out" ] || { prefix_lines "$label" <<<"$out"; return 1; }
 }
 
 service_environment() { tr '\0' '\n' <"/proc/$1/environ"; }
@@ -419,18 +424,20 @@ no_key_in_swap() {
 
 # Local addresses of the listeners in the service container's network namespace, read with the host's ss. Docker's embedded DNS
 # listens on 127.0.0.11 at a random port, TCP and UDP, in the namespace of every container on a user-defined network; it is
-# dockerd's, not the service's, so it is left out.
+# dockerd's, not the service's, so it is left out. A UDP listener counts like a TCP one: a datagram service could be an oracle too.
 container_listeners() {
     nsenter -t "$1" -n ss "$2" -lnH | awk -v col="$3" '$col !~ /^127\.0\.0\.11:/ { print $col }' | sort -u
 }
 
 only_the_expected_listeners() {
-    local pid tcp unix host_tcp host_unix bad=0
+    local pid tcp udp unix host_tcp host_udp host_unix bad=0
     pid=$(service_pid)
     require_pid "$pid" || return 1
     tcp=$(container_listeners "$pid" -t 4)
+    udp=$(container_listeners "$pid" -u 4)
     unix=$(container_listeners "$pid" -x 5)
     [ "$tcp" = "$(printf '%s\n' "$LISTENER_A:8443" "$LISTENER_B:8443" | sort)" ] || { echo "container TCP listeners: $tcp"; bad=1; }
+    [ -z "$udp" ] || { echo "container UDP listeners: $udp"; bad=1; }
     [ "$unix" = "$RUN_DIR/admin.sock" ] || { echo "container unix listeners: $unix"; bad=1; }
     # The positive control: a working ss lists at least systemd's own unix sockets.
     [ -n "$(ss -lxH)" ] || { echo "ss -lx on the host listed nothing: it is not working"; bad=1; }
@@ -438,6 +445,9 @@ only_the_expected_listeners() {
         '$5 != ok && ($5 ~ /iron-vault|ivcheck/ || $0 ~ /"(iron-vault|systemd-creds|age-keygen)"/)') || { echo "ss -lxp failed"; bad=1; }
     host_tcp=$(ss -ltnpH | awk '$4 ~ /^172\.30\./ || $0 ~ /"(iron-vault|systemd-creds|age-keygen|docker-proxy)"/') \
         || { echo "ss -ltnp failed"; bad=1; }
+    host_udp=$(ss -lunpH | awk '$4 ~ /^172\.30\./ || $0 ~ /"(iron-vault|systemd-creds|age-keygen|docker-proxy)"/') \
+        || { echo "ss -lunp failed"; bad=1; }
+    [ -z "$host_udp" ] || { echo "host UDP listeners of ours: $host_udp"; bad=1; }
     [ -z "$host_unix" ] || { echo "host unix listeners of ours: $host_unix"; bad=1; }
     [ -z "$host_tcp" ] || { echo "host TCP listeners of ours: $host_tcp"; bad=1; }
     return $bad
