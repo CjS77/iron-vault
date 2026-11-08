@@ -33,8 +33,9 @@ Done in v0:
 - **Credential commands:** `add`, `replace`, `rm` and `list`; `replace` and `rm` need the approval passphrase.
 - **Response scrubbing:** removes the credential's known forms from response headers, compressed bodies and streamed
   responses.
-- **Recipients:** `recipient list` shows who can open the vault. `recipient add` needs the vault passphrase and
-  `recipient remove` the approval passphrase; removal protects future copies of `identity.age` only.
+- **Recipients:** `recipient list` shows who can open the vault. `recipient add` needs the vault passphrase;
+  `recipient add --recovery` generates and shows a new recovery key, to rotate the old one. `recipient remove` needs
+  the approval passphrase; removal protects future copies of `identity.age` only.
 - **Recovery key check:** `recovery check` proves the offline recovery key still opens the vault, in Locked or Ready, and
   records when.
 - **Vault passphrase attempt limit:** after 5 wrong vault passphrases, `unlock` and migration authorization share one

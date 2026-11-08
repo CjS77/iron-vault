@@ -255,13 +255,15 @@ List every enrolled recipient, one line each: its `age1...` key, role, enrolment
 ## `iron-vault recipient add`
 
 ```text
-iron-vault recipient add [OPTIONS] --label <LABEL> <RECIPIENT>
+iron-vault recipient add [OPTIONS] --label <LABEL> [RECIPIENT]
 ```
 
 Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not affected.
 
+With --recovery, the service instead generates a new offline recovery key and shows it once, as `init` does; save it, type yes, then authorize with the vault passphrase. Check it with `recovery check`, then remove the old recovery key with `recipient remove`.
+
 - `<RECIPIENT>`: The `age1...` public key to enroll.
-  - required
+- `--recovery`: Generate a new recovery key and enroll it, instead of enrolling a key you supply.
 - `--label <LABEL>`: Which device or copy the key is, 1 to 64 bytes: `alice laptop 2026`.
   - required
 

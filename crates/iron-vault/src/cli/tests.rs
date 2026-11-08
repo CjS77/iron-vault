@@ -85,9 +85,26 @@ fn recipient_add_takes_a_key_and_requires_a_label() {
     assert_eq!(
         parse(&["recipient", "add", "age1abc", "--label", "alice laptop"]).unwrap().command,
         Command::Recipient(RecipientCommand::Add {
-            recipient: "age1abc".to_owned(),
+            recipient: Some("age1abc".to_owned()),
+            recovery: false,
             label: "alice laptop".to_owned()
         })
+    );
+    assert_eq!(
+        parse(&["recipient", "add", "--recovery", "--label", "recovery 2026"])
+            .unwrap()
+            .command,
+        Command::Recipient(RecipientCommand::Add {
+            recipient: None,
+            recovery: true,
+            label: "recovery 2026".to_owned()
+        })
+    );
+    assert_eq!(
+        parse(&["recipient", "add", "age1abc", "--recovery", "--label", "x"])
+            .unwrap_err()
+            .exit_code(),
+        2
     );
     assert_eq!(parse(&["recipient", "add", "age1abc"]).unwrap_err().exit_code(), 2);
     assert_eq!(parse(&["recipient", "add", "--label", "x"]).unwrap_err().exit_code(), 2);

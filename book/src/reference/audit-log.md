@@ -184,7 +184,7 @@ recipient key; `recipient.added` and `recipient.removed` also carry the label, e
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `recipient.added` | INFO | A `recipient add` committed | `recipient`, `recipient_role` (`added`), `recipient_label` (escaped), `recipients` (the count after the change) |
+| `recipient.added` | INFO | A `recipient add` committed | `recipient`, `recipient_role` (`added`, or `recovery` for `recipient add --recovery`), `recipient_label` (escaped), `recipients` (the count after the change) |
 | `recipient.inventory-damaged` | WARN | The inventory check found the recipient inventory missing or damaged, and wrote nothing | `inventory_damage`: `envelope_unreadable`, `missing`, `unreadable`, `mac`, `malformed`, `unknown_role`, `other_vault`, `envelope_mismatch` or `count_mismatch` |
 | `recipient.change-recovered` | WARN | The inventory check finished a committed recipient change or removed a staged inventory | `recovery`: `completed` or `discarded` |
 | `recipient.removed` | INFO | A removal committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` (the count after the removal) |
