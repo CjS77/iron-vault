@@ -56,8 +56,8 @@ impl Handlers {
     }
 
     /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile, then `status`,
-    /// `unlock`, `lock`, `config approve`, `add`, `replace`, `init`, `list`, `rm`, `recovery check` and `recipient list`. A command that acts on the service
-    /// registers here with a clone of `service`.
+    /// `unlock`, `lock`, `config approve`, `add`, `replace`, `init`, `list`, `rm`, `recovery check` and `recipient list`.
+    /// A command that acts on the service registers here with a clone of `service`.
     pub fn for_service<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> Self {
         Self::standard(service.paths().profile)
             .with(AdminCommand::Status, Status(Arc::clone(service)))
