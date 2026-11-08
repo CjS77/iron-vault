@@ -18,6 +18,13 @@ service prompt for it, and the CLI reads the answer in one of two ways:
 `init` is the exception: it shows the recovery key, so it needs a controlling terminal and refuses to run without
 one.
 
+## Options of the Container build
+
+The sections below describe the packaged and development builds. The Container build, made for a Docker Compose stack,
+adds one option, `iron-vault init --host-unlock`, which also enrols the host unlock identity from the unlock handoff as a
+recipient of the new vault. The other builds reject it as an unexpected argument
+([design](../../../design/docker-compose.md#enrollment)).
+
 ## The admin socket
 
 The CLI is a thin client. It opens nothing itself: each command sends one admin request to the service over the

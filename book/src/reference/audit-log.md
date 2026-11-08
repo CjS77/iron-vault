@@ -156,7 +156,7 @@ Each of these also has `remediation`.
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `vault.init-discarded` | WARN | An unfinished initialization was discarded | `files` |
-| `vault.initialized` | INFO | `init`'s last step is durable | `vault_id` |
+| `vault.initialized` | INFO | `init`'s last step is durable | `vault_id`, `recipients` (the enrolled roles' names, such as `operational,recovery`) |
 | `vault.init-failed` | WARN | An `init` step failed | `step`, `error_kind` |
 
 `init` also writes `config.version-reserved` and `config.approval-completed` for version 1.

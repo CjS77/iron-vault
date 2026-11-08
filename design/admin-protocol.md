@@ -115,7 +115,7 @@ an error.
 | `4` | `unlock` | none | none |
 | `5` | `lock` | none | whether every cached secret was confirmed cleared |
 | `6` | `status` | none | the [status report](#status) |
-| `7` | `init` | none | the vault ID and the committed version |
+| `7` | `init` | the [host unlock flag](#init) | the vault ID, the committed version and the recipient roles enrolled |
 | `8` | `add` | the credential name, kind and permitted origins | the [record ID](#add) |
 | `9` | `list` | none | the [credential list](#list) |
 | `10` | `replace` | the credential name, kind and permitted origins, as `add` | the new [record ID](#replace) |
@@ -406,9 +406,15 @@ Creates the vault, its two recovery paths and its first committed approval (spec
 [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration),
 [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory),
 [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). The design, including what a crash
-part-way through leaves and what a re-run does with it, is [vault-initialization.md](vault-initialization.md). It takes
-no arguments. It is allowed only while the service is Locked; in any other state the exchange ends with `wrong-state`
-before any prompt. It leaves the service Locked.
+part-way through leaves and what a re-run does with it, is [vault-initialization.md](vault-initialization.md). It is
+allowed only while the service is Locked; in any other state the exchange ends with `wrong-state` before any prompt. It
+leaves the service Locked.
+
+The request's one argument:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | host unlock | flag, exactly 1 byte: `1` to also enrol the host unlock identity from the [unlock handoff](docker-compose.md#enrollment) as a third recipient, else `0`. The CLI sends `1` only for `init --host-unlock`, which only a `container` build accepts, and a service whose profile is not Container refuses it |
 
 The exchange, after the request:
 
@@ -417,7 +423,9 @@ The exchange, after the request:
    initialization is discarded once the new recovery key is confirmed, and that a run another init is still writing is
    never discarded: this init then ends with `busy` or `already-initialized`
    ([vault-initialization.md](vault-initialization.md#the-exchange), step 1). (The CLI has already checked for a
-   controlling terminal, and never sends the request without one; see [the CLI's `init`](#init-1).)
+   controlling terminal, and never sends the request without one; see [the CLI's `init`](#init-1).) With the host
+   unlock flag, the service then reads the unlock handoff, and an absent or refused handoff ends the exchange with
+   `init-failed` before any prompt, naming the reason and nothing of the file's bytes.
 2. **Passphrases.** Four prompts, all secret: `Vault passphrase`, `Repeat the vault passphrase`, `Approval passphrase`,
    `Repeat the approval passphrase`. A value that breaks a
    [passphrase rule](vault-initialization.md#passphrase-rules) ends the exchange with `passphrase-rejected`, whose
@@ -448,6 +456,7 @@ The success result:
 |---|---|---|
 | 2 | vault ID | byte value, exactly 16 bytes: the new vault's ID |
 | 3 | committed version | `u64`: always `1` |
+| 4 | recipients | byte value, one byte per recipient the identity envelope was wrapped for: its [role code](recipients.md#recipient-roles), in the order `operational`, `recovery`, then `host-unlock` when enrolled. Kinds only, never a key |
 
 Errors specific to `init`:
 
@@ -458,7 +467,7 @@ Errors specific to `init`:
 | `wrong-state` | the service is not Locked: at the request, before any prompt, or at the re-check under the lock after the reveal, when the message also says the recovery key shown opens nothing and is to be discarded |
 | `passphrase-rejected` | a passphrase broke a rule; the message names the rule |
 | `declined` | the owner did not answer the recovery key confirmation with `yes`; the message says the recovery key shown opens nothing and is to be discarded |
-| `init-failed` | a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: a start-over means the key is dead, and `already-initialized` with a vault that is Initialized means a vault stands, which the owner confirms with `iron-vault recovery check` before relying on the key, because a concurrent init may have finished first. A failure of the discard of an unfinished initialization names `discard` as its step |
+| `init-failed` | the host unlock flag was set and the service has no host unlock identity to enrol: its profile is not Container, the handoff is absent, or it was refused (untrusted path, too long, not an `age` secret key, unreadable). Raised before any prompt, so the message says nothing was written. Otherwise a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: a start-over means the key is dead, and `already-initialized` with a vault that is Initialized means a vault stands, which the owner confirms with `iron-vault recovery check` before relying on the key, because a concurrent init may have finished first. A failure of the discard of an unfinished initialization names `discard` as its step |
 
 #### recovery check
 
@@ -886,7 +895,8 @@ redacted reason, and exits with code 1.
 
 ### init
 
-`iron-vault init` takes no argument: the passphrases are answers to the service's secret prompts, read as for any
+`iron-vault init` takes one option, `--host-unlock`, which only a `container` build accepts (any other build's parser
+reports an unexpected argument) and which sets the request's host unlock flag. The passphrases are answers to the service's secret prompts, read as for any
 prompt, and the recovery key arrives in a reveal. Before it sends the request it checks that it can open `/dev/tty`,
 and without a controlling terminal it reports that on stderr and exits with code 3, so the service never generates a
 key for a CLI that will refuse to show it. If the command ends after the reveal without a service answer (Ctrl-C, a
@@ -901,9 +911,9 @@ with the key, because the service cannot say so over a closed connection; after 
   necessarily the one this key opens: a concurrent init may have finished first. The owner confirms the key with
   [`iron-vault recovery check`](#recovery-check-1), which needs no unlock, before relying on it.
 
-On success it prints `initialized vault <vault ID>: approval version 1 committed` and `run iron-vault unlock to start
-serving` to stdout; the recovery key never goes there. Otherwise it prints the service's error to stderr and exits
-with code 1.
+On success it prints `initialized vault <vault ID>: approval version 1 committed`, `recipients: <role names>` (such as
+`operational, recovery, host-unlock`; kinds, never keys) and `run iron-vault unlock to start serving` to stdout; the
+recovery key never goes there. Otherwise it prints the service's error to stderr and exits with code 1.
 
 ### caller-token
 

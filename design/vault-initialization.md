@@ -138,13 +138,19 @@ After the admin request, in order:
    discarded, and any recovery key it showed opens nothing. A run still writing holds the service-wide lock, so it is
    never discarded: this init then writes nothing and ends with `busy`, or with `already-initialized` once that run
    has finished.
+
+   With `--host-unlock` (a container build only), the service then reads the
+   [unlock handoff](docker-compose.md#enrollment) as Starting does, and a service whose profile is not Container, an
+   absent handoff or a refused one ends with `init-failed` before any prompt, naming the reason and nothing of the
+   file's bytes. Nothing is written.
 2. **Passphrases.** Four prompts, all secret: `Vault passphrase`, `Repeat the vault passphrase`,
    `Approval passphrase`, `Repeat the approval passphrase`. The [rules](#passphrase-rules) are checked once both
    entries of a passphrase are in; a broken rule ends with `passphrase-rejected`. There is no second try in the same
    exchange.
 3. **Keys.** The service generates every key: the vault identity (`VaultIdentity::generate`), the vault ID (`VaultId::new_random`), the operational
    identity (`OperationalIdentity::generate`), the recovery key (`RecoveryKey::generate`) and the software signer
-   key (`SoftwareSigner::generate`, which also returns the pinned approver).
+   key (`SoftwareSigner::generate`, which also returns the pinned approver). With `--host-unlock`, the host unlock
+   identity read in step 1 is the vault's third recipient.
 4. **Recovery key.** The [presentation](#recovery-key-presentation): a notice, the reveal frame, then the prompt
    `Type yes once you have saved the recovery key`. Any answer but exactly `yes` ends with `declined`.
 5. **Writes.** The service tries the service-wide lock and fails at once with `busy` if it is taken; it never waits.
@@ -275,7 +281,7 @@ store function built on it, so each is whole or absent after a crash.
 | Step | What the service does | Durable change |
 |---|---|---|
 | 1 | Writes the empty file `init.unfinished` in the state directory. From here on the state directory reads Unfinished until step 9. | `init.unfinished` |
-| 2 | Wraps the vault identity for the recipient set {operational recipient key, recovery recipient key} with `wrap_identity` and writes it. Then reads `identity.age` back and unwraps it with `unwrap_identity` twice, once with the operational identity and once with the recovery key's identity, and requires both to give the generated vault identity (same public key). Then writes the [recipient inventory](recipients.md#initialization) with `write_recipient_inventory`: the `operational` and `recovery` entries, labelled `vault passphrase` and `recovery key`, the init time, the vault ID generated with the keys and the digest of the envelope as read back. Reads it back and requires that it opens with the vault identity and equals what was written. The recovery identity is dropped. | `identity.age`, then `recipients.age` |
+| 2 | Wraps the vault identity for the recipient set {operational recipient key, recovery recipient key}, plus the host unlock recipient key with `--host-unlock`, with `wrap_identity` and writes it. Then reads `identity.age` back and unwraps it with `unwrap_identity` once with each identity, and requires every one to give the generated vault identity (same public key). Then writes the [recipient inventory](recipients.md#initialization) with `write_recipient_inventory`: the `operational` and `recovery` entries, labelled `vault passphrase` and `recovery key`, and with `--host-unlock` a `host-unlock` entry labelled `host unlock`, the init time, the vault ID generated with the keys and the digest of the envelope as read back. Reads it back and requires that it opens with the vault identity and equals what was written. The recovery and host unlock identities are dropped. | `identity.age`, then `recipients.age` |
 | 3 | Seals the operational identity to the vault passphrase with `seal_passphrase_envelope` and writes it. The operational identity is dropped. | `operational.age` |
 | 4 | Seals the software signer key to the approval passphrase with `seal_signer_key` and writes it with `write_signer_key`. The signer key is dropped. | `approver.age` |
 | 5 | Creates the vault with `Vault::create_with_id`, using the vault ID generated with the keys in step 3, and an empty manifest at state generation 1. | `manifest.age` |
@@ -287,8 +293,9 @@ store function built on it, so each is whole or absent after a crash.
 Notes on the steps:
 
 - **Step 2's check** comes before anything else depends on the envelope, so a bad envelope is caught while the
-  recovery key the owner just saved still means nothing. Both recipient paths are proved, not only the one `unlock`
-  will use.
+  recovery key the owner just saved still means nothing. Every recipient path is proved, not only the one `unlock`
+  will use. The recovery key stays a separate recipient from the host unlock identity, so losing the host's TPM never
+  loses the vault.
 - **Step 5** consumes the `VaultIdentity`. Step 8's `ApprovalStorage` needs a borrow of it, so the store lends it from
   the `Vault` (a crate-level accessor), or `Vault::create` hands it back beside the vault. That is a store change the
   code ticket makes.
@@ -406,7 +413,7 @@ field names and types, and the record shape they share. The binary emits them fr
 | `vault.init-discarded` | WARN | an unfinished initialization was discarded | the file names removed |
 | `config.version-reserved` | INFO | step 8's reservation of version 1 is durable | version, config digest |
 | `config.approval-completed` | INFO | step 8's commit of version 1 is durable | version, config digest; the summary field reads `initial config` |
-| `vault.initialized` | INFO | step 9 is durable | the vault ID only |
+| `vault.initialized` | INFO | step 9 is durable | the vault ID and the recipient roles enrolled (`operational,recovery`, plus `host-unlock` with `--host-unlock`) |
 | `vault.init-failed` | WARN | a step failed | the step and the error's fixed kind label, never a path or file contents |
 | `vault.foreign-file` | WARN | `unlock` read an Initialized state directory holding a file not on the [lists](#initialization-state) | the file's name |
 

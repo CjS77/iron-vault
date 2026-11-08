@@ -701,7 +701,7 @@ Each corruption event also carries `remediation`, a fixed phrase the service hol
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `vault.init-discarded` | WARN | an unfinished initialization was discarded | `files` |
-| `vault.initialized` | INFO | init's last step is durable | `vault_id` |
+| `vault.initialized` | INFO | init's last step is durable | `vault_id`, `recipients`: the enrolled roles' names, comma-separated (kinds, never keys) |
 | `vault.init-failed` | WARN | an init step failed | `step`, `error_kind` |
 
 Init's version 1 also records `config.version-reserved` and `config.approval-completed`, so it is audited like any
