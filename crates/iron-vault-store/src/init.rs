@@ -348,9 +348,21 @@ fn write_checked_identity(
             false => Err(InitFailure::IdentityMismatch),
         }
     })?;
+    write_checked_inventory(state, fs, (vault, vault_id, &envelope), (operational, &recovery), enrolled_at)
+}
+
+/// The recipient inventory for the two keys, written and read back, so `recipients.age` exists from the moment the vault
+/// does.
+fn write_checked_inventory(
+    state: &StateDirLock,
+    fs: &impl StoreFs,
+    (vault, vault_id, envelope): (&VaultIdentity, VaultId, &[u8]),
+    (operational, recovery): (&RecipientIdentity, &RecipientIdentity),
+    enrolled_at: UtcSecond,
+) -> Result<(), InitFailure> {
     let entries = [
         (operational, RecipientRole::Operational, "vault passphrase"),
-        (&recovery, RecipientRole::Recovery, "recovery key"),
+        (recovery, RecipientRole::Recovery, "recovery key"),
     ]
     .map(|(identity, role, label)| {
         Ok(RecipientEntry::new(
@@ -361,7 +373,8 @@ fn write_checked_identity(
         ))
     });
     let entries = entries.into_iter().collect::<Result<Vec<_>, InitFailure>>()?;
-    let inventory = RecipientInventory::new(vault_id, envelope_digest(&envelope), entries)?;
+    let recipients = RecipientSet::new([operational.recipient_key(), recovery.recipient_key()])?;
+    let inventory = RecipientInventory::new(vault_id, envelope_digest(envelope), entries)?;
     write_recipient_inventory(state, fs, vault, &inventory)?;
     let read_back = read_recipient_inventory(state, fs, vault)?;
     match read_back == inventory && read_back.recipient_set() == recipients {

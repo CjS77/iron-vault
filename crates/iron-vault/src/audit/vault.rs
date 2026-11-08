@@ -2,7 +2,8 @@
 //! (`design/audit-logging.md`, "Credentials and vault writes" and "Initialization").
 
 use iron_vault_store::{
-    ApprovalStateError, ErrorKindLabel, InitFailure, InitStep, StateFileName, UnlockError, VaultError, VaultId, WriteError,
+    ApprovalStateError, ErrorKindLabel, InitFailure, InitStep, RecipientInventoryWriteError, StateFileName, UnlockError, VaultError,
+    VaultId, WriteError,
 };
 
 use super::{AUDIT_TARGET, AuditEvent, EventName, memory_label};
@@ -298,7 +299,7 @@ const fn init_failure_label(failure: &InitFailure) -> &'static str {
         InitFailure::State(_) => "init_state",
         InitFailure::Recipients(_) => "recipients",
         InitFailure::Envelope(_) => "envelope",
-        InitFailure::Write(_) => "state_write",
+        InitFailure::Write(_) | InitFailure::InventoryWrite(RecipientInventoryWriteError::Write(_)) => "state_write",
         InitFailure::Read(_) => "state_read",
         InitFailure::IdentityMismatch => "identity_mismatch",
         InitFailure::Inventory(_) | InitFailure::InventoryWrite(_) | InitFailure::InventoryRead(_) | InitFailure::InventoryLabel(_) => {

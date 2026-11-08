@@ -3,7 +3,8 @@
 use iron_vault_kinds::SecretField;
 use iron_vault_policy::{CredentialKind, CredentialName, Host, Port, RouteName};
 use iron_vault_store::{
-    DamagedRecord, ErrorKindLabel, InitFailure, InitStep, RecordDamage, RecordId, SharedStateDamage, StateFileName, UnlockError, VaultId,
+    DamagedRecord, ErrorKindLabel, InitFailure, InitStep, RecordDamage, RecordId, SealError, SharedStateDamage, StateFileName, UnlockError,
+    VaultId, WriteError,
 };
 
 use super::admin::*;
@@ -49,6 +50,33 @@ fn initialization_events_carry_ids_step_labels_and_kinds_only() {
         (Some("3"), Some("identity_mismatch"))
     );
     record_of(InitFailed::TaskEnded, "WARN", &[]);
+}
+
+/// A disk failure writing `recipients.age` is labelled like every other init write failure; the rest of the inventory
+/// keeps its own labels.
+#[test]
+fn an_inventory_write_failure_is_a_state_write() {
+    let label = |cause: InitFailure| {
+        let failed = InitFailed::Step {
+            step: InitStep::IdentityEnvelope,
+            cause: &cause,
+        };
+        record_of(failed, "WARN", &["step", "error_kind"])["error_kind"]
+            .as_str()
+            .map(str::to_owned)
+    };
+    let disk = WriteError::ListStateDir {
+        kind: std::io::ErrorKind::Other,
+    };
+    assert_eq!(label(InitFailure::InventoryWrite(disk.into())).as_deref(), Some("state_write"));
+    assert_eq!(
+        label(InitFailure::InventoryWrite(SealError::Encryption.into())).as_deref(),
+        Some("recipient_inventory")
+    );
+    assert_eq!(
+        label(InitFailure::InventoryMismatch).as_deref(),
+        Some("recipient_inventory_mismatch")
+    );
 }
 
 #[test]
