@@ -122,6 +122,9 @@ the rest: reading the audit log, changing routes and callers, scrubbing and redi
 go, replacing and removing keys, locking, and tamper detection. It needs Linux, a Rust toolchain, `curl` and `jq`. The
 Venice parts also need two Venice API keys.
 
+Steps 1 to 8 are also in the cookbook recipe [Getting started in development mode](book/src/cookbook/getting-started.md),
+and step 9 in [Two keys, two callers](book/src/cookbook/two-callers.md).
+
 ### 1. Build and install
 
 ```sh
@@ -584,8 +587,9 @@ You can verify that only the `dev` account can make this call:
 curl -si -H "$CHAT" http://127.0.0.1:7878/venice-chat/models
 # chat may not use dev's route: its caller isn't granted it
 curl -si -H "$CHAT" http://127.0.0.1:7878/venice-dev/models
-# the rate limit: seven simultaneous chat requests (with &), sent right after an approval or unlock.
-# The bucket starts empty, so each returns 429 at once. Wait a minute and run it again: six get 200, the seventh 429
+# the rate limit: the bucket starts empty when the approval makes the service Ready and holds 6 requests
+# (burst) after 60 s, so sleep a minute, then send seven requests at once: six are forwarded, the seventh gets 429
+sleep 60
 for i in 1 2 3 4 5 6 7; do
   curl -s -o /dev/null -w '%{http_code}\n' \
     -H "$CHAT" -H 'Content-Type: application/json' \
