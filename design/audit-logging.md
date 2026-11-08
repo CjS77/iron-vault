@@ -722,7 +722,8 @@ other approval.
 | `recovery.checked` | INFO when opened, WARN otherwise | `recovery check` ended with `invalid` at its prompt, or with any other outcome after the key parsed and the lock was taken; `busy` and the re-check's `wrong-state` and `recovery-check-unavailable` record only `admin.command` | `recovery_outcome`; for `opened`, `vault_id` and `recorded`, with `error_kind` when not recorded; for `failed`, `recovery_failure`; for `unavailable`, `file` and `error_kind` |
 | `recovery.reminder` | INFO | a reminder evaluation found a recovery reminder due | `recovery_record`; `last_checked` when `checked`; `reminders_since` when `never_checked`; `error_kind` when `unusable`; `reminder_days`; `remediation` |
 
-**Recipients** ([recipients.md](recipients.md#audit-events) gives the whole family; the inventory check writes these two):
+**Recipients** ([recipients.md](recipients.md#audit-events) gives the whole family; the inventory check writes
+these two):
 
 | Event | Level | When | Fields |
 |---|---|---|---|
@@ -828,9 +829,9 @@ follows the [library error](#library-errors) rule:
 
 An event name is `<subject>.<name>`: a lowercase subject (`admin`, `caller`, `config`, `credential`, `migration`,
 `owner`, `recipient`, `recovery`, `request`, `response`, `route`, `service`, `vault`), a dot, and a kebab-case name,
-matching `^[a-z]+\.[a-z]+(-[a-z]+)*$`. Event names keep the kebab-case already in use in the code and the design docs; only
-field names and label values are snake_case. Names are stable: renaming or removing one changes the schema version.
-Each name is defined once, as an `audit::EventName` constant beside its struct.
+matching `^[a-z]+\.[a-z]+(-[a-z]+)*$`. Event names keep the kebab-case already in use in the code and the design
+docs; only field names and label values are snake_case. Names are stable: renaming or removing one changes the schema
+version. Each name is defined once, as an `audit::EventName` constant beside its struct.
 
 ## Log destination
 
