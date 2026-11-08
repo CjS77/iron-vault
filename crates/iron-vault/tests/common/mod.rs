@@ -20,6 +20,8 @@ pub mod mock_upstream_h2;
 #[cfg(target_os = "linux")]
 pub mod proxy_harness;
 #[cfg(target_os = "linux")]
+pub mod recipient_harness;
+#[cfg(target_os = "linux")]
 pub mod request_log;
 #[cfg(target_os = "linux")]
 pub mod scrub_stream;
