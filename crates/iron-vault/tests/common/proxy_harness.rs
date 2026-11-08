@@ -192,6 +192,27 @@ pub fn next_free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
+/// A loopback port that refuses every connection for as long as this value lives: a TCP socket is bound to it but never
+/// listens, so the kernel answers a connect with a reset. Unlike a port from [`next_free_port`], no other socket can be
+/// given it in the meantime, neither a listener in another test process nor the ephemeral end of an outgoing
+/// connection, so a request to it always fails at connect. The socket does not set `SO_REUSEADDR`, which a second
+/// socket would need on both sides to share the port.
+pub struct RefusingPort(tokio::net::TcpSocket);
+
+impl RefusingPort {
+    /// Binds a fresh loopback port without listening on it.
+    pub fn bind() -> Self {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        Self(socket)
+    }
+
+    /// The refused port.
+    pub fn port(&self) -> u16 {
+        self.0.local_addr().unwrap().port()
+    }
+}
+
 /// The transport a caller connects over, which decides how its token travels.
 #[derive(Clone, Copy, Debug)]
 pub enum Via {

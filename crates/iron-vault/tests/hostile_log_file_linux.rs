@@ -34,7 +34,7 @@ use common::approval_harness::{
 };
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::mock_upstream_h2::{H2Reply, MockH2Upstream};
-use common::proxy_harness::{CallerRequest, Credential, Proxy, Setup, TOKEN_BYTES, TempDir, Via, next_free_port, token_hash, token_of};
+use common::proxy_harness::{CallerRequest, Credential, Proxy, RefusingPort, Setup, TOKEN_BYTES, TempDir, Via, token_hash, token_of};
 use common::scrub_stream::url_forms;
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, Frame, OwnerInput};
 use iron_vault::config_check::UpstreamSettings;
@@ -395,17 +395,17 @@ impl Redirects {
 }
 
 /// Starts the three redirecting upstreams, then the three echoing upstreams and the one that fails mid-body, in
-/// `protocol`; the fifth port has no listener.
-async fn start_upstreams(ca: &TestCa, protocol: Upstream) -> ((Upstreams, Redirects), Ports) {
+/// `protocol`; the fifth port refuses connections, and is held for the run so that nothing else can take it.
+async fn start_upstreams(ca: &TestCa, protocol: Upstream) -> ((Upstreams, Redirects, RefusingPort), Ports) {
     let redirects = Redirects::start(ca).await;
-    let (upstreams, ports) = start_protocol_upstreams(ca, protocol, &redirects).await;
-    ((upstreams, redirects), ports)
+    let dead = RefusingPort::bind();
+    let (upstreams, ports) = start_protocol_upstreams(ca, protocol, &redirects, dead.port()).await;
+    ((upstreams, redirects, dead), ports)
 }
 
-/// The upstreams of [`start_upstreams`] that speak `protocol`, and every port of the run.
-async fn start_protocol_upstreams(ca: &TestCa, protocol: Upstream, redirects: &Redirects) -> (Upstreams, Ports) {
+/// The upstreams of [`start_upstreams`] that speak `protocol`, and every port of the run, with `dead` as the fifth.
+async fn start_protocol_upstreams(ca: &TestCa, protocol: Upstream, redirects: &Redirects, dead: u16) -> (Upstreams, Ports) {
     let echoes = [HEADER_KEY, QUERY_KEY, BASIC_PASSWORD].map(echo_of);
-    let dead = next_free_port();
     let [moved, astray, rewrite] = redirects.0.each_ref().map(MockUpstream::port);
     match protocol {
         Upstream::Http1 => {
