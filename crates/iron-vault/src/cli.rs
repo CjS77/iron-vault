@@ -24,6 +24,7 @@ mod init;
 mod list;
 #[cfg(target_os = "linux")]
 mod recipient_add_recovery;
+#[cfg(target_os = "linux")]
 mod recipient_list;
 // Generates the book's command reference; test-only, so the release binary carries none of it.
 #[cfg(test)]

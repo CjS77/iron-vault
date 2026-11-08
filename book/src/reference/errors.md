@@ -105,6 +105,7 @@ These can happen on any command.
 
 | Code | Name | Meaning | What to do |
 |---|---|---|---|
+| `8` | `declined` | `recipient add --recovery`: you did not type `yes` when asked to confirm you saved the new recovery key. Nothing was changed, and the key shown opens nothing. | Discard the key shown, and run the command again when you are ready to store a new one. |
 | `35` | `recipient-invalid` | The key is not an `age1...` X25519 recipient key, or (for `recipient add`) the label breaks its rule. The message names the rule. | Copy the key from `recipient list`, or check the key and the label you typed. |
 | `36` | `recipient-enrolled` | `recipient add`: the key is already enrolled. It was refused before any prompt. Nothing was changed. | Run `recipient list` to see the enrolled keys. |
 | `37` | `unknown-recipient` | `recipient remove`: no enrolled recipient has this key. Nothing was changed. | Run `recipient list` and copy the key from it. |

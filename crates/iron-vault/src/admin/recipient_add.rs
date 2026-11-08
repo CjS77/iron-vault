@@ -21,7 +21,7 @@ use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode};
 use super::recipient_list::{OLD_COPIES, refused as inventory_refused};
 use super::server::{Exchange, ExchangeError};
-use super::{DEAD_RECOVERY_KEY, UNCONFIRMED_ROTATED_KEY};
+use super::{DEAD_RECOVERY_KEY, unconfirmed_rotated_key};
 use crate::migration_authorization::{MigrationOperation, MigrationRefusal};
 use crate::service_context::{AddRefusal, Enrolled, PlanRefusal, RecipientAddPlan, RecipientRefusal, ServiceContext};
 
@@ -81,7 +81,7 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
         };
         match self.service.add_recipient(&session, authorization, plan).await {
             Ok(enrolled) => completed(exchange, &key, RecipientRole::Added, enrolled).await,
-            Err(refusal) => Ok(add_refused(refusal)),
+            Err(refusal) => Ok(add_refused(refusal, UNKNOWN_KEY)),
         }
     }
 
@@ -97,6 +97,8 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
             Ok(session) => session,
             Err(refusal) => return Ok(not_begun(refusal)),
         };
+        // Generated before the inventory check because the plan keeps the identity to prove the new envelope; a refused
+        // check drops it unrevealed, so the order is invisible to the owner.
         let (secret, identity) = RecoveryKey::generate_with_identity();
         let key = identity.recipient_key();
         let plan = match self.service.plan_recovery_add(&session, identity, label).await {
@@ -115,7 +117,7 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
         };
         match self.service.add_recipient(&session, authorization, plan).await {
             Ok(enrolled) => completed(exchange, &key, RecipientRole::Recovery, enrolled).await,
-            Err(refusal) => Ok(revealed_key_advice(refusal)),
+            Err(refusal) => Ok(revealed_key_advice(&key, refusal)),
         }
     }
 }
@@ -136,7 +138,7 @@ fn summary(plan: &RecipientAddPlan) -> String {
     let (title, next) = match entry.role() {
         RecipientRole::Recovery => (
             "add a new recovery key to the vault",
-            "the new recovery key is shown once; save it, then type yes",
+            "next: the new recovery key is shown once; save it, then type yes",
         ),
         _ => (
             "add a recipient to the vault",
@@ -144,18 +146,13 @@ fn summary(plan: &RecipientAddPlan) -> String {
         ),
     };
     format!(
-        "{title}\n  vault: {}\n  recipient: {}\n  role: {}\n  label: {}\n  recipients after the change: {}\n  {}\n  \
+        "{title}\n  vault: {}\n  recipient: {}\n  role: {}\n  label: {}\n  recipients after the change: {}\n  {next}\n  \
          authorize with: the vault passphrase",
         after.vault_id(),
         entry.key(),
         entry.role().name(),
         entry.label(),
         role_counts(after),
-        if entry.role() == RecipientRole::Recovery {
-            format!("next: {next}")
-        } else {
-            next.to_owned()
-        },
     )
 }
 
@@ -216,8 +213,11 @@ fn plan_refused(refusal: PlanRefusal) -> AdminResponse {
     }
 }
 
-fn add_refused(refusal: AddRefusal) -> AdminResponse {
-    let unknown = "the change may have committed: run `iron-vault recipient list` to see whether the key is enrolled";
+/// What an uncommitted-or-not `recipient add <age1…>` tells the owner when the write may have committed.
+const UNKNOWN_KEY: &str = "the change may have committed: run `iron-vault recipient list` to see whether the key is enrolled";
+
+/// The response for a failed step 9 or 10; `unknown` is the advice for an outcome that may have committed.
+fn add_refused(refusal: AddRefusal, unknown: &str) -> AdminResponse {
     match refusal {
         AddRefusal::WrongState(state) => inventory_refused(COMMAND, RecipientRefusal::WrongState(state)),
         AddRefusal::Unauthorized(refusal) => no_authorization(COMMAND, NoAuthorization(refusal)),
@@ -239,16 +239,17 @@ fn key_dead(response: AdminResponse) -> AdminResponse {
     with_advice(response, DEAD_RECOVERY_KEY)
 }
 
-/// A failed step 9 or 10 after the reveal: the key is dead unless the rewrap may have committed.
-fn revealed_key_advice(refusal: AddRefusal) -> AdminResponse {
+/// A failed step 9 or 10 after the reveal: the key is dead unless the rewrap may have committed, in which case the one
+/// piece of advice names the key to look for.
+fn revealed_key_advice(key: &RecipientKey, refusal: AddRefusal) -> AdminResponse {
     let may_have_committed = match &refusal {
         AddRefusal::Interrupted => true,
         AddRefusal::Failed(RecipientChangeError::Write(write)) => write.committed() != ChangeCommitted::No,
         _ => false,
     };
-    let response = add_refused(refusal);
+    let response = add_refused(refusal, &unconfirmed_rotated_key(key));
     match may_have_committed {
-        true => with_advice(response, UNCONFIRMED_ROTATED_KEY),
+        true => response,
         false => key_dead(response),
     }
 }

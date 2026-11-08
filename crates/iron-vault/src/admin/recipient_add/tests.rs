@@ -57,19 +57,20 @@ fn a_step_3_refusal_outside_ready_or_with_a_damaged_inventory_uses_the_shared_co
 
 #[test]
 fn a_failed_rewrap_says_whether_it_may_have_committed() {
-    let (code, message) = answer(add_refused(AddRefusal::Failed(RecipientChangeError::Wrap(
-        EnvelopeError::Encryption,
-    ))));
+    let (code, message) = answer(add_refused(
+        AddRefusal::Failed(RecipientChangeError::Wrap(EnvelopeError::Encryption)),
+        UNKNOWN_KEY,
+    ));
     assert_eq!(code, ErrorCode::VaultWriteFailed);
     assert!(message.ends_with("nothing was changed"), "{message}");
-    let (code, message) = answer(add_refused(AddRefusal::Interrupted));
+    let (code, message) = answer(add_refused(AddRefusal::Interrupted, UNKNOWN_KEY));
     assert_eq!(code, ErrorCode::VaultWriteFailed);
     assert!(
         message.contains("may have committed") && message.contains("recipient list"),
         "{message}"
     );
     assert_eq!(
-        answer(add_refused(AddRefusal::WrongState(ServiceState::Locked))).0,
+        answer(add_refused(AddRefusal::WrongState(ServiceState::Locked), UNKNOWN_KEY)).0,
         ErrorCode::WrongState
     );
 }
@@ -80,4 +81,38 @@ fn a_service_that_is_not_ready_is_wrong_state_even_when_locked() {
     assert_eq!(code, ErrorCode::WrongState);
     assert!(message.contains("`recipient add`") && message.contains("Locked"), "{message}");
     assert_eq!(answer(not_begun(MigrationRefusal::Unavailable)).0, ErrorCode::MigrationUnavailable);
+}
+
+const NEW_KEY: &str = "age1csc5wgcsw68jdz8uxh9sramjkys02nk8qf740lpywzvlzm9pjf7qxffk4e";
+
+fn rotated(refusal: AddRefusal) -> String {
+    answer(revealed_key_advice(&NEW_KEY.parse().unwrap(), refusal)).1
+}
+
+#[test]
+fn an_uncertain_rotation_names_the_new_key_once() {
+    let message = rotated(AddRefusal::Interrupted);
+    assert!(message.ends_with(&unconfirmed_rotated_key(&NEW_KEY)), "{message}");
+    assert_eq!(message.matches("recipient list").count(), 1, "{message}");
+    assert!(!message.contains(DEAD_RECOVERY_KEY));
+}
+
+#[test]
+fn a_rotation_that_enrolled_nothing_calls_the_key_dead() {
+    let refusals = [
+        AddRefusal::Failed(RecipientChangeError::Wrap(EnvelopeError::Encryption)),
+        AddRefusal::Unauthorized(MigrationRefusal::Unavailable),
+        AddRefusal::WrongState(ServiceState::Locked),
+    ];
+    refusals.into_iter().for_each(|refusal| {
+        let message = rotated(refusal);
+        assert!(message.ends_with(DEAD_RECOVERY_KEY), "{message}");
+    });
+}
+
+#[test]
+fn advice_is_added_to_errors_only() {
+    let kept = with_advice(AdminResponse::Success, "x");
+    assert!(matches!(kept, AdminResponse::Success));
+    assert_eq!(answer(with_advice(error(ErrorCode::Declined, "no".to_owned()), "x")).1, "no; x");
 }
