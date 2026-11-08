@@ -28,9 +28,10 @@ pub const DEFAULT_TOKEN_HEADER: &str = "proxy-authorization";
 /// token_header = "X-Iron-Vault-Token"
 /// ```
 ///
-/// A TCP listener on a non-loopback address must have TLS. That rule needs the listener's name to be reported usefully,
-/// so [`ValidatedConfig`](crate::ValidatedConfig) checks it at load rather than at bind, and an unsafe configuration is
-/// never approved (R-26). Whether the callers on a listener may use `isolated-network` or `peer`
+/// A TCP listener on a non-loopback address must have TLS (R-26), but a `ListenerConfig` does not guarantee it: the rule
+/// needs the listener's name to be reported usefully, so [`ValidatedConfig`](crate::ValidatedConfig) enforces it at
+/// load and an unsafe configuration is never approved. The listeners from [`ParsedConfig::listeners`](crate::ParsedConfig)
+/// are unchecked, and whoever opens one must test [`plain_off_loopback`](Self::plain_off_loopback) first. Whether the callers on a listener may use `isolated-network` or `peer`
 /// authentication depends on every caller section, so [`ValidatedConfig`](crate::ValidatedConfig) checks it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawListener")]
@@ -112,6 +113,18 @@ impl ListenerConfig {
     /// Where the listener accepts connections.
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
+    }
+
+    /// The address of a plain-HTTP TCP listener that is not on loopback, which would carry caller tokens in clear text
+    /// (spec §3.4). `None` for a Unix socket, a TLS listener, or a loopback address.
+    ///
+    /// Loopback is `127.0.0.0/8` or `::1`. An IPv4-mapped address such as `::ffff:127.0.0.1` is deliberately not loopback:
+    /// whether a dual-stack socket on it stays on the host depends on platform settings this crate cannot see.
+    pub fn plain_off_loopback(&self) -> Option<SocketAddr> {
+        match &self.endpoint {
+            Endpoint::Tcp { address, tls: None } if !address.ip().is_loopback() => Some(*address),
+            _ => None,
+        }
     }
 
     /// The dedicated caller-token header, if the listener sets one instead of using `Proxy-Authorization`.

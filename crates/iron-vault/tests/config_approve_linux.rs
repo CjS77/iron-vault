@@ -219,6 +219,28 @@ async fn an_unknown_credential_is_refused_before_any_prompt() {
 }
 
 #[tokio::test]
+async fn a_plain_http_listener_off_loopback_is_refused_before_any_prompt() {
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    let config = format!("{}\n[listeners.public]\naddress = \"192.0.2.10:8443\"\n", fixture.config("rates"));
+
+    let exchanged = approve(&service, &config, &[]).await;
+
+    match &exchanged.response {
+        AdminResponse::Error {
+            code: ErrorCode::ConfigInvalid,
+            message,
+        } => {
+            assert!(message.contains("listener public"), "{message}");
+            assert!(message.contains("plain HTTP is allowed only on loopback"), "{message}");
+        }
+        other => panic!("expected config-invalid, got {other:?}"),
+    }
+    assert!(exchanged.prompts.is_empty() && exchanged.notices.is_empty());
+    assert_eq!(versions(&service).await, (Some(1), 1));
+}
+
+#[tokio::test]
 async fn an_approval_out_of_an_invalid_policy_makes_the_service_ready() {
     let fixture = Fixture::new().await;
     fs::write(fixture.path("etc/config.toml"), fixture.config("edited")).unwrap();

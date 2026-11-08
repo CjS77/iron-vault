@@ -128,9 +128,9 @@ What to check in a summary:
   `yes` ``.** You typed something other than `yes`. Nothing changed.
 - **`iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: …`.** The service
   refuses before the summary, and uses no version. The message names the problem, such as a caller granted a route the
-  config doesn't define. Some mistakes are reported only by position: a listener moved to `0.0.0.0:7878` without
-  `tls_certificate` and `tls_key` gave `config is invalid at line 3, column 1`. Check the
-  [configuration reference](../reference/configuration.md) for that table.
+  config doesn't define. A listener moved to `192.0.2.10:8443` without `tls_certificate` and `tls_key` gives
+  `the proposed config is invalid: listener public on 192.0.2.10:8443 needs tls_certificate and tls_key: plain HTTP is
+  allowed only on loopback`. Check the [configuration reference](../reference/configuration.md) for that table.
 - **`403` with `path_not_allowed` after widening.** Path patterns match the full path sent upstream, including the
   upstream's base path.
 - **`429` straight after the approval.** The bucket [starts empty](getting-started.md#rate-limits-start-empty).

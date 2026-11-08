@@ -254,6 +254,7 @@ pub(crate) fn parse_detail(error: &ConfigError) -> String {
 }
 
 /// A validation error's message, except for the two that quote config content (an address and a path prefix).
+/// `ListenerNeedsTls` keeps its address: it is re-rendered from a parsed `SocketAddr`, so it holds no config text.
 fn validation_detail(error: &ValidationError) -> String {
     match error {
         ValidationError::UndedicatedAddress { caller, listener, .. } => {

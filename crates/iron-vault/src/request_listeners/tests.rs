@@ -407,6 +407,22 @@ fn inode(path: &Path) -> u64 {
 }
 
 #[tokio::test]
+async fn open_each_refuses_plain_http_off_loopback_and_opens_the_rest() {
+    let dir = RuntimeDir::new();
+    let mut config = unix_listeners(&dir, &[("good", "good.sock", "")]);
+    let public = ParsedConfig::from_toml(b"schema_version = 1\n[listeners.public]\naddress = \"0.0.0.0:7878\"\n").unwrap();
+    config.extend(public.listeners().clone());
+    let (listeners, failures) =
+        RequestListeners::open_each(&config, &dir.paths(DeploymentProfile::Development), &mut PassedSockets::default());
+    assert_eq!(listeners.names().cloned().collect::<Vec<_>>(), [name("good")]);
+    assert!(
+        matches!(failures.as_slice(), [OpenError::PlainOffLoopback { listener, address }]
+            if *listener == name("public") && address.to_string() == "0.0.0.0:7878"),
+        "{failures:?}"
+    );
+}
+
+#[tokio::test]
 async fn open_each_leaves_out_only_the_listener_that_fails() {
     let dir = RuntimeDir::new();
     let config = unix_listeners(&dir, &[("good", "good.sock", ""), ("bad", "missing/bad.sock", "")]);

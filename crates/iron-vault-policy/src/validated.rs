@@ -267,18 +267,16 @@ fn caller_references(config: &ParsedConfig, name: &CallerName, caller: &CallerCo
 
 /// A TCP listener off loopback has TLS (spec §3.4).
 ///
-/// Loopback is `127.0.0.0/8` or `::1`. An IPv4-mapped address such as `::ffff:127.0.0.1` is deliberately not loopback:
-/// whether a dual-stack socket on it stays on the host depends on platform settings this crate cannot see.
+/// See [`ListenerConfig::plain_off_loopback`] for what counts as loopback.
 fn check_listener_tls(config: &ParsedConfig) -> Vec<ValidationError> {
     config
         .listeners()
         .iter()
-        .filter_map(|(name, listener)| match listener.endpoint() {
-            Endpoint::Tcp { address, tls: None } if !address.ip().is_loopback() => Some(ValidationError::ListenerNeedsTls {
+        .filter_map(|(name, listener)| {
+            listener.plain_off_loopback().map(|address| ValidationError::ListenerNeedsTls {
                 listener: name.clone(),
-                address: *address,
-            }),
-            _ => None,
+                address,
+            })
         })
         .collect()
 }

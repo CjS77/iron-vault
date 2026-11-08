@@ -121,6 +121,15 @@ pub enum OpenError {
         /// The underlying error kind.
         kind: io::ErrorKind,
     },
+    /// A plain-HTTP TCP listener is off loopback, so caller tokens would cross the network in clear text. A verified
+    /// config never has one; an unverified published config can.
+    #[error("listener {listener} on {address} is plain HTTP off loopback and was not opened")]
+    PlainOffLoopback {
+        /// The listener.
+        listener: ListenerName,
+        /// Its address.
+        address: SocketAddr,
+    },
     /// A TLS listener's certificate and key did not load; the error names the listener.
     #[error(transparent)]
     Tls(#[from] ListenerTlsError),
@@ -353,7 +362,8 @@ async fn pause(listener: &ListenerName, error: &io::Error) {
 }
 
 /// Opens one listener: the socket systemd passed for it in `passed` if there is one and it passes its checks, otherwise
-/// one the service binds. Its TLS files load first.
+/// one the service binds. Every listener is opened here, so the plain-HTTP-off-loopback rule is enforced here for the
+/// unverified provisional set as well as for verified configs. Its TLS files load first.
 fn open_one(
     name: &ListenerName,
     config: &ListenerConfig,
@@ -362,6 +372,12 @@ fn open_one(
     passed: &mut PassedSockets,
     read: impl Fn(AdminFile, &Path) -> Result<Zeroizing<Vec<u8>>, AdminFileError>,
 ) -> Result<OpenListener, OpenError> {
+    if let Some(address) = config.plain_off_loopback() {
+        return Err(OpenError::PlainOffLoopback {
+            listener: name.clone(),
+            address,
+        });
+    }
     let tls = load_tls(name, config.endpoint(), read)?;
     let (socket, file) = match passed.adopt(name, config.endpoint(), paths.owner) {
         Some(adopted) => (register(name, adopted?)?, None),
