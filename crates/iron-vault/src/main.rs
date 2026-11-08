@@ -97,7 +97,7 @@ fn run_service(_log_to_stdout: bool) -> anyhow::Result<()> {
 }
 
 /// Refuses a development build run as root, and otherwise warns that it gives no isolation from the user's malware.
-#[cfg(feature = "dev-mode")]
+#[cfg(all(feature = "dev-mode", target_os = "linux"))]
 fn warn_development(env: &ProfileEnv, accounts: &Accounts) -> anyhow::Result<()> {
     let uid = env.invoking_uid;
     let user = accounts.name(uid).map_or_else(|| format!("uid {uid}"), str::to_string);

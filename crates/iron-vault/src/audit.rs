@@ -38,6 +38,7 @@ use crate::config_check::{CheckFailure, InvalidConfig};
 use crate::hardening::{CoreDumps, HardeningReport, MEMLOCK_REMEDIATION, MemoryProtection};
 #[cfg(target_os = "linux")]
 use crate::logging::LogDestination;
+#[cfg(target_os = "linux")]
 use crate::service_context::DenialKind;
 use crate::service_state::{ServiceState, UnavailableReason};
 
@@ -54,6 +55,8 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const CONSTANT_FIELDS: [&str; 4] = ["service", "service_version", "schema_version", "deployment_profile"];
 
 /// A length as a `u64` field; a length never exceeds `u64::MAX` on a supported target, so the fallback is unreachable.
+// Every event with a count is emitted by the Linux-only service context, request server or proxy handler.
+#[cfg(target_os = "linux")]
 pub(crate) fn count_of(len: usize) -> u64 {
     u64::try_from(len).unwrap_or(u64::MAX)
 }
@@ -238,6 +241,8 @@ impl AuditEvent for ApprovalCompleted<'_> {
 }
 
 /// `config.approval-refused`: the approval passphrase was wrong or the key is not the pinned approver's; nothing was reserved.
+// Its refusal is the service context's, and only the service context's approval emits it.
+#[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy)]
 pub struct ApprovalRefused {
     /// Which check of the approver key refused.
@@ -246,6 +251,7 @@ pub struct ApprovalRefused {
     pub digest: ConfigDigest,
 }
 
+#[cfg(target_os = "linux")]
 impl AuditEvent for ApprovalRefused {
     const NAME: EventName = EventName("config.approval-refused");
 

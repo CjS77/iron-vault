@@ -52,6 +52,8 @@ pub mod trusted_path_report;
 pub mod unlock_handoff;
 pub mod upstream;
 pub mod vault_change_check;
+// The service context builds the summary from its plan of a change, and the service context is Linux-only.
+#[cfg(target_os = "linux")]
 pub mod vault_change_summary;
 
 #[cfg(test)]

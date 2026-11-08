@@ -216,6 +216,8 @@ impl CheckFailure {
     }
 
     /// The failure of a check whose task ended without a result, logged as every check failure is.
+    // Only the Linux-only service context runs a check as a task.
+    #[cfg(target_os = "linux")]
     pub(crate) fn interrupted() -> Self {
         let failure = Self::Interrupted;
         log_failure(&failure);

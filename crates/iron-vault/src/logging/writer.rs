@@ -4,6 +4,8 @@
 //! and can act on it. The service never runs without its audit log, so the first failed write trips [`LogFailure`] and
 //! the `serve` loop stops.
 
+// Only the Linux log file and stdout writers append records; the latch is shared on every platform.
+#[cfg(target_os = "linux")]
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,6 +49,7 @@ impl LogFailure {
 }
 
 /// A destination that takes one whole record at a time and trips its latch when it cannot.
+#[cfg(target_os = "linux")]
 pub trait Append {
     /// Writes `record` whole, or fails; writers on different threads never interleave their records.
     fn append(&self, record: &[u8]) -> io::Result<()>;
@@ -57,9 +60,11 @@ pub trait Append {
 
 /// The `Write` the formatter gets for one record: `fmt::Layer` writes the formatted record with a single `write_all`, so
 /// each [`Write::write`] here carries a whole record.
+#[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct RecordWriter<'a, A>(pub(super) &'a A);
 
+#[cfg(target_os = "linux")]
 impl<A: Append> io::Write for RecordWriter<'_, A> {
     fn write(&mut self, record: &[u8]) -> io::Result<usize> {
         self.0

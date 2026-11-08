@@ -22,6 +22,8 @@ use tokio::time::Instant;
 pub use challenge::{BindingDigest, CHALLENGE_LIFETIME, MigrationChallenge};
 #[cfg(target_os = "linux")]
 pub use method::VaultPassphraseMethod;
+// Only the service context's migration session proves a challenge, and it is Linux-only.
+#[cfg(target_os = "linux")]
 pub(crate) use method::prove_challenge;
 pub use method::{MethodRefusal, OwnerRefusal, SourceOwnerMethod};
 pub use pending::{ChallengeBusy, PendingMigration};
@@ -174,6 +176,7 @@ pub struct MigrationAuthorization {
 impl MigrationAuthorization {
     /// The authorization a source-owner method yields once it has proved `challenge`, taken out of the pending slot.
     /// Private, so [`method::prove_challenge`] is the only way to one.
+    #[cfg(target_os = "linux")]
     fn proved(challenge: MigrationChallenge) -> Self {
         Self { challenge }
     }

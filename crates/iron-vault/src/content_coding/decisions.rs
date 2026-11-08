@@ -7,8 +7,8 @@
 //! Stacked codings (`gzip, br`) and repeated `Content-Encoding` headers are refused rather than decoded layer by layer:
 //! they are rare, and an unsupported layer would leave an opaque body the scrubber cannot read.
 
-use hyper::HeaderMap;
-use hyper::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, ETAG, HeaderName, HeaderValue, VARY};
+// reqwest's re-export of the `http` header types, which hyper shares, so these decisions build where hyper is absent.
+use reqwest::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, ETAG, HeaderMap, HeaderName, HeaderValue, VARY};
 
 use super::ContentCoding;
 

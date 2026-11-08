@@ -14,7 +14,9 @@ use std::future::Future;
 
 use thiserror::Error;
 
-use super::{MigrationAuthorization, MigrationChallenge};
+#[cfg(target_os = "linux")]
+use super::MigrationAuthorization;
+use super::MigrationChallenge;
 use crate::admin::protocol::OwnerInput;
 
 #[cfg(target_os = "linux")]
@@ -72,6 +74,8 @@ pub trait SourceOwnerMethod: sealed::Sealed + Sync {
 
 /// Runs `method` on `challenge` and, only when it proves it, makes the authorization that carries the challenge: the one
 /// path to a [`MigrationAuthorization`]. A refused challenge is dropped here, so it can never be proved again.
+// Only the Linux-only service context's migration session proves a challenge.
+#[cfg(target_os = "linux")]
 pub(crate) async fn prove_challenge<M: SourceOwnerMethod>(
     method: &M,
     challenge: MigrationChallenge,

@@ -19,6 +19,7 @@ use super::route::ResponseScrubbed;
 use super::{AUDIT_TARGET, AuditEvent, EventName};
 use crate::connection_tags::ServiceClose;
 use crate::pipeline::PipelineRefusal;
+#[cfg(target_os = "linux")]
 use crate::proxy_handler::RelayFailure;
 use crate::service_state::UnavailableReason;
 use crate::upstream::transport_error::TransportError;
@@ -170,6 +171,8 @@ impl From<TransportError> for ReasonCode {
     }
 }
 
+// The relay that fails this way is the proxy handler's, which is Linux-only.
+#[cfg(target_os = "linux")]
 impl From<RelayFailure> for ReasonCode {
     fn from(failure: RelayFailure) -> Self {
         match failure {
