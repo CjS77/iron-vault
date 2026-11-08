@@ -372,10 +372,10 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::RecoveryCheckUnavailable,
         ErrorCode::MigrationRateLimited,
         ErrorCode::UnlockRateLimited,
-        ErrorCode::RecipientInventoryDamaged,
         ErrorCode::RecipientInvalid,
         ErrorCode::UnknownRecipient,
         ErrorCode::RecipientSetInvalid,
+        ErrorCode::RecipientInventoryDamaged,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

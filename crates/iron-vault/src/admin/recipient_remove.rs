@@ -12,12 +12,12 @@ use std::sync::Arc;
 use iron_vault_store::{ChangeCommitted, RecipientInventory, RecipientKey, RecipientRole, StoreFs};
 
 use super::dispatch::{AdminHandler, HandlerFuture};
-use super::owner_presence::{NoPresence, no_presence, presence_passphrase};
+use super::owner_presence::{no_presence, require_owner_presence};
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode};
 use super::recipient_list::refused as inventory_refused;
 use super::server::{Exchange, ExchangeError};
-use crate::service_context::{OwnerPresence, RecipientRefusal, RecipientRemoval, RemovalRefusal, RemovedRecipient, ServiceContext};
+use crate::service_context::{RecipientRefusal, RecipientRemoval, RemovalRefusal, RemovedRecipient, ServiceContext};
 use crate::service_state::AdminOperation;
 
 /// What every completed change says about copies already made (R-24).
@@ -67,7 +67,7 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientRemove<F> {
             Err(refusal) => return Ok(refused(refusal)),
         };
         exchange.notice(&summary(&removal)).await?;
-        let proof = match owner_presence(exchange, &removal).await? {
+        let proof = match require_owner_presence(exchange, &removal).await? {
             Ok(proof) => proof,
             Err(none) => return Ok(no_presence("recipient remove", none)),
         };
@@ -83,31 +83,16 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientRemove<F> {
     }
 }
 
-/// Owner presence for `removal`: the approval passphrase, opened against the pinned approver. There is no second try.
-async fn owner_presence<F: StoreFs + Send + Sync + 'static>(
-    exchange: &mut Exchange,
-    removal: &RecipientRemoval<'_, F>,
-) -> Result<Result<OwnerPresence, NoPresence>, ExchangeError> {
-    let checked = match presence_passphrase(exchange, removal.lock_requested()).await? {
-        Ok(passphrase) => removal.prove_presence(passphrase).await.map_err(NoPresence::Refused),
-        Err(unchecked) => Err(unchecked),
-    };
-    Ok(checked)
-}
-
 /// The summary the owner reads before typing the approval passphrase.
 fn summary<F: StoreFs + Send + Sync + 'static>(removal: &RecipientRemoval<'_, F>) -> String {
     let (entry, remaining) = (removal.removed(), removal.remaining());
+    let (vault, key, role, enrolled) = (remaining.vault_id(), entry.key(), entry.role().name(), entry.enrolled_at());
+    let label = entry.label().as_str().chars().filter(|c| !c.is_control()).collect::<String>();
+    let after = counts(remaining);
     format!(
-        "remove a recipient from the vault\n  vault: {}\n  recipient: {}\n  role: {}\n  label: {}\n  enrolled: {}\n  \
-         recipients after the change: {}\n  removing a recipient protects future copies of identity.age only; \
-         copies made before still open with this key\n  authorize with: the approval passphrase",
-        remaining.vault_id(),
-        entry.key(),
-        entry.role().name(),
-        entry.label().as_str().chars().filter(|c| !c.is_control()).collect::<String>(),
-        entry.enrolled_at(),
-        counts(remaining),
+        "remove a recipient from the vault\n  vault: {vault}\n  recipient: {key}\n  role: {role}\n  label: {label}\n  \
+         enrolled: {enrolled}\n  recipients after the change: {after}\n  removing a recipient protects future copies of identity.age only; \
+         copies made before still open with this key\n  authorize with: the approval passphrase"
     )
 }
 

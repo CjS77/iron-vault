@@ -25,8 +25,8 @@ use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::Capabilities;
 use iron_vault_store::{
-    OsFs, RecipientEntry, RecipientIdentity, RecipientInventory, RecipientKey, RecipientLabel, RecipientRole, RecipientSet, UtcSecond,
-    envelope_digest, open_recipient_inventory, seal_recipient_inventory, unwrap_identity, wrap_identity,
+    OsFs, RecipientEntry, RecipientIdentity, RecipientInventory, RecipientKey, RecipientLabel, RecipientRole, RecipientSet, RecoveryKey,
+    StateFileName, UtcSecond, envelope_digest, open_recipient_inventory, seal_recipient_inventory, unwrap_identity, wrap_identity,
 };
 use secrecy::{ExposeSecret, SecretString};
 use tokio::net::UnixStream;
@@ -134,8 +134,6 @@ async fn unlock(service: &Arc<ServiceContext>) {
     let (response, _) = exchange(service, AdminRequest::Unlock, &[VAULT_PASSPHRASE.as_bytes()]).await;
     assert!(matches!(response, AdminResponse::Success), "{response:?}");
 }
-
-use iron_vault_store::{RecoveryKey, StateFileName};
 
 /// Sends `request` over a new connection and answers its prompts with `answers`.
 async fn run(service: &Arc<ServiceContext>, request: AdminRequest, answers: &[&str]) -> Exchanged {

@@ -3,13 +3,14 @@
 use iron_vault_kinds::SecretField;
 use iron_vault_policy::{CredentialKind, CredentialName, Host, Port, RouteName};
 use iron_vault_store::{
-    DamagedRecord, ErrorKindLabel, InitFailure, InitStep, RecipientRole, RecordDamage, RecordId, SealError, SharedStateDamage,
-    StateFileName, UnlockError, VaultId, WriteError,
+    DamagedRecord, ErrorKindLabel, InitFailure, InitStep, RecipientEntry, RecipientLabel, RecipientRole, RecordDamage, RecordId, SealError,
+    SharedStateDamage, StateFileName, UnlockError, UtcSecond, VaultId, WriteError,
 };
 
 use super::admin::*;
 use super::corruption::*;
 use super::credential::*;
+use super::recipient::*;
 use super::route::*;
 use super::tests::record_of;
 use super::vault::*;
@@ -575,4 +576,25 @@ fn recipient_inventory_events_carry_fixed_labels_only() {
     assert_eq!(record["inventory_damage"], "envelope_mismatch");
     let record = record_of(ChangeRecovered(ChangeRecovery::Discarded), "WARN", &["recovery"]);
     assert_eq!(record["recovery"], "discarded");
+}
+
+#[test]
+fn a_removed_recipients_label_is_escaped() {
+    let (_, key) = iron_vault_store::RecoveryKey::generate();
+    let label = RecipientLabel::new("caf\u{e9} laptop").unwrap();
+    let entry = RecipientEntry::new(key, RecipientRole::Added, label, UtcSecond::from_unix_seconds(0).unwrap());
+    let fields = ["recipient", "recipient_role", "recipient_label", "recipients"];
+
+    let record = record_of(
+        Removed {
+            entry: &entry,
+            recipients: 2,
+        },
+        "INFO",
+        &fields,
+    );
+
+    assert_eq!(record["recipient_label"], "caf\\u{e9} laptop");
+    // A control or format character never reaches the log: the label rule refuses it on construction.
+    assert!(RecipientLabel::new("a\nb").is_err() && RecipientLabel::new("a\u{202e}b").is_err());
 }

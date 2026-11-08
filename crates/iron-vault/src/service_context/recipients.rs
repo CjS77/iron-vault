@@ -9,7 +9,8 @@
 use std::sync::Arc;
 
 use iron_vault_store::{
-    InventoryCheckError, InventoryDamage, RecipientEntry, RecipientInventory, StoreFs, VaultId, VaultIdentity, check_recipient_inventory,
+    InventoryCheckError, InventoryDamage, PinnedApprover, RecipientEntry, RecipientInventory, StoreFs, VaultId, VaultIdentity,
+    check_recipient_inventory,
 };
 use tokio::sync::OwnedMutexGuard;
 
@@ -48,7 +49,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let service_wide = Arc::clone(&self.service_wide)
             .try_lock_owned()
             .map_err(|_| RecipientRefusal::Busy)?;
-        let (identity, vault_id) = ready_vault(&*self.inner.lock().await)?;
+        let ReadyVault { identity, vault_id, .. } = ready_vault(&*self.inner.lock().await)?;
         let (_, inventory) = self.check_inventory(service_wide, identity, vault_id).await?;
         Ok(inventory.entries().cloned().collect())
     }
@@ -82,12 +83,26 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// The vault identity the service holds and the open vault's ID; known only when the state allows a vault change.
-fn ready_vault(inner: &Inner) -> Result<(Arc<VaultIdentity>, VaultId), RecipientRefusal> {
+/// What a recipient command reads of the service while it takes the lock: the vault identity and the open vault's ID, and
+/// the state and check generation a change records so it can refuse if either moved, and the pinned approver for owner presence.
+pub(super) struct ReadyVault {
+    pub(super) identity: Arc<VaultIdentity>,
+    pub(super) vault_id: VaultId,
+    pub(super) state: ServiceState,
+    pub(super) checks: u64,
+    pub(super) approver: PinnedApprover,
+}
+
+/// The vault the service holds; known only when the state allows a vault change.
+pub(super) fn ready_vault(inner: &Inner) -> Result<ReadyVault, RecipientRefusal> {
     match (&inner.identity, &inner.open) {
-        (Some(identity), Some(open)) if inner.state.admin_allows(AdminOperation::VaultChange) => {
-            Ok((Arc::clone(identity), open.approval.vault_id()))
-        }
+        (Some(identity), Some(open)) if inner.state.admin_allows(AdminOperation::VaultChange) => Ok(ReadyVault {
+            identity: Arc::clone(identity),
+            vault_id: open.approval.vault_id(),
+            state: inner.state,
+            checks: inner.checks,
+            approver: open.approval.approver().clone(),
+        }),
         _ => Err(RecipientRefusal::WrongState(inner.state)),
     }
 }

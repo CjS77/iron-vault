@@ -572,9 +572,6 @@ pub enum ErrorCode {
     /// `unlock`: too many wrong vault passphrases, here or in migration authorization; no prompt was sent. The message
     /// gives the whole seconds to wait, and the service stays Locked.
     UnlockRateLimited = 34,
-    /// `recipient list`, `recipient add`, `recipient remove`: the inventory check found the recipient inventory missing or
-    /// damaged; the message names the damage; nothing was changed.
-    RecipientInventoryDamaged = 39,
     /// `recipient add`, `recipient remove`: the key is not an `age1...` X25519 recipient key, or the label breaks its rule;
     /// the message names the rule.
     RecipientInvalid = 35,
@@ -583,6 +580,9 @@ pub enum ErrorCode {
     /// `recipient add`, `recipient remove`: the set after the change would break the independence rule or hold more than 64
     /// recipients; the message names which part; nothing was changed.
     RecipientSetInvalid = 38,
+    /// `recipient list`, `recipient add`, `recipient remove`: the inventory check found the recipient inventory missing or
+    /// damaged; the message names the damage; nothing was changed.
+    RecipientInventoryDamaged = 39,
 }
 
 impl ErrorCode {
@@ -623,10 +623,10 @@ impl ErrorCode {
             Self::RecoveryCheckUnavailable => "recovery-check-unavailable",
             Self::MigrationRateLimited => "migration-rate-limited",
             Self::UnlockRateLimited => "unlock-rate-limited",
-            Self::RecipientInventoryDamaged => "recipient-inventory-damaged",
             Self::RecipientInvalid => "recipient-invalid",
             Self::UnknownRecipient => "unknown-recipient",
             Self::RecipientSetInvalid => "recipient-set-invalid",
+            Self::RecipientInventoryDamaged => "recipient-inventory-damaged",
         }
     }
 

@@ -61,7 +61,7 @@ impl AuditEvent for Removed<'_> {
             event = Self::NAME.as_str(),
             recipient = self.entry.key().to_string().as_str(),
             recipient_role = self.entry.role().name(),
-            recipient_label = self.entry.label().as_str(),
+            recipient_label = iron_vault_policy::escaped(self.entry.label().as_str()).as_str(),
             recipients = self.recipients,
             "recipient removed",
         );

@@ -18,10 +18,11 @@ use iron_vault_store::{
 };
 use tokio::sync::OwnedMutexGuard;
 
+use super::recipients::{ReadyVault, ready_vault};
 use super::{OwnerPresence, PresenceRefusal, RecipientRefusal, ServiceContext};
 use crate::audit::AuditEvent;
 use crate::audit::recipient::{ChangeFailed, ChangeFailure, Removed};
-use crate::service_state::{AdminOperation, ServiceState};
+use crate::service_state::ServiceState;
 
 /// Why a recipient removal ended without removing the recipient.
 #[derive(Debug, thiserror::Error)]
@@ -81,19 +82,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let service_wide = Arc::clone(&self.service_wide)
             .try_lock_owned()
             .map_err(|_| RecipientRefusal::Busy)?;
-        let (identity, vault_id, state, checks, approver) = {
-            let inner = self.inner.lock().await;
-            match (&inner.identity, &inner.open) {
-                (Some(identity), Some(open)) if inner.state.admin_allows(AdminOperation::VaultChange) => (
-                    Arc::clone(identity),
-                    open.approval.vault_id(),
-                    inner.state,
-                    inner.checks,
-                    open.approval.approver().clone(),
-                ),
-                _ => return Err(RecipientRefusal::WrongState(inner.state).into()),
-            }
-        };
+        let ReadyVault {
+            identity,
+            vault_id,
+            state,
+            checks,
+            approver,
+        } = ready_vault(&*self.inner.lock().await)?;
         let (service_wide, inventory) = self.check_inventory(service_wide, identity, vault_id).await?;
         let (removed, after) = apply_removal(&inventory, &key).inspect_err(|refusal| log_refused(&key, refusal))?;
         Ok(RecipientRemoval {
@@ -127,6 +122,11 @@ fn log_refused(key: &RecipientKey, refusal: &RemovalRefusal) {
         RemovalRefusal::SetInvalid(_) => ChangeFailure::SetInvalid,
         _ => return,
     };
+    log_failure(key, failure);
+}
+
+/// Logs `recipient.change-failed` for a removal of `key`.
+fn log_failure(key: &RecipientKey, failure: ChangeFailure) {
     ChangeFailed {
         change: "remove",
         recipient: key,
@@ -189,18 +189,19 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientRemoval<'_, F> {
         .await;
         match written {
             Ok(Ok(rewrapped)) => {
+                let recipients = after.entries().len();
+                Removed {
+                    entry: &removed,
+                    recipients,
+                }
+                .emit();
                 let unfinished = rewrapped
                     .unfinished
                     .inspect(|error| log_write_failure(removed.key(), error))
                     .is_some();
-                Removed {
-                    entry: &removed,
-                    recipients: after.entries().len(),
-                }
-                .emit();
                 Ok(RemovedRecipient {
                     removed,
-                    recipients: after.entries().len(),
+                    recipients,
                     unfinished,
                 })
             }
@@ -225,12 +226,7 @@ fn log_write_failure(key: &RecipientKey, error: &RecipientChangeWriteError) {
         error_kind,
         committed: error.committed(),
     };
-    ChangeFailed {
-        change: "remove",
-        recipient: key,
-        failure,
-    }
-    .emit();
+    log_failure(key, failure);
 }
 
 /// The refusal for a change that failed before the commit point or at it, logged as `recipient.change-failed`.
@@ -255,12 +251,7 @@ fn refused_write(key: &RecipientKey, error: &RecipientChangeError) -> RemovalRef
                 error_kind: ErrorKindLabel::fixed("not_written"),
                 committed: ChangeCommitted::No,
             };
-            ChangeFailed {
-                change: "remove",
-                recipient: key,
-                failure,
-            }
-            .emit();
+            log_failure(key, failure);
             RemovalRefusal::Failed {
                 committed: ChangeCommitted::No,
                 cause: other.to_string(),
