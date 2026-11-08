@@ -718,7 +718,7 @@ Each entry:
 | Size | Content                                                                                          |
 |------|--------------------------------------------------------------------------------------------------|
 | var  | Recipient key: a field holding the canonical lowercase `age1…` text, exactly 62 bytes            |
-| 1    | Role: `01` operational, `02` recovery, `03` added; `04` to `06` are reserved and refused         |
+| 1    | Role: `01` operational, `02` recovery, `03` added, `06` host-unlock; `04`, `05` reserved and refused |
 | var  | Label: a field holding the recipient label, 1 to 64 bytes of UTF-8                               |
 | 8    | Enrolled at: `u64` Unix seconds, at most 253402300799 (9999-12-31T23:59:59Z)                      |
 
@@ -731,7 +731,7 @@ reverse, so a payload is accepted only if it is the encoding of the inventory it
 - the entry count is from 2 to 64, and is checked before any entry is read;
 - every recipient key is 62 bytes, parses as an X25519 recipient key and is in canonical lowercase form;
 - keys are strictly ascending, so none repeats;
-- every role code is 1, 2 or 3; a reserved or unknown code is refused;
+- every role code is 1, 2, 3 or 6; a reserved or unknown code is refused;
 - every label is valid UTF-8 and follows the label rule;
 - every enrolment time is within the UTC second range.
 

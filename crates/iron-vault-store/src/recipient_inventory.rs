@@ -55,7 +55,7 @@ const KIND: MacFileKind<RecipientInventoryError> = MacFileKind {
 
 /// What reaches the vault through a recipient. The role decides how the recipient counts toward the independence rule.
 ///
-/// Codes 4 to 6 (`tpm`, `hardware`, `host-unlock`) are reserved for later epics and are refused on reading.
+/// Codes 4 and 5 (`tpm`, `hardware`) are reserved for later epics and are refused on reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RecipientRole {
     /// The operational identity, opened by the vault passphrase through `operational.age`.
@@ -64,6 +64,9 @@ pub enum RecipientRole {
     Recovery,
     /// A recipient key the owner supplied.
     Added,
+    /// The intermediate identity of the host unlock adapter, which a container-profile service reads from the unlock
+    /// handoff. It is in the unlock class and never counts as recovery: its secret lives on the host.
+    HostUnlock,
 }
 
 impl RecipientRole {
@@ -73,12 +76,13 @@ impl RecipientRole {
             Self::Operational => 1,
             Self::Recovery => 2,
             Self::Added => 3,
+            Self::HostUnlock => 6,
         }
     }
 
     /// The role with `code`, or `None` for a reserved or unknown code.
     pub fn from_code(code: u8) -> Option<Self> {
-        [Self::Operational, Self::Recovery, Self::Added]
+        [Self::Operational, Self::Recovery, Self::Added, Self::HostUnlock]
             .into_iter()
             .find(|role| role.code() == code)
     }
@@ -89,6 +93,7 @@ impl RecipientRole {
             Self::Operational => "operational",
             Self::Recovery => "recovery",
             Self::Added => "added",
+            Self::HostUnlock => "host-unlock",
         }
     }
 }

@@ -107,6 +107,18 @@ fn round_trip_with_every_role() {
 }
 
 #[test]
+fn host_unlock_is_role_6_and_round_trips() {
+    assert_eq!(RecipientRole::from_code(6), Some(RecipientRole::HostUnlock));
+    assert_eq!((RecipientRole::HostUnlock.code(), RecipientRole::HostUnlock.name()), (6, "host-unlock"));
+    let entries = example_entries()
+        .into_iter()
+        .chain([entry(key(SECRETS[2]), RecipientRole::HostUnlock, "host unlock", 1_794_000_001)])
+        .filter(|entry| entry.role() != RecipientRole::Added);
+    let inventory = inventory_of(entries.collect());
+    assert_eq!(encoding::decode(&encoding::encode(&inventory)), Ok(inventory));
+}
+
+#[test]
 fn encoding_is_independent_of_insertion_order() {
     let forward = inventory_of(example_entries());
     let backward = inventory_of(example_entries().into_iter().rev().collect());
@@ -240,7 +252,7 @@ fn decode_refuses_a_key_that_is_not_canonical() {
 
 #[test]
 fn decode_refuses_reserved_and_unknown_roles() {
-    [0, 4, 5, 6, 7, 255].iter().for_each(|code| {
+    [0, 4, 5, 7, 255].iter().for_each(|code| {
         let payload = Payload::header(2).entry_with(key(SECRETS[0]).to_string().as_bytes(), *code, b"x", 1);
         assert_eq!(payload.decode(), Err(RecipientInventoryError::UnknownRole(*code)));
     });

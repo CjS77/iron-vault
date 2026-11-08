@@ -41,10 +41,11 @@ whether the recipient counts toward the [independence rule](#independence-rule).
 | `3` | `added` | none | A recipient key the owner supplied, such as a destination device for the alternate migration path ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)) | `recipient add <age1…>` |
 | `4` | `tpm` | unlock | Reserved: a TPM-sealed intermediate identity ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)) | the TPM epic |
 | `5` | `hardware` | unlock | Reserved: a hardware-key intermediate identity ([§5.1](iron-vault-specification.md#51-hardware-key-recipients-signers-and-touch-confirmation)) | the hardware-key phase |
-| `6` | `host-unlock` | unlock | Reserved: the intermediate identity of a host unlock adapter ([§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances)) | the Docker Compose epic |
+| `6` | `host-unlock` | unlock | The intermediate identity of a host unlock adapter, read from the unlock handoff ([§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances)) | `init --host-unlock` in a container build |
 
-Codes 4 to 6 are reserved now so that later epics need no new format version: this release refuses them when it reads
-an inventory, and the epic that enrolls one makes the decoder accept it. A code above 6 is unknown. The role names are
+Codes 4 and 5 are reserved now so that later epics need no new format version: this release refuses them when it reads
+an inventory, and the epic that enrolls one makes the decoder accept it. Code 6 is accepted: the Compose epic enrolls
+it. A code above 6 is unknown. The role names are
 also the labels the CLI prints and the audit log records.
 
 `added` is in no class because the service cannot tell who holds the key or whether it is independent of the
@@ -140,7 +141,7 @@ Decoding accepts a payload only if it is that encoding:
 - the entry count is from 2 to 64;
 - every recipient key is 62 bytes, parses as an X25519 recipient key and is in canonical lowercase form;
 - keys are strictly ascending, so none repeats;
-- every role code is 1, 2 or 3; a reserved or unknown code is refused as a role this release does not know;
+- every role code is 1, 2, 3 or 6; a reserved or unknown code is refused as a role this release does not know;
 - every label passes the label rule;
 - every enrolment time is within the UTC second range.
 
@@ -568,7 +569,8 @@ not repeated in `recipient.change-failed`: migration authorization records `migr
 ## Initialization
 
 `init` writes the first inventory: the `operational` and `recovery` recipients, with the labels `vault passphrase` and
-`recovery key` and the init time. It is the only moment the service knows the recovery key's recipient key, so a vault
+`recovery key` and the init time. A container build's `init --host-unlock` adds a third entry, role `host-unlock`,
+labelled `host unlock`, for the identity in the unlock handoff. It is the only moment the service knows the recovery key's recipient key, so a vault
 whose `init` did not write one can never have one.
 
 The inventory needs the vault ID, for its header and payload, and step 5 (`Vault::create`) is where the vault ID is
@@ -605,8 +607,8 @@ so no owner holds such a vault yet ([open question 2](#open-questions)). The res
 
 ## Out of scope
 
-- TPM, hardware-key and host-unlock recipients. Their epics enroll the reserved roles and extend the independence rule
-  as [described above](#independence-rule).
+- TPM and hardware-key recipients, and `recipient add` for host-unlock. Their epics enroll the roles and extend the
+  independence rule as [described above](#independence-rule).
 - `forget-machine`, which checks recipient removal and guides TPM clearing
   ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)).
 - Changing the vault passphrase. It reseals `operational.age` around the same operational identity, so it changes no
