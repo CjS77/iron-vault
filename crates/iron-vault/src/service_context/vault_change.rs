@@ -13,7 +13,7 @@ pub use plan::{CredentialChanged, CurrentRecord, VaultChangePlan};
 use std::sync::Arc;
 
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::{CredentialKind, CredentialName, Host, Port};
+use iron_vault_policy::{CredentialKind, CredentialName, Host, Port, RouteName};
 use iron_vault_store::{PermittedOrigins, RecordId, StoreFs, VaultError, VaultIdentity, WriteReport};
 
 use super::{Inner, ServiceContext, ServiceLocks};
@@ -42,13 +42,23 @@ pub enum VaultChangeRefusal {
     /// The manifest does not list the name that `replace` or `rm` changes.
     #[error("credential {0} does not exist")]
     UnknownCredential(CredentialName),
-    /// The vault change check failed: routes that use the name would not activate after the change. In route name order.
+    /// The vault change check failed for a `replace`: routes that use the name would not activate with the new record.
+    /// In route name order.
     #[error("routes use credential {name} and would stop working: {}; approve a config without them first", in_use(.routes))]
     InUse {
         /// The credential changed.
         name: CredentialName,
         /// Each failing route with the rule it would break.
         routes: Vec<AffectedRoute>,
+    },
+    /// The vault change check failed for an `rm`: routes of the active config use the name. The vault still holds it, so
+    /// the message names the routes rather than each one's activation error, which would say the credential is unknown.
+    #[error("credential {name} is used by {}; approve a config without {}, then run `rm` again", used_by(.routes), them(.routes))]
+    UsedByRoutes {
+        /// The credential to remove.
+        name: CredentialName,
+        /// The routes that use it, in route name order, each once.
+        routes: Vec<RouteName>,
     },
     /// The material breaks its kind's rules.
     #[error("the credential is invalid: {0}")]
@@ -295,6 +305,22 @@ fn in_use(routes: &[AffectedRoute]) -> String {
         .map(|affected| affected.reason.to_string())
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+/// `route a` or `routes a, b`. Route names follow the name rule (`[a-z0-9_-]`), so none needs escaping.
+fn used_by(routes: &[RouteName]) -> String {
+    let names = routes.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+    match routes {
+        [_] => format!("route {names}"),
+        _ => format!("routes {names}"),
+    }
+}
+
+fn them(routes: &[RouteName]) -> &'static str {
+    match routes {
+        [_] => "that route",
+        _ => "those routes",
+    }
 }
 
 fn uncertain_message(present: Option<bool>) -> String {

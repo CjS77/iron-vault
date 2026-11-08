@@ -164,7 +164,8 @@ async fn a_name_a_route_uses_is_refused_before_any_prompt_and_naming_the_route()
     let AdminResponse::Error { message, .. } = &refused.response else {
         panic!("{refused:?}")
     };
-    assert!(message.contains("fx"), "{message}");
+    assert!(message.contains("is used by route fx;"), "{message}");
+    assert!(!message.contains("does not hold"), "{message}");
     assert!(refused.prompts.is_empty() && refused.notices.is_empty(), "{refused:?}");
     assert_eq!(manifest_bytes(&fixture), before);
     assert!(Arc::ptr_eq(&snapshot, &served(&service)));

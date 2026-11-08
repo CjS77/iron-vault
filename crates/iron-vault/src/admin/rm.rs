@@ -88,7 +88,7 @@ fn refused(refusal: VaultChangeRefusal) -> AdminResponse {
             );
         }
         VaultChangeRefusal::UnknownCredential(_) => ErrorCode::UnknownCredential,
-        VaultChangeRefusal::InUse { .. } => ErrorCode::CredentialInUse,
+        VaultChangeRefusal::InUse { .. } | VaultChangeRefusal::UsedByRoutes { .. } => ErrorCode::CredentialInUse,
         VaultChangeRefusal::Invalid(_) => ErrorCode::CredentialInvalid,
         VaultChangeRefusal::NotActive(_) => ErrorCode::CommittedNotActive,
         // `add` alone refuses a name that exists or reports its own uncertain commit.

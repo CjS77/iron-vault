@@ -49,11 +49,10 @@ iron-vault rm old_key
 ```
 
 ```text
-iron-vault: the service answered error 24 (credential-in-use): routes use credential old_key and would stop working: route old uses credential old_key, which the vault does not hold; approve a config without them first
+iron-vault: the service answered error 24 (credential-in-use): credential old_key is used by route old; approve a config without that route, then run `rm` again
 ```
 
-The message names each route that would break. Nothing was removed. "Which the vault does not hold" describes the
-vault as it would be after the removal: the credential is still there.
+The message names each route that uses the credential. Nothing was removed.
 
 ### 2. Approve a config without those routes
 

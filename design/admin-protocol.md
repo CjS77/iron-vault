@@ -337,7 +337,7 @@ The old record ID was shown in the summary. Errors specific to `replace`:
 | Code | When |
 |---|---|
 | `unknown-credential` | the manifest holds no credential of that name |
-| `credential-in-use` | a route that uses the name would not activate after the change; the message names each route and the rule it breaks |
+| `credential-in-use` | a route that uses the name would not activate after the change; the message names each route and, for `replace`, the rule it breaks |
 | `approval-denied` | owner presence failed |
 | `approval-unavailable` | owner presence could not be checked, or a `lock` cancelled the change at the passphrase prompt; nothing was written |
 | `wrong-state` | a `lock` cancelled the change at a secret prompt, or a `lock` and `unlock` ran during the prompts; nothing was written |
@@ -729,7 +729,7 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `21` | `credential-invalid` | `add`, `replace`, `rm`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
 | `22` | `vault-write-failed` | `add`, `replace`, `rm`: the vault write failed; the message says whether it may have committed |
 | `23` | `unknown-credential` | `replace`, `rm`: the manifest holds no credential of that name |
-| `24` | `credential-in-use` | `replace`, `rm`: a route of the active config uses the name and would not activate after the change; the message names each route and why |
+| `24` | `credential-in-use` | `replace`, `rm`: a route of the active config uses the name and would not activate after the change; the message names each route and, for `replace`, why |
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
 | `26` | `list-too-large` | `list`: the credential list does not fit one frame; the message names the count |
 | `27` | `memory-unprotected` | `unlock`, `recovery check`: a protected install's memory is not locked, so the vault identity is not unwrapped; the message names the memory-lock limit or the locking error, and the service state is unchanged |

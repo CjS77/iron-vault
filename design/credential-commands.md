@@ -54,7 +54,9 @@ Before writing, the service checks what the change would do to the active config
 2. Run `activate` on the active config (the one the serving snapshot was built from) against that catalog, with the
    service's capabilities and account directory. Nothing is written, and the serving snapshot is not touched.
 3. Refuse the change with `credential-in-use` (code 24) when activation fails on a route that uses the name. The
-   message names each such route, in route-name order, and why it would fail.
+   message names each such route, in route-name order. For `replace` it also says why each would fail; for `rm` the
+   reason is always that the name is in use, so it names the routes alone (an activation error would say the vault
+   does not hold the credential, which is false until the removal).
 
 An activation error on a route that does not use the name, or on a peer account, was not caused by the change, so it
 does not refuse it. The config check after the write finds it, just as the next reload would.

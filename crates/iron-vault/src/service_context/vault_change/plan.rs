@@ -31,7 +31,7 @@ use crate::audit::vault::emit_commit_uncertain;
 use crate::service_state::{AdminOperation, ServiceEvent, ServiceState};
 use crate::serving_snapshot::Admission;
 use crate::standing::{CredentialStanding, RecordSummary, Standing};
-use crate::vault_change_check::{PlannedChange, vault_change_check};
+use crate::vault_change_check::{AffectedRoute, PlannedChange, vault_change_check};
 use crate::vault_change_summary::VaultChangeSummary;
 
 /// Steps 2 to 4 of a `replace` or `rm` done: the service-wide lock is held and the vault change check passed. See the
@@ -113,12 +113,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             return Err(VaultChangeRefusal::UnknownCredential(change.name().clone()));
         };
         let config = snapshot.policy().config();
-        vault_change_check(config, &self.setup.capabilities, &*snapshot, &self.setup.accounts, &change).map_err(|routes| {
-            VaultChangeRefusal::InUse {
-                name: change.name().clone(),
-                routes,
-            }
-        })?;
+        vault_change_check(config, &self.setup.capabilities, &*snapshot, &self.setup.accounts, &change)
+            .map_err(|routes| in_use(&change, routes))?;
         Ok(VaultChangePlan {
             service: self,
             service_wide,
@@ -126,6 +122,20 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             approver: open.approval.approver().clone(),
             summary: VaultChangeSummary::new(change, current, before, snapshot.policy()),
         })
+    }
+}
+
+/// The refusal for a failed vault change check. A removal fails only because routes use the name, so it names them; a
+/// replacement names the rule each route would break with the new record.
+fn in_use(change: &PlannedChange, routes: Vec<AffectedRoute>) -> VaultChangeRefusal {
+    let name = change.name().clone();
+    match change {
+        PlannedChange::Remove(_) => {
+            let mut routes: Vec<_> = routes.into_iter().map(|affected| affected.route).collect();
+            routes.dedup();
+            VaultChangeRefusal::UsedByRoutes { name, routes }
+        }
+        PlannedChange::Replace { .. } => VaultChangeRefusal::InUse { name, routes },
     }
 }
 

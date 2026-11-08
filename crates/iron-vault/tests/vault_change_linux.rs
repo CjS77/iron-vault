@@ -22,7 +22,7 @@ use iron_vault::service_state::{ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, ServingSnapshot};
 use iron_vault::vault_change_check::PlannedChange;
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::{ActivationError, Port};
+use iron_vault_policy::Port;
 use iron_vault_store::{PermittedOrigins, SoftwareSigner, StoreFs, seal_signer_key_for_tests};
 
 /// Adds `old_key`, which no route uses.
@@ -97,13 +97,14 @@ async fn removing_a_name_a_route_uses_is_refused_before_any_prompt_naming_the_ro
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
 
-    let Err(VaultChangeRefusal::InUse { routes, .. }) = service.plan_vault_change(remove("fx_key")).await else {
+    let Err(refusal @ VaultChangeRefusal::UsedByRoutes { .. }) = service.plan_vault_change(remove("fx_key")).await else {
         panic!("expected credential-in-use");
     };
 
-    assert_eq!(routes.len(), 1);
-    assert_eq!(routes[0].route.to_string(), "fx");
-    assert!(matches!(routes[0].reason, ActivationError::UnknownCredential { .. }));
+    assert_eq!(
+        refusal.to_string(),
+        "credential fx_key is used by route fx; approve a config without that route, then run `rm` again"
+    );
 }
 
 #[tokio::test]

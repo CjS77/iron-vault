@@ -93,7 +93,7 @@ fn refused(refusal: VaultChangeRefusal) -> AdminResponse {
             return error(ErrorCode::WrongState, message);
         }
         VaultChangeRefusal::UnknownCredential(_) => ErrorCode::UnknownCredential,
-        VaultChangeRefusal::InUse { .. } => ErrorCode::CredentialInUse,
+        VaultChangeRefusal::InUse { .. } | VaultChangeRefusal::UsedByRoutes { .. } => ErrorCode::CredentialInUse,
         VaultChangeRefusal::Invalid(_) => ErrorCode::CredentialInvalid,
         VaultChangeRefusal::NotActive(state) => {
             let message = format!(
