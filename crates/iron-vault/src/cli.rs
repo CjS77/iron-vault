@@ -173,7 +173,7 @@ pub enum Command {
     /// Check the owner's offline recovery key.
     #[command(subcommand)]
     Recovery(RecoveryCommand),
-    /// Show the keys that can open the vault.
+    /// Manage the keys that can open the vault.
     #[command(subcommand)]
     Recipient(RecipientCommand),
     /// Print a shell completion script to stdout. It never contacts the service, so it also runs at build time.

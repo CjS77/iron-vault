@@ -242,7 +242,7 @@ Prove that your offline recovery key opens this vault: the service prompts for t
 iron-vault recipient [OPTIONS] <COMMAND>
 ```
 
-Show the keys that can open the vault.
+Manage the keys that can open the vault.
 
 ## `iron-vault recipient list`
 
