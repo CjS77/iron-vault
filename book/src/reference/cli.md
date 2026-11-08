@@ -252,6 +252,17 @@ iron-vault recipient list [OPTIONS]
 
 List every enrolled recipient, one line each: its `age1...` key, role, enrolment time and label. It works while the service is Ready, and refuses a missing or damaged recipient inventory without changing it.
 
+## `iron-vault recipient remove`
+
+```text
+iron-vault recipient remove [OPTIONS] <RECIPIENT>
+```
+
+Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient and the last recovery recipient, and says that copies of `identity.age` made before still open with the removed key.
+
+- `<RECIPIENT>`: The recipient's `age1...` key, as `recipient list` prints it.
+  - required
+
 ## `iron-vault completions`
 
 ```text

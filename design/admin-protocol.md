@@ -122,6 +122,7 @@ an error.
 | `11` | `rm` | the credential name | none |
 | `12` | `recovery check` | none | the vault ID, the check time and whether the [check was recorded](#recovery-check) |
 | `13` | `recipient list` | none | the enrolled recipients, in inventory order ([recipients.md](recipients.md#admin-protocol)) |
+| `15` | `recipient remove` | the recipient key | the recipient count after the removal ([recipients.md](recipients.md#admin-protocol)) |
 
 **No command accepts an external signature** ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -715,8 +716,8 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `6` | `busy` | the service is already serving as many admin connections as it allows, or another operation holds the lock a command needs; try again |
 | `7` | `config-invalid` | `config approve`: the proposed config is invalid |
 | `8` | `declined` | the owner declined at a confirmation prompt |
-| `9` | `approval-denied` | `config approve`, `replace`, `rm`: owner presence failed: the approval passphrase did not open the approver key, or the key it opened is not the pinned approver |
-| `10` | `approval-unavailable` | `config approve`: the service cannot run an approval now; `replace`, `rm`: owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt; nothing was written |
+| `9` | `approval-denied` | `config approve`, `replace`, `rm`, `recipient remove`: owner presence failed: the approval passphrase did not open the approver key, or the key it opened is not the pinned approver |
+| `10` | `approval-unavailable` | `config approve`: the service cannot run an approval now; `replace`, `rm`, `recipient remove`: owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt; nothing was written |
 | `11` | `approval-failed` | `config approve`: failed after reserving a version, before committing it |
 | `12` | `committed-not-active` | `config approve`: committed, but not yet published or active; `replace`, `rm`: the change committed, but the config check after it left the service Unavailable |
 | `13` | `wrong-state` | the command is not allowed in the service's current state; the message names the state |
@@ -728,7 +729,7 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `19` | `init-failed` | `init`: a write failed; the message names the step, says to re-run `init`, which discards the unfinished vault, and says to discard the recovery key shown (at step 9, where the outcome is unknown, to keep it until the re-run decides) |
 | `20` | `name-taken` | `add`: the name is already in the manifest, healthy or damaged; `add` never overwrites |
 | `21` | `credential-invalid` | `add`, `replace`, `rm`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
-| `22` | `vault-write-failed` | `add`, `replace`, `rm`: the vault write failed; the message says whether it may have committed |
+| `22` | `vault-write-failed` | `add`, `replace`, `rm`, `recipient remove`: the vault write failed; the message says whether it may have committed |
 | `23` | `unknown-credential` | `replace`, `rm`: the manifest holds no credential of that name |
 | `24` | `credential-in-use` | `replace`, `rm`: a route of the active config uses the name and would not activate after the change; the message names each route and, for `replace`, why |
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
@@ -741,7 +742,10 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `32` | `recovery-check-unavailable` | `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the key was not judged; the message names the initialization state, or the file and error kind |
 | `33` | `migration-rate-limited` | `export`, `recipient add`: too many wrong vault passphrases in a row; the [attempt limit](migration-authorization.md#passphrase-attempt-limit) refused the attempt before any prompt, and the message gives the whole seconds to wait; nothing was exported or rewrapped |
 | `34` | `unlock-rate-limited` | `unlock`: too many wrong vault passphrases, here or in migration authorization, so no prompt was sent; the message gives the seconds to wait, and the service stays Locked |
-| `39` | `recipient-inventory-damaged` | `recipient list`: the inventory check found the recipient inventory missing or damaged; the message names the damage and nothing was changed ([recipients.md](recipients.md#error-codes)) |
+| `35` | `recipient-invalid` | `recipient remove`: the key is not an `age1…` X25519 recipient key; the message names the rule ([recipients.md](recipients.md#error-codes)) |
+| `37` | `unknown-recipient` | `recipient remove`: no enrolled recipient has this key; nothing was changed |
+| `38` | `recipient-set-invalid` | `recipient remove`: the set without the key would break the independence rule; the message names which part; nothing was changed |
+| `39` | `recipient-inventory-damaged` | `recipient list`, `recipient remove`: the inventory check found the recipient inventory missing or damaged; the message names the damage and nothing was changed ([recipients.md](recipients.md#error-codes)) |
 
 The migration codes 28, 29 and 33 are raised by the migration authorization step that `export` and `recipient add`
 share ([migration-authorization.md](migration-authorization.md#error-codes)).
@@ -752,8 +756,8 @@ This document specifies protocol version 1, the only version the codec reads or 
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
 `status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), `replace` (command 10), `rm`
-(command 11), `recovery check` (command 12), `recipient list` (command 13), `status` tags 13 to 17, and error
-codes 7 to 34 and 39 join it rather than starting version 2.
+(command 11), `recovery check` (command 12), `recipient list` (command 13), `recipient remove` (command 15),
+`status` tags 13 to 17, and error codes 7 to 35, 37, 38 and 39 join it rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
@@ -949,6 +953,13 @@ a service error goes to stderr with exit code 1.
 `iron-vault rm <name>` sends the name. The approval passphrase is the answer to the service's prompt. On success it
 prints `removed <name>` to stdout; a service error goes to stderr with exit code 1, and for `credential-in-use` the
 message names the routes to remove from the config first.
+
+### recipient remove
+
+`iron-vault recipient remove <age1…>` sends the key. The approval passphrase is the answer to the service's prompt. The
+service's notices show the summary before the prompt and, once the removal commits, say that removing a recipient
+protects future copies of `identity.age` only. On success nothing goes to stdout; a service error goes to stderr with
+exit code 1.
 
 ### recovery check
 

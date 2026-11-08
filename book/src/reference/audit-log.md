@@ -178,13 +178,15 @@ Each of these also has `remediation`.
 
 ### Recipients
 
-Written by the inventory check that every recipient command, `recipient list` included, runs first. Neither carries a
-recipient key or label.
+The first two are written by the inventory check that every recipient command, `recipient list` included, runs first;
+neither carries a recipient key or label. `recipient remove` writes the other two, which name the public recipient key.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `recipient.inventory-damaged` | WARN | The inventory check found the recipient inventory missing or damaged, and wrote nothing | `inventory_damage`: `envelope_unreadable`, `missing`, `unreadable`, `mac`, `malformed`, `unknown_role`, `other_vault`, `envelope_mismatch` or `count_mismatch` |
 | `recipient.change-recovered` | WARN | The inventory check finished a committed recipient change or removed a staged inventory | `recovery`: `completed` or `discarded` |
+| `recipient.removed` | INFO | A removal committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` (the count after the removal) |
+| `recipient.change-failed` | WARN | A removal was refused because the key is not enrolled or its removal breaks the independence rule, or it failed while written | `change` (`remove`), `recipient`, `failure`: `unknown_recipient`, `set_invalid` or `write_failed`; for `write_failed` also `step`, `error_kind` and `committed` (`no`, `unknown` or `yes`) |
 
 ### Migration authorization
 

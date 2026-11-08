@@ -79,11 +79,11 @@ These can happen on any command.
 |---|---|---|---|
 | `20` | `name-taken` | `add`: a credential of that name exists, healthy or damaged. `add` never overwrites. | Use `replace` to change it, or choose another name. |
 | `21` | `credential-invalid` | `add`, `replace`, `rm`: the name, an origin or the secret breaks its rule. The message names the rule, never what you typed. | Fix the argument. Names are what routes reference; origins are `host` or `host:port`, without a scheme. |
-| `22` | `vault-write-failed` | `add`, `replace`, `rm`: writing the vault failed. The message says whether the change may have committed. | Run `list` to see what the vault now holds, fix the cause (often disk space or permissions) and retry. |
+| `22` | `vault-write-failed` | `add`, `replace`, `rm`, `recipient remove`: writing the vault failed. The message says whether the change may have committed. | Run `list` to see what the vault now holds, fix the cause (often disk space or permissions) and retry. |
 | `23` | `unknown-credential` | `replace`, `rm`: no credential of that name. | Check the name with `list`. |
 | `24` | `credential-in-use` | `replace`, `rm`: a route of the active config uses the credential and would not activate after the change. For `rm` the message names each route; for `replace`, each route and why. | For `rm`, approve a config without those routes first. For `replace`, give origins that still suit the routes. |
-| `9` | `approval-denied` | `replace`, `rm`: the approval passphrase was wrong, or opened a key that is not the pinned approver. Nothing was written. | Type the approval passphrase. |
-| `10` | `approval-unavailable` | `replace`, `rm`: owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt. Nothing was written. | Unlock if needed, and run the command again. |
+| `9` | `approval-denied` | `replace`, `rm`, `recipient remove`: the approval passphrase was wrong, or opened a key that is not the pinned approver. Nothing was written. | Type the approval passphrase. |
+| `10` | `approval-unavailable` | `replace`, `rm`, `recipient remove`: owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt. Nothing was written. | Unlock if needed, and run the command again. |
 | `12` | `committed-not-active` | `replace`, `rm`: the change committed, but the config check after it left the service Unavailable. | Run `status` and read the log's `config.check-failed`. |
 | `26` | `list-too-large` | `list`: the credential list does not fit one admin message. The message gives the count. | Remove credentials you no longer need. |
 
@@ -101,14 +101,17 @@ These can happen on any command.
 | `31` | `recovery-check-failed` | The key does not open this vault. | This is not the key for this vault. Find the right one; if you cannot, the vault has no working recovery key. See [Check and store your recovery key](../cookbook/recovery-key.md). |
 | `32` | `recovery-check-unavailable` | The vault is not initialized, or a file the check reads could not be read or is malformed, so the key was not judged. | Read the message, which names the file and error kind. |
 
-### `recipient list`
+### `recipient list` and `recipient remove`
 
 | Code | Name | Meaning | What to do |
 |---|---|---|---|
+| `35` | `recipient-invalid` | `recipient remove`: the argument is not an `age1...` X25519 recipient key. | Copy the key from `recipient list`. |
+| `37` | `unknown-recipient` | `recipient remove`: no enrolled recipient has this key. Nothing was changed. | Run `recipient list` and copy the key from it. |
+| `38` | `recipient-set-invalid` | `recipient remove`: the vault would be left without its operational recipient or without a recovery recipient. The message names which. Nothing was changed. | Keep that recipient: the vault always needs its operational recipient and one recovery recipient. |
 | `39` | `recipient-inventory-damaged` | The recipient inventory (`recipients.age`) is missing or damaged, or does not describe the `identity.age` on disk. The message names the damage. Nothing was changed, and the service stays Ready. | Do not delete or rewrite either file. A vault initialized before recipient commands has no inventory, and the message says so. Keep your recovery key, which opens the vault without the inventory. |
 
-`recipient list` also answers `wrong-state` outside Ready, `busy` while another command holds the service-wide lock, and
-`vault-write-failed` when settling a staged recipient change failed.
+Both commands also answer `wrong-state` outside Ready, `busy` while another command holds the service-wide lock, and
+`vault-write-failed` when settling a staged recipient change failed or, for `recipient remove`, the removal itself did.
 
 ### Migration authorization
 

@@ -723,12 +723,14 @@ other approval.
 | `recovery.reminder` | INFO | a reminder evaluation found a recovery reminder due | `recovery_record`; `last_checked` when `checked`; `reminders_since` when `never_checked`; `error_kind` when `unusable`; `reminder_days`; `remediation` |
 
 **Recipients** ([recipients.md](recipients.md#audit-events) gives the whole family; the inventory check writes
-these two):
+`recipient.inventory-damaged` and `recipient.change-recovered`, and `recipient remove` the other two):
 
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `recipient.inventory-damaged` | WARN | the inventory check found the recipient inventory missing or damaged | `inventory_damage` |
 | `recipient.change-recovered` | WARN | the inventory check finished a committed recipient change or removed a staged inventory | `recovery` |
+| `recipient.removed` | INFO | a recipient change that removes a recipient committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` |
+| `recipient.change-failed` | WARN | a removal was refused at its own step 3 (`unknown_recipient`, `set_invalid`), or its recipient change failed (`write_failed`) | `change`, `recipient`, `failure`; `step`, `error_kind` and `committed` for `write_failed` |
 
 **Migration authorization** ([migration-authorization.md](migration-authorization.md#audit-events) gives the order of the records of one exchange):
 
@@ -760,7 +762,7 @@ The fields that only one event uses, or that only audit events use:
 | `snapshots_held` | number | Serving snapshots still held when the lock's drain ended |
 | `identity_held` | boolean | Whether the vault identity was still held when the lock's drain ended |
 | `summary` | string | The approval summary's text, or `initial config` for version 1 |
-| `failure` | string | A config check failure's fixed label, one per check failure variant, never its `Display` text |
+| `failure` | string | A config check failure's fixed label, one per check failure variant, never its `Display` text; for `recipient.change-failed`, `already_enrolled`, `unknown_recipient`, `set_invalid` or `write_failed` |
 | `renames` | string | The publish renames run, as fixed labels in a [list](#field-rules) |
 | `signed_for` | number | The approval version a staged approval was signed for |
 | `kind`, `old_kind` | string | A credential kind label, such as `static` or `basic` |
@@ -780,6 +782,12 @@ The fields that only one event uses, or that only audit events use:
 | `recorded` | boolean | Whether a successful recovery check's record was written |
 | `inventory_damage` | string | What the recipient inventory check found: `envelope_unreadable`, `missing`, `unreadable`, `mac`, `malformed`, `unknown_role`, `other_vault`, `envelope_mismatch` or `count_mismatch` |
 | `recovery` | string | How the inventory check settled a staged recipient change: `completed` or `discarded` |
+| `recipient` | string | A recipient key's `age1…` text, which is public |
+| `recipient_role` | string | A recipient role's name: `operational`, `recovery`, `added` or `host-unlock` |
+| `recipient_label` | string | A recipient label, escaped |
+| `recipients` | number | The recipient count after a recipient change |
+| `change` | string | `add` or `remove` |
+| `committed` | string | `no`, `unknown` or `yes`: whether a failed recipient change committed |
 | `recovery_record` | string | The recovery check record's form: `checked`, `never_checked` or `unusable` |
 | `last_checked` | string | The record's last successful recovery check, an RFC 3339 UTC timestamp to the second |
 | `reminders_since` | string | When the reminder schedule started counting, an RFC 3339 UTC timestamp to the second |
