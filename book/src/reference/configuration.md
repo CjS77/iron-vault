@@ -163,7 +163,8 @@ tls_key = "/etc/iron-vault/tls/server.key"
 
 **TLS off loopback.** A listener on any address outside loopback must have `tls_certificate` and `tls_key`, so that
 caller tokens never cross a network in clear. Loopback means `127.0.0.0/8` or `::1`. `::ffff:127.0.0.1` is not
-loopback. A Unix socket never takes TLS.
+loopback. A Unix socket never takes TLS. Approval refuses a listener without them and names it:
+`listener public on 192.0.2.10:8443 needs tls_certificate and tls_key: plain HTTP is allowed only on loopback`.
 
 **Socket activation.** In a protected install, systemd opens TCP listeners and passes them to the service. Adding an
 `address` listener there also needs a systemd socket unit:
@@ -189,7 +190,6 @@ route that this listener's callers can use.
 | port 0                                 | `listener address 127.0.0.1:0 uses port 0`                                                                     |
 | one TLS file                           | `listener sets only one of tls_certificate and tls_key; set both or neither`                                   |
 | TLS on a Unix socket                   | `tls_certificate and tls_key apply only to an address listener, not a unix_socket`                             |
-| off loopback without TLS               | `listener address 0.0.0.0:7878 is not loopback, so tls_certificate and tls_key are required`                   |
 | reserved `token_header`                | `token_header X-Forwarded-Token is a reserved header; choose a dedicated header such as X-Iron-Vault-Token`    |
 | malformed header name                  | `header name "X Token" contains ' ', which is not allowed in an HTTP token`                                    |
 

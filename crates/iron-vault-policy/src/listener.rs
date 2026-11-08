@@ -1,6 +1,6 @@
 //! A `[listeners.<name>]` section: where callers reach the request interface (spec §3.3, §3.4).
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 
 use serde::Deserialize;
 use thiserror::Error;
@@ -28,8 +28,9 @@ pub const DEFAULT_TOKEN_HEADER: &str = "proxy-authorization";
 /// token_header = "X-Iron-Vault-Token"
 /// ```
 ///
-/// A TCP listener on a non-loopback address must have TLS, checked here at load rather than at bind so an unsafe
-/// configuration is never approved (R-26). Whether the callers on a listener may use `isolated-network` or `peer`
+/// A TCP listener on a non-loopback address must have TLS. That rule needs the listener's name to be reported usefully,
+/// so [`ValidatedConfig`](crate::ValidatedConfig) checks it at load rather than at bind, and an unsafe configuration is
+/// never approved (R-26). Whether the callers on a listener may use `isolated-network` or `peer`
 /// authentication depends on every caller section, so [`ValidatedConfig`](crate::ValidatedConfig) checks it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawListener")]
@@ -99,12 +100,6 @@ pub enum ListenerError {
     /// TLS files were set on a Unix socket listener.
     #[error("tls_certificate and tls_key apply only to an address listener, not a unix_socket")]
     TlsOnUnixSocket,
-    /// A non-loopback TCP listener has no TLS, so tokens and bodies would cross the network in clear text.
-    #[error("listener address {address} is not loopback, so tls_certificate and tls_key are required")]
-    NonLoopbackWithoutTls {
-        /// The rejected address.
-        address: SocketAddr,
-    },
     /// `token_header` names a header that controls transport or forwarding.
     #[error("token_header {header} is a reserved header; choose a dedicated header such as X-Iron-Vault-Token")]
     ReservedTokenHeader {
@@ -173,17 +168,8 @@ fn tcp_endpoint(text: &str, tls: Option<TlsFiles>) -> Result<Endpoint, ListenerE
     let address: SocketAddr = text.parse().map_err(|_| ListenerError::BadAddress { address: quoted(text) })?;
     match () {
         () if address.port() == 0 => Err(ListenerError::ZeroPort { address }),
-        () if tls.is_none() && !is_loopback(address.ip()) => Err(ListenerError::NonLoopbackWithoutTls { address }),
         () => Ok(Endpoint::Tcp { address, tls }),
     }
-}
-
-/// `127.0.0.0/8` or `::1`.
-///
-/// An IPv4-mapped address such as `::ffff:127.0.0.1` is deliberately not loopback: whether a dual-stack socket on it
-/// stays on the host depends on platform settings this crate cannot see, so it must use TLS.
-fn is_loopback(ip: IpAddr) -> bool {
-    ip.is_loopback()
 }
 
 /// Rejects a reserved header as the caller-token header.
@@ -248,22 +234,10 @@ mod tests {
     }
 
     #[test]
-    fn non_loopback_without_tls_is_rejected() {
-        [
-            "10.20.0.2:7878",
-            "0.0.0.0:7878",
-            "[::]:7878",
-            "192.168.1.5:7878",
-            "[::ffff:127.0.0.1]:7878",
-            "[fe80::1]:7878",
-        ]
-        .iter()
-        .for_each(|a| {
-            rejected(
-                &format!("address = \"{a}\""),
-                "is not loopback, so tls_certificate and tls_key are required",
-            )
-        });
+    fn non_loopback_without_tls_parses() {
+        ["10.20.0.2:7878", "0.0.0.0:7878", "[::]:7878", "[::ffff:127.0.0.1]:7878"]
+            .iter()
+            .for_each(|a| assert!(!tcp(&parse(&format!("address = \"{a}\"")).unwrap()).1));
     }
 
     #[test]

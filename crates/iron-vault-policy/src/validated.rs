@@ -154,6 +154,14 @@ pub enum ValidationError {
         /// Its prefix.
         other_prefix: RoutePrefix,
     },
+    /// A TCP listener off loopback has no TLS, so tokens and bodies would cross the network in clear text.
+    #[error("listener {listener} on {address} needs tls_certificate and tls_key: plain HTTP is allowed only on loopback")]
+    ListenerNeedsTls {
+        /// The listener.
+        listener: ListenerName,
+        /// The listener's address.
+        address: SocketAddr,
+    },
     /// A listener's caller-token header is the header a reachable route writes its credential to.
     #[error("listener {listener} token_header {header} is the credential slot of route {route}, which its callers can use")]
     TokenHeaderIsSlot {
@@ -170,7 +178,8 @@ pub enum ValidationError {
 type Check = fn(&ParsedConfig) -> Vec<ValidationError>;
 
 /// The checks in report order.
-const CHECKS: [Check; 7] = [
+const CHECKS: [Check; 8] = [
+    check_listener_tls,
     check_references,
     check_caller_limits,
     check_listener_auth,
@@ -254,6 +263,24 @@ fn caller_references(config: &ParsedConfig, name: &CallerName, caller: &CallerCo
             route: route.clone(),
         });
     listener.into_iter().chain(routes).collect()
+}
+
+/// A TCP listener off loopback has TLS (spec §3.4).
+///
+/// Loopback is `127.0.0.0/8` or `::1`. An IPv4-mapped address such as `::ffff:127.0.0.1` is deliberately not loopback:
+/// whether a dual-stack socket on it stays on the host depends on platform settings this crate cannot see.
+fn check_listener_tls(config: &ParsedConfig) -> Vec<ValidationError> {
+    config
+        .listeners()
+        .iter()
+        .filter_map(|(name, listener)| match listener.endpoint() {
+            Endpoint::Tcp { address, tls: None } if !address.ip().is_loopback() => Some(ValidationError::ListenerNeedsTls {
+                listener: name.clone(),
+                address: *address,
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Per-caller limits are no looser than their route's limit, in rate or burst (spec §3.5).
@@ -674,6 +701,26 @@ mod tests {
                 "{err:?}"
             );
         });
+    }
+
+    #[test]
+    fn non_loopback_listener_without_tls_is_named() {
+        ["10.20.0.2:7878", "0.0.0.0:7878", "[::ffff:127.0.0.1]:7878"]
+            .iter()
+            .for_each(|address| {
+                let err = errors(&["[listeners.public]\naddress = \"ADDR\"\n".replace("ADDR", address).as_str(), &fx()]);
+                let expected = ValidationError::ListenerNeedsTls {
+                    listener: n("public"),
+                    address: n(address),
+                };
+                assert_eq!(err, [expected], "{address}");
+            });
+        let err = errors(&["[listeners.public]\naddress = \"192.0.2.10:8443\"\n", &fx()]);
+        assert_eq!(
+            err[0].to_string(),
+            "listener public on 192.0.2.10:8443 needs tls_certificate and tls_key: plain HTTP is allowed only on loopback"
+        );
+        assert!(validate(&doc(&[LOOPBACK, &fx()])).is_ok());
     }
 
     #[test]
