@@ -171,7 +171,7 @@ iron-vault recipient add --recovery --label "recovery key 2026"
 
 ```text
 add a new recovery key to the vault
-  vault: 3c3bc52f-…
+  vault: 4b3faa85-…
   recipient: age1lvqkl6…
   role: recovery
   label: recovery key 2026
@@ -200,7 +200,7 @@ iron-vault recipient remove age1vhncy4…
 
 ```text
 remove a recipient from the vault
-  vault: 3c3bc52f-…
+  vault: 4b3faa85-…
   recipient: age1vhncy4…
   role: recovery
   label: recovery key
@@ -210,6 +210,10 @@ remove a recipient from the vault
   authorize with: the approval passphrase
 Approval passphrase:
 removed age1vhncy4…; the vault has 2 recipients.
+Removing a recipient protects future copies of identity.age only.
+Old copies of identity.age, and backups, still open with a removed key.
+If a machine was lost, rotate the provider credentials it could reach.
+Check the recovery key you keep with iron-vault recovery check.
 ```
 
 The old key now fails `recovery check` with `the recovery key does not open this vault`. Removal does not revoke

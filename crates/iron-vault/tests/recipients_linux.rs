@@ -192,23 +192,34 @@ async fn a_rewrap_leaves_every_credential_file_byte_identical_and_the_route_work
 
     let added = session.add_key(&key, VAULT_PASSPHRASE).await;
     assert!(matches!(added, AdminResponse::RecipientAdd { recipients: 3, .. }), "{added:?}");
-    assert_eq!((session.untouched_files() == before, session.get().await.status), (true, 200));
+    assert_eq!(session.untouched_files(), before);
+    assert_eq!(session.get().await.status, 200);
     let removed = session.remove_key(&key).await;
 
     assert!(matches!(removed, AdminResponse::RecipientRemove { recipients: 2 }), "{removed:?}");
-    assert_eq!((session.untouched_files() == before, session.get().await.status), (true, 200));
-    assert_eq!(
-        session.upstream.requests().len(),
-        3,
-        "every request reached the upstream with the credential"
-    );
+    assert_eq!(session.untouched_files(), before);
+    assert_eq!(session.get().await.status, 200);
+    let requests = session.upstream.requests();
+    assert_eq!(requests.len(), 3);
+    for request in &requests {
+        let key = request
+            .headers()
+            .into_iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("x-api-key"));
+        assert_eq!(
+            key.map(|(_, value)| value).as_deref(),
+            Some(CREDENTIAL_SECRET),
+            "the credential was not injected"
+        );
+    }
 }
 
 #[tokio::test]
 async fn a_change_that_leaves_fewer_than_two_independent_paths_is_refused_and_changes_nothing() {
     let session = Session::new().await;
     let (key, _) = fresh_key();
-    session.add_key(&key, VAULT_PASSPHRASE).await;
+    let added = session.add_key(&key, VAULT_PASSPHRASE).await;
+    assert!(matches!(added, AdminResponse::RecipientAdd { recipients: 3, .. }), "{added:?}");
     let before = session.fixture.state_files();
 
     // An added key is no independent path: with it enrolled, the recovery key is still the last one.
@@ -278,25 +289,36 @@ async fn after_rotating_the_recovery_key_the_new_key_passes_recovery_check_and_t
 
 #[tokio::test]
 async fn no_typed_secret_or_secret_key_reaches_the_log_through_a_full_session() {
+    const WRONG: &str = "wrong vault passphrase E2E-3f9a";
     let session = Session::new().await;
     let (key, _) = fresh_key();
-    session.add_key(&key, "wrong vault passphrase E2E-3f9a").await;
-    session.add_key(&key, VAULT_PASSPHRASE).await;
-    session.remove_key(&key).await;
+    let old_recovery = session.key_of(RecipientRole::Recovery).await;
+    let denied = session.add_key(&key, WRONG).await;
+    assert_eq!(refusal(denied).0, ErrorCode::MigrationDenied);
+    let added = session.add_key(&key, VAULT_PASSPHRASE).await;
+    assert!(matches!(added, AdminResponse::RecipientAdd { .. }), "{added:?}");
+    let removed = session.remove_key(&key).await;
+    assert!(matches!(removed, AdminResponse::RecipientRemove { .. }), "{removed:?}");
     let request = AdminRequest::RecipientAddRecovery {
         label: "rotated".to_owned(),
     };
-    let (_, reveals) = exchange(&session.service, request, &[b"yes", VAULT_PASSPHRASE.as_bytes()]).await;
+    let (rotated, reveals) = exchange(&session.service, request, &[b"yes", VAULT_PASSPHRASE.as_bytes()]).await;
+    assert!(matches!(rotated, AdminResponse::RecipientAdd { .. }), "{rotated:?}");
     let new_secret = reveals.into_iter().next().unwrap();
-    session.remove_key(&session.key_of(RecipientRole::Recovery).await).await;
-    exchange(&session.service, AdminRequest::RecoveryCheck, &[new_secret.as_bytes()]).await;
+    let removed = session.remove_key(&old_recovery).await;
+    assert!(matches!(removed, AdminResponse::RecipientRemove { .. }), "{removed:?}");
+    let (new_check, _) = exchange(&session.service, AdminRequest::RecoveryCheck, &[new_secret.as_bytes()]).await;
+    assert!(matches!(new_check, AdminResponse::RecoveryCheck { .. }), "{new_check:?}");
+    let (old_check, _) = exchange(&session.service, AdminRequest::RecoveryCheck, &[session.recovery_key.as_bytes()]).await;
+    assert_eq!(refusal(old_check).0, ErrorCode::RecoveryCheckFailed);
 
+    assert!(!session.logs.events("recipient.added").is_empty() && !session.logs.events("recipient.removed").is_empty());
     let text = session.logs.text();
     [
         VAULT_PASSPHRASE,
         APPROVAL_PASSPHRASE,
         CREDENTIAL_SECRET,
-        "wrong vault passphrase E2E-3f9a",
+        WRONG,
         "AGE-SECRET-KEY-1",
         &new_secret,
         &session.recovery_key,
