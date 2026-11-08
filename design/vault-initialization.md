@@ -60,7 +60,7 @@ bytes are compared with the initial config (below). The checks run in this order
 
 1. **`init.unfinished` is present.** The state is Unfinished if the state directory holds no file but the lock file
    (`lock`), a `lost+found` directory, stale temp files (`.<name>.tmp`), the files an initialization writes
-   (`init.unfinished`, `identity.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`) and the
+   (`init.unfinished`, `identity.age`, `recipients.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`) and the
    recovery check record (`recovery.toml`), and the config directory passes the [config test](#the-config-test).
    Otherwise it is Unrecognized.
 2. **`manifest.age` is present.** The state is Initialized, whatever else the directories hold: an Initialized vault
@@ -78,7 +78,7 @@ bytes are compared with the initial config (below). The checks run in this order
 | Unrecognized | No check matched: a foreign file or a config file that is not init's own beside `init.unfinished`, or files of a vault without its manifest, or anything else in a directory with no manifest. |
 
 A **foreign file** is a file in the state directory that is not on the lists above: the lock file, `lost+found`, temp
-files, the vault's own files (`identity.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`,
+files, the vault's own files (`identity.age`, `recipients.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`,
 `init.unfinished`), record files (`record-*.age`) and the recovery check record (`recovery.toml`), which
 [recovery.md](recovery.md#initialization) describes. It matters only beside `init.unfinished`, where it makes the state
 Unrecognized so the discard never sweeps it into the new vault, and in a state directory with no manifest, where it
@@ -91,7 +91,7 @@ lock the owner out of a working vault. `lost+found` is the directory a filesyste
 
 Init proceeds only on Uninitialized and Unfinished. Examples of Unrecognized:
 
-- envelope files (`identity.age`, `operational.age`, `approver.age`) without `init.unfinished` or a manifest: a
+- envelope files (`identity.age`, `recipients.age`, `operational.age`, `approver.age`) without `init.unfinished` or a manifest: a
   crash cannot leave them, because `init.unfinished` is durable before the first of them is written;
 - record files or `approval.age` without a manifest: what `Vault::open` already reports as damaged shared state;
 - `init.unfinished` beside a record file: only `add` writes a record file, and only an initialized vault adds;
@@ -272,7 +272,7 @@ store function built on it, so each is whole or absent after a crash.
 | Step | What the service does | Durable change |
 |---|---|---|
 | 1 | Writes the empty file `init.unfinished` in the state directory. From here on the state directory reads Unfinished until step 9. | `init.unfinished` |
-| 2 | Wraps the vault identity for the recipient set {operational recipient key, recovery recipient key} with `wrap_identity` and writes it. Then reads `identity.age` back and unwraps it with `unwrap_identity` twice, once with the operational identity and once with the recovery key's identity, and requires both to give the generated vault identity (same public key). The recovery identity is dropped. | `identity.age` |
+| 2 | Wraps the vault identity for the recipient set {operational recipient key, recovery recipient key} with `wrap_identity` and writes it. Then reads `identity.age` back and unwraps it with `unwrap_identity` twice, once with the operational identity and once with the recovery key's identity, and requires both to give the generated vault identity (same public key). Then writes the [recipient inventory](recipients.md#initialization) with `write_recipient_inventory`: the `operational` and `recovery` entries, labelled `vault passphrase` and `recovery key`, the init time, the vault ID generated with the keys and the digest of the envelope as read back. Reads it back and requires that it opens with the vault identity and equals what was written. The recovery identity is dropped. | `identity.age`, then `recipients.age` |
 | 3 | Seals the operational identity to the vault passphrase with `seal_passphrase_envelope` and writes it. The operational identity is dropped. | `operational.age` |
 | 4 | Seals the software signer key to the approval passphrase with `seal_signer_key` and writes it with `write_signer_key`. The signer key is dropped. | `approver.age` |
 | 5 | Creates the vault with `Vault::create`: a new vault ID and an empty manifest at state generation 1. | `manifest.age` |
@@ -312,8 +312,8 @@ writes, each durably, and only those present:
   `config.toml.pending`, each removed durably (unlink, then directory fsync). All signatures go before any config,
   because a signature with no config beside it makes the state Unrecognized and `publish` can leave `config.toml`
   beside `config.toml.sig.staged`;
-- in the state directory: `recovery.toml`, `approval.age`, `manifest.age`, `approver.age`, `operational.age` and
-  `identity.age`, each with `durable_remove`.
+- in the state directory: `recovery.toml`, `approval.age`, `manifest.age`, `approver.age`, `operational.age`,
+  `recipients.age` and `identity.age`, each with `durable_remove`.
 
 `init.unfinished` stays, and step 1 then rewrites it, so a crash during the discard leaves the state Unfinished and
 the next init discards again. Nothing else is left to touch: the state is Unfinished only if the state directory holds
@@ -357,7 +357,7 @@ It does not report the initialization state until K-161 ([open question 6](#open
 |---|---|---|---|
 | none | Uninitialized | `unlock-failed`: not initialized, run `iron-vault init` | removes a leftover `recovery.toml`, then proceeds from step 1 |
 | 1 `init.unfinished` | Unfinished | `unlock-failed`: initialization unfinished, an init may be in progress; run `iron-vault init` again if none is | notice, discards (nothing yet), proceeds |
-| 2 `identity.age` | Unfinished | as row 1 | discards `identity.age`, proceeds |
+| 2 `identity.age`, then `recipients.age` | Unfinished | as row 1 | discards whichever of the two exist, proceeds |
 | 3 `operational.age` | Unfinished | as row 1; the passphrase is never asked for, so the vault never reaches Checking | discards both envelopes, proceeds |
 | 4 `approver.age` | Unfinished | as row 1 | discards the three envelopes, proceeds |
 | 5 manifest | Unfinished | as row 1 | discards envelopes and manifest, proceeds |

@@ -68,11 +68,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         if !inner.state.admin_allows(AdminOperation::Initialize) {
             return Err(InitRefusal::WrongState(inner.state));
         }
+        let enrolled_at = self.clock.now().map_err(|error| InitRefusal::Unreadable(error.to_string()))?;
         let (locks, setup, holder) = (Arc::clone(&self.locks), Arc::clone(&self.setup), Arc::clone(&self.holder));
         let written = tokio::task::spawn_blocking(move || {
             let _held = (service_wide, inner);
             let paused = holder.pause();
-            let written = initialize(&locks.state, &locks.config, &setup.fs, keys, passphrases, &paused);
+            let written = initialize(&locks.state, &locks.config, &setup.fs, keys, passphrases, &paused, enrolled_at);
             log_outcome(&written);
             written
         })

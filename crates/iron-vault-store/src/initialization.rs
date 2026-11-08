@@ -272,13 +272,14 @@ impl Survey {
 /// The files a discard removes from the state directory, in order: a recovery check record, which beside the marker was
 /// left by an earlier vault and was not written after this one was initialized, then what an initialization writes
 /// except the marker.
-fn written_files() -> [StateFileName; 6] {
+fn written_files() -> [StateFileName; 7] {
     [
         StateFileName::recovery_check_record(),
         StateFileName::approval_state(),
         StateFileName::manifest(),
         StateFileName::approver_key(),
         StateFileName::passphrase_envelope(),
+        StateFileName::recipient_inventory(),
         StateFileName::identity_envelope(),
     ]
 }

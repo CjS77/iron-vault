@@ -20,9 +20,13 @@ use crate::{
     AdmissionPaused, ApprovalError, ApprovalPassphrase, ApprovalState, ApprovalStorage, ApprovalVersion, BeginError, ConfigDigest,
     ConfigDirLock, EnvelopeError, ErrorKindLabel, InitStateError, InitializationState, PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig,
     ReadError, RecipientIdentity, RecipientSet, RecipientSetError, SignError, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs,
-    Vault, VaultError, VaultId, VaultIdentity, WriteError, approval::seal_signer_key_at, begin_initialization, finish_initialization,
-    open_signer_key, read_identity_envelope, read_signer_key, unwrap_identity, wrap_identity, write_identity_envelope,
-    write_passphrase_envelope, write_signer_key,
+    UtcSecond, Vault, VaultError, VaultId, VaultIdentity, WriteError, approval::seal_signer_key_at, begin_initialization,
+    finish_initialization, open_signer_key, read_identity_envelope, read_signer_key, unwrap_identity, wrap_identity,
+    write_identity_envelope, write_passphrase_envelope, write_signer_key,
+};
+use crate::{
+    RecipientEntry, RecipientInventory, RecipientInventoryError, RecipientInventoryReadError, RecipientInventoryWriteError, RecipientLabel,
+    RecipientLabelError, RecipientRole, envelope_digest, read_recipient_inventory, write_recipient_inventory,
 };
 
 pub use keys::{NewVaultKeys, SealingKeys};
@@ -35,7 +39,7 @@ pub enum InitStep {
     Discard,
     /// Step 1: writing `init.unfinished`, or refusing a directory init must not write to.
     Begin,
-    /// Step 2: writing `identity.age` and proving both recipients unwrap it.
+    /// Step 2: writing `identity.age`, proving both recipients unwrap it, and writing `recipients.age`.
     IdentityEnvelope,
     /// Step 3: writing `operational.age`.
     PassphraseEnvelope,
@@ -76,7 +80,7 @@ impl fmt::Display for InitStep {
         let what = match self {
             Self::Discard => "discarding the unfinished initialization or a leftover recovery check record",
             Self::Begin => "writing init.unfinished",
-            Self::IdentityEnvelope => "writing and checking the identity envelope",
+            Self::IdentityEnvelope => "writing and checking the identity envelope and the recipient inventory",
             Self::PassphraseEnvelope => "writing the passphrase envelope",
             Self::ApproverKey => "writing the approver key envelope",
             Self::Manifest => "creating the manifest",
@@ -158,6 +162,21 @@ pub enum InitFailure {
     /// A state file could not be read back.
     #[error(transparent)]
     Read(#[from] ReadError),
+    /// The recipient inventory could not be built from the two recipients.
+    #[error(transparent)]
+    Inventory(#[from] RecipientInventoryError),
+    /// The recipient inventory could not be written.
+    #[error(transparent)]
+    InventoryWrite(#[from] RecipientInventoryWriteError),
+    /// The recipient inventory could not be read back.
+    #[error(transparent)]
+    InventoryRead(#[from] RecipientInventoryReadError),
+    /// A default recipient label broke the label rule.
+    #[error(transparent)]
+    InventoryLabel(#[from] RecipientLabelError),
+    /// The inventory as read back names a recipient set other than the one the envelope was wrapped for.
+    #[error("the recipient inventory as read back does not match the identity envelope")]
+    InventoryMismatch,
     /// `identity.age` as read back unwraps to another identity from the one generated.
     #[error("the identity envelope as read back does not hold the generated vault identity")]
     IdentityMismatch,
@@ -215,8 +234,16 @@ pub fn initialize<F: StoreFs>(
     keys: SealingKeys,
     passphrases: InitPassphrases,
     paused: &impl AdmissionPaused,
+    enrolled_at: UtcSecond,
 ) -> Result<InitializedVault, InitError> {
-    initialize_at(state, config, fs, (keys, passphrases), paused, PASSPHRASE_WORK_FACTOR)
+    initialize_at(
+        state,
+        config,
+        fs,
+        (keys, passphrases),
+        paused,
+        (enrolled_at, PASSPHRASE_WORK_FACTOR),
+    )
 }
 
 /// [`initialize`] sealing both passphrase envelopes at work factor `log_n`, so tests do not spend seconds in scrypt.
@@ -226,10 +253,10 @@ pub(crate) fn initialize_at<F: StoreFs>(
     fs: &F,
     (keys, passphrases): (SealingKeys, InitPassphrases),
     paused: &impl AdmissionPaused,
-    log_n: u8,
+    (enrolled_at, log_n): (UtcSecond, u8),
 ) -> Result<InitializedVault, InitError> {
     let discarded = begin(state, config, fs)?;
-    match write_vault(state, config, fs, (keys, passphrases), paused, log_n) {
+    match write_vault(state, config, fs, (keys, passphrases), paused, (enrolled_at, log_n)) {
         Ok((vault_id, committed)) => Ok(InitializedVault {
             vault_id,
             version: committed.version,
@@ -251,20 +278,21 @@ fn write_vault<F: StoreFs>(
     fs: &F,
     (keys, passphrases): (SealingKeys, InitPassphrases),
     paused: &impl AdmissionPaused,
-    log_n: u8,
+    (enrolled_at, log_n): (UtcSecond, u8),
 ) -> Result<(VaultId, FirstApproval), InitError> {
     let SealingKeys {
         vault,
+        vault_id,
         operational,
         recovery,
         signer,
         approver,
     } = keys;
     let (passphrase, approval_passphrase) = passphrases.into_parts();
-    write_checked_identity(state, fs, &vault, &operational, recovery).map_err(at(InitStep::IdentityEnvelope))?;
+    write_checked_identity(state, fs, (&vault, vault_id), &operational, recovery, enrolled_at).map_err(at(InitStep::IdentityEnvelope))?;
     seal_operational(state, fs, operational, passphrase, log_n).map_err(at(InitStep::PassphraseEnvelope))?;
     seal_approver(state, fs, signer, &approval_passphrase, log_n).map_err(at(InitStep::ApproverKey))?;
-    let mut created = Vault::create(state, fs, vault).map_err(at(InitStep::Manifest))?;
+    let mut created = Vault::create_with_id(state, fs, vault, vault_id).map_err(at(InitStep::Manifest))?;
     let (mut approval, _) = created
         .create_approval_state(state, fs, approver)
         .map_err(at(InitStep::ApprovalState))?;
@@ -301,13 +329,15 @@ fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Res
 }
 
 /// Step 2. Both recipient paths are proved on the file as read back, before anything depends on it, while the recovery
-/// key the owner saved still means nothing. The recovery identity is dropped on return.
+/// key the owner saved still means nothing. Then the recipient inventory is written for the same two keys and read
+/// back, so `recipients.age` exists from the moment the vault does. The recovery identity is dropped on return.
 fn write_checked_identity(
     state: &StateDirLock,
     fs: &impl StoreFs,
-    vault: &VaultIdentity,
+    (vault, vault_id): (&VaultIdentity, VaultId),
     operational: &RecipientIdentity,
     recovery: RecipientIdentity,
+    enrolled_at: UtcSecond,
 ) -> Result<(), InitFailure> {
     let recipients = RecipientSet::new([operational.recipient_key(), recovery.recipient_key()])?;
     write_identity_envelope(state, fs, &wrap_identity(vault, &recipients)?)?;
@@ -317,7 +347,27 @@ fn write_checked_identity(
             true => Ok(()),
             false => Err(InitFailure::IdentityMismatch),
         }
-    })
+    })?;
+    let entries = [
+        (operational, RecipientRole::Operational, "vault passphrase"),
+        (&recovery, RecipientRole::Recovery, "recovery key"),
+    ]
+    .map(|(identity, role, label)| {
+        Ok(RecipientEntry::new(
+            identity.recipient_key(),
+            role,
+            RecipientLabel::new(label)?,
+            enrolled_at,
+        ))
+    });
+    let entries = entries.into_iter().collect::<Result<Vec<_>, InitFailure>>()?;
+    let inventory = RecipientInventory::new(vault_id, envelope_digest(&envelope), entries)?;
+    write_recipient_inventory(state, fs, vault, &inventory)?;
+    let read_back = read_recipient_inventory(state, fs, vault)?;
+    match read_back == inventory && read_back.recipient_set() == recipients {
+        true => Ok(()),
+        false => Err(InitFailure::InventoryMismatch),
+    }
 }
 
 /// Step 3. The operational identity and the vault passphrase are dropped on return.

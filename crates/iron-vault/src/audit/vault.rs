@@ -301,6 +301,10 @@ const fn init_failure_label(failure: &InitFailure) -> &'static str {
         InitFailure::Write(_) => "state_write",
         InitFailure::Read(_) => "state_read",
         InitFailure::IdentityMismatch => "identity_mismatch",
+        InitFailure::Inventory(_) | InitFailure::InventoryWrite(_) | InitFailure::InventoryRead(_) | InitFailure::InventoryLabel(_) => {
+            "recipient_inventory"
+        }
+        InitFailure::InventoryMismatch => "recipient_inventory_mismatch",
         InitFailure::Sign(_) => "sign",
         InitFailure::Vault(_) => "vault",
         InitFailure::Approval(_) => "approval",

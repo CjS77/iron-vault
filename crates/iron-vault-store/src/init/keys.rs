@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::{
     OperationalIdentity, PinnedApprover, RecipientIdentity, RecoveryKey, RecoveryKeySecret, SignError, SoftwareSigner, SoftwareSignerKey,
-    VaultIdentity,
+    VaultId, VaultIdentity,
 };
 
 /// The keys of a vault not yet written, with the recovery key's text for the one reveal.
@@ -22,6 +22,7 @@ pub struct NewVaultKeys {
 /// dropped when initialization returns, so the service keeps no recovery path it could use by itself (spec §3.13).
 pub struct SealingKeys {
     pub(super) vault: VaultIdentity,
+    pub(super) vault_id: VaultId,
     pub(super) operational: RecipientIdentity,
     pub(super) recovery: RecipientIdentity,
     pub(super) signer: SoftwareSignerKey,
@@ -29,7 +30,7 @@ pub struct SealingKeys {
 }
 
 impl NewVaultKeys {
-    /// Generates the vault identity, the operational identity, the recovery key and the software signer key.
+    /// Generates the vault identity and ID, the operational identity, the recovery key and the software signer key.
     ///
     /// Fails only when the operating system's random source does.
     pub fn generate() -> Result<Self, SignError> {
@@ -39,6 +40,7 @@ impl NewVaultKeys {
         Ok(Self {
             sealing: SealingKeys {
                 vault: VaultIdentity::generate(),
+                vault_id: VaultId::new_random(),
                 operational,
                 recovery,
                 signer,

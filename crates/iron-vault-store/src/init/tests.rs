@@ -5,7 +5,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 use super::*;
 use crate::durable_replace;
-use crate::fault_fs::{FaultFs, FsOp};
+use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::test_dir::TestDir;
 use crate::vault::tests::capture_logs;
 use crate::{
@@ -15,6 +15,9 @@ use crate::{
 
 /// The passphrase work factor the tests seal at, so a run does not spend seconds in scrypt.
 const TEST_WORK_FACTOR: u8 = 2;
+
+/// The enrolment time the tests give the first inventory.
+const ENROLLED_AT: UtcSecond = UtcSecond::EPOCH;
 
 const VAULT_PASSPHRASE: &str = "correct horse battery";
 const APPROVAL_PASSPHRASE: &str = "staple approval words";
@@ -36,6 +39,8 @@ struct Dirs {
 struct Secrets {
     recovery: String,
     operational: String,
+    /// The set the identity envelope is wrapped for.
+    recipients: RecipientSet,
 }
 
 impl Dirs {
@@ -66,8 +71,23 @@ impl Dirs {
         let recovery = keys.recovery_secret().expose_secret().to_owned();
         let sealing = keys.into_sealing();
         let operational = sealing.operational.secret_text().expose_secret().to_owned();
-        let result = initialize_at(&self.state, &self.config, fs, (sealing, passphrases()), &Paused, TEST_WORK_FACTOR);
-        (result, Secrets { recovery, operational })
+        let recipients = RecipientSet::new([sealing.operational.recipient_key(), sealing.recovery.recipient_key()]).unwrap();
+        let result = initialize_at(
+            &self.state,
+            &self.config,
+            fs,
+            (sealing, passphrases()),
+            &Paused,
+            (ENROLLED_AT, TEST_WORK_FACTOR),
+        );
+        (
+            result,
+            Secrets {
+                recovery,
+                operational,
+                recipients,
+            },
+        )
     }
 
     fn read(&self, fs: &impl StoreFs) -> InitializationState {
@@ -115,13 +135,14 @@ fn passphrases() -> InitPassphrases {
 
 /// Checks the vault opens by both recovery paths to the same identity, and that its approval state committed version
 /// 1 on the initial config with a published pair that verifies.
-fn assert_initialized(dirs: &Dirs, fs: &impl StoreFs, initialized: &InitializedVault, recovery: &str) {
+fn assert_initialized(dirs: &Dirs, fs: &impl StoreFs, initialized: &InitializedVault, secrets: &Secrets) {
     assert_eq!(dirs.read(fs), InitializationState::Initialized);
     assert_eq!(initialized.version, ApprovalVersion::FIRST);
     let identity = unlock_with_passphrase(&dirs.state, fs, &vault_passphrase()).unwrap();
-    let recovery = RecoveryKeySecret::parse(SecretString::from(recovery)).unwrap();
+    let recovery = RecoveryKeySecret::parse(SecretString::from(secrets.recovery.as_str())).unwrap();
     let recovered = unwrap_identity(&read_identity_envelope(&dirs.state, fs).unwrap(), &recovery).unwrap();
     assert_eq!(recovered.public_key(), identity.public_key());
+    assert_inventory(dirs, fs, &identity, initialized.vault_id, &secrets.recipients);
     let (vault, report) = Vault::open(&dirs.state, fs, identity).unwrap();
     assert_eq!(report, Default::default());
     assert_eq!(vault.manifest().vault_id(), initialized.vault_id);
@@ -136,13 +157,53 @@ fn assert_initialized(dirs: &Dirs, fs: &impl StoreFs, initialized: &InitializedV
     assert_eq!(recovered.published().config(), INITIAL_CONFIG);
 }
 
+/// The inventory opens with the vault identity, holds the `operational` and `recovery` entries with their default
+/// labels and the enrolment time, and names exactly the recipients `identity.age` unwraps for.
+fn assert_inventory(dirs: &Dirs, fs: &impl StoreFs, identity: &VaultIdentity, vault_id: VaultId, wrapped_for: &RecipientSet) {
+    let inventory = read_recipient_inventory(&dirs.state, fs, identity).unwrap();
+    assert_eq!(inventory.vault_id(), vault_id);
+    let envelope = read_identity_envelope(&dirs.state, fs).unwrap();
+    assert_eq!(inventory.envelope_digest(), &envelope_digest(&envelope));
+    let described: Vec<_> = inventory
+        .entries()
+        .map(|entry| (entry.role(), entry.label().as_str().to_owned(), entry.enrolled_at()))
+        .collect();
+    assert_eq!(described.len(), 2);
+    assert!(described.contains(&(RecipientRole::Operational, "vault passphrase".to_owned(), ENROLLED_AT)));
+    assert!(described.contains(&(RecipientRole::Recovery, "recovery key".to_owned(), ENROLLED_AT)));
+    assert_eq!(&inventory.recipient_set(), wrapped_for);
+}
+
+#[test]
+fn a_fault_at_the_inventory_write_leaves_it_unfinished_and_the_next_init_discards_it() {
+    let dirs = Dirs::new("init-inventory-fault");
+    let probe = dirs.fault_fs();
+    drop(dirs.init(&probe).unwrap());
+    let rename = probe
+        .trace()
+        .iter()
+        .position(|call| matches!(call, FsCall::Rename { to, .. } if to.ends_with("recipients.age")))
+        .unwrap();
+    let dirs = Dirs::new("init-inventory-fault-run");
+    let fs = dirs.fault_fs();
+    // The directory fsync after the rename: the inventory is visible, but the write reported failure.
+    fs.fail_call(rename + 1, io::ErrorKind::Other);
+    let error = dirs.init(&fs).unwrap_err();
+    assert_eq!(error.step(), InitStep::IdentityEnvelope);
+    assert_eq!(dirs.read(&fs), InitializationState::Unfinished);
+    let (result, secrets) = dirs.init_keeping(&fs);
+    let initialized = result.unwrap();
+    assert!(initialized.discarded.contains(&"recipients.age".to_owned()));
+    assert_initialized(&dirs, &fs, &initialized, &secrets);
+}
+
 #[test]
 fn a_fresh_directory_initializes_to_version_1() {
     let dirs = Dirs::new("init-run");
     let (result, secrets) = dirs.init_keeping(&OsFs);
     let initialized = result.unwrap();
     assert!(initialized.discarded.is_empty(), "{initialized:?}");
-    assert_initialized(&dirs, &OsFs, &initialized, &secrets.recovery);
+    assert_initialized(&dirs, &OsFs, &initialized, &secrets);
     assert_eq!(dirs.file(&OsFs, dirs.config_dir.path(), "config.toml"), INITIAL_CONFIG);
 }
 
@@ -237,17 +298,18 @@ fn an_unfinished_initialization_is_discarded_and_started_over() {
     let (result, secrets) = dirs.init_keeping(&fs);
     let initialized = result.unwrap();
     assert_eq!(initialized.discarded, DISCARDED);
-    assert_initialized(&dirs, &fs, &initialized, &secrets.recovery);
+    assert_initialized(&dirs, &fs, &initialized, &secrets);
 }
 
 /// What the discard of a run that failed only at its commit point removes, in order.
-const DISCARDED: [&str; 7] = [
+const DISCARDED: [&str; 8] = [
     "config.toml.sig",
     "config.toml",
     "approval.age",
     "manifest.age",
     "approver.age",
     "operational.age",
+    "recipients.age",
     "identity.age",
 ];
 

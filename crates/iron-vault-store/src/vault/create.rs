@@ -22,8 +22,13 @@ impl Vault {
     /// A [`VaultError::CommitUncertain`] means the manifest may not survive power loss: open the vault to see whether
     /// it exists. The caller has already authorized initialization; this performs it.
     pub fn create(lock: &StateDirLock, fs: &impl StoreFs, identity: VaultIdentity) -> Result<Vault, VaultError> {
+        Self::create_with_id(lock, fs, identity, VaultId::new_random())
+    }
+
+    /// [`Vault::create`] for a vault ID chosen beforehand, so a file written before the manifest can name the vault.
+    pub fn create_with_id(lock: &StateDirLock, fs: &impl StoreFs, identity: VaultIdentity, vault_id: VaultId) -> Result<Vault, VaultError> {
         refuse_existing_vault(&list_state_dir(lock, fs)?)?;
-        let manifest = VaultManifest::first(VaultId::new_random()).map_err(VaultError::NextManifest)?;
+        let manifest = VaultManifest::first(vault_id).map_err(VaultError::NextManifest)?;
         commit_manifest(lock, fs, &seal_manifest(&identity, &manifest).map_err(VaultError::Seal)?)?;
         Ok(Vault {
             dir: lock.dir().to_path_buf(),
