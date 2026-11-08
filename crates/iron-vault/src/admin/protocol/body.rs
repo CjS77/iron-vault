@@ -43,6 +43,9 @@ const COMMAND_REPLACE: u16 = AdminCommand::Replace as u16;
 const COMMAND_RM: u16 = AdminCommand::Rm as u16;
 const COMMAND_RECOVERY_CHECK: u16 = AdminCommand::RecoveryCheck as u16;
 const COMMAND_RECIPIENT_LIST: u16 = AdminCommand::RecipientList as u16;
+const COMMAND_RECIPIENT_REMOVE: u16 = AdminCommand::RecipientRemove as u16;
+const TAG_RECIPIENT: u16 = 2;
+const TAG_RECIPIENT_COUNT: u16 = 2;
 const TAG_CHECKED_AT: u16 = 3;
 const TAG_RECORDED: u16 = 4;
 const TAG_NAME: u16 = 2;
@@ -59,6 +62,7 @@ pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameErr
     match request {
         AdminRequest::ConfigApprove(config) => fields::put(&mut out, TAG_CONFIG, config.bytes()),
         AdminRequest::Rm { name } => fields::put(&mut out, TAG_NAME, name.as_bytes()),
+        AdminRequest::RecipientRemove { recipient } => fields::put(&mut out, TAG_RECIPIENT, recipient.as_bytes()),
         AdminRequest::Init { host_unlock } => fields::put(&mut out, TAG_HOST_UNLOCK, &[u8::from(*host_unlock)]),
         _ => {}
     }
@@ -95,6 +99,12 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
             let [_, name] = exact(&fields, [TAG_COMMAND, TAG_NAME])?;
             Ok(AdminRequest::Rm {
                 name: read_text(TAG_NAME, name)?,
+            })
+        }
+        COMMAND_RECIPIENT_REMOVE => {
+            let [_, recipient] = exact(&fields, [TAG_COMMAND, TAG_RECIPIENT])?;
+            Ok(AdminRequest::RecipientRemove {
+                recipient: read_text(TAG_RECIPIENT, recipient)?,
             })
         }
         unknown => Err(FrameError::UnknownCommand(unknown)),
@@ -169,6 +179,14 @@ fn decode_caller_token_result(fields: &[fields::Field<'_>]) -> Result<AdminRespo
 /// carry is an error.
 pub(super) fn encode_list_result(credentials: Option<&[CredentialStanding]>) -> Result<Vec<u8>, FrameError> {
     list::encode_result(COMMAND_LIST, credentials)
+}
+
+/// `recipient remove`'s success body: the command it answers, then the recipient count after the removal.
+pub(super) fn encode_recipient_remove_result(recipients: u8) -> Vec<u8> {
+    let mut out = Vec::new();
+    fields::put(&mut out, TAG_COMMAND, &COMMAND_RECIPIENT_REMOVE.to_be_bytes());
+    fields::put(&mut out, TAG_RECIPIENT_COUNT, &[recipients]);
+    out
 }
 
 /// `recipient list`'s success body: the command it answers, then the entries.
@@ -291,6 +309,13 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
         COMMAND_ADD => add::decode_result(&fields).map(|record_id| AdminResponse::Add { record_id }),
         COMMAND_LIST => list::decode_result(&fields),
         COMMAND_RECIPIENT_LIST => recipient_list::decode_result(&fields),
+        COMMAND_RECIPIENT_REMOVE => {
+            let [_, count] = exact(&fields, [TAG_COMMAND, TAG_RECIPIENT_COUNT])?;
+            match count {
+                &[recipients] => Ok(AdminResponse::RecipientRemove { recipients }),
+                _ => Err(FrameError::InvalidValue(TAG_RECIPIENT_COUNT)),
+            }
+        }
         COMMAND_REPLACE => add::decode_result(&fields).map(|record_id| AdminResponse::Replace { record_id }),
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
@@ -348,6 +373,9 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::MigrationRateLimited,
         ErrorCode::UnlockRateLimited,
         ErrorCode::RecipientInventoryDamaged,
+        ErrorCode::RecipientInvalid,
+        ErrorCode::UnknownRecipient,
+        ErrorCode::RecipientSetInvalid,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

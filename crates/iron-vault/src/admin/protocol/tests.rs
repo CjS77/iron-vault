@@ -83,6 +83,7 @@ fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
             },
         ) => a == b && t == u && r == q,
         (R::RecipientList { entries: a }, R::RecipientList { entries: b }) => a == b,
+        (R::RecipientRemove { recipients: a }, R::RecipientRemove { recipients: b }) => a == b,
         (R::Error { code: a, message: m }, R::Error { code: b, message: n }) => a == b && m == n,
         _ => false,
     }
@@ -177,6 +178,9 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::MigrationRateLimited),
         Just(ErrorCode::UnlockRateLimited),
         Just(ErrorCode::RecipientInventoryDamaged),
+        Just(ErrorCode::RecipientInvalid),
+        Just(ErrorCode::UnknownRecipient),
+        Just(ErrorCode::RecipientSetInvalid),
     ]
 }
 
@@ -204,6 +208,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             any::<bool>().prop_map(|host_unlock| AdminRequest::Init { host_unlock }),
             Just(AdminRequest::RecoveryCheck),
             Just(AdminRequest::RecipientList),
+            text(256).prop_map(|recipient| AdminRequest::RecipientRemove { recipient }),
             add_request(),
             replace_request(),
             text(256).prop_map(|name| AdminRequest::Rm { name }),
@@ -227,6 +232,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
         ]
         .prop_map(|profile| Frame::Response(AdminResponse::Ping { profile })),
         any::<bool>().prop_map(|cleared| Frame::Response(AdminResponse::Lock { cleared })),
+        any::<u8>().prop_map(|recipients| Frame::Response(AdminResponse::RecipientRemove { recipients })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Add { record_id: v4(bytes) })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Replace { record_id: v4(bytes) })),
         any::<[u8; 32]>().prop_map(|bytes| Frame::Response(AdminResponse::CallerToken {
@@ -1291,4 +1297,39 @@ fn the_migration_error_codes_have_their_documented_numbers_and_names() {
         assert_eq!((code as u16, code.name()), (number, name));
         assert_round_trips(&error(code, "m"));
     });
+}
+
+#[test]
+fn recipient_remove_has_its_documented_ids_and_bodies() {
+    let request = AdminRequest::RecipientRemove {
+        recipient: "age1x".to_owned(),
+    };
+    assert_eq!(
+        (AdminCommand::RecipientRemove as u16, request.command().name()),
+        (15, "recipient remove")
+    );
+    assert_eq!(
+        encoded(&Frame::Request(request)),
+        raw(1, 1, &[field(1, &[0, 15]), field(2, b"age1x")].concat())
+    );
+    assert_eq!(
+        encoded(&Frame::Response(AdminResponse::RecipientRemove { recipients: 2 })),
+        raw(1, 4, &[field(1, &[0, 15]), field(2, &[2])].concat())
+    );
+    [
+        (ErrorCode::RecipientInvalid, 35, "recipient-invalid"),
+        (ErrorCode::UnknownRecipient, 37, "unknown-recipient"),
+        (ErrorCode::RecipientSetInvalid, 38, "recipient-set-invalid"),
+    ]
+    .into_iter()
+    .for_each(|(code, number, name)| {
+        assert_eq!((code as u16, code.name()), (number, name));
+        assert_round_trips(&error(code, "m"));
+    });
+}
+
+#[test]
+fn a_recipient_count_of_any_other_width_is_refused() {
+    let body = raw(1, 4, &[field(1, &[0, 15]), field(2, &[0, 2])].concat());
+    assert_eq!(decode_err(&body), FrameError::InvalidValue(2));
 }

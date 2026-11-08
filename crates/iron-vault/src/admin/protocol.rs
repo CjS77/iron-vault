@@ -91,6 +91,12 @@ pub enum AdminRequest {
     },
     /// Lists every enrolled recipient of the vault identity, in inventory order; Ready only. No arguments. Command ID 13.
     RecipientList,
+    /// Removes an enrolled recipient from the identity envelope and the inventory after owner presence; the service prompts
+    /// for the approval passphrase. Command ID 15.
+    RecipientRemove {
+        /// The recipient key's `age1...` text, as the owner wrote it; the service parses it.
+        recipient: String,
+    },
 }
 
 /// A requested origin: one permitted origin as an `add` or `replace` request carries it. The host stays text on the wire, at most
@@ -120,6 +126,7 @@ impl AdminRequest {
             Self::Rm { .. } => AdminCommand::Rm,
             Self::RecoveryCheck => AdminCommand::RecoveryCheck,
             Self::RecipientList => AdminCommand::RecipientList,
+            Self::RecipientRemove { .. } => AdminCommand::RecipientRemove,
         }
     }
 }
@@ -153,6 +160,8 @@ pub enum AdminCommand {
     RecoveryCheck = 12,
     /// `recipient list`.
     RecipientList = 13,
+    /// `recipient remove`.
+    RecipientRemove = 15,
 }
 
 impl AdminCommand {
@@ -172,6 +181,7 @@ impl AdminCommand {
             Self::Rm => "rm",
             Self::RecoveryCheck => "recovery check",
             Self::RecipientList => "recipient list",
+            Self::RecipientRemove => "recipient remove",
         }
     }
 
@@ -191,6 +201,7 @@ impl AdminCommand {
             Self::Rm => "rm",
             Self::RecoveryCheck => "recovery_check",
             Self::RecipientList => "recipient_list",
+            Self::RecipientRemove => "recipient_remove",
         }
     }
 }
@@ -217,10 +228,11 @@ mod no_external_signatures {
             AdminCommand::ConfigApprove => &["config"],
             AdminCommand::Add | AdminCommand::Replace => &["name", "kind", "origins"],
             AdminCommand::Rm => &["name"],
+            AdminCommand::RecipientRemove => &["recipient"],
         }
     }
 
-    const COMMANDS: [AdminCommand; 13] = [
+    const COMMANDS: [AdminCommand; 14] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::CallerToken,
@@ -234,6 +246,7 @@ mod no_external_signatures {
         AdminCommand::Rm,
         AdminCommand::RecoveryCheck,
         AdminCommand::RecipientList,
+        AdminCommand::RecipientRemove,
     ];
 
     #[test]
@@ -411,6 +424,11 @@ pub enum AdminResponse {
         /// Every enrolled recipient, in inventory order. Public keys and labels only.
         entries: Vec<RecipientEntry>,
     },
+    /// `recipient remove` completed.
+    RecipientRemove {
+        /// How many recipients the vault has after the removal.
+        recipients: u8,
+    },
     /// `add` completed: the new credential record's ID.
     Add {
         /// The ID of the record the service wrote.
@@ -557,6 +575,14 @@ pub enum ErrorCode {
     /// `recipient list`, `recipient add`, `recipient remove`: the inventory check found the recipient inventory missing or
     /// damaged; the message names the damage; nothing was changed.
     RecipientInventoryDamaged = 39,
+    /// `recipient add`, `recipient remove`: the key is not an `age1...` X25519 recipient key, or the label breaks its rule;
+    /// the message names the rule.
+    RecipientInvalid = 35,
+    /// `recipient remove`: no enrolled recipient has this key; nothing was changed.
+    UnknownRecipient = 37,
+    /// `recipient add`, `recipient remove`: the set after the change would break the independence rule or hold more than 64
+    /// recipients; the message names which part; nothing was changed.
+    RecipientSetInvalid = 38,
 }
 
 impl ErrorCode {
@@ -598,6 +624,9 @@ impl ErrorCode {
             Self::MigrationRateLimited => "migration-rate-limited",
             Self::UnlockRateLimited => "unlock-rate-limited",
             Self::RecipientInventoryDamaged => "recipient-inventory-damaged",
+            Self::RecipientInvalid => "recipient-invalid",
+            Self::UnknownRecipient => "unknown-recipient",
+            Self::RecipientSetInvalid => "recipient-set-invalid",
         }
     }
 
@@ -733,6 +762,9 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         }
         Frame::Response(AdminResponse::RecipientList { entries }) => {
             put_frame(out, FrameKind::Success, &body::encode_recipient_list_result(entries)?)
+        }
+        Frame::Response(AdminResponse::RecipientRemove { recipients }) => {
+            put_frame(out, FrameKind::Success, &body::encode_recipient_remove_result(*recipients))
         }
         Frame::Response(AdminResponse::Add { record_id }) => put_frame(out, FrameKind::Success, &body::encode_add_result(*record_id)),
         Frame::Response(AdminResponse::Replace { record_id }) => {
