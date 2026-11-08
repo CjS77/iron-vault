@@ -116,3 +116,11 @@ fn advice_is_added_to_errors_only() {
     assert!(matches!(kept, AdminResponse::Success));
     assert_eq!(answer(with_advice(error(ErrorCode::Declined, "no".to_owned()), "x")).1, "no; x");
 }
+
+#[test]
+fn the_completion_ends_with_a_newline_whatever_lines_it_carries() {
+    let key = KEY.parse::<RecipientKey>().unwrap();
+    [(RecipientRole::Added, false), (RecipientRole::Recovery, true)]
+        .into_iter()
+        .for_each(|(role, unfinished)| assert!(completion(&key, role, 3, unfinished).ends_with('\n')));
+}

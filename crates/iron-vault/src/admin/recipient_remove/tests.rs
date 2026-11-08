@@ -86,3 +86,10 @@ fn the_completion_adds_a_line_only_when_the_role_or_an_unfinished_inventory_need
         "{added}"
     );
 }
+
+#[test]
+fn the_completion_ends_with_a_newline_whatever_lines_it_carries() {
+    [(RecipientRole::Added, false), (RecipientRole::Recovery, true)]
+        .into_iter()
+        .for_each(|(role, unfinished)| assert!(completion(&removed(role, unfinished)).ends_with('\n')));
+}

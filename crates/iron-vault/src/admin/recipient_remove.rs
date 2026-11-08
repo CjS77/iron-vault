@@ -87,7 +87,7 @@ fn summary<F: StoreFs + Send + Sync + 'static>(removal: &RecipientRemoval<'_, F>
     format!(
         "remove a recipient from the vault\n  vault: {vault}\n  recipient: {key}\n  role: {role}\n  label: {label}\n  \
          enrolled: {enrolled}\n  recipients after the change: {after}\n  removing a recipient protects future copies of identity.age only; \
-         copies made before still open with this key\n  authorize with: the approval passphrase"
+         copies made before still open with this key\n  authorize with: the approval passphrase\n"
     )
 }
 
@@ -120,7 +120,7 @@ fn completion(done: &RemovedRecipient) -> String {
         done.unfinished
             .then(|| "The recipient inventory is finished at the next recipient command.".to_owned()),
     ];
-    lines.into_iter().flatten().collect::<Vec<_>>().join("\n")
+    lines.into_iter().flatten().map(|line| format!("{line}\n")).collect()
 }
 
 fn refused(refusal: RemovalRefusal) -> AdminResponse {

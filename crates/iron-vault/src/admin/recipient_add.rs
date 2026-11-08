@@ -147,7 +147,7 @@ fn summary(plan: &RecipientAddPlan) -> String {
     };
     format!(
         "{title}\n  vault: {}\n  recipient: {}\n  role: {}\n  label: {}\n  recipients after the change: {}\n  {next}\n  \
-         authorize with: the vault passphrase",
+         authorize with: the vault passphrase\n",
         after.vault_id(),
         entry.key(),
         entry.role().name(),
@@ -168,6 +168,20 @@ fn role_counts(inventory: &RecipientInventory) -> String {
 
 /// Step 10's success: the completion notice, then the new key and the recipient count. A new recovery key adds the
 /// reminder to check it and retire the old one.
+/// The completion notice, ending in a newline like every other notice.
+fn completion(key: &RecipientKey, role: RecipientRole, recipients: usize, unfinished: bool) -> String {
+    let pending = if unfinished {
+        "\nThe recipient inventory is finished at the next recipient command."
+    } else {
+        ""
+    };
+    let rotate = if role == RecipientRole::Recovery { ROTATE_REMINDER } else { "" };
+    format!(
+        "enrolled {key} as {}; the vault has {recipients} recipients.\n{OLD_COPIES}{rotate}{pending}\n",
+        role.name()
+    )
+}
+
 async fn completed(
     exchange: &mut Exchange,
     key: &RecipientKey,
@@ -175,18 +189,7 @@ async fn completed(
     enrolled: Enrolled,
 ) -> Result<AdminResponse, ExchangeError> {
     let recipients = enrolled.inventory.entries().len();
-    let pending = if enrolled.unfinished {
-        "\nThe recipient inventory is finished at the next recipient command."
-    } else {
-        ""
-    };
-    let rotate = if role == RecipientRole::Recovery { ROTATE_REMINDER } else { "" };
-    exchange
-        .notice(&format!(
-            "enrolled {key} as {}; the vault has {recipients} recipients.\n{OLD_COPIES}{rotate}{pending}",
-            role.name()
-        ))
-        .await?;
+    exchange.notice(&completion(key, role, recipients, enrolled.unfinished)).await?;
     Ok(AdminResponse::RecipientAdd {
         recipient: key.clone(),
         recipients: u8::try_from(recipients).unwrap_or(u8::MAX),

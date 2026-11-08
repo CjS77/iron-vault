@@ -250,6 +250,12 @@ async fn removing_an_added_recipient_rewraps_the_envelope_and_says_old_copies_st
         "{}",
         done.notices
     );
+    assert!(
+        done.notices.contains("authorize with: the approval passphrase\nremoved "),
+        "{}",
+        done.notices
+    );
+    assert!(done.notices.ends_with('\n'), "{}", done.notices);
     assert!(done.notices.contains(OLD_COPIES), "{}", done.notices);
     assert!(!opens_identity(&fixture, &laptop), "the removed key must not open the new envelope");
     assert!(opens_identity(&fixture, &recovery));

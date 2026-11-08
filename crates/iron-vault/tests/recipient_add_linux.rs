@@ -166,7 +166,7 @@ async fn the_right_vault_passphrase_enrols_the_key_and_the_new_key_opens_the_vau
     );
     assert!(exchanged.notices.contains(&summary), "{}", exchanged.notices);
     assert!(
-        exchanged.notices.contains("authorize with: the vault passphrase"),
+        exchanged.notices.contains("authorize with: the vault passphrase\nenrolled "),
         "{}",
         exchanged.notices
     );
