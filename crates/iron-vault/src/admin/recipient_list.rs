@@ -51,7 +51,9 @@ fn refused(refusal: RecipientRefusal) -> AdminResponse {
         RecipientRefusal::Damaged(damage) => (ErrorCode::RecipientInventoryDamaged, damaged_message(damage)),
         RecipientRefusal::Write(cause) => (
             ErrorCode::VaultWriteFailed,
-            format!("a staged recipient change could not be settled: {cause}"),
+            format!(
+                "a staged recipient change could not be settled and may not be durable; the next recipient command settles it again: {cause}"
+            ),
         ),
         RecipientRefusal::Interrupted => (ErrorCode::VaultWriteFailed, refusal.to_string()),
     };

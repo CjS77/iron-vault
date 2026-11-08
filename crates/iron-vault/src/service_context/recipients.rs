@@ -1,9 +1,10 @@
 //! The recipient commands' side of the service context (`design/recipients.md`, "States and the service-wide lock").
 //!
 //! A recipient command takes the service-wide lock without waiting, so the inventory check, and the change after it, see
-//! `recipients.age` and `recipients.age.staged` as the previous change left them. The vault identity that keys the
-//! inventory is cloned out of the context's mutex, which is released before the blocking task starts, as `lock` waits for
-//! the service-wide lock before it clears the identity.
+//! `recipients.age` and `recipients.age.staged` as the previous change left them. The check can write (it finishes or
+//! discards a staged change), so the blocking task owns the lock guard and keeps it to the end of the check even if the
+//! future that started it is dropped. The vault identity that keys the inventory is cloned out of the context's mutex,
+//! which is released before the task starts, as `lock` waits for the service-wide lock before it clears the identity.
 
 use std::sync::Arc;
 
@@ -41,12 +42,17 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// finish or discard a staged recipient change, which it logs as `recipient.change-recovered`; a damaged inventory
     /// is logged as `recipient.inventory-damaged` and never repaired.
     pub async fn list_recipients(&self) -> Result<Vec<RecipientEntry>, RecipientRefusal> {
-        let _service_wide = self.service_wide.try_lock().map_err(|_| RecipientRefusal::Busy)?;
+        let service_wide = Arc::clone(&self.service_wide)
+            .try_lock_owned()
+            .map_err(|_| RecipientRefusal::Busy)?;
         let (identity, vault_id) = ready_vault(&*self.inner.lock().await)?;
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
-        let checked = tokio::task::spawn_blocking(move || check_recipient_inventory(&locks.state, &setup.fs, &identity, vault_id))
-            .await
-            .map_err(|_| RecipientRefusal::Interrupted)?;
+        let checked = tokio::task::spawn_blocking(move || {
+            let _held = service_wide;
+            check_recipient_inventory(&locks.state, &setup.fs, &identity, vault_id)
+        })
+        .await
+        .map_err(|_| RecipientRefusal::Interrupted)?;
         match checked {
             Ok(checked) => {
                 checked.recovered.map(ChangeRecovered).iter().for_each(AuditEvent::emit);

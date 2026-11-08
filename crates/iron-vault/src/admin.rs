@@ -20,6 +20,7 @@ pub mod principal;
 pub mod protocol;
 #[cfg(target_os = "linux")]
 mod recipient_list;
+#[cfg(target_os = "linux")]
 mod recovery_check;
 #[cfg(target_os = "linux")]
 mod replace;

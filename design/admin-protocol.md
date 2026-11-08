@@ -752,9 +752,8 @@ This document specifies protocol version 1, the only version the codec reads or 
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
 `status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), `replace` (command 10), `rm`
-(command 11), `recovery check` (command 12), `recipient list` (command 13), `status` tags 13 to 17, and error codes 7 to 34 and 39
-join it
-rather than starting version 2.
+(command 11), `recovery check` (command 12), `recipient list` (command 13), `status` tags 13 to 17, and error codes 7 to 34 and 39 join it rather than starting
+version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 

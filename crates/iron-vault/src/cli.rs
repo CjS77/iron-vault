@@ -22,9 +22,9 @@ mod console;
 mod init;
 #[cfg(target_os = "linux")]
 mod list;
-// Generates the book's command reference; test-only, so the release binary carries none of it.
 #[cfg(target_os = "linux")]
 mod recipient_list;
+// Generates the book's command reference; test-only, so the release binary carries none of it.
 #[cfg(test)]
 mod reference;
 #[cfg(target_os = "linux")]

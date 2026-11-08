@@ -166,7 +166,9 @@ async fn after_init_and_unlock_the_operational_and_recovery_entries_are_listed()
 
     let entries = listed(list(&service).await);
 
-    // Entries come in key order, which is random for a new vault, so compare them by role.
+    // Entries come in ascending key-text order; the keys are random, so the roles are compared sorted.
+    let keys: Vec<_> = entries.iter().map(|entry| entry.key().to_string()).collect();
+    assert!(keys.windows(2).all(|pair| pair[0] < pair[1]), "{keys:?}");
     let mut shown: Vec<_> = entries
         .iter()
         .map(|entry| (entry.role(), entry.label().as_str().to_owned()))
@@ -226,6 +228,7 @@ async fn a_missing_inventory_says_an_older_vault_has_none() {
     let fixture = Fixture::new();
     let (service, _) = ready(&fixture).await;
     fs::remove_file(fixture.path("state/recipients.age")).unwrap();
+    let before = fixture.state_files();
 
     let (code, message) = refusal(list(&service).await);
 
@@ -234,6 +237,7 @@ async fn a_missing_inventory_says_an_older_vault_has_none() {
         message.contains("(missing)") && message.contains("initialized before recipient commands"),
         "{message}"
     );
+    assert_eq!(fixture.state_files(), before);
 }
 
 #[tokio::test]
