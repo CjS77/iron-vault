@@ -39,7 +39,7 @@ pub enum InitStep {
     Discard,
     /// Step 1: writing `init.unfinished`, or refusing a directory init must not write to.
     Begin,
-    /// Step 2: writing `identity.age`, proving both recipients unwrap it, and writing `recipients.age`.
+    /// Step 2: writing `identity.age`, proving each recipient unwraps it, and writing `recipients.age`.
     IdentityEnvelope,
     /// Step 3: writing `operational.age`.
     PassphraseEnvelope,
@@ -150,7 +150,7 @@ pub enum InitFailure {
     /// [`InitStateError::FinishUncertain`] at [`InitStep::Finish`] means the vault may read Unfinished after power loss.
     #[error(transparent)]
     State(#[from] InitStateError),
-    /// The operational and recovery keys do not form a recipient set.
+    /// The recipient keys do not form a recipient set.
     #[error(transparent)]
     Recipients(#[from] RecipientSetError),
     /// An envelope could not be sealed or opened.
@@ -162,7 +162,7 @@ pub enum InitFailure {
     /// A state file could not be read back.
     #[error(transparent)]
     Read(#[from] ReadError),
-    /// The recipient inventory could not be built from the two recipients.
+    /// The recipient inventory could not be built from the recipients.
     #[error(transparent)]
     Inventory(#[from] RecipientInventoryError),
     /// The recipient inventory could not be written.
@@ -207,6 +207,8 @@ pub struct InitializedVault {
     pub commit_uncertain: Option<ErrorKindLabel>,
     /// The files discarded from an unfinished initialization before step 1, for the `vault.init-discarded` log.
     pub discarded: Vec<String>,
+    /// The roles of the recipients enrolled, in the order `identity.age` was wrapped for them: kinds, never keys.
+    pub recipients: Vec<RecipientRole>,
 }
 
 impl InitializedVault {
@@ -257,8 +259,9 @@ pub(crate) fn initialize_at<F: StoreFs>(
 ) -> Result<InitializedVault, InitError> {
     let discarded = begin(state, config, fs)?;
     match write_vault(state, config, fs, (keys, passphrases), paused, (enrolled_at, log_n)) {
-        Ok((vault_id, committed)) => Ok(InitializedVault {
+        Ok((vault_id, committed, recipients)) => Ok(InitializedVault {
             vault_id,
+            recipients,
             version: committed.version,
             digest: committed.digest,
             commit_uncertain: committed.commit_uncertain,
@@ -279,17 +282,19 @@ fn write_vault<F: StoreFs>(
     (keys, passphrases): (SealingKeys, InitPassphrases),
     paused: &impl AdmissionPaused,
     (enrolled_at, log_n): (UtcSecond, u8),
-) -> Result<(VaultId, FirstApproval), InitError> {
+) -> Result<(VaultId, FirstApproval, Vec<RecipientRole>), InitError> {
     let SealingKeys {
         vault,
         vault_id,
         operational,
         recovery,
+        host_unlock,
         signer,
         approver,
     } = keys;
     let (passphrase, approval_passphrase) = passphrases.into_parts();
-    write_checked_identity(state, fs, (&vault, vault_id), &operational, recovery, enrolled_at).map_err(at(InitStep::IdentityEnvelope))?;
+    let recipients = write_checked_identity(state, fs, (&vault, vault_id), (&operational, recovery, host_unlock), enrolled_at)
+        .map_err(at(InitStep::IdentityEnvelope))?;
     seal_operational(state, fs, operational, passphrase, log_n).map_err(at(InitStep::PassphraseEnvelope))?;
     seal_approver(state, fs, signer, &approval_passphrase, log_n).map_err(at(InitStep::ApproverKey))?;
     let mut created = Vault::create_with_id(state, fs, vault, vault_id).map_err(at(InitStep::Manifest))?;
@@ -308,7 +313,7 @@ fn write_vault<F: StoreFs>(
         approved: Some(Box::new(approved.clone())),
         ..at(InitStep::Finish)(error)
     })?;
-    Ok((created.manifest().vault_id(), approved))
+    Ok((created.manifest().vault_id(), approved, recipients))
 }
 
 /// The discard and step 1. The state is read first only to name the step a failure belongs to: with the service-wide
@@ -328,56 +333,65 @@ fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Res
     })
 }
 
-/// Step 2. Both recipient paths are proved on the file as read back, before anything depends on it, while the recovery
-/// key the owner saved still means nothing. Then the recipient inventory is written for the same two keys and read
-/// back, so `recipients.age` exists from the moment the vault does. The recovery identity is dropped on return.
+/// One recipient init enrols: its identity, role and default label.
+type Enrolment<'a> = (&'a RecipientIdentity, RecipientRole, &'static str);
+
+/// Step 2. Every recipient path is proved on the file as read back, before anything depends on it, while the recovery
+/// key the owner saved still means nothing: each identity must unwrap the same vault identity. Then the recipient
+/// inventory is written for the same keys and read back, so `recipients.age` exists from the moment the vault does.
+/// The recovery and host unlock identities are dropped on return. Returns the roles enrolled.
 fn write_checked_identity(
     state: &StateDirLock,
     fs: &impl StoreFs,
     (vault, vault_id): (&VaultIdentity, VaultId),
-    operational: &RecipientIdentity,
-    recovery: RecipientIdentity,
+    (operational, recovery, host_unlock): (&RecipientIdentity, RecipientIdentity, Option<RecipientIdentity>),
     enrolled_at: UtcSecond,
-) -> Result<(), InitFailure> {
-    let recipients = RecipientSet::new([operational.recipient_key(), recovery.recipient_key()])?;
+) -> Result<Vec<RecipientRole>, InitFailure> {
+    let enrolments: Vec<Enrolment> = [
+        Some((operational, RecipientRole::Operational, "vault passphrase")),
+        Some((&recovery, RecipientRole::Recovery, "recovery key")),
+        host_unlock.as_ref().map(|host| (host, RecipientRole::HostUnlock, "host unlock")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let recipients = RecipientSet::new(enrolments.iter().map(|(identity, ..)| identity.recipient_key()))?;
     write_identity_envelope(state, fs, &wrap_identity(vault, &recipients)?)?;
     let envelope = read_identity_envelope(state, fs)?;
-    [operational, &recovery].into_iter().try_for_each(|recipient| {
-        match unwrap_identity(&envelope, recipient)?.public_key() == vault.public_key() {
+    enrolments.iter().try_for_each(
+        |(identity, ..)| match unwrap_identity(&envelope, *identity)?.public_key() == vault.public_key() {
             true => Ok(()),
             false => Err(InitFailure::IdentityMismatch),
-        }
-    })?;
-    write_checked_inventory(state, fs, (vault, vault_id, &envelope), (operational, &recovery), enrolled_at)
+        },
+    )?;
+    write_checked_inventory(state, fs, (vault, vault_id, &envelope), (&enrolments, &recipients), enrolled_at)?;
+    Ok(enrolments.iter().map(|(_, role, _)| *role).collect())
 }
 
-/// The recipient inventory for the two keys, written and read back, so `recipients.age` exists from the moment the vault
-/// does.
+/// The recipient inventory for `enrolments`, written and read back, so `recipients.age` exists from the moment the
+/// vault does.
 fn write_checked_inventory(
     state: &StateDirLock,
     fs: &impl StoreFs,
     (vault, vault_id, envelope): (&VaultIdentity, VaultId, &[u8]),
-    (operational, recovery): (&RecipientIdentity, &RecipientIdentity),
+    (enrolments, recipients): (&[Enrolment], &RecipientSet),
     enrolled_at: UtcSecond,
 ) -> Result<(), InitFailure> {
-    let entries = [
-        (operational, RecipientRole::Operational, "vault passphrase"),
-        (recovery, RecipientRole::Recovery, "recovery key"),
-    ]
-    .map(|(identity, role, label)| {
-        Ok(RecipientEntry::new(
-            identity.recipient_key(),
-            role,
-            RecipientLabel::new(label)?,
-            enrolled_at,
-        ))
-    });
-    let entries = entries.into_iter().collect::<Result<Vec<_>, InitFailure>>()?;
-    let recipients = RecipientSet::new([operational.recipient_key(), recovery.recipient_key()])?;
+    let entries = enrolments
+        .iter()
+        .map(|(identity, role, label)| {
+            Ok(RecipientEntry::new(
+                identity.recipient_key(),
+                *role,
+                RecipientLabel::new(label)?,
+                enrolled_at,
+            ))
+        })
+        .collect::<Result<Vec<_>, InitFailure>>()?;
     let inventory = RecipientInventory::new(vault_id, envelope_digest(envelope), entries)?;
     write_recipient_inventory(state, fs, vault, &inventory)?;
     let read_back = read_recipient_inventory(state, fs, vault)?;
-    match read_back == inventory && read_back.recipient_set() == recipients {
+    match read_back == inventory && read_back.recipient_set() == *recipients {
         true => Ok(()),
         false => Err(InitFailure::InventoryMismatch),
     }

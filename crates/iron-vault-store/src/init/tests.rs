@@ -203,6 +203,7 @@ fn a_fresh_directory_initializes_to_version_1() {
     let (result, secrets) = dirs.init_keeping(&OsFs);
     let initialized = result.unwrap();
     assert!(initialized.discarded.is_empty(), "{initialized:?}");
+    assert_eq!(initialized.recipients, [RecipientRole::Operational, RecipientRole::Recovery]);
     assert_initialized(&dirs, &OsFs, &initialized, &secrets);
     assert_eq!(dirs.file(&OsFs, dirs.config_dir.path(), "config.toml"), INITIAL_CONFIG);
 }
@@ -221,6 +222,47 @@ fn no_file_mixes_recipient_kinds() {
     [StateFileName::passphrase_envelope(), StateFileName::approver_key()]
         .iter()
         .for_each(|file| assert_eq!(kinds(file.as_str()), [StanzaKind::Scrypt], "{file}"));
+}
+
+/// A host unlock identity is a third recipient: `identity.age` has three X25519 stanzas, the operational, recovery and
+/// host identities each unwrap the same vault identity, and the inventory lists all three.
+#[test]
+fn a_host_unlock_identity_is_a_third_recipient_that_unwraps_the_vault_identity() {
+    let dirs = Dirs::new("init-host-unlock");
+    let keys = NewVaultKeys::generate().unwrap();
+    let recovery = RecoveryKeySecret::parse(SecretString::from(keys.recovery_secret().expose_secret())).unwrap();
+    let host = RecipientIdentity::generate();
+    let (host_secret, host_key) = (host.secret_text(), host.recipient_key());
+    let sealing = keys.into_sealing().with_host_unlock(host);
+    let wrapped_for = RecipientSet::new([
+        sealing.operational.recipient_key(),
+        sealing.recovery.recipient_key(),
+        host_key.clone(),
+    ])
+    .unwrap();
+    let work = (ENROLLED_AT, TEST_WORK_FACTOR);
+    let initialized = initialize_at(&dirs.state, &dirs.config, &OsFs, (sealing, passphrases()), &Paused, work).unwrap();
+
+    assert_eq!(
+        initialized.recipients,
+        [RecipientRole::Operational, RecipientRole::Recovery, RecipientRole::HostUnlock]
+    );
+    let envelope = read_identity_envelope(&dirs.state, &OsFs).unwrap();
+    let stanzas = stanza_kinds(&envelope).unwrap();
+    assert_eq!(stanzas.iter().filter(|k| **k == StanzaKind::X25519).count(), 3, "{stanzas:?}");
+    assert!(stanzas.iter().all(StanzaKind::is_x25519_or_grease), "{stanzas:?}");
+    let identity = unlock_with_passphrase(&dirs.state, &OsFs, &vault_passphrase()).unwrap();
+    let host = RecipientIdentity::from_secret_text(host_secret.expose_secret().as_bytes()).unwrap();
+    assert_eq!(unwrap_identity(&envelope, &recovery).unwrap().public_key(), identity.public_key());
+    assert_eq!(unwrap_identity(&envelope, &host).unwrap().public_key(), identity.public_key());
+    let inventory = read_recipient_inventory(&dirs.state, &OsFs, &identity).unwrap();
+    assert_eq!(inventory.recipient_set(), wrapped_for);
+    let host_entry = inventory.entries().find(|entry| *entry.key() == host_key).unwrap();
+    assert_eq!(
+        (host_entry.role(), host_entry.label().as_str()),
+        (RecipientRole::HostUnlock, "host unlock")
+    );
+    assert_eq!(inventory.entries().count(), 3);
 }
 
 #[test]

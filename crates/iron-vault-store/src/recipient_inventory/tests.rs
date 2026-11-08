@@ -109,7 +109,10 @@ fn round_trip_with_every_role() {
 #[test]
 fn host_unlock_is_role_6_and_round_trips() {
     assert_eq!(RecipientRole::from_code(6), Some(RecipientRole::HostUnlock));
-    assert_eq!((RecipientRole::HostUnlock.code(), RecipientRole::HostUnlock.name()), (6, "host-unlock"));
+    assert_eq!(
+        (RecipientRole::HostUnlock.code(), RecipientRole::HostUnlock.name()),
+        (6, "host-unlock")
+    );
     let entries = example_entries()
         .into_iter()
         .chain([entry(key(SECRETS[2]), RecipientRole::HostUnlock, "host unlock", 1_794_000_001)])

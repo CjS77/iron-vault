@@ -18,13 +18,15 @@ pub struct NewVaultKeys {
 
 /// The keys initialization writes with, once the recovery key's text is gone: what [`crate::initialize`] takes.
 ///
-/// It keeps the recovery key's recipient identity only for the identity envelope's unwrap check, and every key is
-/// dropped when initialization returns, so the service keeps no recovery path it could use by itself (spec §3.13).
+/// It keeps the recovery key's recipient identity, and the host unlock identity when one is enrolled, only for the
+/// identity envelope's unwrap check, and every key is dropped when initialization returns, so the service keeps no
+/// recovery path it could use by itself (spec §3.13).
 pub struct SealingKeys {
     pub(super) vault: VaultIdentity,
     pub(super) vault_id: VaultId,
     pub(super) operational: RecipientIdentity,
     pub(super) recovery: RecipientIdentity,
+    pub(super) host_unlock: Option<RecipientIdentity>,
     pub(super) signer: SoftwareSignerKey,
     pub(super) approver: PinnedApprover,
 }
@@ -43,6 +45,7 @@ impl NewVaultKeys {
                 vault_id: VaultId::new_random(),
                 operational,
                 recovery,
+                host_unlock: None,
                 signer,
                 approver,
             },
@@ -58,6 +61,16 @@ impl NewVaultKeys {
     /// Drops the recovery key's text, keeping its recipient identity for the unwrap check.
     pub fn into_sealing(self) -> SealingKeys {
         self.sealing
+    }
+}
+
+impl SealingKeys {
+    /// Enrols `host_unlock`, the identity read from the unlock handoff, as a third recipient of the identity envelope,
+    /// so a container-profile service can unlock with no owner present (spec §3.14). The recovery key stays a separate
+    /// recipient, so losing the host's TPM never loses the vault.
+    pub fn with_host_unlock(mut self, host_unlock: RecipientIdentity) -> Self {
+        self.host_unlock = Some(host_unlock);
+        self
     }
 }
 
