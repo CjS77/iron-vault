@@ -614,6 +614,23 @@ so no owner holds such a vault yet ([open question 2](#open-questions)). The res
 - Changing the vault passphrase. It reseals `operational.age` around the same operational identity, so it changes no
   recipient and no inventory entry.
 
+## Release checks
+
+`crates/iron-vault/tests/recipients_linux.rs` drives a real service through `init`, `unlock` and the recipient commands,
+with one test per promise of the recipient epic. Each command's own suite (`recipient_list_linux.rs`,
+`recipient_add_linux.rs`, `recipient_add_recovery_linux.rs`, `recipient_remove_linux.rs`) covers its exchange, output
+and refusals; this file covers what only holds across them.
+
+| Promise | Test | Specification |
+|---|---|---|
+| An added recipient opens the vault after a restart, and the manifest MAC verifies under the identity it unwraps | `an_added_recipient_opens_the_vault_after_a_restart` | [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory) |
+| A rewrap leaves every credential record and the manifest byte-identical, and a route keeps serving without a restart | `a_rewrap_leaves_every_credential_file_byte_identical_and_the_route_working` | [§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes), [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory) |
+| A change that would leave fewer than two independent paths is refused and writes nothing | `a_change_that_leaves_fewer_than_two_independent_paths_is_refused_and_changes_nothing` | [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory) |
+| A removed key still opens a copy of `identity.age` taken before the removal, and not the new envelope | `a_removed_key_still_opens_a_copy_of_the_envelope_taken_before_the_removal` | R-24, [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) |
+| `recipient add` needs the vault passphrase even while Ready; the approval passphrase does not stand in for it | `adding_a_recipient_needs_the_vault_passphrase_even_while_ready` | R-23, [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration), [§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance) |
+| After rotating the recovery key and removing the old one, `recovery check` passes with the new key and fails with the old | `after_rotating_the_recovery_key_the_new_key_passes_recovery_check_and_the_old_fails` | [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) |
+| No typed passphrase, credential secret or secret-key text reaches the log through a session of all these commands | `no_typed_secret_or_secret_key_reaches_the_log_through_a_full_session` | [§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance) |
+
 ## Open questions
 
 The specification leaves each point below open, or this design departs from its wording or from the ticket's default.
