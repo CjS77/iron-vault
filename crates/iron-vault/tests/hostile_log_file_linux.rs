@@ -530,8 +530,9 @@ async fn cli(socket: &Path, args: &[&str], input: &str) -> Option<i32> {
 }
 
 /// `add` with a typed key, a refused approval with a wrong passphrase, then an approval with the right one of a config
-/// holding a comment marker; returns the number of requests the run sent.
-async fn administrative_run() -> usize {
+/// holding a comment marker; returns the fixture, whose upstream port the approval summary logs, and the number of
+/// requests the run sent.
+async fn administrative_run() -> (Fixture, usize) {
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
     let (socket, stop) = serve_admin(&service);
@@ -555,7 +556,7 @@ async fn administrative_run() -> usize {
     );
     assert_eq!(get(&fixture, "fx2").await.status, 200);
     let _ = stop.send(());
-    1
+    (fixture, 1)
 }
 
 // ---- The vault lifecycle run ---------------------------------------------------------------------------------------
@@ -783,11 +784,17 @@ fn assert_hostile_paths_ran(records: &[serde_json::Value], protocol: Upstream) {
     );
 }
 
-/// One session against `protocol` upstreams: the proxy run and the administrative run. Returns the upstream ports and the
-/// number of requests sent.
-async fn hostile_session(protocol: Upstream) -> (Ports, usize) {
+/// Every server a session started, held until the test ends. The approval summary of one session's administrative run
+/// legitimately logs its fixture's port, while the other session's upstream ports must not be logged at all, so no port
+/// may serve both; while these are held, the kernel cannot hand one session's port to the other.
+#[allow(dead_code)] // Held only so the ports stay taken.
+struct SessionServers((Upstreams, Redirects, RefusingPort), Fixture);
+
+/// One session against `protocol` upstreams: the proxy run and the administrative run. Returns the upstream ports, the
+/// number of requests sent and the session's servers.
+async fn hostile_session(protocol: Upstream) -> (Ports, usize, SessionServers) {
     let ca = TestCa::new("hostile log CA");
-    let (_upstreams, ports) = start_upstreams(&ca, protocol).await;
+    let (upstreams, ports) = start_upstreams(&ca, protocol).await;
     let proxy = Proxy::start(Setup {
         ca: &ca,
         callers_and_routes: callers_and_routes(&ports),
@@ -797,8 +804,9 @@ async fn hostile_session(protocol: Upstream) -> (Ports, usize) {
         limits: "",
     })
     .await;
-    let requests = hostile_requests(&proxy).await + administrative_run().await;
-    (ports, requests)
+    let proxied = hostile_requests(&proxy).await;
+    let (fixture, administrative) = administrative_run().await;
+    (ports, proxied + administrative, SessionServers(upstreams, fixture))
 }
 
 #[tokio::test]
@@ -808,10 +816,11 @@ async fn the_whole_log_file_holds_no_forbidden_value_after_a_hostile_run_over_ht
     let recovery_key = vault_lifecycle_run().await;
     let lifecycle = dir.records();
     assert_lifecycle_ran(&lifecycle);
-    let (mut requests, mut seen, mut ports) = (0, lifecycle.len(), Vec::new());
+    let (mut requests, mut seen, mut ports, mut servers) = (0, lifecycle.len(), Vec::new(), Vec::new());
     for protocol in [Upstream::Http1, Upstream::Http2] {
-        let (session_ports, sent) = hostile_session(protocol).await;
+        let (session_ports, sent, session_servers) = hostile_session(protocol).await;
         requests += sent;
+        servers.push(session_servers);
         ports.extend(session_ports.all());
         wait_for_request_events(&dir, requests).await;
         let records = dir.records();
