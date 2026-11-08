@@ -5,6 +5,7 @@ mod add;
 mod body;
 mod fields;
 mod list;
+mod recipient_list;
 mod recovery_status;
 mod status;
 #[cfg(test)]
@@ -18,7 +19,7 @@ use zeroize::Zeroizing;
 use crate::deployment::DeploymentProfile;
 use crate::standing::CredentialStanding;
 use iron_vault_policy::{CallerToken, CredentialKind, Port};
-use iron_vault_store::{Passphrase, RecipientRole, RecordId, VaultId};
+use iron_vault_store::{Passphrase, RecipientEntry, RecipientRole, RecordId, VaultId};
 use secrecy::SecretString;
 
 pub use iron_vault_store::MAX_CONFIG_LEN;
@@ -88,6 +89,8 @@ pub enum AdminRequest {
         /// The credential name, as the owner wrote it; the service validates it.
         name: String,
     },
+    /// Lists every enrolled recipient of the vault identity, in inventory order; Ready only. No arguments. Command ID 13.
+    RecipientList,
 }
 
 /// A requested origin: one permitted origin as an `add` or `replace` request carries it. The host stays text on the wire, at most
@@ -116,6 +119,7 @@ impl AdminRequest {
             Self::Replace { .. } => AdminCommand::Replace,
             Self::Rm { .. } => AdminCommand::Rm,
             Self::RecoveryCheck => AdminCommand::RecoveryCheck,
+            Self::RecipientList => AdminCommand::RecipientList,
         }
     }
 }
@@ -147,6 +151,8 @@ pub enum AdminCommand {
     Rm = 11,
     /// `recovery check`.
     RecoveryCheck = 12,
+    /// `recipient list`.
+    RecipientList = 13,
 }
 
 impl AdminCommand {
@@ -165,6 +171,7 @@ impl AdminCommand {
             Self::Replace => "replace",
             Self::Rm => "rm",
             Self::RecoveryCheck => "recovery check",
+            Self::RecipientList => "recipient list",
         }
     }
 
@@ -183,6 +190,7 @@ impl AdminCommand {
             Self::Replace => "replace",
             Self::Rm => "rm",
             Self::RecoveryCheck => "recovery_check",
+            Self::RecipientList => "recipient_list",
         }
     }
 }
@@ -203,6 +211,7 @@ mod no_external_signatures {
             | AdminCommand::Unlock
             | AdminCommand::Lock
             | AdminCommand::RecoveryCheck
+            | AdminCommand::RecipientList
             | AdminCommand::List => &[],
             AdminCommand::Init => &["host_unlock"],
             AdminCommand::ConfigApprove => &["config"],
@@ -211,7 +220,7 @@ mod no_external_signatures {
         }
     }
 
-    const COMMANDS: [AdminCommand; 12] = [
+    const COMMANDS: [AdminCommand; 13] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::CallerToken,
@@ -224,6 +233,7 @@ mod no_external_signatures {
         AdminCommand::Replace,
         AdminCommand::Rm,
         AdminCommand::RecoveryCheck,
+        AdminCommand::RecipientList,
     ];
 
     #[test]
@@ -396,6 +406,11 @@ pub enum AdminResponse {
         /// Every credential in the vault manifest, in name order; `None` while no vault is open.
         credentials: Option<Vec<CredentialStanding>>,
     },
+    /// `recipient list` completed.
+    RecipientList {
+        /// Every enrolled recipient, in inventory order. Public keys and labels only.
+        entries: Vec<RecipientEntry>,
+    },
     /// `add` completed: the new credential record's ID.
     Add {
         /// The ID of the record the service wrote.
@@ -539,6 +554,9 @@ pub enum ErrorCode {
     /// `unlock`: too many wrong vault passphrases, here or in migration authorization; no prompt was sent. The message
     /// gives the whole seconds to wait, and the service stays Locked.
     UnlockRateLimited = 34,
+    /// `recipient list`, `recipient add`, `recipient remove`: the inventory check found the recipient inventory missing or
+    /// damaged; the message names the damage; nothing was changed.
+    RecipientInventoryDamaged = 39,
 }
 
 impl ErrorCode {
@@ -579,6 +597,7 @@ impl ErrorCode {
             Self::RecoveryCheckUnavailable => "recovery-check-unavailable",
             Self::MigrationRateLimited => "migration-rate-limited",
             Self::UnlockRateLimited => "unlock-rate-limited",
+            Self::RecipientInventoryDamaged => "recipient-inventory-damaged",
         }
     }
 
@@ -711,6 +730,9 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::Lock { cleared }) => put_frame(out, FrameKind::Success, &body::encode_lock_result(*cleared)),
         Frame::Response(AdminResponse::List { credentials }) => {
             put_frame(out, FrameKind::Success, &body::encode_list_result(credentials.as_deref())?)
+        }
+        Frame::Response(AdminResponse::RecipientList { entries }) => {
+            put_frame(out, FrameKind::Success, &body::encode_recipient_list_result(entries)?)
         }
         Frame::Response(AdminResponse::Add { record_id }) => put_frame(out, FrameKind::Success, &body::encode_add_result(*record_id)),
         Frame::Response(AdminResponse::Replace { record_id }) => {

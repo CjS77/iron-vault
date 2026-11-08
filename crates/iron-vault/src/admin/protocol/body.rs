@@ -3,11 +3,11 @@
 use super::fields::{self, exact, first, read_flag, read_profile, read_text, read_u16, read_u64};
 use super::status::{self, StatusReport};
 use super::{AdminCommand, AdminRequest, AdminResponse, ApprovalResult, ErrorCode, FrameError, Notice, Prompt, ProposedConfig};
-use super::{add, list};
+use super::{add, list, recipient_list};
 use crate::deployment::DeploymentProfile;
 use iron_vault_policy::CallerToken;
 use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
-use iron_vault_store::{RecipientRole, RecordId, VaultId};
+use iron_vault_store::{RecipientEntry, RecipientRole, RecordId, VaultId};
 use zeroize::Zeroizing;
 
 use crate::standing::CredentialStanding;
@@ -42,6 +42,7 @@ const COMMAND_LIST: u16 = AdminCommand::List as u16;
 const COMMAND_REPLACE: u16 = AdminCommand::Replace as u16;
 const COMMAND_RM: u16 = AdminCommand::Rm as u16;
 const COMMAND_RECOVERY_CHECK: u16 = AdminCommand::RecoveryCheck as u16;
+const COMMAND_RECIPIENT_LIST: u16 = AdminCommand::RecipientList as u16;
 const TAG_CHECKED_AT: u16 = 3;
 const TAG_RECORDED: u16 = 4;
 const TAG_NAME: u16 = 2;
@@ -88,6 +89,7 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
         COMMAND_RECOVERY_CHECK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::RecoveryCheck),
         COMMAND_ADD => add::decode_request(&fields, |name, kind, origins| AdminRequest::Add { name, kind, origins }),
         COMMAND_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::List),
+        COMMAND_RECIPIENT_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::RecipientList),
         COMMAND_REPLACE => add::decode_request(&fields, |name, kind, origins| AdminRequest::Replace { name, kind, origins }),
         COMMAND_RM => {
             let [_, name] = exact(&fields, [TAG_COMMAND, TAG_NAME])?;
@@ -167,6 +169,11 @@ fn decode_caller_token_result(fields: &[fields::Field<'_>]) -> Result<AdminRespo
 /// carry is an error.
 pub(super) fn encode_list_result(credentials: Option<&[CredentialStanding]>) -> Result<Vec<u8>, FrameError> {
     list::encode_result(COMMAND_LIST, credentials)
+}
+
+/// `recipient list`'s success body: the command it answers, then the entries.
+pub(super) fn encode_recipient_list_result(entries: &[RecipientEntry]) -> Result<Vec<u8>, FrameError> {
+    recipient_list::encode_result(COMMAND_RECIPIENT_LIST, entries)
 }
 
 /// `init`'s success body: the command it answers, the new vault's ID as its 16 raw bytes (as `status` sends it), the
@@ -283,6 +290,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
         COMMAND_RECOVERY_CHECK => decode_recovery_check_result(&fields),
         COMMAND_ADD => add::decode_result(&fields).map(|record_id| AdminResponse::Add { record_id }),
         COMMAND_LIST => list::decode_result(&fields),
+        COMMAND_RECIPIENT_LIST => recipient_list::decode_result(&fields),
         COMMAND_REPLACE => add::decode_result(&fields).map(|record_id| AdminResponse::Replace { record_id }),
         unknown => Err(FrameError::UnknownCommand(unknown)),
     }
@@ -339,6 +347,7 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::RecoveryCheckUnavailable,
         ErrorCode::MigrationRateLimited,
         ErrorCode::UnlockRateLimited,
+        ErrorCode::RecipientInventoryDamaged,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)
