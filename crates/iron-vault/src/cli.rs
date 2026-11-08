@@ -254,6 +254,17 @@ pub enum RecipientCommand {
     /// List every enrolled recipient, one line each: its `age1...` key, role, enrolment time and label. It works while the
     /// service is Ready, and refuses a missing or damaged recipient inventory without changing it.
     List,
+    /// Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path:
+    /// whoever holds the key can open the vault identity, and with it every credential. The service shows what changes,
+    /// then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not
+    /// affected.
+    Add {
+        /// The `age1...` public key to enroll.
+        recipient: String,
+        /// Which device or copy the key is, 1 to 64 bytes: `alice laptop 2026`.
+        #[arg(long)]
+        label: String,
+    },
     /// Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval
     /// passphrase. It refuses the operational recipient and the last recovery recipient, and says that copies of
     /// `identity.age` made before still open with the removed key.
@@ -429,6 +440,19 @@ pub fn recipient_remove(_socket: Option<&Path>, _recipient: String) -> ExitCode 
 #[cfg(target_os = "linux")]
 pub fn recipient_list(socket: Option<&Path>) -> ExitCode {
     client::recipient_list(socket).into()
+}
+
+/// `iron-vault recipient add`: sends `recipient add`, answers the vault passphrase prompt from the owner console, and
+/// leaves the completion notice to stderr.
+#[cfg(target_os = "linux")]
+pub fn recipient_add(socket: Option<&Path>, recipient: String, label: String) -> ExitCode {
+    client::recipient_add(socket, recipient, label).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn recipient_add(_socket: Option<&Path>, _recipient: String, _label: String) -> ExitCode {
+    unsupported_platform()
 }
 
 /// The client is Linux-only for now, like the service.

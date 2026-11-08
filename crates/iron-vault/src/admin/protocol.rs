@@ -5,6 +5,7 @@ mod add;
 mod body;
 mod fields;
 mod list;
+mod recipient_add;
 mod recipient_list;
 mod recovery_status;
 mod status;
@@ -19,7 +20,7 @@ use zeroize::Zeroizing;
 use crate::deployment::DeploymentProfile;
 use crate::standing::CredentialStanding;
 use iron_vault_policy::{CallerToken, CredentialKind, Port};
-use iron_vault_store::{Passphrase, RecipientEntry, RecipientRole, RecordId, VaultId};
+use iron_vault_store::{Passphrase, RecipientEntry, RecipientKey, RecipientRole, RecordId, VaultId};
 use secrecy::SecretString;
 
 pub use iron_vault_store::MAX_CONFIG_LEN;
@@ -91,6 +92,14 @@ pub enum AdminRequest {
     },
     /// Lists every enrolled recipient of the vault identity, in inventory order; Ready only. No arguments. Command ID 13.
     RecipientList,
+    /// Enrols a recipient key the owner supplies, after migration authorization: the vault passphrase, typed at a prompt.
+    /// Command ID 14. Source `1` on the wire; `--recovery`'s source `2` is not served yet.
+    RecipientAdd {
+        /// The `age1...` key as the owner wrote it; the service parses it.
+        recipient: String,
+        /// The recipient label as the owner wrote it; the service validates it.
+        label: String,
+    },
     /// Removes an enrolled recipient from the identity envelope and the inventory after owner presence; the service prompts
     /// for the approval passphrase. Command ID 15.
     RecipientRemove {
@@ -126,6 +135,7 @@ impl AdminRequest {
             Self::Rm { .. } => AdminCommand::Rm,
             Self::RecoveryCheck => AdminCommand::RecoveryCheck,
             Self::RecipientList => AdminCommand::RecipientList,
+            Self::RecipientAdd { .. } => AdminCommand::RecipientAdd,
             Self::RecipientRemove { .. } => AdminCommand::RecipientRemove,
         }
     }
@@ -160,6 +170,8 @@ pub enum AdminCommand {
     RecoveryCheck = 12,
     /// `recipient list`.
     RecipientList = 13,
+    /// `recipient add`.
+    RecipientAdd = 14,
     /// `recipient remove`.
     RecipientRemove = 15,
 }
@@ -181,6 +193,7 @@ impl AdminCommand {
             Self::Rm => "rm",
             Self::RecoveryCheck => "recovery check",
             Self::RecipientList => "recipient list",
+            Self::RecipientAdd => "recipient add",
             Self::RecipientRemove => "recipient remove",
         }
     }
@@ -201,6 +214,7 @@ impl AdminCommand {
             Self::Rm => "rm",
             Self::RecoveryCheck => "recovery_check",
             Self::RecipientList => "recipient_list",
+            Self::RecipientAdd => "recipient_add",
             Self::RecipientRemove => "recipient_remove",
         }
     }
@@ -228,6 +242,7 @@ mod no_external_signatures {
             AdminCommand::ConfigApprove => &["config"],
             AdminCommand::Add | AdminCommand::Replace => &["name", "kind", "origins"],
             AdminCommand::Rm => &["name"],
+            AdminCommand::RecipientAdd => &["recipient", "label"],
             AdminCommand::RecipientRemove => &["recipient"],
         }
     }
@@ -246,6 +261,7 @@ mod no_external_signatures {
         AdminCommand::Rm,
         AdminCommand::RecoveryCheck,
         AdminCommand::RecipientList,
+        AdminCommand::RecipientAdd,
         AdminCommand::RecipientRemove,
     ];
 
@@ -424,6 +440,13 @@ pub enum AdminResponse {
         /// Every enrolled recipient, in inventory order. Public keys and labels only.
         entries: Vec<RecipientEntry>,
     },
+    /// `recipient add` completed: the vault identity is wrapped for the new recipient too.
+    RecipientAdd {
+        /// The key now enrolled.
+        recipient: RecipientKey,
+        /// How many recipients the vault has now.
+        recipients: u8,
+    },
     /// `recipient remove` completed.
     RecipientRemove {
         /// How many recipients the vault has after the removal.
@@ -575,6 +598,8 @@ pub enum ErrorCode {
     /// `recipient add`, `recipient remove`: the key is not an `age1...` X25519 recipient key, or the label breaks its rule;
     /// the message names the rule.
     RecipientInvalid = 35,
+    /// `recipient add`: the key is already enrolled; nothing was changed.
+    RecipientEnrolled = 36,
     /// `recipient remove`: no enrolled recipient has this key; nothing was changed.
     UnknownRecipient = 37,
     /// `recipient add`, `recipient remove`: the set after the change would break the independence rule or hold more than 64
@@ -624,6 +649,7 @@ impl ErrorCode {
             Self::MigrationRateLimited => "migration-rate-limited",
             Self::UnlockRateLimited => "unlock-rate-limited",
             Self::RecipientInvalid => "recipient-invalid",
+            Self::RecipientEnrolled => "recipient-enrolled",
             Self::UnknownRecipient => "unknown-recipient",
             Self::RecipientSetInvalid => "recipient-set-invalid",
             Self::RecipientInventoryDamaged => "recipient-inventory-damaged",
@@ -762,6 +788,9 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         }
         Frame::Response(AdminResponse::RecipientList { entries }) => {
             put_frame(out, FrameKind::Success, &body::encode_recipient_list_result(entries)?)
+        }
+        Frame::Response(AdminResponse::RecipientAdd { recipient, recipients }) => {
+            put_frame(out, FrameKind::Success, &body::encode_recipient_add_result(recipient, *recipients))
         }
         Frame::Response(AdminResponse::RecipientRemove { recipients }) => {
             put_frame(out, FrameKind::Success, &body::encode_recipient_remove_result(*recipients))

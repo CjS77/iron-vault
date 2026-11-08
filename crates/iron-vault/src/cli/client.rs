@@ -251,6 +251,15 @@ pub fn recipient_list(socket: Option<&Path>) -> Exit {
     })
 }
 
+/// Runs `recipient add`. The service shows its summary and the completion notice, and prompts for the vault passphrase,
+/// answered from the owner console; nothing but those notices is printed on success.
+pub fn recipient_add(socket: Option<&Path>, recipient: String, label: String) -> Exit {
+    run(socket, AdminRequest::RecipientAdd { recipient, label }, |response| match response {
+        AdminResponse::RecipientAdd { .. } => Exit::Success,
+        _ => unexpected(),
+    })
+}
+
 /// Runs `recipient remove`. The service describes the removal in a notice and prompts for the approval passphrase, answered
 /// from the owner console; its closing notice says what removal does not reach, so success prints nothing to stdout.
 pub fn recipient_remove(socket: Option<&Path>, recipient: String) -> Exit {

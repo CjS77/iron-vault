@@ -81,6 +81,19 @@ fn recipient_list_is_a_client_command_without_arguments() {
 }
 
 #[test]
+fn recipient_add_takes_a_key_and_requires_a_label() {
+    assert_eq!(
+        parse(&["recipient", "add", "age1abc", "--label", "alice laptop"]).unwrap().command,
+        Command::Recipient(RecipientCommand::Add {
+            recipient: "age1abc".to_owned(),
+            label: "alice laptop".to_owned()
+        })
+    );
+    assert_eq!(parse(&["recipient", "add", "age1abc"]).unwrap_err().exit_code(), 2);
+    assert_eq!(parse(&["recipient", "add", "--label", "x"]).unwrap_err().exit_code(), 2);
+}
+
+#[test]
 fn recovery_check_is_a_client_command_without_arguments() {
     assert_eq!(
         parse(&["recovery", "check"]).unwrap().command,

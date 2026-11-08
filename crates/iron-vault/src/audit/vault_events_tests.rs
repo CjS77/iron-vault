@@ -598,3 +598,63 @@ fn a_removed_recipients_label_is_escaped() {
     // A control or format character never reaches the log: the label rule refuses it on construction.
     assert!(RecipientLabel::new("a\nb").is_err() && RecipientLabel::new("a\u{202e}b").is_err());
 }
+
+#[test]
+fn recipient_added_escapes_the_owner_label_and_a_failure_carries_its_write_details() {
+    use super::recipient::*;
+    use iron_vault_store::{ChangeCommitted, RecipientEntry, RecipientLabel, RecipientRole, UtcSecond};
+    let key: iron_vault_store::RecipientKey = "age1v4q6gqhc84l6yrmyeqcske956a65frdww5rc4jnrdfhkpsdglqksx4muhw".parse().unwrap();
+    let entry = RecipientEntry::new(
+        key.clone(),
+        RecipientRole::Added,
+        RecipientLabel::new("caf\u{e9} \"laptop\"").unwrap(),
+        UtcSecond::from_unix_seconds(1_794_060_171).unwrap(),
+    );
+    let record = record_of(
+        Added {
+            entry: &entry,
+            recipients: 3,
+        },
+        "INFO",
+        &["recipient", "recipient_role", "recipient_label", "recipients"],
+    );
+    let (role, label, count) = (
+        record["recipient_role"].as_str(),
+        record["recipient_label"].as_str(),
+        record["recipients"].as_u64(),
+    );
+    assert_eq!((role, count), (Some("added"), Some(3)));
+    assert_eq!(label, Some(r#"caf\u{e9} "laptop""#));
+
+    let refused = record_of(
+        ChangeFailed {
+            change: "add",
+            recipient: &key,
+            failure: ChangeFailure::AlreadyEnrolled,
+        },
+        "WARN",
+        &["change", "recipient", "failure"],
+    );
+    assert_eq!(
+        (refused["change"].as_str(), refused["failure"].as_str()),
+        (Some("add"), Some("already_enrolled"))
+    );
+    let failed = ChangeFailure::WriteFailed {
+        step: Some(iron_vault_store::RecipientChangeStep::Envelope),
+        error_kind: iron_vault_store::ErrorKindLabel::fixed("permission_denied"),
+        committed: ChangeCommitted::Unknown,
+    };
+    let record = record_of(
+        ChangeFailed {
+            change: "add",
+            recipient: &key,
+            failure: failed,
+        },
+        "WARN",
+        &["change", "recipient", "failure", "step", "error_kind", "committed"],
+    );
+    assert_eq!(
+        (record["step"].as_str(), record["error_kind"].as_str(), record["committed"].as_str()),
+        (Some("envelope"), Some("permission_denied"), Some("unknown"))
+    );
+}

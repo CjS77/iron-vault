@@ -1,7 +1,8 @@
 //! The recipient events (`design/recipients.md`, "Audit events"): the inventory check's `recipient.inventory-damaged` and
-//! `recipient.change-recovered`, and a removal's `recipient.removed` and `recipient.change-failed`.
+//! `recipient.change-recovered`, and a change's `recipient.added`, `recipient.removed` and `recipient.change-failed`.
 //!
-//! They hold fixed labels, and a recipient key or label, which are public: never a secret or a file's bytes.
+//! They hold fixed labels, and a recipient key or label, which are public (a label is escaped): never a secret or a
+//! file's bytes.
 
 use iron_vault_store::{
     ChangeCommitted, ChangeRecovery, ErrorKindLabel, InventoryDamage, RecipientChangeStep, RecipientEntry, RecipientKey,
@@ -43,6 +44,31 @@ impl AuditEvent for ChangeRecovered {
     }
 }
 
+/// `recipient.added`: a recipient change that adds committed.
+#[derive(Debug, Clone, Copy)]
+pub struct Added<'a> {
+    /// The enrolled entry.
+    pub entry: &'a RecipientEntry,
+    /// How many recipients the vault has now.
+    pub recipients: usize,
+}
+
+impl AuditEvent for Added<'_> {
+    const NAME: EventName = EventName("recipient.added");
+
+    fn emit(&self) {
+        tracing::info!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            recipient = self.entry.key().to_string().as_str(),
+            recipient_role = self.entry.role().name(),
+            recipient_label = iron_vault_policy::escaped(self.entry.label().as_str()).as_str(),
+            recipients = self.recipients,
+            "recipient added",
+        );
+    }
+}
+
 /// `recipient.removed`: a recipient change that removes a recipient committed.
 #[derive(Debug, Clone, Copy)]
 pub struct Removed<'a> {
@@ -68,9 +94,11 @@ impl AuditEvent for Removed<'_> {
     }
 }
 
-/// Why a recipient removal did not happen, or did not finish.
+/// Why a recipient change did not happen, or did not finish.
 #[derive(Debug, Clone)]
 pub enum ChangeFailure {
+    /// The key to add is already enrolled.
+    AlreadyEnrolled,
     /// No enrolled recipient has the key.
     UnknownRecipient,
     /// The set after the change would break the independence rule.
@@ -102,6 +130,7 @@ impl AuditEvent for ChangeFailed<'_> {
 
     fn emit(&self) {
         let (failure, step, error_kind, committed) = match &self.failure {
+            ChangeFailure::AlreadyEnrolled => ("already_enrolled", None, None, None),
             ChangeFailure::UnknownRecipient => ("unknown_recipient", None, None, None),
             ChangeFailure::SetInvalid => ("set_invalid", None, None, None),
             ChangeFailure::WriteFailed {

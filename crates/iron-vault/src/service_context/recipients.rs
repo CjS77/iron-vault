@@ -12,7 +12,6 @@ use iron_vault_store::{
     InventoryCheckError, InventoryDamage, PinnedApprover, RecipientEntry, RecipientInventory, StoreFs, VaultId, VaultIdentity,
     check_recipient_inventory,
 };
-use tokio::sync::OwnedMutexGuard;
 
 use super::{Inner, ServiceContext};
 use crate::audit::AuditEvent;
@@ -54,18 +53,18 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         Ok(inventory.entries().cloned().collect())
     }
 
-    /// The inventory check, run by a blocking task that owns `service_wide` until the check ends, even if the future that
-    /// started it is dropped. A check that succeeds hands the guard back, so a recipient change can keep the lock; a refused
-    /// one releases it.
-    pub(super) async fn check_inventory(
+    /// The inventory check, run by a blocking task that owns `held` (the service-wide lock, in whatever guard the caller has)
+    /// until the check ends, even if the future that started it is dropped. A check that succeeds hands it back, so a
+    /// recipient change can keep the lock; a refused one releases it.
+    pub(super) async fn check_inventory<H: Send + 'static>(
         &self,
-        service_wide: OwnedMutexGuard<()>,
+        held: H,
         identity: Arc<VaultIdentity>,
         vault_id: VaultId,
-    ) -> Result<(OwnedMutexGuard<()>, RecipientInventory), RecipientRefusal> {
+    ) -> Result<(H, RecipientInventory), RecipientRefusal> {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let checked = tokio::task::spawn_blocking(move || {
-            check_recipient_inventory(&locks.state, &setup.fs, &identity, vault_id).map(|checked| (service_wide, checked))
+            check_recipient_inventory(&locks.state, &setup.fs, &identity, vault_id).map(|checked| (held, checked))
         })
         .await
         .map_err(|_| RecipientRefusal::Interrupted)?;

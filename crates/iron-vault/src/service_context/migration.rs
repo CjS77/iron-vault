@@ -27,8 +27,8 @@ use super::{Inner, ServiceContext};
 use crate::admin::protocol::OwnerInput;
 use crate::attempt_limit::AttemptLimiter;
 use crate::migration_authorization::{
-    BindingDigest, ChallengeBusy, MethodRefusal, MigrationAuthorization, MigrationChallenge, MigrationOperation, MigrationRefusal,
-    SourceOwnerMethod, VaultPassphraseMethod, prove_challenge,
+    AuthorizedMigration, BindingDigest, ChallengeBusy, MethodRefusal, MigrationAuthorization, MigrationChallenge, MigrationOperation,
+    MigrationRefusal, SourceOwnerMethod, VaultPassphraseMethod, prove_challenge,
 };
 use crate::service_state::ServiceState;
 
@@ -37,7 +37,8 @@ use crate::service_state::ServiceState;
 pub struct MigrationSession<'a, F> {
     service: &'a ServiceContext<F>,
     /// Taken out in `drop`, so a contended retire can carry it into a task and keep the lock until the slot is empty.
-    service_wide: Option<OwnedMutexGuard<()>>,
+    /// Shared, so a blocking write can keep the lock to its end even when the exchange's future is dropped meanwhile.
+    service_wide: Option<Arc<OwnedMutexGuard<()>>>,
     /// The service state and check generation at step 2, which step 9 checks again.
     state: ServiceState,
     checks: u64,
@@ -54,7 +55,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         ready_identity(&inner)?;
         Ok(MigrationSession {
             service: self,
-            service_wide: Some(service_wide),
+            service_wide: Some(Arc::new(service_wide)),
             state: inner.state,
             checks: inner.checks,
         })
@@ -197,6 +198,12 @@ impl<F: StoreFs + Send + Sync + 'static> MigrationSession<'_, F> {
         self.service
     }
 
+    /// The service-wide lock, for a blocking task that writes under it: the lock stays held until the task drops this, even
+    /// if the exchange is dropped first.
+    pub(crate) fn hold(&self) -> Option<Arc<OwnedMutexGuard<()>>> {
+        self.service_wide.clone()
+    }
+
     /// Completes once a `lock` is waiting for the service-wide lock this session holds, so a prompt can end the exchange
     /// rather than make the `lock` wait for the owner.
     pub async fn lock_requested(&self) {
@@ -212,6 +219,18 @@ impl<F: StoreFs + Send + Sync + 'static> MigrationSession<'_, F> {
             true => Ok(()),
             false => Err(MigrationRefusal::WrongState(inner.state)),
         }
+    }
+
+    /// Step 9: the service is still as it was at step 2, then the authorization is consumed for `operation` on the open
+    /// vault, which checks its binding and its expiry. The result is the witness the operation takes to start.
+    pub async fn consume(
+        &self,
+        authorization: MigrationAuthorization,
+        operation: &MigrationOperation,
+    ) -> Result<AuthorizedMigration, MigrationRefusal> {
+        self.ensure_unchanged().await?;
+        let vault_id = open_vault_id(&*self.service.inner.lock().await)?;
+        authorization.authorize(vault_id, operation, Instant::now())
     }
 }
 

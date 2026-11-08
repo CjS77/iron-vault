@@ -23,6 +23,9 @@ pub struct VaultPassphraseMethod {
 }
 
 impl VaultPassphraseMethod {
+    /// The label the audit events' `method` field records.
+    pub const LABEL: &'static str = "vault_passphrase";
+
     /// The method running `check`, which the service context builds over its state directory and the public key of
     /// the vault identity it holds. Only the context makes one, so the check is always the store's.
     pub(crate) fn new(check: impl Fn(&Passphrase) -> Result<(), PassphraseCheckError> + Send + Sync + 'static) -> Self {
@@ -40,7 +43,7 @@ impl Sealed for VaultPassphraseMethod {}
 
 impl SourceOwnerMethod for VaultPassphraseMethod {
     fn label(&self) -> &'static str {
-        "vault_passphrase"
+        Self::LABEL
     }
 
     /// Runs the check on the blocking pool, because scrypt holds a thread for about a second. The task owns the

@@ -19,6 +19,8 @@ mod owner_presence;
 pub mod principal;
 pub mod protocol;
 #[cfg(target_os = "linux")]
+mod recipient_add;
+#[cfg(target_os = "linux")]
 mod recipient_list;
 #[cfg(target_os = "linux")]
 mod recipient_remove;
