@@ -2,7 +2,7 @@ use super::*;
 use crate::service_state::ServiceState;
 
 fn answer(refusal: RecipientRefusal) -> (ErrorCode, String) {
-    match refused(refusal) {
+    match refused("recipient list", refusal) {
         AdminResponse::Error { code, message } => (code, message),
         other => panic!("expected an error, got {other:?}"),
     }

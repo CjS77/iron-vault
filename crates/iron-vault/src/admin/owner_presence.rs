@@ -69,7 +69,7 @@ pub(super) async fn require_owner_presence<F: StoreFs + Send + Sync + 'static>(
 
 /// The passphrase owner presence checks, or why it ends before any check: input that cannot be the passphrase is
 /// refused as a wrong one, and a `lock` cancels the change.
-async fn presence_passphrase(
+pub(super) async fn presence_passphrase(
     exchange: &mut Exchange,
     lock_requested: impl Future<Output = ()>,
 ) -> Result<Result<ApprovalPassphrase, NoPresence>, ExchangeError> {

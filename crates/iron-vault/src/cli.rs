@@ -254,6 +254,13 @@ pub enum RecipientCommand {
     /// List every enrolled recipient, one line each: its `age1...` key, role, enrolment time and label. It works while the
     /// service is Ready, and refuses a missing or damaged recipient inventory without changing it.
     List,
+    /// Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval
+    /// passphrase. It refuses the operational recipient and the last recovery recipient, and says that copies of
+    /// `identity.age` made before still open with the removed key.
+    Remove {
+        /// The recipient's `age1...` key, as `recipient list` prints it.
+        recipient: String,
+    },
 }
 
 impl Cli {
@@ -402,6 +409,19 @@ pub fn recovery_check(socket: Option<&Path>) -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn recovery_check(_socket: Option<&Path>) -> ExitCode {
+    unsupported_platform()
+}
+
+/// `iron-vault recipient remove`: sends `recipient remove`, answers the approval passphrase prompt from the owner console, and
+/// shows the service's notices, which end with what removal does not reach.
+#[cfg(target_os = "linux")]
+pub fn recipient_remove(socket: Option<&Path>, recipient: String) -> ExitCode {
+    client::recipient_remove(socket, recipient).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn recipient_remove(_socket: Option<&Path>, _recipient: String) -> ExitCode {
     unsupported_platform()
 }
 

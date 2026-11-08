@@ -251,6 +251,15 @@ pub fn recipient_list(socket: Option<&Path>) -> Exit {
     })
 }
 
+/// Runs `recipient remove`. The service describes the removal in a notice and prompts for the approval passphrase, answered
+/// from the owner console; its closing notice says what removal does not reach, so success prints nothing to stdout.
+pub fn recipient_remove(socket: Option<&Path>, recipient: String) -> Exit {
+    run(socket, AdminRequest::RecipientRemove { recipient }, |response| match response {
+        AdminResponse::RecipientRemove { .. } => Exit::Success,
+        _ => unexpected(),
+    })
+}
+
 /// Runs `recovery check`, answering the key prompt from the owner console. A success names the vault the key opened and
 /// the check time on stdout; when the check record could not be written, stderr says reminders still count from the last
 /// recorded check.

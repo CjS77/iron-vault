@@ -32,19 +32,20 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for RecipientList<F> {
         Box::pin(async move {
             Ok(match self.service.list_recipients().await {
                 Ok(entries) => AdminResponse::RecipientList { entries },
-                Err(refusal) => refused(refusal),
+                Err(refusal) => refused("recipient list", refusal),
             })
         })
     }
 }
 
-fn refused(refusal: RecipientRefusal) -> AdminResponse {
+/// The error response for a recipient command that ended before its own work; `command` names it in the wrong-state message.
+pub(super) fn refused(command: &str, refusal: RecipientRefusal) -> AdminResponse {
     let (code, message) = match refusal {
         RecipientRefusal::Busy => (ErrorCode::Busy, "another operation is running; try again shortly".to_owned()),
         RecipientRefusal::WrongState(state) => (
             ErrorCode::WrongState,
             format!(
-                "`recipient list` is allowed only while the service is Ready; it is {}",
+                "`{command}` is allowed only while the service is Ready; it is {}",
                 state_name(state)
             ),
         ),

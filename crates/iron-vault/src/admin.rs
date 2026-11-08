@@ -21,6 +21,8 @@ pub mod protocol;
 #[cfg(target_os = "linux")]
 mod recipient_list;
 #[cfg(target_os = "linux")]
+mod recipient_remove;
+#[cfg(target_os = "linux")]
 mod recovery_check;
 #[cfg(target_os = "linux")]
 mod replace;

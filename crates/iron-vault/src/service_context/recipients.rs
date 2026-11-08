@@ -8,7 +8,10 @@
 
 use std::sync::Arc;
 
-use iron_vault_store::{InventoryCheckError, InventoryDamage, RecipientEntry, StoreFs, VaultId, VaultIdentity, check_recipient_inventory};
+use iron_vault_store::{
+    InventoryCheckError, InventoryDamage, RecipientEntry, RecipientInventory, StoreFs, VaultId, VaultIdentity, check_recipient_inventory,
+};
+use tokio::sync::OwnedMutexGuard;
 
 use super::{Inner, ServiceContext};
 use crate::audit::AuditEvent;
@@ -46,17 +49,29 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             .try_lock_owned()
             .map_err(|_| RecipientRefusal::Busy)?;
         let (identity, vault_id) = ready_vault(&*self.inner.lock().await)?;
+        let (_, inventory) = self.check_inventory(service_wide, identity, vault_id).await?;
+        Ok(inventory.entries().cloned().collect())
+    }
+
+    /// The inventory check, run by a blocking task that owns `service_wide` until the check ends, even if the future that
+    /// started it is dropped. A check that succeeds hands the guard back, so a recipient change can keep the lock; a refused
+    /// one releases it.
+    pub(super) async fn check_inventory(
+        &self,
+        service_wide: OwnedMutexGuard<()>,
+        identity: Arc<VaultIdentity>,
+        vault_id: VaultId,
+    ) -> Result<(OwnedMutexGuard<()>, RecipientInventory), RecipientRefusal> {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let checked = tokio::task::spawn_blocking(move || {
-            let _held = service_wide;
-            check_recipient_inventory(&locks.state, &setup.fs, &identity, vault_id)
+            check_recipient_inventory(&locks.state, &setup.fs, &identity, vault_id).map(|checked| (service_wide, checked))
         })
         .await
         .map_err(|_| RecipientRefusal::Interrupted)?;
         match checked {
-            Ok(checked) => {
+            Ok((held, checked)) => {
                 checked.recovered.map(ChangeRecovered).iter().for_each(AuditEvent::emit);
-                Ok(checked.inventory.entries().cloned().collect())
+                Ok((held, checked.inventory))
             }
             Err(InventoryCheckError::Damaged(damage)) => {
                 InventoryDamaged(damage).emit();
