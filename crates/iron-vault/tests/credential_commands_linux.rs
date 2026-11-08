@@ -21,7 +21,7 @@
 mod common;
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -204,7 +204,20 @@ fn exec_argv(proc: &Path, name: &[u8]) -> Option<Vec<u8>> {
     if comm.strip_suffix(b"\n") != Some(name) {
         return None;
     }
-    fs::read(proc.join("cmdline")).ok().filter(|cmdline| !cmdline.is_empty())
+    read_once(&proc.join("cmdline")).filter(|cmdline| !cmdline.is_empty())
+}
+
+/// More than any argv these tests pass.
+const CMDLINE_LIMIT: usize = 64 * 1024;
+
+/// `path` read in one `read` call. `fs::read` takes several, and a process that exits between them shows a cmdline cut
+/// short; within one call the kernel holds the process's memory, so the read is whole or empty.
+fn read_once(path: &Path) -> Option<Vec<u8>> {
+    let mut buffer = vec![0; CMDLINE_LIMIT];
+    let read = fs::File::open(path).ok()?.read(&mut buffer).ok()?;
+    assert!(read < CMDLINE_LIMIT, "{} is longer than {CMDLINE_LIMIT} bytes", path.display());
+    buffer.truncate(read);
+    Some(buffer)
 }
 
 /// Where the last line of `input` starts.
