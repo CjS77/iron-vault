@@ -101,6 +101,15 @@ These can happen on any command.
 | `31` | `recovery-check-failed` | The key does not open this vault. | This is not the key for this vault. Find the right one; if you cannot, the vault has no working recovery key. See [Check and store your recovery key](../cookbook/recovery-key.md). |
 | `32` | `recovery-check-unavailable` | The vault is not initialized, or a file the check reads could not be read or is malformed, so the key was not judged. | Read the message, which names the file and error kind. |
 
+### `recipient list`
+
+| Code | Name | Meaning | What to do |
+|---|---|---|---|
+| `39` | `recipient-inventory-damaged` | The recipient inventory (`recipients.age`) is missing or damaged, or does not describe the `identity.age` on disk. The message names the damage. Nothing was changed, and the service stays Ready. | Do not delete or rewrite either file. A vault initialized before recipient commands has no inventory, and the message says so. Keep your recovery key, which opens the vault without the inventory. |
+
+`recipient list` also answers `wrong-state` outside Ready, `busy` while another command holds the service-wide lock, and
+`vault-write-failed` when settling a staged recipient change failed.
+
 ### Migration authorization
 
 `export` and `recipient add` are not CLI commands yet. These codes are part of the protocol already, for the step the

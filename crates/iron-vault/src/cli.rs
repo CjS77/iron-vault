@@ -23,6 +23,8 @@ mod init;
 #[cfg(target_os = "linux")]
 mod list;
 // Generates the book's command reference; test-only, so the release binary carries none of it.
+#[cfg(target_os = "linux")]
+mod recipient_list;
 #[cfg(test)]
 mod reference;
 #[cfg(target_os = "linux")]
@@ -171,6 +173,9 @@ pub enum Command {
     /// Check the owner's offline recovery key.
     #[command(subcommand)]
     Recovery(RecoveryCommand),
+    /// Show the keys that can open the vault.
+    #[command(subcommand)]
+    Recipient(RecipientCommand),
     /// Print a shell completion script to stdout. It never contacts the service, so it also runs at build time.
     Completions {
         /// The shell to generate the script for.
@@ -241,6 +246,14 @@ pub enum RecoveryCommand {
     /// from stdin, so `pass show iron-vault-recovery | sudo iron-vault recovery check` works. It works while the service
     /// is Locked or Ready, changes nothing but the time it records, and keeps no copy of the key.
     Check,
+}
+
+/// `iron-vault recipient`'s commands.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum RecipientCommand {
+    /// List every enrolled recipient, one line each: its `age1...` key, role, enrolment time and label. It works while the
+    /// service is Ready, and refuses a missing or damaged recipient inventory without changing it.
+    List,
 }
 
 impl Cli {
@@ -389,6 +402,18 @@ pub fn recovery_check(socket: Option<&Path>) -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn recovery_check(_socket: Option<&Path>) -> ExitCode {
+    unsupported_platform()
+}
+
+/// `iron-vault recipient list`: sends `recipient list` and prints one line per enrolled recipient.
+#[cfg(target_os = "linux")]
+pub fn recipient_list(socket: Option<&Path>) -> ExitCode {
+    client::recipient_list(socket).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn recipient_list(_socket: Option<&Path>) -> ExitCode {
     unsupported_platform()
 }
 

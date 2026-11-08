@@ -240,6 +240,17 @@ pub fn rm(socket: Option<&Path>, name: String) -> Exit {
     })
 }
 
+/// Runs `recipient list` and prints one line per enrolled recipient on stdout.
+pub fn recipient_list(socket: Option<&Path>) -> Exit {
+    run(socket, AdminRequest::RecipientList, |response| match response {
+        AdminResponse::RecipientList { entries } => {
+            print!("{}", super::recipient_list::render(&entries));
+            Exit::Success
+        }
+        _ => unexpected(),
+    })
+}
+
 /// Runs `recovery check`, answering the key prompt from the owner console. A success names the vault the key opened and
 /// the check time on stdout; when the check record could not be written, stderr says reminders still count from the last
 /// recorded check.

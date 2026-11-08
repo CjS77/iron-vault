@@ -722,6 +722,13 @@ other approval.
 | `recovery.checked` | INFO when opened, WARN otherwise | `recovery check` ended with `invalid` at its prompt, or with any other outcome after the key parsed and the lock was taken; `busy` and the re-check's `wrong-state` and `recovery-check-unavailable` record only `admin.command` | `recovery_outcome`; for `opened`, `vault_id` and `recorded`, with `error_kind` when not recorded; for `failed`, `recovery_failure`; for `unavailable`, `file` and `error_kind` |
 | `recovery.reminder` | INFO | a reminder evaluation found a recovery reminder due | `recovery_record`; `last_checked` when `checked`; `reminders_since` when `never_checked`; `error_kind` when `unusable`; `reminder_days`; `remediation` |
 
+**Recipients** ([recipients.md](recipients.md#audit-events) gives the whole family; the inventory check writes these two):
+
+| Event | Level | When | Fields |
+|---|---|---|---|
+| `recipient.inventory-damaged` | WARN | the inventory check found the recipient inventory missing or damaged | `inventory_damage` |
+| `recipient.change-recovered` | WARN | the inventory check finished a committed recipient change or removed a staged inventory | `recovery` |
+
 **Migration authorization** ([migration-authorization.md](migration-authorization.md#audit-events) gives the order of the records of one exchange):
 
 | Event | Level | When | Fields |
@@ -770,6 +777,8 @@ The fields that only one event uses, or that only audit events use:
 | `recovery_outcome` | string | `opened`, `failed` (the key does not open this vault), `invalid` (the text is not a recovery key) or `unavailable` (the check could not run) |
 | `recovery_failure` | string | Why a recovery key failed: `not_a_recipient` or `identity_unverified` |
 | `recorded` | boolean | Whether a successful recovery check's record was written |
+| `inventory_damage` | string | What the recipient inventory check found: `envelope_unreadable`, `missing`, `unreadable`, `mac`, `malformed`, `unknown_role`, `other_vault`, `envelope_mismatch` or `count_mismatch` |
+| `recovery` | string | How the inventory check settled a staged recipient change: `completed` or `discarded` |
 | `recovery_record` | string | The recovery check record's form: `checked`, `never_checked` or `unusable` |
 | `last_checked` | string | The record's last successful recovery check, an RFC 3339 UTC timestamp to the second |
 | `reminders_since` | string | When the reminder schedule started counting, an RFC 3339 UTC timestamp to the second |
@@ -818,8 +827,8 @@ follows the [library error](#library-errors) rule:
 ### Event names
 
 An event name is `<subject>.<name>`: a lowercase subject (`admin`, `caller`, `config`, `credential`, `migration`,
-`owner`, `recovery`, `request`, `response`, `route`, `service`, `vault`), a dot, and a kebab-case name, matching
-`^[a-z]+\.[a-z]+(-[a-z]+)*$`. Event names keep the kebab-case already in use in the code and the design docs; only
+`owner`, `recipient`, `recovery`, `request`, `response`, `route`, `service`, `vault`), a dot, and a kebab-case name,
+matching `^[a-z]+\.[a-z]+(-[a-z]+)*$`. Event names keep the kebab-case already in use in the code and the design docs; only
 field names and label values are snake_case. Names are stable: renaming or removing one changes the schema version.
 Each name is defined once, as an `audit::EventName` constant beside its struct.
 

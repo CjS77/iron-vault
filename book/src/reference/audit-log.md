@@ -176,6 +176,16 @@ Each of these also has `remediation`.
 | `recovery.checked` | INFO when the key opened the vault, WARN otherwise | `recovery check` finished | `recovery_outcome`: `opened` with `vault_id` and `recorded` (and `error_kind` when the record was not written); `failed` with `recovery_failure` (`not_a_recipient` or `identity_unverified`); `invalid`; or `unavailable` with `file` and `error_kind` |
 | `recovery.reminder` | INFO | A recovery check is due | `recovery_record` (`checked` with `last_checked`, `never_checked` with `reminders_since`, `unusable` with `error_kind`), `reminder_days`, `remediation` |
 
+### Recipients
+
+Written by the inventory check that every recipient command, `recipient list` included, runs first. Neither carries a
+recipient key or label.
+
+| Event | Level | When | Fields |
+|---|---|---|---|
+| `recipient.inventory-damaged` | WARN | The inventory check found the recipient inventory missing or damaged, and wrote nothing | `inventory_damage`: `envelope_unreadable`, `missing`, `unreadable`, `mac`, `malformed`, `unknown_role`, `other_vault`, `envelope_mismatch` or `count_mismatch` |
+| `recipient.change-recovered` | WARN | The inventory check finished a committed recipient change or removed a staged inventory | `recovery`: `completed` or `discarded` |
+
 ### Migration authorization
 
 `export` and `recipient add` are not CLI commands yet; these events are written by the authorization step they share.

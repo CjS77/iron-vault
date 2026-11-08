@@ -236,6 +236,22 @@ iron-vault recovery check [OPTIONS]
 
 Prove that your offline recovery key opens this vault: the service prompts for the key, read with echo off or from stdin, so `pass show iron-vault-recovery | sudo iron-vault recovery check` works. It works while the service is Locked or Ready, changes nothing but the time it records, and keeps no copy of the key.
 
+## `iron-vault recipient`
+
+```text
+iron-vault recipient [OPTIONS] <COMMAND>
+```
+
+Show the keys that can open the vault.
+
+## `iron-vault recipient list`
+
+```text
+iron-vault recipient list [OPTIONS]
+```
+
+List every enrolled recipient, one line each: its `age1...` key, role, enrolment time and label. It works while the service is Ready, and refuses a missing or damaged recipient inventory without changing it.
+
 ## `iron-vault completions`
 
 ```text

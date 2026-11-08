@@ -71,6 +71,16 @@ fn init_host_unlock_is_accepted_only_by_a_container_build() {
 }
 
 #[test]
+fn recipient_list_is_a_client_command_without_arguments() {
+    assert_eq!(
+        parse(&["recipient", "list"]).unwrap().command,
+        Command::Recipient(RecipientCommand::List)
+    );
+    assert_eq!(parse(&["recipient", "list", "age1x"]).unwrap_err().exit_code(), 2);
+    assert_eq!(parse(&["recipient"]).unwrap_err().exit_code(), 2);
+}
+
+#[test]
 fn recovery_check_is_a_client_command_without_arguments() {
     assert_eq!(
         parse(&["recovery", "check"]).unwrap().command,

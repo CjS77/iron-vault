@@ -121,6 +121,7 @@ an error.
 | `10` | `replace` | the credential name, kind and permitted origins, as `add` | the new [record ID](#replace) |
 | `11` | `rm` | the credential name | none |
 | `12` | `recovery check` | none | the vault ID, the check time and whether the [check was recorded](#recovery-check) |
+| `13` | `recipient list` | none | the enrolled recipients, in inventory order ([recipients.md](recipients.md#admin-protocol)) |
 
 **No command accepts an external signature** ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -740,6 +741,7 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `32` | `recovery-check-unavailable` | `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the key was not judged; the message names the initialization state, or the file and error kind |
 | `33` | `migration-rate-limited` | `export`, `recipient add`: too many wrong vault passphrases in a row; the [attempt limit](migration-authorization.md#passphrase-attempt-limit) refused the attempt before any prompt, and the message gives the whole seconds to wait; nothing was exported or rewrapped |
 | `34` | `unlock-rate-limited` | `unlock`: too many wrong vault passphrases, here or in migration authorization, so no prompt was sent; the message gives the seconds to wait, and the service stays Locked |
+| `39` | `recipient-inventory-damaged` | `recipient list`: the inventory check found the recipient inventory missing or damaged; the message names the damage and nothing was changed ([recipients.md](recipients.md#error-codes)) |
 
 The migration codes 28, 29 and 33 are raised by the migration authorization step that `export` and `recipient add`
 share ([migration-authorization.md](migration-authorization.md#error-codes)).
@@ -750,7 +752,8 @@ This document specifies protocol version 1, the only version the codec reads or 
 is refused before its kind or length is read. Version 1 has not been released, so the notice frame, the reveal frame,
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
 `status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), `replace` (command 10), `rm`
-(command 11), `recovery check` (command 12), `status` tags 13 to 17, and error codes 7 to 34 join it
+(command 11), `recovery check` (command 12), `recipient list` (command 13), `status` tags 13 to 17, and error codes 7 to 34 and 39
+join it
 rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
