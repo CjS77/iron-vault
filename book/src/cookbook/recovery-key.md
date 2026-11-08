@@ -98,9 +98,8 @@ Run the check again whenever you move the key to a new place.
   key`.** What you typed is not a recovery key at all: a truncated paste, a missing line, or a different kind of key.
 - **`iron-vault: the service answered error 31 (recovery-check-failed): the recovery key does not open this vault`.**
   It is a recovery key, but not this vault's: one from an older vault, or one copied wrong. If you can't find the right
-  one, the vault has only its passphrase left as a way in. Adding a new recovery key is
-  [not yet available](roadmap/recipients.md); until it is, keep the vault passphrase safe, and keep the config and
-  `list` copies from [step 1](#1-store-the-key) so you can rebuild.
+  one, the vault has only its passphrase left as a way in. [Add a new recovery key](recipients.md) now, while the
+  passphrase still opens the vault, then remove the lost one.
 - **`recovery-check-unavailable`.** The check could not run, because a vault file could not be read. This says
   nothing about the key. `status` and the log name the file.
 

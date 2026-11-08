@@ -8,7 +8,6 @@ feature ships.
 |---|---|
 | [Unlock at boot with a TPM](tpm-unlock.md) | v0 |
 | [Approve configs with a TPM PIN](tpm-approval.md) | v0 |
-| [Add or remove a recipient](recipients.md) | v0, in progress |
 | [Move a vault to a new machine](migration.md) | v0 |
 | [Retire a machine, or reset the vault](reset.md) | v0 |
 | [Run Iron Vault in Docker Compose](docker-compose.md) | v0, partly built |
