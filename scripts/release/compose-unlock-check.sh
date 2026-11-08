@@ -22,6 +22,8 @@
 #   --cleanup     removes everything a part 1 left, to abandon a run.
 #
 # Prints one PASS or FAIL line per check, with the reason under a FAIL, and exits 1 if any check failed (part 2 counts part 1's).
+# The swap item prints SKIP, not PASS, on a host with no swap: it neither fails the run nor counts as evidence, and the summary says
+# how many were skipped. Rerun on a host with swap for that item.
 # Exit 2 means the script could not start or set up (bad arguments, a missing tool, not root, no opt-in, no TPM, host paths already
 # taken, an image that will not build, no earlier part 1, no reboot since it). Attach both parts' output to the ticket: it is the gate's
 # evidence.
@@ -66,6 +68,7 @@ MODE=before
 KEEP=0
 # Set once the run owns the state directory, so a refused start never tears down an earlier run's.
 ARMED=0
+SKIPPED=0
 BOOT_ID=""
 SCRIPT_START=$(date +%s)
 
@@ -153,19 +156,21 @@ preflight_unlock() {
     systemd-creds has-tpm2 >/dev/null 2>&1 || die "systemd-creds finds no usable TPM2 (real hardware, or swtpm under the hypervisor)"
     case "$REPO" in /etc/* | /var/*) die "check this repository out outside /etc and /var: the key scans read both" ;; esac
     for path in "$HOST_CLI" "$HOST_DIR" "$RUN_DIR" "$UNLOCK_DIR" "$UNIT_FILE" "$TMPFILES_CONF" "$SYSUSERS_CONF" "$STATE_DIR" "$SECRETS"; do
-        [ ! -e "$path" ] || die "$path already exists; this check needs a host with nothing of Iron Vault's on it (--cleanup removes a run's)"
+        [ ! -e "$path" ] || die "$path already exists; this check needs a host with nothing of Iron Vault's on it (--cleanup removes it)"
     done
     for path in "$SERVICE_ACCOUNT" "$SERVICE_UID"; do
         ! getent passwd "$path" >/dev/null || die "an account named or numbered $path exists"
         ! getent group "$path" >/dev/null || die "a group named or numbered $path exists"
     done
     refuse_leftovers
+    ! docker container inspect ivcheck-export >/dev/null 2>&1 || die "a container named ivcheck-export already exists"
 }
 
 banner() {
     # shellcheck source=/dev/null
     echo "compose-unlock-check ($1) on $(. /etc/os-release && echo "$PRETTY_NAME"), kernel $(uname -r), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "docker $(docker version --format '{{.Server.Version}}'), compose $(docker compose version --short), $(systemctl --version | head -n 1)"
+    echo "docker $(docker version --format '{{.Server.Version}}'), compose $(docker compose version --short)," \
+        "$(systemctl --version | head -n 1)"
     echo "tpm: $(systemd-creds has-tpm2 2>&1 | tr '\n' ' '), swap: $(swapon --noheadings --raw --show=NAME | tr '\n' ' ')"
 }
 
@@ -199,18 +204,23 @@ setup_part_one() {
     install_host_files
     install -d -m 0700 "$SECRETS"
     mount -t ramfs -o mode=0700 ramfs "$SECRETS"
-    provision_and_hand_off >"$WORK/provision.out" 2>&1 || { cat "$WORK/provision.out"; die "the host unlock identity could not be sealed and handed off"; }
+    provision_and_hand_off >"$WORK/provision.out" 2>&1 \
+        || { cat "$WORK/provision.out"; die "the host unlock identity could not be sealed and handed off"; }
     grep -E '^age1' "$WORK/provision.out" || true
 }
 
 # --- Part 1: checks -----------------------------------------------------------------------------------------------------------
+
+# Replaces every age secret key, and anything after the marker that looks like one, with a placeholder. sed -E: in basic mode {58}
+# would be literal and nothing would be redacted.
+redact_keys() { sed -E "s/$KEY_MARKER[A-Za-z0-9]*/[recovery key]/g"; }
 
 # `init --host-unlock` shows the recovery key on the controlling terminal only; script(1) gives it a pty. The transcript is on the
 # ramfs, and the key goes to a file there for the recovery check.
 run_init_host_unlock() {
     printf '%s\n' "$VAULT_PASS" "$VAULT_PASS" "$APPROVAL_PASS" "$APPROVAL_PASS" yes >"$SECRETS/init.in"
     HOST_CLI=$HOST_CLI INIT_IN=$SECRETS/init.in script -qec '"$HOST_CLI" init --host-unlock <"$INIT_IN"' /dev/null </dev/null \
-        >"$SECRETS/init.out" 2>&1 || { sed "s/$KEY_RE/[recovery key]/" "$SECRETS/init.out" | tail -n 5; return 1; }
+        >"$SECRETS/init.out" 2>&1 || { redact_keys <"$SECRETS/init.out" | tail -n 5; return 1; }
     grep -aoE "$KEY_RE" "$SECRETS/init.out" >"$SECRETS/recovery.key"
     [ "$(wc -l <"$SECRETS/recovery.key")" -eq 1 ] || { echo "init did not show exactly one recovery key"; return 1; }
 }
@@ -227,21 +237,34 @@ prepare_vault() {
 # The restart clears the service's memory, so Ready afterwards can only come from the handoff.
 restart_is_ready_by_handoff() { prepare_vault && restart_expecting unlocked ready; }
 
+# The vault ID in the newest recovery.checked "opened" record, polled for as expect_host_unlock does: the record may lag the reply.
+recovery_checked_id() {
+    local id="" _
+    for _ in $(seq 20); do
+        id=$(audit | jq -r 'select(.event == "recovery.checked" and .recovery_outcome == "opened") | .vault_id' | tail -n 1)
+        [ -z "$id" ] || break
+        sleep 1
+    done
+    echo "$id"
+}
+
 recovery_key_opens_the_same_vault() {
     local init_id status_id check_id out
     init_id=$(audit | jq -r 'select(.event == "vault.initialized") | .vault_id' | tail -n 1)
     status_id=$("$HOST_CLI" status | sed -n 's/^vault id: //p')
     out=$("$HOST_CLI" recovery check <"$SECRETS/recovery.key") || { echo "$out"; return 1; }
     echo "$out"
-    check_id=$(audit | jq -r 'select(.event == "recovery.checked" and .recovery_outcome == "opened") | .vault_id' | tail -n 1)
+    check_id=$(recovery_checked_id)
     echo "vault id: init $init_id, status $status_id, recovery check $check_id"
     [ -n "$init_id" ] && [ "${init_id,,}" = "${status_id,,}" ] && [ "${init_id,,}" = "${check_id,,}" ]
 }
 
 # age adds one random "-grease" stanza to every file, so it is allowed; any other kind is not.
 identity_has_three_x25519_stanzas() {
-    local kinds x25519 scrypt other
-    kinds=$(docker exec "$(cid iron-vault)" cat /var/lib/iron-vault/identity.age | LC_ALL=C awk '/^--- / { exit } /^-> / { print $2 }') || return 1
+    local kinds x25519 scrypt other file=$WORK/identity.age
+    docker cp "$(cid iron-vault):/var/lib/iron-vault/identity.age" "$file" || { echo "cannot copy identity.age out"; return 1; }
+    kinds=$(LC_ALL=C awk '/^--- / { exit } /^-> / { print $2 }' "$file")
+    rm -f "$file"
     x25519=$(grep -cx X25519 <<<"$kinds" || true)
     scrypt=$(grep -cx scrypt <<<"$kinds" || true)
     other=$(grep -vxE 'X25519|scrypt|.*-grease' <<<"$kinds" || true)
@@ -331,15 +354,40 @@ scanner_finds_a_planted_key() {
     [ "$(wc -l <<<"$stream")" -eq 1 ] && [ -n "$stream" ] && [ -n "$tree" ]
 }
 
+# Runs the command $2... and scans its output for stray keys. A command that fails scanned nothing, which is a failure, not a pass.
+scan_command() {
+    local label=$1 rc out
+    shift
+    out=$({ "$@"; echo $? >"$WORK/scan.rc"; } | stream_strays)
+    rc=$(cat "$WORK/scan.rc")
+    [ "$rc" = 0 ] || { echo "$label: the command exited $rc, so nothing was scanned"; return 1; }
+    [ -z "$out" ] || { sed "s/^/$label: /" <<<"$out"; return 1; }
+}
+
+service_environment() { tr '\0' '\n' <"/proc/$1/environ"; }
+
+# `docker save` layers are compressed under the containerd image store, which the scanner cannot read through; `docker export` of a
+# container made from the image is a plain tar of its filesystem.
+image_filesystem() {
+    local rc ctr="ivcheck-export"
+    docker create --name "$ctr" "$SERVICE_IMAGE" >/dev/null || return 1
+    docker export "$ctr"
+    rc=$?
+    docker rm -f "$ctr" >/dev/null 2>&1
+    return $rc
+}
+
 no_key_in_image_or_environment() {
-    local pid out ids
+    local pid ids bad=0
     pid=$(service_pid)
     require_pid "$pid" || return 1
     mapfile -t ids < <(compose ps -aq)
-    out=$({ docker save "$SERVICE_IMAGE" | stream_strays | sed 's/^/image: /'
-            docker inspect "${ids[@]}" | stream_strays | sed 's/^/docker inspect: /'
-            tr '\0' '\n' <"/proc/$pid/environ" | stream_strays | sed 's/^/service environment: /'; })
-    [ -z "$out" ] || { echo "$out"; return 1; }
+    [ "${#ids[@]}" -ge 3 ] || { echo "expected 3 containers, found ${#ids[@]}"; return 1; }
+    scan_command "docker save" docker save "$SERVICE_IMAGE" || bad=1
+    scan_command "image filesystem" image_filesystem || bad=1
+    scan_command "docker inspect" docker inspect "${ids[@]}" || bad=1
+    scan_command "service environment" service_environment "$pid" || bad=1
+    return $bad
 }
 
 no_key_on_disk() {
@@ -353,14 +401,15 @@ no_key_on_disk() {
     [ -z "$out" ] || { echo "$out"; return 1; }
 }
 
+has_swap() { [ -n "$(swapon --noheadings --raw --show=NAME)" ]; }
+
+swap_text() { strings -a -n 70 "$1"; }
+
 no_key_in_swap() {
-    local dev out bad=0 devs
+    local dev bad=0 devs
     mapfile -t devs < <(swapon --noheadings --raw --show=NAME)
-    [ "${#devs[@]}" -gt 0 ] || { echo "no swap on this host; nothing to read"; return 0; }
     for dev in "${devs[@]}"; do
-        out=$(strings -a -n 70 "$dev" | stream_strays)
-        echo "$dev: ${out:-no key}"
-        [ -z "$out" ] || bad=1
+        scan_command "$dev" swap_text "$dev" || bad=1
     done
     [ "$bad" = 0 ] || echo "a hit may be the recovery key this check typed (see the Scope note), or the service's"
     return $bad
@@ -368,8 +417,12 @@ no_key_in_swap() {
 
 # --- Part 2: listeners --------------------------------------------------------------------------------------------------------
 
-# Local addresses of the listeners in the service container's network namespace, read with the host's ss.
-container_listeners() { nsenter -t "$1" -n ss "$2" -lnH | awk -v col="$3" '{ print $col }' | sort -u; }
+# Local addresses of the listeners in the service container's network namespace, read with the host's ss. Docker's embedded DNS
+# listens on 127.0.0.11 at a random port, TCP and UDP, in the namespace of every container on a user-defined network; it is
+# dockerd's, not the service's, so it is left out.
+container_listeners() {
+    nsenter -t "$1" -n ss "$2" -lnH | awk -v col="$3" '$col !~ /^127\.0\.0\.11:/ { print $col }' | sort -u
+}
 
 only_the_expected_listeners() {
     local pid tcp unix host_tcp host_unix bad=0
@@ -379,12 +432,29 @@ only_the_expected_listeners() {
     unix=$(container_listeners "$pid" -x 5)
     [ "$tcp" = "$(printf '%s\n' "$LISTENER_A:8443" "$LISTENER_B:8443" | sort)" ] || { echo "container TCP listeners: $tcp"; bad=1; }
     [ "$unix" = "$RUN_DIR/admin.sock" ] || { echo "container unix listeners: $unix"; bad=1; }
-    ss -lxH | grep -q . || { echo "ss -lx on the host listed nothing: it is not working"; bad=1; }
-    host_unix=$(ss -lxpH | awk -v ok="$RUN_DIR/admin.sock" '$5 != ok && ($5 ~ /iron-vault|ivcheck/ || $0 ~ /"(iron-vault|systemd-creds|age-keygen)"/)')
-    host_tcp=$(ss -ltnpH | awk '$4 ~ /^172\.30\./ || $0 ~ /"(iron-vault|systemd-creds|age-keygen|docker-proxy)"/')
+    # The positive control: a working ss lists at least systemd's own unix sockets.
+    [ -n "$(ss -lxH)" ] || { echo "ss -lx on the host listed nothing: it is not working"; bad=1; }
+    host_unix=$(ss -lxpH | awk -v ok="$RUN_DIR/admin.sock" \
+        '$5 != ok && ($5 ~ /iron-vault|ivcheck/ || $0 ~ /"(iron-vault|systemd-creds|age-keygen)"/)') || { echo "ss -lxp failed"; bad=1; }
+    host_tcp=$(ss -ltnpH | awk '$4 ~ /^172\.30\./ || $0 ~ /"(iron-vault|systemd-creds|age-keygen|docker-proxy)"/') \
+        || { echo "ss -ltnp failed"; bad=1; }
     [ -z "$host_unix" ] || { echo "host unix listeners of ours: $host_unix"; bad=1; }
     [ -z "$host_tcp" ] || { echo "host TCP listeners of ours: $host_tcp"; bad=1; }
     return $bad
+}
+
+# A check that cannot run because the service container is gone is a FAIL, so the evidence has one line for every item.
+fail_unrun() {
+    echo "FAIL $1"
+    echo "     not run: the service container did not survive the reboot"
+    FAILED=$((FAILED + 1))
+}
+
+# A check that has nothing to test on this host. It is neither a PASS nor a FAIL, and the summary counts it.
+skip() {
+    echo "SKIP $1"
+    echo "     $2"
+    SKIPPED=$((SKIPPED + 1))
 }
 
 run_part_two() {
@@ -396,15 +466,32 @@ run_part_two() {
     ALLOWED_KEYS=$WORK/allowed-keys
     grep -rhoE "$KEY_RE" "$REPO" --exclude-dir=.git --exclude-dir=target >"$ALLOWED_KEYS" || true
     check "after a host reboot the stack is Ready unattended" reboot_leaves_it_ready
-    [ -n "$(cid iron-vault)" ] || return 0
-    check "unit stopped, restart: Locked with absent; passphrase unlock reaches Ready" unit_stopped_leaves_it_locked
-    check "credential sealed for another key: Locked with refused not_a_recipient" another_key_leaves_it_locked
-    check "the first credential back, restart: Ready again" first_credential_restores_ready
+    if [ -n "$(cid iron-vault)" ]; then
+        check "unit stopped, restart: Locked with absent; passphrase unlock reaches Ready" unit_stopped_leaves_it_locked
+        check "credential sealed for another key: Locked with refused not_a_recipient" another_key_leaves_it_locked
+        check "the first credential back, restart: Ready again" first_credential_restores_ready
+    else
+        fail_unrun "unit stopped, restart: Locked with absent; passphrase unlock reaches Ready"
+        fail_unrun "credential sealed for another key: Locked with refused not_a_recipient"
+        fail_unrun "the first credential back, restart: Ready again"
+    fi
     check "the key scanner finds a planted key in a stream and in a file" scanner_finds_a_planted_key
-    check "no age secret key in docker save, docker inspect or the service environment" no_key_in_image_or_environment
+    if [ -n "$(cid iron-vault)" ]; then
+        check "no age secret key in the image, docker inspect or the service environment" no_key_in_image_or_environment
+    else
+        fail_unrun "no age secret key in the image, docker inspect or the service environment"
+    fi
     check "no age secret key under /etc, /var or the named volumes" no_key_on_disk
-    check "no age secret key in swap" no_key_in_swap
-    check "only the admin socket and the request listeners listen: no signing oracle" only_the_expected_listeners
+    if has_swap; then
+        check "no age secret key in swap" no_key_in_swap
+    else
+        skip "no age secret key in swap" "this host has no swap device, so the swap evidence is missing; rerun on a host with swap"
+    fi
+    if [ -n "$(cid iron-vault)" ]; then
+        check "only the admin socket and the request listeners listen: no signing oracle" only_the_expected_listeners
+    else
+        fail_unrun "only the admin socket and the request listeners listen: no signing oracle"
+    fi
 }
 
 # --- Driver -------------------------------------------------------------------------------------------------------------------
@@ -440,6 +527,7 @@ cleanup() {
     mountpoint -q "$SECRETS" && umount "$SECRETS"
     rm -rf "$SECRETS"
     [ "$KEEP" = 0 ] || return 0
+    docker rm -f ivcheck-export >/dev/null 2>&1
     docker compose -p "$PROJECT" -f "$COMPOSE" down --volumes --remove-orphans >/dev/null 2>&1
     systemctl disable --now "$UNIT" >/dev/null 2>&1
     mountpoint -q "$UNLOCK_DIR" && umount "$UNLOCK_DIR"
@@ -481,7 +569,7 @@ main() {
             return
             ;;
     esac
-    echo "$PASSED passed, $FAILED failed"
+    echo "$PASSED passed, $FAILED failed, $SKIPPED skipped (a skipped item has no evidence from this host)"
     [ "$FAILED" -eq 0 ]
 }
 
