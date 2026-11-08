@@ -188,8 +188,9 @@ Each of these also has `remediation`.
 
 ## `jq` recipes
 
-The README's tutorial uses these against a development log (`tee` of `serve --log-to-stdout`). In a protected install
-set `LOG=/var/log/iron-vault/iron-vault.log` and run them with `sudo`.
+These run against a development log (`tee` of `serve --log-to-stdout`). In a protected install set
+`LOG=/var/log/iron-vault/iron-vault.log` and run them with `sudo`. [Investigate with the audit
+log](../cookbook/investigate-audit-log.md) works through more.
 
 ```sh
 LOG=~/iron-vault-dev.log

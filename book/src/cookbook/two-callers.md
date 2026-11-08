@@ -185,6 +185,7 @@ The route's bucket [starts empty](getting-started.md#rate-limits-start-empty) wh
 Ready, so wait a minute for it to fill, then send seven requests at once:
 
 ```sh
+sleep 60
 for i in 1 2 3 4 5 6 7; do
   curl -s -o /dev/null -w '%{http_code}\n' \
     -H "$CHAT" -H 'Content-Type: application/json' \

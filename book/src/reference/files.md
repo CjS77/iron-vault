@@ -129,7 +129,7 @@ All are `0600` and owned by the service account. Any other file in the state dir
   refuses with `unlock-failed` (`15`), naming up to five of the files, and logs `vault.unlock-refused` with refusal
   `unrecognized_files`. `init` refuses with `already-initialized`.
 
-[How the vault is locked](../../../README.md#how-the-vault-is-locked) explains the envelopes.
+[How the vault is locked](../security-model.md#how-the-vault-is-locked) explains the envelopes.
 
 ## The log
 

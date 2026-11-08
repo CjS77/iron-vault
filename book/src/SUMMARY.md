@@ -20,6 +20,8 @@
 - [Remove a credential safely](cookbook/remove-credential.md)
 - [Rotate or revoke a caller token](cookbook/caller-token.md)
 - [Widen or narrow a route](cookbook/change-route.md)
+- [Scrubbing and redirects](cookbook/scrubbing-redirects.md)
+- [A route can't send a key to another host](cookbook/key-origins.md)
 - [Investigate with the audit log](cookbook/investigate-audit-log.md)
 - [Lock, unlock and restart](cookbook/lock-unlock-restart.md)
 - [Check and store your recovery key](cookbook/recovery-key.md)
