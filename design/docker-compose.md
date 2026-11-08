@@ -6,9 +6,9 @@ account, the caller networks, how TCP listeners are bound, the hardening of ever
 access, and how a host TPM unlocks the vault at startup. The [Linux package](linux-package.md) is the model for the
 host side, and the paths and modes here are the ones the trusted-path checks (`trusted_path.rs`) accept.
 
-The one decision that still needs the specification to change, the §3.14 software signer, is under
-[Proposed specification changes](#proposed-specification-changes) and awaits the owner's approval. Everything
-else follows the specification as it stands.
+Two items under [Proposed specification changes](#proposed-specification-changes) still await the owner's
+approval: the §3.14 software signer, the one specification change still open, and the glossary edits that follow from
+the applied §3.2 change. Everything else follows the specification as it stands.
 
 This document introduces four terms, defined in the [glossary](glossary.md): *Container profile*, *Caller network*,
 *Host unlock identity* and *Unlock handoff*.
@@ -152,7 +152,8 @@ IP subject alternative name. One certificate may name every listener's address, 
 
 Docker cannot pass a listening socket from the host into a container, so the Container profile binds its TCP
 listeners itself: `socket_activation::check_origin` lets `Container` bind an unadopted TCP endpoint, where `Protected`
-refuses it. [§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners) allows this for a container installation.
+refuses it. [§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners) allows this for a container
+installation.
 
 Socket activation exists for R-6: a service that binds its own port leaves a gap at each restart in which another
 local process can take the port, collect caller tokens and forge responses. In the Container profile no one who could
@@ -281,7 +282,8 @@ Remote administration takes one of two forms:
   `iron-vault --admin-socket ~/.iv-admin.sock <command>` locally. Any process of the local account can use the
   forwarded socket while it is open, as root on the server, so close the forward when done.
 
-`docker exec` and any other use of the daemon is runtime administration, outside the threat model (§3.14). [§3.2](iron-vault-specification.md#32-service-and-cli-boundary) covers the admin principal.
+`docker exec` and any other use of the daemon is runtime administration, outside the threat model (§3.14).
+[§3.2](iron-vault-specification.md#32-service-and-cli-boundary) covers the admin principal.
 
 ## Host unlock
 
@@ -545,9 +547,9 @@ Two release checks run on a disposable host and are the evidence for this profil
 
 ## Proposed specification changes
 
-**The §3.14 change still awaits the owner's approval.** It is not applied to
-[`iron-vault-specification.md`](iron-vault-specification.md) or the glossary. It gives the text to replace and its
-replacement, word for word.
+**Two items still await the owner's approval: the §3.14 change and the glossary edits.** Neither is applied to
+[`iron-vault-specification.md`](iron-vault-specification.md) or [`glossary.md`](glossary.md). Each gives the text to
+replace and its replacement, word for word.
 
 ### §3.2 and §3.4
 
@@ -571,7 +573,7 @@ with:
 
 ### Glossary
 
-These follow from the §3.2 change, now applied.
+These follow from the §3.2 change. §3.2 is applied; these glossary edits are not yet, pending the owner's approval.
 
 - **Admin principal:** replace "root or the service account in a protected install, the invoking user in development"
   with "root or the service account in a protected install, root alone in a container install, the invoking user in

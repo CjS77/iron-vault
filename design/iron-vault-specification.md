@@ -158,9 +158,14 @@ Host administrators remain outside this protection.
 
 The service exposes separate request and administrative interfaces. Request authorization never grants access to
 administrative operations. The local admin socket authenticates the connecting OS account from its peer credentials
-and accepts only an admin principal: root or the service account in a protected installation, root alone in a container installation, and the invoking user in a development installation. The admin principals are fixed by the deployment profile, not configured. The admin
+and accepts only an admin principal: root or the service account in a protected installation, root alone in a container
+installation, and the invoking user in a development installation. The admin principals are fixed by the deployment
+profile, not configured. The admin
 socket is owned by the service account with mode `0600`, in a directory other accounts cannot write, so other accounts
-cannot connect to it; the peer-credential check refuses them even if those permissions are wrong. A connection forwarded over SSH is judged by the account it arrives as on the service host. In a container installation that is the forwarding process's uid as the container's user namespace maps it, which without remapping is its host uid; the service account is not an admin principal there, because only the service itself runs as it. Destructive and policy-changing
+cannot connect to it; the peer-credential check refuses them even if those permissions are wrong. A connection forwarded
+over SSH is judged by the account it arrives as on the service host. In a container installation that is the forwarding
+process's uid as the container's user namespace maps it, which without remapping is its host uid; the service account is
+not an admin principal there, because only the service itself runs as it. Destructive and policy-changing
 operations also require owner approval. Source ports, executable names, and caller-supplied identity headers do not
 establish administrative identity.
 
@@ -344,13 +349,20 @@ hashes in constant time.
 Default to a request socket under `/run/iron-vault`, plus a separate admin socket in that service-owned directory.
 Other accounts may search that directory but never write to it, so they can reach a request socket but cannot
 replace one.
-For TCP on Linux, use systemd socket activation so the manager holds the port from boot and across restarts. A container installation cannot receive sockets from the host, so it binds its TCP listeners itself, inside its own network namespace. The addresses exist only in that namespace, which no other container shares and where no other process runs; caller containers have neither `NET_ADMIN` nor `NET_RAW` and each has its own static address, so they cannot take the service's address; and every non-loopback listener uses TLS, so whoever claims an address while the service restarts still cannot present Iron Vault's certificate. A loopback listener is reachable only inside that namespace.
+For TCP on Linux, use systemd socket activation so the manager holds the port from boot and across restarts. A container
+installation cannot receive sockets from the host, so it binds its TCP listeners itself, inside its own network
+namespace. The addresses exist only in that namespace, which no other container shares and where no other process runs;
+caller containers have neither `NET_ADMIN` nor `NET_RAW` and each has its own static address, so they cannot take the
+service's address; and every non-loopback listener uses TLS, so whoever claims an address while the service restarts
+still cannot present Iron Vault's certificate. A loopback listener is reachable only inside that namespace.
 Supported TCP packages on other platforms must provide equivalent listener ownership or an authenticated transport
 that prevents a replacement local process from impersonating Iron Vault. Privileged port numbers alone do not solve
 port squatting.
 
 **Attack prevented (R-6).** Protected socket paths and manager-owned TCP listeners stop another local process from
-claiming Iron Vault's endpoint during downtime and collecting caller tokens or forging responses. In a container installation, a network namespace no other container shares, callers without address or raw-socket privileges and with static addresses of their own, and TLS on every non-loopback listener do the same.
+claiming Iron Vault's endpoint during downtime and collecting caller tokens or forging responses. In a container
+installation, a network namespace no other container shares, callers without address or raw-socket privileges and with
+static addresses of their own, and TLS on every non-loopback listener do the same.
 
 Reject non-loopback TCP listeners without TLS. Verify this rule at config load. WireGuard or Tailscale can protect
 an additional network path, but their addresses do not bypass this listener rule. An SSH-forwarded Unix socket
