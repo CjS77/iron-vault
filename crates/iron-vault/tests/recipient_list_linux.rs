@@ -117,7 +117,12 @@ async fn exchange(service: &Arc<ServiceContext>, request: AdminRequest, answers:
 /// Initializes the vault and returns the recovery key shown.
 async fn init(service: &Arc<ServiceContext>) -> String {
     let (vault, approval) = (VAULT_PASSPHRASE.as_bytes(), APPROVAL_PASSPHRASE.as_bytes());
-    let (response, reveals) = exchange(service, AdminRequest::Init, &[vault, vault, approval, approval, b"yes"]).await;
+    let (response, reveals) = exchange(
+        service,
+        AdminRequest::Init { host_unlock: false },
+        &[vault, vault, approval, approval, b"yes"],
+    )
+    .await;
     assert!(matches!(response, AdminResponse::Init { .. }), "{response:?}");
     reveals.into_iter().next().unwrap()
 }
@@ -161,15 +166,17 @@ async fn after_init_and_unlock_the_operational_and_recovery_entries_are_listed()
 
     let entries = listed(list(&service).await);
 
-    let shown: Vec<_> = entries
+    // Entries come in key order, which is random for a new vault, so compare them by role.
+    let mut shown: Vec<_> = entries
         .iter()
         .map(|entry| (entry.role(), entry.label().as_str().to_owned()))
         .collect();
+    shown.sort();
     assert_eq!(
         shown,
         [
-            (RecipientRole::Recovery, "recovery key".to_owned()),
-            (RecipientRole::Operational, "vault passphrase".to_owned())
+            (RecipientRole::Operational, "vault passphrase".to_owned()),
+            (RecipientRole::Recovery, "recovery key".to_owned())
         ]
     );
     assert!(entries.iter().all(|entry| entry.key().to_string().starts_with("age1")));
