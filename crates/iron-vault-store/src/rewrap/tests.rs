@@ -12,7 +12,17 @@ fn add(identity: &RecipientIdentity) -> RecipientChange {
 }
 
 fn rewrap(vault: &TestVault, current: &RecipientInventory, change: &RecipientChange) -> Result<RewrappedIdentity, RecipientChangeError> {
-    rewrap_identity(&vault.lock, &vault.fs, &vault.vault, current, change)
+    rewrap_identity(&vault.lock, &vault.fs, &vault.vault, current, change, None)
+}
+
+/// `recipient add --recovery`: enrolls `recovery` and proves the new envelope with `prover`.
+fn add_recovery(
+    vault: &TestVault,
+    recovery: &RecipientIdentity,
+    prover: &RecipientIdentity,
+) -> Result<RewrappedIdentity, RecipientChangeError> {
+    let change = RecipientChange::Add(entry(recovery, RecipientRole::Recovery));
+    rewrap_identity(&vault.lock, &vault.fs, &vault.vault, &vault.inventory, &change, Some(prover))
 }
 
 /// A vault with a third, `added` recipient enrolled through a rewrap, and that recipient's identity.
@@ -94,6 +104,34 @@ fn a_refused_change_writes_nothing() {
 }
 
 #[test]
+fn a_new_recovery_recipient_proves_the_envelope_it_is_added_to() {
+    let vault = TestVault::new("rewrap-proved");
+    let recovery = RecipientIdentity::generate();
+    let rewrapped = add_recovery(&vault, &recovery, &recovery).unwrap();
+    assert_eq!(rewrapped.unfinished, None);
+    assert!(vault.opens_with(&recovery));
+    assert_eq!(
+        rewrapped.inventory.get(&recovery.recipient_key()).map(|entry| entry.role()),
+        Some(RecipientRole::Recovery)
+    );
+}
+
+#[test]
+fn a_proof_with_an_identity_outside_the_new_set_writes_nothing() {
+    let vault = TestVault::new("rewrap-unproved");
+    let (before, calls) = (vault.files(), vault.calls());
+    let outcome = add_recovery(&vault, &RecipientIdentity::generate(), &RecipientIdentity::generate());
+    assert_eq!(
+        outcome,
+        Err(RecipientChangeError::Proof(EnvelopeProofError::Unwrap(
+            EnvelopeError::NotARecipient
+        )))
+    );
+    assert_eq!(vault.calls(), calls);
+    assert_eq!(vault.files(), before);
+}
+
+#[test]
 fn the_steps_run_in_the_designed_order() {
     let vault = TestVault::new("rewrap-order");
     let from = vault.calls();
@@ -123,6 +161,15 @@ fn rewrap_calls() -> usize {
     let from = vault.calls();
     rewrap(&vault, &vault.inventory, &add(&RecipientIdentity::generate())).unwrap();
     vault.calls() - from
+}
+
+/// The number of filesystem calls a clean rewrap makes up to its commit point: through the read back of `identity.age`.
+fn commit_calls() -> usize {
+    let vault = TestVault::new("rewrap-commit-point");
+    let from = vault.calls();
+    rewrap(&vault, &vault.inventory, &add(&RecipientIdentity::generate())).unwrap();
+    let is_read_back = |call: &crate::fault_fs::FsCall| matches!(call, crate::fault_fs::FsCall::ReadBounded(path) if path.ends_with(StateFileName::identity_envelope().as_str()));
+    vault.fs.trace()[from..].iter().position(is_read_back).unwrap() + 1
 }
 
 /// After power loss, whatever the rewrap reported: the old recipients still open the vault, and the inventory check
@@ -179,8 +226,7 @@ fn a_crash_between_the_two_replaces_is_finished_from_the_staged_inventory_and_no
     let finish = |label| {
         let vault = TestVault::new(label);
         let added = RecipientIdentity::generate();
-        let commit_point = 11; // stage (5 calls), envelope (5 calls) and the read back
-        vault.fs.cut_power_after(vault.calls() + commit_point);
+        vault.fs.cut_power_after(vault.calls() + commit_calls());
         let outcome = rewrap(&vault, &vault.inventory, &add(&added)).unwrap();
         assert_eq!(outcome.unfinished.map(|error| error.step()), Some(RecipientChangeStep::Inventory));
         vault.fs.crash();
@@ -214,8 +260,6 @@ fn nothing_the_rewrap_returns_shows_a_secret_key() {
         let secret = secret.expose_secret();
         assert_hides(&failed, secret);
         assert_hides(&done, secret);
-        [&failed.as_ref().unwrap_err().to_string()]
-            .iter()
-            .for_each(|text| assert!(!text.contains(secret)));
+        assert!(!failed.as_ref().unwrap_err().to_string().contains(secret));
     });
 }

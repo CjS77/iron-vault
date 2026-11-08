@@ -14,9 +14,9 @@ use std::fmt;
 use thiserror::Error;
 
 use crate::{
-    EnvelopeError, ReadError, RecipientChange, RecipientChangeRefusal, RecipientInventory, SealError, StateDirLock, StateFileName, StoreFs,
-    VaultIdentity, WriteError, WriteStep, durable_remove, durable_replace, envelope_digest, read_identity_envelope,
-    seal_recipient_inventory, wrap_identity, write_identity_envelope,
+    EnvelopeError, ReadError, RecipientChange, RecipientChangeRefusal, RecipientIdentity, RecipientInventory, SealError, StateDirLock,
+    StateFileName, StoreFs, VaultIdentity, WriteError, WriteStep, durable_remove, durable_replace, envelope_digest, read_identity_envelope,
+    seal_recipient_inventory, unwrap_identity, wrap_identity, write_identity_envelope,
 };
 
 /// A step of the recipient change that touches the state directory, in order.
@@ -126,6 +126,17 @@ impl RecipientChangeWriteError {
     }
 }
 
+/// The new envelope failed its proof with the identity the service holds; nothing was written.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum EnvelopeProofError {
+    /// The new envelope does not open with the proving identity.
+    #[error("the new identity envelope does not open with the proving identity: {0}")]
+    Unwrap(EnvelopeError),
+    /// The new envelope opens to an identity other than the vault identity the service holds.
+    #[error("the new identity envelope does not hold the vault identity")]
+    IdentityMismatch,
+}
+
 /// Why a recipient change did not commit, or may not have. No variant carries key material.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RecipientChangeError {
@@ -135,6 +146,9 @@ pub enum RecipientChangeError {
     /// The vault identity could not be wrapped for the new set; nothing was written.
     #[error(transparent)]
     Wrap(#[from] EnvelopeError),
+    /// The new envelope failed its proof; nothing was written.
+    #[error(transparent)]
+    Proof(EnvelopeProofError),
     /// The new inventory could not be sealed; nothing was written.
     #[error("cannot seal the recipient inventory: {0}")]
     Seal(#[from] SealError),
@@ -157,23 +171,39 @@ pub struct RewrappedIdentity {
 /// describes the new envelope.
 ///
 /// The caller holds the service-wide lock and `current` is the inventory the inventory check just opened, so nothing
-/// else changes either file before the write. The new envelope cannot be proved by unwrapping, because the service holds
-/// no recipient's private key here; `age` wraps one file key for every stanza, so the read back proves the bytes on disk
-/// are the bytes wrapped.
+/// else changes either file before the write.
+///
+/// The new envelope can be proved only with a private key the service holds. For `recipient add --recovery` that is the
+/// new recovery identity, passed as `prover`: the envelope must unwrap with it to the vault identity before anything is
+/// written. For an added key or a removal the service holds none, and `prover` is `None`; `age` wraps one file key for
+/// every stanza, so the read back, which checks the bytes on disk are the bytes wrapped, is the check that remains.
 pub fn rewrap_identity(
     state: &StateDirLock,
     fs: &impl StoreFs,
     vault: &VaultIdentity,
     current: &RecipientInventory,
     change: &RecipientChange,
+    prover: Option<&RecipientIdentity>,
 ) -> Result<RewrappedIdentity, RecipientChangeError> {
     let next = change.apply(current)?;
     let envelope = wrap_identity(vault, &next.recipient_set())?;
+    prover
+        .map_or(Ok(()), |prover| prove(&envelope, vault, prover))
+        .map_err(RecipientChangeError::Proof)?;
     let inventory = next.describing(envelope_digest(&envelope));
     let staged = seal_recipient_inventory(vault, &inventory)?;
     commit(state, fs, &envelope, &staged).map_err(RecipientChangeError::Write)?;
     let unfinished = finish(state, fs, &staged).err();
     Ok(RewrappedIdentity { inventory, unfinished })
+}
+
+/// Step 1's proof: `envelope` unwraps with `prover` to `vault`.
+fn prove(envelope: &[u8], vault: &VaultIdentity, prover: &RecipientIdentity) -> Result<(), EnvelopeProofError> {
+    let unwrapped = unwrap_identity(envelope, prover).map_err(EnvelopeProofError::Unwrap)?;
+    match unwrapped.public_key() == vault.public_key() {
+        true => Ok(()),
+        false => Err(EnvelopeProofError::IdentityMismatch),
+    }
 }
 
 /// The stage, envelope and read back steps: up to and including the commit point.

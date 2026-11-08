@@ -110,8 +110,8 @@ pub use recovery_record::{
     read_recovery_check, write_recovery_check,
 };
 pub use rewrap::{
-    ChangeCommitted, RecipientChangeError, RecipientChangeFault, RecipientChangeStep, RecipientChangeWriteError, RewrappedIdentity,
-    rewrap_identity,
+    ChangeCommitted, EnvelopeProofError, RecipientChangeError, RecipientChangeFault, RecipientChangeStep, RecipientChangeWriteError,
+    RewrappedIdentity, rewrap_identity,
 };
 pub use sealed::{OpenError, SealError, open, seal};
 pub use stale_temps::sweep_stale_temps;
