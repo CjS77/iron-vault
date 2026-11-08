@@ -3,8 +3,8 @@
 This guide installs the protected Linux deployment ([§3.1](../../../design/iron-vault-specification.md#31-installation-and-ownership)): the
 service runs as the `iron-vault` system account, its vault is in `/var/lib/iron-vault`, and no ordinary account can read
 it. [linux-package.md](../../../design/linux-package.md) says what the package installs and why. For a worked example with several
-accounts, see [multiuser-linux.md](multiuser-linux.md). To try Iron Vault as your own user instead, use the
-[development mode tutorial](development-mode.md), which gives no isolation from malware running as you.
+accounts, see [multiuser-linux.md](multiuser-linux.md). To try Iron Vault as your own user instead, use
+[development mode](development-mode.md), which gives no isolation from malware running as you.
 
 The protection depends on the host, not only the package. Do the two checks under
 [Before you install](#before-you-install) first.

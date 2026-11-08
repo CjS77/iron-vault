@@ -209,7 +209,7 @@ jq -c 'select(.event | strings | test("^(admin|credential|config|caller)\\."))
 # responses the scrubber had to clean, and how many matches it removed
 jq -c 'select(.event == "response.scrubbed") | {request_id, route, credential, matches}' $LOG
 
-# the test secret from the tutorial never reaches the log: this prints 0
+# the test secret from getting started never reaches the log: this prints 0
 grep -c -F 'not-a-real-key-123' $LOG
 ```
 
