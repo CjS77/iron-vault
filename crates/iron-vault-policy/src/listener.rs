@@ -31,7 +31,8 @@ pub const DEFAULT_TOKEN_HEADER: &str = "proxy-authorization";
 /// A TCP listener on a non-loopback address must have TLS (R-26), but a `ListenerConfig` does not guarantee it: the rule
 /// needs the listener's name to be reported usefully, so [`ValidatedConfig`](crate::ValidatedConfig) enforces it at
 /// load and an unsafe configuration is never approved. The listeners from [`ParsedConfig::listeners`](crate::ParsedConfig)
-/// are unchecked, and whoever opens one must test [`plain_off_loopback`](Self::plain_off_loopback) first. Whether the callers on a listener may use `isolated-network` or `peer`
+/// are unchecked, and whoever opens one must test [`plain_off_loopback`](Self::plain_off_loopback) first.
+/// Whether the callers on a listener may use `isolated-network` or `peer`
 /// authentication depends on every caller section, so [`ValidatedConfig`](crate::ValidatedConfig) checks it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawListener")]
