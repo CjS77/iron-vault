@@ -37,6 +37,16 @@ pub(super) fn decode(payload: &[u8]) -> Result<RecipientInventory, RecipientInve
     }
 }
 
+/// The payload of `inventory` with its first entry's role code replaced by `code`, as a build that knows more roles
+/// could write it.
+#[cfg(test)]
+pub(super) fn encode_with_role_code(inventory: &RecipientInventory, code: u8) -> Vec<u8> {
+    let first_role = MAGIC.len() + 1 + 16 + 32 + 8 + 8 + KEY_TEXT_LEN;
+    let mut payload = encode(inventory);
+    payload[first_role] = code;
+    payload
+}
+
 fn decode_v1(reader: &mut Reader<'_>) -> Result<RecipientInventory, RecipientInventoryError> {
     let vault_id = VaultId::from_bytes(reader.array()?)?;
     let envelope_digest = reader.array()?;

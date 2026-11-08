@@ -358,6 +358,14 @@ pub fn seal_recipient_inventory(identity: &VaultIdentity, inventory: &RecipientI
     KIND.seal(identity, inventory.vault_id, &encoding::encode(inventory))
 }
 
+/// `inventory` sealed with its first entry's role code replaced by `code`, so a test can plant a role this build does
+/// not know behind a valid MAC.
+#[cfg(test)]
+pub(crate) fn seal_with_role_code(identity: &VaultIdentity, inventory: &RecipientInventory, code: u8) -> Vec<u8> {
+    KIND.seal(identity, inventory.vault_id, &encoding::encode_with_role_code(inventory, code))
+        .unwrap()
+}
+
 /// The inventory a file holds. Size, header and MAC are checked before anything is decrypted.
 pub fn open_recipient_inventory(identity: &VaultIdentity, file: &[u8]) -> Result<RecipientInventory, RecipientInventoryError> {
     let (vault_id, payload) = KIND.open(identity, file)?;

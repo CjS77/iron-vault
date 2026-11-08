@@ -1,4 +1,5 @@
 use super::*;
+use crate::recipient_inventory::seal_with_role_code;
 use crate::test_vault::{TestVault, entry};
 use crate::{RecipientEntry, RecipientIdentity, RecipientRole, seal_recipient_inventory};
 
@@ -49,7 +50,7 @@ fn an_inventory_that_matches_the_envelope_is_checked_as_it_is() {
 
 #[test]
 fn each_kind_of_damage_is_named_and_nothing_is_written() {
-    let cases: [DamageCase; 7] = [
+    let cases: [DamageCase; 9] = [
         ("check-missing", |vault| vault.remove(&current()), InventoryDamage::Missing),
         (
             "check-mac",
@@ -91,6 +92,16 @@ fn each_kind_of_damage_is_named_and_nothing_is_written() {
                 vault.put(&current(), &bytes);
             },
             InventoryDamage::OtherVault,
+        ),
+        (
+            "check-unreadable",
+            |vault| vault.put(&current(), &vec![0; MAX_RECIPIENT_INVENTORY_LEN + 1]),
+            InventoryDamage::Unreadable,
+        ),
+        (
+            "check-unknown-role",
+            |vault| vault.put(&current(), &seal_with_role_code(&vault.vault, &vault.inventory, 4)),
+            InventoryDamage::UnknownRole,
         ),
         (
             "check-envelope-unreadable",
