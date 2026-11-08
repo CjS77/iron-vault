@@ -166,9 +166,8 @@ fn role_counts(inventory: &RecipientInventory) -> String {
     format!("{} ({})", inventory.entries().len(), split.join(", "))
 }
 
-/// Step 10's success: the completion notice, then the new key and the recipient count. A new recovery key adds the
-/// reminder to check it and retire the old one.
-/// The completion notice, ending in a newline like every other notice.
+/// The completion notice: the new key and recipient count, the old-copies sentences, and the rotate reminder after a new
+/// recovery key. It ends in a newline like every other notice.
 fn completion(key: &RecipientKey, role: RecipientRole, recipients: usize, unfinished: bool) -> String {
     let pending = if unfinished {
         "\nThe recipient inventory is finished at the next recipient command."
@@ -182,6 +181,8 @@ fn completion(key: &RecipientKey, role: RecipientRole, recipients: usize, unfini
     )
 }
 
+/// Step 10's success: the completion notice, then the new key and the recipient count. A new recovery key adds the
+/// reminder to check it and retire the old one.
 async fn completed(
     exchange: &mut Exchange,
     key: &RecipientKey,
