@@ -3,7 +3,8 @@
 //!
 //! The new key opens the vault identity, so this is the alternate migration path: an unlocked vault or an admin connection
 //! is not enough. The exchange holds the service-wide lock from the session through the response, shows its summary, and
-//! asks for the vault passphrase; only the authorization that answer proves reaches the rewrap, which consumes it against the key in the plan.
+//! asks for the vault passphrase; only the authorization that answer proves reaches the rewrap, which consumes it
+//! against the key in the plan.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
