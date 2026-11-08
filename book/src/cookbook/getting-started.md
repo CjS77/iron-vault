@@ -150,75 +150,8 @@ The check changes nothing in the vault. It records only the time, which `status`
 
 ### 6. List the recipients and rotate the recovery key
 
-The vault's identity is wrapped for each recipient: your vault passphrase and the recovery key. `recipient list`
-shows them:
-
-```sh
-iron-vault recipient list
-```
-
-```text
-age10dvnun…  operational  2026-11-08T14:54:27Z  vault passphrase
-age1vhncy4…  recovery     2026-11-08T14:54:27Z  recovery key
-```
-
-To replace the recovery key, have the service generate a new one. It shows the key once, like `init`; save it, type
-`yes`, then authorize with the vault passphrase:
-
-```sh
-iron-vault recipient add --recovery --label "recovery key 2026"
-```
-
-```text
-add a new recovery key to the vault
-  vault: 4b3faa85-…
-  recipient: age1lvqkl6…
-  role: recovery
-  label: recovery key 2026
-  recipients after the change: 3 (operational 1, recovery 2)
-  next: the new recovery key is shown once; save it, then type yes
-  authorize with: the vault passphrase
-The recovery key follows. It is shown this once, and the service keeps no copy.
-…
-AGE-SECRET-KEY-1…
-…
-Type yes once you have saved the recovery key: yes
-Vault passphrase:
-enrolled age1lvqkl6… as recovery; the vault has 3 recipients.
-Removing a recipient protects future copies of identity.age only.
-Old copies of identity.age, and backups, still open with a removed key.
-If a machine was lost, rotate the provider credentials it could reach.
-Check the new key with iron-vault recovery check, then remove the old recovery key with iron-vault recipient remove.
-```
-
-Check the new key as in step 5, then remove the old one by the `age1…` key that `recipient list` printed for it. The
-service asks for the approval passphrase:
-
-```sh
-iron-vault recipient remove age1vhncy4…
-```
-
-```text
-remove a recipient from the vault
-  vault: 4b3faa85-…
-  recipient: age1vhncy4…
-  role: recovery
-  label: recovery key
-  enrolled: 2026-11-08T14:54:27Z
-  recipients after the change: 2 (operational 1, recovery 1)
-  removing a recipient protects future copies of identity.age only; copies made before still open with this key
-  authorize with: the approval passphrase
-Approval passphrase:
-removed age1vhncy4…; the vault has 2 recipients.
-Removing a recipient protects future copies of identity.age only.
-Old copies of identity.age, and backups, still open with a removed key.
-If a machine was lost, rotate the provider credentials it could reach.
-Check the recovery key you keep with iron-vault recovery check.
-```
-
-The old key now fails `recovery check` with `the recovery key does not open this vault`. Removal does not revoke
-copies of `identity.age` or backups made before it: anyone holding one and the old key can still open it. If the old key
-or a machine was lost, rotate the provider credentials too.
+`iron-vault recipient list` shows who can open the vault: your vault passphrase and the recovery key. To replace the
+recovery key, follow [rotate the recovery key](recipients.md). You can skip this step for now.
 
 ### 7. Store a credential
 

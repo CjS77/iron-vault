@@ -1,6 +1,7 @@
 # Rotate the recovery key, or add a machine's key
 
-At the end of this recipe your vault opens with a new recovery key and no longer opens with the old one. The last step
+At the end of this recipe your vault opens with a new recovery key, and new copies of `identity.age` no longer open
+with the old one. The last step
 enrols an `age` key you hold on another machine, ready for when moving a vault there is supported.
 
 A **recipient** is a key the vault identity is wrapped for (the [security model](../security-model.md) explains the
@@ -68,7 +69,8 @@ service treats adding one like moving the vault to another machine.
 
 ### 3. Check the new key
 
-Prove that the key you saved opens the vault before you remove the old one:
+Prove that the key you saved opens the vault before you remove the old one. Paste the new key at the prompt: the old
+one also passes until step 4.
 
 ```sh
 iron-vault recovery check
@@ -120,9 +122,10 @@ still open it. If the old key or a machine was lost, rotate the provider credent
 
 ### 5. Add another machine's key
 
-Enrolling a key does one thing today: whoever holds its secret half can decrypt every copy of `identity.age` written from
-now on, and with it every credential. No v0 command lets that machine use the vault through Iron Vault: `unlock` takes
-only the vault passphrase. The key is meant as the destination for
+Whoever holds an enrolled key's secret half can decrypt every copy of `identity.age` written from now on, and with it
+every credential. In the [Container profile](../installation/compose-install.md), a key placed in the
+[host unlock handoff](../reference/files.md#container) also opens the vault at startup, with no passphrase. Otherwise
+no v0 command uses the key: `unlock` takes only the vault passphrase. The key is meant as the destination for
 [moving a vault to a new machine](roadmap/migration.md), which is not yet available. Enrol only a key you control.
 
 Generate the key on the other machine, for example with `age-keygen`, and enrol its public `age1…` key. The secret half
