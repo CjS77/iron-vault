@@ -59,7 +59,8 @@ fn a_second_recovery_recipient_can_replace_the_first() {
 #[test]
 fn adding_an_enrolled_key_is_refused() {
     let current = initial();
-    let again = current.entries().next().unwrap().clone();
+    let recovery = key_of(&current, RecipientRole::Recovery);
+    let again = current.get(&recovery).unwrap().clone();
     assert_refused(&current, RecipientChange::Add(again), RecipientChangeRefusal::AlreadyEnrolled);
 }
 
