@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use common::mock_upstream::{MockUpstream, RecordedRequest, Reply, TestCa};
 use common::mock_upstream_h2::{H2Reply, MockH2Upstream};
-use common::proxy_harness::{CallerRequest, Credential, Proxy, Response, Setup, TOKEN_BYTES, Via, next_free_port, token_hash};
+use common::proxy_harness::{CallerRequest, Credential, Proxy, RefusingPort, Response, Setup, TOKEN_BYTES, Via, token_hash};
 use iron_vault_kinds::CredentialMaterial;
 
 const FX_SECRET: &str = "fx-secret-3a7d91";
@@ -324,11 +324,13 @@ async fn s3_4_a_token_caller_on_the_loopback_listener_reaches_its_route() {
 async fn s3_15_brave_over_http2_sends_the_credential_to_the_enrolled_authority_only() {
     let ca = TestCa::new("egress test CA");
     let brave = MockH2Upstream::start(&ca, H2Reply::ok("ok")).await;
+    // The other upstreams are never reached; their ports refuse connections and are held so nothing else can take them.
+    let [fx, venice, billing] = std::array::from_fn(|_| RefusingPort::bind());
     let ports = Ports {
-        fx: next_free_port(),
+        fx: fx.port(),
         brave: brave.port(),
-        venice: next_free_port(),
-        billing: next_free_port(),
+        venice: venice.port(),
+        billing: billing.port(),
     };
     let proxy = proxy(&ca, ports).await;
 
