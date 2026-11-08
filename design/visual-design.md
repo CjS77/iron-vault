@@ -118,6 +118,47 @@ the wordmark. In the master file C = 45 px, at a type size of 60 px (C = 0.75em)
 - **Height:** the mark is about 2.6 times the cap height, so it reads as the lead element and doesn't sit like an extra letter.
 - **Clear space:** keep at least 1 C of empty space on every side of the lockup.
 
+## Typography
+
+Three faces, each with one job. All are on Google Fonts under the SIL Open Font License.
+
+| Role    | Face                | Weights  | Use for                                                    | Fallback stack                               |
+|---------|---------------------|----------|------------------------------------------------------------|----------------------------------------------|
+| Display | Michroma            | 400      | The wordmark, section headings, small labels. Capitals only | Eurostile, Microgramma, sans-serif           |
+| Body    | Geist               | 400–600  | Running text, buttons, navigation, card titles             | ui-sans-serif, system-ui, Segoe UI           |
+| Code    | JetBrains Mono      | 400, 700 | Commands, config, log lines, version numbers               | ui-monospace, SFMono-Regular, Menlo, Consolas |
+
+- **Michroma is a display face.** Use it in capitals for headings and labels, never for paragraphs. Headings take +0.02em tracking,
+  and small labels +0.14em. A heading may end with the red full stop, as the wordmark does. Use it on section headings, not on every line.
+- **Geist carries the reading.** Body text is 16px at a 1.6 line height, with lines kept to about 65 characters.
+- **Code is always JetBrains Mono,** on a dark code surface in both themes, because the commands are what people copy.
+
+Type scale (rem, ratio 1.25): 0.8 · 0.9 · 1 · 1.25 · 1.563 · 1.953 · 2.441.
+
+## Theme and CSS
+
+`assets/ironvault.css` is the single source of the theme. It loads the three faces, and defines:
+
+| Group           | Tokens                                     | Notes                                                                                     |
+|-----------------|--------------------------------------------|-------------------------------------------------------------------------------------------|
+| Brand core      | `--iv-red`, `--iv-ink`, `--iv-paper`, `--iv-white`, `--iv-steel`, `--iv-steel-deep` | The colours in the [Colour](#colour) table                                  |
+| Red scale       | `--iv-red-50` … `--iv-red-900`             | 500 is the brand red. Use 300 for red text on dark (6.6:1), 500 for red text on light (5.9:1) |
+| Neutral scale   | `--iv-neutral-0` … `--iv-neutral-950`      | Cool steel greys from white to ink                                                        |
+| Functional      | `--iv-success`, `--iv-warning`, `--iv-info`, `--iv-danger`, each with a `-dark` variant | Danger is the brand red                        |
+| Semantic        | `--iv-bg`, `--iv-surface`, `--iv-border`, `--iv-text`, `--iv-text-muted`, `--iv-accent`, `--iv-focus`, … | Switch between light and dark themes |
+| Type            | `--iv-font-display`, `--iv-font-body`, `--iv-font-mono`, `--iv-text-xs` … `--iv-text-3xl` |                                              |
+| Wordmark        | `.iv-wordmark`, `.iv-heavy`, `.iv-light`, `.iv-dot` | Live-text wordmark. Prefer the SVG lockups where possible                       |
+
+**Themes.** Light is the default. Dark applies when the system prefers it, unless the page sets `data-theme="light"`, and
+`data-theme="dark"` forces it. Style components through the semantic tokens, never the raw scale, so both themes follow.
+
+**Red is a signal, not a fill.** Use it for the mark, the full stop, the primary button and focus rings. Never use it for large areas of
+background or for body text.
+
+**The landing page** (`site/`) builds on this file. Its forge band (header, hero and footer) stays ink in both themes, so the dark lockup
+and the forge banner always sit on dark. `site/build.sh` assembles it with the manual into `_site/`, and
+`.github/workflows/pages.yml` publishes that to GitHub Pages.
+
 ## Rules
 
 **Do**

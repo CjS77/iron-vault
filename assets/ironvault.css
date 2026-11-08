@@ -1,0 +1,201 @@
+/* ==========================================================================
+   IronVault. — brand stylesheet
+   Colour palette, light/dark theme tokens and wordmark typography.
+   ========================================================================== */
+
+/* Typefaces (all SIL Open Font License) via Google Fonts:
+     Michroma        display — wordmark, headings, labels; capitals only
+     Geist           body — running text and UI
+     JetBrains Mono  code — commands, config, logs
+   To self-host instead, swap this @import for @font-face blocks like the one below. */
+@import url("https://fonts.googleapis.com/css2?family=Michroma&family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;700&display=swap");
+
+/*
+@font-face {
+  font-family: "Michroma";
+  src: url("./fonts/michroma-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+*/
+
+:root {
+  /* ---- Brand core ------------------------------------------------------ */
+  --iv-red:        #B0282C;  /* triangle, full stop — the signal colour      */
+  --iv-ink:        #0E0F11;  /* dark ground; "IRON" on light                 */
+  --iv-paper:      #F4F3F0;  /* light ground; "IRON" on dark                 */
+  --iv-white:      #FFFFFF;  /* keyhole                                      */
+  --iv-steel:      #8E949C;  /* "VAULT" on dark   (5.8:1 on ink)             */
+  --iv-steel-deep: #6B6F76;  /* "VAULT" on light  (4.6:1 on paper)           */
+
+  /* ---- Red scale (500 = brand) ----------------------------------------- */
+  --iv-red-50:  #F9EEEE;
+  --iv-red-100: #F1D8D9;
+  --iv-red-200: #E3B2B3;
+  --iv-red-300: #D18285;  /* red text on dark (6.6:1 on ink)                 */
+  --iv-red-400: #C05356;
+  --iv-red-500: #B0282C;  /* red text on light (5.9:1 on paper)              */
+  --iv-red-600: #942225;  /* hover / pressed on light                        */
+  --iv-red-700: #781B1E;
+  --iv-red-800: #5C1517;
+  --iv-red-900: #3F0E10;
+
+  /* ---- Neutral scale (cool steel) -------------------------------------- */
+  --iv-neutral-0:    #FFFFFF;
+  --iv-neutral-50:   #F4F3F0;  /* paper */
+  --iv-neutral-100:  #E8E7E3;
+  --iv-neutral-200:  #D6D8DB;
+  --iv-neutral-300:  #B4B8BE;
+  --iv-neutral-400:  #8E949C;  /* steel */
+  --iv-neutral-500:  #6B6F76;  /* steel-deep */
+  --iv-neutral-600:  #4B5059;
+  --iv-neutral-700:  #3A3F47;
+  --iv-neutral-800:  #2A2E35;
+  --iv-neutral-850:  #1E2126;
+  --iv-neutral-900:  #16181C;
+  --iv-neutral-950:  #0E0F11;  /* ink */
+
+  /* ---- Functional (UI states) ------------------------------------------ */
+  --iv-success:      #166E48;
+  --iv-success-dark: #3DBE85;
+  --iv-warning:      #9A5B00;
+  --iv-warning-dark: #F0A43A;
+  --iv-info:         #2563B8;
+  --iv-info-dark:    #6EA2EC;
+  --iv-danger:       var(--iv-red-500);
+  --iv-danger-dark:  var(--iv-red-300);
+
+  /* ---- Typography ------------------------------------------------------ */
+  --iv-font-wordmark: "Michroma", "Eurostile", "Microgramma", sans-serif;
+  --iv-font-display:  var(--iv-font-wordmark);
+  --iv-font-body:     "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --iv-font-mono:     "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  /* Type scale (rem), 1.25 ratio */
+  --iv-text-xs:  0.8rem;
+  --iv-text-sm:  0.9rem;
+  --iv-text-md:  1rem;
+  --iv-text-lg:  1.25rem;
+  --iv-text-xl:  1.563rem;
+  --iv-text-2xl: 1.953rem;
+  --iv-text-3xl: 2.441rem;
+  --iv-display-tracking: 0.06em;  /* Michroma headings and labels */
+
+  /* Shape */
+  --iv-radius-sm: 4px;
+  --iv-radius-md: 8px;
+  --iv-tracking:      0.035em;  /* wordmark letter-spacing                    */
+  --iv-heavy-stroke:  0.035em;  /* extra weight for "IRON" (Michroma has one weight) */
+  --iv-dot-size:      0.2em;    /* red full stop diameter                     */
+  --iv-dot-gap:       0.04em;
+
+  /* ---- Semantic tokens: light theme (default) -------------------------- */
+  color-scheme: light;
+  --iv-bg:           var(--iv-paper);
+  --iv-surface:      var(--iv-neutral-0);
+  --iv-surface-2:    var(--iv-neutral-100);
+  --iv-border:       var(--iv-neutral-200);
+  --iv-text:         var(--iv-ink);
+  --iv-text-muted:   var(--iv-steel-deep);
+  --iv-wordmark-heavy: var(--iv-ink);
+  --iv-wordmark-light: var(--iv-steel-deep);
+  --iv-accent:       var(--iv-red-500);
+  --iv-accent-hover: var(--iv-red-600);
+  --iv-on-accent:    var(--iv-white);
+  --iv-focus:        var(--iv-red-500);
+  --iv-success-fg:   var(--iv-success);
+  --iv-warning-fg:   var(--iv-warning);
+  --iv-info-fg:      var(--iv-info);
+  --iv-danger-fg:    var(--iv-danger);
+}
+
+/* ---- Dark theme ---------------------------------------------------------- */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --iv-bg:           var(--iv-ink);
+  --iv-surface:      var(--iv-neutral-900);
+  --iv-surface-2:    var(--iv-neutral-850);
+  --iv-border:       var(--iv-neutral-800);
+  --iv-text:         var(--iv-paper);
+  --iv-text-muted:   var(--iv-steel);
+  --iv-wordmark-heavy: var(--iv-paper);
+  --iv-wordmark-light: var(--iv-steel);
+  --iv-accent:       var(--iv-red-500);   /* fills: buttons, mark, dot */
+  --iv-accent-hover: var(--iv-red-400);
+  --iv-on-accent:    var(--iv-white);
+  --iv-focus:        var(--iv-red-300);
+  --iv-success-fg:   var(--iv-success-dark);
+  --iv-warning-fg:   var(--iv-warning-dark);
+  --iv-info-fg:      var(--iv-info-dark);
+  --iv-danger-fg:    var(--iv-danger-dark);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --iv-bg:           var(--iv-ink);
+    --iv-surface:      var(--iv-neutral-900);
+    --iv-surface-2:    var(--iv-neutral-850);
+    --iv-border:       var(--iv-neutral-800);
+    --iv-text:         var(--iv-paper);
+    --iv-text-muted:   var(--iv-steel);
+    --iv-wordmark-heavy: var(--iv-paper);
+    --iv-wordmark-light: var(--iv-steel);
+    --iv-accent:       var(--iv-red-500);
+    --iv-accent-hover: var(--iv-red-400);
+    --iv-on-accent:    var(--iv-white);
+    --iv-focus:        var(--iv-red-300);
+    --iv-success-fg:   var(--iv-success-dark);
+    --iv-warning-fg:   var(--iv-warning-dark);
+    --iv-info-fg:      var(--iv-info-dark);
+    --iv-danger-fg:    var(--iv-danger-dark);
+  }
+}
+
+/* ==========================================================================
+   Wordmark
+   <span class="iv-wordmark" role="img" aria-label="IronVault">
+     <span class="iv-heavy">IRON</span><span class="iv-light">VAULT</span><span class="iv-dot"></span>
+   </span>
+   ========================================================================== */
+
+.iv-wordmark {
+  font-family: var(--iv-font-wordmark);
+  font-weight: 400;
+  letter-spacing: var(--iv-tracking);
+  line-height: 1;
+  white-space: nowrap;
+  font-kerning: normal;
+  text-transform: uppercase;
+}
+
+/* Heavy — "IRON": Michroma thickened with a same-colour outline */
+.iv-heavy {
+  font-family: var(--iv-font-wordmark);
+  font-weight: 400;
+  font-synthesis: none;
+  letter-spacing: var(--iv-tracking);
+  color: var(--iv-wordmark-heavy);
+  -webkit-text-stroke: var(--iv-heavy-stroke) currentColor;
+  paint-order: stroke fill;
+}
+
+/* Light — "VAULT": Michroma regular in steel */
+.iv-light {
+  font-family: var(--iv-font-wordmark);
+  font-weight: 400;
+  font-synthesis: none;
+  letter-spacing: var(--iv-tracking);
+  color: var(--iv-wordmark-light);
+}
+
+/* Red full stop */
+.iv-dot {
+  display: inline-block;
+  width: var(--iv-dot-size);
+  height: var(--iv-dot-size);
+  margin-left: var(--iv-dot-gap);
+  border-radius: 50%;
+  background: var(--iv-red);
+}

@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>IronVault.</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Iron Vault is a small local proxy that holds API credentials so the programs that use them never do.">
+<meta property="og:title" content="IronVault.">
+<meta property="og:description" content="A small local proxy that holds API credentials so the programs that use them never do.">
+<meta property="og:image" content="assets/banner-forge.png">
+<link rel="icon" href="assets/ironvault-mark.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="assets/ironvault.css">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="IronVault home"><img src="assets/ironvault-lockup-dark.svg" alt="IronVault." width="181" height="30"></a>
+    <nav class="nav" aria-label="Main">
+      <a class="nav-hide" href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="manual/">Manual</a>
+      <a class="nav-gh" href="https://github.com/CjS77/iron-vault">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+        GitHub
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero" aria-labelledby="hero-title">
+  <div class="hero-art-wrap">
+    <img class="hero-art" src="assets/banner-forge.webp" alt="The IronVault. lockup forged in glowing metal on an anvil" width="1792" height="768">
+  </div>
+  <div class="wrap">
+    <div class="hero-grid">
+      <h1 id="hero-title">Your programs use the keys. <span class="quiet">They never hold them</span><span class="dot" aria-hidden="true"></span></h1>
+      <div class="hero-side">
+        <p class="lede">Iron Vault is a small local proxy that holds your API credentials. Point an application's base URL at it and give the application a placeholder. Iron Vault adds the real key on the way out, over verified TLS.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#install">Install Iron Vault</a>
+          <a class="btn btn-ghost" href="manual/">Read the manual</a>
+        </div>
+        <p class="status"><span class="pill">v0.2.0-alpha</span><span><strong>Linux only, in progress.</strong> The proxy works end to end in development mode. The protected install hasn't had a release check yet, so don't trust it with real secrets.</span></p>
+      </div>
+    </div>
+
+    <div class="path" aria-labelledby="path-title">
+      <p class="label" id="path-title">The path of one request</p>
+      <div class="path-row">
+        <div class="node">
+          <h3>Your application</h3>
+          <p>Calls <code>http://localhost/brave/…</code> with a placeholder key. Holds at most a caller token that grants specific routes.</p>
+        </div>
+        <div class="arrow" aria-hidden="true"><svg viewBox="0 0 48 24" fill="none" stroke="currentColor" stroke-width="1.5" preserveAspectRatio="none"><line x1="0" y1="12" x2="44" y2="12"></line><polyline points="38 6 44 12 38 18"></polyline></svg></div>
+        <div class="node node-vault">
+          <div class="node-head"><img src="assets/ironvault-mark.svg" alt="" width="26" height="23"><h3>Iron Vault</h3></div>
+          <ol>
+            <li>Authenticates the caller</li>
+            <li>Checks the route's method, path and rate limit</li>
+            <li>Adds the credential to a header or query parameter</li>
+            <li>Scrubs the key from the response</li>
+          </ol>
+        </div>
+        <div class="arrow" aria-hidden="true"><svg viewBox="0 0 48 24" fill="none" stroke="currentColor" stroke-width="1.5" preserveAspectRatio="none"><line x1="0" y1="12" x2="44" y2="12"></line><polyline points="38 6 44 12 38 18"></polyline></svg></div>
+        <div class="node">
+          <h3>Provider API</h3>
+          <p>Receives the real key over HTTPS with verified TLS. Redirects are never followed with the credential attached.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="features" aria-labelledby="features-title">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="label">What it does</p>
+      <h2 id="features-title">Three locks between a program and your keys<span class="dot" aria-hidden="true"></span></h2>
+      <p>An agent, an MCP server or a back-office app gets exactly the access it needs, and never a secret it could leak.</p>
+    </div>
+
+    <div class="features">
+      <article class="feature">
+        <div class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"></circle><path d="M10.7 12.3 21 2"></path><path d="m16 7 3 3"></path><path d="m18.5 4.5 2 2"></path></svg></div>
+        <h3>Credential injection</h3>
+        <p>Applications never see the provider key. Iron Vault stores it, adds it to each request, and takes it back out of anything that echoes it.</p>
+        <ul>
+          <li>Static API keys and Basic authentication</li>
+          <li>Placed in the header or query parameter the route names</li>
+          <li>Scrubbed from response headers, compressed bodies and streams</li>
+        </ul>
+        <div class="code">
+          <div class="code-bar"><span>store a key</span><button class="copy" type="button" data-copy="c-add">Copy</button></div>
+          <pre id="c-add"><span class="c"># prompted or piped, never an argument</span>
+pass show brave | iron-vault add brave \
+  --origin api.search.brave.com</pre>
+        </div>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="2.5"></circle><circle cx="18" cy="5" r="2.5"></circle><path d="M8.5 19H15a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h6.5"></path></svg></div>
+        <h3>Restricted routes</h3>
+        <p>Each caller gets only the routes it is granted. A key can only ever reach the hosts it was stored with, so editing a route can't send it anywhere else.</p>
+        <ul>
+          <li>Callers identified by Unix account, caller token or isolated listener</li>
+          <li>Routes limited by credential, HTTP method, path and request rate</li>
+          <li>Permitted destinations sealed inside the encrypted credential</li>
+        </ul>
+        <div class="code">
+          <div class="code-bar"><span>config.toml</span><button class="copy" type="button" data-copy="c-route">Copy</button></div>
+          <pre id="c-route"><span class="k">[callers.dev]</span>
+listener = "local"
+auth = "peer"     <span class="c"># the kernel names the account</span>
+user = "alice"
+routes = ["venice-dev"]</pre>
+        </div>
+      </article>
+
+      <article class="feature">
+        <div class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10.5" width="16" height="11" rx="2"></rect><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"></path><path d="M12 15v2.5"></path></svg></div>
+        <h3>Encrypted, approved, audited</h3>
+        <p>The vault is encrypted at rest and every change to its rules needs your sign-off. A typed audit log records who did what, without ever writing a secret.</p>
+        <ul>
+          <li>Credentials encrypted with <code>age</code>, plus an offline recovery key</li>
+          <li>Each config change signed with a strictly increasing approval version</li>
+          <li>Wrong passphrases trigger a cooldown from 30 s up to 15 min</li>
+        </ul>
+        <div class="code">
+          <div class="code-bar"><span>day to day</span><button class="copy" type="button" data-copy="c-ops">Copy</button></div>
+          <pre id="c-ops">iron-vault unlock          <span class="c"># vault passphrase</span>
+iron-vault recovery check  <span class="c"># the offline key still works</span>
+iron-vault lock            <span class="c"># secrets out of memory</span></pre>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="boundary" aria-labelledby="boundary-title">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="label">Security boundary</p>
+      <h2 id="boundary-title">What it promises, and what it doesn't<span class="dot" aria-hidden="true"></span></h2>
+      <p>A security tool should be plain about its limits. These come straight from the specification.</p>
+    </div>
+    <div class="bounds">
+      <div class="bound yes">
+        <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z"></path><path d="m8.5 12 2.5 2.5 4.5-5"></path></svg>Iron Vault stops a caller from</h3>
+        <ul>
+          <li><strong>Reading a stored provider credential,</strong> even one it is allowed to use.</li>
+          <li><strong>Sending a key to another origin</strong> than the ones it was stored with.</li>
+          <li><strong>Using a route its identity isn't granted,</strong> or exceeding the route's rate.</li>
+          <li><strong>Running an unapproved config,</strong> or replaying an old config with its old approval.</li>
+        </ul>
+      </div>
+      <div class="bound no">
+        <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z"></path><path d="M12 8v5"></path><path d="M12 16.5h.01"></path></svg>It can't stop</h3>
+        <ul>
+          <li><strong>Misuse of a granted route.</strong> Malware that can read a caller's token can use that caller's routes, within its limits.</li>
+          <li><strong>Every transformed secret.</strong> Scrubbing catches the credential's known forms, not every encoding of it.</li>
+          <li><strong>A hostile administrator.</strong> Root and other host administrators are trusted.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="install" aria-labelledby="install-title">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="label">Installation</p>
+      <h2 id="install-title">Two ways to install<span class="dot" aria-hidden="true"></span></h2>
+      <p>Try it as your own user in development mode, or install the protected service from a Debian package.</p>
+    </div>
+
+    <div class="installs">
+      <div class="install">
+        <div class="install-head"><h3>Development mode</h3><span class="tag">try it out</span></div>
+        <p>Runs as your own user, with files in your XDG directories. Callers, routes, TLS, scrubbing, encryption and approvals all work as normal.</p>
+        <div class="code">
+          <div class="code-bar"><span>bash</span><button class="copy" type="button" data-copy="c-dev">Copy</button></div>
+          <pre id="c-dev">git clone https://github.com/CjS77/iron-vault
+cd iron-vault
+cargo install --path crates/iron-vault --features dev-mode \
+  --root ~/.local/iron-vault-dev
+export PATH="$HOME/.local/iron-vault-dev/bin:$PATH"
+chmod -R g-w ~/.local/iron-vault-dev
+
+iron-vault serve --log-to-stdout   <span class="c"># in its own terminal</span>
+iron-vault init                    <span class="c"># two passphrases, one recovery key</span>
+iron-vault unlock
+iron-vault status                  <span class="c"># service: ready</span></pre>
+        </div>
+        <p class="note">Development mode gives <strong>no isolation from malware running as you</strong>. It is for trying Iron Vault and for development. <a href="manual/installation/development-mode.html">Full tutorial</a></p>
+      </div>
+
+      <div class="install">
+        <div class="install-head"><h3>Protected Linux</h3><span class="tag">system service</span></div>
+        <p>Runs as the <code>iron-vault</code> system account, with the vault in <code>/var/lib/iron-vault</code>, out of reach of ordinary accounts. You administer it with <code>sudo</code>.</p>
+        <div class="code">
+          <div class="code-bar"><span>bash</span><button class="copy" type="button" data-copy="c-deb">Copy</button></div>
+          <pre id="c-deb">cargo install cargo-deb --locked   <span class="c"># once</span>
+cargo deb -p iron-vault --locked
+sudo apt install ./target/debian/iron-vault_*.deb
+sudo iron-vault init
+sudo iron-vault unlock</pre>
+        </div>
+        <p class="note">Harden <code>sudo</code> and encrypt swap and hibernation storage first. The package hasn't had a release check on a real machine yet. <a href="manual/installation/linux-install.html">Installation guide</a></p>
+      </div>
+    </div>
+
+    <p class="reqs">Requires Linux, Rust 1.98 (pinned in <code>rust-toolchain.toml</code>), and for the tutorial <code>curl</code> and <code>jq</code>. macOS and Windows services are on the <a href="manual/cookbook/roadmap/index.html">roadmap</a>.</p>
+  </div>
+</section>
+
+<section class="section" id="manual" aria-labelledby="manual-title">
+  <div class="wrap manual">
+    <div class="section-head">
+      <p class="label">The manual</p>
+      <h2 id="manual-title">Recipes that end with something working<span class="dot" aria-hidden="true"></span></h2>
+      <p>Installation, a cookbook of short recipes, and a full reference for every command, config key, error and audit event.</p>
+      <div class="cta-row"><a class="btn btn-primary" href="manual/">Open the manual</a></div>
+    </div>
+    <ul class="recipes">
+      <li><a href="manual/cookbook/getting-started.html"><span>Getting started in development mode</span><span aria-hidden="true">→</span></a></li>
+      <li><a href="manual/cookbook/agent-api-key.html"><span>Give an AI agent or MCP server an API key</span><span aria-hidden="true">→</span></a></li>
+      <li><a href="manual/cookbook/two-callers.html"><span>Two keys, two callers, different permissions</span><span aria-hidden="true">→</span></a></li>
+      <li><a href="manual/cookbook/real-application.html"><span>Point a real application at Iron Vault</span><span aria-hidden="true">→</span></a></li>
+      <li><a href="manual/cookbook/rotate-key.html"><span>Rotate a provider key</span><span aria-hidden="true">→</span></a></li>
+      <li><a href="manual/cookbook/investigate-audit-log.html"><span>Investigate with the audit log</span><span aria-hidden="true">→</span></a></li>
+      <li><a href="manual/cookbook/recovery-key.html"><span>Check and store your recovery key</span><span aria-hidden="true">→</span></a></li>
+      <li><a href="manual/security-model.html"><span>The security model</span><span aria-hidden="true">→</span></a></li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <img src="assets/ironvault-lockup-dark.svg" alt="IronVault." width="133" height="22">
+    <nav aria-label="Footer">
+      <a href="manual/">Manual</a>
+      <a href="https://github.com/CjS77/iron-vault">GitHub</a>
+      <a href="https://github.com/CjS77/iron-vault/issues">Issues</a>
+      <a href="https://github.com/CjS77/iron-vault/blob/main/LICENSE">MPL-2.0</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var pre = document.getElementById(btn.dataset.copy);
+      var text = pre.innerText;
+      var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1600); };
+      var fallback = function () {
+        var range = document.createRange(); range.selectNodeContents(pre);
+        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+        btn.textContent = 'Selected';
+        setTimeout(function () { btn.textContent = 'Copy'; }, 1600);
+      };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, fallback);
+        } else { fallback(); }
+      } catch (e) { fallback(); }
+    });
+  });
+</script>
+</body>
+</html>
