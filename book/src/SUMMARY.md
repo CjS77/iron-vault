@@ -26,7 +26,7 @@
 - [Investigate with the audit log](cookbook/investigate-audit-log.md)
 - [Lock, unlock and restart](cookbook/lock-unlock-restart.md)
 - [Check and store your recovery key](cookbook/recovery-key.md)
-- [Rotate the recovery key, or add a device's key](cookbook/recipients.md)
+- [Rotate the recovery key, or add a machine's key](cookbook/recipients.md)
 - [Tamper detection and recovery](cookbook/tamper-detection.md)
 - [Start over in development mode](cookbook/start-over.md)
 - [Not yet available](cookbook/roadmap/index.md)

@@ -1,15 +1,13 @@
-# Rotate the recovery key, or add a device's key
+# Rotate the recovery key, or add a machine's key
 
 At the end of this recipe your vault opens with a new recovery key and no longer opens with the old one. The last step
-enrols another device's `age` key as a further way in.
+enrols an `age` key you hold on another machine, ready for when moving a vault there is supported.
 
 A **recipient** is a key the vault identity is wrapped for (the [security model](../security-model.md) explains the
 lockboxes). `init` enrols two: your vault passphrase and the offline recovery key. The `recipient` commands add and
 remove recipients without re-encrypting the credentials. The service refuses any change that would leave the vault
 without its vault passphrase recipient or without a recovery key.
 
-Steps 1 to 4 show output from a development-mode run. Step 5 shows the format documented in the
-[recipients design](../../../design/recipients.md#summaries), from another vault, so its keys and IDs differ.
 
 ## Prerequisites
 
@@ -81,7 +79,8 @@ Recovery key:
 the recovery key opens vault 3c3bc52f-…: checked …
 ```
 
-If the check fails, stop here. The old recovery key still works. See
+If the check fails, stop here: the old recovery key still works. Remove the new key by the `age1…` key step 2 showed,
+with `iron-vault recipient remove`, then run step 2 again. See
 [what can go wrong](recovery-key.md#what-can-go-wrong).
 
 ### 4. Remove the old recovery key
@@ -119,10 +118,15 @@ iron-vault: the service answered error 31 (recovery-check-failed): the recovery 
 Removal does not reach copies of `identity.age` or backups made before it: anyone holding one and the old key can
 still open it. If the old key or a machine was lost, rotate the provider credentials too.
 
-### 5. Add another device's key
+### 5. Add another machine's key
 
-To let another device open the vault, generate an `age` key on that device, for example with `age-keygen`, and enrol
-its public `age1…` key. Only the public key leaves the device. `--label` says which device it is:
+Enrolling a key does one thing today: whoever holds its secret half can decrypt every copy of `identity.age` written from
+now on, and with it every credential. No v0 command lets that machine use the vault through Iron Vault: `unlock` takes
+only the vault passphrase. The key is meant as the destination for
+[moving a vault to a new machine](roadmap/migration.md), which is not yet available. Enrol only a key you control.
+
+Generate the key on the other machine, for example with `age-keygen`, and enrol its public `age1…` key. The secret half
+never leaves that machine. `--label` says which machine it is:
 
 ```sh
 iron-vault recipient add age1v4q6gq… --label "bob's new laptop"
@@ -130,7 +134,7 @@ iron-vault recipient add age1v4q6gq… --label "bob's new laptop"
 
 ```text
 add a recipient to the vault
-  vault: 2a682de7-…
+  vault: 3c3bc52f-…
   recipient: age1v4q6gq…
   role: added
   label: bob's new laptop
@@ -145,7 +149,8 @@ If a machine was lost, rotate the provider credentials it could reach.
 ```
 
 `recipient list` now has a third line, with role `added`. An added key never counts as a recovery key, because the
-service can't tell who holds it. Remove it with `recipient remove` when the device is retired.
+service can't tell who holds it, so it doesn't let you remove the last `recovery` recipient. Remove it with
+`recipient remove` when the machine is retired.
 
 ## What can go wrong
 
