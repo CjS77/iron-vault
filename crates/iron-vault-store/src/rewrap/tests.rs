@@ -3,6 +3,7 @@ use std::io;
 use secrecy::ExposeSecret;
 
 use super::*;
+use crate::fault_fs::FsCall;
 use crate::secret_types_tests::assert_hides;
 use crate::test_vault::{TestVault, entry};
 use crate::{ChangeRecovery, EnvelopeError, RecipientIdentity, RecipientRole, RecipientSet, unwrap_identity};
@@ -132,6 +133,21 @@ fn a_proof_with_an_identity_outside_the_new_set_writes_nothing() {
 }
 
 #[test]
+fn a_proof_that_opens_to_another_vault_identity_is_refused() {
+    let vault = TestVault::new("rewrap-other-identity");
+    let set = RecipientSet::new([&vault.operational, &vault.recovery].map(RecipientIdentity::recipient_key)).unwrap();
+    let other = VaultIdentity::generate();
+    assert_eq!(
+        prove(&wrap_identity(&other, &set).unwrap(), &vault.vault, &vault.operational),
+        Err(EnvelopeProofError::IdentityMismatch)
+    );
+    assert_eq!(
+        prove(&wrap_identity(&vault.vault, &set).unwrap(), &vault.vault, &vault.operational),
+        Ok(())
+    );
+}
+
+#[test]
 fn the_steps_run_in_the_designed_order() {
     let vault = TestVault::new("rewrap-order");
     let from = vault.calls();
@@ -168,7 +184,8 @@ fn commit_calls() -> usize {
     let vault = TestVault::new("rewrap-commit-point");
     let from = vault.calls();
     rewrap(&vault, &vault.inventory, &add(&RecipientIdentity::generate())).unwrap();
-    let is_read_back = |call: &crate::fault_fs::FsCall| matches!(call, crate::fault_fs::FsCall::ReadBounded(path) if path.ends_with(StateFileName::identity_envelope().as_str()));
+    let envelope_name = StateFileName::identity_envelope();
+    let is_read_back = |call: &FsCall| matches!(call, FsCall::ReadBounded(path) if path.ends_with(envelope_name.as_str()));
     vault.fs.trace()[from..].iter().position(is_read_back).unwrap() + 1
 }
 
@@ -249,6 +266,8 @@ fn nothing_the_rewrap_returns_shows_a_secret_key() {
     let added = RecipientIdentity::generate();
     vault.fs.fail_first(crate::fault_fs::FsOp::Rename, io::ErrorKind::Other);
     let failed = rewrap(&vault, &vault.inventory, &add(&added));
+    let refused = add_recovery(&vault, &RecipientIdentity::generate(), &RecipientIdentity::generate());
+    assert!(matches!(refused, Err(RecipientChangeError::Proof(_))));
     let done = rewrap(&vault, &vault.inventory, &add(&added));
     let secrets = [
         vault.vault.secret_text(),
@@ -259,6 +278,7 @@ fn nothing_the_rewrap_returns_shows_a_secret_key() {
     secrets.iter().for_each(|secret| {
         let secret = secret.expose_secret();
         assert_hides(&failed, secret);
+        assert_hides(&refused, secret);
         assert_hides(&done, secret);
         assert!(!failed.as_ref().unwrap_err().to_string().contains(secret));
     });
