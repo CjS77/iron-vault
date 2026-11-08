@@ -398,3 +398,12 @@ fn a_crash_during_the_replace_leaves_only_a_temp_file_the_sweep_removes() {
     write_recipient_inventory(&lock, &fs, &identity, &example()).unwrap();
     assert_eq!(read_recipient_inventory(&lock, &fs, &identity).unwrap(), example());
 }
+
+#[test]
+fn describing_changes_only_the_envelope_digest() {
+    let current = example();
+    let described = current.clone().describing([9; 32]);
+    assert_eq!(described.envelope_digest(), &[9; 32]);
+    assert!(described.entries().eq(current.entries()));
+    assert_eq!(described.vault_id(), current.vault_id());
+}

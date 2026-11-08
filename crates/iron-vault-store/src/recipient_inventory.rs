@@ -270,6 +270,11 @@ impl RecipientInventory {
     pub fn recipient_set(&self) -> RecipientSet {
         RecipientSet::from_validated(self.entries.keys().cloned().collect())
     }
+
+    /// This inventory describing the envelope with digest `envelope_digest` instead.
+    pub(crate) fn describing(self, envelope_digest: [u8; 32]) -> Self {
+        Self { envelope_digest, ..self }
+    }
 }
 
 /// The digest of an `identity.age` file's bytes exactly as they sit on disk: BLAKE2b-256, unkeyed.

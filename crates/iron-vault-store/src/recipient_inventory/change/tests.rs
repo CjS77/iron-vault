@@ -69,22 +69,31 @@ fn removing_a_key_that_is_not_enrolled_is_refused() {
     assert_refused(&initial(), RecipientChange::Remove(stranger), RecipientChangeRefusal::NotEnrolled);
 }
 
+/// A second `operational` entry could stand in for the first, so a later removal of the real one would pass part 1 and
+/// leave out the key `operational.age` opens.
 #[test]
-fn removing_the_operational_recipient_is_refused() {
+fn adding_an_operational_recipient_is_refused() {
     let current = inventory(&[RecipientRole::Operational, RecipientRole::Recovery, RecipientRole::Added]);
+    let change = RecipientChange::Add(entry(RecipientRole::Operational));
+    assert_refused(&current, change, RecipientChangeRefusal::AddsOperational);
+}
+
+#[test]
+fn removing_an_operational_recipient_is_refused() {
+    let current = inventory(&[RecipientRole::Operational, RecipientRole::Operational, RecipientRole::Recovery]);
     let operational = key_of(&current, RecipientRole::Operational);
     assert_refused(
         &current,
         RecipientChange::Remove(operational),
-        RecipientChangeRefusal::NoOperational,
+        RecipientChangeRefusal::RemovesOperational,
     );
-    let initial = initial();
-    let operational = key_of(&initial, RecipientRole::Operational);
-    assert_refused(
-        &initial,
-        RecipientChange::Remove(operational),
-        RecipientChangeRefusal::NoOperational,
-    );
+}
+
+#[test]
+fn a_change_that_leaves_no_operational_recipient_is_refused() {
+    let current = inventory(&[RecipientRole::Recovery, RecipientRole::Added]);
+    let change = RecipientChange::Add(entry(RecipientRole::Added));
+    assert_refused(&current, change, RecipientChangeRefusal::NoOperational);
 }
 
 #[test]
@@ -116,12 +125,4 @@ fn adding_past_the_maximum_is_refused() {
         RecipientChange::Add(entry(RecipientRole::Added)),
         RecipientChangeRefusal::TooMany,
     );
-}
-
-#[test]
-fn describing_changes_only_the_envelope_digest() {
-    let current = initial();
-    let described = current.clone().describing([9; 32]);
-    assert_eq!(described.envelope_digest(), &[9; 32]);
-    assert!(described.entries().eq(current.entries()));
 }

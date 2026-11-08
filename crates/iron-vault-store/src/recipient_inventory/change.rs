@@ -32,8 +32,16 @@ pub enum RecipientChangeRefusal {
     /// The key to remove is not enrolled.
     #[error("no enrolled recipient has this key")]
     NotEnrolled,
-    /// The change would leave no `operational` recipient, which passphrase unlock and migration authorization go through.
+    /// The entry to add has the `operational` role. Only `init` enrolls it, with the key `operational.age` opens; a
+    /// second one could take the first one's place.
+    #[error("only init enrolls an operational recipient")]
+    AddsOperational,
+    /// The key to remove is the `operational` recipient's, which passphrase unlock and migration authorization go through.
+    /// It is never removed, and no other recipient takes its place.
     #[error("the operational recipient is never removed: passphrase unlock goes through it")]
+    RemovesOperational,
+    /// The change would leave no `operational` recipient: the inventory it starts from has none.
+    #[error("the vault would be left with no operational recipient")]
     NoOperational,
     /// The change would leave no `recovery` recipient, the owner's offline way in.
     #[error("the vault would be left with no recovery recipient")]
@@ -67,22 +75,17 @@ impl RecipientChange {
     ) -> Result<BTreeMap<RecipientKey, RecipientEntry>, RecipientChangeRefusal> {
         let mut next = entries.clone();
         match self {
+            Self::Add(entry) if entry.role == RecipientRole::Operational => Err(RecipientChangeRefusal::AddsOperational),
             Self::Add(entry) => match next.insert(entry.key.clone(), entry.clone()) {
                 None => Ok(next),
                 Some(_) => Err(RecipientChangeRefusal::AlreadyEnrolled),
             },
             Self::Remove(key) => match next.remove(key) {
+                Some(removed) if removed.role == RecipientRole::Operational => Err(RecipientChangeRefusal::RemovesOperational),
                 Some(_) => Ok(next),
                 None => Err(RecipientChangeRefusal::NotEnrolled),
             },
         }
-    }
-}
-
-impl RecipientInventory {
-    /// This inventory describing the envelope with digest `envelope_digest` instead.
-    pub(crate) fn describing(self, envelope_digest: [u8; 32]) -> Self {
-        Self { envelope_digest, ..self }
     }
 }
 
