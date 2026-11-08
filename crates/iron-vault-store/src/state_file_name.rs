@@ -64,6 +64,11 @@ impl StateFileName {
         Self("approval.age".to_owned())
     }
 
+    /// The recipient inventory's file, `recipients.age`.
+    pub fn recipient_inventory() -> Self {
+        Self("recipients.age".to_owned())
+    }
+
     /// The approver key envelope's file, `approver.age`.
     pub fn approver_key() -> Self {
         Self("approver.age".to_owned())
@@ -157,6 +162,7 @@ mod tests {
         assert_eq!(StateFileName::new("identity.age"), Ok(StateFileName::identity_envelope()));
         assert_eq!(StateFileName::new("operational.age"), Ok(StateFileName::passphrase_envelope()));
         assert_eq!(StateFileName::new("approval.age"), Ok(StateFileName::approval_state()));
+        assert_eq!(StateFileName::new("recipients.age"), Ok(StateFileName::recipient_inventory()));
         assert_eq!(StateFileName::new("approver.age"), Ok(StateFileName::approver_key()));
         assert_eq!(
             StateFileName::new("init.unfinished"),

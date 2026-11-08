@@ -1,8 +1,8 @@
-//! The MAC'd file frame shared by the vault manifest and the approval state (spec §3.10, `design/storage-formats.md`).
+//! The MAC'd file frame shared by the vault manifest, the approval state and the recipient inventory (spec §3.10, `design/storage-formats.md`).
 //!
 //! `age` does not authenticate the sender, so a control file sealed to the vault public key could be planted by anyone
 //! holding that key. The frame adds a MAC keyed from the private vault identity over a clear header and the ciphertext,
-//! and checks it before anything is decrypted. Both files use this one implementation so a fix reaches both.
+//! and checks it before anything is decrypted. Every MAC'd file uses this one implementation so a fix reaches all of them.
 
 use blake2::Blake2bMac;
 use blake2::digest::{KeyInit, Mac, consts::U32};

@@ -22,6 +22,7 @@ mod partial_restore;
 mod passphrase;
 mod permitted_origins;
 mod recipient;
+mod recipient_inventory;
 mod record;
 mod record_id;
 mod recovery;
@@ -89,6 +90,11 @@ pub use passphrase::{
 pub use permitted_origins::{PermittedOrigins, PermittedOriginsError};
 pub use recipient::{
     MAX_RECIPIENTS, ParseRecipientIdentityError, ParseRecipientKeyError, RecipientIdentity, RecipientKey, RecipientSet, RecipientSetError,
+};
+pub use recipient_inventory::{
+    MAX_RECIPIENT_INVENTORY_LEN, RecipientEntry, RecipientInventory, RecipientInventoryError, RecipientInventoryReadError,
+    RecipientInventoryWriteError, RecipientLabel, RecipientLabelError, RecipientRole, envelope_digest, open_recipient_inventory,
+    read_recipient_inventory, seal_recipient_inventory, write_recipient_inventory,
 };
 pub use record::{CredentialRecord, RecordError, ResolvedCredential, Source, decode, encode};
 pub use record_id::{RecordId, RecordIdError};
