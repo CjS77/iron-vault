@@ -9,13 +9,13 @@
 use std::sync::Arc;
 
 use iron_vault_store::{
-    InventoryCheckError, InventoryDamage, PinnedApprover, RecipientEntry, RecipientInventory, StoreFs, VaultId, VaultIdentity,
-    check_recipient_inventory,
+    ChangeCommitted, ErrorKindLabel, InventoryCheckError, InventoryDamage, PinnedApprover, RecipientChangeFault, RecipientChangeWriteError,
+    RecipientEntry, RecipientInventory, RecipientKey, StoreFs, VaultId, VaultIdentity, check_recipient_inventory,
 };
 
 use super::{Inner, ServiceContext};
 use crate::audit::AuditEvent;
-use crate::audit::recipient::{ChangeRecovered, InventoryDamaged};
+use crate::audit::recipient::{ChangeFailed, ChangeFailure, ChangeRecovered, InventoryDamaged};
 use crate::service_state::{AdminOperation, ServiceState};
 
 /// Why `recipient list` ended without a list.
@@ -103,5 +103,38 @@ pub(super) fn ready_vault(inner: &Inner) -> Result<ReadyVault, RecipientRefusal>
             approver: open.approval.approver().clone(),
         }),
         _ => Err(RecipientRefusal::WrongState(inner.state)),
+    }
+}
+
+/// Logs `recipient.change-failed` for a `change` (`add` or `remove`) of `key`.
+pub(super) fn log_failure(change: &'static str, key: &RecipientKey, failure: ChangeFailure) {
+    ChangeFailed {
+        change,
+        recipient: key,
+        failure,
+    }
+    .emit();
+}
+
+/// A change that ended before its first write: wrapping, proving and sealing failed, so nothing reached the disk.
+pub(super) fn unwritten() -> ChangeFailure {
+    ChangeFailure::WriteFailed {
+        step: None,
+        error_kind: ErrorKindLabel::fixed("not_written"),
+        committed: ChangeCommitted::No,
+    }
+}
+
+/// A step that failed, naming its kind and whether the change committed.
+pub(super) fn step_failure(error: &RecipientChangeWriteError) -> ChangeFailure {
+    let error_kind = match error.fault() {
+        RecipientChangeFault::Write(write) => write.error_kind_label(),
+        RecipientChangeFault::Read(_) => ErrorKindLabel::fixed("read_failed"),
+        RecipientChangeFault::EnvelopeMismatch => ErrorKindLabel::fixed("envelope_mismatch"),
+    };
+    ChangeFailure::WriteFailed {
+        step: Some(error.step()),
+        error_kind,
+        committed: error.committed(),
     }
 }

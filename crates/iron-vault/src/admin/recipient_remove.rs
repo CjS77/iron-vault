@@ -15,15 +15,10 @@ use super::dispatch::{AdminHandler, HandlerFuture};
 use super::owner_presence::{no_presence, require_owner_presence};
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode};
-use super::recipient_list::refused as inventory_refused;
+use super::recipient_list::{OLD_COPIES, refused as inventory_refused};
 use super::server::{Exchange, ExchangeError};
 use crate::service_context::{RecipientRefusal, RecipientRemoval, RemovalRefusal, RemovedRecipient, ServiceContext};
 use crate::service_state::AdminOperation;
-
-/// What every completed change says about copies already made (R-24).
-const OLD_COPIES: &str = "Removing a recipient protects future copies of identity.age only.\n\
-    Old copies of identity.age, and backups, still open with a removed key.\n\
-    If a machine was lost, rotate the provider credentials it could reach.";
 
 /// `recipient remove`'s handler, acting on the running service.
 pub(super) struct RecipientRemove<F> {

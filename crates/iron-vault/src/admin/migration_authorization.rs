@@ -18,8 +18,7 @@ use super::unlock::{PASSPHRASE_PROMPT, state_name};
 use crate::audit::AuditEvent;
 use crate::audit::migration::{AuthorizationRefused, Authorized, ChallengeIssued, Refusal};
 use crate::migration_authorization::{
-    AuthorizedMigration, BindingDigest, MigrationAuthorization, MigrationOperation, MigrationRefusal, OwnerRefusal, SourceOwnerMethod,
-    VaultPassphraseMethod,
+    BindingDigest, MigrationAuthorization, MigrationOperation, MigrationRefusal, OwnerRefusal, SourceOwnerMethod, VaultPassphraseMethod,
 };
 use crate::service_context::MigrationSession;
 use crate::service_state::ServiceState;
@@ -59,27 +58,6 @@ pub async fn require_migration_authorization<F: StoreFs + Send + Sync + 'static>
     let outcome = prompt_and_prove(exchange, session, &digest, &method).await;
     record_ending(&operation, method.label(), &outcome);
     outcome
-}
-
-/// Step 9: consumes `authorization` for `operation` inside `session`. The service must still be as it was at step 2, and
-/// the authorization must be for this vault and this operation, unexpired. A binding or expiry refusal is recorded as
-/// the one consume-time `migration.authorization-refused`; a `wrong-state` adds no migration record.
-pub async fn consume_migration_authorization<F: StoreFs + Send + Sync + 'static>(
-    session: &MigrationSession<'_, F>,
-    authorization: MigrationAuthorization,
-    operation: &MigrationOperation,
-) -> Result<AuthorizedMigration, NoAuthorization> {
-    session.consume(authorization, operation).await.map_err(|refusal| {
-        if matches!(refusal, MigrationRefusal::Expired | MigrationRefusal::BindingMismatch) {
-            AuthorizationRefused {
-                operation,
-                method: VaultPassphraseMethod::LABEL,
-                refusal: Refusal::Refused(refusal),
-            }
-            .emit();
-        }
-        NoAuthorization(refusal)
-    })
 }
 
 /// Steps 6 and 7: the attempt limit, the prompt and the method's check.

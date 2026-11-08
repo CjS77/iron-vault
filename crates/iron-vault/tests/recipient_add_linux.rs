@@ -15,12 +15,15 @@ use std::time::Duration;
 
 use common::approval_harness::{Captured, assert_audit_record, captured_logs, converse, read_frame, send, spawn_admin};
 use common::recipient_harness::{Fixture, VAULT_PASSPHRASE, ready};
+use iron_vault::admin::protocol::OwnerInput;
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, Prompt};
-use iron_vault::service_context::{RecipientRefusal, ServiceContext};
-use iron_vault_store::{RecipientEntry, RecipientKey, RecipientRole, RecoveryKey, RecoveryKeySecret, unwrap_identity};
+use iron_vault::migration_authorization::{MigrationOperation, MigrationRefusal};
+use iron_vault::service_context::{AddRefusal, RecipientRefusal, ServiceContext};
+use iron_vault_store::{RecipientEntry, RecipientKey, RecipientLabel, RecipientRole, RecoveryKey, RecoveryKeySecret, unwrap_identity};
 use secrecy::{ExposeSecret, SecretString};
 use tokio::net::UnixStream;
 use tokio::sync::oneshot;
+use zeroize::Zeroizing;
 
 const WRONG_PASSPHRASE: &str = "ADD-wrong-passphrase-6e03";
 const LABEL: &str = "bob's new laptop";
@@ -384,4 +387,47 @@ async fn no_log_record_holds_a_typed_passphrase() {
     [VAULT_PASSPHRASE, WRONG_PASSPHRASE]
         .into_iter()
         .for_each(|typed| assert!(!text.contains(typed), "a typed passphrase reached the log"));
+}
+
+/// An authorization the vault passphrase proved for `operation`.
+async fn authorization_for(
+    service: &ServiceContext,
+    operation: MigrationOperation,
+) -> iron_vault::migration_authorization::MigrationAuthorization {
+    let digest = service.issue_migration_challenge(operation).await.unwrap();
+    let method = service.vault_passphrase_method().await.unwrap();
+    let typed = OwnerInput::new(Zeroizing::new(VAULT_PASSPHRASE.as_bytes().to_vec()));
+    service.authorize_migration(&digest, &method, typed).await.unwrap()
+}
+
+#[tokio::test]
+async fn an_authorization_for_another_key_or_operation_never_reaches_the_rewrap() {
+    let served = Served::new().await;
+    let (key, identity) = new_recipient();
+    let (other, _) = new_recipient();
+    let before = served.recipient_files();
+
+    for operation in [MigrationOperation::AddRecipient(other.clone()), MigrationOperation::Export] {
+        let session = served.service.begin_migration().await.unwrap();
+        let plan = served
+            .service
+            .plan_recipient_add(&session, key.clone(), RecipientLabel::new(LABEL).unwrap())
+            .await
+            .unwrap();
+        let authorization = authorization_for(&served.service, operation).await;
+
+        let refusal = served.service.add_recipient(&session, authorization, plan).await.unwrap_err();
+
+        assert!(
+            matches!(refusal, AddRefusal::Unauthorized(MigrationRefusal::BindingMismatch)),
+            "{refusal:?}"
+        );
+        served.assert_nothing_written(&before);
+    }
+    assert!(unwrap_identity(&fs::read(served.fixture.path("state/identity.age")).unwrap(), &identity).is_err());
+    assert!(served.events_for("recipient.added", &key).is_empty());
+    let refused = served.events_for("migration.authorization-refused", &key);
+    assert_eq!(refused.len(), 2, "{refused:?}");
+    assert!(refused.iter().all(|record| record["refusal"] == "binding_mismatch"));
+    assert_eq!(served.entries().await.len(), 2);
 }

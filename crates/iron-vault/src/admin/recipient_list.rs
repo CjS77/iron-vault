@@ -38,6 +38,11 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for RecipientList<F> {
     }
 }
 
+/// What every completed recipient change says about copies already made (R-24).
+pub(super) const OLD_COPIES: &str = "Removing a recipient protects future copies of identity.age only.\n\
+    Old copies of identity.age, and backups, still open with a removed key.\n\
+    If a machine was lost, rotate the provider credentials it could reach.";
+
 /// The error response for a recipient command that ended before its own work; `command` names it in the wrong-state message.
 pub(super) fn refused(command: &str, refusal: RecipientRefusal) -> AdminResponse {
     let (code, message) = match refusal {

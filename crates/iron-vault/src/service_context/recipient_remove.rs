@@ -13,16 +13,19 @@
 use std::sync::Arc;
 
 use iron_vault_store::{
-    ApprovalPassphrase, ChangeCommitted, ErrorKindLabel, PinnedApprover, RecipientChange, RecipientChangeError, RecipientChangeFault,
-    RecipientChangeRefusal, RecipientChangeWriteError, RecipientEntry, RecipientInventory, RecipientKey, StoreFs, rewrap_identity,
+    ApprovalPassphrase, ChangeCommitted, PinnedApprover, RecipientChange, RecipientChangeError, RecipientChangeRefusal,
+    RecipientChangeWriteError, RecipientEntry, RecipientInventory, RecipientKey, StoreFs, rewrap_identity,
 };
 use tokio::sync::OwnedMutexGuard;
 
-use super::recipients::{ReadyVault, ready_vault};
+use super::recipients::{ReadyVault, log_failure, ready_vault, step_failure, unwritten};
 use super::{OwnerPresence, PresenceRefusal, RecipientRefusal, ServiceContext};
 use crate::audit::AuditEvent;
-use crate::audit::recipient::{ChangeFailed, ChangeFailure, Removed};
+use crate::audit::recipient::{ChangeFailure, Removed};
 use crate::service_state::ServiceState;
+
+/// The `change` label of the audit records this module writes.
+const CHANGE: &str = "remove";
 
 /// Why a recipient removal ended without removing the recipient.
 #[derive(Debug, thiserror::Error)]
@@ -122,17 +125,7 @@ fn log_refused(key: &RecipientKey, refusal: &RemovalRefusal) {
         RemovalRefusal::SetInvalid(_) => ChangeFailure::SetInvalid,
         _ => return,
     };
-    log_failure(key, failure);
-}
-
-/// Logs `recipient.change-failed` for a removal of `key`.
-fn log_failure(key: &RecipientKey, failure: ChangeFailure) {
-    ChangeFailed {
-        change: "remove",
-        recipient: key,
-        failure,
-    }
-    .emit();
+    log_failure(CHANGE, key, failure);
 }
 
 impl<F: StoreFs + Send + Sync + 'static> RecipientRemoval<'_, F> {
@@ -216,17 +209,7 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientRemoval<'_, F> {
 
 /// Logs a step that failed, naming its kind and whether the change committed.
 fn log_write_failure(key: &RecipientKey, error: &RecipientChangeWriteError) {
-    let error_kind = match error.fault() {
-        RecipientChangeFault::Write(write) => write.error_kind_label(),
-        RecipientChangeFault::Read(_) => ErrorKindLabel::fixed("read_failed"),
-        RecipientChangeFault::EnvelopeMismatch => ErrorKindLabel::fixed("envelope_mismatch"),
-    };
-    let failure = ChangeFailure::WriteFailed {
-        step: Some(error.step()),
-        error_kind,
-        committed: error.committed(),
-    };
-    log_failure(key, failure);
+    log_failure(CHANGE, key, step_failure(error));
 }
 
 /// The refusal for a change that failed before the commit point or at it, logged as `recipient.change-failed`.
@@ -246,12 +229,7 @@ fn refused_write(key: &RecipientKey, error: &RecipientChangeError) -> RemovalRef
         }
         // Wrapping, proving and sealing happen before the first write.
         other => {
-            let failure = ChangeFailure::WriteFailed {
-                step: None,
-                error_kind: ErrorKindLabel::fixed("not_written"),
-                committed: ChangeCommitted::No,
-            };
-            log_failure(key, failure);
+            log_failure(CHANGE, key, unwritten());
             RemovalRefusal::Failed {
                 committed: ChangeCommitted::No,
                 cause: other.to_string(),

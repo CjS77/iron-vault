@@ -557,8 +557,8 @@ fn wrong_state_is_error_code_13() {
 fn a_success_result_must_name_a_command_with_a_result_and_a_known_profile() {
     let no_command = field(2, &[1]);
     assert_eq!(decode_err(&raw(1, 4, &no_command)), FrameError::MissingField(1));
-    let unknown = body(&[field(1, &[0, 15]), field(2, &[1])]);
-    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(15));
+    let unknown = body(&[field(1, &[0, 16]), field(2, &[1])]);
+    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(16));
     let without_profile = field(1, &[0, 1]);
     assert_eq!(decode_err(&raw(1, 4, &without_profile)), FrameError::MissingField(2));
     [&[][..], &[0], &[4], &[1, 1]].into_iter().for_each(|profile| {
@@ -696,7 +696,7 @@ fn unknown_tags_are_refused() {
 
 #[test]
 fn unknown_commands_are_refused_whatever_follows() {
-    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 15]))), FrameError::UnknownCommand(15));
+    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 16]))), FrameError::UnknownCommand(16));
     let with_arguments = body(&[field(1, &[0xff, 0xff]), field(2, b"argument")]);
     assert_eq!(decode_err(&raw(1, 1, &with_arguments)), FrameError::UnknownCommand(0xffff));
 }

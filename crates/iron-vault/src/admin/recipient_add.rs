@@ -3,7 +3,7 @@
 //!
 //! The new key opens the vault identity, so this is the alternate migration path: an unlocked vault or an admin connection
 //! is not enough. The exchange holds the service-wide lock from the session through the response, shows its summary, and
-//! asks for the vault passphrase; only the authorization that answer proves, consumed at step 9, reaches the rewrap.
+//! asks for the vault passphrase; only the authorization that answer proves reaches the rewrap, which consumes it against the key in the plan.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -13,22 +13,15 @@ use iron_vault_store::{
 };
 
 use super::dispatch::{AdminHandler, HandlerFuture};
-use super::migration_authorization::{NoAuthorization, consume_migration_authorization, no_authorization, require_migration_authorization};
+use super::migration_authorization::{NoAuthorization, no_authorization, require_migration_authorization};
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode};
-use super::recipient_list::refused as inventory_refused;
+use super::recipient_list::{OLD_COPIES, refused as inventory_refused};
 use super::server::{Exchange, ExchangeError};
-use super::unlock::state_name;
 use crate::migration_authorization::{MigrationOperation, MigrationRefusal};
-use crate::service_context::{AddRefusal, Enrolled, PlanRefusal, RecipientAddPlan, ServiceContext};
-use crate::service_state::ServiceState;
+use crate::service_context::{AddRefusal, Enrolled, PlanRefusal, RecipientAddPlan, RecipientRefusal, ServiceContext};
 
 const COMMAND: &str = "recipient add";
-
-/// What every completed change prints after its first line: removal reaches only future envelopes (R-24).
-const OLD_COPIES: &str = "Removing a recipient protects future copies of identity.age only.\n\
-    Old copies of identity.age, and backups, still open with a removed key.\n\
-    If a machine was lost, rotate the provider credentials it could reach.";
 
 /// `recipient add`'s handler, acting on the running service.
 pub(super) struct RecipientAdd<F> {
@@ -68,15 +61,11 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
         };
         exchange.notice(&summary(&plan)).await?;
         let operation = MigrationOperation::AddRecipient(key.clone());
-        let authorization = match require_migration_authorization(exchange, &session, operation.clone()).await? {
+        let authorization = match require_migration_authorization(exchange, &session, operation).await? {
             Ok(authorization) => authorization,
             Err(none) => return Ok(no_authorization(COMMAND, none)),
         };
-        let authorized = match consume_migration_authorization(&session, authorization, &operation).await {
-            Ok(authorized) => authorized,
-            Err(none) => return Ok(no_authorization(COMMAND, none)),
-        };
-        match self.service.add_recipient(&session, authorized, plan).await {
+        match self.service.add_recipient(&session, authorization, plan).await {
             Ok(enrolled) => completed(exchange, key, enrolled).await,
             Err(refusal) => Ok(add_refused(refusal)),
         }
@@ -141,19 +130,9 @@ async fn completed(exchange: &mut Exchange, key: RecipientKey, enrolled: Enrolle
 /// Locked state as a `lock` that cancelled a prompt.
 fn not_begun(refusal: MigrationRefusal) -> AdminResponse {
     match refusal {
-        MigrationRefusal::WrongState(state) => wrong_state(state),
+        MigrationRefusal::WrongState(state) => inventory_refused(COMMAND, RecipientRefusal::WrongState(state)),
         other => no_authorization(COMMAND, NoAuthorization(other)),
     }
-}
-
-fn wrong_state(state: ServiceState) -> AdminResponse {
-    error(
-        ErrorCode::WrongState,
-        format!(
-            "`{COMMAND}` is allowed only while the service is Ready; it is {}",
-            state_name(state)
-        ),
-    )
 }
 
 fn plan_refused(refusal: PlanRefusal) -> AdminResponse {
@@ -170,7 +149,8 @@ fn plan_refused(refusal: PlanRefusal) -> AdminResponse {
 fn add_refused(refusal: AddRefusal) -> AdminResponse {
     let unknown = "the change may have committed: run `iron-vault recipient list` to see whether the key is enrolled";
     match refusal {
-        AddRefusal::WrongState(state) => wrong_state(state),
+        AddRefusal::WrongState(state) => inventory_refused(COMMAND, RecipientRefusal::WrongState(state)),
+        AddRefusal::Unauthorized(refusal) => no_authorization(COMMAND, NoAuthorization(refusal)),
         AddRefusal::Failed(RecipientChangeError::Refused(rule)) => rule_refused(rule),
         AddRefusal::Failed(RecipientChangeError::Write(write)) => match write.committed() {
             ChangeCommitted::No => error(ErrorCode::VaultWriteFailed, format!("{write}; nothing was changed")),

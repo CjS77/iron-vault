@@ -26,6 +26,8 @@ use tokio::time::Instant;
 use super::{Inner, ServiceContext};
 use crate::admin::protocol::OwnerInput;
 use crate::attempt_limit::AttemptLimiter;
+use crate::audit::AuditEvent;
+use crate::audit::migration::{AuthorizationRefused, Refusal};
 use crate::migration_authorization::{
     AuthorizedMigration, BindingDigest, ChallengeBusy, MethodRefusal, MigrationAuthorization, MigrationChallenge, MigrationOperation,
     MigrationRefusal, SourceOwnerMethod, VaultPassphraseMethod, prove_challenge,
@@ -222,7 +224,9 @@ impl<F: StoreFs + Send + Sync + 'static> MigrationSession<'_, F> {
     }
 
     /// Step 9: the service is still as it was at step 2, then the authorization is consumed for `operation` on the open
-    /// vault, which checks its binding and its expiry. The result is the witness the operation takes to start.
+    /// vault, which checks its binding and its expiry. The result is the witness the operation takes to start. A binding
+    /// or expiry refusal is recorded as the one consume-time `migration.authorization-refused`; a `wrong-state` adds no
+    /// migration record.
     pub async fn consume(
         &self,
         authorization: MigrationAuthorization,
@@ -230,7 +234,21 @@ impl<F: StoreFs + Send + Sync + 'static> MigrationSession<'_, F> {
     ) -> Result<AuthorizedMigration, MigrationRefusal> {
         self.ensure_unchanged().await?;
         let vault_id = open_vault_id(&*self.service.inner.lock().await)?;
-        authorization.authorize(vault_id, operation, Instant::now())
+        authorization
+            .authorize(vault_id, operation, Instant::now())
+            .inspect_err(|refusal| record_refused_on_consume(operation, *refusal))
+    }
+}
+
+/// Records the refusal of an authorization at step 9, when it names the authorization rather than the service's state.
+fn record_refused_on_consume(operation: &MigrationOperation, refusal: MigrationRefusal) {
+    if matches!(refusal, MigrationRefusal::Expired | MigrationRefusal::BindingMismatch) {
+        AuthorizationRefused {
+            operation,
+            method: VaultPassphraseMethod::LABEL,
+            refusal: Refusal::Refused(refusal),
+        }
+        .emit();
     }
 }
 
