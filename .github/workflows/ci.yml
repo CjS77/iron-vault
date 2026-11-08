@@ -24,6 +24,13 @@ jobs:
         run: python3 scripts/check-policy-deps.py
       - name: Build
         run: cargo build --workspace --locked
+      # v0 runs only on Linux, but the crates must still compile elsewhere; this catches a Linux-only use left ungated.
+      # ring's build script compiles C for the target, hence the MinGW cross-compiler.
+      - name: Non-Linux build
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+          rustup target add x86_64-pc-windows-gnu
+          scripts/check-non-linux.sh
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
