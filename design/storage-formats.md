@@ -105,7 +105,7 @@ version still on disk. A reader never guesses at a version it does not know.
 A [MAC'd file](glossary.md) is a control file the service alone may write. `age` does not authenticate the sender, so
 anyone holding the vault public key can write a file that decrypts cleanly. A MAC'd file is therefore sealed to the
 vault public key and then authenticated with a MAC keyed from the private vault identity, which only the service holds
-while the vault is unlocked (specification [§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). The manifest file and the approval state file are MAC'd files; each
+while the vault is unlocked (specification [§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). The manifest file, the approval state file and the recipient inventory file are MAC'd files; each
 fixes its own magic, version, key persona, domain tag and size limit. Rust: `MacFileKind`, crate-private.
 
 ### Layout
@@ -135,7 +135,7 @@ MAC      = BLAKE2b-256(key = file key, message = domain tag || bytes 0 .. end �
 - The **personalization** (at most 16 bytes, zero-padded to BLAKE2b's 16) is the file type's own, so each file's key is
   independent of every other key derived from the same identity, and a MAC from one file type never verifies another.
 - The 64-byte file key is a full-length BLAKE2b key. It lives only in a buffer that is cleared on drop.
-- The MAC message starts with the file type's 32-byte domain tag, which ends in a zero byte, then every file byte
+- The MAC message starts with the file type's domain tag, which ends in a zero byte, then every file byte
   before the MAC: magic, version, vault ID and ciphertext.
 
 A party holding only the vault public key can seal any payload, but cannot compute the MAC. A file from another vault
@@ -155,7 +155,7 @@ Opening a MAC'd file does the cheap, key-free checks first and decrypts last:
 
 ### State generation
 
-Every MAC'd file payload carries two `u64` counters right after its vault ID:
+The manifest and the approval state, the MAC'd files that carry one, put two `u64` counters right after the vault ID in their payloads (the recipient inventory is not part of the state generation and carries its envelope digest there instead):
 
 - the **state generation**: the vault-wide count of MAC'd file writes at which this file was written;
 - the **peer generation**: the state generation the other MAC'd file had at that moment.
@@ -661,3 +661,90 @@ format version, a vault ID that is not a version 4 UUID, a state or peer generat
 the state generation, an unknown or reserved algorithm ID, a public key of the wrong length for its algorithm, a public
 key that is not a valid, non-weak key for its algorithm, a committed tag other than `00` or `01`, committed version 0, a
 committed version above the highest reserved version, truncation and trailing bytes.
+
+## Recipient inventory file v1
+
+The [recipient inventory](glossary.md): the state-directory file `recipients.age`, listing every recipient key
+`identity.age` is wrapped for. It is a [MAC'd file](#macd-file-frame) because anyone holding the vault public key could
+otherwise seal a list of their own choosing, and the next rewrap would enroll its keys. The design is in
+[recipients.md](recipients.md#recipient-inventory). Rust: `iron_vault_store::{seal_recipient_inventory,
+open_recipient_inventory, write_recipient_inventory, read_recipient_inventory}`.
+
+| Frame parameter | Value                                                                              |
+|-----------------|------------------------------------------------------------------------------------|
+| Magic           | ASCII `IVRF` (`49 56 52 46`)                                                       |
+| Version         | `01`                                                                               |
+| Payload         | The recipient inventory payload v1 (below)                                         |
+| Personalization | `iv-recipients-v1` (16 bytes); the derived key is the **inventory key**            |
+| Domain tag      | `iron-vault recipients file v1 mac` followed by a zero byte (34 bytes)             |
+| Size limit      | `MAX_RECIPIENT_INVENTORY_LEN` (16 KiB)                                             |
+
+The inventory key is independent of the manifest and approval keys, so a MAC from one file never verifies another.
+Domain separation does not depend on the tag's length, because each tag ends in its only zero byte.
+
+The inventory is not part of the [state generation](#state-generation) and carries no counters: it carries the
+**envelope digest** instead, the BLAKE2b-256 (unkeyed, 32-byte output) of `identity.age` exactly as it sits on disk
+(`envelope_digest`). An inventory restored alone no longer matches the envelope and is refused as damaged.
+
+### Size limit
+
+An entry is at most 151 bytes: an 8-byte length and a 62-byte key, a role byte, an 8-byte length and a 64-byte label,
+and an 8-byte time. A full payload is at most 61 + 64 × 151 = 9,725 bytes. `age` adds a header of under 400 bytes, a
+16-byte nonce and a 16-byte tag, and the frame adds 53 bytes: under 10,300 bytes in all, well inside 16 KiB. Building
+an inventory with more than `MAX_RECIPIENTS` (64) entries is refused, so the service never writes one it cannot read
+back.
+
+## Recipient inventory payload v1
+
+The plaintext an inventory file seals. It uses the conventions of [record payload v1](#conventions): big-endian
+unsigned integers, `u64` length prefixes, lengths checked against the bytes remaining before anything is read, and no
+trailing bytes.
+
+### Layout
+
+| Offset | Size | Content                                                                                 |
+|--------|------|-----------------------------------------------------------------------------------------|
+| 0      | 4    | Magic: ASCII `IVRP` (`49 56 52 50`)                                                     |
+| 4      | 1    | Version: `01`                                                                           |
+| 5      | 16   | Vault ID: equal to the file header's                                                    |
+| 21     | 32   | Envelope digest: BLAKE2b-256 of the `identity.age` this inventory describes             |
+| 53     | 8    | Entry count: `u64`, from 2 to 64                                                        |
+| 61     | var  | Entries, in strictly ascending byte order of their recipient key text (below)           |
+
+Each entry:
+
+| Size | Content                                                                                          |
+|------|--------------------------------------------------------------------------------------------------|
+| var  | Recipient key: a field holding the canonical lowercase `age1…` text, exactly 62 bytes            |
+| 1    | Role: `01` operational, `02` recovery, `03` added; `04` to `06` are reserved and refused         |
+| var  | Label: a field holding the recipient label, 1 to 64 bytes of UTF-8                               |
+| 8    | Enrolled at: `u64` Unix seconds, at most 253402300799 (9999-12-31T23:59:59Z)                      |
+
+### Example
+
+Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b`, whose `identity.age` has an illustrative digest of 32 bytes of `ab`, with
+three recipients. Their secret keys are the X25519 key bytes `01 … 20`, `21 … 40` and `41 … 60`, and the entries are
+in the byte order of their key text, which here is also the order of the roles:
+
+```text
+49 56 52 50                                        magic "IVRP"
+01                                                 version 1
+3f 2b 8c 1e 5d 4a 4e 6f 9a 7b 1c 2d 3e 4f 5a 6b    vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b
+ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab
+ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab    envelope digest
+00 00 00 00 00 00 00 03                            three entries
+00 00 00 00 00 00 00 3e                            key length 62
+age1q73he0q5yzfu3d64msd3p6rvksnrwjk3d2598mgtmlqt9wrdr37q2vrn72
+                                                   recipient key, 62 ASCII bytes
+01                                                 role operational
+00 00 00 00 00 00 00 10  "vault passphrase"        label
+00 00 00 00 6a ed a8 1d                            enrolled at 1793959965
+```
+
+The second entry is the `recovery` key `age1tp56laz2jtn9ja2a409m7dnpfk6x89su46zht266js6w6835eascutqdx`, label `recovery key`, enrolled at the same second, with role `02`. The
+third is the `added` key `age1vjcsrvwshedgwp9aq78e39gqrlqrar5lj530rzxaz2xes3k5s3nqxdc696`, label `alice laptop 2026`, enrolled at 1794000000 (`6a ee 44 80`), with role `03`. The
+complete payload, as the store's tests check it:
+
+```text
+49565250013f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6babababababababababababababababababababababababababababababababab0000000000000003000000000000003e616765317137336865307135797a6675336436346d736433703672766b736e72776a6b3364323539386d67746d6c717439777264723337713276726e37320100000000000000107661756c742070617373706872617365000000006aeda81d000000000000003e61676531747035366c617a73326a746e396a6132613430396d37646e70666b36783839737534367a68743236366a7336773638333565617363757471647802000000000000000c7265636f76657279206b6579000000006aeda81d000000000000003e61676531766a63737276777368656467777039617137386533396771726c71726172356c6a353330727a78617a32786573336b3573336e71786463363936030000000000000011616c696365206c6170746f702032303236000000006aee4480
+```
