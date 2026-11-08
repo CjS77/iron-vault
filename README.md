@@ -507,7 +507,7 @@ Points to note:
 - **Every route needs a rate limit.** A route that should be effectively unlimited gets a generous one.
 - **The rate limit is a token bucket.** The bucket holds up to `burst` requests and refills at `requests` every
   `per_seconds`. Every bucket starts empty each time the service becomes Ready: after `unlock`, an approval, a reload,
-  or an `add`, `replace` or `rm`. So the chat route allows its first request 10 seconds after this approval, and
+  or a `replace` or `rm`. So the chat route allows its first request 10 seconds after this approval, and
   six at once only after a quiet minute. See [`rate_limit`](book/src/reference/configuration.md#rate_limit-the-token-bucket).
 
 Approve it with `iron-vault config approve dev-config.toml`. The summary lists the new callers and routes, and the
