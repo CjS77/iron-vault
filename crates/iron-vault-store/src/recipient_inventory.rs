@@ -6,6 +6,7 @@
 //! inventory is a MAC'd file: only the holder of the vault identity writes one that opens. It carries the digest of the
 //! `identity.age` it describes, which is how a restore of either file alone is noticed.
 
+mod change;
 mod encoding;
 #[cfg(test)]
 mod tests;
@@ -15,6 +16,8 @@ use std::fmt;
 
 use blake2::{Blake2b256, Digest};
 use thiserror::Error;
+
+pub use change::{RecipientChange, RecipientChangeRefusal};
 
 use crate::mac_file::MacFileKind;
 use crate::sealed::{OpenError, SealError};

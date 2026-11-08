@@ -92,9 +92,9 @@ pub use recipient::{
     MAX_RECIPIENTS, ParseRecipientIdentityError, ParseRecipientKeyError, RecipientIdentity, RecipientKey, RecipientSet, RecipientSetError,
 };
 pub use recipient_inventory::{
-    MAX_RECIPIENT_INVENTORY_LEN, RecipientEntry, RecipientInventory, RecipientInventoryError, RecipientInventoryReadError,
-    RecipientInventoryWriteError, RecipientLabel, RecipientLabelError, RecipientRole, envelope_digest, open_recipient_inventory,
-    read_recipient_inventory, seal_recipient_inventory, write_recipient_inventory,
+    MAX_RECIPIENT_INVENTORY_LEN, RecipientChange, RecipientChangeRefusal, RecipientEntry, RecipientInventory, RecipientInventoryError,
+    RecipientInventoryReadError, RecipientInventoryWriteError, RecipientLabel, RecipientLabelError, RecipientRole, envelope_digest,
+    open_recipient_inventory, read_recipient_inventory, seal_recipient_inventory, write_recipient_inventory,
 };
 pub use record::{CredentialRecord, RecordError, ResolvedCredential, Source, decode, encode};
 pub use record_id::{RecordId, RecordIdError};
