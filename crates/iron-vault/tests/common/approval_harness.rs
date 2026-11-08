@@ -10,6 +10,8 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use super::mock_upstream::{MockUpstream, Reply, TestCa};
 use super::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, WAIT, token_hash};
@@ -28,7 +30,7 @@ use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 use iron_vault::logging::LogSwitch;
 use iron_vault::path_metadata::invoking_user;
-use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
+use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup, StartError};
 use iron_vault::service_state::ServiceState;
 use iron_vault::service_state::UnavailableReason;
 use iron_vault::serving_snapshot::SnapshotHolder;
@@ -38,8 +40,8 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::Capabilities;
 use iron_vault_store::{
-    ApprovalPassphrase, ApprovalState, ApprovalStorage, ConfigDigest, ConfigDirLock, OsFs, PendingConfig, PermittedOrigins, SoftwareSigner,
-    StateDirLock, StoreFs, Vault, VaultIdentity, open_signer_key, seal_signer_key_for_tests, write_signer_key,
+    ApprovalPassphrase, ApprovalState, ApprovalStorage, ConfigDigest, ConfigDirLock, LockError, OsFs, PendingConfig, PermittedOrigins,
+    SoftwareSigner, StateDirLock, StoreFs, Vault, VaultIdentity, open_signer_key, seal_signer_key_for_tests, write_signer_key,
 };
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -69,7 +71,8 @@ pub fn mkdir(path: &Path) {
 }
 
 /// A vault holding `fx_key` with a software approver, in a temporary directory that is also the runtime directory, and
-/// the base config approved as version 1. No lock is held between steps.
+/// the base config approved as version 1. No lock is held between steps, so a step that takes one waits out a lock the
+/// last step dropped but a child mid-exec still shares ([`LOCK_PATIENCE`]).
 pub struct Fixture {
     dir: TempDir,
     ca: TestCa,
@@ -101,7 +104,7 @@ impl Fixture {
 
     /// The vault, `approver.age` and the approval state pinning its key.
     pub fn create_vault(&self) -> ApprovalState {
-        let lock = StateDirLock::acquire(&self.path("state")).unwrap();
+        let lock = self.state_lock();
         let mut vault = Vault::create(&lock, &OsFs, identity()).unwrap();
         let port = self.upstream.port().to_string().parse().unwrap();
         let origins = PermittedOrigins::new([("localhost".parse().unwrap(), port)].into()).unwrap();
@@ -113,10 +116,14 @@ impl Fixture {
         vault.create_approval_state(&lock, &OsFs, pinned).unwrap().0
     }
 
+    fn state_lock(&self) -> StateDirLock {
+        wait_out_held(|| StateDirLock::acquire(&self.path("state")), is_held, "the state-directory lock")
+    }
+
     /// Approves and publishes `config` through the store's transaction, as `config approve` would.
     pub fn approve_through_store(&self, state: &mut ApprovalState, config: &str) {
-        let state_dir = StateDirLock::acquire(&self.path("state")).unwrap();
-        let config_dir = ConfigDirLock::acquire(&self.path("etc")).unwrap();
+        let state_dir = self.state_lock();
+        let config_dir = wait_out_held(|| ConfigDirLock::acquire(&self.path("etc")), is_held, "the config-directory lock");
         let identity = identity();
         let storage = ApprovalStorage {
             state_dir: &state_dir,
@@ -249,7 +256,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
             state_dir: self.path("state"),
             runtime_dir: Some(self.dir.path().to_path_buf()),
         };
-        let locks = ServiceLocks::acquire(&paths).unwrap();
+        let locks = wait_out_held(|| ServiceLocks::acquire(&paths), start_is_held, "the service's locks");
         let provisional = locks.unverified_listeners(&fs);
         let setup = ServiceSetup {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
@@ -278,6 +285,32 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
         assert_eq!(service.state().await, ServiceState::Ready);
         service
     }
+}
+
+/// How long the harness waits out `Held` on a lock it dropped. A test thread that spawns a child shares every open file
+/// with it from fork until exec, so a lock this thread dropped can stay held for that long by a process about to exec;
+/// exec takes milliseconds, so a lock still held after this is a real conflict.
+const LOCK_PATIENCE: Duration = Duration::from_secs(5);
+const LOCK_RETRY: Duration = Duration::from_millis(10);
+
+/// The result of `acquire`, retried while it fails with `held` until [`LOCK_PATIENCE`] has passed; then the last error
+/// fails the test, naming `what`.
+fn wait_out_held<T, E: std::fmt::Debug>(acquire: impl Fn() -> Result<T, E>, held: fn(&E) -> bool, what: &str) -> T {
+    let deadline = Instant::now() + LOCK_PATIENCE;
+    loop {
+        match acquire() {
+            Err(e) if held(&e) && Instant::now() < deadline => thread::sleep(LOCK_RETRY),
+            result => return result.unwrap_or_else(|e| panic!("cannot take {what}: {e:?}")),
+        }
+    }
+}
+
+fn is_held(e: &LockError) -> bool {
+    matches!(e, LockError::Held { .. })
+}
+
+fn start_is_held(e: &StartError) -> bool {
+    matches!(e, StartError::StateLock(held) | StartError::ConfigLock(held) if is_held(held))
 }
 
 /// The token caller's `GET /<route>/latest`.
