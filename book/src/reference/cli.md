@@ -262,7 +262,8 @@ Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. Thi
 
 - `<RECIPIENT>`: The `age1...` public key to enroll.
   - required
-- `--label <LABEL>`: Which device or copy the key is, 1 to 64 characters: `alice laptop 2026`.
+- `--label <LABEL>`: Which device or copy the key is, 1 to 64 bytes: `alice laptop 2026`.
+  - required
 
 ## `iron-vault recipient remove`
 

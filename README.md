@@ -33,6 +33,8 @@ Done in v0:
 - **Credential commands:** `add`, `replace`, `rm` and `list`; `replace` and `rm` need the approval passphrase.
 - **Response scrubbing:** removes the credential's known forms from response headers, compressed bodies and streamed
   responses.
+- **Recipients:** `recipient list` shows who can open the vault. `recipient add` needs the vault passphrase and
+  `recipient remove` the approval passphrase; removal protects future copies of `identity.age` only.
 - **Recovery key check:** `recovery check` proves the offline recovery key still opens the vault, in Locked or Ready, and
   records when.
 - **Vault passphrase attempt limit:** after 5 wrong vault passphrases, `unlock` and migration authorization share one
@@ -43,7 +45,7 @@ Done in v0:
 
 Still to come in v0:
 
-- recipient add and remove, migration, and reset;
+- migration and reset;
 - TPM unlock and TPM approval signing;
 - a Docker Compose profile;
 - the v0 release acceptance suite.
