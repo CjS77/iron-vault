@@ -7,6 +7,7 @@
 - [Development mode](installation/development-mode.md)
 - [Protected Linux](installation/linux-install.md)
     - [A shared Linux workstation](installation/multiuser-linux.md)
+- [Docker Compose](installation/compose-install.md)
 
 # Cookbook
 

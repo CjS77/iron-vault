@@ -10,6 +10,9 @@ Two items under [Proposed specification changes](#proposed-specification-changes
 approval: the §3.14 software signer, the one specification change still open, and the glossary edits that follow from
 the applied §3.2 change. Everything else follows the specification as it stands.
 
+The [Compose install guide](../book/src/installation/compose-install.md) is the administrator's walkthrough of this
+design.
+
 This document introduces four terms, defined in the [glossary](glossary.md): *Container profile*, *Caller network*,
 *Host unlock identity* and *Unlock handoff*.
 

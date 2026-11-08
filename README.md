@@ -36,6 +36,9 @@ Done in v0:
 - **Recipients:** `recipient list` shows who can open the vault. `recipient add` needs the vault passphrase;
   `recipient add --recovery` generates and shows a new recovery key, to rotate the old one. `recipient remove` needs
   the approval passphrase; removal protects future copies of `identity.age` only.
+- **Docker Compose profile:** the service in a container, one isolated network and TLS listener per caller, and a host
+  unlock that opens the vault at startup from a TPM-sealed identity. See the
+  [Compose install guide](book/src/installation/compose-install.md); it has had no release check on a real machine yet.
 - **Recovery key check:** `recovery check` proves the offline recovery key still opens the vault, in Locked or Ready, and
   records when.
 - **Vault passphrase attempt limit:** after 5 wrong vault passphrases, `unlock` and migration authorization share one
@@ -48,7 +51,6 @@ Still to come in v0:
 
 - migration and reset;
 - TPM unlock and TPM approval signing;
-- a Docker Compose profile;
 - the v0 release acceptance suite.
 
 Later phases add OAuth login and refresh, owner notifications, more credential kinds
@@ -62,7 +64,7 @@ services.
 | AI agents and MCP servers       | Use FX, Brave, Venice, and other configured APIs without real keys in agent-readable configuration or environment variables ([recipe](book/src/cookbook/agent-api-key.md))                                   |
 | Naomi back-office applications  | Share installation credentials through isolated routes ([recipe](book/src/cookbook/two-callers.md)); add Google consent and token refresh in the OAuth phase ([planned](book/src/cookbook/roadmap/oauth.md)) |
 | Shared Linux workstations       | Give each OS account only its own routes, recognised from the connecting account, with no keys in any home directory ([guide](book/src/installation/multiuser-linux.md))                                     |
-| Server and Compose applications | Keep credentials in one protected service while application containers receive only the proxy access they need ([planned](book/src/cookbook/roadmap/docker-compose.md))                                      |
+| Server and Compose applications | Keep credentials in one protected service while application containers receive only the proxy access they need ([guide](book/src/installation/compose-install.md))                                      |
 | Developer CLI tools             | Avoid provider credentials in application files where a tested base-URL integration supports the complete workflow ([recipe](book/src/cookbook/real-application.md))                                         |
 
 ## Roadmap
@@ -164,8 +166,9 @@ so a request sent at once may get `429`; wait a few seconds. Stop the service wi
 The user manual is an mdBook in [`book/`](book/src/SUMMARY.md):
 
 - **Installation:** [development mode](book/src/installation/development-mode.md),
-  [protected Linux](book/src/installation/linux-install.md) and
-  [a shared Linux workstation](book/src/installation/multiuser-linux.md).
+  [protected Linux](book/src/installation/linux-install.md),
+  [a shared Linux workstation](book/src/installation/multiuser-linux.md) and
+  [Docker Compose](book/src/installation/compose-install.md).
 - **Cookbook:** short recipes, each ending with something that works, starting with
   [getting started](book/src/cookbook/getting-started.md). Recipes for features not yet built are under
   [not yet available](book/src/cookbook/roadmap/index.md).

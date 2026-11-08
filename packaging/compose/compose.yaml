@@ -1,6 +1,6 @@
 # Reference Compose file for Iron Vault with two isolated-network callers.
 #
-# Read design/docker-compose.md first (the install guide, when it lands, is book/src/installation/docker-install.md).
+# Read design/docker-compose.md first (the install guide is book/src/installation/compose-install.md).
 # Each setting below is a line of that document's hardening checklist; the comment says why it is there. Keep the
 # file at /etc/iron-vault-host/compose.yaml, root-owned, 0600, with no compose.override.yaml or .env beside it.
 #

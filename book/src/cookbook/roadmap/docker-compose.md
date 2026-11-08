@@ -6,5 +6,5 @@ Iron Vault runs in its own container, with one isolated network and TLS listener
 hands it the vault identity at startup so it can unlock without a passphrase.
 
 The container build, the image, a reference Compose file in `packaging/compose/` and the host unlock at startup are
-in the repository, but they have had no release check and there is no install guide yet. Don't rely on them to
-protect real secrets. Design: [docker-compose.md](../../../../design/docker-compose.md).
+in the repository, with an [install guide](../../installation/compose-install.md), but they have had no release check.
+Don't rely on them to protect real secrets. Design: [docker-compose.md](../../../../design/docker-compose.md).

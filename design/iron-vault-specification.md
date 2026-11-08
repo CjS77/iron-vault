@@ -935,6 +935,7 @@ A direct `/dev/tpmrm0` passthrough profile may exist only after it validates its
 and isolation. In the host-unlock profile, the host must also own approval signing or expose a narrowly scoped,
 authenticated signing helper. The container may request only the service's validated approval transaction; the
 host must not expose an arbitrary signing oracle. Ordinary callers receive neither interface.
+The [Compose install guide](../book/src/installation/compose-install.md) walks an administrator through this setup.
 
 Remote deployments require authenticated TLS on non-local listeners. Remote administration uses the existing
 local admin socket through an authenticated channel such as SSH forwarding. The service never exposes its local
