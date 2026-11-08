@@ -140,7 +140,7 @@ After the admin request, in order:
    `Approval passphrase`, `Repeat the approval passphrase`. The [rules](#passphrase-rules) are checked once both
    entries of a passphrase are in; a broken rule ends with `passphrase-rejected`. There is no second try in the same
    exchange.
-3. **Keys.** The service generates every key: the vault identity (`VaultIdentity::generate`), the operational
+3. **Keys.** The service generates every key: the vault identity (`VaultIdentity::generate`), the vault ID (`VaultId::new_random`), the operational
    identity (`OperationalIdentity::generate`), the recovery key (`RecoveryKey::generate`) and the software signer
    key (`SoftwareSigner::generate`, which also returns the pinned approver).
 4. **Recovery key.** The [presentation](#recovery-key-presentation): a notice, the reveal frame, then the prompt
@@ -240,6 +240,7 @@ nothing: discard it*:
 | `busy`: another operation, such as a second init, holds the service-wide lock at step 5 | the service |
 | `already-initialized`: the re-check under the lock finds Initialized or Unrecognized, as when a second init finished first | the service |
 | `wrong-state`: the re-check under the lock finds the service has left Locked | the service |
+| `init-failed`: the service clock could not be read, before any write | the service |
 | `init-failed` at the discard or at any step before 9: a write failed | the service |
 | the command cancelled or lost before the CLI sent `yes`: Ctrl-C or a closed terminal, a signal, a dropped or timed-out connection | the CLI, on stderr before it exits, and after SIGHUP also in the system log; the service cannot answer a closed connection |
 
@@ -275,7 +276,7 @@ store function built on it, so each is whole or absent after a crash.
 | 2 | Wraps the vault identity for the recipient set {operational recipient key, recovery recipient key} with `wrap_identity` and writes it. Then reads `identity.age` back and unwraps it with `unwrap_identity` twice, once with the operational identity and once with the recovery key's identity, and requires both to give the generated vault identity (same public key). Then writes the [recipient inventory](recipients.md#initialization) with `write_recipient_inventory`: the `operational` and `recovery` entries, labelled `vault passphrase` and `recovery key`, the init time, the vault ID generated with the keys and the digest of the envelope as read back. Reads it back and requires that it opens with the vault identity and equals what was written. The recovery identity is dropped. | `identity.age`, then `recipients.age` |
 | 3 | Seals the operational identity to the vault passphrase with `seal_passphrase_envelope` and writes it. The operational identity is dropped. | `operational.age` |
 | 4 | Seals the software signer key to the approval passphrase with `seal_signer_key` and writes it with `write_signer_key`. The signer key is dropped. | `approver.age` |
-| 5 | Creates the vault with `Vault::create`: a new vault ID and an empty manifest at state generation 1. | `manifest.age` |
+| 5 | Creates the vault with `Vault::create_with_id`, using the vault ID generated with the keys in step 3, and an empty manifest at state generation 1. | `manifest.age` |
 | 6 | Creates the approval state with `Vault::create_approval_state`, pinning the approver from step 4, with nothing reserved and nothing committed, then the manifest write that records it. | `approval.age`, then `manifest.age` |
 | 7 | Reads `approver.age` back and opens it with the approval passphrase (`open_signer_key`, checked against the pinned approver), which proves the file on disk opens. The approval passphrase is dropped. | none |
 | 8 | Runs the approval transaction on the [initial config](#initial-config): `PendingConfig::write`, then `prepare` with the signer from step 7 (reserving version 1), then `commit` (committing version 1, publishing, and verifying the published pair as read back). | `config.toml.pending`, `approval.age` (reserve), `config.toml.sig.staged`, `approval.age` (commit), `config.toml`, `config.toml.sig` |
