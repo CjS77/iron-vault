@@ -188,6 +188,12 @@ impl RecipientSet {
         }
     }
 
+    /// A set from keys already known to number between two and [`MAX_RECIPIENTS`], such as the keys of a validated
+    /// recipient inventory.
+    pub(crate) fn from_validated(keys: BTreeSet<RecipientKey>) -> Self {
+        Self(keys)
+    }
+
     /// The keys in their canonical order.
     pub fn iter(&self) -> impl Iterator<Item = &RecipientKey> {
         self.0.iter()

@@ -21,8 +21,8 @@ use crate::sealed::{OpenError, SealError};
 use crate::vault_id::{VaultId, VaultIdError};
 use crate::vault_identity::VaultIdentity;
 use crate::{
-    MAX_RECIPIENTS, ReadError, RecipientKey, RecipientSet, RecipientSetError, StateDirLock, StateFileName, StoreFs, UtcSecond, WriteError,
-    durable_replace, read_state_file,
+    MAX_RECIPIENTS, ReadError, RecipientKey, RecipientSet, StateDirLock, StateFileName, StoreFs, UtcSecond, WriteError, durable_replace,
+    read_state_file,
 };
 
 /// The largest inventory file accepted, in bytes on disk, checked before any other work. A full inventory is under
@@ -137,8 +137,10 @@ impl fmt::Display for RecipientLabel {
     }
 }
 
-/// Whether `c` is in Unicode general category Cf. `std` knows Cc but not Cf, and no dependency does, so the ranges are
-/// listed here (Unicode 16). A character added to Cf later is accepted until the list is updated.
+/// Whether `c` is in Unicode general category Cf. `std` knows Cc but not Cf. `icu_properties` knows it but is only a
+/// transitive dependency here, and adding it directly would pull a large Unicode data crate into the store's audited
+/// surface for one check, so the ranges are listed by hand (Unicode 16). A character added to Cf later is accepted
+/// until the list is updated.
 fn is_format_char(c: char) -> bool {
     const CF: [(u32, u32); 21] = [
         (0xAD, 0xAD),
@@ -262,8 +264,8 @@ impl RecipientInventory {
     }
 
     /// The set of keys the identity envelope is wrapped for.
-    pub fn recipient_set(&self) -> Result<RecipientSet, RecipientSetError> {
-        RecipientSet::new(self.entries.keys().cloned())
+    pub fn recipient_set(&self) -> RecipientSet {
+        RecipientSet::from_validated(self.entries.keys().cloned().collect())
     }
 }
 
@@ -348,7 +350,7 @@ pub fn seal_recipient_inventory(identity: &VaultIdentity, inventory: &RecipientI
     KIND.seal(identity, inventory.vault_id, &encoding::encode(inventory))
 }
 
-/// The inventory a file holds, after its size, header and MAC are checked and before anything is decrypted.
+/// The inventory a file holds. Size, header and MAC are checked before anything is decrypted.
 pub fn open_recipient_inventory(identity: &VaultIdentity, file: &[u8]) -> Result<RecipientInventory, RecipientInventoryError> {
     let (vault_id, payload) = KIND.open(identity, file)?;
     let inventory = encoding::decode(&payload)?;

@@ -113,7 +113,7 @@ fn encoding_is_independent_of_insertion_order() {
     assert_eq!(encoding::encode(&forward), encoding::encode(&backward));
     let keys: Vec<_> = forward.entries().map(|e| e.key().clone()).collect();
     assert!(keys.is_sorted());
-    assert_eq!(forward.recipient_set().unwrap().iter().cloned().collect::<Vec<_>>(), keys);
+    assert_eq!(forward.recipient_set().iter().cloned().collect::<Vec<_>>(), keys);
 }
 
 /// The example in `design/storage-formats.md`, byte for byte.
@@ -316,11 +316,15 @@ fn a_file_for_one_vault_identity_does_not_open_with_another() {
 fn a_flipped_byte_fails_the_mac() {
     let identity = VaultIdentity::generate();
     let file = seal_recipient_inventory(&identity, &example()).unwrap();
-    // Skip the magic and version, whose damage is reported before the MAC is checked.
+    // Bytes 0..5 are the magic and version, read before the MAC because they decide how it is computed. From byte 5 on
+    // the MAC is checked before the vault ID is parsed or anything is decrypted, so every flip is `Damaged`.
     (5..file.len()).step_by(7).for_each(|at| {
         let mut flipped = file.clone();
         flipped[at] ^= 1;
-        assert!(open_recipient_inventory(&identity, &flipped).is_err(), "byte {at}");
+        assert!(
+            matches!(open_recipient_inventory(&identity, &flipped), Err(RecipientInventoryError::Damaged)),
+            "byte {at}"
+        );
     });
     let mut flipped = file.clone();
     *flipped.last_mut().unwrap() ^= 1;
