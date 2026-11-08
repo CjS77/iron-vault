@@ -32,6 +32,8 @@ pub enum InitRefusal {
     Unrecognized(Vec<String>),
     /// The initialization state could not be read, so nothing was written.
     Unreadable(String),
+    /// The service clock could not be read for the first approval's enrolment time, before any write.
+    Clock(String),
     /// A step of the write order, or the discard before it, failed.
     Failed(InitError),
     /// The task writing the vault ended without a result, so how far it got is unknown.
@@ -68,7 +70,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         if !inner.state.admin_allows(AdminOperation::Initialize) {
             return Err(InitRefusal::WrongState(inner.state));
         }
-        let enrolled_at = self.clock.now().map_err(|error| InitRefusal::Unreadable(error.to_string()))?;
+        let enrolled_at = self.clock.now().map_err(|error| InitRefusal::Clock(error.to_string()))?;
         let (locks, setup, holder) = (Arc::clone(&self.locks), Arc::clone(&self.setup), Arc::clone(&self.holder));
         let written = tokio::task::spawn_blocking(move || {
             let _held = (service_wide, inner);

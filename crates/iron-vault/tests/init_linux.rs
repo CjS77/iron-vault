@@ -28,6 +28,7 @@ use iron_vault::admin::protocol::{
 };
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
+use iron_vault::clock::WallClock;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
@@ -41,7 +42,7 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::{Capabilities, CredentialKind};
 use iron_vault_store::{
     ApprovalPassphrase, INITIAL_CONFIG, InitPassphrases, NewVaultKeys, OsFs, Passphrase, RecoveryKeySecret, SealingKeys, UnlockError,
-    VaultId, unwrap_identity,
+    UtcSecond, UtcSecondError, VaultId, unwrap_identity,
 };
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -103,6 +104,10 @@ impl Fixture {
 
     /// Starts the service as `serve` does, without systemd sockets: Locked, waiting for an unlock or an init.
     fn start(&self) -> Arc<ServiceContext> {
+        Arc::new(self.context())
+    }
+
+    fn context(&self) -> ServiceContext {
         let paths = ServicePaths {
             profile: DeploymentProfile::Development,
             owner: invoking_user().unwrap(),
@@ -125,7 +130,7 @@ impl Fixture {
             },
             log: iron_vault::logging::LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
         };
-        Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap())
+        ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap()
     }
 
     /// The file names in the state and config directories, each sorted.
@@ -384,6 +389,33 @@ async fn declining_the_recovery_key_writes_nothing() {
     fixture.assert_only_lock_files();
     assert_eq!(service.state().await, ServiceState::Locked);
     assert_no_secret_logged(&logs, &[exchanged.recovery_key()]);
+}
+
+/// A clock that cannot be read.
+#[derive(Debug)]
+struct BrokenClock;
+
+impl WallClock for BrokenClock {
+    fn now(&self) -> Result<UtcSecond, UtcSecondError> {
+        UtcSecond::from_unix_seconds(u64::MAX)
+    }
+}
+
+#[tokio::test]
+async fn an_unreadable_clock_after_the_reveal_writes_nothing_and_says_the_key_is_dead() {
+    let fixture = Fixture::new().await;
+    let service = Arc::new(fixture.context().with_clock(Arc::new(BrokenClock)));
+
+    let exchanged = init(&service, &COMPLETE).await;
+
+    let (code, message) = exchanged.error();
+    assert_eq!(code, ErrorCode::InitFailed);
+    assert!(
+        message.contains("service clock") && message.ends_with("the recovery key shown opens nothing: discard it"),
+        "{message}"
+    );
+    fixture.assert_only_lock_files();
+    assert_eq!(service.state().await, ServiceState::Locked);
 }
 
 #[tokio::test]

@@ -200,6 +200,10 @@ fn refused(refusal: InitRefusal, revealed: bool) -> AdminResponse {
             ErrorCode::InitFailed,
             format!("cannot read the initialization state, so nothing was written: {detail}"),
         ),
+        InitRefusal::Clock(detail) => error(
+            ErrorCode::InitFailed,
+            dead(format!("cannot read the service clock, so nothing was written: {detail}")),
+        ),
         InitRefusal::Failed(failure) => failed(&failure),
         InitRefusal::Interrupted => error(
             ErrorCode::InitFailed,
