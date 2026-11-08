@@ -25,9 +25,9 @@ impl RecoveryKey {
         (secret, identity.recipient_key())
     }
 
-    /// A fresh recovery key's secret text and its recipient identity, kept so initialization can prove the identity
-    /// envelope opens for it without parsing the text back.
-    pub(crate) fn generate_with_identity() -> (RecoveryKeySecret, RecipientIdentity) {
+    /// A fresh recovery key's secret text and its recipient identity, kept so initialization and `recipient add --recovery`
+    /// can prove the identity envelope opens for it without parsing the text back.
+    pub fn generate_with_identity() -> (RecoveryKeySecret, RecipientIdentity) {
         let identity = RecipientIdentity::generate();
         (RecoveryKeySecret(identity.secret_text()), identity)
     }

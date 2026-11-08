@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use iron_vault_store::{
     ApprovalPassphrase, InitError, InitFailure, InitPassphrases, InitStateError, InitializationState, NewVaultKeys, Passphrase,
-    RecipientIdentity, SealingKeys, StoreFs, WhichPassphrase,
+    RecipientIdentity, RecoveryKeySecret, SealingKeys, StoreFs, WhichPassphrase,
 };
 use secrecy::{ExposeSecret, SecretString};
 use subtle::ConstantTimeEq;
@@ -122,9 +122,18 @@ impl<F: StoreFs + Send + Sync + 'static> Init<F> {
 /// Shows the recovery key once, after the notice, and asks the owner to confirm they saved it: the keys to seal once they
 /// answer exactly `yes`, or `declined`. The recovery key's text is dropped as soon as the reveal is written.
 async fn reveal_and_confirm(exchange: &mut Exchange, keys: NewVaultKeys) -> Result<Result<SealingKeys, AdminResponse>, ExchangeError> {
+    let confirmed = reveal_recovery_key(exchange, keys.recovery_secret()).await?;
+    Ok(confirmed.map(|()| keys.into_sealing()))
+}
+
+/// The reveal `init` and `recipient add --recovery` share: the notice, the key's text and QR code, and the confirmation
+/// prompt. Anything but exactly `yes` is `declined`, with the advice that the key opens nothing.
+pub(super) async fn reveal_recovery_key(
+    exchange: &mut Exchange,
+    secret: &RecoveryKeySecret,
+) -> Result<Result<(), AdminResponse>, ExchangeError> {
     exchange.notice(RECOVERY_NOTICE).await?;
-    exchange.reveal(keys.recovery_secret().expose_secret().as_bytes()).await?;
-    let keys = keys.into_sealing();
+    exchange.reveal(secret.expose_secret().as_bytes()).await?;
     let confirmation = Prompt {
         label: CONFIRMATION.to_owned(),
         secret: false,
@@ -133,7 +142,7 @@ async fn reveal_and_confirm(exchange: &mut Exchange, keys: NewVaultKeys) -> Resu
         let message = format!("the recovery key was not confirmed as saved, so nothing was written; {DEAD_RECOVERY_KEY}");
         return Ok(Err(error(ErrorCode::Declined, message)));
     }
-    Ok(Ok(keys))
+    Ok(Ok(()))
 }
 
 /// The vault and approval passphrases, each entered twice, or the rule one broke. Each passphrase's rules are checked

@@ -13,8 +13,10 @@ const TAG_LABEL: u16 = 4;
 const TAG_RESULT_RECIPIENT: u16 = 2;
 const TAG_RECIPIENTS: u16 = 3;
 
-/// The source of a key the owner gives. Source `2`, a recovery key the service generates, is not served yet.
+/// The source of a key the owner gives.
 const SOURCE_OWNER_KEY: u8 = 1;
+/// The source of a recovery key the service generates; it carries no key.
+const SOURCE_NEW_RECOVERY: u8 = 2;
 
 pub(super) fn encode_request(command: u16, recipient: &str, label: &str) -> Vec<u8> {
     let mut out = Vec::new();
@@ -25,18 +27,26 @@ pub(super) fn encode_request(command: u16, recipient: &str, label: &str) -> Vec<
     out
 }
 
-/// An owner key needs source `1` and a key: an empty one is a malformed frame, not a rule the service judges.
+pub(super) fn encode_recovery_request(command: u16, label: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    fields::put(&mut out, TAG_COMMAND, &command.to_be_bytes());
+    fields::put(&mut out, TAG_SOURCE, &[SOURCE_NEW_RECOVERY]);
+    fields::put(&mut out, TAG_RECIPIENT, b"");
+    fields::put(&mut out, TAG_LABEL, label.as_bytes());
+    out
+}
+
+/// An owner key needs source `1` and a key, and a new recovery key source `2` and none: a mismatch is a malformed frame,
+/// not a rule the service judges.
 pub(super) fn decode_request(fields: &[Field<'_>]) -> Result<AdminRequest, FrameError> {
     let [_, source, recipient, label] = exact(fields, [TAG_COMMAND, TAG_SOURCE, TAG_RECIPIENT, TAG_LABEL])?;
-    if source != [SOURCE_OWNER_KEY] {
-        return Err(FrameError::InvalidValue(TAG_SOURCE));
-    }
-    match read_text(TAG_RECIPIENT, recipient)? {
-        key if key.is_empty() => Err(FrameError::InvalidValue(TAG_RECIPIENT)),
-        recipient => Ok(AdminRequest::RecipientAdd {
-            recipient,
-            label: read_text(TAG_LABEL, label)?,
-        }),
+    let (recipient, label) = (read_text(TAG_RECIPIENT, recipient)?, read_text(TAG_LABEL, label)?);
+    match (source, recipient.is_empty()) {
+        ([SOURCE_OWNER_KEY], false) => Ok(AdminRequest::RecipientAdd { recipient, label }),
+        ([SOURCE_OWNER_KEY], true) => Err(FrameError::InvalidValue(TAG_RECIPIENT)),
+        ([SOURCE_NEW_RECOVERY], true) => Ok(AdminRequest::RecipientAddRecovery { label }),
+        ([SOURCE_NEW_RECOVERY], false) => Err(FrameError::InvalidValue(TAG_RECIPIENT)),
+        _ => Err(FrameError::InvalidValue(TAG_SOURCE)),
     }
 }
 

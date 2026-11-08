@@ -62,7 +62,11 @@ fn the_request_is_command_14_with_source_1_the_key_and_the_label() {
 
 #[test]
 fn another_source_or_an_empty_key_is_a_malformed_frame_but_a_bad_key_or_label_is_the_services_to_judge() {
-    assert!(matches!(decode(&request(&[2], "", "x")), Err(FrameError::InvalidValue(TAG_SOURCE))));
+    assert!(matches!(decode(&request(&[3], "", "x")), Err(FrameError::InvalidValue(TAG_SOURCE))));
+    assert!(matches!(
+        decode(&request(&[2], KEY, "x")),
+        Err(FrameError::InvalidValue(TAG_RECIPIENT))
+    ));
     assert!(matches!(
         decode(&request(&[0], KEY, "x")),
         Err(FrameError::InvalidValue(TAG_SOURCE))
@@ -74,6 +78,18 @@ fn another_source_or_an_empty_key_is_a_malformed_frame_but_a_bad_key_or_label_is
     assert!(matches!(
         decode(&request(&[1], "not a key", "")),
         Ok(Frame::Request(AdminRequest::RecipientAdd { .. }))
+    ));
+}
+
+#[test]
+fn a_new_recovery_key_is_source_2_with_an_empty_key() {
+    let frame = Frame::Request(AdminRequest::RecipientAddRecovery {
+        label: "recovery key 2026".to_owned(),
+    });
+    assert_eq!(encoded(&frame), request(&[2], "", "recovery key 2026"));
+    assert!(matches!(
+        decode(&request(&[2], "", "recovery key 2026")),
+        Ok(Frame::Request(AdminRequest::RecipientAddRecovery { label })) if label == "recovery key 2026"
     ));
 }
 

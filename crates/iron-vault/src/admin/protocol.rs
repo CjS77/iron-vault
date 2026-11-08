@@ -93,10 +93,16 @@ pub enum AdminRequest {
     /// Lists every enrolled recipient of the vault identity, in inventory order; Ready only. No arguments. Command ID 13.
     RecipientList,
     /// Enrols a recipient key the owner supplies, after migration authorization: the vault passphrase, typed at a prompt.
-    /// Command ID 14. Source `1` on the wire; `--recovery`'s source `2` is not served yet.
+    /// Command ID 14. Source `1` on the wire.
     RecipientAdd {
         /// The `age1...` key as the owner wrote it; the service parses it.
         recipient: String,
+        /// The recipient label as the owner wrote it; the service validates it.
+        label: String,
+    },
+    /// Generates a recovery key, reveals it once, and enrols it after migration authorization. Command ID 14, source `2`
+    /// with an empty key on the wire.
+    RecipientAddRecovery {
         /// The recipient label as the owner wrote it; the service validates it.
         label: String,
     },
@@ -135,7 +141,7 @@ impl AdminRequest {
             Self::Rm { .. } => AdminCommand::Rm,
             Self::RecoveryCheck => AdminCommand::RecoveryCheck,
             Self::RecipientList => AdminCommand::RecipientList,
-            Self::RecipientAdd { .. } => AdminCommand::RecipientAdd,
+            Self::RecipientAdd { .. } | Self::RecipientAddRecovery { .. } => AdminCommand::RecipientAdd,
             Self::RecipientRemove { .. } => AdminCommand::RecipientRemove,
         }
     }

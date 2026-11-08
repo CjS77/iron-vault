@@ -23,6 +23,7 @@ mod init;
 #[cfg(target_os = "linux")]
 mod list;
 #[cfg(target_os = "linux")]
+mod recipient_add_recovery;
 mod recipient_list;
 // Generates the book's command reference; test-only, so the release binary carries none of it.
 #[cfg(test)]
@@ -258,9 +259,17 @@ pub enum RecipientCommand {
     /// whoever holds the key can open the vault identity, and with it every credential. The service shows what changes,
     /// then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not
     /// affected.
+    ///
+    /// With --recovery, the service instead generates a new offline recovery key and shows it once, as `init` does; save it,
+    /// type yes, then authorize with the vault passphrase. Check it with `recovery check`, then remove the old recovery key
+    /// with `recipient remove`.
     Add {
         /// The `age1...` public key to enroll.
-        recipient: String,
+        #[arg(required_unless_present = "recovery", conflicts_with = "recovery")]
+        recipient: Option<String>,
+        /// Generate a new recovery key and enroll it, instead of enrolling a key you supply.
+        #[arg(long)]
+        recovery: bool,
         /// Which device or copy the key is, 1 to 64 bytes: `alice laptop 2026`.
         #[arg(long)]
         label: String,
@@ -447,6 +456,19 @@ pub fn recipient_list(socket: Option<&Path>) -> ExitCode {
 #[cfg(target_os = "linux")]
 pub fn recipient_add(socket: Option<&Path>, recipient: String, label: String) -> ExitCode {
     client::recipient_add(socket, recipient, label).into()
+}
+
+/// `iron-vault recipient add --recovery`: sends `recipient add` for a new recovery key, shows it on the terminal, and answers
+/// the vault passphrase prompt from the owner console.
+#[cfg(target_os = "linux")]
+pub fn recipient_add_recovery(socket: Option<&Path>, label: String) -> ExitCode {
+    recipient_add_recovery::run(socket, label).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn recipient_add_recovery(_socket: Option<&Path>, _label: String) -> ExitCode {
+    unsupported_platform()
 }
 
 /// The client is Linux-only for now, like the service.

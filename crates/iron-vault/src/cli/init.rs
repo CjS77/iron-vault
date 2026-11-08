@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, OwnerInput, Prompt, RevealedSecret};
-use iron_vault::admin::{DEAD_RECOVERY_KEY, UNCONFIRMED_RECOVERY_KEY};
+use iron_vault::admin::{DEAD_RECOVERY_KEY, UNCONFIRMED_RECOVERY_KEY, UNCONFIRMED_ROTATED_KEY};
 
 use super::Exit;
 use super::client::{fail, run_on, unexpected};
@@ -60,11 +60,22 @@ enum Stage {
     Confirmed,
 }
 
+/// Which command shows the recovery key, which decides what counts as confirmed and what the advice says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shower {
+    /// `init`: the owner's `yes` is the confirmation, and the vault is then written.
+    Init,
+    /// `recipient add --recovery`: `yes` only asks for the vault passphrase; the rewrap may start once the passphrase (the
+    /// next secret prompt) is sent.
+    Rotation,
+}
+
 /// An owner console that passes everything through and remembers whether the recovery key was shown and confirmed, for
 /// the advice the owner needs if the command ends without a service answer.
 pub struct RecoveryKeyWatch<C> {
     console: C,
     stage: Stage,
+    shower: Shower,
 }
 
 impl<C> RecoveryKeyWatch<C> {
@@ -73,18 +84,34 @@ impl<C> RecoveryKeyWatch<C> {
         Self {
             console,
             stage: Stage::Unseen,
+            shower: Shower::Init,
+        }
+    }
+
+    /// Watches a `recipient add --recovery` exchange through `console`.
+    pub fn rotation(console: C) -> Self {
+        Self {
+            shower: Shower::Rotation,
+            ..Self::new(console)
         }
     }
 
     /// What to do with the recovery key if the command ends now without a service answer; `None` before it is shown.
     pub fn advice(&self) -> Option<String> {
-        match self.stage {
-            Stage::Unseen => None,
-            Stage::Shown => Some(format!(
+        match (self.shower, self.stage) {
+            (_, Stage::Unseen) => None,
+            (Shower::Init, Stage::Shown) => Some(format!(
                 "init ended before the recovery key was confirmed, so the service wrote nothing; {DEAD_RECOVERY_KEY}"
             )),
-            Stage::Confirmed => Some(format!(
+            (Shower::Init, Stage::Confirmed) => Some(format!(
                 "init ended without an answer after `yes`, so the vault may or may not be written: {UNCONFIRMED_RECOVERY_KEY}"
+            )),
+            (Shower::Rotation, Stage::Shown) => Some(format!(
+                "recipient add ended before the vault passphrase was sent, so nothing was enrolled; {DEAD_RECOVERY_KEY}"
+            )),
+            (Shower::Rotation, Stage::Confirmed) => Some(format!(
+                "recipient add ended without an answer after the vault passphrase, so the key may or may not be enrolled: \
+                 {UNCONFIRMED_ROTATED_KEY}"
             )),
         }
     }
@@ -100,7 +127,11 @@ impl<C: OwnerConsole> OwnerConsole for RecoveryKeyWatch<C> {
     fn collect(&mut self, prompt: &Prompt) -> Result<OwnerInput, InputError> {
         let input = self.console.collect(prompt)?;
         // The input counts as sent once collected: if sending it fails, the unknown outcome's advice is still safe.
-        if self.stage == Stage::Shown && input.expose_secret() == b"yes" {
+        let confirms = match self.shower {
+            Shower::Init => input.expose_secret() == b"yes",
+            Shower::Rotation => prompt.secret,
+        };
+        if self.stage == Stage::Shown && confirms {
             self.reach(Stage::Confirmed);
         }
         Ok(input)

@@ -51,9 +51,10 @@ fn run() -> anyhow::Result<ExitCode> {
         // Not a client command: it reads nothing from the service, so it skips the admin socket and core-dump handling.
         Command::Completions { shell } => cli::completions(shell).map(|()| ExitCode::SUCCESS).map_err(Into::into),
         Command::Recipient(RecipientCommand::List) => Ok(run_client(|| cli::recipient_list(cli.admin_socket.as_deref()))),
-        Command::Recipient(RecipientCommand::Add { recipient, label }) => {
-            Ok(run_client(|| cli::recipient_add(cli.admin_socket.as_deref(), recipient, label)))
-        }
+        Command::Recipient(RecipientCommand::Add { recipient, label, .. }) => Ok(run_client(|| match recipient {
+            Some(recipient) => cli::recipient_add(cli.admin_socket.as_deref(), recipient, label),
+            None => cli::recipient_add_recovery(cli.admin_socket.as_deref(), label),
+        })),
         Command::Recipient(RecipientCommand::Remove { recipient }) => {
             Ok(run_client(|| cli::recipient_remove(cli.admin_socket.as_deref(), recipient)))
         }

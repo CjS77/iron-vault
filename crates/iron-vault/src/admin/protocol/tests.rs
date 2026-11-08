@@ -224,6 +224,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
                 text(256)
             )
                 .prop_map(|(recipient, label)| AdminRequest::RecipientAdd { recipient, label }),
+            text(256).prop_map(|label| AdminRequest::RecipientAddRecovery { label }),
             text(256).prop_map(|recipient| AdminRequest::RecipientRemove { recipient }),
             add_request(),
             replace_request(),

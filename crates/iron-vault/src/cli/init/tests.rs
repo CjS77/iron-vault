@@ -56,3 +56,22 @@ fn a_shown_key_is_dead_until_yes_is_sent_and_kept_after_it() {
     assert_eq!(console::signal_advice(), Some(unconfirmed));
     console::set_signal_advice(None);
 }
+
+/// One test, because the signal watcher's advice is process-wide and each watch that reaches a stage sets it.
+#[test]
+fn a_rotation_confirms_at_the_vault_passphrase_and_not_at_yes() {
+    let secret_prompt = Prompt {
+        label: "Vault passphrase".to_owned(),
+        secret: true,
+    };
+    let mut watch = RecoveryKeyWatch::rotation(Scripted(vec![b"yes", b"passphrase"]));
+    watch.reveal(&reveal()).unwrap();
+    watch.collect(&prompt()).unwrap();
+    let dead = watch.advice().unwrap();
+    assert!(dead.ends_with(DEAD_RECOVERY_KEY), "{dead}");
+
+    watch.collect(&secret_prompt).unwrap();
+    let unconfirmed = watch.advice().unwrap();
+    assert!(unconfirmed.ends_with(UNCONFIRMED_ROTATED_KEY), "{unconfirmed}");
+    console::set_signal_advice(None);
+}

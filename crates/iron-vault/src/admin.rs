@@ -45,6 +45,12 @@ pub const ADMIN_SOCKET_NAME: &str = "admin.sock";
 /// (design/vault-initialization.md, "Failing after the reveal").
 pub const DEAD_RECOVERY_KEY: &str = "the recovery key shown opens nothing: discard it";
 
+/// What the owner does with a recovery key that `recipient add --recovery` showed, when the rewrap may or may not have
+/// committed: the service says it for an uncertain write, and the CLI when the command ends after the vault passphrase was
+/// sent without an answer (design/recipients.md, "`recipient add --recovery`").
+pub const UNCONFIRMED_ROTATED_KEY: &str = "keep the recovery key and run `iron-vault recipient list`. If it lists the new recovery key, \
+    the key is enrolled: check it with `iron-vault recovery check`. If it does not, discard the key";
+
 /// What the owner does with a recovery key when `init` may or may not have written its vault: the service says it when
 /// init's commit point may not survive power loss, and the CLI when the command ends after `yes` without an answer.
 pub const UNCONFIRMED_RECOVERY_KEY: &str = "keep the recovery key and run `iron-vault init` again. If it starts over with a new \

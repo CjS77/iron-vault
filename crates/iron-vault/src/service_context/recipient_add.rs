@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use iron_vault_store::{
-    ChangeCommitted, ErrorKindLabel, RecipientChange, RecipientChangeError, RecipientChangeRefusal, RecipientEntry, RecipientInventory,
-    RecipientKey, RecipientLabel, RecipientRole, StoreFs, rewrap_identity,
+    ChangeCommitted, ErrorKindLabel, RecipientChange, RecipientChangeError, RecipientChangeRefusal, RecipientEntry, RecipientIdentity,
+    RecipientInventory, RecipientKey, RecipientLabel, RecipientRole, StoreFs, rewrap_identity,
 };
 
 use super::ServiceContext;
@@ -56,12 +56,15 @@ pub enum AddRefusal {
     Interrupted,
 }
 
-/// Step 3's result: the inventory the check opened, the entry to enrol and the inventory the change would write.
+/// Step 3's result: the inventory the check opened, the entry to enrol and the inventory the change would write. For a
+/// new recovery key it also holds that key's identity, so the rewrap can prove the new envelope opens with it; the
+/// secret text is never here.
 #[derive(Debug)]
 pub struct RecipientAddPlan {
     entry: RecipientEntry,
     current: RecipientInventory,
     after: RecipientInventory,
+    prover: Option<RecipientIdentity>,
 }
 
 impl RecipientAddPlan {
@@ -95,15 +98,43 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         key: RecipientKey,
         label: RecipientLabel,
     ) -> Result<RecipientAddPlan, PlanRefusal> {
+        self.plan(session, key, RecipientRole::Added, label, None).await
+    }
+
+    /// Step 3 of `recipient add --recovery`: the same check for the new recovery key's identity, enrolled with the
+    /// `recovery` role. The identity is kept in the plan only to prove the new envelope before it is written.
+    pub async fn plan_recovery_add(
+        &self,
+        session: &MigrationSession<'_, F>,
+        identity: RecipientIdentity,
+        label: RecipientLabel,
+    ) -> Result<RecipientAddPlan, PlanRefusal> {
+        self.plan(session, identity.recipient_key(), RecipientRole::Recovery, label, Some(identity))
+            .await
+    }
+
+    async fn plan(
+        &self,
+        session: &MigrationSession<'_, F>,
+        key: RecipientKey,
+        role: RecipientRole,
+        label: RecipientLabel,
+        prover: Option<RecipientIdentity>,
+    ) -> Result<RecipientAddPlan, PlanRefusal> {
         let ReadyVault { identity, vault_id, .. } = ready_vault(&*self.inner.lock().await)?;
         let (_, current) = self.check_inventory(session.hold(), identity, vault_id).await?;
         let enrolled_at = self.clock.now().map_err(|_| PlanRefusal::Clock)?;
-        let entry = RecipientEntry::new(key, RecipientRole::Added, label, enrolled_at);
+        let entry = RecipientEntry::new(key, role, label, enrolled_at);
         let after = RecipientChange::Add(entry.clone())
             .apply(&current)
             .inspect_err(|rule| log_failure(CHANGE, entry.key(), rule_failure(*rule)))
             .map_err(PlanRefusal::Rule)?;
-        Ok(RecipientAddPlan { entry, current, after })
+        Ok(RecipientAddPlan {
+            entry,
+            current,
+            after,
+            prover,
+        })
     }
 
     /// Steps 9 and 10: consumes `authorization` for adding the plan's key, then rewraps the vault identity for it and
@@ -116,7 +147,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         authorization: MigrationAuthorization,
         plan: RecipientAddPlan,
     ) -> Result<Enrolled, AddRefusal> {
-        let RecipientAddPlan { entry, current, .. } = plan;
+        let RecipientAddPlan {
+            entry, current, prover, ..
+        } = plan;
         let operation = MigrationOperation::AddRecipient(entry.key().clone());
         session.consume(authorization, &operation).await.map_err(AddRefusal::Unauthorized)?;
         let inner = self.inner.lock().await;
@@ -126,7 +159,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let change = RecipientChange::Add(entry.clone());
         let rewrapped = tokio::task::spawn_blocking(move || {
             let _held = held;
-            rewrap_identity(&locks.state, &setup.fs, &identity, &current, &change, None)
+            rewrap_identity(&locks.state, &setup.fs, &identity, &current, &change, prover.as_ref())
         })
         .await;
         match rewrapped {

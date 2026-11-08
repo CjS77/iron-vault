@@ -59,6 +59,7 @@ pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameErr
         AdminRequest::RecipientAdd { recipient, label } => {
             return Ok(recipient_add::encode_request(COMMAND_RECIPIENT_ADD, recipient, label));
         }
+        AdminRequest::RecipientAddRecovery { label } => return Ok(recipient_add::encode_recovery_request(COMMAND_RECIPIENT_ADD, label)),
         _ => {}
     }
     let mut out = Vec::new();
