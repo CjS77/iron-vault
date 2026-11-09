@@ -1,9 +1,9 @@
-//! Response encoders: recompress a scrubbed body for a caller whose `Accept-Encoding` forbids `identity` (spec §3.8, Q-6).
+//! Response encoders: recompress a scrubbed body for a caller whose `Accept-Encoding` forbids `identity` (spec §11, Q-6).
 //!
 //! A [`ResponseEncoder`] is push-based like the [`ResponseDecoder`](super::ResponseDecoder). Every
 //! [`push`](ResponseEncoder::push) ends in a sync flush, so the bytes returned so far decode to exactly the bytes pushed
 //! so far. That keeps a streamed response (SSE) streaming: an encoder that waited for a full block would hold events back
-//! and defeat the scrubber's minimal hold-back (§9). The price is a few bytes of framing per chunk.
+//! and defeat the scrubber's minimal hold-back (implementation spec §3). The price is a few bytes of framing per chunk.
 //!
 //! The encoder's input is already scrubbed, so it holds no secret material. Its buffers are not wiped and it must not be
 //! added to the secret tables in `design/secret-handling.md`.

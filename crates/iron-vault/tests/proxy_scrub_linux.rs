@@ -1,5 +1,5 @@
 //! Response scrubbing through the proxy handler end to end: a caller on a Unix request socket, the real request server
-//! and pipeline, a Basic credential and a recording TLS test upstream that echoes it back (specification §3.8, §3.12).
+//! and pipeline, a Basic credential and a recording TLS test upstream that echoes it back (specification §11, §15).
 //!
 //! The credential is Basic so one body can echo three of its forms at once: the password as stored, the `Basic` token
 //! and the URL-encoded password. The password holds `/`, `+` and `=`, so its URL-encoded form differs from it.

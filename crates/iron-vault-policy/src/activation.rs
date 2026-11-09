@@ -1,4 +1,4 @@
-//! Activation: checking a validated config against facts only the running service knows (spec §2, §3.3, §3.4, §3.9).
+//! Activation: checking a validated config against facts only the running service knows (spec §6, §7, §12).
 //!
 //! The configuration cannot know which credential records exist, which hosts they permit, whether this machine can
 //! confirm a touch, or which uid each peer account has. The service supplies those facts as [`Capabilities`], a
@@ -23,7 +23,7 @@ use crate::validated::ValidatedConfig;
 /// What this service installation can do that some routes depend on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Capabilities {
-    /// Whether a supported touch-confirmation provider exists; v0 never has one (spec §2).
+    /// Whether a supported touch-confirmation provider exists; v0 never has one (spec §6).
     pub touch_provider: bool,
 }
 
@@ -35,7 +35,7 @@ pub trait CredentialCatalog {
     fn entry(&self, name: &CredentialName) -> CatalogEntry;
 }
 
-/// The host's local accounts, as activation needs them to resolve each peer caller's `user` (spec §3.4).
+/// The host's local accounts, as activation needs them to resolve each peer caller's `user` (spec §7).
 ///
 /// The service implements this over the host's account database, so this crate resolves accounts without reading it.
 pub trait AccountDirectory {
@@ -55,15 +55,15 @@ pub trait AccountDirectory {
 pub enum CatalogEntry {
     /// No record has this name.
     Unknown,
-    /// A record has this name but is damaged or needs login, so its routes are unavailable (spec §3.9).
+    /// A record has this name but is damaged or needs login, so its routes are unavailable (spec §12).
     ///
     /// It carries no origins: a damaged record cannot be trusted to report them.
     Unusable,
     /// A record has this name and can serve requests.
     Usable {
-        /// The kind the record declares, which decides the slots its routes may use (spec §5.2).
+        /// The kind the record declares, which decides the slots its routes may use (future spec §2.2).
         kind: CredentialKind,
-        /// The exact host and port pairs the record permits its secret to reach (spec §3.3).
+        /// The exact host and port pairs the record permits its secret to reach (spec §6).
         origins: BTreeSet<(Host, Port)>,
     },
 }
@@ -85,12 +85,12 @@ pub struct ActivePolicy {
 
 /// Why a route of an active policy serves no request (glossary: *Unavailable route*). A route may have both.
 ///
-/// Neither cause refuses the policy: each is a fault local to its routes, which the owner fixes and then reloads (§3.9).
+/// Neither cause refuses the policy: each is a fault local to its routes, which the owner fixes and then reloads (§12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum UnavailableCause {
     /// The route's credential record is damaged or needs login.
     CredentialUnusable,
-    /// The route's pinned CA could not be loaded (§3.7).
+    /// The route's pinned CA could not be loaded (§10).
     PinnedCaUnavailable,
 }
 
@@ -103,7 +103,7 @@ pub enum ActivationError {
         /// The route.
         route: RouteName,
     },
-    /// The route names a credential the vault does not hold, which invalidates the whole config (spec §3.9).
+    /// The route names a credential the vault does not hold, which invalidates the whole config (spec §12).
     #[error("route {route} uses credential {credential}, which the vault does not hold")]
     UnknownCredential {
         /// The route.
@@ -123,7 +123,7 @@ pub enum ActivationError {
         /// The route's upstream port.
         port: Port,
     },
-    /// The route's slot cannot be filled by its credential's kind, so every request to it would fail (spec §5.2).
+    /// The route's slot cannot be filled by its credential's kind, so every request to it would fail (future spec §2.2).
     #[error("route {route} uses a {} credential, {credential}, on a slot that kind cannot fill", .kind.as_str())]
     SlotMismatch {
         /// The route.
@@ -133,7 +133,7 @@ pub enum ActivationError {
         /// The credential's kind.
         kind: CredentialKind,
     },
-    /// The peer caller's `user` names no account on this host (spec §3.4).
+    /// The peer caller's `user` names no account on this host (spec §7).
     #[error("caller {caller} names user {user}, which is not an account on this host")]
     UnknownAccount {
         /// The peer caller.
@@ -141,9 +141,9 @@ pub enum ActivationError {
         /// The account it names.
         user: AccountName,
     },
-    /// The peer caller's `user` resolves to root or to the service account, which are never peer accounts (spec §3.4).
+    /// The peer caller's `user` resolves to root or to the service account, which are never peer accounts (spec §7).
     ///
-    /// Root is already a host administrator, outside the threat model (spec §1.2), so it needs no caller identity;
+    /// Root is already a host administrator, outside the threat model (spec §2), so it needs no caller identity;
     /// a program run as root to use a route holds far more than that route. The service account connecting to its own
     /// request socket is never legitimate: a process doing so is the service misbehaving or something running with
     /// its privileges.
@@ -154,7 +154,7 @@ pub enum ActivationError {
         /// The account it names.
         user: AccountName,
     },
-    /// The peer caller's `user` resolves to the kernel's overflow uid, `nobody` by default (spec §3.4).
+    /// The peer caller's `user` resolves to the kernel's overflow uid, `nobody` by default (spec §7).
     ///
     /// The kernel reports that uid for every peer whose uid has no mapping in the service's user namespace, so in a
     /// container or sandbox it would match many unrelated processes rather than one account.
@@ -166,7 +166,7 @@ pub enum ActivationError {
         user: AccountName,
     },
     /// Peer callers on one listener name accounts with the same uid, as `passwd` aliases can, so a connection from that
-    /// uid would identify more than one caller (spec §3.4).
+    /// uid would identify more than one caller (spec §7).
     #[error("callers {} on listener {listener} name accounts with uid {uid}, so one account would identify more than one caller", joined(.callers))]
     SharedPeerAccount {
         /// The listener.
@@ -352,7 +352,7 @@ mod tests {
         }
     }
 
-    /// A catalog that permits each §3.3 route's upstream, with `overrides` replacing individual entries.
+    /// A catalog that permits each §6 route's upstream, with `overrides` replacing individual entries.
     fn spec_catalog(overrides: &[(&str, CatalogEntry)]) -> FakeCatalog {
         let healthy = [
             ("fx_key", "api.fx.example"),
@@ -368,7 +368,7 @@ mod tests {
         ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap()
     }
 
-    /// The §3.3 example with the `[routes.fx]` line `from` replaced by `to`.
+    /// The §6 example with the `[routes.fx]` line `from` replaced by `to`.
     fn spec_with(from: &str, to: &str) -> ValidatedConfig {
         assert!(SPEC_EXAMPLE.contains(from), "{from}");
         config(&SPEC_EXAMPLE.replacen(from, to, 1))

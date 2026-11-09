@@ -1,4 +1,4 @@
-//! The upstream client: the only way the service reaches an upstream (specification §3.5 step 9, §3.7, §7).
+//! The upstream client: the only way the service reaches an upstream (specification §8 step 9, §10, implementation spec §1).
 //!
 //! [`UpstreamClient::new`] is the one constructor. It hands reqwest the rustls config built from an [`UpstreamTrust`],
 //! turns off proxies, redirects, retries and the `Referer` header, and refuses cleartext. `clippy.toml` refuses every
@@ -31,7 +31,7 @@ const ALPN_PROTOCOLS: [&[u8]; 2] = [b"h2", b"http/1.1"];
 
 /// How long the client waits on an upstream before giving up with [`TransportError::Timeout`].
 ///
-/// The defaults are placeholders until the request pipeline (EP-18) and the operational limits of specification §9 are
+/// The defaults are placeholders until the request pipeline (EP-18) and the operational limits of implementation spec §3 are
 /// published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportLimits {
@@ -45,7 +45,7 @@ pub struct TransportLimits {
 
 impl Default for TransportLimits {
     /// 10 seconds to connect and 300 seconds until the response headers arrive: a language model may take minutes
-    /// before it answers a non-streamed request. Both are placeholders until §9 publishes the limits.
+    /// before it answers a non-streamed request. Both are placeholders until implementation spec §3 publishes the limits.
     fn default() -> Self {
         Self {
             connect: Duration::from_secs(10),
@@ -93,7 +93,7 @@ impl UpstreamClient {
     /// but `https`, never adds `Referer`, keeps no cookies and adds no default header of its own choosing.
     ///
     /// It never retries: one checked request is one send. reqwest's default policy would re-send a request an HTTP/2
-    /// upstream refused with `GOAWAY` or `REFUSED_STREAM`, which the final check (§7) and rate limits (§3.5) never see,
+    /// upstream refused with `GOAWAY` or `REFUSED_STREAM`, which the final check (implementation spec §1) and rate limits (§8) never see,
     /// and which repeats a non-idempotent request the upstream may have acted on. Whether to try again is the caller's
     /// call. `never()` alone still lets reqwest clone every request, credential included, for a retry it will not make;
     /// a limit of zero retries stops that copy too.
@@ -118,7 +118,7 @@ impl UpstreamClient {
     ///
     /// The request carries the checked method, URL and headers, plus `body`, and nothing else. `Host` is never set here: reqwest
     /// derives it, or HTTP/2's `:authority`, from the URL, whose host the final check proved is
-    /// [`CheckedRequest::host`], and TLS verifies that same name, so all three name the checked upstream (§3.6).
+    /// [`CheckedRequest::host`], and TLS verifies that same name, so all three name the checked upstream (§9).
     /// reqwest adds `Accept: */*` when the request has no `Accept`, and its builder offers no way to stop it.
     ///
     /// `body` is forwarded chunk by chunk, never buffered whole and never inspected. It is framed by its declared

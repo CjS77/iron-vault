@@ -1,4 +1,4 @@
-//! The three content-coding decisions of spec §3.8, each a pure function so the handler only applies them: which coding
+//! The three content-coding decisions of spec §11, each a pure function so the handler only applies them: which coding
 //! the upstream used, which coding the caller needs the response in, and which headers no longer describe the body.
 //!
 //! The service decodes a response so the scrubber can screen it, and re-encodes it only when the caller's

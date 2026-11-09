@@ -1,5 +1,5 @@
 //! `init` end to end over a real admin socket against a running service context on a fresh state directory
-//! (specification §3.2, §3.9, §3.11, §3.12, §3.13; design/vault-initialization.md): the refusals before any prompt, the
+//! (specification §5, §12, §14, §15, §16; design/vault-initialization.md): the refusals before any prompt, the
 //! passphrase rules, the recovery key shown once and confirmed before anything is written, the vault `unlock` then
 //! opens at approval version 1, and the development MVP path through `add`, `config approve` and a proxied request.
 //!

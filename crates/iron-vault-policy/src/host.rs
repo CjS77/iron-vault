@@ -1,7 +1,7 @@
 //! The canonical form of an upstream host.
 //!
 //! Every host comparison in Iron Vault (credential record, route upstream, final outgoing-request check) uses the
-//! [`Host`] produced here, so a host is converted exactly once and compared byte for byte afterwards (§3.6).
+//! [`Host`] produced here, so a host is converted exactly once and compared byte for byte afterwards (§9).
 
 use std::fmt;
 use std::str::FromStr;

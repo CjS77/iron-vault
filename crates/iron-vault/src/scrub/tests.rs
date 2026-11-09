@@ -5,7 +5,7 @@ use super::*;
 const R: &str = "[iron-vault:scrubbed]";
 
 /// The output and match count of scrubbing `chunks` in turn with `patterns`, checking after every chunk that fewer
-/// bytes are held than the longest pattern has (§3.8: at most `n - 1`).
+/// bytes are held than the longest pattern has (§11: at most `n - 1`).
 fn scrub_chunks(patterns: &[&[u8]], chunks: &[&[u8]]) -> (Vec<u8>, u64) {
     let longest = patterns.iter().map(|pattern| pattern.len()).max().unwrap_or(0);
     let mut scrubber = Scrubber::with_patterns(patterns.iter().copied());

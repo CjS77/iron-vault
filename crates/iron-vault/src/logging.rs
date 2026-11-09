@@ -8,7 +8,7 @@
 //! which a config check can later point at the destination the approved config chooses.
 //!
 //! At `DEBUG` and `TRACE`, `hyper` and `h2` log frames and headers, and those headers carry the injected credential
-//! (§3.7, §3.15). [`dependency_caps`] is installed as its own layer, so no global level, `RUST_LOG` value or trace
+//! (§10, §18). [`dependency_caps`] is installed as its own layer, so no global level, `RUST_LOG` value or trace
 //! setting can lift it: a layer filter only ever narrows what reaches the subscriber. EP-26 must keep this layer
 //! whatever logging configuration it adds.
 //!

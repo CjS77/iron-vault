@@ -1,4 +1,4 @@
-//! Migration authorization (specification §3.13, §3.15, R-23; design/migration-authorization.md): the challenge the
+//! Migration authorization (specification §16, §19; design/migration-authorization.md): the challenge the
 //! service issues for one pending migration, the pending slot that makes it single-use, and the move-only proof that
 //! the owner authorized that one migration operation.
 //!

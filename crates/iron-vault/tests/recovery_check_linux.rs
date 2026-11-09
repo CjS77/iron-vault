@@ -1,4 +1,4 @@
-//! `recovery check` end to end over a real admin socket against a running service context (specification §3.13, §3.15;
+//! `recovery check` end to end over a real admin socket against a running service context (specification §16, §18, §19;
 //! design/recovery.md): the right key in Locked and Ready, a key of another vault, text that is no key, the states and
 //! checks that end before the prompt, and the service-wide lock.
 //!

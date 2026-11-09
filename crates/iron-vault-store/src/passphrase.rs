@@ -1,5 +1,5 @@
-//! Passphrase unlock: the operational identity and the passphrase envelope that holds it (specification §3.11, §3.12,
-//! §3.15).
+//! Passphrase unlock: the operational identity and the passphrase envelope that holds it (specification §14, §15,
+//! §19).
 //!
 //! `age` refuses an scrypt stanza beside any other recipient, so a passphrase cannot be a recipient of the identity
 //! envelope. The service instead generates an operational identity, enrolls its recipient key in `identity.age` like

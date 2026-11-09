@@ -1,5 +1,5 @@
-//! An approval-state write whose directory fsync fails is recorded through the JSON layer, in order (specification §3.9,
-//! §3.15; `design/audit-logging.md`, "Config approvals and checks"): a settled commit, a reservation, and init's first
+//! An approval-state write whose directory fsync fails is recorded through the JSON layer, in order (specification §12,
+//! §18; `design/audit-logging.md`, "Config approvals and checks"): a settled commit, a reservation, and init's first
 //! approval and approval state.
 //!
 //! A filesystem fails the state-directory fsync after the Nth rename of `approval.age` since it was armed. Every test

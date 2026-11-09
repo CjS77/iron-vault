@@ -1,4 +1,4 @@
-//! The vault manifest: the service's own index of which credential records exist (spec §3.3, §3.10).
+//! The vault manifest: the service's own index of which credential records exist (spec §6, §13).
 //!
 //! `age` does not authenticate the sender, so anyone holding the vault public key can plant a well-formed record file.
 //! The manifest names every record the service wrote and the digest of its file, so a planted, swapped or deleted record

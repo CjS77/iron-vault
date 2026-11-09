@@ -1,4 +1,4 @@
-//! The stable identity of one vault (spec §3.10).
+//! The stable identity of one vault (spec §13).
 
 use std::fmt;
 

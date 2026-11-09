@@ -1,4 +1,4 @@
-//! The host unlock at startup (`design/docker-compose.md`, "In the container"; specification §3.12): a container-profile
+//! The host unlock at startup (`design/docker-compose.md`, "In the container"; specification §15): a container-profile
 //! service leaves Starting for Checking when the unlock handoff opens the vault, and for Locked otherwise.
 //!
 //! Every step's failure leaves the service Locked with passphrase `unlock` still offered, since the operational identity
@@ -32,7 +32,7 @@ pub enum HostUnlockOutcome {
 /// Why a host unlock left the service Locked. No variant carries the handoff's bytes or its recipient key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostUnlockRefusal {
-    /// Memory is not locked against swap, so the handoff was never opened (§3.11).
+    /// Memory is not locked against swap, so the handoff was never opened (§14).
     MemoryUnprotected,
     /// The handoff or a directory above it broke the `UnlockHandoff` trusted-path rule.
     Untrusted,

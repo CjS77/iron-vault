@@ -1,7 +1,7 @@
 //! The deployment profile: how this build is installed, and the install paths and service account that follow from it.
 //!
 //! A packaged binary must never be switchable into development mode, which gives no isolation from malware running as
-//! the user (specification §3.1). So the profile is fixed at build time by the `dev-mode` or `container` feature, never
+//! the user (specification §4). So the profile is fixed at build time by the `dev-mode` or `container` feature, never
 //! chosen by config, flag or detection. Without `dev-mode` the development code paths are not compiled in, and the two
 //! features cannot be combined.
 //!
@@ -52,7 +52,7 @@ const DEVELOPMENT_DIR: &str = "iron-vault-dev";
 const DEVELOPMENT_LOG_DIR: &str = "iron-vault-dev-log";
 
 /// How this build is installed. It decides the install paths, the service account and the admin principals, and
-/// nothing else: development mode never relaxes any request, TLS, scrubbing, encryption or approval check (§2).
+/// nothing else: development mode never relaxes any request, TLS, scrubbing, encryption or approval check (§4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentProfile {
     /// A supported protected installation: root owns the binary and the `iron-vault` account runs the service.
@@ -184,7 +184,7 @@ impl Accounts {
     }
 }
 
-/// The local accounts that activation resolves peer callers against, and the account the service runs as (spec §3.4).
+/// The local accounts that activation resolves peer callers against, and the account the service runs as (spec §7).
 ///
 /// Accounts come from `/etc/passwd`, the same list the service account is found in. Package-created and `useradd`
 /// accounts are always there, so no NSS lookup is needed; an account that exists only in a directory service such as

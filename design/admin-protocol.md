@@ -1,6 +1,6 @@
 # Admin protocol
 
-The CLI and the service talk only over the admin socket (spec [§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). This document specifies the bytes they exchange:
+The CLI and the service talk only over the admin socket (spec [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). This document specifies the bytes they exchange:
 the **admin protocol**. Terms are defined in the [glossary](glossary.md). The codec is `iron_vault::admin::protocol`;
 it is pure and does no I/O. The [admin socket](#admin-socket) section specifies the service's transport:
 binding, the peer check and the server loop (`iron_vault::admin::socket` and `iron_vault::admin::server`).
@@ -24,7 +24,7 @@ One connection carries one exchange:
    owner and never answered.
 3. The service sends exactly one **admin response**, success or error, and closes the connection.
 
-The service, not the CLI, decides what to prompt for: the service owns the operation ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)), so a modified CLI cannot
+The service, not the CLI, decides what to prompt for: the service owns the operation ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)), so a modified CLI cannot
 skip a step by not asking for it. A frame of a kind the receiver does not expect at that point in the exchange ends
 it: the service answers with an `unexpected-frame` error response and closes; the CLI reports the fault and closes.
 
@@ -125,7 +125,7 @@ an error.
 | `14` | `recipient add` | the recipient key text and label ([recipients.md](recipients.md#admin-protocol)) | the key and the recipient count after the change |
 | `15` | `recipient remove` | the recipient key | the recipient count after the removal ([recipients.md](recipients.md#admin-protocol)) |
 
-**No command accepts an external signature** ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The service signs only the pending config of its own approval
+**No command accepts an external signature** ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
 input. Normal loading verifies only the `config.toml.sig` the service itself published. A later command that would
 take any of these is out of bounds for this protocol, whatever it is for.
@@ -136,9 +136,9 @@ check that the service is up and which profile it runs before the real commands 
 
 #### lock
 
-Clears the vault identity and every cached secret from the service's memory (spec [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration), [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)) and moves the service
+Clears the vault identity and every cached secret from the service's memory (spec [§16](iron-vault-specification.md#16-administration-recovery-and-migration), [§14](iron-vault-specification.md#14-recipients-startup-and-memory)) and moves the service
 from Ready or Unavailable to Locked. It takes no arguments and no prompt. In order, the service stops admitting requests, withdraws the
-serving snapshot so requests running on it stop where the transport permits ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)), and drops the approval state. It
+serving snapshot so requests running on it stop where the transport permits ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)), and drops the approval state. It
 then waits for the last holder of the old snapshot, a request or a streaming response body, to release it (the *lock
 drain*, at most 10 seconds). The vault, which the snapshot owns, is dropped when that last holder releases it, so during
 the drain the vault may still be in memory. Unavailable has no snapshot to withdraw: there the service drops the vault
@@ -159,7 +159,7 @@ service locks: in any other state the command fails with `wrong-state`.
 
 #### config approve
 
-Runs the approval transaction (spec [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload); [config-approval.md](config-approval.md#the-transaction)) on the bytes the
+Runs the approval transaction (spec [§12](iron-vault-specification.md#12-configuration-approval-and-reload); [config-approval.md](config-approval.md#the-transaction)) on the bytes the
 owner proposes.
 
 | Tag | Field | Value |
@@ -181,7 +181,7 @@ The exchange, after the request:
    than exactly `yes` ends the exchange with `declined`. No version is reserved.
 4. **Approval passphrase.** A prompt, secret: `Approval passphrase`. The service opens the approver key with it. A
    wrong passphrase ends the exchange with `approval-denied`, still before any reservation. There is no second try in
-   the same exchange. Summary, confirmation, then passphrase is the order of [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)'s sequence diagram, which its text
+   the same exchange. Summary, confirmation, then passphrase is the order of [§12](iron-vault-specification.md#12-configuration-approval-and-reload)'s sequence diagram, which its text
    words differently ([open question 6](config-approval.md#open-questions)).
 5. The service runs steps 2 to 6 of the transaction, including the config check after the commit, and answers once
    the check has ended, with the result or an error below. A success means the new config is active.
@@ -209,7 +209,7 @@ Errors specific to `config approve`:
 | `busy` | another approval, vault write or reload holds the service-wide lock | no |
 | `config-invalid` | the proposed config fails parsing, validation or activation; the message names the rule and the configured names involved, escaped, and never quotes other config bytes | no |
 | `declined` | the owner did not answer the confirmation with `yes` | no |
-| `approval-denied` | the approval passphrase did not open the approver key, or the key it opened is not the pinned approver | no |
+| `approval-denied` | the approval passphrase did not open the approver key, or the key it opened is not the asked approver's | no |
 | `approval-unavailable` | the service cannot approve now: its state does not allow it (only Ready and Unavailable with an invalid policy do), the approval state is damaged, the version counter is exhausted, a write failed before any version was reserved, or a `lock` cancelled the approval at a prompt; the message says which. Also when the task running the transaction ended without a result (it panicked, or the runtime was shutting down); the message then says a version may be consumed or committed | no, except after that crash: possibly |
 | `approval-failed` | the transaction failed after its reservation and before its commit; the active policy is unchanged | yes; the message names it |
 | `committed-not-active` | the commit landed, or may have landed, but it could not be settled, published or activated; the service is Unavailable, and a reload does not leave that state: only an authorized repair (`Repaired`, then Checking) or a restart does | yes; the message names the version |
@@ -217,9 +217,9 @@ Errors specific to `config approve`:
 #### unlock
 
 Opens the vault with the interactive passphrase (spec
-[§3.11](iron-vault-specification.md#311-recipients-startup-and-memory),
-[§3.12](iron-vault-specification.md#312-service-states-and-errors),
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). It is allowed only while the service
+[§14](iron-vault-specification.md#14-recipients-startup-and-memory),
+[§15](iron-vault-specification.md#15-service-states-and-errors),
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration)). It is allowed only while the service
 is Locked; in any other state the exchange ends with `wrong-state` before any prompt, and the state is unchanged. It
 also needs an initialized vault: unless the [initialization state](vault-initialization.md#initialization-state) is
 Initialized, the exchange ends with `unlock-failed` before any prompt, and the message names the initialization state
@@ -227,7 +227,7 @@ and says to run `iron-vault init`. For Unfinished it adds that an init may be in
 names the first offending files instead. Files beside a manifest never refuse `unlock`: it logs their names at WARN.
 In a protected install whose memory is not locked, the exchange ends with `memory-unprotected` before any prompt, and
 the message names the `RLIMIT_MEMLOCK` soft limit or the locking error
-([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)); the service stays Locked. The checks run
+([§14](iron-vault-specification.md#14-recipients-startup-and-memory)); the service stays Locked. The checks run
 in this order: state, initialization state, memory. A vault that is not Initialized has no secret to protect, and
 `iron-vault init` is the step the owner needs first, so its `unlock-failed` comes before `memory-unprotected`.
 The state is read again under the service context's mutex in step 2.
@@ -246,9 +246,9 @@ message gives the seconds left, rounded up. The service stays Locked, and the re
    again under the service context's mutex, so two unlocks never both open the vault, checks the attempt limit again
    (`unlock-rate-limited`), so two exchanges that passed the check before the prompt cannot both test a passphrase,
    and opens `operational.age` with the passphrase, then `identity.age` with the operational identity, which is
-   dropped as soon as the vault identity is unwrapped ([§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). A wrong passphrase ends the exchange with
+   dropped as soon as the vault identity is unwrapped ([§13](iron-vault-specification.md#13-vault-structure-and-durable-writes)). A wrong passphrase ends the exchange with
    `unlock-denied`, whose message is only `wrong passphrase`; an envelope that cannot be read or opened ends it with
-   `unlock-failed`. Either way the service stays Locked, and no other storage is tried (R-22). A wrong passphrase adds
+   `unlock-failed`. Either way the service stays Locked, and no other storage is tried (§15). A wrong passphrase adds
    to the attempt count and an opened vault clears it; an envelope that cannot be read adds nothing. There is no second try
    in the same exchange.
 3. The service moves to Checking and runs the config check. Ready answers with a success without a result.
@@ -260,8 +260,8 @@ with `from_state` and `to_state` and nothing the owner typed ([audit events](aud
 
 #### add
 
-Enrols a new credential (spec [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration), [§3.3](iron-vault-specification.md#33-credential-records-and-configuration)). The name, kind and permitted origins are arguments, because none of
-them is secret; the material is owner input, so it never travels as an argument ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)) and stdin carries
+Enrols a new credential (spec [§16](iron-vault-specification.md#16-administration-recovery-and-migration), [§6](iron-vault-specification.md#6-credential-records-and-configuration)). The name, kind and permitted origins are arguments, because none of
+them is secret; the material is owner input, so it never travels as an argument ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)) and stdin carries
 nothing else: `pass show fx | iron-vault add fx --origin api.fx.example` works.
 
 | Tag | Field | Value |
@@ -273,7 +273,7 @@ nothing else: `pass show fx | iron-vault add fx --origin api.fx.example` works.
 The origins value is a `u8` count, 1 to 32, then per origin a `u8` host length, 1 to 253, the host bytes, which must be
 UTF-8, and a `u16` port, never `0`. Nothing may follow the last origin. The decoder checks only these bounds: the host
 stays text on the wire, and the service parses it with the same origin rule the CLI used, so a modified CLI gains
-nothing by skipping it. HTTPS is implied and never sent ([§3.3](iron-vault-specification.md#33-credential-records-and-configuration)).
+nothing by skipping it. HTTPS is implied and never sent ([§6](iron-vault-specification.md#6-credential-records-and-configuration)).
 
 The service, not the CLI, decides what to prompt for, by kind:
 
@@ -288,7 +288,7 @@ The success result:
 | 2 | record ID | byte value, exactly 16 bytes: the new record's random version 4 UUID |
 
 `add` runs only while the service is Ready
-([§3.12](iron-vault-specification.md#312-service-states-and-errors)); in any other state it answers `wrong-state`
+([§15](iron-vault-specification.md#15-service-states-and-errors)); in any other state it answers `wrong-state`
 before any prompt. The name and the origins are checked before any prompt too, so the owner is never asked for material
 that cannot be stored. Once the material is in hand, the service takes the service-wide lock and answers `busy` while
 an approval, another vault write or a reload holds it. The write goes through a vault opened for it alone, not the one
@@ -306,8 +306,8 @@ serving requests, so the new credential takes effect from the next approval: no 
 #### replace
 
 Replaces a credential record with a new one under the same name, after owner presence (spec
-[§3.3](iron-vault-specification.md#33-credential-records-and-configuration),
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). The design, including why each step
+[§6](iron-vault-specification.md#6-credential-records-and-configuration),
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration)). The design, including why each step
 is where it is, is [credential-commands.md](credential-commands.md). The arguments are `add`'s: tag 2 the name, tag 3
 the kind, tag 4 the origins, with the same encoding and bounds. The new kind and origins need not match the old ones.
 
@@ -321,7 +321,7 @@ The exchange, after the request:
    a route that uses the name would not activate with the new kind and origins. The message names each route and why.
 5. **Summary.** The [vault change summary](credential-commands.md#vault-change-summary), as one or more notices.
 6. **Owner presence.** A prompt, secret: `Approval passphrase`. The service opens the approver key with it and drops
-   it. A wrong passphrase, or a key that is not the pinned approver, ends the exchange with `approval-denied`. Nothing
+   it. A wrong passphrase, or a key that is not the asked approver's, ends the exchange with `approval-denied`. Nothing
    is reserved or signed, and there is no second try.
 7. **Material.** The secret prompts for the new kind, as for `add`. Material that breaks its rule ends the exchange
    with `credential-invalid`.
@@ -351,8 +351,8 @@ The old record ID was shown in the summary. Errors specific to `replace`:
 #### rm
 
 Removes a credential record, after owner presence (spec
-[§3.3](iron-vault-specification.md#33-credential-records-and-configuration),
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)); see
+[§6](iron-vault-specification.md#6-credential-records-and-configuration),
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration)); see
 [credential-commands.md](credential-commands.md).
 
 | Tag | Field | Value |
@@ -367,8 +367,8 @@ Its errors are `replace`'s, except that `credential-invalid` is only for the nam
 #### caller-token
 
 Issues a fresh caller token for the owner to enroll (spec
-[§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners),
-[§3.3](iron-vault-specification.md#33-credential-records-and-configuration)). It takes no arguments and no prompt. The
+[§7](iron-vault-specification.md#7-caller-authentication-and-listeners),
+[§6](iron-vault-specification.md#6-credential-records-and-configuration)). It takes no arguments and no prompt. The
 service draws the token from the operating system's random source and returns it in the result; it keeps no copy, and
 writes no config. Issuing enrolls nothing: the owner puts the token's `token_hash` on a token caller's
 `[callers.<name>]` table and approves that config with `config approve`
@@ -379,13 +379,13 @@ authenticates its caller from the moment that config is active.
 - **Revoke:** approve a config without the caller, or without its `token_hash`.
 
 Neither changes a provider credential. The service cannot prove that an approved `token_hash` came from a token it
-issued; the owner is trusted ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)), and the approval
+issued; the owner is trusted ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)), and the approval
 summary shows that a token changed.
 
 It is allowed in every state the admin socket is served in, Locked and Unavailable included: it touches neither the
 vault nor the policy, so the owner can prepare the config that fixes an invalid policy. The service logs
 `caller.token-issued` at INFO, with neither the token nor its hash
-([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)).
+([§18](iron-vault-specification.md#18-logging)).
 
 The success result:
 
@@ -406,9 +406,9 @@ Errors specific to `caller-token`:
 #### init
 
 Creates the vault, its two recovery paths and its first committed approval (spec
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration),
-[§3.11](iron-vault-specification.md#311-recipients-startup-and-memory),
-[§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). The design, including what a crash
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration),
+[§14](iron-vault-specification.md#14-recipients-startup-and-memory),
+[§12](iron-vault-specification.md#12-configuration-approval-and-reload)). The design, including what a crash
 part-way through leaves and what a re-run does with it, is [vault-initialization.md](vault-initialization.md). It is
 allowed only while the service is Locked; in any other state the exchange ends with `wrong-state` before any prompt. It
 leaves the service Locked.
@@ -475,7 +475,7 @@ Errors specific to `init`:
 #### recovery check
 
 Proves that the owner's offline recovery key opens the current vault (spec
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). The design, including what the check
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration)). The design, including what the check
 proves, its record and the reminders that prompt it, is [recovery.md](recovery.md). It takes no arguments. It is
 allowed while the service is Locked or Ready; in any other state the exchange ends with `wrong-state` before any
 prompt. It never changes the service state. Before the prompt it also needs an Initialized
@@ -558,7 +558,7 @@ The service encodes the frame into a buffer that clears itself on drop, straight
 both once the frame is written. The CLI decodes the body once, straight from the received bytes into a clearing buffer
 (`Zeroizing<Vec<u8>>`), wrapped in `RevealedSecret`, a secret-bearing type (`design/secret-handling.md`). It shows the
 value on the owner console, followed by a newline and then the same value as a QR code, and drops it. Every reveal is
-shown as text and QR code (specification §3.13), so the owner can scan a recovery key into a phone password manager
+shown as text and QR code (specification §16), so the owner can scan a recovery key into a phone password manager
 instead of retyping it. The CLI draws the QR code itself from the text it holds: the service never sends a rendered
 code, because a notice is not a secret type. The code is level M, in the automatic encoding mode, with a quiet zone,
 two module rows to a text line, and it goes to the same descriptor as the text. A value too long for any QR code is
@@ -592,7 +592,7 @@ an unknown command, is an error.
 
 #### status
 
-`status` changes nothing and is answered in every state ([§3.12](iron-vault-specification.md#312-service-states-and-errors)), including Locked and Unavailable, so the owner can
+`status` changes nothing and is answered in every state ([§15](iron-vault-specification.md#15-service-states-and-errors)), including Locked and Unavailable, so the owner can
 diagnose why requests fail. The result is the **status report**: fields, never one preformatted string, so the CLI
 renders them and tests assert on values. Every collection is in name order, and the report holds no secret value, record
 digest or permitted origin.
@@ -629,7 +629,7 @@ While no vault is open the service reads the state and config directories for th
 cannot be listed, also report `0`: `status` has no error to give, and `unlock` and `init` name the files when the owner runs them.
 
 Memory protection is reported from the process hardening report and never claims swap protection unless `mlockall`
-succeeded ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)).
+succeeded ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)).
 
 The recovery check fields are known in every state, because the
 [recovery check record](recovery.md#the-recovery-check-record) is plaintext: the service reads `recovery.toml` on each
@@ -669,8 +669,8 @@ The entry names no CA path, PEM bytes or load error; the owner's log names the r
 #### list
 
 `list` shows the owner what the vault holds, so the owner can write routes that will activate and see what `rm` or
-`replace` would touch ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). It takes no arguments and changes nothing. Like `status` it is answered in every state
-([§3.12](iron-vault-specification.md#312-service-states-and-errors)), because it reads only what the service context holds of an open vault. It never carries a secret value or a
+`replace` would touch ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)). It takes no arguments and changes nothing. Like `status` it is answered in every state
+([§15](iron-vault-specification.md#15-service-states-and-errors)), because it reads only what the service context holds of an open vault. It never carries a secret value or a
 record digest. `status` leaves permitted origins out; `list` is the one command that reports them.
 
 | Tag | Field | Value |
@@ -717,7 +717,7 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `6` | `busy` | the service is already serving as many admin connections as it allows, or another operation holds the lock a command needs; try again |
 | `7` | `config-invalid` | `config approve`: the proposed config is invalid |
 | `8` | `declined` | the owner declined at a confirmation prompt |
-| `9` | `approval-denied` | `config approve`, `replace`, `rm`, `recipient remove`: owner presence failed: the approval passphrase did not open the approver key, or the key it opened is not the pinned approver |
+| `9` | `approval-denied` | `config approve`, `replace`, `rm`, `recipient remove`: owner presence failed: the approval passphrase did not open the approver key, or the key it opened is not the asked approver's |
 | `10` | `approval-unavailable` | `config approve`: the service cannot run an approval now; `replace`, `rm`, `recipient remove`: owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt; nothing was written |
 | `11` | `approval-failed` | `config approve`: failed after reserving a version, before committing it |
 | `12` | `committed-not-active` | `config approve`: committed, but not yet published or active; `replace`, `rm`: the change committed, but the config check after it left the service Unavailable |
@@ -778,7 +778,7 @@ ID, and never contain body bytes, so no error can carry owner input into a log o
 
 ## Admin socket
 
-The service serves the admin protocol on `admin.sock` in its runtime directory (spec [§3.2](iron-vault-specification.md#32-service-and-cli-boundary), [§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners)).
+The service serves the admin protocol on `admin.sock` in its runtime directory (spec [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns), [§7](iron-vault-specification.md#7-caller-authentication-and-listeners)).
 
 **Binding.** A leftover file at the path is removed only when `lstat` shows a socket owned by the service account;
 a regular file, a symlink, or a socket another account owns stops startup with an error naming the path. The service
@@ -977,8 +977,8 @@ dumps first, because the key passes through its memory.
 
 The CLI collects each prompted value from its **owner console**, opened at the first prompt, notice or reveal, so a
 command the service never prompts for touches neither the terminal nor stdin. No argument ever carries a value
-([§3.2](iron-vault-specification.md#32-service-and-cli-boundary),
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)).
+([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns),
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration)).
 
 - **Stdin is a terminal:** the CLI opens `/dev/tty`, writes the label to it followed by `: `, and reads one line from
   it. For a secret prompt it turns echo off for the read with `tcsetattr`: `ECHO` off and `ECHONL` on, so the owner's

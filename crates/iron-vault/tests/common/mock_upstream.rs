@@ -1,4 +1,4 @@
-//! A TLS test upstream on loopback that records exactly what reaches it (specification §8: "use a mock upstream to
+//! A TLS test upstream on loopback that records exactly what reaches it (implementation spec §2: "use a mock upstream to
 //! observe exactly which requests and credentials left the service").
 //!
 //! It speaks HTTP/1.1 only and records each request's head byte for byte, before any parsing could normalise it. It

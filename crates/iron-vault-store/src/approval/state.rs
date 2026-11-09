@@ -1,4 +1,4 @@
-//! The approval state: the pinned approver and the approval version counters (spec §3.9, §3.10).
+//! The approval state: the pinned approver and the approval version counters (spec §12, §13).
 //!
 //! Versioned approval stops an old `config.toml` and `config.toml.sig` pair from becoming valid again only if the
 //! counters never go backwards. The state lives in `approval.age`, sealed to the vault public key and authenticated with
@@ -9,7 +9,7 @@
 //! Every write also reads the manifest from disk, before touching any file, and takes the next vault-wide state
 //! generation after the manifest's and its own, recording the manifest's as its peer generation. The state-directory
 //! lock makes the service the only writer, so the file on disk is the current one and no two writes share a state
-//! generation. Restoring the whole state directory from an older copy restores older counters too; spec §3.9 leaves
+//! generation. Restoring the whole state directory from an older copy restores older counters too; spec §12 leaves
 //! protection against that outside v0.
 
 mod encoding;
@@ -38,7 +38,7 @@ pub use file::{open_approval_state, seal_approval_state};
 /// later algorithm with a longer public key while keeping a planted file cheap to refuse.
 pub const MAX_APPROVAL_STATE_LEN: usize = 4096;
 
-/// The algorithm and public key every config approval must verify against (spec §3.9).
+/// The algorithm and public key every config approval must verify against (spec §12).
 ///
 /// It is kept only in the approval state, never read from the config or the signature file. The key is checked when it
 /// is pinned, so a held approver always has a usable key: an unusable one is refused at enrolment, not at the next
@@ -218,7 +218,7 @@ pub enum ApprovalStateError {
     AlreadyExists,
     /// The approval state and the manifest are not a pair any sequence of writes leaves: one was restored from an older
     /// copy or deleted. `load` and every write refuse such a pair, and `create` refuses a manifest that records an
-    /// approval state, because creating one again would reset its counters (spec §3.9). Nothing was written.
+    /// approval state, because creating one again would reset its counters (spec §12). Nothing was written.
     #[error(transparent)]
     PartialRestore(PartialRestore),
     /// The approval state file could not be read, or is over its size limit.
@@ -301,9 +301,9 @@ impl ApprovalState {
     /// Reads `approval.age` and opens it as the approval state of vault `vault_id`, refusing it unless it and this
     /// vault's manifest on disk are a pair some sequence of writes leaves together.
     ///
-    /// Any error is damaged shared state (spec §3.10): approvals cannot be checked, so the service must not proxy. A
+    /// Any error is damaged shared state (spec §13): approvals cannot be checked, so the service must not proxy. A
     /// [`ApprovalStateError::PartialRestore`] means one of the two files was restored from an older copy, so the
-    /// counters may have gone backwards; it is never repaired here (spec §3.9).
+    /// counters may have gone backwards; it is never repaired here (spec §12).
     pub fn load(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, vault_id: VaultId) -> Result<Self, ApprovalStateError> {
         let state = Self::read(lock, fs, identity, vault_id)?;
         let manifest = read_vault_manifest(lock, fs, identity, vault_id)?;
@@ -364,7 +364,7 @@ impl ApprovalState {
         self.committed
     }
 
-    /// Durably reserves the next approval version and returns it, before anything is signed (spec §3.9).
+    /// Durably reserves the next approval version and returns it, before anything is signed (spec §12).
     ///
     /// The version is consumed whether or not signing succeeds. At `u64::MAX` this returns
     /// [`ApprovalStateError::Exhausted`] and touches no file, and the caller must not sign. Only an `Ok` version may
@@ -392,7 +392,7 @@ impl ApprovalState {
         Ok(version)
     }
 
-    /// Durably makes `(version, digest)` the committed approval: the commit point of an approval (spec §3.9, step 5).
+    /// Durably makes `(version, digest)` the committed approval: the commit point of an approval (spec §12, step 5).
     ///
     /// `version` must be reserved and newer than the committed version; anything else is refused before any file is
     /// touched. The caller has already checked the signature over this version and digest.
@@ -424,7 +424,7 @@ impl ApprovalState {
         }
     }
 
-    /// Durably pins `approver` in place of the current one, keeping both counters (spec §3.9).
+    /// Durably pins `approver` in place of the current one, keeping both counters (spec §12).
     ///
     /// The active signature stops verifying because the key changed, until the owner approves the config again at a
     /// new version. This performs an already authorized change: the caller checks administrator or existing-owner
@@ -465,7 +465,7 @@ impl ApprovalState {
     /// Replaces the file with `next` at the next state generation, then makes that the state in memory. The disk checks
     /// come first: a stale in-memory state would otherwise write lower counters over newer ones, and the manifest on
     /// disk gives the peer generation. A partial restore is refused rather than written over: recording the restored
-    /// manifest as the peer would make the pair agree again and hide the restore (spec §3.9).
+    /// manifest as the peer would make the pair agree again and hide the restore (spec §12).
     fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, next: Self) -> Result<(), ApprovalStateError> {
         self.ensure_disk_matches(lock, fs, identity)?;
         let manifest = read_vault_manifest(lock, fs, identity, self.vault_id)?;

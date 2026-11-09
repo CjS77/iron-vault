@@ -1,4 +1,4 @@
-//! The admin interface: what the CLI and the service exchange over the admin socket (spec §3.2).
+//! The admin interface: what the CLI and the service exchange over the admin socket (spec §5).
 
 // The server and its socket use tokio and rustix, which this crate depends on only on Linux, like the peer-credential
 // adapter the server relies on.

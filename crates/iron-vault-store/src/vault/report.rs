@@ -8,7 +8,7 @@ use iron_vault_policy::CredentialName;
 
 use crate::{ErrorKindLabel, RecordId, StateFileName};
 
-/// Why a record the manifest lists did not load (spec §3.10).
+/// Why a record the manifest lists did not load (spec §13).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RecordDamage {
     /// The record file does not exist.

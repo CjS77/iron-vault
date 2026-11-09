@@ -15,7 +15,7 @@ use crate::validated::ValidatedConfig;
 
 const SECRET: &str = "S3CR3T";
 
-/// Permits every §3.3 credential on its route's host at 443.
+/// Permits every §6 credential on its route's host at 443.
 struct Catalog;
 
 impl CredentialCatalog for Catalog {
@@ -39,7 +39,7 @@ fn origins(host: &str, port: u16) -> BTreeSet<(Host, Port)> {
     [(host.parse().unwrap(), Port::try_from(port).unwrap())].into()
 }
 
-/// The §3.3 example with every route opened to every path.
+/// The §6 example with every route opened to every path.
 fn policy() -> ActivePolicy {
     let doc = [
         "[\"/latest\", \"/historical/**\"]",

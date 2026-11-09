@@ -1,4 +1,4 @@
-//! The stored form of a caller token (spec §3.3, §3.4).
+//! The stored form of a caller token (spec §6, §7).
 
 use std::fmt;
 use std::str::FromStr;
@@ -60,7 +60,7 @@ impl TokenHash {
     }
 
     /// Whether `token` hashes to this digest, compared in constant time so that response timing does not reveal how
-    /// many leading bytes of a guess's digest were right (spec §3.4).
+    /// many leading bytes of a guess's digest were right (spec §7).
     pub fn matches(&self, token: &CallerToken) -> bool {
         self.0.as_slice().ct_eq(Self::of(token).0.as_slice()).into()
     }

@@ -1,4 +1,4 @@
-//! The exact destinations a credential record's secret may reach (spec §3.3).
+//! The exact destinations a credential record's secret may reach (spec §6).
 
 use std::collections::BTreeSet;
 
@@ -7,7 +7,7 @@ use thiserror::Error;
 
 /// A credential record's non-empty set of exact host and port pairs.
 ///
-/// There is no scheme field: HTTPS is mandatory (spec §3.3), so an origin with any other scheme cannot be expressed.
+/// There is no scheme field: HTTPS is mandatory (spec §6), so an origin with any other scheme cannot be expressed.
 /// The set is ordered, so iterating it, and so encoding it, always gives the same sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermittedOrigins(BTreeSet<(Host, Port)>);

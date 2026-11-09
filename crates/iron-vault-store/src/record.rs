@@ -1,4 +1,4 @@
-//! The credential record: a secret bound to its identity and the origins it may reach (spec §3.3).
+//! The credential record: a secret bound to its identity and the origins it may reach (spec §6).
 
 mod encoding;
 mod resolved;
@@ -14,7 +14,7 @@ use crate::record_id::RecordId;
 pub use encoding::{RecordError, decode, encode};
 pub use resolved::ResolvedCredential;
 
-/// Where a credential record's secret came from (spec §1.3, §3.3).
+/// Where a credential record's secret came from (spec §3, §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     /// The owner entered the secret through `add` or `replace`.
@@ -88,7 +88,7 @@ impl CredentialRecord {
     }
 
     /// Resolves this record's material for `slot` and keeps it with this record's origins, the intended way to build
-    /// the bound credential the final outgoing-request check takes (R-4).
+    /// the bound credential the final outgoing-request check takes (§6).
     pub fn resolve(&self, slot: &Slot, request: &AuthorizedRequest) -> Result<ResolvedCredential<'_>, KindError> {
         iron_vault_kinds::resolve(&self.material, slot, request).map(|resolution| ResolvedCredential::new(resolution, &self.origins))
     }

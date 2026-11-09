@@ -1,7 +1,7 @@
-//! Socket activation (spec §3.4): request listeners that systemd binds and passes to the service by name.
+//! Socket activation (spec §7): request listeners that systemd binds and passes to the service by name.
 //!
 //! A service that binds its own TCP port leaves a gap at every restart in which another local process can bind the
-//! port, collect caller tokens and forge responses (R-6). Under socket activation systemd holds the port from boot and
+//! port, collect caller tokens and forge responses (§7). Under socket activation systemd holds the port from boot and
 //! across restarts, so in a protected Linux install every TCP listener must arrive that way. A Unix request socket is
 //! protected by its service-owned directory instead, so it may be activated or bound by the service.
 //!

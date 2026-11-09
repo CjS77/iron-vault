@@ -226,7 +226,7 @@ impl AdminCommand {
     }
 }
 
-/// No command accepts an external signature (§3.2): the service signs only the pending config of its own approval
+/// No command accepts an external signature (§5): the service signs only the pending config of its own approval
 /// transaction. The test lists every argument of every command through an exhaustive match, so a new command does not
 /// compile until its arguments are listed and checked here.
 #[cfg(test)]

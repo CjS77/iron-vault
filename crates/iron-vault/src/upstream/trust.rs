@@ -1,4 +1,4 @@
-//! Upstream trust: the trust anchors an upstream's certificate must chain to (specification §3.7).
+//! Upstream trust: the trust anchors an upstream's certificate must chain to (specification §10).
 //!
 //! The outbound client trusts the webpki roots compiled into this binary or, for a route that names one, the CA
 //! certificates in an administrator-installed pinned CA file. It builds its own rustls config over exactly those roots,

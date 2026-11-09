@@ -1,4 +1,4 @@
-//! Charging requests against route and caller rate limits under concurrency (spec §3.5, §3.12, §3.15, R-1).
+//! Charging requests against route and caller rate limits under concurrency (spec §8, §15, §19).
 //!
 //! Each route has one [`TokenBucket`] shared by all its callers, and a caller may also have a stricter bucket on that
 //! route. A request passes only if both allow it, and it takes a token from both or from neither: otherwise a request
@@ -18,7 +18,7 @@ use crate::validated::ValidatedConfig;
 
 /// The token buckets for one [`ActivePolicy`], shared by every thread that serves requests.
 ///
-/// The service charges a request after authorizing it and before confirmation or credential resolution (spec §3.5
+/// The service charges a request after authorizing it and before confirmation or credential resolution (spec §8
 /// step 5). Each route's buckets sit behind their own lock, so requests on different routes never contend, and a
 /// charge locks exactly one route, so there is no lock ordering to get wrong.
 ///
@@ -48,7 +48,7 @@ pub enum ExhaustedLimit {
     Both,
 }
 
-/// A request refused because a rate limit is exhausted; the service answers `429` (spec §3.12).
+/// A request refused because a rate limit is exhausted; the service answers `429` (spec §15).
 ///
 /// It names only the requesting caller's own limit or the route's aggregate one, never another caller's usage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -94,7 +94,7 @@ pub enum ChargeError {
 }
 
 impl RateLimiter {
-    /// Creates every bucket for `policy`, all empty and accounting for time from `now` (spec §3.5).
+    /// Creates every bucket for `policy`, all empty and accounting for time from `now` (spec §8).
     ///
     /// Routes that are unavailable get buckets too; authorization keeps requests off them, and a limiter whose routes
     /// match the configuration needs no rebuild rule of its own.
@@ -197,7 +197,7 @@ mod tests {
     use crate::spec_example::SPEC_EXAMPLE;
     use crate::test_accounts::FakeAccounts;
 
-    /// A vault where every §3.3 credential is usable at its route's upstream.
+    /// A vault where every §6 credential is usable at its route's upstream.
     struct Healthy;
 
     impl CredentialCatalog for Healthy {

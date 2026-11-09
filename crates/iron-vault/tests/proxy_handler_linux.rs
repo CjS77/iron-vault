@@ -1,5 +1,5 @@
 //! The proxy handler end to end: a caller on a Unix request socket, the real request server and pipeline, and a
-//! recording TLS test upstream (specification §3.5 steps 9-10, §3.12).
+//! recording TLS test upstream (specification §8 steps 9-10, §15).
 //!
 //! The service account is the test's own uid, and the caller authenticates with a token in a dedicated header, so an
 //! upstream echoing that header back is the case the relay must strip.

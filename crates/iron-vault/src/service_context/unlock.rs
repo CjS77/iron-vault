@@ -1,6 +1,6 @@
 //! `unlock`'s initialization check (design/vault-initialization.md, "Unlock needs an initialized vault"): the state
 //! directories are read before the passphrase prompt and again under the context's mutex, so no passphrase is asked
-//! for, or spent on scrypt, when there is no vault to open. Its memory check (§3.11) runs at the same two points, so a
+//! for, or spent on scrypt, when there is no vault to open. Its memory check (§14) runs at the same two points, so a
 //! protected install whose memory is not locked never asks for the passphrase or opens the vault.
 
 use std::sync::Arc;
@@ -48,7 +48,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// Refuses an unlock in a protected or container install unless `memory` is `Locked` (§3.11). No secret is in memory before unlock,
+/// Refuses an unlock in a protected or container install unless `memory` is `Locked` (§14). No secret is in memory before unlock,
 /// so the service stays Locked with nothing to leak, and `status` says why. An `Unsupported` platform refuses too: no
 /// protected platform ships without a locking adapter. Development mode has reported the failure at startup and goes
 /// on.

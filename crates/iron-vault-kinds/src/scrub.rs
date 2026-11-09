@@ -1,4 +1,4 @@
-//! The byte forms of an injected secret that response scrubbing watches for (spec §3.8).
+//! The byte forms of an injected secret that response scrubbing watches for (spec §11).
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;

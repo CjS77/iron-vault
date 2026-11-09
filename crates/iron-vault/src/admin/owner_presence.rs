@@ -1,4 +1,4 @@
-//! The approval passphrase prompt (specification §3.9, §3.3): `config approve` asks it before signing, and `replace`
+//! The approval passphrase prompt (specification §12, §6): `config approve` asks it before signing, and `replace`
 //! and `rm` ask it as owner presence (design/credential-commands.md, "Owner presence"). Both use this one prompt and
 //! the service context's one key check, so the two cannot drift apart.
 

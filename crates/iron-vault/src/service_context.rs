@@ -1,4 +1,4 @@
-//! The service context (specification §3.1, §3.11, §3.12): the one owned value the running service is. It drives the
+//! The service context (specification §4, §14, §15): the one owned value the running service is. It drives the
 //! service state model, keeps the vault identity from unlock until lock or stop, holds the open vault through the
 //! serving snapshot, and binds the request interface.
 //!
@@ -6,8 +6,8 @@
 //! without a new unlock, and an Unavailable service holds the one key and none of the decrypted credential records.
 //!
 //! Every change takes one async mutex and goes through [`next`], so no two changes interleave and none makes a
-//! transition the §3.12 diagram lacks. Scrypt and the config check run on the blocking pool with the mutex held, so the
-//! runtime thread stays free to answer requests with `503`, serve other admin commands and handle signals (§3.12).
+//! transition the §15 diagram lacks. Scrypt and the config check run on the blocking pool with the mutex held, so the
+//! runtime thread stays free to answer requests with `503`, serve other admin commands and handle signals (§15).
 //! Requests never take that mutex: each loads its admission from the snapshot holder, which every transition stores
 //! into.
 //!
@@ -97,7 +97,7 @@ pub enum UnlockRefusal {
     /// The unlock task ended without a result (it panicked, or the runtime is shutting down); the service stays Locked.
     #[error("the vault could not be unlocked: the unlock did not finish")]
     Interrupted,
-    /// A protected install's memory is not locked against swap, so the vault is not opened (§3.11). Holds the memory
+    /// A protected install's memory is not locked against swap, so the vault is not opened (§14). Holds the memory
     /// protection status, which names the `RLIMIT_MEMLOCK` soft limit or the locking error; never `Locked`.
     #[error("memory is not locked against swap ({}), so a protected install does not open the vault", unprotected_reason(.0))]
     MemoryUnprotected(MemoryProtection),
@@ -108,7 +108,7 @@ pub enum UnlockRefusal {
 }
 
 /// The state-directory lock and the config-directory lock, held for the service's lifetime: a second instance on
-/// either directory fails to start (§3.1).
+/// either directory fails to start (§4).
 #[derive(Debug)]
 pub struct ServiceLocks {
     state: StateDirLock,
@@ -359,7 +359,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// It waits for the service-wide lock, as [`recheck`](Self::recheck) does, so it never runs during an approval.
     ///
     /// Cancel-safe: once the service enters Checking, a task of its own finishes the check and the move to Ready or
-    /// Unavailable even if this future is dropped, so the service never stays in Checking (§3.12).
+    /// Unavailable even if this future is dropped, so the service never stays in Checking (§15).
     pub async fn enter_checking(&self, identity: VaultIdentity) -> Result<ServiceState, IllegalTransition> {
         let service_wide = Arc::clone(&self.service_wide).lock_owned().await;
         let inner = Arc::clone(&self.inner).lock_owned().await;
@@ -384,7 +384,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         self.check_and_settle_detached(service_wide, inner, event, identity).await
     }
 
-    /// Reloads on SIGHUP (§3.9, Q-5): [`recheck`](Self::recheck) with [`ServiceEvent::Reload`], which only a Ready service
+    /// Reloads on SIGHUP (§12, Q-5): [`recheck`](Self::recheck) with [`ServiceEvent::Reload`], which only a Ready service
     /// accepts. In Locked, Checking or Unavailable nothing changes and the signal is logged at INFO: a reload is not an
     /// authorized repair, so it never leads out of Unavailable. A failed check leaves the service Unavailable and logs
     /// `config.reload-failed` at WARN.
@@ -397,7 +397,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         })
     }
 
-    /// Unlocks with the owner's `passphrase` (§3.11) and runs the config check: Locked to Checking, then Ready or
+    /// Unlocks with the owner's `passphrase` (§14) and runs the config check: Locked to Checking, then Ready or
     /// Unavailable, as [`enter_checking`](Self::enter_checking) does. Each state change is logged as a lock transition.
     ///
     /// It waits for the service-wide lock, as [`recheck`](Self::recheck) does: the owner has already typed the passphrase,
@@ -407,7 +407,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// The state is checked under the mutex, so two unlocks never both open the vault, and so is the initialization
     /// state, which `unlock` also read before its prompt: only Initialized goes on. A protected install whose memory is
     /// not locked is refused next, before scrypt runs, so the passphrase is never used. A wrong passphrase or an
-    /// unreadable envelope leaves the service Locked: no other storage is ever tried (R-22). The operational identity
+    /// unreadable envelope leaves the service Locked: no other storage is ever tried (§15). The operational identity
     /// the passphrase opens is dropped inside [`unlock_with_passphrase`], once it has unwrapped the vault identity.
     ///
     /// Cancel-safe: dropping this future during scrypt leaves the service Locked, and dropping it once the service has
@@ -436,7 +436,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 
     /// Locks the service on an explicit `lock`: Ready or Unavailable to Locked, clearing the vault identity and every
-    /// cached secret (§3.13, §3.11). §3.12 draws a lock only from those two states; from any other the event is refused.
+    /// cached secret (§16, §14). §15 draws a lock only from those two states; from any other the event is refused.
     ///
     /// First it cancels an approval waiting at a prompt, which has reserved nothing, and waits for the service-wide lock:
     /// an approval past its prompts, or a config check, holds it for seconds. Then, under the context's mutex, it stops
@@ -474,10 +474,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 
     /// Stops the service on SIGTERM or SIGINT: Ready to Stopped, then drops the snapshot, the vault in it, the approval
-    /// state and the vault identity, so their secret buffers clear (§3.11), and closes the request listeners, removing
+    /// state and the vault identity, so their secret buffers clear (§14), and closes the request listeners, removing
     /// their socket files.
     ///
-    /// §3.12 draws a stop only from Ready. From any other state there is no transition to make: the process ends all
+    /// §15 draws a stop only from Ready. From any other state there is no transition to make: the process ends all
     /// the same, after the same teardown.
     pub async fn stop(&self) {
         let mut inner = self.inner.lock().await;
@@ -627,7 +627,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 
     /// [`Settler::check_and_settle`] in a spawned task that owns `inner` and the service-wide lock, so the move out of
-    /// Checking finishes even if this future is dropped (§3.12 leaves Checking only on a pass or a failure), and the
+    /// Checking finishes even if this future is dropped (§15 leaves Checking only on a pass or a failure), and the
     /// service-wide lock is held until the check ends. A task that ends without a result has already failed closed
     /// through its [`SettleGuard`], so the caller only reads the state it left.
     async fn check_and_settle_detached(
@@ -703,7 +703,7 @@ impl Drop for LockRequest<'_> {
 
 /// The settle task's hold on `inner`. The task owns it, so a crash fails closed even after the caller is gone: dropping
 /// it while the service is still in Checking moves the service to Unavailable needing recovery, drops the vault the
-/// check opened and logs `config.check-failed`. A settled task leaves a state §3.12 allows, which stays.
+/// check opened and logs `config.check-failed`. A settled task leaves a state §15 allows, which stays.
 struct SettleGuard {
     inner: OwnedMutexGuard<Inner>,
     holder: Arc<SnapshotHolder>,

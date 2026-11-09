@@ -35,7 +35,7 @@ pub fn seal_approval_state(identity: &VaultIdentity, state: &ApprovalState) -> R
 
 /// The approval state a file holds, after its size, header and MAC are checked and before anything is decrypted.
 ///
-/// A MAC mismatch, a payload for another vault or a broken invariant is damaged shared state (spec §3.10).
+/// A MAC mismatch, a payload for another vault or a broken invariant is damaged shared state (spec §13).
 pub fn open_approval_state(identity: &VaultIdentity, file: &[u8]) -> Result<ApprovalState, ApprovalStateError> {
     let (vault_id, payload) = KIND.open(identity, file)?;
     let state = encoding::decode(&payload)?;

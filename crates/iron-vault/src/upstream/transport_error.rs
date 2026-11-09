@@ -1,4 +1,4 @@
-//! Why an upstream exchange failed, with nothing from the failure itself (specification §3.12).
+//! Why an upstream exchange failed, with nothing from the failure itself (specification §15).
 //!
 //! A `reqwest::Error` formats the request URL, whose query may hold a query-slot credential, and its source chain
 //! carries hyper and rustls diagnostics. So an error is classified only through its predicates and its source types,

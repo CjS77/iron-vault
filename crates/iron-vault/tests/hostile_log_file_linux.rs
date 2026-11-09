@@ -1,4 +1,4 @@
-//! The whole log file after a hostile run holds none of the never-log values (specification §3.15; `design/audit-logging.md`,
+//! The whole log file after a hostile run holds none of the never-log values (specification §18; `design/audit-logging.md`,
 //! "Never logged"; K-85 and K-95 do the same for the stderr log of the upstream client).
 //!
 //! The service logs through the rolling-file destination (`LogFile` in a verified directory) with the production

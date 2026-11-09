@@ -1,6 +1,6 @@
 //! HTTP methods that a route may allow.
 //!
-//! The set is a closed allowlist: `CONNECT` would turn the proxy into a tunnel (spec §3.5 step 2) and `TRACE`
+//! The set is a closed allowlist: `CONNECT` would turn the proxy into a tunnel (spec §8 step 2) and `TRACE`
 //! reflects request headers, including injected credentials, back to the caller. Neither can ever be granted.
 
 use std::fmt;
@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::display::quoted;
 
-/// An HTTP method from the allowlist a route may grant (spec §3.3, §3.5).
+/// An HTTP method from the allowlist a route may grant (spec §6, §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub enum Method {

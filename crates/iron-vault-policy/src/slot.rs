@@ -1,6 +1,6 @@
-//! The one place a route may write its credential (spec §1.3, §3.6).
+//! The one place a route may write its credential (spec §3, §9).
 //!
-//! Configuration spells a slot in one of four TOML shapes (spec §3.3):
+//! Configuration spells a slot in one of four TOML shapes (spec §6):
 //!
 //! ```toml
 //! slot = { header = "X-Subscription-Token" }
@@ -101,7 +101,7 @@ pub enum SlotError {
 }
 
 impl HeaderSlot {
-    /// A header slot, refused when `name` is a reserved header (spec §3.6).
+    /// A header slot, refused when `name` is a reserved header (spec §9).
     pub fn new(name: HeaderName, format: SlotFormat) -> Result<Self, SlotError> {
         if reserved_headers::is_reserved(&name) {
             return Err(SlotError::ReservedHeader(name));

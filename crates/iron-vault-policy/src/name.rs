@@ -1,7 +1,7 @@
 //! Validated configuration names for callers, routes, listeners, and credentials.
 //!
 //! Names reach logs and audit events, so every name type shares one strict rule that leaves no room for log
-//! injection: 1 to [`MAX_NAME_LEN`] bytes of ASCII `[a-z0-9_-]`, starting with a lowercase letter (spec §3.15).
+//! injection: 1 to [`MAX_NAME_LEN`] bytes of ASCII `[a-z0-9_-]`, starting with a lowercase letter (spec §18).
 
 use std::fmt;
 use std::str::FromStr;
@@ -134,25 +134,25 @@ macro_rules! name_type {
 }
 
 name_type!(
-    /// The configured name of a caller, the authenticated program identity granted named routes (spec §3.3, §3.4).
+    /// The configured name of a caller, the authenticated program identity granted named routes (spec §6, §7).
     CallerName,
     "caller"
 );
 
 name_type!(
-    /// The configured name of a route, which a caller is granted by name (spec §3.3).
+    /// The configured name of a route, which a caller is granted by name (spec §6).
     RouteName,
     "route"
 );
 
 name_type!(
-    /// The configured name of a listener, the endpoint a caller connects through (spec §3.3, §3.4).
+    /// The configured name of a listener, the endpoint a caller connects through (spec §6, §7).
     ListenerName,
     "listener"
 );
 
 name_type!(
-    /// The unique name of a credential, which routes reference to select it (spec §3.3).
+    /// The unique name of a credential, which routes reference to select it (spec §6).
     CredentialName,
     "credential"
 );

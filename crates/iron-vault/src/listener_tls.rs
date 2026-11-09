@@ -1,4 +1,4 @@
-//! TLS listeners (specification §3.4, R-26): a TCP listener that terminates TLS with the certificate chain and private
+//! TLS listeners (specification §7): a TCP listener that terminates TLS with the certificate chain and private
 //! key the administrator installed for it, so a network observer can neither read caller tokens and request bodies
 //! nor change them.
 //!
@@ -34,7 +34,7 @@ use crate::trusted_path::ExpectedOwner;
 
 /// How long a client has to finish the TLS handshake before its connection is dropped.
 ///
-/// A placeholder until specification §9 publishes the listener limits: long enough for a slow network, short enough
+/// A placeholder until implementation spec §3 publishes the listener limits: long enough for a slow network, short enough
 /// that silent connections cannot pile up.
 pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 

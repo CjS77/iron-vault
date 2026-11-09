@@ -1,9 +1,9 @@
 //! The outgoing request: the authorized method, the upstream target and the outgoing headers with the route's slot
-//! filled exactly once (spec §3.5 step 7, §3.6).
+//! filled exactly once (spec §8 step 7, §9).
 //!
 //! The slot is the only place a credential is written. Only the text the slot is about to replace is scanned for
 //! markers; the body, the path, other headers and other query parameters are never read, so a marker there stays
-//! inert (R-10). The credential always comes from the route, never from a marker (§3.5 step 6, §8.2 Q-1).
+//! inert (§9). The credential always comes from the route, never from a marker (§8 step 6, implementation spec §2.2 Q-1).
 
 use secrecy::ExposeSecret;
 use secrecy::zeroize::Zeroizing;
@@ -44,10 +44,10 @@ pub struct OutgoingRequest {
 /// The text never contains a header value, query text or the slot value: each may hold a secret.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum AssembleError {
-    /// A marker in the slot names a credential other than the route's: `400` (§3.12), with no upstream request.
+    /// A marker in the slot names a credential other than the route's: `400` (§15), with no upstream request.
     #[error("a marker in the slot names a different credential")]
     ForeignMarker,
-    /// A `{iv:` in the slot has an invalid name or no closing `}`: `400` (§3.12), with no upstream request.
+    /// A `{iv:` in the slot has an invalid name or no closing `}`: `400` (§15), with no upstream request.
     #[error("the slot holds a malformed {{iv:…}} marker")]
     MalformedMarker,
     /// The slot value for a header or Basic slot is not ASCII. A header value is sent as bytes that upstreams read as

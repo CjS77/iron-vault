@@ -1,4 +1,4 @@
-//! Vault writes through the running service (specification §3.3, §3.10, §3.12): `add` here, and `replace` and `rm`
+//! Vault writes through the running service (specification §6, §13, §15): `add` here, and `replace` and `rm`
 //! in [`plan`].
 //!
 //! The open vault lives inside the immutable serving snapshot, so a write never goes through it. It opens a fresh
@@ -96,7 +96,7 @@ enum Written {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Adds a credential record named `name`, refusing a name the manifest lists (§3.3). Only a Ready service writes.
+    /// Adds a credential record named `name`, refusing a name the manifest lists (§6). Only a Ready service writes.
     ///
     /// It fails at once with [`VaultChangeRefusal::Busy`] while an approval or a reload holds the service-wide lock, so a
     /// pending approval never sees the catalog change under it. On success, and on an uncertain commit the reopened

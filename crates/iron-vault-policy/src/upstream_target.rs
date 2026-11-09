@@ -1,4 +1,4 @@
-//! The upstream target: the URL an authorized request is sent to (spec §3.5 step 7, §3.6).
+//! The upstream target: the URL an authorized request is sent to (spec §8 step 7, §9).
 //!
 //! The URL is built through the `url` API from the configured [`UpstreamUrl`] and an [`AuthorizedRequest`], never by
 //! accepting caller text as a URL, so a caller cannot supply a scheme, an authority or a path the authorizer did not
@@ -157,7 +157,7 @@ mod tests {
     use crate::test_accounts::FakeAccounts;
     use crate::validated::ValidatedConfig;
 
-    /// Permits every §3.3 credential on its route's host, on both 443 and 8443.
+    /// Permits every §6 credential on its route's host, on both 443 and 8443.
     struct Catalog;
 
     impl CredentialCatalog for Catalog {
@@ -176,7 +176,7 @@ mod tests {
         }
     }
 
-    /// The §3.3 example with every route opened to every path, so any request target can be built.
+    /// The §6 example with every route opened to every path, so any request target can be built.
     fn open_example() -> String {
         [
             "[\"/latest\", \"/historical/**\"]",

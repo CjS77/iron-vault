@@ -1,5 +1,5 @@
 //! The offline recovery key: a second, independent way to unwrap the identity envelope when the machine or the
-//! passphrase is lost (specification §1.3, §3.11, §3.13).
+//! passphrase is lost (specification §3, §14, §16).
 //!
 //! The service generates the key at initialization, hands its secret text to the owner to keep offline, and enrolls only
 //! its recipient key in `identity.age`. Nothing in the store writes or keeps the secret, so the recovery path needs

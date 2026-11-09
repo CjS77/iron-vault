@@ -1,5 +1,5 @@
 //! The identity envelope: the vault identity wrapped for every enrolled recipient in `identity.age` (specification
-//! §3.10, §3.11).
+//! §13, §14).
 //!
 //! The envelope is a plain binary `age` file whose plaintext is the vault identity's secret text. It holds only X25519
 //! stanzas, because `age` forbids a passphrase stanza beside any other recipient; passphrase unlock and the recovery key
@@ -63,7 +63,7 @@ pub enum EnvelopeError {
 
 /// Encrypts the vault identity's secret text as an `age` file with one X25519 stanza per key in `recipients`.
 ///
-/// A [`RecipientSet`] holds only X25519 keys, so no passphrase stanza can be mixed in (specification §3.11). The secret
+/// A [`RecipientSet`] holds only X25519 keys, so no passphrase stanza can be mixed in (specification §14). The secret
 /// text lives only in a buffer that is cleared on drop.
 pub fn wrap_identity(identity: &VaultIdentity, recipients: &RecipientSet) -> Result<Vec<u8>, EnvelopeError> {
     let secret = identity.secret_text();

@@ -1,4 +1,4 @@
-//! Generating caller tokens from the operating system's random source (spec §3.4).
+//! Generating caller tokens from the operating system's random source (spec §7).
 
 use iron_vault_policy::CallerToken;
 use rand_core::OsRng;

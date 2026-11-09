@@ -1,7 +1,7 @@
-//! Turning a caller's headers into [`OutgoingHeaders`] (specification §3.6).
+//! Turning a caller's headers into [`OutgoingHeaders`] (specification §9).
 //!
 //! Every caller header is untrusted. Forwarding and method-override headers would let an upstream apply a different
-//! route policy than Iron Vault checked (R-9, R-11), a forwarded caller token would leak it, and conflicting framing
+//! route policy than Iron Vault checked (§9), a forwarded caller token would leak it, and conflicting framing
 //! headers would let Iron Vault and the upstream disagree about where the body ends.
 
 use thiserror::Error;
@@ -11,7 +11,7 @@ use crate::header_name::HeaderName;
 use crate::header_value::HeaderValue;
 use crate::reserved_headers::is_reserved;
 
-/// Why a caller's headers were rejected; the request interface answers every variant with `400` (§3.12).
+/// Why a caller's headers were rejected; the request interface answers every variant with `400` (§15).
 ///
 /// The text names the header, never its value, because values can carry tokens.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

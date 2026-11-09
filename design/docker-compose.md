@@ -1,14 +1,14 @@
 # Docker Compose deployment
 
 This document decides how Iron Vault runs under Docker Compose on a server or a Naomi appliance
-([§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances)): the build profile, the service
+([§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances)): the build profile, the service
 account, the caller networks, how TCP listeners are bound, the hardening of every container and of the host, admin
 access, and how a host TPM unlocks the vault at startup. The [Linux package](linux-package.md) is the model for the
 host side, and the paths and modes here are the ones the trusted-path checks (`trusted_path.rs`) accept.
 
 Two items under [Proposed specification changes](#proposed-specification-changes) still await the owner's
-approval: the §3.14 software signer, the one specification change still open, and the glossary edits that follow from
-the applied §3.2 change. Everything else follows the specification as it stands.
+approval: the §17 software signer, the one specification change still open, and the glossary edits that follow from
+the applied §5 change. Everything else follows the specification as it stands.
 
 The [Compose install guide](../book/src/installation/compose-install.md) is the administrator's walkthrough of this
 design.
@@ -24,15 +24,15 @@ the [Linux package](linux-package.md), and the two never share a host ([open que
 
 Not supported in v0:
 
-- **Rootless Docker.** §3.14 forbids isolating Iron Vault with a daemon its owner's malware controls. A rootless daemon
+- **Rootless Docker.** §17 forbids isolating Iron Vault with a daemon its owner's malware controls. A rootless daemon
   run by a dedicated account would not have that problem, but its containers see host uids only through that
   account's user namespace, which breaks admin access in the same way as remapping (below).
 - **`userns-remap`.** Under remapping the container runs in its own user namespace, and the kernel reports a host uid
   with no mapping there as the overflow uid. A host `sudo iron-vault` would arrive as uid 65534, which identifies no
   account and which the service never accepts as an admin principal
-  ([§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners)). Admin access would be impossible.
+  ([§7](iron-vault-specification.md#7-caller-authentication-and-listeners)). Admin access would be impossible.
 - **Podman.** Its rootful mode may work, but none of this has been checked against it.
-- **A TPM device passed into the container.** §3.14 allows it only after its own validation.
+- **A TPM device passed into the container.** §17 allows it only after its own validation.
 
 ## Container profile
 
@@ -56,13 +56,13 @@ Everything else is `Protected`'s:
 - the service account `iron-vault`, which the service must run as (`require_service_account`);
 - the trusted-path rules, with the service account as the expected owner;
 - unlock requires locked memory: without it the service stays Locked, attempts no host unlock, and refuses `unlock`
-  with `memory-unprotected` ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)).
+  with `memory-unprotected` ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)).
 
 The `deployment_profile` log field and `status` show `container`.
 
 ## Service identity
 
-The service account has one fixed uid and gid, the same in the image and on the host: §3.14's "dedicated host-mapped
+The service account has one fixed uid and gid, the same in the image and on the host: §17's "dedicated host-mapped
 service identity". Without remapping the container shares the host's uids, so the uid must be the same in three places:
 
 - **The image** has an `iron-vault` user and group at that uid and gid. The service resolves the service account from
@@ -155,12 +155,12 @@ IP subject alternative name. One certificate may name every listener's address, 
 
 Docker cannot pass a listening socket from the host into a container, so the Container profile binds its TCP
 listeners itself: `socket_activation::check_origin` lets `Container` bind an unadopted TCP endpoint, where `Protected`
-refuses it. [§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners) allows this for a container
+refuses it. [§7](iron-vault-specification.md#7-caller-authentication-and-listeners) allows this for a container
 installation.
 
-Socket activation exists for R-6: a service that binds its own port leaves a gap at each restart in which another
-local process can take the port, collect caller tokens and forge responses. In the Container profile no one who could
-use that gap can reach it:
+Socket activation exists to stop listener squatting (§7): a service that binds its own port leaves a gap at each
+restart in which another local process can take the port, collect caller tokens and forge responses. In the Container
+profile no one who could use that gap can reach it:
 
 - **The addresses live in Iron Vault's own network namespace.** Each listener address is an interface address of Iron
   Vault's container. This holds only while no container joins that namespace with `network_mode: "service:…"` or
@@ -171,7 +171,7 @@ use that gap can reach it:
   the address or a route, nor `NET_RAW`, so it cannot send raw frames, such as ARP replies claiming the address or
   packets addressed to it on another interface. Every container on a caller network is pinned to its own static
   address, so Docker never hands Iron Vault's address to a caller that starts while Iron Vault is stopped.
-- **Every non-loopback listener uses TLS,** as §3.4 already requires, and every isolated-network listener is
+- **Every non-loopback listener uses TLS,** as §7 already requires, and every isolated-network listener is
   non-loopback. Whoever does take an address while Iron Vault is down, which only a runtime administrator can arrange,
   still cannot present Iron Vault's certificate, because the key is only in Iron Vault's mounts. The caller refuses the
   connection before sending anything. An isolated-network caller has no token to steal, and TLS keeps its request
@@ -186,7 +186,7 @@ Linux accepts a packet for any of its addresses on any interface. So a caller th
 packet to another caller's listener address through its own network, and be identified as the other caller. Dropping
 `NET_RAW` and withholding `NET_ADMIN` is what stops it, which is why the
 [caller checklist](#caller-containers) requires both
-([R-27](iron-vault-specification.md#34-caller-authentication-and-listeners)).
+([§7](iron-vault-specification.md#7-caller-authentication-and-listeners)).
 
 ## Hardening checklist
 
@@ -195,61 +195,61 @@ reference Compose file applies every line.
 
 ### Service container
 
-| Setting | Why | Threat |
+| Setting | Why | Spec |
 |---|---|---|
-| `user: "<uid>:<gid>"`, the fixed service account | The service runs as the account that owns its files and is refused as any other ([Service identity](#service-identity)). | R-25 |
-| `read_only: true` | The image's files cannot be changed from inside; the service writes only to its volumes and `/run/iron-vault`. The log directory `/var/log/iron-vault` is therefore not writable: the log goes to stdout, and a `[logging]` file destination would need a volume mounted there. | R-25 |
-| `cap_drop: [ALL]` | The service needs no capability. Without `CAP_DAC_OVERRIDE`, even root inside the container cannot open the vault's files or the admin socket. | R-25 |
-| `security_opt: [no-new-privileges:true]` | No set-uid program or file capability can raise the service's privileges. | R-25 |
-| `ulimits: memlock: -1` | `hardening.rs` locks memory only when `RLIMIT_MEMLOCK` is unlimited, and unlock requires locked memory. | R-20 |
-| `ulimits: core: 0` | No core dump holds service memory. The service also sets `RLIMIT_CORE` and clears `PR_SET_DUMPABLE`. | R-20 |
-| No `privileged`, `pid: host`, `ipc: host`, `network_mode: host`, `devices` or Docker socket | Each would let the container, or whatever compromises it, reach the host or other containers. | R-25 |
-| No `seccomp=unconfined` or `apparmor=unconfined` | Docker's default profiles allow what the service needs (`mlockall`, `prctl`) and refuse the rest. | R-25 |
-| No `environment` or `env_file` holding a secret | Environment variables are visible to `docker inspect` and inherited by children; §3.14 forbids secrets there. | R-25 |
-| `command: ["serve", "--log-to-stdout"]` and `logging: driver: json-file` with `max-size` and `max-file`, never `journald` | As [the log operations guide](../book/src/reference/log-operations.md#docker) says: the runtime keeps and rotates the log, and the journal's readers are not bound by the log's permissions. | — ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)) |
-| `restart: unless-stopped` | The service comes back after a crash and at boot, unattended ([§3.12](iron-vault-specification.md#312-service-states-and-errors)). `on-failure` would not restart it when the daemon starts. A Locked service has not failed and keeps running. | — |
-| `image:` pinned by digest | A retagged image cannot change what a later recreation runs. | R-28 |
-| Networks: `egress` and every caller network, each with a static `ipv4_address` | Each listener's address is fixed and on its caller's network alone. | R-27 |
-| No other container names it in `network_mode: "service:…"` or `"container:…"` | A container sharing Iron Vault's network namespace has every listener address as its own, so it could pose as any isolated-network caller and bind the addresses while Iron Vault restarts. | R-6, R-27 |
+| `user: "<uid>:<gid>"`, the fixed service account | The service runs as the account that owns its files and is refused as any other ([Service identity](#service-identity)). | §17 |
+| `read_only: true` | The image's files cannot be changed from inside; the service writes only to its volumes and `/run/iron-vault`. The log directory `/var/log/iron-vault` is therefore not writable: the log goes to stdout, and a `[logging]` file destination would need a volume mounted there. | §17 |
+| `cap_drop: [ALL]` | The service needs no capability. Without `CAP_DAC_OVERRIDE`, even root inside the container cannot open the vault's files or the admin socket. | §17 |
+| `security_opt: [no-new-privileges:true]` | No set-uid program or file capability can raise the service's privileges. | §17 |
+| `ulimits: memlock: -1` | `hardening.rs` locks memory only when `RLIMIT_MEMLOCK` is unlimited, and unlock requires locked memory. | §14 |
+| `ulimits: core: 0` | No core dump holds service memory. The service also sets `RLIMIT_CORE` and clears `PR_SET_DUMPABLE`. | §14 |
+| No `privileged`, `pid: host`, `ipc: host`, `network_mode: host`, `devices` or Docker socket | Each would let the container, or whatever compromises it, reach the host or other containers. | §17 |
+| No `seccomp=unconfined` or `apparmor=unconfined` | Docker's default profiles allow what the service needs (`mlockall`, `prctl`) and refuse the rest. | §17 |
+| No `environment` or `env_file` holding a secret | Environment variables are visible to `docker inspect` and inherited by children; §17 forbids secrets there. | §17 |
+| `command: ["serve", "--log-to-stdout"]` and `logging: driver: json-file` with `max-size` and `max-file`, never `journald` | As [the log operations guide](../book/src/reference/log-operations.md#docker) says: the runtime keeps and rotates the log, and the journal's readers are not bound by the log's permissions. | — ([§18](iron-vault-specification.md#18-logging)) |
+| `restart: unless-stopped` | The service comes back after a crash and at boot, unattended ([§15](iron-vault-specification.md#15-service-states-and-errors)). `on-failure` would not restart it when the daemon starts. A Locked service has not failed and keeps running. | — |
+| `image:` pinned by digest | A retagged image cannot change what a later recreation runs. | §17 |
+| Networks: `egress` and every caller network, each with a static `ipv4_address` | Each listener's address is fixed and on its caller's network alone. | §7 |
+| No other container names it in `network_mode: "service:…"` or `"container:…"` | A container sharing Iron Vault's network namespace has every listener address as its own, so it could pose as any isolated-network caller and bind the addresses while Iron Vault restarts. | §7 |
 
 ### Mounts
 
 | Mount | Why | Threat |
 |---|---|---|
-| Named volume `config` at `/etc/iron-vault` | The config directory. The image makes the directory `iron-vault`, `0700`, and Docker copies its owner and mode into the empty volume on first use, so the `ConfigDir` rule passes with no manual step. | R-25 |
-| Named volume `state` at `/var/lib/iron-vault` | The state directory, made the same way (`StateDir`, `0700`). | R-25 |
-| Host `/run/iron-vault` at `/run/iron-vault`, read-write | The service binds `admin.sock` there, so host root reaches it. The host's `0711` directory and the socket's `0600` keep every other host account out. | R-25 |
-| Host `/run/iron-vault-unlock` at `/run/iron-vault-unlock`, read-only | The unlock handoff. The directory is mounted, not the file: a file mount of a missing path makes Docker create a directory in its place, and a replaced file would not be seen. | R-25, R-28 |
-| Host `/etc/iron-vault-host/tls` at `/etc/iron-vault-tls`, read-only | Listener certificates (`AdminCertificate`) and keys (`AdminPrivateKey`: the service account's, `0600`). | R-26 |
-| Nothing else | No home directory, no Docker socket, no host path the service does not need. | R-25 |
+| Named volume `config` at `/etc/iron-vault` | The config directory. The image makes the directory `iron-vault`, `0700`, and Docker copies its owner and mode into the empty volume on first use, so the `ConfigDir` rule passes with no manual step. | §17 |
+| Named volume `state` at `/var/lib/iron-vault` | The state directory, made the same way (`StateDir`, `0700`). | §17 |
+| Host `/run/iron-vault` at `/run/iron-vault`, read-write | The service binds `admin.sock` there, so host root reaches it. The host's `0711` directory and the socket's `0600` keep every other host account out. | §17 |
+| Host `/run/iron-vault-unlock` at `/run/iron-vault-unlock`, read-only | The unlock handoff. The directory is mounted, not the file: a file mount of a missing path makes Docker create a directory in its place, and a replaced file would not be seen. | §17 |
+| Host `/etc/iron-vault-host/tls` at `/etc/iron-vault-tls`, read-only | Listener certificates (`AdminCertificate`) and keys (`AdminPrivateKey`: the service account's, `0600`). | §7 |
+| Nothing else | No home directory, no Docker socket, no host path the service does not need. | §17 |
 
 The volumes take their owner and mode from the image only when they are first created empty. Removing a volume
 removes the vault's only copy, as purging the Linux package's state directory does.
 
 ### Caller containers
 
-| Setting | Why | Threat |
+| Setting | Why | Spec |
 |---|---|---|
-| `cap_drop: [ALL]`, and never `NET_ADMIN` | Without `NET_RAW` a caller cannot forge frames or source addresses; without `NET_ADMIN` it cannot take another address or add a route. Docker grants `NET_RAW` by default, so it must be dropped. | R-27 |
-| `security_opt: [no-new-privileges:true]` | A set-uid binary in the caller's image cannot regain a dropped capability. | R-27 |
-| Its own caller network only, never `egress` or another caller's | The listener address identifies the caller only while no other container can reach it. | R-27 |
-| Never `network_mode: "service:iron-vault"`, `"container:…"` naming Iron Vault, or `host` | Sharing Iron Vault's network namespace makes every caller's listener address local to it. | R-6, R-27 |
-| A static `ipv4_address` of its own on its caller network | While Iron Vault is stopped its address is free; a caller with a dynamic address could be given it, and bind it. | R-6 |
-| No `config` or `state` volume, no `/run/iron-vault`, `/run/iron-vault-unlock` or TLS key mount, no Docker socket | A compromised caller can read nothing of the vault, reach no admin or unlock interface, and cannot control the daemon. | R-25 |
-| No `privileged`, `pid: host` or `ipc: host` | A caller must not see or enter Iron Vault's processes or memory. | R-25 |
-| Trusts only the CA that issued its listener's certificate | It talks to Iron Vault only if Iron Vault answers. | R-26 |
+| `cap_drop: [ALL]`, and never `NET_ADMIN` | Without `NET_RAW` a caller cannot forge frames or source addresses; without `NET_ADMIN` it cannot take another address or add a route. Docker grants `NET_RAW` by default, so it must be dropped. | §7 |
+| `security_opt: [no-new-privileges:true]` | A set-uid binary in the caller's image cannot regain a dropped capability. | §7 |
+| Its own caller network only, never `egress` or another caller's | The listener address identifies the caller only while no other container can reach it. | §7 |
+| Never `network_mode: "service:iron-vault"`, `"container:…"` naming Iron Vault, or `host` | Sharing Iron Vault's network namespace makes every caller's listener address local to it. | §7 |
+| A static `ipv4_address` of its own on its caller network | While Iron Vault is stopped its address is free; a caller with a dynamic address could be given it, and bind it. | §7 |
+| No `config` or `state` volume, no `/run/iron-vault`, `/run/iron-vault-unlock` or TLS key mount, no Docker socket | A compromised caller can read nothing of the vault, reach no admin or unlock interface, and cannot control the daemon. | §17 |
+| No `privileged`, `pid: host` or `ipc: host` | A caller must not see or enter Iron Vault's processes or memory. | §17 |
+| Trusts only the CA that issued its listener's certificate | It talks to Iron Vault only if Iron Vault answers. | §7 |
 
 ### Host
 
-| Control | Why | Threat |
+| Control | Why | Spec |
 |---|---|---|
-| `/etc/iron-vault-host` root-owned, `0700`: the Compose file, any `compose.override.yaml` and `.env` beside it, which Compose reads automatically | Whoever can write these changes what the next `docker compose up` runs, even without daemon access. | R-28 |
-| The image's build context and any entrypoint or mounted script kept as root's | As above, for the image a rebuild produces. | R-28 |
-| `host-unlock.cred` root, `0600`; the handoff unit and its scripts root-owned | Only a host administrator can change how the vault is unlocked. | R-28 |
-| The Docker socket reachable only by root: no ordinary account in the `docker` group, no passwordless `sudo docker` | Daemon access is runtime administration, which reaches everything ([§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances)). | R-25 |
-| The host `iron-vault` account has no shell, and nothing on the host runs as it | Only the container's service may read the handoff and the TLS keys. | R-25 |
-| Encrypted swap and hibernation storage | Locked memory does not stop hibernation from capturing RAM ([the Linux install guide](../book/src/installation/linux-install.md)). | R-20 |
-| `sudo` hardened as [the Linux install guide](../book/src/installation/linux-install.md) says | Every admin command passes through `sudo` ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). | — |
+| `/etc/iron-vault-host` root-owned, `0700`: the Compose file, any `compose.override.yaml` and `.env` beside it, which Compose reads automatically | Whoever can write these changes what the next `docker compose up` runs, even without daemon access. | §17 |
+| The image's build context and any entrypoint or mounted script kept as root's | As above, for the image a rebuild produces. | §17 |
+| `host-unlock.cred` root, `0600`; the handoff unit and its scripts root-owned | Only a host administrator can change how the vault is unlocked. | §17 |
+| The Docker socket reachable only by root: no ordinary account in the `docker` group, no passwordless `sudo docker` | Daemon access is runtime administration, which reaches everything ([§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances)). | §17 |
+| The host `iron-vault` account has no shell, and nothing on the host runs as it | Only the container's service may read the handoff and the TLS keys. | §17 |
+| Encrypted swap and hibernation storage | Locked memory does not stop hibernation from capturing RAM ([the Linux install guide](../book/src/installation/linux-install.md)). | §14 |
+| `sudo` hardened as [the Linux install guide](../book/src/installation/linux-install.md) says | Every admin command passes through `sudo` ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). | — |
 
 ## Admin access
 
@@ -268,7 +268,7 @@ decides nothing (`peer.rs`), so nothing else changes.
 everything else, the service account included. In a protected install the service account is an admin principal
 because it is the account that runs the service; in a container, only the service itself runs as that uid, so
 accepting it would grant nothing an administrator needs and would admit anything that took over the service's uid.
-The owner reaches the socket the way §3.2 intends, by becoming a host administrator.
+The owner reaches the socket the way §5 intends, by becoming a host administrator.
 
 The admin socket in the bind-mounted runtime directory is `0600`, owned by the service account. Host root opens it
 with `CAP_DAC_OVERRIDE`. A plain `docker exec` into Iron Vault's container runs as the container's `user:`, the service
@@ -285,15 +285,15 @@ Remote administration takes one of two forms:
   `iron-vault --admin-socket ~/.iv-admin.sock <command>` locally. Any process of the local account can use the
   forwarded socket while it is open, as root on the server, so close the forward when done.
 
-`docker exec` and any other use of the daemon is runtime administration, outside the threat model (§3.14).
-[§3.2](iron-vault-specification.md#32-service-and-cli-boundary) covers the admin principal.
+`docker exec` and any other use of the daemon is runtime administration, outside the threat model (§17).
+[§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns) covers the admin principal.
 
 ## Host unlock
 
-§3.14 prefers a host adapter that unseals with `systemd-creds` and hands the result to the container, and warns that
-`systemd-creds` does not implement an `age` recipient. §3.14 speaks of unsealing "the vault identity" into a "tmpfs
-secret file"; this design reads that deliberately as an intermediate identity on a ramfs. The handoff therefore carries an
-[intermediate identity](glossary.md) in the sense of [§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes),
+[§17](iron-vault-specification.md#containerised-deployments) prefers a host adapter that unseals with `systemd-creds`
+and hands the result to the container on a ramfs, and gives the reasons. `systemd-creds` does not implement an `age`
+recipient, so the handoff carries an
+[intermediate identity](glossary.md) in the sense of [§13](iron-vault-specification.md#13-vault-structure-and-durable-writes),
 never the vault identity: the **host unlock identity**, a generated X25519 identity whose recipient key is an
 ordinary recipient of `identity.age`, beside the operational identity and the recovery key. `systemd-creds` only
 seals and unseals its secret text, which needs no `age` support. The vault identity itself is unwrapped only inside
@@ -345,7 +345,7 @@ identity:
   needs its own `recovery` recipient. It does count toward part 4's floor of two and limit of 64.
 
 It is not a source-owner method for migration authorization. Like unattended TPM unwrap in
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration), it opens the vault but proves no owner
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration), it opens the vault but proves no owner
 took part, so it never authorizes `export` or `recipient add`.
 
 ### Format
@@ -356,7 +356,7 @@ optionally followed by one newline. It is parsed by the same code as the recover
 `RecoveryKeySecret::parse`'s trim of all surrounding whitespace, which is for a key typed at a prompt: a program writes
 the handoff, so anything more than one newline means the wrong file. Letter case is whatever `age`'s parser accepts;
 `age-keygen` writes uppercase, and nothing here relies on lowercase being refused. That is how the handoff is
-"validated against the vault's recovery format" (§3.14): the host unlock identity and the recovery key are the same
+"validated against the vault's recovery format" (§17): the host unlock identity and the recovery key are the same
 kind of key in the same text, and the identity envelope cannot tell them apart. Anything else is refused: comment
 lines such as `age-keygen` writes, other whitespace, a public key, or a file longer than 128 bytes.
 
@@ -381,7 +381,7 @@ age-keygen 2>/dev/null \
   `recipient add` enrols.
 - `--with-key=tpm2` seals to this host's TPM alone. `host+tpm2` also ties it to `/var/lib/systemd/credential.secret`
   and is the only alternative allowed.
-- `--tpm2-pcrs=7` binds the seal to the Secure Boot policy, which §3.11 accepts for the server and appliance profile.
+- `--tpm2-pcrs=7` binds the seal to the Secure Boot policy, which §14 accepts for the server and appliance profile.
   Current `systemd-creds` binds no PCR unless asked
   ([systemd-creds(1)](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html)).
 - `--name=host-unlock` embeds the credential's name. Decryption fails when the name it is loaded under differs, so the
@@ -439,7 +439,7 @@ Only the service container mounts the host's `/run/iron-vault-unlock`, read-only
 Starting:
 
 1. **Memory.** Without locked memory it does not open the file
-   ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)).
+   ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)).
 2. **Read.** The file must pass the `UnlockHandoff` trusted-path rule: a regular file, not a symlink, owned by the
    service account, with no group or other permission bits, in a directory owned by the service account or root that
    neither group nor others can write. It is opened with `O_NOFOLLOW` and checked again through the open descriptor,
@@ -449,7 +449,7 @@ Starting:
 4. **Unwrap.** The identity unwraps `identity.age` (`unwrap_identity`), and the manifest's MAC verifies, as for
    passphrase unlock. The host unlock identity is dropped, and its bytes cleared, as soon as the vault identity is
    unwrapped.
-5. **Checking.** The service moves from Starting to Checking ([§3.12](iron-vault-specification.md#312-service-states-and-errors))
+5. **Checking.** The service moves from Starting to Checking ([§15](iron-vault-specification.md#15-service-states-and-errors))
    and runs the usual config check.
 
 Each attempt writes one audit event, `vault.host-unlock`, which never holds the file's bytes or the recipient key:
@@ -466,7 +466,7 @@ writes the `vault.unlock-refused` record that every unlock path's memory guard w
 
 ### Lifetime
 
-The handoff stays on its ramfs for as long as the stack runs, so a crashed service restarts unattended (§3.12). It is
+The handoff stays on its ramfs for as long as the stack runs, so a crashed service restarts unattended (§15). It is
 never in an environment variable, an image layer, a named volume or any file that outlives the boot: the unit removes
 it when it stops, and the ramfs goes at shutdown. The service reads it only while Starting. After an explicit `lock`
 the service stays Locked until a passphrase `unlock` or a restart; a restart uses the handoff again, so in this
@@ -493,9 +493,9 @@ handoff takes effect at the next restart.
 operation `AdminOperation::VaultChange`, so it runs only in Ready. Without a readable handoff it is refused, naming
   the reason, before any prompt.
 
-### Against the §9 gate
+### Against the implementation spec §3 gate
 
-§9's "Host unlock handoff" gate asks for proof that the adapter "can supply the same recoverable vault identity without
+[Implementation spec §3](implementation-specification.md#3-implementation-gates-and-unresolved-details)'s "Host unlock handoff" gate asks for proof that the adapter "can supply the same recoverable vault identity without
 persistent plaintext or exposing a signing oracle":
 
 - **The same recoverable vault identity.** The handoff unwraps the existing `identity.age`; it does not replace the
@@ -518,22 +518,22 @@ opened only by the approval passphrase, which the owner types over the admin soc
 the container can sign without the owner typing that passphrase. The host unlock identity gives no approval
 authority: the approval passphrase is separate from every unlock factor.
 
-§3.14 says that "in the host-unlock profile, the host must also own approval signing or expose a narrowly scoped,
-authenticated signing helper". That sentence is about a TPM approval key, which the container cannot reach. Until one
-exists, the software signer meets it: there is no host key to own and no helper to narrow. The host-side helper for a
-TPM approval key waits for EP-33's signer. The wording is under [§3.14](#314-docker-remote-servers-and-appliances).
+[§17](iron-vault-specification.md#containerised-deployments) says that "in the host-unlock profile, the host owns
+approval signing, or exposes a narrowly scoped, authenticated signing helper". That rule is about a TPM approval key,
+which the container cannot reach. Until one exists, the software signer meets it: there is no host key to own and no
+helper to narrow. The host-side helper for a TPM approval key waits for EP-33's signer.
 
 ## Threats
 
 | Threat | Controls here | What remains |
 |---|---|---|
-| R-6: another process claims a listener during a restart | Addresses in a network namespace no other container shares; callers without `NET_ADMIN` or `NET_RAW`, each at its own static address; TLS on every non-loopback listener | A runtime administrator can start anything at the address; callers refuse it without Iron Vault's key |
-| R-20: memory capture leaves credentials on disk | `memlock: -1` and unlock only with locked memory; `core: 0` and no dumpability; the handoff on ramfs; encrypted swap and hibernation on the host | Locked memory does not stop hibernation; the host's disk encryption must |
-| R-25: a sibling container enters Iron Vault or reads its vault identity | No caller mounts of volumes, runtime directory, unlock directory or Docker socket; no `privileged` or `pid: host`; the service container's dropped capabilities and read-only image | A caller can use its own routes, as §1.2 allows |
-| R-26: a network observer reads or changes caller traffic | TLS on every non-loopback listener, which includes every isolated-network listener; callers trust only Iron Vault's CA | — |
-| R-27: a caller impersonates another caller | One internal caller network per caller, gateway mode `isolated`, a dedicated listener per caller, no `NET_RAW` or `NET_ADMIN` in callers, no container sharing Iron Vault's network namespace | A caller given `NET_RAW` back, put on a second caller's network, or joined to Iron Vault's network namespace defeats it; the release check looks for all three |
-| R-28: an ordinary host user changes what a later recreation runs | Compose files, overrides, `.env`, image sources, the unit and the sealed credential all root-owned and closed to other accounts; the image pinned by digest | — |
-| Runtime administrator | Outside the threat model ([§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances)) | Can replace the image, `docker exec` with any capability, read the handoff, and capture the vault identity from memory after unlock |
+| Another process claims a listener during a restart (§7) | Addresses in a network namespace no other container shares; callers without `NET_ADMIN` or `NET_RAW`, each at its own static address; TLS on every non-loopback listener | A runtime administrator can start anything at the address; callers refuse it without Iron Vault's key |
+| Memory capture leaves credentials on disk (§14) | `memlock: -1` and unlock only with locked memory; `core: 0` and no dumpability; the handoff on ramfs; encrypted swap and hibernation on the host | Locked memory does not stop hibernation; the host's disk encryption must |
+| A sibling container enters Iron Vault or reads its vault identity (§17) | No caller mounts of volumes, runtime directory, unlock directory or Docker socket; no `privileged` or `pid: host`; the service container's dropped capabilities and read-only image | A caller can use its own routes, as §2 allows |
+| A network observer reads or changes caller traffic (§7) | TLS on every non-loopback listener, which includes every isolated-network listener; callers trust only Iron Vault's CA | — |
+| A caller impersonates another caller (§7) | One internal caller network per caller, gateway mode `isolated`, a dedicated listener per caller, no `NET_RAW` or `NET_ADMIN` in callers, no container sharing Iron Vault's network namespace | A caller given `NET_RAW` back, put on a second caller's network, or joined to Iron Vault's network namespace defeats it; the release check looks for all three |
+| An ordinary host user changes what a later recreation runs (§17) | Compose files, overrides, `.env`, image sources, the unit and the sealed credential all root-owned and closed to other accounts; the image pinned by digest | — |
+| Runtime administrator | Outside the threat model ([§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances)) | Can replace the image, `docker exec` with any capability, read the handoff, and capture the vault identity from memory after unlock |
 
 ## Release checks
 
@@ -556,17 +556,17 @@ Two release checks run on a disposable host and are the evidence for this profil
 
 ## Proposed specification changes
 
-**Two items still await the owner's approval: the §3.14 change and the glossary edits.** Neither is applied to
+**Two items still await the owner's approval: the §17 change and the glossary edits.** Neither is applied to
 [`iron-vault-specification.md`](iron-vault-specification.md) or [`glossary.md`](glossary.md). Each gives the text to
 replace and its replacement, word for word.
 
-### §3.2 and §3.4
+### §5 and §7
 
-The owner approved the §3.2 and §3.4 changes on 2026-11-07, and they are applied to
+The owner approved the §5 and §7 changes on 2026-11-07, and they are applied to
 [`iron-vault-specification.md`](iron-vault-specification.md): root alone is the admin principal in a container
 installation, and the service binds its own TCP listeners.
 
-### §3.14 Docker, remote servers, and appliances
+### §17 Docker, remote servers, and appliances
 
 Replace:
 
@@ -582,7 +582,7 @@ with:
 
 ### Glossary
 
-These follow from the §3.2 change. §3.2 is applied; these glossary edits are not yet, pending the owner's approval.
+These follow from the §5 change. §5 is applied; these glossary edits are not yet, pending the owner's approval.
 
 - **Admin principal:** replace "root or the service account in a protected install, the invoking user in development"
   with "root or the service account in a protected install, root alone in a container install, the invoking user in
@@ -592,12 +592,18 @@ These follow from the §3.2 change. §3.2 is applied; these glossary edits are n
 
 ## Open questions
 
-1. **The fixed uid and gid.** The image, the Compose file's `user:` and the host's `sysusers.d` line must carry the
-   same value. *Default:* uid and gid 460, in the system range and far from where `adduser` (counting up from 100) and
-   `systemd-sysusers` (counting down from 999) allocate. The value is a Docker build argument with that default, the
-   host file is `g iron-vault 460` and `u iron-vault 460:460 "Iron Vault credential proxy" - /usr/sbin/nologin` (systemd 255 refuses the `u` line alone with "please create GID 460"), and the host setup checks
-   after `systemd-sysusers` that `id -u iron-vault` is 460, since `systemd-sysusers` may pick another uid when one is
-   taken. A test compares the three literals in the repository.
+1. **The fixed uid and gid.** *Decided (2026-11-09):* uid and gid 460 as the default says, in the build arguments of
+   [`Dockerfile`](../packaging/compose/Dockerfile), the `user:` of [`compose.yaml`](../packaging/compose/compose.yaml)
+   and [`iron-vault.conf`](../packaging/compose/host/sysusers.d/iron-vault.conf), but no repository test compares the
+   three literals; the install guide's `id iron-vault` step and
+   [`compose-check.sh`](../scripts/release/compose-check.sh) check the uid instead. The image, the Compose file's
+   `user:` and the host's `sysusers.d` line must carry the same value. *Default:* uid and gid 460, in the system range
+   and far from where `adduser` (counting up from 100) and `systemd-sysusers` (counting down from 999) allocate. The
+   value is a Docker build argument with that default, the host file is `g iron-vault 460` and
+   `u iron-vault 460:460 "Iron Vault credential proxy" - /usr/sbin/nologin` (systemd 255 refuses the `u` line alone
+   with "please create GID 460"), and the host setup checks after `systemd-sysusers` that `id -u iron-vault` is 460,
+   since `systemd-sysusers` may pick another uid when one is taken. A test compares the three literals in the
+   repository.
 2. **ramfs, or the credentials directory bind-mounted directly.** *Default:* the unit's own ramfs. systemd documents
    that the credentials directory lives in non-swappable memory where possible, is readable only by the unit's user
    and root, exists from activation to deactivation, and is invisible to other services when the unit uses file
@@ -607,11 +613,12 @@ These follow from the §3.2 change. §3.2 is applied; these glossary edits are n
    systemd versions on current Ubuntu LTS releases, whether they mount the credentials directory in a private
    namespace by default, and whether a unit that loads a credential gets its own mount namespace, which would hide the
    ramfs from Docker. The host unlock release check settles these with `findmnt` on the target release.
-3. **Whether `status` shows the last host unlock failure.** *Default:* no, the audit log only. `status` already
-   shows Locked and the memory protection; the `vault.host-unlock` record says why.
-4. **Whether the Linux package and the Compose stack may share a host.** *Default:* no. Both use `/run/iron-vault`,
-   the `iron-vault` account (at a dynamic uid in the package, a fixed one here) and
-   `/usr/lib/sysusers.d/iron-vault.conf`.
+3. **Whether `status` shows the last host unlock failure.** *Decided: default accepted (2026-11-09).* *Default:* no,
+   the audit log only. `status` already shows Locked and the memory protection; the `vault.host-unlock` record says
+   why.
+4. **Whether the Linux package and the Compose stack may share a host.** *Decided: default accepted (2026-11-09).*
+   *Default:* no. Both use `/run/iron-vault`, the `iron-vault` account (at a dynamic uid in the package, a fixed one
+   here) and `/usr/lib/sysusers.d/iron-vault.conf`.
 5. **Named volumes copying the image directory's owner and mode.** Docker documents that an empty named volume
    receives the image directory's contents, but not that it takes the directory's owner and mode; the Docker
    engine's source does copy them. *Default:* rely on it, and have the caller isolation release check verify both
@@ -620,7 +627,7 @@ These follow from the §3.2 change. §3.2 is applied; these glossary edits are n
    first version was not checked. *Default:* require a Docker Engine that supports it, recorded by the release check.
    Older engines could use `com.docker.network.bridge.inhibit_ipv4`, which also leaves the bridge without an address;
    that is not part of v0.
-7. **PCR 7.** *Default:* seal with `--tpm2-pcrs=7`, as §3.11 allows for unattended server unlock. A Secure Boot
+7. **PCR 7.** *Default:* seal with `--tpm2-pcrs=7`, as §14 allows for unattended server unlock. A Secure Boot
    policy update then makes the handoff fail; the service waits Locked, passphrase `unlock` works, and the
    administrator provisions and enrols a new identity. Binding no PCR would survive such updates but would let any OS
    booted on the machine unseal the credential.

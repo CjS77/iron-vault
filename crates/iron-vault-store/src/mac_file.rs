@@ -1,4 +1,4 @@
-//! The MAC'd file frame shared by the vault manifest, the approval state and the recipient inventory (spec §3.10,
+//! The MAC'd file frame shared by the vault manifest, the approval state and the recipient inventory (spec §13,
 //! `design/storage-formats.md`).
 //!
 //! `age` does not authenticate the sender, so a control file sealed to the vault public key could be planted by anyone

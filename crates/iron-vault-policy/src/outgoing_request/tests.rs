@@ -12,7 +12,7 @@ use crate::validated::ValidatedConfig;
 
 const SECRET: &str = "S3CR3T";
 
-/// Permits every §3.3 credential on its route's host.
+/// Permits every §6 credential on its route's host.
 struct Catalog;
 
 impl CredentialCatalog for Catalog {
@@ -29,7 +29,7 @@ impl CredentialCatalog for Catalog {
     }
 }
 
-/// The §3.3 example with every route opened to every path.
+/// The §6 example with every route opened to every path.
 fn policy() -> ActivePolicy {
     let doc = [
         "[\"/latest\", \"/historical/**\"]",

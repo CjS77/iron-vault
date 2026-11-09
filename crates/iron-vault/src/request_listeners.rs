@@ -1,4 +1,4 @@
-//! The request listeners (spec §3.4, §3.5): every configured listener open at once, each accepted connection tagged
+//! The request listeners (spec §7, §8): every configured listener open at once, each accepted connection tagged
 //! by the transport with the listener it arrived on and, on a Unix socket, the peer identity the kernel reports.
 //!
 //! Caller identification takes the listener name and the peer uid from here and never from the request, so an

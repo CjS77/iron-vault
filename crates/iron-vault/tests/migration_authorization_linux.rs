@@ -1,4 +1,4 @@
-//! Migration authorization in a running service context (specification §3.13, §3.15, R-23;
+//! Migration authorization in a running service context (specification §16, §19;
 //! design/migration-authorization.md): the vault passphrase method proving a challenge against the envelopes on disk,
 //! each refusal retiring the challenge, the passphrase attempt limit across challenges, and a `lock` during the check.
 //!

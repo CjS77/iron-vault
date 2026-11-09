@@ -1,4 +1,4 @@
-//! The token bucket that enforces a route's [`RateLimit`] (spec §3.5, §3.12, R-1).
+//! The token bucket that enforces a route's [`RateLimit`] (spec §8, §15).
 //!
 //! The arithmetic is exact integer arithmetic so rounding can never grant an extra request. The level is counted in
 //! *units*, where one token is `per_seconds × 10⁹` units: one nanosecond then refills exactly `requests` units, so
@@ -34,7 +34,7 @@ pub struct TokenBucket {
 impl TokenBucket {
     /// Creates an empty bucket for `limit`, accounting for time from `now`.
     ///
-    /// Starting empty is deliberate (spec §3.5): a bucket that started full would let every restart replenish a
+    /// Starting empty is deliberate (spec §8): a bucket that started full would let every restart replenish a
     /// whole burst instantly.
     pub fn new(limit: RateLimit, now: Instant) -> Self {
         // Each factor is below 2³², so these products stay far below u128::MAX.
@@ -100,7 +100,7 @@ impl TokenBucket {
 /// How long a refused caller should wait before a token is available, in whole seconds.
 ///
 /// Rounded **up** and never below one second, so a client honouring it is never refused again for retrying too early
-/// and the value can go straight into a `Retry-After` header (spec §3.12).
+/// and the value can go straight into a `Retry-After` header (spec §15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("rate limit exhausted; retry after {secs} s")]
 pub struct RetryAfter {

@@ -1,4 +1,4 @@
-//! A slot value bound to the permitted origins of the credential record it came from (spec §3.3, §3.6, §5.2).
+//! A slot value bound to the permitted origins of the credential record it came from (spec §6, §9, future spec §2.2).
 
 use std::collections::BTreeSet;
 
@@ -9,7 +9,7 @@ use crate::slot_value::SlotValue;
 /// A borrowed slot value and the permitted origins of the same credential record, the one credential input of
 /// [`final_check`](crate::final_check).
 ///
-/// Destinations are bound to the record (R-4), so the final check must compare the upstream with the origins of the
+/// Destinations are bound to the record (§6), so the final check must compare the upstream with the origins of the
 /// record whose secret it is sending. Taking both through one value lets the caller hand over a single record's view
 /// rather than two arguments that could come from different records. The store's `CredentialRecord::resolve` is the
 /// intended way to get one: it borrows the value it resolved and that record's own origins. This crate cannot see

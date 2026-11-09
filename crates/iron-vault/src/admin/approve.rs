@@ -1,4 +1,4 @@
-//! `config approve`: the approval transaction on the owner's proposed config (specification §3.9, §3.2, §3.13;
+//! `config approve`: the approval transaction on the owner's proposed config (specification §12, §5, §16;
 //! `design/admin-protocol.md`, "config approve").
 //!
 //! The service writes and validates the pending config, shows its own summary as notices, and asks for the

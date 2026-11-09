@@ -1,5 +1,5 @@
 //! `replace`: writes new material and origins under a name the manifest already lists, healthy or damaged
-//! (specification §3.3, §3.11; design/credential-commands.md, "Order of steps").
+//! (specification §6, §14; design/credential-commands.md, "Order of steps").
 //!
 //! Unlike `add`, the service-wide lock is taken before any prompt, so the vault change check and the summary the owner
 //! reads stay true until the write. Owner presence comes before the secret prompts, so a caller without the approval

@@ -6,8 +6,7 @@
 2. A relative link to a file outside `book/src`, such as `../../../design/audit-logging.md`, works when the Markdown is
    read on GitHub but not on the published site. It is rewritten to the file on `main` in the repository. A link to a
    file that does not exist fails the build, since the link checker does not fetch web links.
-3. A link to a guide that moved into the book from `design/` points at its page in the book, so the glossary's links
-   reach the book rather than the pointer left behind.
+3. A link to `design/glossary.md` points at the book's glossary page, which the marker above builds from it.
 
 The protocol is mdBook's: `repo_links.py supports <renderer>` exits 0, then `[context, book]` arrives as JSON on stdin
 and the book goes back as JSON on stdout.
@@ -25,9 +24,6 @@ GLOSSARY_SOURCE = "design/glossary.md"
 # Repository paths whose content lives in the book, mapped to their page relative to the book's `src`.
 IN_BOOK = {
     "design/glossary.md": "glossary.md",
-    "design/linux-install.md": "installation/linux-install.md",
-    "design/multiuser-linux.md": "installation/multiuser-linux.md",
-    "design/log-operations.md": "reference/log-operations.md",
 }
 
 LINK = re.compile(r"\]\(([^)\s]+)\)")

@@ -1,6 +1,6 @@
 //! Compressed responses through the proxy handler end to end: a caller on a Unix request socket, the real request server
 //! and pipeline, a static key in a header slot and a TLS test upstream that answers in a content coding (specification
-//! §3.8, §3.12, §8.2 Q-6).
+//! §11, §15, implementation spec §2.2 Q-6).
 //!
 //! The upstream's bodies echo the key, so each test shows the scrubber saw the decoded bytes.
 

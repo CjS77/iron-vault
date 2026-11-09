@@ -1,4 +1,4 @@
-//! The state generation: one vault-wide count of MAC'd file writes (spec §3.9, §3.10).
+//! The state generation: one vault-wide count of MAC'd file writes (spec §12, §13).
 //!
 //! The manifest and the approval state each record the state generation they were written at and the other file's at
 //! that moment. A single number covering both is what a TPM monotonic counter can later anchor (outside v0), and the

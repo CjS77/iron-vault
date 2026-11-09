@@ -1,5 +1,5 @@
 //! The partial restore check: whether the manifest and the approval state on disk are a pair some sequence of writes
-//! leaves together (spec §3.9, §3.10).
+//! leaves together (spec §12, §13).
 //!
 //! Each write replaces one file, records the other file's current state generation as its peer, and takes a state
 //! generation above both. So the file with the higher state generation was written last, and its peer generation must
@@ -34,7 +34,7 @@ pub enum PartialRestore {
     SameGeneration(StateGeneration),
 }
 
-/// What the operator should do. Repairing the pair automatically would accept the older copy as current (spec §3.9).
+/// What the operator should do. Repairing the pair automatically would accept the older copy as current (spec §12).
 const REMEDIATION: &str = "a control file looks restored from an older copy or deleted; \
     recover the vault with the recovery key or reset it, and do not edit or delete state files by hand";
 

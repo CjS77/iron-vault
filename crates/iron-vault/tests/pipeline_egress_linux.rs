@@ -1,8 +1,8 @@
-//! What leaves the service, observed at a recording TLS upstream (specification §3.15 first two v0 release checks, §8).
+//! What leaves the service, observed at a recording TLS upstream (specification §19 first two v0 release checks, implementation spec §2).
 //!
 //! The real request server, pipeline and upstream client run behind a Unix request socket and a loopback TCP listener,
-//! configured from the §3.3 FX/Brave/Venice example plus a Basic route, each with a recognisable test secret. Checking
-//! only the constructed URL is not enough (§8), so each test reads the request head and body the upstream received.
+//! configured from the §6 FX/Brave/Venice example plus a Basic route, each with a recognisable test secret. Checking
+//! only the constructed URL is not enough (implementation spec §2), so each test reads the request head and body the upstream received.
 //!
 //! A refused request must leave no trace upstream: the negative tests assert the upstream accepted no TCP connection at
 //! all, which is stronger than recording no request.
@@ -36,11 +36,11 @@ const ALL_SECRETS: [&str; 4] = [FX_SECRET, BRAVE_SECRET, VENICE_SECRET, BILLING_
 
 /// The token of `brave-only`, which holds a grant of one route.
 const NARROW_TOKEN: [u8; 32] = [8; 32];
-/// The §3.3 `burst` of the `quota` route, and how many requests beyond it a test sends.
+/// The §6 `burst` of the `quota` route, and how many requests beyond it a test sends.
 const QUOTA_BURST: usize = 5;
 const EXTRA_REQUESTS: usize = 7;
 
-/// The §3.3 example's routes with each upstream moved to its test port, plus `billing` (Basic) and `quota`. `quota`
+/// The §6 example's routes with each upstream moved to its test port, plus `billing` (Basic) and `quota`. `quota`
 /// refills a token every ten seconds, so a test that spends its burst sees no refill; it shares `fx`'s upstream.
 fn callers_and_routes(ports: &Ports) -> String {
     let (hash, narrow, ca) = (token_hash(TOKEN_BYTES), token_hash(NARROW_TOKEN), "/etc/iron-vault/ca/test.pem");
@@ -461,7 +461,7 @@ async fn s3_12_a_route_the_caller_is_not_granted_is_403() {
 #[tokio::test]
 async fn s3_12_a_prefix_no_route_has_is_404() {
     let (_ca, upstreams, proxy) = start_all().await;
-    // Lookalikes of `/fx` match on whole segments only (§3.6).
+    // Lookalikes of `/fx` match on whole segments only (§9).
     let targets = [
         "/nowhere/latest",
         "/",

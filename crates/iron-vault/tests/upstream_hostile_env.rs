@@ -1,8 +1,8 @@
-//! The upstream client in an environment a user controls (specification §3.7, R-8; §3.12 for diagnostics).
+//! The upstream client in an environment a user controls (specification §10; §15 for diagnostics).
 //!
-//! Each test name starts with the rule it proves: a §3.7 rule, or §3.8's for the redirect. A test sets hostile
+//! Each test name starts with the rule it proves: a §10 rule, or §11's for the redirect. A test sets hostile
 //! variables (proxies, trust stores, a key log, verbose `RUST_LOG`) and asserts on what the mock servers actually
-//! recorded, as §8 requires, not on how the client was built.
+//! recorded, as implementation spec §2 requires, not on how the client was built.
 //!
 //! `std::env::set_var` is `unsafe` in edition 2024 and the workspace forbids unsafe code, so the variables are set on a
 //! child process instead: the test re-runs this test binary with `--exact` [`CHILD_TEST`] and the variables. The child
@@ -276,7 +276,7 @@ impl ChildRun {
     }
 
     /// Asserts the child failed with `expected`, and that no printed form of the error shows a marker or any part of
-    /// the request URL (§3.12: no raw secret-bearing client diagnostics).
+    /// the request URL (§15: no raw secret-bearing client diagnostics).
     fn assert_error(&self, expected: TransportError) {
         assert_eq!(self.line("outcome"), Some(format!("error {expected:?}").as_str()), "{self}");
         let forbidden = [
@@ -378,7 +378,7 @@ async fn proxy_case(slot: Slot) {
     assert_carried(&upstream, slot);
 }
 
-/// §3.7: "The outbound client must disable environment proxy discovery, including `HTTPS_PROXY` and `ALL_PROXY`."
+/// §10: "The outbound client must disable environment proxy discovery, including `HTTPS_PROXY` and `ALL_PROXY`."
 #[tokio::test]
 async fn s3_7_no_proxy_discovery_proxy_variables_never_see_a_connection() {
     proxy_case(Slot::Header).await;
@@ -396,7 +396,7 @@ async fn built_in_roots_case(slot: Slot) {
     assert_eq!(upstream.requests(), []);
 }
 
-/// §3.7: "It must not inherit trust roots from `SSL_CERT_FILE`, `SSL_CERT_DIR`": the built-in roots stay the only ones.
+/// §10: "It must not inherit trust roots from `SSL_CERT_FILE`, `SSL_CERT_DIR`": the built-in roots stay the only ones.
 #[tokio::test]
 async fn s3_7_no_inherited_trust_ssl_cert_variables_add_no_built_in_root() {
     built_in_roots_case(Slot::Header).await;
@@ -423,7 +423,7 @@ async fn pinned_case(slot: Slot, pin_upstream_ca: bool) {
     }
 }
 
-/// §3.7: a route "may reference an administrator-installed pinned CA"; `SSL_CERT_FILE` and `SSL_CERT_DIR` naming the
+/// §10: a route "may reference an administrator-installed pinned CA"; `SSL_CERT_FILE` and `SSL_CERT_DIR` naming the
 /// upstream's CA neither add to the pinned CA nor stand in for it.
 #[tokio::test]
 async fn s3_7_no_inherited_trust_a_pinned_ca_alone_decides_under_ssl_cert_variables() {
@@ -444,7 +444,7 @@ async fn wrong_name_case(slot: Slot) {
     assert_eq!(upstream.requests(), []);
 }
 
-/// §3.7: "The service must verify certificates and hostnames", also against a pinned CA.
+/// §10: "The service must verify certificates and hostnames", also against a pinned CA.
 #[tokio::test]
 async fn s3_7_hostname_verified_a_pinned_cas_certificate_for_another_name_is_refused() {
     wrong_name_case(Slot::Header).await;
@@ -468,7 +468,7 @@ async fn key_log_case(slot: Slot) {
     assert_eq!(key_logs.entries(), Vec::<PathBuf>::new());
 }
 
-/// §3.7: "The package must disable raw connection logging": `SSLKEYLOGFILE` cannot make it log TLS session keys.
+/// §10: "The package must disable raw connection logging": `SSLKEYLOGFILE` cannot make it log TLS session keys.
 #[tokio::test]
 async fn s3_7_no_raw_connection_logging_sslkeylogfile_gets_no_key_log() {
     key_log_case(Slot::Header).await;
@@ -491,7 +491,7 @@ async fn redirect_case(slot: Slot) {
     assert_eq!(elsewhere.connections(), 0, "the redirect target saw a connection");
 }
 
-/// §3.8: "The client must never follow an upstream redirect automatically", so a redirect cannot carry the credential
+/// §11: "The client must never follow an upstream redirect automatically", so a redirect cannot carry the credential
 /// to another origin.
 #[tokio::test]
 async fn s3_8_no_redirect_following_a_redirect_is_returned_unfollowed() {
@@ -572,7 +572,7 @@ fn is_capped_target(token: &str) -> bool {
         .any(|target| token == *target || token.strip_prefix(target).is_some_and(|rest| rest.starts_with("::")))
 }
 
-/// §3.7: the package must "cap HTTP/TLS dependency log verbosity in code, regardless of `RUST_LOG`".
+/// §10: the package must "cap HTTP/TLS dependency log verbosity in code, regardless of `RUST_LOG`".
 ///
 /// `logging::init()` ignores `RUST_LOG` today (it installs a fixed `INFO` level), so this test shows what comes out of
 /// a child that sets it, not that the caps hold. `caps_hold_under_a_trace_global_level` in `logging.rs` proves the caps

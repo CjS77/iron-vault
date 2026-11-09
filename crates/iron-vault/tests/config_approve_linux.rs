@@ -1,5 +1,5 @@
-//! `config approve` end to end over a real admin socket against a running service context (specification §3.9, §3.2,
-//! §3.13): the summary as notices, the confirmation, the approval passphrase, then the transaction, the admission pause
+//! `config approve` end to end over a real admin socket against a running service context (specification §12, §5,
+//! §16): the summary as notices, the confirmation, the approval passphrase, then the transaction, the admission pause
 //! and the config check. Every test's log goes to one captured buffer, which must never hold an approval passphrase.
 //!
 //! Each test builds a vault holding `fx_key`, pins a software approver whose key is sealed in `approver.age` under
@@ -522,7 +522,7 @@ async fn an_approval_that_drops_a_listener_closes_only_that_socket_and_a_request
 }
 
 /// An approval aborted after its commit, while the config check that follows holds it, still ends in Ready on the new
-/// version: the check and the move out of Checking belong to a task of their own (§3.12).
+/// version: the check and the move out of Checking belong to a task of their own (§15).
 #[tokio::test]
 async fn an_approval_aborted_after_its_commit_still_settles_in_ready_on_the_new_version() {
     let fixture = Fixture::new().await;

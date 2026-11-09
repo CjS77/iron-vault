@@ -1,4 +1,4 @@
-//! The recovery reminder schedule against a running service context (specification §3.13, §3.15; design/recovery.md,
+//! The recovery reminder schedule against a running service context (specification §16, §18; design/recovery.md,
 //! "Reminders"), with a test clock for the wall time and a paused tokio clock for the 7-day spacing.
 //!
 //! The log buffer is shared by every test of this binary and a reminder names no vault, so each test starts its clock at

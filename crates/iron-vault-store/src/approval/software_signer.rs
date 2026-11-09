@@ -1,4 +1,4 @@
-//! The software signer: an Ed25519 approval key kept in `approver.age` under the approval passphrase (spec §3.9).
+//! The software signer: an Ed25519 approval key kept in `approver.age` under the approval passphrase (spec §12).
 //!
 //! The private key is decrypted only inside the service, for one approval, and dropped with the signer; nothing here
 //! keeps a global or cached signer. The file is written and read by the same scrypt envelope code as the passphrase

@@ -1,9 +1,9 @@
-//! The final outgoing-request check: the last decision before a credential leaves the service (spec §3.3, §3.6, §7).
+//! The final outgoing-request check: the last decision before a credential leaves the service (spec §6, §9, implementation spec §1).
 //!
 //! Every fact is read back from the assembled request's own URL and headers, never taken from the inputs that built
 //! it, so a defect in URL construction or slot filling is caught here rather than repeated. The route's upstream is
 //! compared with the credential record's permitted origins too, because destinations are bound to the record and a
-//! route edit must not be able to send an existing secret elsewhere (R-4). The selected slot must hold the slot value
+//! route edit must not be able to send an existing secret elsewhere (§6). The selected slot must hold the slot value
 //! as the assembler renders it, and the value must appear nowhere else, so a slot filled through the wrong route, or a
 //! caller copy left in the slot, is caught even when the slot is written exactly once. A failure means a policy or construction
 //! defect: the request is dropped unsent, and the service raises a high-severity event.
@@ -90,7 +90,7 @@ pub enum FinalCheckError {
 
 /// Checks `request` against the plan it was built for, the selected route's `upstream` and `slot`, and the route's
 /// `credential`: the slot value it produced and the origins its credential record permits, immediately before sending
-/// (§3.6).
+/// (§9).
 ///
 /// The value and origins arrive as one [`BoundCredential`]; built through the store's `CredentialRecord::resolve`, the
 /// intended way, both come from the same record. The value is borrowed and rendered here with the assembler's own

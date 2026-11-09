@@ -1,4 +1,4 @@
-//! Compile-time and `Debug` checks for this crate's secret-bearing types (spec §3.11, `design/secret-handling.md`).
+//! Compile-time and `Debug` checks for this crate's secret-bearing types (spec §14, `design/secret-handling.md`).
 //!
 //! A type that gains `Clone`, `Copy`, `Display` or a serde impl would start copying, printing or writing the secret it
 //! holds; each assertion below turns that change into a build failure.

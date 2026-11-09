@@ -1,11 +1,11 @@
-//! Opening the vault: the manifest, then every record it lists, with damaged records isolated (spec §3.10, §3.12).
+//! Opening the vault: the manifest, then every record it lists, with damaged records isolated (spec §13, §15).
 //!
 //! The manifest is shared state: if it cannot be trusted, no record can be told from a planted one, so the whole vault
 //! is unavailable. So is the approval state, whose state generation the manifest records: a pair of the two that no
 //! sequence of writes leaves together is a partial restore, and refused. A record is not shared: a damaged one takes
 //! down only the routes that use it, and the others load.
 //!
-//! Vault writes (spec §3.3, §3.10) make the durable replace of the manifest their single commit point: a new record file
+//! Vault writes (spec §6, §13) make the durable replace of the manifest their single commit point: a new record file
 //! is written before it and a superseded one removed after it, so a crash at any step leaves the old or the new vault.
 
 mod create;
@@ -44,7 +44,7 @@ pub enum VaultError {
     /// There is no manifest, no record file and no approval state: no vault has been created in this state directory.
     #[error("the vault is not initialized: the state directory holds no manifest and no credential records")]
     NotInitialized,
-    /// Shared state cannot be trusted (spec §3.10, §3.12). An open refuses the whole vault, and a write refuses to change
+    /// Shared state cannot be trusted (spec §13, §15). An open refuses the whole vault, and a write refuses to change
     /// it and touches no file.
     #[error("vault shared state file {file} is damaged ({damage}); the vault is unavailable and may require recovery")]
     SharedStateDamaged {
@@ -62,7 +62,7 @@ pub enum VaultError {
     /// A vault cannot be created where a manifest already exists.
     #[error("the vault is already initialized: the state directory holds a manifest")]
     AlreadyInitialized,
-    /// `add` refuses a name the manifest already lists, whether its record is healthy or damaged (spec §3.3).
+    /// `add` refuses a name the manifest already lists, whether its record is healthy or damaged (spec §6).
     #[error("credential {0} already exists; replacing it requires an explicit replace")]
     NameTaken(CredentialName),
     /// `replace` and `remove` need a name the manifest lists.
@@ -116,7 +116,7 @@ pub enum SharedStateDamage {
     #[error("it is missing, but credential record files exist")]
     MissingWithRecords,
     /// The manifest is gone but approval state remains, so a vault existed here and was damaged or half removed;
-    /// creating a new one would reset its approval counters (spec §3.9).
+    /// creating a new one would reset its approval counters (spec §12).
     #[error("it is missing, but approval.age from an earlier vault remains; recover or reset the vault rather than initialize")]
     MissingWithApprovalState,
     /// The file could not be read, or is over its size limit.
@@ -129,7 +129,7 @@ pub enum SharedStateDamage {
     #[error(transparent)]
     ApprovalState(ApprovalStateError),
     /// The manifest and the approval state are not a pair any sequence of writes leaves: the named file was restored
-    /// from an older copy or deleted. It is never repaired automatically (spec §3.9); the owner recovers or resets.
+    /// from an older copy or deleted. It is never repaired automatically (spec §12); the owner recovers or resets.
     #[error(transparent)]
     PartialRestore(PartialRestore),
 }
@@ -159,7 +159,7 @@ impl Vault {
     /// The manifest and the approval state must be a pair some sequence of writes leaves together: a manifest or
     /// approval state restored alone from an older copy, or an approval state deleted, fails the open as a partial
     /// restore before any record is read. Restoring both together is not detected here: that needs an anchor outside
-    /// the state directory (spec §3.9).
+    /// the state directory (spec §12).
     ///
     /// An approval state the manifest does not yet record, left by a crash inside [`Vault::create_approval_state`], is
     /// a valid pair: the open succeeds, flags it in the [`OpenReport`], and writes nothing.

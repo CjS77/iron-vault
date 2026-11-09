@@ -1,4 +1,4 @@
-//! The outbound side of the proxy: how the service reaches an upstream (specification §3.7).
+//! The outbound side of the proxy: how the service reaches an upstream (specification §10).
 
 pub mod body;
 pub mod client;

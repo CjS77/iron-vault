@@ -1,4 +1,4 @@
-//! The caller token itself: its text format, generation from a cryptographic source, and parsing (spec §3.4).
+//! The caller token itself: its text format, generation from a cryptographic source, and parsing (spec §7).
 
 use std::fmt;
 

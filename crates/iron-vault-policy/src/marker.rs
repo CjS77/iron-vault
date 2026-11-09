@@ -1,10 +1,10 @@
-//! Markers: `{iv:name}` placeholders an SDK may put where its API key belongs (spec §3.6, §8.2 Q-1).
+//! Markers: `{iv:name}` placeholders an SDK may put where its API key belongs (spec §9, implementation spec §2.2 Q-1).
 //!
-//! A marker never selects or expands a credential: the route alone selects the credential (§3.5 step 6). Slot filling
+//! A marker never selects or expands a credential: the route alone selects the credential (§8 step 6). Slot filling
 //! scans only the text it is about to replace, and refuses the request when a marker there names a different
 //! credential, because that caller expected another key and is misconfigured or probing. Markers anywhere else are
 //! inert text and are never scanned, so a marker in an issue title or a JSON body cannot make the upstream store the
-//! real key (R-10).
+//! real key (§9).
 
 use thiserror::Error;
 

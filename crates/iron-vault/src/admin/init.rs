@@ -1,7 +1,7 @@
-//! `init`: creates the vault, its two recovery paths and its first committed approval (specification §3.9, §3.11,
-//! §3.13; design/vault-initialization.md, "The exchange").
+//! `init`: creates the vault, its two recovery paths and its first committed approval (specification §12, §14,
+//! §16; design/vault-initialization.md, "The exchange").
 //!
-//! The service, not the CLI, prompts for both passphrases, so neither travels as an argument (§3.2), and it generates
+//! The service, not the CLI, prompts for both passphrases, so neither travels as an argument (§5), and it generates
 //! every key and shows the recovery key once, in a reveal. Nothing is written until the owner confirms they saved it.
 //! From the reveal on, every ending but success says what to do with the key shown.
 

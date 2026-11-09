@@ -1,4 +1,4 @@
-//! The stable identity of one credential record (spec §1.3, §3.3).
+//! The stable identity of one credential record (spec §3, §6).
 
 use std::fmt;
 use std::str::FromStr;
@@ -9,7 +9,7 @@ use uuid::{Uuid, Variant, Version};
 /// A credential record's GUID: a random version 4 UUID, new on every add and every replace.
 ///
 /// A replacement gets a fresh ID rather than reusing the name's old one, so the service can tell the record a grant was
-/// approved against from one that took its name later (spec §3.3). Its text form is the lowercase hyphenated UUID, and
+/// approved against from one that took its name later (spec §6). Its text form is the lowercase hyphenated UUID, and
 /// parsing accepts nothing else, so every record has exactly one spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RecordId(Uuid);

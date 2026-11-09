@@ -1,6 +1,6 @@
 //! The approval transaction end to end, and under an injected failure or a power cut at every filesystem call.
 //!
-//! Every failure is checked against the split spec §3.9 requires: a transaction that fails before its commit leaves
+//! Every failure is checked against the split spec §12 requires: a transaction that fails before its commit leaves
 //! the previous committed approval and the published pair that verifies as it; one that fails after leaves the new
 //! committed approval and files that recovery rows 1 to 4 of design/config-approval.md finish.
 

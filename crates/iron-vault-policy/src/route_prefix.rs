@@ -1,4 +1,4 @@
-//! The request-path prefix that selects a route (spec §3.3, §3.6).
+//! The request-path prefix that selects a route (spec §6, §9).
 
 use std::fmt;
 use std::str::FromStr;

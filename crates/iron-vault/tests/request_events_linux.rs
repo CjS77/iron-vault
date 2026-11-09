@@ -1,5 +1,5 @@
 //! The request event of each request that ends before a response head is relayed, end to end: the real request server,
-//! pipeline and proxy handler in front of a recording test upstream (specification §3.15; `design/audit-logging.md`,
+//! pipeline and proxy handler in front of a recording test upstream (specification §18; `design/audit-logging.md`,
 //! "Request event").
 //!
 //! The harness runs on a current-thread runtime, so the log captured on the test's thread holds every record.

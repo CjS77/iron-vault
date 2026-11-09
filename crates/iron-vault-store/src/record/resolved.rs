@@ -1,4 +1,4 @@
-//! One record's resolution for one request, kept with that record's permitted origins (spec §3.3, §5.2).
+//! One record's resolution for one request, kept with that record's permitted origins (spec §6, future spec §2.2).
 
 use iron_vault_kinds::{Resolution, ScrubPatterns};
 use iron_vault_policy::BoundCredential;
@@ -10,7 +10,7 @@ use crate::permitted_origins::PermittedOrigins;
 ///
 /// Only [`CredentialRecord::resolve`](crate::CredentialRecord::resolve) builds one, from its own material and its own
 /// origins, so the value the final check sees and the destinations it compares against cannot come from different
-/// records (R-4). There is no `Clone`, so the secret is not copied further; `Debug` shows the resolution's redacted
+/// records (§6). There is no `Clone`, so the secret is not copied further; `Debug` shows the resolution's redacted
 /// form.
 #[derive(Debug)]
 pub struct ResolvedCredential<'a> {

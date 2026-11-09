@@ -56,7 +56,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         self.require_locked_memory_for_check()
     }
 
-    /// The memory rule `unlock` is held to (§3.11): the check unwraps the vault identity into memory. Every refusal
+    /// The memory rule `unlock` is held to (§14): the check unwraps the vault identity into memory. Every refusal
     /// `memory_guard` gives counts, so a refusal added to it later fails closed here.
     fn require_locked_memory_for_check(&self) -> Result<(), RecoveryRefusal> {
         memory_guard(self.setup.paths.profile, &self.setup.hardening.memory)

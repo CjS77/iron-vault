@@ -1,7 +1,7 @@
 //! Reading administrator-installed files: a TLS listener's certificate chain and key, and a route's pinned CA file.
 //!
 //! Whoever can write one of these files can impersonate Iron Vault to TLS callers or send a route's credential to an
-//! interceptor (specification §3.3, §3.4, §3.7), so each is read only through its trusted-path rule. The path is walked
+//! interceptor (specification §6, §7, §10), so each is read only through its trusted-path rule. The path is walked
 //! and checked first; the leaf is then opened without following a symlink, and the open file must be the very file
 //! the walk checked, with the same type, owner, group, mode, device and inode. A file swapped in between the two
 //! steps is refused rather than read.

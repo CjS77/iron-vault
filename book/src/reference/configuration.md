@@ -3,7 +3,7 @@
 This page lists every table and key of Iron Vault's configuration file. For each key it gives the type, whether the
 key is required, its default, the rule it must meet and the refusal you get when it doesn't. The `iron-vault-policy`
 crate checks the config, and every refusal below is copied from its code. Terms follow the [glossary](../glossary.md),
-and the [specification](../../../design/iron-vault-specification.md#33-credential-records-and-configuration) is the
+and the [specification](../../../design/iron-vault-specification.md#6-credential-records-and-configuration) is the
 source of the rules.
 
 ## How approval works

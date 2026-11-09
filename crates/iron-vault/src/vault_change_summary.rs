@@ -1,11 +1,11 @@
 //! The vault change summary (glossary; design/credential-commands.md, "Vault change summary"): the service's own account
-//! of one `replace` or `rm`, which the owner reads before owner presence (specification §3.2). The CLI's display of it
+//! of one `replace` or `rm`, which the owner reads before owner presence (specification §5). The CLI's display of it
 //! is never evidence of what the owner authorized.
 //!
 //! It is pure: the service context builds it under the service-wide lock, from the served policy and its credential
 //! report, so it stays true until the write. It holds names, record IDs, kinds and origins only, never material. Every
 //! configured name it prints follows the name rule (`[a-z0-9_-]`) and every host is validated, so nothing in it needs the
-//! escaping a free-text value would (§3.15).
+//! escaping a free-text value would (§18).
 
 use std::fmt;
 

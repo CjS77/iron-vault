@@ -1,4 +1,4 @@
-//! Operational limits on request size, response size, time and concurrency (spec §9).
+//! Operational limits on request size, response size, time and concurrency (implementation spec §3).
 //!
 //! Every limit has a conservative default so an installation without a `[limits]` table is still bounded. A
 //! `[limits]` table overrides individual fields; each override must be non-zero and below a sanity ceiling, because

@@ -1,6 +1,6 @@
-//! `unlock`: opens the vault with the passphrase the service prompts for (specification §3.11, §3.12, §3.13).
+//! `unlock`: opens the vault with the passphrase the service prompts for (specification §14, §15, §16).
 //!
-//! The service, not the CLI, asks for the passphrase, with echo off, so no argument ever carries it (§3.2). Only the
+//! The service, not the CLI, asks for the passphrase, with echo off, so no argument ever carries it (§5). Only the
 //! vault passphrase is asked for: an approval passphrase is a separate type and is never accepted here.
 
 use std::sync::Arc;

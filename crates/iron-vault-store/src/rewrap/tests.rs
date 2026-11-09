@@ -63,7 +63,7 @@ fn a_removed_recipient_no_longer_opens_the_new_envelope() {
     assert!(vault.opens_with(&vault.operational) && vault.opens_with(&vault.recovery));
 }
 
-/// R-24: removal reaches only envelopes written from now on. A copy of `identity.age` taken before still opens with the
+/// §16: removal reaches only envelopes written from now on. A copy of `identity.age` taken before still opens with the
 /// removed key; this is the documented limit, not a defect.
 #[test]
 fn a_copy_of_the_old_envelope_still_opens_with_a_removed_key() {

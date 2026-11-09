@@ -1,4 +1,4 @@
-//! The upstream client against a recording TLS test upstream (specification §3.5 step 9, §3.6, §3.7, §3.12).
+//! The upstream client against a recording TLS test upstream (specification §8 step 9, §9, §10, §15).
 //!
 //! Each test sends a checked request built through the public policy API and asserts on what the upstream actually
 //! received, not on the request the client was given.

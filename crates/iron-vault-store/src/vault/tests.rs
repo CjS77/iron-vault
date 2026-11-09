@@ -33,7 +33,7 @@ impl AccountDirectory for NoAccounts {
     }
 }
 
-/// The §3.3 example, with a real digest standing in for its `blake2b:...` placeholder.
+/// The §6 example, with a real digest standing in for its `blake2b:...` placeholder.
 const SPEC_EXAMPLE: &str = r#"schema_version = 1
 
 [listeners.local]

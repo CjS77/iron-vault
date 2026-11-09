@@ -1,4 +1,4 @@
-//! The config check: the work the service does in Checking (specification §3.9, §3.12, §8.2 Q-5).
+//! The config check: the work the service does in Checking (specification §12, §15, implementation spec §2.2 Q-5).
 //!
 //! Every entry to Checking (an unlock, a reload, an approval's commit, a repair) calls [`open_and_check`], which opens a
 //! new vault from the vault identity the service keeps and then runs [`check_config`], so they cannot disagree about
@@ -336,7 +336,7 @@ fn open_and_run(
 /// Runs the config check and returns the snapshot to serve, or the failure that leaves the service Unavailable.
 ///
 /// `vault` and `state` are the opened shared state; `config_dir` is the held config directory lock. A damaged or
-/// needs-login credential record is not a failure: activation marks only its routes unavailable (§3.9). Nor is a
+/// needs-login credential record is not a failure: activation marks only its routes unavailable (§12). Nor is a
 /// pinned CA that fails to load: the routes that pin it are marked unavailable the same way, and logged. The vault moves
 /// into the snapshot on success and is dropped on failure, so the next check opens it again. A failure is logged here at
 /// WARN as `config.check-failed`, with its [`detail`](CheckFailure::detail). Opening the vault and the approval state

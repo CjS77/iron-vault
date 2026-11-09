@@ -1,5 +1,5 @@
 //! The request event of each request answered by relaying an upstream response, end to end: written once when the
-//! relayed body ends, cleanly or not, or when the relay refuses the upstream's head (specification §3.15;
+//! relayed body ends, cleanly or not, or when the relay refuses the upstream's head (specification §18;
 //! `design/audit-logging.md`, "Request event").
 //!
 //! The harness runs on a current-thread runtime, so the log captured on the test's thread holds every record.

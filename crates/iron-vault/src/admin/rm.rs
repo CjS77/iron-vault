@@ -1,4 +1,4 @@
-//! `rm`: removes a credential record after owner presence (specification §3.3, §3.13; `design/admin-protocol.md`, rm;
+//! `rm`: removes a credential record after owner presence (specification §6, §16; `design/admin-protocol.md`, rm;
 //! `design/credential-commands.md`).
 //!
 //! The service-wide lock, the manifest lookup and the vault change check all come from

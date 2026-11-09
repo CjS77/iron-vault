@@ -1,4 +1,4 @@
-//! The upstream clients for one active policy: one per upstream trust its routes use (specification §3.7).
+//! The upstream clients for one active policy: one per upstream trust its routes use (specification §10).
 //!
 //! Built once when a policy is activated, so a request never builds a client or reads a CA file. Routes with the
 //! built-in roots share one client, and routes that pin the same CA file share that file's client.
@@ -57,7 +57,7 @@ impl UpstreamClients {
     ///
     /// Only the built-in client failing is an error here, since no route could then be served. A pinned CA that fails
     /// gives its routes a [`RouteClientError::PinnedCa`] and leaves every other route its client. That makes only those
-    /// routes unavailable, like a damaged credential record (§3.9): the config check passes them to
+    /// routes unavailable, like a damaged credential record (§12): the config check passes them to
     /// [`mark_unusable_routes`](Self::mark_unusable_routes) before the policy serves, so a request to one is refused
     /// before it reaches [`for_route`](Self::for_route). A route already unavailable through its credential is tried
     /// too, so it reports both causes.

@@ -1,4 +1,4 @@
-//! The approval transaction's durable steps: the six steps of spec §3.9, each durable before the next starts
+//! The approval transaction's durable steps: the six steps of spec §12, each durable before the next starts
 //! (design/config-approval.md, "The transaction").
 //!
 //! The types follow the steps, so they cannot be run out of order or skipped:
@@ -32,7 +32,7 @@ use crate::{
 /// Proof that no request is being admitted: the service's admission pause guard implements this.
 ///
 /// [`PreparedApproval::commit`] takes it by reference, so a commit cannot run unless the caller holds the pause
-/// (spec §3.9: "pause new admissions before committing"). The one production implementation is the service's
+/// (spec §12: "pause new admissions before committing"). The one production implementation is the service's
 /// `AdmissionPause` guard, returned by `SnapshotHolder::pause`, whose existence means the snapshot holder refuses every
 /// new request. Any other implementation could commit with requests still being admitted, so adding one needs review.
 pub trait AdmissionPaused {}
@@ -200,7 +200,7 @@ impl PendingConfig {
 
     /// Step 2: durably reserves the next version. The caller records the reservation before it signs
     /// ([`ReservedApproval::version`]), so a signing failure, or a signer that waits for the owner, follows it in the
-    /// audit log (spec §3.9).
+    /// audit log (spec §12).
     ///
     /// The `&mut` borrow of `state` lasts until the approval is committed or abandoned, so approvals are serialized.
     /// On failure the pending config and any staged approval are removed, and a reservation whose directory fsync

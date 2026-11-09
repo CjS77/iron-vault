@@ -2,9 +2,9 @@
 
 How `iron-vault recovery check` proves that the owner's offline recovery key still opens the vault, and how the
 service reminds the owner to run it (specification
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration),
-[§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance),
-[§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). The recovery key is generated once, at
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration),
+[§18](iron-vault-specification.md#18-logging), [§19](iron-vault-specification.md#19-v0-user-acceptance),
+[§13](iron-vault-specification.md#13-vault-structure-and-durable-writes)). The recovery key is generated once, at
 `init` ([vault-initialization.md](vault-initialization.md#recovery-key-presentation)), and the owner keeps it outside
 the service. It is used rarely, so it can be lost, mistyped when it was saved, or kept for a vault that no longer
 stands, and the owner finds out only when it is needed. The check finds that out early, and reminders make the owner
@@ -62,7 +62,7 @@ because a read failed would send them to replace a recovery path that works.
 
 Nothing is written except the [recovery check record](#the-recovery-check-record). The check never rewraps the
 envelope, never touches `operational.age`, `approver.age` or `approval.age`, and never changes the recipient set or
-the approval counters ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). The unwrapped
+the approval counters ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)). The unwrapped
 vault identity and the recipient identity are dropped, and cleared, before the service answers. They are never stored
 in the service context: in Ready the vault identity the service already holds is neither used nor replaced, and in
 Locked no vault identity is held once the check ends.
@@ -89,7 +89,7 @@ The checks before the prompt run in this order, as `unlock`'s do:
    [initialization state](vault-initialization.md#initialization-state) and says to run `iron-vault init`.
 3. **Memory:** in a protected install whose memory is not locked, `memory-unprotected`. The check unwraps the vault
    identity into memory, so it is held to the same rule as `unlock`
-   ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)): the refusal comes before the owner
+   ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)): the refusal comes before the owner
    types the key.
 
 After the prompt, and once the text has parsed as a recovery key, the service **tries** the service-wide lock and
@@ -165,7 +165,7 @@ zero days, so a clock fault delays a reminder by at most the size of the jump an
 ## Reminders
 
 A **recovery reminder** is the audit event `recovery.reminder`, which tells the owner to run a recovery check. v0
-reminds through the log only ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)); from
+reminds through the log only ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)); from
 v1, EP-40's owner notifications carry it as the topic `recovery_reminder`
 ([owner-notifications.md](owner-notifications.md#which-events-notify)).
 
@@ -216,7 +216,7 @@ interval is never held back by one for the last.
 > and the list adds unrouted credentials and each one's kind and origins.
 
 The second sentence is the owner's rebuild list after complete loss
-([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)): with the vault gone, the owner
+([§16](iron-vault-specification.md#16-administration-recovery-and-migration)): with the vault gone, the owner
 reissues each credential named there from its provider.
 
 ## Status
@@ -299,44 +299,46 @@ days.
 ## Open questions
 
 The ticket sets the defaults for questions 1 to 3, and this design takes them; the rest are defaults this design
-picked. Each takes its default until the owner decides.
+picked. The owner has decided all ten by accepting their defaults, and the design stands on them.
 
-1. **States.** *Default:* Locked and Ready, as `AdminOperation::RecoveryCheck`; `wrong-state` otherwise. The
-   alternatives allow Unavailable as well, so a key can be checked while the owner is repairing a config, or allow
-   Ready only, so the check never unwraps the vault identity while the service is otherwise holding no secrets.
-2. **Error codes.** *Default:* `recovery-key-invalid` for text that is not a recovery key and
-   `recovery-check-failed`, with a fixed message, for a key that does not open this vault, as the ticket sets, plus
-   a third, `recovery-check-unavailable`, for a check that could not run (a vault that is not Initialized, an
-   unreadable or malformed envelope or manifest). The alternative reports those as `recovery-check-failed`, which
-   would tell the owner a working key is dead when a read fails.
-3. **Reminder interval.** *Default:* `[recovery] reminder_days` in the approved config, 7 to 365, default 90. The
-   alternatives fix 90 days in the binary, or let the owner turn reminders off.
-4. **`busy` rather than waiting.** The ticket asks for `busy` "like unlock", but `unlock` waits for the service-wide
-   lock. *Default:* the check tries the lock and answers `busy` at once, as `init` step 5, `replace` and `rm` do,
-   because a `config approve` can hold the lock for minutes, past the CLI's 60-second timeout. The alternative waits,
-   as `unlock` does.
-5. **`memory-unprotected` before the prompt.** *Default:* in a protected install whose memory is not locked, the check
-   is refused like `unlock`, because it unwraps the vault identity. The alternative allows it, since the identity is
-   held for milliseconds and is never kept.
-6. **A failed record write.** *Default:* the check still succeeds, with `recorded` false in the result and the
-   event. The alternative fails the command with a new error code, which would tell the owner the check failed when
-   only its record did.
-7. **The interval while no config is active.** *Default:* the last activated config's interval, or 90 from startup
-   until the first activation; never the unverified `config.toml`. The alternative reads `reminder_days` from the
-   unverified file while locked, so a restarted, locked service uses the owner's interval, at the cost of letting a
-   writer of that file delay reminders.
-8. **A leftover record on Uninitialized.** *Default:* a `recovery.toml` with no other vault file does not stop
-   `init`, which removes it before step 1. The alternative makes the state Unrecognized, so `init` refuses until the
-   owner removes the file.
-9. **The record has no format version.** *Default:* like `init.unfinished`, `recovery.toml` carries no version, and
-   a key a later release adds makes the record unusable to an older one, which then counts a reminder as due until the
-   next check rewrites it. The alternative adds `version = 1`.
-10. **The vault a check opens in Ready.** In Ready the check proves the key against the files on disk and never
-    compares the vault ID it opened with the vault ID of the vault the service holds, as migration's `not_this_vault`
-    does ([migration-authorization.md](migration-authorization.md#error-codes)). A writer of the state directory could
-    plant an `identity.age` wrapped for the recovery key's recipient and a `manifest.age` MAC'd by the identity inside
-    it, and the check would pass against that pair. *Default:* no comparison: such a writer has already defeated the
-    vault, as [The recovery check record](#the-recovery-check-record) and the README's
-    [security boundary](../README.md#security-boundary) say. The alternative ends a check in Ready with
+1. **States.** *Decided: default accepted (2026-11-09).* *Default:* Locked and Ready, as
+   `AdminOperation::RecoveryCheck`; `wrong-state` otherwise. The alternatives allow Unavailable as well, so a key can be
+   checked while the owner is repairing a config, or allow Ready only, so the check never unwraps the vault identity
+   while the service is otherwise holding no secrets.
+2. **Error codes.** *Decided: default accepted (2026-11-09).* *Default:* `recovery-key-invalid` for text that is not a
+   recovery key and `recovery-check-failed`, with a fixed message, for a key that does not open this vault, as the
+   ticket sets, plus a third, `recovery-check-unavailable`, for a check that could not run (a vault that is not
+   Initialized, an unreadable or malformed envelope or manifest). The alternative reports those as
+   `recovery-check-failed`, which would tell the owner a working key is dead when a read fails.
+3. **Reminder interval.** *Decided: default accepted (2026-11-09).* *Default:* `[recovery] reminder_days` in the
+   approved config, 7 to 365, default 90. The alternatives fix 90 days in the binary, or let the owner turn reminders
+   off.
+4. **`busy` rather than waiting.** *Decided: default accepted (2026-11-09).* The ticket asks for `busy` "like unlock",
+   but `unlock` waits for the service-wide lock. *Default:* the check tries the lock and answers `busy` at once, as
+   `init` step 5, `replace` and `rm` do, because a `config approve` can hold the lock for minutes, past the CLI's
+   60-second timeout. The alternative waits, as `unlock` does.
+5. **`memory-unprotected` before the prompt.** *Decided: default accepted (2026-11-09).* *Default:* in a protected
+   install whose memory is not locked, the check is refused like `unlock`, because it unwraps the vault identity. The
+   alternative allows it, since the identity is held for milliseconds and is never kept.
+6. **A failed record write.** *Decided: default accepted (2026-11-09).* *Default:* the check still succeeds, with
+   `recorded` false in the result and the event. The alternative fails the command with a new error code, which would
+   tell the owner the check failed when only its record did.
+7. **The interval while no config is active.** *Decided: default accepted (2026-11-09).* *Default:* the last activated
+   config's interval, or 90 from startup until the first activation; never the unverified `config.toml`. The alternative
+   reads `reminder_days` from the unverified file while locked, so a restarted, locked service uses the owner's
+   interval, at the cost of letting a writer of that file delay reminders.
+8. **A leftover record on Uninitialized.** *Decided: default accepted (2026-11-09).* *Default:* a `recovery.toml` with
+   no other vault file does not stop `init`, which removes it before step 1. The alternative makes the state
+   Unrecognized, so `init` refuses until the owner removes the file.
+9. **The record has no format version.** *Decided: default accepted (2026-11-09).* *Default:* like `init.unfinished`,
+   `recovery.toml` carries no version, and a key a later release adds makes the record unusable to an older one, which
+   then counts a reminder as due until the next check rewrites it. The alternative adds `version = 1`.
+10. **The vault a check opens in Ready.** *Decided: default accepted (2026-11-09).* In Ready the check proves the key
+    against the files on disk and never compares the vault ID it opened with the vault ID of the vault the service
+    holds, as migration's `not_this_vault` does ([migration-authorization.md](migration-authorization.md#error-codes)).
+    A writer of the state directory could plant an `identity.age` wrapped for the recovery key's recipient and a
+    `manifest.age` MAC'd by the identity inside it, and the check would pass against that pair. *Default:* no
+    comparison: such a writer has already defeated the vault, as [The recovery check record](#the-recovery-check-record)
+    and the README's [security boundary](../README.md#security-boundary) say. The alternative ends a check in Ready with
     `recovery-check-failed` when the vault ID it opened is not the one the service holds, which catches a pair swapped
     in while the service runs; in Locked no vault ID is held, so there is nothing to compare.

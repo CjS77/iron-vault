@@ -1,9 +1,9 @@
 # Vault initialization
 
 How `iron-vault init` creates a vault: its two independent recovery paths
-([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)), the recovery key shown exactly once
-([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)), the approval counters starting at zero
-and the first committed approval ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). It also
+([§14](iron-vault-specification.md#14-recipients-startup-and-memory)), the recovery key shown exactly once
+([§16](iron-vault-specification.md#16-administration-recovery-and-migration)), the approval counters starting at zero
+and the first committed approval ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)). It also
 covers what a crash part-way through leaves behind, and what each command does with it. Terms follow the
 [glossary](glossary.md); byte formats are in [storage-formats.md](storage-formats.md), and the `init` command's frames
 are in [admin-protocol.md](admin-protocol.md#init).
@@ -20,7 +20,7 @@ Three rules drive the design:
 - **Nothing is written until the owner has saved the recovery key.** A crash or a refusal before then leaves the
   state directory as it was.
 - **Every step is durable before the next one starts**, and one durable remove is the commit point
-  ([§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)).
+  ([§13](iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 - **Init never overwrites or removes what it did not write.** It removes only the files an unfinished initialization
   can have written (a config file only when its bytes are the initial config) and a leftover
   [recovery check record](recovery.md#initialization), and refuses anything else.
@@ -34,7 +34,7 @@ A fresh service starts Locked (`ServiceContext::start`): v0 keeps the vault iden
 startup always waits for an interactive unlock. Before init the request interface answers `503` `locked`, as in any
 Locked service, and the provisional listener set is empty, because there is no `config.toml` to name listeners.
 
-[§3.12](iron-vault-specification.md#312-service-states-and-errors) has no "uninitialized" state, and this design adds
+[§15](iron-vault-specification.md#15-service-states-and-errors) has no "uninitialized" state, and this design adds
 none, nor any edge ([open question 1](#open-questions)):
 
 - **Init is allowed only in Locked.** In any other state it ends with `wrong-state` before any prompt. A new
@@ -86,7 +86,7 @@ is foreign ([recipients.md](recipients.md#initialization)). It matters only besi
 Unrecognized so the discard never sweeps it into the new vault, and in a state directory with no manifest, where it
 makes Uninitialized impossible. Beside a manifest it changes nothing: `unlock` logs its name at WARN
 (`vault.foreign-file`) and goes on, because `Vault::open` already ignores names it does not know and the manifest alone
-decides which records exist ([§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). A stray
+decides which records exist ([§13](iron-vault-specification.md#13-vault-structure-and-durable-writes)). A stray
 `lost+found` on a state volume, an editor's backup or a file a later release writes, left after a downgrade, must not
 lock the owner out of a working vault. `lost+found` is the directory a filesystem check creates on a fresh volume, so
 `init` ignores it like the lock file and temp files ([open question 9](#open-questions)).
@@ -205,7 +205,7 @@ before the rule still opens. A later passphrase change applies the same rules ([
 
 ## Recovery key presentation
 
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) requires the service to present the
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration) requires the service to present the
 recovery identity once, through the owner-only session, and to have the owner confirm they saved it. In order:
 
 1. **Generate all keys first** (the exchange's step 3), so the key shown is the key that will be enrolled, and no
@@ -223,15 +223,15 @@ recovery identity once, through the owner-only session, and to have the owner co
 After the reveal the service keeps only the recovery key's parsed `RecipientIdentity`, for
 [step 2's unwrap check](#write-order), and drops it once that check passes. It never writes the secret text or the
 identity to disk, to a log or to an error, so the service holds no automatically usable recovery path, as
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) requires. `RecoveryKey::generate`
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration) requires. `RecoveryKey::generate`
 returns only the text, so the binary parses that text back with `RecoveryKeySecret::parse` before dropping it, or the
 store adds a way to keep the identity it generated; either keeps the parse inside a clearing buffer.
 
 The CLI writes the reveal value to the controlling terminal only, never to stdout or a pipe
 ([open question 5](#open-questions)). It checks for that terminal before it sends the `init` request, so the secret
 never reaches a CLI that will refuse to show it.
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) also asks for a QR code; until K-160 the
-CLI shows text only ([open question 4](#open-questions)).
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration) also asks for a QR code: the CLI renders
+one from the reveal value, below the text, on the same terminal ([open question 4](#open-questions)).
 
 ### Failing after the reveal
 
@@ -258,7 +258,7 @@ finished, may still be running or may have failed, and the CLI cannot tell which
 dead: discard it. If it answers `busy`, the first run is still writing: wait a few seconds and run it again. If it
 answers `already-initialized` and the message says the vault is Initialized, a vault stands, but it may not be the
 one this key opens, so do not rely on the key yet: confirm it with `iron-vault recovery check`, which runs while the
-vault is locked ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)), and keep the key
+vault is locked ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)), and keep the key
 only if that passes. If the message says Unrecognized, files init did not write are present and the key is
 not confirmed either.* The case the check guards against is a concurrent init: a second init finished first, so the
 owner's own run was refused and its key is dead, yet the re-run answers `already-initialized` for the other run's
@@ -337,7 +337,7 @@ config directory holds none of the four, or from Unfinished, where each is init'
 writer and writes the initial config alone.
 
 **Counters.** Discarding `approval.age` discards approval counters, which
-[§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) says start at zero "only when creating a new
+[§12](iron-vault-specification.md#12-configuration-approval-and-reload) says start at zero "only when creating a new
 vault". This design reads a re-run as creating a new vault, not resetting an old one
 ([open question 2](#open-questions)):
 
@@ -359,9 +359,9 @@ Nothing else has been written, so the state is still Uninitialized and the next 
 ## Crash table
 
 What each command does after a crash, or any failure, following each step. A crash inside a step leaves the state of
-the row before it or of its own row, because each durable write is whole or absent. `status` is the same in every row:
-it answers in Locked, and the vault ID, approval versions and credentials print as unknown while the vault is locked.
-It does not report the initialization state until K-161 ([open question 6](#open-questions)).
+the row before it or of its own row, because each durable write is whole or absent. `status` answers in Locked in
+every row, and names the initialization state: "not initialized (run iron-vault init)" for Uninitialized, and
+"initialization unfinished (run iron-vault init again)" for an unfinished init ([open question 6](#open-questions)).
 
 | Last step durable | Initialization state | `unlock` | `init` again |
 |---|---|---|---|
@@ -398,7 +398,7 @@ approval the owner would have to approve before adding anything, against a crede
 Init runs the store's approval transaction directly, without the approval summary and the confirmation prompt that
 `config approve` adds: the owner authorizes init as a whole, and the summary of the empty config is empty. The approval
 passphrase prompt is init's own step 2 prompt; step 7 opens the signer with it.
-[§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) step 2 says "authenticate the owner, show the
+[§12](iron-vault-specification.md#12-configuration-approval-and-reload) step 2 says "authenticate the owner, show the
 service-generated summary", so this departs from its wording ([open question 3](#open-questions)).
 
 ## Logging
@@ -429,25 +429,25 @@ questions 1 to 8 by accepting their defaults, and the design stands on them; onl
 default until the owner decides.
 
 1. **No uninitialized service state.** *Decided: default accepted (2026-11-04).*
-   [§3.12](iron-vault-specification.md#312-service-states-and-errors) draws no state for a service without a vault.
+   [§15](iron-vault-specification.md#15-service-states-and-errors) draws no state for a service without a vault.
    *Default:* the service starts Locked as it does today; `init` runs only in Locked and leaves the service Locked;
    `unlock` refuses with `unlock-failed` unless the vault is Initialized. No state or edge is added. The alternative
    adds an Uninitialized state with an edge to Locked on init.
 2. **Discarding counters on a re-run.** *Decided: default accepted (2026-11-04).*
-   [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) initializes the highest reserved version
+   [§12](iron-vault-specification.md#12-configuration-approval-and-reload) initializes the highest reserved version
    to zero "only when creating a new vault". *Default:* a re-run on Unfinished discards the unfinished vault's
    `approval.age`, counters included, and creates a new vault with a new vault ID and a new approver, so no old
    signature can verify and the discarded counters never protected anything served. The alternative keeps an
    unfinished vault's counters, which would mean resuming rather than restarting.
 3. **Version 1 without a summary or confirmation.** *Decided: default accepted (2026-11-04).*
-   [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) step 2 says "authenticate the owner, show
+   [§12](iron-vault-specification.md#12-configuration-approval-and-reload) step 2 says "authenticate the owner, show
    the service-generated summary". *Default:* init commits the fixed initial config without either, because the owner
    authorizes init as a whole and the config is fixed and empty. The alternative shows the empty summary and asks for
    a second confirmation.
 4. **The QR code.** *Decided: default accepted (2026-11-04).*
-   [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) asks for the recovery identity "as
-   text and a QR code". *Default:* text only until K-160. A QR code needs no protocol change, since the CLI can render
-   one from the reveal value on the terminal; K-160 adds it.
+   [§16](iron-vault-specification.md#16-administration-recovery-and-migration) asks for the recovery identity "as
+   text and a QR code". *Default:* text only at first. A QR code needs no protocol change, since the CLI can render
+   one from the reveal value on the terminal. K-160 added it.
 5. **Where the reveal is shown.** *Decided: default accepted (2026-11-04).* *Default:* the CLI writes the recovery key
    to the controlling terminal (`/dev/tty`) only, even when stdin is a pipe; with no controlling terminal it cancels
    the command before sending the request, so the service generates nothing and writes nothing. A scripted init
@@ -455,7 +455,7 @@ default until the owner decides.
    puts the key into whatever captures stderr.
 6. **`status` and the initialization state.** *Decided: default accepted (2026-11-04).* *Default:* this design leaves
    the status report unchanged, so before init `status` says Locked, as after it, and `unlock`'s and `init`'s messages
-   say which initialization state the directories are in. K-161 plans to add a status field for it.
+   say which initialization state the directories are in. K-161 added it to `status`.
 7. **Passphrase rules.** *Decided: default accepted (2026-11-04).* The specification sets no strength rule. *Default:*
    the [rules above](#passphrase-rules): entered twice, at least 12 Unicode scalar values, the two passphrases
    different, no strength estimate or blocklist; applied when a passphrase is chosen (init, and later a passphrase

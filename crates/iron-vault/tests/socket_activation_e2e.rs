@@ -1,5 +1,5 @@
 //! A real passed socket under `systemd-socket-activate`, which sets `LISTEN_*` and passes a listening socket to the
-//! service the way systemd does (specification §3.4, R-6; the end-to-end run `socket_activation.rs` leaves to EP-34).
+//! service the way systemd does (specification §7; the end-to-end run `socket_activation.rs` leaves to EP-34).
 //!
 //! The service is the built binary in development mode, which adopts passed sockets too. `init`, `unlock` and
 //! `config approve` run over its real admin socket: `init` shows the recovery key on a terminal only, and there is none

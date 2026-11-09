@@ -1,5 +1,5 @@
 //! Reading the host unlock handoff: the file through which the host gives a container-profile service the host unlock
-//! identity (`design/docker-compose.md`, specification §3.14).
+//! identity (`design/docker-compose.md`, specification §17).
 //!
 //! The file holds the recovery key's secret text, so it is read only through its own trusted-path rule: whoever could
 //! plant or read it could unlock the vault. The path is walked first; the leaf is then opened without following a

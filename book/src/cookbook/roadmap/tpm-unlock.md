@@ -7,4 +7,4 @@ laptop unlocks with a TPM PIN.
 
 Until then, in a development or protected Linux install, every start needs `iron-vault unlock` with the vault passphrase; see
 [lock, unlock and restart](../lock-unlock-restart.md). Requirements:
-[§3.11](../../../../design/iron-vault-specification.md#311-recipients-startup-and-memory).
+[§14](../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory).

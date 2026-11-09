@@ -2,34 +2,36 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 
-# Specification §3.7: the service must offer no way to disable certificate or hostname verification. rustls's
+# Specification §10: the service must offer no way to disable certificate or hostname verification. rustls's
 # `dangerous()` builders are the only way to replace its WebPKI verifier, so no code may call them.
 disallowed-methods = [
-    { path = "rustls::ConfigBuilder::dangerous", reason = "replaces certificate verification; §3.7 forbids disabling it", allow-invalid = true },
-    { path = "rustls::ClientConfig::dangerous", reason = "replaces certificate verification; §3.7 forbids disabling it", allow-invalid = true },
-    # §7: one controlled outbound-client constructor. `UpstreamClient::new` is the only caller of `Client::builder`, under
-    # an `allow` that points here; every other way to build a reqwest client skips its settings. `Client::default` is a
-    # trait method clippy cannot name, so `tests/upstream_construction.rs` searches the sources for it instead.
-    { path = "reqwest::Client::new", reason = "builds a client with ambient proxies and redirects; use UpstreamClient::new (§7)" },
-    { path = "reqwest::Client::builder", reason = "only UpstreamClient::new may build a reqwest client (§7)" },
-    { path = "reqwest::ClientBuilder::new", reason = "only UpstreamClient::new may build a reqwest client (§7)" },
-    { path = "reqwest::get", reason = "builds a client with ambient proxies and redirects; use UpstreamClient (§7)" },
-    { path = "reqwest::ClientBuilder::danger_accept_invalid_certs", reason = "disables certificate verification; §3.7 forbids it" },
-    { path = "reqwest::ClientBuilder::danger_accept_invalid_hostnames", reason = "disables hostname verification; §3.7 forbids it" },
-    # §7: one checked request is one send. `UpstreamClient::new` turns retries off; any other policy re-sends a request.
-    { path = "reqwest::ClientBuilder::retry", reason = "a retry re-sends a checked request; only UpstreamClient::new sets the policy (§7)" },
-    { path = "reqwest::ClientBuilder::proxy", reason = "sends credentialed requests through a proxy; §3.7 allows none" },
-    { path = "reqwest::Proxy::all", reason = "a proxy can intercept credentialed requests; §3.7 allows none" },
-    { path = "reqwest::Proxy::http", reason = "a proxy can intercept credentialed requests; §3.7 allows none" },
-    { path = "reqwest::Proxy::https", reason = "a proxy can intercept credentialed requests; §3.7 allows none" },
-    { path = "reqwest::Proxy::custom", reason = "a proxy can intercept credentialed requests; §3.7 allows none" },
+    { path = "rustls::ConfigBuilder::dangerous", reason = "replaces certificate verification; §10 forbids disabling it", allow-invalid = true },
+    { path = "rustls::ClientConfig::dangerous", reason = "replaces certificate verification; §10 forbids disabling it", allow-invalid = true },
+    # Implementation spec §1: one controlled outbound-client constructor. `UpstreamClient::new` is the only caller of
+    # `Client::builder`, under an `allow` that points here; every other way to build a reqwest client skips its settings.
+    # `Client::default` is a trait method clippy cannot name, so `tests/upstream_construction.rs` searches the sources
+    # for it instead.
+    { path = "reqwest::Client::new", reason = "builds a client with ambient proxies and redirects; use UpstreamClient::new (implementation spec §1)" },
+    { path = "reqwest::Client::builder", reason = "only UpstreamClient::new may build a reqwest client (implementation spec §1)" },
+    { path = "reqwest::ClientBuilder::new", reason = "only UpstreamClient::new may build a reqwest client (implementation spec §1)" },
+    { path = "reqwest::get", reason = "builds a client with ambient proxies and redirects; use UpstreamClient (implementation spec §1)" },
+    { path = "reqwest::ClientBuilder::danger_accept_invalid_certs", reason = "disables certificate verification; §10 forbids it" },
+    { path = "reqwest::ClientBuilder::danger_accept_invalid_hostnames", reason = "disables hostname verification; §10 forbids it" },
+    # Implementation spec §1: one checked request is one send. `UpstreamClient::new` turns retries off; any other
+    # policy re-sends a request.
+    { path = "reqwest::ClientBuilder::retry", reason = "a retry re-sends a checked request; only UpstreamClient::new sets the policy (implementation spec §1)" },
+    { path = "reqwest::ClientBuilder::proxy", reason = "sends credentialed requests through a proxy; §10 allows none" },
+    { path = "reqwest::Proxy::all", reason = "a proxy can intercept credentialed requests; §10 allows none" },
+    { path = "reqwest::Proxy::http", reason = "a proxy can intercept credentialed requests; §10 allows none" },
+    { path = "reqwest::Proxy::https", reason = "a proxy can intercept credentialed requests; §10 allows none" },
+    { path = "reqwest::Proxy::custom", reason = "a proxy can intercept credentialed requests; §10 allows none" },
 ]
 
 # A custom verifier is how verification gets switched off, so no code may name the verifier trait: clippy refuses
 # importing it, `dyn ServerCertVerifier` and trait bounds on it. It does not catch an `impl` that spells out the
 # trait's full path without importing it, so review must still refuse one.
 disallowed-types = [
-    { path = "rustls::client::danger::ServerCertVerifier", reason = "a custom verifier can skip certificate checks; §3.7 forbids disabling them", allow-invalid = true },
+    { path = "rustls::client::danger::ServerCertVerifier", reason = "a custom verifier can skip certificate checks; §10 forbids disabling them", allow-invalid = true },
     # The `blocking` feature is off, so the path resolves only if someone turns it on, which is when this must refuse it.
-    { path = "reqwest::blocking::Client", reason = "builds its own client outside UpstreamClient::new (§7)", allow-invalid = true },
+    { path = "reqwest::blocking::Client", reason = "builds its own client outside UpstreamClient::new (implementation spec §1)", allow-invalid = true },
 ]

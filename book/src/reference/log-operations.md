@@ -2,7 +2,7 @@
 
 How to run, rotate, collect and query the Iron Vault log. [Audit logging](../../../design/audit-logging.md) defines what the log holds;
 this guide covers the host and the tools around it (specification
-[§3.15](../../../design/iron-vault-specification.md#315-logging-and-v0-acceptance)). Terms follow the [glossary](../glossary.md). Field,
+[§18](../../../design/iron-vault-specification.md#18-logging)). Terms follow the [glossary](../glossary.md). Field,
 event and reason names below are those of [audit-logging.md](../../../design/audit-logging.md); when the two disagree, that document wins.
 
 The log is JSON Lines: one JSON object per line, UTF-8, in one file, `iron-vault.log`. A line is a request event
@@ -92,7 +92,7 @@ The package ships `/etc/logrotate.d/iron-vault`, owned by root, mode `0644`:
 
 - **`copytruncate`.** It loses every record written between its copy and its truncate. An audit log must not have that
   window, and the rename-based rule above needs no copy.
-- **A `postrotate` signal.** `SIGHUP` means "reload the config" ([§3.9](../../../design/iron-vault-specification.md#39-configuration-approval-and-reload)),
+- **A `postrotate` signal.** `SIGHUP` means "reload the config" ([§12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)),
   so a rotation script would trigger a reload. The service needs no signal to follow a rename.
 - **Rotating by hand** with `mv` is fine for the same reason. Never delete the file, which destroys audit records. Never
   `touch` or create `iron-vault.log` yourself: at its next record the service stops if the file is not owned by the
@@ -123,7 +123,7 @@ services:
 - The `json-file` driver wraps each line in its own JSON object (`{"log":"...","stream":"stdout","time":"..."}`). A
   collector must unwrap `log` before it reads the record.
 - Whoever controls the Docker daemon can read these logs, replace the service and run commands in its container
-  ([§3.14](../../../design/iron-vault-specification.md#314-docker-remote-servers-and-appliances)). A collector that reads container logs
+  ([§17](../../../design/iron-vault-specification.md#17-docker-remote-servers-and-appliances)). A collector that reads container logs
   through the daemon's socket holds that control; prefer a host agent that reads the driver's files, owned by root.
 - The service refuses `stdout` when stdout is the systemd journal, so `--log-to-stdout` is for containers and pipes, not
   for a unit.

@@ -1,7 +1,7 @@
 # Linux package
 
 This document decides how Iron Vault is packaged for a protected Linux installation
-([§3.1](iron-vault-specification.md#31-installation-and-ownership)): the package format, who owns every path the
+([§4](iron-vault-specification.md#4-installation-and-ownership)): the package format, who owns every path the
 package installs or creates, the systemd units, and what install, upgrade, remove and purge do. The paths and modes
 here are the ones the service's trusted-path checks accept (`trusted_path.rs`), so a fresh
 install passes them without any manual step.
@@ -46,7 +46,7 @@ Created by column means a file in the `.deb`'s data archive, which dpkg owns and
 | Path | Owner:group | Mode | Created by | Trusted-path rule |
 |---|---|---|---|---|
 | `/usr/bin/iron-vault` | `root:root` | `0755` | package | `Binary`: a regular file owned by root, writable by neither group nor others |
-| `/usr/lib/systemd/system/iron-vault.service` | `root:root` | `0644` | package | not checked by the service; root-owned and unwritable by users ([§3.1](iron-vault-specification.md#31-installation-and-ownership)) |
+| `/usr/lib/systemd/system/iron-vault.service` | `root:root` | `0644` | package | not checked by the service; root-owned and unwritable by users ([§4](iron-vault-specification.md#4-installation-and-ownership)) |
 | `/usr/lib/systemd/system/iron-vault-listener@.socket` | `root:root` | `0644` | package | as above |
 | `/usr/lib/sysusers.d/iron-vault.conf` | `root:root` | `0644` | package | as above |
 | `/usr/lib/tmpfiles.d/iron-vault.conf` | `root:root` | `0644` | package | as above |
@@ -157,13 +157,13 @@ WantedBy=multi-user.target
 |---|---|
 | `Type=exec` | The service sends no readiness notification. `exec` makes a start fail when the binary cannot be executed, rather than reporting success. |
 | `ExecReload=` | The service reloads its published config on SIGHUP ([config-approval.md](config-approval.md#reload)), so `systemctl reload iron-vault` does that. |
-| `User=iron-vault`, `Group=iron-vault` | The service runs under its own account ([§3.1](iron-vault-specification.md#31-installation-and-ownership)), which is the expected owner the trusted-path checks look for and an admin principal ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). |
-| `Restart=on-failure` | A crash restarts the service unattended ([§3.12](iron-vault-specification.md#312-service-states-and-errors)). A clean exit, and a service waiting Locked, are not failures, so neither is restarted. |
-| `LimitCORE=0` | No core dump can hold service memory ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)). The service also sets `RLIMIT_CORE` to 0 and clears `PR_SET_DUMPABLE` itself. |
-| `LimitMEMLOCK=infinity` | `hardening.rs` calls `mlockall` only when the `RLIMIT_MEMLOCK` soft limit is unlimited, because locking future mappings under a finite limit makes allocations fail once the service grows past it. A protected install does not unlock without locked memory ([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory)). Locking needs no capability once the limit allows it. |
+| `User=iron-vault`, `Group=iron-vault` | The service runs under its own account ([§4](iron-vault-specification.md#4-installation-and-ownership)), which is the expected owner the trusted-path checks look for and an admin principal ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). |
+| `Restart=on-failure` | A crash restarts the service unattended ([§15](iron-vault-specification.md#15-service-states-and-errors)). A clean exit, and a service waiting Locked, are not failures, so neither is restarted. |
+| `LimitCORE=0` | No core dump can hold service memory ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)). The service also sets `RLIMIT_CORE` to 0 and clears `PR_SET_DUMPABLE` itself. |
+| `LimitMEMLOCK=infinity` | `hardening.rs` calls `mlockall` only when the `RLIMIT_MEMLOCK` soft limit is unlimited, because locking future mappings under a finite limit makes allocations fail once the service grows past it. A protected install does not unlock without locked memory ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)). Locking needs no capability once the limit allows it. |
 | `UMask=0077` | Any file the service creates without an explicit mode is its own alone. Files that need another mode set it explicitly: the log file `0640`, request sockets `0666`. |
 | `LogsDirectory=`, `LogsDirectoryMode=0750` | systemd creates `/var/log/iron-vault`, owned by the service account, before each start, and makes it writable under `ProtectSystem=strict` ([log-operations.md](../book/src/reference/log-operations.md)). Without `LogsDirectoryMode=` the mode would be `0755`, which the `LogDir` rule refuses. |
-| No `Environment=`, `EnvironmentFile=` or `PassEnvironment=` | The service gets only the environment systemd builds for a unit, never the environment of the administrator who started it. The service does not depend on this: it ignores proxy, trust-root and log-level variables in code ([§3.7](iron-vault-specification.md#37-outbound-tls-and-environment)). |
+| No `Environment=`, `EnvironmentFile=` or `PassEnvironment=` | The service gets only the environment systemd builds for a unit, never the environment of the administrator who started it. The service does not depend on this: it ignores proxy, trust-root and log-level variables in code ([§10](iron-vault-specification.md#10-outbound-tls-and-environment)). |
 | `ProtectSystem=strict`, `ReadWritePaths=` | The whole filesystem is read-only to the service except its config, state and runtime directories and its log directory. `/run` is read-only under `strict` too, so the runtime directory must be listed: the service binds `admin.sock` there. An approved config whose `[logging] destination` names another directory needs a drop-in adding that directory to `ReadWritePaths=`. |
 | `ProtectHome=yes` | `/home`, `/root` and `/run/user` are invisible. The service has no reason to read a login account's files. |
 | `PrivateDevices=yes` | Only pseudo-devices such as `/dev/null` and `/dev/urandom` are visible. v0 uses no device. |
@@ -183,7 +183,7 @@ versions the package supports make an allowed device node visible in the private
 
 In a protected install every TCP listener comes from systemd socket activation: the service refuses to bind one
 itself (`socket_activation::check_origin`), so that no other process can take the port while the service restarts
-([§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners), R-6). A Unix request socket may be
+([§7](iron-vault-specification.md#7-caller-authentication-and-listeners)). A Unix request socket may be
 bound by the service or by a socket unit.
 
 The package ships one template:
@@ -307,7 +307,7 @@ dpkg removes the conffile `/etc/logrotate.d/iron-vault`, then `postrm purge`:
    files ([§10.8](https://www.debian.org/doc/debian-policy/ch-files.html#log-files)). Any TLS files the administrator
    put under `/etc/iron-vault` go with it.
 2. Deletes the drop-in directories `/etc/systemd/system/iron-vault-listener@*.socket.d`, which configure nothing but
-   this package. This step is a default for the owner to confirm ([open questions](#open-questions)).
+   this package ([open question 1](#open-questions), decided).
 3. Asks whether to delete the vault, as below.
 4. Purges the package's debconf entries.
 
@@ -398,7 +398,7 @@ group-writable directory is read from the journal, because the service's startup
 
 ## Admin access
 
-Admin commands run only through `sudo` ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The admin
+Admin commands run only through `sudo` ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The admin
 principals of a protected install are root and the service account, fixed by the deployment profile. `admin.sock` is
 the service account's with mode `0600`, and the service checks each connection's peer account before reading
 anything. The package creates no admin group. Membership of the `iron-vault` group grants no admin access: the
@@ -412,7 +412,7 @@ or none, and a hardware-key factor where the platform supports one.
 
 ## Open questions
 
-1. **Purge deletes the listener drop-ins.** [Purge](#purge) step 2 deletes
+1. **Purge deletes the listener drop-ins.** *Decided: default accepted (2026-11-09).* [Purge](#purge) step 2 deletes
    `/etc/systemd/system/iron-vault-listener@*.socket.d`. The administrator wrote these files, not the package, and
    the purge contract the owner set names only `/etc/iron-vault`, `/var/log/iron-vault` and the vault. Deleting them
    is the default because they configure nothing once the template unit is gone; the owner should confirm it.

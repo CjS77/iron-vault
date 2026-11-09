@@ -41,7 +41,7 @@ const OPERATIONS: [AdminOperation; 11] = [
     AdminOperation::RecoveryCheck,
 ];
 
-/// Every edge of the §3.12 diagram, and nothing else.
+/// Every edge of the §15 diagram, and nothing else.
 fn legal_edges() -> Vec<(ServiceState, ServiceEvent, ServiceState)> {
     let policy = S::Unavailable(FailureReason::PolicyInvalid);
     let recovery = S::Unavailable(FailureReason::RecoveryNeeded);

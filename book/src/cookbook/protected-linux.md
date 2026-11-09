@@ -126,7 +126,7 @@ for removing it.
 - [Installing Iron Vault on Linux](../installation/linux-install.md) and
   [a shared Linux workstation](../installation/multiuser-linux.md).
 - [CLI](../reference/cli.md#sudo-in-a-protected-installation): running commands with `sudo`.
-- [§3.1](../../../design/iron-vault-specification.md#31-installation-and-ownership) of the specification, and the
+- [§4](../../../design/iron-vault-specification.md#4-installation-and-ownership) of the specification, and the
   [package design](../../../design/linux-package.md).
 - The rest of the cookbook applies with `sudo` in front of each `iron-vault` command, the log at
   `/var/log/iron-vault/iron-vault.log` and the published config at `/etc/iron-vault/config.toml`.

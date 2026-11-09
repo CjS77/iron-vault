@@ -1,6 +1,6 @@
 # Secret handling in memory
 
-Spec [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory) requires the service to hold secret values in types that suppress debugging and clear their buffers on
+Spec [§14](iron-vault-specification.md#14-recipients-startup-and-memory) requires the service to hold secret values in types that suppress debugging and clear their buffers on
 release, to minimize copies, and to clear cached values on lock or replacement. This document lists every type that
 holds secret bytes, how each one is cleared, and the copies the code knows about but cannot yet avoid.
 
@@ -114,7 +114,7 @@ operation.
 
 ## Streamed response compatibility
 
-Spec [§9](iron-vault-specification.md#9-implementation-gates-and-unresolved-details) asks for measured overlap buffering and SSE latency. `crates/iron-vault/tests/proxy_scrub_stream_linux.rs` runs
+[Implementation spec §3](implementation-specification.md#3-implementation-gates-and-unresolved-details) asks for measured overlap buffering and SSE latency. `crates/iron-vault/tests/proxy_scrub_stream_linux.rs` runs
 the real request server and pipeline against a test upstream that sends scripted chunks, each flushed as its own write.
 
 The scrubber holds back only the tail of the pending bytes that is a proper prefix of some pattern (`Scrubber::scan`
@@ -155,7 +155,7 @@ Compressed bodies are covered in the next section.
 
 ### Compressed responses
 
-Spec [§3.8](iron-vault-specification.md#38-responses-redirects-and-scrubbing) and [§9](iron-vault-specification.md#9-implementation-gates-and-unresolved-details) ask for tests that combine compression with chunk boundaries and unchanged traffic, and for measured
+Spec [§11](iron-vault-specification.md#11-responses-redirects-and-scrubbing) and [implementation spec §3](implementation-specification.md#3-implementation-gates-and-unresolved-details) ask for tests that combine compression with chunk boundaries and unchanged traffic, and for measured
 decompression limits. `crates/iron-vault/tests/proxy_coding_stream_linux.rs` runs the same assembled service against an
 upstream that sends already compressed, scripted chunks; the refusals are in `proxy_coding_linux.rs`.
 
@@ -212,7 +212,7 @@ dropped. (The service's `ServingSnapshot` shares its vault through an `Arc`: the
 replaced the snapshot and the last request that loaded it has finished.) `secret_types_tests` checks this by scanning
 the store's sources, and asserts `Vault: Send + Sync`, which `Rc` would break.
 
-**Lock** (`ServiceContext::lock`, spec [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)) drops every owner of a secret in this order. Under the context's mutex,
+**Lock** (`ServiceContext::lock`, spec [§16](iron-vault-specification.md#16-administration-recovery-and-migration)) drops every owner of a secret in this order. Under the context's mutex,
 the holder stops admitting requests and withdraws its snapshots, which cancels the requests running on them, and the
 approval state is dropped. The mutex is then released, and the service waits up to the *lock drain* for every
 `Arc<ServingSnapshot>` to go. A snapshot has three kinds of holder, and the drain waits for all of them: a request still
@@ -284,7 +284,7 @@ client shared between snapshots) breaks this, and must come with a new way to cl
 | `age`'s scrypt recipient and identity take a `SecretString` copy of the passphrase (`Passphrase::for_age`), and derive the wrapping key inside `age`. | The copy is a `SecretString` and is wiped; `age`'s internal key derivation is not audited here. Locked memory (K-45) keeps it out of swap. |
 | `base64`'s `encode_string`, used by both `CallerToken` constructors, encodes through a 1 KiB stack buffer it does not wipe, leaving a copy of the token's body in a dead stack frame. | The next calls on that thread overwrite it; locked memory (K-45) keeps it out of swap. The 32 raw bytes are held in `Zeroizing` buffers. |
 | An upstream connection's task, which owns the connection's write buffer (the last request's headers, the injected credential included), outlives the last handle to it by the task's final poll. The drain waits for the snapshot, not the task, so `lock` can answer `cleared` in that window. | Dropping the snapshot drops its pools, and with them every idle connection's handle, before the drain sees it released ("Upstream connections close with their snapshot" above); a connection still streaming loses its handle when its body drops, which is also before. Each task is woken then and closes on its next poll, normally within microseconds. A TLS `close_notify` that cannot be flushed because the upstream stopped reading keeps it longer, until the kernel accepts the write or the connection fails; reqwest offers no write timeout. A background connect (hyper-util's `one_connection_for` spawning a connect that an idle connection beat, above) holds the pool strongly past the snapshot, so idle connections then lose their handles only when it ends, at most `TransportLimits::connect` (10 seconds by default) after `lock`; the drain does not see this task, so `lock` can answer `cleared` while it runs. The buffer is then freed unwiped, like the next rows. Locked memory (K-45) keeps it out of swap, and core dumps and same-account `ptrace` are off. |
-| A request that ignores its cancellation. | `lock` cancels requests where the transport permits ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)), but a request blocked in code that never polls its cancellation keeps its `Arc<ServingSnapshot>`, and with it the vault, until it ends. The lock drain bounds the wait and `lock` then answers `cleared` as false and logs the count of snapshots still held, instead of claiming the secrets are gone. |
+| A request that ignores its cancellation. | `lock` cancels requests where the transport permits ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)), but a request blocked in code that never polls its cancellation keeps its `Arc<ServingSnapshot>`, and with it the vault, until it ends. The lock drain bounds the wait and `lock` then answers `cleared` as false and logs the count of snapshots still held, instead of claiming the secrets are gone. |
 | The kernel holds owner input outside the CLI: in the terminal's line buffer while the owner types, in the pipe buffer when it is piped, and in the admin socket's buffers in transit. | Outside any process's control. Each buffer is drained by the read that empties it. |
 | When SIGINT, SIGQUIT, SIGTERM or SIGHUP arrives after the CLI opened its owner console, its watcher thread restores the terminal if echo is off and calls `process::exit`, which runs no destructors, so a line buffer the main thread is filling is not wiped. | The process exits at once and the kernel frees its memory. Core dumps and same-account `ptrace` are off, so nothing can read the buffer between the signal and the exit. |
 | The CLI's memory is not locked, so an owner-input buffer could be swapped out while it lives. | It lives only from the read until the frame is written. The CLI disables core dumps and same-account `ptrace` before connecting; encrypted swap, which the install guide requires, covers the rest. |

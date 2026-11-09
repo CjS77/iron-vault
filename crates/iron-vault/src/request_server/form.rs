@@ -1,4 +1,4 @@
-//! The request form gate (spec §3.5 step 2): only an origin-form request that asks for no protocol change goes on.
+//! The request form gate (spec §8 step 2): only an origin-form request that asks for no protocol change goes on.
 //!
 //! A `CONNECT` tunnel, an absolute-form target or an upgrade would carry a request around route selection and the final
 //! outgoing-request check, so each is refused before authentication. The check is a pure function over the parts of

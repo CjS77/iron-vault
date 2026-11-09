@@ -1,4 +1,4 @@
-//! The `[logging] destination` setting: where the approved config sends the service's log (spec §3.15).
+//! The `[logging] destination` setting: where the approved config sends the service's log (spec §18).
 //!
 //! This is the setting as written and checked for shape. Opening the directory and verifying its owner and mode is the
 //! service's job (`TrustedPathRule::LogDir`), as is choosing the destination at runtime.

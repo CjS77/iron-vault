@@ -1,10 +1,10 @@
-//! The service's own account of what an approval changes (spec §3.2, design/config-approval.md "Approval summary").
+//! The service's own account of what an approval changes (spec §5, design/config-approval.md "Approval summary").
 //!
 //! [`summarize`] diffs the pending validated config against the active one. It is a pure function of the two configs, so
 //! the same inputs always give the same text: every collection is walked in `BTreeMap` or `BTreeSet` order. The
 //! committed version, vault ID and digest are not known to this crate; the command that shows the summary writes that
 //! header and puts [`ApprovalSummary::render`] below it. A token hash is never rendered, and every configured value is
-//! escaped, so a hostile value cannot forge a summary line (spec §3.15).
+//! escaped, so a hostile value cannot forge a summary line (spec §18).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
@@ -22,7 +22,7 @@ use crate::route::RouteConfig;
 use crate::slot::Slot;
 use crate::validated::ValidatedConfig;
 
-/// The line printed when the bytes differ but no section has an entry (whitespace or comments, spec §3.9).
+/// The line printed when the bytes differ but no section has an entry (whitespace or comments, spec §12).
 const TEXT_ONLY: &str = "no policy change; text changed";
 
 /// The line printed when there is no active config to diff against.

@@ -1,17 +1,17 @@
-//! The §3.12 answer for each pipeline refusal: one status, one fixed body, and the label of a service defect.
+//! The §15 answer for each pipeline refusal: one status, one fixed body, and the label of a service defect.
 //!
 //! The table in [`PipelineRefusal::status`] is the one place a refusal becomes a status, so the rules about what a
 //! refusal may reveal are reviewed together:
 //!
 //! - `401` names no scheme, token header or listener caller, and carries no `WWW-Authenticate`, so a client without a
 //!   token learns nothing about where to look for one;
-//! - `403` and `404` get different statuses and neither body names a route or a grant: §3.12 requires that `404`
+//! - `403` and `404` get different statuses and neither body names a route or a grant: §15 requires that `404`
 //!   disclose no other caller's grants, and a constant body per status meets that;
 //! - `503` carries a redacted reason: the same body whether the vault is damaged, a record is missing or a kind failed;
 //! - a refusal that only a service defect can cause answers `500` "internal error".
 //!
 //! Every body is a constant. No body repeats caller input, a route the caller is not granted, or a library error,
-//! whose text may hold a URL or a header value (§3.15).
+//! whose text may hold a URL or a header value (§18).
 
 use iron_vault_policy::{AssembleError, AuthzError, ChargeError};
 
@@ -65,7 +65,7 @@ impl RefusalResponse {
 }
 
 impl PipelineRefusal {
-    /// The HTTP status this refusal is answered with (§3.12).
+    /// The HTTP status this refusal is answered with (§15).
     pub fn status(&self) -> u16 {
         match self {
             Self::Unauthenticated(_) => 401,
@@ -75,7 +75,7 @@ impl PipelineRefusal {
             Self::Authz(AuthzError::Unavailable { .. }) | Self::NoHealthyRecord { .. } | Self::Kind(_) => 503,
             Self::Target(_) | Self::Method | Self::Sanitize(_) => 400,
             Self::Assemble(AssembleError::ForeignMarker | AssembleError::MalformedMarker) => 400,
-            // §3.12 has no row for these: only a service defect reaches them, so `500` is the honest status. This list
+            // §15 has no row for these: only a service defect reaches them, so `500` is the honest status. This list
             // and `defect()` name the same variants; a test checks that a `500` is exactly a logged defect.
             Self::Charge(ChargeError::UnknownRoute { .. } | ChargeError::NotGranted { .. })
             | Self::Assemble(
@@ -96,7 +96,7 @@ impl PipelineRefusal {
     }
 
     /// A fixed snake_case label for a refusal that only a service defect can cause, for the `request.defect` event;
-    /// `None` for a caller error or a route failure. The variants carry nothing, so the label discloses nothing (§3.15).
+    /// `None` for a caller error or a route failure. The variants carry nothing, so the label discloses nothing (§18).
     pub fn defect(&self) -> Option<&'static str> {
         match self {
             Self::FinalCheck(error) => Some(final_check_label(error)),

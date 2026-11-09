@@ -1,4 +1,4 @@
-//! Headers that carry caller authentication or control transport, routing or method semantics (spec §3.6).
+//! Headers that carry caller authentication or control transport, routing or method semantics (spec §9).
 //!
 //! This is the single denylist for two uses: a header slot may never name one of these headers, and the outgoing
 //! request has them removed before forwarding. Keeping both uses on one list means a header cannot be stripped from
@@ -29,7 +29,7 @@ pub const RESERVED_HEADERS: &[&str] = &[
     // request.
     "host",
     "content-length",
-    // Forwarding headers. `Via` and `X-Real-IP` are not named in §3.6, but upstreams read them as client or proxy
+    // Forwarding headers. `Via` and `X-Real-IP` are not named in §9, but upstreams read them as client or proxy
     // identity exactly as they read `Forwarded`, so they get the same treatment.
     "forwarded",
     "via",

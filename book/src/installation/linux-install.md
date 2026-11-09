@@ -1,6 +1,6 @@
 # Installing Iron Vault on Linux
 
-This guide installs the protected Linux deployment ([§3.1](../../../design/iron-vault-specification.md#31-installation-and-ownership)): the
+This guide installs the protected Linux deployment ([§4](../../../design/iron-vault-specification.md#4-installation-and-ownership)): the
 service runs as the `iron-vault` system account, its vault is in `/var/lib/iron-vault`, and no ordinary account can read
 it. [linux-package.md](../../../design/linux-package.md) says what the package installs and why. For a worked example with several
 accounts, see [multiuser-linux.md](multiuser-linux.md). To try Iron Vault as your own user instead, use
@@ -13,7 +13,7 @@ The protection depends on the host, not only the package. Do the two checks unde
 
 ### Harden `sudo`
 
-Every admin command runs through `sudo` ([§3.2](../../../design/iron-vault-specification.md#32-service-and-cli-boundary)): your login
+Every admin command runs through `sudo` ([§5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns)): your login
 account is never an admin principal, so malware running as you cannot reach the admin socket. That barrier is only as
 strong as your `sudo` setup. After you enter your password, `sudo` remembers it for a timeout that depends on the
 distribution: 5 minutes upstream, 15 on Ubuntu. Since sudo 1.8.21 the cache is per terminal (`timestamp_type=tty`) by
@@ -50,14 +50,14 @@ ends.
   4. From a second terminal, check that `sudo true` asks for the touch, and only then close the root shell.
 
 Approving a config also needs the approval passphrase, and unlocking needs the vault passphrase, so a borrowed `sudo`
-session alone can do neither. It is still a host administrator ([§1.2](../../../design/iron-vault-specification.md#12-security-promise-and-limits)):
+session alone can do neither. It is still a host administrator ([§2](../../../design/iron-vault-specification.md#2-security-promise-and-limits)):
 it can read the unlocked service's memory, lock the service, and run as any caller account to use that account's routes.
 
 ### Encrypt swap and hibernation storage
 
 Iron Vault locks its memory with `mlockall`, so the service's secrets are not paged out to swap. Locking does not stop
 hibernation: the kernel writes all of RAM to the hibernation image, locked pages included
-([§3.11](../../../design/iron-vault-specification.md#311-recipients-startup-and-memory)). Swap and hibernation storage must therefore be
+([§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)). Swap and hibernation storage must therefore be
 encrypted whenever either is enabled, normally by full-disk encryption. Swap matters beyond the service too: the CLI
 (`sudo iron-vault init`, `unlock`, `add`, `replace` and `config approve`) holds the passphrases and keys you type, and
 does not call `mlockall`, so those pages can be swapped out.
@@ -133,12 +133,12 @@ curl --unix-socket /run/iron-vault/proxy.sock http://localhost/gh/user
 ```
 
 Your own login gets `401` unless the config names it as a caller. `sudo curl ...` is refused: the service never accepts
-root as a caller ([§3.4](../../../design/iron-vault-specification.md#34-caller-authentication-and-listeners)).
+root as a caller ([§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)).
 
 ## Add a TCP listener
 
 In a protected install, systemd holds every TCP port, so the service never binds one itself
-([§3.4](../../../design/iron-vault-specification.md#34-caller-authentication-and-listeners)). Each listener is an instance
+([§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)). Each listener is an instance
 `iron-vault-listener@<name>.socket` of the packaged template, and `<name>` must be the listener's name in the config. A
 non-loopback address also needs `tls_certificate` and `tls_key` in the config.
 
@@ -192,7 +192,7 @@ sudo iron-vault unlock
 ```
 
 The upgrade restarts `iron-vault.service`, and it comes back Locked: requests get `503` with reason `locked` until you
-unlock it ([§3.12](../../../design/iron-vault-specification.md#312-service-states-and-errors)). Listener socket units are not restarted, so
+unlock it ([§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)). Listener socket units are not restarted, so
 they keep their ports through the upgrade. The vault and config are not touched.
 
 ## Uninstall and purge

@@ -1,4 +1,4 @@
-//! Opening the pinned approver's key with the approval passphrase (specification §3.9, §3.3): the one check both
+//! Opening the pinned approver's key with the approval passphrase (specification §12, §6): the one check both
 //! `config approve` and owner presence (design/credential-commands.md, "Owner presence") make.
 //!
 //! `config approve` keeps the signer it opens to sign its payload. Owner presence drops it at once and keeps only an

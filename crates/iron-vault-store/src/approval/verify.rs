@@ -1,4 +1,4 @@
-//! Verifying a config approval against the approval state at startup and reload (spec §3.9, §3.15).
+//! Verifying a config approval against the approval state at startup and reload (spec §12, §19).
 //!
 //! The checks run in a fixed order and stop at the first failure. The signature is checked before any payload field
 //! is trusted, so an unsigned payload never reaches the vault, digest or version checks. Verification only reads the
@@ -40,7 +40,7 @@ impl VerifiedApproval {
     }
 }
 
-/// Why a config approval does not verify. Any variant stops proxying (spec §3.9).
+/// Why a config approval does not verify. Any variant stops proxying (spec §12).
 ///
 /// No variant carries key material, signature bytes or config bytes. Versions are not secret, so they are named for the
 /// operator.
@@ -97,7 +97,7 @@ pub enum VerifyError {
     },
 }
 
-/// Verifies the `config.toml.sig` bytes `envelope` for the `config.toml` bytes `config` against `state` (spec §3.9).
+/// Verifies the `config.toml.sig` bytes `envelope` for the `config.toml` bytes `config` against `state` (spec §12).
 ///
 /// Checks, in order: the envelope decodes; its algorithm is the pinned approver's; its signature verifies against the
 /// pinned key over the exact payload bytes; the payload names this vault; the payload digest is the digest of

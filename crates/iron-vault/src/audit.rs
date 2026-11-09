@@ -1,4 +1,4 @@
-//! Audit events: the typed records of administrative and security facts (specification §3.15;
+//! Audit events: the typed records of administrative and security facts (specification §18;
 //! `design/audit-logging.md`, "Audit events").
 //!
 //! Each event is a struct whose fields are domain types, and its [`AuditEvent::emit`] makes one `tracing` call under

@@ -1,4 +1,4 @@
-//! `recipient list`: every enrolled recipient of the vault identity (specification §3.13; `design/recipients.md`,
+//! `recipient list`: every enrolled recipient of the vault identity (specification §16; `design/recipients.md`,
 //! "`recipient list`").
 //!
 //! It needs Ready and the service-wide lock, and opens the inventory with the inventory check, so a staged change is
@@ -38,7 +38,7 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for RecipientList<F> {
     }
 }
 
-/// What every completed recipient change says about copies already made (R-24).
+/// What every completed recipient change says about copies already made (§16).
 pub(super) const OLD_COPIES: &str = "Removing a recipient protects future copies of identity.age only.\n\
     Old copies of identity.age, and backups, still open with a removed key.\n\
     If a machine was lost, rotate the provider credentials it could reach.";

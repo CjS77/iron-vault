@@ -1,4 +1,4 @@
-//! Location rewrite: what the caller sees of an upstream redirect's `Location` (spec §3.5, §3.8, R-13).
+//! Location rewrite: what the caller sees of an upstream redirect's `Location` (spec §8, §11).
 //!
 //! The upstream client never follows a redirect, so the `Location` it returns is the caller's to follow. The value is
 //! resolved against the URL actually sent (RFC 3986 §5) and then:
@@ -58,7 +58,7 @@ pub enum LocationRefusal {
     /// A same-origin destination outside the upstream base path: an out-of-base redirect.
     #[error("upstream Location leaves the upstream base path")]
     OutOfBase,
-    /// A same-origin path breaks a request-target path rule (§3.6), or would be reinterpreted when rebuilt.
+    /// A same-origin path breaks a request-target path rule (§9), or would be reinterpreted when rebuilt.
     #[error("upstream Location has an ambiguous path")]
     AmbiguousPath,
     /// A cross-origin destination not written as an absolute `scheme://authority` URL: a relative cross-origin redirect.

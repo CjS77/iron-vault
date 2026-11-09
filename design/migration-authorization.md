@@ -2,8 +2,8 @@
 
 How the service checks that the owner authorizes a migration before `export` writes a migration bundle or `recipient
 add` rewraps the vault identity for a destination (specification
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration),
-[§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance), R-23). It covers the challenge the service issues,
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration),
+[§19](iron-vault-specification.md#19-v0-user-acceptance), §16). It covers the challenge the service issues,
 how the owner proves authority over the vault identity, what the proof authorizes, and how the admin exchange and the
 audit log show it. Terms follow the [glossary](glossary.md). The commands that consume an authorization are designed
 by their own epics: `export` (EP-30), `recipient add` (EP-28) and the TPM approval-key PIN method (EP-33).
@@ -12,12 +12,12 @@ Three rules drive the design:
 
 - **Only an enrolled factor, proved now, authorizes.** An unlocked vault, an authenticated admin connection, an
   earlier unlock or a newly chosen export passphrase never does
-  ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). Otherwise malware with an admin
-  connection could export every credential under a passphrase it chose (R-23).
+  ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)). Otherwise malware with an admin
+  connection could export every credential under a passphrase it chose (§16).
 - **An authorization covers one pending migration.** It is bound to the vault, the operation and the destination
   recipient, and it is used once, before it expires.
 - **The service runs the proof itself.** It issues the challenge, asks for the input, starts any hardware proof and
-  verifies the result. The CLI only relays prompts and input ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)).
+  verifies the result. The CLI only relays prompts and input ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)).
 
 ## The v0 method: the vault passphrase
 
@@ -44,7 +44,7 @@ Empty or non-UTF-8 input cannot be the passphrase and is refused as a wrong one.
 exchange.
 
 **Owner decision: the vault passphrase, not the approval passphrase.**
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)'s method table asks the owner to
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration)'s method table asks the owner to
 "re-enter the original source-vault passphrase", verified "against the existing enrolled identity envelope". The
 approval passphrase is the right factor for config and credential changes
 ([owner presence](credential-commands.md#owner-presence)). Authority over the vault identity itself belongs to the
@@ -54,7 +54,7 @@ vault passphrase is expected.
 ## Migration operation
 
 A migration operation is what an authorization permits. There are two, the two paths of
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration):
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration):
 
 | Operation | Label | Destination recipient | Consumed by |
 |---|---|---|---|
@@ -147,7 +147,7 @@ Consuming it checks that the vault ID, the operation and the destination recipie
 and that the challenge's expiry has not passed. A mismatch is refused as `binding_mismatch` and an expired proof as
 `expired`, both with `migration-denied`, and recorded after the proof's `migration.authorized` (see
 [Audit events](#audit-events)). For an expired proof the owner runs the command again, which issues a new
-challenge and asks again: §3.13 step 1, "if the authorization expires before export begins, repeat the check"
+challenge and asks again: §16 step 1, "if the authorization expires before export begins, repeat the check"
 ([open question 2](#open-questions)).
 
 The authorization holds no reference to the service and does not notice a `lock` itself. A `lock` cancels the
@@ -179,14 +179,14 @@ The service starts and verifies every hardware proof itself. A signature over an
 cached PIN proves nothing. The TPM's unattended unwrap of the vault identity is not a method: it shows the machine
 started, not that the owner is present.
 
-These do not authorize a migration: the recovery key, which §3.13 keeps for loss rather than listing as a migration
+These do not authorize a migration: the recovery key, which §16 keeps for loss rather than listing as a migration
 factor; the approval passphrase; an earlier unlock or migration authorization; an admin connection; and the export
 passphrase. Which method to ask for when a vault has more than one enrolled is EP-33's decision, made when the TPM
 method lands.
 
 A hardware device's own lockout applies as the device enforces it, such as the TPM's dictionary-attack protection
-for the approval key ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)) and its
-dictionary-attack state across power loss ([§3.12](iron-vault-specification.md#312-service-states-and-errors)). The
+for the approval key ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)) and its
+dictionary-attack state across power loss ([§15](iron-vault-specification.md#15-service-states-and-errors)). The
 service adds no limit of its own for a device. The vault passphrase has the
 [attempt limit](#passphrase-attempt-limit) below.
 
@@ -277,7 +277,7 @@ There is no separate `Type yes` confirmation. As with owner presence, typing the
 the confirmation, and cancelling the prompt declines.
 
 Only after step 7 succeeds does `export` ask for the export passphrase
-([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration): "only after this source-owner check
+([§16](iron-vault-specification.md#16-administration-recovery-and-migration): "only after this source-owner check
 succeeds may the service accept a new passphrase"). The owner never types the new passphrase into an exchange that has
 not been authorized.
 
@@ -348,11 +348,11 @@ The owner notification topic `migration_refused` is reserved for `migration.auth
 
 ## Release checks
 
-[§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance) requires export and destination-recipient
+[§19](iron-vault-specification.md#19-v0-user-acceptance) requires export and destination-recipient
 enrollment to "reject missing, incorrect, expired, replayed, or cancelled source-owner authorization, including when
 the vault is already unlocked". Each case maps to a mechanism above:
 
-| §3.15 case | How it is refused | Refusal |
+| §19 case | How it is refused | Refusal |
 |---|---|---|
 | Missing: no authorization in the code | The operation takes a migration authorization by value, and only a method's proof constructs one | none: the code cannot be written |
 | Missing: no answer at the prompt | The vault passphrase prompt gets no owner input: a client that never answers is cancelled at the prompt deadline, and one that sends a frame out of turn gets `unexpected-frame` (code 4) | `cancelled` |
@@ -375,12 +375,12 @@ decides.
 
 1. **Code without a caller.** `recipient add` calls the migration authorization modules; until `export` (EP-30) lands,
    its code paths (the `export` operation) have no caller outside tests.
-2. **Expiry within one exchange.** [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) step
-   1 says that if the authorization expires before export begins, the check is repeated. *Default:* the exchange ends
-   with `migration-denied` (`expired`), and running the command again repeats the check, with a new challenge. The
-   alternative issues a new challenge and prompts again inside the same exchange, which would make it the one place
-   with a second try.
-3. **`recipient remove`.** §3.13 asks for "fresh existing-owner authorization" for `recipient remove` as well as
-   `recipient add`, but removal is not a migration path. *Default:* removal is not a migration operation, and EP-28
-   chooses its check. If EP-28 uses this one, a third operation tag is the only change: the existing encodings stay
-   as they are, so the persona does not change.
+2. **Expiry within one exchange.** *Decided: default accepted (2026-11-09).*
+   [§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 1 says that if the authorization
+   expires before export begins, the check is repeated. *Default:* the exchange ends with `migration-denied`
+   (`expired`), and running the command again repeats the check, with a new challenge. The alternative issues a new
+   challenge and prompts again inside the same exchange, which would make it the one place with a second try.
+3. **`recipient remove`.** *Decided: default accepted (2026-11-09).* §16 asks for "fresh existing-owner
+   authorization" for `recipient remove` as well as `recipient add`, but removal is not a migration path. *Default:*
+   removal is not a migration operation, and EP-28 chooses its check. If EP-28 uses this one, a third operation tag is
+   the only change: the existing encodings stay as they are, so the persona does not change.

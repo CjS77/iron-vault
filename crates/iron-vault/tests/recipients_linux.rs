@@ -246,7 +246,7 @@ async fn a_removed_key_still_opens_a_copy_of_the_envelope_taken_before_the_remov
         unwrap_identity(&session.envelope(), &identity).is_err(),
         "the removed key opens the new envelope"
     );
-    let vault = unwrap_identity(&old_copy, &identity).expect("R-24: an old copy still opens with the removed key");
+    let vault = unwrap_identity(&old_copy, &identity).expect("§16: an old copy still opens with the removed key");
     open_manifest(&vault, &session.fixture.state_files()["manifest.age"]).expect("the old copy yields the live vault identity");
 }
 

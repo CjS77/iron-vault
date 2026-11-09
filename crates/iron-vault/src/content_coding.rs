@@ -1,4 +1,4 @@
-//! Response decoders: turn a content-coded response body back into the bytes the scrubber screens (spec §3.8, Q-6, §9).
+//! Response decoders: turn a content-coded response body back into the bytes the scrubber screens (spec §11, Q-6, implementation spec §3).
 //!
 //! A compressed body hides an echoed secret from the scrubber, so the service decodes `gzip`, `deflate` and `br` before
 //! scrubbing. Like the [`Scrubber`](crate::scrub::Scrubber), a [`ResponseDecoder`] is fed each upstream chunk in turn

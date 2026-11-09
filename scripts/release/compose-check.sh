@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Release check for the Docker Compose profile: caller isolation and container hardening
-# (design/docker-compose.md "Release checks"; spec 3.4 R-27, 3.11, 3.14 R-25 R-28, 3.15, 8).
+# (design/docker-compose.md "Release checks"; spec §7, §14, §17, §19, implementation spec §2).
 #
 # !! RUN THE FULL CHECK ONLY ON A DISPOSABLE VM. !!  It runs as root and, on the host, creates the `iron-vault` account (uid 460),
 # /run/iron-vault, /run/iron-vault-unlock, /etc/iron-vault-host and /usr/local/bin/iron-vault, builds two Docker images, and starts

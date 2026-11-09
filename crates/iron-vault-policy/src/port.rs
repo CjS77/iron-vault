@@ -10,7 +10,7 @@ use thiserror::Error;
 /// A non-zero TCP port.
 ///
 /// An omitted HTTPS port is stored as [`Port::HTTPS`] rather than left implicit, so the configured upstream, the
-/// credential record and the final outgoing-request check always compare two explicit numbers (§3.6).
+/// credential record and the final outgoing-request check always compare two explicit numbers (§9).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "u16")]
 pub struct Port(NonZeroU16);

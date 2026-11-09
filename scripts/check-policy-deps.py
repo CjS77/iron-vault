@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail if `iron-vault-policy` gains a dependency that could bring I/O into the pure policy crate.
 
-Specification §7 requires `iron-vault-policy` to perform no I/O. This guard reads `cargo metadata` and checks:
+Implementation spec §1 requires `iron-vault-policy` to perform no I/O. This guard reads `cargo metadata` and checks:
 
 1. Every normal (non-dev, non-build) direct dependency is on ALLOWED_DIRECT.
 2. No crate in the normal transitive dependency tree is on DENIED_TRANSITIVE (I/O runtimes).

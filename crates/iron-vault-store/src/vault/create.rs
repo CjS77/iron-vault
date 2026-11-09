@@ -14,7 +14,7 @@ impl Vault {
     /// refuses a state directory that already holds a manifest or any record file, and never overwrites either.
     ///
     /// It also refuses `approval.age` without a manifest: approval counters start at zero only when a vault is created
-    /// and are never reset (spec §3.9), so a new vault ID beside an earlier vault's counters would be a reset. The
+    /// and are never reset (spec §12), so a new vault ID beside an earlier vault's counters would be a reset. The
     /// envelope files `identity.age`, `recipients.age`, `operational.age` and `approver.age` do not block creation, because
     /// initialization writes them around this call and a retried initialization must still create. Initialization must
     /// write `identity.age` durably before the first record is sealed (EP-24).

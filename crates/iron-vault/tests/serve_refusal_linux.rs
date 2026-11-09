@@ -1,5 +1,5 @@
 //! `iron-vault serve` on an unsafe installation: it refuses to start, exits non-zero and names the failing path
-//! (specification §3.1, §3.15 "ownership failures produce explicit safe states").
+//! (specification §4, §19 "ownership failures produce explicit safe states").
 //!
 //! The development profile reads its directories from the XDG variables, so each test points them at a tree under the
 //! build's scratch directory, which is not below a shared sticky directory such as `/tmp`. Only a development build has

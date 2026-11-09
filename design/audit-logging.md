@@ -1,7 +1,7 @@
 # Audit logging
 
 What the service writes to its log, in what shape, and where (specification
-[§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)). Iron Vault cannot stop a caller from misusing a
+[§18](iron-vault-specification.md#18-logging)). Iron Vault cannot stop a caller from misusing a
 route it was granted, so it records every request and every administrative and security fact. The log must never
 become the leak: it holds names, numbers and fixed codes, never a secret, a body, a header value or a URL. Terms follow
 the [glossary](glossary.md).
@@ -14,7 +14,7 @@ The log has three kinds of record, all in one stream:
 - **Diagnostic records:** every other `tracing` event, such as a listener's accept error. They help an administrator
   debug and carry no stable name.
 
-What the owner has not yet decided is listed under [Open questions](#open-questions).
+The questions this design raised for the owner, and how each was decided, are under [Open questions](#open-questions).
 
 ## Owner decisions
 
@@ -54,7 +54,7 @@ Rejected:
   second place to configure the service. The approved config is the one reviewed record of how the service behaves.
 - **An environment variable.** Environment variables are inherited and easily set from outside the service's
   definition, and the service already refuses ambient settings such as `RUST_LOG` and `SSL_CERT_FILE`
-  ([§3.7](iron-vault-specification.md#37-outbound-tls-and-environment)).
+  ([§10](iron-vault-specification.md#10-outbound-tls-and-environment)).
 
 A `serve` flag survives in one narrow role: `--log-to-stdout` chooses stdout before any approved config is active, for
 Docker ([Docker](#docker)).
@@ -73,7 +73,7 @@ Rejected:
 - **`logrotate` with `copytruncate`.** It silently loses every record written between its copy and its truncate.
 - **A reopen signal (`SIGUSR1`) sent from `postrotate`.** It adds a signal handler and a way for a root script to find
   the service's process, and still needs the same reopen logic; the inode check below needs neither. `SIGHUP` already
-  means "reload the config" ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)).
+  means "reload the config" ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)).
 
 ### D3: every refusal Iron Vault's code makes writes a request event
 
@@ -92,7 +92,7 @@ Rejected:
 
 - **Leaving the request server's own refusals to a diagnostic record.** A diagnostic record has no stable name or
   shape, so a collector cannot count or alert on it, and the
-  [§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance) rule of one event per rejected request would
+  [§18](iron-vault-specification.md#18-logging) rule of one event per rejected request would
   have a hole Iron Vault could close.
 - **A separate event name for the request server's refusals.** Every dashboard would have to query two names for one
   stream; `reason` already says which check refused.
@@ -244,7 +244,7 @@ JSON escapes every control character, so no value can start a new record or forg
 person reading the file or a tool that renders it, so:
 
 - configured names (callers, routes, credentials, listeners) and the log directory reject control characters when the
-  config is validated ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)), as the policy crate's name
+  config is validated ([§18](iron-vault-specification.md#18-logging)), as the policy crate's name
   types already do;
 - a caller-controlled value that must be logged goes through the policy crate's escaping (`display::escaped`), which
   also escapes non-ASCII, so a format character such as U+202E cannot reorder what a reader sees. That function is
@@ -256,7 +256,7 @@ control character, space or quote, and it still goes through `display::escaped`.
 
 ## Never logged
 
-No record contains any of these ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)):
+No record contains any of these ([§18](iron-vault-specification.md#18-logging)):
 
 - request or response bodies;
 - header values, including `Authorization`, `Proxy-Authorization`, cookies and `Location`;
@@ -339,8 +339,8 @@ the head reached the wire; for a body that failed after its head, it is that hea
 
 Its one absence is a `respond` future dropped before any response existed: the caller closed the connection, or the
 service closed it, while the handler was still working. Then no status exists to record, and the reason is
-`caller_gone` or `service_closed`. This is this design's reading of D3's "`status` is always present", for the owner to
-confirm ([open question 4](#open-questions)); the alternative, a made-up status such as `499`, would be a status no
+`caller_gone` or `service_closed`. This is this design's reading of D3's "`status` is always present", as decided in
+[open question 4](#open-questions); the alternative, a made-up status such as `499`, would be a status no
 one sent.
 
 ### Who writes the event
@@ -562,7 +562,7 @@ as a connection error, and any caller can provoke them at will. A connection err
 
 A final-check failure, or any other refusal only a service defect can cause, is recorded twice: in the request event,
 as `outcome` `failure` with reason `service_defect`, and as its own audit event, `request.defect`, at `ERROR`. That
-event is the redacted high-severity event [§3.6](iron-vault-specification.md#36-url-header-and-slot-rules) requires.
+event is the redacted high-severity event [§9](iron-vault-specification.md#9-url-header-and-slot-rules) requires.
 It carries the `request_id`, the `route`, the `credential` and `defect`, the fixed label of the check that failed
 (`PipelineRefusal::report` gives one today, such as `Host` or `AssembleHeader`, written in snake_case), and never the
 URL, a header or a library error.
@@ -599,7 +599,7 @@ what a return value already carries.
 
 One fact has an ordering constraint: `config.version-reserved` must be recorded before signing starts, so a signing
 failure, or a crash while the signer waits for the owner, follows its reservation in the log
-([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). The store therefore returns the reserved
+([§12](iron-vault-specification.md#12-configuration-approval-and-reload)). The store therefore returns the reserved
 version from its own step, before it signs, rather than only in the result of the whole transaction.
 
 ### Catalogue
@@ -618,7 +618,7 @@ with these fields.
 | `service.lock-transition` | INFO | a lock transition: Locked to Checking, or Starting to Checking on a host unlock, the outcome of the check that follows, and Ready or Unavailable to Locked | `from_state`, `to_state`; `unavailable_reason` when `to_state` is `unavailable` |
 | `vault.unlock-refused` | WARN | an unlock was refused | `refusal`, such as `wrong_passphrase` or `rate_limited`; `memory_protection` when `refusal` is `memory_unprotected`, a protected install whose memory is not locked; `retry_after` (whole seconds) when `refusal` is `rate_limited`, the vault passphrase attempt limit |
 | `vault.host-unlock` | INFO, or WARN when refused | a Container-profile service tried the unlock handoff at startup; other profiles never write it | `host_unlock_outcome`; `refusal` when refused: `memory_unprotected`, `untrusted`, `unreadable`, `not_an_identity`, `not_initialized` or `not_a_recipient` |
-| `vault.presence-refused` | WARN | owner presence for `replace` or `rm` was refused: the approval passphrase was wrong or the key is not the pinned approver's; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`); no `config_digest`, since no config is involved |
+| `vault.presence-refused` | WARN | owner presence for `replace` or `rm` was refused: the approval passphrase was wrong or the key is not the asked approver's; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`); no `config_digest`, since no config is involved |
 | `vault.lock-incomplete` | WARN | a lock's drain ended with a serving snapshot or the vault identity still held | `snapshots_held`, `identity_held` |
 
 `service.started` carries the hardening report's outcome as fixed labels, so a run without its protections is visible
@@ -648,11 +648,11 @@ read as a command (the frame errors the admin server logs today). A refusal of a
 
 **Config approvals and checks** ([config-approval.md](config-approval.md#audit-events) gives when each fires). A
 reserved version and a completed approval are distinct events, so a reserved version is never mistaken for a
-completed approval ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)):
+completed approval ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)):
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `config.approval-refused` | WARN | the approval passphrase was wrong or the key is not the pinned approver's; nothing was reserved | `refusal` (`wrong_passphrase` or `key_mismatch`), `config_digest` |
+| `config.approval-refused` | WARN | the approval passphrase was wrong or the key is not the asked approver's; nothing was reserved | `refusal` (`wrong_passphrase` or `key_mismatch`), `config_digest` |
 | `config.version-reserved` | INFO | step 2's reservation is durable | `version`, `config_digest` |
 | `config.approval-failed` | WARN | the transaction failed after its reservation and before its commit | `version` (consumed), `config_digest`, `step`, `error_kind` |
 | `config.commit-uncertain` | WARN | step 5's rename of `approval.age` landed, but its directory fsync failed | `version`, `error_kind` |
@@ -873,7 +873,7 @@ costs only an administrator clearing a stray variable. The check runs at startup
 as for a destination that cannot be opened, and in the config check for `destination = "stdout"`, which then fails as
 for an unusable directory ([Switching at activation](#switching-at-activation)). The variable is read only to refuse; it
 can never select or move a destination, so it is not an ambient setting in the sense of
-[§3.7](iron-vault-specification.md#37-outbound-tls-and-environment).
+[§10](iron-vault-specification.md#10-outbound-tls-and-environment).
 
 The alternatives were rejected. Detecting a container (`/.dockerenv`, `/run/.containerenv`, cgroup names) depends on
 each runtime's conventions and would refuse stdout piped to a collector outside one. Setting `StandardOutput=null` in
@@ -1089,7 +1089,7 @@ writer that drops records when its channel is full is ruled out: audit records m
   it binds any socket or unlocks anything. systemd records the failure in the unit's status.
 - **A write fails mid-run** (for example, a full disk, a failed reopen, or a closed stdout): after a record fails, the
   service serves and accepts nothing further, then stops as on SIGTERM: it clears its memory and exits non-zero. A
-  unit with `Restart=on-failure` ([§3.12](iron-vault-specification.md#312-service-states-and-errors)) restarts it,
+  unit with `Restart=on-failure` ([§15](iron-vault-specification.md#15-service-states-and-errors)) restarts it,
   and the restart then succeeds or fails at startup as above.
 
 `tracing-subscriber`'s `fmt::Layer` discards a writer's error: it only prints it to stderr. So the failure is seen in
@@ -1099,7 +1099,7 @@ Rust ignores `SIGPIPE`, so a closed stdout returns `EPIPE` rather than killing t
 as any other failed write. Either writer's first failed write trips a shared latch, `logging::LogFailure`. The
 request server checks the latch as it admits each request and the admin server as it reads each command, and refuses
 both once it is tripped: the request server closes the connection without a response, as it does over `max_connections`
-(stopping is the default of the [open question](#open-questions) below, so callers see no `503`), and the admin server
+(stopping was decided in [open question 2](#open-questions), so callers see no `503`), and the admin server
 answers `wrong-state`. The `serve` loop's stop future completes on it beside SIGTERM.
 
 The subscriber is built with `log_internal_errors(false)`. Otherwise, when an event fails to format, `fmt::Layer`
@@ -1112,13 +1112,13 @@ A full disk keeps the service down. Each restart opens the file, fails its first
 systemd's start limit leaves the unit failed. That is intended: the service never runs without its audit log, and the
 unit's status and stderr say why. Freeing space and restarting the unit recovers it.
 
-Both cases are explicit safe states ([§3.12](iron-vault-specification.md#312-service-states-and-errors)): the service
+Both cases are explicit safe states ([§15](iron-vault-specification.md#15-service-states-and-errors)): the service
 never serves a request or accepts an admin change it cannot record. The alternative, falling back to stderr and
 carrying on, runs the service without its audit log, which is what this design must prevent. A third option, a new
 service state that refuses requests with a `503` while the log is unwritable and resumes when it recovers, keeps the
 request interface answering, but adds a state, an unavailable reason and a retry loop for a rare fault. Stopping costs
-a passphrase-only install one unlock after the disk is fixed. Whether stopping is the safe state §3.12 intends is an
-[open question](#open-questions).
+a passphrase-only install one unlock after the disk is fixed. Stopping is the safe state, as decided in
+[open question 2](#open-questions).
 
 ## Permissions
 
@@ -1134,7 +1134,7 @@ file itself, at `0640` whatever the unit's umask; the shipped `logrotate` rule c
 
 The dependency caps in `logging.rs` stay as they are: `CAPPED_TARGETS` capped at `DEPENDENCY_CAP` (`WARN`) by their
 own layer, fixed in code whatever level or setting is in force
-([§3.7](iron-vault-specification.md#37-outbound-tls-and-environment)). The new formatter and writer are added beside
+([§10](iron-vault-specification.md#10-outbound-tls-and-environment)). The new formatter and writer are added beside
 that layer, never in place of it. No `log` backend is installed, so the records `reqwest` and `rustls` emit through
 `log` stay discarded.
 
@@ -1161,35 +1161,36 @@ and the Elastic `@timestamp` rename above.
 
 ## Open questions
 
-These are questions about the specification, for the owner. Until the owner answers, the design follows the default
-stated for each.
+These are questions about the specification, for the owner. The owner has decided questions 2 to 4 by accepting their
+defaults, and the design stands on them; only question 1 is open.
 
-1. **§3.15's "one structured event per … rejected request": does it exempt rejections made before service code
+1. **§18's "one structured event per … rejected request": does it exempt rejections made before service code
    runs?** hyper's own `431` and `414`, and connections closed unread over `max_connections`, have no request event
    ([Known limit](#known-limit)). Owner decision D3 answers this for the design: these are the accepted exceptions,
    and every refusal Iron Vault's own code makes writes a request event. The specification's wording still reads as
-   if it had no exceptions, so the question left is whether §3.15 should name them.
-2. **§3.12 keeps the request interface bound so callers receive an explicit status. Is stopping on an audit-log
-   failure the intended safe state, or should it be a `503` state?** *Default:* stop, as
-   [Failure behaviour](#failure-behaviour) describes; callers then see a refused connection rather than a `503`.
-3. **Confirm the departure from decision 2:** no `tracing-appender`
+   if it had no exceptions, so the question left is whether §18 should name them.
+2. **§15 keeps the request interface bound so callers receive an explicit status. Is stopping on an audit-log failure
+   the intended safe state, or should it be a `503` state?** *Decided: default accepted (2026-11-09).* *Default:* stop,
+   as [Failure behaviour](#failure-behaviour) describes; callers then see a refused connection rather than a `503`.
+3. **Confirm the departure from decision 2:** *Decided: default accepted (2026-11-09).* no `tracing-appender`
    ([Departure: no `tracing-appender`](#departure-no-tracing-appender)). *Default:* the binary's own `LogFile`
    writer.
 4. **D3 says `status` is always present. Is a request event without `status` acceptable when the connection closed
-   before any response existed?** No status was produced then, so none can be recorded ([`status`](#status)).
-   *Default:* leave `status` out in that one case, with reason `caller_gone` or `service_closed`.
+   before any response existed?** *Decided: default accepted (2026-11-09).* No status was produced then, so none can be
+   recorded ([`status`](#status)). *Default:* leave `status` out in that one case, with reason `caller_gone` or
+   `service_closed`.
 
 ## Spec check
 
-Checked against [§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance),
-[§3.2](iron-vault-specification.md#32-service-and-cli-boundary),
-[§3.6](iron-vault-specification.md#36-url-header-and-slot-rules),
-[§3.7](iron-vault-specification.md#37-outbound-tls-and-environment),
-[§3.9](iron-vault-specification.md#39-configuration-approval-and-reload),
-[§3.12](iron-vault-specification.md#312-service-states-and-errors) and
-[§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances). The request event carries every field
-§3.15 lists (time, caller, route, credential name, upstream host, method, status, sizes, duration, scrubbing), and
+Checked against [§18](iron-vault-specification.md#18-logging),
+[§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns),
+[§9](iron-vault-specification.md#9-url-header-and-slot-rules),
+[§10](iron-vault-specification.md#10-outbound-tls-and-environment),
+[§12](iron-vault-specification.md#12-configuration-approval-and-reload),
+[§15](iron-vault-specification.md#15-service-states-and-errors) and
+[§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances). The request event carries every field
+§18 lists (time, caller, route, credential name, upstream host, method, status, sizes, duration, scrubbing), and
 every rejected request Iron Vault's code sees writes one. Owner notifications
-([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)) come in v1, in EP-40, as the specification's release
+([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)) come in v1, in EP-40, as the specification's release
 plan places them; in v0 this design has none, and v1 adds the audit event `owner.notified`
 ([owner-notifications.md](owner-notifications.md)).

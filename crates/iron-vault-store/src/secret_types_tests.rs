@@ -1,4 +1,4 @@
-//! Compile-time and `Debug` checks for this crate's secret-bearing types (spec §3.11, `design/secret-handling.md`).
+//! Compile-time and `Debug` checks for this crate's secret-bearing types (spec §14, `design/secret-handling.md`).
 //!
 //! A type that gains `Clone`, `Copy`, `Display` or a serde impl would start copying, printing or writing the secret it
 //! holds; each assertion below turns that change into a build failure.
@@ -159,7 +159,7 @@ fn vault_debug_hides_the_identity_and_every_record() {
 /// production sources must use neither, so dropping a `Vault` drops its only copies of the records.
 ///
 /// The vault identity is the one exception, as `Arc<VaultIdentity>`: the service keeps it from unlock until lock or stop
-/// and opens a new `Vault` from it on every config check (§3.11, §3.12), so its holders share the one copy, cleared when
+/// and opens a new `Vault` from it on every config check (§14, §15), so its holders share the one copy, cleared when
 /// the last drops it.
 #[test]
 fn no_shared_or_global_owner_of_vault_secrets() {

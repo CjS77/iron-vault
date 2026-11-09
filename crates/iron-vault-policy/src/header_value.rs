@@ -1,4 +1,4 @@
-//! HTTP header field values as received from callers or written for upstreams (specification §3.6).
+//! HTTP header field values as received from callers or written for upstreams (specification §9).
 
 use std::fmt;
 
@@ -14,7 +14,7 @@ use thiserror::Error;
 /// callers may legitimately send them, and the value is forwarded as bytes, never decoded as text.
 ///
 /// Values can carry caller tokens or credentials, so `Debug` shows only the length, there is no `Display`, and the
-/// bytes are wiped when the value is dropped (spec §3.11).
+/// bytes are wiped when the value is dropped (spec §14).
 #[derive(PartialEq, Eq)]
 pub struct HeaderValue(Vec<u8>);
 

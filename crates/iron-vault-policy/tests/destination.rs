@@ -1,4 +1,4 @@
-//! Property tests for the destination invariant (specification §3.6, §8; threats R-4, R-7).
+//! Property tests for the destination invariant (specification §6, §9; implementation spec §2).
 //!
 //! The destination invariant: a credential leaves only for its route upstream's host and port, only when its
 //! credential record permits that pair, only inside the upstream base path, and only in the route's one slot. Each case

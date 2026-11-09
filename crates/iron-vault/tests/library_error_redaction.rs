@@ -1,5 +1,5 @@
 //! A reqwest error formats its request URL, so a query-slot credential would reach a log that formatted it; its error
-//! kind label must hold nothing of the URL (specification §3.15, `design/audit-logging.md` "Library errors").
+//! kind label must hold nothing of the URL (specification §18, `design/audit-logging.md` "Library errors").
 //!
 //! This test builds a reqwest client of its own, because its subject is the raw `reqwest::Error` that
 //! `UpstreamClient` never hands out; `upstream_construction.rs` exempts it by name. The client carries no credential.

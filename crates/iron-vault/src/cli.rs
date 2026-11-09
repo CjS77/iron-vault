@@ -1,11 +1,11 @@
-//! The command line: one parser for running the service (`serve`) and for the thin CLI's commands (spec §3.2).
+//! The command line: one parser for running the service (`serve`) and for the thin CLI's commands (spec §5).
 //!
 //! The CLI only sends commands to the service over the admin socket and shows the answers. It never opens vault files,
-//! calls a TPM or edits policy (§3.1): the service owns every operation, and judges whoever connects, including over
+//! calls a TPM or edits policy (§4): the service owns every operation, and judges whoever connects, including over
 //! a socket forwarded with `--admin-socket`.
 //!
 //! **No argument ever takes a secret value.** Arguments end up in shell history, process listings and diagnostics,
-//! where a prompted value must never appear (§3.2). A command that needs a secret has the service prompt for it over
+//! where a prompted value must never appear (§5). A command that needs a secret has the service prompt for it over
 //! the admin protocol, and the CLI reads it from the terminal or stdin. Diagnostics never echo a request's arguments
 //! either.
 

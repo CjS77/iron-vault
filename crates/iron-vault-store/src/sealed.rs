@@ -1,8 +1,8 @@
-//! Sealed files: binary `age` ciphertext encrypted to the vault public key (specification §3.10).
+//! Sealed files: binary `age` ciphertext encrypted to the vault public key (specification §13).
 //!
 //! [`seal`] and [`open`] are the only way the store encrypts and decrypts with an X25519 key, so `age` types and error
 //! text stay inside this crate; the passphrase envelope's scrypt use lives in `passphrase`. Plaintext comes back in a
-//! buffer that is cleared on drop (specification §3.11).
+//! buffer that is cleared on drop (specification §14).
 
 use std::{
     io::{self, Read, Write},
@@ -53,7 +53,7 @@ pub fn seal(key: &VaultPublicKey, plaintext: &[u8]) -> Result<Vec<u8>, SealError
 
 /// Encrypts `plaintext` as binary `age` output with one X25519 stanza per key in `keys`.
 ///
-/// Taking only X25519 recipients means no caller can put a passphrase stanza beside them (specification §3.11).
+/// Taking only X25519 recipients means no caller can put a passphrase stanza beside them (specification §14).
 pub(crate) fn seal_to<'a>(keys: impl Iterator<Item = &'a x25519::Recipient>, plaintext: &[u8]) -> Result<Vec<u8>, SealError> {
     let encryptor = Encryptor::with_recipients(keys.map(|key| key as &dyn age::Recipient)).map_err(|_| SealError::Encryption)?;
     let mut writer = encryptor

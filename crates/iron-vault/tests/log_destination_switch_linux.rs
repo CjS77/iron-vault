@@ -1,4 +1,4 @@
-//! An approved config's `[logging] destination` moves the log at activation (specification §3.15, §3.12;
+//! An approved config's `[logging] destination` moves the log at activation (specification §18, §15;
 //! `design/audit-logging.md`, "Switching at activation").
 //!
 //! The service logs through a `LogSwitch` installed as the process-wide subscriber, so records written on the blocking

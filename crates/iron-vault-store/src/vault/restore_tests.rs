@@ -401,7 +401,7 @@ fn an_approval_state_write_refuses_a_restored_manifest_and_touches_no_file() {
     assert_eq!((mutations(&fs, calls), &approval), (vec![], &before));
 }
 
-/// An approval state has existed, so creating one again would reset its version counters (spec §3.9).
+/// An approval state has existed, so creating one again would reset its version counters (spec §12).
 #[test]
 fn creating_an_approval_state_the_manifest_records_is_refused_and_touches_no_file() {
     let fixture = Fixture::new("restore-approval-create");

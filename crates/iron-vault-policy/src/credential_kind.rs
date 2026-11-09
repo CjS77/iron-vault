@@ -1,4 +1,4 @@
-//! The name of a credential record's kind, as policy needs it to check a route's slot (spec §3.3, §5.2).
+//! The name of a credential record's kind, as policy needs it to check a route's slot (spec §6, future spec §2.2).
 //!
 //! The kinds themselves live in `iron-vault-kinds`; this crate only names them so activation can refuse a route whose
 //! slot its credential's kind cannot fill.

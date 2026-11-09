@@ -8,7 +8,7 @@ The log is JSON Lines: one flat JSON object per line, in one file, `iron-vault.l
 - a **diagnostic record**: anything else, for a developer. It has no `event` field.
 
 No record holds a secret, a caller token, a passphrase, a header value, a request or response body, a raw query string
-or a library error's text ([§3.15](../../../design/iron-vault-specification.md#315-logging-and-v0-acceptance)).
+or a library error's text ([§18](../../../design/iron-vault-specification.md#18-logging)).
 
 This page lists what the records hold. The [log operations guide](log-operations.md) covers rotation, permissions,
 Docker, collectors and more queries; [Investigate with the audit log](../cookbook/investigate-audit-log.md) walks

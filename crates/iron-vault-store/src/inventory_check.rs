@@ -1,5 +1,5 @@
 //! The inventory check: how every recipient command opens the recipient inventory, bound to the identity envelope on
-//! disk (spec §3.10, §3.12, `design/recipients.md`).
+//! disk (spec §13, §15, `design/recipients.md`).
 //!
 //! An inventory describes only the envelope whose digest it carries, and must list as many recipients as the envelope
 //! has X25519 stanzas. A staged inventory that matches the envelope is a recipient change that committed and was not

@@ -1,4 +1,4 @@
-//! The OS account a `peer` caller must connect as (spec §3.4).
+//! The OS account a `peer` caller must connect as (spec §7).
 
 use std::fmt;
 use std::str::FromStr;

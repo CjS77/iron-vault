@@ -1,5 +1,5 @@
 //! `caller-token` over a real admin socket, served by the standard handlers: each call issues a fresh, valid token, and
-//! the service's log names the event without the token or its hash (spec §3.4, §3.15).
+//! the service's log names the event without the token or its hash (spec §7, §18).
 
 #![cfg(target_os = "linux")]
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.

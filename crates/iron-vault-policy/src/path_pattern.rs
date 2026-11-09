@@ -1,4 +1,4 @@
-//! Path patterns: the route restriction that decides which upstream paths a route may reach (specification §3.3).
+//! Path patterns: the route restriction that decides which upstream paths a route may reach (specification §6).
 //!
 //! A pattern is written as an absolute path whose segments are literals, `*` (exactly one segment) or `**` (zero or
 //! more complete segments). Patterns match the whole normalized upstream path, never its query. Normalizing a request

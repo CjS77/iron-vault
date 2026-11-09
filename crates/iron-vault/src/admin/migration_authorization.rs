@@ -1,4 +1,4 @@
-//! The migration authorization step of an admin exchange (specification §3.13, §3.15; design/migration-authorization.md,
+//! The migration authorization step of an admin exchange (specification §16, §19; design/migration-authorization.md,
 //! "Admin exchange", steps 5 to 7): issue the challenge, check the attempt limit, ask for the vault passphrase and verify
 //! it. `export` and `recipient add` both run it and both answer a refusal through [`no_authorization`], so the two
 //! cannot drift apart, as `owner_presence` keeps `replace` and `rm` together.

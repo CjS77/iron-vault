@@ -111,5 +111,5 @@ the key.
 
 - [CLI](../reference/cli.md#iron-vault-recovery-check): `recovery check`.
 - The [recovery design](../../../design/recovery.md): what the check proves, and the reminder schedule.
-- [§3.13](../../../design/iron-vault-specification.md#313-administration-recovery-and-migration) of the
+- [§16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration) of the
   specification.

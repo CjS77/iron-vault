@@ -1,4 +1,4 @@
-//! Process hardening, checked in a child process because it changes process-wide limits (specification §3.11).
+//! Process hardening, checked in a child process because it changes process-wide limits (specification §14).
 //!
 //! The test runs in its own binary: it forks, and a forked child shares the parent's open lock fds until it execs, so
 //! a test in the same process that dropped and retook a state-directory lock in that window would find it held.

@@ -1,4 +1,4 @@
-//! The kind boundary: credential material in, slot value and scrub patterns out (spec §5.2).
+//! The kind boundary: credential material in, slot value and scrub patterns out (future spec §2.2).
 
 use iron_vault_policy::{AuthorizedRequest, Slot, SlotValue, SlotValueError};
 use thiserror::Error;
@@ -60,7 +60,7 @@ impl Resolution {
 
 /// Resolves `material` into the value for `slot` and its scrub patterns.
 ///
-/// `request` is the authorized request plan every kind receives (spec §5.2): a static key ignores it, but signing kinds
+/// `request` is the authorized request plan every kind receives (future spec §2.2): a static key ignores it, but signing kinds
 /// need the final method and path, so the boundary carries it from the start.
 pub fn resolve(material: &CredentialMaterial, slot: &Slot, request: &AuthorizedRequest) -> Result<Resolution, KindError> {
     match material {
@@ -90,7 +90,7 @@ mod tests {
 
     use super::*;
 
-    /// The §3.3 FX and Brave routes, plus a Basic route to show a static key refused there.
+    /// The §6 FX and Brave routes, plus a Basic route to show a static key refused there.
     const CONFIG: &str = r#"schema_version = 1
 
 [listeners.local]

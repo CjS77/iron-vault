@@ -2,7 +2,7 @@
 //!
 //! Encryption cannot protect a vault whose binary, config or state directory a caller can replace, so before it
 //! unlocks anything the service walks each trusted path from `/` down and refuses to start on the first unsafe
-//! component (specification §3.1).
+//! component (specification §4).
 //!
 //! The rules are pure functions over metadata the platform adapter reads, so every case is testable without a
 //! filesystem. This module performs no I/O and names users and groups only by the ids and names it is given.

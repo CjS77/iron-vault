@@ -1,11 +1,11 @@
 # Config approval transaction
 
-How the service turns proposed config bytes into the config it serves (specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)), and what it does with
+How the service turns proposed config bytes into the config it serves (specification [§12](iron-vault-specification.md#12-configuration-approval-and-reload)), and what it does with
 whatever a crash leaves behind. Terms follow the [glossary](glossary.md); the byte formats of the approval payload,
 the approval envelope and the approval state are in [storage-formats.md](storage-formats.md), and the `config approve`
 command is in [admin-protocol.md](admin-protocol.md#config-approve).
 
-Three [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) rules drive everything below:
+Three [§12](iron-vault-specification.md#12-configuration-approval-and-reload) rules drive everything below:
 
 - **Never promote a signed but uncommitted version.** A signature alone proves nothing about freshness; only the
   committed approval in `approval.age` does.
@@ -70,7 +70,7 @@ service account's alone, mode exactly `0700`) applied to the config file's paren
 between the binary and the config file, and the lock file after the config file.
 
 Once the service reads its config, a refused config directory, config file or config-directory lock file stops
-startup, as the binary and runtime directory already do ([§3.1](iron-vault-specification.md#31-installation-and-ownership): "refuse an unsafe installation and explain which path
+startup, as the binary and runtime directory already do ([§4](iron-vault-specification.md#4-installation-and-ownership): "refuse an unsafe installation and explain which path
 failed"). Today the check only reports these paths. The package creates `/etc/iron-vault` owned by `iron-vault` with
 mode `0700`; in development the service creates its config directory with mode `0700` when it is missing. The mode and
 the refusal are defaults ([open question 9](#open-questions)).
@@ -110,7 +110,7 @@ Everything goes through `StoreFs`, so `FaultFs` can fail or cut power at any cal
 
 ## The transaction
 
-The approval transaction runs the six steps of [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) in order. Each step is durable before the next one starts.
+The approval transaction runs the six steps of [§12](iron-vault-specification.md#12-configuration-approval-and-reload) in order. Each step is durable before the next one starts.
 
 ### The service-wide lock
 
@@ -135,13 +135,13 @@ These are defaults ([open question 8](#open-questions)).
 | Step | What the service does | Durable change | Service state |
 |---|---|---|---|
 | 1 | Writes the proposed bytes as `config.toml.pending`. Then parses, validates and activates them against the credential catalog, capabilities and account directory, using the one owned buffer it wrote, and dry-runs the upstream clients, so a config that cannot be served is invalid before any prompt. Never reads the file back to do this. | `config.toml.pending` | Ready, or Unavailable with `PolicyInvalid` |
-| 2 | Shows the approval summary and asks the owner to confirm it. Then takes the approval passphrase and opens the approver key with it. Then reserves the next version. | `approval.age`: highest reserved version + 1 | unchanged |
-| 3 | Signs the approval payload (purpose, vault ID, the reserved version, the digest of the buffer) and drops the signer. | none | unchanged |
+| 2 | Shows the approval summary and asks the owner to confirm it. Then asks for one pinned approver's authorization, naming it by label (see [Choosing the signer](#choosing-the-signer)); for the software signer, takes the approval passphrase and opens the approver key with it. Then reserves the next version. | `approval.age`: highest reserved version + 1 | unchanged |
+| 3 | Signs the approval payload (purpose, vault ID, the reserved version, the digest of the buffer), writes the envelope with the signer's approver ID, and drops the signer. | none | unchanged |
 | 4 | Writes the envelope as `config.toml.sig.staged`. | `config.toml.sig.staged` | unchanged |
 | 5 | **Admission pause starts:** from Ready, the service moves to Checking, and requests get `503` `checking` from then on. Then it commits `(version, digest)`. | `approval.age`: the committed approval | Checking |
 | 6 | Publishes, then runs the config check, which builds the serving snapshot from the published files. The check passing moves the service to Ready, with the listener set rebuilt from the new config; failing moves it to Unavailable. **Admission pause ends.** | `config.toml`, `config.toml.sig` | Checking, then Ready or Unavailable |
 
-The service enters Checking before the commit, not after it, because the pause must start before the commit ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)),
+The service enters Checking before the commit, not after it, because the pause must start before the commit ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)),
 and Checking is the state in which requests are refused while the service is unchanged in every other way. The
 service state model has the edge from Ready to Checking. It is labelled "explicit reload", so the approval needs an
 event of its own on that edge ([open question 3](#open-questions)).
@@ -154,13 +154,29 @@ request only after the config check ends, so the result says whether the new con
 The step 1 dry run does not replace the config check. It only moves the failures it can find to before the first
 prompt, where they consume no version.
 
-**Why the order of step 2 is confirmation, passphrase, then reservation.** [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)'s text says "authenticate the owner,
+**Why the order of step 2 is confirmation, passphrase, then reservation.** [§12](iron-vault-specification.md#12-configuration-approval-and-reload)'s text says "authenticate the owner,
 show the summary, and durably reserve". Its sequence diagram instead puts the summary before the owner's authorization.
 This design follows the diagram ([open question 6](#open-questions)): the admin principal is authenticated at
 connect, by its peer credentials, and the approval passphrase comes after the summary, so the owner authorizes what
 they have just read. Opening the approver key before reserving means a mistyped passphrase consumes no version. A TPM
-signer authorizes inside step 3 instead, so its failed PIN does consume one, which [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) allows ("failed attempts
+signer authorizes inside step 3 instead, so its failed PIN does consume one, which [§12](iron-vault-specification.md#12-configuration-approval-and-reload) allows ("failed attempts
 consume their versions").
+
+### Choosing the signer
+
+The approval state pins one or more approvers ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)),
+and any one of them may approve. Step 2 asks for one, names it by its label, and lets the owner switch to another
+pinned approver before answering, for example `Tap "Dave YubiKey 3" to approve. Ctrl-Y to try another way.` Switching
+asks for the next approver; nothing is reserved or signed until one of them authorizes. A wrong answer to one
+approver's prompt ends the approval as `approval-denied`, as a wrong approval passphrase does today: it does not move
+on to another approver, so switching is the owner's choice, never a retry ([open question 15](#open-questions)).
+Which approver is asked first, the prompt's
+exact text and the protocol frame for "try another way" belong to the approver enrollment design (K-277). Until then
+`init` pins one approver, the software signer, and step 2 asks for the approval passphrase as before.
+
+The envelope written at step 3 carries the signer's approver ID, and verification checks the signature with that
+approver's pinned key and algorithm ([storage-formats.md](storage-formats.md#approval-envelope-v1)). Owner presence
+([credential-commands.md](credential-commands.md#owner-presence)) asks the same way and accepts any pinned approver.
 
 ### When a step fails
 
@@ -229,7 +245,7 @@ Publish is step 6's file change, and the only way `config.toml` or `config.toml.
 2. rename `config.toml.sig.staged` to `config.toml.sig`;
 3. fsync the config directory.
 
-The order follows [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)'s wording ("publish the pending config and artifact"). Nothing depends on it. Until the
+The order follows [§12](iron-vault-specification.md#12-configuration-approval-and-reload)'s wording ("publish the pending config and artifact"). Nothing depends on it. Until the
 directory fsync returns, power loss can keep either rename, both or neither, whatever order they ran in. So recovery
 never infers progress from which file landed. It decides from the committed approval alone. The two files are
 published separately, never as one atomic swap.
@@ -241,7 +257,7 @@ passed over in this way: the config check that follows finds the committed confi
 retries the rename. If the retry fails too, the service goes Unavailable with `RecoveryNeeded`.
 
 The same publish finishes a committed transaction during the config check. There it renames only the files that are
-not yet in place. Finishing a publish in a running service, and not only "on restart" as [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) puts it, is a default
+not yet in place. Finishing a publish in a running service, and not only "on restart" as [§12](iron-vault-specification.md#12-configuration-approval-and-reload) puts it, is a default
 ([open question 7](#open-questions)).
 
 ## Recovery
@@ -268,8 +284,8 @@ identity is cleared when the lock drain releases that snapshot; a stop drops bot
   error from the disk, ...). An unreadable file is not absent: recovery cannot tell what it holds, so it refuses
   before the table.
 - **Matches C**: a config file X and a signature file Y *match C* when `verify_approval(state, X, Y)` succeeds. That
-  covers all of these: the envelope decodes; it is signed with the pinned approver's algorithm and key; it names this
-  vault; its digest is the digest of X; and its version and digest are C. A config file holds C's config when its
+  covers all of these: the envelope decodes; its approver ID is pinned; it is signed with that approver's algorithm
+  and key; it names this vault; its digest is the digest of X; and its version and digest are C. A config file holds C's config when its
   digest is C's digest. A signature file holds C's approval when it matches C with that config.
 
 ### Before the table
@@ -324,10 +340,10 @@ never touches the counters: a discarded staged approval's version stays consumed
 **Why rows 5 and 6 differ from rows 7 and 8.** Rows 5 and 6 hold a file of C waiting to be published, so a committed
 transaction is on disk that cannot be completed. The service state model documents exactly that case as
 `RecoveryNeeded`. Rows 7 and 8 hold no such file: the published pair simply does not verify as the committed
-approval, which is [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)'s "invalid signature, a previous version, or an uncommitted higher version", and the model's
+approval, which is [§12](iron-vault-specification.md#12-configuration-approval-and-reload)'s "invalid signature, a previous version, or an uncommitted higher version", and the model's
 `PolicyInvalid`. The split decides the way out, because the admin interface offers approving only for
 `PolicyInvalid`, and for `RecoveryNeeded` only a repair. Both are defaults ([open question 4](#open-questions)). In
-none of these rows may the service serve the older pair beside the committed one ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)).
+none of these rows may the service serve the older pair beside the committed one ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)).
 
 ### Pending and staged files beside a published pair that matches C (row 1)
 
@@ -341,7 +357,7 @@ Every combination is an uncommitted leftover, from a transaction that ended befo
 | absent or present | present | a version below C (`Superseded`) | discard |
 | absent or present | present | C itself, a duplicate of the published signature | discard |
 | absent or present | present | C's version with another digest (`DigestNotCommitted`) | discard, and log at ERROR: only a misbehaving signer produces it |
-| absent or present | present | does not verify (malformed, wrong algorithm, bad signature, wrong vault) | discard |
+| absent or present | present | does not verify (malformed, unknown approver, wrong algorithm, bad signature, wrong vault) | discard |
 
 ### Detail when the service stays unavailable (rows 5 to 8)
 
@@ -354,8 +370,9 @@ this order:
 |---|---|---|
 | `config.toml` or `config.toml.sig` absent (missing, oversized or not a regular file) | the committed config or its signature is missing | none |
 | the signature does not decode | signature malformed | `Malformed` |
-| another algorithm than the pinned approver's | signed with the wrong algorithm | `WrongAlgorithm` |
-| the signature does not verify against the pinned key | bad signature | `BadSignature` |
+| the approver ID is not a pinned approver's | signed by an approver this vault does not pin | `UnknownApprover` |
+| another algorithm than the named approver's | signed with the wrong algorithm | `WrongAlgorithm` |
+| the signature does not verify against the named approver's key | bad signature | `BadSignature` |
 | the payload names another vault | approval is for another vault | `WrongVault` |
 | the config's digest is not the signed one | config changed since it was approved | `ConfigChanged` |
 | the version is below C | an old config and signature pair; never fall back to it | `Superseded` |
@@ -366,8 +383,8 @@ this order:
 
 The config check then parses, validates and activates the published config. A config that fails (for example, an
 unknown credential reference) is `PolicyInvalid`. A damaged or needs-login record is not a failure: only its routes
-are unavailable ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). Next the check builds the upstream clients, and a route's pinned CA that fails to load
-([§3.7](iron-vault-specification.md#37-outbound-tls-and-environment)) is treated the same way: only the routes that pin it are unavailable, with the cause *pinned CA
+are unavailable ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)). Next the check builds the upstream clients, and a route's pinned CA that fails to load
+([§10](iron-vault-specification.md#10-outbound-tls-and-environment)) is treated the same way: only the routes that pin it are unavailable, with the cause *pinned CA
 unavailable*, and every other route keeps serving. It is not `PolicyInvalid`: the config verified and validated, and
 the fault is in an administrator-installed file outside it, which the owner fixes and then reloads. The check logs one
 WARN event per such route, naming the route and the `ca_file` field but never the path or the file's bytes, and
@@ -477,25 +494,25 @@ only finds earlier the configs whose clients cannot be built.
 **A request admitted before the pause** keeps the snapshot it took. This holds whether its upstream request has been
 sent or not. If the pause ends on Ready, it finishes on the old snapshot: its route, its credential record, its
 upstream client and its rate-limit charge all come from the old activation. If the pause ends on Unavailable, the old
-snapshot is withdrawn, and its outstanding work is cancelled where the transport permits ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). Both are defaults
+snapshot is withdrawn, and its outstanding work is cancelled where the transport permits ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)). Both are defaults
 ([open question 1](#open-questions)).
 
 ## Reload
 
-The service reloads on SIGHUP, never by watching files ([§8.2](iron-vault-specification.md#82-product-decisions-and-resulting-behavior) Q-5), and only from Ready. SIGHUP in any other state is
+The service reloads on SIGHUP, never by watching files ([implementation spec §2.2](implementation-specification.md#22-product-decisions-and-resulting-behavior) Q-5), and only from Ready. SIGHUP in any other state is
 logged at INFO and ignored. In particular, a reload is not a way out of Unavailable: that takes an authorized repair or
 a restart.
 
 A reload takes the service-wide lock, so one that arrives during an approval runs after it. It then moves Ready to
 Checking: a single store of *refuse* `checking` in the snapshot holder, after which requests get `503` `checking` until
-the config check ends, as [§3.12](iron-vault-specification.md#312-service-states-and-errors) draws it. A reload commits nothing, so it never writes the approval state. The check
+the config check ends, as [§15](iron-vault-specification.md#15-service-states-and-errors) draws it. A reload commits nothing, so it never writes the approval state. The check
 passing moves the service to Ready with a store of *serve* and the new snapshot. Failing moves it to Unavailable: the old
 snapshot is withdrawn, its outstanding work is cancelled where the transport permits, and the service keeps no old
-route policy ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). A failed reload is recorded as `config.reload-failed`, with a WARN to the owner.
+route policy ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)). A failed reload is recorded as `config.reload-failed`, with a WARN to the owner.
 
 ## Approval summary
 
-The service writes the approval summary itself ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The
+The service writes the approval summary itself ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The
 owner reviews it, it goes to the audit log, and its headline is in the command's result. v0 has no owner notifications;
 from v1, the one for a completed approval carries the version and the headline
 ([owner-notifications.md](owner-notifications.md#which-events-notify)). It is a diff of the pending validated config
@@ -512,10 +529,10 @@ The order is fixed, so the same two configs always give the same text:
 2. **Callers**: added, removed, or changed, with listener, authentication kind, peer account, and "token changed".
    A token hash is never shown.
 3. **Route grants**: per caller, the routes granted and the routes revoked.
-4. **Routes**, the destinations and restrictions [§3.2](iron-vault-specification.md#32-service-and-cli-boundary) asks for: added, removed, or changed. A changed route shows
+4. **Routes**, the destinations and restrictions [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns) asks for: added, removed, or changed. A changed route shows
    each field that changed, old → new: prefix, upstream (host, port, base path), credential name, slot, pinned CA file,
    methods, path patterns, rate limit and confirmation.
-5. **Listeners**: added, removed or changed. [§3.2](iron-vault-specification.md#32-service-and-cli-boundary) does not list them, but a listener moved to a non-loopback
+5. **Listeners**: added, removed or changed. [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns) does not list them, but a listener moved to a non-loopback
    address changes who can reach the routes, so hiding it would mislead the owner
    ([open question 14](#open-questions)). A listener the running service cannot bind is marked "takes effect after
    restart" ([open question 2](#open-questions)).
@@ -534,7 +551,7 @@ The order is fixed, so the same two configs always give the same text:
 
 Within each section, entries are in name order (`BTreeMap` order). Each entry is marked `+` added, `-` removed or `~`
 changed. Every configured name is printed through the configured-name escaping, so a hostile name cannot forge a
-summary line ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)).
+summary line ([§18](iron-vault-specification.md#18-logging)).
 
 The **headline** is one line of counts per section, such as `callers: 1 added, 2 changed; route grants: 3 added; routes:
 1 changed; listeners: none; limits: none; logging: none; recovery: none`. It is bounded whatever the config size, so it
@@ -543,13 +560,13 @@ fits in the command's result.
 ## Audit events
 
 Each event has a distinct name, so a reserved version is never mistaken for a completed approval
-([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). They are audit events in the audit log;
+([§12](iron-vault-specification.md#12-configuration-approval-and-reload)). They are audit events in the audit log;
 [audit-logging.md](audit-logging.md#audit-events) is the one place that lists each one's fields, with their names and
 types, and the record shape they share. None carries config bytes, signature bytes, key material or a passphrase.
 
 | Event | Level | When |
 |---|---|---|
-| `config.approval-refused` | WARN | the approval passphrase was wrong or the key is not the pinned approver's; nothing was reserved |
+| `config.approval-refused` | WARN | the approval passphrase was wrong or the key is not the asked approver's; nothing was reserved |
 | `config.version-reserved` | INFO | step 2's reservation is durable |
 | `config.approval-failed` | WARN | the transaction failed after its reservation and before its commit |
 | `config.commit-uncertain` | WARN | step 5's rename of `approval.age` landed, but its directory fsync failed |
@@ -565,92 +582,113 @@ by `config.activation-failed` when settling fails. A commit followed by a failed
 `config.approval-completed` and then `config.activation-failed`: the approval did complete, and only its activation
 failed. *Reload* stays the SIGHUP operation alone, so a check after an approval is never a "reload failed".
 
+`config.approval-refused`, `config.version-reserved` and `config.approval-completed` also name the approver that was
+asked or signed, by approver ID and label, so the log says which signer approved each version.
+[audit-logging.md](audit-logging.md#audit-events) gains the two fields with the multiple-approver ticket (K-276).
+
 ## Open questions
 
-The specification leaves each point below open, or this design departs from its wording. The design takes the
-default stated for each. Each needs the owner's decision before the code is final, and the downstream tickets follow
-the default until then.
+The specification leaves each point below open, or this design departs from its wording. The owner has decided
+questions 1 to 14, all but question 2 by accepting their defaults, and the design stands on them; only question 15 is
+open, and takes its default until the owner decides.
 
-1. **Requests admitted before an approval's commit.** [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) forbids admitting new requests under the previous policy
-   after the commit, and says operations already sent upstream "remain subject to the cancellation limits below". It
-   does not say what happens to requests admitted under the old policy before the pause, whether already forwarded or
-   still inside the pipeline at the commit. That matters when an approval revokes a caller whose long streaming
-   response is still running. *Default:* when the check ends on Ready, they all finish on the old snapshot. When it
-   ends on Unavailable, the old snapshot is withdrawn and they are cancelled where the transport permits. This may
-   depart from [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) rather than fill a gap in it: [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) carves out only operations "already sent upstream", so a
-   request admitted but not yet forwarded at the commit may count as admitted under the old policy after the commit.
-   The alternative cancels, or re-admits under the new snapshot, every request not yet forwarded when the pause
-   begins.
-2. **Listener changes in an approval.** On entry to Ready the listener set is rebuilt from the verified config. But
-   in a protected Linux install every TCP listener comes from socket activation ([§3.4](iron-vault-specification.md#34-caller-authentication-and-listeners)), so a running service cannot
-   bind a TCP listener that the new config adds. *Default:* the rebuild closes the sockets the new config no longer
-   names and binds or adopts what it can. A listener it cannot bind is logged at WARN and stays missing until restart,
-   the service still enters Ready, and the approval summary marks that listener "takes effect after restart".
-3. **The events an approval uses.** The [§3.12](iron-vault-specification.md#312-service-states-and-errors) diagram labels its one edge from Ready to Checking "explicit reload",
-   and nothing else, and `ServiceEvent::Reload` is SIGHUP's. *Default:* a new event, such as `ApprovalCommitting`, on
-   that existing edge, so *Reload* keeps one meaning. The alternative reuses `Reload`. Also by default, from
-   Unavailable(`PolicyInvalid`), `Repaired` fires once the commit is durable, and also for a commit that could not be
-   settled, only so that the service can reach `RecoveryNeeded` through Checking (see
-   [When `Repaired` fires](#when-a-step-fails)). The alternative adds a direct edge from Unavailable(`PolicyInvalid`)
-   to Unavailable(`RecoveryNeeded`), which [§3.12](iron-vault-specification.md#312-service-states-and-errors) does not draw.
-4. **The failure reason for recovery rows 5 to 8.** *Default:* rows 5 and 6, a committed transaction with a file
-   waiting to be published, are `RecoveryNeeded`, as `FailureReason::RecoveryNeeded`'s doc comment describes ("a
-   committed transaction could not be completed"). Rows 7 and 8, a published pair that does not verify, are
-   `PolicyInvalid`. Consequence: in rows 5 and 6 `config approve` is refused (`admin_allows` offers only repair). No
-   repair command is specified, in [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration) or in any ticket, and a restart reaches the same row. So until one is, rows 5
-   and 6 have no exit but `reset`, which discards the vault and rebuilds it from reissued credentials. The
-   alternative makes rows 5 and 6 `PolicyInvalid` too, so a new approval at a higher version is the repair. That is
-   safe, because the new version is above the lost committed one, but K-124's doc comment would change.
-5. **What a request sees during the pause.** *Default:* `503` `checking` at once, like any Checking state, with no
-   `Retry-After`. An earlier draft of this design had requests wait up to 5 seconds for the pause to end, then answer
-   `503` with a fifth reason, `reconfiguring`, and `Retry-After: 1`. That hides a sub-second approval from callers,
-   but adds an `UnavailableReason` and a wait that Checking does not have anywhere else.
-6. **The order of step 2.** [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)'s text puts "authenticate the owner" before "show the service-generated summary". Its
-   sequence diagram puts the summary first. *Default:* the diagram's order: summary, confirmation, approval passphrase,
-   then reservation. The admin principal itself is authenticated at connect.
-7. **Finishing a publish in a running service.** [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) allows finishing publishing "on restart". *Default:* every
-   config check may finish it, under the same rule (only the committed transaction, only when its files verify): the
-   check after an approval's commit, after an unlock and after a repair, as well as at startup. A failed directory
-   fsync after the publish renames is logged and does not stop the check, because the commit is the durable record.
-8. **The service-wide lock across prompts.** *Default:* `config approve` holds it from its request to its response,
-   up to about 10 minutes across two prompts. Meanwhile other approvals and vault writes get `busy`, SIGHUP waits, and
-   `lock` cancels an approval that is still at a prompt. The alternative takes the lock only after the passphrase, and
-   refuses the approval if the committed approval or the catalog changed since the summary.
-9. **Config directory mode, and refusing to start.** *Default:* the config directory is the service account's, with
-   mode exactly `0700`, the state directory's rule. A refused config directory, config file or config-directory lock
-   file stops startup. Today that check only reports.
-10. **The summary when nothing is active.** *Default:* when the service is Unavailable, or for the first approval, the
-    summary diffs against the empty config, says "no active config" and lists everything as added. An Unavailable
-    service still has a committed approval, so the alternative diffs against the committed config, whose bytes are
-    then read from `config.toml` if they verify.
-11. **The notice frame in protocol version 1.** *Default:* the notice frame, byte values, `config approve` and error
-    codes 7 to 12 join version 1 without a version bump, because version 1 has not been released.
-12. **Where the CLI reads the config.** *Default:* `config approve <file>` only. stdin is not accepted, because when
-    stdin is not a terminal it carries the answers to the prompts. K-128's spec reads stdin when no file is given, so
-    K-128 or this default has to change.
-13. **Settling an uncertain commit, and restarting after one.** *Default:* the transaction settles it with a second
-    durable write of `approval.age`. A config check never writes the approval state, so if settling fails the service
-    stays Unavailable with `RecoveryNeeded`. A restart without a reboot then reads a commit of version N that is
-    visible in the page cache but may not be durable, and trusts it. If a later power loss undoes that commit,
-    `approval.age` is back at N-1. If the publish renames were undone as well, the N-1 pair is published again beside
-    N's pending and staged files, so recovery serves the N-1 pair and discards N's files as uncommitted leftovers.
-    (If the renames survived, the published N pair is `Uncommitted` and the service stays Unavailable.) The service
-    would then serve N-1 after it served N, which is what [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)'s "never fall back to an older committed version" forbids.
-    The alternative: every startup config check settles `approval.age` with a durable re-write, because after a
-    restart nothing records whether the last commit was settled. That breaks "loading never writes the approval
-    state", which K-126 asserts in a test.
-14. **Sections beyond [§3.2](iron-vault-specification.md#32-service-and-cli-boundary)'s list.** [§3.2](iron-vault-specification.md#32-service-and-cli-boundary) says the summary includes "changed callers, route grants, destinations,
-    restrictions, and the committed version". *Default:* the summary also lists listener and limit changes, and a
-    text-only change, so no change to the config goes unshown.
+1. **Requests admitted before an approval's commit.** *Decided: default accepted (2026-11-09).*
+   [§12](iron-vault-specification.md#12-configuration-approval-and-reload) forbids admitting new requests under the
+   previous policy after the commit, and says operations already sent upstream "remain subject to the cancellation
+   limits below". It does not say what happens to requests admitted under the old policy before the pause, whether
+   already forwarded or still inside the pipeline at the commit. That matters when an approval revokes a caller whose
+   long streaming response is still running. *Default:* when the check ends on Ready, they all finish on the old
+   snapshot. When it ends on Unavailable, the old snapshot is withdrawn and they are cancelled where the transport
+   permits. This may depart from [§12](iron-vault-specification.md#12-configuration-approval-and-reload) rather than
+   fill a gap in it: [§12](iron-vault-specification.md#12-configuration-approval-and-reload) carves out only operations
+   "already sent upstream", so a request admitted but not yet forwarded at the commit may count as admitted under the
+   old policy after the commit. The alternative cancels, or re-admits under the new snapshot, every request not yet
+   forwarded when the pause begins.
+2. **Listener changes in an approval.** *Decided (2026-11-09):* the rebuild closes, binds or adopts as the default says,
+   and logs a listener it cannot open at WARN as missing until restart while the service enters Ready
+   (`crates/iron-vault/src/service_context.rs`), but the approval summary does not mark that listener "takes effect
+   after restart" (`crates/iron-vault-policy/src/approval_summary.rs`). On entry to Ready the listener set is rebuilt
+   from the verified config. But in a protected Linux install every TCP listener comes from socket activation
+   ([§7](iron-vault-specification.md#7-caller-authentication-and-listeners)), so a running service cannot bind a TCP
+   listener that the new config adds. *Default:* the rebuild closes the sockets the new config no longer names and binds
+   or adopts what it can. A listener it cannot bind is logged at WARN and stays missing until restart, the service still
+   enters Ready, and the approval summary marks that listener "takes effect after restart".
+3. **The events an approval uses.** *Decided: default accepted (2026-11-09).* The
+   [§15](iron-vault-specification.md#15-service-states-and-errors) diagram labels its one edge from Ready to Checking
+   "explicit reload", and nothing else, and `ServiceEvent::Reload` is SIGHUP's. *Default:* a new event, such as
+   `ApprovalCommitting`, on that existing edge, so *Reload* keeps one meaning. The alternative reuses `Reload`. Also by
+   default, from Unavailable(`PolicyInvalid`), `Repaired` fires once the commit is durable, and also for a commit that
+   could not be settled, only so that the service can reach `RecoveryNeeded` through Checking (see
+   [When `Repaired` fires](#when-a-step-fails)). The alternative adds a direct edge from Unavailable(`PolicyInvalid`) to
+   Unavailable(`RecoveryNeeded`), which [§15](iron-vault-specification.md#15-service-states-and-errors) does not draw.
+4. **The failure reason for recovery rows 5 to 8.** *Decided: default accepted (2026-11-09).* *Default:* rows 5 and 6, a
+   committed transaction with a file waiting to be published, are `RecoveryNeeded`, as `FailureReason::RecoveryNeeded`'s
+   doc comment describes ("a committed transaction could not be completed"). Rows 7 and 8, a published pair that does
+   not verify, are `PolicyInvalid`. Consequence: in rows 5 and 6 `config approve` is refused (`admin_allows` offers only
+   repair). No repair command is specified, in
+   [§16](iron-vault-specification.md#16-administration-recovery-and-migration) or in any ticket, and a restart reaches
+   the same row. So until one is, rows 5 and 6 have no exit but `reset`, which discards the vault and rebuilds it from
+   reissued credentials. The alternative makes rows 5 and 6 `PolicyInvalid` too, so a new approval at a higher version
+   is the repair. That is safe, because the new version is above the lost committed one, but K-124's doc comment would
+   change.
+5. **What a request sees during the pause.** *Decided: default accepted (2026-11-09).* *Default:* `503` `checking` at
+   once, like any Checking state, with no `Retry-After`. An earlier draft of this design had requests wait up to 5
+   seconds for the pause to end, then answer `503` with a fifth reason, `reconfiguring`, and `Retry-After: 1`. That
+   hides a sub-second approval from callers, but adds an `UnavailableReason` and a wait that Checking does not have
+   anywhere else.
+6. **The order of step 2.** *Decided: default accepted (2026-11-09).*
+   [§12](iron-vault-specification.md#12-configuration-approval-and-reload)'s text puts "authenticate the owner" before
+   "show the service-generated summary". Its sequence diagram puts the summary first. *Default:* the diagram's order:
+   summary, confirmation, approval passphrase, then reservation. The admin principal itself is authenticated at connect.
+7. **Finishing a publish in a running service.** *Decided: default accepted (2026-11-09).*
+   [§12](iron-vault-specification.md#12-configuration-approval-and-reload) allows finishing publishing "on restart".
+   *Default:* every config check may finish it, under the same rule (only the committed transaction, only when its files
+   verify): the check after an approval's commit, after an unlock and after a repair, as well as at startup. A failed
+   directory fsync after the publish renames is logged and does not stop the check, because the commit is the durable
+   record.
+8. **The service-wide lock across prompts.** *Decided: default accepted (2026-11-09).* *Default:* `config approve` holds
+   it from its request to its response, up to about 10 minutes across two prompts. Meanwhile other approvals and vault
+   writes get `busy`, SIGHUP waits, and `lock` cancels an approval that is still at a prompt. The alternative takes the
+   lock only after the passphrase, and refuses the approval if the committed approval or the catalog changed since the
+   summary.
+9. **Config directory mode, and refusing to start.** *Decided: default accepted (2026-11-09).* *Default:* the config
+   directory is the service account's, with mode exactly `0700`, the state directory's rule. A refused config directory,
+   config file or config-directory lock file stops startup. Before this, the check only reported.
+10. **The summary when nothing is active.** *Decided: default accepted (2026-11-09).* *Default:* when the service is
+    Unavailable, or for the first approval, the summary diffs against the empty config, says "no active config" and
+    lists everything as added. An Unavailable service still has a committed approval, so the alternative diffs against
+    the committed config, whose bytes are then read from `config.toml` if they verify.
+11. **The notice frame in protocol version 1.** *Decided: default accepted (2026-11-09).* *Default:* the notice frame,
+    byte values, `config approve` and error codes 7 to 12 join version 1 without a version bump, because version 1 has
+    not been released.
+12. **Where the CLI reads the config.** *Decided: default accepted (2026-11-09).* *Default:* `config approve <file>`
+    only. stdin is not accepted, because when stdin is not a terminal it carries the answers to the prompts. K-128's
+    spec read stdin when no file is given; K-128 followed this default instead.
+13. **Settling an uncertain commit, and restarting after one.** *Decided: default accepted (2026-11-09).* *Default:* the
+    transaction settles it with a second durable write of `approval.age`. A config check never writes the approval
+    state, so if settling fails the service stays Unavailable with `RecoveryNeeded`. A restart without a reboot then
+    reads a commit of version N that is visible in the page cache but may not be durable, and trusts it. If a later
+    power loss undoes that commit, `approval.age` is back at N-1. If the publish renames were undone as well, the N-1
+    pair is published again beside N's pending and staged files, so recovery serves the N-1 pair and discards N's files
+    as uncommitted leftovers. (If the renames survived, the published N pair is `Uncommitted` and the service stays
+    Unavailable.) The service would then serve N-1 after it served N, which is what
+    [§12](iron-vault-specification.md#12-configuration-approval-and-reload)'s "never fall back to an older committed
+    version" forbids. The alternative: every startup config check settles `approval.age` with a durable re-write,
+    because after a restart nothing records whether the last commit was settled. That breaks "loading never writes the
+    approval state", which K-126 asserts in a test.
+14. **Sections beyond [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)'s list.**
+    *Decided: default accepted (2026-11-09).* [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)
+    says the summary includes "changed callers, route grants, destinations, restrictions, and the committed version".
+    *Default:* the summary also lists listener and limit changes, and a text-only change, so no change to the config
+    goes unshown.
+15. **A wrong answer with more than one approver.** [§14](iron-vault-specification.md#14-recipients-startup-and-memory)
+    lets the owner switch to another approval signer at the prompt. *Default:* a wrong passphrase or PIN for the asked
+    approver ends the approval as `approval-denied`, and nothing moves on to the next approver by itself, so a guess
+    against one signer is never followed by a free guess against another. The alternative offers the next approver
+    after a wrong answer, within the same exchange.
 
 ### Which tickets each question blocks
 
 | Ticket | Open questions |
 |---|---|
-| K-119 | 9 |
-| K-120 | 3, 6, 8, 13 |
-| K-121 | 4, 7 (recovery at every config check, not only at startup), 13 |
-| K-122 | 4, 7, 13 |
-| K-123 | 1, 5 (its reason set needs `checking`) |
-| K-125 | 2, 3, 9 |
-| K-128 | 12 (stdin, a direct conflict), 11, 6, 8, 10, 14, 4 |
+| K-277 | 15 |

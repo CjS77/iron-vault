@@ -1,4 +1,4 @@
-//! Who is at the other end of a Unix socket, as the kernel reports it (spec §3.2, §3.4).
+//! Who is at the other end of a Unix socket, as the kernel reports it (spec §5, §7).
 //!
 //! Both the admin socket and the request sockets judge a connection only by this answer: the admin socket checks it
 //! against the admin principals, and a request socket hands it to caller authentication. Nothing the peer sends takes
@@ -42,7 +42,7 @@ impl PeerIdentity {
     }
 
     /// The peer's process ID, for the audit log only. It is never used to look up an executable: `/proc/<pid>/exe`
-    /// cannot tell the owner from malware running as the same account (§3.4), and the pid may already be reused.
+    /// cannot tell the owner from malware running as the same account (§7), and the pid may already be reused.
     pub const fn pid(&self) -> u32 {
         self.pid
     }

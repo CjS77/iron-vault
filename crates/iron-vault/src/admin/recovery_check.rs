@@ -1,4 +1,4 @@
-//! `recovery check`: proves that the owner's recovery key opens the vault (specification §3.13; design/recovery.md).
+//! `recovery check`: proves that the owner's recovery key opens the vault (specification §16; design/recovery.md).
 //!
 //! The service prompts for the key with echo off, so no argument carries it. The checks that need no key run before the
 //! prompt; the lock, the store check and the record write are the service context's. The key's text lives in three

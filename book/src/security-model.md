@@ -1,6 +1,6 @@
 # Security model
 
-The [security promise and limits](../../design/iron-vault-specification.md#12-security-promise-and-limits) in the
+The [security promise and limits](../../design/iron-vault-specification.md#2-security-promise-and-limits) in the
 specification say what Iron Vault protects against and what it doesn't. This page explains how the vault is locked.
 
 ## How the vault is locked

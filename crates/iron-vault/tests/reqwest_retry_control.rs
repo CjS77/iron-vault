@@ -1,5 +1,5 @@
 //! The control for the no-retry tests in `upstream_client_h2.rs`: reqwest's default retry policy re-sends a request the
-//! HTTP/2 test upstream refused unprocessed, so those tests' refusals are ones reqwest would retry (§7).
+//! HTTP/2 test upstream refused unprocessed, so those tests' refusals are ones reqwest would retry (implementation spec §1).
 //!
 //! This is the one test file that builds a reqwest client of its own, because its subject is the default policy that
 //! `UpstreamClient::new` replaces; `upstream_construction.rs` exempts it by name. The client carries no credential.

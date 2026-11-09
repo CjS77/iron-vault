@@ -1,10 +1,10 @@
-//! The proxy handler: one request end to end, from the request server to the upstream and back (specification §3.5).
+//! The proxy handler: one request end to end, from the request server to the upstream and back (specification §8).
 //!
-//! Per request it loads the serving snapshot once and uses only that, runs the request pipeline (§3.5 steps 3-8),
+//! Per request it loads the serving snapshot once and uses only that, runs the request pipeline (§8 steps 3-8),
 //! sends the checked request with the caller's body through the route's upstream client (step 9), and relays the
 //! response, decoded, through the scrubber with the injected credential's scrub patterns and re-encoded when the caller
-//! requires it (step 10, §3.8). Each failure gets one
-//! fixed answer, and none formats a library error (§3.15):
+//! requires it (step 10, §11). Each failure gets one
+//! fixed answer, and none formats a library error (§18):
 //!
 //! | Failure | Answer |
 //! |---|---|
@@ -16,7 +16,7 @@
 //! | The upstream exchange fails | [`TransportError::status`]: `502`, or `504` for a timeout |
 //! | No response headers by the request deadline | `504` |
 //! | The response has a content coding the service does not decode, a coded `206`, or a transfer coding besides `chunked` | `502` |
-//! | The response's `Location` leaves the route's upstream base or is ambiguous, or it has several (§3.8) | `502` |
+//! | The response's `Location` leaves the route's upstream base or is ambiguous, or it has several (§11) | `502` |
 //! | The response body fails after its head was sent: upstream error, decode error, truncated coding, decompression budget | The caller's connection is aborted |
 //!
 //! The request deadline bounds the body as well: the request server fails a response body still streaming at it.
@@ -85,7 +85,7 @@ impl RequestHandler for ProxyHandler {
 
 /// Serves `request` from `snapshot` until the snapshot is withdrawn. A request withdrawn before its response head is
 /// dropped, which cancels its upstream request, and answered with a fixed `503`; one withdrawn after it has its body fail,
-/// so the caller's connection is aborted rather than ended as if the body were complete (§3.9).
+/// so the caller's connection is aborted rather than ended as if the body were complete (§12).
 ///
 /// The response body keeps `snapshot` alive until the body is dropped, because the body owns the request's injected
 /// secret patterns: a lock that waits for the snapshot to drop therefore also waits for the body.
@@ -247,7 +247,7 @@ fn token_header(snapshot: &ServingSnapshot, tags: &ConnectionTags) -> Option<Hea
 }
 
 /// The `503` for a request refused at admission: the redacted reason as its whole body. It is given before the caller is
-/// identified, because with no snapshot there is no policy to identify the caller against (§3.12).
+/// identified, because with no snapshot there is no policy to identify the caller against (§15).
 fn unavailable(reason: UnavailableReason, facts: &RequestFacts) -> Response<ResponseBody> {
     facts.refuse(reason.into());
     text_response(StatusCode::SERVICE_UNAVAILABLE, reason.as_str())

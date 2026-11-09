@@ -291,7 +291,7 @@ impl RequestFacts {
         self.0.request_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
 
-    /// Writes the high-severity `request.defect` event for a refusal only a service defect can cause (§3.6). The caller
+    /// Writes the high-severity `request.defect` event for a refusal only a service defect can cause (§9). The caller
     /// records the request's `service_defect` reason as it does any other.
     pub fn report_defect(&self, defect: &'static str) {
         let state = self.state();

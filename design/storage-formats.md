@@ -1,12 +1,30 @@
 # Iron Vault storage formats
 
 Byte layouts of the data Iron Vault writes to disk. Each format carries a version so a later release can read what an
-earlier one wrote and refuse what it does not understand (specification [§9](iron-vault-specification.md#9-implementation-gates-and-unresolved-details)). Terms follow the
+earlier one wrote and refuse what it does not understand ([implementation spec §3](implementation-specification.md#3-implementation-gates-and-unresolved-details)). Terms follow the
 [glossary](glossary.md).
+
+## Magic numbers
+
+Every format below starts with four ASCII bytes naming it: `IV` for Iron Vault, then two letters for the format. A
+reader refuses a file whose magic is not the one it expects. In a signed or MAC'd payload the magic is also domain
+separation: those bytes can be read only as the format they name.
+
+| Magic  | Format                                                          |
+|--------|-----------------------------------------------------------------|
+| `IVCR` | Credential record (record payload v1)                           |
+| `IVMF` | Manifest file                                                   |
+| `IVMP` | Manifest payload                                                |
+| `IVAP` | Approval payload: the bytes a config approval signs             |
+| `IVAS` | Approval signature: the envelope in `config.toml.sig`           |
+| `IVAF` | Approval state file                                             |
+| `IVAM` | Approval metadata: the approval state payload                   |
+| `IVRF` | Recipient inventory file                                        |
+| `IVRP` | Recipient inventory payload                                     |
 
 ## Record payload v1
 
-The plaintext of one [credential record](iron-vault-specification.md#33-credential-records-and-configuration): the
+The plaintext of one [credential record](iron-vault-specification.md#6-credential-records-and-configuration): the
 bytes a credential file encrypts. Encryption, file names and the manifest are separate layers; this section covers
 only what is inside the encryption. Rust: `iron_vault_store::{encode, decode}`.
 
@@ -15,7 +33,7 @@ only what is inside the encryption. Rust: `iron_vault_store::{encode, decode}`.
 The payload is a small hand-written, length-prefixed binary layout rather than TOML or a serde format. Decoding reads
 each secret field as a borrowed slice of the decrypted buffer, checks it is UTF-8 in place, and copies it once, straight
 into the `SecretString` that owns it from then on. A TOML or serde decoder would first build its own `String` for each
-value, a heap copy of the secret that nothing zeroizes. Specification [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory) asks for as few copies of a secret as
+value, a heap copy of the secret that nothing zeroizes. Specification [§14](iron-vault-specification.md#14-recipients-startup-and-memory) asks for as few copies of a secret as
 possible, each cleared on release. The encoder sizes its `Zeroizing<Vec<u8>>` exactly before writing, so the buffer
 never reallocates and leaves no stale copy behind either.
 
@@ -50,7 +68,7 @@ Material fields:
 The kind is the material tag; the record stores no separate kind, so a kind and its material cannot disagree.
 
 Each origin is a field holding the host in its canonical form, followed by the port as a `u16`. The scheme is not
-stored: specification [§3.3](iron-vault-specification.md#33-credential-records-and-configuration) makes HTTPS mandatory, so every origin is an HTTPS origin.
+stored: specification [§6](iron-vault-specification.md#6-credential-records-and-configuration) makes HTTPS mandatory, so every origin is an HTTPS origin.
 
 ### Example
 
@@ -96,8 +114,8 @@ A longer file is a damaged record and is never read in full.
 
 ### Versions
 
-Payload version 1 holds no provider settings or operational state. Specification [§3.3](iron-vault-specification.md#33-credential-records-and-configuration) lists both, and both arrive
-with OAuth in product phase v1 ([§4](iron-vault-specification.md#4-v1-oauth-login-and-refresh)). Adding them means a new version byte with its own layout, and a reader for every
+Payload version 1 holds no provider settings or operational state. Specification [§6](iron-vault-specification.md#6-credential-records-and-configuration) lists both, and both arrive
+with OAuth in product phase v1 ([future spec §1](future-specifications.md#1-v1-oauth-login-and-refresh)). Adding them means a new version byte with its own layout, and a reader for every
 version still on disk. A reader never guesses at a version it does not know.
 
 ## MAC'd file frame
@@ -105,7 +123,7 @@ version still on disk. A reader never guesses at a version it does not know.
 A [MAC'd file](glossary.md) is a control file the service alone may write. `age` does not authenticate the sender, so
 anyone holding the vault public key can write a file that decrypts cleanly. A MAC'd file is therefore sealed to the
 vault public key and then authenticated with a MAC keyed from the private vault identity, which only the service holds
-while the vault is unlocked (specification [§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)). The manifest file, the approval state file and the recipient inventory file are MAC'd files; each
+while the vault is unlocked (specification [§13](iron-vault-specification.md#13-vault-structure-and-durable-writes)). The manifest file, the approval state file and the recipient inventory file are MAC'd files; each
 fixes its own magic, version, key persona, domain tag and size limit. Rust: `MacFileKind`, crate-private.
 
 ### Layout
@@ -149,7 +167,7 @@ Opening a MAC'd file does the cheap, key-free checks first and decrypts last:
 2. A file shorter than header plus MAC is truncated. A wrong magic or unknown version is refused; the version is read
    before the MAC because it decides how the MAC is computed.
 3. The MAC is compared in constant time. A mismatch is reported as damaged shared state: the file was altered, or was
-   not written by this vault, and specification [§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes) says the vault may need recovery.
+   not written by this vault, and specification [§13](iron-vault-specification.md#13-vault-structure-and-durable-writes) says the vault may need recovery.
 4. Only then is the vault ID parsed and the ciphertext opened, with the size limit also bounding the plaintext, and
    decoded. A payload naming a different vault from the header is refused.
 
@@ -208,16 +226,16 @@ refuse a partial restore as damaged shared state, naming the file that is behind
 and the one found, and every write of either file refuses it before touching any file: writing over it would record
 the restored file as the peer and make the pair agree again. Creating the approval state is refused once the manifest
 records one, since that would reset its counters. A partial restore is never repaired automatically (specification
-[§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)); the owner recovers the vault with the recovery key or resets it.
+[§12](iron-vault-specification.md#12-configuration-approval-and-reload)); the owner recovers the vault with the recovery key or resets it.
 
 The check cannot tell a pair that was once on disk together from the current one. That covers restoring both files
-together, the whole-storage rollback of specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload), and restoring one file to a copy that the other file's
+together, the whole-storage rollback of specification [§12](iron-vault-specification.md#12-configuration-approval-and-reload), and restoring one file to a copy that the other file's
 latest write already saw. Outside v0, anchoring the state generation in a TPM monotonic counter is what detects those.
 
 ## Manifest file v1
 
 The [vault manifest](glossary.md): the service's index of which credential records exist, in the state-directory file
-`manifest.age`. Specification [§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes) makes the service's own index the authority on which records exist, and [§3.3](iron-vault-specification.md#33-credential-records-and-configuration) says
+`manifest.age`. Specification [§13](iron-vault-specification.md#13-vault-structure-and-durable-writes) makes the service's own index the authority on which records exist, and [§6](iron-vault-specification.md#6-credential-records-and-configuration) says
 only the service may index record files. A manifest sealed only to the vault public key would be as forgeable as the
 records it indexes, so it is a [MAC'd file](#macd-file-frame). Rust: `iron_vault_store::{seal_manifest, open_manifest}`.
 
@@ -284,7 +302,7 @@ even one that decrypts to the same record, no longer matches its entry. Record f
 A new vault's first manifest is at state generation 1 with peer generation 0 and no entries, written before any record
 file and before the approval state. Every later manifest takes its state generation from the
 [vault-wide rule](#state-generation). Rolling the whole state directory back to an older consistent copy is outside
-what the manifest detects (specification [§9](iron-vault-specification.md#9-implementation-gates-and-unresolved-details)).
+what the manifest detects ([implementation spec §3](implementation-specification.md#3-implementation-gates-and-unresolved-details)).
 
 ### Example
 
@@ -326,7 +344,7 @@ Iron Vault framing. Its plaintext is the vault identity's secret text: the 74 AS
 derived from. Rust: `iron_vault_store::{wrap_identity, unwrap_identity}`.
 
 - **Stanzas.** One X25519 stanza per recipient key, plus the one random `*-grease` stanza `age` adds to every file
-  without a passphrase. Specification [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory) forbids an scrypt stanza beside other recipients, so the envelope never
+  without a passphrase. Specification [§14](iron-vault-specification.md#14-recipients-startup-and-memory) forbids an scrypt stanza beside other recipients, so the envelope never
   holds one; passphrase unlock and the recovery key each reach it through an X25519 recipient.
 - **Recipients.** Between 2 and `MAX_RECIPIENTS` (64), so a vault always has a second way in.
 - **Size limit.** `MAX_IDENTITY_ENVELOPE_LEN` is 16 KiB. An X25519 stanza is 98 bytes, the grease stanza at most about
@@ -357,7 +375,7 @@ open_passphrase_envelope, unlock_with_passphrase}`.
 
 - **Stanzas.** Exactly one scrypt stanza and no other. `age` adds its random grease stanza only to files without an
   scrypt stanza, and refuses to write an scrypt stanza beside any other, so this file never holds one. `stanza_kinds`
-  of it is `[Scrypt]`, and of `identity.age` never contains `Scrypt` (specification [§3.11](iron-vault-specification.md#311-recipients-startup-and-memory), [§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)).
+  of it is `[Scrypt]`, and of `identity.age` never contains `Scrypt` (specification [§14](iron-vault-specification.md#14-recipients-startup-and-memory), [§19](iron-vault-specification.md#19-v0-user-acceptance)).
 - **Work factor.** New envelopes are sealed at `PASSPHRASE_WORK_FACTOR` = 18 (N = 2^18, r = 8: 256 MiB and roughly
   half a second to a second per unlock). Opening refuses a header asking for more than `MAX_PASSPHRASE_WORK_FACTOR` = 20
   (1 GiB) before any scrypt work. The work factor must be one or two decimal digits without a leading zero.
@@ -432,13 +450,18 @@ Its plaintext is the 32-byte Ed25519 private key (the RFC 8032 seed), raw. Rust:
 - **Separate passphrase.** The vault-unlock passphrase and the approval passphrase are separate types and separate
   files, so holding the unlock passphrase gives no way to sign an approval.
 - **Pinned key check.** `open_signer_key` derives the public key from the decrypted private key and refuses with
-  `KeyMismatch` unless it equals the pinned approver's, so a swapped `approver.age` signs nothing.
+  `KeyMismatch` unless it equals the public key of the [pinned approver](#approval-state-payload-v1) it is opened for,
+  so a swapped `approver.age` signs nothing.
+- **One file.** `init` enrolls one software signer, and `approver.age` holds its key. Specification
+  [§14](iron-vault-specification.md#14-recipients-startup-and-memory) lets the owner enroll several approval signers,
+  of the same kind or different kinds. Where a second software signer's key lives is decided by the approver
+  enrollment design (K-277).
 - **Lifetime.** A software signer is opened for one approval and dropped; the private key is cleared on drop and never
   cached.
 
 ## Approval payload v1
 
-The bytes a [config approval](glossary.md) signs (specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). It binds the fixed purpose, the vault, the
+The bytes a [config approval](glossary.md) signs (specification [§12](iron-vault-specification.md#12-configuration-approval-and-reload)). It binds the fixed purpose, the vault, the
 approval version and the config digest, so a signature cannot be moved to another vault, another version or another
 config. It uses the conventions of record payload v1: big-endian unsigned integers, `u64` length prefixes, lengths
 checked against the bytes remaining before anything is read, and no trailing bytes. Rust:
@@ -486,31 +509,40 @@ not a version 4 UUID, approval version 0, truncation and trailing bytes.
 
 ## Approval envelope v1
 
-The file `config.toml.sig`: an approval payload, the [signature algorithm](glossary.md) that signed it and the
-signature. Software, TPM and later YubiKey signers all write this one envelope (specification [§8.2](iron-vault-specification.md#82-product-decisions-and-resulting-behavior) Q-9). Rust:
+The file `config.toml.sig`: an approval payload, the [signature algorithm](glossary.md) and the
+[approver ID](glossary.md) of the approver that signed it, and the signature. Software, TPM and later YubiKey signers
+all write this one envelope ([implementation spec §2.2](implementation-specification.md#22-product-decisions-and-resulting-behavior) Q-9). Rust:
 `iron_vault_store::ApprovalEnvelope::{encode, decode}`.
 
 ### Layout
 
-| Offset | Size | Content                                                               |
-|--------|------|-----------------------------------------------------------------------|
-| 0      | 4    | Magic: ASCII `IVAS` (`49 56 41 53`)                                   |
-| 4      | 1    | Format version: `01`                                                  |
-| 5      | 1    | Signature algorithm ID (below)                                        |
-| 6      | var  | Payload: field holding an approval payload v1                         |
-| var    | var  | Signature: field holding the signature over the payload field's bytes |
+| Offset | Size | Content                                                                    |
+|-----|-----|-----------------------------------------------------------------------------|
+| 0   | 4   | Magic: ASCII `IVAS` (`49 56 41 53`)                                         |
+| 4   | 1   | Format version: `01`                                                        |
+| 5   | 1   | Signature algorithm ID (below)                                              |
+| 6   | 16  | Approver ID: the 16 bytes of the version 4 UUID of the approver that signed |
+| 22  | var | Payload: field holding an approval payload v1                               |
+| var | var | Signature: field holding the signature over the payload field's bytes       |
 
-| ID   | Algorithm                                                                      |
-|------|--------------------------------------------------------------------------------|
-| `00` | Never valid                                                                    |
-| `01` | Ed25519 (RFC 8032), the software signer; the signature is exactly 64 bytes     |
-| `02` | Reserved for ECDSA P-256 with SHA-256, the TPM signer; not accepted in v0      |
+| ID   | Algorithm                                                                  |
+|------|----------------------------------------------------------------------------|
+| `00` | Never valid                                                                |
+| `01` | Ed25519 (RFC 8032), the software signer; the signature is exactly 64 bytes |
+| `02` | Reserved for ECDSA P-256 with SHA-256, the TPM signer; not accepted in v0  |
 
 Any other ID is refused as unknown. The signature is over exactly the bytes inside the payload field.
 
-The envelope carries **no public key**. Specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) forbids trusting a key from the signature file; the
-verifier uses the approver key and algorithm pinned in protected vault metadata, and refuses an envelope whose
-algorithm differs from the pinned one.
+The envelope carries **no public key**. Specification [§12](iron-vault-specification.md#12-configuration-approval-and-reload) forbids trusting a key from the signature file. The
+approver ID only says which pinned approver to check: the verifier looks it up among the approvers pinned in the
+approval state, refuses an ID that is not there, refuses an envelope whose algorithm differs from that approver's, and
+verifies the signature with that approver's key.
+
+The approver ID sits outside the signed payload, and needs no signature of its own. Changing it makes the verifier
+check the signature against another approver's key, which fails, because no two approvers share a key. A signature
+that verifies therefore also proves which approver made it, so the approver ID can be logged as the signer.
+
+A v1 envelope without an approver ID was never released, so the ID joins v1 rather than starting v2.
 
 ### Example
 
@@ -521,6 +553,7 @@ not check signatures, verification does.
 49 56 41 53                                        magic "IVAS"
 01                                                 format version 1
 01                                                 algorithm Ed25519
+8d 1c 6f 0e 2b 7a 4c 59 9e 3d 5a 4b 3c 2d 1e 0f    approver ID 8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f
 00 00 00 00 00 00 00 59                            payload length 89
 …                                                  the 89 payload bytes from the example above
 00 00 00 00 00 00 00 40                            signature length 64
@@ -530,36 +563,37 @@ not check signatures, verification does.
 5a 5a 5a 5a 5a 5a 5a 5a  5a 5a 5a 5a 5a 5a 5a 5a
 ```
 
-The whole file is 175 bytes.
+The whole file is 191 bytes.
 
 ### One encoding per envelope
 
-Decoding rejects a wrong magic, an unknown format version, an unknown or reserved algorithm ID, a payload that is not
-a canonical approval payload v1 (including trailing bytes inside the payload field), a signature of the wrong length
-for its algorithm, truncation and trailing bytes.
+Decoding rejects a wrong magic, an unknown format version, an unknown or reserved algorithm ID, an approver ID that is
+not a version 4 UUID, a payload that is not a canonical approval payload v1 (including trailing bytes inside the
+payload field), a signature of the wrong length for its algorithm, truncation and trailing bytes. Whether the approver
+ID is pinned is the verifier's check, not the decoder's.
 
 ### Size limit
 
-`MAX_APPROVAL_ENVELOPE_LEN` is 4096 bytes, checked before anything else is read. A v1 envelope is 175 bytes with an
-Ed25519 signature and at most 183 with a DER-encoded ECDSA P-256 one; the limit leaves room for a later algorithm with
+`MAX_APPROVAL_ENVELOPE_LEN` is 4096 bytes, checked before anything else is read. A v1 envelope is 191 bytes with an
+Ed25519 signature and at most 199 with a DER-encoded ECDSA P-256 one; the limit leaves room for a later algorithm with
 a larger signature while keeping a planted file cheap to refuse.
 
 ## Approval state file v1
 
-The [approval state](glossary.md) of one vault, in the state-directory file `approval.age`: the pinned approver, the
-highest reserved version and the committed approval (specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). Versioned approval rejects an old
+The [approval state](glossary.md) of one vault, in the state-directory file `approval.age`: the pinned approvers, the
+highest reserved version and the committed approval (specification [§12](iron-vault-specification.md#12-configuration-approval-and-reload)). Versioned approval rejects an old
 `config.toml` and `config.toml.sig` pair only while these counters never go backwards, so the file is a
 [MAC'd file](#macd-file-frame) that a party holding only the vault public key cannot write. Rust:
 `iron_vault_store::{seal_approval_state, open_approval_state, ApprovalState}`.
 
-| Frame parameter | Value                                                                  |
-|-----------------|------------------------------------------------------------------------|
-| Magic           | ASCII `IVAF` (`49 56 41 46`)                                           |
-| Version         | `01`                                                                   |
-| Payload         | The approval state payload v1 (below)                                  |
-| Personalization | `iv-approval-v1` (14 bytes); the derived key is the **approval key**   |
-| Domain tag      | `iron-vault approval file v1 mac` followed by a zero byte              |
-| Size limit      | `MAX_APPROVAL_STATE_LEN` (4 KiB)                                       |
+| Frame parameter | Value                                                                |
+|-----------------|----------------------------------------------------------------------|
+| Magic           | ASCII `IVAF` (`49 56 41 46`)                                         |
+| Version         | `01`                                                                 |
+| Payload         | The approval state payload v1 (below)                                |
+| Personalization | `iv-approval-v1` (14 bytes); the derived key is the **approval key** |
+| Domain tag      | `iron-vault approval file v1 mac` followed by a zero byte            |
+| Size limit      | `MAX_APPROVAL_STATE_LEN` (4 KiB)                                     |
 
 The approval key is independent of the manifest key, so a MAC from one file never verifies the other.
 
@@ -577,14 +611,18 @@ MAC           432bf6223d8cfcab01ea4ba4f7e3757ed426bb724c440ccbf42d2ecdeca76e3f
 ```
 
 A MAC mismatch, a payload naming another vault, or a payload whose committed version is above its highest reserved
-version is damaged shared state: approvals cannot be checked, so the service stops proxying (specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload),
-[§3.10](iron-vault-specification.md#310-vault-structure-and-durable-writes)).
+version is damaged shared state: approvals cannot be checked, so the service stops proxying (specification [§12](iron-vault-specification.md#12-configuration-approval-and-reload),
+[§13](iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 
 ### Size limit
 
-A payload with an Ed25519 approver is 127 bytes. `age` adds a header of at most about 400 bytes, a 16-byte payload nonce
-and a 16-byte tag, and the file adds 53 bytes of header and MAC: under 600 bytes. `MAX_APPROVAL_STATE_LEN` is 4096
-bytes, which leaves room for a later algorithm with a longer public key. The same limit bounds the decrypted payload.
+A payload with one Ed25519 approver labelled `approval passphrase` is 186 bytes. An approver entry is at most 170 bytes:
+a 16-byte ID, an algorithm byte, an 8-byte length and a public key of at most 65 bytes (an uncompressed P-256 point),
+an 8-byte length and a 64-byte label, and an 8-byte time. With `MAX_APPROVERS` (16) entries the payload is at most
+37 + 8 + 16 × 170 + 49 = 2,814 bytes. `age` adds a header of at most about 400 bytes, a 16-byte payload nonce and a
+16-byte tag, and the file adds 53 bytes of header and MAC: under 3,300 bytes, inside `MAX_APPROVAL_STATE_LEN` (4096
+bytes). The same limit bounds the decrypted payload. Enrolling a seventeenth approver is refused, so the service never
+writes a state it cannot read back.
 
 ### Writes
 
@@ -601,12 +639,19 @@ replace returns. Every write reads the manifest from disk first and takes its st
 - **Reserve.** Writes the highest reserved version plus one and returns it; the returned version is already durable, so
   it is never handed out twice. At `u64::MAX` it fails without writing, and nothing may be signed.
 - **Commit.** Writes a new committed approval. The version must be reserved and newer than the committed one.
-- **Replace approver.** Writes a new pinned approver and keeps both counters, so the active signature stops verifying
-  until the config is approved again at a new version.
+- **Enroll approver.** Adds a pinned approver with a new approver ID and keeps both counters. It refuses a public key
+  that is already pinned, and a seventeenth approver.
+- **Remove approver.** Removes a pinned approver and keeps both counters. It refuses to remove the last one. If the
+  removed approver signed the active `config.toml.sig`, that signature stops verifying until the config is approved
+  again at a new version, as specification [§12](iron-vault-specification.md#12-configuration-approval-and-reload)
+  says of signing-key rotation.
+
+Signing-key rotation is an enroll followed by a remove. Who may enroll or remove an approver, and how the owner
+authorizes it, is the approver enrollment design (K-277); `init` writes the state with its one approver.
 
 Before each write the service reads the file back and requires it to equal its in-memory state, so a stale copy can
 never write lower counters over newer ones. Restoring the whole state directory from an older copy restores older
-counters too; specification [§3.9](iron-vault-specification.md#39-configuration-approval-and-reload) leaves that outside v0.
+counters too; specification [§12](iron-vault-specification.md#12-configuration-approval-and-reload) leaves that outside v0.
 
 ## Approval state payload v1
 
@@ -615,24 +660,38 @@ The plaintext an approval state file seals. It uses the conventions of record pa
 
 ### Layout
 
-| Offset | Size | Content                                                                              |
-|--------|------|--------------------------------------------------------------------------------------|
-| 0      | 4    | Magic: ASCII `IVAM` (`49 56 41 4d`)                                                  |
-| 4      | 1    | Format version: `01`                                                                 |
-| 5      | 16   | Vault ID: equal to the file header's                                                 |
-| 21     | 8    | State generation: `u64`, at least 1                                                  |
-| 29     | 8    | Peer generation: `u64`, the manifest's; at least 1                                   |
-| 37     | 1    | Approver algorithm: a signature algorithm ID, as in approval envelope v1             |
-| 38     | var  | Approver public key: field; 32 bytes for Ed25519                                     |
-| …      | 8    | Highest reserved version: `u64`, 0 before the first reservation                      |
-| …      | 1    | Committed tag: `00` nothing committed, `01` a committed approval follows             |
-| …      | 8    | Committed version (tag `01` only): `u64`, from 1 to the highest reserved version     |
-| …      | 32   | Committed config digest (tag `01` only): BLAKE2b-256 of the approved config          |
+| Offset | Size | Content                                                                            |
+|--------|------|------------------------------------------------------------------------------------|
+| 0      | 4    | Magic: ASCII `IVAM` (`49 56 41 4d`)                                                |
+| 4      | 1    | Format version: `01`                                                               |
+| 5      | 16   | Vault ID: equal to the file header's                                               |
+| 21     | 8    | State generation: `u64`, at least 1                                                |
+| 29     | 8    | Peer generation: `u64`, the manifest's; at least 1                                 |
+| 37     | 8    | Approver count: `u64`, from 1 to `MAX_APPROVERS` (16)                              |
+| 45     | var  | Approvers: one entry each (below), in strictly ascending byte order of approver ID |
+| …      | 8    | Highest reserved version: `u64`, 0 before the first reservation                    |
+| …      | 1    | Committed tag: `00` nothing committed, `01` a committed approval follows           |
+| …      | 8    | Committed version (tag `01` only): `u64`, from 1 to the highest reserved version   |
+| …      | 32   | Committed config digest (tag `01` only): BLAKE2b-256 of the approved config        |
+
+Each approver entry, a **pinned approver**:
+
+| Size | Content                                                                                                                |
+|------|------------------------------------------------------------------------------------------------------------------------|
+| 16   | Approver ID: the 16 bytes of a version 4 UUID, generated when the approver is enrolled                                 |
+| 1    | Algorithm: a signature algorithm ID, as in approval envelope v1                                                        |
+| var  | Public key: field; 32 bytes for Ed25519                                                                                |
+| var  | Label: field holding the owner's name for the signer, under the [recipient label](recipients.md#recipient-labels) rule |
+| 8    | Enrolled at: `u64` Unix seconds, a [UTC second](glossary.md)                                                           |
+
+The approver ID is the approver's identity: the approval envelope names it, and an audit event records it. It is
+never reused, so an envelope signed by a removed approver can never be read as signed by a later one. The label is
+what a prompt shows the owner, such as `Dave YubiKey 3`; it need not be unique, and nothing looks an approver up by it.
 
 ### Example
 
-Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b` with an Ed25519 approver (the RFC 8032 test 1 public key), versions 1 and
-2 reserved, and version 1 committed for an empty config. Version 2 was reserved for a signing attempt that never
+Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b` with one Ed25519 approver (the RFC 8032 test 1 public key), enrolled by
+`init` with the label `approval passphrase`, versions 1 and 2 reserved, and version 1 committed for an empty config. Version 2 was reserved for a signing attempt that never
 committed, and stays consumed. After the manifest example above (state generation 3), the state was written three
 times, reserving 1, committing 1 and reserving 2, so it is at state generation 6 with peer generation 3.
 
@@ -642,10 +701,16 @@ times, reserving 1, committing 1 and reserving 2, so it is at state generation 6
 3f 2b 8c 1e 5d 4a 4e 6f 9a 7b 1c 2d 3e 4f 5a 6b    vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b
 00 00 00 00 00 00 00 06                            state generation 6
 00 00 00 00 00 00 00 03                            peer generation 3
-01                                                 approver algorithm Ed25519
+00 00 00 00 00 00 00 01                            approver count 1
+8d 1c 6f 0e 2b 7a 4c 59 9e 3d 5a 4b 3c 2d 1e 0f    approver ID 8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f
+01                                                 algorithm Ed25519
 00 00 00 00 00 00 00 20                            public key length 32
 d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a    public key
 0e e1 72 f3 da a6 23 25 af 02 1a 68 f7 07 51 1a
+00 00 00 00 00 00 00 13                            label length 19
+61 70 70 72 6f 76 61 6c 20 70 61 73 73 70 68 72    "approval passphr"
+61 73 65                                           "ase"
+00 00 00 00 6a ed a2 99                            enrolled at 2026-11-06T09:49:13Z
 00 00 00 00 00 00 00 02                            highest reserved version 2
 01                                                 an approval is committed
 00 00 00 00 00 00 00 01                            committed version 1
@@ -653,16 +718,20 @@ d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a    public key
 d1 e5 df 47 77 8f 77 87 fa ab 45 cd f1 2f e3 a8
 ```
 
-The payload is 127 bytes. A new vault's payload has the same layout up to the public key, then eight zero bytes and
-the tag `00`.
+The payload is 186 bytes. A new vault's payload has the same layout up to the last approver, then eight zero bytes and
+the tag `00`: 146 bytes with this approver.
+
+A state with one approver was never released, so the approver list joins v1 rather than starting v2.
 
 ### One encoding per state
 
 Every field has one form, so the same state always encodes to the same bytes. Decoding rejects a wrong magic, an unknown
 format version, a vault ID that is not a version 4 UUID, a state or peer generation of 0, a peer generation not below
-the state generation, an unknown or reserved algorithm ID, a public key of the wrong length for its algorithm, a public
-key that is not a valid, non-weak key for its algorithm, a committed tag other than `00` or `01`, committed version 0, a
-committed version above the highest reserved version, truncation and trailing bytes.
+the state generation, an approver count of 0 or above 16, approver IDs that are not version 4 UUIDs or not strictly
+ascending, an unknown or reserved algorithm ID, a public key of the wrong length for its algorithm, a public key that
+is not a valid, non-weak key for its algorithm, a public key pinned twice, a label that breaks its rule, an enrolment
+time outside the UTC second range, a committed tag other than `00` or `01`, committed version 0, a committed version
+above the highest reserved version, truncation and trailing bytes.
 
 ## Recipient inventory file v1
 

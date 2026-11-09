@@ -7,4 +7,4 @@ the new machine. No plaintext secret is written anywhere on the way, and old con
 
 Until then, there is no supported way to move a vault. Rebuild on the new machine from your copies of the approved
 config and `iron-vault list`, with keys reissued by each provider. Requirements:
-[§3.13](../../../../design/iron-vault-specification.md#313-administration-recovery-and-migration).
+[§16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration).

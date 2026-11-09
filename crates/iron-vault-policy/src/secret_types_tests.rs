@@ -1,4 +1,4 @@
-//! Compile-time and `Debug` checks for this crate's secret-bearing types (spec §3.11, `design/secret-handling.md`).
+//! Compile-time and `Debug` checks for this crate's secret-bearing types (spec §14, `design/secret-handling.md`).
 //!
 //! A type that gains `Clone`, `Copy`, `Display` or a serde impl would start copying, printing or writing the secret it
 //! holds; each assertion below turns that change into a build failure. Every type asserts the full negative set.
@@ -82,7 +82,7 @@ fn outgoing_headers_debug_hides_every_value() {
     assert_redacted(&headers);
 }
 
-/// Permits every §3.3 credential on its route's host at 443.
+/// Permits every §6 credential on its route's host at 443.
 struct Catalog;
 
 impl CredentialCatalog for Catalog {
@@ -108,7 +108,7 @@ fn policy() -> ActivePolicy {
     activate(&config, &Capabilities::default(), &Catalog, &FakeAccounts::host()).unwrap()
 }
 
-/// One §3.3 request through every stage that holds the marker: `target` is authorized for `caller`, built, assembled
+/// One §6 request through every stage that holds the marker: `target` is authorized for `caller`, built, assembled
 /// with the route's slot filled with [`MARKER`], and final-checked.
 struct Pipeline {
     policy: ActivePolicy,

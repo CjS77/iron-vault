@@ -1,4 +1,4 @@
-//! A `[routes.<name>]` section: one upstream mapping with its credential, slot and restrictions (spec §3.3, §3.7).
+//! A `[routes.<name>]` section: one upstream mapping with its credential, slot and restrictions (spec §6, §10).
 
 use std::collections::BTreeSet;
 
@@ -29,10 +29,10 @@ use crate::upstream::UpstreamUrl;
 /// paths = ["/latest", "/historical/**"]
 /// rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 /// confirm = "none"                         # optional; "none" when omitted
-/// ca_file = "/etc/iron-vault/ca/fx.pem"    # optional administrator-installed CA (spec §3.7)
+/// ca_file = "/etc/iron-vault/ca/fx.pem"    # optional administrator-installed CA (spec §10)
 /// ```
 ///
-/// Methods, paths and the rate limit are required so a missing restriction never widens into "allow all" (spec §3.3).
+/// Methods, paths and the rate limit are required so a missing restriction never widens into "allow all" (spec §6).
 /// Whether prefixes overlap needs the whole configuration, so [`ValidatedConfig`](crate::ValidatedConfig) checks it.
 /// Whether `credential` exists and permits `upstream`, and whether `confirm = "touch"` can be honoured, need the vault
 /// and the service, so [`activate`](crate::activate) checks them.

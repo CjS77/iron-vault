@@ -1,5 +1,5 @@
 //! Vault initialization at store level: the write order of design/vault-initialization.md, from `init.unfinished` to
-//! committed approval version 1 (spec §3.9, §3.10, §3.11, §3.13).
+//! committed approval version 1 (spec §12, §13, §14, §16).
 //!
 //! [`crate::InitializationState`] and the `init.unfinished` marker live in `initialization`; this module runs the steps
 //! between writing the marker and removing it. Each step is durable before the next starts, so a failure at any step
@@ -189,7 +189,7 @@ pub enum InitFailure {
     /// The approval transaction failed.
     #[error(transparent)]
     Approval(#[from] ApprovalError),
-    /// The approval committed a version other than 1, so the counters did not start at zero (spec §3.9).
+    /// The approval committed a version other than 1, so the counters did not start at zero (spec §12).
     #[error("the first approval committed version {0}, not 1")]
     UnexpectedVersion(ApprovalVersion),
 }

@@ -1,6 +1,6 @@
 //! Caller identification: which caller a request comes from, decided from the listener it arrived on and, on a peer
-//! listener, the connecting process's uid or, on a token listener, the caller token it presents (spec §3.4, §3.5 step
-//! 3, §3.12).
+//! listener, the connecting process's uid or, on a token listener, the caller token it presents (spec §7, §8 step
+//! 3, §15).
 //!
 //! Validation leaves each listener with one mechanism. An `isolated-network` listener has exactly one caller, so the
 //! listener alone names it. A peer listener holds only peer callers, and activation resolves their accounts to distinct
@@ -8,8 +8,8 @@
 //! token hash the presented token matches; validation guarantees at most one does.
 //!
 //! Nothing here reaches the admin interface. The admin socket is a separate socket that accepts an admin principal by
-//! its peer credentials alone (§3.2), so neither a caller token nor a listener identity is ever an admin credential.
-//! Keep it that way: same-user malware can steal caller tokens (§3.4), and they must never grant admin access.
+//! its peer credentials alone (§5), so neither a caller token nor a listener identity is ever an admin credential.
+//! Keep it that way: same-user malware can steal caller tokens (§7), and they must never grant admin access.
 
 use thiserror::Error;
 
@@ -24,7 +24,7 @@ use crate::name::{CallerName, ListenerName};
 /// The `Proxy-Authorization` scheme and its single separating space, compared case-insensitively.
 const BEARER: &[u8] = b"Bearer ";
 
-/// The request's caller could not be identified; the request interface answers `401` (spec §3.12).
+/// The request's caller could not be identified; the request interface answers `401` (spec §15).
 ///
 /// It carries nothing: no caller name, header or token, so no response or log built from it can disclose credential
 /// information. The response body must not name the authentication scheme, the token header or the listener's callers

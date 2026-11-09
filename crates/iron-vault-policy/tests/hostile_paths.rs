@@ -1,4 +1,4 @@
-//! Property tests over hostile caller request paths (specification §3.6, §8; threat R-7).
+//! Property tests over hostile caller request paths (specification §9, implementation spec §2).
 //!
 //! Example tests cover the attacks someone thought of. These generate targets that mix ordinary segments with raw,
 //! mixed-case encoded and double- or triple-encoded hostile fragments under the prefixes of a fixed config, then check

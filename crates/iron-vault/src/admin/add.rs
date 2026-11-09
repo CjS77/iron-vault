@@ -1,9 +1,9 @@
-//! `add`: enrols a new credential record under a name the manifest does not hold (specification §3.3, §3.13;
+//! `add`: enrols a new credential record under a name the manifest does not hold (specification §6, §16;
 //! `design/admin-protocol.md`, add).
 //!
 //! The state, the name and the origins are checked before any prompt, so the owner is never asked for a secret that
 //! cannot be stored. The service, not the CLI, decides what to prompt for, by kind, and the material never travels as
-//! an argument (§3.2). The service-wide lock is taken only once the material is in hand, so a slow owner never blocks
+//! an argument (§5). The service-wide lock is taken only once the material is in hand, so a slow owner never blocks
 //! an approval.
 
 use std::collections::BTreeSet;

@@ -1,7 +1,7 @@
 //! Process hardening: turn off core dumps and keep memory out of swap before the service holds any secret.
 //!
 //! A core dump or a swapped-out page would leave the vault identity and credential values on disk in plain text
-//! (specification §3.11, R-20). This module only measures and reports what took effect; whether an incomplete
+//! (specification §14). This module only measures and reports what took effect; whether an incomplete
 //! report stops the service is a deployment-profile decision.
 
 // Off Linux only the unsupported report is built; the locking outcomes wait for the platform adapters.

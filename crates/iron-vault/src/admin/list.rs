@@ -1,5 +1,5 @@
 //! `list`: names, kinds, permitted origins and standing of every credential in the open vault, never a secret
-//! (specification §3.13; `design/admin-protocol.md`, list).
+//! (specification §16; `design/admin-protocol.md`, list).
 //!
 //! Like `status` it is answered in every state ([`AdminOperation::Status`](crate::service_state::AdminOperation)):
 //! everything comes from what the service context already holds, and while no vault is open it holds nothing.

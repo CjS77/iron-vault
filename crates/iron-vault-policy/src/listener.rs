@@ -1,4 +1,4 @@
-//! A `[listeners.<name>]` section: where callers reach the request interface (spec §3.3, §3.4).
+//! A `[listeners.<name>]` section: where callers reach the request interface (spec §6, §7).
 
 use std::net::SocketAddr;
 
@@ -28,7 +28,7 @@ pub const DEFAULT_TOKEN_HEADER: &str = "proxy-authorization";
 /// token_header = "X-Iron-Vault-Token"
 /// ```
 ///
-/// A TCP listener on a non-loopback address must have TLS (R-26), but a `ListenerConfig` does not guarantee it: the rule
+/// A TCP listener on a non-loopback address must have TLS (§7), but a `ListenerConfig` does not guarantee it: the rule
 /// needs the listener's name to be reported usefully, so [`ValidatedConfig`](crate::ValidatedConfig) enforces it at
 /// load and an unsafe configuration is never approved. The listeners from [`ParsedConfig::listeners`](crate::ParsedConfig)
 /// are unchecked, and whoever opens one must test [`plain_off_loopback`](Self::plain_off_loopback) first.
@@ -45,7 +45,7 @@ pub struct ListenerConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Endpoint {
     /// A Unix domain socket. Any local account may connect; the caller's peer account (`auth = "peer"`) or caller
-    /// token decides what it may use (spec §3.4).
+    /// token decides what it may use (spec §7).
     UnixSocket(ConfigPath),
     /// A TCP address, with TLS required unless the address is loopback.
     Tcp {
@@ -117,7 +117,7 @@ impl ListenerConfig {
     }
 
     /// The address of a plain-HTTP TCP listener that is not on loopback, which would carry caller tokens in clear text
-    /// (spec §3.4). `None` for a Unix socket, a TLS listener, or a loopback address.
+    /// (spec §7). `None` for a Unix socket, a TLS listener, or a loopback address.
     ///
     /// Loopback is `127.0.0.0/8` or `::1`. An IPv4-mapped address such as `::ffff:127.0.0.1` is deliberately not loopback:
     /// whether a dual-stack socket on it stays on the host depends on platform settings this crate cannot see.
@@ -188,7 +188,7 @@ fn tcp_endpoint(text: &str, tls: Option<TlsFiles>) -> Result<Endpoint, ListenerE
 
 /// Rejects a reserved header as the caller-token header.
 ///
-/// Reserved headers carry framing, hop-by-hop or forwarding meaning (spec §3.6), which an intermediary may add,
+/// Reserved headers carry framing, hop-by-hop or forwarding meaning (spec §9), which an intermediary may add,
 /// rewrite or drop, so a token placed in one could be lost or replaced in transit. `Proxy-Authorization` is the
 /// one exception: it is the default token header, so naming it explicitly changes nothing.
 fn check_token_header(header: HeaderName) -> Result<HeaderName, ListenerError> {

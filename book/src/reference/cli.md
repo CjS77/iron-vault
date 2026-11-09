@@ -8,7 +8,7 @@ from the same definitions the CLI parses, the way `iron-vault completions` is, s
 
 No argument or option ever takes a secret value. Arguments end up in shell history, process listings and error
 messages, where a passphrase or a provider key must never appear
-([§3.2](../../../design/iron-vault-specification.md#32-service-and-cli-boundary)). A command that needs one has the
+([§5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). A command that needs one has the
 service prompt for it, and the CLI reads the answer in one of two ways:
 
 - **From a terminal**, with echo off.

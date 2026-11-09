@@ -1,9 +1,9 @@
-//! Binding a request socket (spec §3.4): a Unix socket on which callers reach the request interface.
+//! Binding a request socket (spec §7): a Unix socket on which callers reach the request interface.
 //!
 //! Any local account may connect, so the socket has mode `0666` and the mode grants nothing: each connection carries
 //! the peer identity the kernel recorded, and caller authentication decides from that peer account, or from a caller
 //! token, what the connection may use. What stops another account squatting on the path while the service is down
-//! (R-6) is the directory: it must pass the runtime-directory rule, so only the service account can write it.
+//! (§7) is the directory: it must pass the runtime-directory rule, so only the service account can write it.
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;

@@ -1,4 +1,4 @@
-//! The approval release checks of specification §3.15, end to end against a running service context:
+//! The approval release checks of specification §19, end to end against a running service context:
 //!
 //! - an old config/signature pair fails after a newer approval, on restart and on SIGHUP;
 //! - the version counters survive a restart, a failed approval, a failed signer and a key replacement without reuse;

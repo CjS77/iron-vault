@@ -6,4 +6,4 @@
 TPM. `iron-vault reset` discards a vault whose every way in is lost, so you can rebuild from reissued credentials.
 
 Until then, a development vault can be deleted by hand; see [start over in development mode](../start-over.md).
-Requirements: [§3.13](../../../../design/iron-vault-specification.md#313-administration-recovery-and-migration).
+Requirements: [§16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration).

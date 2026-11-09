@@ -1,4 +1,4 @@
-//! The request pipeline: §3.5 steps 3-8, from an incoming request to a checked request (specification §3.5, §3.6).
+//! The request pipeline: §8 steps 3-8, from an incoming request to a checked request (specification §8, §9).
 //!
 //! [`prepare`] runs one step after another, and each returns early, so no step runs before the one ahead of it has
 //! passed:
@@ -15,16 +15,16 @@
 //! **Why sanitizing follows authorization and precedes the charge.** Headers cannot change which route is selected,
 //! so authorization does not need them sanitized, and authenticating first means a caller without a token learns
 //! nothing about framing rules. Sanitizing does two things. Its framing check refuses an ambiguous body length, which
-//! §3.12 treats as a malformed request, like the target checks of step 4; running it before the charge means a
+//! §15 treats as a malformed request, like the target checks of step 4; running it before the charge means a
 //! malformed request neither spends the route's allowance nor resolves a credential. Its stripping of control headers
 //! and caller authentication is what step 7 requires before the slot is filled, and it is pure, so doing it earlier
 //! changes no byte of the outgoing request.
 //!
 //! **The credential comes from the route.** Step 6 looks up the credential the route's configuration names; markers in
-//! the request are never consulted to choose one (§8.2 Q-1). A marker in the slot is only checked against that
+//! the request are never consulted to choose one (implementation spec §2.2 Q-1). A marker in the slot is only checked against that
 //! credential when the slot is filled, and a marker anywhere else is inert text.
 //!
-//! Step 2 of §3.5, the request-form gate, runs before authentication and is not part of this pipeline. This module
+//! Step 2 of §8, the request-form gate, runs before authentication and is not part of this pipeline. This module
 //! refuses absolute-form and authority-form targets ([`RequestTarget::parse`]) and `CONNECT` (the method allowlist) too,
 //! after authentication. It does not refuse upgrades: sanitizing only strips `Upgrade` as a reserved header.
 
@@ -118,7 +118,7 @@ impl Prepared {
     }
 }
 
-/// Why the pipeline stopped a request: one variant per step that can fail, each answered with one §3.12 status.
+/// Why the pipeline stopped a request: one variant per step that can fail, each answered with one §15 status.
 ///
 /// Every variant keeps only what is safe to log: route, caller and credential names, never a header value, query text
 /// or slot value.
@@ -161,7 +161,7 @@ pub enum PipelineRefusal {
     FinalCheck(#[from] FinalCheckError),
 }
 
-/// Runs §3.5 steps 3-8 for `head`, which arrived on the connection `tags` describes, against one serving snapshot at
+/// Runs §8 steps 3-8 for `head`, which arrived on the connection `tags` describes, against one serving snapshot at
 /// `now`.
 ///
 /// `now` is when the request is charged against its rate limits; the caller passes the current instant. `identified`
@@ -225,7 +225,7 @@ fn run(
 }
 
 /// Replaces the caller's `Accept-Encoding` with [`UPSTREAM_ACCEPT_ENCODING`], the codings the response stage decodes
-/// (§3.8), so an upstream never answers in one the service must refuse. The caller's value is never forwarded; the
+/// (§11), so an upstream never answers in one the service must refuse. The caller's value is never forwarded; the
 /// request handler reads it from the caller's request to choose the coding it emits.
 ///
 /// Neither step can fail, since the constant is a valid value and `Accept-Encoding` is not reserved; if one did, the
@@ -248,9 +248,10 @@ fn charge_and_build(
     headers: OutgoingHeaders,
     now: Instant,
 ) -> Result<Prepared, PipelineRefusal> {
-    // §3.5 step 5 also obtains owner confirmation, which needs no code in v0: activation refuses a route with
-    // `confirm = "touch"` unless `Capabilities::touch_provider` is set, and v0 never sets it (§2, §8.2 "Touch policy
-    // without a device"). A confirmation provider must add its check here, after the charge and before resolution.
+    // §8 step 5 also obtains owner confirmation, which needs no code in v0: activation refuses a route with
+    // `confirm = "touch"` unless `Capabilities::touch_provider` is set, and v0 never sets it (§6, implementation spec §2.2
+    // "Touch policy without a device"). A confirmation provider must add its check here, after the charge and before
+    // resolution.
     sources.limiter().charge(caller, authorized.route(), now)?;
     let resolved = resolve(sources, route, authorized)?;
     let outgoing = assemble(route, authorized, headers, &resolved)?;
@@ -263,7 +264,7 @@ fn charge_and_build(
     })
 }
 
-/// Parses the target and the method, then checks the caller's grant and the route's restrictions (§3.5 step 4).
+/// Parses the target and the method, then checks the caller's grant and the route's restrictions (§8 step 4).
 fn authorize_request(policy: &ActivePolicy, caller: &CallerName, method: &str, target: &str) -> Result<AuthorizedRequest, PipelineRefusal> {
     let (path, query) = RequestTarget::parse(target)?.into_parts();
     let method = Method::try_from(method).map_err(|_| PipelineRefusal::Method)?;
@@ -302,7 +303,7 @@ fn selected_route<'p>(policy: &'p ActivePolicy, authorized: &AuthorizedRequest) 
     policy.route(route).ok_or_else(|| AuthzError::Unavailable { route: route.clone() })
 }
 
-/// Resolves the credential the route names for the route's slot (§3.5 step 6); never one a marker names.
+/// Resolves the credential the route names for the route's slot (§8 step 6); never one a marker names.
 fn resolve<'s>(
     sources: &'s impl Sources,
     route: &RouteConfig,
@@ -316,7 +317,7 @@ fn resolve<'s>(
     Ok(record.resolve(route.slot(), authorized)?)
 }
 
-/// Builds the upstream target and fills the route's slot once with the resolved value (§3.5 step 7).
+/// Builds the upstream target and fills the route's slot once with the resolved value (§8 step 7).
 fn assemble(
     route: &RouteConfig,
     authorized: &AuthorizedRequest,

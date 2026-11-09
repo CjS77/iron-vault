@@ -32,7 +32,7 @@ use super::console::{InputError, OwnerConsole, ProcessConsole};
 /// or a progress frame.
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// In a protected install only root and the service account are admin principals (§3.2), so the owner reaches the
+/// In a protected install only root and the service account are admin principals (§5), so the owner reaches the
 /// admin socket through `sudo`.
 const SUDO_HINT: &str = "In a protected install only root and the service account may use the admin socket: run the command with sudo.";
 

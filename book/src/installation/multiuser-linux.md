@@ -6,7 +6,7 @@ cryptography, systemd or Linux permissions beyond "each user has their own files
 
 > **Status:** this guide describes the protected Linux installation, which the `.deb` package installs. For the install,
 > `sudo` hardening, encrypted swap, upgrade and uninstall, see [linux-install.md](linux-install.md). Callers are
-> recognised as in [§3.4](../../../design/iron-vault-specification.md#34-caller-authentication-and-listeners) of the
+> recognised as in [§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners) of the
 > [specification](../../../design/iron-vault-specification.md).
 
 ## The situation
@@ -267,7 +267,7 @@ with the same address, and a caller with `token_hash`. Get the token with
 `(umask 077; sudo iron-vault caller-token > ~/.iron-vault-token)`: the token goes to a file only the caller can read, and
 the `token_hash` line for the caller's table goes to the terminal. The service keeps only the hash.
 Some command-line tools, such as `gh`, need more than a base URL change and are not supported yet
-(specification [§6](../../../design/iron-vault-specification.md#6-conditional-phase-forward-proxy-and-cli-compatibility)).
+([future spec §3](../../../design/future-specifications.md#3-conditional-phase-forward-proxy-and-cli-compatibility)).
 
 ## What each account can and can't do
 

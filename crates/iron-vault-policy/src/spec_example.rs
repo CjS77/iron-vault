@@ -1,6 +1,6 @@
-//! The §3.3 configuration example, shared by tests that parse, validate and activate it.
+//! The §6 configuration example, shared by tests that parse, validate and activate it.
 
-/// The §3.3 example as written, except that its `token_hash = "blake2b:..."` placeholder is not a valid digest, so
+/// The §6 example as written, except that its `token_hash = "blake2b:..."` placeholder is not a valid digest, so
 /// a real 64-hex-digit hash stands in. The `naomi-backoffice` listener still follows the caller that names it.
 pub(crate) const SPEC_EXAMPLE: &str = r#"schema_version = 1
 

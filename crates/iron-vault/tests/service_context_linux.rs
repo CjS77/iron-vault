@@ -1,6 +1,6 @@
 //! The service context end to end: startup Locked with provisional listeners from the unverified config, entering
 //! Checking with a known vault identity (no prompt), the listener rebuild on entry to Ready, and stop (specification
-//! §3.1, §3.4, §3.9, §3.11, §3.12).
+//! §4, §7, §12, §14, §15).
 //!
 //! `unlock` runs over the admin protocol against the same fixture, with the passphrase envelope in place, and every
 //! test's log goes to one captured buffer, which must never hold a passphrase.
@@ -1973,7 +1973,7 @@ async fn a_cancelled_unlock_still_settles_in_ready() {
     assert_eq!(settled(&service).await, ServiceState::Ready);
 }
 
-// Safe states (specification §3.12, §3.15): each failure the service can meet at startup or while serving ends in an
+// Safe states (specification §15, §19): each failure the service can meet at startup or while serving ends in an
 // explicit state. In every one the request interface answers a fixed redacted `503`, `status` names the state, `ping`
 // still answers, and nothing reaches the upstream.
 

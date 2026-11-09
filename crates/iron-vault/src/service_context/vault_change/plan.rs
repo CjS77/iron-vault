@@ -167,7 +167,7 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
     ///
     /// A write that failed cleanly runs no check. A committed one answers success only when the check settles in
     /// Ready, on a new serving snapshot; requests admitted earlier finish on the old one, whose vault, and the secret
-    /// replaced or removed with it, drops when the last of them ends (§3.11).
+    /// replaced or removed with it, drops when the last of them ends (§14).
     ///
     /// Cancel-safe as an approval's commit is: a task of its own owns both guards and runs the write and the check to
     /// their end, and one that ends without a result fails closed through its [`SettleGuard`].

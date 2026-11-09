@@ -1,4 +1,4 @@
-//! Short secrets: stored secret fields so short that they are probably a mistake (spec §3.8, §3.15, §5.2).
+//! Short secrets: stored secret fields so short that they are probably a mistake (spec §11, §18, future spec §2.2).
 //!
 //! A short value is allowed, since only the owner sets values, but it usually means the wrong field was pasted, and
 //! response scrubbing blanks every occurrence of it, so a value of a few bytes mangles ordinary response text.

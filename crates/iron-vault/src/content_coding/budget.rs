@@ -1,4 +1,4 @@
-//! The decompression budget: how much a single response may decode to (spec §3.8, §3.12, §9).
+//! The decompression budget: how much a single response may decode to (spec §11, §15, implementation spec §3).
 
 use iron_vault_policy::Limits;
 

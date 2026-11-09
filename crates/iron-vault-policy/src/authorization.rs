@@ -1,4 +1,4 @@
-//! Route selection and request authorization (spec §3.5 steps 3–4, §3.6, §3.12).
+//! Route selection and request authorization (spec §8 steps 3–4, §9, §15).
 //!
 //! [`authorize`] decides, once, which route an authenticated caller's request belongs to and whether the caller may use
 //! it with this method and path. Its result, an [`AuthorizedRequest`], is the immutable request plan that rate limiting,
@@ -55,7 +55,7 @@ impl AuthorizedRequest {
     }
 }
 
-/// Why a request was not authorized; each variant names the status the request interface returns (spec §3.12).
+/// Why a request was not authorized; each variant names the status the request interface returns (spec §15).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum AuthzError {
     /// No route's prefix matches the path: `404`.
@@ -98,7 +98,7 @@ pub enum Refusal {
 ///
 /// Checks run in an order that discloses as little as possible: a caller learns that a route is unavailable only after
 /// its grant to that route is confirmed, so an ungranted caller gets `Forbidden` whether or not the route is available.
-/// The query is carried through unchecked, because path patterns match the upstream path excluding its query (§3.3).
+/// The query is carried through unchecked, because path patterns match the upstream path excluding its query (§6).
 pub fn authorize(
     policy: &ActivePolicy,
     caller: &CallerName,
@@ -128,7 +128,7 @@ pub fn authorize(
 
 /// The route whose prefix covers the leading complete segments of `path`, available or not.
 ///
-/// Whole-segment comparison is what keeps `/fx` from matching `/fx.evil.example` or `/fx@evil.example` (§3.6).
+/// Whole-segment comparison is what keeps `/fx` from matching `/fx.evil.example` or `/fx@evil.example` (§9).
 /// Validation guarantees that no two prefixes overlap, so at most one route matches.
 fn select_route<'a>(policy: &'a ActivePolicy, path: &NormalizedPath) -> Option<&'a RouteName> {
     let routes = policy.config().routes().iter();
@@ -175,7 +175,7 @@ mod tests {
     use crate::test_accounts::FakeAccounts;
     use crate::validated::ValidatedConfig;
 
-    /// Permits every §3.3 credential on its route's upstream, except those named as unusable.
+    /// Permits every §6 credential on its route's upstream, except those named as unusable.
     struct Catalog(&'static [&'static str]);
 
     impl CredentialCatalog for Catalog {

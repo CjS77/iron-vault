@@ -1,17 +1,17 @@
 # Owner notifications
 
 How the service tells the owner about approvals, vault changes and failures without the owner reading the audit log
-(specification [§3.2](iron-vault-specification.md#32-service-and-cli-boundary) and
-[§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)). Terms follow the [glossary](glossary.md).
+(specification [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns) and
+[§18](iron-vault-specification.md#18-logging)). Terms follow the [glossary](glossary.md).
 
 **Phase.** Owner notifications ship in v1, the OAuth phase, in EP-40
-([§2](iron-vault-specification.md#2-release-plan)). v0 has none: the service's own summary of an operation goes only to
+([future spec §1](future-specifications.md#1-v1-oauth-login-and-refresh)). v0 has none: the service's own summary of an operation goes only to
 the command's result and the audit log. This document is the design for v1; nothing in it applies to v0.
 
 Delivery is the hard part. The service runs as the service account, `iron-vault`. The owner's desktop belongs to the
 owner's login account, which in a protected install has no authority and is never an admin principal
-([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). Malware running as that account controls what the
-desktop shows ([§1.2](iron-vault-specification.md#12-security-promise-and-limits)). This design decides which events
+([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). Malware running as that account controls what the
+desktop shows ([§2](iron-vault-specification.md#2-security-promise-and-limits)). This design decides which events
 notify, how a notification reaches the desktop without giving the login account any new authority, and what happens
 where there is no desktop.
 
@@ -28,7 +28,7 @@ happened and what to do about it. It is informational only:
 - it is never evidence that something did or did not happen.
 
 The audit log and `sudo iron-vault status` stay the authority, because
-[§1.2](iron-vault-specification.md#12-security-promise-and-limits) says no display on a compromised desktop can be
+[§2](iron-vault-specification.md#2-security-promise-and-limits) says no display on a compromised desktop can be
 trusted.
 
 Every owner notification is written to the audit log as the audit event
@@ -68,14 +68,14 @@ that source event struct's domain-typed fields, and its remediation is a fixed p
 `config.activation-failed` notifies only for an uncertain commit that could not be settled. Its other cause, a failed
 config check after a committed approval, already records `config.check-failed`, which notifies on its own.
 
-In [§3.12](iron-vault-specification.md#312-service-states-and-errors) only Checking leads to Unavailable, and every
+In [§15](iron-vault-specification.md#15-service-states-and-errors) only Checking leads to Unavailable, and every
 way out of Checking into Unavailable records `config.check-failed` but one: a commit that could not be settled ends
 Checking at once, without running the config check, and records `config.activation-failed`
 ([config-approval.md](config-approval.md#when-a-step-fails)). So `config.check-failed`, plus the unsettled commit,
 raises exactly one `service_unavailable` each time the service becomes Unavailable.
 
 The recovery topics are EP-40 work in v1. Their source events come with the recovery epic in v0
-([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)), which sends reminders through the
+([§16](iron-vault-specification.md#16-administration-recovery-and-migration)), which sends reminders through the
 log alone; EP-40 makes those events notify once both exist.
 
 ### Reserved topics
@@ -83,12 +83,12 @@ log alone; EP-40 makes those events notify once both exist.
 These topics are designed here and built by the epics that bring their source events. Each gains its row in the
 table above when it is built:
 
-- `needs_touch` ([§3.12](iron-vault-specification.md#312-service-states-and-errors),
-  [§5.1](iron-vault-specification.md#51-hardware-key-recipients-signers-and-touch-confirmation); the hardware-key
+- `needs_touch` ([§15](iron-vault-specification.md#15-service-states-and-errors),
+  [future spec §2.1](future-specifications.md#21-hardware-key-recipients-signers-and-touch-confirmation); the hardware-key
   phase);
-- `needs_login` ([§4.3](iron-vault-specification.md#43-refresh-token-rotation-and-crash-recovery); v1);
+- `needs_login` ([future spec §1.3](future-specifications.md#13-refresh-token-rotation-and-crash-recovery); v1);
 - `migration_refused`, from `migration.authorization-refused`
-  ([§3.13](iron-vault-specification.md#313-administration-recovery-and-migration),
+  ([§16](iron-vault-specification.md#16-administration-recovery-and-migration),
   [migration-authorization.md](migration-authorization.md#audit-events); v1, once the migration authorization epic
   emits its source event in v0). A refused migration authorization can mean someone is guessing the vault passphrase.
 
@@ -126,9 +126,9 @@ typed method keeps the mapping from event to notification checked by the compile
 
 | Option | How | Trust trade-offs | Verdict |
 |---|---|---|---|
-| D-Bus `org.freedesktop.Notifications` from the service | The service connects to the owner's session bus at `/run/user/<uid>/bus` | That directory is `0700` and owned by the login account, and the session bus admits only its own uid. The service would need root, `CAP_SETUID` or `CAP_DAC_OVERRIDE` to reach it, which breaks the dedicated-account boundary ([§3.1](iron-vault-specification.md#31-installation-and-ownership)). It would also put a D-Bus client into the process that holds the secrets, talking to a bus that malware running as the owner controls: malware can own the `org.freedesktop.Notifications` name and answer with crafted messages. | Rejected |
+| D-Bus `org.freedesktop.Notifications` from the service | The service connects to the owner's session bus at `/run/user/<uid>/bus` | That directory is `0700` and owned by the login account, and the session bus admits only its own uid. The service would need root, `CAP_SETUID` or `CAP_DAC_OVERRIDE` to reach it, which breaks the dedicated-account boundary ([§4](iron-vault-specification.md#4-installation-and-ownership)). It would also put a D-Bus client into the process that holds the secrets, talking to a bus that malware running as the owner controls: malware can own the `org.freedesktop.Notifications` name and answer with crafted messages. | Rejected |
 | `notify-send` through `systemd-run --user --machine=<user>@` | The service spawns a helper into the user's service manager | Needs root, or a polkit rule for the service account. It forks child processes from the process that holds the secrets, whose environment must then be controlled. The text is in argv, which other accounts can read in `/proc/<pid>/cmdline`. | Rejected |
-| A per-user agent on the admin socket | The agent connects to `admin.sock` | The login account would have to become an admin principal, against [§3.2](iron-vault-specification.md#32-service-and-cli-boundary)'s rule that it never is in a protected install. That hands the admin interface to malware running as the owner. Even a read-only command would widen the `0600` socket and the admin principal check. | Rejected |
+| A per-user agent on the admin socket | The agent connects to `admin.sock` | The login account would have to become an admin principal, against [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)'s rule that it never is in a protected install. That hands the admin interface to malware running as the owner. Even a read-only command would widen the `0600` socket and the admin principal check. | Rejected |
 | The agent tails the audit log | The login account joins the log's reader group | The login account can then read the whole log, including every request event of every caller, other accounts' routes and failure details: far more than a notification needs. | Rejected |
 | A system-bus signal | The service emits a signal on the system bus and the agent subscribes | Needs a D-Bus client in the service and a system-bus policy file. A broadcast signal reaches every subscriber the policy allows, and that policy is easy to get wrong. A peer-checked Unix socket does the same with code the service already has. | Rejected |
 | Email, webhook or push service from the service | Outbound network from the service | Another egress path out of the process that holds the secrets. A collector can turn `owner.notified` records into alerts outside the service. | Not in the service; documented as collector alerting |
@@ -219,7 +219,7 @@ The D-Bus client lives in this separate crate so that the service process never 
 
 - Owner notifications describe policy (credential names, origins, approval headlines) and failures.
 - A caller of another account must not learn them, just as
-  [§3.12](iron-vault-specification.md#312-service-states-and-errors) hides other callers' grants behind `404`.
+  [§15](iron-vault-specification.md#15-service-states-and-errors) hides other callers' grants behind `404`.
 - So they never travel on the request interface, and the notification socket admits only the notification account.
 - **Accepted limit:** on a single-user desktop, callers often run as the owner's login account, and malware running as
   that account can connect in place of the agent and read owner notifications. That is new information to it, since
@@ -231,7 +231,7 @@ The D-Bus client lives in this separate crate so that the service process never 
 - The stream is one-way and comes only from the service, so no caller can inject a notification into it, such as a
   fake "approved version 8" to hide a real change.
 - A process running as the login account can still post a lookalike desktop notification straight to its own session
-  bus. No design prevents this ([§1.2](iron-vault-specification.md#12-security-promise-and-limits)).
+  bus. No design prevents this ([§2](iron-vault-specification.md#2-security-promise-and-limits)).
 - That is why owner notifications never ask for input, never carry actions or links, never tell the owner to type a
   secret, and are never the authority.
 
@@ -247,7 +247,7 @@ On servers, in Docker and on macOS and Windows, leave `[notifications]` out. Eve
 In Docker:
 
 - the runtime directory is never mounted into application containers, so neither the admin socket nor the
-  notification socket reaches a caller ([§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances));
+  notification socket reaches a caller ([§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances));
 - `[notifications]` is pointless there, because no agent can connect.
 
 ## No secrets
@@ -268,13 +268,13 @@ record, which already passed those rules.
 
 Proposed for the owner's approval ([open question 7](#open-questions)); they apply from v1:
 
-- [§3.2](iron-vault-specification.md#32-service-and-cli-boundary) gains the one-way notification socket, a third
+- [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns) gains the one-way notification socket, a third
   interface: it sends owner notifications only to the notification account the approved config names, reads nothing
   and grants nothing, and the notification account never becomes an admin principal. Notifications are informational
   and never request input or serve as evidence of an operation.
-- [§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances) adds the notification socket to what
+- [§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances) adds the notification socket to what
   application containers never receive.
-- [§7](iron-vault-specification.md#7-implementation-structure) adds the crate `iron-vault-notify`, the desktop
+- [implementation spec §1](implementation-specification.md#1-implementation-structure) adds the crate `iron-vault-notify`, the desktop
   notification agent.
 
 ## Open questions
@@ -294,8 +294,8 @@ Questions for the owner. Each has a default, which the design above follows and 
    attention: run `sudo iron-vault status`"), which disclose nothing.
 3. **Approval body.** *Default:* the version plus the approval summary's headline. The alternative is the full approval
    summary, which is long, names hosts and base paths, and is truncated by most notification servers.
-   [§3.2](iron-vault-specification.md#32-service-and-cli-boundary) says owner notifications carry the approval summary
-   and [§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance) that they contain the operation summary; the
+   [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns) says owner notifications carry the approval summary
+   and [§18](iron-vault-specification.md#18-logging) that they contain the operation summary; the
    default reads that as the headline, with the full summary in the audit log's `config.approval-completed`.
 4. **Refusals.** *Default:* notify on `config.approval-refused` and `vault.unlock-refused`, but not on `admin.refused`
    (`not_admin_principal`), to avoid noise. Should a refused admin-socket peer, which is malware probing, notify too?
@@ -304,9 +304,9 @@ Questions for the owner. Each has a default, which the design above follows and 
 6. **Locked at start.** *Default:* none. It needs a new audit event, and under question 1's default the notification
    account is not yet known at boot.
 7. **Specification additions.** Approve the [specification changes](#specification-changes): the
-   [§3.2](iron-vault-specification.md#32-service-and-cli-boundary) notification socket (a third interface), the
-   [§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances) line, and the new crate
-   `iron-vault-notify` in [§7](iron-vault-specification.md#7-implementation-structure), which already assigns
+   [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns) notification socket (a third interface), the
+   [§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances) line, and the new crate
+   `iron-vault-notify` in [implementation spec §1](implementation-specification.md#1-implementation-structure), which already assigns
    notifications to `iron-vault`. The service side stays in `iron-vault`; only the desktop agent is separate, so the
    service never links a D-Bus client.
 8. **Platforms.** *Default:* Linux only. macOS and Windows are log-only until a later phase gives them an agent
@@ -320,12 +320,12 @@ Questions for the owner. Each has a default, which the design above follows and 
 
 ## Spec check
 
-Checked against [§1.2](iron-vault-specification.md#12-security-promise-and-limits) (no trusted display on a compromised
-desktop: notifications are never input or authority), [§3.1](iron-vault-specification.md#31-installation-and-ownership)
+Checked against [§2](iron-vault-specification.md#2-security-promise-and-limits) (no trusted display on a compromised
+desktop: notifications are never input or authority), [§4](iron-vault-specification.md#4-installation-and-ownership)
 (the service keeps its dedicated account and gains no privilege over the owner's session),
-[§3.2](iron-vault-specification.md#32-service-and-cli-boundary) (the login account never becomes an admin principal;
-see open question 3 for the summary), [§3.12](iron-vault-specification.md#312-service-states-and-errors),
-[§3.14](iron-vault-specification.md#314-docker-remote-servers-and-appliances) (no socket reaches a container),
-[§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance) (notifications carry remediation and never secrets)
-and [§7](iron-vault-specification.md#7-implementation-structure). v0 is unchanged: it has no notification socket, no
+[§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns) (the login account never becomes an admin principal;
+see open question 3 for the summary), [§15](iron-vault-specification.md#15-service-states-and-errors),
+[§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances) (no socket reaches a container),
+[§18](iron-vault-specification.md#18-logging) (notifications carry remediation and never secrets)
+and [implementation spec §1](implementation-specification.md#1-implementation-structure). v0 is unchanged: it has no notification socket, no
 agent and no `owner.notified` event.

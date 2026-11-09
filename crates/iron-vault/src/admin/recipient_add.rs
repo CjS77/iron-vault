@@ -1,5 +1,5 @@
-//! `recipient add`: enrols a recipient key the owner supplies, after migration authorization (specification §3.13, §3.15,
-//! R-23; `design/recipients.md`, "`recipient add <age1…>`"; `design/migration-authorization.md`, "Admin exchange").
+//! `recipient add`: enrols a recipient key the owner supplies, after migration authorization (specification §16, §19,
+//! §16; `design/recipients.md`, "`recipient add <age1…>`"; `design/migration-authorization.md`, "Admin exchange").
 //!
 //! The new key opens the vault identity, so this is the alternate migration path: an unlocked vault or an admin connection
 //! is not enough. The exchange holds the service-wide lock from the session through the response, shows its summary, and

@@ -1,4 +1,4 @@
-//! A route's owner-confirmation policy (spec §2, §3.3, §5.1).
+//! A route's owner-confirmation policy (spec §6, future spec §2.1).
 
 use serde::Deserialize;
 
@@ -6,14 +6,14 @@ use serde::Deserialize;
 ///
 /// TOML form: `confirm = "touch"`. Omitting `confirm` means [`Confirmation::None`]; `confirm = "none"` is also
 /// accepted so a configuration can state it explicitly. Parsing `touch` always succeeds: v0 has no touch provider,
-/// and route activation, not parsing, refuses it so the error names the route (spec §2).
+/// and route activation, not parsing, refuses it so the error names the route (spec §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Confirmation {
     /// No confirmation; the route's other restrictions still apply.
     #[default]
     None,
-    /// A fresh hardware-key touch for each request (spec §5.1).
+    /// A fresh hardware-key touch for each request (future spec §2.1).
     Touch,
 }
 

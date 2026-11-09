@@ -1,4 +1,4 @@
-//! The recovery check: proves that a recovery key opens the vault on disk, changing nothing (specification §3.13,
+//! The recovery check: proves that a recovery key opens the vault on disk, changing nothing (specification §16,
 //! `design/recovery.md`, "What the check proves").
 //!
 //! `age` does not authenticate the sender, so unwrapping `identity.age` proves nothing by itself: anyone who knows the

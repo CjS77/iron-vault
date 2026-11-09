@@ -1,4 +1,4 @@
-//! The `static` kind: a stored provider key sent as is in a header or query slot (spec §5.2).
+//! The `static` kind: a stored provider key sent as is in a header or query slot (future spec §2.2).
 
 use iron_vault_policy::{AuthorizedRequest, Slot, SlotValue};
 use secrecy::{ExposeSecret, SecretString};

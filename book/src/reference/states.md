@@ -3,7 +3,7 @@
 The service is always in one of five states: Starting, Locked, Checking, Ready or Unavailable. The state decides what
 the request listeners do with a request and which admin commands run. Only Ready serves requests; every other state
 answers `503` with a short reason, so a caller can tell a locked vault from a broken one
-([§3.12](../../../design/iron-vault-specification.md#312-service-states-and-errors)).
+([§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)).
 
 Terms follow the [glossary](../glossary.md). The [errors reference](errors.md) lists every refusal these states cause.
 

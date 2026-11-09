@@ -1,4 +1,4 @@
-//! Resolving each peer caller's `user` to the uid the kernel will report for it (spec §3.4).
+//! Resolving each peer caller's `user` to the uid the kernel will report for it (spec §7).
 
 use std::collections::BTreeMap;
 

@@ -1,4 +1,4 @@
-//! The Container profile's host unlock at startup (specification §3.12; design/docker-compose.md, "In the container"):
+//! The Container profile's host unlock at startup (specification §15; design/docker-compose.md, "In the container"):
 //! a good unlock handoff takes the service from Starting through Checking to Ready with no `unlock`, and every other
 //! outcome leaves it Locked with passphrase `unlock` still offered.
 //!

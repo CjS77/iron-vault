@@ -20,7 +20,7 @@ pub struct NewVaultKeys {
 ///
 /// It keeps the recovery key's recipient identity, and the host unlock identity when one is enrolled, only for the
 /// identity envelope's unwrap check, and every key is dropped when initialization returns, so the service keeps no
-/// recovery path it could use by itself (spec §3.13).
+/// recovery path it could use by itself (spec §16).
 pub struct SealingKeys {
     pub(super) vault: VaultIdentity,
     pub(super) vault_id: VaultId,
@@ -66,7 +66,7 @@ impl NewVaultKeys {
 
 impl SealingKeys {
     /// Enrols `host_unlock`, the identity read from the unlock handoff, as a third recipient of the identity envelope,
-    /// so a container-profile service can unlock with no owner present (spec §3.14). The recovery key stays a separate
+    /// so a container-profile service can unlock with no owner present (spec §17). The recovery key stays a separate
     /// recipient, so losing the host's TPM never loses the vault.
     pub fn with_host_unlock(mut self, host_unlock: RecipientIdentity) -> Self {
         self.host_unlock = Some(host_unlock);

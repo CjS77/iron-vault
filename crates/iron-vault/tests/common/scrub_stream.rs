@@ -34,7 +34,7 @@ impl Cred {
     }
 }
 
-/// Shaped like the FX service's key (§3.3): 32 lowercase hex characters, sent in the `access_key` query slot.
+/// Shaped like the FX service's key (§6): 32 lowercase hex characters, sent in the `access_key` query slot.
 pub fn fx() -> Cred {
     static_cred("fx", "fx_key", "3f9a1c07d2b84e65a0c1f7e93b5d8a42", "{ query = \"access_key\" }")
 }

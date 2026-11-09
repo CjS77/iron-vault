@@ -1,9 +1,9 @@
-//! The upstream client over HTTP/2 against a recording test upstream that offers only ALPN `h2` (specification §3.6,
-//! §3.7, §3.12).
+//! The upstream client over HTTP/2 against a recording test upstream that offers only ALPN `h2` (specification §9,
+//! §10, §15).
 //!
 //! The HTTP/1.1 tests in `upstream_client.rs` cover the rest of the client; these cover what only HTTP/2 has:
 //! `:authority`, HPACK's never-indexed literals, failures signalled by RST_STREAM and GOAWAY, and that a request the
-//! upstream refused unprocessed is not re-sent (§7).
+//! upstream refused unprocessed is not re-sent (implementation spec §1).
 //!
 //! Linux only: the test upstream terminates TLS with `tokio-rustls`, which this crate depends on only on Linux.
 

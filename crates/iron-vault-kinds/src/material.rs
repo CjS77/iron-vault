@@ -1,4 +1,4 @@
-//! The decrypted secret fields a kind consumes (spec §3.3, §5.2).
+//! The decrypted secret fields a kind consumes (spec §6, future spec §2.2).
 
 use iron_vault_policy::SlotValue;
 use secrecy::{ExposeSecret, SecretString};
@@ -13,12 +13,12 @@ use crate::resolve::KindError;
 /// [`secrecy`] type whose own `Debug` is redacted.
 #[derive(Debug)]
 pub enum CredentialMaterial {
-    /// A provider key sent as stored (`static`, spec §5.2).
+    /// A provider key sent as stored (`static`, future spec §2.2).
     Static {
         /// The provider key.
         key: SecretString,
     },
-    /// A username and password sent as HTTP Basic authorization (`basic`, spec §5.2).
+    /// A username and password sent as HTTP Basic authorization (`basic`, future spec §2.2).
     Basic {
         /// The user-id; non-empty and without `:` (RFC 7617 §2).
         username: SecretString,

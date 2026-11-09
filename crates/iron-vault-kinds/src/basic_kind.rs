@@ -1,4 +1,4 @@
-//! The `basic` kind: a username and password sent as HTTP Basic authorization (spec §3.6, §5.2; RFC 7617).
+//! The `basic` kind: a username and password sent as HTTP Basic authorization (spec §9, future spec §2.2; RFC 7617).
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;

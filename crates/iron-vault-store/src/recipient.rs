@@ -1,5 +1,5 @@
 //! Recipients of the identity envelope: their public keys, the private keys that unwrap it, and the set it is wrapped
-//! for (specification §3.10, §3.11).
+//! for (specification §13, §14).
 
 use std::{cmp::Ordering, collections::BTreeSet, fmt, hash, str::FromStr};
 
@@ -155,7 +155,7 @@ pub struct ParseRecipientIdentityError;
 
 /// The recipient keys an identity envelope is wrapped for: at least two and at most [`MAX_RECIPIENTS`].
 ///
-/// Two is the floor because every vault needs a second way in (specification §3.11); whether the two are independent
+/// Two is the floor because every vault needs a second way in (specification §14); whether the two are independent
 /// is for the caller that enrolls them to decide.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecipientSet(BTreeSet<RecipientKey>);

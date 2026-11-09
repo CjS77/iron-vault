@@ -1,5 +1,5 @@
 //! The serving gate end to end: a request refused at admission, the admission pause around a snapshot swap, and the
-//! withdrawal of a snapshot from the requests still running on it (specification §3.9, §3.12).
+//! withdrawal of a snapshot from the requests still running on it (specification §12, §15).
 //!
 //! The harness serves one snapshot; a test builds another with [`Proxy::snapshot`] and swaps it in through the holder, the
 //! way the config check will.

@@ -1,4 +1,4 @@
-//! The secret a kind hands to slot filling (spec §3.6, §3.11, §5.2).
+//! The secret a kind hands to slot filling (spec §9, §14, future spec §2.2).
 //!
 //! A slot value is written into a header or query parameter, so it must never carry a control character: a stored key
 //! holding CR or LF would otherwise split the outgoing header and let its owner inject arbitrary headers.

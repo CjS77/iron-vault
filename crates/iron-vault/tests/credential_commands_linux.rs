@@ -1,13 +1,13 @@
-//! The credential commands' release checks (specification §3.3, R-4 and R-5; §3.2; §3.15), run through the `iron-vault`
+//! The credential commands' release checks (specification §6; §5; §19), run through the `iron-vault`
 //! binary in the development profile, where malware runs as the admin principal and reaches every admin command:
 //!
 //! - without the approval passphrase, malware cannot take an existing name with `add`, nor `replace` or `rm` a
-//!   credential, and a credential it adds serves no route until the owner approves a config that uses it (R-5);
+//!   credential, and a credential it adds serves no route until the owner approves a config that uses it (§6);
 //! - a config edit cannot send a credential to an origin its record does not permit; only `replace`, with the secret
-//!   typed again and the approval passphrase, changes where it may go (R-4);
-//! - a name removed and added again is never served by a route approved for the old record (R-5);
+//!   typed again and the approval passphrase, changes where it may go (§6);
+//! - a name removed and added again is never served by a route approved for the old record (§6);
 //! - no typed secret, username, password or passphrase appears in the binary's argv, stdout or stderr, in the service
-//!   log, or in `list` or `status` output (§3.2, §3.15).
+//!   log, or in `list` or `status` output (§5, §18).
 //!
 //! Each test runs the `config approve` harness's service context, whose route `fx` sends `fx_key` to a mock TLS
 //! upstream, and serves its admin socket to the binary through `--admin-socket`. The service's profile is Development,
@@ -315,7 +315,7 @@ async fn malware_without_the_approval_passphrase_can_neither_replace_nor_remove_
     spare.assert_succeeded();
     let before = manifest_bytes(&fixture);
 
-    // The same name and origin with the attacker's own key: the account swap of R-5.
+    // The same name and origin with the attacker's own key: the account swap of §6.
     let replaced = cli
         .run(
             &["replace", "fx_key", "--origin", &origin],

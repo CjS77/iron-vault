@@ -1,6 +1,6 @@
 //! The service side of `replace` and `rm` (design/credential-commands.md): the plan's checks before any prompt, owner
 //! presence through the approval passphrase, and the write followed by the config check through
-//! `ServiceEvent::VaultChanged`, which must settle out of Checking even when its caller is dropped (§3.12).
+//! `ServiceEvent::VaultChanged`, which must settle out of Checking even when its caller is dropped (§15).
 //!
 //! Each test uses the `config approve` harness: a vault holding `fx_key`, used by the route `fx`, with a software
 //! approver sealed under [`APPROVAL_PASSPHRASE`].

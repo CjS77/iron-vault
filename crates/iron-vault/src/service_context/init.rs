@@ -1,4 +1,4 @@
-//! `init`'s side of the service context (specification §3.13; design/vault-initialization.md, "The exchange"): the
+//! `init`'s side of the service context (specification §16; design/vault-initialization.md, "The exchange"): the
 //! initialization state read before any prompt, and the writes once the owner has confirmed the recovery key.
 //!
 //! The prompts hold no lock, so the writes take the service-wide lock without waiting, check the service state again

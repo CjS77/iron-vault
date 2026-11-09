@@ -1,7 +1,7 @@
 //! The record payload v1 encoding: the plaintext a credential file encrypts (`design/storage-formats.md`).
 //!
 //! The layout is hand-written rather than serde or TOML so that decoding reads each secret straight out of the caller's
-//! decrypted buffer into a [`SecretString`], with no intermediate `String` left unwiped on the heap (spec §3.11).
+//! decrypted buffer into a [`SecretString`], with no intermediate `String` left unwiped on the heap (spec §14).
 
 use std::collections::BTreeSet;
 

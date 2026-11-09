@@ -1,6 +1,6 @@
-//! The service state model (specification §3.12): five states, the events that move between them, and what each state
+//! The service state model (specification §15): five states, the events that move between them, and what each state
 //! allows. Everything here is pure; the runtime that drives transitions and binds sockets calls into it, so it cannot
-//! invent a transition the specification's diagram lacks, such as a silent fall back from Locked to weaker storage (R-22).
+//! invent a transition the specification's diagram lacks, such as a silent fall back from Locked to weaker storage (§15).
 //!
 //! # Listeners before Ready
 //!
@@ -17,7 +17,7 @@
 #[cfg(test)]
 mod tests;
 
-/// Why a check left the service Unavailable (the checks of §3.12: "invalid policy or damaged shared state").
+/// Why a check left the service Unavailable (the checks of §15: "invalid policy or damaged shared state").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureReason {
     /// The configuration or its approval did not verify.
@@ -59,7 +59,7 @@ impl UnavailableReason {
     }
 }
 
-/// Where the service is in its life (specification §3.12).
+/// Where the service is in its life (specification §15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceState {
     /// From process start until the service knows whether it can unlock itself.
@@ -79,7 +79,7 @@ pub enum ServiceState {
 
 /// Something that happens to the service and may move it to another state.
 ///
-/// Configured key removal (Ready to Locked, specification §3.12) belongs to the YubiKey phase; its event is
+/// Configured key removal (Ready to Locked, specification §15) belongs to the YubiKey phase; its event is
 /// `KeyRemoved` and it is deliberately not defined yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceEvent {
@@ -123,7 +123,7 @@ pub struct IllegalTransition {
     pub event: ServiceEvent,
 }
 
-/// The state `event` moves `state` to, or the refusal. Implements exactly the §3.12 diagram: a lock is taken from Ready
+/// The state `event` moves `state` to, or the refusal. Implements exactly the §15 diagram: a lock is taken from Ready
 /// and from Unavailable, so the owner can clear the vault identity an Unavailable service keeps without stopping it.
 pub fn next(state: ServiceState, event: ServiceEvent) -> Result<ServiceState, IllegalTransition> {
     use ServiceEvent as E;

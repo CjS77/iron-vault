@@ -1,4 +1,4 @@
-//! The vault identity and its public key (specification §3.10).
+//! The vault identity and its public key (specification §13).
 //!
 //! The vault identity is the one `age` X25519 private key that opens every sealed file in the vault. It stays in
 //! service memory while the vault is unlocked; this module never writes it anywhere. Wrapping it for recipients is a

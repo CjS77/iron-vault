@@ -1,4 +1,4 @@
-//! Binding the service's Unix socket files (spec §3.4, `design/admin-protocol.md`, "Admin socket"): a socket owned by
+//! Binding the service's Unix socket files (spec §7, `design/admin-protocol.md`, "Admin socket"): a socket owned by
 //! the service account at one fixed mode, never connectable at any other.
 //!
 //! A socket is bound, set to its mode and checked before it listens. A Unix socket that is bound but not listening

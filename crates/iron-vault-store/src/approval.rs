@@ -1,4 +1,5 @@
-//! Config approvals: the payload a signer signs and the `config.toml.sig` envelope that carries it (spec §3.9, §8.2 Q-9).
+//! Config approvals: the payload a signer signs and the `config.toml.sig` envelope that carries it (spec §12,
+//! implementation spec §2.2 Q-9).
 //!
 //! The signature covers the purpose, the vault ID, the approval version and the config digest together, so an old
 //! config cannot be paired with a newer signature and an old approval's version cannot be edited. Software, TPM and

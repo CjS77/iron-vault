@@ -2,7 +2,7 @@
 //!
 //! A route's upstream is parsed here once. Validation runs on the raw text, because the `url` crate silently resolves
 //! dot segments, strips tabs and newlines, and treats `\` as `/` for `https`, which would erase exactly the evidence
-//! §3.6 requires us to reject. The canonical result is then checked to be a fixed point of the `url` parser, so a
+//! §9 requires us to reject. The canonical result is then checked to be a fixed point of the `url` parser, so a
 //! later URL built from it through the `url` API means what was validated.
 
 use std::fmt;
@@ -25,7 +25,7 @@ const SCHEME_PREFIX: &str = "https://";
 /// digits uppercased; `https://h/a/` and `https://h/a` are the same upstream, as are `https://h/` and `https://h`.
 ///
 /// The canonical form's parsed `url::Url` is kept, so every request URL starts from the one parse that was checked
-/// to be a fixed point rather than parsing the upstream again (§3.6).
+/// to be a fixed point rather than parsing the upstream again (§9).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(try_from = "String")]
 pub struct UpstreamUrl {

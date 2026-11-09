@@ -1,4 +1,4 @@
-//! The recipient change rule: which inventory a change to the recipient set leads to, or why it is refused (spec §3.11,
+//! The recipient change rule: which inventory a change to the recipient set leads to, or why it is refused (spec §14,
 //! `design/recipients.md`).
 //!
 //! The rule is pure, so `recipient add` and `recipient remove` can apply it before any prompt and the rewrap applies it

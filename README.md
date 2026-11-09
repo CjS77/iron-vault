@@ -89,8 +89,8 @@ scrubbing reduces accidental disclosure but cannot recognize every transformed s
 The host and runtime administrators remain trusted. Anyone who controls Iron Vault's Docker daemon can replace or
 inspect it; TPM encryption does not protect secrets after the service unwraps them into memory. Protected deployments
 must keep vault storage, unlock material, and deployment files outside ordinary callers' control. See the
-[security requirements](design/iron-vault-specification.md#12-security-promise-and-limits) and
-[deployment requirements](design/iron-vault-specification.md#314-docker-remote-servers-and-appliances). The manual's
+[security requirements](design/iron-vault-specification.md#2-security-promise-and-limits) and
+[deployment requirements](design/iron-vault-specification.md#17-docker-remote-servers-and-appliances). The manual's
 [security model](book/src/security-model.md) explains how the vault is locked.
 
 ## Protected installation (Linux)
@@ -178,4 +178,6 @@ The user manual is an mdBook in [`book/`](book/src/SUMMARY.md):
 - **[Security model](book/src/security-model.md):** how the vault is locked.
 - **[Glossary](design/glossary.md):** the terms the manual and the code share.
 
-Design documents and the [product specification](design/iron-vault-specification.md) are in `design/`.
+Design documents and the [product specification](design/iron-vault-specification.md) are in `design/`. The
+[visual design](design/visual-design.md) covers the logo, typefaces and CSS, and [design reviews](design/reviews/README.md)
+are indexed in `design/reviews/`.

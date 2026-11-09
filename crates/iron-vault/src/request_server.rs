@@ -1,4 +1,4 @@
-//! The request server (spec §3.5 step 1, §9): HTTP/1.1 on every connection the request listeners accept, bounded by
+//! The request server (spec §8 step 1, implementation spec §3): HTTP/1.1 on every connection the request listeners accept, bounded by
 //! the operational limits before anyone is authenticated.
 //!
 //! Callers reach the service over local sockets and loopback, so it serves HTTP/1.1 only; HTTP/2 from callers is out
@@ -8,7 +8,7 @@
 //!
 //! | Limit | Enforced by | Answer |
 //! |---|---|---|
-//! | Request form (§3.5 step 2) | [`check_form`], first, before the body limit and the handler | `400` |
+//! | Request form (§8 step 2) | [`check_form`], first, before the body limit and the handler | `400` |
 //! | `max_connections` | A semaphore permit taken before the TLS handshake | Closed unread |
 //! | `max_header_bytes` | hyper's `max_header_size`, which counts the request line and headers on the wire exactly | `431` |
 //! | `max_header_count` | hyper's `max_headers` | `431` |
@@ -27,7 +27,7 @@
 //! service never serves a request it cannot record.
 //!
 //! The handler sees only the connection tags the transport set ([`ConnectionTags`]), never anything from the request
-//! that claims to be one (§3.4).
+//! that claims to be one (§7).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;

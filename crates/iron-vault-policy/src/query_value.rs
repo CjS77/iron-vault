@@ -1,5 +1,5 @@
 //! The one encoding a credential gets in a query slot, and the decoding used to compare caller parameters with it
-//! (spec §3.6).
+//! (spec §9).
 //!
 //! `url::form_urlencoded::byte_serialize` is not used for the value: it writes a space as `+` and leaves `*` bare,
 //! which an upstream that decodes with RFC 3986 rules rather than form rules would read differently. Encoding every

@@ -1,4 +1,4 @@
-//! Release checks for streamed-response scrubbing on the assembled service (specification §3.8, §3.15, §9 "Streamed
+//! Release checks for streamed-response scrubbing on the assembled service (specification §11, §19, implementation spec §3 "Streamed
 //! response compatibility"): a caller on the Unix request socket, the real request server and pipeline, and a test
 //! upstream that sends scripted chunks. `design/secret-handling.md` quotes the numbers the measuring tests print.
 

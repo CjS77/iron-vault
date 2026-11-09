@@ -11,7 +11,7 @@ use crate::display::quoted;
 /// The placeholder a slot format replaces with the credential.
 const PLACEHOLDER: &str = "{}";
 
-/// A header-value template with exactly one `{}` substitution point, such as `Bearer {}` (spec §3.6).
+/// A header-value template with exactly one `{}` substitution point, such as `Bearer {}` (spec §9).
 ///
 /// The fixed text is printable ASCII without braces, so the template cannot split a header with CR or LF, cannot
 /// carry a second substitution point, and renders to the same bytes on every HTTP stack. The default is `{}`: the

@@ -12,7 +12,7 @@ three slot shapes:
 | Venice       | a header with a format: `Authorization: Bearer {}`           | `http://127.0.0.1:7878/venice`  |
 | An FX API    | a query parameter: `access_key`                              | `http://127.0.0.1:7878/fx`      |
 
-The routes are the ones in the [specification's example config](../../../design/iron-vault-specification.md#33-credential-records-and-configuration),
+The routes are the ones in the [specification's example config](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
 with one change to the FX route. The spec's FX upstream, `api.fx.example`, is a placeholder that doesn't resolve, so
 this recipe uses [exchangerate.host](https://exchangerate.host), which takes its key in an `access_key` query
 parameter. Its endpoints are named differently, so the paths change too: the spec allows `/latest` and

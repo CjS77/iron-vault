@@ -1,4 +1,4 @@
-//! The cursor every store payload decoder reads with (spec §3.10, `design/storage-formats.md`).
+//! The cursor every store payload decoder reads with (spec §13, `design/storage-formats.md`).
 //!
 //! The record, manifest, approval and approval state encodings share one layout vocabulary: fixed-width fields,
 //! big-endian integers and `u64` length prefixes. They read it through this one reader, so a bounds check fixed here is

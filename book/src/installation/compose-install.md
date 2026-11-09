@@ -2,7 +2,7 @@
 
 This guide takes a server from nothing to a Ready Iron Vault stack: the service in one container, one isolated network
 and TLS listener per caller container, and a host unlock so the service comes back Ready after a restart with no one
-typing a passphrase. It is the server and appliance shape of [§3.14](../../../design/iron-vault-specification.md#314-docker-remote-servers-and-appliances).
+typing a passphrase. It is the server and appliance shape of [§17](../../../design/iron-vault-specification.md#17-docker-remote-servers-and-appliances).
 [docker-compose.md](../../../design/docker-compose.md) says why each choice was made. On a desktop or a shared
 workstation use [protected Linux](linux-install.md) instead, and to try Iron Vault use [development mode](development-mode.md).
 
@@ -36,7 +36,7 @@ Never use a user's rootless daemon for Iron Vault: that user controls it.
 ### Encrypt swap and hibernation storage
 
 Iron Vault locks its memory, but locked memory does not stop hibernation from writing it to disk
-([§3.11](../../../design/iron-vault-specification.md#311-recipients-startup-and-memory)). Use full-disk encryption, and check
+([§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)). Use full-disk encryption, and check
 swap and hibernation storage as in the Linux guide's
 [Encrypt swap and hibernation storage](linux-install.md#encrypt-swap-and-hibernation-storage). The host CLI you type
 passphrases into does not lock its memory either.

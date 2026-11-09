@@ -1,6 +1,6 @@
 //! Redirect `Location` handling through the proxy handler end to end: a caller on a Unix request socket, the real
 //! request server and pipeline, an FX route with a query slot and a Brave route with a header slot, each in front of a
-//! recording TLS test upstream (specification §3.5, §3.8, §3.12, R-13).
+//! recording TLS test upstream (specification §8, §11, §15).
 
 #![cfg(target_os = "linux")]
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.

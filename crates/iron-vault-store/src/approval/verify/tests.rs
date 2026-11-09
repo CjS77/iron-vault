@@ -224,7 +224,7 @@ fn committed_version_with_another_digest_is_refused() {
     );
 }
 
-/// The release check (spec §3.15): after approving v2, putting v1's config and signature back fails.
+/// The release check (spec §19): after approving v2, putting v1's config and signature back fails.
 #[test]
 fn restored_older_config_and_signature_fail_after_a_newer_approval() {
     let mut vault = Vault::new("verify-release");

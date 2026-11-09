@@ -1,7 +1,7 @@
 //! The vault change check (glossary; design/credential-commands.md, "Vault change check"): the dry run `replace` and
 //! `rm` make before any prompt. It activates the active config against the credential catalog as it would be after the
 //! change and keeps only the failures the change causes, so every name the active config references stays in the vault
-//! manifest (specification §3.3, §3.9).
+//! manifest (specification §6, §12).
 //!
 //! It is pure: the service supplies the active config, its catalog, capabilities and account directory.
 

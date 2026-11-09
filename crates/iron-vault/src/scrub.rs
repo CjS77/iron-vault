@@ -1,4 +1,4 @@
-//! The scrubber: replaces every occurrence of a request's scrub patterns in a streamed response body (spec §3.8, R-12).
+//! The scrubber: replaces every occurrence of a request's scrub patterns in a streamed response body (spec §11).
 //!
 //! Matching is a hand-rolled scan rather than `aho-corasick`: a request has 10-20 short patterns, `aho-corasick`'s
 //! streaming search does not support leftmost-longest matching, and its automaton would hold copies of the secrets that
@@ -27,7 +27,7 @@ const REPLACEMENT_TEXT: &str = "[iron-vault:scrubbed]";
 /// `Basic <token>` is replaced whole rather than leaving `Basic ` before a replaced token. Between chunks it holds back
 /// only the bytes from the first position where a match could still begin or grow; everything before that is released
 /// at once, so an SSE event is never delayed until the next one. The held bytes are at most one less than the longest
-/// pattern (§3.8) and are wiped when the scrubber is dropped.
+/// pattern (§11) and are wiped when the scrubber is dropped.
 ///
 /// Call [`finish`](Self::finish) at the end of the body. It consumes the scrubber, so no chunk can be pushed after the
 /// held bytes are released, and it returns the body's total match count. Dropping the scrubber without it releases
@@ -207,7 +207,7 @@ impl fmt::Debug for Scrubber<'_> {
     }
 }
 
-/// Scrubs every response header value in place and returns how many matches were replaced across all values (spec §3.8).
+/// Scrubs every response header value in place and returns how many matches were replaced across all values (spec §11).
 ///
 /// Each value is scrubbed whole and one-shot through the same [`Scrubber`] as the body, so headers and body share one
 /// matching rule. Header names are not scrubbed: a secret in a name is implausible, and rewriting names would change

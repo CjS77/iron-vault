@@ -1,7 +1,7 @@
 //! `iron-vault serve`: checks the trusted paths, takes the directory locks and sweeps their stale temp files, starts
 //! the service context with its provisional request listeners, Locked or, in the Container profile, unlocked from the
 //! host's unlock handoff, and serves the admin socket until SIGTERM, SIGINT or a failed log write, then stops the
-//! service. SIGHUP reloads the config (§3.9).
+//! service. SIGHUP reloads the config (§12).
 
 use std::fs::DirBuilder;
 use std::io;
@@ -37,7 +37,7 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport,
         .context("this deployment names no runtime directory for the admin socket")?;
     // In a packaged install the service manager has already created the runtime directory; a development install has
     // nothing else to make it. At `0711` other accounts may search it, so they can reach a request socket inside it, but
-    // never list or write it, so none can put its own socket there (§3.4). The admin socket in it stays `0600` and
+    // never list or write it, so none can put its own socket there (§7). The admin socket in it stays `0600` and
     // peer-checked. In development it sits in the user's `0700` `$XDG_RUNTIME_DIR`, so other accounts still cannot
     // reach it; development gives no isolation from other accounts' callers anyway.
     create_dir(runtime_dir, 0o711, "runtime")?;
@@ -119,7 +119,7 @@ fn create_config_dir(paths: &ServicePaths) -> anyhow::Result<()> {
 /// Creates a development install's state directory, and any missing parents, at `0700`. `$XDG_STATE_HOME` may not exist
 /// yet and the XDG specification allows `0700` for what is created. An existing directory is left as it is, so a wrong
 /// mode is refused by the trusted-path check rather than repaired. A packaged install's directory belongs to the
-/// package (§3.1), so the protected profile never creates it.
+/// package (§4), so the protected profile never creates it.
 fn create_state_dir(paths: &ServicePaths) -> anyhow::Result<()> {
     if paths.profile != DeploymentProfile::Development {
         return Ok(());
@@ -131,7 +131,7 @@ fn create_state_dir(paths: &ServicePaths) -> anyhow::Result<()> {
         .with_context(|| format!("cannot create the state directory {}", paths.state_dir.display()))
 }
 
-/// Refuses to start when a path the service reads before it unlocks anything is untrusted (§3.1: "refuse an unsafe
+/// Refuses to start when a path the service reads before it unlocks anything is untrusted (§4: "refuse an unsafe
 /// installation and explain which path failed"), and logs each path caution.
 fn check_trusted_paths(paths: &ServicePaths) -> anyhow::Result<()> {
     let report = TrustedPathReport::check(paths);
@@ -160,7 +160,7 @@ fn stop_signal(log_failure: LogFailure) -> io::Result<impl Future<Output = ()>> 
     })
 }
 
-/// Reloads the service on each SIGHUP, never by watching files (§8.2 Q-5). A SIGHUP arriving while a change holds the
+/// Reloads the service on each SIGHUP, never by watching files (implementation spec §2.2 Q-5). A SIGHUP arriving while a change holds the
 /// service queues behind it. The task ends with the runtime when serving stops.
 async fn reload_on_sighup(mut hangup: tokio::signal::unix::Signal, service: Arc<ServiceContext>) {
     while hangup.recv().await.is_some() {

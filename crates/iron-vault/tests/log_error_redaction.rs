@@ -1,5 +1,5 @@
 //! A log record never formats a library error: it records `error_kind = %error.kind_label()` instead (specification
-//! §3.15, `design/audit-logging.md` "Library errors"). This test searches every log macro in the workspace's sources
+//! §18, `design/audit-logging.md` "Library errors"). This test searches every log macro in the workspace's sources
 //! for a formatted value bound to an error name (`e`, `err`, `error`, `cause`, `source`) and fails on any that is not
 //! a known domain error.
 //!

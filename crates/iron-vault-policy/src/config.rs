@@ -1,7 +1,7 @@
-//! The configuration document: listeners, callers, routes and limits parsed from TOML bytes (spec §3.3).
+//! The configuration document: listeners, callers, routes and limits parsed from TOML bytes (spec §6).
 //!
 //! Parsing takes bytes the caller already holds, so this crate stays free of I/O and approval can hash exactly the
-//! bytes that were parsed (spec §3.9). Only section-local rules are checked here; references between sections are
+//! bytes that were parsed (spec §12). Only section-local rules are checked here; references between sections are
 //! resolved by [`ValidatedConfig`](crate::ValidatedConfig).
 
 use std::collections::BTreeMap;
@@ -27,7 +27,7 @@ pub const SCHEMA_VERSION: i64 = 1;
 /// A configuration document whose every section passed its own validation.
 ///
 /// Sections are held in [`BTreeMap`]s so iteration, and anything derived from it, follows name order rather than
-/// file or hash order (spec §7). An omitted `[listeners]`, `[callers]` or `[routes]` table is empty; an omitted
+/// file or hash order (implementation spec §1). An omitted `[listeners]`, `[callers]` or `[routes]` table is empty; an omitted
 /// `[limits]` table means the default limits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedConfig {

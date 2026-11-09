@@ -1,4 +1,4 @@
-//! Who may use the admin socket (spec §3.2): an admin principal, judged only from the uid the kernel reports for the
+//! Who may use the admin socket (spec §5): an admin principal, judged only from the uid the kernel reports for the
 //! connecting process.
 //!
 //! The socket's `0600` mode is the first barrier; this check refuses everyone else even when those permissions are

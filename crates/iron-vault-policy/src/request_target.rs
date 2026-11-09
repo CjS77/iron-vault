@@ -1,5 +1,5 @@
 //! Caller request targets: the one path representation used for both authorization and forwarding (specification
-//! §3.3, §3.5 steps 2 and 4, §3.6).
+//! §6, §8 steps 2 and 4, §9).
 //!
 //! Caller paths are hostile. Every check runs on the raw target before anything is decoded, so normalization can never
 //! erase evidence of traversal. A target is accepted only in origin form (`/path?query`); the path is split into
@@ -95,7 +95,7 @@ const LOOK_ALIKES: &[char] = &[
     '\u{2215}', // DIVISION SLASH
 ];
 
-/// Why a caller's request target was rejected; the request interface answers every variant with `400` (§3.12).
+/// Why a caller's request target was rejected; the request interface answers every variant with `400` (§15).
 ///
 /// Messages never echo the target, because it is caller-controlled and may carry a secret placed in the query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

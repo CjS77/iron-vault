@@ -1,4 +1,4 @@
-//! The serving snapshot: everything one request is served with, swapped as a unit (specification §3.5, §3.9).
+//! The serving snapshot: everything one request is served with, swapped as a unit (specification §8, §12).
 //!
 //! A request takes its [`Admission`] once with [`SnapshotHolder::load`] and uses only that, so the route it was
 //! authorized against, the credential record it resolves, the client it sends with and the limiter it was charged by
@@ -178,7 +178,7 @@ impl ServingSnapshot {
     }
 
     /// Completes once the holder withdraws this snapshot (a failed check or a lock), and at once if it already has. A
-    /// request running on the snapshot stops when it does, where the transport permits (specification §3.9).
+    /// request running on the snapshot stops when it does, where the transport permits (specification §12).
     pub fn withdrawn(&self) -> WaitForCancellationFutureOwned {
         self.withdrawn.clone().cancelled_owned()
     }
@@ -274,7 +274,7 @@ impl SnapshotHolder {
     }
 
     /// Makes every later [`load`](Self::load) refuse with `reason`. Any reason but *checking* also withdraws every
-    /// snapshot served, so no old route policy is kept (specification §3.9), and returns them for the caller to wait
+    /// snapshot served, so no old route policy is kept (specification §12), and returns them for the caller to wait
     /// on; *checking* withdraws none and returns an empty [`Withdrawn`].
     pub fn refuse(&self, reason: UnavailableReason) -> Withdrawn {
         let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
@@ -312,7 +312,7 @@ impl Withdrawn {
     /// Waits up to `within` for every snapshot to be dropped, vault included, and returns how many are still held.
     ///
     /// A request that ignores its cancellation holds its snapshot until it ends, so the wait is bounded and the caller
-    /// reports a non-zero count rather than claiming the secrets are cleared (specification §3.9, §3.11).
+    /// reports a non-zero count rather than claiming the secrets are cleared (specification §12, §14).
     pub async fn released(&mut self, within: Duration) -> usize {
         // A sender dropping without a value resolves its receiver with an error, which is the signal. A receiver is
         // removed once it resolves, because polling it again would panic, and the wait can be called again.

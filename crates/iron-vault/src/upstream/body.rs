@@ -1,4 +1,4 @@
-//! The body of an upstream request: the caller's bytes, forwarded as they arrive (specification §3.5 step 9, §3.6, §9).
+//! The body of an upstream request: the caller's bytes, forwarded as they arrive (specification §8 step 9, §9, implementation spec §3).
 //!
 //! The body is not part of a [`CheckedRequest`](iron_vault_policy::CheckedRequest). The final check never inspects it,
 //! because no credential goes into a caller's body, and keeping it apart makes that visible.

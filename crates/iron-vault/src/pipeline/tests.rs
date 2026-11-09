@@ -27,7 +27,7 @@ const VENICE_SECRET: &str = "venice-secret-7b3d";
 const FX_MCP_UID: u32 = 1001;
 const TOKEN_BYTES: [u8; 32] = [7; 32];
 
-/// The §3.3 example with a real token hash for `brave-cli` and a Basic route for `naomi-backoffice`.
+/// The §6 example with a real token hash for `brave-cli` and a Basic route for `naomi-backoffice`.
 fn config() -> String {
     let hash = TokenHash::of(&CallerToken::from_bytes(TOKEN_BYTES));
     format!(

@@ -1,10 +1,10 @@
 //! `recipient remove`: removes an enrolled recipient from the identity envelope and the inventory after owner presence
-//! (specification §3.11, §3.13; `design/recipients.md`, "`recipient remove <age1…>`").
+//! (specification §14, §16; `design/recipients.md`, "`recipient remove <age1…>`").
 //!
 //! The service-wide lock, the inventory check and the independence rule all come from
 //! [`ServiceContext::plan_recipient_removal`], so a key that is not enrolled, or whose removal would leave fewer than two
 //! independent ways in, is refused before any prompt. The lock is held through the summary, the approval passphrase prompt
-//! and the write. Removal reaches only future envelopes (R-24), and the completion notice says so.
+//! and the write. Removal reaches only future envelopes (§16), and the completion notice says so.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

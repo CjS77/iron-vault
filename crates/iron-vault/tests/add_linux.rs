@@ -1,5 +1,5 @@
-//! `add` end to end over a real admin socket against a running service context (specification §3.3, §3.10, §3.12,
-//! §3.13): the state and argument checks before any prompt, the prompts by kind, the vault write through a vault opened
+//! `add` end to end over a real admin socket against a running service context (specification §6, §13, §15,
+//! §16): the state and argument checks before any prompt, the prompts by kind, the vault write through a vault opened
 //! for it alone, and a later `config approve` that routes through the new credential. Every test's log goes to one
 //! captured buffer at TRACE, which must never hold a secret, username or password typed at a prompt.
 //!

@@ -1,5 +1,5 @@
-//! The fixed config and the hostile request-path generators that the property-test files share (specification §3.6,
-//! §8; threat R-7).
+//! The fixed config and the hostile request-path generators that the property-test files share (specification §9;
+//! implementation spec §2).
 
 // Each test binary compiles its own copy of this module and uses a different part of it, so the rest is dead code in
 // that binary.

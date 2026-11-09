@@ -1,4 +1,4 @@
-//! Vault writes: add, replace and remove one credential record, or record the approval state (spec §3.3, §3.9, §3.10).
+//! Vault writes: add, replace and remove one credential record, or record the approval state (spec §6, §12, §13).
 //!
 //! Every write follows the same steps. Everything that can fail without writing a file happens first: validation,
 //! reading the approval state's state generation from disk, sealing and building the next manifest, which takes the
@@ -42,7 +42,7 @@ struct Prepared {
 impl Vault {
     /// Adds a credential record named `name` under a new record ID, refusing a name the manifest already lists.
     ///
-    /// This performs an already authorized change: the caller checks owner presence (spec §3.3). Returns the new
+    /// This performs an already authorized change: the caller checks owner presence (spec §6). Returns the new
     /// record's ID and what else the write did, including any short secret in the new record, for the audit log.
     pub fn add(
         &mut self,
@@ -64,7 +64,7 @@ impl Vault {
     }
 
     /// Replaces the record named `name` with a new record under a new record ID, so a swapped account shows as a new
-    /// record identity rather than an edit (spec §3.3, R-5). The superseded file is removed after the commit.
+    /// record identity rather than an edit (spec §6). The superseded file is removed after the commit.
     ///
     /// The record may be damaged: replacing it is how a damaged credential is repaired. This performs an already
     /// authorized change: the caller checks owner presence and the routes that use the credential. The report names
@@ -103,7 +103,7 @@ impl Vault {
     /// Writes a manifest with unchanged entries that records the approval state's current state generation as its peer.
     ///
     /// Until a manifest records the approval state, deleting `approval.age` leaves a pair the partial restore check
-    /// accepts, and creating the approval state again would reset its counters (spec §3.9). Refuses with
+    /// accepts, and creating the approval state again would reset its counters (spec §12). Refuses with
     /// [`VaultError::NoApprovalState`] when there is none. Changes no record file.
     pub fn record_approval_state(&mut self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<WriteReport, VaultError> {
         self.ensure_same_dir(lock)?;
@@ -166,7 +166,7 @@ impl Vault {
     /// state that cannot be read or opened is damaged shared state, and the write is refused.
     ///
     /// A partial restore is refused too, never written over: the next manifest would record the restored approval state
-    /// as its peer, or record no peer after a deletion, and the pair would agree again and hide the restore (spec §3.9).
+    /// as its peer, or record no peer after a deletion, and the pair would agree again and hide the restore (spec §12).
     /// The caller has checked that the manifest in memory is the one on disk.
     fn approval_generation(&self, lock: &StateDirLock, fs: &impl StoreFs) -> Result<Option<StateGeneration>, VaultError> {
         let approval = approval_generations(lock, fs, &self.identity, &self.manifest)?;

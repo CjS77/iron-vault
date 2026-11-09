@@ -1,4 +1,4 @@
-//! A `[callers.<name>]` section: one caller's listener, identity mechanism and route grants (spec §3.3, §3.4, §3.5).
+//! A `[callers.<name>]` section: one caller's listener, identity mechanism and route grants (spec §6, §7, §8).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -48,7 +48,7 @@ pub struct CallerConfig {
     rate_limits: BTreeMap<RouteName, RateLimit>,
 }
 
-/// How the service establishes that a connection is this caller (spec §3.4).
+/// How the service establishes that a connection is this caller (spec §7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallerAuth {
     /// The caller presents a token whose hash matches this one.
@@ -115,7 +115,7 @@ impl CallerConfig {
         &self.routes
     }
 
-    /// Per-route limits for this caller, applied in addition to each route's aggregate limit (spec §3.5).
+    /// Per-route limits for this caller, applied in addition to each route's aggregate limit (spec §8).
     pub fn rate_limits(&self) -> &BTreeMap<RouteName, RateLimit> {
         &self.rate_limits
     }
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn spec_token_caller_parses() {
-        // §3.3 writes `token_hash = "blake2b:..."`; a placeholder digest is not a valid hash, so a real one stands in.
+        // §6 writes `token_hash = "blake2b:..."`; a placeholder digest is not a valid hash, so a real one stands in.
         let c = parse(&format!("listener = \"local\"\ntoken_hash = \"{HASH}\"\nroutes = [\"fx\"]")).unwrap();
         assert_eq!(c.listener().as_str(), "local");
         assert_eq!(c.auth(), &CallerAuth::Token(HASH.parse().unwrap()));

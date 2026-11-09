@@ -1,4 +1,4 @@
-//! One permitted origin as the owner writes it when enrolling a credential (spec §3.3).
+//! One permitted origin as the owner writes it when enrolling a credential (spec §6).
 //!
 //! The scheme is always HTTPS, so it is implicit and never written: an origin is a host and an optional port. The CLI
 //! parses each `--origin` with [`parse_origin`] before connecting, and the service parses the requested origins of an
@@ -11,7 +11,7 @@ use crate::port::{Port, PortError};
 
 /// Why an origin was rejected.
 ///
-/// Messages name the rule and never the rejected text, so a diagnostic cannot echo an argument (§3.2).
+/// Messages name the rule and never the rejected text, so a diagnostic cannot echo an argument (§5).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OriginError {
     /// The origin names a scheme; HTTPS is implied and never written.

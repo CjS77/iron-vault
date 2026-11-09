@@ -1,5 +1,5 @@
 //! The `[recovery] reminder_days` setting: how often the service reminds the owner to run a recovery check
-//! (spec §3.13, `design/recovery.md`).
+//! (spec §16, `design/recovery.md`).
 
 use std::fmt;
 

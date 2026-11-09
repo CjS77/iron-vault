@@ -1,4 +1,4 @@
-//! Approval recovery: the first part of every config check (design/config-approval.md, "Recovery"; spec §3.9).
+//! Approval recovery: the first part of every config check (design/config-approval.md, "Recovery"; spec §12).
 //!
 //! Multiple renames do not form a filesystem transaction, so after a crash the config directory may hold a committed
 //! transaction that is only partly published. Recovery decides what to do from the committed approval alone, never

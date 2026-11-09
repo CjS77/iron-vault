@@ -1,4 +1,4 @@
-//! Library errors and their error kind labels (`design/audit-logging.md`, "Library errors"; specification §3.15).
+//! Library errors and their error kind labels (`design/audit-logging.md`, "Library errors"; specification §18).
 //!
 //! A library error's `Display` and `Debug` may hold a URL with its query, a header value or a path, and a query-slot
 //! credential puts the secret in the URL. A log records such an error only as `error_kind = %error.kind_label()`,

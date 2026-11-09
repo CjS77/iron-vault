@@ -1,4 +1,4 @@
-//! The connection tags the transport sets on every request (§3.4). They live outside the Linux-only request server so
+//! The connection tags the transport sets on every request (§7). They live outside the Linux-only request server so
 //! the request pipeline, which reads them, stays pure and builds on every platform.
 
 use std::sync::Arc;

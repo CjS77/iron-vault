@@ -1,11 +1,11 @@
-//! The release-check rejection suite for migration authorization (specification §3.15, §3.13, R-23;
+//! The release-check rejection suite for migration authorization (specification §19, §16;
 //! design/migration-authorization.md), driven through a real admin socket by a handler registered only here. The handler
 //! stands in for `export` and `recipient add` (EP-28, EP-30), which will run the same checks through their real commands.
 //!
-//! One test per rejection §3.15 names. Cases that `migration_prompt_linux.rs` already pins over the same socket are not
+//! One test per rejection §19 names. Cases that `migration_prompt_linux.rs` already pins over the same socket are not
 //! repeated; this file maps them so a reader of the checklist finds every case:
 //!
-//! | §3.15 case                              | Test                                                                               |
+//! | §19 case                              | Test                                                                               |
 //! |-----------------------------------------|------------------------------------------------------------------------------------|
 //! | missing                                 | `missing_authorization_has_no_way_to_start`                                        |
 //! | incorrect                               | `incorrect_*` here, and `a_wrong_passphrase_is_denied_with_one_refusal_event`      |

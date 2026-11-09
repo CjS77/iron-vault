@@ -154,7 +154,7 @@ fn age_part<'a>(name: &str, bytes: &'a [u8]) -> &'a [u8] {
     }
 }
 
-/// The no-mixed-recipient release check (§3.15): the passphrase envelope is scrypt only, every other `age` file is
+/// The no-mixed-recipient release check (§19): the passphrase envelope is scrypt only, every other `age` file is
 /// X25519 plus at most one grease stanza, and no file has both scrypt and X25519.
 fn assert_no_mixed_recipients(files: &[(String, Vec<u8>)]) {
     let operational = StateFileName::passphrase_envelope();

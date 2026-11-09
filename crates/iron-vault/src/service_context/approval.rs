@@ -1,4 +1,4 @@
-//! `config approve`'s side of the service context: the approval transaction (specification §3.9;
+//! `config approve`'s side of the service context: the approval transaction (specification §12;
 //! design/config-approval.md, "The transaction") driven through the service state model.
 //!
 //! [`ServiceContext::review_approval`] takes the service-wide lock and runs step 1. The [`ApprovalReview`] it returns
@@ -237,7 +237,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
     ///
     /// Cancel-safe: once `commit` holds the context mutex, a task of its own owns that guard, and the service-wide guard
     /// with it, and runs every step to its end, as [`ServiceContext::unlock`] does for a config check. Dropping this
-    /// future after the commit therefore never leaves the service in Checking (§3.12): the task still settles in Ready
+    /// future after the commit therefore never leaves the service in Checking (§15): the task still settles in Ready
     /// on the new config, or in Unavailable. A task that ends without a result fails closed through its
     /// [`SettleGuard`], and this call then answers [`ApprovalEnd::Unavailable`], whose message says a version may be
     /// consumed or committed.

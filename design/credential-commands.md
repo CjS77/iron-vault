@@ -1,25 +1,25 @@
 # Replacing and removing credentials
 
 How `iron-vault replace` and `iron-vault rm` change a credential record that already exists (specification
-[§3.3](iron-vault-specification.md#33-credential-records-and-configuration),
-[§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)). It covers how the owner proves
+[§6](iron-vault-specification.md#6-credential-records-and-configuration),
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration)). It covers how the owner proves
 presence, what happens to the routes that use the name, and how the change reaches the requests the service serves.
 Terms follow the [glossary](glossary.md). The frames, prompts and error codes are in
 [admin-protocol.md](admin-protocol.md#replace), and the store's writes are `Vault::replace` and `Vault::remove`.
 
 Three rules drive the design:
 
-- **A name never stands in for the record behind it** ([§1.3](iron-vault-specification.md#13-terms)). A replacement is
-  a new record ID, so an account swapped under the same name shows as a new record (R-5).
+- **A name never stands in for the record behind it** ([§3](iron-vault-specification.md#3-terms-and-definitions)). A replacement is
+  a new record ID, so an account swapped under the same name shows as a new record (§6).
 - **Every name the active config references is in the vault manifest.** Approval already enforces this: activation
   refuses an unknown credential, which invalidates the whole config
-  ([§3.9](iron-vault-specification.md#39-configuration-approval-and-reload)). Nothing here may break it.
+  ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)). Nothing here may break it.
 - **Owner presence authorizes only the change the service just described.** The service writes its own summary
-  ([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)), and the owner proves presence after reading it.
+  ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)), and the owner proves presence after reading it.
 
 ## Owner presence
 
-[§3.3](iron-vault-specification.md#33-credential-records-and-configuration) requires owner presence "through the
+[§6](iron-vault-specification.md#6-credential-records-and-configuration) requires owner presence "through the
 approval mechanism" for `replace` and `rm`. In v0 the service proves it like this, inside one exchange:
 
 1. It sends a secret prompt, `Approval passphrase`, the same label `config approve` uses.
@@ -28,7 +28,7 @@ approval mechanism" for `replace` and `rm`. In v0 the service proves it like thi
 3. It drops the opened signer at once.
 
 Presence reserves no approval version, signs nothing and writes nothing to `approval.age`. It proves only that the
-person typing knows the approval passphrase now. A wrong passphrase, or a key that is not the pinned approver, ends
+person typing knows the approval passphrase now. A wrong passphrase, or a key that is not the asked approver's, ends
 the exchange with `approval-denied` (code 9), before anything is written. That code's meaning widens from "the
 approval passphrase was wrong" to "owner presence failed", which covers both uses. There is no second try in the same
 exchange.
@@ -77,7 +77,7 @@ This keeps the rule that every name the active config references is in the manif
 - **No rebinding under live routes.** Once a name is removed, no active route names it. A later `add` of the name
   creates a record with a new record ID that no route uses. A route can use it only after an approval, whose summary
   shows the route and its credential to the owner. `add` needs no owner presence, so this is what stops malware with
-  an admin connection from removing a name and adding its own account in its place (R-5).
+  an admin connection from removing a name and adding its own account in its place (§6).
 - **No whole-config failure.** If a route still used a removed name, the next config check would fail with an
   unknown credential for the whole config, and the service would become Unavailable with every route down.
 - **No storage format change.** The manifest stays a list of the records that exist.
@@ -107,7 +107,7 @@ permit.
 ## Vault change summary
 
 Before the presence prompt, the service sends a **vault change summary** in one or more notices
-([§3.2](iron-vault-specification.md#32-service-and-cli-boundary)). The CLI's display of it is never evidence of what
+([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The CLI's display of it is never evidence of what
 the owner authorized. The summary goes to the audit log too.
 
 For `replace`:
@@ -136,7 +136,7 @@ remove credential old_key
 - The new record ID is drawn inside the write, so the summary cannot name it yet. The result carries it.
 - Routes and callers are in name order. Each caller is listed with the routes the active config grants it. Every
   configured name is printed with the configured-name escaping of the approval summary
-  ([§3.15](iron-vault-specification.md#315-logging-and-v0-acceptance)).
+  ([§18](iron-vault-specification.md#18-logging)).
 - `rm` only gets this far when no route uses the name, so its list is always `none`. The line stays, so the owner
   sees that the service checked.
 
@@ -175,12 +175,12 @@ secret into the exchange.
 
 `add` leaves the serving snapshot alone, because no active route can use a new name. `replace` and `rm` cannot: a
 replaced record's routes must use the new secret, and a removed or replaced secret must leave memory
-([§3.11](iron-vault-specification.md#311-recipients-startup-and-memory): "clear cached values on lock or
+([§14](iron-vault-specification.md#14-recipients-startup-and-memory): "clear cached values on lock or
 replacement").
 
 So after the write commits, and before it releases the service-wide lock, the service runs the config check from
 Ready, through the event `ServiceEvent::VaultChanged` on the Ready → Checking edge of
-[§3.12](iron-vault-specification.md#312-service-states-and-errors) ([open question 1](#open-questions)). It runs
+[§15](iron-vault-specification.md#15-service-states-and-errors) ([open question 1](#open-questions)). It runs
 after a write that may have committed too, because the check reads whatever the disk holds. A write that failed
 cleanly changed nothing and runs no check.
 
@@ -225,13 +225,15 @@ report; the next vault write removes it. A write that removed an unindexed recor
 The specification leaves each point below open, or this design departs from its wording. The design takes the
 default stated for each, until the owner decides.
 
-1. **The event a vault change uses.** The [§3.12](iron-vault-specification.md#312-service-states-and-errors) diagram
-   labels its one edge from Ready to Checking "explicit reload". *Default:* a new event, `ServiceEvent::VaultChanged`,
-   on that edge, as an approval adds `ApprovalCommitting` there
-   ([config-approval open question 3](config-approval.md#open-questions)). *Reload* stays the SIGHUP operation alone.
-   The alternative reuses `Reload`, so a failed check after a vault change would be logged as a failed reload.
-2. **"Update affected references explicitly".** [§3.13](iron-vault-specification.md#313-administration-recovery-and-migration)'s
-   `replace` row asks `replace` to update affected references explicitly. *Default:* `replace` changes no reference
-   itself. A route that would not activate refuses the replace, and the owner updates references by approving a
-   config, which shows each change in its summary. The alternative edits the config as part of `replace`, which would
-   make `replace` a second way to approve a config.
+1. **The event a vault change uses.** *Decided: default accepted (2026-11-09).* The
+   [§15](iron-vault-specification.md#15-service-states-and-errors) diagram labels its one edge from Ready to Checking
+   "explicit reload". *Default:* a new event, `ServiceEvent::VaultChanged`, on that edge, as an approval adds
+   `ApprovalCommitting` there ([config-approval open question 3](config-approval.md#open-questions)). *Reload* stays
+   the SIGHUP operation alone. The alternative reuses `Reload`, so a failed check after a vault change would be logged
+   as a failed reload.
+2. **"Update affected references explicitly".** *Decided: default accepted (2026-11-09).*
+   [§16](iron-vault-specification.md#16-administration-recovery-and-migration)'s `replace` row asks `replace` to
+   update affected references explicitly. *Default:* `replace` changes no reference itself. A route that would not
+   activate refuses the replace, and the owner updates references by approving a config, which shows each change in its
+   summary. The alternative edits the config as part of `replace`, which would make `replace` a second way to approve a
+   config.

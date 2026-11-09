@@ -1,5 +1,5 @@
 //! The recipient change transaction: rewrapping the vault identity for a new recipient set and writing the inventory
-//! that describes it (spec §3.10, §3.11, `design/recipients.md`).
+//! that describes it (spec §13, §14, `design/recipients.md`).
 //!
 //! Two files change and the filesystem has no transaction, so the inventory is written twice: staged before the
 //! identity envelope and in place after it. The envelope's durable replace is the single commit point; the inventory

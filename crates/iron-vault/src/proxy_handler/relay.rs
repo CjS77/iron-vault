@@ -1,11 +1,11 @@
-//! Relaying an upstream response to the caller (specification §3.5 step 10, §3.8): its status, its headers without
+//! Relaying an upstream response to the caller (specification §8 step 10, §11): its status, its headers without
 //! connection-scoped or caller-authentication headers and scrubbed, and its body decoded, scrubbed and, when the caller
 //! requires it, re-encoded chunk by chunk.
 //!
 //! Every response passes through the scrubber with the scrub patterns of the credential injected for its request; no
 //! path relays a response without it. A response the scrubber cannot see through, because its content coding is not
 //! one the service decodes or a transfer coding besides `chunked` hides the bytes, is refused with `502` before
-//! anything is sent (§3.8: no coding is forwarded opaquely). The order of the stages is set out once, on
+//! anything is sent (§11: no coding is forwarded opaquely). The order of the stages is set out once, on
 //! [`RelayedBody`].
 
 use std::pin::Pin;

@@ -11,21 +11,21 @@ name: iron-vault
 
 services:
   iron-vault:
-    # Pinned by digest so a retagged image cannot change what a recreation runs (R-28).
+    # Pinned by digest so a retagged image cannot change what a recreation runs (§17).
     image: iron-vault@sha256:0000000000000000000000000000000000000000000000000000000000000000
-    # The fixed service account, the same uid:gid in the image and on the host; the service refuses any other (R-25).
+    # The fixed service account, the same uid:gid in the image and on the host; the service refuses any other (§17).
     user: "460:460"
-    # The image's files cannot be changed from inside; the log goes to stdout, not /var/log/iron-vault (R-25).
+    # The image's files cannot be changed from inside; the log goes to stdout, not /var/log/iron-vault (§17).
     read_only: true
-    # The service needs no capability; without CAP_DAC_OVERRIDE even container root cannot open the vault (R-25).
+    # The service needs no capability; without CAP_DAC_OVERRIDE even container root cannot open the vault (§17).
     cap_drop: [ALL]
-    # No set-uid program or file capability can raise the service's privileges (R-25).
+    # No set-uid program or file capability can raise the service's privileges (§17).
     security_opt:
       - no-new-privileges:true
     ulimits:
-      # Memory is locked only when RLIMIT_MEMLOCK is unlimited, and unlock requires locked memory (R-20).
+      # Memory is locked only when RLIMIT_MEMLOCK is unlimited, and unlock requires locked memory (§14).
       memlock: -1
-      # No core dump holds service memory (R-20).
+      # No core dump holds service memory (§14).
       core: 0
     # The image's default command, stated so the log destination is visible. The runtime keeps the log, never journald.
     command: ["serve", "--log-to-stdout"]
@@ -37,27 +37,27 @@ services:
     # Comes back after a crash and at boot; a Locked service has not failed and keeps running.
     restart: unless-stopped
     # Not set, on purpose: privileged, pid, ipc, network_mode, devices, the Docker socket, seccomp or apparmor
-    # unconfined, and any environment or env_file. None may hold a secret or widen the container (R-25).
+    # unconfined, and any environment or env_file. None may hold a secret or widen the container (§17).
     networks:
       # The only container on egress: it carries the upstream requests.
       egress: {}
-      # A static address per caller network, so each listener address is fixed and on that network alone (R-27).
+      # A static address per caller network, so each listener address is fixed and on that network alone (§7).
       caller-a:
         ipv4_address: 172.30.1.2
       caller-b:
         ipv4_address: 172.30.2.2
     volumes:
-      # Config and state directories. Docker copies the image's owner and 0700 mode into each empty volume (R-25).
+      # Config and state directories. Docker copies the image's owner and 0700 mode into each empty volume (§17).
       - config:/etc/iron-vault
       - state:/var/lib/iron-vault
-      # admin.sock lives here so host root reaches it; the host's 0711 directory keeps other accounts out (R-25).
+      # admin.sock lives here so host root reaches it; the host's 0711 directory keeps other accounts out (§17).
       - /run/iron-vault:/run/iron-vault
-      # The unlock handoff, read-only. The directory is mounted, not the file, so a missing or replaced file is seen (R-25, R-28).
+      # The unlock handoff, read-only. The directory is mounted, not the file, so a missing or replaced file is seen (§17).
       - type: bind
         source: /run/iron-vault-unlock
         target: /run/iron-vault-unlock
         read_only: true
-      # Listener certificates and the service account's keys, read-only (R-26).
+      # Listener certificates and the service account's keys, read-only (§7).
       - type: bind
         source: /etc/iron-vault-host/tls
         target: /etc/iron-vault-tls
@@ -68,15 +68,15 @@ services:
     image: alpine@sha256:0000000000000000000000000000000000000000000000000000000000000000
     command: ["sleep", "infinity"]
     # Without NET_RAW a caller cannot forge frames or source addresses; without NET_ADMIN it cannot take another
-    # address or add a route. Docker grants NET_RAW by default, so everything is dropped (R-27).
+    # address or add a route. Docker grants NET_RAW by default, so everything is dropped (§7).
     cap_drop: [ALL]
-    # A set-uid binary in the caller's image cannot regain a dropped capability (R-27).
+    # A set-uid binary in the caller's image cannot regain a dropped capability (§7).
     security_opt:
       - no-new-privileges:true
-    # Its own caller network only, never egress or another caller's; no volumes, so nothing of the vault is visible (R-25, R-27).
+    # Its own caller network only, never egress or another caller's; no volumes, so nothing of the vault is visible (§17, §7).
     networks:
       caller-a:
-        # Its own static address: while Iron Vault is stopped its address is free, and a dynamic caller could be given it (R-6).
+        # Its own static address: while Iron Vault is stopped its address is free, and a dynamic caller could be given it (§7).
         ipv4_address: 172.30.1.3
 
   caller-b:

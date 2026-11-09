@@ -1,5 +1,5 @@
-//! The recipient inventory: the service's own record of which recipient keys `identity.age` is wrapped for (spec §3.10,
-//! §3.11, `design/recipients.md`).
+//! The recipient inventory: the service's own record of which recipient keys `identity.age` is wrapped for (spec §13,
+//! §14, `design/recipients.md`).
 //!
 //! An X25519 stanza does not name its recipient, so without this file the service could not rewrap the vault identity for
 //! the recipients it keeps. Anyone holding the vault public key could seal a list of their own choosing, so the

@@ -1,4 +1,4 @@
-//! The approval signer: what produces config approvals for the pinned approver (spec §3.9, §8.2 Q-9).
+//! The approval signer: what produces config approvals for the pinned approver (spec §12, implementation spec §2.2 Q-9).
 //!
 //! The approval transaction asks a signer for an envelope over a typed payload and never needs to know which kind of
 //! signer it holds, so the software signer, the TPM signer and the later YubiKey signer plug in at the same place and
