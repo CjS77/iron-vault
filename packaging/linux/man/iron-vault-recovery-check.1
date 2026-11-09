@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-recovery-check 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-recovery\-check \- Prove that your offline recovery key opens this vault: the service prompts for the key, read with echo off or from stdin, so `pass show iron\-vault\-recovery | sudo iron\-vault recovery check` works. It works while the service is Locked or Ready, changes nothing but the time it records, and keeps no copy of the key
+.SH SYNOPSIS
+\fBiron\-vault recovery check\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Prove that your offline recovery key opens this vault: the service prompts for the key, read with echo off or from stdin, so `pass show iron\-vault\-recovery | sudo iron\-vault recovery check` works. It works while the service is Locked or Ready, changes nothing but the time it records, and keeps no copy of the key
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-recipient-list 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-recipient\-list \- List every enrolled recipient, one line each: its `age1...` key, role, enrolment time and label. It works while the service is Ready, and refuses a missing or damaged recipient inventory without changing it
+.SH SYNOPSIS
+\fBiron\-vault recipient list\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+List every enrolled recipient, one line each: its `age1...` key, role, enrolment time and label. It works while the service is Ready, and refuses a missing or damaged recipient inventory without changing it
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

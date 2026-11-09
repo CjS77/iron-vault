@@ -1,0 +1,73 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault \- Iron Vault: a local proxy that holds API credentials so the programs that use them never do
+.SH SYNOPSIS
+\fBiron\-vault\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Iron Vault: a local proxy that holds API credentials so the programs that use them never do
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+iron\-vault\-serve(1)
+Run the service until SIGTERM or SIGINT
+.TP
+iron\-vault\-ping(1)
+Check that the service is running and show its deployment profile
+.TP
+iron\-vault\-status(1)
+Show the service, vault, approval, memory protection and credential states, without secrets. It exits 4 when the service answers and is not Ready
+.TP
+iron\-vault\-list(1)
+List every credential with its kind, permitted origins and standing, never a secret. It needs an open vault, and exits 4 while none is open
+.TP
+iron\-vault\-unlock(1)
+Open the vault: the service prompts for the vault passphrase, read with echo off or from stdin
+.TP
+iron\-vault\-lock(1)
+Clear the vault identity and every cached secret from the service\*(Aqs memory, leaving it Locked
+.TP
+iron\-vault\-init(1)
+Create the vault: the service prompts for the vault and approval passphrases, shows the recovery key once on the controlling terminal, and once you confirm you saved it, writes the vault and approves the initial config as version 1. It needs a controlling terminal, and leaves the service Locked
+.TP
+iron\-vault\-caller\-token(1)
+Issue a fresh caller token: it goes to stdout once, and its token_hash line to stderr. The service keeps no copy; the token works once a config naming the hash is approved with `config approve`
+.TP
+iron\-vault\-add(1)
+Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron\-vault add fx \-\-origin api.fx.example` works. It never overwrites an existing name
+.TP
+iron\-vault\-replace(1)
+Replace NAME\*(Aqs record with a new one, and with it the kind and the origins; the old record need not be readable, so this also repairs a damaged one. The service shows what changes, asks for the approval passphrase as owner presence, then prompts for the new secret. On stdin, the first line is the approval passphrase and the rest the secret. Routes that use NAME keep working only if the new kind and origins suit them; otherwise nothing changes
+.TP
+iron\-vault\-rm(1)
+Remove the credential NAME after you type the approval passphrase. It refuses while a route of the active config uses the name: approve a config without those routes first
+.TP
+iron\-vault\-config(1)
+Change the approved configuration
+.TP
+iron\-vault\-recovery(1)
+Check the owner\*(Aqs offline recovery key
+.TP
+iron\-vault\-recipient(1)
+Manage the keys that can open the vault
+.TP
+iron\-vault\-completions(1)
+Print a shell completion script to stdout. It never contacts the service, so it also runs at build time
+.SH EXTRA
+Exit codes:
+  0  success
+  1  the service answered with an error
+  2  usage error
+  3  no answer from the service: it is not running, this account may not connect, the exchange failed, a prompt
+     got no value, or a secret value the service sent could not be shown on a terminal
+  4  `status`: the service answered, and it is not Ready; `list`: no vault is open, so the credentials are unknown

@@ -51,6 +51,22 @@ Created by column means a file in the `.deb`'s data archive, which dpkg owns and
 | `/usr/lib/sysusers.d/iron-vault.conf` | `root:root` | `0644` | package | as above |
 | `/usr/lib/tmpfiles.d/iron-vault.conf` | `root:root` | `0644` | package | as above |
 | `/etc/logrotate.d/iron-vault` | `root:root` | `0644` | package, as a conffile | not checked by the service |
+| `/usr/share/doc/iron-vault/copyright` | `root:root` | `0644` | package | not checked by the service |
+| `/usr/share/doc/iron-vault/changelog.Debian.gz` | `root:root` | `0644` | package | not checked by the service |
+| `/usr/share/man/man1/iron-vault.1.gz` | `root:root` | `0644` | package | not checked by the service |
+| `/usr/share/man/man5/iron-vault-config.5.gz` | `root:root` | `0644` | package | not checked by the service |
+| `/usr/share/lintian/overrides/iron-vault` | `root:root` | `0644` | package | not checked by the service |
+
+The package also installs one man page per subcommand beside `iron-vault.1.gz`, such as `iron-vault-config-approve.1.gz`,
+with the same owner and mode. `clap_mangen` names them in each parent page. They are generated from the CLI definition
+into `packaging/linux/man/` by a test that fails when the committed pages are out of date, as the book's
+[CLI reference](../book/src/reference/cli.md) is.
+
+`iron-vault-config(5)` describes the config file, pairing with `iron-vault-config(1)` as `crontab(5)` pairs with
+`crontab(1)`. It is hand-written, a summary of the [configuration reference](../book/src/reference/configuration.md)
+without its refusal messages. A test in `iron-vault-policy` fails when the page does not name, in bold, every key and
+enumerated value the parser accepts (read from the parser's own unknown-key refusals), or when its EXAMPLE section is
+not a valid config.
 | `/etc/iron-vault` | `iron-vault:iron-vault` | `0700` | `tmpfiles.d` | `ConfigDir`: a directory owned by the service account, mode exactly `0700` |
 | `/var/lib/iron-vault` | `iron-vault:iron-vault` | `0700` | `tmpfiles.d` | `StateDir`: a directory owned by the service account, mode exactly `0700` |
 | `/run/iron-vault` | `iron-vault:iron-vault` | `0711` | `tmpfiles.d` | `RuntimeDir`: a directory owned by the service account, writable by neither group nor others |
@@ -370,6 +386,8 @@ A kept vault opens with a later install, but its published config and signature 
 
 - the package `Version:` is not the crate version with its first `-` turned into `~` plus the revision `-1`, or still holds a
   `-` before the revision (see below);
+- the newest entry of the changelog, `packaging/linux/debian/changelog`, is not that package version, so a version bump
+  needs a changelog entry;
 - the packaged binary's `--version` lists any feature, so a `dev-mode` package is refused;
 - a file's owner or mode differs from the [ownership table](#ownership), a path is owned by anyone but root, or
   anything is shipped under `/etc/iron-vault`, `/var/lib/iron-vault`, `/var/log/iron-vault` or `/run/iron-vault`;
@@ -383,8 +401,16 @@ which dpkg sorts above `0.2.0-1`, so the final release would not upgrade an alph
 The package's own scripts (`packaging/linux/debian/`) use `systemctl` rather than `deb-systemd-invoke` for the listener
 instances, because `deb-systemd-invoke` neither disables a unit nor takes a pattern.
 
-Accepted `lintian` warnings: none recorded yet. The first run on a machine with `lintian` installed must list any
-warning it keeps here with its reason.
+#### Accepted lintian tags
+
+The package ships these overrides in `/usr/share/lintian/overrides/iron-vault` (source
+`packaging/linux/lintian/iron-vault`). Any other error or warning is fixed, not overridden.
+
+| Tag | Level | Why it is accepted |
+|---|---|---|
+| `no-debconf-config` | error | The only debconf question is the [vault question](#the-vault-question), which `postrm` asks at purge time, as `mariadb-server` does. Nothing is asked at configure time, so there is no `config` script. |
+| `maintainer-script-calls-systemctl` (`prerm`) | warning | `prerm` stops and disables the listener socket instances, and `deb-systemd-invoke` neither disables a unit nor takes a pattern (above). |
+| `initial-upload-closes-no-bugs` | warning | The package is built from this repository and never uploaded to Debian, so its first changelog entry has no ITP bug to close. |
 
 ### Checking a real install
 

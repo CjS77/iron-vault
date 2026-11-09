@@ -1,0 +1,326 @@
+.\" Hand-written. Tests in crates/iron-vault-policy/tests/config_man_page.rs check that it names every key and value the
+.\" parser accepts, and that its EXAMPLE section is a valid config. The manual's configuration reference
+.\" (book/src/reference/configuration.md) is the full account, with every refusal message.
+.TH iron-vault-config 5 "" "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-config \- the Iron Vault configuration file
+.SH SYNOPSIS
+\fI/etc/iron\-vault/config.toml\fR
+.SH DESCRIPTION
+The config says where callers connect (listeners), who each caller is and which routes it may use (callers), and
+where each route sends requests and with which credential (routes).
+It is one TOML file in UTF\-8, at most 61440 bytes long.
+.PP
+You never edit the config the service runs.
+Write your own copy, anywhere you like, and approve it:
+.PP
+.RS
+\fBsudo iron\-vault config approve\fR \fIFILE\fR
+.RE
+.PP
+The service checks the file, shows its own summary of what changes, and asks you to type \fByes\fR and then the
+approval passphrase.
+It then signs the config, publishes it as \fIconfig.toml\fR with its signature \fIconfig.toml.sig\fR, and puts it into
+force without a restart.
+A config that fails a check uses up no approval version, and the active config does not change.
+.PP
+The signature covers every byte, comments and whitespace included.
+If the published copy is edited, the service refuses it: it stops proxying and reports \fBpolicy invalid\fR until you
+approve a config again.
+.SH GENERAL RULES
+\fBUnknown keys are refused\fR in every table, so a misspelt key is an error rather than a setting silently ignored.
+.PP
+\fBNames\fR of listeners, callers, routes and credentials are 1 to 64 bytes of \fBa\-z\fR, \fB0\-9\fR, \fB_\fR and
+\fB\-\fR, starting with a lowercase letter.
+.PP
+\fBPaths\fR must be absolute, with no \fB..\fR component and no NUL byte.
+.PP
+The top level holds \fBschema_version\fR and the tables below.
+Every table is optional.
+A config with only \fBschema_version = 1\fR is valid, and opens no listener.
+.TP
+\fBschema_version\fR (integer, required)
+The version of the file's format.
+It must be \fB1\fR in this release.
+.SH LISTENERS
+A \fB[listeners.\fINAME\fB]\fR table is one socket or address where callers connect.
+Each caller names the listener it arrives on.
+.TP
+\fBunix_socket\fR (path)
+A Unix socket, such as \fI/run/iron\-vault/proxy.sock\fR.
+Set exactly one of \fBunix_socket\fR and \fBaddress\fR.
+.TP
+\fBaddress\fR (string)
+An IP address and port, such as \fB127.0.0.1:7878\fR or \fB[::1]:7878\fR.
+A host name is refused, and so is port 0.
+In a protected install, systemd opens the socket and passes it to the service, so each address listener also needs
+an \fBiron\-vault\-listener@\fINAME\fB.socket\fR unit with the same address.
+.TP
+\fBtls_certificate\fR, \fBtls_key\fR (paths)
+The listener's TLS certificate chain and private key, in PEM.
+Set both or neither.
+The certificate must be owned by root or the service account and writable by nobody else; the key must be owned by the
+service account, with no group or other permission bits.
+They are required on an address outside loopback (\fB127.0.0.0/8\fR and \fB::1\fR), so caller tokens never cross a
+network in clear, and refused on a Unix socket.
+.TP
+\fBtoken_header\fR (string, default \fBProxy\-Authorization\fR)
+The header from which callers on this listener send their caller token.
+With \fBProxy\-Authorization\fR the caller sends \fBProxy\-Authorization: Bearer\fR \fITOKEN\fR.
+With any other header, such as \fBX\-Iron\-Vault\-Token\fR, the whole value is the token.
+It must not be a reserved header, apart from \fBProxy\-Authorization\fR itself, nor the slot header of a route this
+listener's callers can use.
+The service strips it before forwarding.
+.SH CALLERS
+A \fB[callers.\fINAME\fB]\fR table is one program, or group of programs, that Iron Vault recognises and grants routes
+to.
+.TP
+\fBlistener\fR (listener name, required)
+The listener the caller connects to.
+.TP
+\fBauth\fR (string, default \fBtoken\fR)
+How the caller is identified.
+All callers on one listener use the same kind.
+.RS
+.TP
+\fBtoken\fR
+The caller sends a caller token, whose hash is in \fBtoken_hash\fR.
+Anyone who can read the token can use the caller's routes.
+.TP
+\fBpeer\fR
+The caller is the OS account the kernel reports for the connecting process, named in \fBuser\fR.
+There is no token to steal.
+It needs a \fBunix_socket\fR listener, and every caller on that listener must be a peer caller with a different
+account.
+.TP
+\fBisolated\-network\fR
+The caller is recognised by the listener alone.
+It must be the only caller on an address listener with TLS, bound to an address only it can reach, such as its own
+container network: neither loopback nor a wildcard address.
+.RE
+.TP
+\fBtoken_hash\fR (string, with \fBauth = "token"\fR only)
+\fBblake2b:\fR followed by 64 lowercase hex digits, as printed by \fBiron\-vault caller\-token\fR.
+The service keeps only the hash.
+Token callers on one listener must have different hashes.
+To rotate a token, approve a config with the new hash: the old token stops working at that moment.
+.TP
+\fBuser\fR (account name, with \fBauth = "peer"\fR only)
+The account: \fBa\-z\fR or \fB_\fR, then \fBa\-z\fR, \fB0\-9\fR, \fB_\fR or \fB\-\fR, with an optional trailing
+\fB$\fR, at most 32 bytes.
+The account must exist on the host, and must not be root, the service account or the overflow uid
+(\fBnobody\fR).
+.TP
+\fBroutes\fR (array of route names, required)
+The routes the caller may use.
+It must not be empty or repeat a route, and every route it names must be defined.
+.TP
+\fBrate_limits\fR (table)
+A rate limit for this caller on one of its routes, keyed by route name, such as
+\fB[callers.code.rate_limits]\fR with \fBgithub = { requests = 30, per_seconds = 60, burst = 5 }\fR.
+It applies on top of the route's own limit, and may be stricter but never looser.
+.SH ROUTES
+A \fB[routes.\fINAME\fB]\fR table maps requests under a path prefix to one upstream, with one credential in one slot.
+.TP
+\fBprefix\fR (string, required)
+The path under which callers send requests for this route.
+The service takes it off and sends the rest of the path upstream.
+It matches whole segments: \fB/fx\fR matches \fB/fx\fR and \fB/fx/latest\fR, never \fB/fxx\fR.
+It must not be \fB/\fR, contain a wildcard or \fB%\fR, end in a slash, or overlap another route's prefix.
+.TP
+\fBupstream\fR (string, required)
+The HTTPS URL that requests are sent to, with an optional base path, such as
+\fBhttps://api.venice.ai/api/v1\fR.
+It starts with \fBhttps://\fR in lowercase, and has no user\-info, query or fragment.
+An IP address host must be in canonical form.
+A trailing slash is dropped, and the port defaults to 443.
+.TP
+\fBcredential\fR (credential name, required)
+A credential in the vault, stored with \fBiron\-vault add\fR.
+The origins given to \fBadd\fR are kept inside the encrypted record, and the route's upstream must be one of them, so
+a config change can never send an existing key to a new host.
+Only \fBiron\-vault replace\fR changes them.
+.TP
+\fBslot\fR (table or string, required)
+The one place the service writes the credential.
+It first removes whatever the caller sent there, so a placeholder key is replaced, never forwarded.
+.RS
+.TP
+\fB{ header = "\fINAME\fB" }\fR
+The header holds the key alone.
+\fBheader\fR must not be a reserved header; \fBAuthorization\fR is allowed.
+.TP
+\fB{ header = "\fINAME\fB", format = "Bearer {}" }\fR
+The key goes in place of \fB{}\fR.
+\fBformat\fR is printable ASCII with exactly one \fB{}\fR and no other braces, and defaults to \fB{}\fR.
+.TP
+\fB{ query = "\fINAME\fB" }\fR
+The key is added to the query as \fINAME\fB=\fIKEY\fR.
+The name is made only of \fBA\-Z a\-z 0\-9 \- . _ ~\fR.
+.TP
+\fB"basic"\fR
+For a credential added with a username and password: \fBAuthorization: Basic\fR and the encoded pair.
+.RE
+.TP
+\fBmethods\fR (array of strings, required)
+The methods the route allows: any of \fBGET\fR, \fBHEAD\fR, \fBPOST\fR, \fBPUT\fR, \fBPATCH\fR, \fBDELETE\fR and
+\fBOPTIONS\fR, in upper case, without repeats.
+\fBCONNECT\fR and \fBTRACE\fR are never allowed.
+.TP
+\fBpaths\fR (array of strings, required)
+The path patterns the route allows.
+They match the full path sent upstream, which is the upstream's base path followed by the rest of the request path,
+and never see the query.
+\fB*\fR matches exactly one segment and \fB**\fR zero or more; a wildcard must be a whole segment.
+\fB["/**"]\fR allows every path, and must be written out: an empty list is refused.
+A pattern starts with \fB/\fR, has no empty or dot segment and no trailing slash.
+Literal segments hold letters, digits and \fB\- . _ ~ ! $ & \(aq ( ) + , ; = : @\fR.
+.TP
+\fBrate_limit\fR (table, required)
+\fB{ requests =\fR \fIN\fB, per_seconds =\fR \fIN\fB, burst =\fR \fIN\fB }\fR, three nonzero whole numbers.
+A token bucket that holds at most \fBburst\fR tokens and refills at \fBrequests\fR tokens every \fBper_seconds\fR
+seconds.
+Each request takes a token, and a request that finds the bucket empty gets \fB429\fR.
+All the route's callers share the bucket.
+Every bucket starts empty each time the service becomes Ready, such as after \fBunlock\fR or an approval.
+.TP
+\fBconfirm\fR (string, default \fBnone\fR)
+\fBnone\fR or \fBtouch\fR.
+No touch confirmation provider exists in this release, so a route with \fBtouch\fR is refused.
+.TP
+\fBca_file\fR (path)
+A PEM file of CA certificates that the route trusts instead of the built\-in roots.
+Install it where only an administrator can write.
+If it cannot be read, the config is still approved, but the routes that pin it are unavailable.
+.SH RESERVED HEADERS
+The service removes these from every request before forwarding, and sets \fBHost\fR itself.
+None may be a slot, and none but \fBProxy\-Authorization\fR may be a \fBtoken_header\fR.
+Names are compared without regard to case.
+.PP
+\fBConnection\fR, \fBKeep\-Alive\fR, \fBProxy\-Connection\fR, \fBProxy\-Authenticate\fR,
+\fBProxy\-Authorization\fR, \fBTE\fR, \fBTrailer\fR, \fBTransfer\-Encoding\fR, \fBUpgrade\fR, \fBHost\fR,
+\fBContent\-Length\fR, \fBForwarded\fR, \fBVia\fR, \fBX\-Real\-IP\fR, \fBTrue\-Client\-IP\fR, \fBX\-Client\-IP\fR,
+\fBCF\-Connecting\-IP\fR, \fBX\-Host\fR, \fBX\-Original\-Host\fR, \fBX\-HTTP\-Host\-Override\fR,
+\fBX\-HTTP\-Method\-Override\fR, \fBX\-Method\-Override\fR, \fBX\-HTTP\-Method\fR, \fBX\-Original\-URL\fR,
+\fBX\-Rewrite\-URL\fR, and every header starting with \fBX\-Forwarded\-\fR.
+.SH LIMITS
+The \fB[limits]\fR table holds service\-wide limits.
+Every key is optional, and a key left out keeps its default.
+Zero is refused, and so is a value above the ceiling.
+.TP
+\fBmax_header_bytes\fR (default 65536, ceiling 1048576)
+A request line and headers, in bytes.
+.TP
+\fBmax_header_count\fR (default 100, ceiling 1000)
+A request's headers, in number.
+.TP
+\fBmax_request_body_bytes\fR (default 10485760, ceiling 1073741824)
+A request body, in bytes.
+.TP
+\fBmax_decompressed_response_bytes\fR (default 67108864, ceiling 4294967296)
+A response body after decompression for scrubbing, in bytes.
+.TP
+\fBmax_decompression_ratio\fR (default 100, ceiling 10000)
+Decompressed size over compressed size.
+.TP
+\fBrequest_timeout_secs\fR (default 300, ceiling 3600)
+A whole request, in seconds.
+.TP
+\fBupstream_timeout_secs\fR (default 300, ceiling 600)
+Waiting for the upstream's response headers, in seconds.
+It must not exceed \fBrequest_timeout_secs\fR.
+.TP
+\fBmax_connections\fR (default 256, ceiling 65536)
+Concurrent caller connections.
+.SH LOGGING
+The \fB[logging]\fR table says where the audit log goes.
+.TP
+\fBdestination\fR (string)
+Where the log goes: \fBstdout\fR, or an absolute directory in which the service writes \fIiron\-vault.log\fR.
+When it is not set, the log goes to \fI/var/log/iron\-vault\fR in a protected install.
+A directory must exist before you approve and lie outside the state and config directories.
+The service account must own it, with no group write and no access for others; \fBconfig approve\fR checks it.
+.SH RECOVERY
+The \fB[recovery]\fR table sets how often the service reminds you to check the offline recovery key.
+.TP
+\fBreminder_days\fR (integer, default 90)
+How many days may pass after the last \fBiron\-vault recovery check\fR before the service reminds you to run
+another: a whole number from 7 to 365.
+.SH EXAMPLE
+One socket for two local accounts, each recognised by the kernel, and a loopback address for a tool that can only
+take an HTTP URL, with a caller token:
+.PP
+.EX
+schema_version = 1
+
+[listeners.local]
+unix_socket = "/run/iron\-vault/proxy.sock"
+
+[listeners.loopback]
+address = "127.0.0.1:7878"
+
+[callers.code]
+listener = "local"
+auth = "peer"
+user = "code"
+routes = ["github"]
+
+[callers.trading]
+listener = "local"
+auth = "peer"
+user = "trading"
+routes = ["coingecko"]
+
+[callers.brave\-cli]
+listener = "loopback"
+token_hash = "blake2b:0123456789abcdef00112233445566778899aabbccddeeff0f1e2d3c4b5a6978"
+routes = ["brave"]
+
+[routes.github]
+prefix = "/github"
+upstream = "https://api.github.com"
+credential = "github"
+slot = { header = "Authorization", format = "Bearer {}" }
+methods = ["GET", "POST"]
+paths = ["/user/repos", "/repos/*/*/issues"]
+rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
+
+[routes.coingecko]
+prefix = "/coingecko"
+upstream = "https://api.coingecko.com"
+credential = "coingecko"
+slot = { header = "x\-cg\-demo\-api\-key" }
+methods = ["GET"]
+paths = ["/api/v3/**"]
+rate_limit = { requests = 30, per_seconds = 60, burst = 5 }
+
+[routes.brave]
+prefix = "/brave"
+upstream = "https://api.search.brave.com"
+credential = "brave"
+slot = { header = "X\-Subscription\-Token" }
+methods = ["GET"]
+paths = ["/res/v1/web/search"]
+rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
+.EE
+.PP
+The \fBcode\fR account then reaches GitHub with:
+.PP
+.RS
+\fBcurl \-\-unix\-socket /run/iron\-vault/proxy.sock http://localhost/github/user/repos\fR
+.RE
+.SH FILES
+.TP
+\fI/etc/iron\-vault/config.toml\fR
+The approved config, as the service published it.
+.TP
+\fI/etc/iron\-vault/config.toml.sig\fR
+Its approval signature.
+.TP
+\fI$XDG_CONFIG_HOME/iron\-vault\-dev/config.toml\fR
+The approved config in development mode.
+.SH SEE ALSO
+\fBiron\-vault\fR(1), \fBiron\-vault\-config\-approve\fR(1), \fBiron\-vault\-caller\-token\fR(1),
+\fBiron\-vault\-add\fR(1), \fBiron\-vault\-replace\fR(1)
+.PP
+The configuration reference in the Iron Vault manual lists every rule with the refusal it gives.

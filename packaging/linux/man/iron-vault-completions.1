@@ -1,0 +1,27 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-completions 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-completions \- Print a shell completion script to stdout. It never contacts the service, so it also runs at build time
+.SH SYNOPSIS
+\fBiron\-vault completions\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISHELL\fR> 
+.SH DESCRIPTION
+Print a shell completion script to stdout. It never contacts the service, so it also runs at build time
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fISHELL\fR>
+The shell to generate the script for
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+bash: Bash, through the bash\-completion framework
+.RE

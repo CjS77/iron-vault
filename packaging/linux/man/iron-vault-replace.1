@@ -1,0 +1,35 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-replace 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-replace \- Replace NAME\*(Aqs record with a new one, and with it the kind and the origins; the old record need not be readable, so this also repairs a damaged one. The service shows what changes, asks for the approval passphrase as owner presence, then prompts for the new secret. On stdin, the first line is the approval passphrase and the rest the secret. Routes that use NAME keep working only if the new kind and origins suit them; otherwise nothing changes
+.SH SYNOPSIS
+\fBiron\-vault replace\fR [\fB\-\-admin\-socket\fR] [\fB\-\-kind\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-origin\fR> <\fINAME\fR> 
+.SH DESCRIPTION
+Replace NAME\*(Aqs record with a new one, and with it the kind and the origins; the old record need not be readable, so this also repairs a damaged one. The service shows what changes, asks for the approval passphrase as owner presence, then prompts for the new secret. On stdin, the first line is the approval passphrase and the rest the secret. Routes that use NAME keep working only if the new kind and origins suit them; otherwise nothing changes
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-\-kind\fR \fI<KIND>\fR [default: static]
+The new kind: a static key, or a Basic username and password
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+static: A provider key, sent as is
+.IP \(bu 2
+basic: A username and password, sent as `Authorization: Basic`
+.RE
+.TP
+\fB\-\-origin\fR \fI<ORIGIN>\fR
+A new permitted origin, as for `add`. Repeat for each origin, up to 32; the old origins are not kept
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fINAME\fR>
+The credential name

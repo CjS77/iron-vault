@@ -13,11 +13,13 @@
 # The checks, each of which fails the script:
 #  - the package version is the crate version with the first `-` turned into `~`, plus the revision `-1`
 #    (`0.2.0-alpha` becomes `0.2.0~alpha-1`), so a pre-release sorts below the final release; no `-` may precede the revision;
+#  - the changelog's newest entry is that package version;
 #  - the packaged binary's `--version` lists no feature, so neither `dev-mode` nor `container` is packaged;
 #  - every file's owner and mode match the design's ownership table, and nothing is owned by a non-root account;
 #  - nothing is shipped under the service's own directories, and the only conffile is the logrotate rule;
 #  - the maintainer scripts are present and executable;
 #  - lintian reports no error. A missing lintian fails the script; IRON_VAULT_SKIP_LINTIAN=1 opts out explicitly.
+# A package that passes every check, lintian included, is copied to target/debian/<package>_<version>_<arch>.deb.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -48,6 +50,14 @@ case "${built_version%-1}" in
     *-*) fail "package version $built_version has a '-' before the revision; a pre-release must use '~'" ;;
 esac
 
+echo "== changelog version"
+# The newest entry's heading is `iron-vault (<version>) <distribution>; urgency=<urgency>`.
+changelog_version=$(dpkg-deb --fsys-tarfile "$deb" | tar -xO ./usr/share/doc/iron-vault/changelog.Debian.gz | gzip -dc \
+    | sed -n '1s/^iron-vault (\([^)]*\)).*/\1/p')
+echo "$changelog_version"
+[ "$changelog_version" = "$deb_version" ] \
+    || fail "the changelog's newest entry is ${changelog_version:-missing}, expected $deb_version; add an entry to packaging/linux/debian/changelog"
+
 echo "== packaged binary reports no features"
 dpkg-deb --fsys-tarfile "$deb" | tar -xO ./usr/bin/iron-vault >"$work/iron-vault"
 chmod +x "$work/iron-vault"
@@ -67,6 +77,11 @@ expected=$(cat <<'TABLE'
 ./usr/lib/sysusers.d/iron-vault.conf -rw-r--r--
 ./usr/lib/tmpfiles.d/iron-vault.conf -rw-r--r--
 ./etc/logrotate.d/iron-vault -rw-r--r--
+./usr/share/doc/iron-vault/copyright -rw-r--r--
+./usr/share/doc/iron-vault/changelog.Debian.gz -rw-r--r--
+./usr/share/man/man1/iron-vault.1.gz -rw-r--r--
+./usr/share/man/man5/iron-vault-config.5.gz -rw-r--r--
+./usr/share/lintian/overrides/iron-vault -rw-r--r--
 TABLE
 )
 # Fields of `dpkg-deb -c`: mode, owner/group, size, date, time, path (symlinks add ` -> target`).
@@ -111,3 +126,8 @@ else
     exit 0
 fi
 echo "package checks passed"
+# Debian's file name, <package>_<version>_<architecture>.deb, from the package's own fields.
+deb_name="$(dpkg-deb -f "$deb" Package)_${built_version}_$(dpkg-deb -f "$deb" Architecture).deb"
+mkdir -p "$root/target/debian"
+cp "$deb" "$root/target/debian/$deb_name"
+echo "$root/target/debian/$deb_name"

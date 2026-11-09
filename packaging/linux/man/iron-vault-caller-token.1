@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-caller-token 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-caller\-token \- Issue a fresh caller token: it goes to stdout once, and its token_hash line to stderr. The service keeps no copy; the token works once a config naming the hash is approved with `config approve`
+.SH SYNOPSIS
+\fBiron\-vault caller\-token\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Issue a fresh caller token: it goes to stdout once, and its token_hash line to stderr. The service keeps no copy; the token works once a config naming the hash is approved with `config approve`
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

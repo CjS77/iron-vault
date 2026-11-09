@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-init 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-init \- Create the vault: the service prompts for the vault and approval passphrases, shows the recovery key once on the controlling terminal, and once you confirm you saved it, writes the vault and approves the initial config as version 1. It needs a controlling terminal, and leaves the service Locked
+.SH SYNOPSIS
+\fBiron\-vault init\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Create the vault: the service prompts for the vault and approval passphrases, shows the recovery key once on the controlling terminal, and once you confirm you saved it, writes the vault and approves the initial config as version 1. It needs a controlling terminal, and leaves the service Locked
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

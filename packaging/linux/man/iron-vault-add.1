@@ -1,0 +1,35 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-add 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-add \- Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron\-vault add fx \-\-origin api.fx.example` works. It never overwrites an existing name
+.SH SYNOPSIS
+\fBiron\-vault add\fR [\fB\-\-admin\-socket\fR] [\fB\-\-kind\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-origin\fR> <\fINAME\fR> 
+.SH DESCRIPTION
+Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron\-vault add fx \-\-origin api.fx.example` works. It never overwrites an existing name
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-\-kind\fR \fI<KIND>\fR [default: static]
+The credential\*(Aqs kind: a static key, or a Basic username and password
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+static: A provider key, sent as is
+.IP \(bu 2
+basic: A username and password, sent as `Authorization: Basic`
+.RE
+.TP
+\fB\-\-origin\fR \fI<ORIGIN>\fR
+A permitted origin: `host`, `host:port`, `[v6]` or `[v6]:port`, without a scheme (HTTPS is implied); the port defaults to 443. Repeat for each origin, up to 32
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fINAME\fR>
+The credential name, which routes reference

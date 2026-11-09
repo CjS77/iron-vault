@@ -1,0 +1,26 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-recipient 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-recipient \- Manage the keys that can open the vault
+.SH SYNOPSIS
+\fBiron\-vault recipient\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Manage the keys that can open the vault
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+iron\-vault\-recipient\-list(1)
+List every enrolled recipient, one line each: its `age1...` key, role, enrolment time and label. It works while the service is Ready, and refuses a missing or damaged recipient inventory without changing it
+.TP
+iron\-vault\-recipient\-add(1)
+Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not affected
+.TP
+iron\-vault\-recipient\-remove(1)
+Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient and the last recovery recipient, and says that copies of `identity.age` made before still open with the removed key

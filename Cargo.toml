@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.3.0-alpha"
 edition = "2024"
-license = "Apache-2.0"
+license = "MPL-2.0"
 rust-version = "1.98.0"
 
 [workspace.dependencies]
@@ -27,6 +27,8 @@ bytes = "1.12.1"
 clap = { version = "4.6", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
 # Shell completion scripts for `completions`, generated from the same `Cli` definition. Default features are off.
 clap_complete = { version = "4.6", default-features = false }
+# The Linux package's man pages, generated from the same `Cli` definition by a test. Default features are off.
+clap_mangen = { version = "0.3.3", default-features = false }
 # Approval signing and verification. zeroize clears the software signer's private key and its expanded form on drop;
 # std, fast tables and rand_core stay off: verify_strict needs no feature, and key generation fills the seed from
 # getrandom directly.

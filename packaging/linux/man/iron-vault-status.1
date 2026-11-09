@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-status 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-status \- Show the service, vault, approval, memory protection and credential states, without secrets. It exits 4 when the service answers and is not Ready
+.SH SYNOPSIS
+\fBiron\-vault status\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Show the service, vault, approval, memory protection and credential states, without secrets. It exits 4 when the service answers and is not Ready
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

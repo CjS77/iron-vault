@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-rm 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-rm \- Remove the credential NAME after you type the approval passphrase. It refuses while a route of the active config uses the name: approve a config without those routes first
+.SH SYNOPSIS
+\fBiron\-vault rm\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR> 
+.SH DESCRIPTION
+Remove the credential NAME after you type the approval passphrase. It refuses while a route of the active config uses the name: approve a config without those routes first
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fINAME\fR>
+The credential name to remove

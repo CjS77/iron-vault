@@ -84,6 +84,8 @@ tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "signal"
 tokio-rustls.workspace = true
 
 [dev-dependencies]
+# Generates the Linux package's man pages; test-only, so the release binary carries none of it.
+clap_mangen.workspace = true
 # Signs the approvals the config check tests commit, as the store's own test signer does.
 ed25519-dalek.workspace = true
 # Encodes the secrets the scrub tests expect the service to recognise.
@@ -119,6 +121,16 @@ workspace = true
 [package.metadata.deb]
 name = "iron-vault"
 maintainer = "Iron Vault maintainers <noreply@example.invalid>"
+copyright = "2026 CjS77"
+extended-description = """\
+Iron Vault holds API credentials so the programs that use them never do. An application points its base URL at \
+Iron Vault and holds at most a local caller token. Iron Vault authenticates the caller, checks its route, adds the \
+credential and forwards the request over verified TLS.
+
+This package runs Iron Vault as the iron-vault system service, with its vault in /var/lib/iron-vault. The service \
+starts Locked: run 'sudo iron-vault init' after the first install."""
+# Debian-formatted; `scripts/build-deb.sh` fails when its newest entry is not the package version.
+changelog = "../../packaging/linux/debian/changelog"
 section = "admin"
 priority = "optional"
 depends = "$auto, systemd, debconf (>= 0.5) | debconf-2.0"
@@ -133,4 +145,9 @@ assets = [
     ["../../packaging/linux/sysusers.d/iron-vault.conf", "usr/lib/sysusers.d/iron-vault.conf", "644"],
     ["../../packaging/linux/tmpfiles.d/iron-vault.conf", "usr/lib/tmpfiles.d/iron-vault.conf", "644"],
     ["../../packaging/linux/logrotate.d/iron-vault", "etc/logrotate.d/iron-vault", "644"],
+    # Generated from the CLI definition by `cli::man_page`'s test; cargo-deb gzips them.
+    ["../../packaging/linux/man/*.1", "usr/share/man/man1/", "644"],
+    # Hand-written; `iron-vault-policy`'s `config_man_page` test checks it against the parser.
+    ["../../packaging/linux/man/iron-vault-config.5", "usr/share/man/man5/iron-vault-config.5", "644"],
+    ["../../packaging/linux/lintian/iron-vault", "usr/share/lintian/overrides/iron-vault", "644"],
 ]

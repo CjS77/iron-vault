@@ -1,0 +1,27 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-recipient-add 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-recipient\-add \- Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not affected
+.SH SYNOPSIS
+\fBiron\-vault recipient add\fR [\fB\-\-admin\-socket\fR] [\fB\-\-recovery\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-label\fR> [\fIRECIPIENT\fR] 
+.SH DESCRIPTION
+Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not affected.
+.PP
+With \-\-recovery, the service instead generates a new offline recovery key and shows it once, as `init` does; save it, type yes, then authorize with the vault passphrase. Check it with `recovery check`, then remove the old recovery key with `recipient remove`.
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-\-recovery\fR
+Generate a new recovery key and enroll it, instead of enrolling a key you supply
+.TP
+\fB\-\-label\fR \fI<LABEL>\fR
+Which device or copy the key is, 1 to 64 bytes: `alice laptop 2026`
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+[\fIRECIPIENT\fR]
+The `age1...` public key to enroll

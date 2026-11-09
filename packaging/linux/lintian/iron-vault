@@ -1,0 +1,11 @@
+# Each override is recorded with its reason in design/linux-package.md, "Accepted lintian tags".
+
+# The only debconf question is the vault question, which postrm asks at purge time, as mariadb-server does. There is
+# nothing to ask at configure time, so there is no config script.
+iron-vault: no-debconf-config
+
+# prerm stops and disables the listener socket instances. deb-systemd-invoke takes no unit patterns and cannot disable.
+iron-vault: maintainer-script-calls-systemctl [prerm:*]
+
+# The package is built from this repository, not uploaded to Debian, so its first entry has no ITP bug to close.
+iron-vault: initial-upload-closes-no-bugs [usr/share/doc/iron-vault/changelog.Debian.gz:1]

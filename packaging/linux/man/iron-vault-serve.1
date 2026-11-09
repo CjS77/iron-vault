@@ -1,0 +1,21 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-serve 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-serve \- Run the service until SIGTERM or SIGINT
+.SH SYNOPSIS
+\fBiron\-vault serve\fR [\fB\-\-admin\-socket\fR] [\fB\-\-log\-to\-stdout\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Run the service until SIGTERM or SIGINT.
+.PP
+In a protected installation systemd starts it as the `iron\-vault` service account, so you never run it yourself. It starts Locked: run `unlock` after each start.
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-\-log\-to\-stdout\fR
+Write the log to stdout until an approved config names a destination, as the Docker image does. The service refuses it when stdout is the systemd journal
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)

@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-unlock 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-unlock \- Open the vault: the service prompts for the vault passphrase, read with echo off or from stdin
+.SH SYNOPSIS
+\fBiron\-vault unlock\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Open the vault: the service prompts for the vault passphrase, read with echo off or from stdin
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
