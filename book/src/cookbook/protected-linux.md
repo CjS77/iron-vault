@@ -95,7 +95,7 @@ Another account gets `401` unless the config names it, and `sudo curl` is refuse
 ### 6. Add a TCP listener, if a caller needs one
 
 systemd holds every TCP port, through an `iron-vault-listener@<name>.socket` instance named after the listener. Give
-the instance its address, enable it, restart and unlock the service, then approve a config with a listener of the
+the instance its address, enable it, start it while the service is stopped, start and unlock the service, then approve a config with a listener of the
 same name and address. The four steps are in
 [Add a TCP listener](../installation/linux-install.md#add-a-tcp-listener). A non-loopback address also needs
 `tls_certificate` and `tls_key`.

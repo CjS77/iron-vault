@@ -154,16 +154,20 @@ non-loopback address also needs `tls_certificate` and `tls_key` in the config.
    ```
 
    An address that appears only after boot, such as a Docker bridge, also needs `FreeBind=yes` in the drop-in.
-2. Start it now and at every boot:
+2. Enable it, so it starts at every boot:
 
    ```sh
-   sudo systemctl enable --now iron-vault-listener@loopback.socket
+   sudo systemctl enable iron-vault-listener@loopback.socket
    ```
 
-3. Restart the service so it receives the socket, and unlock it again:
+3. Start it with the service stopped, then start the service so it receives the socket, and unlock it again. systemd
+   refuses to start a socket while its service is running (`Socket service iron-vault.service already active,
+   refusing`), so `enable --now` or a plain `start` fails here:
 
    ```sh
-   sudo systemctl restart iron-vault
+   sudo systemctl stop iron-vault
+   sudo systemctl start iron-vault-listener@loopback.socket
+   sudo systemctl start iron-vault
    sudo iron-vault unlock
    ```
 

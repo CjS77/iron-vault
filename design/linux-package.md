@@ -255,10 +255,13 @@ unit can therefore only remove a listener, never widen one. Socket unit files an
 
 ### Adding and removing a TCP listener
 
-A running service cannot take a socket that was started after it, so a new TCP listener needs a restart:
+A running service cannot take a socket that was started after it, and systemd refuses to start a socket unit whose
+service is already active (`Socket service iron-vault.service already active, refusing`). A new TCP listener therefore
+needs the service stopped while its socket starts:
 
-1. Write the drop-in, then `sudo systemctl enable --now iron-vault-listener@<name>.socket`.
-2. `sudo systemctl restart iron-vault`, then `sudo iron-vault unlock`. The restarted service holds the new socket.
+1. Write the drop-in, then `sudo systemctl enable iron-vault-listener@<name>.socket`.
+2. `sudo systemctl stop iron-vault`, `sudo systemctl start iron-vault-listener@<name>.socket`,
+   `sudo systemctl start iron-vault`, then `sudo iron-vault unlock`. The started service holds the new socket.
 3. Approve a config that names the listener. The approval can come before step 2, and its summary then marks the
    listener as taking effect after restart ([config-approval.md](config-approval.md#open-questions), question 2).
 
