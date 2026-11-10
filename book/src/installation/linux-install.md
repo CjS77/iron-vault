@@ -186,6 +186,31 @@ The service serves on a passed socket only if an approved listener of the same n
 a socket unit can remove a listener but never widen one. To remove a listener, approve a config without it, then run
 `sudo systemctl disable --now iron-vault-listener@loopback.socket`.
 
+## Stop the service
+
+`sudo systemctl stop iron-vault` stops the service only until a caller connects. systemd keeps listening on each
+listener socket and starts the service again on the next connection. It comes back Locked, so no credential is exposed,
+but it is running. If you stop it during an incident, for example because you suspect a caller was compromised, stop
+the listener sockets with it:
+
+```sh
+sudo systemctl stop 'iron-vault-listener@*.socket' iron-vault.service
+```
+
+It stays stopped until the next boot. Stopping the sockets releases their ports, and another local process can then
+bind a TCP port and collect the caller tokens that callers keep sending to it. Stop your callers first. If any kept
+sending while the ports were free, issue new caller tokens for the callers on TCP listeners with
+[`iron-vault caller-token`](../reference/cli.md#iron-vault-caller-token) and approve a config with their new
+`token_hash` lines.
+
+To start it again, start each listener socket, then the service, and unlock it:
+
+```sh
+sudo systemctl start iron-vault-listener@loopback.socket
+sudo systemctl start iron-vault
+sudo iron-vault unlock
+```
+
 ## Upgrade
 
 Build the new package as under [Install](#install), then:

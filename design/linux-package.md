@@ -268,6 +268,21 @@ needs the service stopped while its socket starts:
 To remove one, approve a config without it, then `sudo systemctl disable --now iron-vault-listener@<name>.socket`.
 Otherwise systemd keeps the port and passes a socket that nothing serves on.
 
+### Stopping the service
+
+`sudo systemctl stop iron-vault` does not keep the service down. Each listener socket names
+`Service=iron-vault.service`, so systemd keeps listening and starts the service again on the next caller connection.
+It comes back Locked, so no credential is exposed, but an owner who stops it during an incident expects it to stay
+stopped. To stop it until the next boot, stop the sockets with it:
+
+```sh
+sudo systemctl stop 'iron-vault-listener@*.socket' iron-vault.service
+```
+
+This releases the listeners' ports. Another local process can then bind a TCP port and collect the caller tokens that
+callers keep sending to it. Stop the callers first, or rotate the caller tokens of the callers on TCP listeners
+afterwards. To bring the service back, start each `iron-vault-listener@<name>.socket`, then `iron-vault`, then unlock.
+
 ## Lifecycle
 
 The maintainer scripts follow the dpkg contract
