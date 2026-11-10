@@ -137,7 +137,8 @@ runs. It fails `configure` unless the account is what `systemd-sysusers` would h
 - an `iron-vault` group with no members, which is no other account's primary group;
 - in `/etc/gshadow`, a group with no administrators, no members and no usable password. A password is unusable when
   it is empty or starts with `!` or `*`, which `gshadow(5)` says is not a valid `crypt(3)` string, so `newgrp` cannot
-  be passed with it. `adduser --system --group` writes `iron-vault:!::`. A group administrator can add members with
+  be passed with it. `systemd-sysusers` writes `iron-vault:!*::`; `adduser --system --group`'s `!::` and `*::` are also
+  accepted. Every `iron-vault` line is read. A group administrator can add members with
   `gpasswd -a`, and anyone who knows a password can join with `newgrp`. Members are refused here as well as in
   `/etc/group`, because the two lists can differ. A missing `/etc/gshadow` means no group has an entry;
 - no other account with its uid and no other group with its gid, because either would be the same identity under
@@ -149,7 +150,8 @@ configures skip the check: the account is then the package's own, and its group 
 ([Admin access](#admin-access)). A purge keeps the account and group, so a collector's membership must be removed
 before reinstalling and added back afterwards. When `postinst` cannot run the check, because a file is missing or
 unreadable or `awk` fails, it says so and fails `configure` too, because an account it could not check may be one it
-should refuse; that includes an `/etc/gshadow` that exists but cannot be read. The check reads only the files in `/etc`, not accounts that NSS takes from a directory service.
+should refuse; that includes an `/etc/gshadow` that exists but cannot be read. The check reads only the files in `/etc`,
+not accounts that NSS takes from a directory service.
 
 #### Why `serve` does not check the account again
 
@@ -183,7 +185,8 @@ socket refuses the service account's uid ([Admin access](#admin-access);
 
 One gap is left open: an account from a directory service, which neither check would fully close, because `serve`
 still could not see its password state. The `postinst` check does not read the password field of `/etc/group` either;
-it matters only on a host without `/etc/gshadow`.
+it also matters on a host whose `/etc/gshadow` has no `iron-vault` entry, or no `/etc/gshadow` at all, because
+`newgrp(1)` falls back to the `/etc/group` password. Checking that field is follow-up ticket K-290.
 
 `/usr/lib/tmpfiles.d/iron-vault.conf` creates the three directories:
 
@@ -569,12 +572,13 @@ from this file, then checks the service's account, locked memory, core limit and
 account nor the service account can use the admin socket, that the test account cannot reach `/proc/<pid>/mem`,
 `/proc/<pid>/environ` or the vault, that a group-writable `/etc/iron-vault` stops a `systemctl restart` (a reboot would
 repair it), that a second `serve` fails on the state lock, and that a listener socket unit keeps its port across a
-service restart and stays active through seven crashes, past systemd's default start limit. It does not run the
-[account check](#account-and-directories) against `/etc/gshadow`; the fixture tests in
+service restart and stays active through seven crashes, past systemd's default start limit. It refuses to run
+without `--i-know-this-is-a-disposable-vm`. The refusal of the group-writable directory is read from the journal,
+because the service's startup error goes to stderr.
+
+The script does not run the [account check](#account-and-directories) against `/etc/gshadow`; the fixture tests in
 `crates/iron-vault/tests/package_account_check.rs` do. To check a real host by hand, read the `iron-vault` line of
-`/etc/gshadow`, which should be `iron-vault:!::` or `iron-vault:*::`. It refuses to run without
-`--i-know-this-is-a-disposable-vm`. The refusal of the group-writable directory is read from the journal, because the
-service's startup error goes to stderr.
+`/etc/gshadow`, which should be `iron-vault:!*::` on a package install.
 
 ## Admin access
 

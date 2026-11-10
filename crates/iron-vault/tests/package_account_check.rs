@@ -1,7 +1,7 @@
 //! The Linux package's `postinst` check of an `iron-vault` account or group that existed before the package.
 //!
 //! The check is the block of `packaging/linux/debian/postinst` between its BEGIN and END markers. Each test runs that
-//! block with `sh` against fixture `passwd`, `group`, `shadow` and `login.defs` files in a temporary directory, so no
+//! block with `sh` against fixture `passwd`, `group`, `shadow`, `gshadow` and `login.defs` files in a temporary directory, so no
 //! test reads the host's account files or needs root. The baseline is the account `systemd-sysusers` creates from the
 //! package's `sysusers.d` line; each failing case changes one attribute of it.
 
@@ -42,7 +42,7 @@ impl Accounts {
                 "alice:$6$salt$hash:20000:0:99999:7:::",
                 "iron-vault:!*:20000::::::",
             ]),
-            gshadow: Some(lines(&["root:*::", "sudo:*::alice", "alice:!::", "iron-vault:!::"])),
+            gshadow: Some(lines(&["root:*::", "sudo:*::alice", "alice:!::", "iron-vault:!*::"])),
             login_defs: Some("UID_MIN 1000\nSYS_UID_MIN 100\nSYS_UID_MAX 999\n".to_string()),
         }
     }
@@ -68,14 +68,8 @@ impl Accounts {
         self
     }
 
-    fn gshadow_entry(mut self, entry: &str) -> Self {
-        let lines = self.gshadow.as_mut().expect("a gshadow file");
-        let index = lines
-            .iter()
-            .position(|line| line.starts_with("iron-vault:"))
-            .expect("an iron-vault entry");
-        lines[index] = entry.to_string();
-        self
+    fn gshadow_entry(self, entry: &str) -> Self {
+        self.service_entry(|a| a.gshadow.as_mut().expect("a gshadow file"), entry)
     }
 
     fn passwd_entry(self, entry: &str) -> Self {
@@ -127,7 +121,8 @@ fn check_block() -> &'static str {
 /// Runs the check in `dir`, which holds the fixture files, reading the shadow entries from `shadow`.
 fn run_check(dir: &Path, shadow: &str) -> Output {
     let script = format!(
-        "{}\npasswd_file=passwd group_file=group shadow_file={shadow} gshadow_file=gshadow login_defs=login.defs\nrefuse_unsafe_service_account",
+        "{}\npasswd_file=passwd group_file=group shadow_file={shadow} gshadow_file=gshadow \
+         login_defs=login.defs\nrefuse_unsafe_service_account",
         check_block()
     );
     Command::new("sh").arg("-c").arg(script).current_dir(dir).output().expect("sh runs")
@@ -366,6 +361,13 @@ fn gshadow_administrator_is_refused() {
 }
 
 #[test]
+fn gshadow_administrator_after_a_malformed_line_is_refused() {
+    // gpasswd skips the bare line, so alice is still an administrator.
+    let accounts = Accounts::sysusers().gshadow_entry("iron-vault\niron-vault:!:alice:");
+    assert_refused(&accounts, "group iron-vault: gshadow names administrators alice");
+}
+
+#[test]
 fn gshadow_group_password_is_refused() {
     let accounts = Accounts::sysusers().gshadow_entry("iron-vault:$6$salt$hash::");
     assert_refused(&accounts, "group iron-vault: gshadow sets a group password");
@@ -404,17 +406,10 @@ fn missing_gshadow_passes() {
 fn gshadow_without_read_permission_is_refused() {
     use std::os::unix::fs::PermissionsExt;
     let accounts = Accounts::sysusers();
-    let dir = Scratch::new();
-    ["passwd", "group", "shadow", "gshadow"].into_iter().for_each(|name| {
-        let lines = match name {
-            "passwd" => &accounts.passwd,
-            "group" => &accounts.group,
-            "shadow" => &accounts.shadow,
-            _ => accounts.gshadow.as_ref().unwrap(),
-        };
-        fs::write(dir.0.join(name), lines.join("\n") + "\n").unwrap();
-    });
+    let dir = without_shadow();
+    fs::write(dir.0.join("shadow"), accounts.shadow.join("\n") + "\n").unwrap();
     let gshadow = dir.0.join("gshadow");
+    fs::write(&gshadow, accounts.gshadow.expect("a gshadow file").join("\n") + "\n").unwrap();
     fs::set_permissions(&gshadow, fs::Permissions::from_mode(0o000)).unwrap();
     if fs::read(&gshadow).is_ok() {
         eprintln!("skipped: running as root");
