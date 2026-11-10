@@ -93,12 +93,10 @@ mod tests {
 
     /// A state with a committed approval, so every payload field is present.
     fn state(vault_id: VaultId) -> ApprovalState {
-        let approver = PinnedApprover::from_signing_key(&ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]));
         ApprovalState::from_parts(
             vault_id,
-            StateGeneration::new(5).unwrap(),
-            StateGeneration::new(4).unwrap(),
-            approver,
+            (StateGeneration::new(5).unwrap(), StateGeneration::new(4).unwrap()),
+            vec![PinnedApprover::from_seed(0x42)],
             3,
             ApprovalVersion::new(2).map(|v| (v, ConfigDigest::of(b"config"))),
         )
@@ -220,8 +218,9 @@ mod tests {
     fn a_broken_invariant_behind_a_valid_mac_is_rejected() {
         let identity = VaultIdentity::generate();
         let mut payload = encoding::encode(&state(VaultId::new_random()));
-        // Highest reserved is the u64 at 78..86 (see the payload layout); 1 is below the committed version 2.
-        payload[78..86].copy_from_slice(&1u64.to_be_bytes());
+        // Highest reserved is the u64 just before the committed tag, version and digest; 1 is below the committed version 2.
+        let at = payload.len() - 49;
+        payload[at..at + 8].copy_from_slice(&1u64.to_be_bytes());
         let id = VaultId::from_bytes(payload[5..21].try_into().unwrap()).unwrap();
         let file = forged(&identity, id, &payload, &identity.derive_key(APPROVAL_KEY_PERSONA));
         assert_eq!(open_approval_state(&identity, &file), Err(ApprovalStateError::CommittedNotReserved));
@@ -231,8 +230,8 @@ mod tests {
     fn a_weak_approver_key_behind_a_valid_mac_is_rejected() {
         let identity = VaultIdentity::generate();
         let mut payload = encoding::encode(&state(VaultId::new_random()));
-        // The public key is the 32 bytes at 46..78; the identity point is small-order.
-        payload[46..78].copy_from_slice(&[[1u8].as_slice(), &[0; 31]].concat());
+        // The public key is the 32 bytes at 70..102; the identity point is small-order.
+        payload[70..102].copy_from_slice(&[[1u8].as_slice(), &[0; 31]].concat());
         let id = VaultId::from_bytes(payload[5..21].try_into().unwrap()).unwrap();
         let file = forged(&identity, id, &payload, &identity.derive_key(APPROVAL_KEY_PERSONA));
         let weak = ApprovalStateError::InvalidApproverKey {

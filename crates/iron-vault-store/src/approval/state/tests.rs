@@ -13,7 +13,14 @@ use crate::{ManifestError, OsFs, VaultManifest, durable_replace};
 type Op = fn(&Setup, &FaultFs, &mut ApprovalState) -> Result<(), ApprovalStateError>;
 
 fn approver(seed: u8) -> PinnedApprover {
-    PinnedApprover::from_signing_key(&ed25519_dalek::SigningKey::from_bytes(&[seed; 32]))
+    PinnedApprover::from_seed(seed)
+}
+
+/// `seeds`' approvers, in the approver ID order the state keeps them in.
+fn approvers(seeds: &[u8]) -> Vec<PinnedApprover> {
+    let mut approvers: Vec<_> = seeds.iter().copied().map(approver).collect();
+    approvers.sort_by_key(PinnedApprover::id);
+    approvers
 }
 
 fn version(v: u64) -> ApprovalVersion {
@@ -107,8 +114,12 @@ impl Setup {
         state.commit(&self.lock, fs, &self.identity, version(v), digest(v))
     }
 
-    fn replace_approver(&self, fs: &impl StoreFs, state: &mut ApprovalState, seed: u8) -> Result<(), ApprovalStateError> {
-        state.replace_approver(&self.lock, fs, &self.identity, approver(seed))
+    fn enroll(&self, fs: &impl StoreFs, state: &mut ApprovalState, seed: u8) -> Result<(), ApprovalStateError> {
+        state.enroll_approver(&self.lock, fs, &self.identity, approver(seed))
+    }
+
+    fn remove(&self, fs: &impl StoreFs, state: &mut ApprovalState, seed: u8) -> Result<(), ApprovalStateError> {
+        state.remove_approver(&self.lock, fs, &self.identity, approver(seed).id())
     }
 
     /// Writes `state` as the durable file, whatever its counters, the way only a test can.
@@ -122,10 +133,11 @@ impl Setup {
         .unwrap();
     }
 
-    /// A created state with versions 1 and 2 reserved and version 1 committed, all durable.
+    /// A created state with approvers 1 and 2 pinned, versions 1 and 2 reserved and version 1 committed, all durable.
     fn seeded(&self) -> (FaultFs, ApprovalState) {
         let fs = self.fs();
         let mut state = self.create(&fs).unwrap();
+        self.enroll(&fs, &mut state, 2).unwrap();
         self.reserve(&fs, &mut state).unwrap();
         self.commit(&fs, &mut state, 1).unwrap();
         self.reserve(&fs, &mut state).unwrap();
@@ -159,12 +171,16 @@ fn commit_two(setup: &Setup, fs: &FaultFs, state: &mut ApprovalState) -> Result<
     setup.commit(fs, state, 2)
 }
 
-fn replace_with_nine(setup: &Setup, fs: &FaultFs, state: &mut ApprovalState) -> Result<(), ApprovalStateError> {
-    setup.replace_approver(fs, state, 9)
+fn enroll_nine(setup: &Setup, fs: &FaultFs, state: &mut ApprovalState) -> Result<(), ApprovalStateError> {
+    setup.enroll(fs, state, 9)
+}
+
+fn remove_two(setup: &Setup, fs: &FaultFs, state: &mut ApprovalState) -> Result<(), ApprovalStateError> {
+    setup.remove(fs, state, 2)
 }
 
 /// Each operation, with the state it starts from and the state it commits.
-fn operations(setup: &Setup) -> [(&'static str, Op, ApprovalState, ApprovalState); 3] {
+fn operations(setup: &Setup) -> [(&'static str, Op, ApprovalState, ApprovalState); 4] {
     let (_, old) = setup.seeded();
     [
         (
@@ -188,11 +204,21 @@ fn operations(setup: &Setup) -> [(&'static str, Op, ApprovalState, ApprovalState
             },
         ),
         (
-            "replace approver",
-            replace_with_nine,
+            "enroll approver",
+            enroll_nine,
             old.clone(),
             ApprovalState {
-                approver: approver(9),
+                approvers: approvers(&[1, 2, 9]),
+                state_generation: after(&old),
+                ..old.clone()
+            },
+        ),
+        (
+            "remove approver",
+            remove_two,
+            old.clone(),
+            ApprovalState {
+                approvers: approvers(&[1]),
                 state_generation: after(&old),
                 ..old
             },
@@ -206,8 +232,8 @@ fn reserve_counts_up_from_one_across_reopen_and_never_resets() {
     let fs = setup.fs();
     let created = setup.create(&fs).unwrap();
     assert_eq!(
-        (created.highest_reserved(), created.committed(), created.approver()),
-        (0, None, &approver(1))
+        (created.highest_reserved(), created.committed(), created.approvers()),
+        (0, None, &approvers(&[1])[..])
     );
     (1..=3).for_each(|expected| {
         fs.crash();
@@ -219,7 +245,7 @@ fn reserve_counts_up_from_one_across_reopen_and_never_resets() {
 }
 
 #[test]
-fn reserve_commit_and_replace_approver_work_end_to_end_on_disk() {
+fn reserve_commit_and_approver_rotation_work_end_to_end_on_disk() {
     let setup = Setup::new("approval-e2e");
     let fs = OsFs;
     setup.plant_manifest(&fs, MANIFEST, None);
@@ -233,28 +259,77 @@ fn reserve_commit_and_replace_approver_work_end_to_end_on_disk() {
     let mut state = setup.load(&fs).unwrap();
     assert_eq!(setup.reserve(&fs, &mut state).unwrap().get(), 3);
     setup.commit(&fs, &mut state, 3).unwrap();
-    setup.replace_approver(&fs, &mut state, 9).unwrap();
+    // Signing-key rotation: enroll the new approver, then remove the old one.
+    setup.enroll(&fs, &mut state, 9).unwrap();
+    setup.remove(&fs, &mut state, 1).unwrap();
 
     let reloaded = setup.load(&fs).unwrap();
     assert_eq!(reloaded, state);
     assert_eq!(
-        (reloaded.highest_reserved(), reloaded.committed(), reloaded.approver()),
-        (3, Some((version(3), digest(3))), &approver(9))
+        (reloaded.highest_reserved(), reloaded.committed(), reloaded.approvers()),
+        (3, Some((version(3), digest(3))), &approvers(&[9])[..])
     );
 }
 
 #[test]
-fn replace_approver_keeps_both_counters_across_reopen() {
-    let setup = Setup::new("approval-replace");
+fn enroll_then_remove_keeps_both_counters_across_reopen() {
+    let setup = Setup::new("approval-rotate");
     let (fs, mut state) = setup.seeded();
-    setup.replace_approver(&fs, &mut state, 9).unwrap();
+    setup.enroll(&fs, &mut state, 9).unwrap();
     fs.crash();
     let mut reloaded = setup.load(&fs).unwrap();
     assert_eq!(
-        (reloaded.highest_reserved(), reloaded.committed(), reloaded.approver()),
-        (2, Some((version(1), digest(1))), &approver(9))
+        (reloaded.highest_reserved(), reloaded.committed(), reloaded.approvers()),
+        (2, Some((version(1), digest(1))), &approvers(&[1, 2, 9])[..])
     );
+    setup.remove(&fs, &mut reloaded, 1).unwrap();
+    fs.crash();
+    let mut reloaded = setup.load(&fs).unwrap();
+    assert_eq!(
+        (reloaded.highest_reserved(), reloaded.committed(), reloaded.approvers()),
+        (2, Some((version(1), digest(1))), &approvers(&[2, 9])[..])
+    );
+    assert_eq!(reloaded.approver(approver(9).id()), Some(&approver(9)));
+    assert_eq!(reloaded.approver(approver(1).id()), None);
     assert_eq!(setup.reserve(&fs, &mut reloaded).unwrap().get(), 3);
+}
+
+#[test]
+fn enroll_refuses_a_duplicate_id_a_pinned_key_and_a_seventeenth_approver_and_touches_no_file() {
+    let setup = Setup::new("approval-enroll-refused");
+    let (fs, mut state) = setup.seeded();
+    let (calls, before) = (fs.trace().len(), state.clone());
+    let two = approver(2);
+    let same_id = PinnedApprover::new(two.id(), *approver(9).public_key(), two.label().clone(), two.enrolled_at());
+    let same_key = PinnedApprover::new(approver(9).id(), *two.public_key(), two.label().clone(), two.enrolled_at());
+    let mut enroll = |approver| state.enroll_approver(&setup.lock, &fs, &setup.identity, approver);
+    assert_eq!(enroll(same_id), Err(ApprovalStateError::DuplicateApproverId(two.id())));
+    assert_eq!(enroll(same_key), Err(ApprovalStateError::DuplicateApproverKey));
+    assert_eq!((fs.trace().len(), &state), (calls, &before));
+
+    (3..=MAX_APPROVERS as u8).for_each(|seed| setup.enroll(&fs, &mut state, seed).unwrap());
+    assert_eq!(state.approvers(), approvers(&(1..=16).collect::<Vec<_>>()));
+    let (calls, full) = (fs.trace().len(), state.clone());
+    assert_eq!(setup.enroll(&fs, &mut state, 17), Err(ApprovalStateError::TooManyApprovers));
+    assert_eq!((fs.trace().len(), &state), (calls, &full));
+    assert_eq!(setup.load(&fs).unwrap(), full);
+}
+
+#[test]
+fn remove_refuses_an_unknown_id_and_the_last_approver_and_touches_no_file() {
+    let setup = Setup::new("approval-remove-refused");
+    let (fs, mut state) = setup.seeded();
+    let (calls, before) = (fs.trace().len(), state.clone());
+    assert_eq!(
+        setup.remove(&fs, &mut state, 9),
+        Err(ApprovalStateError::UnknownApprover(approver(9).id()))
+    );
+    assert_eq!((fs.trace().len(), &state), (calls, &before));
+    setup.remove(&fs, &mut state, 2).unwrap();
+    let (calls, last) = (fs.trace().len(), state.clone());
+    assert_eq!(setup.remove(&fs, &mut state, 1), Err(ApprovalStateError::LastApprover));
+    assert_eq!((fs.trace().len(), &state), (calls, &last));
+    assert_eq!(setup.load(&fs).unwrap().approvers(), approvers(&[1]));
 }
 
 #[test]
@@ -307,8 +382,10 @@ fn every_write_takes_the_next_state_generation_and_records_the_manifest_on_disk(
     setup.plant_manifest(&fs, generation(9), Some(generation(6)));
     setup.commit(&fs, &mut state, 1).unwrap();
     assert_eq!((state.state_generation(), state.peer_generation()), (generation(10), generation(9)));
-    setup.replace_approver(&fs, &mut state, 2).unwrap();
+    setup.enroll(&fs, &mut state, 2).unwrap();
     assert_eq!((state.state_generation(), state.peer_generation()), (generation(11), generation(9)));
+    setup.remove(&fs, &mut state, 2).unwrap();
+    assert_eq!((state.state_generation(), state.peer_generation()), (generation(12), generation(9)));
     assert_eq!(setup.load(&fs).unwrap(), state);
 }
 
@@ -354,7 +431,8 @@ fn a_missing_damaged_or_foreign_manifest_refuses_every_write_and_touches_no_file
         let errors = [
             setup.reserve(&fs, &mut state).map(|_| ()).unwrap_err(),
             setup.commit(&fs, &mut state, 2).unwrap_err(),
-            setup.replace_approver(&fs, &mut state, 9).unwrap_err(),
+            setup.enroll(&fs, &mut state, 9).unwrap_err(),
+            setup.remove(&fs, &mut state, 2).unwrap_err(),
         ];
         errors.iter().for_each(|error| assert!(expected(error), "{label}: {error:?}"));
         assert_eq!((mutations(&fs, calls), &state), (vec![], &before), "{label}");
@@ -380,7 +458,8 @@ fn every_write_at_state_generation_u64_max_is_exhausted_and_touches_no_file() {
     let exhausted = Err(ApprovalStateError::StateGenerationExhausted);
     assert_eq!(setup.reserve(&fs, &mut at_max).map(|_| ()), exhausted);
     assert_eq!(setup.commit(&fs, &mut at_max, 2), exhausted);
-    assert_eq!(setup.replace_approver(&fs, &mut at_max, 9), exhausted);
+    assert_eq!(setup.enroll(&fs, &mut at_max, 9), exhausted);
+    assert_eq!(setup.remove(&fs, &mut at_max, 2), exhausted);
     assert_eq!((mutations(&fs, calls), &at_max), (vec![], &before));
 
     // A manifest at u64::MAX exhausts the approval state's next write and its creation just the same.
@@ -475,7 +554,8 @@ fn a_stale_state_writes_nothing_and_never_lowers_the_counter() {
     let calls = fs.trace().len();
     assert_eq!(setup.reserve(&fs, &mut stale), Err(ApprovalStateError::ReloadRequired));
     assert_eq!(setup.commit(&fs, &mut stale, 2), Err(ApprovalStateError::ReloadRequired));
-    assert_eq!(setup.replace_approver(&fs, &mut stale, 9), Err(ApprovalStateError::ReloadRequired));
+    assert_eq!(setup.enroll(&fs, &mut stale, 9), Err(ApprovalStateError::ReloadRequired));
+    assert_eq!(setup.remove(&fs, &mut stale, 2), Err(ApprovalStateError::ReloadRequired));
     assert_eq!(mutations(&fs, calls), []);
     assert_eq!(setup.load(&fs).unwrap(), current);
 }

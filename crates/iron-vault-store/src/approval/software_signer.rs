@@ -14,7 +14,7 @@ use ed25519_dalek::{SECRET_KEY_LENGTH, Signer, SigningKey};
 use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
 
-use super::{ApprovalEnvelope, ApprovalPayload, ApprovalSigner, PinnedApprover, SignError, SignatureAlgorithm};
+use super::{ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApproverPublicKey, PinnedApprover, SignError, SignatureAlgorithm};
 use crate::{
     EnvelopeError, MAX_PASSPHRASE_ENVELOPE_LEN, PASSPHRASE_WORK_FACTOR, PassphraseError, StateDirLock, StateFileName, StoreFs,
     durable::{ReadError, WriteError, durable_replace, read_state_file},
@@ -70,9 +70,9 @@ impl SoftwareSignerKey {
         Self(Box::new(SigningKey::from_bytes(seed)))
     }
 
-    /// The approver this key verifies as.
-    fn pinned(&self) -> PinnedApprover {
-        PinnedApprover::from_signing_key(&self.0)
+    /// The public key this key's signatures verify against.
+    fn public_key(&self) -> ApproverPublicKey {
+        ApproverPublicKey::from_signing_key(&self.0)
     }
 }
 
@@ -82,35 +82,36 @@ impl fmt::Debug for SoftwareSignerKey {
     }
 }
 
-/// An open software signer: the private key and the pinned approver it was checked against.
+/// An open software signer: the private key and the pinned approver whose key it is.
 ///
 /// Open one with [`open_signer_key`] for a single approval and drop it once that approval is signed. Its key is cleared
 /// on drop, and it has no `Clone`, so the decrypted key lives no longer than the approval that needed it.
 pub struct SoftwareSigner {
     key: Box<SigningKey>,
-    pinned: PinnedApprover,
+    approver: PinnedApprover,
 }
 
 impl SoftwareSigner {
-    /// A fresh software signer key from the operating system's random source, and the approver to pin for it.
+    /// A fresh software signer key from the operating system's random source, and its public key to pin.
     ///
-    /// The key is sealed with [`seal_signer_key`] and then dropped; the approver goes into the approval state.
-    pub fn generate() -> Result<(SoftwareSignerKey, PinnedApprover), SignError> {
+    /// The key is sealed with [`seal_signer_key`] and then dropped; the public key is pinned in the approval state.
+    pub fn generate() -> Result<(SoftwareSignerKey, ApproverPublicKey), SignError> {
         let mut seed = Zeroizing::new([0u8; SECRET_KEY_LENGTH]);
         getrandom::fill(seed.as_mut_slice()).map_err(|_| SignError::Randomness)?;
         let key = SoftwareSignerKey::from_seed(&seed);
-        let pinned = key.pinned();
-        Ok((key, pinned))
+        let public_key = key.public_key();
+        Ok((key, public_key))
     }
 
-    /// The signer for `key`, refusing it unless its public key is `pinned`'s.
-    fn new(key: SoftwareSignerKey, pinned: &PinnedApprover) -> Result<Self, SignError> {
-        match key.pinned() == *pinned {
-            true => Ok(Self {
+    /// The signer for `key`, as the one of `approvers` that pins its public key; refused if none does.
+    fn new(key: SoftwareSignerKey, approvers: &[PinnedApprover]) -> Result<Self, SignError> {
+        let public_key = key.public_key();
+        match approvers.iter().find(|approver| *approver.public_key() == public_key) {
+            Some(approver) => Ok(Self {
                 key: key.0,
-                pinned: pinned.clone(),
+                approver: approver.clone(),
             }),
-            false => Err(SignError::KeyMismatch),
+            None => Err(SignError::KeyMismatch),
         }
     }
 }
@@ -120,8 +121,8 @@ impl ApprovalSigner for SoftwareSigner {
         SignatureAlgorithm::Ed25519
     }
 
-    fn pinned(&self) -> PinnedApprover {
-        self.pinned.clone()
+    fn public_key(&self) -> ApproverPublicKey {
+        *self.approver.public_key()
     }
 
     fn sign(&self, payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
@@ -145,13 +146,17 @@ pub fn seal_signer_key(key: &SoftwareSignerKey, passphrase: &ApprovalPassphrase)
     seal_signer_key_at(key, passphrase, PASSPHRASE_WORK_FACTOR)
 }
 
-/// Decrypts `approver.age` with `passphrase` and opens a signer for `pinned`.
+/// Decrypts `approver.age` with `passphrase` and opens a signer as the one of `approvers` whose key it holds.
 ///
 /// The header checks of the passphrase envelope run before any scrypt work. A wrong passphrase is
-/// [`SignError::WrongPassphrase`] and nothing more; a key that is not `pinned`'s is [`SignError::KeyMismatch`], so a
-/// swapped `approver.age` signs nothing.
-pub fn open_signer_key(envelope: &[u8], passphrase: &ApprovalPassphrase, pinned: &PinnedApprover) -> Result<SoftwareSigner, SignError> {
-    SoftwareSigner::new(open_key(envelope, passphrase)?, pinned)
+/// [`SignError::WrongPassphrase`] and nothing more; a key no approver pins is [`SignError::KeyMismatch`], so a swapped
+/// `approver.age` signs nothing.
+pub fn open_signer_key(
+    envelope: &[u8],
+    passphrase: &ApprovalPassphrase,
+    approvers: &[PinnedApprover],
+) -> Result<SoftwareSigner, SignError> {
+    SoftwareSigner::new(open_key(envelope, passphrase)?, approvers)
 }
 
 /// [`seal_signer_key`] at work factor 2 instead of [`PASSPHRASE_WORK_FACTOR`], so a test that opens the key spends no

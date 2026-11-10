@@ -42,8 +42,9 @@ pub struct VaultChangePlan<'a, F> {
     service_wide: OwnedMutexGuard<()>,
     /// The check generation at step 2, which the write checks again.
     checks: u64,
-    /// The pinned approver owner presence must open, from the approval state the service holds.
-    approver: PinnedApprover,
+    /// The pinned approvers, from the approval state the service holds; owner presence opens `approver.age` as one of
+    /// them.
+    approvers: Vec<PinnedApprover>,
     /// The change the check passed, the record it acts on and the routes that use it, as the owner is shown them.
     summary: VaultChangeSummary,
 }
@@ -119,7 +120,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             service: self,
             service_wide,
             checks: inner.checks,
-            approver: open.approval.approver().clone(),
+            approvers: open.approval.approvers().to_vec(),
             summary: VaultChangeSummary::new(change, current, before, snapshot.policy()),
         })
     }
@@ -151,10 +152,10 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
         self.service.lock_requested().await;
     }
 
-    /// Owner presence (design/credential-commands.md): opens `approver.age` with `passphrase` as the pinned approver's
+    /// Owner presence (design/credential-commands.md): opens `approver.age` with `passphrase` as a pinned approver's
     /// key and drops the signer at once. Nothing is reserved, signed or written.
     pub async fn prove_presence(&self, passphrase: ApprovalPassphrase) -> Result<OwnerPresence, PresenceRefusal> {
-        self.service.prove_presence(passphrase, self.approver.clone()).await
+        self.service.prove_presence(passphrase, self.approvers.clone()).await
     }
 
     /// Writes the planned change, then runs the config check from Ready through [`ServiceEvent::VaultChanged`] and

@@ -193,13 +193,13 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         self.service.lock_requested().await;
     }
 
-    /// Opens `approver.age` with `passphrase` as the pinned approver's signer, through the check owner presence makes
-    /// too. A wrong passphrase, or a key that is not the pinned approver's, is [`ApprovalEnd::Denied`]; a check that
+    /// Opens `approver.age` with `passphrase` as the signer of the pinned approver whose key it holds, through the check
+    /// owner presence makes too. A wrong passphrase, or a key no approver pins, is [`ApprovalEnd::Denied`]; a check that
     /// cannot run or does not finish refuses the approval before anything is reserved.
     pub async fn open_signer(&self, passphrase: ApprovalPassphrase) -> Result<SoftwareSigner, ApprovalEnd> {
-        let pinned = self.approval.approver().clone();
+        let approvers = self.approval.approvers().to_vec();
         self.service
-            .open_approver(passphrase, pinned)
+            .open_approver(passphrase, approvers)
             .await
             .map_err(|refusal| match refusal {
                 PresenceRefusal::Denied(kind) => self.refused(kind),

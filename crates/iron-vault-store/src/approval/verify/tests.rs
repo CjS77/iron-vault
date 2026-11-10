@@ -6,7 +6,7 @@ use super::*;
 use crate::fault_fs::FaultFs;
 use crate::manifest::tests::{KAT_IDENTITY, write_first_manifest};
 use crate::test_dir::TestDir;
-use crate::{ApprovalPayload, StateDirLock, VaultId, VaultIdentity};
+use crate::{ApprovalPayload, ApproverPublicKey, StateDirLock, VaultId, VaultIdentity};
 
 const APPROVER_SEED: [u8; 32] = [7; 32];
 
@@ -24,7 +24,8 @@ fn signing_key(seed: [u8; 32]) -> SigningKey {
 }
 
 fn pinned(seed: [u8; 32]) -> PinnedApprover {
-    PinnedApprover::new(SignatureAlgorithm::Ed25519, signing_key(seed).verifying_key().to_bytes().to_vec()).unwrap()
+    let key = ApproverPublicKey::new(SignatureAlgorithm::Ed25519, signing_key(seed).verifying_key().to_bytes().to_vec()).unwrap();
+    PinnedApprover::for_tests(key)
 }
 
 /// The `config.toml.sig` bytes for `payload`, signed by the key with `seed`.
@@ -244,11 +245,16 @@ fn restored_older_config_and_signature_fail_after_a_newer_approval() {
 #[test]
 fn error_messages_carry_no_key_or_signature_bytes() {
     let (vault, envelopes) = Vault::approved("verify-messages", 1);
-    let key_hex: String = vault.state.approver().public_key().iter().map(|b| format!("{b:02x}")).collect();
+    let key_hex: String = vault.state.approvers()[0]
+        .public_key()
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let mut flipped = envelopes[0].clone();
     let last = flipped.len() - 1;
     flipped[last] ^= 1;
     let message = vault.verify(&config(1), &flipped).unwrap_err().to_string();
     assert!(!message.contains(&key_hex[..16]), "{message}");
-    assert_eq!(message, "the config approval signature does not verify against the pinned approver");
+    assert_eq!(message, "the config approval signature does not verify against any pinned approver");
 }

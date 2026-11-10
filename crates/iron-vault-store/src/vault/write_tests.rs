@@ -644,7 +644,7 @@ fn approval_generations(state: &ApprovalState) -> (u64, Option<u64>) {
 }
 
 fn approver() -> PinnedApprover {
-    PinnedApprover::from_signing_key(&ed25519_dalek::SigningKey::from_bytes(&[1; 32]))
+    PinnedApprover::from_seed(1)
 }
 
 /// Durably writes `state` as the approval state, whatever its state generation, the way only a test can.

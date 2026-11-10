@@ -1,4 +1,4 @@
-//! The approval state: the pinned approver and the approval version counters (spec §12, §13).
+//! The approval state: the pinned approvers and the approval version counters (spec §12, §13).
 //!
 //! Versioned approval stops an old `config.toml` and `config.toml.sig` pair from becoming valid again only if the
 //! counters never go backwards. The state lives in `approval.age`, sealed to the vault public key and authenticated with
@@ -12,123 +12,48 @@
 //! generation. Restoring the whole state directory from an older copy restores older counters too; spec §12 leaves
 //! protection against that outside v0.
 
+mod approver;
 mod encoding;
 mod file;
 #[cfg(test)]
 mod tests;
 
+use std::cmp::Ordering;
 use std::io;
 
-use ed25519_dalek::{SigningKey, VerifyingKey};
 use thiserror::Error;
 
 use super::{ApprovalDecodeError, ApprovalVersion, ConfigDigest, SignatureAlgorithm};
 use crate::{
-    MAX_MANIFEST_LEN, ManifestError, OpenError, PartialRestore, ReadError, SealError, StateDirLock, StateFileName, StateGeneration,
-    StoreFs, VaultId, VaultIdentity, VaultManifest, WriteError, WriteStep, durable_replace, open_manifest,
+    MAX_MANIFEST_LEN, ManifestError, OpenError, PartialRestore, ReadError, RecipientLabelError, SealError, StateDirLock, StateFileName,
+    StateGeneration, StoreFs, VaultId, VaultIdentity, VaultManifest, WriteError, WriteStep, durable_replace, open_manifest,
     partial_restore::check_control_generations, read_state_file,
 };
 
+pub(crate) use approver::ApproverKey;
+pub use approver::{ApproverId, ApproverLabel, ApproverPublicKey, InvalidKeyReason, MAX_APPROVERS, PinnedApprover};
 pub use file::{open_approval_state, seal_approval_state};
 
 /// The largest approval state file accepted, in bytes on disk, checked before any other work; also the payload limit.
 ///
-/// A payload with an Ed25519 approver is 127 bytes. `age` adds a header of at most about 400 bytes plus a 16-byte nonce
-/// and a 16-byte tag, and the file adds 53 bytes of header and MAC: under 600 bytes in all. The limit leaves room for a
-/// later algorithm with a longer public key while keeping a planted file cheap to refuse.
+/// A payload with [`MAX_APPROVERS`] approvers is at most 2,814 bytes. `age` adds a header of at most about 400 bytes plus
+/// a 16-byte nonce and a 16-byte tag, and the file adds 53 bytes of header and MAC: under 3,300 bytes in all. The limit
+/// keeps a planted file cheap to refuse.
 pub const MAX_APPROVAL_STATE_LEN: usize = 4096;
 
-/// The algorithm and public key every config approval must verify against (spec §12).
-///
-/// It is kept only in the approval state, never read from the config or the signature file. The key is checked when it
-/// is pinned, so a held approver always has a usable key: an unusable one is refused at enrolment, not at the next
-/// reload.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PinnedApprover {
-    key: ApproverKey,
-}
-
-/// A validated public key, tagged with its algorithm.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ApproverKey {
-    /// An Ed25519 key that is a valid, non-weak point.
-    Ed25519(VerifyingKey),
-}
-
-/// Why a public key cannot be pinned as an approver. Carries no key bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InvalidKeyReason {
-    /// The bytes do not decode to a point on the curve.
-    NotAPoint,
-    /// The key is a small-order point, which strict verification refuses for every signature.
-    WeakKey,
-}
-
-impl PinnedApprover {
-    /// The approver with `public_key` for `algorithm`, refusing a key of the wrong length, a non-point or a weak key.
-    pub fn new(algorithm: SignatureAlgorithm, public_key: Vec<u8>) -> Result<Self, ApprovalStateError> {
-        match algorithm {
-            SignatureAlgorithm::Ed25519 => {
-                let bytes: [u8; 32] = public_key
-                    .try_into()
-                    .map_err(|key: Vec<u8>| ApprovalStateError::PublicKeyLength { algorithm, len: key.len() })?;
-                let key = VerifyingKey::from_bytes(&bytes).map_err(|_| invalid(algorithm, InvalidKeyReason::NotAPoint))?;
-                if key.is_weak() {
-                    return Err(invalid(algorithm, InvalidKeyReason::WeakKey));
-                }
-                Ok(Self {
-                    key: ApproverKey::Ed25519(key),
-                })
-            }
-        }
-    }
-
-    /// The Ed25519 approver for `signing_key`.
-    ///
-    /// Infallible because an Ed25519 public key is a clamped scalar times the basepoint: clamping makes the scalar a
-    /// multiple of the cofactor and the basepoint has prime order, so the result is never a small-order point.
-    pub(crate) fn from_signing_key(signing_key: &SigningKey) -> Self {
-        Self {
-            key: ApproverKey::Ed25519(signing_key.verifying_key()),
-        }
-    }
-
-    /// The algorithm approvals must be signed with.
-    pub fn algorithm(&self) -> SignatureAlgorithm {
-        match self.key {
-            ApproverKey::Ed25519(_) => SignatureAlgorithm::Ed25519,
-        }
-    }
-
-    /// The encoded public key approvals must verify against.
-    pub fn public_key(&self) -> &[u8] {
-        match &self.key {
-            ApproverKey::Ed25519(key) => key.as_bytes(),
-        }
-    }
-
-    /// The validated key approvals must verify against.
-    pub(crate) fn key(&self) -> &ApproverKey {
-        &self.key
-    }
-}
-
-fn invalid(algorithm: SignatureAlgorithm, reason: InvalidKeyReason) -> ApprovalStateError {
-    ApprovalStateError::InvalidApproverKey { algorithm, reason }
-}
-
-/// One vault's approval state: the pinned approver, the highest reserved version and the committed approval, at one
+/// One vault's approval state: the pinned approvers, the highest reserved version and the committed approval, at one
 /// state generation.
 ///
 /// The committed version is never above the highest reserved version, whether the state was built or decoded. The
 /// highest reserved version is 0 only in a newly created state, and no operation lowers it. The peer generation is
-/// always below the state generation.
+/// always below the state generation. It pins from 1 to [`MAX_APPROVERS`] approvers, in strictly ascending order of
+/// approver ID, no two with the same public key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalState {
     vault_id: VaultId,
     state_generation: StateGeneration,
     peer_generation: StateGeneration,
-    approver: PinnedApprover,
+    approvers: Vec<PinnedApprover>,
     highest_reserved: u64,
     committed: Option<(ApprovalVersion, ConfigDigest)>,
 }
@@ -171,6 +96,39 @@ pub enum ApprovalStateError {
         /// What is wrong with the key.
         reason: InvalidKeyReason,
     },
+    /// The approver ID is not a random version 4 UUID, so the service did not generate it.
+    #[error("approver ID is not a random version 4 UUID")]
+    InvalidApproverId,
+    /// The approver label is not UTF-8.
+    #[error("approver label is not UTF-8")]
+    ApproverLabelNotUtf8,
+    /// The approver label breaks the recipient label rule.
+    #[error("approver label breaks the label rule: {0}")]
+    InvalidApproverLabel(RecipientLabelError),
+    /// The enrolment time is outside the range a UTC second holds.
+    #[error("approver enrolment time is out of range")]
+    BadEnrolmentTime,
+    /// The payload pins no approver, or more than [`MAX_APPROVERS`].
+    #[error("approval state pins {0} approvers; it must pin from 1 to {MAX_APPROVERS}")]
+    ApproverCount(u64),
+    /// The approver IDs are not in strictly ascending order, which no service write produces.
+    #[error("approval state approvers are not in ascending approver ID order")]
+    UnsortedApprovers,
+    /// Two approvers share an approver ID: in the payload, or the one being enrolled is already pinned.
+    #[error("approver ID {0} is already pinned")]
+    DuplicateApproverId(ApproverId),
+    /// Two approvers share a public key: in the payload, or the one being enrolled is already pinned under another ID.
+    #[error("the approver's public key is already pinned")]
+    DuplicateApproverKey,
+    /// `enroll_approver` would pin more than [`MAX_APPROVERS`]. Nothing was written.
+    #[error("{MAX_APPROVERS} approvers are already pinned; remove one before enrolling another")]
+    TooManyApprovers,
+    /// `remove_approver` named the last pinned approver; without one no config could be approved. Nothing was written.
+    #[error("the last pinned approver cannot be removed")]
+    LastApprover,
+    /// `remove_approver` named an approver ID that is not pinned. Nothing was written.
+    #[error("no pinned approver has ID {0}")]
+    UnknownApprover(ApproverId),
     /// The byte saying whether an approval is committed is neither `00` nor `01`.
     #[error("unknown committed-approval tag {0}")]
     BadCommittedTag(u8),
@@ -241,26 +199,26 @@ pub enum ApprovalStateError {
 }
 
 impl ApprovalState {
-    /// A state from its parts, refusing a committed version above the highest reserved one and a peer generation not
-    /// below the state generation.
+    /// A state from its parts, refusing approvers that break the state's invariant, a committed version above the
+    /// highest reserved one, and a peer generation not below the state generation.
     fn from_parts(
         vault_id: VaultId,
-        state_generation: StateGeneration,
-        peer_generation: StateGeneration,
-        approver: PinnedApprover,
+        (state_generation, peer_generation): (StateGeneration, StateGeneration),
+        approvers: Vec<PinnedApprover>,
         highest_reserved: u64,
         committed: Option<(ApprovalVersion, ConfigDigest)>,
     ) -> Result<Self, ApprovalStateError> {
         if peer_generation >= state_generation {
             return Err(ApprovalStateError::PeerNotOlder);
         }
+        check_approvers(&approvers)?;
         match committed {
             Some((version, _)) if version.get() > highest_reserved => Err(ApprovalStateError::CommittedNotReserved),
             _ => Ok(Self {
                 vault_id,
                 state_generation,
                 peer_generation,
-                approver,
+                approvers,
                 highest_reserved,
                 committed,
             }),
@@ -268,7 +226,7 @@ impl ApprovalState {
     }
 
     /// Writes the state of the vault whose manifest is in the state directory to `approval.age` and returns it:
-    /// `approver` pinned, nothing reserved and nothing committed, at the state generation after the manifest's.
+    /// `approver` alone pinned, nothing reserved and nothing committed, at the state generation after the manifest's.
     ///
     /// Refuses a missing or damaged manifest: the vault is created first, and its manifest names the vault and the
     /// state generation to follow. Refuses with [`ApprovalStateError::AlreadyExists`] if the file exists, and with
@@ -287,7 +245,7 @@ impl ApprovalState {
             vault_id: manifest.vault_id(),
             state_generation: next_generation(manifest.state_generation(), None)?,
             peer_generation: manifest.state_generation(),
-            approver,
+            approvers: vec![approver],
             highest_reserved: 0,
             committed: None,
         };
@@ -349,9 +307,14 @@ impl ApprovalState {
         (self.state_generation, self.peer_generation)
     }
 
-    /// The approver every config approval must verify against.
-    pub fn approver(&self) -> &PinnedApprover {
-        &self.approver
+    /// The pinned approvers, in ascending order of approver ID; a config approval must verify against one of them.
+    pub fn approvers(&self) -> &[PinnedApprover] {
+        &self.approvers
+    }
+
+    /// The pinned approver with ID `id`, if any.
+    pub fn approver(&self, id: ApproverId) -> Option<&PinnedApprover> {
+        self.approvers.iter().find(|approver| approver.id() == id)
     }
 
     /// The highest version reserved so far; 0 before the first reservation.
@@ -424,19 +387,56 @@ impl ApprovalState {
         }
     }
 
-    /// Durably pins `approver` in place of the current one, keeping both counters (spec §12).
+    /// Durably pins `approver` beside the approvers already pinned, keeping both counters (spec §12). Signing-key
+    /// rotation is an enroll followed by a [`remove_approver`](Self::remove_approver).
     ///
-    /// The active signature stops verifying because the key changed, until the owner approves the config again at a
-    /// new version. This performs an already authorized change: the caller checks administrator or existing-owner
-    /// authorization.
-    pub fn replace_approver(
+    /// Refuses, before any file is touched, an approver ID or a public key already pinned and a seventeenth approver.
+    /// This performs an already authorized change: the caller checks the owner's authorization.
+    pub fn enroll_approver(
         &mut self,
         lock: &StateDirLock,
         fs: &impl StoreFs,
         identity: &VaultIdentity,
         approver: PinnedApprover,
     ) -> Result<(), ApprovalStateError> {
-        self.write(lock, fs, identity, Self { approver, ..self.clone() })
+        let at = match self.approvers.binary_search_by_key(&approver.id(), PinnedApprover::id) {
+            Ok(_) => return Err(ApprovalStateError::DuplicateApproverId(approver.id())),
+            Err(at) => at,
+        };
+        if self.approvers.iter().any(|pinned| pinned.public_key() == approver.public_key()) {
+            return Err(ApprovalStateError::DuplicateApproverKey);
+        }
+        if self.approvers.len() >= MAX_APPROVERS {
+            return Err(ApprovalStateError::TooManyApprovers);
+        }
+        let mut approvers = self.approvers.clone();
+        approvers.insert(at, approver);
+        self.write(lock, fs, identity, Self { approvers, ..self.clone() })
+    }
+
+    /// Durably unpins the approver `id`, keeping both counters (spec §12).
+    ///
+    /// If that approver signed the active `config.toml.sig`, the signature stops verifying, because no pinned key
+    /// matches it any more, until the owner approves the config again at a new version. Refuses, before any file is
+    /// touched, an ID that is not pinned and the last approver, since without one no config could ever be approved
+    /// again. This performs an already authorized change: the caller checks the owner's authorization.
+    pub fn remove_approver(
+        &mut self,
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        identity: &VaultIdentity,
+        id: ApproverId,
+    ) -> Result<(), ApprovalStateError> {
+        let at = self
+            .approvers
+            .binary_search_by_key(&id, PinnedApprover::id)
+            .map_err(|_| ApprovalStateError::UnknownApprover(id))?;
+        if self.approvers.len() == 1 {
+            return Err(ApprovalStateError::LastApprover);
+        }
+        let mut approvers = self.approvers.clone();
+        approvers.remove(at);
+        self.write(lock, fs, identity, Self { approvers, ..self.clone() })
     }
 
     /// Writes the state on disk again, its counters unchanged, after a commit of `expected` whose rename landed but
@@ -506,6 +506,28 @@ impl ApprovalState {
             highest_reserved,
             ..self.clone()
         }
+    }
+}
+
+/// Refuses approvers no service write leaves: none or more than [`MAX_APPROVERS`], IDs not strictly ascending, or one
+/// public key pinned twice. Every entry was validated when it was built.
+fn check_approvers(approvers: &[PinnedApprover]) -> Result<(), ApprovalStateError> {
+    if approvers.is_empty() || approvers.len() > MAX_APPROVERS {
+        // At most 16 here or 0, so it always fits in a u64.
+        return Err(ApprovalStateError::ApproverCount(approvers.len() as u64));
+    }
+    approvers.windows(2).try_for_each(|pair| match pair[0].id().cmp(&pair[1].id()) {
+        Ordering::Less => Ok(()),
+        Ordering::Equal => Err(ApprovalStateError::DuplicateApproverId(pair[1].id())),
+        Ordering::Greater => Err(ApprovalStateError::UnsortedApprovers),
+    })?;
+    let pinned_twice = approvers
+        .iter()
+        .enumerate()
+        .any(|(i, approver)| approvers[..i].iter().any(|earlier| earlier.public_key() == approver.public_key()));
+    match pinned_twice {
+        true => Err(ApprovalStateError::DuplicateApproverKey),
+        false => Ok(()),
     }
 }
 

@@ -68,8 +68,9 @@ pub struct RecipientRemoval<'a, F> {
     /// The service state and check generation at step 2, which the write checks again.
     state: ServiceState,
     checks: u64,
-    /// The pinned approver owner presence must open, from the approval state the service holds.
-    approver: PinnedApprover,
+    /// The pinned approvers, from the approval state the service holds; owner presence opens `approver.age` as one of
+    /// them.
+    approvers: Vec<PinnedApprover>,
     /// The inventory the check opened, which the write rewraps from.
     inventory: RecipientInventory,
     removed: RecipientEntry,
@@ -90,7 +91,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             vault_id,
             state,
             checks,
-            approver,
+            approvers,
         } = ready_vault(&*self.inner.lock().await)?;
         let (service_wide, inventory) = self.check_inventory(service_wide, identity, vault_id).await?;
         let (removed, after) = apply_removal(&inventory, &key).inspect_err(|refusal| log_refused(&key, refusal))?;
@@ -99,7 +100,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             service_wide,
             state,
             checks,
-            approver,
+            approvers,
             inventory,
             removed,
             after,
@@ -145,10 +146,10 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientRemoval<'_, F> {
         self.service.lock_requested().await;
     }
 
-    /// Owner presence (`design/credential-commands.md`): opens `approver.age` with `passphrase` as the pinned approver's
+    /// Owner presence (`design/credential-commands.md`): opens `approver.age` with `passphrase` as a pinned approver's
     /// key and drops the signer at once. Nothing is reserved, signed or written.
     pub async fn prove_presence(&self, passphrase: ApprovalPassphrase) -> Result<OwnerPresence, PresenceRefusal> {
-        self.service.prove_presence(passphrase, self.approver.clone()).await
+        self.service.prove_presence(passphrase, self.approvers.clone()).await
     }
 
     /// Step 7: rewraps the vault identity for the set without the recipient, if the service is still in the state and at

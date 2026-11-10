@@ -15,8 +15,8 @@ use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::manifest::tests::KAT_IDENTITY;
 use crate::test_dir::TestDir;
 use crate::{
-    ApprovalEnvelope, ConfigFileName, PinnedApprover, SignatureAlgorithm, StateFileName, StateGeneration, VaultId, VaultManifest,
-    durable_replace, read_config_file, seal_approval_state,
+    ApprovalEnvelope, ApproverPublicKey, ConfigFileName, PinnedApprover, SignatureAlgorithm, StateFileName, StateGeneration, VaultId,
+    VaultManifest, durable_replace, read_config_file, seal_approval_state,
 };
 
 pub(crate) const OLD_CONFIG: &[u8] = b"# version 1\n[listener.agent]\nbind = \"127.0.0.1:8080\"\n";
@@ -63,8 +63,8 @@ impl ApprovalSigner for TestSigner {
         SignatureAlgorithm::Ed25519
     }
 
-    fn pinned(&self) -> PinnedApprover {
-        PinnedApprover::from_signing_key(&self.key)
+    fn public_key(&self) -> ApproverPublicKey {
+        ApproverPublicKey::from_signing_key(&self.key)
     }
 
     fn sign(&self, payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
@@ -84,8 +84,8 @@ impl ApprovalSigner for UnusableSigner {
         SignatureAlgorithm::Ed25519
     }
 
-    fn pinned(&self) -> PinnedApprover {
-        TestSigner::pinned().pinned()
+    fn public_key(&self) -> ApproverPublicKey {
+        TestSigner::pinned().public_key()
     }
 
     fn sign(&self, _: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
@@ -146,7 +146,13 @@ impl Setup {
         let manifest = VaultManifest::new(self.vault_id, StateGeneration::FIRST, None, Default::default()).unwrap();
         let manifest_path = self.state_dir.path().join(StateFileName::manifest().as_str());
         let fs = FaultFs::new().with_durable_file(&manifest_path, &crate::seal_manifest(&self.identity, &manifest).unwrap());
-        let state = ApprovalState::create(&self.state_lock, &fs, &self.identity, TestSigner::pinned().pinned()).unwrap();
+        let state = ApprovalState::create(
+            &self.state_lock,
+            &fs,
+            &self.identity,
+            PinnedApprover::for_tests(TestSigner::pinned().public_key()),
+        )
+        .unwrap();
         (fs, state)
     }
 

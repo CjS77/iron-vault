@@ -21,13 +21,18 @@ fn unlock_passphrase(text: &str) -> Passphrase {
     Passphrase::new(SecretString::from(text)).unwrap()
 }
 
-/// A fresh key sealed to `text` at the test work factor, with the approver to pin for it.
-fn sealed(text: &str) -> (Vec<u8>, PinnedApprover) {
-    let (key, pinned) = SoftwareSigner::generate().unwrap();
+/// A fresh key sealed to `text` at the test work factor, with the approvers pinned for it: just its own.
+fn sealed(text: &str) -> (Vec<u8>, Vec<PinnedApprover>) {
+    let (key, public_key) = SoftwareSigner::generate().unwrap();
     (
         seal_signer_key_at(&key, &approval_passphrase(text), TEST_WORK_FACTOR).unwrap(),
-        pinned,
+        vec![PinnedApprover::for_tests(public_key)],
     )
+}
+
+/// An approver for a fresh key nobody holds.
+fn stranger() -> PinnedApprover {
+    PinnedApprover::for_tests(SoftwareSigner::generate().unwrap().1)
 }
 
 fn payload(vault_id: VaultId, version: ApprovalVersion) -> ApprovalPayload {
@@ -52,11 +57,14 @@ fn a_signed_approval_verifies_against_the_committed_state() {
     let (envelope, pinned) = sealed("approve me");
     write_signer_key(&lock, &fs, &envelope).unwrap();
     crate::manifest::tests::write_first_manifest(&lock, &fs, &identity);
-    let mut state = ApprovalState::create(&lock, &fs, &identity, pinned.clone()).unwrap();
+    let mut state = ApprovalState::create(&lock, &fs, &identity, pinned[0].clone()).unwrap();
     let version = state.reserve(&lock, &fs, &identity).unwrap();
 
     let signer = open_signer_key(&read_signer_key(&lock, &fs).unwrap(), &approval_passphrase("approve me"), &pinned).unwrap();
-    assert_eq!((signer.algorithm(), signer.pinned()), (SignatureAlgorithm::Ed25519, pinned));
+    assert_eq!(
+        (signer.algorithm(), signer.public_key()),
+        (SignatureAlgorithm::Ed25519, *pinned[0].public_key())
+    );
     let signed = signer.sign(&payload(state.vault_id(), version)).unwrap();
     drop(signer);
 
@@ -104,17 +112,23 @@ fn the_unlock_and_approval_passphrases_are_independent() {
 fn the_passphrase_envelope_never_opens_as_an_approver_key() {
     let (operational, _) = OperationalIdentity::generate();
     let envelope = seal_at(&operational, &unlock_passphrase("same text"), TEST_WORK_FACTOR).unwrap();
-    let (_, pinned) = SoftwareSigner::generate().unwrap();
-    let error = open_signer_key(&envelope, &approval_passphrase("same text"), &pinned).unwrap_err();
+    let error = open_signer_key(&envelope, &approval_passphrase("same text"), &[stranger()]).unwrap_err();
     assert_eq!(error, SignError::Envelope(EnvelopeError::Malformed));
 }
 
 #[test]
 fn a_swapped_approver_key_is_key_mismatch_and_signs_nothing() {
     let (envelope, _) = sealed("approve me");
-    let (_, other) = SoftwareSigner::generate().unwrap();
-    let error = open_signer_key(&envelope, &approval_passphrase("approve me"), &other).unwrap_err();
+    let error = open_signer_key(&envelope, &approval_passphrase("approve me"), &[stranger(), stranger()]).unwrap_err();
     assert_eq!(error, SignError::KeyMismatch);
+}
+
+#[test]
+fn the_key_opens_as_whichever_pinned_approver_holds_it() {
+    let (envelope, pinned) = sealed("approve me");
+    let approvers = [stranger(), pinned[0].clone(), stranger()];
+    let signer = open_signer_key(&envelope, &approval_passphrase("approve me"), &approvers).unwrap();
+    assert_eq!(signer.public_key(), *pinned[0].public_key());
 }
 
 #[test]
@@ -150,10 +164,15 @@ fn generated_keys_differ() {
 
 #[test]
 fn debug_shows_no_key_bytes_or_passphrase() {
-    let (key, pinned) = SoftwareSigner::generate().unwrap();
+    let (key, public_key) = SoftwareSigner::generate().unwrap();
     let secret = *key.0.as_bytes();
     let envelope = seal_signer_key_at(&key, &approval_passphrase("approve me"), TEST_WORK_FACTOR).unwrap();
-    let signer = open_signer_key(&envelope, &approval_passphrase("approve me"), &pinned).unwrap();
+    let signer = open_signer_key(
+        &envelope,
+        &approval_passphrase("approve me"),
+        &[PinnedApprover::for_tests(public_key)],
+    )
+    .unwrap();
     let debug = format!("{key:?} {key:#?} {signer:?} {signer:#?} {:?}", approval_passphrase("approve me"));
     let hex: String = secret.iter().map(|b| format!("{b:02x}")).collect();
     let decimal = format!("{secret:?}");
@@ -162,7 +181,7 @@ fn debug_shows_no_key_bytes_or_passphrase() {
         !debug.contains(&hex) && !debug.contains(decimal_items) && !debug.contains("approve"),
         "{debug}"
     );
-    let public = format!("{:?}", pinned.public_key());
+    let public = format!("{:?}", public_key.as_bytes());
     assert!(!debug.contains(&public[1..public.len() - 1]), "{debug}");
 }
 
@@ -188,7 +207,7 @@ fn software_signer_key_debug_hides_a_known_seed() {
 #[test]
 fn software_signer_debug_hides_a_known_seed() {
     let key = SoftwareSignerKey::from_seed(&SEED);
-    let pinned = key.pinned();
-    let signer = SoftwareSigner::new(key, &pinned).unwrap();
+    let pinned = PinnedApprover::for_tests(key.public_key());
+    let signer = SoftwareSigner::new(key, &[pinned]).unwrap();
     [seed_hex(), seed_decimal()].iter().for_each(|secret| assert_hides(&signer, secret));
 }

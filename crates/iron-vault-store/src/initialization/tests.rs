@@ -1,7 +1,6 @@
 use std::io;
 use std::path::Path;
 
-use ed25519_dalek::SigningKey;
 use secrecy::SecretString;
 
 use super::*;
@@ -158,7 +157,7 @@ fn every_crash_point_is_unfinished() {
 fn a_created_vault_with_approval_state_is_initialized() {
     let dirs = Dirs::new("init-created");
     let mut vault = Vault::create(&dirs.state, &OsFs, VaultIdentity::generate()).unwrap();
-    let approver = PinnedApprover::from_signing_key(&SigningKey::from_bytes(&[1; 32]));
+    let approver = PinnedApprover::from_seed(1);
     vault.create_approval_state(&dirs.state, &OsFs, approver).unwrap();
     assert_eq!(dirs.read(&OsFs), InitializationState::Initialized);
 }

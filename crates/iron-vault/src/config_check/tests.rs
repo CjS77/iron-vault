@@ -9,9 +9,9 @@ use ed25519_dalek::{Signer, SigningKey};
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{AccountDirectory, AccountName, Port, UnavailableCause};
 use iron_vault_store::{
-    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalStorage, ApprovalVersion, ConfigDigest, ConfigDirLock, ConfigFileName, OsFs,
-    PendingConfig, PermittedOrigins, PinnedApprover, PublishedPairFault, RecordId, SignError, SignatureAlgorithm, StateDirLock,
-    StateFileName, StoreFs, VaultId, VaultIdentity, VerifyError,
+    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalStorage, ApprovalVersion, ApproverPublicKey, ConfigDigest, ConfigDirLock,
+    ConfigFileName, OsFs, PendingConfig, PermittedOrigins, PinnedApprover, PublishedPairFault, RecordId, SignError, SignatureAlgorithm,
+    StateDirLock, StateFileName, StoreFs, VaultId, VaultIdentity, VerifyError,
 };
 
 use super::*;
@@ -60,8 +60,8 @@ impl ApprovalSigner for TestSigner {
         SignatureAlgorithm::Ed25519
     }
 
-    fn pinned(&self) -> PinnedApprover {
-        PinnedApprover::new(SignatureAlgorithm::Ed25519, self.0.verifying_key().to_bytes().to_vec()).unwrap()
+    fn public_key(&self) -> ApproverPublicKey {
+        ApproverPublicKey::new(SignatureAlgorithm::Ed25519, self.0.verifying_key().to_bytes().to_vec()).unwrap()
     }
 
     fn sign(&self, payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
@@ -138,7 +138,9 @@ impl Fixture {
                 ((*name).to_owned(), id)
             })
             .collect();
-        let (state, _) = vault.create_approval_state(&state_lock, &OsFs, TestSigner::new().pinned()).unwrap();
+        let (state, _) = vault
+            .create_approval_state(&state_lock, &OsFs, PinnedApprover::for_tests(TestSigner::new().public_key()))
+            .unwrap();
         Self {
             state_dir,
             config_dir,

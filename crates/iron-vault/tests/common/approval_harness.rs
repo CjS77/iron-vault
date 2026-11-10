@@ -41,7 +41,8 @@ use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::Capabilities;
 use iron_vault_store::{
     ApprovalPassphrase, ApprovalState, ApprovalStorage, ConfigDigest, ConfigDirLock, LockError, OsFs, PendingConfig, PermittedOrigins,
-    SoftwareSigner, StateDirLock, StoreFs, Vault, VaultIdentity, open_signer_key, seal_signer_key_for_tests, write_signer_key,
+    PinnedApprover, SoftwareSigner, StateDirLock, StoreFs, Vault, VaultIdentity, open_signer_key, seal_signer_key_for_tests,
+    write_signer_key,
 };
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -113,7 +114,10 @@ impl Fixture {
         let (key, pinned) = SoftwareSigner::generate().unwrap();
         let sealed = seal_signer_key_for_tests(&key, &approval_passphrase(APPROVAL_PASSPHRASE)).unwrap();
         write_signer_key(&lock, &OsFs, &sealed).unwrap();
-        vault.create_approval_state(&lock, &OsFs, pinned).unwrap().0
+        vault
+            .create_approval_state(&lock, &OsFs, PinnedApprover::for_tests(pinned))
+            .unwrap()
+            .0
     }
 
     fn state_lock(&self) -> StateDirLock {
@@ -132,7 +136,7 @@ impl Fixture {
             fs: &OsFs,
         };
         let envelope = iron_vault_store::read_signer_key(&state_dir, &OsFs).unwrap();
-        let signer = open_signer_key(&envelope, &approval_passphrase(APPROVAL_PASSPHRASE), state.approver()).unwrap();
+        let signer = open_signer_key(&envelope, &approval_passphrase(APPROVAL_PASSPHRASE), state.approvers()).unwrap();
         let holder = SnapshotHolder::refusing(UnavailableReason::Checking);
         let pending = PendingConfig::write(&storage, config.as_bytes().to_vec()).unwrap();
         let prepared = pending.prepare(&storage, state, signer).unwrap();

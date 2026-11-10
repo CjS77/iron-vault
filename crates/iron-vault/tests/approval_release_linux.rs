@@ -32,9 +32,9 @@ use iron_vault::service_context::ServiceContext;
 use iron_vault::service_state::{FailureReason, ServiceState};
 use iron_vault_store::fault_fs::{FaultFile, FaultFs, FsCall};
 use iron_vault_store::{
-    ApprovalEnvelope, ApprovalPayload, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDigest, ConfigDirLock, OsFs,
-    PendingConfig, PinnedApprover, SignError, SignatureAlgorithm, SoftwareSigner, StateDirLock, StoreFs, Vault, VerifyError,
-    verify_approval, write_signer_key,
+    ApprovalEnvelope, ApprovalPayload, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ApproverId, ApproverLabel,
+    ApproverPublicKey, ConfigDigest, ConfigDirLock, OsFs, PendingConfig, PinnedApprover, SignError, SignatureAlgorithm, SoftwareSigner,
+    StateDirLock, StoreFs, UtcSecond, Vault, VerifyError, verify_approval, write_signer_key,
 };
 
 // ---- Helpers shared by the tests below -------------------------------------------------------------------------
@@ -160,8 +160,8 @@ impl ApprovalSigner for RefusingSigner {
         SignatureAlgorithm::Ed25519
     }
 
-    fn pinned(&self) -> PinnedApprover {
-        self.0.clone()
+    fn public_key(&self) -> ApproverPublicKey {
+        *self.0.public_key()
     }
 
     fn sign(&self, _: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
@@ -183,7 +183,7 @@ fn approve_with_failing_signer(fixture: &Fixture, config: &str) -> u64 {
         identity: &identity,
         fs: &OsFs,
     };
-    let signer = RefusingSigner(state.approver().clone());
+    let signer = RefusingSigner(state.approvers()[0].clone());
     let error = PendingConfig::write(&storage, config.as_bytes().to_vec())
         .unwrap()
         .prepare(&storage, &mut state, signer)
@@ -229,8 +229,8 @@ async fn replacing_the_approver_keeps_the_counters_and_the_active_signature_need
     let before = counters(&fixture);
     assert_eq!(before, (Some(2), 2));
     let replaced_pair = fixture.published_pair();
-    replace_approver(&fixture);
-    assert_eq!(counters(&fixture), before, "replacing the approver keeps both counters");
+    rotate_approver(&fixture);
+    assert_eq!(counters(&fixture), before, "rotating the approver keeps both counters");
     assert_eq!(verify_published(&fixture, &replaced_pair), Err(VerifyError::BadSignature));
 
     let restarted = fixture.start().await;
@@ -246,14 +246,23 @@ async fn replacing_the_approver_keeps_the_counters_and_the_active_signature_need
     assert_eq!(counters(&fixture), (Some(3), 3));
 }
 
-/// Pins a newly generated approver, whose key is sealed under the same approval passphrase.
-fn replace_approver(fixture: &Fixture) {
+/// Enrolls a newly generated approver, whose key is sealed under the same approval passphrase, and removes the one
+/// that signed the published pair.
+fn rotate_approver(fixture: &Fixture) {
     let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
     let mut state = load_state(&lock, &OsFs);
     let (key, pinned) = SoftwareSigner::generate().unwrap();
     let sealed = iron_vault_store::seal_signer_key_for_tests(&key, &approval_passphrase(APPROVAL_PASSPHRASE)).unwrap();
     write_signer_key(&lock, &OsFs, &sealed).unwrap();
-    state.replace_approver(&lock, &OsFs, &identity(), pinned).unwrap();
+    let old = state.approvers()[0].id();
+    let approver = PinnedApprover::new(
+        ApproverId::generate(),
+        pinned,
+        ApproverLabel::new("rotated").unwrap(),
+        UtcSecond::EPOCH,
+    );
+    state.enroll_approver(&lock, &OsFs, &identity(), approver).unwrap();
+    state.remove_approver(&lock, &OsFs, &identity(), old).unwrap();
 }
 
 /// Whether the published pair `pair` still verifies as the committed approval.

@@ -83,13 +83,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
 }
 
 /// What a recipient command reads of the service while it takes the lock: the vault identity and the open vault's ID, and
-/// the state and check generation a change records so it can refuse if either moved, and the pinned approver for owner presence.
+/// the state and check generation a change records so it can refuse if either moved, and the pinned approvers for owner presence.
 pub(super) struct ReadyVault {
     pub(super) identity: Arc<VaultIdentity>,
     pub(super) vault_id: VaultId,
     pub(super) state: ServiceState,
     pub(super) checks: u64,
-    pub(super) approver: PinnedApprover,
+    pub(super) approvers: Vec<PinnedApprover>,
 }
 
 /// The vault the service holds; known only when the state allows a vault change.
@@ -100,7 +100,7 @@ pub(super) fn ready_vault(inner: &Inner) -> Result<ReadyVault, RecipientRefusal>
             vault_id: open.approval.vault_id(),
             state: inner.state,
             checks: inner.checks,
-            approver: open.approval.approver().clone(),
+            approvers: open.approval.approvers().to_vec(),
         }),
         _ => Err(RecipientRefusal::WrongState(inner.state)),
     }

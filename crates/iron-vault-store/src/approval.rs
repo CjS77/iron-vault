@@ -6,7 +6,7 @@
 //! later YubiKey signers all produce the same envelope, so it is verified one way. Both byte layouts are in
 //! `design/storage-formats.md`.
 //!
-//! The approval state, which pins the approver and holds the version counters, is in [`state`]; checking an approval
+//! The approval state, which pins the approvers and holds the version counters, is in [`state`]; checking an approval
 //! against it is in [`verify`]. The signer that produces approvals is [`signer`], with the software signer in
 //! [`software_signer`]. The approval transaction's durable steps, which build on all of these, are in [`transaction`],
 //! and the approval recovery every config check runs first is in [`recovery`].
@@ -37,7 +37,8 @@ pub use software_signer::{
     ApprovalPassphrase, SoftwareSigner, SoftwareSignerKey, open_signer_key, read_signer_key, seal_signer_key, write_signer_key,
 };
 pub use state::{
-    ApprovalState, ApprovalStateError, InvalidKeyReason, MAX_APPROVAL_STATE_LEN, PinnedApprover, open_approval_state, seal_approval_state,
+    ApprovalState, ApprovalStateError, ApproverId, ApproverLabel, ApproverPublicKey, InvalidKeyReason, MAX_APPROVAL_STATE_LEN,
+    MAX_APPROVERS, PinnedApprover, open_approval_state, seal_approval_state,
 };
 pub use transaction::{
     AdmissionPaused, ApprovalError, ApprovalFailure, ApprovalProgress, ApprovalStep, ApprovalStorage, CommittedApproval, PendingConfig,

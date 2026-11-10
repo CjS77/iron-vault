@@ -3,8 +3,8 @@
 use std::fmt;
 
 use crate::{
-    OperationalIdentity, PinnedApprover, RecipientIdentity, RecoveryKey, RecoveryKeySecret, SignError, SoftwareSigner, SoftwareSignerKey,
-    VaultId, VaultIdentity,
+    ApproverPublicKey, OperationalIdentity, RecipientIdentity, RecoveryKey, RecoveryKeySecret, SignError, SoftwareSigner,
+    SoftwareSignerKey, VaultId, VaultIdentity,
 };
 
 /// The keys of a vault not yet written, with the recovery key's text for the one reveal.
@@ -28,7 +28,7 @@ pub struct SealingKeys {
     pub(super) recovery: RecipientIdentity,
     pub(super) host_unlock: Option<RecipientIdentity>,
     pub(super) signer: SoftwareSignerKey,
-    pub(super) approver: PinnedApprover,
+    pub(super) approver: ApproverPublicKey,
 }
 
 impl NewVaultKeys {

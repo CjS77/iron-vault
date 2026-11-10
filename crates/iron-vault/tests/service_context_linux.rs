@@ -52,10 +52,10 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{Capabilities, CredentialKind, ListenerName};
 use iron_vault_store::{
-    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalStorage, ConfigDirLock, LockError, OperationalIdentity, OsFs,
-    Passphrase, PendingConfig, PermittedOrigins, PinnedApprover, RecipientSet, RecordDamage, SignError, SignatureAlgorithm, StateDirLock,
-    StoreFs, Vault, VaultId, VaultIdentity, seal_passphrase_envelope_for_tests, wrap_identity, write_identity_envelope,
-    write_passphrase_envelope,
+    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalStorage, ApproverPublicKey, ConfigDirLock, LockError,
+    OperationalIdentity, OsFs, Passphrase, PendingConfig, PermittedOrigins, PinnedApprover, RecipientSet, RecordDamage, SignError,
+    SignatureAlgorithm, StateDirLock, StoreFs, Vault, VaultId, VaultIdentity, seal_passphrase_envelope_for_tests, wrap_identity,
+    write_identity_envelope, write_passphrase_envelope,
 };
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -82,8 +82,8 @@ impl ApprovalSigner for TestSigner {
         SignatureAlgorithm::Ed25519
     }
 
-    fn pinned(&self) -> PinnedApprover {
-        PinnedApprover::new(SignatureAlgorithm::Ed25519, self.0.verifying_key().to_bytes().to_vec()).unwrap()
+    fn public_key(&self) -> ApproverPublicKey {
+        ApproverPublicKey::new(SignatureAlgorithm::Ed25519, self.0.verifying_key().to_bytes().to_vec()).unwrap()
     }
 
     fn sign(&self, payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
@@ -153,7 +153,9 @@ impl Fixture {
             .into_iter()
             .find(|file| !before.contains(file))
             .unwrap();
-        let (state, _) = vault.create_approval_state(&lock, &OsFs, signer().pinned()).unwrap();
+        let (state, _) = vault
+            .create_approval_state(&lock, &OsFs, PinnedApprover::for_tests(signer().public_key()))
+            .unwrap();
         write_unlock_envelopes(&lock);
         Self {
             dir,

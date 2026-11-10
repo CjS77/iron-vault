@@ -47,9 +47,9 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{Capabilities, CredentialKind};
 use iron_vault_store::{
-    ApprovalPassphrase, ApprovalState, ApprovalStorage, ConfigDirLock, CredentialRecord, OsFs, PendingConfig, PermittedOrigins, RecordId,
-    SoftwareSigner, StateDirLock, StateFileName, StoreFs, Vault, VaultIdentity, VaultManifest, decode, open_manifest, open_signer_key,
-    seal_signer_key_for_tests, write_signer_key,
+    ApprovalPassphrase, ApprovalState, ApprovalStorage, ConfigDirLock, CredentialRecord, OsFs, PendingConfig, PermittedOrigins,
+    PinnedApprover, RecordId, SoftwareSigner, StateDirLock, StateFileName, StoreFs, Vault, VaultIdentity, VaultManifest, decode,
+    open_manifest, open_signer_key, seal_signer_key_for_tests, write_signer_key,
 };
 use secrecy::{ExposeSecret, SecretString};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -112,7 +112,10 @@ impl Fixture {
         let (key, pinned) = SoftwareSigner::generate().unwrap();
         let sealed = seal_signer_key_for_tests(&key, &approval_passphrase()).unwrap();
         write_signer_key(&lock, &OsFs, &sealed).unwrap();
-        vault.create_approval_state(&lock, &OsFs, pinned).unwrap().0
+        vault
+            .create_approval_state(&lock, &OsFs, PinnedApprover::for_tests(pinned))
+            .unwrap()
+            .0
     }
 
     fn approve_through_store(&self, state: &mut ApprovalState, config: &str) {
@@ -126,7 +129,7 @@ impl Fixture {
             fs: &OsFs,
         };
         let envelope = iron_vault_store::read_signer_key(&state_dir, &OsFs).unwrap();
-        let signer = open_signer_key(&envelope, &approval_passphrase(), state.approver()).unwrap();
+        let signer = open_signer_key(&envelope, &approval_passphrase(), state.approvers()).unwrap();
         let holder = SnapshotHolder::refusing(UnavailableReason::Checking);
         let pending = PendingConfig::write(&storage, config.as_bytes().to_vec()).unwrap();
         let prepared = pending.prepare(&storage, state, signer).unwrap();

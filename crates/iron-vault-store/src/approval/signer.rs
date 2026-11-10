@@ -6,7 +6,7 @@
 
 use thiserror::Error;
 
-use super::{ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, PinnedApprover, SignatureAlgorithm};
+use super::{ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, ApproverPublicKey, SignatureAlgorithm};
 use crate::EnvelopeError;
 
 /// Signs config approvals for one pinned approver.
@@ -17,8 +17,8 @@ pub trait ApprovalSigner {
     /// The algorithm this signer signs with.
     fn algorithm(&self) -> SignatureAlgorithm;
 
-    /// The approver this signer's key verifies as: the value to pin when this signer is enrolled.
-    fn pinned(&self) -> PinnedApprover;
+    /// The public key this signer's signatures verify against: the key to pin when this signer is enrolled.
+    fn public_key(&self) -> ApproverPublicKey;
 
     /// Signs the exact encoding of `payload` and returns the `config.toml.sig` envelope carrying it.
     fn sign(&self, payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError>;
@@ -30,8 +30,8 @@ pub enum SignError {
     /// The approval passphrase does not open the approver key envelope.
     #[error("wrong approval passphrase")]
     WrongPassphrase,
-    /// The decrypted signing key is not the pinned approver's key, so nothing may be signed with it.
-    #[error("the approver key does not match the pinned approver")]
+    /// The decrypted signing key is no pinned approver's key, so nothing may be signed with it.
+    #[error("the approver key does not match any pinned approver")]
     KeyMismatch,
     /// The approver key envelope is damaged, oversized or not an approver key envelope.
     #[error("the approver key envelope cannot be opened: {0}")]

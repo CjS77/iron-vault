@@ -17,12 +17,12 @@ use thiserror::Error;
 use crate::initialization::INITIAL_CONFIG;
 use crate::passphrase::seal_at;
 use crate::{
-    AdmissionPaused, ApprovalError, ApprovalPassphrase, ApprovalState, ApprovalStorage, ApprovalVersion, BeginError, ConfigDigest,
-    ConfigDirLock, EnvelopeError, ErrorKindLabel, InitStateError, InitializationState, PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig,
-    ReadError, RecipientIdentity, RecipientSet, RecipientSetError, SignError, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs,
-    UtcSecond, Vault, VaultError, VaultId, VaultIdentity, WriteError, approval::seal_signer_key_at, begin_initialization,
-    finish_initialization, open_signer_key, read_identity_envelope, read_signer_key, unwrap_identity, wrap_identity,
-    write_identity_envelope, write_passphrase_envelope, write_signer_key,
+    AdmissionPaused, ApprovalError, ApprovalPassphrase, ApprovalState, ApprovalStorage, ApprovalVersion, ApproverId, ApproverLabel,
+    ApproverPublicKey, BeginError, ConfigDigest, ConfigDirLock, EnvelopeError, ErrorKindLabel, InitStateError, InitializationState,
+    PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig, PinnedApprover, ReadError, RecipientIdentity, RecipientSet, RecipientSetError,
+    SignError, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs, UtcSecond, Vault, VaultError, VaultId, VaultIdentity, WriteError,
+    approval::seal_signer_key_at, begin_initialization, finish_initialization, open_signer_key, read_identity_envelope, read_signer_key,
+    unwrap_identity, wrap_identity, write_identity_envelope, write_passphrase_envelope, write_signer_key,
 };
 use crate::{
     RecipientEntry, RecipientInventory, RecipientInventoryError, RecipientInventoryReadError, RecipientInventoryWriteError, RecipientLabel,
@@ -171,7 +171,7 @@ pub enum InitFailure {
     /// The recipient inventory could not be read back.
     #[error(transparent)]
     InventoryRead(#[from] RecipientInventoryReadError),
-    /// A default recipient label broke the label rule.
+    /// A default recipient or approver label broke the label rule.
     #[error(transparent)]
     InventoryLabel(#[from] RecipientLabelError),
     /// The inventory as read back names a recipient set other than the one the envelope was wrapped for.
@@ -298,8 +298,8 @@ fn write_vault<F: StoreFs>(
     seal_operational(state, fs, operational, passphrase, log_n).map_err(at(InitStep::PassphraseEnvelope))?;
     seal_approver(state, fs, signer, &approval_passphrase, log_n).map_err(at(InitStep::ApproverKey))?;
     let mut created = Vault::create_with_id(state, fs, vault, vault_id).map_err(at(InitStep::Manifest))?;
-    let (mut approval, _) = created
-        .create_approval_state(state, fs, approver)
+    let (mut approval, _) = pin_software_signer(approver, enrolled_at)
+        .and_then(|approver| Ok(created.create_approval_state(state, fs, approver)?))
         .map_err(at(InitStep::ApprovalState))?;
     let signer = open_signer(state, fs, approval_passphrase, &approval).map_err(at(InitStep::OpenSigner))?;
     let storage = ApprovalStorage {
@@ -419,6 +419,13 @@ fn seal_approver(
     Ok(write_signer_key(state, fs, &seal_signer_key_at(&signer, passphrase, log_n)?)?)
 }
 
+/// The software signer's public key as step 6 pins it: a fresh approver ID, the label the owner knows it by, and the
+/// initialization time.
+fn pin_software_signer(key: ApproverPublicKey, enrolled_at: UtcSecond) -> Result<PinnedApprover, InitFailure> {
+    let label = ApproverLabel::new("approval passphrase")?;
+    Ok(PinnedApprover::new(ApproverId::generate(), key, label, enrolled_at))
+}
+
 /// Step 7: proves `approver.age` as written opens with the approval passphrase, which is dropped on return.
 fn open_signer(
     state: &StateDirLock,
@@ -426,7 +433,7 @@ fn open_signer(
     passphrase: ApprovalPassphrase,
     approval: &ApprovalState,
 ) -> Result<SoftwareSigner, InitFailure> {
-    Ok(open_signer_key(&read_signer_key(state, fs)?, &passphrase, approval.approver())?)
+    Ok(open_signer_key(&read_signer_key(state, fs)?, &passphrase, approval.approvers())?)
 }
 
 /// What step 8 committed.

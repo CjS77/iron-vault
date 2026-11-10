@@ -25,7 +25,7 @@ type History = Vec<(&'static str, Disk)>;
 type Op = fn(&Fixture, &FaultFs, &mut Vault, &mut ApprovalState);
 
 fn approver(seed: u8) -> PinnedApprover {
-    PinnedApprover::from_signing_key(&ed25519_dalek::SigningKey::from_bytes(&[seed; 32]))
+    PinnedApprover::from_seed(seed)
 }
 
 fn g(value: u64) -> StateGeneration {
@@ -397,7 +397,7 @@ fn an_approval_state_write_refuses_a_restored_manifest_and_touches_no_file() {
         approval.commit(&fixture.lock, &fs, &identity(), ApprovalVersion::FIRST, ConfigDigest::of(b"c")),
         expected
     );
-    assert_eq!(approval.replace_approver(&fixture.lock, &fs, &identity(), approver(9)), expected);
+    assert_eq!(approval.enroll_approver(&fixture.lock, &fs, &identity(), approver(9)), expected);
     assert_eq!((mutations(&fs, calls), &approval), (vec![], &before));
 }
 
