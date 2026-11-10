@@ -15,15 +15,18 @@ use std::fs;
 use std::sync::Arc;
 
 use common::WAIT;
-use common::approval_harness::{APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approval_passphrase, captured_logs, get};
+use common::approval_harness::{APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approval_passphrase, captured_logs, get, identity};
 use common::gated_fs::GatedFs;
-use iron_vault::service_context::{CredentialChanged, DenialKind, PresenceRefusal, ServiceContext, VaultChangeRefusal};
+use iron_vault::service_context::{ApprovalEnd, CredentialChanged, DenialKind, PresenceRefusal, ServiceContext, VaultChangeRefusal};
 use iron_vault::service_state::{ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, ServingSnapshot};
 use iron_vault::vault_change_check::PlannedChange;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::Port;
-use iron_vault_store::{PermittedOrigins, SoftwareSigner, StoreFs, seal_signer_key_for_tests};
+use iron_vault_store::{
+    ApproverId, ApproverLabel, OsFs, PermittedOrigins, PinnedApprover, SoftwareSigner, StateDirLock, StoreFs, UtcSecond, Vault,
+    seal_signer_key_for_tests, write_signer_key,
+};
 
 /// Adds `old_key`, which no route uses.
 async fn add_unused<F: StoreFs + Send + Sync + 'static>(service: &ServiceContext<F>) {
@@ -45,6 +48,32 @@ fn served<F: StoreFs + Send + Sync + 'static>(service: &ServiceContext<F>) -> Ar
 
 fn approval_bytes(fixture: &Fixture) -> Vec<u8> {
     fs::read(fixture.path("state/approval.age")).unwrap()
+}
+
+/// Enrolls a second software approver beside the one `init` pinned, its key sealed under the same approval passphrase,
+/// and returns its ID. Run before the service starts, which holds the state-directory lock.
+fn enroll_second_approver(fixture: &Fixture) -> ApproverId {
+    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let (vault, _) = Vault::open(&lock, &OsFs, identity()).unwrap();
+    let mut state = vault.load_approval_state(&lock, &OsFs).unwrap();
+    let (key, pinned) = SoftwareSigner::generate().unwrap();
+    let sealed = seal_signer_key_for_tests(&key, &approval_passphrase(APPROVAL_PASSPHRASE)).unwrap();
+    let id = ApproverId::generate();
+    write_signer_key(&lock, &OsFs, id, &sealed).unwrap();
+    let approver = PinnedApprover::software_for_tests(id, pinned, ApproverLabel::new("second").unwrap(), UtcSecond::EPOCH);
+    state.enroll_approver(&lock, &OsFs, &identity(), approver).unwrap();
+    id
+}
+
+/// Swaps the key files of approvers `a` and `b`, so each holds the other's genuine sealed key.
+fn swap_key_files(fixture: &Fixture, a: ApproverId, b: ApproverId) {
+    let (a, b) = (
+        fixture.path(&format!("state/approver-{a}.age")),
+        fixture.path(&format!("state/approver-{b}.age")),
+    );
+    let (a_key, b_key) = (fs::read(&a).unwrap(), fs::read(&b).unwrap());
+    fs::write(&a, b_key).unwrap();
+    fs::write(&b, a_key).unwrap();
 }
 
 #[tokio::test]
@@ -74,7 +103,7 @@ async fn a_wrong_passphrase_is_refused_and_writes_nothing() {
 }
 
 #[tokio::test]
-async fn a_key_file_swapped_with_another_approvers_is_refused_and_writes_nothing() {
+async fn a_key_no_approver_pins_in_the_key_file_is_refused_and_writes_nothing() {
     let logs = captured_logs();
     let fixture = Fixture::new().await;
     let approver = fixture.approver_id();
@@ -90,6 +119,38 @@ async fn a_key_file_swapped_with_another_approvers_is_refused_and_writes_nothing
 
     assert_eq!(refused.unwrap_err(), PresenceRefusal::Denied(DenialKind::KeyMismatch));
     assert_eq!(approval_bytes(&fixture), before);
+    logs.assert_no_passphrase();
+}
+
+/// Both approvers' keys open under the one passphrase, so only the key check keeps the asked approver's prompt from
+/// signing as the other: whichever approver is asked, its file holds the other's key.
+#[tokio::test]
+async fn a_key_file_swapped_with_another_pinned_approvers_is_refused_as_key_mismatch_by_presence_and_approval() {
+    let logs = captured_logs();
+    let fixture = Fixture::new().await;
+    let first = fixture.approver_id();
+    let second = enroll_second_approver(&fixture);
+    swap_key_files(&fixture, first, second);
+    let service = fixture.ready().await;
+    add_unused(&service).await;
+    let before = approval_bytes(&fixture);
+    let plan = service.plan_vault_change(remove("old_key")).await.unwrap();
+
+    let refused = plan.prove_presence(approval_passphrase(APPROVAL_PASSPHRASE)).await;
+    assert_eq!(refused.unwrap_err(), PresenceRefusal::Denied(DenialKind::KeyMismatch));
+    drop(plan);
+    let review = service.review_approval(fixture.config("rates").into_bytes()).await.unwrap();
+    let opened = review.open_signer(approval_passphrase(APPROVAL_PASSPHRASE)).await;
+    assert!(matches!(opened, Err(ApprovalEnd::Denied)), "{opened:?}");
+    review.abandon();
+
+    assert_eq!(approval_bytes(&fixture), before);
+    let refusals: Vec<_> = logs
+        .events("config.approval-refused")
+        .iter()
+        .map(|record| record["refusal"].clone())
+        .collect();
+    assert_eq!(refusals, ["key_mismatch"], "{}", logs.text());
     logs.assert_no_passphrase();
 }
 
