@@ -200,21 +200,28 @@ bind in it. The age field `-` means the directories are never cleaned.
 A `d` line also resets the owner and mode of a directory that already exists. That runs at every boot and every
 `postinst configure`, before the service checks the directory. So a `/etc/iron-vault` or `/var/lib/iron-vault` that was
 made group-writable or handed to another account is put right silently, and the service's `ConfigDir` or `StateDir`
-refusal only fires between those runs, such as on `systemctl restart`. Files planted while the directory was open
-stay. The service still does not trust them, with one exception.
-In `/etc/iron-vault`, the `Config` rule and the config signature catch a planted `config.toml`. In
-`/var/lib/iron-vault`, the [MAC'd file frame](storage-formats.md#macd-file-frame) on the manifest, the approval state
-and the recipient inventory rejects a file written without the vault identity, and a record file is trusted only
-through the manifest that lists it. The exception is `recovery.toml`, the
-[recovery check record](storage-formats.md#recovery-check-record): it is plaintext, with no MAC and no version, so the
-service reads a planted or edited one if it is valid. Its only guard was that just the service account can write the
-state directory, which is the guard that failed here. A forged record can only move or suppress the recovery reminder
-(it holds two times, and `since` may not be later than `last_checked`); an invalid one is unusable and the reminder
-counts as due. It cannot reach a credential or a config. So the repair hides the warning sign, and lets a planted
-`recovery.toml` through, with that limited effect. The package keeps the repair: an upgrade or reboot heals a mistaken
+refusal only fires between those runs, such as on `systemctl restart`. Files planted while the directory was open stay.
+The service still does not trust them, with two exceptions. In `/etc/iron-vault`, the `Config` rule and the config
+signature catch a planted `config.toml`. In `/var/lib/iron-vault`, the [MAC'd file
+frame](storage-formats.md#macd-file-frame) on the manifest, the approval state and the recipient inventory rejects a
+file written without the vault identity, and a record file is trusted only through the manifest that lists it. The `age`
+envelopes are trusted only through the manifest MAC (`identity.age`, `operational.age`) or the pinned approver key
+(`approver.age`), so a planted one can only make unlock or approval fail. The first exception is `init.unfinished`,
+which the service reads by name alone: its presence is its whole meaning ([unfinished initialization
+file](storage-formats.md#unfinished-initialization-file)). A planted one makes `unlock` refuse the vault as an
+unfinished or unrecognized initialization, and the owner's next `init` then offers to discard the vault's files. That is
+loud and touches availability only, no worse than deleting the vault's files, and it never reaches a credential or the
+config. The other exception is `recovery.toml`, the [recovery check record](storage-formats.md#recovery-check-record):
+it is plaintext, with no MAC and no version, so the service reads a planted or edited one if it is valid. Its only guard
+was that just the service account can write the state directory, which is the guard that failed here. A forged record
+can only move or suppress the recovery reminder and what `status` reports as `recovery last checked` (it holds two
+times, and `since` may not be later than `last_checked`); an invalid one is unusable and the reminder counts as due. It
+cannot reach a credential or a config. So the repair hides the warning sign, and lets a planted `recovery.toml` through,
+with that limited effect. One warning sign survives the repair: `unlock` logs a `vault.foreign-file` WARN for any file
+in the state directory that init never writes. The package keeps the repair: an upgrade or reboot heals a mistaken
 `chmod` without an administrator's help, and that is worth more than the earlier warning. An administrator who wants to
-know that a directory was tampered with must look at the journal of an earlier restart or at the files in it, not at
-the next boot.
+know that a directory was tampered with must look at the journal of an earlier restart or at the files in it, not at the
+next boot.
 
 ## Service unit
 
