@@ -19,7 +19,11 @@ service_account_problems() {
         FILENAME == passwd && $1 == name && !user { user = 1; pw = $2; uid = $3; gid = $4; home = $6; shell = $7; next }
         FILENAME == passwd { users++; pname[users] = $1; puid[users] = $3; pgid[users] = $4 }
         FILENAME == group && $1 == name && !grp { grp = 1; ggid = $3; members = $4; next }
-        FILENAME == group { groups++; gname[groups] = $1; ggidof[groups] = $3; gmembers[groups] = "," $4 "," }
+        # glibc skips blanks before each member name, so " iron-vault" in a member list is a member too.
+        FILENAME == group {
+            groups++; gname[groups] = $1; ggidof[groups] = $3
+            m = "," $4; gsub(/,[ \t]+/, ",", m); gmembers[groups] = m ","
+        }
         FILENAME == shadow && $1 == name && !shadowed { shadowed = 1; spw = $2 }
         END {
             if (user) {
@@ -45,7 +49,11 @@ service_account_problems() {
 
 # Fails configure, saying what is wrong and how to fix it, when service_account_problems finds anything.
 refuse_unsafe_service_account() {
-    problems=$(service_account_problems) || problems="the account files could not be read"
+    if ! problems=$(service_account_problems); then
+        echo "iron-vault: could not read the account files to check for an existing iron-vault account" >&2
+        echo "iron-vault: check that $passwd_file, $group_file and $shadow_file exist, then run 'sudo dpkg --configure iron-vault'." >&2
+        return 1
+    fi
     [ -n "$problems" ] || return 0
     {
         echo "iron-vault: an iron-vault account or group already exists and is not a locked system account:"

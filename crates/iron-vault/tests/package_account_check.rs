@@ -227,6 +227,16 @@ fn sys_uid_max_comes_from_login_defs() {
 }
 
 #[test]
+fn commented_out_sys_uid_max_is_ignored() {
+    // Debian ships these lines commented out; a 499 that was read would refuse uid 998.
+    let accounts = Accounts {
+        login_defs: Some("UID_MIN\t\t\t 1000\n#SYS_UID_MIN\t\t  100\n#SYS_UID_MAX\t\t  499\n".to_string()),
+        ..Accounts::sysusers()
+    };
+    assert_eq!(accounts.check(), Ok(()));
+}
+
+#[test]
 fn home_outside_the_allowed_list_is_refused() {
     let accounts = Accounts::sysusers().passwd_entry("iron-vault:x:998:998::/home/iron-vault:/usr/sbin/nologin");
     assert_refused(&accounts, "home /home/iron-vault is not /, /nonexistent or /var/lib/iron-vault");
@@ -242,6 +252,14 @@ fn other_primary_group_is_refused() {
 fn supplementary_group_is_refused() {
     let mut accounts = Accounts::sysusers();
     accounts.group[1] = "sudo:x:27:alice,iron-vault".to_string();
+    assert_refused(&accounts, "member of group sudo");
+}
+
+#[test]
+fn supplementary_group_after_a_blank_is_refused() {
+    // glibc skips the blank, so iron-vault is a member of sudo.
+    let mut accounts = Accounts::sysusers();
+    accounts.group[1] = "sudo:x:27:alice, iron-vault".to_string();
     assert_refused(&accounts, "member of group sudo");
 }
 
@@ -279,16 +297,46 @@ fn group_sharing_the_gid_is_refused() {
     assert_refused(&accounts, "group collectors: has the same gid as iron-vault");
 }
 
-#[test]
-fn unreadable_shadow_is_refused() {
+/// Asserts the check fails closed when it cannot read a file, saying so rather than reporting an unsafe account.
+fn assert_unreadable_refused(dir: &Path, shadow: &str) {
+    let output = run_check(dir, shadow);
+    assert!(!output.status.success(), "a check that cannot read a file must fail closed");
+    let message = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        message.contains("iron-vault: could not read the account files to check for an existing iron-vault account"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("already exists"),
+        "an unread file says nothing about the account:\n{message}"
+    );
+}
+
+/// Writes the passwd and group fixtures into a new directory, leaving the shadow file to the test.
+fn without_shadow() -> Scratch {
     let accounts = Accounts::sysusers();
     let dir = Scratch::new();
-    fs::write(dir.0.join("passwd"), accounts.passwd.join("\n")).unwrap();
-    fs::write(dir.0.join("group"), accounts.group.join("\n")).unwrap();
-    let output = run_check(&dir.0, "missing");
-    assert!(
-        !output.status.success(),
-        "a check that cannot read the shadow file must fail closed"
-    );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("could not be read"));
+    fs::write(dir.0.join("passwd"), accounts.passwd.join("\n") + "\n").unwrap();
+    fs::write(dir.0.join("group"), accounts.group.join("\n") + "\n").unwrap();
+    dir
+}
+
+#[test]
+fn missing_shadow_is_refused() {
+    let dir = without_shadow();
+    assert_unreadable_refused(&dir.0, "missing");
+}
+
+#[test]
+fn shadow_without_read_permission_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = without_shadow();
+    let shadow = dir.0.join("shadow");
+    fs::write(&shadow, Accounts::sysusers().shadow.join("\n") + "\n").unwrap();
+    fs::set_permissions(&shadow, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads a mode-000 file anyway, so there is nothing to test when the tests run as root.
+    if fs::read(&shadow).is_ok() {
+        return;
+    }
+    assert_unreadable_refused(&dir.0, "shadow");
 }
