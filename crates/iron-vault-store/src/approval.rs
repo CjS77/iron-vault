@@ -11,6 +11,7 @@
 //! [`software_signer`]. The approval transaction's durable steps, which build on all of these, are in [`transaction`],
 //! and the approval recovery every config check runs first is in [`recovery`].
 
+mod approver_change;
 mod encoding;
 mod recovery;
 mod signer;
@@ -28,6 +29,7 @@ use thiserror::Error;
 
 use crate::vault_id::{VaultId, VaultIdError};
 
+pub use approver_change::{ApproverChangeError, ApproverChangeStep, ApproverChanges, KeyCheckError, KeyFileOutcome, MayHaveCommitted};
 pub use recovery::{ApprovalRecoveryError, DiscardedFile, PublishedPairFault, RecoveredApproval, RecoveryFailure, recover_approval};
 pub use signer::{ApprovalSigner, SignError};
 pub(crate) use software_signer::seal_signer_key_at;
