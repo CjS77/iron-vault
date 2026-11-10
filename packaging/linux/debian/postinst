@@ -4,8 +4,71 @@
 # unit is enabled: the administrator creates those. Messages go to stderr because debconf's confmodule owns stdout.
 set -e
 
+# BEGIN service account check. crates/iron-vault/tests/package_account_check.rs runs this block against fixture files.
+
+# systemd-sysusers leaves an existing iron-vault account or group as it is, and the package would then hand that account
+# the service's directories and that group the audit log. Prints one line per way an existing account or group differs
+# from the locked system account sysusers creates, and fails if there is any; prints nothing when neither exists.
+# Reads $passwd_file, $group_file, $shadow_file and $login_defs.
+service_account_problems() {
+    sys_uid_max=$(awk '$1 == "SYS_UID_MAX" { v = $2 } END { print v }' "$login_defs" 2>/dev/null || true)
+    case "$sys_uid_max" in '' | *[!0-9]*) sys_uid_max=999 ;; esac
+    awk -F: -v name=iron-vault -v max="$sys_uid_max" \
+        -v passwd="$passwd_file" -v group="$group_file" -v shadow="$shadow_file" '
+        function problem(text) { print text; bad = 1 }
+        # The first entry is the one getpwnam and getgrnam return.
+        FILENAME == passwd && $1 == name && !user { user = 1; pw = $2; uid = $3; gid = $4; home = $6; shell = $7; next }
+        FILENAME == passwd { users++; pname[users] = $1; puid[users] = $3; pgid[users] = $4 }
+        FILENAME == group && $1 == name && !grp { grp = 1; ggid = $3; members = $4; next }
+        FILENAME == group { groups++; gname[groups] = $1; ggidof[groups] = $3; gmembers[groups] = "," $4 "," }
+        FILENAME == shadow && $1 == name && !shadowed { shadowed = 1; spw = $2 }
+        END {
+            if (user) {
+                if (uid !~ /^[0-9]+$/ || uid == 0 || uid + 0 > max)
+                    problem("account " name ": uid " uid " is not a system uid (1 to " max ")")
+                if (shell !~ /^(\/usr)?\/s?bin\/(nologin|false)$/) problem("account " name ": shell " shell " allows a login")
+                # "x" defers to the shadow entry; with none there is no password to log in with.
+                if (pw == "x") pw = shadowed ? spw : "*"
+                if (pw !~ /^[!*]/) problem("account " name ": the password is not locked")
+                if (home != "/" && home != "/nonexistent" && home != "/var/lib/iron-vault")
+                    problem("account " name ": home " home " is not /, /nonexistent or /var/lib/iron-vault")
+                if (!grp || gid != ggid) problem("account " name ": the primary group is not " name)
+                for (i = 1; i <= groups; i++) if (index(gmembers[i], "," name ",")) problem("account " name ": member of group " gname[i])
+                for (i = 1; i <= users; i++) if (puid[i] == uid) problem("account " pname[i] ": has the same uid as " name)
+            }
+            if (grp) {
+                if (members != "") problem("group " name ": lists members " members)
+                for (i = 1; i <= users; i++) if (pgid[i] == ggid) problem("group " name ": primary group of account " pname[i])
+                for (i = 1; i <= groups; i++) if (ggidof[i] == ggid) problem("group " gname[i] ": has the same gid as " name)
+            }
+            exit bad
+        }' "$passwd_file" "$group_file" "$shadow_file"
+}
+
+# Fails configure, saying what is wrong and how to fix it, when service_account_problems finds anything.
+refuse_unsafe_service_account() {
+    problems=$(service_account_problems) && return 0
+    [ -n "$problems" ] || problems="the account files could not be read"
+    {
+        echo "iron-vault: an iron-vault account or group already exists and is not a locked system account:"
+        printf '%s\n' "$problems" | sed 's/^/iron-vault:   /'
+        echo "iron-vault: correct it, or delete it ('userdel iron-vault', then 'groupdel iron-vault' if the group remains)"
+        echo "iron-vault: so the package creates its own; then run 'sudo dpkg --configure iron-vault'."
+    } >&2
+    return 1
+}
+
+# END service account check.
+
 # Registers the purge question's template with debconf; the question itself is asked by postrm.
 [ -e /usr/share/debconf/confmodule ] && . /usr/share/debconf/confmodule
+
+# Only on the first configure, or the first after a purge: an account that exists then was not made by this package.
+# Later configures keep the account the package made, whose group may hold a log collector's account.
+if [ "$1" = configure ] && [ -z "$2" ]; then
+    passwd_file=/etc/passwd group_file=/etc/group shadow_file=/etc/shadow login_defs=/etc/login.defs
+    refuse_unsafe_service_account || exit 1
+fi
 
 # The generated snippets create the account and directories before they enable and start the service.
 #DEBHELPER#
