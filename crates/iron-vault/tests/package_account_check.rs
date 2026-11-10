@@ -1,0 +1,294 @@
+//! The Linux package's `postinst` check of an `iron-vault` account or group that existed before the package.
+//!
+//! The check is the block of `packaging/linux/debian/postinst` between its BEGIN and END markers. Each test runs that
+//! block with `sh` against fixture `passwd`, `group`, `shadow` and `login.defs` files in a temporary directory, so no
+//! test reads the host's account files or needs root. The baseline is the account `systemd-sysusers` creates from the
+//! package's `sysusers.d` line; each failing case changes one attribute of it.
+
+#![cfg(target_os = "linux")]
+// Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+const POSTINST: &str = include_str!("../../../packaging/linux/debian/postinst");
+const BEGIN: &str = "# BEGIN service account check.";
+const END: &str = "# END service account check.";
+
+/// The account database of a host where `systemd-sysusers` created `iron-vault`, beside root and a login account.
+struct Accounts {
+    passwd: Vec<String>,
+    group: Vec<String>,
+    shadow: Vec<String>,
+    login_defs: Option<String>,
+}
+
+impl Accounts {
+    fn sysusers() -> Self {
+        Self {
+            passwd: lines(&[
+                "root:x:0:0:root:/root:/bin/bash",
+                "alice:x:1000:1000:Alice:/home/alice:/bin/bash",
+                "iron-vault:x:998:998:Iron Vault credential proxy:/:/usr/sbin/nologin",
+            ]),
+            group: lines(&["root:x:0:", "sudo:x:27:alice", "alice:x:1000:", "iron-vault:x:998:"]),
+            shadow: lines(&[
+                "root:*:20000:0:99999:7:::",
+                "alice:$6$salt$hash:20000:0:99999:7:::",
+                "iron-vault:!*:20000::::::",
+            ]),
+            login_defs: Some("UID_MIN 1000\nSYS_UID_MIN 100\nSYS_UID_MAX 999\n".to_string()),
+        }
+    }
+
+    /// The host before the package: no `iron-vault` account or group.
+    fn without_service_account() -> Self {
+        let mut accounts = Self::sysusers();
+        [&mut accounts.passwd, &mut accounts.group, &mut accounts.shadow]
+            .into_iter()
+            .for_each(|file| file.retain(|line| !line.starts_with("iron-vault:")));
+        accounts
+    }
+
+    /// Replaces the `iron-vault` entry of one file.
+    fn service_entry(mut self, file: fn(&mut Self) -> &mut Vec<String>, entry: &str) -> Self {
+        let lines = file(&mut self);
+        let index = lines
+            .iter()
+            .position(|line| line.starts_with("iron-vault:"))
+            .expect("an iron-vault entry");
+        lines[index] = entry.to_string();
+        self
+    }
+
+    fn passwd_entry(self, entry: &str) -> Self {
+        self.service_entry(|a| &mut a.passwd, entry)
+    }
+
+    fn group_entry(self, entry: &str) -> Self {
+        self.service_entry(|a| &mut a.group, entry)
+    }
+
+    fn shadow_entry(self, entry: &str) -> Self {
+        self.service_entry(|a| &mut a.shadow, entry)
+    }
+
+    /// Runs the check against these files: `Ok` with no output, or `Err` with what it printed to stderr.
+    fn check(&self) -> Result<(), String> {
+        let dir = Scratch::new();
+        fs::write(dir.0.join("passwd"), self.passwd.join("\n") + "\n").unwrap();
+        fs::write(dir.0.join("group"), self.group.join("\n") + "\n").unwrap();
+        fs::write(dir.0.join("shadow"), self.shadow.join("\n") + "\n").unwrap();
+        if let Some(defs) = &self.login_defs {
+            fs::write(dir.0.join("login.defs"), defs).unwrap();
+        }
+        let output = run_check(&dir.0, "shadow");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.stdout.is_empty(), "the check writes nothing to stdout, which debconf owns");
+        match output.status.success() {
+            true if stderr.is_empty() => Ok(()),
+            true => panic!("the check passed but printed: {stderr}"),
+            false => Err(stderr),
+        }
+    }
+}
+
+fn lines(entries: &[&str]) -> Vec<String> {
+    entries.iter().map(ToString::to_string).collect()
+}
+
+/// The postinst's account check: its functions only, without the code that runs at configure.
+fn check_block() -> &'static str {
+    let start = POSTINST.find(BEGIN).expect("postinst has the BEGIN marker");
+    let end = POSTINST.find(END).expect("postinst has the END marker");
+    &POSTINST[start..end]
+}
+
+/// Runs the check in `dir`, which holds the fixture files, reading the shadow entries from `shadow`.
+fn run_check(dir: &Path, shadow: &str) -> Output {
+    let script = format!(
+        "{}\npasswd_file=passwd group_file=group shadow_file={shadow} login_defs=login.defs\nrefuse_unsafe_service_account",
+        check_block()
+    );
+    Command::new("sh").arg("-c").arg(script).current_dir(dir).output().expect("sh runs")
+}
+
+/// A temporary directory removed when dropped.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Self {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("iv-account-{}-{n}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Asserts the check refuses `accounts`, names `problem`, and says how to fix it.
+fn assert_refused(accounts: &Accounts, problem: &str) {
+    let message = accounts.check().expect_err("the check must refuse");
+    assert!(message.contains(problem), "expected {problem:?} in:\n{message}");
+    assert!(message.contains("userdel iron-vault"), "the refusal says how to fix it:\n{message}");
+}
+
+#[test]
+fn sysusers_account_passes() {
+    assert_eq!(Accounts::sysusers().check(), Ok(()));
+}
+
+#[test]
+fn no_existing_account_passes() {
+    assert_eq!(Accounts::without_service_account().check(), Ok(()));
+}
+
+#[test]
+fn allowed_homes_shells_and_locked_passwords_pass() {
+    [
+        "iron-vault:x:998:998::/nonexistent:/usr/sbin/nologin",
+        "iron-vault:x:998:998::/var/lib/iron-vault:/sbin/nologin",
+        "iron-vault:x:998:998::/:/bin/false",
+        "iron-vault:x:998:998::/:/usr/bin/false",
+    ]
+    .into_iter()
+    .for_each(|entry| assert_eq!(Accounts::sysusers().passwd_entry(entry).check(), Ok(()), "{entry}"));
+    [
+        "iron-vault:!:20000::::::",
+        "iron-vault:*:20000::::::",
+        "iron-vault:!$6$salt$hash:20000::::::",
+    ]
+    .into_iter()
+    .for_each(|entry| assert_eq!(Accounts::sysusers().shadow_entry(entry).check(), Ok(()), "{entry}"));
+}
+
+#[test]
+fn missing_login_defs_means_sys_uid_max_999() {
+    let accounts = Accounts {
+        login_defs: None,
+        ..Accounts::sysusers()
+    };
+    assert_eq!(accounts.check(), Ok(()));
+    let accounts = Accounts {
+        login_defs: None,
+        ..Accounts::sysusers()
+    }
+    .passwd_entry("iron-vault:x:1000:998::/:/usr/sbin/nologin");
+    assert_refused(&accounts, "uid 1000 is not a system uid (1 to 999)");
+}
+
+#[test]
+fn login_shell_is_refused() {
+    let accounts = Accounts::sysusers().passwd_entry("iron-vault:x:998:998::/:/bin/bash");
+    assert_refused(&accounts, "shell /bin/bash allows a login");
+    // An empty shell field means /bin/sh.
+    let accounts = Accounts::sysusers().passwd_entry("iron-vault:x:998:998::/:");
+    assert_refused(&accounts, "allows a login");
+}
+
+#[test]
+fn unlocked_password_is_refused() {
+    let accounts = Accounts::sysusers().shadow_entry("iron-vault:$6$salt$hash:20000::::::");
+    assert_refused(&accounts, "the password is not locked");
+    let accounts = Accounts::sysusers().shadow_entry("iron-vault::20000::::::");
+    assert_refused(&accounts, "the password is not locked");
+}
+
+#[test]
+fn password_in_passwd_is_refused() {
+    let accounts = Accounts::sysusers().passwd_entry("iron-vault:$6$salt$hash:998:998::/:/usr/sbin/nologin");
+    assert_refused(&accounts, "the password is not locked");
+}
+
+#[test]
+fn uid_outside_the_system_range_is_refused() {
+    let accounts = Accounts::sysusers().passwd_entry("iron-vault:x:1000:998::/:/usr/sbin/nologin");
+    assert_refused(&accounts, "uid 1000 is not a system uid (1 to 999)");
+    let accounts = Accounts::sysusers().passwd_entry("iron-vault:x:0:998::/:/usr/sbin/nologin");
+    assert_refused(&accounts, "uid 0 is not a system uid");
+}
+
+#[test]
+fn sys_uid_max_comes_from_login_defs() {
+    let accounts = Accounts {
+        login_defs: Some("SYS_UID_MAX\t499\n".to_string()),
+        ..Accounts::sysusers()
+    };
+    assert_refused(&accounts, "uid 998 is not a system uid (1 to 499)");
+}
+
+#[test]
+fn home_outside_the_allowed_list_is_refused() {
+    let accounts = Accounts::sysusers().passwd_entry("iron-vault:x:998:998::/home/iron-vault:/usr/sbin/nologin");
+    assert_refused(&accounts, "home /home/iron-vault is not /, /nonexistent or /var/lib/iron-vault");
+}
+
+#[test]
+fn other_primary_group_is_refused() {
+    let accounts = Accounts::sysusers().passwd_entry("iron-vault:x:998:1000::/:/usr/sbin/nologin");
+    assert_refused(&accounts, "the primary group is not iron-vault");
+}
+
+#[test]
+fn supplementary_group_is_refused() {
+    let mut accounts = Accounts::sysusers();
+    accounts.group[1] = "sudo:x:27:alice,iron-vault".to_string();
+    assert_refused(&accounts, "member of group sudo");
+}
+
+#[test]
+fn group_member_is_refused() {
+    let accounts = Accounts::sysusers().group_entry("iron-vault:x:998:alice");
+    assert_refused(&accounts, "group iron-vault: lists members alice");
+}
+
+#[test]
+fn group_as_another_accounts_primary_group_is_refused() {
+    let mut accounts = Accounts::sysusers();
+    accounts.passwd.push("bob:x:1001:998:Bob:/home/bob:/bin/bash".to_string());
+    assert_refused(&accounts, "group iron-vault: primary group of account bob");
+}
+
+#[test]
+fn group_without_an_account_is_checked() {
+    let mut accounts = Accounts::without_service_account();
+    accounts.group.push("iron-vault:x:998:alice".to_string());
+    assert_refused(&accounts, "group iron-vault: lists members alice");
+}
+
+#[test]
+fn account_sharing_the_uid_is_refused() {
+    let mut accounts = Accounts::sysusers();
+    accounts.passwd.push("mallory:x:998:1000::/home/mallory:/bin/bash".to_string());
+    assert_refused(&accounts, "account mallory: has the same uid as iron-vault");
+}
+
+#[test]
+fn group_sharing_the_gid_is_refused() {
+    let mut accounts = Accounts::sysusers();
+    accounts.group.push("collectors:x:998:alice".to_string());
+    assert_refused(&accounts, "group collectors: has the same gid as iron-vault");
+}
+
+#[test]
+fn unreadable_shadow_is_refused() {
+    let accounts = Accounts::sysusers();
+    let dir = Scratch::new();
+    fs::write(dir.0.join("passwd"), accounts.passwd.join("\n")).unwrap();
+    fs::write(dir.0.join("group"), accounts.group.join("\n")).unwrap();
+    let output = run_check(&dir.0, "missing");
+    assert!(
+        !output.status.success(),
+        "a check that cannot read the shadow file must fail closed"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not be read"));
+}
