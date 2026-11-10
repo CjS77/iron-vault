@@ -343,14 +343,21 @@ unit can therefore only remove a listener, never widen one. Socket unit files an
 ### Adding and removing a TCP listener
 
 A running service cannot take a socket that was started after it, and systemd refuses to start a socket unit whose
-service is already active (`Socket service iron-vault.service already active, refusing`). A new TCP listener therefore
-needs the service stopped while its socket starts:
+service is already active (`Socket service iron-vault.service already active, refusing`). Every listener socket names
+`Service=iron-vault.service`, so stopping the service alone is not enough: a caller connecting to a listener socket that
+is still up starts the service again. A new TCP listener therefore needs the existing sockets stopped with the service:
 
 1. Write the drop-in, then `sudo systemctl enable iron-vault-listener@<name>.socket`.
-2. `sudo systemctl stop iron-vault`, `sudo systemctl start iron-vault-listener@<name>.socket`,
-   `sudo systemctl start iron-vault`, then `sudo iron-vault unlock`. The started service holds the new socket.
+2. `sudo systemctl stop 'iron-vault-listener@*.socket' iron-vault.service`, then `sudo systemctl start` for every
+   enabled listener socket, the new one included, then `sudo systemctl start iron-vault` and `sudo iron-vault unlock`.
+   The started service holds all the sockets.
 3. Approve a config that names the listener. The approval can come before step 2, and its summary then marks the
    listener as taking effect after restart ([config-approval.md](config-approval.md#open-questions), question 2).
+
+The alternative was to keep the plain stop and start and tell the owner to repeat them if systemd refuses. That leaves
+the race open and hides it behind a retry. Stopping the sockets is deterministic, at the cost of freeing the existing
+ports for a moment, which is the same exposure as [Stopping the service](#stopping-the-service) and is documented there.
+An owner can weigh and plan for a known, bounded gap; an intermittent failure gives no such choice.
 
 To remove one, approve a config without it, then `sudo systemctl disable --now iron-vault-listener@<name>.socket`.
 Otherwise systemd keeps the port and passes a socket that nothing serves on.

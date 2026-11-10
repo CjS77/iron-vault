@@ -178,16 +178,20 @@ non-loopback address also needs `tls_certificate` and `tls_key` in the config.
    sudo systemctl enable iron-vault-listener@loopback.socket
    ```
 
-3. Start it with the service stopped, then start the service so it receives the socket, and unlock it again. systemd
-   refuses to start a socket while its service is running (`Socket service iron-vault.service already active,
-   refusing`), so `enable --now` or a plain `start` fails here:
+3. Stop the service together with the listener sockets, start every enabled listener socket, then start the service and
+   unlock it. systemd refuses to start a socket while its service is running (`Socket service iron-vault.service
+   already active, refusing`), so `enable --now` or a plain `start` fails here. Stopping the service alone is not
+   enough: a caller connecting to a listener socket that is still up starts it again, and the refusal returns.
 
    ```sh
-   sudo systemctl stop iron-vault
-   sudo systemctl start iron-vault-listener@loopback.socket
+   sudo systemctl stop 'iron-vault-listener@*.socket' iron-vault.service
+   sudo systemctl start iron-vault-listener@loopback.socket   # one line for each enabled listener, the new one included
    sudo systemctl start iron-vault
    sudo iron-vault unlock
    ```
+
+   This frees every listener's port for a moment. Read [Stop the service](#stop-the-service) for what that means for
+   callers and for port squatting, and stop your callers first.
 
 4. Approve a config that names the listener with the same address:
 
