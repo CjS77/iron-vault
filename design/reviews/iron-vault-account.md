@@ -154,14 +154,43 @@ the account the attacker runs as.
 
 *Who can run as the service uid?*
 
-- **Protected:** nothing but the service. The account has no login shell or password (`sysusers.d`). Only root can
-  start a process as it (`runuser`, `systemd-run --uid`), and root is trusted. The attacker is therefore code running
-  in the service, or a process it started, which stays in the unit's sandbox and cgroup and is killed when the unit
-  stops.
-- **Container:** the same, plus:
-  - `docker exec`, which is runtime administration and outside the threat model;
+- **Protected:** the service, and two short-lived programs the package has root start as the uid. The account has no
+  login shell or password (`sysusers.d`). Only root can start a process as it (`runuser`, `systemd-run --uid`), and
+  root is trusted. The package does so twice:
+  - **The reload command.** The unit's `ExecReload=/bin/kill -HUP $MAINPID` has no `+` prefix, so each
+    `systemctl reload iron-vault` runs `/bin/kill` as `User=iron-vault`, in the unit's sandbox.
+  - **logrotate's compressor.** `/etc/logrotate.d/iron-vault` has `su iron-vault iron-vault` and `compress`. logrotate
+    3.21 (Debian 12, Ubuntu 24.04) sets the real and effective ids of its compressor child to the `su` account before it
+    execs `gzip` (`switch_user_permanently`, called from `compressLogFile` in `logrotate.c`). That `gzip` runs once a
+    day, outside the unit's sandbox and cgroup.
+
+  Neither is the service or a process it started. Apart from them, the attacker is code running in the service, or a
+  process it started, which stays in the unit's sandbox and cgroup and is killed when the unit stops.
+- **Container:** the service, plus:
+  - `docker exec`, plain or with `-u` and the service uid. A shell or `iron-vault` command started that way runs as the
+    service uid, and it is not the service or its descendant. Administration needs no such process: the owner runs
+    `sudo iron-vault` on the host (`compose-install.md`, Remote administration), and the admin socket refuses a plain
+    `docker exec` anyway. A `docker exec` is runtime administration and outside the threat model, but such a process
+    is still one the service can take over (below).
   - another container that runs as the uid and mounts the host's `/run/iron-vault`, which the hardening checklist
     forbids.
+
+*Can the service take over such a process?* It shares the uid but is not the service's descendant. `ptrace` attach,
+`process_vm_writev` and a write to `/proc/<pid>/mem` all need ptrace access to it. The uid matches, the target is
+dumpable, and it holds no capability the service lacks, so Yama's `ptrace_scope` decides:
+
+- At 0, access is allowed. A service taken over can rewrite the process's memory and make it `execve` any program.
+- At 1 or more, it is refused, because the process is not the service's descendant.
+- Ubuntu sets 1 in `/etc/sysctl.d/10-ptrace.conf` (shipped by `procps`; read on an Ubuntu 24.04 host). Debian's kernel
+  is believed to leave Yama at 0 unless an administrator raises it; this was not checked on a Debian machine. The value
+  is the host's, so it applies inside containers too.
+- System call filters close only part of this. In Protected, `SystemCallFilter=@system-service` denies `ptrace` (in
+  `@debug`) but allows `process_vm_readv` and `process_vm_writev` (in `@ipc`; read with `systemd-analyze syscall-filter`,
+  systemd 255). Docker's default profile allows all three on kernels from 4.8. No filter can tell a write to
+  `/proc/<pid>/mem` from any other `openat` and `pwrite64`.
+
+The window is as long as the process runs: a moment for `kill`, a few seconds for `gzip`. A service taken over can
+poll `/proc` for it.
 
 **Impact.** Smaller than the investigation assumed. A compromised service already receives every owner input sent to
 the real admin socket, and can send any prompt itself. Passphrases typed while it is compromised are lost with or
@@ -194,7 +223,7 @@ either with an in-place `execve` or as a child it hands a socket to.
 |---|---|---|---|---|
 | A. A socket unit binds `admin.sock` in a root-owned directory and passes it to the service | Not closed. The service uid can no longer unlink the path, but the service holds the listening socket systemd passed it. Code in the service clears `FD_CLOEXEC` on it and `execve`s a program in place, or passes it to a process it starts; that program accepts the owner's connections on the real socket | Not possible: Docker cannot pass a socket into a container, and without `CAP_DAC_OVERRIDE` the service cannot bind in a root-owned directory | Not closed, for the same reason: `sshd` reaches the root-owned path, and whatever holds the socket answers | A new socket unit and admin socket path; the service adopts its admin socket. A connection to it starts a stopped service, as a listener socket unit already does |
 | B. The CLI checks the listening process from `SO_PEERCRED` before it sends anything | Not closed. On the client end `SO_PEERCRED` gives the server's credentials as they were at `listen` (unix(7)), and a pid survives `execve`. A program `execve`d in place keeps `MainPID`, then unlinks `admin.sock`, binds and listens there, and passes. So does a socket the service itself binds at the path and hands to a child: the CLI sees the service's pid. Reading `MainPID` from systemd and the peer from `SO_PEERPIDFD` would not change this | Not closed, the same way: the program `execve`d in place stays PID 1 of the container | Not covered: the CLI's peer is the local `ssh`, and `sshd` on the server connects without checking | Client only, at one choke point (`exchange`). Conflicts with A: on a socket systemd bound, the listener is systemd (pid 1, uid 0), so B as described would refuse the real service |
-| C. Once started, the service denies itself `execve` and `execveat` with a seccomp filter | Closed. No program can be started as the service uid. Every process with that uid is the service or a fork of it, which runs the service's own code with a copy of its memory and already receives every owner input | Closed, the same way | Covered: whatever answers at the path is the service or a fork of it | A dependency and a small filter at startup; hardware adapters may not be child processes. See below |
+| C. Once started, the service denies itself `execve` and `execveat` with a seccomp filter | Closed once the reload command runs as root (`ExecReload=+…`) and logrotate starts no compressor as the uid. The service then starts no program, and no process with its uid is anything but the service or a fork of it, which runs the service's own code with a copy of its memory and already receives every owner input. Until both changes, it holds only at Yama `ptrace_scope` 1 or more | Closed while nobody `docker exec`s into the container as the service uid, or at `ptrace_scope` 1 or more | Covered as far as the profile it forwards to: whatever answers at the path is the service or a fork of it | A dependency and a small filter at startup; `ExecReload=+` and no log compression in the package; hardware adapters may not be child processes. See below |
 | A key pinned at `init` | No help: the key must work while the service is Locked, so it would sit in the state directory, which the service uid reads | Same | — | Ruled out |
 | A check of `/proc/<pid>/exe` and the uid | No help: a process the service started can `execve` `/usr/bin/iron-vault` with `LD_PRELOAD` | Same | — | Ruled out |
 | A separate admin socket directory | Becomes A: the service creates the socket, so a directory it cannot write needs a socket unit | Same as A | — | Not a separate fix |
@@ -214,7 +243,7 @@ an exec call. So it can give up `execve` and `execveat` once it is running, and 
   `systemd-run --user -p SystemCallFilter=~execve /bin/true`, systemd's executor is killed by `SIGSYS` before
   `/bin/true` runs. `~execveat` starts it, but denying `execveat` alone leaves `execve` open. Docker's seccomp profile
   has the same limit, because the runtime loads it just before it execs the entrypoint.
-- **So the filter is in-process,** installed by `harden_process` (`hardening/linux.rs`).
+- **So the filter is in-process,** called from `harden_process` (`hardening.rs`), implemented in `hardening/linux.rs`.
   - The workspace forbids `unsafe` code. rustix 1.1 exposes only seccomp's strict mode, not filter mode, and calling
     `prctl` or `seccomp` through `libc` needs `unsafe`. A crate is therefore needed. `seccompiler` 0.5 (rust-vmm,
     Apache-2.0 OR BSD-3-Clause) builds and installs the BPF program, and its only required dependency is `libc`, which
@@ -228,7 +257,25 @@ an exec call. So it can give up `execve` and `execveat` once it is running, and 
   - The filter must also refuse other system call ABIs. On x86_64, the i386 `execve` has another number, and x32
     numbers carry bit `0x40000000`. The unit does not set `SystemCallArchitectures=native`, and Docker's default
     profile admits the x86 and x32 ABIs.
-  - Failing to install the filter would be reported in the hardening report, like the core-dump and memory-lock results.
+  - A denied call kills the process (`SECCOMP_RET_KILL_PROCESS`) rather than failing with `EPERM`. The service never
+    makes these calls, so one means its code is compromised. Killing it ends the compromise and drops the vault
+    identity from memory. The unit (`Restart=on-failure`) or Compose (`restart: unless-stopped`) restarts it Locked,
+    and the `SIGSYS` exit is in the journal or the container's state.
+  - The filter should also deny `ptrace`, `process_vm_readv` and `process_vm_writev`. The service never uses them, and
+    in Container and Development nothing else denies them; in Protected `process_vm_*` are allowed (above). They are
+    three more numbers in the same filter. They do not close `/proc/<pid>/mem`, so fix C still needs the package
+    changes below in Protected, and no `docker exec` as the uid in Container.
+  - If the filter fails to install, the gap is open. That is reported in the hardening report, `status` and the
+    startup audit record, as the core-dump result is, and the service still serves. Refusing the admin socket would
+    lock the owner out over a Low gap. A failure also means a bug rather than a platform: `SystemCallFilter=` and
+    Docker's default profile already need seccomp filter mode on every host the two profiles support.
+- **What it needs from the package.** In Protected, two programs started as the uid must go:
+  - `ExecReload=+/bin/kill -HUP $MAINPID`. The `+` prefix runs the reload command as root, outside the sandbox, so it
+    no longer runs as the uid. The unit file, and the unit listing and directive table in `linux-package.md`
+    (Service unit), change with it.
+  - The logrotate rule stops compressing: `compress` and `delaycompress` come out, so logrotate only renames, under
+    `su`, and starts no child. Thirty daily files stay uncompressed. The rule appears in `audit-logging.md` (The
+    shipped rule) and `log-operations.md`. An owner who keeps compression relies on `ptrace_scope` 1 or more.
 - **What it rules out.** Planned work needs no exec in the service, except one adapter that is still only a lead:
   - The host-side signing helper (K-255) runs on the host. The service reaches it over a Unix socket.
   - The host unlock runs `systemd-creds` on the host, not in the container.
@@ -238,27 +285,36 @@ an exec call. So it can give up `execve` and `execveat` once it is running, and 
     program that `age` runs as a child process, so fix C rules that adapter out. The same holds for
     `age-plugin-yubikey` (`future-specifications.md` §2.1). Hardware adapters would run in the service, or as host-side
     helpers reached over a socket, never as child processes of the service.
-- **What it leaves.** A fork of the service can still serve at the path. It is the service's own code with a copy of
-  the service's memory, so it gains nothing the service lacks. Denying process creation too (`fork`, `vfork`, `clone`
-  without `CLONE_THREAD`, and `clone3`, which must fail with `ENOSYS` so the C library falls back to `clone` for
-  threads) would make the service the only process with its uid, at the price of a larger filter.
+- **What it leaves.**
+  - Code inside the service can unlink `admin.sock` and bind its own listener there, with no exec at all. That is the
+    service itself, which already receives every owner input.
+  - Root can still start a process as the uid, and a `docker exec` as the uid is such a process (above). The service
+    can take it over at `ptrace_scope` 0.
+  - A fork of the service can still serve at the path. It is the service's own code with a copy of the service's
+    memory, so it gains nothing the service lacks. Denying process creation too (`fork`, `vfork`, `clone` without
+    `CLONE_THREAD`, and `clone3`, which must fail with `ENOSYS` so the C library falls back to `clone` for threads)
+    would stop the service starting any process at all, at the price of a larger filter.
 
 **Recommendations.**
 
 - Do not build fix A or fix B. Neither closes the gap: an in-place `execve` keeps the service's pid and its sockets.
   They also conflict with each other.
 - Fix C is the review's recommendation, for the owner to decide. It is the only fix compared that closes the gap, and
-  it covers Protected, Container and the `ssh -L` forward. It needs no change to the CLI, the package or the Compose
-  file. Its costs are one dependency (`seccompiler`) and a design rule that the service never starts a program, which
-  rules out `age` plugins as hardware adapters.
+  it covers Protected, Container and the `ssh -L` forward. In Container it holds while nobody `docker exec`s in as the
+  service uid. It needs no change to the CLI or the Compose file. Its costs:
+  - one dependency (`seccompiler`) and a small filter at startup;
+  - in the package, `ExecReload=+/bin/kill -HUP $MAINPID` and a logrotate rule without compression, with the matching
+    text in `linux-package.md` (Service unit), `audit-logging.md` and `log-operations.md`;
+  - a design rule that the service never starts a program, which rules out `age` plugins as hardware adapters.
 - The alternative is no product fix. The gap stays Low: a compromised service already receives every passphrase typed
   while it runs. What the attacker saves is the work of hooking the running service.
 - **Owner decision.** §5 says no other process, "including one running as the service account", may serve at the admin
   socket's path or stand in for the service. Can anything short of stopping the service from starting processes meet
   that? The review finds nothing. Whatever owns the path or the socket, and whatever the CLI checks, a program the
   service starts inherits the service's pid or its sockets. So either:
-  - build fix C, and §5 holds in outcome. A fork of the service can still serve at the path, so it holds literally
-    only if the filter also denies process creation; or
+  - build fix C with its package changes, and §5 holds in outcome, in Container while nobody `docker exec`s in as the
+    service uid. A fork of the service can still serve at the path, so it holds literally only if the filter also
+    denies process creation; or
   - build nothing, and reword §5 to what holds: no account but the service account can serve at the admin socket's
     path, and anything running as the service account is treated as the service, because the service already
     receives every owner input.
@@ -307,7 +363,9 @@ refuse root as they would refuse any other account.
 - **Finding 3:** confirmed by the K-273 investigation, which also lowered it from Medium to Low.
   - The replacement works in Protected and Container, and was reproduced unprivileged in Development.
   - The threat tables in `linux-package.md` and `docker-compose.md` now list it.
-  - Ticket K-286 (EP-35) builds fix C, the service denying itself `execve` and `execveat`, if the owner chooses it.
+  - Ticket K-286 (EP-35) builds fix C if the owner chooses it: the service kills itself on `execve`, `execveat`,
+    `ptrace` and `process_vm_*`, and the package stops starting programs as the uid (`ExecReload=+`, no log
+    compression).
   - Open for the owner: fix C, or no product fix and §5 reworded to what holds. Fixes A and B are not to be built.
 - **Finding 4:** open. The remapping clause in §3.2 (line 118) still contradicts `docker-compose.md`. The service
   account parenthetical will be replaced under K-272.

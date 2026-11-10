@@ -532,12 +532,14 @@ A kept vault opens with a later install, but its published config and signature 
 
 ## Threats
 
-What this layout leaves to a process running as the service account. Nothing but the service runs as it, so in
-practice that is code running in the service, or a process the service started.
+What this layout leaves to a process running as the service account. Besides the service, the package has root start
+two short-lived programs as it: the reload command (`ExecReload=` has no `+` prefix) and logrotate's `gzip` (the rule
+has `su iron-vault iron-vault` and `compress`). A compromised service can take either over at Yama `ptrace_scope` 0. In
+practice, then, the attacker is code running in the service, a process the service started, or one of those two.
 
 | Threat | Controls here | What remains |
 |---|---|---|
-| A process running as the service uid replaces `admin.sock` and collects the passphrases the owner types (§5) | None yet: `/run/iron-vault` is the service account's and listed in `ReadWritePaths=`, because the service binds there, and only the service runs as that uid. Neither a root-owned admin socket nor a CLI check of the server's pid would stop it: a program `execve`d in place keeps the service's pid and its sockets. Proposed, for the owner to decide: K-286, after which the service denies itself `execve` and `execveat` once started | Until K-286, a program the service starts can capture the passphrases, at the local path or through an `ssh -L` forward. With it, only the service or a fork of it can serve at the path, and that code already receives every owner input ([iron-vault-account.md](reviews/iron-vault-account.md), finding 3) |
+| A process running as the service uid replaces `admin.sock` and collects the passphrases the owner types (§5) | None yet: `/run/iron-vault` is the service account's and listed in `ReadWritePaths=`, because the service binds there. Neither a root-owned admin socket nor a CLI check of the server's pid would stop it: a program `execve`d in place keeps the service's pid and its sockets. Proposed, for the owner to decide: K-286, after which the service kills itself on `execve`, `execveat`, `ptrace` and `process_vm_*` once started, the reload command runs as root (`ExecReload=+`), and logrotate no longer compresses | Until K-286, a program the service starts can capture the passphrases, at the local path or through an `ssh -L` forward. With it, only the service or a fork of it can serve at the path, and that code already receives every owner input. That holds because no other process then runs as the uid; a process root starts as the uid (`runuser`, `systemd-run --uid`) can still be taken over at `ptrace_scope` 0 ([iron-vault-account.md](reviews/iron-vault-account.md), finding 3) |
 | A process running as the service uid replaces a Unix request socket (§7) | Other accounts cannot write `/run/iron-vault` | The service uid can, whether the service or a listener socket unit bound the socket; callers would only send it what a compromised service already sees |
 
 ## Building and checking the package
