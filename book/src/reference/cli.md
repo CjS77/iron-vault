@@ -41,8 +41,8 @@ the connection arrives as.
 ## `sudo` in a protected installation
 
 In a protected installation your login account is never an admin principal, so malware running as you cannot reach
-the admin socket. Only root and the `iron-vault` service account may connect, so you run every client command
-through `sudo`:
+the admin socket. Only root may connect, not even the `iron-vault` service account, so a compromised service cannot lock the vault or
+spend your passphrase attempts. You run every client command through `sudo`:
 
 ```sh
 sudo iron-vault unlock

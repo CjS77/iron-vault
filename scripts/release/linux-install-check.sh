@@ -213,6 +213,15 @@ ping_is_refused() {
     esac
 }
 
+# The service account must be refused by the service's peer check, not by the socket's mode: it owns admin.sock, so it
+# can connect, and only the peer-account check stops it. Anything else (a stopped service) does not count.
+service_account_ping_is_refused() {
+    local out
+    if out=$(runuser -u "$SERVICE_ACCOUNT" -- "$BINARY" ping 2>&1); then echo "ping succeeded: $out"; return 1; fi
+    echo "$out"
+    case "$out" in *"(not-admin-principal)"*) ;; *) echo "not refused by the service's peer-account check"; return 1 ;; esac
+}
+
 # --- Checks that restart the service ------------------------------------------------------------------------------------
 
 journal_since() { journalctl -u "$SERVICE" --since "$1" --no-pager -o cat; }
@@ -333,6 +342,7 @@ run_checks() {
     check "LimitCORE is 0" core_dumps_are_off "$pid"
     check "the service process is not dumpable" process_not_dumpable "$pid"
     check "$ACCOUNT: iron-vault ping is refused" ping_is_refused
+    check "$SERVICE_ACCOUNT: iron-vault ping is refused by the peer-account check" service_account_ping_is_refused
     check "$ACCOUNT cannot open /proc/$pid/mem" open_is_denied "/proc/$pid/mem"
     check "$ACCOUNT cannot open /proc/$pid/environ" open_is_denied "/proc/$pid/environ"
     check "$ACCOUNT cannot open /var/lib/iron-vault" open_is_denied /var/lib/iron-vault

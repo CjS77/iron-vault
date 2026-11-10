@@ -46,7 +46,7 @@ The Container profile is `Protected` except in three places:
 
 | | Protected | Container | Why |
 |---|---|---|---|
-| Admin principals | root and the service account | root only | [Admin access](#admin-access) |
+| Admin principals | root only | root only | [Admin access](#admin-access) |
 | TCP listeners | from socket activation only | bound by the service | [TCP listeners](#tcp-listeners-without-socket-activation) |
 | Startup | always Locked | Checking when the unlock handoff opens the vault, else Locked | [Host unlock](#host-unlock) |
 
@@ -264,16 +264,15 @@ The peer's pid is a different matter. The connecting process is outside the cont
 reports its pid as 0, and the admin audit record's `peer_pid` is 0. The pid is recorded for the audit log only and
 decides nothing (`peer.rs`), so nothing else changes.
 
-**Root is the Container profile's only admin principal.** `AdminPrincipals::accepts` accepts uid 0 and refuses
-everything else, the service account included. In a protected install the service account is an admin principal
-because it is the account that runs the service; in a container, only the service itself runs as that uid, so
-accepting it would grant nothing an administrator needs and would admit anything that took over the service's uid.
+**Root is the Container and Protected profiles' only admin principal.** `AdminPrincipals::accepts` accepts uid 0 and
+refuses everything else, the service account included. Only the service itself runs as that uid, so accepting it would
+grant nothing an administrator needs and would admit anything that took over the service's uid.
 The owner reaches the socket the way §5 intends, by becoming a host administrator.
 
 The admin socket in the bind-mounted runtime directory is `0600`, owned by the service account. Host root opens it
 with `CAP_DAC_OVERRIDE`. A plain `docker exec` into Iron Vault's container runs as the container's `user:`, the service
 uid, which owns the socket and can connect; it is refused because `AdminPrincipals::accepts` rejects the service
-account in this profile. `docker exec -u 0` arrives as root but, under `cap_drop: [ALL]`, without
+account. `docker exec -u 0` arrives as root but, under `cap_drop: [ALL]`, without
 `CAP_DAC_OVERRIDE`, so it cannot open the socket.
 
 Remote administration takes one of two forms:
@@ -582,13 +581,9 @@ with:
 
 ### Glossary
 
-These follow from the §5 change. §5 is applied; these glossary edits are not yet, pending the owner's approval.
-
-- **Admin principal:** replace "root or the service account in a protected install, the invoking user in development"
-  with "root or the service account in a protected install, root alone in a container install, the invoking user in
-  development".
-- **Actor disambiguation**, the *Admin principal* row: no change to its two columns; a container column is not added,
-  since the table compares the two profiles an owner chooses between on a desktop.
+The glossary's *Admin principal* entries are applied: root in a protected or container install, the invoking user in
+development. The *Actor disambiguation* table compares the two profiles an owner chooses between on a desktop, so it
+gets no container column.
 
 ## Open questions
 

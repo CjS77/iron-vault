@@ -235,7 +235,7 @@ WantedBy=multi-user.target
 |---|---|
 | `Type=exec` | The service sends no readiness notification. `exec` makes a start fail when the binary cannot be executed, rather than reporting success. |
 | `ExecReload=` | The service reloads its published config on SIGHUP ([config-approval.md](config-approval.md#reload)), so `systemctl reload iron-vault` does that. |
-| `User=iron-vault`, `Group=iron-vault` | The service runs under its own account ([§4](iron-vault-specification.md#4-installation-and-ownership)), which is the expected owner the trusted-path checks look for and an admin principal ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). |
+| `User=iron-vault`, `Group=iron-vault` | The service runs under its own account ([§4](iron-vault-specification.md#4-installation-and-ownership)), which is the expected owner the trusted-path checks look for. It is not an admin principal ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). |
 | `Restart=on-failure` | A crash restarts the service unattended ([§15](iron-vault-specification.md#15-service-states-and-errors)). A clean exit, and a service waiting Locked, are not failures, so neither is restarted. |
 | `LimitCORE=0` | No core dump can hold service memory ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)). The service also sets `RLIMIT_CORE` to 0 and clears `PR_SET_DUMPABLE` itself. |
 | `LimitMEMLOCK=infinity` | `hardening.rs` calls `mlockall` only when the `RLIMIT_MEMLOCK` soft limit is unlimited, because locking future mappings under a finite limit makes allocations fail once the service grows past it. A protected install does not unlock without locked memory ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)). Locking needs no capability once the limit allows it. |
@@ -506,10 +506,10 @@ group-writable directory is read from the journal, because the service's startup
 ## Admin access
 
 Admin commands run only through `sudo` ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The admin
-principals of a protected install are root and the service account, fixed by the deployment profile. `admin.sock` is
+principal of a protected install is root alone, fixed by the deployment profile: no administrator acts as the service account, and accepting it would let anything that took over the service lock the vault or spend the owner's passphrase attempts. `admin.sock` is
 the service account's with mode `0600`, and the service checks each connection's peer account before reading
 anything. The package creates no admin group. Membership of the `iron-vault` group grants no admin access: the
-socket's group has no access, and the peer check refuses the account anyway. It does grant read access to the audit
+socket's group has no access, and the peer check refuses the account anyway, as it refuses the service account itself. It does grant read access to the audit
 log, because `/var/log/iron-vault` is `0750` and `iron-vault.log` is `0640`, both with the service's group, and
 anyone who reads the log sees every route, caller and refusal. Only a log collector's own service account belongs in
 the group; never add a login account ([log-operations.md](../book/src/reference/log-operations.md#location-and-permissions)).
