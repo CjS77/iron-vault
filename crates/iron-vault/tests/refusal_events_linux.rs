@@ -9,7 +9,8 @@
 mod common;
 
 use common::approval_harness::{
-    APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approve, assert_audit_record, captured_logs, converse, error_code, send, serve_admin,
+    APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approve, assert_audit_record, assert_names_approver, captured_logs, converse,
+    error_code, send, serve_admin,
 };
 use iron_vault::admin::protocol::{AdminRequest, ErrorCode, Frame};
 use iron_vault_kinds::CredentialMaterial;
@@ -20,6 +21,7 @@ use iron_vault_store::{ConfigDigest, PermittedOrigins};
 async fn an_unusable_approval_passphrase_on_config_approve_writes_one_refusal_with_the_digest() {
     let logs = captured_logs();
     let fixture = Fixture::new().await;
+    let approver = fixture.approver_id();
     let service = fixture.ready().await;
     let proposed = fixture.config("unusable");
 
@@ -33,8 +35,9 @@ async fn an_unusable_approval_passphrase_on_config_approve_writes_one_refusal_wi
         .filter(|record| record["config_digest"] == digest.as_str())
         .collect();
     assert_eq!(refused.len(), 1, "{}", logs.text());
-    assert_audit_record(&refused[0], "WARN", &["refusal", "config_digest"]);
+    assert_audit_record(&refused[0], "WARN", &["refusal", "config_digest", "approver_id", "approver_label"]);
     assert_eq!(refused[0]["refusal"], "wrong_passphrase");
+    assert_names_approver(&refused[0], approver);
     logs.assert_no_passphrase();
 }
 
@@ -44,6 +47,7 @@ async fn an_unusable_approval_passphrase_on_config_approve_writes_one_refusal_wi
 async fn an_unusable_and_a_wrong_passphrase_on_rm_each_write_one_presence_refusal() {
     let logs = captured_logs();
     let fixture = Fixture::new().await;
+    let approver = fixture.approver_id();
     let service = fixture.ready().await;
     let origins = PermittedOrigins::new([("old.example".parse().unwrap(), Port::HTTPS)].into()).unwrap();
     let material = CredentialMaterial::Static { key: "old-secret".into() };
@@ -63,8 +67,10 @@ async fn an_unusable_and_a_wrong_passphrase_on_rm_each_write_one_presence_refusa
         assert_eq!(error_code(&exchanged.response), ErrorCode::ApprovalDenied);
         let records = logs.events("vault.presence-refused");
         assert_eq!(records.len(), expected_records, "{}", logs.text());
-        assert_audit_record(&records[expected_records - 1], "WARN", &["refusal"]);
-        assert_eq!(records[expected_records - 1]["refusal"], "wrong_passphrase");
+        let record = &records[expected_records - 1];
+        assert_audit_record(record, "WARN", &["refusal", "approver_id", "approver_label"]);
+        assert_eq!(record["refusal"], "wrong_passphrase");
+        assert_names_approver(record, approver);
     }
     logs.assert_no_passphrase();
     assert!(!logs.text().contains(APPROVAL_PASSPHRASE));

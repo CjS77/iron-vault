@@ -239,7 +239,7 @@ async fn removing_an_added_recipient_rewraps_the_envelope_and_says_old_copies_st
         "{done:?}"
     );
     assert_eq!(done.prompts.len(), 1);
-    assert_eq!(done.prompts[0].label, "Approval passphrase");
+    assert_eq!(done.prompts[0].label, "Approval passphrase for \"approval passphrase\"");
     assert!(
         done.notices.contains("role: added") && done.notices.contains("label: old laptop"),
         "{}",

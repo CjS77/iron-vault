@@ -123,7 +123,13 @@ async fn a_healthy_replace_serves_the_new_secret_and_the_old_snapshot_drops_when
     assert_ne!(new_id, old_id);
     assert_eq!(record_id(&fixture), new_id);
     assert!(!record_path(&fixture, &old_id).exists(), "the old record file was removed");
-    assert_eq!(exchanged.prompts, [prompt("Approval passphrase"), prompt("Secret for fx_key")]);
+    assert_eq!(
+        exchanged.prompts,
+        [
+            prompt("Approval passphrase for \"approval passphrase\""),
+            prompt("Secret for fx_key")
+        ]
+    );
     let origin_text = format!("localhost:{}", origin.1);
     assert_eq!(
         exchanged.notices,
@@ -219,7 +225,7 @@ async fn a_wrong_approval_passphrase_writes_nothing_and_asks_for_no_secret() {
     let exchanged = replace(&service, replace_request(&[upstream_origin(&fixture)]), &[WRONG_PASSPHRASE]).await;
 
     assert_eq!(error_code(&exchanged.response), ErrorCode::ApprovalDenied);
-    assert_eq!(exchanged.prompts, [prompt("Approval passphrase")]);
+    assert_eq!(exchanged.prompts, [prompt("Approval passphrase for \"approval passphrase\"")]);
     assert_eq!(manifest_bytes(&fixture), before);
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_nothing_typed_leaked(&logs, &exchanged);
@@ -238,7 +244,7 @@ async fn a_lock_at_the_secret_prompt_cancels_the_change_with_nothing_written() {
             break prompt;
         }
     };
-    assert_eq!(passphrase_prompt, prompt("Approval passphrase"));
+    assert_eq!(passphrase_prompt, prompt("Approval passphrase for \"approval passphrase\""));
     let passphrase = OwnerInput::new(Zeroizing::new(APPROVAL_PASSPHRASE.as_bytes().to_vec()));
     send(&mut stream, &Frame::OwnerInput(passphrase)).await;
     assert!(matches!(read_frame(&mut stream).await, Frame::Prompt(prompt) if prompt.label == "Secret for fx_key"));

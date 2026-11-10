@@ -74,7 +74,7 @@ async fn rm(path: &std::path::Path, name: &str, answers: &[&str]) -> Exchanged {
 
 fn presence_prompt() -> Prompt {
     Prompt {
-        label: "Approval passphrase".to_owned(),
+        label: "Approval passphrase for \"approval passphrase\"".to_owned(),
         secret: true,
     }
 }

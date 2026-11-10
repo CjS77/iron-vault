@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use common::approval_harness::{
-    APPROVAL_PASSPHRASE, Fixture, approval_passphrase, approve, error_code, get, identity, the_two_prompts, versions,
+    APPROVAL_PASSPHRASE, Fixture, approval_passphrase, approve, error_code, get, identity, the_two_prompts, the_two_prompts_for, versions,
 };
 use iron_vault::admin::protocol::{AdminResponse, ApprovalResult, ErrorCode};
 use iron_vault::service_context::ServiceContext;
@@ -229,7 +229,7 @@ async fn rotating_the_approver_keeps_the_counters_and_the_active_signature_needs
     let before = counters(&fixture);
     assert_eq!(before, (Some(2), 2));
     let replaced_pair = fixture.published_pair();
-    let removed = rotate_approver(&fixture);
+    let (removed, rotated) = rotate_approver(&fixture);
     assert_eq!(counters(&fixture), before, "rotating the approver keeps both counters");
     assert_eq!(
         verify_published(&fixture, &replaced_pair),
@@ -241,32 +241,38 @@ async fn rotating_the_approver_keeps_the_counters_and_the_active_signature_needs
     assert_eq!(restarted.state().await, ServiceState::Unavailable(FailureReason::PolicyInvalid));
     assert_refusing(&fixture, "policy invalid", "under the replaced approver").await;
     let again = approve(&restarted, &fixture.config("rates"), &["yes", APPROVAL_PASSPHRASE]).await;
-    assert_eq!(again.prompts, the_two_prompts(3), "the next version is above every earlier one");
+    assert_eq!(
+        again.prompts,
+        the_two_prompts_for(3, "rotated"),
+        "the next version is above every earlier one"
+    );
     assert_eq!(approved_version(&again.response), 3);
     assert_eq!(restarted.state().await, ServiceState::Ready);
+    let envelope = ApprovalEnvelope::decode(&fixture.published_pair()[1]).unwrap();
+    assert_eq!(
+        envelope.approver_id(),
+        rotated,
+        "the envelope names the approver the prompt asked for"
+    );
     assert_eq!(get(&fixture, "rates").await.status, 200);
     shutdown(restarted).await;
     assert_eq!(counters(&fixture), (Some(3), 3));
 }
 
 /// Enrolls a newly generated approver, whose key is sealed under the same approval passphrase, and removes the one
-/// that signed the published pair, returning that one's ID.
-fn rotate_approver(fixture: &Fixture) -> ApproverId {
+/// that signed the published pair, returning that one's ID and the new one's.
+fn rotate_approver(fixture: &Fixture) -> (ApproverId, ApproverId) {
     let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
     let mut state = load_state(&lock, &OsFs);
     let (key, pinned) = SoftwareSigner::generate().unwrap();
     let sealed = iron_vault_store::seal_signer_key_for_tests(&key, &approval_passphrase(APPROVAL_PASSPHRASE)).unwrap();
     write_signer_key(&lock, &OsFs, &sealed).unwrap();
     let old = state.approvers()[0].id();
-    let approver = PinnedApprover::new(
-        ApproverId::generate(),
-        pinned,
-        ApproverLabel::new("rotated").unwrap(),
-        UtcSecond::EPOCH,
-    );
+    let rotated = ApproverId::generate();
+    let approver = PinnedApprover::new(rotated, pinned, ApproverLabel::new("rotated").unwrap(), UtcSecond::EPOCH);
     state.enroll_approver(&lock, &OsFs, &identity(), approver).unwrap();
     state.remove_approver(&lock, &OsFs, &identity(), old).unwrap();
-    old
+    (old, rotated)
 }
 
 /// Whether the published pair `pair` still verifies as the committed approval.

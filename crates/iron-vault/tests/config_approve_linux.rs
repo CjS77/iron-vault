@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use common::WAIT;
 use common::approval_harness::{
-    APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approval_passphrase, approve, approve_request, assert_audit_record, captured_logs,
-    converse, error_code, get, identity, read_frame, send, serve_admin, the_two_prompts, versions,
+    APPROVAL_PASSPHRASE, Fixture, WRONG_PASSPHRASE, approval_passphrase, approve, approve_request, assert_audit_record,
+    assert_names_approver, captured_logs, converse, error_code, get, identity, read_frame, send, serve_admin, the_two_prompts, versions,
 };
 use common::gated_fs::GatedFs;
 use common::mock_upstream::Reply;
@@ -29,7 +29,7 @@ use iron_vault::admin::protocol::{AdminResponse, ApprovalResult, ErrorCode, Fram
 use iron_vault::service_context::{ApprovalEnd, ServiceContext, UnlockRefusal};
 use iron_vault::service_state::{FailureReason, ServiceEvent, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::Admission;
-use iron_vault_store::{ConfigDigest, Passphrase, StoreFs};
+use iron_vault_store::{ApprovalEnvelope, ConfigDigest, Passphrase, StoreFs};
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -40,6 +40,7 @@ use zeroize::Zeroizing;
 async fn a_valid_change_is_active_when_the_response_arrives_and_the_old_pair_no_longer_verifies() {
     let logs = captured_logs();
     let fixture = Fixture::new().await;
+    let approver = fixture.approver_id();
     let service = fixture.ready().await;
     let old_pair = ["config.toml", "config.toml.sig"].map(|file| fs::read(fixture.path(&format!("etc/{file}"))).unwrap());
     let proposed = fixture.config("rates");
@@ -67,6 +68,19 @@ async fn a_valid_change_is_active_when_the_response_arrives_and_the_old_pair_no_
     assert_eq!(get(&fixture, "fx").await.status, 404);
     assert_eq!(fs::read(fixture.path("etc/config.toml")).unwrap(), proposed.as_bytes());
     assert_eq!(versions(&service).await, (Some(2), 2));
+    let envelope = ApprovalEnvelope::decode(&fixture.published_pair()[1]).unwrap();
+    assert_eq!(envelope.approver_id(), approver, "the envelope names the software signer");
+    assert_eq!(
+        service.recheck(ServiceEvent::Reload).await,
+        Ok(ServiceState::Ready),
+        "the next config check verifies it"
+    );
+    let digest = ConfigDigest::of(proposed.as_bytes()).to_string();
+    ["config.version-reserved", "config.approval-completed"].iter().for_each(|event| {
+        let records = logs.events(event);
+        let record = records.iter().find(|record| record["config_digest"] == digest.as_str()).unwrap();
+        assert_names_approver(record, approver);
+    });
 
     // Putting the version 1 pair back is a rollback, which the config check refuses.
     ["config.toml", "config.toml.sig"]
@@ -98,6 +112,7 @@ async fn declining_the_summary_consumes_no_version_and_keeps_the_active_pair() {
 async fn a_wrong_approval_passphrase_consumes_no_version() {
     let logs = captured_logs();
     let fixture = Fixture::new().await;
+    let approver = fixture.approver_id();
     let service = fixture.ready().await;
 
     let exchanged = approve(&service, &fixture.config("rates"), &["yes", WRONG_PASSPHRASE]).await;
@@ -114,8 +129,9 @@ async fn a_wrong_approval_passphrase_consumes_no_version() {
         .filter(|record| record["config_digest"] == digest.as_str())
         .collect();
     assert_eq!(refused.len(), 1, "{}", logs.text());
-    assert_audit_record(&refused[0], "WARN", &["refusal", "config_digest"]);
+    assert_audit_record(&refused[0], "WARN", &["refusal", "config_digest", "approver_id", "approver_label"]);
     assert_eq!(refused[0]["refusal"], "wrong_passphrase");
+    assert_names_approver(&refused[0], approver);
     logs.assert_no_passphrase();
 }
 

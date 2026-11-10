@@ -515,7 +515,7 @@ impl AdminHandler for StubRm {
         Box::pin(async move {
             self.0.requests.lock().unwrap().push(request);
             let prompt = Prompt {
-                label: "Approval passphrase".to_owned(),
+                label: "Approval passphrase for \"approval passphrase\"".to_owned(),
                 secret: true,
             };
             let input = exchange.prompt(&prompt).await?;
@@ -887,7 +887,7 @@ impl AdminHandler for StubReplace {
         Box::pin(async move {
             self.0.requests.lock().unwrap().push(request);
             exchange.notice("replace credential fx\n").await?;
-            for label in ["Approval passphrase", "Secret for fx"] {
+            for label in ["Approval passphrase for \"approval passphrase\"", "Secret for fx"] {
                 let prompt = Prompt {
                     label: label.to_owned(),
                     secret: true,

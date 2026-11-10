@@ -40,9 +40,9 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::Capabilities;
 use iron_vault_store::{
-    ApprovalPassphrase, ApprovalState, ApprovalStorage, ConfigDigest, ConfigDirLock, LockError, OsFs, PendingConfig, PermittedOrigins,
-    PinnedApprover, SoftwareSigner, StateDirLock, StoreFs, Vault, VaultIdentity, open_signer_key, seal_signer_key_for_tests,
-    write_signer_key,
+    ApprovalPassphrase, ApprovalState, ApprovalStorage, ApproverId, ConfigDigest, ConfigDirLock, LockError, OsFs, PendingConfig,
+    PermittedOrigins, PinnedApprover, SoftwareSigner, StateDirLock, StoreFs, Vault, VaultIdentity, open_signer_key,
+    seal_signer_key_for_tests, write_signer_key,
 };
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -118,6 +118,14 @@ impl Fixture {
             .create_approval_state(&lock, &OsFs, PinnedApprover::for_tests(pinned))
             .unwrap()
             .0
+    }
+
+    /// The ID of the one approver the vault pins. Read under the state-directory lock, so call it before the service
+    /// starts.
+    pub fn approver_id(&self) -> ApproverId {
+        let lock = self.state_lock();
+        let (vault, _) = Vault::open(&lock, &OsFs, identity()).unwrap();
+        vault.load_approval_state(&lock, &OsFs).unwrap().approvers()[0].id()
     }
 
     fn state_lock(&self) -> StateDirLock {
@@ -459,13 +467,18 @@ pub fn error_code(response: &AdminResponse) -> ErrorCode {
 }
 
 pub fn the_two_prompts(version: u64) -> Vec<Prompt> {
+    the_two_prompts_for(version, "approval passphrase")
+}
+
+/// The confirmation, then the passphrase prompt naming the approver labelled `approver`.
+pub fn the_two_prompts_for(version: u64, approver: &str) -> Vec<Prompt> {
     vec![
         Prompt {
             label: format!("{CONFIRM} {version}? Type yes to approve"),
             secret: false,
         },
         Prompt {
-            label: "Approval passphrase".to_owned(),
+            label: format!("Approval passphrase for \"{approver}\""),
             secret: true,
         },
     ]
@@ -514,6 +527,12 @@ pub fn assert_audit_record(record: &serde_json::Value, level: &str, own: &[&str]
         "{record}"
     );
     assert_eq!(keys, expected, "{record}");
+}
+
+/// Asserts `record` names the approver `id` with the label `init` gives the software signer.
+pub fn assert_names_approver(record: &serde_json::Value, id: ApproverId) {
+    assert_eq!(record["approver_id"], id.to_string().as_str(), "{record}");
+    assert_eq!(record["approver_label"], "approval passphrase", "{record}");
 }
 
 #[derive(Clone, Default)]

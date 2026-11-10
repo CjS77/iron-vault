@@ -650,6 +650,7 @@ fn assert_lifecycle_ran(records: &[serde_json::Value]) {
         .for_each(|command| assert!(has("admin.command", "command", command), "{command}: {records:?}"));
     assert!(records.iter().any(|r| r["event"] == "vault.initialized"), "{records:?}");
     assert!(has_number("config.approval-completed", "version", 1), "{records:?}");
+    assert_names_the_software_signer(records, &["config.version-reserved", "config.approval-completed"]);
     assert!(has("vault.unlock-refused", "refusal", "wrong_passphrase"), "{records:?}");
     let transition = |from: &str, to: &str| {
         records
@@ -782,6 +783,20 @@ fn assert_hostile_paths_ran(records: &[serde_json::Value], protocol: Upstream) {
         1,
         "the wrong passphrase was not logged: {records:?}"
     );
+    assert_names_the_software_signer(records, &["config.approval-refused", "config.approval-completed"]);
+}
+
+/// Checks that every record of `events` names the approver it asked or signed with: its approver ID, and the label `init`
+/// gives the software signer. The whole-file scan checks the records hold no secret beside it.
+fn assert_names_the_software_signer(records: &[serde_json::Value], events: &[&str]) {
+    events.iter().for_each(|event| {
+        let named: Vec<_> = records.iter().filter(|r| r["event"] == *event).collect();
+        assert!(!named.is_empty(), "{event}: {records:?}");
+        named.iter().for_each(|r| {
+            assert!(r["approver_id"].as_str().is_some_and(|id| id.len() == 36), "{r}");
+            assert_eq!(r["approver_label"], "approval passphrase", "{r}");
+        });
+    });
 }
 
 /// Every server a session started, held until the test ends. The approval summary of one session's administrative run
