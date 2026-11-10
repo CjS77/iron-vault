@@ -353,9 +353,9 @@ It rejects unknown fields, unresolved references, duplicate names, ambiguous rou
 unsafe upstream URLs, and unavailable confirmation policies.
 
 Path patterns match the normalized request path below the upstream base path, excluding its query: the segments after
-the route prefix, as the provider documents them. The service prepends the base path when it forwards the request. A literal segment matches itself;
-`*` matches one segment and `**` matches zero or more complete segments. Matching covers the whole path. The service
-must use the same path representation for authorization and forwarding.
+the route prefix, as the provider documents them. The service prepends the base path when it forwards the request. A
+literal segment matches itself; `*` matches one segment and `**` matches zero or more complete segments. Matching
+covers the whole path. The service must use the same path representation for authorization and forwarding.
 
 ## 7. Caller authentication and listeners
 

@@ -93,7 +93,8 @@ rate_limit = { requests = 600, per_seconds = 60, burst = 100 }
 
 - **A caller reaches only the routes it lists.** `chat` lists only `venice-chat`.
 - **Paths leave out the upstream's base path.** `/venice-chat/chat/completions` reaches Venice as
-  `/api/v1/chat/completions`, and `paths` names `/chat/completions`. `**` matches any number of segments, `*` exactly one.
+  `/api/v1/chat/completions`, and `paths` names `/chat/completions`. `**` matches any number of segments, `*` exactly
+  one.
 - **The rate limit is a token bucket.** It holds up to `burst` requests and refills at `requests` every `per_seconds`.
   The chat route can send 6 at once, then one every 10 seconds. The bucket is shared by every caller of the route.
 - **Every route needs a rate limit.** A route that should be effectively unlimited gets a generous one.
@@ -217,9 +218,10 @@ log record has `"reason":"rate_limited"`.
 - **`401 Unauthorized` from Iron Vault, `unauthorized` in the body.** The token is missing, wrong, or was replaced
   by a newer approval. The log's `reason` is `unauthenticated`.
 - **`iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: caller chat is
-  granted route venice-admin, which is not defined`.** A caller's `routes` names a route the config does not define. Add the route or take it out of the
-  list.
-- **`403` with `path_not_allowed` on the chat route.** `paths` is matched against the path after the route prefix, so `/chat/completions`, not `/api/v1/chat/completions`.
+  granted route venice-admin, which is not defined`.** A caller's `routes` names a route the config does not define.
+  Add the route or take it out of the list.
+- **`403` with `path_not_allowed` on the chat route.** `paths` is matched against the path after the route prefix, so
+  `/chat/completions`, not `/api/v1/chat/completions`.
 
 ## Reference
 

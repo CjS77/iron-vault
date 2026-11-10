@@ -131,8 +131,8 @@ What to check in a summary:
   config doesn't define. A listener moved to `192.0.2.10:8443` without `tls_certificate` and `tls_key` gives
   `the proposed config is invalid: listener public on 192.0.2.10:8443 needs tls_certificate and tls_key: plain HTTP is
   allowed only on loopback`. Check the [configuration reference](../reference/configuration.md) for that table.
-- **`403` with `path_not_allowed` after widening.** Path patterns match the full path sent upstream, including the
-  upstream's base path.
+- **`403` with `path_not_allowed` after widening.** Patterns match the path after the route prefix, as the provider
+  documents it, without the upstream's base path.
 - **`429` straight after the approval.** The bucket [starts empty](getting-started.md#rate-limits-start-empty).
 
 ## Reference

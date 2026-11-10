@@ -406,11 +406,10 @@ upstream's base path. The service adds the base path when it forwards the reques
 `upstream = "https://api.venice.ai/api/v1"` and `prefix = "/venice"`, `paths = ["/chat/completions"]` allows a request
 for `/venice/chat/completions`, which is sent to `/api/v1/chat/completions`. Patterns never see the query string.
 
-Brave Search documents `/v1/web/search`, and its API lives under `/res`, so the route is:
+Brave Search documents `/v1/web/search`, and its API lives under `/res`, so the route's `upstream` and `paths` are:
 
 ```toml
 [routes.brave]
-prefix = "/brave"
 upstream = "https://api.search.brave.com/res"
 paths = ["/v1/web/search"]
 ```

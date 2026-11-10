@@ -335,14 +335,14 @@ fn callers_and_routes(ports: &Ports) -> String {
     let routes = "[\"hdr\", \"qry\", \"basic\", \"cut\", \"dead\", \"moved\", \"astray\", \"rewrite\"]";
     [
         format!("[callers.agent]\nlistener = \"local\"\ntoken_hash = \"{hash}\"\nroutes = {routes}\n\n"),
-        route("hdr", "/v1", header, "/v1/**", ports.header, "hdr_key", "[\"GET\", \"POST\"]"),
+        route("hdr", "/v1", header, "/**", ports.header, "hdr_key", "[\"GET\", \"POST\"]"),
         route("qry", "", "{ query = \"access_key\" }", "/latest", ports.query, "qry_key", get),
-        route("basic", "/v1", "\"basic\"", "/v1/**", ports.basic, "basic_cred", get),
-        route("cut", "/v1", header, "/v1/**", ports.cut, "cut_key", get),
-        route("dead", "/v1", header, "/v1/**", ports.dead, "dead_key", get),
-        route("moved", "/v1", header, "/v1/**", ports.moved, "moved_key", get),
-        route("astray", "/v1", header, "/v1/**", ports.astray, "astray_key", get),
-        route("rewrite", "/v1", header, "/v1/**", ports.rewrite, "rewrite_key", get),
+        route("basic", "/v1", "\"basic\"", "/**", ports.basic, "basic_cred", get),
+        route("cut", "/v1", header, "/**", ports.cut, "cut_key", get),
+        route("dead", "/v1", header, "/**", ports.dead, "dead_key", get),
+        route("moved", "/v1", header, "/**", ports.moved, "moved_key", get),
+        route("astray", "/v1", header, "/**", ports.astray, "astray_key", get),
+        route("rewrite", "/v1", header, "/**", ports.rewrite, "rewrite_key", get),
     ]
     .concat()
 }

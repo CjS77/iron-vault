@@ -90,7 +90,7 @@ pub enum Refusal {
     #[error("the method is not allowed")]
     Method,
     /// The request path below the route prefix matches none of the route's `paths`.
-    #[error("the upstream path is not allowed")]
+    #[error("the path is not allowed")]
     Path,
 }
 
@@ -120,12 +120,7 @@ pub fn authorize(
     if !route.methods().contains(method) {
         return Err(forbidden(Refusal::Method));
     }
-    let below_prefix: Vec<&str> = path
-        .segments()
-        .iter()
-        .skip(route.prefix().segments().len())
-        .map(String::as_str)
-        .collect();
+    let below_prefix: Vec<&str> = below_prefix(route, path).map(String::as_str).collect();
     match route.paths().matches(&below_prefix) {
         true => Ok(plan(name, *method, route, path, query)),
         false => Err(forbidden(Refusal::Path)),
@@ -153,12 +148,25 @@ fn is_granted(policy: &ActivePolicy, caller: &CallerName, route: &RouteName) -> 
         .is_some_and(|config| config.routes().contains(route))
 }
 
+/// The request segments after the route prefix.
+///
+/// Authorization matches path patterns against these and forwarding appends them to the upstream base path, so both
+/// must read the same segments (§6).
+fn below_prefix<'a>(route: &RouteConfig, path: &'a NormalizedPath) -> impl Iterator<Item = &'a String> {
+    path.segments().iter().skip(route.prefix().segments().len())
+}
+
 /// Builds the plan for `path` on `route`: the upstream base segments, then the request segments after the prefix.
 ///
 /// A trailing slash is kept, except on the root path, which has no segment for it to follow.
 fn plan(name: &RouteName, method: Method, route: &RouteConfig, path: &NormalizedPath, query: Option<RawQuery>) -> AuthorizedRequest {
-    let remainder = path.segments().iter().skip(route.prefix().segments().len());
-    let upstream_segments: Vec<String> = route.upstream().base_segments().iter().chain(remainder).cloned().collect();
+    let upstream_segments: Vec<String> = route
+        .upstream()
+        .base_segments()
+        .iter()
+        .chain(below_prefix(route, path))
+        .cloned()
+        .collect();
     let trailing_slash = path.has_trailing_slash() && !upstream_segments.is_empty();
     AuthorizedRequest {
         route: name.clone(),
@@ -357,11 +365,12 @@ mod tests {
             request(&p, "brave-cli", Method::Get, "/brave/v1/web/search"),
             Err(forbidden("brave", Refusal::Path))
         );
-        assert!(request(&p, "brave-cli", Method::Get, "/brave/res/v1/web/search").is_ok());
+        let ok = request(&p, "brave-cli", Method::Get, "/brave/res/v1/web/search").unwrap();
+        assert_eq!(upstream_path(&ok), "/res/res/v1/web/search");
     }
 
     #[test]
-    fn any_pattern_allows_the_bare_prefix() {
+    fn double_star_allows_the_bare_prefix() {
         let p = based_policy("/res", "\"/**\"");
         let ok = request(&p, "brave-cli", Method::Get, "/brave").unwrap();
         assert_eq!(upstream_path(&ok), "/res");
