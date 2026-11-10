@@ -18,7 +18,8 @@ use std::time::Duration;
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
 use iron_vault::admin::protocol::{
-    AdminCommand, AdminRequest, AdminResponse, ErrorCode, MemoryStatus, Prompt, RecoveryStatus, RequestedOrigin, StatusReport, VaultStatus,
+    AdminCommand, AdminRequest, AdminResponse, ErrorCode, MemoryStatus, Prompt, PromptAnswer, RecoveryStatus, RequestedOrigin,
+    StatusReport, VaultStatus,
 };
 use iron_vault::admin::server::{AdminServer, Exchange, Limits};
 use iron_vault::admin::socket::AdminSocket;
@@ -942,4 +943,181 @@ fn completions_bash_prints_the_script_with_no_runtime_directory_or_service() {
     assert_eq!(output.status.code(), Some(0), "stderr: {}", text(&output.stderr));
     assert!(text(&output.stdout).contains("_iron__vault()"));
     assert!(output.stderr.is_empty(), "stderr: {}", text(&output.stderr));
+}
+
+/// The approver prompt the switching handler asks.
+const APPROVER_LABEL: &str = "Approval passphrase for \"laptop\"";
+
+/// A test-only `unlock` handler that asks a switchable approver prompt until it gets owner input, reporting each answer
+/// (`None` for a switch), then succeeds.
+struct SwitchingUnlock(tokio::sync::mpsc::UnboundedSender<Option<Vec<u8>>>);
+
+impl AdminHandler for SwitchingUnlock {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let prompt = Prompt {
+                label: APPROVER_LABEL.to_owned(),
+                secret: true,
+                switchable: true,
+            };
+            loop {
+                match exchange.prompt_or_switch_unless(&prompt, std::future::pending()).await? {
+                    Some(PromptAnswer::Switch) => {
+                        let _ = self.0.send(None);
+                    }
+                    Some(PromptAnswer::OwnerInput(input)) => {
+                        let _ = self.0.send(Some(input.expose_secret().to_vec()));
+                        return Ok(AdminResponse::Success);
+                    }
+                    None => return Ok(AdminResponse::Success),
+                }
+            }
+        })
+    }
+}
+
+/// `iron-vault unlock` running with a pseudo-terminal as its stdin and controlling terminal, against the switching
+/// handler.
+struct SwitchingRun {
+    _dir: TempDir,
+    pty: Pty,
+    /// The terminal's settings before the CLI started.
+    before: rustix::termios::Termios,
+    child: std::process::Child,
+    answers: tokio::sync::mpsc::UnboundedReceiver<Option<Vec<u8>>>,
+    shown: Arc<Mutex<Vec<u8>>>,
+    stop: oneshot::Sender<()>,
+    served: tokio::task::JoinHandle<std::io::Result<()>>,
+}
+
+impl SwitchingRun {
+    fn start() -> Self {
+        let dir = TempDir::new();
+        let me = invoking_user().unwrap();
+        let socket = AdminSocket::bind(&dir.0, me).unwrap();
+        let (answered, answers) = tokio::sync::mpsc::unbounded_channel();
+        let handlers = Handlers::default().with(AdminCommand::Unlock, SwitchingUnlock(answered));
+        let server = AdminServer::new(
+            AdminPrincipals::new(DeploymentProfile::Development, me.uid),
+            handlers,
+            Limits::default(),
+        );
+        let (stop, stopped) = oneshot::channel::<()>();
+        let served = tokio::spawn(async move {
+            server
+                .serve(socket, async {
+                    let _ = stopped.await;
+                })
+                .await
+        });
+        let pty = open_pty();
+        let before = rustix::termios::tcgetattr(&pty.slave).unwrap();
+        let child = Command::new("setsid")
+            .args(["sh", "-c", r#"exec 9<"$IV_PTS" && exec 9<&- && exec "$@""#, "sh"])
+            .arg(env!("CARGO_BIN_EXE_iron-vault"))
+            .args(command_args("unlock", &dir.socket()))
+            .env("IV_PTS", &pty.path)
+            .stdin(Stdio::from(pty.slave.try_clone().unwrap()))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let (shown, _) = collect(pty.master.try_clone().unwrap());
+        Self {
+            _dir: dir,
+            pty,
+            before,
+            child,
+            answers,
+            shown,
+            stop,
+            served,
+        }
+    }
+
+    /// Waits until the CLI reads a switchable prompt: Ctrl-Y ends a line and echo is off. Typing before then could be
+    /// flushed by the CLI's switch to quiet settings.
+    async fn wait_for_switchable_read(&self) {
+        let ready = || {
+            let now = rustix::termios::tcgetattr(&self.pty.slave).unwrap();
+            now.special_codes[rustix::termios::SpecialCodeIndex::VEOL] == 0x19
+                && !now.local_modes.contains(rustix::termios::LocalModes::ECHO)
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !ready() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the CLI never read a switchable prompt");
+    }
+
+    fn type_bytes(&self, bytes: &[u8]) {
+        (&self.pty.master).write_all(bytes).unwrap();
+    }
+
+    async fn answer(&mut self) -> Option<Vec<u8>> {
+        tokio::time::timeout(Duration::from_secs(10), self.answers.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Waits for the CLI to exit, stops the server and returns the exit code and what the terminal showed.
+    async fn finish(mut self) -> (Option<i32>, String) {
+        let status = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match self.child.try_wait().unwrap() {
+                    Some(status) => break status,
+                    None => tokio::time::sleep(Duration::from_millis(10)).await,
+                }
+            }
+        })
+        .await
+        .expect("the CLI exits");
+        self.assert_terminal_restored();
+        let _ = self.stop.send(());
+        self.served.await.unwrap().unwrap();
+        (status.code(), text(&self.shown.lock().unwrap()))
+    }
+
+    /// Echo and `VEOL` are as they were before the CLI started.
+    fn assert_terminal_restored(&self) {
+        let after = rustix::termios::tcgetattr(&self.pty.slave).unwrap();
+        let veol = |termios: &rustix::termios::Termios| termios.special_codes[rustix::termios::SpecialCodeIndex::VEOL];
+        assert_eq!(veol(&after), veol(&self.before));
+        assert_eq!(after.local_modes, self.before.local_modes);
+    }
+}
+
+#[tokio::test]
+async fn ctrl_y_after_typing_sends_a_switch_and_no_typed_byte_then_enter_sends_the_value() {
+    let mut run = SwitchingRun::start();
+    run.wait_for_switchable_read().await;
+    run.type_bytes(b"wrong-approver\x19");
+    assert_eq!(run.answer().await, None, "a switch, carrying nothing typed");
+    run.wait_for_switchable_read().await;
+    run.type_bytes(b"s3cret\n");
+    assert_eq!(run.answer().await, Some(b"s3cret".to_vec()));
+    let (code, shown) = run.finish().await;
+    assert_eq!(code, Some(0), "terminal: {shown}");
+    assert_eq!(
+        shown.matches(&format!("{APPROVER_LABEL} (Ctrl-Y to try another way): ")).count(),
+        2,
+        "{shown}"
+    );
+    assert!(
+        !shown.contains("wrong-approver") && !shown.contains("s3cret"),
+        "nothing typed is echoed: {shown}"
+    );
+}
+
+#[tokio::test]
+async fn sigint_at_a_switchable_prompt_restores_echo_and_veol() {
+    let run = SwitchingRun::start();
+    run.wait_for_switchable_read().await;
+    run.type_bytes(b"partial");
+    rustix::process::kill_process(rustix::process::Pid::from_child(&run.child), rustix::process::Signal::INT).unwrap();
+    let (code, shown) = run.finish().await;
+    assert_eq!(code, Some(130), "terminal: {shown}");
 }
