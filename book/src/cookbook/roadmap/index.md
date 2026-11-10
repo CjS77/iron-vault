@@ -10,7 +10,6 @@ feature ships.
 | [Approve configs with a TPM PIN](tpm-approval.md) | v0 |
 | [Move a vault to a new machine](migration.md) | v0 |
 | [Retire a machine, or reset the vault](reset.md) | v0 |
-| [Run Iron Vault in Docker Compose](docker-compose.md) | v0, partly built |
 | [Log in to an OAuth provider](oauth.md) | v1 |
 | [Get owner notifications on the desktop](notifications.md) | v1 |
 | [Restrict what a request may contain](request-content.md) | v1 |

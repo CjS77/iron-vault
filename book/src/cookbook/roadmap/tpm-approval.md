@@ -7,3 +7,6 @@ type its PIN. A vault that unlocks unattended still needs you present to change 
 
 Until then, the approval passphrase signs each approval; see [widen or narrow a route](../change-route.md).
 Requirements: [§12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload).
+
+In the [Docker Compose](../compose.md) install the same applies, and the key would stay on the host: the container
+could ask only for the service's own approval transaction to be signed.
