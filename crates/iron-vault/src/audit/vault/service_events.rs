@@ -125,9 +125,8 @@ const fn init_failure_label(failure: &InitFailure) -> &'static str {
         InitFailure::Write(_) | InitFailure::InventoryWrite(RecipientInventoryWriteError::Write(_)) => "state_write",
         InitFailure::Read(_) => "state_read",
         InitFailure::IdentityMismatch => "identity_mismatch",
-        InitFailure::Inventory(_) | InitFailure::InventoryWrite(_) | InitFailure::InventoryRead(_) | InitFailure::InventoryLabel(_) => {
-            "recipient_inventory"
-        }
+        InitFailure::Inventory(_) | InitFailure::InventoryWrite(_) | InitFailure::InventoryRead(_) => "recipient_inventory",
+        InitFailure::DefaultLabel(_) => "default_label",
         InitFailure::InventoryMismatch => "recipient_inventory_mismatch",
         InitFailure::Sign(_) => "sign",
         InitFailure::Vault(_) => "vault",

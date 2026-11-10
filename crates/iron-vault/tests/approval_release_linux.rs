@@ -221,7 +221,7 @@ async fn a_version_consumed_by_a_failed_stage_or_a_failed_signer_is_never_reused
 }
 
 #[tokio::test]
-async fn replacing_the_approver_keeps_the_counters_and_the_active_signature_needs_a_new_approval() {
+async fn rotating_the_approver_keeps_the_counters_and_the_active_signature_needs_a_new_approval() {
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
     approve(&service, &fixture.config("rates"), &["yes", APPROVAL_PASSPHRASE]).await;

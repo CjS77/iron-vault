@@ -173,7 +173,7 @@ pub enum InitFailure {
     InventoryRead(#[from] RecipientInventoryReadError),
     /// A default recipient or approver label broke the label rule.
     #[error(transparent)]
-    InventoryLabel(#[from] RecipientLabelError),
+    DefaultLabel(#[from] RecipientLabelError),
     /// The inventory as read back names a recipient set other than the one the envelope was wrapped for.
     #[error("the recipient inventory as read back does not match the identity envelope")]
     InventoryMismatch,
