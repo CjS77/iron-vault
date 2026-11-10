@@ -303,7 +303,7 @@ fn assert_unreadable_refused(dir: &Path, shadow: &str) {
     assert!(!output.status.success(), "a check that cannot read a file must fail closed");
     let message = String::from_utf8_lossy(&output.stderr);
     assert!(
-        message.contains("iron-vault: could not read the account files to check for an existing iron-vault account"),
+        message.contains("iron-vault: could not check the account files for an existing iron-vault account"),
         "{message}"
     );
     assert!(
@@ -336,6 +336,7 @@ fn shadow_without_read_permission_is_refused() {
     fs::set_permissions(&shadow, fs::Permissions::from_mode(0o000)).unwrap();
     // Root reads a mode-000 file anyway, so there is nothing to test when the tests run as root.
     if fs::read(&shadow).is_ok() {
+        eprintln!("skipped: running as root");
         return;
     }
     assert_unreadable_refused(&dir.0, "shadow");

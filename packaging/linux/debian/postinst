@@ -50,7 +50,7 @@ service_account_problems() {
 # Fails configure, saying what is wrong and how to fix it, when service_account_problems finds anything.
 refuse_unsafe_service_account() {
     if ! problems=$(service_account_problems); then
-        echo "iron-vault: could not read the account files to check for an existing iron-vault account" >&2
+        echo "iron-vault: could not check the account files for an existing iron-vault account" >&2
         echo "iron-vault: check that $passwd_file, $group_file and $shadow_file exist, then run 'sudo dpkg --configure iron-vault'." >&2
         return 1
     fi

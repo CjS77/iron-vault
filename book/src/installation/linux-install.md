@@ -114,8 +114,8 @@ sudo dpkg --configure iron-vault
 
 The same check runs when you reinstall after a purge, which keeps the account. If you gave a
 [log collector](../reference/log-operations.md#location-and-permissions) the `iron-vault` group, take it out of the
-group first and add it back afterwards. If the install stops instead with "could not read the account files to check
-for an existing iron-vault account", check that `/etc/passwd`, `/etc/group` and `/etc/shadow` exist, then run
+group first and add it back afterwards. If the install stops instead with "could not check the account files for an
+existing iron-vault account", check that `/etc/passwd`, `/etc/group` and `/etc/shadow` exist, then run
 `sudo dpkg --configure iron-vault`.
 
 ```sh
