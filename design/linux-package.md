@@ -548,6 +548,22 @@ practice, then, the attacker is code running in the service, a process the servi
 (`cargo install cargo-deb --locked`), `dpkg-deb` and `lintian` (`sudo apt install lintian`). Without `lintian` it exits non-zero;
 `IRON_VAULT_SKIP_LINTIAN=1` is the explicit opt-out, and the script then ends with "package checks passed WITHOUT lintian". It fails when:
 
+The release workflow (`.github/workflows/release.yml`) runs the script, without the opt-out, for every release and every release
+tag: when a release is published, or a tag matching the pattern below is pushed. Pull requests do not run it; `ci.yml`'s
+"Release build has no development mode" step is the per-pull-request guard against a packaged `dev-mode` or `container`
+build. The workflow's first step, `scripts/check-release-tag.sh`, applies this rule and then checks that the tag without its
+`v` equals the `iron-vault` crate version:
+
+```
+^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$
+```
+
+That is `v`, three numbers without leading zeros, and an optional non-empty pre-release of `[0-9A-Za-z.-]`.
+`v0.3.0-alpha` and `v1.12.342-alpha.ubuntu` match; `v1.0`, `v01.2.3`, `v1.0.0-` and `v1.2.3-alpha_1` do not. Git refuses `~` in
+a tag name, so the tag is `v0.3.0-alpha` and only the package version is `0.3.0~alpha-1`. The workflow's tag filters are globs
+and cannot say all of this, so they only narrow the tags that start a run. `scripts/check-release-tag-test.sh` tests the rule.
+The checked `.deb` is uploaded as a workflow artifact, and on a published release it is also attached to the GitHub release.
+
 - the package `Version:` is not the crate version with its first `-` turned into `~` plus the revision `-1`, or still holds a
   `-` before the revision (see below);
 - the newest entry of the changelog, `packaging/linux/debian/changelog`, is not that package version, so a version bump
@@ -566,6 +582,12 @@ The package's own scripts (`packaging/linux/debian/`) use `systemctl` rather tha
 instances, because `deb-systemd-invoke` neither disables a unit nor takes a pattern.
 
 #### Accepted lintian tags
+
+Lintian 2.117.0ubuntu1.5, run locally on Ubuntu 24.04.5 LTS (2026-11-10), reports no error or warning beyond the three tags
+below, which the package overrides. CI's lintian version may differ, since tags change between releases; a new tag it
+reports is fixed or added here with its reason. Lintian also prints information-level notes (`hardening-no-fortify-functions`,
+`no-md5sums-control-file`, `spelling-error-in-binary` from dependency strings, `systemd-service-file-missing-documentation-key`)
+that do not fail the check and are not accepted warnings. `no-manual-page` does not occur: the man pages are packaged.
 
 The package ships these overrides in `/usr/share/lintian/overrides/iron-vault` (source
 `packaging/linux/lintian/iron-vault`). Any other error or warning is fixed, not overridden.
