@@ -530,6 +530,16 @@ A kept vault opens with a later install, but its published config and signature 
 `unlock` the service is Unavailable with an invalid policy, because the committed config is missing
 ([config-approval.md](config-approval.md#recovery-table), row 7), until the owner approves a config again.
 
+## Threats
+
+What this layout leaves to a process running as the service account. Nothing but the service runs as it, so in
+practice that is code running in the service, or a process the service started.
+
+| Threat | Controls here | What remains |
+|---|---|---|
+| A process running as the service uid replaces `admin.sock` and collects the passphrases the owner types (§5) | None yet: `/run/iron-vault` is the service account's and listed in `ReadWritePaths=`, because the service binds there. K-286 makes the CLI refuse a server that is not the unit's main process | Code running in the service already receives every owner input. An `ssh -L` forward is not checked: `sshd` connects to the path as it finds it ([iron-vault-account.md](reviews/iron-vault-account.md), finding 3) |
+| A process running as the service uid replaces a Unix request socket (§7) | Other accounts cannot write `/run/iron-vault` | The service uid can, whether the service or a listener socket unit bound the socket; callers would only send it what a compromised service already sees |
+
 ## Building and checking the package
 
 `scripts/build-deb.sh` builds the `.deb` with `cargo deb -p iron-vault` and checks it. It needs `cargo-deb`
