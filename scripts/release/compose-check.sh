@@ -7,7 +7,8 @@
 # a Compose project named ivcheck from packaging/compose/compose.yaml. All of it is removed on every exit path.
 #
 # Set up:
-#   1. A fresh Ubuntu LTS VM with Docker Engine, the Compose plugin and the buildx plugin (BuildKit), sudo, util-linux (runuser, script), openssl, curl and jq.
+#   1. A fresh Ubuntu LTS VM with Docker Engine, the Compose plugin and the buildx plugin (BuildKit), sudo, util-linux (runuser,
+#      script), openssl, curl and jq.
 #      On Ubuntu's own packages that is docker.io, docker-compose-v2 and docker-buildx; docker.io only suggests the last, and
 #      the legacy builder cannot run the Dockerfile's COPY --chmod. With Docker's apt repository the buildx package is
 #      docker-buildx-plugin. Not needed when --image names an image already built.
@@ -255,7 +256,8 @@ refuse_leftovers() {
 require_buildkit() {
     [ -n "$IMAGE" ] && return 0
     docker buildx version >/dev/null 2>&1 \
-        || die "building the service image needs BuildKit: install docker-buildx (Ubuntu) or docker-buildx-plugin (Docker's apt repository), or pass --image"
+        || die "building the service image needs BuildKit: install docker-buildx (Ubuntu) or docker-buildx-plugin" \
+            "(Docker's apt repository), or pass --image"
 }
 
 preflight() {

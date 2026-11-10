@@ -53,7 +53,7 @@ Every admin command runs through `sudo` on the host, so follow [Harden `sudo`](l
   `com.docker.network.bridge.gateway_mode_ipv4: isolated`, and enabled at boot. The service image is built with
   BuildKit, which the buildx plugin provides. On Ubuntu's own packages install `docker-buildx` with `docker.io` and
   `docker-compose-v2`: `docker.io` only suggests it, and without it the build fails with "the --chmod option requires
-  BuildKit". Docker's apt repository calls it `docker-buildx-plugin`, and Docker Desktop includes it.
+  BuildKit". Docker's apt repository calls it `docker-buildx-plugin`.
 - `age-keygen` (Debian and Ubuntu package `age`), `openssl` and `curl`.
 - This repository checked out, for the files under `packaging/compose/`.
 
