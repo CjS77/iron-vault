@@ -52,7 +52,8 @@ pub enum VerifyError {
     /// The envelope names an algorithm no pinned approver uses.
     #[error("the config approval is signed with {envelope:?}, but the pinned approvers use {pinned:?}")]
     WrongAlgorithm {
-        /// The first pinned approver's algorithm.
+        /// The first pinned approver's algorithm. Only Ed25519 exists, so every approver uses it; naming each approver's
+        /// algorithm waits for the envelope to name its signer (K-275).
         pinned: SignatureAlgorithm,
         /// The algorithm the envelope names.
         envelope: SignatureAlgorithm,

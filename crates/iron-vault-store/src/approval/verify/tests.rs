@@ -6,7 +6,7 @@ use super::*;
 use crate::fault_fs::FaultFs;
 use crate::manifest::tests::{KAT_IDENTITY, write_first_manifest};
 use crate::test_dir::TestDir;
-use crate::{ApprovalPayload, ApproverPublicKey, StateDirLock, VaultId, VaultIdentity};
+use crate::{ApprovalPayload, ApproverId, ApproverPublicKey, StateDirLock, VaultId, VaultIdentity};
 
 const APPROVER_SEED: [u8; 32] = [7; 32];
 
@@ -83,6 +83,14 @@ impl Vault {
         (vault, envelopes)
     }
 
+    /// Pins a further approver whose key has `seed`, returning its ID.
+    fn enroll(&mut self, seed: [u8; 32]) -> ApproverId {
+        let approver = pinned(seed);
+        let id = approver.id();
+        self.state.enroll_approver(&self.lock, &self.fs, &self.identity, approver).unwrap();
+        id
+    }
+
     fn payload(&self, v: u64) -> ApprovalPayload {
         ApprovalPayload::new(self.state.vault_id(), version(v), ConfigDigest::of(&config(v)))
     }
@@ -129,6 +137,43 @@ fn wrong_algorithm_byte_is_refused() {
 fn key_that_is_not_pinned_is_refused() {
     let (vault, _) = Vault::approved("verify-other-key", 1);
     let envelope = sign([8; 32], vault.payload(1));
+    assert_eq!(vault.verify(&config(1), &envelope), Err(VerifyError::BadSignature));
+}
+
+/// Approver IDs are random, so signing with every pinned approver in turn is what covers approvers after the first.
+#[test]
+fn approval_signed_by_any_pinned_approver_verifies() {
+    let (mut vault, _) = Vault::approved("verify-several", 1);
+    let seeds = [APPROVER_SEED, [8; 32], [9; 32]];
+    seeds[1..].iter().for_each(|&seed| {
+        vault.enroll(seed);
+    });
+    assert_eq!(vault.state.approvers().len(), seeds.len());
+    seeds.iter().for_each(|&seed| {
+        let verified = vault.verify(&config(1), &sign(seed, vault.payload(1))).unwrap();
+        assert_eq!(verified.version(), version(1));
+    });
+}
+
+#[test]
+fn key_that_no_approver_pins_is_refused_among_several() {
+    let (mut vault, _) = Vault::approved("verify-several-other-key", 1);
+    vault.enroll([8; 32]);
+    vault.enroll([9; 32]);
+    let envelope = sign([10; 32], vault.payload(1));
+    assert_eq!(vault.verify(&config(1), &envelope), Err(VerifyError::BadSignature));
+}
+
+#[test]
+fn signature_by_a_removed_approver_is_refused() {
+    let (mut vault, _) = Vault::approved("verify-removed", 1);
+    let removed = vault.enroll([8; 32]);
+    let envelope = sign([8; 32], vault.payload(1));
+    assert!(vault.verify(&config(1), &envelope).is_ok());
+    vault
+        .state
+        .remove_approver(&vault.lock, &vault.fs, &vault.identity, removed)
+        .unwrap();
     assert_eq!(vault.verify(&config(1), &envelope), Err(VerifyError::BadSignature));
 }
 
