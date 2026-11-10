@@ -9,7 +9,9 @@ Before the service unlocks anything, it checks each path it reads: every directo
 root or the service account and not writable by anyone else, and the file must have the owner and mode below. The log
 directory is the exception: a directory above it may be group-writable when root owns it, because Debian and Ubuntu
 ship `/var/log` as `drwxrwxr-x root syslog`. The service refuses to start on an unsafe path and names the path that
-failed. An existing directory with the wrong mode is refused, never repaired.
+failed. The service never repairs a directory: an existing one with the wrong mode is refused. On a protected install, the
+package's `tmpfiles.d` puts back the owner and mode of `/etc/iron-vault` and `/var/lib/iron-vault` at boot and on
+upgrade, so that refusal shows only until then.
 
 ## Protected install
 
