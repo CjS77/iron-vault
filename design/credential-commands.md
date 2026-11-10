@@ -25,8 +25,8 @@ approval mechanism" for `replace` and `rm`. In v0 the service proves it like thi
 1. It sends a secret prompt naming the asked approver by its label, `Approval passphrase for "<label>"`, the same
    prompt `config approve` uses.
 2. It reads the asked approver's own key envelope, `approver-<approver ID>.age`, and opens it with the passphrase
-   (`open_signer_key`), one scrypt run. The key inside must be the asked
-   approver in the approval state the service holds.
+   (`open_signer_key`), one scrypt run. The key inside must be the asked approver in the approval state the service
+   holds.
 3. It drops the opened signer at once.
 
 Presence reserves no approval version, signs nothing and writes nothing to `approval.age`. It proves only that the

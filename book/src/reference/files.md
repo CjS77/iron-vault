@@ -164,7 +164,7 @@ mode rules above protect them.
 - **`identity.age`, `operational.age` and `approval.age`.** Damage to the shared state makes `unlock`
   refuse, or sends the service to Unavailable (`recovery needed`), with `vault.shared-state-damaged` in the log.
 - **`approver-<id>.age`.** Only that approver's prompt reads it: a damaged or swapped key file makes its answer fail
-  for `config approve`, `replace` and `rm`, and signs nothing.
+  for `config approve`, `replace`, `rm` and `recipient remove`, and signs nothing.
 - **`recovery.toml`** is plain text, so reminders work while the vault is locked. It holds only two times, when
   reminders started counting and when the last recovery check ran, so an edit can change no more than when `status`
   reminds you to check the recovery key.

@@ -726,7 +726,6 @@ async fn a_peer_that_is_not_an_admin_principal_is_refused_and_nothing_is_written
     fixture.assert_only_lock_files();
 }
 
-/// The token caller's `GET /rates/latest` through the Unix listener.
 /// The names in the state directory that start `approver`, sorted, so a stray `approver.age` shows too.
 fn approver_key_files(fixture: &Fixture) -> Vec<String> {
     let mut names: Vec<_> = fs::read_dir(fixture.path("state"))
@@ -738,6 +737,7 @@ fn approver_key_files(fixture: &Fixture) -> Vec<String> {
     names
 }
 
+/// The token caller's `GET /rates/latest` through the Unix listener.
 async fn get_rates(fixture: &Fixture) -> Response {
     let request = CallerRequest::get("/rates/latest").signed(Via::Unix);
     let mut stream = UnixStream::connect(fixture.socket()).await.unwrap();

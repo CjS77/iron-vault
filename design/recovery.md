@@ -60,12 +60,13 @@ missing or unreadable, an envelope that is too large, malformed or holds an unex
 too large, truncated, of an unknown version or fails after its MAC verified. Telling the owner that a good key is dead
 because a read failed would send them to replace a recovery path that works.
 
-Nothing is written except the [recovery check record](#the-recovery-check-record). The check never rewraps the
-envelope, never touches `operational.age`, an approver key envelope (`approver-<approver ID>.age`) or `approval.age`, and never changes the recipient set or
-the approval counters ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)). The unwrapped
-vault identity and the recipient identity are dropped, and cleared, before the service answers. They are never stored
-in the service context: in Ready the vault identity the service already holds is neither used nor replaced, and in
-Locked no vault identity is held once the check ends.
+Nothing is written except the [recovery check record](#the-recovery-check-record). The check never rewraps the envelope,
+never touches `operational.age`, an approver key envelope (`approver-<approver ID>.age`) or `approval.age`, and never
+changes the recipient set or the approval counters
+([§16](iron-vault-specification.md#16-administration-recovery-and-migration)). The unwrapped vault identity and the
+recipient identity are dropped, and cleared, before the service answers. They are never stored in the service context:
+in Ready the vault identity the service already holds is neither used nor replaced, and in Locked no vault identity is
+held once the check ends.
 
 There is no attempt limit. The recovery key carries 256 bits, so guessing it through the check is no easier than
 guessing it against a copy of `identity.age`, and only an admin principal can run the check.

@@ -59,7 +59,8 @@ pub(super) fn asked_approver(approvers: &[PinnedApprover]) -> Result<&PinnedAppr
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Opens `approver`'s own key envelope, `approver-<approver ID>.age`, with `passphrase` as its signer, on the
-    /// blocking pool, since scrypt holds a thread for seconds. A wrong passphrase, or a key that is not `approver`'s, is [`PresenceRefusal::Denied`].
+    /// blocking pool, since scrypt holds a thread for seconds. A wrong passphrase, or a key that is not `approver`'s,
+    /// is [`PresenceRefusal::Denied`].
     ///
     /// The task owns the passphrase and drops it when it ends. If this future is dropped first, the task still ends and
     /// drops the signer it opened.

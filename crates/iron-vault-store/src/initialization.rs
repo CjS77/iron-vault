@@ -298,13 +298,11 @@ fn approver_keys(state: &StateDirLock, fs: &impl StoreFs) -> Result<Vec<StateFil
     let listing = fs
         .list_dir(state.dir())
         .map_err(|e| InitStateError::ListStateDir { kind: e.kind() })?;
-    let mut keys: Vec<_> = listing
+    Ok(listing
         .iter()
         .filter_map(|name| StateFileName::approver_key_id(name.to_str()?))
         .map(StateFileName::approver_key)
-        .collect();
-    keys.sort();
-    Ok(keys)
+        .collect())
 }
 
 fn classify(name: &OsStr) -> Entry {
@@ -332,13 +330,15 @@ fn survey(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Re
     let has = |wanted: Entry| entries.iter().any(|(kind, _)| *kind == wanted);
     let names_where = |keep: fn(Entry) -> bool| entries.iter().filter(move |(k, _)| keep(*k)).map(|(_, n)| n.clone());
     if has(Entry::Marker) {
-        // An initialization writes one approver key envelope, so a second is not its own.
-        let extra_keys = match names_where(|k| k == Entry::ApproverKey).count() {
-            0 | 1 => Vec::new(),
-            _ => names_where(|k| k == Entry::ApproverKey).collect(),
+        // An initialization writes one approver key envelope, so beside a second neither is known to be its own.
+        let several_keys = entries.iter().filter(|(kind, _)| *kind == Entry::ApproverKey).count() > 1;
+        let blocks = |kind: Entry| {
+            matches!(kind, Entry::Record | Entry::Foreign | Entry::StagedInventory) || (several_keys && kind == Entry::ApproverKey)
         };
-        let blockers = names_where(|k| matches!(k, Entry::Record | Entry::Foreign | Entry::StagedInventory))
-            .chain(extra_keys)
+        let blockers = entries
+            .iter()
+            .filter(|(kind, _)| blocks(*kind))
+            .map(|(_, name)| name.clone())
             .chain(config_test_failures(config, fs)?)
             .collect();
         return Ok(Survey::new(InitializationState::Unfinished, blockers));
