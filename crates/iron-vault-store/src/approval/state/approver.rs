@@ -53,7 +53,7 @@ impl fmt::Display for ApproverId {
 ///
 /// Codes 2 (`tpm`) and 3 (`hardware`) are reserved for later epics and are refused on reading, so those epics need no
 /// new approval state format version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignerKind {
     /// The software signer: an Ed25519 key in its own approver key envelope, opened by its approval passphrase.
     Software,

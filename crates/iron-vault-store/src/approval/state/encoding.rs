@@ -125,8 +125,8 @@ mod tests {
     use crate::approval::InvalidKeyReason;
 
     /// The documented example: vault 3f2b8c1e-…, state generation 6 with peer generation 3, one Ed25519 software
-    /// signer approver (the RFC 8032 test 1 public key) labelled `approval passphrase`, versions 1 and 2 reserved, version 1 committed for an
-    /// empty config.
+    /// signer approver (the RFC 8032 test 1 public key) labelled `approval passphrase`, versions 1 and 2 reserved,
+    /// version 1 committed for an empty config.
     const EXAMPLE_HEX: &str = "4956414d 01 3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b 0000000000000006 0000000000000003 0000000000000001 \
                                8d1c6f0e2b7a4c599e3d5a4b3c2d1e0f 01 01 0000000000000020 \
                                d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a \

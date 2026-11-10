@@ -555,7 +555,6 @@ not check signatures, verification does.
 49 56 41 53                                        magic "IVAS"
 01                                                 format version 1
 01                                                 algorithm Ed25519
-01                                                 signer kind software
 8d 1c 6f 0e 2b 7a 4c 59 9e 3d 5a 4b 3c 2d 1e 0f    approver ID 8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f
 00 00 00 00 00 00 00 59                            payload length 89
 …                                                  the 89 payload bytes from the example above
@@ -624,8 +623,8 @@ a 16-byte ID, an algorithm byte, a signer kind byte, an 8-byte length and a publ
 uncompressed P-256 point), an 8-byte length and a 64-byte label, and an 8-byte time. With `MAX_APPROVERS` (16) entries
 the payload is at most 37 + 8 + 16 × 171 + 49 = 2,830 bytes. `age` adds a header of at most about 400 bytes, a 16-byte
 payload nonce and a 16-byte tag, and the file adds 53 bytes of header and MAC: about 3,315 bytes, inside
-`MAX_APPROVAL_STATE_LEN` (4096 bytes). The same limit bounds the decrypted payload. Enrolling a seventeenth approver is refused, so the service never
-writes a state it cannot read back.
+`MAX_APPROVAL_STATE_LEN` (4096 bytes). The same limit bounds the decrypted payload. Enrolling a seventeenth approver is
+refused, so the service never writes a state it cannot read back.
 
 ### Writes
 
