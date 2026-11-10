@@ -34,11 +34,11 @@ fn callers_and_routes(port: u16) -> String {
     let fast = "{ requests = 1000, per_seconds = 1, burst = 1000 }";
     let ca = "/etc/iron-vault/ca/test.pem";
     let routes = [
-        route("fx", "\"GET\"", "\"/v1/**\"", ca, fast),
-        route("slow", "\"GET\"", "\"/v1/**\"", ca, "{ requests = 2, per_seconds = 60, burst = 1 }"),
-        route("narrow", "\"GET\"", "\"/v1/latest\"", ca, fast),
-        route("broken", "\"GET\"", "\"/v1/**\"", UNLOADABLE_CA, fast),
-        route("other", "\"GET\"", "\"/v1/**\"", ca, fast),
+        route("fx", "\"GET\"", "\"/**\"", ca, fast),
+        route("slow", "\"GET\"", "\"/**\"", ca, "{ requests = 2, per_seconds = 60, burst = 1 }"),
+        route("narrow", "\"GET\"", "\"/latest\"", ca, fast),
+        route("broken", "\"GET\"", "\"/**\"", UNLOADABLE_CA, fast),
+        route("other", "\"GET\"", "\"/**\"", ca, fast),
     ]
     .concat();
     format!(

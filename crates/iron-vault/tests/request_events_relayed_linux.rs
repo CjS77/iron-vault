@@ -32,7 +32,7 @@ fn callers_and_routes(port: u16) -> String {
     format!(
         "[callers.agent]\nlistener = \"local\"\ntoken_hash = \"{hash}\"\nroutes = [\"fx\"]\n\n[routes.fx]\nprefix = \"/fx\"\n\
          upstream = \"https://localhost:{port}/v1\"\nca_file = \"/etc/iron-vault/ca/test.pem\"\ncredential = \"fx_key\"\n\
-         slot = {{ header = \"X-Api-Key\" }}\nmethods = [\"GET\", \"HEAD\"]\npaths = [\"/v1/**\"]\n\
+         slot = {{ header = \"X-Api-Key\" }}\nmethods = [\"GET\", \"HEAD\"]\npaths = [\"/**\"]\n\
          rate_limit = {{ requests = 1000, per_seconds = 1, burst = 1000 }}\n"
     )
 }

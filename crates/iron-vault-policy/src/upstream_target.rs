@@ -180,7 +180,7 @@ mod tests {
     fn open_example() -> String {
         [
             "[\"/latest\", \"/historical/**\"]",
-            "[\"/api/v1/chat/completions\"]",
+            "[\"/chat/completions\"]",
             "[\"/res/v1/web/search\"]",
         ]
         .iter()

@@ -43,7 +43,7 @@ fn origins(host: &str, port: u16) -> BTreeSet<(Host, Port)> {
 fn policy() -> ActivePolicy {
     let doc = [
         "[\"/latest\", \"/historical/**\"]",
-        "[\"/api/v1/chat/completions\"]",
+        "[\"/chat/completions\"]",
         "[\"/res/v1/web/search\"]",
     ]
     .iter()
