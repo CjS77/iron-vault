@@ -50,6 +50,7 @@ fn secret() -> Prompt {
     Prompt {
         label: "Secret".to_owned(),
         secret: true,
+        switchable: false,
     }
 }
 
@@ -57,6 +58,7 @@ fn plain() -> Prompt {
     Prompt {
         label: "Plain".to_owned(),
         secret: false,
+        switchable: false,
     }
 }
 

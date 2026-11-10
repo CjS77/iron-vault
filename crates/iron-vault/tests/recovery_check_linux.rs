@@ -68,6 +68,7 @@ fn key_prompt() -> iron_vault::admin::protocol::Prompt {
     iron_vault::admin::protocol::Prompt {
         label: KEY_PROMPT.to_owned(),
         secret: true,
+        switchable: false,
     }
 }
 

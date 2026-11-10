@@ -47,6 +47,7 @@ pub(super) async fn ask_approval_passphrase(
     let prompt = Prompt {
         label: passphrase_prompt(approver),
         secret: true,
+        switchable: false,
     };
     let answer = match exchange.prompt_unless(&prompt, lock_requested).await? {
         None => PassphraseAnswer::CancelledByLock,

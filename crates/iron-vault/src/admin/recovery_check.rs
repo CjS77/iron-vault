@@ -52,6 +52,7 @@ impl<F: StoreFs + Send + Sync + 'static> RecoveryCheck<F> {
         let prompt = Prompt {
             label: KEY_PROMPT.to_owned(),
             secret: true,
+            switchable: false,
         };
         let Some(recipient) = recovery_key(exchange.prompt(&prompt).await?) else {
             RecoveryChecked::Invalid.emit();

@@ -71,6 +71,7 @@ async fn authorize<F: StoreFs + Send + Sync + 'static>(
     let confirm = Prompt {
         label: format!("Approve this config as version {}? Type yes to approve", review.version()),
         secret: false,
+        switchable: false,
     };
     let Some(confirmation) = exchange.prompt_unless(&confirm, review.lock_requested()).await? else {
         return Ok(Err(cancelled_by_lock()));

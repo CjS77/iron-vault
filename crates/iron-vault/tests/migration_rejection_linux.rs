@@ -97,6 +97,7 @@ impl Gate {
         let prompt = Prompt {
             label: "Vault passphrase".to_owned(),
             secret: true,
+            switchable: false,
         };
         let typed = exchange.prompt(&prompt).await?;
         if let Err(refusal) = self.service.authorize_migration(&digest, &method, typed).await {

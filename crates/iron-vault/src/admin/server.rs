@@ -19,6 +19,7 @@ use super::dispatch::Handlers;
 use super::principal::{AdminPrincipal, AdminPrincipals, peer_identity};
 use super::protocol::{
     self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, Notice, OwnerInput, Prompt,
+    PromptAnswer,
 };
 use super::socket::AdminSocket;
 use crate::audit::AuditEvent;
@@ -229,7 +230,8 @@ pub enum ExchangeError {
     /// The CLI answered with a frame that does not decode.
     #[error("the CLI answered a prompt with a malformed frame: {0}")]
     Malformed(FrameError),
-    /// The CLI answered with a well-formed frame other than owner input.
+    /// The CLI answered with a well-formed frame other than owner input, or a switch frame when the prompt was not
+    /// switchable.
     #[error("the CLI answered a prompt with a frame other than owner input")]
     Unexpected,
     /// The handler asked to send a frame the codec refuses, such as an empty reveal: a bug in the handler. Nothing was
@@ -275,23 +277,43 @@ impl Exchange {
     }
 
     /// Asks the owner for one value: sends `prompt` within the request deadline, then waits for the CLI's owner input
-    /// within the prompt deadline. On an error the handler returns it, so its command is cancelled.
+    /// within the prompt deadline. On an error the handler returns it, so its command is cancelled. The prompt is not
+    /// switchable: a switch frame answering it is unexpected; a switchable prompt goes through
+    /// [`prompt_or_switch_unless`](Self::prompt_or_switch_unless).
     pub async fn prompt(&mut self, prompt: &Prompt) -> Result<OwnerInput, ExchangeError> {
         self.send(&Frame::Prompt(prompt.clone())).await?;
-        self.owner_input().await
+        only_input(self.answer(false).await?)
     }
 
     /// [`prompt`](Self::prompt), unless `cancel` completes while the owner's input is awaited: then `None`. The prompt
     /// frame is always written whole and nothing more is read, so the exchange can still end with a response.
     pub async fn prompt_unless(&mut self, prompt: &Prompt, cancel: impl Future<Output = ()>) -> Result<Option<OwnerInput>, ExchangeError> {
         self.send(&Frame::Prompt(prompt.clone())).await?;
+        self.answer_unless(false, cancel).await?.map(only_input).transpose()
+    }
+
+    /// Sends `prompt` and returns the CLI's answer: owner input, or, when `prompt` is switchable, a switch frame asking
+    /// for the next approver (`design/approval-signers.md`, "Switching"). `None` when `cancel` completes first, as for
+    /// [`prompt_unless`](Self::prompt_unless). Each answer is awaited within the prompt deadline; a handler that switches
+    /// bounds the whole approver prompt itself.
+    pub async fn prompt_or_switch_unless(
+        &mut self,
+        prompt: &Prompt,
+        cancel: impl Future<Output = ()>,
+    ) -> Result<Option<PromptAnswer>, ExchangeError> {
+        self.send(&Frame::Prompt(prompt.clone())).await?;
+        self.answer_unless(prompt.switchable, cancel).await
+    }
+
+    /// [`answer`](Self::answer), unless `cancel` completes first: then `None`, with the read buffer cleared.
+    async fn answer_unless(&mut self, switchable: bool, cancel: impl Future<Output = ()>) -> Result<Option<PromptAnswer>, ExchangeError> {
         let answered = tokio::select! {
             biased;
             () = cancel => None,
-            input = self.owner_input() => Some(input),
+            answer = self.answer(switchable) => Some(answer),
         };
         match answered {
-            Some(input) => input.map(Some),
+            Some(answer) => answer.map(Some),
             None => {
                 // The read it cut off may have left part of the owner's input in the buffer.
                 self.buffer.as_mut_slice().zeroize();
@@ -300,10 +322,12 @@ impl Exchange {
         }
     }
 
-    /// The CLI's answer to the prompt just sent, within the prompt deadline.
-    async fn owner_input(&mut self) -> Result<OwnerInput, ExchangeError> {
+    /// The CLI's answer to the prompt just sent, within the prompt deadline. A switch frame is an answer only when the
+    /// prompt was `switchable`.
+    async fn answer(&mut self, switchable: bool) -> Result<PromptAnswer, ExchangeError> {
         match tokio::time::timeout(self.limits.prompt_deadline, self.read_frame()).await {
-            Ok(Ok(Frame::OwnerInput(input))) => Ok(input),
+            Ok(Ok(Frame::OwnerInput(input))) => Ok(PromptAnswer::OwnerInput(input)),
+            Ok(Ok(Frame::Switch)) if switchable => Ok(PromptAnswer::Switch),
             Ok(Ok(_)) => Err(ExchangeError::Unexpected),
             Ok(Err(ReadError::Closed)) => Err(ExchangeError::Closed),
             Ok(Err(ReadError::Io(e))) => Err(ExchangeError::Io(e.kind())),
@@ -408,6 +432,14 @@ impl Exchange {
         if !matches!(sent, Ok(Ok(()))) {
             tracing::warn!("the admin response could not be delivered");
         }
+    }
+}
+
+/// The owner input of an answer to a prompt that was not switchable, where a switch frame is out of turn.
+fn only_input(answer: PromptAnswer) -> Result<OwnerInput, ExchangeError> {
+    match answer {
+        PromptAnswer::OwnerInput(input) => Ok(input),
+        PromptAnswer::Switch => Err(ExchangeError::Unexpected),
     }
 }
 

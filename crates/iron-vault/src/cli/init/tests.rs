@@ -25,6 +25,7 @@ fn prompt() -> Prompt {
     Prompt {
         label: "Type yes once you have saved the recovery key".to_owned(),
         secret: false,
+        switchable: false,
     }
 }
 
@@ -63,6 +64,7 @@ fn a_rotation_confirms_at_the_vault_passphrase_and_not_at_yes() {
     let secret_prompt = Prompt {
         label: "Vault passphrase".to_owned(),
         secret: true,
+        switchable: false,
     };
     let mut watch = RecoveryKeyWatch::rotation(Scripted(vec![b"yes", b"passphrase"]));
     watch.reveal(&reveal()).unwrap();

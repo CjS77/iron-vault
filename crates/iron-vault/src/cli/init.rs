@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use iron_vault::admin::protocol::{AdminRequest, AdminResponse, OwnerInput, Prompt, RevealedSecret};
+use iron_vault::admin::protocol::{AdminRequest, AdminResponse, OwnerInput, Prompt, PromptAnswer, RevealedSecret};
 use iron_vault::admin::{DEAD_RECOVERY_KEY, UNCONFIRMED_RECOVERY_KEY, UNCONFIRMED_ROTATED_KEY};
 
 use super::Exit;
@@ -116,6 +116,18 @@ impl<C> RecoveryKeyWatch<C> {
         }
     }
 
+    /// Notes owner input collected for `prompt`. The input counts as sent once collected: if sending it fails, the
+    /// unknown outcome's advice is still safe.
+    fn collected(&mut self, prompt: &Prompt, input: &OwnerInput) {
+        let confirms = match self.shower {
+            Shower::Init => input.expose_secret() == b"yes",
+            Shower::Rotation => prompt.secret,
+        };
+        if self.stage == Stage::Shown && confirms {
+            self.reach(Stage::Confirmed);
+        }
+    }
+
     /// Moves to `stage`, and has the signal watcher give the advice for it too.
     fn reach(&mut self, stage: Stage) {
         self.stage = stage;
@@ -126,15 +138,16 @@ impl<C> RecoveryKeyWatch<C> {
 impl<C: OwnerConsole> OwnerConsole for RecoveryKeyWatch<C> {
     fn collect(&mut self, prompt: &Prompt) -> Result<OwnerInput, InputError> {
         let input = self.console.collect(prompt)?;
-        // The input counts as sent once collected: if sending it fails, the unknown outcome's advice is still safe.
-        let confirms = match self.shower {
-            Shower::Init => input.expose_secret() == b"yes",
-            Shower::Rotation => prompt.secret,
-        };
-        if self.stage == Stage::Shown && confirms {
-            self.reach(Stage::Confirmed);
-        }
+        self.collected(prompt, &input);
         Ok(input)
+    }
+
+    fn answer(&mut self, prompt: &Prompt) -> Result<PromptAnswer, InputError> {
+        let answer = self.console.answer(prompt)?;
+        if let PromptAnswer::OwnerInput(input) = &answer {
+            self.collected(prompt, input);
+        }
+        Ok(answer)
     }
 
     fn notice(&mut self, text: &str) -> Result<(), InputError> {

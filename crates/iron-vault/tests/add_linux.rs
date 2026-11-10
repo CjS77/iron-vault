@@ -437,6 +437,7 @@ fn secret_prompt(label: &str) -> Prompt {
     Prompt {
         label: label.to_owned(),
         secret: true,
+        switchable: false,
     }
 }
 

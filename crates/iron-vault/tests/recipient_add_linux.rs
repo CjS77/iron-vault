@@ -141,6 +141,7 @@ fn vault_passphrase_prompt() -> Prompt {
     Prompt {
         label: "Vault passphrase".to_owned(),
         secret: true,
+        switchable: false,
     }
 }
 

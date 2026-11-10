@@ -476,10 +476,12 @@ pub fn the_two_prompts_for(version: u64, approver: &str) -> Vec<Prompt> {
         Prompt {
             label: format!("{CONFIRM} {version}? Type yes to approve"),
             secret: false,
+            switchable: false,
         },
         Prompt {
             label: format!("Approval passphrase for \"{approver}\""),
             secret: true,
+            switchable: false,
         },
     ]
 }

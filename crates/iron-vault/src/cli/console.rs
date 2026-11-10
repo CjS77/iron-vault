@@ -13,13 +13,17 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::AsFd;
 use std::sync::{Mutex, PoisonError};
 
-use iron_vault::admin::protocol::{MAX_BODY_LEN, OwnerInput, Prompt, RevealedSecret};
+use iron_vault::admin::protocol::{MAX_BODY_LEN, OwnerInput, Prompt, PromptAnswer, RevealedSecret};
 use qrcode::render::unicode::Dense1x2;
 use qrcode::{EcLevel, QrCode};
 use zeroize::Zeroizing;
 
 /// The longest line a value may arrive in: the longest value, then `\r\n`.
 const LINE_CAPACITY: usize = MAX_BODY_LEN + 2;
+
+/// Ctrl-Y, which ends a terminal line asking to switch to the next approver (`design/approval-signers.md`, "Switching").
+/// Linux gives it no other meaning in canonical mode, since it has no `VDSUSP`.
+pub(super) const SWITCH_KEY: u8 = 0x19;
 
 /// The shortest terminal line, line ending included, that Linux may have cut short. In canonical mode the terminal keeps
 /// at most 4095 bytes of a line and silently discards the rest up to the newline, so a line that reaches this length
@@ -67,8 +71,14 @@ pub enum InputError {
 
 /// Collects one value from the owner for each prompt, and shows the owner each notice and reveal.
 pub trait OwnerConsole {
-    /// Shows the prompt's label and reads one value.
+    /// Shows the prompt's label and reads one value, never offering a switch.
     fn collect(&mut self, prompt: &Prompt) -> Result<OwnerInput, InputError>;
+
+    /// Answers the prompt: a value, or a switch when the prompt is switchable and the owner asks for the next approver.
+    /// Only a terminal offers the switch; elsewhere this is [`Self::collect`].
+    fn answer(&mut self, prompt: &Prompt) -> Result<PromptAnswer, InputError> {
+        self.collect(prompt).map(PromptAnswer::OwnerInput)
+    }
 
     /// Shows a notice's text, after the text of the notice before it.
     fn notice(&mut self, text: &str) -> Result<(), InputError>;
@@ -115,6 +125,10 @@ impl ProcessConsole {
 impl OwnerConsole for ProcessConsole {
     fn collect(&mut self, prompt: &Prompt) -> Result<OwnerInput, InputError> {
         self.console()?.collect(prompt)
+    }
+
+    fn answer(&mut self, prompt: &Prompt) -> Result<PromptAnswer, InputError> {
+        self.console()?.answer(prompt)
     }
 
     fn notice(&mut self, text: &str) -> Result<(), InputError> {
@@ -196,8 +210,8 @@ impl<R: Read, W: Write, O: FnMut() -> io::Result<T>, T: Write> OwnerConsole for 
 
 /// Turns terminal echo off and back on. A trait, so the guard that restores it is tested without a terminal.
 pub trait EchoControl {
-    /// Turns echo off.
-    fn echo_off(&self) -> io::Result<()>;
+    /// Turns echo off, and when `switch_key` is set also makes [`SWITCH_KEY`] end a line, as Enter does.
+    fn echo_off(&self, switch_key: bool) -> io::Result<()>;
     /// Restores the terminal as it was before [`Self::echo_off`]; restoring twice does nothing more.
     fn restore(&self) -> io::Result<()>;
 }
@@ -206,8 +220,8 @@ pub trait EchoControl {
 struct EchoOff<'a, E: EchoControl>(&'a E);
 
 impl<'a, E: EchoControl> EchoOff<'a, E> {
-    fn new(control: &'a E) -> Result<Self, InputError> {
-        control.echo_off().map_err(InputError::Terminal)?;
+    fn new(control: &'a E, switch_key: bool) -> Result<Self, InputError> {
+        control.echo_off(switch_key).map_err(InputError::Terminal)?;
         Ok(Self(control))
     }
 }
@@ -233,21 +247,52 @@ impl<T: Read + Write, E: EchoControl> Terminal<T, E> {
     }
 }
 
+impl<T: Read + Write, E: EchoControl> Terminal<T, E> {
+    /// Writes `label` and `: `, with nothing typed before it kept.
+    fn show_label(&mut self, label: &str) -> Result<(), InputError> {
+        write!(self.tty, "{label}: ")
+            .and_then(|()| self.tty.flush())
+            .map_err(InputError::Terminal)
+    }
+
+    /// Reads a switchable prompt's line with echo off and Ctrl-Y ending a line. A line ending in Ctrl-Y asks to switch:
+    /// what was typed before it is cleared, never sent, and the owner's cursor moves to a new line.
+    fn switchable(&mut self, prompt: &Prompt) -> Result<PromptAnswer, InputError> {
+        self.show_label(&format!("{} (Ctrl-Y to try another way)", printable(&prompt.label)))?;
+        let line = {
+            let _echo_off = EchoOff::new(&self.echo, true)?;
+            read_raw_line(&mut self.tty, Some(SWITCH_KEY))?
+        };
+        if line.last() == Some(&SWITCH_KEY) {
+            // Dropping the line clears it.
+            drop(line);
+            self.tty
+                .write_all(b"\n")
+                .and_then(|()| self.tty.flush())
+                .map_err(InputError::Terminal)?;
+            return Ok(PromptAnswer::Switch);
+        }
+        terminal_value(line).map(PromptAnswer::OwnerInput)
+    }
+}
+
 impl<T: Read + Write, E: EchoControl> OwnerConsole for Terminal<T, E> {
     fn collect(&mut self, prompt: &Prompt) -> Result<OwnerInput, InputError> {
-        write!(self.tty, "{}: ", printable(&prompt.label))
-            .and_then(|()| self.tty.flush())
-            .map_err(InputError::Terminal)?;
+        self.show_label(&printable(&prompt.label))?;
         let line = if prompt.secret {
-            let _echo_off = EchoOff::new(&self.echo)?;
-            read_raw_line(&mut self.tty)
+            let _echo_off = EchoOff::new(&self.echo, false)?;
+            read_raw_line(&mut self.tty, None)
         } else {
-            read_raw_line(&mut self.tty)
+            read_raw_line(&mut self.tty, None)
         }?;
-        if line.len() >= TERMINAL_LINE_LIMIT {
-            return Err(InputError::TerminalLineTooLong);
+        terminal_value(line)
+    }
+
+    fn answer(&mut self, prompt: &Prompt) -> Result<PromptAnswer, InputError> {
+        if prompt.switchable {
+            return self.switchable(prompt);
         }
-        strip_ending(line).map(OwnerInput::new)
+        self.collect(prompt).map(PromptAnswer::OwnerInput)
     }
 
     fn notice(&mut self, text: &str) -> Result<(), InputError> {
@@ -260,6 +305,14 @@ impl<T: Read + Write, E: EchoControl> OwnerConsole for Terminal<T, E> {
     fn reveal(&mut self, secret: &RevealedSecret) -> Result<(), InputError> {
         write_reveal(&mut self.tty, printable_reveal(secret)?)
     }
+}
+
+/// The value of a line read at the terminal, refused when it reached the terminal's line limit.
+fn terminal_value(line: Zeroizing<Vec<u8>>) -> Result<OwnerInput, InputError> {
+    if line.len() >= TERMINAL_LINE_LIMIT {
+        return Err(InputError::TerminalLineTooLong);
+    }
+    strip_ending(line).map(OwnerInput::new)
 }
 
 /// The label without control characters, so a label cannot move the cursor or reprogram the terminal.
@@ -311,19 +364,20 @@ fn write_qr(tty: &mut impl Write, value: &[u8]) -> io::Result<()> {
 /// Reads one line and strips one trailing `\n` and a `\r` before it. A last line without `\n` is still a value; input
 /// that ends before any byte is not.
 fn read_line(input: &mut impl Read) -> Result<Zeroizing<Vec<u8>>, InputError> {
-    read_raw_line(input).and_then(strip_ending)
+    read_raw_line(input, None).and_then(strip_ending)
 }
 
-/// Reads one line, keeping its line ending.
+/// Reads one line, keeping its line ending: `\n`, or `also_ends` when given.
 ///
 /// Bytes are read one at a time straight into a clearing buffer sized for the longest line, so nothing past the line is
 /// consumed, no other buffer holds the value, and the buffer never reallocates and leaves a copy behind.
-fn read_raw_line(input: &mut impl Read) -> Result<Zeroizing<Vec<u8>>, InputError> {
+fn read_raw_line(input: &mut impl Read, also_ends: Option<u8>) -> Result<Zeroizing<Vec<u8>>, InputError> {
     let mut line = Zeroizing::new(Vec::with_capacity(LINE_CAPACITY));
     loop {
         match read_byte(input, &mut line)? {
             None if line.is_empty() => return Err(InputError::NoInput),
             None | Some(b'\n') => return Ok(line),
+            Some(byte) if Some(byte) == also_ends => return Ok(line),
             // Without its `\n` the line already holds more than the longest value and a `\r`.
             Some(_) if line.len() >= LINE_CAPACITY => return Err(InputError::TooLong),
             Some(_) => {}

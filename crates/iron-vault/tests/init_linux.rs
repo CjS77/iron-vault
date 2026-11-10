@@ -266,6 +266,7 @@ fn prompts(count: usize) -> Vec<Prompt> {
         .map(|(label, secret)| Prompt {
             label: (*label).to_owned(),
             secret: *secret,
+            switchable: false,
         })
         .collect()
 }

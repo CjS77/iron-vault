@@ -445,6 +445,7 @@ async fn unlock(service: &Arc<ServiceContext>, passphrase: &str) -> AdminRespons
     let expected = Prompt {
         label: "Vault passphrase".to_owned(),
         secret: true,
+        switchable: false,
     };
     assert_eq!(prompts, [expected]);
     response

@@ -340,6 +340,19 @@ pub struct Prompt {
     pub label: String,
     /// Whether the value is secret, so the CLI turns terminal echo off while the owner types.
     pub secret: bool,
+    /// Whether the CLI may answer with a [switch frame](Frame::Switch) instead of owner input, asking for the next
+    /// approver (`design/approval-signers.md`, "Switching"). Set only on an approver prompt while more than one approver
+    /// is pinned.
+    pub switchable: bool,
+}
+
+/// The CLI's answer to a prompt: owner input, or a switch frame when the prompt was switchable.
+#[derive(Debug)]
+pub enum PromptAnswer {
+    /// The value the owner gave.
+    OwnerInput(OwnerInput),
+    /// The owner asked for the next approver; nothing typed was sent.
+    Switch,
 }
 
 /// Text the service needs the owner to read, such as an approval summary; it is never answered. Text longer than one
@@ -699,6 +712,8 @@ pub enum Frame {
     Notice(Notice),
     /// Kind 7, service to CLI.
     Reveal(RevealedSecret),
+    /// Kind 8, CLI to service: the answer to a switchable prompt that asks for the next approver. Its body is empty.
+    Switch,
 }
 
 /// What [`decode`] found at the start of its input.
@@ -758,6 +773,9 @@ pub enum FrameError {
     /// A frame of this kind, which must carry a value, has an empty body.
     #[error("admin frame kind {0} has an empty body")]
     EmptyBody(u8),
+    /// A frame of this kind, which carries nothing, has a body.
+    #[error("admin frame kind {0} must have an empty body")]
+    UnexpectedBody(u8),
 }
 
 /// The frame kind byte, which selects how the body is read.
@@ -770,6 +788,7 @@ enum FrameKind {
     Error = 5,
     Notice = 6,
     Reveal = 7,
+    Switch = 8,
 }
 
 impl FrameKind {
@@ -782,6 +801,7 @@ impl FrameKind {
             Self::Error,
             Self::Notice,
             Self::Reveal,
+            Self::Switch,
         ]
         .into_iter()
         .find(|kind| *kind as u8 == byte)
@@ -837,6 +857,7 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::Error { code, message }) => put_frame(out, FrameKind::Error, &body::encode_error(*code, message)),
         Frame::Notice(notice) => put_frame(out, FrameKind::Notice, &body::encode_notice(notice)),
         Frame::Reveal(secret) => encode_reveal(secret.expose_secret(), out),
+        Frame::Switch => put_frame(out, FrameKind::Switch, &[]),
     }
 }
 
@@ -872,6 +893,8 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, FrameError> {
         FrameKind::Reveal if body.is_empty() => return Err(FrameError::EmptyBody(FrameKind::Reveal as u8)),
         // As for owner input: one copy, straight into its clearing buffer.
         FrameKind::Reveal => Frame::Reveal(RevealedSecret::new(Zeroizing::new(body.to_vec()))),
+        FrameKind::Switch if !body.is_empty() => return Err(FrameError::UnexpectedBody(FrameKind::Switch as u8)),
+        FrameKind::Switch => Frame::Switch,
     };
     Ok(Decoded::Frame { frame, used })
 }

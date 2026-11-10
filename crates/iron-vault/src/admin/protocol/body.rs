@@ -15,6 +15,7 @@ use crate::standing::CredentialStanding;
 pub(super) const TAG_COMMAND: u16 = 1;
 const TAG_LABEL: u16 = 1;
 const TAG_SECRET: u16 = 2;
+const TAG_SWITCHABLE: u16 = 3;
 const TAG_CODE: u16 = 1;
 const TAG_MESSAGE: u16 = 2;
 const TAG_PROFILE: u16 = 2;
@@ -124,14 +125,16 @@ pub(super) fn encode_prompt(prompt: &Prompt) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_LABEL, prompt.label.as_bytes());
     fields::put(&mut out, TAG_SECRET, &[u8::from(prompt.secret)]);
+    fields::put(&mut out, TAG_SWITCHABLE, &[u8::from(prompt.switchable)]);
     out
 }
 
 pub(super) fn decode_prompt(body: &[u8]) -> Result<Prompt, FrameError> {
-    let [label, secret] = exact(&fields::parse(body)?, [TAG_LABEL, TAG_SECRET])?;
+    let [label, secret, switchable] = exact(&fields::parse(body)?, [TAG_LABEL, TAG_SECRET, TAG_SWITCHABLE])?;
     Ok(Prompt {
         label: read_text(TAG_LABEL, label)?,
         secret: read_flag(TAG_SECRET, secret)?,
+        switchable: read_flag(TAG_SWITCHABLE, switchable)?,
     })
 }
 

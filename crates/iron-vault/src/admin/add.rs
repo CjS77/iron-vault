@@ -141,7 +141,16 @@ async fn secret_text(
     label: String,
     cancel: impl Future<Output = ()>,
 ) -> Result<Option<Result<SecretString, String>>, ExchangeError> {
-    let input = exchange.prompt_unless(&Prompt { label, secret: true }, cancel).await?;
+    let input = exchange
+        .prompt_unless(
+            &Prompt {
+                label,
+                secret: true,
+                switchable: false,
+            },
+            cancel,
+        )
+        .await?;
     Ok(input.map(|input| secret_string(input).ok_or_else(|| "invalid credential material: a value must be UTF-8 text".to_owned())))
 }
 

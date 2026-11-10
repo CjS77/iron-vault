@@ -17,7 +17,9 @@ use std::time::Duration;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
-use iron_vault::admin::protocol::{self, AdminCommand, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, OwnerInput, Prompt};
+use iron_vault::admin::protocol::{
+    self, AdminCommand, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, OwnerInput, Prompt, PromptAnswer,
+};
 use iron_vault::admin::server::{AdminServer, Exchange, ExchangeError, Limits};
 use iron_vault::admin::socket::{AdminSocket, BindError};
 use iron_vault::deployment::DeploymentProfile;
@@ -495,6 +497,7 @@ fn secret_prompt() -> Prompt {
     Prompt {
         label: "Passphrase".to_owned(),
         secret: true,
+        switchable: false,
     }
 }
 
@@ -591,5 +594,72 @@ async fn a_prompt_answered_with_a_malformed_frame_is_answered_malformed_frame() 
     cli.write_all(&raw(1, 9, 0, &[])).await.unwrap();
     assert_eq!(error_code(&read_response(&mut cli).await), ErrorCode::MalformedFrame);
     assert!(handler_answer(&mut received).await.unwrap_err().starts_with("Malformed"));
+    served.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_switch_answering_a_prompt_that_is_not_switchable_is_answered_unexpected_frame() {
+    let (mut cli, mut received, served) = serve_prompting(PATIENCE);
+    ping_until_prompted(&mut cli).await;
+    cli.write_all(&frame_bytes(&Frame::Switch)).await.unwrap();
+    assert_eq!(error_code(&read_response(&mut cli).await), ErrorCode::UnexpectedFrame);
+    assert_eq!(handler_answer(&mut received).await, Err(format!("{:?}", ExchangeError::Unexpected)));
+    served.await.unwrap();
+}
+
+/// A ping handler that asks a switchable prompt until it gets owner input, and reports each answer: `None` for a
+/// switch.
+struct Switching(mpsc::UnboundedSender<Option<Vec<u8>>>);
+
+fn approver_prompt() -> Prompt {
+    Prompt {
+        label: "Approval passphrase for \"laptop\"".to_owned(),
+        secret: true,
+        switchable: true,
+    }
+}
+
+impl AdminHandler for Switching {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            loop {
+                match exchange.prompt_or_switch_unless(&approver_prompt(), future::pending()).await? {
+                    Some(PromptAnswer::Switch) => {
+                        let _ = self.0.send(None);
+                    }
+                    Some(PromptAnswer::OwnerInput(input)) => {
+                        let _ = self.0.send(Some(input.expose_secret().to_vec()));
+                        return Ok(AdminResponse::Success);
+                    }
+                    None => return Ok(AdminResponse::Success),
+                }
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_switchable_prompt_takes_a_switch_and_then_owner_input() {
+    let (answers, mut received) = mpsc::unbounded_channel();
+    let handlers = Handlers::default().with(AdminCommand::Ping, Switching(answers));
+    let server = AdminServer::new(
+        AdminPrincipals::new(DeploymentProfile::Development, me().uid),
+        handlers,
+        Limits::default(),
+    );
+    let (ours, mut cli) = UnixStream::pair().unwrap();
+    let served = tokio::spawn(async move { server.serve_connection(ours).await });
+
+    cli.write_all(&ping()).await.unwrap();
+    assert!(matches!(read_frame(&mut cli).await, Frame::Prompt(prompt) if prompt == approver_prompt()));
+    cli.write_all(&frame_bytes(&Frame::Switch)).await.unwrap();
+    assert!(matches!(read_frame(&mut cli).await, Frame::Prompt(prompt) if prompt == approver_prompt()));
+    let input = Frame::OwnerInput(OwnerInput::new(Zeroizing::new(b"typed value".to_vec())));
+    cli.write_all(&frame_bytes(&input)).await.unwrap();
+    assert!(matches!(read_response(&mut cli).await, AdminResponse::Success));
+
+    let switched = tokio::time::timeout(PATIENCE, received.recv()).await.unwrap();
+    let typed = tokio::time::timeout(PATIENCE, received.recv()).await.unwrap();
+    assert_eq!((switched, typed), (Some(None), Some(Some(b"typed value".to_vec()))));
     served.await.unwrap();
 }

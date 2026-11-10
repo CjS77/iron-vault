@@ -11,7 +11,7 @@ use anyhow::Context;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::protocol::{
     self, AdminRequest, AdminResponse, ApprovalResult, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, MAX_CONFIG_LEN,
-    OwnerInput, PROTOCOL_VERSION, ProposedConfig, RequestedOrigin, digest_text,
+    OwnerInput, PROTOCOL_VERSION, PromptAnswer, ProposedConfig, RequestedOrigin, digest_text,
 };
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::hardening::MEMLOCK_REMEDIATION;
@@ -386,11 +386,11 @@ fn converse(stream: &mut UnixStream, request: AdminRequest, console: &mut impl O
         };
         sent = match frame {
             Frame::Response(response) => return Ok(response),
-            Frame::Prompt(prompt) => send_input(stream, console.collect(&prompt).map_err(ClientError::Input)?),
+            Frame::Prompt(prompt) => send_answer(stream, console.answer(&prompt).map_err(ClientError::Input)?),
             // A notice or a reveal comes only after the service has read the request, so the request was sent.
             Frame::Notice(notice) => Ok(console.notice(&notice.text).map_err(ClientError::Input)?),
             Frame::Reveal(secret) => Ok(console.reveal(&secret).map_err(ClientError::Input)?),
-            Frame::Request(_) | Frame::OwnerInput(_) => return Err(ClientError::Unexpected),
+            Frame::Request(_) | Frame::OwnerInput(_) | Frame::Switch => return Err(ClientError::Unexpected),
         };
     }
 }
@@ -421,6 +421,18 @@ fn send_request(stream: &mut UnixStream, request: AdminRequest) -> io::Result<()
     let mut bytes = Vec::new();
     protocol::encode(&Frame::Request(request), &mut bytes).map_err(io::Error::other)?;
     stream.write_all(&bytes)
+}
+
+/// Sends the owner's answer to a prompt: owner input, or a switch frame, which carries nothing typed.
+fn send_answer(stream: &mut UnixStream, answer: PromptAnswer) -> io::Result<()> {
+    match answer {
+        PromptAnswer::OwnerInput(input) => send_input(stream, input),
+        PromptAnswer::Switch => {
+            let mut bytes = Vec::with_capacity(HEADER_LEN);
+            protocol::encode(&Frame::Switch, &mut bytes).map_err(io::Error::other)?;
+            stream.write_all(&bytes)
+        }
+    }
 }
 
 /// Sends `input` as one owner-input frame. The frame holds the value, so it is built in a clearing buffer sized for it

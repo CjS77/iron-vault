@@ -11,8 +11,8 @@ use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
 use iron_vault_policy::{CallerToken, CredentialKind, Port, TokenHash};
 use iron_vault_store::{RecipientRole, RecordDamage, RecordId, UtcSecond, VaultId};
 
-/// The longest prompt label: the body bound less two field headers and the one-byte secret flag.
-const MAX_LABEL: usize = MAX_BODY_LEN - 2 * FIELD_HEADER_LEN - 1;
+/// The longest prompt label: the body bound less three field headers and the one-byte secret and switchable flags.
+const MAX_LABEL: usize = MAX_BODY_LEN - 3 * FIELD_HEADER_LEN - 2;
 /// The longest error message: the body bound less two field headers and the two-byte error code.
 const MAX_MESSAGE: usize = MAX_BODY_LEN - 2 * FIELD_HEADER_LEN - 2;
 
@@ -42,6 +42,7 @@ fn same(a: &Frame, b: &Frame) -> bool {
         (Frame::Response(a), Frame::Response(b)) => same_response(a, b),
         (Frame::Notice(a), Frame::Notice(b)) => a == b,
         (Frame::Reveal(a), Frame::Reveal(b)) => a.expose_secret() == b.expose_secret(),
+        (Frame::Switch, Frame::Switch) => true,
         _ => false,
     }
 }
@@ -111,6 +112,7 @@ fn prompt(label: &str, secret: bool) -> Frame {
     Frame::Prompt(Prompt {
         label: label.to_owned(),
         secret,
+        switchable: false,
     })
 }
 
@@ -241,7 +243,12 @@ fn any_frame() -> impl Strategy<Value = Frame> {
         (any::<u64>(), any::<[u8; 32]>(), text(256)).prop_map(|(version, digest, headline)| Frame::Response(AdminResponse::ConfigApprove(
             ApprovalResult { version, digest, headline }
         ))),
-        (text(MAX_LABEL), any::<bool>()).prop_map(|(label, secret)| Frame::Prompt(Prompt { label, secret })),
+        (text(MAX_LABEL), any::<bool>(), any::<bool>()).prop_map(|(label, secret, switchable)| Frame::Prompt(Prompt {
+            label,
+            secret,
+            switchable
+        })),
+        Just(()).prop_map(|()| Frame::Switch),
         owner_bytes().prop_map(|bytes| owner_input(&bytes)),
         owner_bytes()
             .prop_filter("a reveal is never empty", |bytes| !bytes.is_empty())
@@ -456,6 +463,7 @@ fn every_frame_kind_round_trips_with_its_kind_byte() {
             6,
         ),
         (reveal(b"AGE-SECRET-KEY-1"), 7),
+        (Frame::Switch, 8),
     ];
     frames.iter().for_each(|(frame, kind)| {
         assert_eq!(encoded(frame)[2], *kind);
@@ -683,7 +691,7 @@ fn an_unsupported_version_is_refused_before_the_kind() {
 
 #[test]
 fn unknown_frame_kinds_are_refused() {
-    [0, 8, 255]
+    [0, 9, 255]
         .into_iter()
         .for_each(|kind| assert_eq!(decode_err(&raw(1, kind, &[])), FrameError::UnknownKind(kind)));
 }
@@ -692,8 +700,8 @@ fn unknown_frame_kinds_are_refused() {
 fn unknown_tags_are_refused() {
     let request = body(&[field(1, &[0, 1]), field(2, b"")]);
     assert_eq!(decode_err(&raw(1, 1, &request)), FrameError::UnknownTag(2));
-    let prompt = body(&[field(1, b"label"), field(2, &[1]), field(3, b"")]);
-    assert_eq!(decode_err(&raw(1, 2, &prompt)), FrameError::UnknownTag(3));
+    let prompt = body(&[field(1, b"label"), field(2, &[1]), field(3, &[0]), field(4, b"")]);
+    assert_eq!(decode_err(&raw(1, 2, &prompt)), FrameError::UnknownTag(4));
     let ping_result = body(&[field(1, &[0, 1]), field(2, &[1]), field(3, b"")]);
     assert_eq!(decode_err(&raw(1, 4, &ping_result)), FrameError::UnknownTag(3));
     let error = body(&[field(0, b""), field(1, &[0, 1]), field(2, b"m")]);
@@ -719,12 +727,14 @@ fn duplicate_and_out_of_order_tags_are_refused() {
 fn missing_fields_are_refused() {
     assert_eq!(decode_err(&raw(1, 1, &[])), FrameError::MissingField(1));
     assert_eq!(decode_err(&raw(1, 2, &field(1, b"label"))), FrameError::MissingField(2));
+    let without_switchable = body(&[field(1, b"label"), field(2, &[1])]);
+    assert_eq!(decode_err(&raw(1, 2, &without_switchable)), FrameError::MissingField(3));
     assert_eq!(decode_err(&raw(1, 5, &field(2, b"message"))), FrameError::MissingField(1));
 }
 
 #[test]
 fn invalid_utf8_is_refused() {
-    let prompt = body(&[field(1, &[0xff]), field(2, &[0])]);
+    let prompt = body(&[field(1, &[0xff]), field(2, &[0]), field(3, &[0])]);
     assert_eq!(decode_err(&raw(1, 2, &prompt)), FrameError::InvalidUtf8(1));
     let error = body(&[field(1, &[0, 2]), field(2, &[0xc3])]);
     assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::InvalidUtf8(2));
@@ -734,8 +744,10 @@ fn invalid_utf8_is_refused() {
 fn malformed_fixed_width_values_and_flags_are_refused() {
     assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 0, 1]))), FrameError::InvalidValue(1));
     [&[][..], &[2], &[1, 0]].into_iter().for_each(|flag| {
-        let prompt = body(&[field(1, b"label"), field(2, flag)]);
+        let prompt = body(&[field(1, b"label"), field(2, flag), field(3, &[0])]);
         assert_eq!(decode_err(&raw(1, 2, &prompt)), FrameError::InvalidValue(2));
+        let prompt = body(&[field(1, b"label"), field(2, &[1]), field(3, flag)]);
+        assert_eq!(decode_err(&raw(1, 2, &prompt)), FrameError::InvalidValue(3));
     });
     let error = body(&[field(1, &[2]), field(2, b"m")]);
     assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::InvalidValue(1));
@@ -1106,6 +1118,25 @@ fn a_reveal_over_the_body_bound_is_refused_at_the_header() {
     let mut out = vec![9];
     assert_eq!(encode_reveal(&vec![0; MAX_BODY_LEN + 1], &mut out), Err(FrameError::BodyTooLong));
     assert_eq!(out, [9], "a refused reveal appends nothing");
+}
+
+#[test]
+fn a_switchable_prompt_round_trips_with_its_flag_at_tag_3() {
+    let switchable = Frame::Prompt(Prompt {
+        label: "Approval passphrase for \"laptop\"".to_owned(),
+        secret: true,
+        switchable: true,
+    });
+    assert_round_trips(&switchable);
+    assert!(encoded(&switchable).ends_with(&field(3, &[1])));
+    assert!(encoded(&prompt("Type yes", false)).ends_with(&field(3, &[0])));
+}
+
+#[test]
+fn a_switch_frame_is_a_bare_header_and_a_body_is_malformed() {
+    assert_eq!(encoded(&Frame::Switch), raw(1, 8, &[]));
+    assert_eq!(decode_err(&raw(1, 8, &[0])), FrameError::UnexpectedBody(8));
+    assert_eq!(ErrorCode::for_frame_error(FrameError::UnexpectedBody(8)), ErrorCode::MalformedFrame);
 }
 
 #[test]

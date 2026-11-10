@@ -76,6 +76,7 @@ fn presence_prompt() -> Prompt {
     Prompt {
         label: "Approval passphrase for \"approval passphrase\"".to_owned(),
         secret: true,
+        switchable: false,
     }
 }
 

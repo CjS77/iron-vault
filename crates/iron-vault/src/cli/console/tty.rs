@@ -6,9 +6,9 @@ use std::io;
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use rustix::termios::{LocalModes, OptionalActions, Termios, tcgetattr, tcsetattr};
+use rustix::termios::{LocalModes, OptionalActions, SpecialCodeIndex, Termios, tcgetattr, tcsetattr};
 
-use super::{EchoControl, InputError, Terminal};
+use super::{EchoControl, InputError, SWITCH_KEY, Terminal};
 
 /// The echo of the terminal [`open`] opened, where the signal watcher can restore it. Registered before any prompt can
 /// turn echo off, and held by the watcher until the process exits.
@@ -61,12 +61,17 @@ impl TtyEcho {
 }
 
 impl EchoControl for TtyEcho {
-    fn echo_off(&self) -> io::Result<()> {
+    fn echo_off(&self, switch_key: bool) -> io::Result<()> {
         let saved = tcgetattr(&self.0.fd)?;
         let mut quiet = saved.clone();
         quiet.local_modes.remove(LocalModes::ECHO);
         // The newline the owner types still shows, so the next output starts on a line of its own.
         quiet.local_modes.insert(LocalModes::ECHONL);
+        if switch_key {
+            // In canonical mode `VEOL` ends a line as Enter does, so Ctrl-Y hands the line over at once. The saved
+            // settings restore the old `VEOL` with echo.
+            quiet.special_codes[SpecialCodeIndex::VEOL] = SWITCH_KEY;
+        }
         // Held until echo is off, so the watcher's restore runs either before anything is saved or once echo is off,
         // never between the two, when it would find the settings and then see echo go off after restoring them.
         let mut slot = self.saved();

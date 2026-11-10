@@ -205,6 +205,7 @@ impl AdminHandler for PromptingPing {
                 let prompt = Prompt {
                     label: label.to_owned(),
                     secret,
+                    switchable: false,
                 };
                 let input = exchange.prompt(&prompt).await?;
                 self.0.lock().unwrap().push(input.expose_secret().to_vec());
@@ -305,6 +306,7 @@ impl AdminHandler for ScriptedUnlock {
             let prompt = Prompt {
                 label: "Vault passphrase".to_owned(),
                 secret: true,
+                switchable: false,
             };
             let input = exchange.prompt(&prompt).await?;
             self.values.lock().unwrap().push(input.expose_secret().to_vec());
@@ -414,6 +416,7 @@ impl AdminHandler for StubAdd {
             let prompt = Prompt {
                 label: "Secret for fx".to_owned(),
                 secret: true,
+                switchable: false,
             };
             let input = exchange.prompt(&prompt).await?;
             self.0.values.lock().unwrap().push(input.expose_secret().to_vec());
@@ -517,6 +520,7 @@ impl AdminHandler for StubRm {
             let prompt = Prompt {
                 label: "Approval passphrase for \"approval passphrase\"".to_owned(),
                 secret: true,
+                switchable: false,
             };
             let input = exchange.prompt(&prompt).await?;
             self.0.values.lock().unwrap().push(input.expose_secret().to_vec());
@@ -698,6 +702,7 @@ impl AdminHandler for ScriptedInit {
             let prompt = Prompt {
                 label: "Type yes".to_owned(),
                 secret: false,
+                switchable: false,
             };
             let input = exchange.prompt(&prompt).await?;
             let _ = self.answered.send(input.expose_secret().to_vec());
@@ -891,6 +896,7 @@ impl AdminHandler for StubReplace {
                 let prompt = Prompt {
                     label: label.to_owned(),
                     secret: true,
+                    switchable: false,
                 };
                 let input = exchange.prompt(&prompt).await?;
                 self.0.values.lock().unwrap().push(input.expose_secret().to_vec());

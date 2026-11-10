@@ -59,6 +59,7 @@ impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
         let prompt = Prompt {
             label: PASSPHRASE_PROMPT.to_owned(),
             secret: true,
+            switchable: false,
         };
         let Some(passphrase) = exchange.prompt(&prompt).await?.into_vault_passphrase() else {
             // Empty or non-UTF-8 input never reaches the context's unlock, but it is a wrong guess all the same.

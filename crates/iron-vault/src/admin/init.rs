@@ -137,6 +137,7 @@ pub(super) async fn reveal_recovery_key(
     let confirmation = Prompt {
         label: CONFIRMATION.to_owned(),
         secret: false,
+        switchable: false,
     };
     if exchange.prompt(&confirmation).await?.expose_secret() != b"yes" {
         let message = format!("the recovery key was not confirmed as saved, so nothing was written; {DEAD_RECOVERY_KEY}");
@@ -165,6 +166,7 @@ async fn chosen(
     let secret = |label: &str| Prompt {
         label: label.to_owned(),
         secret: true,
+        switchable: false,
     };
     let entry = exchange.prompt(&secret(label)).await?;
     let repeated = exchange.prompt(&secret(repeat)).await?;

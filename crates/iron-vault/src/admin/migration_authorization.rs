@@ -75,6 +75,7 @@ async fn prompt_and_prove<F: StoreFs + Send + Sync + 'static>(
     let prompt = Prompt {
         label: PASSPHRASE_PROMPT.to_owned(),
         secret: true,
+        switchable: false,
     };
     let input = match exchange.prompt_unless(&prompt, session.lock_requested()).await {
         Ok(Some(input)) => input,

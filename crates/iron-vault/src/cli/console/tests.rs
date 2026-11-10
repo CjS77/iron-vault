@@ -15,6 +15,7 @@ fn prompt(label: &str, secret: bool) -> Prompt {
     Prompt {
         label: label.to_owned(),
         secret,
+        switchable: false,
     }
 }
 
@@ -105,11 +106,13 @@ struct FakeEcho {
 }
 
 impl EchoControl for FakeEcho {
-    fn echo_off(&self) -> io::Result<()> {
+    fn echo_off(&self, switch_key: bool) -> io::Result<()> {
         if self.refuse {
             return Err(io::Error::other("not a terminal"));
         }
-        self.events.borrow_mut().push("echo off");
+        self.events
+            .borrow_mut()
+            .push(if switch_key { "echo off, Ctrl-Y ends a line" } else { "echo off" });
         Ok(())
     }
 
@@ -240,6 +243,44 @@ fn a_plain_value_is_read_with_echo_on() {
     let (mut console, events) = terminal(Some(b"plain\n"), false);
     assert_eq!(console.collect(&prompt("Name", false)).unwrap().expose_secret(), b"plain");
     assert_eq!(steps(&events), ["read"]);
+}
+
+fn switchable(label: &str) -> Prompt {
+    Prompt {
+        switchable: true,
+        ..prompt(label, true)
+    }
+}
+
+#[test]
+fn ctrl_y_at_a_switchable_prompt_switches_and_sends_nothing_typed() {
+    let (mut console, events) = terminal(Some(b"half-typed\x19rest\n"), false);
+    assert!(matches!(
+        console.answer(&switchable("Approval passphrase")),
+        Ok(PromptAnswer::Switch)
+    ));
+    assert_eq!(steps(&events), ["echo off, Ctrl-Y ends a line", "read", "restore"]);
+    assert_eq!(console.tty.shown, b"Approval passphrase (Ctrl-Y to try another way): \n");
+}
+
+#[test]
+fn enter_at_a_switchable_prompt_answers_with_the_value() {
+    let (mut console, events) = terminal(Some(b"s3cret\n"), false);
+    let Ok(PromptAnswer::OwnerInput(input)) = console.answer(&switchable("Approval passphrase")) else {
+        panic!("expected owner input");
+    };
+    assert_eq!(input.expose_secret(), b"s3cret");
+    assert_eq!(steps(&events), ["echo off, Ctrl-Y ends a line", "read", "restore"]);
+    assert_eq!(console.tty.shown, b"Approval passphrase (Ctrl-Y to try another way): ");
+}
+
+#[test]
+fn a_piped_console_never_switches_and_reads_ctrl_y_as_a_byte() {
+    let mut console = Piped::new(&b"a\x19b\n"[..], false);
+    let Ok(PromptAnswer::OwnerInput(input)) = console.answer(&switchable("Approval passphrase")) else {
+        panic!("expected owner input");
+    };
+    assert_eq!(input.expose_secret(), b"a\x19b");
 }
 
 #[test]
