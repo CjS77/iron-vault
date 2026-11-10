@@ -194,11 +194,28 @@ impl PinnedApprover {
 }
 
 #[cfg(any(test, feature = "test-support"))]
+impl ApproverId {
+    /// The approver ID [`PinnedApprover::for_tests`] gives `key`: a version 4 UUID made from the key's first 16 bytes, so
+    /// a test signer can name the approver it is pinned as without being told. Only `test-support` exposes it.
+    pub fn for_tests(key: &ApproverPublicKey) -> Self {
+        let mut bytes = [0; 16];
+        bytes.copy_from_slice(&key.as_bytes()[..16]);
+        Self(uuid::Builder::from_random_bytes(bytes).into_uuid())
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
 impl PinnedApprover {
-    /// `key` pinned with a fresh approver ID, the label `init` gives the software signer, and enrolled at the epoch: for
-    /// tests that need an approval state and do not care which approver it names. Only `test-support` exposes it.
+    /// `key` pinned as [`ApproverId::for_tests`], with the label `init` gives the software signer, and enrolled at the
+    /// epoch: for tests that need an approval state and do not care which approver it names. Only `test-support`
+    /// exposes it.
     pub fn for_tests(key: ApproverPublicKey) -> Self {
-        Self::new(ApproverId::generate(), key, test_label("approval passphrase"), UtcSecond::EPOCH)
+        Self::new(
+            ApproverId::for_tests(&key),
+            key,
+            test_label("approval passphrase"),
+            UtcSecond::EPOCH,
+        )
     }
 }
 

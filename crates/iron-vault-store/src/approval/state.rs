@@ -416,8 +416,8 @@ impl ApprovalState {
 
     /// Durably unpins the approver `id`, keeping both counters (spec §12).
     ///
-    /// If that approver signed the active `config.toml.sig`, the signature stops verifying, because no pinned key
-    /// matches it any more, until the owner approves the config again at a new version. Refuses, before any file is
+    /// If that approver signed the active `config.toml.sig`, the signature stops verifying, because the approver ID it
+    /// names is no longer pinned, until the owner approves the config again at a new version. Refuses, before any file is
     /// touched, an ID that is not pinned and the last approver, since without one no config could ever be approved
     /// again. This performs an already authorized change: the caller checks the owner's authorization.
     pub fn remove_approver(

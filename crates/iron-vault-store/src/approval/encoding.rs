@@ -1,8 +1,8 @@
 //! The approval payload v1 and approval envelope v1 encodings (`design/storage-formats.md`).
 
 use super::{
-    APPROVAL_PURPOSE, ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, ApprovalVersion, ConfigDigest, MAX_APPROVAL_ENVELOPE_LEN,
-    SignatureAlgorithm,
+    APPROVAL_PURPOSE, ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, ApprovalVersion, ApproverId, ConfigDigest,
+    MAX_APPROVAL_ENVELOPE_LEN, SignatureAlgorithm,
 };
 use crate::vault_id::VaultId;
 use crate::wire::{Reader, WireError};
@@ -40,16 +40,19 @@ pub(super) fn decode_payload(bytes: &[u8]) -> Result<ApprovalPayload, ApprovalDe
     Ok(ApprovalPayload::new(vault_id, version, digest))
 }
 
-/// The envelope's v1 encoding: magic, version, algorithm ID, payload field, signature field.
+/// The envelope's v1 encoding: magic, version, algorithm ID, approver ID, payload field, signature field.
 pub(super) fn encode_envelope(envelope: &ApprovalEnvelope) -> Vec<u8> {
     let mut out = header(ENVELOPE_MAGIC, ENVELOPE_VERSION);
     out.push(envelope.algorithm.id());
+    out.extend_from_slice(envelope.approver_id.as_bytes());
     put_field(&mut out, &encode_payload(&envelope.payload));
     put_field(&mut out, &envelope.signature);
     out
 }
 
 /// The envelope a v1 encoding holds, after the size limit, accepted only if it is that envelope's one encoding.
+///
+/// Whether the approver ID is pinned is the verifier's check: decoding refuses only an ID that is no approver's ID.
 pub(super) fn decode_envelope(bytes: &[u8]) -> Result<ApprovalEnvelope, ApprovalDecodeError> {
     if bytes.len() > MAX_APPROVAL_ENVELOPE_LEN {
         return Err(ApprovalDecodeError::TooLarge {
@@ -59,10 +62,11 @@ pub(super) fn decode_envelope(bytes: &[u8]) -> Result<ApprovalEnvelope, Approval
     let mut reader = Reader::new(bytes);
     read_header(&mut reader, ENVELOPE_MAGIC, ENVELOPE_VERSION)?;
     let algorithm = SignatureAlgorithm::from_id(reader.u8()?)?;
+    let approver_id = ApproverId::from_bytes(reader.array()?).map_err(|_| ApprovalDecodeError::InvalidApproverId)?;
     let payload = decode_payload(reader.field()?)?;
     let signature = reader.field()?.to_vec();
     reader.finish()?;
-    ApprovalEnvelope::new(algorithm, payload, signature)
+    ApprovalEnvelope::new(algorithm, approver_id, payload, signature)
 }
 
 /// The magic, then the format version: the start of every approval encoding.
@@ -107,6 +111,9 @@ mod tests {
 
     const VAULT: &str = "3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b";
 
+    /// The documented envelope example's approver ID, 8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.
+    const APPROVER: &str = "8d1c6f0e2b7a4c599e3d5a4b3c2d1e0f";
+
     /// The documented payload example: vault 3f2b8c1e-…, version 1, the digest of an empty config.
     const PAYLOAD_HEX: &str = "49564150 01 0000000000000014 69726f6e2d7661756c742d636f6e6669672d7631 \
                                3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b 0000000000000001 \
@@ -127,14 +134,19 @@ mod tests {
         ApprovalPayload::new(vault_id, ApprovalVersion::FIRST, ConfigDigest::of(b""))
     }
 
+    fn approver() -> ApproverId {
+        ApproverId::from_bytes(unhex(APPROVER).try_into().unwrap()).unwrap()
+    }
+
     /// The documented envelope example: the payload above with a stand-in signature of 64 bytes of `5a`.
     fn envelope() -> ApprovalEnvelope {
-        ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, payload(), vec![0x5a; 64]).unwrap()
+        ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, approver(), payload(), vec![0x5a; 64]).unwrap()
     }
 
     fn envelope_bytes(algorithm: u8, payload: &[u8], signature: &[u8]) -> Vec<u8> {
         let mut out = b"IVAS\x01".to_vec();
         out.push(algorithm);
+        out.extend_from_slice(&unhex(APPROVER));
         put_field(&mut out, payload);
         put_field(&mut out, signature);
         out
@@ -155,9 +167,12 @@ mod tests {
 
     #[test]
     fn documented_envelope_example_matches() {
-        let hex = format!("49564153 01 01 0000000000000059 {PAYLOAD_HEX} 0000000000000040 {}", "5a".repeat(64));
+        let hex = format!(
+            "49564153 01 01 {APPROVER} 0000000000000059 {PAYLOAD_HEX} 0000000000000040 {}",
+            "5a".repeat(64)
+        );
         let bytes = unhex(&hex);
-        assert_eq!(bytes.len(), 175);
+        assert_eq!(bytes.len(), 191);
         assert_eq!(envelope().encode(), bytes);
         assert_eq!(ApprovalEnvelope::decode(&bytes), Ok(envelope()));
     }
@@ -267,10 +282,26 @@ mod tests {
         );
         let length_past_end = envelope_bytes(1, &[], &[])
             .into_iter()
-            .take(6)
+            .take(22)
             .chain(u64::MAX.to_be_bytes())
             .collect::<Vec<_>>();
         assert_eq!(ApprovalEnvelope::decode(&length_past_end), Err(ApprovalDecodeError::LengthPastEnd));
+    }
+
+    /// Bytes 6 to 21 are the approver ID; byte 12 holds its version nibble and byte 14 its variant bits.
+    #[test]
+    fn approver_ids_that_are_not_version_4_are_rejected() {
+        let with = |at: usize, byte: u8| {
+            let mut bytes = envelope().encode();
+            bytes[at] = byte;
+            ApprovalEnvelope::decode(&bytes)
+        };
+        assert_eq!(with(12, 0x1c), Err(ApprovalDecodeError::InvalidApproverId));
+        assert_eq!(with(14, 0x1e), Err(ApprovalDecodeError::InvalidApproverId));
+        let mut zero = envelope().encode();
+        zero[6..22].fill(0);
+        assert_eq!(ApprovalEnvelope::decode(&zero), Err(ApprovalDecodeError::InvalidApproverId));
+        assert_eq!(with(21, 0x0e).map(|envelope| envelope.approver_id() == approver()), Ok(false));
     }
 
     proptest! {
@@ -286,7 +317,7 @@ mod tests {
             let at = index.index(bytes.len());
             bytes[at] = byte;
             let _ = ApprovalEnvelope::decode(&bytes);
-            let _ = ApprovalPayload::decode(&bytes[14..103]);
+            let _ = ApprovalPayload::decode(&bytes[30..119]);
         }
 
         #[test]

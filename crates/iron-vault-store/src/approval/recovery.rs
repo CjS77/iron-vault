@@ -328,7 +328,7 @@ fn discard_leftovers(config_dir: &ConfigDirLock, fs: &impl StoreFs, state: &Appr
         .collect()
 }
 
-/// The payload of a staged leftover the pinned approver signed for this vault.
+/// The payload of a staged leftover that a pinned approver signed for this vault.
 fn staged_payload(state: &ApprovalState, envelope: &[u8]) -> Option<ApprovalPayload> {
     let claimed = ApprovalEnvelope::decode(envelope).ok()?.payload().digest();
     verify_signed(state, claimed, envelope).ok()

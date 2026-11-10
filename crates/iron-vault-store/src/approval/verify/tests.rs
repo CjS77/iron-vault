@@ -28,10 +28,15 @@ fn pinned(seed: [u8; 32]) -> PinnedApprover {
     PinnedApprover::for_tests(key)
 }
 
-/// The `config.toml.sig` bytes for `payload`, signed by the key with `seed`.
+/// The `config.toml.sig` bytes for `payload`, signed by the key with `seed` and naming the ID [`pinned`] gives it.
 fn sign(seed: [u8; 32], payload: ApprovalPayload) -> Vec<u8> {
+    sign_as(pinned(seed).id(), seed, payload)
+}
+
+/// The `config.toml.sig` bytes for `payload`, signed by the key with `seed` and naming the approver `id`.
+fn sign_as(id: ApproverId, seed: [u8; 32], payload: ApprovalPayload) -> Vec<u8> {
     let signature = signing_key(seed).sign(&payload.encode()).to_bytes().to_vec();
-    ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, payload, signature)
+    ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, id, payload, signature)
         .unwrap()
         .encode()
 }
@@ -133,11 +138,42 @@ fn wrong_algorithm_byte_is_refused() {
     );
 }
 
+/// Bytes 6 to 21 of the envelope are the approver ID; byte 12 holds its UUID version.
 #[test]
-fn key_that_is_not_pinned_is_refused() {
+fn approver_id_that_is_not_version_4_is_malformed() {
+    let (vault, envelopes) = Vault::approved("verify-id-version", 1);
+    let mut envelope = envelopes[0].clone();
+    envelope[12] = (envelope[12] & 0x0f) | 0x10;
+    assert_eq!(
+        vault.verify(&config(1), &envelope),
+        Err(VerifyError::Malformed(ApprovalDecodeError::InvalidApproverId))
+    );
+}
+
+#[test]
+fn approver_that_is_not_pinned_is_refused() {
     let (vault, _) = Vault::approved("verify-other-key", 1);
+    let approver = pinned([8; 32]).id();
     let envelope = sign([8; 32], vault.payload(1));
-    assert_eq!(vault.verify(&config(1), &envelope), Err(VerifyError::BadSignature));
+    assert_eq!(vault.verify(&config(1), &envelope), Err(VerifyError::UnknownApprover { approver }));
+}
+
+/// The approver ID is not signed; naming another pinned approver checks the signature with that approver's key, which
+/// fails.
+#[test]
+fn envelope_naming_another_pinned_approver_fails_on_the_signature() {
+    let (mut vault, _) = Vault::approved("verify-renamed", 1);
+    let first = pinned(APPROVER_SEED).id();
+    let other = vault.enroll([8; 32]);
+    let [first_signed, other_signed] = [APPROVER_SEED, [8; 32]].map(|seed| sign(seed, vault.payload(1)));
+    [(first_signed, other), (other_signed, first)]
+        .into_iter()
+        .for_each(|(signed, renamed)| {
+            assert!(vault.verify(&config(1), &signed).is_ok());
+            let decoded = ApprovalEnvelope::decode(&signed).unwrap();
+            let envelope = ApprovalEnvelope::new(decoded.algorithm(), renamed, *decoded.payload(), decoded.signature().to_vec()).unwrap();
+            assert_eq!(vault.verify(&config(1), &envelope.encode()), Err(VerifyError::BadSignature));
+        });
 }
 
 /// Approver IDs are random, so signing with every pinned approver in turn is what covers approvers after the first.
@@ -161,7 +197,8 @@ fn key_that_no_approver_pins_is_refused_among_several() {
     vault.enroll([8; 32]);
     vault.enroll([9; 32]);
     let envelope = sign([10; 32], vault.payload(1));
-    assert_eq!(vault.verify(&config(1), &envelope), Err(VerifyError::BadSignature));
+    let approver = pinned([10; 32]).id();
+    assert_eq!(vault.verify(&config(1), &envelope), Err(VerifyError::UnknownApprover { approver }));
 }
 
 #[test]
@@ -174,7 +211,10 @@ fn signature_by_a_removed_approver_is_refused() {
         .state
         .remove_approver(&vault.lock, &vault.fs, &vault.identity, removed)
         .unwrap();
-    assert_eq!(vault.verify(&config(1), &envelope), Err(VerifyError::BadSignature));
+    assert_eq!(
+        vault.verify(&config(1), &envelope),
+        Err(VerifyError::UnknownApprover { approver: removed })
+    );
 }
 
 #[test]
@@ -193,7 +233,13 @@ fn every_flipped_signature_bit_is_refused() {
 fn edited_payload_fails_on_the_signature_first() {
     let (vault, envelopes) = Vault::approved("verify-edited", 2);
     let edited = ApprovalEnvelope::decode(&envelopes[0]).unwrap();
-    let forged = ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, vault.payload(2), edited.signature().to_vec()).unwrap();
+    let forged = ApprovalEnvelope::new(
+        SignatureAlgorithm::Ed25519,
+        edited.approver_id(),
+        vault.payload(2),
+        edited.signature().to_vec(),
+    )
+    .unwrap();
     assert_eq!(vault.verify(&config(2), &forged.encode()), Err(VerifyError::BadSignature));
 }
 
@@ -301,5 +347,8 @@ fn error_messages_carry_no_key_or_signature_bytes() {
     flipped[last] ^= 1;
     let message = vault.verify(&config(1), &flipped).unwrap_err().to_string();
     assert!(!message.contains(&key_hex[..16]), "{message}");
-    assert_eq!(message, "the config approval signature does not verify against any pinned approver");
+    assert_eq!(
+        message,
+        "the config approval signature does not verify against the named approver's key"
+    );
 }

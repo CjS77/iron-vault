@@ -57,7 +57,7 @@ pub enum ApprovalStep {
     WritePending,
     /// Step 2: durably reserve the next approval version.
     Reserve,
-    /// Step 3: sign the approval payload, and check the signer's envelope against the pinned approver.
+    /// Step 3: sign the approval payload, and check the signer's envelope against the pinned approver it names.
     Sign,
     /// Step 4: durably write `config.toml.sig.staged`.
     Stage,
@@ -155,7 +155,7 @@ pub enum ApprovalFailure {
     /// The signer refused or failed to sign.
     #[error(transparent)]
     Sign(#[from] SignError),
-    /// The signer's envelope does not verify against the pinned approver for this vault and config, or the published
+    /// The signer's envelope does not verify against the pinned approver it names for this vault and config, or the published
     /// pair read back does not verify as the committed approval.
     #[error("the approval does not verify: {0}")]
     BadApproval(VerifyError),
@@ -245,7 +245,7 @@ impl<'s> ReservedApproval<'s> {
     }
 
     /// Steps 3 and 4: signs with `signer` (dropped once it has signed), checks the envelope against the pinned
-    /// approver, and durably stages it. On failure the pending config and any staged approval are removed, and the
+    /// approver it names, and durably stages it. On failure the pending config and any staged approval are removed, and the
     /// version stays consumed.
     pub fn sign<F: StoreFs, S: ApprovalSigner>(
         self,

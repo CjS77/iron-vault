@@ -229,9 +229,12 @@ async fn rotating_the_approver_keeps_the_counters_and_the_active_signature_needs
     let before = counters(&fixture);
     assert_eq!(before, (Some(2), 2));
     let replaced_pair = fixture.published_pair();
-    rotate_approver(&fixture);
+    let removed = rotate_approver(&fixture);
     assert_eq!(counters(&fixture), before, "rotating the approver keeps both counters");
-    assert_eq!(verify_published(&fixture, &replaced_pair), Err(VerifyError::BadSignature));
+    assert_eq!(
+        verify_published(&fixture, &replaced_pair),
+        Err(VerifyError::UnknownApprover { approver: removed })
+    );
 
     let restarted = fixture.start().await;
 
@@ -247,8 +250,8 @@ async fn rotating_the_approver_keeps_the_counters_and_the_active_signature_needs
 }
 
 /// Enrolls a newly generated approver, whose key is sealed under the same approval passphrase, and removes the one
-/// that signed the published pair.
-fn rotate_approver(fixture: &Fixture) {
+/// that signed the published pair, returning that one's ID.
+fn rotate_approver(fixture: &Fixture) -> ApproverId {
     let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
     let mut state = load_state(&lock, &OsFs);
     let (key, pinned) = SoftwareSigner::generate().unwrap();
@@ -263,6 +266,7 @@ fn rotate_approver(fixture: &Fixture) {
     );
     state.enroll_approver(&lock, &OsFs, &identity(), approver).unwrap();
     state.remove_approver(&lock, &OsFs, &identity(), old).unwrap();
+    old
 }
 
 /// Whether the published pair `pair` still verifies as the committed approval.

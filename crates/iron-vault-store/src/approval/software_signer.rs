@@ -127,7 +127,7 @@ impl ApprovalSigner for SoftwareSigner {
 
     fn sign(&self, payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
         let signature = self.key.sign(&payload.encode()).to_bytes().to_vec();
-        ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, *payload, signature).map_err(SignError::Signature)
+        ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, self.approver.id(), *payload, signature).map_err(SignError::Signature)
     }
 }
 

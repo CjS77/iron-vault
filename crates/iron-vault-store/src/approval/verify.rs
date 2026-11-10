@@ -14,7 +14,7 @@ use thiserror::Error;
 
 use super::state::ApproverKey;
 use super::{
-    ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, ApprovalState, ApprovalVersion, ConfigDigest, PinnedApprover,
+    ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, ApprovalState, ApprovalVersion, ApproverId, ConfigDigest, PinnedApprover,
     SignatureAlgorithm,
 };
 
@@ -49,17 +49,22 @@ pub enum VerifyError {
     /// The signature file is not a well-formed approval envelope.
     #[error("the config signature file is malformed: {0}")]
     Malformed(#[from] ApprovalDecodeError),
-    /// The envelope names an algorithm no pinned approver uses.
-    #[error("the config approval is signed with {envelope:?}, but the pinned approvers use {pinned:?}")]
+    /// The envelope's approver ID is not one this vault pins: the approver was never enrolled or has been removed.
+    #[error("the config approval is signed by approver {approver}, which this vault does not pin")]
+    UnknownApprover {
+        /// The approver ID the envelope names.
+        approver: ApproverId,
+    },
+    /// The envelope names another algorithm than the named approver's.
+    #[error("the config approval is signed with {envelope:?}, but the named approver uses {pinned:?}")]
     WrongAlgorithm {
-        /// The first pinned approver's algorithm. Only Ed25519 exists, so every approver uses it; naming each approver's
-        /// algorithm waits for the envelope to name its signer (K-275).
+        /// The named approver's algorithm.
         pinned: SignatureAlgorithm,
         /// The algorithm the envelope names.
         envelope: SignatureAlgorithm,
     },
-    /// The signature does not verify against any pinned public key over the encoded payload.
-    #[error("the config approval signature does not verify against any pinned approver")]
+    /// The signature does not verify against the named approver's public key over the encoded payload.
+    #[error("the config approval signature does not verify against the named approver's key")]
     BadSignature,
     /// The signed payload names a different vault.
     #[error("the config approval is for a different vault")]
@@ -100,9 +105,9 @@ pub enum VerifyError {
 
 /// Verifies the `config.toml.sig` bytes `envelope` for the `config.toml` bytes `config` against `state` (spec §12).
 ///
-/// Checks, in order: the envelope decodes; a pinned approver uses its algorithm; its signature verifies against one
-/// such approver's key over the exact payload bytes; the payload names this vault; the payload digest is the digest of
-/// `config`; and the payload's version and digest are the committed approval. Reads nothing but its arguments and
+/// Checks, in order: the envelope decodes; its approver ID is pinned; that approver uses its algorithm; its signature
+/// verifies against that approver's key over the exact payload bytes; the payload names this vault; the payload digest
+/// is the digest of `config`; and the payload's version and digest are the committed approval. Reads nothing but its arguments and
 /// changes nothing.
 pub fn verify_approval(state: &ApprovalState, config: &[u8], envelope: &[u8]) -> Result<VerifiedApproval, VerifyError> {
     let payload = verify_signed(state, ConfigDigest::of(config), envelope)?;
@@ -119,7 +124,7 @@ pub fn verify_approval(state: &ApprovalState, config: &[u8], envelope: &[u8]) ->
 /// not yet the one to compare with.
 pub(crate) fn verify_signed(state: &ApprovalState, digest: ConfigDigest, envelope: &[u8]) -> Result<ApprovalPayload, VerifyError> {
     let envelope = ApprovalEnvelope::decode(envelope)?;
-    check_signature(state.approvers(), &envelope)?;
+    check_signature(state, &envelope)?;
     let payload = *envelope.payload();
     if payload.vault_id() != state.vault_id() {
         return Err(VerifyError::WrongVault);
@@ -130,22 +135,18 @@ pub(crate) fn verify_signed(state: &ApprovalState, digest: ConfigDigest, envelop
     Ok(payload)
 }
 
-/// Checks the envelope's algorithm and signature against the pinned approvers, never against anything in the envelope
-/// itself. Any one pinned approver's signature approves (spec §12). The envelope does not yet name its signer, so each
-/// approver with the envelope's algorithm is tried; an envelope whose algorithm no approver uses is refused naming the
-/// first approver's.
-fn check_signature(approvers: &[PinnedApprover], envelope: &ApprovalEnvelope) -> Result<(), VerifyError> {
-    let claimed = envelope.algorithm();
-    let mut candidates = approvers.iter().filter(|approver| approver.algorithm() == claimed).peekable();
-    match (candidates.peek(), approvers.first()) {
-        (None, Some(first)) => Err(VerifyError::WrongAlgorithm {
-            pinned: first.algorithm(),
-            envelope: claimed,
+/// Checks the envelope's algorithm and signature against the pinned approver its ID names, never against a key in the
+/// envelope itself. Any one pinned approver's signature approves (spec §12); the ID only selects which key to check.
+fn check_signature(state: &ApprovalState, envelope: &ApprovalEnvelope) -> Result<(), VerifyError> {
+    let approver = state.approver(envelope.approver_id()).ok_or(VerifyError::UnknownApprover {
+        approver: envelope.approver_id(),
+    })?;
+    match approver.algorithm() == envelope.algorithm() {
+        true => verify_with(approver, envelope),
+        false => Err(VerifyError::WrongAlgorithm {
+            pinned: approver.algorithm(),
+            envelope: envelope.algorithm(),
         }),
-        _ => match candidates.any(|approver| verify_with(approver, envelope).is_ok()) {
-            true => Ok(()),
-            false => Err(VerifyError::BadSignature),
-        },
     }
 }
 

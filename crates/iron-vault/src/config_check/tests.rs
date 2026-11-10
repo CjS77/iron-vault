@@ -9,9 +9,9 @@ use ed25519_dalek::{Signer, SigningKey};
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{AccountDirectory, AccountName, Port, UnavailableCause};
 use iron_vault_store::{
-    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalStorage, ApprovalVersion, ApproverPublicKey, ConfigDigest, ConfigDirLock,
-    ConfigFileName, OsFs, PendingConfig, PermittedOrigins, PinnedApprover, PublishedPairFault, RecordId, SignError, SignatureAlgorithm,
-    StateDirLock, StateFileName, StoreFs, VaultId, VaultIdentity, VerifyError,
+    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalStorage, ApprovalVersion, ApproverId, ApproverPublicKey, ConfigDigest,
+    ConfigDirLock, ConfigFileName, OsFs, PendingConfig, PermittedOrigins, PinnedApprover, PublishedPairFault, RecordId, SignError,
+    SignatureAlgorithm, StateDirLock, StateFileName, StoreFs, VaultId, VaultIdentity, VerifyError,
 };
 
 use super::*;
@@ -66,7 +66,13 @@ impl ApprovalSigner for TestSigner {
 
     fn sign(&self, payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
         let signature = self.0.sign(&payload.encode()).to_bytes().to_vec();
-        ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, *payload, signature).map_err(SignError::Signature)
+        ApprovalEnvelope::new(
+            SignatureAlgorithm::Ed25519,
+            ApproverId::for_tests(&self.public_key()),
+            *payload,
+            signature,
+        )
+        .map_err(SignError::Signature)
     }
 }
 
@@ -293,16 +299,26 @@ fn payload(fixture: &Fixture, vault: Option<VaultId>, version: u64, config: &str
 fn each_way_the_published_pair_fails_to_verify_is_policy_invalid() {
     type Tamper = fn(&mut Fixture);
     type Is = fn(&VerifyError) -> bool;
-    let cases: [(&str, Tamper, Is); 7] = [
+    let cases: [(&str, Tamper, Is); 8] = [
         (
             "malformed",
             |f| f.write("config.toml.sig", b"junk"),
             |e| matches!(e, VerifyError::Malformed(_)),
         ),
         (
+            "unknown approver",
+            |f| {
+                let id = ApproverId::generate();
+                let forged = ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, id, payload(f, None, 1, &v1()), vec![0; 64]).unwrap();
+                f.write("config.toml.sig", &forged.encode());
+            },
+            |e| matches!(e, VerifyError::UnknownApprover { .. }),
+        ),
+        (
             "bad signature",
             |f| {
-                let forged = ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, payload(f, None, 1, &v1()), vec![0; 64]).unwrap();
+                let id = ApproverId::for_tests(&TestSigner::new().public_key());
+                let forged = ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, id, payload(f, None, 1, &v1()), vec![0; 64]).unwrap();
                 f.write("config.toml.sig", &forged.encode());
             },
             |e| matches!(e, VerifyError::BadSignature),

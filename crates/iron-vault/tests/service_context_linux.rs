@@ -52,9 +52,9 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{Capabilities, CredentialKind, ListenerName};
 use iron_vault_store::{
-    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalStorage, ApproverPublicKey, ConfigDirLock, LockError,
-    OperationalIdentity, OsFs, Passphrase, PendingConfig, PermittedOrigins, PinnedApprover, RecipientSet, RecordDamage, SignError,
-    SignatureAlgorithm, StateDirLock, StoreFs, Vault, VaultId, VaultIdentity, seal_passphrase_envelope_for_tests, wrap_identity,
+    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalStorage, ApproverId, ApproverPublicKey, ConfigDirLock,
+    LockError, OperationalIdentity, OsFs, Passphrase, PendingConfig, PermittedOrigins, PinnedApprover, RecipientSet, RecordDamage,
+    SignError, SignatureAlgorithm, StateDirLock, StoreFs, Vault, VaultId, VaultIdentity, seal_passphrase_envelope_for_tests, wrap_identity,
     write_identity_envelope, write_passphrase_envelope,
 };
 use secrecy::SecretString;
@@ -88,7 +88,13 @@ impl ApprovalSigner for TestSigner {
 
     fn sign(&self, payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
         let signature = self.0.sign(&payload.encode()).to_bytes().to_vec();
-        ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, *payload, signature).map_err(SignError::Signature)
+        ApprovalEnvelope::new(
+            SignatureAlgorithm::Ed25519,
+            ApproverId::for_tests(&self.public_key()),
+            *payload,
+            signature,
+        )
+        .map_err(SignError::Signature)
     }
 }
 

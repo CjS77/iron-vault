@@ -15,8 +15,8 @@ use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::manifest::tests::KAT_IDENTITY;
 use crate::test_dir::TestDir;
 use crate::{
-    ApprovalEnvelope, ApproverPublicKey, ConfigFileName, PinnedApprover, SignatureAlgorithm, StateFileName, StateGeneration, VaultId,
-    VaultManifest, durable_replace, read_config_file, seal_approval_state,
+    ApprovalEnvelope, ApproverId, ApproverPublicKey, ConfigFileName, PinnedApprover, SignatureAlgorithm, StateFileName, StateGeneration,
+    VaultId, VaultManifest, durable_replace, read_config_file, seal_approval_state,
 };
 
 pub(crate) const OLD_CONFIG: &[u8] = b"# version 1\n[listener.agent]\nbind = \"127.0.0.1:8080\"\n";
@@ -32,9 +32,11 @@ pub(crate) struct Paused;
 
 impl AdmissionPaused for Paused {}
 
-/// An Ed25519 signer that can be told to fail, as a TPM signer authorizing inside step 3 would.
+/// An Ed25519 signer that can be told to fail, as a TPM signer authorizing inside step 3 would. Its envelopes name
+/// `approver`.
 pub(crate) struct TestSigner {
     key: SigningKey,
+    approver: ApproverId,
     fail: Option<SignError>,
 }
 
@@ -43,10 +45,21 @@ impl TestSigner {
         Self::with_seed(7)
     }
 
+    /// The signer with the key from `seed`, naming the approver ID [`PinnedApprover::for_tests`] gives that key.
     pub(crate) fn with_seed(seed: u8) -> Self {
+        let key = SigningKey::from_bytes(&[seed; 32]);
         Self {
-            key: SigningKey::from_bytes(&[seed; 32]),
+            approver: ApproverId::for_tests(&ApproverPublicKey::from_signing_key(&key)),
+            key,
             fail: None,
+        }
+    }
+
+    /// A signer that names the pinned approver but signs with another key.
+    fn impostor() -> Self {
+        Self {
+            approver: Self::pinned().approver,
+            ..Self::with_seed(9)
         }
     }
 
@@ -72,7 +85,7 @@ impl ApprovalSigner for TestSigner {
             return Err(fail.clone());
         }
         let signature = self.key.sign(&payload.encode()).to_bytes().to_vec();
-        ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, *payload, signature).map_err(SignError::Signature)
+        ApprovalEnvelope::new(SignatureAlgorithm::Ed25519, self.approver, *payload, signature).map_err(SignError::Signature)
     }
 }
 
@@ -471,7 +484,13 @@ fn a_failed_signer_consumes_its_version_and_stages_nothing() {
             TestSigner::failing(SignError::KeyMismatch),
             ApprovalFailure::Sign(SignError::KeyMismatch),
         ),
-        (TestSigner::with_seed(9), ApprovalFailure::BadApproval(VerifyError::BadSignature)),
+        (
+            TestSigner::with_seed(9),
+            ApprovalFailure::BadApproval(VerifyError::UnknownApprover {
+                approver: TestSigner::with_seed(9).approver,
+            }),
+        ),
+        (TestSigner::impostor(), ApprovalFailure::BadApproval(VerifyError::BadSignature)),
     ];
     signers.into_iter().for_each(|(signer, cause)| {
         let context = format!("{cause:?}");

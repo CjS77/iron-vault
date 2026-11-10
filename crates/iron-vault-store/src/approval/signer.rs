@@ -20,7 +20,8 @@ pub trait ApprovalSigner {
     /// The public key this signer's signatures verify against: the key to pin when this signer is enrolled.
     fn public_key(&self) -> ApproverPublicKey;
 
-    /// Signs the exact encoding of `payload` and returns the `config.toml.sig` envelope carrying it.
+    /// Signs the exact encoding of `payload` and returns the `config.toml.sig` envelope carrying it, naming the approver
+    /// ID this signer is pinned as, so the verifier checks the signature against that approver's key.
     fn sign(&self, payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError>;
 }
 

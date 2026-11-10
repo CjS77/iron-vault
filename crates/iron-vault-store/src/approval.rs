@@ -48,7 +48,7 @@ pub use verify::{VerifiedApproval, VerifyError, verify_approval};
 
 /// The largest approval envelope accepted, in bytes, checked before anything else is read.
 ///
-/// A v1 envelope with an Ed25519 signature is 175 bytes and one with a DER ECDSA P-256 signature at most 183. The
+/// A v1 envelope with an Ed25519 signature is 191 bytes and one with a DER ECDSA P-256 signature at most 199. The
 /// limit leaves room for a later algorithm with a large signature while keeping a planted file cheap to refuse.
 pub const MAX_APPROVAL_ENVELOPE_LEN: usize = 4096;
 
@@ -206,24 +206,35 @@ impl ApprovalPayload {
     }
 }
 
-/// The contents of `config.toml.sig`: a payload, the algorithm that signed it and the signature.
+/// The contents of `config.toml.sig`: a payload, the algorithm and approver ID of the approver that signed it, and the
+/// signature.
 ///
-/// It carries no public key: the service verifies against the approver key pinned in protected vault metadata, never
-/// a key from the signature file. The signature covers [`ApprovalPayload::encode`], which is the payload's exact bytes
-/// in the envelope because decoding accepts only that encoding.
+/// It carries no public key: the service verifies against the key of the approver the ID names, pinned in protected
+/// vault metadata, never a key from the signature file. The ID is outside the signed payload and needs no signature of
+/// its own: a changed ID selects another approver's key, the signature then fails, and no two approvers share a key.
+/// The signature covers [`ApprovalPayload::encode`], which is the payload's exact bytes in the envelope because
+/// decoding accepts only that encoding.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ApprovalEnvelope {
     algorithm: SignatureAlgorithm,
+    approver_id: ApproverId,
     payload: ApprovalPayload,
     signature: Vec<u8>,
 }
 
 impl ApprovalEnvelope {
-    /// An envelope for `payload` signed with `algorithm`, refusing a signature of the wrong length for it.
-    pub fn new(algorithm: SignatureAlgorithm, payload: ApprovalPayload, signature: Vec<u8>) -> Result<Self, ApprovalDecodeError> {
+    /// An envelope for `payload` signed with `algorithm` by the approver `approver_id`, refusing a signature of the
+    /// wrong length for the algorithm.
+    pub fn new(
+        algorithm: SignatureAlgorithm,
+        approver_id: ApproverId,
+        payload: ApprovalPayload,
+        signature: Vec<u8>,
+    ) -> Result<Self, ApprovalDecodeError> {
         match algorithm.accepts_signature_len(signature.len()) {
             true => Ok(Self {
                 algorithm,
+                approver_id,
                 payload,
                 signature,
             }),
@@ -237,6 +248,11 @@ impl ApprovalEnvelope {
     /// The algorithm the signature claims; the verifier checks it against the pinned approver's.
     pub fn algorithm(&self) -> SignatureAlgorithm {
         self.algorithm
+    }
+
+    /// The approver the envelope says signed it; the verifier checks the signature against that approver's pinned key.
+    pub fn approver_id(&self) -> ApproverId {
+        self.approver_id
     }
 
     /// The signed payload, not yet verified.
@@ -265,6 +281,7 @@ impl fmt::Debug for ApprovalEnvelope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ApprovalEnvelope")
             .field("algorithm", &self.algorithm)
+            .field("approver_id", &self.approver_id)
             .field("payload", &self.payload)
             .field("signature_len", &self.signature.len())
             .finish()
@@ -301,6 +318,9 @@ pub enum ApprovalDecodeError {
     /// The payload's approval version is zero, which is never reserved.
     #[error("approval version is zero")]
     ZeroVersion,
+    /// The envelope's approver ID is not a random version 4 UUID.
+    #[error("approval envelope approver ID is not a version 4 UUID")]
+    InvalidApproverId,
     /// The envelope names a signature algorithm this build does not support.
     #[error("unknown signature algorithm ID {0}")]
     UnknownAlgorithm(u8),
