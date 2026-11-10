@@ -31,6 +31,12 @@ impl PeerIdentity {
         Self { uid, gid, pid: Some(pid) }
     }
 
+    /// A test peer whose pid the kernel could not report, as for a peer in another PID namespace.
+    #[cfg(test)]
+    pub(crate) const fn for_test_without_pid(uid: u32, gid: u32) -> Self {
+        Self { uid, gid, pid: None }
+    }
+
     /// The peer's effective uid when it connected; the only field that decides who the peer is.
     pub const fn uid(&self) -> u32 {
         self.uid

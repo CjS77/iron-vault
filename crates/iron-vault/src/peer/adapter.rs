@@ -25,6 +25,7 @@ pub fn peer_identity(stream: &UnixStream) -> io::Result<PeerIdentity> {
 /// Converts the raw pid from `SO_PEERCRED`. The kernel reports 0 when the peer is in a PID namespace this process
 /// cannot see, such as the host CLI talking to a containerised service, so 0 means "no pid", not an error. A negative
 /// pid can only come from a broken kernel interface, so it is refused.
+#[cfg(target_os = "linux")]
 pub(super) fn visible_pid(raw: i32) -> io::Result<Option<u32>> {
     match u32::try_from(raw) {
         Ok(0) => Ok(None),

@@ -313,6 +313,20 @@ fn admin_events_name_a_command_and_a_peer_and_never_an_argument() {
 }
 
 #[test]
+fn an_admin_refusal_leaves_out_a_pid_from_another_pid_namespace() {
+    let record = record_of(
+        AdminRefused {
+            refusal: AdminRefusal::Busy,
+            peer: Some(PeerIdentity::for_test_without_pid(0, 0)),
+        },
+        "WARN",
+        &["refusal", "peer_uid"],
+    );
+    assert_eq!(record["peer_uid"].as_u64(), Some(0));
+    assert!(record.get("peer_pid").is_none(), "{record}");
+}
+
+#[test]
 fn a_wrong_state_unlock_refusal_is_recorded() {
     let record = record_of(
         UnlockRefused {

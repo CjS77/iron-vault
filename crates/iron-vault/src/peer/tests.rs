@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 use super::adapter::visible_pid;
 use super::*;
 
@@ -11,6 +12,7 @@ async fn a_socket_pair_reports_this_process() {
     assert_eq!(identity.pid(), Some(std::process::id()));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_pid_from_another_pid_namespace_is_absent_and_a_negative_one_is_an_error() {
     assert_eq!(visible_pid(0).unwrap(), None);
