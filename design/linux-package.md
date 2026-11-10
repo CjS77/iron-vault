@@ -200,15 +200,21 @@ bind in it. The age field `-` means the directories are never cleaned.
 A `d` line also resets the owner and mode of a directory that already exists. That runs at every boot and every
 `postinst configure`, before the service checks the directory. So a `/etc/iron-vault` or `/var/lib/iron-vault` that was
 made group-writable or handed to another account is put right silently, and the service's `ConfigDir` or `StateDir`
-refusal only fires between those runs, such as on `systemctl restart`. Files planted while the directory was open stay,
-and the service still does not trust them. In `/etc/iron-vault`, the `Config` rule and the config signature catch a
-planted `config.toml`. In `/var/lib/iron-vault`, the [MAC'd file frame](storage-formats.md#macd-file-frame) on the
-manifest, the approval state and the recipient inventory rejects a file written without the vault identity, and a
-record file is trusted only through the manifest that lists it. The repair hides the warning sign without letting a
-planted file through. The package keeps the repair: an upgrade or reboot heals a
-mistaken `chmod` without an administrator's help, and that is worth more than the earlier warning. An administrator who
-wants to know that a directory was tampered with must look at the journal of an earlier restart or at the files in it,
-not at the next boot.
+refusal only fires between those runs, such as on `systemctl restart`. Files planted while the directory was open
+stay. The service still does not trust them, with one exception.
+In `/etc/iron-vault`, the `Config` rule and the config signature catch a planted `config.toml`. In
+`/var/lib/iron-vault`, the [MAC'd file frame](storage-formats.md#macd-file-frame) on the manifest, the approval state
+and the recipient inventory rejects a file written without the vault identity, and a record file is trusted only
+through the manifest that lists it. The exception is `recovery.toml`, the
+[recovery check record](storage-formats.md#recovery-check-record): it is plaintext, with no MAC and no version, so the
+service reads a planted or edited one if it is valid. Its only guard was that just the service account can write the
+state directory, which is the guard that failed here. A forged record can only move or suppress the recovery reminder
+(it holds two times, and `since` may not be later than `last_checked`); an invalid one is unusable and the reminder
+counts as due. It cannot reach a credential or a config. So the repair hides the warning sign, and lets a planted
+`recovery.toml` through, with that limited effect. The package keeps the repair: an upgrade or reboot heals a mistaken
+`chmod` without an administrator's help, and that is worth more than the earlier warning. An administrator who wants to
+know that a directory was tampered with must look at the journal of an earlier restart or at the files in it, not at
+the next boot.
 
 ## Service unit
 
