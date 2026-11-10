@@ -100,6 +100,15 @@ pub enum AdminRequest {
         /// The recipient label as the owner wrote it; the service validates it.
         label: String,
     },
+    /// Enrols a host unlock identity's key the owner supplies with the `host-unlock` role, after the same migration
+    /// authorization as [`Self::RecipientAdd`], so a new host unlock identity can replace one lost with its TPM. Command
+    /// ID 14, source `3` on the wire.
+    RecipientAddHostUnlock {
+        /// The `age1...` key as the owner wrote it; the service parses it.
+        recipient: String,
+        /// The recipient label as the owner wrote it; the service validates it.
+        label: String,
+    },
     /// Generates a recovery key, reveals it once, and enrols it after migration authorization. Command ID 14, source `2`
     /// with an empty key on the wire.
     RecipientAddRecovery {
@@ -141,7 +150,9 @@ impl AdminRequest {
             Self::Rm { .. } => AdminCommand::Rm,
             Self::RecoveryCheck => AdminCommand::RecoveryCheck,
             Self::RecipientList => AdminCommand::RecipientList,
-            Self::RecipientAdd { .. } | Self::RecipientAddRecovery { .. } => AdminCommand::RecipientAdd,
+            Self::RecipientAdd { .. } | Self::RecipientAddHostUnlock { .. } | Self::RecipientAddRecovery { .. } => {
+                AdminCommand::RecipientAdd
+            }
             Self::RecipientRemove { .. } => AdminCommand::RecipientRemove,
         }
     }

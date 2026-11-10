@@ -87,6 +87,7 @@ fn recipient_add_takes_a_key_and_requires_a_label() {
         Command::Recipient(RecipientCommand::Add {
             recipient: Some("age1abc".to_owned()),
             recovery: false,
+            host_unlock: false,
             label: "alice laptop".to_owned()
         })
     );
@@ -97,6 +98,7 @@ fn recipient_add_takes_a_key_and_requires_a_label() {
         Command::Recipient(RecipientCommand::Add {
             recipient: None,
             recovery: true,
+            host_unlock: false,
             label: "recovery 2026".to_owned()
         })
     );
@@ -108,6 +110,28 @@ fn recipient_add_takes_a_key_and_requires_a_label() {
     );
     assert_eq!(parse(&["recipient", "add", "age1abc"]).unwrap_err().exit_code(), 2);
     assert_eq!(parse(&["recipient", "add", "--label", "x"]).unwrap_err().exit_code(), 2);
+}
+
+#[test]
+fn recipient_add_host_unlock_takes_a_key_and_conflicts_with_recovery() {
+    assert_eq!(
+        parse(&["recipient", "add", "--host-unlock", "age1abc", "--label", "host unlock, new TPM"])
+            .unwrap()
+            .command,
+        Command::Recipient(RecipientCommand::Add {
+            recipient: Some("age1abc".to_owned()),
+            recovery: false,
+            host_unlock: true,
+            label: "host unlock, new TPM".to_owned()
+        })
+    );
+    let usage = |args: &[&str]| parse(args).unwrap_err().exit_code();
+    assert_eq!(usage(&["recipient", "add", "--host-unlock", "--recovery", "--label", "x"]), 2);
+    assert_eq!(
+        usage(&["recipient", "add", "age1abc", "--host-unlock", "--recovery", "--label", "x"]),
+        2
+    );
+    assert_eq!(usage(&["recipient", "add", "--host-unlock", "--label", "x"]), 2);
 }
 
 #[test]

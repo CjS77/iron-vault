@@ -43,6 +43,10 @@ pub enum RecipientChangeRefusal {
     /// The change would leave no `operational` recipient: the inventory it starts from has none.
     #[error("the vault would be left with no operational recipient")]
     NoOperational,
+    /// The key to remove is the `host-unlock` recipient of the configured host unlock adapter: the identity the unlock
+    /// handoff holds now. Removing it would make the next restart wait for passphrase `unlock`.
+    #[error("the recipient is the host unlock identity the unlock handoff holds; retire host unlock on the host first")]
+    RemovesConfiguredHostUnlock,
     /// The change would leave no `recovery` recipient, the owner's offline way in.
     #[error("the vault would be left with no recovery recipient")]
     NoRecovery,
@@ -60,7 +64,20 @@ impl RecipientChange {
     /// The result still carries `current`'s envelope digest: the envelope it describes does not exist until the rewrap
     /// wraps the vault identity for it, which then gives it that envelope's digest.
     pub fn apply(&self, current: &RecipientInventory) -> Result<RecipientInventory, RecipientChangeRefusal> {
+        self.apply_configured(current, None)
+    }
+
+    /// [`Self::apply`] with `host_unlock`, the recipient key of the configured host unlock adapter, when there is one.
+    /// Part 1 of the independence rule keeps that recipient while `current` enrols it with the `host-unlock` role; a key
+    /// enrolled with another role is not the adapter's recipient, so it is not kept.
+    pub fn apply_configured(
+        &self,
+        current: &RecipientInventory,
+        host_unlock: Option<&RecipientKey>,
+    ) -> Result<RecipientInventory, RecipientChangeRefusal> {
         let entries = self.next_entries(&current.entries)?;
+        let configured = host_unlock.filter(|key| current.get(key).is_some_and(|entry| entry.role == RecipientRole::HostUnlock));
+        configured_unlock_rule(&entries, configured)?;
         independence_rule(&entries)?;
         Ok(RecipientInventory {
             vault_id: current.vault_id,
@@ -99,6 +116,17 @@ fn independence_rule(entries: &BTreeMap<RecipientKey, RecipientEntry>) -> Result
         _ if !has(RecipientRole::Operational) => Err(RecipientChangeRefusal::NoOperational),
         _ if !has(RecipientRole::Recovery) => Err(RecipientChangeRefusal::NoRecovery),
         count => count_rule(count),
+    }
+}
+
+/// Part 1 for the host unlock adapter: the set still holds the `host-unlock` recipient it is configured for.
+fn configured_unlock_rule(
+    entries: &BTreeMap<RecipientKey, RecipientEntry>,
+    host_unlock: Option<&RecipientKey>,
+) -> Result<(), RecipientChangeRefusal> {
+    match host_unlock {
+        Some(key) if !entries.contains_key(key) => Err(RecipientChangeRefusal::RemovesConfiguredHostUnlock),
+        _ => Ok(()),
     }
 }
 

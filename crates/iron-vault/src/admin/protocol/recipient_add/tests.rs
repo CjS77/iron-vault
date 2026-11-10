@@ -62,7 +62,11 @@ fn the_request_is_command_14_with_source_1_the_key_and_the_label() {
 
 #[test]
 fn another_source_or_an_empty_key_is_a_malformed_frame_but_a_bad_key_or_label_is_the_services_to_judge() {
-    assert!(matches!(decode(&request(&[3], "", "x")), Err(FrameError::InvalidValue(TAG_SOURCE))));
+    assert!(matches!(decode(&request(&[4], "", "x")), Err(FrameError::InvalidValue(TAG_SOURCE))));
+    assert!(matches!(
+        decode(&request(&[3], "", "x")),
+        Err(FrameError::InvalidValue(TAG_RECIPIENT))
+    ));
     assert!(matches!(
         decode(&request(&[2], KEY, "x")),
         Err(FrameError::InvalidValue(TAG_RECIPIENT))
@@ -79,6 +83,21 @@ fn another_source_or_an_empty_key_is_a_malformed_frame_but_a_bad_key_or_label_is
         decode(&request(&[1], "not a key", "")),
         Ok(Frame::Request(AdminRequest::RecipientAdd { .. }))
     ));
+}
+
+#[test]
+fn a_host_unlock_key_is_source_3_with_the_key_and_the_label() {
+    let frame = Frame::Request(AdminRequest::RecipientAddHostUnlock {
+        recipient: KEY.to_owned(),
+        label: "host unlock, new TPM".to_owned(),
+    });
+    assert_eq!(encoded(&frame), request(&[3], KEY, "host unlock, new TPM"));
+    match decode(&request(&[3], KEY, "host unlock, new TPM")) {
+        Ok(Frame::Request(AdminRequest::RecipientAddHostUnlock { recipient, label })) => {
+            assert_eq!((recipient.as_str(), label.as_str()), (KEY, "host unlock, new TPM"))
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]

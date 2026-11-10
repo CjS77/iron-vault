@@ -17,11 +17,15 @@ const TAG_RECIPIENTS: u16 = 3;
 const SOURCE_OWNER_KEY: u8 = 1;
 /// The source of a recovery key the service generates; it carries no key.
 const SOURCE_NEW_RECOVERY: u8 = 2;
+/// The source of a host unlock identity's key the owner gives, enrolled with the `host-unlock` role.
+const SOURCE_HOST_UNLOCK_KEY: u8 = 3;
 
-pub(super) fn encode_request(command: u16, recipient: &str, label: &str) -> Vec<u8> {
+/// The request for a key the owner gives: `host_unlock` picks source `3` over source `1`.
+pub(super) fn encode_request(command: u16, recipient: &str, label: &str, host_unlock: bool) -> Vec<u8> {
+    let source = if host_unlock { SOURCE_HOST_UNLOCK_KEY } else { SOURCE_OWNER_KEY };
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &command.to_be_bytes());
-    fields::put(&mut out, TAG_SOURCE, &[SOURCE_OWNER_KEY]);
+    fields::put(&mut out, TAG_SOURCE, &[source]);
     fields::put(&mut out, TAG_RECIPIENT, recipient.as_bytes());
     fields::put(&mut out, TAG_LABEL, label.as_bytes());
     out
@@ -36,14 +40,15 @@ pub(super) fn encode_recovery_request(command: u16, label: &str) -> Vec<u8> {
     out
 }
 
-/// An owner key needs source `1` and a key, and a new recovery key source `2` and none: a mismatch is a malformed frame,
-/// not a rule the service judges.
+/// An owner key needs source `1` or `3` and a key, and a new recovery key source `2` and none: a mismatch is a malformed
+/// frame, not a rule the service judges.
 pub(super) fn decode_request(fields: &[Field<'_>]) -> Result<AdminRequest, FrameError> {
     let [_, source, recipient, label] = exact(fields, [TAG_COMMAND, TAG_SOURCE, TAG_RECIPIENT, TAG_LABEL])?;
     let (recipient, label) = (read_text(TAG_RECIPIENT, recipient)?, read_text(TAG_LABEL, label)?);
     match (source, recipient.is_empty()) {
         ([SOURCE_OWNER_KEY], false) => Ok(AdminRequest::RecipientAdd { recipient, label }),
-        ([SOURCE_OWNER_KEY], true) => Err(FrameError::InvalidValue(TAG_RECIPIENT)),
+        ([SOURCE_HOST_UNLOCK_KEY], false) => Ok(AdminRequest::RecipientAddHostUnlock { recipient, label }),
+        ([SOURCE_OWNER_KEY | SOURCE_HOST_UNLOCK_KEY], true) => Err(FrameError::InvalidValue(TAG_RECIPIENT)),
         ([SOURCE_NEW_RECOVERY], true) => Ok(AdminRequest::RecipientAddRecovery { label }),
         ([SOURCE_NEW_RECOVERY], false) => Err(FrameError::InvalidValue(TAG_RECIPIENT)),
         _ => Err(FrameError::InvalidValue(TAG_SOURCE)),

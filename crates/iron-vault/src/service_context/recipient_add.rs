@@ -101,6 +101,17 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         self.plan(session, key, RecipientRole::Added, label, None).await
     }
 
+    /// Step 3 of `recipient add --host-unlock`: the same check for a host unlock identity's key, enrolled with the
+    /// `host-unlock` role, so part 1 of the independence rule can keep it once the unlock handoff holds its identity.
+    pub async fn plan_host_unlock_add(
+        &self,
+        session: &MigrationSession<'_, F>,
+        key: RecipientKey,
+        label: RecipientLabel,
+    ) -> Result<RecipientAddPlan, PlanRefusal> {
+        self.plan(session, key, RecipientRole::HostUnlock, label, None).await
+    }
+
     /// Step 3 of `recipient add --recovery`: the same check for the new recovery key's identity, enrolled with the
     /// `recovery` role. The identity is kept in the plan only to prove the new envelope before it is written.
     pub async fn plan_recovery_add(

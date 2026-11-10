@@ -53,14 +53,24 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
     /// retires any pending challenge.
     async fn run(&self, request: AdminRequest, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         match request {
-            AdminRequest::RecipientAdd { recipient, label } => self.add_key(&recipient, &label, exchange).await,
+            AdminRequest::RecipientAdd { recipient, label } => self.add_key(&recipient, &label, RecipientRole::Added, exchange).await,
+            AdminRequest::RecipientAddHostUnlock { recipient, label } => {
+                self.add_key(&recipient, &label, RecipientRole::HostUnlock, exchange).await
+            }
             AdminRequest::RecipientAddRecovery { label } => self.add_recovery(&label, exchange).await,
             _ => Ok(error(ErrorCode::RecipientInvalid, "the request is not `recipient add`".to_owned())),
         }
     }
 
-    /// `recipient add <age1…>`: the key the owner supplied, enrolled with the `added` role.
-    async fn add_key(&self, recipient: &str, label: &str, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
+    /// `recipient add <age1…>`: the key the owner supplied, enrolled with `role`: `added`, or `host-unlock` for
+    /// `--host-unlock`. Both are authorized alike, by the vault passphrase.
+    async fn add_key(
+        &self,
+        recipient: &str,
+        label: &str,
+        role: RecipientRole,
+        exchange: &mut Exchange,
+    ) -> Result<AdminResponse, ExchangeError> {
         let (key, label) = match parse_arguments(recipient, label) {
             Ok(parsed) => parsed,
             Err(message) => return Ok(error(ErrorCode::RecipientInvalid, message)),
@@ -69,7 +79,11 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
             Ok(session) => session,
             Err(refusal) => return Ok(not_begun(refusal)),
         };
-        let plan = match self.service.plan_recipient_add(&session, key.clone(), label).await {
+        let planned = match role {
+            RecipientRole::HostUnlock => self.service.plan_host_unlock_add(&session, key.clone(), label).await,
+            _ => self.service.plan_recipient_add(&session, key.clone(), label).await,
+        };
+        let plan = match planned {
             Ok(plan) => plan,
             Err(refusal) => return Ok(plan_refused(refusal)),
         };
@@ -80,7 +94,7 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
             Err(none) => return Ok(no_authorization(COMMAND, none)),
         };
         match self.service.add_recipient(&session, authorization, plan).await {
-            Ok(enrolled) => completed(exchange, &key, RecipientRole::Added, enrolled).await,
+            Ok(enrolled) => completed(exchange, &key, role, enrolled).await,
             Err(refusal) => Ok(add_refused(refusal, UNKNOWN_KEY)),
         }
     }

@@ -57,7 +57,10 @@ pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameErr
         AdminRequest::Add { name, kind, origins } => return add::encode_request(COMMAND_ADD, name, *kind, origins),
         AdminRequest::Replace { name, kind, origins } => return add::encode_request(COMMAND_REPLACE, name, *kind, origins),
         AdminRequest::RecipientAdd { recipient, label } => {
-            return Ok(recipient_add::encode_request(COMMAND_RECIPIENT_ADD, recipient, label));
+            return Ok(recipient_add::encode_request(COMMAND_RECIPIENT_ADD, recipient, label, false));
+        }
+        AdminRequest::RecipientAddHostUnlock { recipient, label } => {
+            return Ok(recipient_add::encode_request(COMMAND_RECIPIENT_ADD, recipient, label, true));
         }
         AdminRequest::RecipientAddRecovery { label } => return Ok(recipient_add::encode_recovery_request(COMMAND_RECIPIENT_ADD, label)),
         _ => {}

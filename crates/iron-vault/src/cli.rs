@@ -267,6 +267,10 @@ pub enum RecipientCommand {
     /// With --recovery, the service instead generates a new offline recovery key and shows it once, as `init` does; save it,
     /// type yes, then authorize with the vault passphrase. Check it with `recovery check`, then remove the old recovery key
     /// with `recipient remove`.
+    ///
+    /// With --host-unlock, RECIPIENT is a host unlock identity's key, such as a new one provisioned after a lost TPM. It is
+    /// enrolled with the `host-unlock` role and authorized the same way. Once a restart reaches Ready with no `unlock`,
+    /// remove the old `host-unlock` recipient with `recipient remove`.
     Add {
         /// The `age1...` public key to enroll.
         #[arg(required_unless_present = "recovery", conflicts_with = "recovery")]
@@ -274,6 +278,9 @@ pub enum RecipientCommand {
         /// Generate a new recovery key and enroll it, instead of enrolling a key you supply.
         #[arg(long)]
         recovery: bool,
+        /// Enroll RECIPIENT as the host unlock identity's recipient, role `host-unlock`, rather than `added`.
+        #[arg(long, conflicts_with = "recovery")]
+        host_unlock: bool,
         /// Which device or copy the key is, 1 to 64 bytes: `alice laptop 2026`.
         #[arg(long)]
         label: String,
@@ -458,8 +465,8 @@ pub fn recipient_list(socket: Option<&Path>) -> ExitCode {
 /// `iron-vault recipient add`: sends `recipient add`, answers the vault passphrase prompt from the owner console, and
 /// leaves the completion notice to stderr.
 #[cfg(target_os = "linux")]
-pub fn recipient_add(socket: Option<&Path>, recipient: String, label: String) -> ExitCode {
-    client::recipient_add(socket, recipient, label).into()
+pub fn recipient_add(socket: Option<&Path>, recipient: String, label: String, host_unlock: bool) -> ExitCode {
+    client::recipient_add(socket, recipient, label, host_unlock).into()
 }
 
 /// `iron-vault recipient add --recovery`: sends `recipient add` for a new recovery key, shows it on the terminal, and answers
@@ -477,7 +484,7 @@ pub fn recipient_add_recovery(_socket: Option<&Path>, _label: String) -> ExitCod
 
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
-pub fn recipient_add(_socket: Option<&Path>, _recipient: String, _label: String) -> ExitCode {
+pub fn recipient_add(_socket: Option<&Path>, _recipient: String, _label: String, _host_unlock: bool) -> ExitCode {
     unsupported_platform()
 }
 

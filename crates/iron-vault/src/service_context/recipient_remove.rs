@@ -95,7 +95,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             approvers,
         } = ready_vault(&*self.inner.lock().await)?;
         let (service_wide, inventory) = self.check_inventory(service_wide, identity, vault_id).await?;
-        let (removed, after) = apply_removal(&inventory, &key).inspect_err(|refusal| log_refused(&key, refusal))?;
+        let host_unlock = self.configured_host_unlock().await;
+        let (removed, after) = apply_removal(&inventory, &key, host_unlock.as_ref()).inspect_err(|refusal| log_refused(&key, refusal))?;
         Ok(RecipientRemoval {
             service: self,
             service_wide,
@@ -109,11 +110,16 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// The entry `key` names and the inventory without it, if the independence rule allows that set.
-fn apply_removal(inventory: &RecipientInventory, key: &RecipientKey) -> Result<(RecipientEntry, RecipientInventory), RemovalRefusal> {
+/// The entry `key` names and the inventory without it, if the independence rule allows that set with `host_unlock` as
+/// the configured host unlock adapter's recipient key.
+fn apply_removal(
+    inventory: &RecipientInventory,
+    key: &RecipientKey,
+    host_unlock: Option<&RecipientKey>,
+) -> Result<(RecipientEntry, RecipientInventory), RemovalRefusal> {
     let removed = inventory.get(key).cloned().ok_or(RemovalRefusal::NotEnrolled)?;
     let after = RecipientChange::Remove(key.clone())
-        .apply(inventory)
+        .apply_configured(inventory, host_unlock)
         .map_err(|refusal| match refusal {
             RecipientChangeRefusal::NotEnrolled => RemovalRefusal::NotEnrolled,
             rule => RemovalRefusal::SetInvalid(rule),

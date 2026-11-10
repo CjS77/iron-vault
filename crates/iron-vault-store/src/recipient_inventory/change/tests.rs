@@ -127,3 +127,55 @@ fn adding_past_the_maximum_is_refused() {
         RecipientChangeRefusal::TooMany,
     );
 }
+
+/// A Compose vault after re-enrolment: the old and the new host unlock identity are both `host-unlock` recipients.
+fn two_host_unlocks() -> (RecipientInventory, RecipientKey, RecipientKey) {
+    let current = inventory(&[
+        RecipientRole::Operational,
+        RecipientRole::Recovery,
+        RecipientRole::HostUnlock,
+        RecipientRole::HostUnlock,
+    ]);
+    let keys: Vec<RecipientKey> = current
+        .entries()
+        .filter(|entry| entry.role() == RecipientRole::HostUnlock)
+        .map(|entry| entry.key().clone())
+        .collect();
+    (current, keys[0].clone(), keys[1].clone())
+}
+
+#[test]
+fn a_host_unlock_recipient_the_handoff_does_not_hold_can_be_removed() {
+    let (current, old, new) = two_host_unlocks();
+    let next = RecipientChange::Remove(old.clone()).apply_configured(&current, Some(&new)).unwrap();
+    assert_eq!(next.get(&old), None);
+}
+
+#[test]
+fn the_host_unlock_recipient_the_handoff_holds_is_kept() {
+    let (current, old, _) = two_host_unlocks();
+    let before = current.clone();
+    assert_eq!(
+        RecipientChange::Remove(old.clone()).apply_configured(&current, Some(&old)),
+        Err(RecipientChangeRefusal::RemovesConfiguredHostUnlock)
+    );
+    assert_eq!(current, before);
+}
+
+#[test]
+fn with_no_configured_adapter_the_last_host_unlock_recipient_can_be_removed() {
+    let current = inventory(&[RecipientRole::Operational, RecipientRole::Recovery, RecipientRole::HostUnlock]);
+    let host = key_of(&current, RecipientRole::HostUnlock);
+    assert!(RecipientChange::Remove(host).apply_configured(&current, None).is_ok());
+}
+
+#[test]
+fn an_added_recipient_with_the_handoff_key_is_not_the_adapters_recipient() {
+    let current = inventory(&[RecipientRole::Operational, RecipientRole::Recovery, RecipientRole::Added]);
+    let added = key_of(&current, RecipientRole::Added);
+    assert!(
+        RecipientChange::Remove(added.clone())
+            .apply_configured(&current, Some(&added))
+            .is_ok()
+    );
+}

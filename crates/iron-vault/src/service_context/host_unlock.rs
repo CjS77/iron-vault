@@ -8,7 +8,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use iron_vault_store::{EnvelopeError, StoreFs, UnlockError, VaultIdentity, read_identity_envelope, require_initialized, unwrap_identity};
+use iron_vault_store::{
+    EnvelopeError, RecipientKey, StoreFs, UnlockError, VaultIdentity, read_identity_envelope, require_initialized, unwrap_identity,
+};
 
 use super::unlock::log_foreign_files;
 use super::{ServiceContext, ServiceLocks, ServiceSetup, apply};
@@ -137,6 +139,23 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         tokio::task::spawn_blocking(move || unwrap_with_handoff(&locks, &setup, &handoff))
             .await
             .unwrap_or(Err(HostUnlockRefusal::Unreadable))
+    }
+
+    /// The recipient key of the configured host unlock adapter, which part 1 of the independence rule keeps: the
+    /// identity the unlock handoff holds now, in the Container profile (`design/docker-compose.md`, "Its role among the
+    /// recipients"). With no readable handoff, or in another profile, no host unlock is configured. The identity is
+    /// dropped as this returns; only its public key is kept.
+    pub(super) async fn configured_host_unlock(&self) -> Option<RecipientKey> {
+        let setup = Arc::clone(&self.setup);
+        if !tries_host_unlock(setup.paths.profile) {
+            return None;
+        }
+        let path = self.handoff.clone();
+        let read = tokio::task::spawn_blocking(move || read_handoff(setup.paths.profile, setup.paths.owner, &path)).await;
+        match read {
+            Ok(Ok(Some(host))) => Some(host.recipient_key()),
+            _ => None,
+        }
     }
 }
 

@@ -251,9 +251,14 @@ pub fn recipient_list(socket: Option<&Path>) -> Exit {
 }
 
 /// Runs `recipient add`. The service shows its summary and the completion notice, and prompts for the vault passphrase,
-/// answered from the owner console; nothing but those notices is printed on success.
-pub fn recipient_add(socket: Option<&Path>, recipient: String, label: String) -> Exit {
-    run(socket, AdminRequest::RecipientAdd { recipient, label }, |response| match response {
+/// answered from the owner console; nothing but those notices is printed on success. `host_unlock` enrols the key with the
+/// `host-unlock` role.
+pub fn recipient_add(socket: Option<&Path>, recipient: String, label: String, host_unlock: bool) -> Exit {
+    let request = match host_unlock {
+        true => AdminRequest::RecipientAddHostUnlock { recipient, label },
+        false => AdminRequest::RecipientAdd { recipient, label },
+    };
+    run(socket, request, |response| match response {
         AdminResponse::RecipientAdd { .. } => Exit::Success,
         _ => unexpected(),
     })
