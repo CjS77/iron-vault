@@ -261,7 +261,7 @@ host uid on the admin socket:
   connects to the socket as that account.
 
 The peer's pid is a different matter. The connecting process is outside the container's PID namespace, so the kernel
-reports its pid as 0, and the admin audit record's `peer_pid` is 0. The pid is recorded for the audit log only and
+reports its pid as 0, and the admin audit record leaves `peer_pid` out. The pid is recorded for the audit log only and
 decides nothing (`peer.rs`), so nothing else changes.
 
 **Root is the Container and Protected profiles' only admin principal.** `AdminPrincipals::accepts` accepts uid 0 and

@@ -103,7 +103,7 @@ Every audit event has the target `iron-vault.audit`. The fields are those beyond
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `admin.command` | INFO | An admin principal's command was read | `command` (`config_approve`, `caller_token`, `unlock` and so on), `principal_uid` |
-| `admin.refused` | WARN | An admin connection or request was refused before any command ran | `refusal`: `not_admin_principal`, `peer_unreadable`, `busy`, `unsupported_version`, `malformed_frame`, `unknown_command` or `unexpected_frame`; `peer_uid` and `peer_pid` when known; `peer_pid` is absent when the peer is in another PID namespace, such as the host CLI in the Compose profile |
+| `admin.refused` | WARN | An admin connection or request was refused before any command ran | `refusal`: `not_admin_principal`, `peer_unreadable`, `busy`, `unsupported_version`, `malformed_frame`, `unknown_command` or `unexpected_frame`; `peer_uid` and `peer_pid` when known; `peer_pid` is absent when the peer is in another PID namespace, such as the host CLI in the Container profile |
 | `caller.token-issued` | INFO | A caller token was issued | none; the token is never logged |
 | `caller.token-failed` | ERROR | No caller token could be issued | `error_kind` |
 

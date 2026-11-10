@@ -637,7 +637,7 @@ never holds the handoff's bytes or its recipient key, and a `memory_unprotected`
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `admin.command` | INFO | an admin principal's request was read | `command`, `principal_uid` |
-| `admin.refused` | WARN | an admin connection or request was refused before any command ran | `refusal`; `peer_uid` and `peer_pid` when known |
+| `admin.refused` | WARN | an admin connection or request was refused before any command ran | `refusal`; `peer_uid` and `peer_pid` when known; `peer_pid` is absent when the peer is in another PID namespace |
 | `caller.token-issued` | INFO | a caller token was issued | none; the token is never logged |
 | `caller.token-failed` | ERROR | no caller token could be issued | `error_kind` |
 
@@ -755,7 +755,7 @@ The fields that only one event uses, or that only audit events use:
 | Field | Type | Form |
 |---|---|---|
 | `command` | string | The admin command ID in snake_case, such as `config_approve` or `caller_token` |
-| `principal_uid`, `peer_uid`, `peer_pid` | number | The admin peer's uid and pid, as the kernel reported them |
+| `principal_uid`, `peer_uid`, `peer_pid` | number | The admin peer's uid and pid, as the kernel reported them; `peer_pid` is left out when the peer is in another PID namespace, such as the host CLI in the Container profile |
 | `core_dumps` | string | `disabled` or `not_disabled` |
 | `memory_protection` | string | `locked`, `unavailable` or `unsupported` |
 | `previous_log_destination` | string | The log destination before the change, in `log_destination`'s form |
