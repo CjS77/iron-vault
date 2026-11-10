@@ -7,7 +7,7 @@ check="$(dirname "${BASH_SOURCE[0]}")/check-release-tag.sh"
 status=0
 
 expect() { # expected-result tag [crate-version]
-    local want=$1 tag=$2 crate=${3:-${2#v}}
+    local want=$1 tag=$2 crate=${3:-${2#v}} got
     "$check" "$tag" "$crate" >/dev/null 2>&1 && got=pass || got=fail
     [ "$got" = "$want" ] && echo "ok   $want $tag" || { echo "FAIL expected $want for $tag"; status=1; }
 }

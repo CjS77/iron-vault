@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      # The tag is checked before anything is built, so a mistyped tag fails in seconds.
+      # The tag is checked before the package is built, so a mistyped tag fails before the slow steps.
       - name: Tag is a release tag and names the crate version
         run: |
           scripts/check-release-tag-test.sh
@@ -81,4 +81,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+        # --clobber lets a re-run replace the asset. It also lets a later run replace a package users may already have downloaded.
         run: gh release upload "$TAG" iron-vault_*.deb --clobber

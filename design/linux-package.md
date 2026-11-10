@@ -547,6 +547,15 @@ practice, then, the attacker is code running in the service, a process the servi
 `scripts/build-deb.sh` builds the `.deb` with `cargo deb -p iron-vault` and checks it. It needs `cargo-deb`
 (`cargo install cargo-deb --locked`), `dpkg-deb` and `lintian` (`sudo apt install lintian`). Without `lintian` it exits non-zero;
 `IRON_VAULT_SKIP_LINTIAN=1` is the explicit opt-out, and the script then ends with "package checks passed WITHOUT lintian". It fails when:
+- the package `Version:` is not the crate version with its first `-` turned into `~` plus the revision `-1`, or still holds a
+  `-` before the revision (see below);
+- the newest entry of the changelog, `packaging/linux/debian/changelog`, is not that package version, so a version bump
+  needs a changelog entry;
+- the packaged binary's `--version` lists any feature, so a `dev-mode` package is refused;
+- a file's owner or mode differs from the [ownership table](#ownership), a path is owned by anyone but root, or
+  anything is shipped under `/etc/iron-vault`, `/var/lib/iron-vault`, `/var/log/iron-vault` or `/run/iron-vault`;
+- the conffiles are anything but `/etc/logrotate.d/iron-vault`, or a maintainer script is missing or not executable;
+- `lintian --fail-on error` reports an error.
 
 The release workflow (`.github/workflows/release.yml`) runs the script, without the opt-out, for every release and every release
 tag: when a release is published, or a tag matching the pattern below is pushed. Pull requests do not run it; `ci.yml`'s
@@ -563,16 +572,6 @@ That is `v`, three numbers without leading zeros, and an optional non-empty pre-
 a tag name, so the tag is `v0.3.0-alpha` and only the package version is `0.3.0~alpha-1`. The workflow's tag filters are globs
 and cannot say all of this, so they only narrow the tags that start a run. `scripts/check-release-tag-test.sh` tests the rule.
 The checked `.deb` is uploaded as a workflow artifact, and on a published release it is also attached to the GitHub release.
-
-- the package `Version:` is not the crate version with its first `-` turned into `~` plus the revision `-1`, or still holds a
-  `-` before the revision (see below);
-- the newest entry of the changelog, `packaging/linux/debian/changelog`, is not that package version, so a version bump
-  needs a changelog entry;
-- the packaged binary's `--version` lists any feature, so a `dev-mode` package is refused;
-- a file's owner or mode differs from the [ownership table](#ownership), a path is owned by anyone but root, or
-  anything is shipped under `/etc/iron-vault`, `/var/lib/iron-vault`, `/var/log/iron-vault` or `/run/iron-vault`;
-- the conffiles are anything but `/etc/logrotate.d/iron-vault`, or a maintainer script is missing or not executable;
-- `lintian --fail-on error` reports an error.
 
 The script passes `--deb-version` to `cargo deb`. cargo-deb would turn the crate version `0.2.0-alpha` into `0.2.0-alpha-1`,
 which dpkg sorts above `0.2.0-1`, so the final release would not upgrade an alpha. Debian writes a pre-release with `~`:
