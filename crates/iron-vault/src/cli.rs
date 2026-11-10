@@ -286,8 +286,9 @@ pub enum RecipientCommand {
         label: String,
     },
     /// Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval
-    /// passphrase. It refuses the operational recipient and the last recovery recipient, and says that copies of
-    /// `identity.age` made before still open with the removed key.
+    /// passphrase. It refuses the operational recipient, the last recovery recipient and, in a Docker Compose stack, the
+    /// `host-unlock` recipient whose identity the unlock handoff holds. It says that copies of `identity.age` made before
+    /// still open with the removed key.
     Remove {
         /// The recipient's `age1...` key, as `recipient list` prints it.
         recipient: String,

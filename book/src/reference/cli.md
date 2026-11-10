@@ -262,8 +262,11 @@ Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. Thi
 
 With --recovery, the service instead generates a new offline recovery key and shows it once, as `init` does; save it, type yes, then authorize with the vault passphrase. Check it with `recovery check`, then remove the old recovery key with `recipient remove`.
 
+With --host-unlock, RECIPIENT is a host unlock identity's key, such as a new one provisioned after a lost TPM. It is enrolled with the `host-unlock` role and authorized the same way. Once a restart reaches Ready with no `unlock`, remove the old `host-unlock` recipient with `recipient remove`.
+
 - `<RECIPIENT>`: The `age1...` public key to enroll.
 - `--recovery`: Generate a new recovery key and enroll it, instead of enrolling a key you supply.
+- `--host-unlock`: Enroll RECIPIENT as the host unlock identity's recipient, role `host-unlock`, rather than `added`.
 - `--label <LABEL>`: Which device or copy the key is, 1 to 64 bytes: `alice laptop 2026`.
   - required
 
@@ -273,7 +276,7 @@ With --recovery, the service instead generates a new offline recovery key and sh
 iron-vault recipient remove [OPTIONS] <RECIPIENT>
 ```
 
-Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient and the last recovery recipient, and says that copies of `identity.age` made before still open with the removed key.
+Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient, the last recovery recipient and, in a Docker Compose stack, the `host-unlock` recipient whose identity the unlock handoff holds. It says that copies of `identity.age` made before still open with the removed key.
 
 - `<RECIPIENT>`: The recipient's `age1...` key, as `recipient list` prints it.
   - required

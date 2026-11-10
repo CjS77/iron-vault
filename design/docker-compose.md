@@ -485,12 +485,13 @@ handoff takes effect at the next restart.
   prompt, as Starting does, and refuses `init` if it is absent or refused, naming the reason. Init then wraps
   `identity.age` for the operational identity, the recovery key and the host unlock identity, and proves that each
   opens it. Init's summary and the `vault.initialized` record name the kinds enrolled, never a key.
-- **An existing vault:** `iron-vault recipient add --host-unlock --label <text>`, a third form of `recipient add` to add
-  to [`recipients.md`](recipients.md)'s command table for K-231. It takes no key argument. The service reads the
-  handoff as Starting does, derives its recipient key, and runs migration authorization with `AddRecipient(<that key>)`,
-  like the other forms, then enrolls the key with role `host-unlock`. Like every recipient command, it maps onto the admin
-operation `AdminOperation::VaultChange`, so it runs only in Ready. Without a readable handoff it is refused, naming
-  the reason, before any prompt.
+- **An existing vault:** `iron-vault recipient add --host-unlock <age1…> --label <text>`, a form of `recipient add` in
+  [`recipients.md`](recipients.md#recipient-add---host-unlock-age1) (owner decision, 2026-11-10). It takes the host
+  unlock identity's recipient key, which the provisioning script prints, runs migration authorization with
+  `AddRecipient(<key>)` like the other forms, and enrolls the key with role `host-unlock`. It reads no handoff: the
+  owner may enrol the new identity before the handoff holds it, and part 1 of the independence rule then keeps whichever
+  `host-unlock` recipient the handoff holds when `recipient remove` runs. Like every recipient command, it maps onto
+  the admin operation `AdminOperation::VaultChange`, so it runs only in Ready.
 
 ### Against the implementation spec §3 gate
 

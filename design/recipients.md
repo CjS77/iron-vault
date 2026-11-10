@@ -41,7 +41,7 @@ whether the recipient counts toward the [independence rule](#independence-rule).
 | `3` | `added` | none | A recipient key the owner supplied, such as a destination device for the alternate migration path ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)) | `recipient add <age1…>` |
 | `4` | `tpm` | unlock | Reserved: a TPM-sealed intermediate identity ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)) | the TPM epic |
 | `5` | `hardware` | unlock | Reserved: a hardware-key intermediate identity ([future spec §2.1](future-specifications.md#21-hardware-key-recipients-signers-and-touch-confirmation)) | the hardware-key phase |
-| `6` | `host-unlock` | unlock | The intermediate identity of a host unlock adapter, read from the unlock handoff ([§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances)) | `init --host-unlock` in a container build |
+| `6` | `host-unlock` | unlock | The intermediate identity of a host unlock adapter, read from the unlock handoff ([§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances)) | `init --host-unlock` in a container build, `recipient add --host-unlock <age1…>` |
 
 Codes 4 and 5 are reserved now so that later epics need no new format version: this release refuses them when it reads
 an inventory, and the epic that enrolls one makes the decoder accept it. Code 6 is accepted: the Compose epic enrolls
@@ -286,7 +286,10 @@ and part 3 becomes "at least one recipient of the recovery class":
   ([open question 11](#open-questions)).
 - **`hardware`** joins the unlock class. Whether a second hardware key may count as recovery is that phase's decision.
 - **`host-unlock`** joins the unlock class. Part 1 keeps it while the host unlock adapter is configured. It never counts
-  as recovery, because its secret lives on the host.
+  as recovery, because its secret lives on the host. The adapter is configured for the `host-unlock` recipient whose
+  key the unlock handoff holds when the command runs, in the Container profile
+  ([docker-compose.md](docker-compose.md#its-role-among-the-recipients)); any other `host-unlock` recipient, and any
+  `added` one, is not kept by part 1.
 
 ## Commands
 
@@ -294,12 +297,14 @@ and part 3 becomes "at least one recipient of the recovery class":
 |---|---|---|
 | `iron-vault recipient list` | none beyond the admin principal | nothing, unless the inventory check finishes or discards a change |
 | `iron-vault recipient add <age1…> --label <text>` | migration authorization, `AddRecipient(<key>)` | enrolls the key with role `added` |
+| `iron-vault recipient add --host-unlock <age1…> --label <text>` | migration authorization, `AddRecipient(<key>)` | enrolls the key with role `host-unlock` |
 | `iron-vault recipient add --recovery --label <text>` | migration authorization, `AddRecipient(<new key's recipient key>)` | generates a recovery key, shows it once, and enrolls it with role `recovery` |
 | `iron-vault recipient remove <age1…>` | owner presence | removes the key from the envelope and the inventory |
 
 A recipient key and a label are public, so they travel as arguments. No command takes a secret as an argument
 ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)). `recipient add` takes exactly one of
-a key and `--recovery`, and `--label` always; anything else is a usage error. `recipient list` is not in §16's table,
+a key and `--recovery`, and `--label` always; `--host-unlock` needs a key and conflicts with `--recovery`; anything
+else is a usage error. `recipient list` is not in §16's table,
 but `remove` cannot be used without knowing what is enrolled ([open question 1](#open-questions)).
 
 ### Authorization
@@ -310,6 +315,8 @@ That makes it the alternate migration path of
 source-owner authorization as `export`. It runs the [admin exchange](migration-authorization.md#admin-exchange) of
 migration authorization, steps 1 to 10, with the operation `AddRecipient` naming the key to be enrolled. For
 `--recovery` that is the new key's recipient key, so the challenge binds the very key that is revealed.
+`--host-unlock` is authorized exactly as a plain key is, by the vault passphrase: the host unlock identity opens the
+vault, so enrolling one is the same migration whatever role it takes. Unlocking, by any method, never authorizes it.
 
 **`recipient remove` requires owner presence**, the approval passphrase
 ([credential-commands.md](credential-commands.md#owner-presence)), and nothing else.
@@ -377,6 +384,18 @@ in the command's own.
 | 9 | Still Ready at the recorded check generation; consume the authorization | `wrong-state`, `migration-denied` |
 | 10 | The [recipient change](#the-recipient-change), then the [completion notice](#the-completion-notice) | `vault-write-failed` |
 
+### `recipient add --host-unlock <age1…>`
+
+The same exchange as `recipient add <age1…>`, in the same states, with the label rule every recipient follows. The
+entry's role is `host-unlock` rather than `added`, so the summary, the completion notice and `recipient.added` name
+that role. It re-enrols host unlock after the host unlock identity is lost with its TPM, the motherboard, a TPM clear
+or a change to the bound PCR: the host provisions a new identity, whose recipient key the provisioning script prints,
+and the owner enrolls it with this command. Once a restart reaches Ready with no `unlock`, the unlock handoff holds the
+new identity, so part 1 of the [independence rule](#independence-rule) no longer keeps the old `host-unlock` recipient,
+and `recipient remove` takes it out. An `added` recipient never counts as the host unlock adapter's recipient: only role
+`host-unlock` does. Every profile accepts the command; the role only matters to part 1 in the Container profile, where
+a host unlock adapter can be configured.
+
 ### `recipient add --recovery`
 
 The same exchange, with the recovery key shown between the summary and the challenge:
@@ -414,7 +433,7 @@ that will refuse to show it. Every ending after the reveal says what to do with 
 |---|---|---|
 | 1 | The service is Ready; the key parses as a recipient key | `wrong-state`, `recipient-invalid` |
 | 2 | Try the service-wide lock, recording the state and check generation | `busy` |
-| 3 | The inventory check; the key is enrolled; the independence rule allows the set without it | `recipient-inventory-damaged`, `vault-write-failed`, `unknown-recipient`, `recipient-set-invalid` |
+| 3 | The inventory check; the key is enrolled; in the Container profile, read the unlock handoff for the configured host unlock recipient; the independence rule allows the set without it | `recipient-inventory-damaged`, `vault-write-failed`, `unknown-recipient`, `recipient-set-invalid` |
 | 4 | The summary, as notices | |
 | 5 | Owner presence: the `Approval passphrase for "<label>"` prompt | `approval-denied`, `approval-unavailable` |
 | 6 | Still Ready at the recorded check generation | `wrong-state` |
@@ -500,11 +519,11 @@ The rows below join [admin-protocol.md](admin-protocol.md) with the command tick
 
 | Tag | Field | Value |
 |---|---|---|
-| 2 | source | `u8`: `1` a recipient key the owner gives, `2` a new recovery key the service generates |
-| 3 | recipient key | UTF-8 text: the `age1…` key for source `1`; empty for source `2` |
+| 2 | source | `u8`: `1` a recipient key the owner gives, `2` a new recovery key the service generates, `3` a host unlock identity's recipient key the owner gives |
+| 3 | recipient key | UTF-8 text: the `age1…` key for sources `1` and `3`; empty for source `2` |
 | 4 | label | UTF-8 text: the label |
 
-A source other than 1 or 2, an empty key with source `1` or a key with source `2` is a malformed frame. A key or label
+A source other than 1, 2 or 3, an empty key with source `1` or `3`, or a key with source `2` is a malformed frame. A key or label
 that breaks its rule is `recipient-invalid`, decided by the service. `recipient remove`'s request has one field, tag
 2, the recipient key as UTF-8 text.
 
@@ -559,7 +578,7 @@ recovery key's secret text is never logged.
 | Field | Type | Form |
 |---|---|---|
 | `recipient` | string | A recipient key's `age1…` text; for `--recovery`, the new key's |
-| `recipient_role` | string | A role name: `operational`, `recovery` or `added` |
+| `recipient_role` | string | A role name: `operational`, `recovery`, `added` or `host-unlock` |
 | `recipient_label` | string | A recipient label, escaped |
 | `recipients` | number | The recipient count after the change |
 | `change` | string | `add` or `remove` |
@@ -616,8 +635,8 @@ so no owner holds such a vault yet ([open question 2](#open-questions)). The res
 
 ## Out of scope
 
-- TPM and hardware-key recipients, and `recipient add` for host-unlock. Their epics enroll the roles and extend the
-  independence rule as [described above](#independence-rule).
+- TPM and hardware-key recipients. Their epics enroll the roles and extend the independence rule as
+  [described above](#independence-rule).
 - `forget-machine`, which checks recipient removal and guides TPM clearing
   ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)).
 - Changing the vault passphrase. It reseals `operational.age` around the same operational identity, so it changes no

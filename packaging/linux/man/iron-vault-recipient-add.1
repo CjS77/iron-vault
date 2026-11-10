@@ -4,11 +4,13 @@
 .SH NAME
 iron\-vault\-recipient\-add \- Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not affected
 .SH SYNOPSIS
-\fBiron\-vault recipient add\fR [\fB\-\-admin\-socket\fR] [\fB\-\-recovery\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-label\fR> [\fIRECIPIENT\fR] 
+\fBiron\-vault recipient add\fR [\fB\-\-admin\-socket\fR] [\fB\-\-recovery\fR] [\fB\-\-host\-unlock\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-label\fR> [\fIRECIPIENT\fR] 
 .SH DESCRIPTION
 Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not affected.
 .PP
 With \-\-recovery, the service instead generates a new offline recovery key and shows it once, as `init` does; save it, type yes, then authorize with the vault passphrase. Check it with `recovery check`, then remove the old recovery key with `recipient remove`.
+.PP
+With \-\-host\-unlock, RECIPIENT is a host unlock identity\*(Aqs key, such as a new one provisioned after a lost TPM. It is enrolled with the `host\-unlock` role and authorized the same way. Once a restart reaches Ready with no `unlock`, remove the old `host\-unlock` recipient with `recipient remove`.
 .SH OPTIONS
 .TP
 \fB\-\-admin\-socket\fR \fI<PATH>\fR
@@ -16,6 +18,9 @@ Use the admin socket at PATH instead of this installation\*(Aqs, for example one
 .TP
 \fB\-\-recovery\fR
 Generate a new recovery key and enroll it, instead of enrolling a key you supply
+.TP
+\fB\-\-host\-unlock\fR
+Enroll RECIPIENT as the host unlock identity\*(Aqs recipient, role `host\-unlock`, rather than `added`
 .TP
 \fB\-\-label\fR \fI<LABEL>\fR
 Which device or copy the key is, 1 to 64 bytes: `alice laptop 2026`

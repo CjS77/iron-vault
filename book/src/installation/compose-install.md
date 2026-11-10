@@ -345,15 +345,17 @@ only root can open it. Even a login that got through would be refused, because t
 The host unlock identity lives only sealed to this host's TPM. It is lost with the TPM, the motherboard, a TPM clear, or
 a change to Secure Boot's policy (PCR 7). Then the stack starts Locked, and the vault is intact.
 
-1. Open the vault with the vault passphrase, which `recipient add` needs. Optionally run `recovery check` to confirm the
-   offline recovery key still opens it; it does not unlock the vault.
+Open the vault with the vault passphrase, which `recipient add` needs. Optionally run `recovery check` to confirm the
+offline recovery key still opens it; it does not unlock the vault.
 
-   ```sh
-   sudo iron-vault unlock
-   sudo iron-vault recovery check
-   ```
+```sh
+sudo iron-vault unlock
+sudo iron-vault recovery check
+```
 
-2. Move the unusable credential aside, because the script will not overwrite it, and provision a new identity:
+Then replace the host unlock identity:
+
+1. Move the unusable credential aside, because the script will not overwrite it, and provision a new identity:
 
    ```sh
    sudo mv /etc/iron-vault-host/host-unlock.cred /etc/iron-vault-host/host-unlock.cred.old
@@ -363,24 +365,22 @@ a change to Secure Boot's policy (PCR 7). Then the stack starts Locked, and the 
 
    Note the `age1...` recipient key it prints.
 
-3. Enrol it, with the vault passphrase:
+2. Enrol it as the host unlock recipient, with the vault passphrase:
 
    ```sh
-   sudo iron-vault recipient add age1... --label "host unlock, new TPM"
+   sudo iron-vault recipient add --host-unlock age1... --label "host unlock, new TPM"
    ```
 
-   [Recipients](../../../design/recipients.md) lists the key with the role `added`. `recipient add` has no
-   `--host-unlock` form yet, so the role is not `host-unlock`.
+   `recipient list` shows the key with the role `host-unlock`, beside the old one.
 
-4. Restart the container, and check it reaches Ready with no `unlock`:
+3. Restart the container, and check it reaches Ready with no `unlock`:
 
    ```sh
    sudo docker compose -f /etc/iron-vault-host/compose.yaml restart iron-vault
    sudo iron-vault status
    ```
 
-5. Remove the old entry, the one with the role `host-unlock` (not the `added` key from step 3), by its key as
-   `recipient list` prints it, and delete the old credential:
+4. Remove the old `host-unlock` entry by its key as `recipient list` prints it, and delete the old credential:
 
    ```sh
    sudo iron-vault recipient list
@@ -388,7 +388,8 @@ a change to Secure Boot's policy (PCR 7). Then the stack starts Locked, and the 
    sudo rm /etc/iron-vault-host/host-unlock.cred.old
    ```
 
-   Removal needs the approval passphrase, and it protects future copies of `identity.age` only.
+   Removal needs the approval passphrase, and it protects future copies of `identity.age` only. `recipient remove`
+   refuses the entry whose identity the unlock handoff holds, so if it refuses, you named the new key.
 
 ## Upgrade
 

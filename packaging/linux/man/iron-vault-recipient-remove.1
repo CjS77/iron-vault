@@ -2,11 +2,11 @@
 .el .ds Aq '
 .TH iron-vault-recipient-remove 1  "Iron Vault" "Iron Vault Manual"
 .SH NAME
-iron\-vault\-recipient\-remove \- Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient and the last recovery recipient, and says that copies of `identity.age` made before still open with the removed key
+iron\-vault\-recipient\-remove \- Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient, the last recovery recipient and, in a Docker Compose stack, the `host\-unlock` recipient whose identity the unlock handoff holds. It says that copies of `identity.age` made before still open with the removed key
 .SH SYNOPSIS
 \fBiron\-vault recipient remove\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIRECIPIENT\fR> 
 .SH DESCRIPTION
-Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient and the last recovery recipient, and says that copies of `identity.age` made before still open with the removed key
+Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient, the last recovery recipient and, in a Docker Compose stack, the `host\-unlock` recipient whose identity the unlock handoff holds. It says that copies of `identity.age` made before still open with the removed key
 .SH OPTIONS
 .TP
 \fB\-\-admin\-socket\fR \fI<PATH>\fR

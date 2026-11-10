@@ -23,4 +23,4 @@ iron\-vault\-recipient\-add(1)
 Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not affected
 .TP
 iron\-vault\-recipient\-remove(1)
-Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient and the last recovery recipient, and says that copies of `identity.age` made before still open with the removed key
+Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient, the last recovery recipient and, in a Docker Compose stack, the `host\-unlock` recipient whose identity the unlock handoff holds. It says that copies of `identity.age` made before still open with the removed key
