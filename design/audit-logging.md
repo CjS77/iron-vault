@@ -1108,9 +1108,10 @@ request events record only primitive values ([Field rules](#field-rules)), so th
 diagnostic record whose own `Display` fails is lost, which is acceptable for a diagnostic record and impossible for an
 audit record.
 
-A full disk keeps the service down. Each restart opens the file, fails its first write and stops again, until
-systemd's start limit leaves the unit failed. That is intended: the service never runs without its audit log, and the
-unit's status and stderr say why. Freeing space and restarting the unit recovers it.
+A full disk keeps the service down. Each restart opens the file, fails its first write and stops again. The packaged
+unit has no start limit and restarts it once a second ([linux-package.md](linux-package.md#service-unit)), so that
+the listener sockets keep their ports. That is intended: the service never runs without its audit log, and the
+unit's status and stderr say why. Once space is freed, the next restart succeeds and the service starts Locked.
 
 Both cases are explicit safe states ([§15](iron-vault-specification.md#15-service-states-and-errors)): the service
 never serves a request or accepts an admin change it cannot record. The alternative, falling back to stderr and

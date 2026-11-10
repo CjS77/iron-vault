@@ -228,6 +228,7 @@ next boot.
 ```ini
 [Unit]
 Description=Iron Vault credential proxy
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec
@@ -236,6 +237,7 @@ ExecReload=/bin/kill -HUP $MAINPID
 User=iron-vault
 Group=iron-vault
 Restart=on-failure
+RestartSec=1
 LimitCORE=0
 LimitMEMLOCK=infinity
 UMask=0077
@@ -258,10 +260,12 @@ WantedBy=multi-user.target
 
 | Directive | Why |
 |---|---|
+| `StartLimitIntervalSec=0` (in `[Unit]`) | No start limit. When a socket-activated service hits its start limit, systemd fails every socket unit that names it (`service-start-limit-hit`), and a failed socket unit closes its port. Under the default limit, 5 starts in 10 s, a crash loop would free each TCP listener's port for another local process to bind and collect caller tokens ([§7](iron-vault-specification.md#7-caller-authentication-and-listeners)). A loop needs no crash bug: `serve` exits non-zero when an audit-log write fails, so an account that can fill the filesystem holding `/var/log` makes every start fail fast. With no limit, systemd keeps restarting the service and keeps the ports. |
 | `Type=exec` | The service sends no readiness notification. `exec` makes a start fail when the binary cannot be executed, rather than reporting success. |
 | `ExecReload=` | The service reloads its published config on SIGHUP ([config-approval.md](config-approval.md#reload)), so `systemctl reload iron-vault` does that. |
 | `User=iron-vault`, `Group=iron-vault` | The service runs under its own account ([§4](iron-vault-specification.md#4-installation-and-ownership)), which is the expected owner the trusted-path checks look for. It is not an admin principal ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). |
 | `Restart=on-failure` | A crash restarts the service unattended ([§15](iron-vault-specification.md#15-service-states-and-errors)). A clean exit, and a service waiting Locked, are not failures, so neither is restarted. |
+| `RestartSec=1` | Paces a restart loop at about one start a second, since no start limit ends it; the default 100 ms would spin. A start that is refused, for example for an untrusted directory, repeats its journal line once a second until the cause is fixed, and the next start after the fix succeeds without an administrator, Locked. `RestartSteps=` and `RestartMaxDelaySec=` would back the loop off further, but they need systemd 254, newer than Debian 12's 252. |
 | `LimitCORE=0` | No core dump can hold service memory ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)). The service also sets `RLIMIT_CORE` to 0 and clears `PR_SET_DUMPABLE` itself. |
 | `LimitMEMLOCK=infinity` | `hardening.rs` calls `mlockall` only when the `RLIMIT_MEMLOCK` soft limit is unlimited, because locking future mappings under a finite limit makes allocations fail once the service grows past it. A protected install does not unlock without locked memory ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)). Locking needs no capability once the limit allows it. |
 | `UMask=0077` | Any file the service creates without an explicit mode is its own alone. Files that need another mode set it explicitly: the log file `0640`, request sockets `0666`. |
@@ -324,6 +328,15 @@ instance without a drop-in has no `ListenStream=` and fails to start, so a liste
   it names, so the socket is listening when the service starts.
 - **No `PartOf=`**. Restarting the service must leave the socket open, or the port would be free for the restart.
 - **`WantedBy=sockets.target`** binds the socket at boot.
+- **systemd's default trigger limit stays.** While the service is not running, more than 20 connections in 2 s fail
+  the socket unit with `trigger-limit-hit`, which closes its port. On Debian 12 (systemd 252) the limit did not fire
+  for a service that fails at every start, as in a crash or log-write failure loop: the service waits in
+  auto-restart, and connections meanwhile do not count as triggers. It fired only for a service that exits 0 at once,
+  because `Restart=on-failure` does not restart a clean exit, so each connection starts it again. `serve` exits 0 only
+  on SIGTERM or SIGINT, and sending those over and over takes root or the service account. With
+  `TriggerLimitIntervalSec=0` the port stayed held in that case, but systemd started the service 368 times in 10 s,
+  and the loop never ends, because the connections stay in the backlog. The template keeps the default: an endless
+  busy loop is a worse cost than a released port that only root or the service account can cause.
 - **Unix sockets** use `ListenStream=/run/iron-vault/<name>.sock`. systemd's default `SocketMode=0666` and
   `SocketUser=root` are what the service accepts for an adopted socket file.
 - **An address that appears after boot**, such as an isolated Docker network's bridge address, needs `FreeBind=yes`
@@ -380,6 +393,24 @@ This releases the listeners' ports. Another local process can then bind a TCP po
 callers keep sending to it. Stop the callers first, or rotate the caller tokens of the callers on TCP listeners
 afterwards. To bring the service back, start each `iron-vault-listener@<name>.socket`, then `iron-vault`, then unlock.
 
+### When systemd releases a port
+
+systemd keeps a listener's port through service restarts and crash loops. It releases the port, so that another local
+process can bind it and collect the caller tokens that callers keep sending, only when:
+
+- **a socket unit fails to bind at boot**, for example because another process holds the port, or an address that
+  appears after boot has no `FreeBind=yes`. The service never binds a TCP port itself, so the port stays free until
+  someone notices;
+- **the package is removed**: `prerm` stops the listener sockets ([Remove](#remove)). The vault and config are kept,
+  so tokens collected in between stay valid after a reinstall;
+- **an administrator stops a listener socket**, as in [Stopping the service](#stopping-the-service);
+- **the trigger limit fires** while the service keeps exiting cleanly, which takes root or the service account
+  ([above](#listener-socket-units)).
+
+The owner checks `systemctl --failed` after each boot and stops the callers before `apt remove`. If callers kept
+sending while a port was free, the owner rotates their tokens: new ones from `iron-vault caller-token`, and an approved
+config with the new `token_hash` lines.
+
 ## Lifecycle
 
 The maintainer scripts follow the dpkg contract
@@ -427,7 +458,9 @@ dpkg then removes the binary, the units and the `sysusers.d` and `tmpfiles.d` fi
 - the `iron-vault` account.
 
 A later install finds the vault and its config where they were and starts Locked. The administrator enables each
-listener socket unit again. `/run/iron-vault` is on a tmpfs and goes at the next boot.
+listener socket unit again. The listeners' ports are free in between, and the caller tokens stay valid
+([When systemd releases a port](#when-systemd-releases-a-port)). `/run/iron-vault` is on a tmpfs and goes at the
+next boot.
 
 ### Purge
 
@@ -536,8 +569,9 @@ from this file, then checks the service's account, locked memory, core limit and
 account nor the service account can use the admin socket, that the test account cannot reach `/proc/<pid>/mem`,
 `/proc/<pid>/environ` or the vault, that a group-writable `/etc/iron-vault` stops a `systemctl restart` (a reboot would
 repair it), that a second `serve` fails on the state lock, and that a listener socket unit keeps its port across a
-service restart. It refuses to run without `--i-know-this-is-a-disposable-vm`. The refusal of the group-writable
-directory is read from the journal, because the service's startup error goes to stderr.
+service restart and stays active through seven crashes, past systemd's default start limit. It refuses to run
+without `--i-know-this-is-a-disposable-vm`. The refusal of the group-writable directory is read from the journal,
+because the service's startup error goes to stderr.
 
 ## Admin access
 

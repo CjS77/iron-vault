@@ -211,6 +211,11 @@ The service serves on a passed socket only if an approved listener of the same n
 a socket unit can remove a listener but never widen one. To remove a listener, approve a config without it, then run
 `sudo systemctl disable --now iron-vault-listener@loopback.socket`.
 
+systemd keeps the port through service restarts and crash loops. A socket that fails to bind at boot, for example
+because another process took the port first, leaves the port free, and a process holding it can collect the caller
+tokens your callers send. Check `systemctl --failed` after each boot. If a listener socket was down while callers kept
+sending, rotate their tokens as under [Stop the service](#stop-the-service).
+
 ## Stop the service
 
 `sudo systemctl stop iron-vault` stops the service only until a caller connects. systemd keeps listening on each
@@ -254,6 +259,10 @@ they keep their ports through the upgrade. The vault and config are not touched.
 `sudo apt remove iron-vault` stops the service, stops and disables the listener instances, and removes the program. It
 keeps `/etc/iron-vault`, `/var/lib/iron-vault`, `/var/log/iron-vault`, the listener drop-ins and the `iron-vault` account,
 so a later install opens the same vault and starts Locked. Enable each listener socket unit again after reinstalling.
+
+Removing the package releases the listener ports, and the caller tokens stay valid for the reinstall. Stop your callers
+before `apt remove`. If any kept sending to a TCP listener while the package was removed, rotate their tokens as under
+[Stop the service](#stop-the-service).
 
 `sudo apt purge iron-vault` deletes `/etc/iron-vault` (the published config and signature, and any TLS files you put
 there), `/var/log/iron-vault` and the listener drop-ins under `/etc/systemd/system/iron-vault-listener@*.socket.d`. It then
