@@ -3,7 +3,7 @@
 //! for it alone, and a later `config approve` that routes through the new credential. Every test's log goes to one
 //! captured buffer at TRACE, which must never hold a secret, username or password typed at a prompt.
 //!
-//! Each test builds a vault holding `fx_key`, pins a software approver whose key is sealed in `approver.age`, and
+//! Each test builds a vault holding `fx_key`, pins a software approver whose key is sealed in its approver key envelope, and
 //! approves the base config through the store, then releases both locks so the service takes them.
 
 #![cfg(target_os = "linux")]
@@ -111,11 +111,9 @@ impl Fixture {
             .unwrap();
         let (key, pinned) = SoftwareSigner::generate().unwrap();
         let sealed = seal_signer_key_for_tests(&key, &approval_passphrase()).unwrap();
-        write_signer_key(&lock, &OsFs, &sealed).unwrap();
-        vault
-            .create_approval_state(&lock, &OsFs, PinnedApprover::for_tests(pinned))
-            .unwrap()
-            .0
+        let approver = PinnedApprover::for_tests(pinned);
+        write_signer_key(&lock, &OsFs, approver.id(), &sealed).unwrap();
+        vault.create_approval_state(&lock, &OsFs, approver).unwrap().0
     }
 
     fn approve_through_store(&self, state: &mut ApprovalState, config: &str) {
@@ -128,7 +126,7 @@ impl Fixture {
             identity: &identity,
             fs: &OsFs,
         };
-        let envelope = iron_vault_store::read_signer_key(&state_dir, &OsFs).unwrap();
+        let envelope = iron_vault_store::read_signer_key(&state_dir, &OsFs, state.approvers()[0].id()).unwrap();
         let signer = open_signer_key(&envelope, &approval_passphrase(), state.approvers()).unwrap();
         let holder = SnapshotHolder::refusing(UnavailableReason::Checking);
         let pending = PendingConfig::write(&storage, config.as_bytes().to_vec()).unwrap();

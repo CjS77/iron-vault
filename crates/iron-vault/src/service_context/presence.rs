@@ -20,7 +20,7 @@ pub struct OwnerPresence(());
 /// Which check of the approver key refused, kept apart so the audit event can name it without the error's text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DenialKind {
-    /// The passphrase does not open `approver.age`.
+    /// The passphrase does not open the asked approver's key envelope.
     WrongPassphrase,
     /// The key inside opened, but it is not the asked approver's.
     KeyMismatch,
@@ -39,7 +39,7 @@ impl DenialKind {
 /// Why the approval passphrase check did not pass. Neither message holds anything the owner typed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PresenceRefusal {
-    /// The passphrase does not open `approver.age`, or the key inside is not the asked approver's.
+    /// The passphrase does not open the asked approver's key envelope, or the key inside is not the asked approver's.
     #[error("the approval passphrase does not open the approver key")]
     Denied(DenialKind),
     /// The approver key could not be read, or the check did not finish.
@@ -58,8 +58,8 @@ pub(super) fn asked_approver(approvers: &[PinnedApprover]) -> Result<&PinnedAppr
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Opens `approver.age` with `passphrase` as the signer of `approver`, on the blocking pool, since scrypt holds a
-    /// thread for seconds. A wrong passphrase, or a key that is not `approver`'s, is [`PresenceRefusal::Denied`].
+    /// Opens `approver`'s own key envelope, `approver-<approver ID>.age`, with `passphrase` as its signer, on the
+    /// blocking pool, since scrypt holds a thread for seconds. A wrong passphrase, or a key that is not `approver`'s, is [`PresenceRefusal::Denied`].
     ///
     /// The task owns the passphrase and drops it when it ends. If this future is dropped first, the task still ends and
     /// drops the signer it opened.
@@ -70,7 +70,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     ) -> Result<SoftwareSigner, PresenceRefusal> {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let opened = tokio::task::spawn_blocking(move || {
-            let envelope = read_signer_key(&locks.state, &setup.fs).map_err(|error| PresenceRefusal::Unavailable(error.to_string()))?;
+            let envelope =
+                read_signer_key(&locks.state, &setup.fs, approver.id()).map_err(|error| PresenceRefusal::Unavailable(error.to_string()))?;
             open_signer_key(&envelope, &passphrase, std::slice::from_ref(&approver)).map_err(denied_or_unavailable)
         });
         opened

@@ -203,7 +203,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         &self.approver
     }
 
-    /// Opens `approver.age` with `passphrase` as the signer of the asked approver, through the check owner presence
+    /// Opens the asked approver's own key envelope with `passphrase` as its signer, through the check owner presence
     /// makes too. A wrong passphrase, or a key that is not the asked approver's, is [`ApprovalEnd::Denied`], with no
     /// fall-through to another approver; a check that cannot run or does not finish refuses the approval before anything
     /// is reserved.

@@ -74,14 +74,15 @@ async fn a_wrong_passphrase_is_refused_and_writes_nothing() {
 }
 
 #[tokio::test]
-async fn a_key_that_is_not_the_pinned_approver_is_refused_and_writes_nothing() {
+async fn a_key_file_swapped_with_another_approvers_is_refused_and_writes_nothing() {
     let logs = captured_logs();
     let fixture = Fixture::new().await;
+    let approver = fixture.approver_id();
     let service = fixture.ready().await;
     add_unused(&service).await;
     let (other, _) = SoftwareSigner::generate().unwrap();
     let sealed = seal_signer_key_for_tests(&other, &approval_passphrase(APPROVAL_PASSPHRASE)).unwrap();
-    fs::write(fixture.path("state/approver.age"), sealed).unwrap();
+    fs::write(fixture.path(&format!("state/approver-{approver}.age")), sealed).unwrap();
     let before = approval_bytes(&fixture);
     let plan = service.plan_vault_change(remove("old_key")).await.unwrap();
 

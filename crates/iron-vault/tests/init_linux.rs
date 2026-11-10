@@ -41,8 +41,8 @@ use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::{Capabilities, CredentialKind};
 use iron_vault_store::{
-    ApprovalPassphrase, INITIAL_CONFIG, InitPassphrases, NewVaultKeys, OsFs, Passphrase, RecoveryKeySecret, SealingKeys, UnlockError,
-    UtcSecond, UtcSecondError, VaultId, unwrap_identity,
+    ApprovalEnvelope, ApprovalPassphrase, INITIAL_CONFIG, InitPassphrases, NewVaultKeys, OsFs, Passphrase, RecoveryKeySecret, SealingKeys,
+    UnlockError, UtcSecond, UtcSecondError, VaultId, unwrap_identity,
 };
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -727,6 +727,17 @@ async fn a_peer_that_is_not_an_admin_principal_is_refused_and_nothing_is_written
 }
 
 /// The token caller's `GET /rates/latest` through the Unix listener.
+/// The names in the state directory that start `approver`, sorted, so a stray `approver.age` shows too.
+fn approver_key_files(fixture: &Fixture) -> Vec<String> {
+    let mut names: Vec<_> = fs::read_dir(fixture.path("state"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.starts_with("approver"))
+        .collect();
+    names.sort();
+    names
+}
+
 async fn get_rates(fixture: &Fixture) -> Response {
     let request = CallerRequest::get("/rates/latest").signed(Via::Unix);
     let mut stream = UnixStream::connect(fixture.socket()).await.unwrap();
@@ -770,6 +781,12 @@ async fn init_unlock_add_and_approve_lead_to_a_request_carrying_the_secret() {
     assert!(
         matches!(approved.response, AdminResponse::ConfigApprove(ref result) if result.version == 2),
         "{approved:?}"
+    );
+    let signature = ApprovalEnvelope::decode(&fs::read(fixture.path("etc/config.toml.sig")).unwrap()).unwrap();
+    assert_eq!(
+        approver_key_files(&fixture),
+        [format!("approver-{}.age", signature.approver_id())],
+        "init's approver signed version 2 from its own key file"
     );
 
     assert_eq!(get_rates(&fixture).await.status, 200);

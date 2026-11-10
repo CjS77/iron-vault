@@ -155,6 +155,20 @@ fn assert_initialized(dirs: &Dirs, fs: &impl StoreFs, initialized: &InitializedV
     let recovered = recover_approval(&dirs.config, fs, &approval).unwrap();
     assert_eq!(recovered.published().approval().version(), ApprovalVersion::FIRST);
     assert_eq!(recovered.published().config(), INITIAL_CONFIG);
+    let pinned = StateFileName::approver_key(approval.approvers()[0].id());
+    assert_eq!(approver_keys(dirs, fs), [pinned.as_str()]);
+}
+
+/// The names in the state directory that start `approver`, sorted, `approver.age` included.
+fn approver_keys(dirs: &Dirs, fs: &impl StoreFs) -> Vec<String> {
+    let mut names: Vec<_> = fs
+        .list_dir(dirs.state.dir())
+        .unwrap()
+        .iter()
+        .filter_map(|n| n.to_str().filter(|n| n.starts_with("approver")).map(str::to_owned))
+        .collect();
+    names.sort();
+    names
 }
 
 /// The inventory opens with the vault identity, holds the `operational` and `recovery` entries with their default
@@ -219,9 +233,10 @@ fn no_file_mixes_recipient_kinds() {
     assert_eq!(identity.iter().filter(|k| **k == StanzaKind::X25519).count(), 2, "{identity:?}");
     assert_eq!(identity.iter().filter(|k| **k == StanzaKind::Grease).count(), 1, "{identity:?}");
     assert!(identity.iter().all(StanzaKind::is_x25519_or_grease), "{identity:?}");
-    [StateFileName::passphrase_envelope(), StateFileName::approver_key()]
-        .iter()
-        .for_each(|file| assert_eq!(kinds(file.as_str()), [StanzaKind::Scrypt], "{file}"));
+    [StateFileName::passphrase_envelope().as_str().to_owned()]
+        .into_iter()
+        .chain(approver_keys(&dirs, &OsFs))
+        .for_each(|file| assert_eq!(kinds(&file), [StanzaKind::Scrypt], "{file}"));
 }
 
 /// A host unlock identity is a third recipient: `identity.age` has three X25519 stanzas, the operational, recovery and
@@ -337,23 +352,24 @@ fn an_unfinished_initialization_is_discarded_and_started_over() {
     let error = dirs.init(&fs).unwrap_err();
     assert_eq!(error.step(), InitStep::Finish);
     assert_eq!(dirs.read(&fs), InitializationState::Unfinished);
+    let expected = discarded(&dirs, &fs);
     let (result, secrets) = dirs.init_keeping(&fs);
     let initialized = result.unwrap();
-    assert_eq!(initialized.discarded, DISCARDED);
+    assert_eq!(initialized.discarded, expected);
     assert_initialized(&dirs, &fs, &initialized, &secrets);
 }
 
-/// What the discard of a run that failed only at its commit point removes, in order.
-const DISCARDED: [&str; 8] = [
-    "config.toml.sig",
-    "config.toml",
-    "approval.age",
-    "manifest.age",
-    "approver.age",
-    "operational.age",
-    "recipients.age",
-    "identity.age",
-];
+/// What the discard of a run that failed only at its commit point removes, in order, its one approver key included.
+fn discarded(dirs: &Dirs, fs: &impl StoreFs) -> Vec<String> {
+    let [approver_key] = approver_keys(dirs, fs).try_into().unwrap();
+    assert!(approver_key.starts_with("approver-"), "{approver_key}");
+    ["config.toml.sig", "config.toml", "approval.age", "manifest.age"]
+        .into_iter()
+        .map(str::to_owned)
+        .chain([approver_key])
+        .chain(["operational.age", "recipients.age", "identity.age"].map(str::to_owned))
+        .collect()
+}
 
 #[test]
 fn a_step_failing_after_a_discard_still_names_the_discarded_files() {
@@ -361,10 +377,11 @@ fn a_step_failing_after_a_discard_still_names_the_discarded_files() {
     let fs = dirs.fault_fs();
     fail_finish_unlink(&dirs, &fs);
     assert!(dirs.init(&fs).unwrap_err().discarded().is_empty());
+    let expected = discarded(&dirs, &fs);
     fs.fail_first(FsOp::Rename, io::ErrorKind::Other);
     let error = dirs.init(&fs).unwrap_err();
     assert_eq!(error.step(), InitStep::IdentityEnvelope);
-    assert_eq!(error.discarded(), DISCARDED);
+    assert_eq!(error.discarded(), expected);
 }
 
 /// The store reports the first approval to the service, which records its events; the store logs none of them.

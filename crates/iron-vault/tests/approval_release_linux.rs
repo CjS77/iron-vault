@@ -266,9 +266,9 @@ fn rotate_approver(fixture: &Fixture) -> (ApproverId, ApproverId) {
     let mut state = load_state(&lock, &OsFs);
     let (key, pinned) = SoftwareSigner::generate().unwrap();
     let sealed = iron_vault_store::seal_signer_key_for_tests(&key, &approval_passphrase(APPROVAL_PASSPHRASE)).unwrap();
-    write_signer_key(&lock, &OsFs, &sealed).unwrap();
     let old = state.approvers()[0].id();
     let rotated = ApproverId::generate();
+    write_signer_key(&lock, &OsFs, rotated, &sealed).unwrap();
     let approver = PinnedApprover::software_for_tests(rotated, pinned, ApproverLabel::new("rotated").unwrap(), UtcSecond::EPOCH);
     state.enroll_approver(&lock, &OsFs, &identity(), approver).unwrap();
     state.remove_approver(&lock, &OsFs, &identity(), old).unwrap();

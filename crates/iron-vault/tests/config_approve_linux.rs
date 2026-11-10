@@ -2,7 +2,7 @@
 //! §16): the summary as notices, the confirmation, the approval passphrase, then the transaction, the admission pause
 //! and the config check. Every test's log goes to one captured buffer, which must never hold an approval passphrase.
 //!
-//! Each test builds a vault holding `fx_key`, pins a software approver whose key is sealed in `approver.age` under
+//! Each test builds a vault holding `fx_key`, pins a software approver whose key is sealed in its approver key envelope under
 //! [`APPROVAL_PASSPHRASE`], and approves the base config through the store, then releases both locks so the service
 //! takes them. The service account is the test's own uid.
 

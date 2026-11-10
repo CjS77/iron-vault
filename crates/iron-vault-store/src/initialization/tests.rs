@@ -12,6 +12,12 @@ use crate::{
     unlock_with_passphrase, wrap_identity, write_pending, write_staged,
 };
 
+/// The approver key envelope the crash points write, as `init` names its approver's.
+const APPROVER_KEY: &str = "approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age";
+
+/// A second approver's key envelope.
+const OTHER_APPROVER_KEY: &str = "approver-3f2a9b1c-7d4e-4a8b-b6c5-0e1d2c3b4a59.age";
+
 /// Locked state and config directories. The locks are real; the files live wherever the `fs` passed to each call puts them.
 struct Dirs {
     state_dir: TestDir,
@@ -79,7 +85,7 @@ impl Dirs {
             0 => self.put_bytes(fs, "init.unfinished", b""),
             1 => self.put(fs, "identity.age"),
             2 => self.put(fs, "operational.age"),
-            3 => self.put(fs, "approver.age"),
+            3 => self.put(fs, APPROVER_KEY),
             4 => self.put(fs, "manifest.age"),
             5 => self.put(fs, "approval.age"),
             6 => self.put_config(fs, Pending, INITIAL_CONFIG),
@@ -175,7 +181,7 @@ fn vault_files_without_the_marker_or_a_manifest_are_unrecognized() {
     [
         "identity.age",
         "operational.age",
-        "approver.age",
+        APPROVER_KEY,
         "approval.age",
         "record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age",
     ]
@@ -302,6 +308,45 @@ fn a_foreign_file_beside_the_marker_or_without_a_manifest_is_unrecognized() {
 }
 
 #[test]
+fn a_second_approver_key_beside_the_marker_is_unrecognized() {
+    let dirs = Dirs::new("init-two-approver-keys");
+    dirs.crashed_after(&OsFs, 3);
+    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished);
+    dirs.put(&OsFs, OTHER_APPROVER_KEY);
+    let error = ensure_initializable(&dirs.state, &dirs.config, &OsFs).unwrap_err();
+    assert_eq!(
+        error,
+        InitStateError::Unrecognized {
+            files: vec![OTHER_APPROVER_KEY.to_owned(), APPROVER_KEY.to_owned()]
+        }
+    );
+}
+
+#[test]
+fn approver_keys_beside_a_manifest_are_not_foreign_files() {
+    let dirs = Dirs::new("init-approver-keys-vault");
+    Vault::create(&dirs.state, &OsFs, VaultIdentity::generate()).unwrap();
+    [APPROVER_KEY, OTHER_APPROVER_KEY].iter().for_each(|file| dirs.put(&OsFs, file));
+    dirs.put(&OsFs, "approver.age");
+    assert_eq!(
+        require_initialized(&dirs.state, &dirs.config, &OsFs),
+        Ok(vec!["approver.age".to_owned()])
+    );
+}
+
+#[test]
+fn a_misspelt_approver_key_beside_the_marker_is_foreign() {
+    ["approver.age", "approver-8D1C6F0E-2B7A-4C59-9E3D-5A4B3C2D1E0F.age"]
+        .iter()
+        .for_each(|file| {
+            let dirs = Dirs::new("init-misspelt-approver-key");
+            dirs.crashed_after(&OsFs, 2);
+            dirs.put(&OsFs, file);
+            assert_eq!(dirs.read(&OsFs), InitializationState::Unrecognized, "{file}");
+        });
+}
+
+#[test]
 fn a_record_file_beside_the_marker_is_unrecognized() {
     let dirs = Dirs::new("init-record");
     dirs.crashed_after(&OsFs, 4);
@@ -409,7 +454,7 @@ fn begin_names_what_it_removed_config_first() {
             "config.toml",
             "approval.age",
             "manifest.age",
-            "approver.age",
+            APPROVER_KEY,
             "operational.age",
             "identity.age"
         ]

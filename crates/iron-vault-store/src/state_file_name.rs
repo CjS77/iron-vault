@@ -2,6 +2,9 @@
 
 use std::fmt;
 
+use uuid::Uuid;
+
+use crate::ApproverId;
 use crate::record_id::RecordId;
 
 /// Name of the lock file, which no store write may touch in any letter case.
@@ -75,9 +78,18 @@ impl StateFileName {
         Self("recipients.age.staged".to_owned())
     }
 
-    /// The approver key envelope's file, `approver.age`.
-    pub fn approver_key() -> Self {
-        Self("approver.age".to_owned())
+    /// The approver key envelope's file for the software approver `id`: `approver-<id>.age`, the ID in lowercase
+    /// hyphenated form. Its text uses only `[0-9a-f-]`, so the name always passes [`StateFileName::new`].
+    pub fn approver_key(id: ApproverId) -> Self {
+        Self(format!("approver-{id}.age"))
+    }
+
+    /// The approver ID `name` is the approver key envelope of, if it is exactly [`StateFileName::approver_key`] of a
+    /// version 4 UUID. Any other spelling of an ID, such as upper case, names no approver key.
+    pub(crate) fn approver_key_id(name: &str) -> Option<ApproverId> {
+        let uuid = Uuid::try_parse(name.strip_prefix("approver-")?.strip_suffix(".age")?).ok()?;
+        let id = ApproverId::from_bytes(uuid.into_bytes()).ok()?;
+        (Self::approver_key(id).as_str() == name).then_some(id)
     }
 
     /// The empty file `init.unfinished`, which marks a vault initialization that has not finished.
@@ -173,7 +185,6 @@ mod tests {
             StateFileName::new("recipients.age.staged"),
             Ok(StateFileName::staged_recipient_inventory())
         );
-        assert_eq!(StateFileName::new("approver.age"), Ok(StateFileName::approver_key()));
         assert_eq!(
             StateFileName::new("init.unfinished"),
             Ok(StateFileName::unfinished_initialization())
@@ -186,6 +197,30 @@ mod tests {
         (0..32).map(|_| StateFileName::record(&RecordId::new_random())).for_each(|name| {
             assert_eq!(StateFileName::new(name.as_str()).as_ref(), Ok(&name));
         });
+    }
+
+    #[test]
+    fn approver_key_names_carry_the_lowercase_hyphenated_id() {
+        let id = ApproverId::from_bytes(*Uuid::parse_str("8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f").unwrap().as_bytes()).unwrap();
+        let name = StateFileName::approver_key(id);
+        assert_eq!(name.as_str(), "approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age");
+        assert_eq!(StateFileName::new(name.as_str()).as_ref(), Ok(&name));
+        assert_eq!(StateFileName::approver_key_id(name.as_str()), Some(id));
+    }
+
+    #[test]
+    fn approver_key_id_rejects_other_names() {
+        [
+            "approver.age",
+            "approver-.age",
+            "approver-8D1C6F0E-2B7A-4C59-9E3D-5A4B3C2D1E0F.age",
+            "approver-8d1c6f0e2b7a4c599e3d5a4b3c2d1e0f.age",
+            "approver-8d1c6f0e-2b7a-1c59-9e3d-5a4b3c2d1e0f.age",
+            "approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age.tmp",
+            "record-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age",
+        ]
+        .iter()
+        .for_each(|n| assert_eq!(StateFileName::approver_key_id(n), None, "{n:?}"));
     }
 
     #[test]

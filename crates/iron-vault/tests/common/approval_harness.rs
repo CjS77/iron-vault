@@ -103,7 +103,7 @@ impl Fixture {
         fixture
     }
 
-    /// The vault, `approver.age` and the approval state pinning its key.
+    /// The vault, its approver key envelope and the approval state pinning its key.
     pub fn create_vault(&self) -> ApprovalState {
         let lock = self.state_lock();
         let mut vault = Vault::create(&lock, &OsFs, identity()).unwrap();
@@ -113,11 +113,9 @@ impl Fixture {
         vault.add(&lock, &OsFs, "fx_key".parse().unwrap(), material, origins).unwrap();
         let (key, pinned) = SoftwareSigner::generate().unwrap();
         let sealed = seal_signer_key_for_tests(&key, &approval_passphrase(APPROVAL_PASSPHRASE)).unwrap();
-        write_signer_key(&lock, &OsFs, &sealed).unwrap();
-        vault
-            .create_approval_state(&lock, &OsFs, PinnedApprover::for_tests(pinned))
-            .unwrap()
-            .0
+        let approver = PinnedApprover::for_tests(pinned);
+        write_signer_key(&lock, &OsFs, approver.id(), &sealed).unwrap();
+        vault.create_approval_state(&lock, &OsFs, approver).unwrap().0
     }
 
     /// The ID of the one approver the vault pins. Read under the state-directory lock, so call it before the service
@@ -143,7 +141,7 @@ impl Fixture {
             identity: &identity,
             fs: &OsFs,
         };
-        let envelope = iron_vault_store::read_signer_key(&state_dir, &OsFs).unwrap();
+        let envelope = iron_vault_store::read_signer_key(&state_dir, &OsFs, state.approvers()[0].id()).unwrap();
         let signer = open_signer_key(&envelope, &approval_passphrase(APPROVAL_PASSPHRASE), state.approvers()).unwrap();
         let holder = SnapshotHolder::refusing(UnavailableReason::Checking);
         let pending = PendingConfig::write(&storage, config.as_bytes().to_vec()).unwrap();

@@ -42,10 +42,10 @@ const MAX_NAMED: usize = 5;
 /// What the state and config directories hold, read without the vault identity.
 ///
 /// The checks run in this order and the first that matches decides: `init.unfinished` present (Unfinished, unless a
-/// record file, a foreign file or a config file that is not the initial config is there), else `manifest.age` present
-/// (Initialized, whatever else is there), else only the lock file, `lost+found`, temp files and a recovery check record
-/// (`recovery.toml`) and no config file (Uninitialized), else Unrecognized. `init` proceeds only on Uninitialized and
-/// Unfinished.
+/// record file, a foreign file, a second approver key envelope or a config file that is not the initial config is there),
+/// else `manifest.age` present (Initialized, whatever else is there), else only the lock file, `lost+found`, temp files
+/// and a recovery check record (`recovery.toml`) and no config file (Uninitialized), else Unrecognized. `init` proceeds
+/// only on Uninitialized and Unfinished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitializationState {
     /// Nothing of a vault or its config is there.
@@ -234,6 +234,8 @@ enum Entry {
     Manifest,
     /// Another file an initialization writes.
     InitFile,
+    /// An approver key envelope, `approver-<approver ID>.age`: an initialization writes one.
+    ApproverKey,
     /// `recovery.toml`: part of the vault beside a manifest, removed by the discard, and never a foreign file.
     RecoveryRecord,
     /// `recipients.age.staged`: part of the vault beside a manifest. `init` never writes it, so anywhere else it is foreign.
@@ -273,17 +275,36 @@ impl Survey {
 
 /// The files a discard removes from the state directory, in order: a recovery check record, which beside the marker was
 /// left by an earlier vault and was not written after this one was initialized, then what an initialization writes
-/// except the marker.
-fn written_files() -> [StateFileName; 7] {
+/// except the marker. `approver_keys` are the approver key envelopes present; the name holds an approver ID generated
+/// with the keys, so it is known only from the listing.
+fn written_files(approver_keys: impl IntoIterator<Item = StateFileName>) -> Vec<StateFileName> {
     [
         StateFileName::recovery_check_record(),
         StateFileName::approval_state(),
         StateFileName::manifest(),
-        StateFileName::approver_key(),
+    ]
+    .into_iter()
+    .chain(approver_keys)
+    .chain([
         StateFileName::passphrase_envelope(),
         StateFileName::recipient_inventory(),
         StateFileName::identity_envelope(),
-    ]
+    ])
+    .collect()
+}
+
+/// The approver key envelopes in the state directory, sorted.
+fn approver_keys(state: &StateDirLock, fs: &impl StoreFs) -> Result<Vec<StateFileName>, InitStateError> {
+    let listing = fs
+        .list_dir(state.dir())
+        .map_err(|e| InitStateError::ListStateDir { kind: e.kind() })?;
+    let mut keys: Vec<_> = listing
+        .iter()
+        .filter_map(|name| StateFileName::approver_key_id(name.to_str()?))
+        .map(StateFileName::approver_key)
+        .collect();
+    keys.sort();
+    Ok(keys)
 }
 
 fn classify(name: &OsStr) -> Entry {
@@ -296,7 +317,8 @@ fn classify(name: &OsStr) -> Entry {
         Ok(file) if file == StateFileName::manifest() => Entry::Manifest,
         Ok(file) if file == StateFileName::recovery_check_record() => Entry::RecoveryRecord,
         Ok(file) if file == StateFileName::staged_recipient_inventory() => Entry::StagedInventory,
-        Ok(file) if written_files().contains(&file) => Entry::InitFile,
+        Ok(file) if written_files(None).contains(&file) => Entry::InitFile,
+        Ok(file) if StateFileName::approver_key_id(file.as_str()).is_some() => Entry::ApproverKey,
         Ok(file) if is_record_file_name(file.as_str()) => Entry::Record,
         _ => Entry::Foreign,
     }
@@ -310,7 +332,13 @@ fn survey(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Re
     let has = |wanted: Entry| entries.iter().any(|(kind, _)| *kind == wanted);
     let names_where = |keep: fn(Entry) -> bool| entries.iter().filter(move |(k, _)| keep(*k)).map(|(_, n)| n.clone());
     if has(Entry::Marker) {
+        // An initialization writes one approver key envelope, so a second is not its own.
+        let extra_keys = match names_where(|k| k == Entry::ApproverKey).count() {
+            0 | 1 => Vec::new(),
+            _ => names_where(|k| k == Entry::ApproverKey).collect(),
+        };
         let blockers = names_where(|k| matches!(k, Entry::Record | Entry::Foreign | Entry::StagedInventory))
+            .chain(extra_keys)
             .chain(config_test_failures(config, fs)?)
             .collect();
         return Ok(Survey::new(InitializationState::Unfinished, blockers));
@@ -376,7 +404,7 @@ fn discard(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> R
     let config_files = DISCARD_ORDER
         .into_iter()
         .map(|name| (name.to_string(), config_removal(remove_config_file(config, fs, name))));
-    let state_files = written_files()
+    let state_files = written_files(approver_keys(state, fs)?)
         .into_iter()
         .map(|file| (file.to_string(), state_removal(durable_remove(state, fs, &file))));
     let mut discarded = Vec::new();

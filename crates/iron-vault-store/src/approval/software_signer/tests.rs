@@ -55,12 +55,17 @@ fn a_signed_approval_verifies_against_the_committed_state() {
     let lock = StateDirLock::acquire(dir.path()).unwrap();
     let (fs, identity) = (OsFs, VaultIdentity::generate());
     let (envelope, pinned) = sealed("approve me");
-    write_signer_key(&lock, &fs, &envelope).unwrap();
+    write_signer_key(&lock, &fs, pinned[0].id(), &envelope).unwrap();
     crate::manifest::tests::write_first_manifest(&lock, &fs, &identity);
     let mut state = ApprovalState::create(&lock, &fs, &identity, pinned[0].clone()).unwrap();
     let version = state.reserve(&lock, &fs, &identity).unwrap();
 
-    let signer = open_signer_key(&read_signer_key(&lock, &fs).unwrap(), &approval_passphrase("approve me"), &pinned).unwrap();
+    let signer = open_signer_key(
+        &read_signer_key(&lock, &fs, pinned[0].id()).unwrap(),
+        &approval_passphrase("approve me"),
+        &pinned,
+    )
+    .unwrap();
     assert_eq!(
         (signer.algorithm(), signer.public_key()),
         (SignatureAlgorithm::Ed25519, *pinned[0].public_key())

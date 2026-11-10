@@ -43,13 +43,13 @@ pub enum InitStep {
     IdentityEnvelope,
     /// Step 3: writing `operational.age`.
     PassphraseEnvelope,
-    /// Step 4: writing `approver.age`.
+    /// Step 4: writing the approver key envelope, `approver-<approver ID>.age`.
     ApproverKey,
     /// Step 5: creating the vault's manifest.
     Manifest,
     /// Step 6: creating the approval state and recording it in the manifest.
     ApprovalState,
-    /// Step 7: opening `approver.age` as read back.
+    /// Step 7: opening the approver key envelope as read back.
     OpenSigner,
     /// Step 8: approving the initial config as version 1.
     FirstApproval,
@@ -297,12 +297,12 @@ fn write_vault<F: StoreFs>(
     let recipients = write_checked_identity(state, fs, (&vault, vault_id), (&operational, recovery, host_unlock), enrolled_at)
         .map_err(at(InitStep::IdentityEnvelope))?;
     seal_operational(state, fs, operational, passphrase, log_n).map_err(at(InitStep::PassphraseEnvelope))?;
-    seal_approver(state, fs, signer, &approval_passphrase, log_n).map_err(at(InitStep::ApproverKey))?;
+    seal_approver(state, fs, (approver_id, signer), &approval_passphrase, log_n).map_err(at(InitStep::ApproverKey))?;
     let mut created = Vault::create_with_id(state, fs, vault, vault_id).map_err(at(InitStep::Manifest))?;
     let (mut approval, _) = pin_software_signer(approver_id, approver, enrolled_at)
         .and_then(|approver| Ok(created.create_approval_state(state, fs, approver)?))
         .map_err(at(InitStep::ApprovalState))?;
-    let signer = open_signer(state, fs, approval_passphrase, &approval).map_err(at(InitStep::OpenSigner))?;
+    let signer = open_signer(state, fs, (approver_id, approval_passphrase), &approval).map_err(at(InitStep::OpenSigner))?;
     let storage = ApprovalStorage {
         state_dir: state,
         config_dir: config,
@@ -409,15 +409,15 @@ fn seal_operational(
     Ok(write_passphrase_envelope(state, fs, &seal_at(&operational, &passphrase, log_n)?)?)
 }
 
-/// Step 4. The signer key is dropped on return.
+/// Step 4: writes the signer key under the approver ID it will be pinned with. The key is dropped on return.
 fn seal_approver(
     state: &StateDirLock,
     fs: &impl StoreFs,
-    signer: SoftwareSignerKey,
+    (id, signer): (ApproverId, SoftwareSignerKey),
     passphrase: &ApprovalPassphrase,
     log_n: u8,
 ) -> Result<(), InitFailure> {
-    Ok(write_signer_key(state, fs, &seal_signer_key_at(&signer, passphrase, log_n)?)?)
+    Ok(write_signer_key(state, fs, id, &seal_signer_key_at(&signer, passphrase, log_n)?)?)
 }
 
 /// The label `init` pins the software signer under: the owner knows it as the approval passphrase.
@@ -431,14 +431,19 @@ fn pin_software_signer(id: ApproverId, key: ApproverPublicKey, enrolled_at: UtcS
     PinnedApprover::new(id, SignerKind::Software, key, label, enrolled_at).map_err(|error| VaultError::ApprovalState(error).into())
 }
 
-/// Step 7: proves `approver.age` as written opens with the approval passphrase, which is dropped on return.
+/// Step 7: proves the approver key envelope of `id` as written opens with the approval passphrase, which is dropped on
+/// return.
 fn open_signer(
     state: &StateDirLock,
     fs: &impl StoreFs,
-    passphrase: ApprovalPassphrase,
+    (id, passphrase): (ApproverId, ApprovalPassphrase),
     approval: &ApprovalState,
 ) -> Result<SoftwareSigner, InitFailure> {
-    Ok(open_signer_key(&read_signer_key(state, fs)?, &passphrase, approval.approvers())?)
+    Ok(open_signer_key(
+        &read_signer_key(state, fs, id)?,
+        &passphrase,
+        approval.approvers(),
+    )?)
 }
 
 /// What step 8 committed.

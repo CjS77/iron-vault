@@ -1,4 +1,5 @@
-//! The software signer: an Ed25519 approval key kept in `approver.age` under the approval passphrase (spec §12).
+//! The software signer: an Ed25519 approval key kept in its approver key envelope,
+//! `approver-<approver ID>.age`, under the approval passphrase (spec §12).
 //!
 //! The private key is decrypted only inside the service, for one approval, and dropped with the signer; nothing here
 //! keeps a global or cached signer. The file is written and read by the same scrypt envelope code as the passphrase
@@ -14,7 +15,9 @@ use ed25519_dalek::{SECRET_KEY_LENGTH, Signer, SigningKey};
 use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
 
-use super::{ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApproverPublicKey, PinnedApprover, SignError, SignatureAlgorithm};
+use super::{
+    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApproverId, ApproverPublicKey, PinnedApprover, SignError, SignatureAlgorithm,
+};
 use crate::{
     EnvelopeError, MAX_PASSPHRASE_ENVELOPE_LEN, PASSPHRASE_WORK_FACTOR, PassphraseError, StateDirLock, StateFileName, StoreFs,
     durable::{ReadError, WriteError, durable_replace, read_state_file},
@@ -54,7 +57,7 @@ impl fmt::Debug for ApprovalPassphrase {
     }
 }
 
-/// A software signer's Ed25519 private key, between generation and sealing into `approver.age`.
+/// A software signer's Ed25519 private key, between generation and sealing into its approver key envelope.
 ///
 /// The key is cleared when it is dropped; it has no `Clone` and its `Debug` shows nothing of it.
 pub struct SoftwareSignerKey(Box<SigningKey>);
@@ -139,18 +142,18 @@ impl fmt::Debug for SoftwareSigner {
     }
 }
 
-/// Encrypts `key` to `passphrase` alone, at [`PASSPHRASE_WORK_FACTOR`]: the `approver.age` bytes.
+/// Encrypts `key` to `passphrase` alone, at [`PASSPHRASE_WORK_FACTOR`]: the approver key envelope's bytes.
 ///
 /// The output has exactly one scrypt stanza and no other, as the passphrase envelope does.
 pub fn seal_signer_key(key: &SoftwareSignerKey, passphrase: &ApprovalPassphrase) -> Result<Vec<u8>, SignError> {
     seal_signer_key_at(key, passphrase, PASSPHRASE_WORK_FACTOR)
 }
 
-/// Decrypts `approver.age` with `passphrase` and opens a signer as the one of `approvers` whose key it holds.
+/// Decrypts an approver key envelope with `passphrase` and opens a signer as the one of `approvers` whose key it holds.
 ///
 /// The header checks of the passphrase envelope run before any scrypt work. A wrong passphrase is
 /// [`SignError::WrongPassphrase`] and nothing more; a key no approver pins is [`SignError::KeyMismatch`], so a swapped
-/// `approver.age` signs nothing.
+/// key file signs nothing.
 pub fn open_signer_key(
     envelope: &[u8],
     passphrase: &ApprovalPassphrase,
@@ -166,14 +169,16 @@ pub fn seal_signer_key_for_tests(key: &SoftwareSignerKey, passphrase: &ApprovalP
     seal_signer_key_at(key, passphrase, 2)
 }
 
-/// Durably replaces `approver.age` with `envelope`.
-pub fn write_signer_key(lock: &StateDirLock, fs: &impl StoreFs, envelope: &[u8]) -> Result<(), WriteError> {
-    durable_replace(lock, fs, &StateFileName::approver_key(), envelope)
+/// Durably replaces the approver key envelope of the software approver `id`, `approver-<id>.age`, with `envelope`.
+pub fn write_signer_key(lock: &StateDirLock, fs: &impl StoreFs, id: ApproverId, envelope: &[u8]) -> Result<(), WriteError> {
+    durable_replace(lock, fs, &StateFileName::approver_key(id), envelope)
 }
 
-/// Reads `approver.age`, refusing a file longer than [`MAX_PASSPHRASE_ENVELOPE_LEN`].
-pub fn read_signer_key(lock: &StateDirLock, fs: &impl StoreFs) -> Result<Vec<u8>, ReadError> {
-    read_state_file(lock, fs, &StateFileName::approver_key(), MAX_PASSPHRASE_ENVELOPE_LEN as u64)
+/// Reads the approver key envelope of the software approver `id`, `approver-<id>.age`, refusing a file longer than
+/// [`MAX_PASSPHRASE_ENVELOPE_LEN`]. Only that approver's file is read: the prompt names one approver, so one scrypt run
+/// answers it.
+pub fn read_signer_key(lock: &StateDirLock, fs: &impl StoreFs, id: ApproverId) -> Result<Vec<u8>, ReadError> {
+    read_state_file(lock, fs, &StateFileName::approver_key(id), MAX_PASSPHRASE_ENVELOPE_LEN as u64)
 }
 
 /// [`seal_signer_key`] at work factor `log_n`, which must be in `1..64`.
