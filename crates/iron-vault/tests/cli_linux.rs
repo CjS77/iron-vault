@@ -115,7 +115,7 @@ async fn serve_and_run(dir: &TempDir, service_uid: u32, handlers: Handlers, comm
 async fn serve_and_run_args(dir: &TempDir, service_uid: u32, handlers: Handlers, args: Vec<String>, input: Vec<u8>) -> Output {
     let me = invoking_user().unwrap();
     let socket = AdminSocket::bind(&dir.0, me).unwrap();
-    let principals = AdminPrincipals::new(DeploymentProfile::Protected, service_uid);
+    let principals = AdminPrincipals::new(DeploymentProfile::Development, service_uid);
     let server = AdminServer::new(principals, handlers, Limits::default());
     let (stop, stopped) = oneshot::channel::<()>();
     let served = tokio::spawn(async move {
@@ -783,7 +783,7 @@ async fn interrupt_init(mode: ConsoleMode, confirm: bool, signal: rustix::proces
     };
     let handlers = Handlers::default().with(AdminCommand::Init, handler);
     let server = AdminServer::new(
-        AdminPrincipals::new(DeploymentProfile::Protected, me.uid),
+        AdminPrincipals::new(DeploymentProfile::Development, me.uid),
         handlers,
         Limits::default(),
     );

@@ -85,7 +85,7 @@ async fn each_call_issues_a_fresh_valid_token_and_the_log_holds_neither_it_nor_i
     let me = invoking_user().unwrap();
     let socket = AdminSocket::bind(&dir.0, me).unwrap();
     let path = dir.0.join(iron_vault::admin::ADMIN_SOCKET_NAME);
-    let principals = AdminPrincipals::new(DeploymentProfile::Protected, me.uid);
+    let principals = AdminPrincipals::new(DeploymentProfile::Development, me.uid);
     let server = AdminServer::new(principals, Handlers::standard(DeploymentProfile::Protected), Limits::default());
     let (stop, stopped) = oneshot::channel::<()>();
     let served = tokio::spawn(async move {
@@ -169,7 +169,7 @@ async fn a_malformed_request_from_an_admin_principal_is_refused_with_its_peer() 
     let me = invoking_user().unwrap();
     let socket = AdminSocket::bind(&dir.0, me).unwrap();
     let path = dir.0.join(iron_vault::admin::ADMIN_SOCKET_NAME);
-    let principals = AdminPrincipals::new(DeploymentProfile::Protected, me.uid);
+    let principals = AdminPrincipals::new(DeploymentProfile::Development, me.uid);
     let server = AdminServer::new(principals, Handlers::standard(DeploymentProfile::Protected), Limits::default());
     let (stop, stopped) = oneshot::channel::<()>();
     let served = tokio::spawn(async move {

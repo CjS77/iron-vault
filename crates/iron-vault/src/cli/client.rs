@@ -32,9 +32,9 @@ use super::console::{InputError, OwnerConsole, ProcessConsole};
 /// or a progress frame.
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// In a protected install only root and the service account are admin principals (§5), so the owner reaches the
+/// In a protected install only root is an admin principal (§5), so the owner reaches the
 /// admin socket through `sudo`.
-const SUDO_HINT: &str = "In a protected install only root and the service account may use the admin socket: run the command with sudo.";
+const SUDO_HINT: &str = "In a protected install only root may use the admin socket: run the command with sudo.";
 
 /// Why no admin response came back. Messages name the socket path and protocol numbers, never request arguments.
 #[derive(Debug, thiserror::Error)]

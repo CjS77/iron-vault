@@ -96,7 +96,7 @@ fn serve_one(stream: UnixStream, handler: impl AdminHandler + 'static) {
     runtime.block_on(async {
         stream.set_nonblocking(true).unwrap();
         let stream = tokio::net::UnixStream::from_std(stream).unwrap();
-        let principals = AdminPrincipals::new(DeploymentProfile::Protected, invoking_user().unwrap().uid);
+        let principals = AdminPrincipals::new(DeploymentProfile::Development, invoking_user().unwrap().uid);
         let handlers = Handlers::default().with(AdminCommand::Ping, handler);
         AdminServer::new(principals, handlers, Limits::default())
             .serve_connection(stream)

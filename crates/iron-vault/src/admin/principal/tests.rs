@@ -13,11 +13,16 @@ fn accepts(profile: DeploymentProfile, service_uid: u32, uid: u32) -> Result<Adm
 }
 
 #[test]
-fn protected_accepts_root_and_the_service_account() {
-    [0, SERVICE].into_iter().for_each(|uid| {
-        let principal = accepts(DeploymentProfile::Protected, SERVICE, uid).unwrap();
-        assert_eq!(principal.peer(), peer(uid));
-    });
+fn protected_accepts_only_root() {
+    assert_eq!(accepts(DeploymentProfile::Protected, SERVICE, 0).unwrap().peer(), peer(0));
+}
+
+#[test]
+fn protected_refuses_the_service_account() {
+    assert_eq!(
+        accepts(DeploymentProfile::Protected, SERVICE, SERVICE),
+        Err(NotAnAdminPrincipal::Protected { uid: SERVICE })
+    );
 }
 
 #[test]

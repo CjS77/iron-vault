@@ -45,20 +45,20 @@ pub struct AdminPrincipals {
 }
 
 impl AdminPrincipals {
-    /// The admin principals of `profile`, whose service account has `service_uid`. In development the service account
-    /// is the invoking user.
+    /// The admin principals of `profile`. `service_uid` matters only in development, where the service account is the
+    /// invoking user and the only admin principal.
     pub const fn new(profile: DeploymentProfile, service_uid: u32) -> Self {
         Self { profile, service_uid }
     }
 
-    /// Accepts `peer` when its uid is an admin principal: root or the service account in a protected install, only
-    /// the service account in development, never root, because a development build refuses to run as root, and only
-    /// root in a container, whose service account holds no host login to administer from.
+    /// Accepts `peer` when its uid is an admin principal: only root in a protected install or a container, because no
+    /// administrator acts as the service account and accepting it would let whatever takes over the service lock the
+    /// vault or burn the owner's passphrase attempts; only the invoking user in development, never root, because a
+    /// development build refuses to run as root.
     pub fn accepts(&self, peer: PeerIdentity) -> Result<AdminPrincipal, NotAnAdminPrincipal> {
         match self.profile {
-            DeploymentProfile::Protected if peer.uid() == 0 || peer.uid() == self.service_uid => Ok(AdminPrincipal { peer }),
+            DeploymentProfile::Protected | DeploymentProfile::Container if peer.uid() == 0 => Ok(AdminPrincipal { peer }),
             DeploymentProfile::Development if peer.uid() != 0 && peer.uid() == self.service_uid => Ok(AdminPrincipal { peer }),
-            DeploymentProfile::Container if peer.uid() == 0 => Ok(AdminPrincipal { peer }),
             DeploymentProfile::Protected => Err(NotAnAdminPrincipal::Protected { uid: peer.uid() }),
             DeploymentProfile::Development => Err(NotAnAdminPrincipal::Development { uid: peer.uid() }),
             DeploymentProfile::Container => Err(NotAnAdminPrincipal::Container { uid: peer.uid() }),

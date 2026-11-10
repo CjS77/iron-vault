@@ -85,7 +85,7 @@ impl Running {
 
 fn start(dir: &RuntimeDir, limits: Limits) -> Running {
     let socket = AdminSocket::bind(&dir.0, me()).unwrap();
-    let principals = AdminPrincipals::new(DeploymentProfile::Protected, me().uid);
+    let principals = AdminPrincipals::new(DeploymentProfile::Development, me().uid);
     let server = AdminServer::new(principals, Handlers::standard(DeploymentProfile::Protected), limits);
     let (stop, stopped) = oneshot::channel::<()>();
     let served = tokio::spawn(async move {
@@ -298,11 +298,32 @@ async fn a_refused_peer_reaches_no_handler_and_is_told_why() {
     assert!(!ran.load(Ordering::SeqCst), "the handler ran for a refused peer");
 }
 
+/// The service account is not an admin principal of a protected install: a compromised service must not be able to lock
+/// the vault or spend the owner's passphrase attempts.
+#[tokio::test]
+async fn a_protected_install_refuses_the_service_account_before_any_handler() {
+    if me().uid == 0 {
+        return;
+    }
+    let ran = Arc::new(AtomicBool::new(false));
+    let handlers = Handlers::default().with(AdminCommand::Ping, Recording(Arc::clone(&ran)));
+    let principals = AdminPrincipals::new(DeploymentProfile::Protected, me().uid);
+    let server = AdminServer::new(principals, handlers, Limits::default());
+    let (ours, mut theirs) = UnixStream::pair().unwrap();
+    theirs.write_all(&ping()).await.unwrap();
+    tokio::time::timeout(PATIENCE, server.serve_connection(ours)).await.unwrap();
+    match read_response(&mut theirs).await {
+        AdminResponse::Error { code, .. } => assert_eq!(code, ErrorCode::NotAdminPrincipal),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(!ran.load(Ordering::SeqCst), "the handler ran for the service account");
+}
+
 #[tokio::test]
 async fn an_accepted_peer_reaches_its_handler() {
     let ran = Arc::new(AtomicBool::new(false));
     let handlers = Handlers::default().with(AdminCommand::Ping, Recording(Arc::clone(&ran)));
-    let principals = AdminPrincipals::new(DeploymentProfile::Protected, me().uid);
+    let principals = AdminPrincipals::new(DeploymentProfile::Development, me().uid);
     let server = AdminServer::new(principals, handlers, Limits::default());
     let (ours, mut theirs) = UnixStream::pair().unwrap();
     theirs.write_all(&ping()).await.unwrap();
@@ -315,7 +336,7 @@ async fn an_accepted_peer_reaches_its_handler() {
 async fn ping_with(failure: &LogFailure) -> (AdminResponse, bool) {
     let ran = Arc::new(AtomicBool::new(false));
     let handlers = Handlers::default().with(AdminCommand::Ping, Recording(Arc::clone(&ran)));
-    let principals = AdminPrincipals::new(DeploymentProfile::Protected, me().uid);
+    let principals = AdminPrincipals::new(DeploymentProfile::Development, me().uid);
     let server = AdminServer::new(principals, handlers, Limits::default()).with_log_failure(failure.clone());
     let (ours, mut theirs) = UnixStream::pair().unwrap();
     theirs.write_all(&ping()).await.unwrap();
@@ -339,7 +360,7 @@ async fn a_command_after_a_log_failure_is_refused_and_reaches_no_handler() {
 
 #[tokio::test]
 async fn a_command_without_a_handler_is_unknown() {
-    let principals = AdminPrincipals::new(DeploymentProfile::Protected, me().uid);
+    let principals = AdminPrincipals::new(DeploymentProfile::Development, me().uid);
     let server = AdminServer::new(principals, Handlers::default(), Limits::default());
     let (ours, mut theirs) = UnixStream::pair().unwrap();
     theirs.write_all(&ping()).await.unwrap();
@@ -494,7 +515,7 @@ impl AdminHandler for Prompting {
 fn serve_prompting(prompt_deadline: Duration) -> (UnixStream, mpsc::UnboundedReceiver<Answer>, JoinHandle<()>) {
     let (answers, received) = mpsc::unbounded_channel();
     let handlers = Handlers::default().with(AdminCommand::Ping, Prompting(answers));
-    let principals = AdminPrincipals::new(DeploymentProfile::Protected, me().uid);
+    let principals = AdminPrincipals::new(DeploymentProfile::Development, me().uid);
     let limits = Limits {
         prompt_deadline,
         ..Limits::default()
