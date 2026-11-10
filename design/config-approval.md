@@ -170,9 +170,12 @@ pinned approver before answering, for example `Tap "Dave YubiKey 3" to approve. 
 asks for the next approver; nothing is reserved or signed until one of them authorizes. A wrong answer to one
 approver's prompt ends the approval as `approval-denied`, as a wrong approval passphrase does today: it does not move
 on to another approver, so switching is the owner's choice, never a retry ([open question 15](#open-questions)).
-Which approver is asked first, the prompt's
-exact text and the switch frame for "try another way" are in
-[approval-signers.md](approval-signers.md#the-approver-prompt). `init` pins one approver, the software signer labelled
+The approver prompt starts at the first approver in
+[approver order](approval-signers.md#approver-order): the signer of the active approval, then the rest by enrolment
+time. Each switch moves to the next, wrapping after the last, under one prompt deadline for the whole prompt. The
+prompt's exact text and the switch frame for "try another way" are in
+[approval-signers.md](approval-signers.md#the-approver-prompt). The approver answered is the one the audit events name.
+`init` pins one approver, the software signer labelled
 `approval passphrase`, so step 2 asks for its passphrase as `Approval passphrase for "approval passphrase"` until the
 owner enrolls another.
 

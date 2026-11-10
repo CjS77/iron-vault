@@ -22,18 +22,20 @@ Three rules drive the design:
 [§6](iron-vault-specification.md#6-credential-records-and-configuration) requires owner presence "through the
 approval mechanism" for `replace` and `rm`. In v0 the service proves it like this, inside one exchange:
 
-1. It sends a secret prompt naming the asked approver by its label, `Approval passphrase for "<label>"`, the same
-   prompt `config approve` uses.
-2. It reads the asked approver's own key envelope, `approver-<approver ID>.age`, and opens it with the passphrase
-   (`open_signer_key`), one scrypt run. The key inside must be the asked approver in the approval state the service
+1. It sends a secret prompt naming the first approver in [approver order](approval-signers.md#approver-order) by its
+   label, `Approval passphrase for "<label>"`, the same prompt `config approve` uses. While more than one approver is
+   pinned the prompt is switchable: a switch frame moves to the next approver in the order, wrapping after the last,
+   and one prompt deadline covers every switch.
+2. It reads the answered approver's own key envelope, `approver-<approver ID>.age`, and opens it with the passphrase
+   (`open_signer_key`), one scrypt run. The key inside must be the answered approver in the approval state the service
    holds.
 3. It drops the opened signer at once.
 
 Presence reserves no approval version, signs nothing and writes nothing to `approval.age`. It proves only that the
-person typing knows the approval passphrase now. A wrong passphrase, or a key that is not the asked approver's, ends
+person typing knows the approval passphrase now. A wrong passphrase, or a key that is not the answered approver's, ends
 the exchange with `approval-denied` (code 9), before anything is written. That code's meaning widens from "the
 approval passphrase was wrong" to "owner presence failed", which covers both uses. There is no second try in the same
-exchange.
+exchange, and no move to another approver after a wrong answer.
 
 There is no separate `Type yes` confirmation. Typing the approval passphrase after the summary is the confirmation,
 and cancelling the prompt declines. `config approve` asks for `yes` first so that declining never needs the
@@ -214,7 +216,7 @@ field names and types, and the record shape they share. None carries credential 
 | `credential.removed` | INFO | the remove committed | name, record ID |
 
 A refused owner-presence check (step 2 of [Owner presence](#owner-presence)) is recorded as `vault.presence-refused`
-at WARN with `refusal` set to `wrong_passphrase` or `key_mismatch`, and the asked approver's `approver_id` and
+at WARN with `refusal` set to `wrong_passphrase` or `key_mismatch`, and the answered approver's `approver_id` and
 `approver_label`. An unusable passphrase (empty or
 not UTF-8) is recorded as `wrong_passphrase`. It carries no config digest; `config approve`'s refusal is the separate
 `config.approval-refused`.

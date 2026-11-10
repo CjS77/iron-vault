@@ -185,3 +185,34 @@ async fn no_pinned_approver_asks_nothing() {
 
     assert!(prompts.is_empty() && outcome.is_none());
 }
+
+/// One prompt deadline covers every switch: switching just before it expires starts no new one. On a paused clock, so the
+/// deadline is exact.
+#[tokio::test(start_paused = true)]
+async fn the_deadline_spans_every_switch() {
+    let prompt_deadline = std::time::Duration::from_secs(60);
+    let (service, mut cli) = UnixStream::pair().unwrap();
+    let mut exchange = Exchange::new(
+        service,
+        Limits {
+            prompt_deadline,
+            ..Limits::default()
+        },
+    );
+    let approvers = [approver("first"), approver("second")];
+    let asked = ask_approval_passphrase(&mut exchange, &approvers, future::pending::<()>);
+    let cli_side = async {
+        let _ = read_prompt(&mut cli).await;
+        tokio::time::sleep(prompt_deadline - std::time::Duration::from_secs(1)).await;
+        let mut bytes = Vec::new();
+        protocol::encode(&Frame::Switch, &mut bytes).unwrap();
+        cli.write_all(&bytes).await.unwrap();
+        let _ = read_prompt(&mut cli).await;
+    };
+    let started = tokio::time::Instant::now();
+
+    let (outcome, ()) = tokio::join!(asked, cli_side);
+
+    assert!(matches!(outcome, Err(ExchangeError::TimedOut)));
+    assert_eq!(started.elapsed(), prompt_deadline);
+}

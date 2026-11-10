@@ -409,6 +409,40 @@ pub async fn converse(stream: &mut UnixStream, answers: &[&str]) -> Exchanged {
     exchanged
 }
 
+/// One answer to a prompt: owner input, or a switch frame asking for the next approver.
+#[derive(Clone, Copy)]
+pub enum Answer<'a> {
+    Input(&'a str),
+    Switch,
+}
+
+/// [`converse`] with switch frames among the answers.
+pub async fn converse_switching(stream: &mut UnixStream, answers: &[Answer<'_>]) -> Exchanged {
+    let (mut notices, mut prompts) = (String::new(), Vec::new());
+    let mut answers = answers.iter();
+    loop {
+        match read_frame(stream).await {
+            Frame::Response(response) => {
+                return Exchanged {
+                    notices,
+                    prompts,
+                    response,
+                };
+            }
+            Frame::Notice(notice) => notices.push_str(&notice.text),
+            Frame::Prompt(prompt) => {
+                prompts.push(prompt);
+                let frame = match answers.next().expect("a prompt beyond the answers given") {
+                    Answer::Input(text) => Frame::OwnerInput(OwnerInput::new(Zeroizing::new(text.as_bytes().to_vec()))),
+                    Answer::Switch => Frame::Switch,
+                };
+                send(stream, &frame).await;
+            }
+            other => panic!("unexpected frame {other:?}"),
+        }
+    }
+}
+
 /// [`converse`] for a command that reveals secrets (`init`'s recovery key), returning them with the exchange.
 pub async fn converse_revealing(stream: &mut UnixStream, answers: &[&str]) -> (Exchanged, Vec<RevealedSecret>) {
     let (mut notices, mut prompts, mut revealed) = (String::new(), Vec::new(), Vec::new());
