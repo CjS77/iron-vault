@@ -205,7 +205,7 @@ without the replacement. The replacement adds two things:
 - **Every owner command goes to the stand-in**, `lock` included, which it can acknowledge without locking anything.
   A compromised service can lie the same way.
 
-The code does not meet §5, which says: "The CLI must send owner input only to the service. No other process,
+The code did not meet §5, which then said: "The CLI must send owner input only to the service. No other process,
 including one running as the service account, may serve at the admin socket's path or otherwise stand in for the
 service."
 
@@ -308,9 +308,9 @@ an exec call. So it can give up `execve` and `execveat` once it is running, and 
   - a design rule that the service never starts a program, which rules out `age` plugins as hardware adapters.
 - The alternative is no product fix. The gap stays Low: a compromised service already receives every passphrase typed
   while it runs. What the attacker saves is the work of hooking the running service.
-- **Owner decision.** §5 says no other process, "including one running as the service account", may serve at the admin
-  socket's path or stand in for the service. Can anything short of stopping the service from starting processes meet
-  that? The review finds nothing. Whatever owns the path or the socket, and whatever the CLI checks, a program the
+- **Owner decision.** §5 then said no other process, "including one running as the service account", may serve at the
+  admin socket's path or stand in for the service. Can anything short of stopping the service from starting processes
+  meet that? The review finds nothing. Whatever owns the path or the socket, and whatever the CLI checks, a program the
   service starts inherits the service's pid or its sockets. So either:
   - build fix C with its package changes, and §5 holds in outcome, in Container while nobody `docker exec`s in as the
     service uid. A fork of the service can still serve at the path, so it holds literally only if the filter also
@@ -362,10 +362,9 @@ refuse root as they would refuse any other account.
   state the rule as an outcome rather than as protection against a compromised service.
 - **Finding 3:** confirmed by the K-273 investigation, which also lowered it from Medium to Low.
   - The replacement works in Protected and Container, and was reproduced unprivileged in Development.
-  - The threat tables in `linux-package.md` and `docker-compose.md` now list it.
-  - Ticket K-286 (EP-35) builds fix C if the owner chooses it: the service kills itself on `execve`, `execveat`,
-    `ptrace` and `process_vm_*`, and the package stops starting programs as the uid (`ExecReload=+`, no log
-    compression).
-  - Open for the owner: fix C, or no product fix and §5 reworded to what holds. Fixes A and B are not to be built.
+  - The threat tables in `linux-package.md` and `docker-compose.md` list it as an accepted Low residual.
+  - Owner decision, 2026-11-10: no product fix. Fixes A, B and C are not built. Ticket K-286 (EP-35) reworded §5 to
+    what holds: no account but the service account may serve at the admin socket's path, and anything running as the
+    service account is treated as the service.
 - **Finding 4:** open. The remapping clause in §3.2 (line 118) still contradicts `docker-compose.md`. The service
   account parenthetical will be replaced under K-272.
