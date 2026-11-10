@@ -195,8 +195,17 @@ d /run/iron-vault     0711 iron-vault iron-vault -
 
 `postinst` runs `systemd-sysusers` and then `systemd-tmpfiles --create` before it starts any unit. At every boot
 `systemd-tmpfiles-setup.service` recreates `/run/iron-vault` before `sockets.target`, so listener socket units can
-bind in it. A `d` line also puts back the owner and mode of a directory that already exists, and its age field `-`
-means it is never cleaned.
+bind in it. The age field `-` means the directories are never cleaned.
+
+A `d` line also resets the owner and mode of a directory that already exists. That runs at every boot and every
+`postinst configure`, before the service checks the directory. So a `/etc/iron-vault` or `/var/lib/iron-vault` that was
+made group-writable or handed to another account is put right silently, and the service's `ConfigDir` or `StateDir`
+refusal only fires between those runs, such as on `systemctl restart`. Files planted while the directory was open stay;
+the service still checks each one (the `Config` and `StateFile` rules and the config signature), so the repair hides the
+warning sign without letting a planted file through. The package keeps the repair: an upgrade or reboot heals a
+mistaken `chmod` without an administrator's help, and that is worth more than the earlier warning. An administrator who
+wants to know that a directory was tampered with must look at the journal of an earlier restart or at the files in it,
+not at the next boot.
 
 ## Service unit
 
@@ -499,7 +508,7 @@ The package ships these overrides in `/usr/share/lintian/overrides/iron-vault` (
 VM, takes an ordinary test account, and prints a PASS or FAIL line per check. It reads the [ownership table](#ownership)
 from this file, then checks the service's account, locked memory, core limit and dumpability, that neither the test
 account nor the service account can use the admin socket, that the test account cannot reach `/proc/<pid>/mem`,
-`/proc/<pid>/environ` or the vault, that a group-writable `/etc/iron-vault` stops a restart, that a second `serve` fails
+`/proc/<pid>/environ` or the vault, that a group-writable `/etc/iron-vault` stops a `systemctl restart` (a reboot would repair it), that a second `serve` fails
 on the state lock, and that a listener socket unit keeps its port across a service restart. It refuses to run without
 `--i-know-this-is-a-disposable-vm`. The refusal of the
 group-writable directory is read from the journal, because the service's startup error goes to stderr.
