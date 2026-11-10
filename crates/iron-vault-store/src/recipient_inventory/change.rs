@@ -107,9 +107,10 @@ impl RecipientChange {
 }
 
 /// The independence rule, part by part in the order `design/recipients.md` numbers them; the first part that fails is
-/// the refusal. Part 2, the recipient of each configured unlock method, adds nothing while passphrase unlock is the only
-/// method. Parts 1 and 3 already imply part 4's floor in v0; it stays so the rule still means two ways in once later
-/// roles join.
+/// the refusal. Part 1, the configured unlock method's recipient, is checked by `configured_unlock_rule`, because only
+/// the caller knows which host unlock identity is configured; its floor of one unlock-class recipient follows from part
+/// 2 in v0. Part 2 keeps `operational` because the vault passphrase is the only source-owner method in v0. Parts 2 and
+/// 3 already imply part 4's floor in v0; it stays so the rule still means two ways in once later roles join.
 fn independence_rule(entries: &BTreeMap<RecipientKey, RecipientEntry>) -> Result<(), RecipientChangeRefusal> {
     let has = |role| entries.values().any(|entry| entry.role == role);
     match entries.len() {

@@ -318,27 +318,30 @@ is lost with the TPM, the motherboard, a TPM clear or a change to the PCR it is 
 [`recipients.md`](recipients.md) puts `host-unlock` in the unlock class. Two parts of its independence rule decide
 how the host unlock identity counts. The inventory after any change must hold:
 
-> 1. **the `operational` recipient, in every profile.** Passphrase `unlock` and the vault passphrase method of
->    migration authorization both go through it, and it is the fallback when any other unlock method fails. It is never
->    removed, and no other recipient takes its place;
-> 2. **the recipient of each configured unlock method, in addition to `operational`, never in its place.** In v0
->    passphrase unlock is the only method, so this part adds nothing yet. A `host-unlock` recipient never replaces
->    `operational`: passphrase `unlock` stays the fallback when the host unlock handoff fails;
+> 1. **the recipient of each configured unlock method, and at least one unlock-class recipient.** The passphrase's is
+>    `operational`; a TPM's is `tpm`, a hardware key's `hardware`, and a host unlock adapter's `host-unlock`. No unlock
+>    method is required beside another;
+> 2. **the `operational` recipient while the vault passphrase is the only source-owner method.**
+>    [Migration authorization](migration-authorization.md#source-owner-method), which `recipient add` and `export` run,
+>    proves authority through a source-owner method. A vault left with none could never add a recipient or migrate
+>    again. In v0 the vault passphrase, through `operational`, is the only method, so this part keeps `operational` in
+>    every v0 vault. Once the TPM approval signer (EP-33) or a hardware key is a method, a vault that has one may drop
+>    `operational`;
 
 Part 3 requires at least one `recovery` recipient, and part 4 between 2 and 64 recipients. For the host unlock
 identity:
 
-- **Part 1 keeps the operational identity beside it.** Enrolling a host unlock identity never makes the operational
-  identity removable, so passphrase `unlock` is always there when the handoff fails.
-- **Part 2 keeps the host unlock identity while the host unlock adapter is configured.** That design leaves "configured"
+- **Part 1 keeps the host unlock identity while the host unlock adapter is configured.** That design leaves "configured"
   to this epic. Here, the adapter is configured for the host unlock identity whose recipient key the current unlock
   handoff holds. In the Container profile, `recipient remove` reads the handoff before any prompt, as Starting does,
-  and part 2 keeps that one recipient. Any other `host-unlock` recipient, such as an old host's or one whose TPM was
+  and part 1 keeps that one recipient. Any other `host-unlock` recipient, such as an old host's or one whose TPM was
   replaced, is not configured and can be removed. With no readable handoff, no host unlock is configured.
   Whether a recipient can be removed depends on the host's handoff at the time of the command, never on how the
   service was last unlocked.
+- **Part 2 keeps the operational identity beside it.** Enrolling a host unlock identity never makes the operational
+  identity removable, so in v0 passphrase `unlock` is always there when the handoff fails.
 - **To retire host unlock,** the host administrator stops and disables the handoff unit and removes
-  `host-unlock.cred`, then runs `recipient remove`. Part 2 no longer applies to the identity, and the service keeps
+  `host-unlock.cred`, then runs `recipient remove`. Part 1 no longer applies to the identity, and the service keeps
   working through the passphrase.
 - **It never counts toward part 3.** Its secret lives on the host and dies with the machine, so a vault with one still
   needs its own `recovery` recipient. It does count toward part 4's floor of two and limit of 64.

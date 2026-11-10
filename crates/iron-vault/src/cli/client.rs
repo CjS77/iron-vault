@@ -254,9 +254,10 @@ pub fn recipient_list(socket: Option<&Path>) -> Exit {
 /// answered from the owner console; nothing but those notices is printed on success. `host_unlock` enrols the key with the
 /// `host-unlock` role.
 pub fn recipient_add(socket: Option<&Path>, recipient: String, label: String, host_unlock: bool) -> Exit {
-    let request = match host_unlock {
-        true => AdminRequest::RecipientAddHostUnlock { recipient, label },
-        false => AdminRequest::RecipientAdd { recipient, label },
+    let request = if host_unlock {
+        AdminRequest::RecipientAddHostUnlock { recipient, label }
+    } else {
+        AdminRequest::RecipientAdd { recipient, label }
     };
     run(socket, request, |response| match response {
         AdminResponse::RecipientAdd { .. } => Exit::Success,

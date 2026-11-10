@@ -240,7 +240,7 @@ pub struct ServiceContext<F = OsFs> {
     clock: Arc<dyn WallClock>,
     /// The recovery reminder schedule's memory: the interval in force and when it last reminded.
     reminders: SharedSchedule,
-    /// Where `init --host-unlock` reads the unlock handoff.
+    /// Where `init --host-unlock` and `recipient remove` read the unlock handoff.
     handoff: PathBuf,
 }
 
@@ -333,8 +333,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         })
     }
 
-    /// The context reading the unlock handoff for `init --host-unlock` at `handoff` instead of [`HANDOFF_PATH`], so a
-    /// test stages one in a directory the trusted-path rule accepts.
+    /// The context reading the unlock handoff for `init --host-unlock` and `recipient remove` at `handoff` instead of
+    /// [`HANDOFF_PATH`], so a test stages one in a directory the trusted-path rule accepts.
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_handoff_path(mut self, handoff: PathBuf) -> Self {
         self.handoff = handoff;

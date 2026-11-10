@@ -70,7 +70,7 @@ fn removing_a_key_that_is_not_enrolled_is_refused() {
     assert_refused(&initial(), RecipientChange::Remove(stranger), RecipientChangeRefusal::NotEnrolled);
 }
 
-/// A second `operational` entry could stand in for the first, so a later removal of the real one would pass part 1 and
+/// A second `operational` entry could stand in for the first, so a later removal of the real one would pass part 2 and
 /// leave out the key `operational.age` opens.
 #[test]
 fn adding_an_operational_recipient_is_refused() {
@@ -104,7 +104,7 @@ fn removing_the_last_recovery_recipient_is_refused() {
     assert_refused(&current, RecipientChange::Remove(recovery), RecipientChangeRefusal::NoRecovery);
 }
 
-/// Parts 1 and 3 hold two distinct entries between them, so no change reaches part 4's floor in v0; the part is checked
+/// Parts 2 and 3 hold two distinct entries between them, so no change reaches part 4's floor in v0; the part is checked
 /// on its own.
 #[test]
 fn fewer_than_two_recipients_breaks_the_count_rule() {
