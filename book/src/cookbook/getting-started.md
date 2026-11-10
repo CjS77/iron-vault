@@ -243,7 +243,7 @@ routes:
 listeners:
   + loopback: endpoint tcp 127.0.0.1:7878, no tls, token header default
 Approve this config as version 2? Type yes to approve: yes
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 approved version 2 (blake2b:f08dc490…)
 callers: 1 added; route grants: 1 added; routes: 1 added; listeners: 1 added; limits: none; logging: none; recovery: none
 ```

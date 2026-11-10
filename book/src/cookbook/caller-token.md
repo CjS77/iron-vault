@@ -65,7 +65,7 @@ committed version: 4
 callers:
   ~ me: token changed
 Approve this config as version 5? Type yes to approve: yes
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 approved version 5 (blake2b:3671b247…)
 callers: 1 changed; route grants: none; routes: none; listeners: none; limits: none; logging: none; recovery: none
 ```
@@ -110,7 +110,7 @@ callers:
 route grants:
   - ci: revoked httpbin
 Approve this config as version 7? Type yes to approve: yes
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 approved version 7 (blake2b:afe3d6c6…)
 callers: 1 removed; route grants: 1 removed; routes: none; listeners: none; limits: none; logging: none; recovery: none
 ```

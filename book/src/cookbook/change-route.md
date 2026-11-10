@@ -39,7 +39,7 @@ committed version: 7
 routes:
   ~ httpbin: paths /anything/**, /headers -> /anything/**, /gzip, /headers, /stream/*
 Approve this config as version 8? Type yes to approve: yes
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 approved version 8 (blake2b:e540c2d8…)
 callers: none; route grants: none; routes: 1 changed; listeners: none; limits: none; logging: none; recovery: none
 ```
@@ -74,7 +74,7 @@ committed version: 8
 routes:
   ~ httpbin: paths /anything/**, /gzip, /headers, /stream/* -> /anything/**, /gzip, /headers; rate limit 30 per 60s burst 5 -> 10 per 60s burst 2
 Approve this config as version 9? Type yes to approve: yes
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 approved version 9 (blake2b:f8020a2b…)
 callers: none; route grants: none; routes: 1 changed; listeners: none; limits: none; logging: none; recovery: none
 ```

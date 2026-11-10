@@ -80,7 +80,7 @@ route grants:
 routes:
   - old
 Approve this config as version 4? Type yes to approve: yes
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 approved version 4 (blake2b:ab7050b8…)
 callers: none; route grants: 1 changed; routes: 1 removed; listeners: none; limits: none; logging: none; recovery: none
 ```
@@ -102,7 +102,7 @@ remove credential old_key
   kind: static
   origins: httpbin.org:443
   routes using old_key: none
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 removed old_key
 httpbin_key  static  httpbin.org:443  healthy
 ```

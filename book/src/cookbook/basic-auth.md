@@ -83,7 +83,7 @@ route grants:
 routes:
   + httpbin-basic: prefix /httpbin-basic, upstream https://httpbin.org/, credential httpbin_basic, slot basic, ca file none, methods GET, paths /basic-auth/alice/*, /headers, rate limit 30 per 60s burst 5, confirm none
 Approve this config as version 5? Type yes to approve: yes
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 approved version 5 (blake2b:6d193719…)
 callers: none; route grants: 1 changed; routes: 1 added; listeners: none; limits: none; logging: none; recovery: none
 ```

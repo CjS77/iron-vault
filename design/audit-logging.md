@@ -618,7 +618,7 @@ with these fields.
 | `service.lock-transition` | INFO | a lock transition: Locked to Checking, or Starting to Checking on a host unlock, the outcome of the check that follows, and Ready or Unavailable to Locked | `from_state`, `to_state`; `unavailable_reason` when `to_state` is `unavailable` |
 | `vault.unlock-refused` | WARN | an unlock was refused | `refusal`, such as `wrong_passphrase` or `rate_limited`; `memory_protection` when `refusal` is `memory_unprotected`, a protected install whose memory is not locked; `retry_after` (whole seconds) when `refusal` is `rate_limited`, the vault passphrase attempt limit |
 | `vault.host-unlock` | INFO, or WARN when refused | a Container-profile service tried the unlock handoff at startup; other profiles never write it | `host_unlock_outcome`; `refusal` when refused: `memory_unprotected`, `untrusted`, `unreadable`, `not_an_identity`, `not_initialized` or `not_a_recipient` |
-| `vault.presence-refused` | WARN | owner presence for `replace` or `rm` was refused: the approval passphrase was wrong or the key is not the asked approver's; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`); no `config_digest`, since no config is involved |
+| `vault.presence-refused` | WARN | owner presence for `replace` or `rm` was refused: the approval passphrase was wrong or the key is not the asked approver's; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`), `approver_id`, `approver_label`; no `config_digest`, since no config is involved |
 | `vault.lock-incomplete` | WARN | a lock's drain ended with a serving snapshot or the vault identity still held | `snapshots_held`, `identity_held` |
 
 `service.started` carries the hardening report's outcome as fixed labels, so a run without its protections is visible
@@ -652,11 +652,11 @@ completed approval ([§12](iron-vault-specification.md#12-configuration-approval
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `config.approval-refused` | WARN | the approval passphrase was wrong or the key is not the asked approver's; nothing was reserved | `refusal` (`wrong_passphrase` or `key_mismatch`), `config_digest` |
-| `config.version-reserved` | INFO | step 2's reservation is durable | `version`, `config_digest` |
+| `config.approval-refused` | WARN | the approval passphrase was wrong or the key is not the asked approver's; nothing was reserved | `refusal` (`wrong_passphrase` or `key_mismatch`), `config_digest`, `approver_id`, `approver_label` |
+| `config.version-reserved` | INFO | step 2's reservation is durable | `version`, `config_digest`, `approver_id`, `approver_label` |
 | `config.approval-failed` | WARN | the transaction failed after its reservation and before its commit | `version` (consumed), `config_digest`, `step`, `error_kind` |
 | `config.commit-uncertain` | WARN | step 5's rename of `approval.age` landed, but its directory fsync failed | `version`, `error_kind` |
-| `config.approval-completed` | INFO | the commit is durable | `version`, `config_digest`, `summary` |
+| `config.approval-completed` | INFO | the commit is durable | `version`, `config_digest`, `summary`, `approver_id`, `approver_label` |
 | `config.activation-failed` | WARN | the config check after a committed approval failed, or an uncertain commit could not be settled | `version`, `unavailable_reason`, `detail` |
 | `config.check-failed` | WARN | any config check failed | `unavailable_reason`, `failure`, `detail`; `log_destination` when the log destination failed |
 | `config.reload-failed` | WARN | the config check of a SIGHUP reload failed | `committed_version`, `unavailable_reason`, `detail` |
@@ -786,6 +786,8 @@ The fields that only one event uses, or that only audit events use:
 | `recipient` | string | A recipient key's `age1…` text, which is public |
 | `recipient_role` | string | A recipient role's name: `operational`, `recovery`, `added` or `host-unlock` |
 | `recipient_label` | string | A recipient label, escaped |
+| `approver_id` | string | The approver asked for, or that signed: its approver ID, a hyphenated UUID |
+| `approver_label` | string | That approver's label, escaped |
 | `recipients` | number | The recipient count after a recipient change |
 | `change` | string | `add` or `remove` |
 | `committed` | string | `no`, `unknown` or `yes`: whether a failed recipient change committed |

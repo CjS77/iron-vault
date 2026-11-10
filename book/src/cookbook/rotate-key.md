@@ -37,7 +37,7 @@ replace credential httpbin_key
   kind: static -> static
   origins: httpbin.org:443 -> httpbin.org:443
   routes using httpbin_key: httpbin (callers: me)
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 Secret for httpbin_key:
 replaced httpbin_key (static) as record 22327b62-…
 ```

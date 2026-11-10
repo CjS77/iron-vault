@@ -416,7 +416,7 @@ that will refuse to show it. Every ending after the reveal says what to do with 
 | 2 | Try the service-wide lock, recording the state and check generation | `busy` |
 | 3 | The inventory check; the key is enrolled; the independence rule allows the set without it | `recipient-inventory-damaged`, `vault-write-failed`, `unknown-recipient`, `recipient-set-invalid` |
 | 4 | The summary, as notices | |
-| 5 | Owner presence: the `Approval passphrase` prompt | `approval-denied`, `approval-unavailable` |
+| 5 | Owner presence: the `Approval passphrase for "<label>"` prompt | `approval-denied`, `approval-unavailable` |
 | 6 | Still Ready at the recorded check generation | `wrong-state` |
 | 7 | The recipient change, then the completion notice | `vault-write-failed` |
 

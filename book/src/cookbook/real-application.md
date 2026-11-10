@@ -131,7 +131,7 @@ route grants:
 listeners:
   + app: endpoint tcp 127.0.0.1:7879, no tls, token header X-Iron-Vault-Token
 Approve this config as version 6? Type yes to approve: yes
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 approved version 6 (blake2b:2dbc74a7…)
 callers: 1 added; route grants: 1 added; routes: none; listeners: 1 added; limits: none; logging: none; recovery: none
 ```

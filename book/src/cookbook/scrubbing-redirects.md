@@ -40,7 +40,7 @@ committed version: 2
 routes:
   ~ httpbin: paths /anything/**, /headers -> /anything/**, /gzip, /headers, /redirect-to, /stream/*
 Approve this config as version 3? Type yes to approve: yes
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 approved version 3 (blake2b:d5c63bfb9766ff1cbf98328c7c50f8e0fd4aeff2c1ce9f897567a59e361a6b5a)
 callers: none; route grants: none; routes: 1 changed; listeners: none; limits: none; logging: none; recovery: none
 ```

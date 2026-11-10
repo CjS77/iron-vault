@@ -22,8 +22,9 @@ Three rules drive the design:
 [§6](iron-vault-specification.md#6-credential-records-and-configuration) requires owner presence "through the
 approval mechanism" for `replace` and `rm`. In v0 the service proves it like this, inside one exchange:
 
-1. It sends a secret prompt, `Approval passphrase`, the same label `config approve` uses.
-2. It reads `approver.age` and opens it with the passphrase (`open_signer_key`). The key inside must be the pinned
+1. It sends a secret prompt naming the asked approver by its label, `Approval passphrase for "<label>"`, the same
+   prompt `config approve` uses.
+2. It reads `approver.age` and opens it with the passphrase (`open_signer_key`). The key inside must be the asked
    approver in the approval state the service holds.
 3. It drops the opened signer at once.
 
@@ -212,7 +213,8 @@ field names and types, and the record shape they share. None carries credential 
 | `credential.removed` | INFO | the remove committed | name, record ID |
 
 A refused owner-presence check (step 2 of [Owner presence](#owner-presence)) is recorded as `vault.presence-refused`
-at WARN with `refusal` set to `wrong_passphrase` or `key_mismatch`, and nothing else. An unusable passphrase (empty or
+at WARN with `refusal` set to `wrong_passphrase` or `key_mismatch`, and the asked approver's `approver_id` and
+`approver_label`. An unusable passphrase (empty or
 not UTF-8) is recorded as `wrong_passphrase`. It carries no config digest; `config approve`'s refusal is the separate
 `config.approval-refused`.
 

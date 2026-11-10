@@ -172,7 +172,8 @@ approver's prompt ends the approval as `approval-denied`, as a wrong approval pa
 on to another approver, so switching is the owner's choice, never a retry ([open question 15](#open-questions)).
 Which approver is asked first, the prompt's
 exact text and the protocol frame for "try another way" belong to the approver enrollment design (K-277). Until then
-`init` pins one approver, the software signer, and step 2 asks for the approval passphrase as before.
+`init` pins one approver, the software signer labelled `approval passphrase`, and step 2 asks for its passphrase as
+`Approval passphrase for "approval passphrase"`.
 
 The envelope written at step 3 carries the signer's approver ID, and verification checks the signature with that
 approver's pinned key and algorithm ([storage-formats.md](storage-formats.md#approval-envelope-v1)). Owner presence
@@ -583,8 +584,9 @@ by `config.activation-failed` when settling fails. A commit followed by a failed
 failed. *Reload* stays the SIGHUP operation alone, so a check after an approval is never a "reload failed".
 
 `config.approval-refused`, `config.version-reserved` and `config.approval-completed` also name the approver that was
-asked or signed, by approver ID and label, so the log says which signer approved each version.
-[audit-logging.md](audit-logging.md#audit-events) gains the two fields with the multiple-approver ticket (K-276).
+asked or signed, by approver ID and label, so the log says which signer approved each version: `approver_id` and
+`approver_label` ([audit-logging.md](audit-logging.md#audit-events)). The label goes through the configured-name escaping
+there and in the passphrase prompt, `Approval passphrase for "<label>"`.
 
 ## Open questions
 

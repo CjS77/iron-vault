@@ -103,7 +103,7 @@ remove a recipient from the vault
   recipients after the change: 2 (operational 1, recovery 1)
   removing a recipient protects future copies of identity.age only; copies made before still open with this key
   authorize with: the approval passphrase
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 removed age1vhncy4…; the vault has 2 recipients.
 Removing a recipient protects future copies of identity.age only.
 Old copies of identity.age, and backups, still open with a removed key.

@@ -179,7 +179,8 @@ The exchange, after the request:
    longer than one notice continues in the next, and nothing is ever truncated (see [Notice](#notice-kind-6)).
 3. **Confirmation.** A prompt, not secret: `Approve this config as version <n>? Type yes to approve`. Any answer other
    than exactly `yes` ends the exchange with `declined`. No version is reserved.
-4. **Approval passphrase.** A prompt, secret: `Approval passphrase`. The service opens the approver key with it. A
+4. **Approval passphrase.** A prompt, secret, naming the asked approver by its label, escaped:
+   `Approval passphrase for "<label>"`. The service opens the approver key with it. A
    wrong passphrase ends the exchange with `approval-denied`, still before any reservation. There is no second try in
    the same exchange. Summary, confirmation, then passphrase is the order of [§12](iron-vault-specification.md#12-configuration-approval-and-reload)'s sequence diagram, which its text
    words differently ([open question 6](config-approval.md#open-questions)).
@@ -320,9 +321,9 @@ The exchange, after the request:
 4. The [vault change check](credential-commands.md#vault-change-check) ends the exchange with `credential-in-use` when
    a route that uses the name would not activate with the new kind and origins. The message names each route and why.
 5. **Summary.** The [vault change summary](credential-commands.md#vault-change-summary), as one or more notices.
-6. **Owner presence.** A prompt, secret: `Approval passphrase`. The service opens the approver key with it and drops
-   it. A wrong passphrase, or a key that is not the asked approver's, ends the exchange with `approval-denied`. Nothing
-   is reserved or signed, and there is no second try.
+6. **Owner presence.** A prompt, secret, naming the asked approver: `Approval passphrase for "<label>"`. The service
+   opens the approver key with it and drops it. A wrong passphrase, or a key that is not the asked approver's, ends the
+   exchange with `approval-denied`. Nothing is reserved or signed, and there is no second try.
 7. **Material.** The secret prompts for the new kind, as for `add`. Material that breaks its rule ends the exchange
    with `credential-invalid`.
 8. The service checks again that it is Ready and that no `lock` and `unlock` ran during the prompts (`wrong-state`),

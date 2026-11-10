@@ -132,7 +132,7 @@ routes:
   + fx: prefix /fx, upstream https://api.exchangerate.host/, credential fx_key, slot query access_key, ca file none, methods GET, paths /historical, /live, rate limit 60 per 60s burst 10, confirm none
   + venice: prefix /venice, upstream https://api.venice.ai/api/v1, credential venice, slot header Authorization format "Bearer {}", ca file none, methods POST, paths /chat/completions, rate limit 120 per 60s burst 20, confirm none
 Approve this config as version 3? Type yes to approve: yes
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 approved version 3 (blake2b:ce35d419…)
 callers: 1 added; route grants: 1 added; routes: 3 added; listeners: none; limits: none; logging: none; recovery: none
 ```

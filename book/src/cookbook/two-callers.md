@@ -121,7 +121,7 @@ routes:
   + venice-chat: prefix /venice-chat, upstream https://api.venice.ai/api/v1, credential venice_chat, slot header Authorization format "Bearer {}", ca file none, methods POST, paths /chat/completions, rate limit 6 per 60s burst 6, confirm none
   + venice-dev: prefix /venice-dev, upstream https://api.venice.ai/api/v1, credential venice_dev, slot header Authorization format "Bearer {}", ca file none, methods GET, POST, paths /**, rate limit 600 per 60s burst 100, confirm none
 Approve this config as version 4? Type yes to approve: yes
-Approval passphrase:
+Approval passphrase for "approval passphrase":
 approved version 4 (blake2b:731e570b…)
 callers: 2 added; route grants: 2 added; routes: 2 added; listeners: none; limits: none; logging: none; recovery: none
 ```

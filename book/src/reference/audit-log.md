@@ -44,6 +44,8 @@ These mean the same, with the same type, in every event that has them:
 | `request_id` | string | A random UUID per request; joins `request.completed` to `response.scrubbed` and `request.defect` |
 | `caller`, `route`, `credential` | string | Configured names |
 | `record_id` | string | A credential record's ID |
+| `approver_id` | string | The approver that was asked for the approval passphrase, or that signed: its ID, a hyphenated UUID |
+| `approver_label` | string | That approver's label, escaped; `init` labels the approval passphrase's approver `approval passphrase` |
 | `version` | number | An approval version |
 | `committed_version` | number | The committed approval version; absent when none is committed |
 | `config_digest` | string | `blake2b:` and 64 hex digits |
@@ -93,7 +95,7 @@ Every audit event has the target `iron-vault.audit`. The fields are those beyond
 | `vault.unlock-refused` | WARN | An unlock was refused | `refusal`: `wrong_passphrase`, `rate_limited`, `memory_unprotected`, `wrong_state`, `state_read`, `passphrase_envelope`, `identity_envelope`, `initialization_unfinished`, `not_initialized`, `unrecognized_files`, `state_unreadable` or `interrupted`; `memory_protection` for `memory_unprotected`; `retry_after` (whole seconds) for `rate_limited` |
 | `vault.host-unlock` | INFO when `unlocked` or `absent`, WARN when `refused` | A Container-profile service tried the unlock handoff at startup; other profiles never write it | `host_unlock_outcome` (`unlocked`, `absent` or `refused`); `refusal` when refused: `memory_unprotected`, `untrusted`, `unreadable`, `not_an_identity`, `not_initialized` or `not_a_recipient`. Never the handoff's bytes or its recipient key. A `memory_unprotected` refusal also writes `vault.unlock-refused`. |
 | `vault.foreign-file` | WARN | `unlock` found a file beside the manifest that the vault does not use; the file is never read, and the unlock goes on | `file`, escaped |
-| `vault.presence-refused` | WARN | The approval passphrase for `replace` or `rm` was refused; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`) |
+| `vault.presence-refused` | WARN | The approval passphrase for `replace` or `rm` was refused; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`), `approver_id`, `approver_label` |
 | `vault.lock-incomplete` | WARN | A lock finished while a request still held a snapshot or the vault identity | `snapshots_held` (number), `identity_held` (boolean) |
 
 ### Admin commands and caller tokens
@@ -111,11 +113,11 @@ A command refused after it was read, such as `init` in the wrong state, records 
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `config.approval-refused` | WARN | The approval passphrase was wrong or opened the wrong key; nothing was reserved | `refusal` (`wrong_passphrase` or `key_mismatch`), `config_digest` |
-| `config.version-reserved` | INFO | A version was reserved, before signing | `version`, `config_digest` |
+| `config.approval-refused` | WARN | The approval passphrase was wrong or opened the wrong key; nothing was reserved | `refusal` (`wrong_passphrase` or `key_mismatch`), `config_digest`, `approver_id`, `approver_label` |
+| `config.version-reserved` | INFO | A version was reserved, before signing | `version`, `config_digest`, `approver_id`, `approver_label` |
 | `config.approval-failed` | WARN | The approval failed after its reservation and before its commit; the version is used up | `version`, `config_digest`, `step`, `error_kind` |
 | `config.commit-uncertain` | WARN | The commit's rename landed but its directory fsync failed | `version`, `error_kind` |
-| `config.approval-completed` | INFO | The commit is durable | `version`, `config_digest`, `summary` (the approval summary's text, or `initial config` for version 1) |
+| `config.approval-completed` | INFO | The commit is durable | `version`, `config_digest`, `summary` (the approval summary's text, or `initial config` for version 1), `approver_id`, `approver_label` |
 | `config.activation-failed` | WARN | The config check after a committed approval failed | `version`, `unavailable_reason`, `detail` |
 | `config.check-failed` | WARN | Any config check failed | `unavailable_reason`, `failure` (a fixed label), `detail`; `log_destination` when the log destination failed |
 | `config.reload-failed` | WARN | The config check of a SIGHUP reload failed | `committed_version`, `unavailable_reason`, `detail` |
