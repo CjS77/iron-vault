@@ -348,10 +348,13 @@ service is already active (`Socket service iron-vault.service already active, re
 is still up starts the service again. A new TCP listener therefore needs the existing sockets stopped with the service:
 
 1. Write the drop-in, then `sudo systemctl enable iron-vault-listener@<name>.socket`.
-2. `sudo systemctl stop 'iron-vault-listener@*.socket' iron-vault.service`, then `sudo systemctl start` for every
-   enabled listener socket, the new one included, then `sudo systemctl start iron-vault` and `sudo iron-vault unlock`.
-   The started service holds all the sockets.
-3. Approve a config that names the listener. The approval can come before step 2, and its summary then marks the
+2. `systemctl list-units 'iron-vault-listener@*.socket'` lists the running instances. The listing comes before the
+   stop because a stopped instance may be unloaded, and a glob passed to `start` would then match nothing. A listener
+   left out stays down, with its port free, until the next boot.
+3. `sudo systemctl stop 'iron-vault-listener@*.socket' iron-vault.service`, then `sudo systemctl start` for every
+   instance the listing showed, the new one included, then `sudo systemctl start iron-vault` and `sudo iron-vault
+   unlock`. The started service holds all the sockets.
+4. Approve a config that names the listener. The approval can come before step 3, and its summary then marks the
    listener as taking effect after restart ([config-approval.md](config-approval.md#open-questions), question 2).
 
 The alternative was to keep the plain stop and start and tell the owner to repeat them if systemd refuses. That leaves

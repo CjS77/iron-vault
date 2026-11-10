@@ -178,20 +178,23 @@ non-loopback address also needs `tls_certificate` and `tls_key` in the config.
    sudo systemctl enable iron-vault-listener@loopback.socket
    ```
 
-3. Stop the service together with the listener sockets, start every enabled listener socket, then start the service and
-   unlock it. systemd refuses to start a socket while its service is running (`Socket service iron-vault.service
-   already active, refusing`), so `enable --now` or a plain `start` fails here. Stopping the service alone is not
-   enough: a caller connecting to a listener socket that is still up starts it again, and the refusal returns.
+3. List the running listener sockets, then stop them together with the service, start each one the list shows plus the
+   new one, then start the service and unlock it. systemd refuses to start a socket while its service is running
+   (`Socket service iron-vault.service already active, refusing`), so `enable --now` or a plain `start` fails here.
+   Stopping the service alone is not enough: a caller connecting to a listener socket that is still up starts it again,
+   and the refusal returns. This frees every listener's port for a moment. Read [Stop the service](#stop-the-service)
+   for what that means for callers and for port squatting, and stop your callers first.
 
    ```sh
+   systemctl list-units 'iron-vault-listener@*.socket'
    sudo systemctl stop 'iron-vault-listener@*.socket' iron-vault.service
-   sudo systemctl start iron-vault-listener@loopback.socket   # one line for each enabled listener, the new one included
+   sudo systemctl start iron-vault-listener@loopback.socket   # one line for each socket the list showed, the new one included
    sudo systemctl start iron-vault
    sudo iron-vault unlock
    ```
 
-   This frees every listener's port for a moment. Read [Stop the service](#stop-the-service) for what that means for
-   callers and for port squatting, and stop your callers first.
+   List before you stop: a stopped instance may be unloaded, and a glob passed to `start` then matches nothing. A
+   listener you leave out stays down, with its port free, until the next boot.
 
 4. Approve a config that names the listener with the same address:
 
