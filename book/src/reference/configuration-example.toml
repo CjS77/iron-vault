@@ -70,7 +70,7 @@ methods = ["GET"]
 paths = ["/latest", "/historical/**"]
 rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 
-# A header slot with a format. The upstream has a base path, so `paths` starts with it: a request for
+# A header slot with a format. The upstream has a base path, which `paths` leaves out: a request for
 # /venice/chat/completions is sent to /api/v1/chat/completions.
 [routes.venice]
 prefix = "/venice"
@@ -78,7 +78,7 @@ upstream = "https://api.venice.ai/api/v1"
 credential = "venice"
 slot = { header = "Authorization", format = "Bearer {}" }
 methods = ["POST"]
-paths = ["/api/v1/chat/completions"]
+paths = ["/chat/completions"]
 rate_limit = { requests = 120, per_seconds = 60, burst = 20 }
 
 # A header slot without a format: the header holds the key alone.
@@ -110,7 +110,7 @@ upstream = "https://tickets.internal.example/rest/api/2"
 credential = "tickets"
 slot = "basic"
 methods = ["GET", "POST", "PUT"]
-paths = ["/rest/api/2/issue", "/rest/api/2/issue/*", "/rest/api/2/search"]
+paths = ["/issue", "/issue/*", "/search"]
 rate_limit = { requests = 20, per_seconds = 60, burst = 5 }
 ca_file = "/etc/iron-vault/ca/tickets.pem"
 

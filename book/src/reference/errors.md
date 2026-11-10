@@ -167,7 +167,7 @@ the response. A refusal before the route's credential is added sends nothing ups
 | `401` `unauthenticated` | No caller token, a wrong one, or a peer account no caller names. | Send the token in `Proxy-Authorization: Bearer <token>`, or in the listener's `token_header`. After a token rotation, the old one stops working at once. |
 | `403` `not_granted` | The caller is known but its `routes` do not include this route. | Grant the route in the caller's table and approve. |
 | `403` `method_not_allowed` | The route's `methods` do not allow this method. | Widen `methods`, or call it differently. See [Widen or narrow a route](../cookbook/change-route.md). |
-| `403` `path_not_allowed` | The route's `paths` do not match. Patterns match the full path sent upstream, including the upstream's base path. | Check `paths` against the upstream path, not the prefix you call. |
+| `403` `path_not_allowed` | The route's `paths` do not match. Patterns match the path after the route prefix, as the provider documents it, without the upstream's base path. | Check `paths` against the path you call after the prefix; leave the upstream's base path out. |
 | `404` `no_route` | No route has this prefix. The same answer whatever other callers may use. | Check the prefix in the URL. |
 
 ### 413, 408 and 429: limits

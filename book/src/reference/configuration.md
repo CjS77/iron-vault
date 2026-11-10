@@ -336,7 +336,7 @@ upstream = "https://api.venice.ai/api/v1"
 credential = "venice"
 slot = { header = "Authorization", format = "Bearer {}" }
 methods = ["POST"]
-paths = ["/api/v1/chat/completions"]
+paths = ["/chat/completions"]
 rate_limit = { requests = 120, per_seconds = 60, burst = 20 }
 ```
 
@@ -401,10 +401,22 @@ method is refused before anything is sent.
 
 The path patterns the route allows. A request whose path matches none of them is refused before anything is sent.
 
-**Patterns match the full path sent upstream**, which is the upstream's base path followed by the rest of the request
-path. With `upstream = "https://api.venice.ai/api/v1"` and `prefix = "/venice"`, a request for
-`/venice/chat/completions` is sent to `/api/v1/chat/completions`, and that is what `paths` must name. Patterns never
-see the query string.
+**Patterns match the request path after the route prefix**, which is the path the provider documents, without the
+upstream's base path. The service adds the base path when it forwards the request. With
+`upstream = "https://api.venice.ai/api/v1"` and `prefix = "/venice"`, `paths = ["/chat/completions"]` allows a request
+for `/venice/chat/completions`, which is sent to `/api/v1/chat/completions`. Patterns never see the query string.
+
+Brave Search documents `/v1/web/search`, and its API lives under `/res`, so the route is:
+
+```toml
+[routes.brave]
+prefix = "/brave"
+upstream = "https://api.search.brave.com/res"
+paths = ["/v1/web/search"]
+```
+
+A pattern that repeats the base path, such as `/res/v1/web/search`, is legal but means `/res/res/v1/web/search`, so
+it matches nothing the provider serves.
 
 **Wildcards stand for whole segments.**
 

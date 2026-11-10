@@ -92,7 +92,7 @@ upstream = "https://api.venice.ai/api/v1"
 credential = "venice"
 slot = { header = "Authorization", format = "Bearer {}" }
 methods = ["POST"]
-paths = ["/api/v1/chat/completions"]
+paths = ["/chat/completions"]
 rate_limit = { requests = 120, per_seconds = 60, burst = 20 }
 
 [routes.fx]
@@ -106,8 +106,9 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 ```
 
 - A header slot with no `format` sends the key as the whole header value.
-- `paths` match the path sent upstream, including the upstream's base path. The Venice upstream ends in `/api/v1`, so
-  the agent's `/venice/chat/completions` reaches Venice as `/api/v1/chat/completions`, and that is what `paths` names.
+- `paths` match the path after the route prefix, without the upstream's base path. The Venice upstream ends in
+  `/api/v1`, so the agent's `/venice/chat/completions` reaches Venice as `/api/v1/chat/completions`, and `paths` names
+  `/chat/completions`.
 - Each route allows only the methods and paths the agent needs. Widen them when it needs more.
 
 Approve it:
@@ -129,7 +130,7 @@ route grants:
 routes:
   + brave: prefix /brave, upstream https://api.search.brave.com/, credential brave, slot header X-Subscription-Token format "{}", ca file none, methods GET, paths /res/v1/web/search, rate limit 60 per 60s burst 10, confirm none
   + fx: prefix /fx, upstream https://api.exchangerate.host/, credential fx_key, slot query access_key, ca file none, methods GET, paths /historical, /live, rate limit 60 per 60s burst 10, confirm none
-  + venice: prefix /venice, upstream https://api.venice.ai/api/v1, credential venice, slot header Authorization format "Bearer {}", ca file none, methods POST, paths /api/v1/chat/completions, rate limit 120 per 60s burst 20, confirm none
+  + venice: prefix /venice, upstream https://api.venice.ai/api/v1, credential venice, slot header Authorization format "Bearer {}", ca file none, methods POST, paths /chat/completions, rate limit 120 per 60s burst 20, confirm none
 Approve this config as version 3? Type yes to approve: yes
 Approval passphrase:
 approved version 3 (blake2b:ce35d419…)
@@ -231,7 +232,7 @@ routes = ["fx"]
   `https://api.fx.example` upstream gets against a key added for `api.exchangerate.host`. Fix the upstream, or
   `replace` the credential with the right `--origin`. No version is used up.
 - **`403 Forbidden` from Iron Vault.** The method or path is not in the route. The log's `reason` says which:
-  `method_not_allowed` or `path_not_allowed`. Remember that `paths` include the upstream's base path.
+  `method_not_allowed` or `path_not_allowed`. Remember that `paths` leave out the upstream's base path.
 - **`401` or `422` from the provider.** The request reached the provider with the stored key, and the provider refused
   it. Check the key, or `replace` it.
 - **`400 Bad Request` with `foreign_marker` in the log.** The agent sent a marker such as `{iv:brave}` in a route

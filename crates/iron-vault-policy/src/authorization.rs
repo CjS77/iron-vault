@@ -89,7 +89,7 @@ pub enum Refusal {
     /// The method is not in the route's `methods`.
     #[error("the method is not allowed")]
     Method,
-    /// The upstream path matches none of the route's `paths`.
+    /// The request path below the route prefix matches none of the route's `paths`.
     #[error("the upstream path is not allowed")]
     Path,
 }
@@ -98,7 +98,9 @@ pub enum Refusal {
 ///
 /// Checks run in an order that discloses as little as possible: a caller learns that a route is unavailable only after
 /// its grant to that route is confirmed, so an ungranted caller gets `Forbidden` whether or not the route is available.
-/// The query is carried through unchecked, because path patterns match the upstream path excluding its query (§6).
+/// Path patterns match the request segments after the route prefix, which is the path below the upstream base path
+/// and the path the provider documents; the base path is prepended by [`plan`] only after the match. The query is
+/// carried through unchecked, because patterns never see it (§6).
 pub fn authorize(
     policy: &ActivePolicy,
     caller: &CallerName,
@@ -118,10 +120,14 @@ pub fn authorize(
     if !route.methods().contains(method) {
         return Err(forbidden(Refusal::Method));
     }
-    let request = plan(name, *method, route, path, query);
-    let segments: Vec<&str> = request.upstream_segments.iter().map(String::as_str).collect();
-    match route.paths().matches(&segments) {
-        true => Ok(request),
+    let below_prefix: Vec<&str> = path
+        .segments()
+        .iter()
+        .skip(route.prefix().segments().len())
+        .map(String::as_str)
+        .collect();
+    match route.paths().matches(&below_prefix) {
+        true => Ok(plan(name, *method, route, path, query)),
         false => Err(forbidden(Refusal::Path)),
     }
 }
@@ -325,6 +331,50 @@ mod tests {
         let venice = request(&policy(&[]), "naomi-backoffice", Method::Post, "/venice/chat/completions/").unwrap();
         assert!(venice.has_trailing_slash());
         assert_eq!(upstream_path(&venice), "/api/v1/chat/completions/");
+    }
+
+    fn based_policy(base: &str, paths: &str) -> ActivePolicy {
+        let doc = SPEC_EXAMPLE
+            .replace(
+                "upstream = \"https://api.search.brave.com\"",
+                &format!("upstream = \"https://api.search.brave.com{base}\""),
+            )
+            .replace("paths = [\"/res/v1/web/search\"]", &format!("paths = [{paths}]"));
+        policy_from(&doc, &[])
+    }
+
+    #[test]
+    fn patterns_match_below_the_upstream_base_path() {
+        let p = based_policy("/res", "\"/v1/web/search\"");
+        let ok = request(&p, "brave-cli", Method::Get, "/brave/v1/web/search").unwrap();
+        assert_eq!(upstream_path(&ok), "/res/v1/web/search");
+    }
+
+    #[test]
+    fn patterns_that_repeat_the_base_path_do_not_match() {
+        let p = based_policy("/res", "\"/res/v1/web/search\"");
+        assert_eq!(
+            request(&p, "brave-cli", Method::Get, "/brave/v1/web/search"),
+            Err(forbidden("brave", Refusal::Path))
+        );
+        assert!(request(&p, "brave-cli", Method::Get, "/brave/res/v1/web/search").is_ok());
+    }
+
+    #[test]
+    fn any_pattern_allows_the_bare_prefix() {
+        let p = based_policy("/res", "\"/**\"");
+        let ok = request(&p, "brave-cli", Method::Get, "/brave").unwrap();
+        assert_eq!(upstream_path(&ok), "/res");
+    }
+
+    #[test]
+    fn empty_base_path_matches_the_request_path() {
+        let p = based_policy("", "\"/v1/web/search\"");
+        assert!(request(&p, "brave-cli", Method::Get, "/brave/v1/web/search").is_ok());
+        assert_eq!(
+            request(&p, "brave-cli", Method::Get, "/brave/res/v1/web/search"),
+            Err(forbidden("brave", Refusal::Path))
+        );
     }
 
     #[test]

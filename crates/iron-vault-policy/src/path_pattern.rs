@@ -1,8 +1,8 @@
 //! Path patterns: the route restriction that decides which upstream paths a route may reach (specification §6).
 //!
 //! A pattern is written as an absolute path whose segments are literals, `*` (exactly one segment) or `**` (zero or
-//! more complete segments). Patterns match the whole normalized upstream path, never its query. Normalizing a request
-//! path into segments is [`NormalizedPath`](crate::NormalizedPath)'s job; matching here assumes segments in that form:
+//! more complete segments). Patterns match the whole normalized request path below the upstream base path (the segments after the route
+//! prefix), never its query. Normalizing a request path into segments is [`NormalizedPath`](crate::NormalizedPath)'s job; matching here assumes segments in that form:
 //! validated, with unreserved characters decoded and every other escape kept as uppercase `%XX`.
 //!
 //! A literal pattern segment never contains `%`, so a request segment that still holds an escape (`caf%C3%A9`) can be

@@ -133,7 +133,7 @@ ca_file = "/etc/iron-vault/ca/test.pem"
 credential = "{name}"
 slot = {slot}
 methods = ["GET"]
-paths = ["/v1/**"]
+paths = ["/**"]
 rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
 "#
             )

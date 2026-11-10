@@ -19,7 +19,7 @@ upstream = "https://api.svc.example/v1"
 credential = "svc_key"
 slot = { header = "X-Key" }
 methods = ["GET"]
-paths = ["/v1/**"]
+paths = ["/**"]
 rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 "#;
 

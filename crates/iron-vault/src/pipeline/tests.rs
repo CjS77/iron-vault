@@ -75,7 +75,7 @@ upstream = "https://api.venice.ai/api/v1"
 credential = "venice"
 slot = {{ header = "Authorization", format = "Bearer {{}}" }}
 methods = ["POST"]
-paths = ["/api/v1/chat/completions"]
+paths = ["/chat/completions"]
 rate_limit = {{ requests = 120, per_seconds = 60, burst = 20 }}
 
 [routes.brave]
@@ -93,7 +93,7 @@ upstream = "https://api.billing.example"
 credential = "billing"
 slot = "basic"
 methods = ["GET"]
-paths = ["/v1/**"]
+paths = ["/**"]
 rate_limit = {{ requests = 60, per_seconds = 60, burst = 10 }}
 "#
     )

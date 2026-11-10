@@ -78,7 +78,7 @@ upstream = "https://api.venice.ai/api/v1"
 credential = "venice_chat"
 slot = { header = "Authorization", format = "Bearer {}" }
 methods = ["POST"]
-paths = ["/api/v1/chat/completions"]
+paths = ["/chat/completions"]
 rate_limit = { requests = 6, per_seconds = 60, burst = 6 }
 
 [routes.venice-dev]
@@ -87,13 +87,13 @@ upstream = "https://api.venice.ai/api/v1"
 credential = "venice_dev"
 slot = { header = "Authorization", format = "Bearer {}" }
 methods = ["GET", "POST"]
-paths = ["/api/v1/**"]
+paths = ["/**"]
 rate_limit = { requests = 600, per_seconds = 60, burst = 100 }
 ```
 
 - **A caller reaches only the routes it lists.** `chat` lists only `venice-chat`.
-- **Paths include the upstream's base path.** `/venice-chat/chat/completions` reaches Venice as
-  `/api/v1/chat/completions`, which is what `paths` names. `**` matches any number of segments, `*` exactly one.
+- **Paths leave out the upstream's base path.** `/venice-chat/chat/completions` reaches Venice as
+  `/api/v1/chat/completions`, and `paths` names `/chat/completions`. `**` matches any number of segments, `*` exactly one.
 - **The rate limit is a token bucket.** It holds up to `burst` requests and refills at `requests` every `per_seconds`.
   The chat route can send 6 at once, then one every 10 seconds. The bucket is shared by every caller of the route.
 - **Every route needs a rate limit.** A route that should be effectively unlimited gets a generous one.
@@ -117,8 +117,8 @@ route grants:
   + chat: granted venice-chat
   + dev: granted venice-dev
 routes:
-  + venice-chat: prefix /venice-chat, upstream https://api.venice.ai/api/v1, credential venice_chat, slot header Authorization format "Bearer {}", ca file none, methods POST, paths /api/v1/chat/completions, rate limit 6 per 60s burst 6, confirm none
-  + venice-dev: prefix /venice-dev, upstream https://api.venice.ai/api/v1, credential venice_dev, slot header Authorization format "Bearer {}", ca file none, methods GET, POST, paths /api/v1/**, rate limit 600 per 60s burst 100, confirm none
+  + venice-chat: prefix /venice-chat, upstream https://api.venice.ai/api/v1, credential venice_chat, slot header Authorization format "Bearer {}", ca file none, methods POST, paths /chat/completions, rate limit 6 per 60s burst 6, confirm none
+  + venice-dev: prefix /venice-dev, upstream https://api.venice.ai/api/v1, credential venice_dev, slot header Authorization format "Bearer {}", ca file none, methods GET, POST, paths /**, rate limit 600 per 60s burst 100, confirm none
 Approve this config as version 4? Type yes to approve: yes
 Approval passphrase:
 approved version 4 (blake2b:731e570b…)
@@ -219,7 +219,7 @@ log record has `"reason":"rate_limited"`.
 - **`iron-vault: the service answered error 7 (config-invalid): the proposed config is invalid: caller chat is
   granted route venice-admin, which is not defined`.** A caller's `routes` names a route the config does not define. Add the route or take it out of the
   list.
-- **`403` with `path_not_allowed` on the chat route.** `paths` must include the `/api/v1` base path.
+- **`403` with `path_not_allowed` on the chat route.** `paths` is matched against the path after the route prefix, so `/chat/completions`, not `/api/v1/chat/completions`.
 
 ## Reference
 

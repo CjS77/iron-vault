@@ -171,7 +171,7 @@ ca_file = "/etc/iron-vault/ca/test.pem"
 credential = "fx"
 slot = {{ header = "X-Api-Key" }}
 methods = ["GET"]
-paths = ["/v1/**"]
+paths = ["/**"]
 rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
 "#,
             socket = self.socket().display(),

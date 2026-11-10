@@ -33,7 +33,7 @@ upstream = "{origin}/v1"
 credential = "key"
 slot = {{ query = "access_key" }}
 methods = ["GET", "POST"]
-paths = ["/v1/**"]
+paths = ["/**"]
 rate_limit = {{ requests = 60, per_seconds = 60, burst = 10 }}
 
 [routes.header]
@@ -42,7 +42,7 @@ upstream = "{origin}/v1"
 credential = "key"
 slot = {{ header = "X-Api-Key" }}
 methods = ["GET", "POST"]
-paths = ["/v1/**"]
+paths = ["/**"]
 rate_limit = {{ requests = 60, per_seconds = 60, burst = 10 }}
 "#
     )

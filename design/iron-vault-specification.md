@@ -329,7 +329,7 @@ upstream = "https://api.venice.ai/api/v1"
 credential = "venice"
 slot = { header = "Authorization", format = "Bearer {}" }
 methods = ["POST"]
-paths = ["/api/v1/chat/completions"]
+paths = ["/chat/completions"]
 rate_limit = { requests = 120, per_seconds = 60, burst = 20 }
 
 [routes.brave]
@@ -352,7 +352,8 @@ The service must not infer broader grants from missing restrictions.
 It rejects unknown fields, unresolved references, duplicate names, ambiguous route matches, invalid patterns, 
 unsafe upstream URLs, and unavailable confirmation policies.
 
-Path patterns match the final normalized upstream path, excluding its query. A literal segment matches itself;
+Path patterns match the normalized request path below the upstream base path, excluding its query: the segments after
+the route prefix, as the provider documents them. The service prepends the base path when it forwards the request. A literal segment matches itself;
 `*` matches one segment and `**` matches zero or more complete segments. Matching covers the whole path. The service
 must use the same path representation for authorization and forwarding.
 

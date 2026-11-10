@@ -46,7 +46,7 @@ upstream = "https://api.venice.ai/api/v1"
 credential = "venice"
 slot = { header = "Authorization", format = "Bearer {}" }
 methods = ["POST"]
-paths = ["/api/v1/chat/completions"]
+paths = ["/chat/completions"]
 rate_limit = { requests = 120, per_seconds = 60, burst = 20 }
 
 [routes.brave]

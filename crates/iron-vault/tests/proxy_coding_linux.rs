@@ -35,7 +35,7 @@ ca_file = "/etc/iron-vault/ca/test.pem"
 credential = "fx_key"
 slot = {{ header = "X-Api-Key" }}
 methods = ["GET", "HEAD"]
-paths = ["/v1/**"]
+paths = ["/**"]
 rate_limit = {{ requests = 60, per_seconds = 60, burst = 10 }}
 "#
     )

@@ -169,8 +169,8 @@ The methods the route allows: any of \fBGET\fR, \fBHEAD\fR, \fBPOST\fR, \fBPUT\f
 .TP
 \fBpaths\fR (array of strings, required)
 The path patterns the route allows.
-They match the full path sent upstream, which is the upstream's base path followed by the rest of the request path,
-and never see the query.
+They match the request path after the route prefix, as the provider documents it, without the upstream's base path
+(the service adds that when it forwards the request), and never see the query.
 \fB*\fR matches exactly one segment and \fB**\fR zero or more; a wildcard must be a whole segment.
 \fB["/**"]\fR allows every path, and must be written out: an empty list is refused.
 A pattern starts with \fB/\fR, has no empty or dot segment and no trailing slash.

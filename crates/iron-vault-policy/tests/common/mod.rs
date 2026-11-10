@@ -51,7 +51,7 @@ upstream = "https://api.fxa.example/x"
 credential = "fxa_key"
 slot = { header = "X-Api-Key" }
 methods = ["GET"]
-paths = ["/x/**"]
+paths = ["/**"]
 rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 
 [routes.venice]
@@ -60,7 +60,7 @@ upstream = "https://api.venice.ai/api/v1"
 credential = "venice"
 slot = { header = "Authorization", format = "Bearer {}" }
 methods = ["GET"]
-paths = ["/api/v1/chat/*", "/api/v1/models"]
+paths = ["/chat/*", "/models"]
 rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 
 [routes.deep]
@@ -69,7 +69,7 @@ upstream = "https://api.deep.example/v2/base"
 credential = "deep"
 slot = { header = "X-Api-Key" }
 methods = ["GET"]
-paths = ["/v2/base/**"]
+paths = ["/**"]
 rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 
 [routes.basic]
@@ -78,7 +78,7 @@ upstream = "https://api.fx.example.:8443/b"
 credential = "basic_login"
 slot = "basic"
 methods = ["GET"]
-paths = ["/b/**"]
+paths = ["/**"]
 rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 "#;
 
