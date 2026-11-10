@@ -190,11 +190,12 @@ core_dumps_are_off() {
     core_limit_is_zero <"/proc/$1/limits" || { echo "the process's core limit is not 0"; return 1; }
 }
 
-# The kernel makes /proc/PID/* of a non-dumpable process belong to root, whatever account runs the process.
+# The kernel makes the files under /proc/PID of a non-dumpable process belong to root, whatever account runs the
+# process. The /proc/PID directory itself keeps the process's own uid, so stat a file inside it.
 process_not_dumpable() {
     local owner
-    owner=$(stat -c %u "/proc/$1")
-    [ "$owner" = 0 ] || { echo "/proc/$1 belongs to uid $owner, so the process is dumpable"; return 1; }
+    owner=$(stat -c %u "/proc/$1/status")
+    [ "$owner" = 0 ] || { echo "/proc/$1/status belongs to uid $owner, so the process is dumpable"; return 1; }
 }
 
 # --- Checks as the ordinary test account --------------------------------------------------------------------------------
