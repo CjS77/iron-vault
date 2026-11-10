@@ -519,7 +519,7 @@ the same approver prompt. The epic that brings each kind decides, for that kind:
   never a cached PIN or an earlier touch;
 - the release checks that let [§14](iron-vault-specification.md#14-recipients-startup-and-memory) offer it.
 
-Three constraints carry over:
+Two constraints carry over:
 
 - **A TPM approver is also a source-owner method** ([migration-authorization.md](migration-authorization.md#source-owner-method)).
   Once the [independence rule](recipients.md#independence-rule) lets a vault drop `operational`, removing the last
@@ -528,10 +528,6 @@ Three constraints carry over:
 - **Touch needs another frame.** In an exchange the CLI answers each prompt before the service sends anything else, so
   it cannot express a service waiting on a device while the CLI watches the keyboard for Ctrl-Y. The hardware-key phase
   adds a frame for it, and the switch frame stays the CLI's way to ask for another approver.
-- **No child processes.** If the running service is forbidden to `execve` (K-286, not yet decided), a signer adapter
-  cannot be an `age` plugin or any other child process. It must run in-process, such as `tss-esapi` for the TPM, or as
-  a host-side helper reached over a socket, as [docker-compose.md](docker-compose.md#approval-signing) already expects
-  for a container.
 
 ## Release checks
 
