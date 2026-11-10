@@ -138,9 +138,13 @@ runs. It fails `configure` unless the account is what `systemd-sysusers` would h
 - in `/etc/gshadow`, a group with no administrators, no members and no usable password. A password is unusable when
   it is empty or starts with `!` or `*`, which `gshadow(5)` says is not a valid `crypt(3)` string, so `newgrp` cannot
   be passed with it. `systemd-sysusers` writes `iron-vault:!*::`; `adduser --system --group`'s `!::` and `*::` are also
-  accepted. Every `iron-vault` line is read. A group administrator can add members with
+  accepted. Every `iron-vault` line is read for these. A group administrator can add members with
   `gpasswd -a`, and anyone who knows a password can join with `newgrp`. Members are refused here as well as in
-  `/etc/group`, because the two lists can differ. A missing `/etc/gshadow` means no group has an entry;
+  `/etc/group`, because the two lists can differ. A missing `/etc/gshadow` means no group has an entry. An entry is
+  the first `iron-vault` line that has exactly four colon-separated fields and follows no malformed line, because
+  `newgrp` looks it up with shadow-utils' `getsgnam`: `sgetsgent` (`lib/gshadow.c`) rejects any other field count,
+  and `getsgent` ends the scan at the first line it rejects. A blank line, a bare name or a five-field line therefore
+  hides every later line, and `newgrp` then uses the `/etc/group` password;
 - when `/etc/gshadow` has no `iron-vault` entry, a usable password in the second field of the `/etc/group` entry, because
   `newgrp(1)` takes the group's password from `/etc/group` only then. The same rule applies: empty, `!…` and `*…` are
   unusable. So is `x`, which means "look in `/etc/gshadow`": with no entry there is nothing to match, and `crypt(3)`

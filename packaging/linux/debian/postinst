@@ -31,8 +31,15 @@ service_account_problems() {
         # gshadow(5): name:password:administrators:members. A password starting with ! or * is not a valid crypt(3) string,
         # so no one can join the group with it; an empty one lets no non-member in either.
         # Every line is read, as gpasswd skips a malformed one and may act on a later one.
+        # getsgnam (newgrp) scans with shadow-utils lib/gshadow.c: sgetsgent rejects a line unless it has exactly 4 fields,
+        # and getsgent returns NULL at the first line it rejects, which ends the scan. So the entry newgrp finds is the
+        # first iron-vault line with NF == 4 and no malformed line (blank, bare name, 5 fields) before it. Without one,
+        # newgrp falls back to the /etc/group password, so this must not count a line it would not find.
+        FILENAME == gshadow && !scanned {
+            if (NF != 4) scanned = 1
+            else if ($1 == name) { gshadowed = 1; scanned = 1 }
+        }
         FILENAME == gshadow && $1 == name {
-            if (NF >= 4) gshadowed = 1
             if ($2 != "" && $2 !~ /^[!*]/) gpw = 1
             if ($3 != "") gadmins = gadmins (gadmins == "" ? "" : ",") $3
             if ($4 != "") gmembers_sh = gmembers_sh (gmembers_sh == "" ? "" : ",") $4

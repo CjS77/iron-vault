@@ -362,7 +362,7 @@ fn gshadow_administrator_is_refused() {
 
 #[test]
 fn gshadow_administrator_after_a_malformed_line_is_refused() {
-    // gpasswd skips the bare line, so alice is still an administrator.
+    // Administrators are read from every iron-vault line: gpasswd skips the bare line, so alice is still one.
     let accounts = Accounts::sysusers().gshadow_entry("iron-vault\niron-vault:!:alice:");
     assert_refused(&accounts, "group iron-vault: gshadow names administrators alice");
 }
@@ -422,6 +422,30 @@ fn group_password_with_no_gshadow_line_is_refused() {
         .expect("a gshadow file")
         .retain(|line| !line.starts_with("iron-vault:"));
     assert_refused(&accounts, GROUP_PASSWORD);
+}
+
+/// Refused because `newgrp` finds no gshadow entry and so reads the `/etc/group` password.
+fn assert_group_password_refused_with_gshadow(entry: &str) {
+    let accounts = Accounts::sysusers()
+        .group_entry("iron-vault:$6$salt$hash:998:")
+        .gshadow_entry(entry);
+    assert_refused(&accounts, GROUP_PASSWORD);
+}
+
+#[test]
+fn group_password_with_a_five_field_gshadow_line_is_refused() {
+    assert_group_password_refused_with_gshadow("iron-vault:!*:::");
+}
+
+#[test]
+fn group_password_with_a_blank_line_before_the_gshadow_entry_is_refused() {
+    assert_group_password_refused_with_gshadow("\niron-vault:!*::");
+    assert_group_password_refused_with_gshadow("junk\niron-vault:!*::");
+}
+
+#[test]
+fn group_password_with_a_bare_line_before_the_gshadow_entry_is_refused() {
+    assert_group_password_refused_with_gshadow("iron-vault\niron-vault:!*::");
 }
 
 #[test]
