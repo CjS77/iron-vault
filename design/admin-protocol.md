@@ -20,7 +20,8 @@ One connection carries one exchange:
 
 1. The CLI sends one **admin request**: a command and its arguments.
 2. The service sends zero or more **prompts**, **notices** and **reveals**, in any order. The CLI answers each prompt
-   with exactly one **owner input** frame before the service sends anything else. A notice or a reveal is shown to the
+   with exactly one **owner input** frame before the service sends anything else, or, only when the prompt is
+   switchable, with one **switch** frame. A notice or a reveal is shown to the
    owner and never answered.
 3. The service sends exactly one **admin response**, success or error, and closes the connection.
 
@@ -35,8 +36,8 @@ sequenceDiagram
     CLI->>Service: admin request
     loop zero or more times
         alt prompt
-            Service->>CLI: prompt (label, secret?)
-            CLI->>Service: owner input
+            Service->>CLI: prompt (label, secret?, switchable?)
+            CLI->>Service: owner input, or switch when switchable
         else notice
             Service->>CLI: notice (text)
         else reveal
@@ -67,6 +68,7 @@ Every frame is a 7-byte header followed by its body. Integers are big-endian.
 | `5` | admin response: error | service | fields |
 | `6` | notice | service | fields |
 | `7` | reveal | service | the value itself |
+| `8` | switch | CLI | empty |
 
 The body bound is 64 KiB (65 536 bytes). It is far above any label, message or typed value an operation needs, and
 small enough that a hostile length costs nothing. A body length above the bound is refused as soon as the header is
@@ -79,7 +81,7 @@ Bytes after a complete frame belong to the next frame.
 
 ## Body encoding
 
-Every body except owner input and a reveal is a sequence of **fields**:
+Every body except owner input, a reveal and a switch is a sequence of **fields**:
 
 | Size | Field part |
 |---|---|
@@ -521,6 +523,10 @@ Errors specific to `recovery check`:
 |---|---|---|
 | 1 | label | UTF-8 text the CLI shows the owner |
 | 2 | secret | flag: when `1`, the CLI turns terminal echo off while the owner types |
+| 3 | switchable | flag: when `1`, the CLI may answer with a [switch](#switch-kind-8) instead of owner input |
+
+Every prompt carries `switchable`. It is `1` only on an [approver prompt](approval-signers.md#the-approver-prompt)
+while more than one approver is pinned; every other prompt sends `0`.
 
 ### Notice (kind 6)
 
@@ -548,6 +554,16 @@ into its own secret type, such as a passphrase.
 
 The encoder writes the frame into a buffer the caller supplies, so a caller sending owner input passes a clearing
 buffer. The transport that reads frames off the socket clears its read buffer for the same reason.
+
+### Switch (kind 8)
+
+The CLI's answer to a switchable prompt when the owner asks for the next approver in approver order, instead of owner
+input ([approval-signers.md](approval-signers.md#switching)). The body is empty, so nothing typed travels with it; a
+switch frame with a body is `malformed-frame`. A switch frame answering a prompt that is not switchable, or arriving
+anywhere else in the exchange, is `unexpected-frame`. The service answers it with the next approver's prompt.
+
+In the service a handler asks a switchable prompt with `Exchange::prompt_or_switch_unless`, which returns
+`PromptAnswer::OwnerInput` or `PromptAnswer::Switch`; `Exchange::prompt` and `prompt_unless` take no switch.
 
 ### Reveal (kind 7)
 
@@ -760,7 +776,8 @@ is refused before its kind or length is read. Version 1 has not been released, s
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
 `status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), `replace` (command 10), `rm`
 (command 11), `recovery check` (command 12), `recipient list` (command 13), `recipient add` (command 14),
-`recipient remove` (command 15), `status` tags 13 to 17, and error codes 7 to 39 join it rather than starting version 2.
+`recipient remove` (command 15), `status` tags 13 to 17, the prompt's `switchable` tag 3, the switch frame (kind 8),
+and error codes 7 to 39 join it rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
@@ -986,6 +1003,12 @@ command the service never prompts for touches neither the terminal nor stdin. No
   Enter still moves to a new line, applied with `TCSAFLUSH` so anything typed before the prompt is discarded. A guard
   restores the saved settings on every path out of the read, errors included. If echo cannot be turned off, nothing
   is read and the command is cancelled.
+- **A switchable prompt at a terminal:** the CLI writes the label followed by ` (Ctrl-Y to try another way): ` and
+  reads with echo off, as for a secret, and with `c_cc[VEOL]` set to Ctrl-Y (`0x19`), in the same `tcsetattr`; the
+  same guard, and the signal watcher, restore both. In canonical mode `VEOL` ends a line as Enter does. A line that
+  ends in `0x19` asks to switch: the CLI clears what was typed before it, writes a newline and sends a
+  [switch frame](#switch-kind-8). Any other line is owner input. A value holding `0x19` cannot be typed here; it can
+  be piped ([approval-signers.md](approval-signers.md#switching)).
 - **Signals:** when the console opens, in either mode and before its first read or reveal, the CLI registers handlers
   for SIGINT, SIGQUIT, SIGTERM and SIGHUP. On any of them a watcher thread restores the terminal's saved settings if
   echo is off, writes to stderr any advice the command set (`init`'s, below), and exits with status 128 plus the
@@ -1000,7 +1023,8 @@ command the service never prompts for touches neither the terminal nor stdin. No
   longer values through stdin. A value typed at the terminal is therefore at most 4093 bytes.
 - **Stdin is not a terminal:** each value is the next line of stdin, so `pass show fx | sudo iron-vault add fx` works
   from an interactive shell as well as from a script, and several prompts read consecutive lines. The label goes to
-  stderr, and only when stderr is a terminal; it never goes to stdout.
+  stderr, and only when stderr is a terminal; it never goes to stdout. Piped input never switches: a switchable prompt shows its
+  label alone and takes the next line as owner input.
 - **A reveal** is written to the controlling terminal, `/dev/tty`, whether or not stdin is a terminal, and nowhere
   else: never to stdout, and never to stderr, which a script may capture. When there is no controlling terminal, the
   CLI shows nothing, reports on stderr that the value can only be shown on a terminal, and cancels the command with
