@@ -17,9 +17,10 @@ Four rules drive the design:
   config. Enrolling or removing an approver therefore needs the same fresh proof: owner presence from an approver that
   is already pinned, the existing-owner authorization [§12](iron-vault-specification.md#12-configuration-approval-and-reload)
   requires for signing-key rotation.
-- **Unlocking never grants approval** ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)). The vault
-  passphrase never enrolls an approver, or a stolen unlock secret would yield approval. When every signer is lost, the
-  one way back is the offline recovery key, which already opens everything approval protects.
+- **Unlocking never grants approval** ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)). Only a
+  pinned approver's proof enrolls or removes an approver. Neither the vault passphrase nor a recovery key does, because
+  the vault passphrase can make a recovery key ([Who cannot authorize](#who-cannot-authorize)). An owner who loses
+  every signer has `reset` left, so the way to keep a forgotten passphrase from being fatal is a second approver.
 - **Switching is the owner's choice, never a retry.** A prompt names the approver it asks. The owner may switch to
   another before answering; a wrong answer ends the exchange.
 - **No change leaves the vault without a signer, or serving a config that no pinned approver signed.** The last
@@ -45,17 +46,21 @@ directly after the algorithm. As with [recipient roles](recipients.md#recipient-
 so that later epics need no new format version: this release refuses them when it reads the approval state, and the
 epic that enrolls one makes the decoder accept it. A code above 3 is unknown, and decoding also refuses an entry whose
 algorithm its kind does not allow. The approval state v1 has not been released, so the byte joins v1: each entry grows
-to at most 171 bytes, the one-approver example payload becomes 187 bytes, and 16 entries fit in 37 + 8 + 16 × 171 + 49
-= 2,830 bytes, inside `MAX_APPROVAL_STATE_LEN`. The kind names are what `approver list` prints and the audit log
-records.
+to at most 171 bytes, the one-approver example payload becomes 187 bytes (147 for a new vault), and 16 entries fit in
+37 + 8 + 16 × 171 + 49 = 2,830 bytes, inside `MAX_APPROVAL_STATE_LEN`. The kind names are what `approver list` prints
+and the audit log records.
+
+K-291 writes the byte into storage-formats.md's "Approval state payload v1" (the entry table, the example, the size
+limit and the decoding rules) in the same commit as the decoder. The store's tests read that section's example bytes
+from the document, so the document and the code cannot change apart.
 
 ## Commands
 
 | Command | Authorization | Changes |
 |---|---|---|
 | `iron-vault approver list` | none beyond the admin principal | nothing |
-| `iron-vault approver add --label <text> [--kind software] [--with-recovery-key]` | owner presence, or [recovery-key authorization](#recovery-key-authorization) with the flag | enrolls a new approver of that kind |
-| `iron-vault approver remove <approver ID> [--with-recovery-key]` | owner presence, or recovery-key authorization with the flag | removes that approver |
+| `iron-vault approver add --label <text> [--kind software]` | [owner presence](#authorization) | enrolls a new approver of that kind |
+| `iron-vault approver remove <approver ID>` | owner presence | removes that approver |
 
 The noun is `approver` because the commands change the [pinned approvers](glossary.md); each has an approval signer
 behind it. A command names an approver by its approver ID, never its label, because labels need not be unique, as
@@ -74,44 +79,51 @@ existing-owner authorization in the sense of [§12](iron-vault-specification.md#
 proof, collected now, that the owner takes part in this exchange, for the one change the summary just described, and
 never kept or reused ([credential-commands.md](credential-commands.md#owner-presence)).
 
-**What does not authorize.** An admin connection alone does not: malware with one could otherwise enroll a signer of
-its own and then approve any config, which is what approval exists to prevent. That is how this design reads
+Owner presence is the only authorization for either change. It never bypasses a refusal: `approver remove` checks at
+its step 3, before the prompt, that the approver is not the last and did not sign the active approval, so no proof
+removes either.
+
+### Who cannot authorize
+
+**An admin connection alone.** Malware with one could otherwise enroll a signer of its own and then approve any
+config, which is what approval exists to prevent. That is how this design reads
 [§12](iron-vault-specification.md#12-configuration-approval-and-reload)'s "administrator or existing-owner
-authorization" ([open question 1](#open-questions)). Neither does the vault passphrase, nor migration authorization,
-which proves the vault passphrase: approval is separate from unlock
+authorization" ([open question 1](#open-questions)).
+
+**The vault passphrase, or migration authorization, which proves it.** Approval is separate from unlock
 ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)).
 
-### Recovery-key authorization
+**A recovery key.** A recovery key could look like a fallback for an owner who has lost every signer, since it opens the
+vault identity and so everything approval protects. It is not one, because the vault passphrase can make a key that
+passes any recovery-key test:
 
-An owner who has forgotten every approval passphrase, or lost every signer, has no approver left to give presence.
-Without a fallback that vault could never approve a config, replace a credential or remove a recipient again, and
-`reset`, which discards the vault, would be the only way out. The fallback is the recovery key
-([open question 2](#open-questions)).
+1. `recipient add --recovery` generates a new recovery key and shows it, and `recipient add <age1…>` enrolls a key the
+   caller already holds. Both need only migration authorization, which is the vault passphrase
+   ([recipients.md](recipients.md#authorization)).
+2. That key unwraps `identity.age`, and the vault manifest's MAC verifies with the identity it unwraps, exactly as for
+   the recovery key `init` made ([recovery.md](recovery.md#what-the-check-proves)).
+3. If a recovery key authorized `approver add`, the holder of that key would enroll a signer of their own, which then
+   approves any config.
 
-With `--with-recovery-key`, the authorization step sends the secret prompt `Recovery key`, the label `recovery check`
-uses ([recovery.md](recovery.md#the-exchange)), in place of the approver prompt. The service:
+So a stolen vault passphrase plus an admin connection would yield approval, which
+[§14](iron-vault-specification.md#14-recipients-startup-and-memory) forbids: "A stolen unlock secret alone therefore
+cannot change route policy". The rule that breaks the chain is that only a pinned approver's proof authorizes an
+approver change. A recovery key or the vault passphrase typed at the approver prompt is only a wrong answer, refused as
+`approval-denied` ([open question 2](#open-questions)).
 
-1. parses the text as a recovery key, and refuses anything else with `recovery-key-invalid`;
-2. proves it as a recovery check does, from the files on disk: the key must unwrap `identity.age`, and the vault
-   manifest's MAC must verify with the identity it unwraps ([recovery.md](recovery.md#what-the-check-proves)). The
-   unwrapped identity's public key must also equal the vault identity the service holds. A key that fails is
-   `recovery-check-failed`; a file that cannot be read is `recovery-check-unavailable`;
-3. drops the key and the identity it unwrapped.
+### When no approver can answer
 
-It does not write the [recovery check record](glossary.md): the record says when the owner last ran `recovery check`,
-and reminders count from that alone.
+A vault always has a pinned approver, because the last is never removed. An owner who has forgotten every approval
+passphrase, or lost every signer, has pinned approvers and none that can give presence. That vault can still unlock and
+serve its active config, but it can never approve a config, replace or remove a credential, remove a recipient, or
+change its approvers again. The way out is `iron-vault reset`
+([§16](iron-vault-specification.md#16-administration-recovery-and-migration)), which discards the vault; the owner
+rebuilds it from reissued credentials.
 
-This grants nothing the recovery key does not already give. The recovery key opens the vault identity, and with it
-every credential the approval protects. The vault passphrase also opens the vault identity, but it is typed at every
-start, and [§14](iron-vault-specification.md#14-recipients-startup-and-memory) keeps a stolen unlock secret from
-changing policy. The recovery key is kept offline and used rarely, and its use here is loud: the summary says it
-authorizes, the audit event records `authorized_by` `recovery_key`, and the completion notice tells the owner what to
-do next.
-
-Recovery-key authorization covers `approver add` and `approver remove` only. `remove` takes it too, so that a vault
-whose 16 approvers are all lost can make room. It never authorizes `config approve`, a vault change or `recipient
-remove`: once a new approver is pinned, the owner uses it. It is not a source-owner method, so migration authorization
-is unchanged ([migration-authorization.md](migration-authorization.md#source-owner-method)).
+The guard is a second approver, enrolled while the owner still holds one: a second approval passphrase kept apart from
+the first, or later a TPM or hardware key. Then a forgotten passphrase costs one `approver remove`, after approving the
+config with the other approver if the forgotten one signed it. The manual's approval-signer pages tell the owner to
+enroll one (K-300).
 
 ### States and the service-wide lock
 
@@ -155,9 +167,9 @@ The output is a function of the service's answer, so two runs on the same state 
 |---|---|---|
 | 1 | The service is Ready; the label follows its rule; this install offers the kind | `wrong-state`, `approver-invalid`, `approver-kind-unavailable` |
 | 2 | Try the service-wide lock, recording the state and check generation | `busy` |
-| 3 | Remove [orphan key files](#orphan-key-files); fewer than `MAX_APPROVERS` (16) approvers are pinned | `approver-set-invalid` |
+| 3 | [Read `approval.age` back](#reading-the-approval-state-back), then remove [orphan key files](#orphan-key-files); fewer than `MAX_APPROVERS` (16) approvers are pinned | `vault-write-failed`, `approver-set-invalid` |
 | 4 | The [summary](#summaries), as notices | |
-| 5 | Authorization: the approver prompt, or the `Recovery key` prompt with `--with-recovery-key` | `approval-denied`, `approval-unavailable`; `recovery-key-invalid`, `recovery-check-failed`, `recovery-check-unavailable` |
+| 5 | Owner presence: the [approver prompt](#the-approver-prompt) | `approval-denied`, `approval-unavailable` |
 | 6 | The new signer's secret. For `software`, two secret prompts, `New approval passphrase for "<label>"` and `Repeat the new approval passphrase`, checked by the [passphrase rules](vault-initialization.md#passphrase-rules): at least 12 Unicode scalar values, and the two must match, compared in constant time | `passphrase-rejected` |
 | 7 | Still Ready at the recorded check generation | `wrong-state` |
 | 8 | The [approver change](#approver-changes) that enrolls, then the [completion notice](#the-completion-notice) | `vault-write-failed` |
@@ -180,13 +192,14 @@ on. The summary asks the owner to choose one that differs instead ([open questio
 |---|---|---|
 | 1 | The service is Ready; the argument is a version 4 UUID | `wrong-state`, `approver-invalid` |
 | 2 | Try the service-wide lock, recording the state and check generation | `busy` |
-| 3 | Remove orphan key files; the ID names a pinned approver; it is not the last; it did not sign the active approval | `unknown-approver`, `approver-set-invalid`, `approver-in-use` |
+| 3 | Read `approval.age` back, then remove orphan key files; the ID names a pinned approver; it is not the last; it did not sign the active approval | `vault-write-failed`, `unknown-approver`, `approver-set-invalid`, `approver-in-use` |
 | 4 | The summary, as notices | |
-| 5 | Authorization, as for `add` | as for `add` |
+| 5 | Owner presence: the approver prompt | `approval-denied`, `approval-unavailable` |
 | 6 | Still Ready at the recorded check generation | `wrong-state` |
 | 7 | The approver change that removes, then the completion notice | `vault-write-failed` |
 
-The result is the approver count. On success the CLI prints nothing to stdout.
+The result is the approver count. On success the CLI prints nothing to stdout. Every refusal at step 3 comes before
+any prompt, so no authorization, however it is given, removes the last approver or the active approval's signer.
 
 **Why the approver that signed the active approval cannot be removed.** The store allows it, and removing it stops the
 active `config.toml.sig` verifying until the config is approved again
@@ -194,8 +207,8 @@ active `config.toml.sig` verifying until the config is approved again
 unlock or a restart, would then find a published pair that does not verify and stop proxying, with every route down
 until the owner approved again. Refusing instead keeps rotation free of an outage: enroll the new approver, approve the
 config with it (switching to it at the prompt), then remove the old one. The `approver-in-use` message says so. An
-owner whose lost signer approved the active config approves it again with another approver first, which may be one
-just enrolled with the recovery key ([open question 4](#open-questions)).
+owner whose lost signer approved the active config approves it again with another pinned approver first
+([open question 4](#open-questions)).
 
 ## Approver changes
 
@@ -223,17 +236,32 @@ counters, and each runs only under the service-wide lock, after its authorizatio
 A failure before the commit point leaves the approval state as it was, and at most an orphan key file. A failed
 directory fsync after the rename of `approval.age` leaves the change visible but perhaps not durable. The answer is
 then `vault-write-failed`, whose message says the change may have committed and to run `approver list`, and the
-in-memory approval state accepts no more writes until it is loaded again from disk, as after a reservation whose
-directory fsync failed ([config-approval.md](config-approval.md#when-a-step-fails)).
+in-memory approval state accepts no more writes until the next approver change or approval loads it again from disk
+([Reading the approval state back](#reading-the-approval-state-back)), as after a reservation whose directory fsync
+failed ([config-approval.md](config-approval.md#when-a-step-fails)).
+
+### Reading the approval state back
+
+Step 3 of `approver add` and `approver remove` reads `approval.age` from disk and opens it before anything is deleted
+or asked. When an earlier write left the in-memory approval state unsettled (its directory fsync failed after the
+rename, so that state accepts no more writes), the state read from disk replaces it, as the next approval does after
+such a reservation. Otherwise the two must be equal, the check the store makes before every approval-state write
+([storage-formats.md](storage-formats.md#writes)). A file that cannot be read or opened, or that differs from the
+in-memory state, ends the command with `vault-write-failed`, whose message says nothing was changed, and no key file is
+deleted.
+
+The orphan sweep relies on this. An in-memory state that missed a committed enrollment would make that approver's key
+file look like an orphan, and the sweep would delete the only key of a pinned approver.
 
 ### Orphan key files
 
 A key file whose approver ID no pinned approver has is an orphan: an enrollment that failed before its commit point
 left it, or a removal could not delete it. It signs nothing, because the service opens a key file only for the pinned
-approver it names, and `open_signer_key` refuses a key that is not that approver's. Every approver change removes
-orphans at its step 3, before any prompt, and logs each with `approver.orphan-removed`. Nothing else removes them:
-`unlock` and the config check never write. An orphan is not a foreign file, because `approver-*.age` names are the
-vault's own ([vault-initialization.md](vault-initialization.md#initialization-state)).
+approver it names, and `open_signer_key` refuses a key that is not that approver's. `approver add` and
+`approver remove` remove orphans at their step 3, after reading the approval state back and before any prompt, and log
+each with `approver.orphan-removed`. Nothing else removes them: `unlock` and the config check never write. An orphan is not a
+foreign file, because `approver-<approver ID>.age` names are the vault's own
+([vault-initialization.md](vault-initialization.md#initialization-state)).
 
 Removing an approver reaches future copies of the state directory only. A backup taken before still holds the key file
 and an `approval.age` that pins it, and restoring the whole directory restores both; that is whole-storage rollback,
@@ -243,9 +271,9 @@ which [§12](iron-vault-specification.md#12-configuration-approval-and-reload) l
 
 Each software approver has its own [approver key envelope](storage-formats.md#approver-key-envelope), in the state
 directory as `approver-<approver ID>.age`, with the ID in lowercase hyphenated form, for example
-`approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age`. The envelope's format is unchanged: one scrypt stanza and the
-32-byte Ed25519 seed. `init` writes its one approver's key under this name too, so there is one rule for every
-software approver.
+`approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age`. Each envelope is a plain `age` file with one scrypt stanza,
+sealed to that approver's approval passphrase, holding its 32-byte Ed25519 seed. `init` writes its one approver's key
+under this name too, so there is one rule for every software approver.
 
 One file each, rather than one file holding several keys, because:
 
@@ -304,8 +332,9 @@ At a terminal, the CLI writes a switchable prompt as the label, then ` (Ctrl-Y t
 Approval passphrase for "backup passphrase" (Ctrl-Y to try another way):
 ```
 
-A prompt that cannot switch is written as before, the label and `: `. When stdin is not a terminal the CLI cannot
-switch, so it writes the label alone, to stderr when that is a terminal. The text in
+A prompt that cannot switch, such as the approver prompt while one approver is pinned, is written as the label and
+`: `, as every other prompt is. When stdin is not a terminal the CLI cannot switch, so it writes the label alone, to
+stderr when that is a terminal. The text in
 [§14](iron-vault-specification.md#14-recipients-startup-and-memory), `Tap "Dave YubiKey 3" to approve. Ctrl-Y to try
 another way.`, is the touch form, which arrives with hardware keys ([Later signer kinds](#later-signer-kinds)).
 
@@ -313,22 +342,22 @@ another way.`, is the touch form, which arrives with hardware keys ([Later signe
 
 The [prompt frame](admin-protocol.md#prompt-kind-2) gains a third field, `switchable`, a flag that every prompt
 carries. It is `1` only on an approver prompt while more than one approver is pinned. The CLI may answer a switchable
-prompt with a [switch](glossary.md) frame, kind 8 with an empty body, instead of owner input. A switch answering any
-other prompt is `unexpected-frame`, and a switch frame with a body is `malformed-frame`. On a switch the service sends
-the approver prompt for the next approver in approver order. Nothing typed was sent, so nothing is dropped.
+prompt with a [switch frame](glossary.md), kind 8 with an empty body, instead of owner input. A switch frame answering
+any other prompt is `unexpected-frame`, and a switch frame with a body is `malformed-frame`. On a switch frame the
+service sends the approver prompt for the next approver in approver order. Nothing typed was sent, so nothing is dropped.
 
 **Ctrl-Y.** For a switchable prompt at a terminal, the CLI sets `c_cc[VEOL]` to Ctrl-Y (`0x19`) for the read, beside
 turning echo off, and the guard that restores echo restores it too. In canonical mode `VEOL` ends a line as Enter does,
-so Ctrl-Y ends the read at once. A line that ends in `0x19` is a switch: the CLI clears whatever was typed before it,
+so Ctrl-Y ends the read at once. A line that ends in `0x19` asks to switch: the CLI clears whatever was typed before it,
 writes a newline, and sends a switch frame. Linux gives Ctrl-Y no other meaning (it has no `VDSUSP`). A passphrase
 holding the byte `0x19` cannot be typed at a switchable terminal prompt; it can still be piped. When stdin is not a
-terminal the CLI never sends a switch, so a script answers the first approver in approver order, which `approver list`
-shows ([open question 8](#open-questions)).
+terminal the CLI never sends a switch frame, so a script answers the first approver in approver order, which
+`approver list` shows ([open question 8](#open-questions)).
 
 **Deadline.** The [prompt deadline](glossary.md) covers the whole approver prompt, from the first approver's prompt to
 the answer, however many switches come between. Switching therefore never holds the service-wide lock longer than one
-prompt can. A `lock` cancels the command at any approver prompt, as it does at every prompt. A switch records no audit
-event; the events that end the prompt name the approver that answered.
+prompt can. A `lock` cancels the command at any approver prompt, as it does at every prompt. A switch frame records no
+audit event; the events that end the prompt name the approver that answered.
 
 ### A wrong answer
 
@@ -372,28 +401,25 @@ remove an approval signer
   authorize with: any pinned approver
 ```
 
-With `--with-recovery-key` the last line reads `authorize with: the recovery key`. Labels are written with control
-characters removed.
+Labels are written with control characters removed.
 
 ### The completion notice
 
 After a change commits, and before its success response, the service sends one notice:
 
-- enrolled: `enrolled approver <approver ID> (<kind>); the vault has <n> approvers.` After recovery-key authorization a
-  further line follows: `Approve the config again with the new approver, then remove the ones you lost with iron-vault
-  approver remove.`
+- enrolled: `enrolled approver <approver ID> (<kind>); the vault has <n> approvers.`
 - removed: `removed approver <approver ID>; the vault has <n> approvers.` When its key file could not be removed, a
-  further line: `Its key file could not be removed; the next approver change removes it.`
+  further line: `Its key file could not be removed; the next approver add or remove removes it.`
 
 ## Admin protocol
 
-These rows join [admin-protocol.md](admin-protocol.md) with the command tickets.
+These rows join [admin-protocol.md](admin-protocol.md) with K-296, K-297 and K-298.
 
 | Command ID | Command | Arguments | Result |
 |---|---|---|---|
 | `16` | `approver list` | none | the pinned approvers, in approver order |
-| `17` | `approver add` | the kind, the label and the authorization | the new approver ID and the approver count |
-| `18` | `approver remove` | the approver ID and the authorization | the approver count |
+| `17` | `approver add` | the kind and the label | the new approver ID and the approver count |
+| `18` | `approver remove` | the approver ID | the approver count |
 
 `approver add`'s request:
 
@@ -401,11 +427,10 @@ These rows join [admin-protocol.md](admin-protocol.md) with the command tickets.
 |---|---|---|
 | 2 | kind | `u8`: a signer kind code, 1 to 3 |
 | 3 | label | UTF-8 text |
-| 4 | authorization | `u8`: `1` the approver prompt, `2` the recovery key |
 
-`approver remove`'s request has tag 2, the approver ID as a 16-byte value, and tag 3, the authorization as for `add`.
-A kind or authorization outside its values, or an approver ID that is not 16 bytes, is a malformed frame. A label that
-breaks its rule, or an ID that is not a version 4 UUID, is `approver-invalid`, decided by the service.
+`approver remove`'s request has tag 2, the approver ID as a 16-byte value. A kind outside its values, or an approver
+ID that is not 16 bytes, is a malformed frame. A label that breaks its rule, or an ID that is not a version 4 UUID, is
+`approver-invalid`, decided by the service.
 
 `approver list`'s result is tag 2, a byte value holding the entries in approver order:
 
@@ -421,9 +446,10 @@ breaks its rule, or an ID that is not a version 4 UUID, is `approver-invalid`, d
 16 entries are under 1.5 KiB. `approver add`'s result is tag 2, the approver ID as a 16-byte value, and tag 3, the
 approver count as `u8`. `approver remove`'s result is tag 2, the approver count as `u8`.
 
-The [prompt frame](admin-protocol.md#prompt-kind-2) gains tag 3, `switchable`, a flag, on every prompt. Frame kind `8`,
-**switch**, is sent by the CLI and has an empty body ([Switching](#switching)). Version 1 has not been released, so
-these join it, as the notice frame did ([config-approval.md open question 11](config-approval.md#open-questions)).
+The [prompt frame](admin-protocol.md#prompt-kind-2) gains tag 3, `switchable`, a flag, on every prompt. Frame kind
+`8`, the **switch frame**, is sent by the CLI and has an empty body ([Switching](#switching)). Version 1 has not been
+released, so these join it, as the notice frame did
+([config-approval.md open question 11](config-approval.md#open-questions)).
 
 ### Error codes
 
@@ -439,38 +465,44 @@ Five codes are new, the next free numbers after 39:
 
 Existing codes widen to cover the approver commands: `approval-denied` (9) and `approval-unavailable` (10) for owner
 presence; `passphrase-rejected` (18) for a new approval passphrase that breaks a rule; `vault-write-failed` (22) for an
-approver change that failed, whose message says whether it may have committed; `recovery-key-invalid` (30),
-`recovery-check-failed` (31) and `recovery-check-unavailable` (32) for recovery-key authorization. `busy` and
-`wrong-state` already cover them.
+approver change that failed, whose message says whether it may have committed, and for an approval state that does
+not read back at step 3. `busy` and `wrong-state` already cover them.
 
 ## Audit events
 
 These join the [catalogue](audit-logging.md#catalogue), under a new subject, `approver`. None carries a secret: an
-approver ID, label and public key are public, and no passphrase, PIN, recovery key or key file byte is logged.
+approver ID, label and public key are public, and no passphrase, PIN or key file byte is logged.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `approver.enrolled` | INFO | an approver change that enrolls committed | `approver_id`, `approver_label`, `signer_kind`, `approvers`, `authorized_by`; `authorizing_approver_id` and `authorizing_approver_label` when `authorized_by` is `approver` |
+| `approver.enrolled` | INFO | an approver change that enrolls committed | `approver_id`, `approver_label`, `signer_kind`, `approvers`, `authorizing_approver_id`, `authorizing_approver_label` |
 | `approver.removed` | INFO | an approver change that removes committed | as `approver.enrolled`, and `key_file` |
-| `approver.change-failed` | WARN | an add or remove was refused at its own step 3 or 6, or by recovery-key authorization, or its approver change failed | `change`, `failure`; `approver_id` when known; `recovery_failure` for `recovery_key_refused`; `step`, `error_kind` and `committed` for `write_failed` |
-| `approver.orphan-removed` | WARN | step 3 of an approver change removed an orphan key file | `approver_id`, the ID in the file's name |
+| `approver.change-failed` | WARN | `approver add` was refused at step 3 (`set_invalid`, `write_failed`) or step 6 (`passphrase_rejected`); `approver remove` was refused at step 3 (`unknown_approver`, `set_invalid`, `in_use`, `write_failed`); or either command's approver change failed at its last step (`write_failed`) | `change`, `failure`; `approver_id` when known; `step`, `error_kind` and `committed` for `write_failed` |
+| `approver.orphan-removed` | WARN | step 3 of an approver command removed an orphan key file | `approver_id`, the ID in the file's name |
+
+New fields:
 
 | Field | Type | Form |
 |---|---|---|
-| `approver_id`, `authorizing_approver_id` | string | An approver ID in lowercase hyphenated form |
-| `approver_label`, `authorizing_approver_label` | string | An approver label, escaped |
+| `authorizing_approver_id` | string | The approver that gave owner presence for the change: its approver ID, a hyphenated UUID |
+| `authorizing_approver_label` | string | That approver's label, escaped |
 | `signer_kind` | string | `software`, `tpm` or `hardware` |
 | `approvers` | number | The approver count after the change |
-| `authorized_by` | string | `approver` or `recovery_key` |
 | `key_file` | string | `removed`, `left`, or `none` for a kind without one |
-| `change` | string | `add` or `remove` |
-| `failure` | string | `unknown_approver`, `set_invalid`, `in_use`, `passphrase_rejected`, `recovery_key_refused` or `write_failed` |
-| `recovery_failure` | string | as `recovery.checked` uses it, or `invalid` for text that is not a recovery key |
-| `committed` | string | `no`, `unknown` or `yes`: whether the failed change committed |
 
-`step` takes `key_file`, `key_check` or `approval_state`. Owner presence refusals keep their own event,
+Fields [audit-logging.md](audit-logging.md#audit-events) already defines, which widen:
+
+- `approver_id` and `approver_label` also name the approver an approver command enrolls, removes or finds orphaned;
+- `failure` gains `unknown_approver`, `in_use` and `passphrase_rejected` for `approver.change-failed`, beside
+  `set_invalid` and `write_failed`, which `recipient.change-failed` already uses;
+- `committed` also says whether a failed approver change committed: always `no` when `step` is `read_back`;
+- `step` gains `read_back` (step 3's [read-back](#reading-the-approval-state-back)), `key_file`, `key_check` and
+  `approval_state`, the steps of an [approver change](#approver-changes).
+
+`change` keeps its values, `add` and `remove`. Owner presence refusals keep their own event,
 `vault.presence-refused`, which names the asked approver, and its "When" widens to the approver commands. A refusal at
-step 1 or 2 records only `admin.command`, as for every command.
+step 1 or 2 records only `admin.command`, as for every command; so does the `wrong-state` of `approver add`'s step 7
+and `approver remove`'s step 6.
 
 ## Later signer kinds
 
@@ -513,40 +545,49 @@ them.
 | Rotation (enroll, approve with the new approver by switching, remove the old) keeps every route serving | `rotating_the_approver_keeps_routes_serving` | [§12](iron-vault-specification.md#12-configuration-approval-and-reload) |
 | The last approver, and the approver that signed the active approval, cannot be removed | `the_last_and_the_active_approver_cannot_be_removed` | [§14](iron-vault-specification.md#14-recipients-startup-and-memory) |
 | A wrong answer to one approver ends the exchange and never asks another | `a_wrong_answer_never_falls_through_to_another_approver` | [§14](iron-vault-specification.md#14-recipients-startup-and-memory) |
-| The vault passphrase never enrolls an approver; the recovery key does, once every approval passphrase is forgotten | `only_the_recovery_key_replaces_a_forgotten_approval_passphrase` | [§14](iron-vault-specification.md#14-recipients-startup-and-memory) |
+| Only a pinned approver's proof authorizes an approver change: the vault passphrase, and a recovery key that `recipient add --recovery` has just made with it, are each refused at `approver add`'s approver prompt as `approval-denied`, and nothing is enrolled | `only_a_pinned_approver_authorizes_an_approver_change` | [§14](iron-vault-specification.md#14-recipients-startup-and-memory) |
 | A removed approver's passphrase no longer gives owner presence, and its key file is gone | `a_removed_approver_gives_no_presence_and_leaves_no_key_file` | [§14](iron-vault-specification.md#14-recipients-startup-and-memory) |
-| No typed passphrase, recovery key or key file byte reaches the log | `no_typed_secret_reaches_the_log_through_approver_commands` | [§18](iron-vault-specification.md#18-logging) |
+| No typed passphrase or key file byte reaches the log | `no_typed_secret_reaches_the_log_through_approver_commands` | [§18](iron-vault-specification.md#18-logging) |
 
 ## Implementation tickets
 
-| Order | Ticket | Depends on |
-|---|---|---|
-| 1 | Store: record each pinned approver's signer kind | K-276 |
-| 2 | Store: one key file per software approver, named by approver ID | 1 |
-| 3 | Store: approver changes that enroll and remove a software approver, with their key files | 2 |
-| 4 | Protocol and CLI: the switchable prompt and the switch frame | K-276 |
-| 5 | Service: approver order and switching at the approver prompt | 2, 4 |
-| 6 | `iron-vault approver list` | 1, 5 |
-| 7 | `iron-vault approver add` for software approvers, with owner presence | 3, 5 |
-| 8 | `iron-vault approver remove`, with owner presence | 3, 5 |
-| 9 | Recovery-key authorization for `approver add` and `approver remove` | 7, 8 |
-| 10 | Approver release checks and the manual | 6, 9 |
+Each ticket updates the design documents and glossary entries it changes, in the same branch as its code.
+
+| Order | Ticket | What | Depends on | Updates |
+|---|---|---|---|---|
+| 1 | K-291 | Store: record each pinned approver's signer kind | K-276 | storage-formats.md "Approval state payload v1" (entry table, example, size limit, decoding rules); glossary "Pinned approver" and "Signer kind" |
+| 2 | K-292 | Store: one key file per software approver, named by approver ID | K-291 | credential-commands.md "Owner presence"; recovery.md; secret-handling.md; linux-package.md; docker-compose.md "Approval signing"; the manual's files reference |
+| 3 | K-293 | Store: approver changes that enroll and remove a software approver, with their key files | K-292 | glossary "Approver change" |
+| 4 | K-294 | Protocol and CLI: the switchable prompt and the switch frame | K-276 | admin-protocol.md (frame kinds, Prompt, Owner input, Versions); glossary "Prompt" and "Switch frame" |
+| 5 | K-295 | Service: approver order and switching at the approver prompt | K-292, K-294 | config-approval.md "Choosing the signer"; credential-commands.md "Owner presence"; glossary "Prompt deadline", "Approver order" and "Approver prompt" |
+| 6 | K-296 | `iron-vault approver list` | K-291, K-295 | admin-protocol.md (command 16); the manual's CLI reference |
+| 7 | K-297 | `iron-vault approver add` for software approvers, with owner presence | K-293, K-295 | admin-protocol.md (command 17, error codes 40, 42 and 44, the widened codes); audit-logging.md (the `approver` subject, `approver.enrolled`, `approver.change-failed`, `approver.orphan-removed`, the new and widened fields); the manual's CLI, errors and audit log references |
+| 8 | K-298 | `iron-vault approver remove`, with owner presence | K-293, K-295 | admin-protocol.md (command 18, error codes 41 and 43); audit-logging.md (`approver.removed`, `key_file`); the manual's CLI, errors and audit log references |
+| 9 | K-300 | Approver release checks and the manual | K-296, K-297, K-298 | README features; the manual: rotating an approval signer, enrolling a second approver so a forgotten passphrase is not fatal, and `reset` as the way out when no approver can answer; the security model |
+
+This design already carries the `approver-<approver ID>.age` naming through storage-formats.md "Approver key
+envelope", vault-initialization.md and the glossary "Approver key envelope", ahead of K-292's code.
 
 ## Open questions
 
 The specification leaves each point below open, or this design departs from its wording. The design takes the default
-stated for each, until the owner decides.
+stated for each, until the owner decides. Question 2 is decided.
 
 1. **"Administrator" authorization.** [§12](iron-vault-specification.md#12-configuration-approval-and-reload) says
    signing-key rotation "requires administrator or existing-owner authorization". *Default:* existing-owner
-   authorization alone, owner presence, with the recovery key as the fallback; an admin connection alone never enrolls
-   an approver, because malware with one could then approve any config. The alternative reads "administrator" as the
-   admin principal, which in a protected install is root through `sudo`. If the default stands, §12's wording could say
-   "existing-owner authorization, or the recovery key".
-2. **The recovery key as the fallback.** [§14](iron-vault-specification.md#14-recipients-startup-and-memory) gives the
-   recovery key one job: opening the vault identity when the unlock method is lost. *Default:* it also authorizes
-   approver changes, and nothing else, when every approval signer is lost, because it already opens everything approval
-   protects. The alternative leaves `reset` as the only way out for an owner who has lost every signer.
+   authorization alone, owner presence from a pinned approver; an admin connection alone never enrolls an approver,
+   because malware with one could then approve any config. The alternative reads "administrator" as the admin
+   principal, which in a protected install is root through `sudo`. If the default stands, §12's wording could say
+   "existing-owner authorization".
+2. **No recovery-key fallback. Decided by the owner.** The recovery key never authorizes an approver change. The vault
+   passphrase can make a key that passes any recovery-key test: `recipient add --recovery` mints a new recovery key, and
+   `recipient add <age1…>` enrolls a key of the caller's own, each with migration authorization alone. If a recovery
+   key authorized `approver add`, a stolen vault passphrase would enroll an approver and then approve any config. The
+   rule that breaks the chain: only a pinned approver's proof authorizes `approver add` or `approver remove`, so
+   [§14](iron-vault-specification.md#14-recipients-startup-and-memory) holds and unlocking never grants approval. An
+   owner who loses every signer has `reset` left; a second approver, enrolled while one still answers, is the guard
+   ([When no approver can answer](#when-no-approver-can-answer)). The alternative not taken would have accepted only a
+   recipient of role `recovery` and required owner presence for every `recipient add` that makes one.
 3. **Approver order.** *Default:* the approver that signed the active approval first, then enrolment order, which needs
    no stored preference. The alternatives are pure enrolment order, which keeps asking `init`'s passphrase first after
    the owner moves to a hardware key, or an owner-set order, which needs a field in the approval state and a command to

@@ -695,4 +695,4 @@ open, and takes its default until the owner decides.
 
 | Ticket | Open questions |
 |---|---|
-| the approver prompt ticket of [approval-signers.md](approval-signers.md#implementation-tickets) | 15 |
+| K-295, the approver prompt ([approval-signers.md](approval-signers.md#implementation-tickets)) | 15 |
