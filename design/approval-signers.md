@@ -350,9 +350,9 @@ service sends the approver prompt for the next approver in approver order. Nothi
 turning echo off, and the guard that restores echo restores it too. In canonical mode `VEOL` ends a line as Enter does,
 so Ctrl-Y ends the read at once. A line that ends in `0x19` asks to switch: the CLI clears whatever was typed before it,
 writes a newline, and sends a switch frame. Linux gives Ctrl-Y no other meaning (it has no `VDSUSP`). A passphrase
-holding the byte `0x19` cannot be typed at a switchable terminal prompt; it can still be piped. When stdin is not a
-terminal the CLI never sends a switch frame, so a script answers the first approver in approver order, which
-`approver list` shows ([open question 8](#open-questions)).
+holding the byte `0x19` cannot be typed as a plain key at a switchable terminal prompt; it can still be piped. When
+stdin is not a terminal the CLI never sends a switch frame, so a script answers the first approver in approver order,
+which `approver list` shows ([open question 8](#open-questions)).
 
 **Deadline.** The [prompt deadline](glossary.md) covers the whole approver prompt, from the first approver's prompt to
 the answer, however many switches come between. Switching therefore never holds the service-wide lock longer than one

@@ -555,16 +555,6 @@ into its own secret type, such as a passphrase.
 The encoder writes the frame into a buffer the caller supplies, so a caller sending owner input passes a clearing
 buffer. The transport that reads frames off the socket clears its read buffer for the same reason.
 
-### Switch (kind 8)
-
-The CLI's answer to a switchable prompt when the owner asks for the next approver in approver order, instead of owner
-input ([approval-signers.md](approval-signers.md#switching)). The body is empty, so nothing typed travels with it; a
-switch frame with a body is `malformed-frame`. A switch frame answering a prompt that is not switchable, or arriving
-anywhere else in the exchange, is `unexpected-frame`. The service answers it with the next approver's prompt.
-
-In the service a handler asks a switchable prompt with `Exchange::prompt_or_switch_unless`, which returns
-`PromptAnswer::OwnerInput` or `PromptAnswer::Switch`; `Exchange::prompt` and `prompt_unless` take no switch.
-
 ### Reveal (kind 7)
 
 The service shows the owner a secret value it generated, once, such as the recovery key at `init`. Like owner input,
@@ -583,6 +573,21 @@ shown as text with a one-line note in place of the code. A value with any byte o
 refused and nothing of it is shown: removing the other bytes would show a value that differs from the secret, which the
 owner would save in good faith. It never writes it to stdout, a pipe or a diagnostic: when the owner console cannot
 show it, the CLI cancels the command before showing anything (see [Owner input](#owner-input)).
+
+### Switch (kind 8)
+
+The CLI's answer to a switchable prompt when the owner asks for the next approver in approver order, instead of owner
+input ([approval-signers.md](approval-signers.md#switching)). The body is empty, so nothing typed travels with it; a
+switch frame with a body is `malformed-frame`. A switch frame answering a prompt that is not switchable, or arriving
+anywhere else in the exchange, is `unexpected-frame`. The service answers it with the next approver's prompt.
+
+In the service a handler asks a switchable prompt with `Exchange::prompt_or_switch_unless`, which returns
+`PromptAnswer::OwnerInput` or `PromptAnswer::Switch`; `Exchange::prompt` and `prompt_unless` take no switch.
+
+One [prompt deadline](glossary.md) covers the whole approver prompt, however many switches come between: it starts at
+the first switchable prompt, a switch does not restart it, and owner input ends it. `prompt_or_switch_unless` enforces
+this itself, so a handler that loops on switches needs no bound of its own, and switching never holds the service-wide
+lock longer than one prompt can.
 
 ### Admin response: success (kind 4)
 
@@ -1007,8 +1012,8 @@ command the service never prompts for touches neither the terminal nor stdin. No
   reads with echo off, as for a secret, and with `c_cc[VEOL]` set to Ctrl-Y (`0x19`), in the same `tcsetattr`; the
   same guard, and the signal watcher, restore both. In canonical mode `VEOL` ends a line as Enter does. A line that
   ends in `0x19` asks to switch: the CLI clears what was typed before it, writes a newline and sends a
-  [switch frame](#switch-kind-8). Any other line is owner input. A value holding `0x19` cannot be typed here; it can
-  be piped ([approval-signers.md](approval-signers.md#switching)).
+  [switch frame](#switch-kind-8). Any other line is owner input. A value holding `0x19` cannot be typed here as a
+  plain key; it can be piped ([approval-signers.md](approval-signers.md#switching)).
 - **Signals:** when the console opens, in either mode and before its first read or reveal, the CLI registers handlers
   for SIGINT, SIGQUIT, SIGTERM and SIGHUP. On any of them a watcher thread restores the terminal's saved settings if
   echo is off, writes to stderr any advice the command set (`init`'s, below), and exits with status 128 plus the

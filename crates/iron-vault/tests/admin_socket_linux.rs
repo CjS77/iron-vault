@@ -663,3 +663,36 @@ async fn a_switchable_prompt_takes_a_switch_and_then_owner_input() {
     assert_eq!((switched, typed), (Some(None), Some(Some(b"typed value".to_vec()))));
     served.await.unwrap();
 }
+
+/// One prompt deadline covers the whole approver prompt: a switch just before it expires starts no new one, so the next
+/// approver's prompt times out at the first prompt's deadline. On a paused clock, so the deadline is exact.
+#[tokio::test(start_paused = true)]
+async fn a_switch_does_not_extend_the_approver_prompts_deadline() {
+    let prompt_deadline = Duration::from_secs(60);
+    let (answers, _received) = mpsc::unbounded_channel();
+    let handlers = Handlers::default().with(AdminCommand::Ping, Switching(answers));
+    let limits = Limits {
+        prompt_deadline,
+        ..Limits::default()
+    };
+    let server = AdminServer::new(AdminPrincipals::new(DeploymentProfile::Development, me().uid), handlers, limits);
+    let (ours, mut cli) = UnixStream::pair().unwrap();
+    let served = tokio::spawn(async move { server.serve_connection(ours).await });
+
+    let started = tokio::time::Instant::now();
+    cli.write_all(&ping()).await.unwrap();
+    assert!(matches!(read_frame(&mut cli).await, Frame::Prompt(prompt) if prompt == approver_prompt()));
+    tokio::time::sleep(prompt_deadline - Duration::from_secs(1)).await;
+    cli.write_all(&frame_bytes(&Frame::Switch)).await.unwrap();
+    assert!(matches!(read_frame(&mut cli).await, Frame::Prompt(prompt) if prompt == approver_prompt()));
+
+    // No timeout of the test's own here: on a paused clock it would fire before the server's deadline.
+    let mut rest = Vec::new();
+    assert_eq!(
+        cli.read_to_end(&mut rest).await.unwrap(),
+        0,
+        "the timed-out exchange closes without a response"
+    );
+    assert_eq!(started.elapsed(), prompt_deadline);
+    served.await.unwrap();
+}

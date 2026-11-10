@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::dispatch::Handlers;
@@ -211,6 +212,10 @@ pub struct Exchange {
     /// reallocated, cleared after each frame and on drop.
     buffer: Zeroizing<Vec<u8>>,
     limits: Limits,
+    /// When the approver prompt under way times out: set by its first switchable prompt and kept across switches, so
+    /// switching never stretches the approver prompt past one prompt deadline (`design/approval-signers.md`,
+    /// "Switching"). Owner input ends the approver prompt and clears it.
+    approver_deadline: Option<Instant>,
 }
 
 /// Why a prompt got no owner input. The exchange is over: the handler returns the error, which cancels its command
@@ -273,6 +278,7 @@ impl Exchange {
             stream,
             buffer: Zeroizing::new(vec![0; HEADER_LEN + MAX_BODY_LEN]),
             limits,
+            approver_deadline: None,
         }
     }
 
@@ -294,8 +300,8 @@ impl Exchange {
 
     /// Sends `prompt` and returns the CLI's answer: owner input, or, when `prompt` is switchable, a switch frame asking
     /// for the next approver (`design/approval-signers.md`, "Switching"). `None` when `cancel` completes first, as for
-    /// [`prompt_unless`](Self::prompt_unless). Each answer is awaited within the prompt deadline; a handler that switches
-    /// bounds the whole approver prompt itself.
+    /// [`prompt_unless`](Self::prompt_unless). One prompt deadline covers the whole approver prompt: it starts at the
+    /// first switchable prompt, and a switch does not restart it, so a handler may loop on switches without bounding them.
     pub async fn prompt_or_switch_unless(
         &mut self,
         prompt: &Prompt,
@@ -322,17 +328,32 @@ impl Exchange {
         }
     }
 
-    /// The CLI's answer to the prompt just sent, within the prompt deadline. A switch frame is an answer only when the
-    /// prompt was `switchable`.
+    /// The CLI's answer to the prompt just sent, within the prompt deadline: for a switchable prompt, the approver
+    /// prompt's deadline. A switch frame is an answer only when the prompt was `switchable`.
     async fn answer(&mut self, switchable: bool) -> Result<PromptAnswer, ExchangeError> {
-        match tokio::time::timeout(self.limits.prompt_deadline, self.read_frame()).await {
-            Ok(Ok(Frame::OwnerInput(input))) => Ok(PromptAnswer::OwnerInput(input)),
+        let deadline = self.answer_deadline(switchable);
+        match tokio::time::timeout_at(deadline, self.read_frame()).await {
+            Ok(Ok(Frame::OwnerInput(input))) => {
+                self.approver_deadline = None;
+                Ok(PromptAnswer::OwnerInput(input))
+            }
             Ok(Ok(Frame::Switch)) if switchable => Ok(PromptAnswer::Switch),
             Ok(Ok(_)) => Err(ExchangeError::Unexpected),
             Ok(Err(ReadError::Closed)) => Err(ExchangeError::Closed),
             Ok(Err(ReadError::Io(e))) => Err(ExchangeError::Io(e.kind())),
             Ok(Err(ReadError::Frame(e))) => Err(ExchangeError::Malformed(e)),
             Err(_) => Err(ExchangeError::TimedOut),
+        }
+    }
+
+    /// When the answer to the prompt just sent times out: one prompt deadline from now, or for a switchable prompt the
+    /// approver prompt's deadline, started now if this is its first prompt.
+    fn answer_deadline(&mut self, switchable: bool) -> Instant {
+        let fresh = Instant::now() + self.limits.prompt_deadline;
+        if switchable {
+            *self.approver_deadline.get_or_insert(fresh)
+        } else {
+            fresh
         }
     }
 
