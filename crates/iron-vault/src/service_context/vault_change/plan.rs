@@ -24,7 +24,6 @@ use iron_vault_policy::CredentialName;
 use iron_vault_store::{ApprovalPassphrase, PermittedOrigins, PinnedApprover, RecordId, StoreFs, VaultError, VaultIdentity};
 use tokio::sync::OwnedMutexGuard;
 
-use super::super::presence::asked_approver;
 use super::super::{Inner, OpenVault, OwnerPresence, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, log_task_crash};
 use super::{VaultChangeRefusal, audit_write_report, kind_of, log_committed};
 use crate::audit::corruption::open_vault;
@@ -43,8 +42,7 @@ pub struct VaultChangePlan<'a, F> {
     service_wide: OwnedMutexGuard<()>,
     /// The check generation at step 2, which the write checks again.
     checks: u64,
-    /// The pinned approvers, from the approval state the service holds; owner presence asks the first of
-    /// them ([`asked_approver`]).
+    /// The pinned approvers in approver order, from the approval state the service holds.
     approvers: Vec<PinnedApprover>,
     /// The change the check passed, the record it acts on and the routes that use it, as the owner is shown them.
     summary: VaultChangeSummary,
@@ -121,7 +119,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             service: self,
             service_wide,
             checks: inner.checks,
-            approvers: open.approval.approvers().to_vec(),
+            approvers: self.ordered_approvers(open.approval.approvers()),
             summary: VaultChangeSummary::new(change, current, before, snapshot.policy()),
         })
     }
@@ -153,15 +151,19 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
         self.service.lock_requested().await;
     }
 
-    /// The approver owner presence asks for, whose label the passphrase prompt names.
-    pub fn asked_approver(&self) -> Result<&PinnedApprover, PresenceRefusal> {
-        asked_approver(&self.approvers)
+    /// The pinned approvers in approver order: owner presence asks the first and lets the owner switch to the rest.
+    pub fn approvers(&self) -> &[PinnedApprover] {
+        &self.approvers
     }
 
-    /// Owner presence (design/credential-commands.md): opens the asked approver's own key envelope with
+    /// Owner presence (design/credential-commands.md): opens `approver`'s own key envelope with
     /// `passphrase` and drops the signer at once. Nothing is reserved, signed or written.
-    pub async fn prove_presence(&self, passphrase: ApprovalPassphrase) -> Result<OwnerPresence, PresenceRefusal> {
-        self.service.prove_presence(passphrase, &self.approvers).await
+    pub async fn prove_presence(
+        &self,
+        passphrase: ApprovalPassphrase,
+        approver: &PinnedApprover,
+    ) -> Result<OwnerPresence, PresenceRefusal> {
+        self.service.prove_presence(passphrase, approver).await
     }
 
     /// Writes the planned change, then runs the config check from Ready through [`ServiceEvent::VaultChanged`] and

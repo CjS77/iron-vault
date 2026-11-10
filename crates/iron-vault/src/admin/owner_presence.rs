@@ -7,7 +7,7 @@ use std::future::Future;
 use iron_vault_store::{ApprovalPassphrase, PinnedApprover, StoreFs};
 use secrecy::SecretString;
 
-use super::protocol::{AdminResponse, ErrorCode, OwnerInput, Prompt};
+use super::protocol::{AdminResponse, ErrorCode, OwnerInput, Prompt, PromptAnswer};
 use super::server::{Exchange, ExchangeError};
 use crate::audit::{AuditEvent, NamedApprover, vault::PresenceRefused};
 use crate::service_context::{DenialKind, OwnerPresence, PresenceRefusal, RecipientRemoval, VaultChangePlan};
@@ -37,69 +37,91 @@ pub(super) enum NoPresence {
     CancelledByLock,
 }
 
-/// Asks for `approver`'s approval passphrase with a secret prompt, which `lock_requested` ends. The error is a prompt
-/// that got no owner input.
-pub(super) async fn ask_approval_passphrase(
+/// Asks for an approval passphrase with the approver prompt: it names the first of `approvers` by its label, and when more
+/// than one is pinned the owner may switch, which moves to the next and wraps after the last. Returns the approver the
+/// answer is for, so the caller checks that approver's key and names it in its audit event. `None` when `approvers` is
+/// empty. `lock_requested` is called once per prompt and ends it.
+///
+/// One prompt deadline covers every switch (`Exchange::prompt_or_switch_unless`), and a wrong answer is never retried
+/// with another approver here: the caller ends the exchange on it. The error is a prompt that got no owner input.
+pub(super) async fn ask_approval_passphrase<'a, L: Future<Output = ()>>(
     exchange: &mut Exchange,
-    approver: &PinnedApprover,
-    lock_requested: impl Future<Output = ()>,
-) -> Result<PassphraseAnswer, ExchangeError> {
-    let prompt = Prompt {
-        label: passphrase_prompt(approver),
-        secret: true,
-        switchable: false,
-    };
-    let answer = match exchange.prompt_unless(&prompt, lock_requested).await? {
-        None => PassphraseAnswer::CancelledByLock,
-        Some(input) => approval_passphrase(input).map_or(PassphraseAnswer::Unusable, PassphraseAnswer::Typed),
-    };
-    Ok(answer)
+    approvers: &'a [PinnedApprover],
+    lock_requested: impl Fn() -> L,
+) -> Result<Option<(&'a PinnedApprover, PassphraseAnswer)>, ExchangeError> {
+    let switchable = approvers.len() > 1;
+    for approver in approvers.iter().cycle() {
+        let prompt = Prompt {
+            label: passphrase_prompt(approver),
+            secret: true,
+            switchable,
+        };
+        let answer = match exchange.prompt_or_switch_unless(&prompt, lock_requested()).await? {
+            None => PassphraseAnswer::CancelledByLock,
+            Some(PromptAnswer::Switch) => continue,
+            Some(PromptAnswer::OwnerInput(input)) => approval_passphrase(input).map_or(PassphraseAnswer::Unusable, PassphraseAnswer::Typed),
+        };
+        return Ok(Some((approver, answer)));
+    }
+    Ok(None)
 }
 
 /// A change that holds the service-wide lock while the owner proves presence: what the prompt needs of it.
 pub(super) trait PresencePlan {
-    /// The pinned approver owner presence asks for.
-    fn asked_approver(&self) -> Result<&PinnedApprover, PresenceRefusal>;
+    /// The pinned approvers in approver order, the first of which owner presence asks.
+    fn approvers(&self) -> &[PinnedApprover];
     /// Completes once a `lock` is waiting for the lock the plan holds.
     fn lock_requested(&self) -> impl Future<Output = ()> + Send;
-    /// Opens the pinned approver's key with `passphrase`; see [`require_owner_presence`].
-    fn prove_presence(&self, passphrase: ApprovalPassphrase) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send;
+    /// Opens `approver`'s key with `passphrase`; see [`require_owner_presence`].
+    fn prove_presence(
+        &self,
+        passphrase: ApprovalPassphrase,
+        approver: &PinnedApprover,
+    ) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send;
 }
 
 impl<F: StoreFs + Send + Sync + 'static> PresencePlan for VaultChangePlan<'_, F> {
-    fn asked_approver(&self) -> Result<&PinnedApprover, PresenceRefusal> {
-        VaultChangePlan::asked_approver(self)
+    fn approvers(&self) -> &[PinnedApprover] {
+        VaultChangePlan::approvers(self)
     }
 
     fn lock_requested(&self) -> impl Future<Output = ()> + Send {
         VaultChangePlan::lock_requested(self)
     }
 
-    fn prove_presence(&self, passphrase: ApprovalPassphrase) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send {
-        VaultChangePlan::prove_presence(self, passphrase)
+    fn prove_presence(
+        &self,
+        passphrase: ApprovalPassphrase,
+        approver: &PinnedApprover,
+    ) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send {
+        VaultChangePlan::prove_presence(self, passphrase, approver)
     }
 }
 
 impl<F: StoreFs + Send + Sync + 'static> PresencePlan for RecipientRemoval<'_, F> {
-    fn asked_approver(&self) -> Result<&PinnedApprover, PresenceRefusal> {
-        RecipientRemoval::asked_approver(self)
+    fn approvers(&self) -> &[PinnedApprover] {
+        RecipientRemoval::approvers(self)
     }
 
     fn lock_requested(&self) -> impl Future<Output = ()> + Send {
         RecipientRemoval::lock_requested(self)
     }
 
-    fn prove_presence(&self, passphrase: ApprovalPassphrase) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send {
-        RecipientRemoval::prove_presence(self, passphrase)
+    fn prove_presence(
+        &self,
+        passphrase: ApprovalPassphrase,
+        approver: &PinnedApprover,
+    ) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send {
+        RecipientRemoval::prove_presence(self, passphrase, approver)
     }
 }
 
-/// Owner presence for `plan`: asks for the asked approver's passphrase and opens the approver key with it. There is no
-/// second try, and no fall-through to another approver. The outer error is a prompt that got no owner input, which
-/// cancels the command.
+/// Owner presence for `plan`: asks for an approver's passphrase through the approver prompt and opens that approver's key
+/// with it. There is no second try, and no fall-through to another approver after a wrong answer. The outer error is a
+/// prompt that got no owner input, which cancels the command.
 ///
 /// Every denial, a typed one or an unusable one, passes through here, so it is the one place that records
-/// `vault.presence-refused`, naming the approver that was asked.
+/// `vault.presence-refused`, naming the approver that was answered.
 ///
 /// A `lock` waiting for the service-wide lock the plan holds ends the prompt with [`NoPresence::CancelledByLock`], as
 /// it ends an approval's.
@@ -107,13 +129,17 @@ pub(super) async fn require_owner_presence(
     exchange: &mut Exchange,
     plan: &impl PresencePlan,
 ) -> Result<Result<OwnerPresence, NoPresence>, ExchangeError> {
-    let approver = match plan.asked_approver() {
-        Ok(approver) => approver,
-        Err(refusal) => return Ok(Err(NoPresence::Refused(refusal))),
+    let Some((approver, answer)) = ask_approval_passphrase(exchange, plan.approvers(), || plan.lock_requested()).await? else {
+        let none = PresenceRefusal::Unavailable("the approval state pins no approver".to_owned());
+        return Ok(Err(NoPresence::Refused(none)));
     };
-    let checked = match presence_passphrase(exchange, approver, plan.lock_requested()).await? {
-        Ok(passphrase) => plan.prove_presence(passphrase).await.map_err(NoPresence::Refused),
-        Err(unchecked) => Err(unchecked),
+    let checked = match answer {
+        PassphraseAnswer::Typed(passphrase) => plan.prove_presence(passphrase, approver).await.map_err(NoPresence::Refused),
+        PassphraseAnswer::Unusable => Err(NoPresence::Refused(PresenceRefusal::Denied(DenialKind::WrongPassphrase))),
+        PassphraseAnswer::CancelledByLock => {
+            tracing::warn!("change cancelled at its prompt by a lock; nothing was written");
+            Err(NoPresence::CancelledByLock)
+        }
     };
     if let Err(NoPresence::Refused(PresenceRefusal::Denied(refusal))) = &checked {
         PresenceRefused {
@@ -123,24 +149,6 @@ pub(super) async fn require_owner_presence(
         .emit();
     }
     Ok(checked)
-}
-
-/// The passphrase owner presence checks, or why it ends before any check: input that cannot be the passphrase is
-/// refused as a wrong one, and a `lock` cancels the change.
-async fn presence_passphrase(
-    exchange: &mut Exchange,
-    approver: &PinnedApprover,
-    lock_requested: impl Future<Output = ()>,
-) -> Result<Result<ApprovalPassphrase, NoPresence>, ExchangeError> {
-    let passphrase = match ask_approval_passphrase(exchange, approver, lock_requested).await? {
-        PassphraseAnswer::Typed(passphrase) => Ok(passphrase),
-        PassphraseAnswer::Unusable => Err(NoPresence::Refused(PresenceRefusal::Denied(DenialKind::WrongPassphrase))),
-        PassphraseAnswer::CancelledByLock => {
-            tracing::warn!("change cancelled at its prompt by a lock; nothing was written");
-            Err(NoPresence::CancelledByLock)
-        }
-    };
-    Ok(passphrase)
 }
 
 /// The answer when owner presence for `command` was not shown, so nothing was written. A wrong passphrase is

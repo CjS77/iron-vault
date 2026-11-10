@@ -26,6 +26,7 @@ use super::{
 pub struct VerifiedApproval {
     version: ApprovalVersion,
     digest: ConfigDigest,
+    approver: ApproverId,
 }
 
 impl VerifiedApproval {
@@ -37,6 +38,11 @@ impl VerifiedApproval {
     /// The digest of the verified config bytes.
     pub fn digest(&self) -> ConfigDigest {
         self.digest
+    }
+
+    /// The pinned approver that signed the approval, from the envelope. The service asks it first at the next prompt.
+    pub fn approver(&self) -> ApproverId {
+        self.approver
     }
 }
 
@@ -112,9 +118,12 @@ pub enum VerifyError {
 pub fn verify_approval(state: &ApprovalState, config: &[u8], envelope: &[u8]) -> Result<VerifiedApproval, VerifyError> {
     let payload = verify_signed(state, ConfigDigest::of(config), envelope)?;
     check_committed(state.committed(), payload.version(), payload.digest())?;
+    // Decoded a second time, after the checks above passed, so `verify_signed` keeps returning only the payload.
+    let approver = ApprovalEnvelope::decode(envelope)?.approver_id();
     Ok(VerifiedApproval {
         version: payload.version(),
         digest: payload.digest(),
+        approver,
     })
 }
 

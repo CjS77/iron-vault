@@ -40,9 +40,9 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::Capabilities;
 use iron_vault_store::{
-    ApprovalPassphrase, ApprovalState, ApprovalStorage, ApproverId, ConfigDigest, ConfigDirLock, LockError, OsFs, PendingConfig,
-    PermittedOrigins, PinnedApprover, SoftwareSigner, StateDirLock, StoreFs, Vault, VaultIdentity, open_signer_key,
-    seal_signer_key_for_tests, write_signer_key,
+    ApprovalPassphrase, ApprovalState, ApprovalStorage, ApproverId, ApproverLabel, ConfigDigest, ConfigDirLock, LockError, OsFs,
+    PendingConfig, PermittedOrigins, PinnedApprover, SoftwareSigner, StateDirLock, StoreFs, UtcSecond, Vault, VaultIdentity,
+    open_signer_key, seal_signer_key_for_tests, write_signer_key,
 };
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -124,6 +124,21 @@ impl Fixture {
         let lock = self.state_lock();
         let (vault, _) = Vault::open(&lock, &OsFs, identity()).unwrap();
         vault.load_approval_state(&lock, &OsFs).unwrap().approvers()[0].id()
+    }
+
+    /// Enrolls a second software approver labelled `label`, enrolled at `enrolled_at` and sealed under `passphrase`, beside the
+    /// one `init` pinned, and returns its ID. Call it before the service starts, which holds the state-directory lock.
+    pub fn enroll_second_approver(&self, label: &str, passphrase: &str, enrolled_at: UtcSecond) -> ApproverId {
+        let lock = self.state_lock();
+        let (vault, _) = Vault::open(&lock, &OsFs, identity()).unwrap();
+        let mut state = vault.load_approval_state(&lock, &OsFs).unwrap();
+        let (key, pinned) = SoftwareSigner::generate().unwrap();
+        let sealed = seal_signer_key_for_tests(&key, &approval_passphrase(passphrase)).unwrap();
+        let id = ApproverId::generate();
+        write_signer_key(&lock, &OsFs, id, &sealed).unwrap();
+        let approver = PinnedApprover::software_for_tests(id, pinned, ApproverLabel::new(label).unwrap(), enrolled_at);
+        state.enroll_approver(&lock, &OsFs, &identity(), approver).unwrap();
+        id
     }
 
     fn state_lock(&self) -> StateDirLock {

@@ -29,7 +29,6 @@ use iron_vault_store::{
 };
 use tokio::sync::OwnedMutexGuard;
 
-use super::presence::asked_approver;
 use super::{
     DenialKind, Inner, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_destination, log_task_crash,
 };
@@ -97,8 +96,8 @@ pub struct ApprovalReview<'a, F> {
     pending: PendingConfig,
     approval: ApprovalState,
     summary: ApprovalSummary,
-    /// The pinned approver step 2 asks for, and the one whose ID the envelope carries.
-    approver: PinnedApprover,
+    /// The pinned approvers in approver order: step 2 asks the first and lets the owner switch through the rest.
+    approvers: Vec<PinnedApprover>,
 }
 
 /// Where an approval started: the service state and the context's check generation.
@@ -118,7 +117,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let (started, identity, active) = self.approval_start().await?;
         let (vault, _) = open_vault(&self.locks.state, &self.setup.fs, Arc::clone(&identity)).map_err(unavailable)?;
         let approval = vault.load_approval_state(&self.locks.state, &self.setup.fs).map_err(unavailable)?;
-        let approver = asked_approver(approval.approvers()).map_err(unavailable)?.clone();
+        let approvers = self.ordered_approvers(approval.approvers());
+        if approvers.is_empty() {
+            return Err(unavailable("the approval state pins no approver"));
+        }
         let pending = PendingConfig::write(&self.storage(&identity), config).map_err(unavailable)?;
         let policy = match self.servable(pending.bytes(), &vault) {
             Ok(policy) => policy,
@@ -134,7 +136,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             summary: summarize(active.as_ref(), policy.config()),
             pending,
             approval,
-            approver,
+            approvers,
         })
     }
 
@@ -198,37 +200,36 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         self.service.lock_requested().await;
     }
 
-    /// The pinned approver the passphrase prompt asks for, by its label.
-    pub fn asked_approver(&self) -> &PinnedApprover {
-        &self.approver
+    /// The pinned approvers in approver order: the prompt asks the first, and each switch moves to the next.
+    pub fn approvers(&self) -> &[PinnedApprover] {
+        &self.approvers
     }
 
-    /// Opens the asked approver's own key envelope with `passphrase` as its signer, through the check owner presence
-    /// makes too. A wrong passphrase, or a key that is not the asked approver's, is [`ApprovalEnd::Denied`], with no
-    /// fall-through to another approver; a check that cannot run or does not finish refuses the approval before anything
-    /// is reserved.
-    pub async fn open_signer(&self, passphrase: ApprovalPassphrase) -> Result<SoftwareSigner, ApprovalEnd> {
+    /// Opens `approver`'s own key envelope with `passphrase` as its signer, through the check owner presence makes too.
+    /// A wrong passphrase, or a key that is not `approver`'s, is [`ApprovalEnd::Denied`], with no fall-through to another
+    /// approver; a check that cannot run or does not finish refuses the approval before anything is reserved.
+    pub async fn open_signer(&self, approver: &PinnedApprover, passphrase: ApprovalPassphrase) -> Result<SoftwareSigner, ApprovalEnd> {
         self.service
-            .open_approver(passphrase, self.approver.clone())
+            .open_approver(passphrase, approver.clone())
             .await
             .map_err(|refusal| match refusal {
-                PresenceRefusal::Denied(kind) => self.refused(kind),
+                PresenceRefusal::Denied(kind) => self.refused(kind, approver),
                 PresenceRefusal::Unavailable(cause) => ApprovalEnd::Unavailable(format!("{cause}; nothing was reserved")),
             })
     }
 
-    /// Ends the approval for a passphrase that cannot be the approval passphrase (empty or not UTF-8), which is answered as
-    /// a wrong one: records `config.approval-refused` and returns [`ApprovalEnd::Denied`].
-    pub fn refuse_unusable_passphrase(&self) -> ApprovalEnd {
-        self.refused(DenialKind::WrongPassphrase)
+    /// Ends the approval for a passphrase to `approver` that cannot be the approval passphrase (empty or not UTF-8), which
+    /// is answered as a wrong one: records `config.approval-refused` and returns [`ApprovalEnd::Denied`].
+    pub fn refuse_unusable_passphrase(&self, approver: &PinnedApprover) -> ApprovalEnd {
+        self.refused(DenialKind::WrongPassphrase, approver)
     }
 
-    /// The one place a denied approval is recorded, with the digest of the config it was for.
-    fn refused(&self, refusal: DenialKind) -> ApprovalEnd {
+    /// The one place a denied approval is recorded, with the digest of the config it was for and the approver answered.
+    fn refused(&self, refusal: DenialKind, approver: &PinnedApprover) -> ApprovalEnd {
         ApprovalRefused {
             refusal,
             digest: self.pending.digest(),
-            approver: NamedApprover::from(&self.approver),
+            approver: NamedApprover::from(approver),
         }
         .emit();
         ApprovalEnd::Denied
@@ -239,7 +240,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         self.pending.abandon(&self.service.locks.config, &self.service.setup.fs);
     }
 
-    /// Steps 2 to 6 with `signer`, which is dropped once it has signed: reserve, sign and stage; then the admission
+    /// Steps 2 to 6 with `signer`, the key of `approver` (the one [`open_signer`](Self::open_signer) opened), which is dropped once it has signed: reserve, sign and stage; then the admission
     /// pause (from Ready, the move to Checking), the commit and publish; then the config check that ends the pause.
     ///
     /// Refuses before reserving unless the service is in the state, and at the check generation, the approval started
@@ -252,7 +253,11 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
     /// on the new config, or in Unavailable. A task that ends without a result fails closed through its
     /// [`SettleGuard`], and this call then answers [`ApprovalEnd::Unavailable`], whose message says a version may be
     /// consumed or committed.
-    pub async fn commit<S: ApprovalSigner + Send + 'static>(self, signer: S) -> Result<ApprovalResult, ApprovalEnd> {
+    pub async fn commit<S: ApprovalSigner + Send + 'static>(
+        self,
+        approver: PinnedApprover,
+        signer: S,
+    ) -> Result<ApprovalResult, ApprovalEnd> {
         let Self {
             service,
             service_wide,
@@ -260,7 +265,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
             pending,
             approval,
             summary,
-            approver,
+            approvers: _,
         } = self;
         let inner = Arc::clone(&service.inner).lock_owned().await;
         let Some(identity) = inner.identity.clone().filter(|_| inner.state == started && inner.checks == checks) else {

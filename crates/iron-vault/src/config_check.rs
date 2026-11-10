@@ -376,7 +376,9 @@ fn run(
         .map_err(|error| CheckFailure::Config(InvalidConfig::Clients(error)))?;
     let policy = clients.mark_unusable_routes(policy);
     let limiter = RateLimiter::new(&policy, Instant::now());
-    ServingSnapshot::new(policy, vault, clients, limiter).map_err(|error| CheckFailure::Config(InvalidConfig::Snapshot(error)))
+    ServingSnapshot::new(policy, vault, clients, limiter)
+        .map(|snapshot| snapshot.signed_by(recovered.published().approval().approver()))
+        .map_err(|error| CheckFailure::Config(InvalidConfig::Snapshot(error)))
 }
 
 /// Parses, validates and activates `bytes` against `vault`'s credential catalog.

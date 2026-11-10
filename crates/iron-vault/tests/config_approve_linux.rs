@@ -550,10 +550,14 @@ async fn an_approval_aborted_after_its_commit_still_settles_in_ready_on_the_new_
         let service = Arc::clone(&service);
         async move {
             let review = service.review_approval(proposed.into_bytes()).await.unwrap();
-            let signer = review.open_signer(approval_passphrase(APPROVAL_PASSPHRASE)).await.unwrap();
+            let approver = review.approvers()[0].clone();
+            let signer = review
+                .open_signer(&approver, approval_passphrase(APPROVAL_PASSPHRASE))
+                .await
+                .unwrap();
             signed.0.send(()).unwrap();
             go.1.await.unwrap();
-            review.commit(signer).await.map(drop)
+            review.commit(approver, signer).await.map(drop)
         }
     });
     signed.1.await.unwrap();

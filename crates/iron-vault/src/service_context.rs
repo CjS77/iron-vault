@@ -19,6 +19,7 @@
 //! (design/config-approval.md, open question 1).
 
 mod approval;
+mod approver_order;
 mod host_unlock;
 mod init;
 mod log_destination;

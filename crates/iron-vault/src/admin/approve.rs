@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use iron_vault_store::{SoftwareSigner, StoreFs};
+use iron_vault_store::{PinnedApprover, SoftwareSigner, StoreFs};
 
 use super::dispatch::{AdminHandler, HandlerFuture};
 use super::owner_presence::{PassphraseAnswer, ask_approval_passphrase};
@@ -45,7 +45,10 @@ impl<F: StoreFs + Send + Sync + 'static> Approve<F> {
             Err(end) => return Ok(refused(end)),
         };
         match authorize(&review, exchange).await {
-            Ok(Ok(signer)) => Ok(review.commit(signer).await.map_or_else(refused, AdminResponse::ConfigApprove)),
+            Ok(Ok((approver, signer))) => Ok(review
+                .commit(approver, signer)
+                .await
+                .map_or_else(refused, AdminResponse::ConfigApprove)),
             Ok(Err(end)) => {
                 review.abandon();
                 Ok(refused(end))
@@ -66,7 +69,7 @@ impl<F: StoreFs + Send + Sync + 'static> Approve<F> {
 async fn authorize<F: StoreFs + Send + Sync + 'static>(
     review: &ApprovalReview<'_, F>,
     exchange: &mut Exchange,
-) -> Result<Result<SoftwareSigner, ApprovalEnd>, ExchangeError> {
+) -> Result<Result<(PinnedApprover, SoftwareSigner), ApprovalEnd>, ExchangeError> {
     exchange.notice(&review.summary()).await?;
     let confirm = Prompt {
         label: format!("Approve this config as version {}? Type yes to approve", review.version()),
@@ -79,12 +82,18 @@ async fn authorize<F: StoreFs + Send + Sync + 'static>(
     if confirmation.expose_secret() != b"yes" {
         return Ok(Err(ApprovalEnd::Declined));
     }
-    let passphrase = match ask_approval_passphrase(exchange, review.asked_approver(), review.lock_requested()).await? {
+    let Some((approver, answer)) = ask_approval_passphrase(exchange, review.approvers(), || review.lock_requested()).await? else {
+        return Ok(Err(ApprovalEnd::Unavailable("the approval state pins no approver".to_owned())));
+    };
+    let passphrase = match answer {
         PassphraseAnswer::Typed(passphrase) => passphrase,
-        PassphraseAnswer::Unusable => return Ok(Err(review.refuse_unusable_passphrase())),
+        PassphraseAnswer::Unusable => return Ok(Err(review.refuse_unusable_passphrase(approver))),
         PassphraseAnswer::CancelledByLock => return Ok(Err(cancelled_by_lock())),
     };
-    Ok(review.open_signer(passphrase).await)
+    Ok(review
+        .open_signer(approver, passphrase)
+        .await
+        .map(|signer| (approver.clone(), signer)))
 }
 
 fn cancelled_by_lock() -> ApprovalEnd {

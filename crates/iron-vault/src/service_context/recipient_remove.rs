@@ -18,7 +18,6 @@ use iron_vault_store::{
 };
 use tokio::sync::OwnedMutexGuard;
 
-use super::presence::asked_approver;
 use super::recipients::{ReadyVault, log_failure, ready_vault, step_failure, unwritten};
 use super::{OwnerPresence, PresenceRefusal, RecipientRefusal, ServiceContext};
 use crate::audit::AuditEvent;
@@ -69,8 +68,7 @@ pub struct RecipientRemoval<'a, F> {
     /// The service state and check generation at step 2, which the write checks again.
     state: ServiceState,
     checks: u64,
-    /// The pinned approvers, from the approval state the service holds; owner presence asks the first of
-    /// them ([`asked_approver`]).
+    /// The pinned approvers in approver order, from the approval state the service holds.
     approvers: Vec<PinnedApprover>,
     /// The inventory the check opened, which the write rewraps from.
     inventory: RecipientInventory,
@@ -102,7 +100,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             service_wide,
             state,
             checks,
-            approvers,
+            approvers: self.ordered_approvers(&approvers),
             inventory,
             removed,
             after,
@@ -153,15 +151,19 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientRemoval<'_, F> {
         self.service.lock_requested().await;
     }
 
-    /// The approver owner presence asks for, whose label the passphrase prompt names.
-    pub fn asked_approver(&self) -> Result<&PinnedApprover, PresenceRefusal> {
-        asked_approver(&self.approvers)
+    /// The pinned approvers in approver order: owner presence asks the first and lets the owner switch to the rest.
+    pub fn approvers(&self) -> &[PinnedApprover] {
+        &self.approvers
     }
 
-    /// Owner presence (`design/credential-commands.md`): opens the asked approver's own key envelope with
+    /// Owner presence (`design/credential-commands.md`): opens `approver`'s own key envelope with
     /// `passphrase` and drops the signer at once. Nothing is reserved, signed or written.
-    pub async fn prove_presence(&self, passphrase: ApprovalPassphrase) -> Result<OwnerPresence, PresenceRefusal> {
-        self.service.prove_presence(passphrase, &self.approvers).await
+    pub async fn prove_presence(
+        &self,
+        passphrase: ApprovalPassphrase,
+        approver: &PinnedApprover,
+    ) -> Result<OwnerPresence, PresenceRefusal> {
+        self.service.prove_presence(passphrase, approver).await
     }
 
     /// Step 7: rewraps the vault identity for the set without the recipient, if the service is still in the state and at

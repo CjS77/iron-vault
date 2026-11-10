@@ -9,6 +9,8 @@ use std::sync::Arc;
 use iron_vault_store::{ApprovalPassphrase, PinnedApprover, SignError, SoftwareSigner, StoreFs, open_signer_key, read_signer_key};
 
 use super::ServiceContext;
+use super::approver_order::approver_order;
+use crate::serving_snapshot::Admission;
 
 /// Proof that the owner typed the approval passphrase in this exchange, after the service described the change.
 ///
@@ -47,16 +49,6 @@ pub enum PresenceRefusal {
     Unavailable(String),
 }
 
-/// The approver a prompt asks for, named by its label. In v0 that is the software signer, the one approver `init` pins.
-/// Which approver is asked first when more than one is pinned belongs to the approver enrolment design; until then it is
-/// the first in approver ID order. A key that is not this approver's is refused, with no fall-through to another
-/// (design/config-approval.md, "Choosing the signer").
-pub(super) fn asked_approver(approvers: &[PinnedApprover]) -> Result<&PinnedApprover, PresenceRefusal> {
-    approvers
-        .first()
-        .ok_or_else(|| PresenceRefusal::Unavailable("the approval state pins no approver".to_owned()))
-}
-
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Opens `approver`'s own key envelope, `approver-<approver ID>.age`, with `passphrase` as its signer, on the
     /// blocking pool, since scrypt holds a thread for seconds. A wrong passphrase, or a key that is not `approver`'s,
@@ -80,15 +72,24 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             .unwrap_or_else(|_| Err(PresenceRefusal::Unavailable("the approver key check was interrupted".to_owned())))
     }
 
-    /// Owner presence: [`open_approver`](Self::open_approver) as the approver [`asked_approver`] picks from `approvers`,
-    /// dropping the signer at once.
+    /// `approvers` in [approver order](approver_order), by the signer of the active approval the serving snapshot was built
+    /// from. The service is Unavailable, with no active approval, when it holds no snapshot.
+    pub(super) fn ordered_approvers(&self, approvers: &[PinnedApprover]) -> Vec<PinnedApprover> {
+        let active = match self.holder.load() {
+            Admission::Serve(snapshot) => snapshot.signer(),
+            Admission::Refuse(_) => None,
+        };
+        approver_order(approvers, active)
+    }
+
+    /// Owner presence: [`open_approver`](Self::open_approver) as the `approver` the owner answered, dropping the signer at
+    /// once. A key that is not `approver`'s is refused, with no fall-through to another approver.
     pub(super) async fn prove_presence(
         &self,
         passphrase: ApprovalPassphrase,
-        approvers: &[PinnedApprover],
+        approver: &PinnedApprover,
     ) -> Result<OwnerPresence, PresenceRefusal> {
-        let approver = asked_approver(approvers)?.clone();
-        self.open_approver(passphrase, approver).await.map(|signer| {
+        self.open_approver(passphrase, approver.clone()).await.map(|signer| {
             drop(signer);
             OwnerPresence(())
         })

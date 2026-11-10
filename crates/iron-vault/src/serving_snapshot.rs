@@ -12,7 +12,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use iron_vault_policy::{ActivePolicy, CatalogEntry, CredentialCatalog, CredentialName, RateLimiter, RouteName, UnavailableCause};
-use iron_vault_store::{CredentialRecord, OpenReport, RecordId, Vault};
+use iron_vault_store::{ApproverId, CredentialRecord, OpenReport, RecordId, Vault};
 use tokio::sync::oneshot;
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
@@ -30,6 +30,9 @@ pub struct ServingSnapshot {
     vault: Vault,
     clients: UpstreamClients,
     limiter: RateLimiter,
+    /// The approver that signed the approval the snapshot was built from, which the next approver prompt asks first.
+    /// `None` only for a snapshot built without an approval, as in tests.
+    signed_by: Option<ApproverId>,
     /// Fired when the holder that serves the snapshot ends its epoch. A snapshot no holder serves is never withdrawn.
     withdrawn: CancellationToken,
     /// Dropped with the snapshot, and declared last so that every other field, the vault among them, is already dropped
@@ -92,10 +95,24 @@ impl ServingSnapshot {
                 vault,
                 clients,
                 limiter,
+                signed_by: None,
                 withdrawn: CancellationToken::new(),
                 released: None,
             }),
         }
+    }
+
+    /// The snapshot, recording `approver` as the signer of the approval it was built from.
+    pub fn signed_by(self, approver: ApproverId) -> Self {
+        Self {
+            signed_by: Some(approver),
+            ..self
+        }
+    }
+
+    /// The approver that signed the active approval, when the snapshot knows it.
+    pub fn signer(&self) -> Option<ApproverId> {
+        self.signed_by
     }
 
     /// The snapshot, withdrawn with every other snapshot of `epoch`, and the signal that it has been dropped.
