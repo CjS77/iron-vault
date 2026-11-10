@@ -60,9 +60,9 @@ bytes are compared with the initial config (below). The checks run in this order
 
 1. **`init.unfinished` is present.** The state is Unfinished if the state directory holds no file but the lock file
    (`lock`), a `lost+found` directory, stale temp files (`.<name>.tmp`), the files an initialization writes
-   (`init.unfinished`, `identity.age`, `recipients.age`, `operational.age`, `approver.age`, `manifest.age`, `approval.age`) and the
-   recovery check record (`recovery.toml`), and the config directory passes the [config test](#the-config-test).
-   Otherwise it is Unrecognized.
+   (`init.unfinished`, `identity.age`, `recipients.age`, `operational.age`, at most one approver key envelope
+   `approver-<approver ID>.age`, `manifest.age`, `approval.age`) and the recovery check record (`recovery.toml`), and
+   the config directory passes the [config test](#the-config-test). Otherwise it is Unrecognized.
 2. **`manifest.age` is present.** The state is Initialized, whatever else the directories hold: an Initialized vault
    never depends on the absence of other files.
 3. **The state directory holds only the lock file, a `lost+found` directory, stale temp files and the recovery check
@@ -79,10 +79,12 @@ bytes are compared with the initial config (below). The checks run in this order
 
 A **foreign file** is a file in the state directory that is not on the lists above: the lock file, `lost+found`, temp
 files, the vault's own files (`identity.age`, `recipients.age`, `recipients.age.staged`, `operational.age`,
-`approver.age`, `manifest.age`, `approval.age`, `init.unfinished`), record files (`record-*.age`) and the recovery check
-record (`recovery.toml`), which [recovery.md](recovery.md#initialization) describes. The staged inventory
-(`recipients.age.staged`) is a vault file only beside a manifest: `init` never writes it, so beside `init.unfinished` it
-is foreign ([recipients.md](recipients.md#initialization)). It matters only beside `init.unfinished`, where it makes the state
+`manifest.age`, `approval.age`, `init.unfinished`), approver key envelopes (`approver-<approver ID>.age`, the ID a
+version 4 UUID in lowercase hyphenated form), record files (`record-*.age`) and the recovery check record
+(`recovery.toml`), which [recovery.md](recovery.md#initialization) describes. Beside a manifest, an approver key
+envelope that no pinned approver names is an [orphan](approval-signers.md#orphan-key-files), not a foreign file. The
+staged inventory (`recipients.age.staged`) is a vault file only beside a manifest: `init` never writes it, so beside
+`init.unfinished` it is foreign ([recipients.md](recipients.md#initialization)). It matters only beside `init.unfinished`, where it makes the state
 Unrecognized so the discard never sweeps it into the new vault, and in a state directory with no manifest, where it
 makes Uninitialized impossible. Beside a manifest it changes nothing: `unlock` logs its name at WARN
 (`vault.foreign-file`) and goes on, because `Vault::open` already ignores names it does not know and the manifest alone
@@ -93,8 +95,10 @@ lock the owner out of a working vault. `lost+found` is the directory a filesyste
 
 Init proceeds only on Uninitialized and Unfinished. Examples of Unrecognized:
 
-- envelope files (`identity.age`, `recipients.age`, `operational.age`, `approver.age`) without `init.unfinished` or a manifest: a
-  crash cannot leave them, because `init.unfinished` is durable before the first of them is written;
+- envelope files (`identity.age`, `recipients.age`, `operational.age`, `approver-<approver ID>.age`) without
+  `init.unfinished` or a manifest: a crash cannot leave them, because `init.unfinished` is durable before the first of
+  them is written;
+- two approver key envelopes beside `init.unfinished`: init writes one;
 - record files or `approval.age` without a manifest: what `Vault::open` already reports as damaged shared state;
 - `init.unfinished` beside a record file: only `add` writes a record file, and only an initialized vault adds;
 - `config.toml` or `config.toml.sig` beside an empty state directory. Init refuses rather than overwrite the owner's
@@ -283,10 +287,10 @@ store function built on it, so each is whole or absent after a crash.
 | 1 | Writes the empty file `init.unfinished` in the state directory. From here on the state directory reads Unfinished until step 9. | `init.unfinished` |
 | 2 | Wraps the vault identity for the recipient set {operational recipient key, recovery recipient key}, plus the host unlock recipient key with `--host-unlock`, with `wrap_identity` and writes it. Then reads `identity.age` back and unwraps it with `unwrap_identity` once with each identity, and requires every one to give the generated vault identity (same public key). Then writes the [recipient inventory](recipients.md#initialization) with `write_recipient_inventory`: the `operational` and `recovery` entries, labelled `vault passphrase` and `recovery key`, and with `--host-unlock` a `host-unlock` entry labelled `host unlock`, the init time, the vault ID generated with the keys and the digest of the envelope as read back. Reads it back and requires that it opens with the vault identity and equals what was written. The recovery and host unlock identities are dropped. | `identity.age`, then `recipients.age` |
 | 3 | Seals the operational identity to the vault passphrase with `seal_passphrase_envelope` and writes it. The operational identity is dropped. | `operational.age` |
-| 4 | Seals the software signer key to the approval passphrase with `seal_signer_key` and writes it with `write_signer_key`. The signer key is dropped. | `approver.age` |
+| 4 | Seals the software signer key to the approval passphrase with `seal_signer_key` and writes it with `write_signer_key`, named by the approver ID generated with the keys. The signer key is dropped. | `approver-<approver ID>.age` |
 | 5 | Creates the vault with `Vault::create_with_id`, using the vault ID generated with the keys in step 3, and an empty manifest at state generation 1. | `manifest.age` |
 | 6 | Creates the approval state with `Vault::create_approval_state`, pinning the approver from step 4, with nothing reserved and nothing committed, then the manifest write that records it. | `approval.age`, then `manifest.age` |
-| 7 | Reads `approver.age` back and opens it with the approval passphrase (`open_signer_key`, checked against the pinned approver), which proves the file on disk opens. The approval passphrase is dropped. | none |
+| 7 | Reads `approver-<approver ID>.age` back and opens it with the approval passphrase (`open_signer_key`, checked against the pinned approver), which proves the file on disk opens. The approval passphrase is dropped. | none |
 | 8 | Runs the approval transaction on the [initial config](#initial-config): `PendingConfig::write`, then `prepare` with the signer from step 7 (reserving version 1), then `commit` (committing version 1, publishing, and verifying the published pair as read back). | `config.toml.pending`, `approval.age` (reserve), `config.toml.sig.staged`, `approval.age` (commit), `config.toml`, `config.toml.sig` |
 | 9 | Removes `init.unfinished` with `durable_remove`. **This is init's commit point.** | `init.unfinished` removed |
 
@@ -322,8 +326,8 @@ writes, each durably, and only those present:
   `config.toml.pending`, each removed durably (unlink, then directory fsync). All signatures go before any config,
   because a signature with no config beside it makes the state Unrecognized and `publish` can leave `config.toml`
   beside `config.toml.sig.staged`;
-- in the state directory: `recovery.toml`, `approval.age`, `manifest.age`, `approver.age`, `operational.age`,
-  `recipients.age` and `identity.age`, each with `durable_remove`.
+- in the state directory: `recovery.toml`, `approval.age`, `manifest.age`, the approver key envelope
+  (`approver-<approver ID>.age`), `operational.age`, `recipients.age` and `identity.age`, each with `durable_remove`.
 
 `init.unfinished` stays, and step 1 then rewrites it, so a crash during the discard leaves the state Unfinished and
 the next init discards again. Nothing else is left to touch: the state is Unfinished only if the state directory holds
@@ -369,7 +373,7 @@ every row, and names the initialization state: "not initialized (run iron-vault 
 | 1 `init.unfinished` | Unfinished | `unlock-failed`: initialization unfinished, an init may be in progress; run `iron-vault init` again if none is | notice, discards (nothing yet), proceeds |
 | 2 `identity.age`, then `recipients.age` | Unfinished | as row 1 | discards whichever of the two exist, proceeds |
 | 3 `operational.age` | Unfinished | as row 1; the passphrase is never asked for, so the vault never reaches Checking | discards both envelopes, proceeds |
-| 4 `approver.age` | Unfinished | as row 1 | discards the three envelopes, proceeds |
+| 4 `approver-<approver ID>.age` | Unfinished | as row 1 | discards the three envelopes, proceeds |
 | 5 manifest | Unfinished | as row 1 | discards envelopes and manifest, proceeds |
 | 6 approval state (recorded or not) | Unfinished | as row 1 | discards envelopes, manifest and `approval.age`, proceeds |
 | 7 (no write) | Unfinished | as row 1 | as row 6 |

@@ -429,10 +429,12 @@ last_checked = 2027-02-01T10:00:00Z
 
 ## Approver key envelope
 
-The [approver key envelope](glossary.md), state-directory file `approver.age`, holds the
-[software signer](glossary.md)'s private key. It is a plain binary `age` v1 file with no Iron Vault framing, written by
-the same passphrase envelope code as `operational.age` but opened only with the [approval passphrase](glossary.md).
-Its plaintext is the 32-byte Ed25519 private key (the RFC 8032 seed), raw. Rust:
+The [approver key envelope](glossary.md) holds one software approver's private key, the key of its
+[software signer](glossary.md). Each software approver has its own, in the state-directory file
+`approver-<approver ID>.age`, with the ID in lowercase hyphenated form, such as
+`approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age`. It is a plain binary `age` v1 file with no Iron Vault framing,
+written by the same passphrase envelope code as `operational.age` but opened only with that approver's
+[approval passphrase](glossary.md). Its plaintext is the 32-byte Ed25519 private key (the RFC 8032 seed), raw. Rust:
 `iron_vault_store::{seal_signer_key, open_signer_key, write_signer_key, read_signer_key}`.
 
 | Bytes | Content                                                                 |
@@ -451,11 +453,11 @@ Its plaintext is the 32-byte Ed25519 private key (the RFC 8032 seed), raw. Rust:
   files, so holding the unlock passphrase gives no way to sign an approval.
 - **Pinned key check.** `open_signer_key` derives the public key from the decrypted private key and refuses with
   `KeyMismatch` unless it equals the public key of the [pinned approver](#approval-state-payload-v1) it is opened for,
-  so a swapped `approver.age` signs nothing.
-- **One file.** `init` enrolls one software signer, and `approver.age` holds its key. Specification
-  [§14](iron-vault-specification.md#14-recipients-startup-and-memory) lets the owner enroll several approval signers,
-  of the same kind or different kinds. [approval-signers.md](approval-signers.md#software-signer-keys) gives every
-  software signer a file of its own, `approver-<approver ID>.age`, `init`'s included.
+  so a key file renamed or swapped to another approver's name signs nothing.
+- **One file per approver.** The service opens only the file named by the approver it asks, so each answer costs one
+  scrypt run. `init` writes its one approver's file, and `approver add` writes one for each later software approver
+  ([approval-signers.md](approval-signers.md#software-signer-keys)). A file whose ID no pinned approver has is an
+  [orphan](approval-signers.md#orphan-key-files), which the next `approver add` or `approver remove` deletes.
 - **Lifetime.** A software signer is opened for one approval and dropped; the private key is cleared on drop and never
   cached.
 
@@ -647,7 +649,7 @@ replace returns. Every write reads the manifest from disk first and takes its st
   says of signing-key rotation.
 
 Signing-key rotation is an enroll followed by a remove. `init` writes the state with its one approver; `approver add`
-and `approver remove` enroll and remove the others, after owner presence or the recovery key
+and `approver remove` enroll and remove the others, after owner presence from a pinned approver
 ([approval-signers.md](approval-signers.md#authorization)).
 
 Before each write the service reads the file back and requires it to equal its in-memory state, so a stale copy can
