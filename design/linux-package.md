@@ -172,9 +172,9 @@ group's members too, unless the group existed before the package and names a gro
 password (the second gap below). The threat model trusts root and the host's administrators
 ([§2](iron-vault-specification.md#2-security-promise-and-limits)). The case the threat model does cover, an account that
 existed before the package and would be adopted by it, is closed at configure, where `postinst` runs as root and reads
-`/etc/shadow`, apart from that second gap. [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)
-requires that taking over the service account not give admin access; the `Protected` deployment profile still accepts
-the service account's uid on the admin socket ([Admin access](#admin-access)) until that is brought in line with §5.
+`/etc/shadow`, apart from that second gap. Taking over the service account gives no admin access either: the admin
+socket refuses the service account's uid ([Admin access](#admin-access);
+[§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)).
 
 Two gaps are left open:
 
@@ -512,9 +512,10 @@ account, and accepting it would let anything that took over the service lock the
 attempts. `admin.sock` is the service account's with mode `0600`, and the service checks each connection's peer account
 before reading anything. The package creates no admin group. Membership of the `iron-vault` group grants no admin
 access: the socket's group has no access, and the peer check refuses the account anyway, as it refuses the service
-account itself. It does grant read access to the audit log, because `/var/log/iron-vault` is `0750` and `iron-vault.log` is `0640`, both with the service's group, and
-anyone who reads the log sees every route, caller and refusal. Only a log collector's own service account belongs in
-the group; never add a login account ([log-operations.md](../book/src/reference/log-operations.md#location-and-permissions)).
+account itself. It does grant read access to the audit log, because `/var/log/iron-vault` is `0750` and
+`iron-vault.log` is `0640`, both with the service's group, and anyone who reads the log sees every route, caller and
+refusal. Only a log collector's own service account belongs in the group; never add a login account
+([log-operations.md](../book/src/reference/log-operations.md#location-and-permissions)).
 
 The owner runs `sudo iron-vault <command>`. The installation guide recommends per-terminal `sudo` credential caching
 or none, and a hardware-key factor where the platform supports one.
