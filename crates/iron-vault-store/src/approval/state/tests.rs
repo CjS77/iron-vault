@@ -615,11 +615,13 @@ fn an_uncertain_write_leaves_memory_unchanged_and_blocks_writes_until_reload() {
             "{label}"
         );
         assert_eq!(state, old, "{label}");
+        assert!(state.is_unsettled(), "{label}");
         let calls = fs.trace().len();
         assert_eq!(setup.reserve(&fs, &mut state), Err(ApprovalStateError::ReloadRequired), "{label}");
         assert_eq!(mutations(&fs, calls), [], "{label}");
         // The rename happened, so a reload without a crash sees the new state.
         assert_eq!(setup.reload_working(&fs, label), new, "{label}");
+        assert!(!setup.load(&fs).unwrap().is_unsettled(), "{label}");
     });
 }
 

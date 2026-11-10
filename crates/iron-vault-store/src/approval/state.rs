@@ -48,7 +48,7 @@ pub const MAX_APPROVAL_STATE_LEN: usize = 4096;
 /// highest reserved version is 0 only in a newly created state, and no operation lowers it. The peer generation is
 /// always below the state generation. It pins from 1 to [`MAX_APPROVERS`] approvers, in strictly ascending order of
 /// approver ID, no two with the same public key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ApprovalState {
     vault_id: VaultId,
     state_generation: StateGeneration,
@@ -56,7 +56,24 @@ pub struct ApprovalState {
     approvers: Vec<PinnedApprover>,
     highest_reserved: u64,
     committed: Option<(ApprovalVersion, ConfigDigest)>,
+    /// Set when a write renamed the new state into place but its directory fsync failed, so the disk may hold a state
+    /// this one does not. An unsettled state accepts no write; [`ApprovalState::load`] gives the state to continue with.
+    unsettled: bool,
 }
+
+/// Two states are equal when they say the same thing; whether memory has lost track of the disk is not part of what
+/// the state says.
+impl PartialEq for ApprovalState {
+    fn eq(&self, other: &Self) -> bool {
+        self.vault_id == other.vault_id
+            && self.generations() == other.generations()
+            && self.approvers == other.approvers
+            && self.highest_reserved == other.highest_reserved
+            && self.committed == other.committed
+    }
+}
+
+impl Eq for ApprovalState {}
 
 /// The approval state cannot be built, opened or changed. No variant carries key material or MAC bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -235,6 +252,7 @@ impl ApprovalState {
                 approvers,
                 highest_reserved,
                 committed,
+                unsettled: false,
             }),
         }
     }
@@ -262,6 +280,7 @@ impl ApprovalState {
             approvers: vec![approver],
             highest_reserved: 0,
             committed: None,
+            unsettled: false,
         };
         let bytes = seal_approval_state(identity, &state).map_err(ApprovalStateError::Seal)?;
         refuse_existing(lock, fs)?;
@@ -490,15 +509,28 @@ impl ApprovalState {
             ..next
         };
         let bytes = seal_approval_state(identity, &next).map_err(ApprovalStateError::Seal)?;
-        replace_file(lock, fs, &bytes)?;
+        replace_file(lock, fs, &bytes).inspect_err(|error| self.unsettled |= matches!(error, ApprovalStateError::WriteUncertain(_)))?;
         *self = next;
         Ok(())
     }
 
-    /// Refuses with [`ApprovalStateError::ReloadRequired`] unless the state on disk is exactly this one.
-    fn ensure_disk_matches(&self, lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity) -> Result<(), ApprovalStateError> {
+    /// Whether an earlier write of this state renamed the new file into place but failed its directory fsync, so the disk
+    /// may hold a state this one does not. Such a state accepts no write until [`ApprovalState::load`] replaces it.
+    pub fn is_unsettled(&self) -> bool {
+        self.unsettled
+    }
+
+    /// Refuses with [`ApprovalStateError::ReloadRequired`] unless this state is settled and the state on disk is exactly
+    /// it. Every write calls this first; an approver change calls it before it writes a key file, so a refusal leaves no
+    /// orphan.
+    pub(crate) fn ensure_disk_matches(
+        &self,
+        lock: &StateDirLock,
+        fs: &impl StoreFs,
+        identity: &VaultIdentity,
+    ) -> Result<(), ApprovalStateError> {
         match Self::read(lock, fs, identity, self.vault_id) {
-            Ok(on_disk) if on_disk == *self => Ok(()),
+            Ok(on_disk) if !self.unsettled && on_disk == *self => Ok(()),
             _ => Err(ApprovalStateError::ReloadRequired),
         }
     }
