@@ -407,12 +407,13 @@ memory_is_locked() {
     [ "${kb:-0}" -gt 0 ]
 }
 
-# The kernel makes /proc/PID/* of a non-dumpable process belong to root, whatever account runs the process.
+# The kernel makes the files under /proc/PID of a non-dumpable process belong to root, whatever account runs the
+# process. The /proc/PID directory itself keeps the process's own uid, so stat a file inside it.
 process_not_dumpable() {
     local owner
     require_pid "$1" || return 1
-    owner=$(stat -c %u "/proc/$1") || return 1
-    [ "$owner" = 0 ] || { echo "/proc/$1 belongs to uid $owner, so the process is dumpable"; return 1; }
+    owner=$(stat -c %u "/proc/$1/status") || return 1
+    [ "$owner" = 0 ] || { echo "/proc/$1/status belongs to uid $owner, so the process is dumpable"; return 1; }
 }
 
 # --- Live checks: callers ------------------------------------------------------------------------------------------------
