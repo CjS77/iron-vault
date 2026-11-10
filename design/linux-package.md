@@ -142,8 +142,39 @@ The refusal lists each problem and says to correct the account, or delete it (`u
 iron-vault` if the group remains) so the package creates its own, then run `dpkg --configure iron-vault`. Later
 configures skip the check: the account is then the package's own, and its group may hold a log collector's account
 ([Admin access](#admin-access)). A purge keeps the account and group, so a collector's membership must be removed
-before reinstalling and added back afterwards. The check reads only the files in `/etc`, not accounts that NSS takes
-from a directory service.
+before reinstalling and added back afterwards. When `postinst` cannot read one of the files, it says so and fails
+`configure` too, because an account it could not check may be one it should refuse. The check reads only the files in
+`/etc`, not accounts that NSS takes from a directory service.
+
+#### Why `serve` does not check the account again
+
+A second check was considered: `iron-vault serve` would refuse to start when its own account is not a locked system
+account. It is not built.
+
+It would gain three things over the check in `postinst`:
+
+- it runs at every start, not only on the first configure;
+- it looks the account up through NSS, so it also sees an account, or a group membership, that a directory service
+  provides;
+- it catches a change made to the account after install, such as a login shell or a supplementary group added later.
+
+It would cost three things:
+
+- the service runs as `iron-vault` and cannot read `/etc/shadow`, so it cannot see whether the password is locked,
+  which is what decides whether anyone can log in as the account;
+- a failing check takes the service down, so a mistake in the check, or a harmless change to the account, stops every
+  caller's routes;
+- it must allow a log collector's account in the `iron-vault` group ([Admin access](#admin-access)), so it cannot refuse
+  a group with members, the check that keeps the audit log private.
+
+Against those costs the gains are small. After install, only root can change the account or its groups, and the
+threat model trusts root and the host's administrators
+([§2](iron-vault-specification.md#2-security-promise-and-limits)). The case the threat model does cover, an account
+that existed before the package and would be adopted by it, is closed at configure, where `postinst` runs as root and
+reads `/etc/shadow`. And taking over the account is not meant to yield admin access: the specification makes the
+service account never an admin principal ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)).
+The gap left open is an account from a directory service, which neither check would fully close, because `serve` still
+could not see its password state.
 
 `/usr/lib/tmpfiles.d/iron-vault.conf` creates the three directories:
 
