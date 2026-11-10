@@ -72,6 +72,11 @@ impl Accounts {
         self.service_entry(|a| a.gshadow.as_mut().expect("a gshadow file"), entry)
     }
 
+    fn without_gshadow(mut self) -> Self {
+        self.gshadow = None;
+        self
+    }
+
     fn passwd_entry(self, entry: &str) -> Self {
         self.service_entry(|a| &mut a.passwd, entry)
     }
@@ -395,21 +400,14 @@ fn locked_or_empty_gshadow_passwords_pass() {
 
 #[test]
 fn missing_gshadow_passes() {
-    let accounts = Accounts {
-        gshadow: None,
-        ..Accounts::sysusers()
-    };
-    assert_eq!(accounts.check(), Ok(()));
+    assert_eq!(Accounts::sysusers().without_gshadow().check(), Ok(()));
 }
 
 const GROUP_PASSWORD: &str = "group iron-vault: /etc/group sets a group password";
 
 #[test]
 fn group_password_with_no_gshadow_file_is_refused() {
-    let accounts = Accounts {
-        gshadow: None,
-        ..Accounts::sysusers().group_entry("iron-vault:$6$salt$hash:998:")
-    };
+    let accounts = Accounts::sysusers().group_entry("iron-vault:$6$salt$hash:998:").without_gshadow();
     assert_refused(&accounts, GROUP_PASSWORD);
 }
 
@@ -438,7 +436,7 @@ fn group_password_with_a_five_field_gshadow_line_is_refused() {
 }
 
 #[test]
-fn group_password_with_a_blank_line_before_the_gshadow_entry_is_refused() {
+fn group_password_with_a_blank_or_junk_line_before_the_gshadow_entry_is_refused() {
     assert_group_password_refused_with_gshadow("\niron-vault:!*::");
     assert_group_password_refused_with_gshadow("junk\niron-vault:!*::");
 }
@@ -446,6 +444,12 @@ fn group_password_with_a_blank_line_before_the_gshadow_entry_is_refused() {
 #[test]
 fn group_password_with_a_bare_line_before_the_gshadow_entry_is_refused() {
     assert_group_password_refused_with_gshadow("iron-vault\niron-vault:!*::");
+}
+
+#[test]
+fn group_password_with_a_continued_line_before_the_gshadow_entry_is_refused() {
+    // fgetsx joins `other:!::alice\` to the next line, so newgrp reads one 7-field line and stops.
+    assert_group_password_refused_with_gshadow("other:!::alice\\\niron-vault:!*::");
 }
 
 #[test]
@@ -465,10 +469,7 @@ fn unusable_group_passwords_with_no_gshadow_file_pass() {
     ]
     .into_iter()
     .for_each(|entry| {
-        let accounts = Accounts {
-            gshadow: None,
-            ..Accounts::sysusers().group_entry(entry)
-        };
+        let accounts = Accounts::sysusers().group_entry(entry).without_gshadow();
         assert_eq!(accounts.check(), Ok(()), "{entry}");
     });
 }
