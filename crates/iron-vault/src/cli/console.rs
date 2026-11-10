@@ -245,10 +245,8 @@ impl<T: Read + Write, E: EchoControl> Terminal<T, E> {
     pub fn new(tty: T, echo: E) -> Self {
         Self { tty, echo }
     }
-}
 
-impl<T: Read + Write, E: EchoControl> Terminal<T, E> {
-    /// Writes `label` and `: `, with nothing typed before it kept.
+    /// Writes `label` and `: ` and flushes them, so the owner sees the prompt before the read starts.
     fn show_label(&mut self, label: &str) -> Result<(), InputError> {
         write!(self.tty, "{label}: ")
             .and_then(|()| self.tty.flush())
