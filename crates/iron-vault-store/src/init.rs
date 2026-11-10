@@ -291,6 +291,7 @@ fn write_vault<F: StoreFs>(
         host_unlock,
         signer,
         approver,
+        approver_id,
     } = keys;
     let (passphrase, approval_passphrase) = passphrases.into_parts();
     let recipients = write_checked_identity(state, fs, (&vault, vault_id), (&operational, recovery, host_unlock), enrolled_at)
@@ -298,7 +299,7 @@ fn write_vault<F: StoreFs>(
     seal_operational(state, fs, operational, passphrase, log_n).map_err(at(InitStep::PassphraseEnvelope))?;
     seal_approver(state, fs, signer, &approval_passphrase, log_n).map_err(at(InitStep::ApproverKey))?;
     let mut created = Vault::create_with_id(state, fs, vault, vault_id).map_err(at(InitStep::Manifest))?;
-    let (mut approval, _) = pin_software_signer(approver, enrolled_at)
+    let (mut approval, _) = pin_software_signer(approver_id, approver, enrolled_at)
         .and_then(|approver| Ok(created.create_approval_state(state, fs, approver)?))
         .map_err(at(InitStep::ApprovalState))?;
     let signer = open_signer(state, fs, approval_passphrase, &approval).map_err(at(InitStep::OpenSigner))?;
@@ -419,11 +420,14 @@ fn seal_approver(
     Ok(write_signer_key(state, fs, &seal_signer_key_at(&signer, passphrase, log_n)?)?)
 }
 
-/// The software signer's public key as step 6 pins it: a fresh approver ID, the label the owner knows it by, and the
-/// initialization time.
-fn pin_software_signer(key: ApproverPublicKey, enrolled_at: UtcSecond) -> Result<PinnedApprover, InitFailure> {
-    let label = ApproverLabel::new("approval passphrase")?;
-    Ok(PinnedApprover::new(ApproverId::generate(), key, label, enrolled_at))
+/// The label `init` pins the software signer under: the owner knows it as the approval passphrase.
+pub const SOFTWARE_APPROVER_LABEL: &str = "approval passphrase";
+
+/// The software signer's public key as step 6 pins it: the approver ID generated with the keys, the label the owner
+/// knows it by, and the initialization time.
+fn pin_software_signer(id: ApproverId, key: ApproverPublicKey, enrolled_at: UtcSecond) -> Result<PinnedApprover, InitFailure> {
+    let label = ApproverLabel::new(SOFTWARE_APPROVER_LABEL)?;
+    Ok(PinnedApprover::new(id, key, label, enrolled_at))
 }
 
 /// Step 7: proves `approver.age` as written opens with the approval passphrase, which is dropped on return.

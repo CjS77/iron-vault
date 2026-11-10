@@ -24,6 +24,7 @@ use iron_vault_policy::CredentialName;
 use iron_vault_store::{ApprovalPassphrase, PermittedOrigins, PinnedApprover, RecordId, StoreFs, VaultError, VaultIdentity};
 use tokio::sync::OwnedMutexGuard;
 
+use super::super::presence::asked_approver;
 use super::super::{Inner, OpenVault, OwnerPresence, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, log_task_crash};
 use super::{VaultChangeRefusal, audit_write_report, kind_of, log_committed};
 use crate::audit::corruption::open_vault;
@@ -42,8 +43,8 @@ pub struct VaultChangePlan<'a, F> {
     service_wide: OwnedMutexGuard<()>,
     /// The check generation at step 2, which the write checks again.
     checks: u64,
-    /// The pinned approvers, from the approval state the service holds; owner presence opens `approver.age` as one of
-    /// them.
+    /// The pinned approvers, from the approval state the service holds; owner presence asks the first of
+    /// them ([`asked_approver`]).
     approvers: Vec<PinnedApprover>,
     /// The change the check passed, the record it acts on and the routes that use it, as the owner is shown them.
     summary: VaultChangeSummary,
@@ -152,10 +153,15 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
         self.service.lock_requested().await;
     }
 
-    /// Owner presence (design/credential-commands.md): opens `approver.age` with `passphrase` as a pinned approver's
+    /// The approver owner presence asks for, whose label the passphrase prompt names.
+    pub fn asked_approver(&self) -> Result<&PinnedApprover, PresenceRefusal> {
+        asked_approver(&self.approvers)
+    }
+
+    /// Owner presence (design/credential-commands.md): opens `approver.age` with `passphrase` as the asked approver's
     /// key and drops the signer at once. Nothing is reserved, signed or written.
     pub async fn prove_presence(&self, passphrase: ApprovalPassphrase) -> Result<OwnerPresence, PresenceRefusal> {
-        self.service.prove_presence(passphrase, self.approvers.clone()).await
+        self.service.prove_presence(passphrase, &self.approvers).await
     }
 
     /// Writes the planned change, then runs the config check from Ready through [`ServiceEvent::VaultChanged`] and

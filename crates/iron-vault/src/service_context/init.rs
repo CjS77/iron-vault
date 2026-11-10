@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use iron_vault_store::{
     ConfigDigest, FirstApproval, INITIAL_CONFIG, InitError, InitFailure, InitPassphrases, InitStateError, InitStep, InitializationState,
-    InitializedVault, RecipientIdentity, SealingKeys, StoreFs, ensure_initializable, initialize,
+    InitializedVault, RecipientIdentity, SOFTWARE_APPROVER_LABEL, SealingKeys, StoreFs, ensure_initializable, initialize,
 };
 use tokio::task::JoinError;
 
@@ -17,7 +17,7 @@ use super::ServiceContext;
 use super::host_unlock::tries_host_unlock;
 use crate::audit::config::{VersionReserved, record_commit_uncertain, record_failed_approval};
 use crate::audit::vault::{InitDiscarded, InitFailed, VaultInitialized, emit_commit_uncertain};
-use crate::audit::{ApprovalCompleted, AuditEvent};
+use crate::audit::{ApprovalCompleted, AuditEvent, NamedApprover};
 use crate::service_state::{AdminOperation, ServiceState};
 use crate::unlock_handoff::{HandoffError, read_handoff};
 
@@ -106,12 +106,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             return Err(InitRefusal::WrongState(inner.state));
         }
         let enrolled_at = self.clock.now().map_err(|error| InitRefusal::Clock(error.to_string()))?;
+        let approver = software_approver(&keys);
         let (locks, setup, holder) = (Arc::clone(&self.locks), Arc::clone(&self.setup), Arc::clone(&self.holder));
         let written = tokio::task::spawn_blocking(move || {
             let _held = (service_wide, inner);
             let paused = holder.pause();
             let written = initialize(&locks.state, &locks.config, &setup.fs, keys, passphrases, &paused, enrolled_at);
-            log_outcome(&written);
+            log_outcome(&written, approver);
             written
         })
         .await;
@@ -128,9 +129,17 @@ pub fn step_names(step: InitStep) -> (String, String) {
     )
 }
 
+/// The software signer as `init` pins it, which signs version 1, named for the first approval's audit records.
+fn software_approver(keys: &SealingKeys) -> NamedApprover<'static> {
+    NamedApprover {
+        id: keys.approver_id(),
+        label: SOFTWARE_APPROVER_LABEL,
+    }
+}
+
 /// Logs how the writes ended: the files a discard removed, then the new vault or the failed step. A refusal of the
 /// directories is not a failure, since nothing was written, and its caller is told why.
-fn log_outcome(written: &Result<InitializedVault, InitError>) {
+fn log_outcome(written: &Result<InitializedVault, InitError>, approver: NamedApprover<'_>) {
     let discarded = written
         .as_ref()
         .map_or_else(InitError::discarded, |vault| vault.discarded.as_slice());
@@ -139,7 +148,7 @@ fn log_outcome(written: &Result<InitializedVault, InitError>) {
     }
     match written {
         Ok(vault) => {
-            record_first_approval(&vault.approved());
+            record_first_approval(&vault.approved(), approver);
             VaultInitialized {
                 vault_id: vault.vault_id,
                 recipients: &vault.recipients,
@@ -148,8 +157,8 @@ fn log_outcome(written: &Result<InitializedVault, InitError>) {
         }
         Err(error) if begin_refusal(error).is_none() => {
             match error.approved() {
-                Some(approved) => record_first_approval(approved),
-                None => record_uncertain_init_writes(error.cause()),
+                Some(approved) => record_first_approval(approved, approver),
+                None => record_uncertain_init_writes(error.cause(), approver),
             }
             InitFailed::Step {
                 step: error.step(),
@@ -164,9 +173,9 @@ fn log_outcome(written: &Result<InitializedVault, InitError>) {
 /// Records the uncertain writes behind a failed step before its `vault.init-failed`, the order a success records its
 /// approval events in: the facts, then the outcome. Step 6's approval state creation fails as a vault error; step 8's
 /// transaction as an approval error, whose reservation (if durable) is recorded too.
-fn record_uncertain_init_writes(cause: &InitFailure) {
+fn record_uncertain_init_writes(cause: &InitFailure, approver: NamedApprover<'_>) {
     match cause {
-        InitFailure::Approval(approval) => record_failed_approval(approval, ConfigDigest::of(INITIAL_CONFIG)),
+        InitFailure::Approval(approval) => record_failed_approval(approval, ConfigDigest::of(INITIAL_CONFIG), approver),
         InitFailure::Vault(vault_error) => emit_commit_uncertain(vault_error),
         _ => {}
     }
@@ -175,7 +184,7 @@ fn record_uncertain_init_writes(cause: &InitFailure) {
 /// Init's version 1 is audited like any approval: reserved, uncertain if its commit was, then completed. The store ran
 /// the transaction to its end before returning, so the events follow it in order. A later step's failure records them
 /// too, before its own `vault.init-failed`.
-fn record_first_approval(approved: &FirstApproval) {
+fn record_first_approval(approved: &FirstApproval, approver: NamedApprover<'_>) {
     let FirstApproval {
         version,
         digest,
@@ -184,6 +193,7 @@ fn record_first_approval(approved: &FirstApproval) {
     VersionReserved {
         version: *version,
         digest: *digest,
+        approver,
     }
     .emit();
     commit_uncertain
@@ -193,6 +203,7 @@ fn record_first_approval(approved: &FirstApproval) {
         version: *version,
         digest: *digest,
         summary: "initial config",
+        approver,
     }
     .emit();
 }

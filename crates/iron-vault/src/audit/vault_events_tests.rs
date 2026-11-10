@@ -12,7 +12,7 @@ use super::corruption::*;
 use super::credential::*;
 use super::recipient::*;
 use super::route::*;
-use super::tests::record_of;
+use super::tests::{approver, assert_names_the_approver, record_of};
 use super::vault::*;
 use super::{AuditEvent, EventName, RequestId};
 use crate::admin::protocol::{AdminCommand, FrameError};
@@ -88,13 +88,21 @@ fn an_inventory_write_failure_is_a_state_write() {
 }
 
 #[test]
-fn a_presence_refusal_names_its_kind_and_nothing_else() {
+fn a_presence_refusal_names_its_kind_and_the_approver_and_nothing_else() {
     [
         (DenialKind::WrongPassphrase, "wrong_passphrase"),
         (DenialKind::KeyMismatch, "key_mismatch"),
     ]
     .into_iter()
-    .for_each(|(refusal, label)| assert_eq!(record_of(PresenceRefused { refusal }, "WARN", &["refusal"])["refusal"], label));
+    .for_each(|(refusal, label)| {
+        let event = PresenceRefused {
+            refusal,
+            approver: approver(),
+        };
+        let record = record_of(event, "WARN", &["refusal", "approver_id", "approver_label"]);
+        assert_eq!(record["refusal"], label);
+        assert_names_the_approver(&record);
+    });
 }
 
 #[test]
@@ -387,6 +395,7 @@ pub(super) fn emit_every_event() {
     .emit();
     PresenceRefused {
         refusal: DenialKind::KeyMismatch,
+        approver: approver(),
     }
     .emit();
     LockIncomplete {

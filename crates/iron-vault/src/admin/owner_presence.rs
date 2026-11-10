@@ -4,16 +4,19 @@
 
 use std::future::Future;
 
-use iron_vault_store::{ApprovalPassphrase, StoreFs};
+use iron_vault_store::{ApprovalPassphrase, PinnedApprover, StoreFs};
 use secrecy::SecretString;
 
 use super::protocol::{AdminResponse, ErrorCode, OwnerInput, Prompt};
 use super::server::{Exchange, ExchangeError};
-use crate::audit::{AuditEvent, vault::PresenceRefused};
+use crate::audit::{AuditEvent, NamedApprover, vault::PresenceRefused};
 use crate::service_context::{DenialKind, OwnerPresence, PresenceRefusal, RecipientRemoval, VaultChangePlan};
 
-/// The label of the secret prompt for the approval passphrase.
-const PASSPHRASE_PROMPT: &str = "Approval passphrase";
+/// The label of the secret prompt for the approval passphrase of `approver`, which names it by its label, escaped since
+/// the owner chose it.
+fn passphrase_prompt(approver: &PinnedApprover) -> String {
+    format!("Approval passphrase for \"{}\"", NamedApprover::from(approver).label_text())
+}
 
 /// The owner's answer to the approval passphrase prompt.
 pub(super) enum PassphraseAnswer {
@@ -34,14 +37,15 @@ pub(super) enum NoPresence {
     CancelledByLock,
 }
 
-/// Asks for the approval passphrase with a secret prompt, which `lock_requested` ends. The error is a prompt that got no
-/// owner input.
+/// Asks for `approver`'s approval passphrase with a secret prompt, which `lock_requested` ends. The error is a prompt
+/// that got no owner input.
 pub(super) async fn ask_approval_passphrase(
     exchange: &mut Exchange,
+    approver: &PinnedApprover,
     lock_requested: impl Future<Output = ()>,
 ) -> Result<PassphraseAnswer, ExchangeError> {
     let prompt = Prompt {
-        label: PASSPHRASE_PROMPT.to_owned(),
+        label: passphrase_prompt(approver),
         secret: true,
     };
     let answer = match exchange.prompt_unless(&prompt, lock_requested).await? {
@@ -53,6 +57,8 @@ pub(super) async fn ask_approval_passphrase(
 
 /// A change that holds the service-wide lock while the owner proves presence: what the prompt needs of it.
 pub(super) trait PresencePlan {
+    /// The pinned approver owner presence asks for.
+    fn asked_approver(&self) -> Result<&PinnedApprover, PresenceRefusal>;
     /// Completes once a `lock` is waiting for the lock the plan holds.
     fn lock_requested(&self) -> impl Future<Output = ()> + Send;
     /// Opens the pinned approver's key with `passphrase`; see [`require_owner_presence`].
@@ -60,6 +66,10 @@ pub(super) trait PresencePlan {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> PresencePlan for VaultChangePlan<'_, F> {
+    fn asked_approver(&self) -> Result<&PinnedApprover, PresenceRefusal> {
+        VaultChangePlan::asked_approver(self)
+    }
+
     fn lock_requested(&self) -> impl Future<Output = ()> + Send {
         VaultChangePlan::lock_requested(self)
     }
@@ -70,6 +80,10 @@ impl<F: StoreFs + Send + Sync + 'static> PresencePlan for VaultChangePlan<'_, F>
 }
 
 impl<F: StoreFs + Send + Sync + 'static> PresencePlan for RecipientRemoval<'_, F> {
+    fn asked_approver(&self) -> Result<&PinnedApprover, PresenceRefusal> {
+        RecipientRemoval::asked_approver(self)
+    }
+
     fn lock_requested(&self) -> impl Future<Output = ()> + Send {
         RecipientRemoval::lock_requested(self)
     }
@@ -79,8 +93,12 @@ impl<F: StoreFs + Send + Sync + 'static> PresencePlan for RecipientRemoval<'_, F
     }
 }
 
-/// Owner presence for `plan`: asks for the approval passphrase and opens the pinned approver key with it. There is no
-/// second try. The outer error is a prompt that got no owner input, which cancels the command.
+/// Owner presence for `plan`: asks for the asked approver's passphrase and opens the approver key with it. There is no
+/// second try, and no fall-through to another approver. The outer error is a prompt that got no owner input, which
+/// cancels the command.
+///
+/// Every denial, a typed one or an unusable one, passes through here, so it is the one place that records
+/// `vault.presence-refused`, naming the approver that was asked.
 ///
 /// A `lock` waiting for the service-wide lock the plan holds ends the prompt with [`NoPresence::CancelledByLock`], as
 /// it ends an approval's.
@@ -88,10 +106,21 @@ pub(super) async fn require_owner_presence(
     exchange: &mut Exchange,
     plan: &impl PresencePlan,
 ) -> Result<Result<OwnerPresence, NoPresence>, ExchangeError> {
-    let checked = match presence_passphrase(exchange, plan.lock_requested()).await? {
+    let approver = match plan.asked_approver() {
+        Ok(approver) => approver,
+        Err(refusal) => return Ok(Err(NoPresence::Refused(refusal))),
+    };
+    let checked = match presence_passphrase(exchange, approver, plan.lock_requested()).await? {
         Ok(passphrase) => plan.prove_presence(passphrase).await.map_err(NoPresence::Refused),
         Err(unchecked) => Err(unchecked),
     };
+    if let Err(NoPresence::Refused(PresenceRefusal::Denied(refusal))) = &checked {
+        PresenceRefused {
+            refusal: *refusal,
+            approver: approver.into(),
+        }
+        .emit();
+    }
     Ok(checked)
 }
 
@@ -99,9 +128,10 @@ pub(super) async fn require_owner_presence(
 /// refused as a wrong one, and a `lock` cancels the change.
 async fn presence_passphrase(
     exchange: &mut Exchange,
+    approver: &PinnedApprover,
     lock_requested: impl Future<Output = ()>,
 ) -> Result<Result<ApprovalPassphrase, NoPresence>, ExchangeError> {
-    let passphrase = match ask_approval_passphrase(exchange, lock_requested).await? {
+    let passphrase = match ask_approval_passphrase(exchange, approver, lock_requested).await? {
         PassphraseAnswer::Typed(passphrase) => Ok(passphrase),
         PassphraseAnswer::Unusable => Err(NoPresence::Refused(PresenceRefusal::Denied(DenialKind::WrongPassphrase))),
         PassphraseAnswer::CancelledByLock => {
@@ -112,16 +142,12 @@ async fn presence_passphrase(
     Ok(passphrase)
 }
 
-/// The answer when owner presence for `command` was not shown, so nothing was written. Every denial, a typed one or an
-/// unusable one, passes through here, so it is the one place that records `vault.presence-refused`. A wrong passphrase is
+/// The answer when owner presence for `command` was not shown, so nothing was written. A wrong passphrase is
 /// `approval-denied`, and a key check that could not run or a `lock` at the passphrase prompt is
 /// `approval-unavailable` (design/admin-protocol.md).
 pub(super) fn no_presence(command: &str, none: NoPresence) -> AdminResponse {
     let (code, message) = match none {
-        NoPresence::Refused(denied @ PresenceRefusal::Denied(kind)) => {
-            PresenceRefused { refusal: kind }.emit();
-            (ErrorCode::ApprovalDenied, denied.to_string())
-        }
+        NoPresence::Refused(denied @ PresenceRefusal::Denied(_)) => (ErrorCode::ApprovalDenied, denied.to_string()),
         NoPresence::Refused(unavailable) => (ErrorCode::ApprovalUnavailable, unavailable.to_string()),
         NoPresence::CancelledByLock => (
             ErrorCode::ApprovalUnavailable,

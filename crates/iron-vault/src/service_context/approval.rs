@@ -25,17 +25,18 @@ use std::sync::Arc;
 use iron_vault_policy::{ActivePolicy, ApprovalSummary, ValidatedConfig, summarize};
 use iron_vault_store::{
     ApprovalError, ApprovalPassphrase, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ApprovalVersion,
-    CommittedApproval, ConfigDigest, PendingConfig, PreparedApproval, SoftwareSigner, StoreFs, Vault, VaultIdentity,
+    CommittedApproval, ConfigDigest, PendingConfig, PinnedApprover, PreparedApproval, SoftwareSigner, StoreFs, Vault, VaultIdentity,
 };
 use tokio::sync::OwnedMutexGuard;
 
+use super::presence::asked_approver;
 use super::{
     DenialKind, Inner, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_destination, log_task_crash,
 };
 use crate::admin::protocol::ApprovalResult;
 use crate::audit::config::{VersionReserved, record_commit_uncertain, record_uncertain_writes};
 use crate::audit::corruption::open_vault;
-use crate::audit::{ActivationCause, ActivationFailed, ApprovalCompleted, ApprovalFailed, ApprovalRefused, AuditEvent};
+use crate::audit::{ActivationCause, ActivationFailed, ApprovalCompleted, ApprovalFailed, ApprovalRefused, AuditEvent, NamedApprover};
 use crate::config_check::{InvalidConfig, activate_config};
 use crate::service_state::{AdminOperation, FailureReason, ServiceEvent, ServiceState};
 use crate::serving_snapshot::Admission;
@@ -96,6 +97,8 @@ pub struct ApprovalReview<'a, F> {
     pending: PendingConfig,
     approval: ApprovalState,
     summary: ApprovalSummary,
+    /// The pinned approver step 2 asks for, and the one whose ID the envelope carries.
+    approver: PinnedApprover,
 }
 
 /// Where an approval started: the service state and the context's check generation.
@@ -115,6 +118,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let (started, identity, active) = self.approval_start().await?;
         let (vault, _) = open_vault(&self.locks.state, &self.setup.fs, Arc::clone(&identity)).map_err(unavailable)?;
         let approval = vault.load_approval_state(&self.locks.state, &self.setup.fs).map_err(unavailable)?;
+        let approver = asked_approver(approval.approvers()).map_err(unavailable)?.clone();
         let pending = PendingConfig::write(&self.storage(&identity), config).map_err(unavailable)?;
         let policy = match self.servable(pending.bytes(), &vault) {
             Ok(policy) => policy,
@@ -130,6 +134,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             summary: summarize(active.as_ref(), policy.config()),
             pending,
             approval,
+            approver,
         })
     }
 
@@ -193,13 +198,18 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         self.service.lock_requested().await;
     }
 
-    /// Opens `approver.age` with `passphrase` as the signer of the pinned approver whose key it holds, through the check
-    /// owner presence makes too. A wrong passphrase, or a key no approver pins, is [`ApprovalEnd::Denied`]; a check that
-    /// cannot run or does not finish refuses the approval before anything is reserved.
+    /// The pinned approver the passphrase prompt asks for, by its label.
+    pub fn asked_approver(&self) -> &PinnedApprover {
+        &self.approver
+    }
+
+    /// Opens `approver.age` with `passphrase` as the signer of the asked approver, through the check owner presence
+    /// makes too. A wrong passphrase, or a key that is not the asked approver's, is [`ApprovalEnd::Denied`], with no
+    /// fall-through to another approver; a check that cannot run or does not finish refuses the approval before anything
+    /// is reserved.
     pub async fn open_signer(&self, passphrase: ApprovalPassphrase) -> Result<SoftwareSigner, ApprovalEnd> {
-        let approvers = self.approval.approvers().to_vec();
         self.service
-            .open_approver(passphrase, approvers)
+            .open_approver(passphrase, self.approver.clone())
             .await
             .map_err(|refusal| match refusal {
                 PresenceRefusal::Denied(kind) => self.refused(kind),
@@ -218,6 +228,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         ApprovalRefused {
             refusal,
             digest: self.pending.digest(),
+            approver: NamedApprover::from(&self.approver),
         }
         .emit();
         ApprovalEnd::Denied
@@ -249,6 +260,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
             pending,
             approval,
             summary,
+            approver,
         } = self;
         let inner = Arc::clone(&service.inner).lock_owned().await;
         let Some(identity) = inner.identity.clone().filter(|_| inner.state == started && inner.checks == checks) else {
@@ -264,6 +276,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
             pending,
             approval,
             summary,
+            approver,
             signer,
         };
         let running = tokio::spawn(async move {
@@ -287,6 +300,7 @@ struct Transaction<S> {
     pending: PendingConfig,
     approval: ApprovalState,
     summary: ApprovalSummary,
+    approver: PinnedApprover,
     signer: S,
 }
 
@@ -299,11 +313,13 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
             pending,
             mut approval,
             summary,
+            approver,
             signer,
         } = transaction;
+        let named = NamedApprover::from(&approver);
         let storage = approval_storage(&self.locks, &self.setup.fs, &identity);
         let digest = pending.digest();
-        let prepared = match reserve_and_sign(&storage, pending, &mut approval, signer) {
+        let prepared = match reserve_and_sign(&storage, pending, &mut approval, (named, signer)) {
             Ok(prepared) => prepared,
             Err(error) => {
                 // A reservation that took is consumed: `status` reports the counter as it now is.
@@ -334,6 +350,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
             version: approved,
             digest,
             summary: &summary.render(),
+            approver: named,
         }
         .emit();
         match self.check_committed(inner, started, identity).await {
@@ -417,12 +434,13 @@ fn reserve_and_sign<'s, F: StoreFs, S: ApprovalSigner>(
     storage: &ApprovalStorage<'_, F>,
     pending: PendingConfig,
     approval: &'s mut ApprovalState,
-    signer: S,
+    (approver, signer): (NamedApprover<'_>, S),
 ) -> Result<PreparedApproval<'s>, ApprovalError> {
     let reserved = pending.reserve(storage, approval).inspect_err(record_uncertain_writes)?;
     VersionReserved {
         version: reserved.version(),
         digest: reserved.digest(),
+        approver,
     }
     .emit();
     reserved.sign(storage, signer)

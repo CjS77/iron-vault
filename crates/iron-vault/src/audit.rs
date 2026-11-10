@@ -32,7 +32,7 @@ pub mod vault;
 mod request;
 pub use request::{Ending, REQUEST_TARGET, ReasonCode, RequestFacts, RequestId, RequestRecord};
 
-use iron_vault_store::{ApprovalError, ApprovalFailure, ApprovalStep, ApprovalVersion, ConfigDigest};
+use iron_vault_store::{ApprovalError, ApprovalFailure, ApprovalStep, ApprovalVersion, ApproverId, ConfigDigest, PinnedApprover};
 
 use crate::config_check::{CheckFailure, InvalidConfig};
 use crate::hardening::{CoreDumps, HardeningReport, MEMLOCK_REMEDIATION, MemoryProtection};
@@ -69,6 +69,37 @@ impl EventName {
     /// The name as written in the record.
     pub const fn as_str(self) -> &'static str {
         self.0
+    }
+}
+
+/// The approver a config approval or owner presence asked, or signed with, as its audit records name it: the approver ID
+/// and the label, so the log says which signer approved each version.
+#[derive(Debug, Clone, Copy)]
+pub struct NamedApprover<'a> {
+    /// The approver's ID, written as the hyphenated UUID.
+    pub id: ApproverId,
+    /// The approver's label, written escaped, since the owner chose it.
+    pub label: &'a str,
+}
+
+impl NamedApprover<'_> {
+    /// The `approver_id` field's value.
+    pub(crate) fn id_text(&self) -> String {
+        self.id.to_string()
+    }
+
+    /// The `approver_label` field's value: the label with control and non-ASCII characters escaped.
+    pub(crate) fn label_text(&self) -> String {
+        iron_vault_policy::escaped(self.label)
+    }
+}
+
+impl<'a> From<&'a PinnedApprover> for NamedApprover<'a> {
+    fn from(approver: &'a PinnedApprover) -> Self {
+        Self {
+            id: approver.id(),
+            label: approver.label().as_str(),
+        }
     }
 }
 
@@ -223,6 +254,8 @@ pub struct ApprovalCompleted<'a> {
     /// The approval summary the owner confirmed, rendered; its configured names are already escaped. Init's version 1
     /// has no summary but `initial config`.
     pub summary: &'a str,
+    /// The approver that signed the version.
+    pub approver: NamedApprover<'a>,
 }
 
 impl AuditEvent for ApprovalCompleted<'_> {
@@ -235,24 +268,28 @@ impl AuditEvent for ApprovalCompleted<'_> {
             version = self.version.get(),
             config_digest = self.digest.to_string().as_str(),
             summary = self.summary,
+            approver_id = self.approver.id_text().as_str(),
+            approver_label = self.approver.label_text().as_str(),
             "config approval completed",
         );
     }
 }
 
-/// `config.approval-refused`: the approval passphrase was wrong or the key is not the pinned approver's; nothing was reserved.
+/// `config.approval-refused`: the approval passphrase was wrong or the key is not the asked approver's; nothing was reserved.
 // Its refusal is the service context's, and only the service context's approval emits it.
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy)]
-pub struct ApprovalRefused {
+pub struct ApprovalRefused<'a> {
     /// Which check of the approver key refused.
     pub refusal: DenialKind,
     /// The digest of the config that was being approved.
     pub digest: ConfigDigest,
+    /// The approver that was asked.
+    pub approver: NamedApprover<'a>,
 }
 
 #[cfg(target_os = "linux")]
-impl AuditEvent for ApprovalRefused {
+impl AuditEvent for ApprovalRefused<'_> {
     const NAME: EventName = EventName("config.approval-refused");
 
     fn emit(&self) {
@@ -261,6 +298,8 @@ impl AuditEvent for ApprovalRefused {
             event = Self::NAME.as_str(),
             refusal = self.refusal.label(),
             config_digest = self.digest.to_string().as_str(),
+            approver_id = self.approver.id_text().as_str(),
+            approver_label = self.approver.label_text().as_str(),
             "config approval refused; nothing was reserved",
         );
     }

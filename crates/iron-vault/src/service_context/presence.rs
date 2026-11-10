@@ -22,7 +22,7 @@ pub struct OwnerPresence(());
 pub enum DenialKind {
     /// The passphrase does not open `approver.age`.
     WrongPassphrase,
-    /// The key inside opened, but no pinned approver has it.
+    /// The key inside opened, but it is not the asked approver's.
     KeyMismatch,
 }
 
@@ -39,7 +39,7 @@ impl DenialKind {
 /// Why the approval passphrase check did not pass. Neither message holds anything the owner typed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PresenceRefusal {
-    /// The passphrase does not open `approver.age`, or no pinned approver has the key inside.
+    /// The passphrase does not open `approver.age`, or the key inside is not the asked approver's.
     #[error("the approval passphrase does not open the approver key")]
     Denied(DenialKind),
     /// The approver key could not be read, or the check did not finish.
@@ -47,42 +47,53 @@ pub enum PresenceRefusal {
     Unavailable(String),
 }
 
+/// The approver a prompt asks for, named by its label. In v0 that is the software signer, the one approver `init` pins.
+/// Which approver is asked first when more than one is pinned belongs to the approver enrolment design; until then it is
+/// the first in approver ID order. A key that is not this approver's is refused, with no fall-through to another
+/// (design/config-approval.md, "Choosing the signer").
+pub(super) fn asked_approver(approvers: &[PinnedApprover]) -> Result<&PinnedApprover, PresenceRefusal> {
+    approvers
+        .first()
+        .ok_or_else(|| PresenceRefusal::Unavailable("the approval state pins no approver".to_owned()))
+}
+
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Opens `approver.age` with `passphrase` as the signer of the one of `approvers` whose key it holds, on the blocking
-    /// pool, since scrypt holds a thread for seconds. A wrong passphrase, or a key none of them has, is
-    /// [`PresenceRefusal::Denied`].
+    /// Opens `approver.age` with `passphrase` as the signer of `approver`, on the blocking pool, since scrypt holds a
+    /// thread for seconds. A wrong passphrase, or a key that is not `approver`'s, is [`PresenceRefusal::Denied`].
     ///
     /// The task owns the passphrase and drops it when it ends. If this future is dropped first, the task still ends and
     /// drops the signer it opened.
     pub(super) async fn open_approver(
         &self,
         passphrase: ApprovalPassphrase,
-        approvers: Vec<PinnedApprover>,
+        approver: PinnedApprover,
     ) -> Result<SoftwareSigner, PresenceRefusal> {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let opened = tokio::task::spawn_blocking(move || {
             let envelope = read_signer_key(&locks.state, &setup.fs).map_err(|error| PresenceRefusal::Unavailable(error.to_string()))?;
-            open_signer_key(&envelope, &passphrase, &approvers).map_err(denied_or_unavailable)
+            open_signer_key(&envelope, &passphrase, std::slice::from_ref(&approver)).map_err(denied_or_unavailable)
         });
         opened
             .await
             .unwrap_or_else(|_| Err(PresenceRefusal::Unavailable("the approver key check was interrupted".to_owned())))
     }
 
-    /// Owner presence: [`open_approver`](Self::open_approver), dropping the signer at once.
+    /// Owner presence: [`open_approver`](Self::open_approver) as the approver [`asked_approver`] picks from `approvers`,
+    /// dropping the signer at once.
     pub(super) async fn prove_presence(
         &self,
         passphrase: ApprovalPassphrase,
-        approvers: Vec<PinnedApprover>,
+        approvers: &[PinnedApprover],
     ) -> Result<OwnerPresence, PresenceRefusal> {
-        self.open_approver(passphrase, approvers).await.map(|signer| {
+        let approver = asked_approver(approvers)?.clone();
+        self.open_approver(passphrase, approver).await.map(|signer| {
             drop(signer);
             OwnerPresence(())
         })
     }
 }
 
-/// A wrong approval passphrase, or a key no approver pins, is the owner's refusal; anything else is
+/// A wrong approval passphrase, or a key that is not the asked approver's, is the owner's refusal; anything else is
 /// the service's.
 fn denied_or_unavailable(error: SignError) -> PresenceRefusal {
     match error {

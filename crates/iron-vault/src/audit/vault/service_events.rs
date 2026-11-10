@@ -3,7 +3,7 @@
 
 use iron_vault_store::{InitFailure, InitStep, RecipientInventoryWriteError, UnlockError};
 
-use crate::audit::{AUDIT_TARGET, AuditEvent, EventName, memory_label};
+use crate::audit::{AUDIT_TARGET, AuditEvent, EventName, NamedApprover, memory_label};
 use crate::hardening::MemoryProtection;
 use crate::service_context::{DenialKind, HostUnlockOutcome, UnlockRefusal, step_names};
 
@@ -98,12 +98,14 @@ impl AuditEvent for HostUnlock {
 
 /// `vault.presence-refused`: owner presence for a `replace` or `rm` was refused. No config is involved, so no digest.
 #[derive(Debug, Clone, Copy)]
-pub struct PresenceRefused {
+pub struct PresenceRefused<'a> {
     /// Which check of the approver key refused.
     pub refusal: DenialKind,
+    /// The approver that was asked.
+    pub approver: NamedApprover<'a>,
 }
 
-impl AuditEvent for PresenceRefused {
+impl AuditEvent for PresenceRefused<'_> {
     const NAME: EventName = EventName("vault.presence-refused");
 
     fn emit(&self) {
@@ -111,6 +113,8 @@ impl AuditEvent for PresenceRefused {
             target: AUDIT_TARGET,
             event = Self::NAME.as_str(),
             refusal = self.refusal.label(),
+            approver_id = self.approver.id_text().as_str(),
+            approver_label = self.approver.label_text().as_str(),
             "owner presence refused; nothing was written",
         );
     }

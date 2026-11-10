@@ -3,7 +3,7 @@
 use std::fmt;
 
 use crate::{
-    ApproverPublicKey, OperationalIdentity, RecipientIdentity, RecoveryKey, RecoveryKeySecret, SignError, SoftwareSigner,
+    ApproverId, ApproverPublicKey, OperationalIdentity, RecipientIdentity, RecoveryKey, RecoveryKeySecret, SignError, SoftwareSigner,
     SoftwareSignerKey, VaultId, VaultIdentity,
 };
 
@@ -29,6 +29,7 @@ pub struct SealingKeys {
     pub(super) host_unlock: Option<RecipientIdentity>,
     pub(super) signer: SoftwareSignerKey,
     pub(super) approver: ApproverPublicKey,
+    pub(super) approver_id: ApproverId,
 }
 
 impl NewVaultKeys {
@@ -48,6 +49,7 @@ impl NewVaultKeys {
                 host_unlock: None,
                 signer,
                 approver,
+                approver_id: ApproverId::generate(),
             },
             recovery_secret,
         })
@@ -65,6 +67,12 @@ impl NewVaultKeys {
 }
 
 impl SealingKeys {
+    /// The approver ID the software signer is pinned as, chosen before anything is written so the service can name it
+    /// in the first approval's audit records, even when initialization fails after the reservation.
+    pub fn approver_id(&self) -> ApproverId {
+        self.approver_id
+    }
+
     /// Enrols `host_unlock`, the identity read from the unlock handoff, as a third recipient of the identity envelope,
     /// so a container-profile service can unlock with no owner present (spec §17). The recovery key stays a separate
     /// recipient, so losing the host's TPM never loses the vault.

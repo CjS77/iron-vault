@@ -80,6 +80,26 @@ pub(super) fn record_of(event: impl AuditEvent, level: &str, fields: &[&str]) ->
     record
 }
 
+/// The approver ID the approver records name in these tests.
+pub(super) const APPROVER_ID: &str = "0b7c4e8a-5d2f-4c1e-9a3b-6f8d2e1c7a90";
+
+/// An approver whose label holds U+202E, which its records must escape.
+pub(super) fn approver() -> NamedApprover<'static> {
+    let bytes = [
+        0x0b, 0x7c, 0x4e, 0x8a, 0x5d, 0x2f, 0x4c, 0x1e, 0x9a, 0x3b, 0x6f, 0x8d, 0x2e, 0x1c, 0x7a, 0x90,
+    ];
+    NamedApprover {
+        id: ApproverId::from_bytes(bytes).unwrap(),
+        label: "Dave\u{202e}key",
+    }
+}
+
+/// Asserts `record` names [`approver`], with its label escaped.
+pub(super) fn assert_names_the_approver(record: &serde_json::Value) {
+    assert_eq!(record["approver_id"], APPROVER_ID);
+    assert_eq!(record["approver_label"], "Dave\\u{202e}key");
+}
+
 fn impl_name<E: AuditEvent>(_: &E) -> &'static str {
     E::NAME.as_str()
 }
@@ -174,7 +194,7 @@ fn lock_transition_into_unavailable_names_the_reason() {
 }
 
 #[test]
-fn approval_completed_records_version_digest_and_summary() {
+fn approval_completed_records_version_digest_summary_and_approver() {
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
     let summary = summarize(None, &config);
     let digest = ConfigDigest::of(CONFIG.as_bytes());
@@ -182,23 +202,31 @@ fn approval_completed_records_version_digest_and_summary() {
         version: version(3),
         digest,
         summary: &summary.render(),
+        approver: approver(),
     };
-    let record = record_of(event, "INFO", &["version", "config_digest", "summary"]);
+    let record = record_of(
+        event,
+        "INFO",
+        &["version", "config_digest", "summary", "approver_id", "approver_label"],
+    );
     assert_eq!(record["version"], 3);
     assert_eq!(record["config_digest"], digest.to_string());
     assert_eq!(record["summary"], summary.render());
+    assert_names_the_approver(&record);
 }
 
 #[test]
-fn approval_refused_records_its_kind_and_the_digest() {
+fn approval_refused_records_its_kind_the_digest_and_the_approver() {
     let digest = ConfigDigest::of(CONFIG.as_bytes());
     let event = ApprovalRefused {
         refusal: DenialKind::KeyMismatch,
         digest,
+        approver: approver(),
     };
-    let record = record_of(event, "WARN", &["refusal", "config_digest"]);
+    let record = record_of(event, "WARN", &["refusal", "config_digest", "approver_id", "approver_label"]);
     assert_eq!(record["refusal"], "key_mismatch");
     assert_eq!(record["config_digest"], digest.to_string());
+    assert_names_the_approver(&record);
 }
 
 #[test]
@@ -373,11 +401,13 @@ fn no_audit_event_records_a_constant_field() {
             version: version(1),
             digest: ConfigDigest::of(b""),
             summary: &summary.render(),
+            approver: approver(),
         }
         .emit();
         ApprovalRefused {
             refusal: DenialKind::WrongPassphrase,
             digest: ConfigDigest::of(b""),
+            approver: approver(),
         }
         .emit();
         ActivationFailed {

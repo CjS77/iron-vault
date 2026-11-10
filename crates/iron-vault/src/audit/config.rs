@@ -7,19 +7,21 @@ use iron_vault_store::{
 };
 
 use super::vault::emit_approval_state_uncertain;
-use super::{AUDIT_TARGET, AuditEvent, EventName};
+use super::{AUDIT_TARGET, AuditEvent, EventName, NamedApprover};
 
 /// `config.version-reserved`: step 2's reservation is durable. Recorded before signing starts, so a signing failure, or
 /// a crash while the signer waits for the owner, follows it in the log.
 #[derive(Debug, Clone, Copy)]
-pub struct VersionReserved {
+pub struct VersionReserved<'a> {
     /// The reserved version, consumed whatever happens next.
     pub version: ApprovalVersion,
     /// The digest of the config the version was reserved for.
     pub digest: ConfigDigest,
+    /// The approver that authorized the reservation and will sign.
+    pub approver: NamedApprover<'a>,
 }
 
-impl AuditEvent for VersionReserved {
+impl AuditEvent for VersionReserved<'_> {
     const NAME: EventName = EventName("config.version-reserved");
 
     fn emit(&self) {
@@ -28,6 +30,8 @@ impl AuditEvent for VersionReserved {
             event = Self::NAME.as_str(),
             version = self.version.get(),
             config_digest = self.digest.to_string().as_str(),
+            approver_id = self.approver.id_text().as_str(),
+            approver_label = self.approver.label_text().as_str(),
             "approval version reserved",
         );
     }
@@ -177,10 +181,10 @@ pub fn record_uncertain_writes(error: &ApprovalError) {
 }
 
 /// Records a failed approval after the fact, for a caller that could not record its reservation as it happened: the
-/// reservation, if it was durable, then what the transaction left uncertain.
-pub fn record_failed_approval(error: &ApprovalError, digest: ConfigDigest) {
+/// reservation by `approver`, if it was durable, then what the transaction left uncertain.
+pub fn record_failed_approval(error: &ApprovalError, digest: ConfigDigest, approver: NamedApprover<'_>) {
     reserved_version(error)
         .into_iter()
-        .for_each(|version| VersionReserved { version, digest }.emit());
+        .for_each(|version| VersionReserved { version, digest, approver }.emit());
     record_uncertain_writes(error);
 }

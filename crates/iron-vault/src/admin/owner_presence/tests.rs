@@ -3,6 +3,7 @@
 
 use std::future::{self, Future};
 
+use iron_vault_store::{ApproverId, ApproverLabel, SoftwareSigner, UtcSecond};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use zeroize::Zeroizing;
@@ -26,14 +27,22 @@ async fn read_prompt(cli: &mut UnixStream) -> Prompt {
     }
 }
 
-/// Runs the presence prompt with `lock_requested`; the CLI end answers with `answer`, or never answers when it is `None`.
-async fn presence_with(
+/// A pinned approver labelled `label`, with a fresh key.
+fn approver(label: &str) -> PinnedApprover {
+    let (_, key) = SoftwareSigner::generate().unwrap();
+    PinnedApprover::new(ApproverId::generate(), key, ApproverLabel::new(label).unwrap(), UtcSecond::EPOCH)
+}
+
+/// Runs the presence prompt for `asked` with `lock_requested`; the CLI end answers with `answer`, or never answers when it
+/// is `None`.
+async fn prompt_for(
+    asked: &PinnedApprover,
     answer: Option<&[u8]>,
     lock_requested: impl Future<Output = ()>,
 ) -> (Prompt, Result<ApprovalPassphrase, NoPresence>) {
     let (service, mut cli) = UnixStream::pair().unwrap();
     let mut exchange = Exchange::new(service, Limits::default());
-    let answered = presence_passphrase(&mut exchange, lock_requested);
+    let answered = presence_passphrase(&mut exchange, asked, lock_requested);
     let cli_side = async {
         let prompt = read_prompt(&mut cli).await;
         if let Some(answer) = answer {
@@ -47,11 +56,28 @@ async fn presence_with(
     (prompt, outcome.unwrap())
 }
 
+/// [`prompt_for`] the software signer as `init` pins it.
+async fn presence_with(
+    answer: Option<&[u8]>,
+    lock_requested: impl Future<Output = ()>,
+) -> (Prompt, Result<ApprovalPassphrase, NoPresence>) {
+    prompt_for(&approver("approval passphrase"), answer, lock_requested).await
+}
+
 fn passphrase_prompt() -> Prompt {
     Prompt {
-        label: PASSPHRASE_PROMPT.to_owned(),
+        label: "Approval passphrase for \"approval passphrase\"".to_owned(),
         secret: true,
     }
+}
+
+// The store refuses a label with a control or format character such as U+202E, so a pinned label can only reach the
+// prompt with non-ASCII text; the prompt escapes it all the same.
+#[tokio::test]
+async fn the_prompt_names_the_asked_approver_with_its_label_escaped() {
+    let (prompt, _) = prompt_for(&approver("Dave's clé"), None, future::ready(())).await;
+
+    assert_eq!(prompt.label, "Approval passphrase for \"Dave's cl\\u{e9}\"");
 }
 
 #[tokio::test]

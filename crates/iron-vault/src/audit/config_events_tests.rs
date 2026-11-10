@@ -3,7 +3,7 @@
 use iron_vault_store::{ApprovalVersion, ConfigDigest, ConfigFileName, DiscardedFile, ErrorKindLabel, PublishSet};
 
 use super::config::*;
-use super::tests::record_of;
+use super::tests::{approver, assert_names_the_approver, record_of};
 use super::{AuditEvent, EventName};
 
 fn version(value: u64) -> ApprovalVersion {
@@ -25,14 +25,16 @@ fn a_reserved_version_and_an_uncertain_commit_record_numbers_and_a_kind() {
         VersionReserved {
             version: version(4),
             digest,
+            approver: approver(),
         },
         "INFO",
-        &["version", "config_digest"],
+        &["version", "config_digest", "approver_id", "approver_label"],
     );
     assert_eq!(
         (record["version"].as_u64(), record["config_digest"].as_str()),
         (Some(4), Some(digest.to_string().as_str()))
     );
+    assert_names_the_approver(&record);
     let kind = ErrorKindLabel::fixed("storage_full");
     let record = record_of(
         CommitUncertain {
@@ -96,6 +98,7 @@ pub(super) fn emit_every_event() {
     VersionReserved {
         version: version(1),
         digest: ConfigDigest::of(b""),
+        approver: approver(),
     }
     .emit();
     CommitUncertain {
