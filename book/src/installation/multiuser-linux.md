@@ -129,7 +129,7 @@ forget the vault passphrase. Then unlock the vault, which you do again after eve
 sudo iron-vault unlock
 ```
 
-> **Why `sudo`, and not just `alice`?** Admin commands only work for root or the `iron-vault` account. If plain
+> **Why `sudo`, and not just `alice`?** Admin commands only work for root. If plain
 > `alice` could run them, malware in `alice`'s account could too. Going through `sudo` means typing your password
 > every time, if you set `sudo` up with `timestamp_timeout=0` as [linux-install.md](linux-install.md#harden-sudo) recommends
 > (with `tty` it is once per terminal per timeout). Approving a config change *also* needs your approval passphrase,

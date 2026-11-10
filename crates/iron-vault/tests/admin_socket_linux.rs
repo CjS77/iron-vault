@@ -302,7 +302,9 @@ async fn a_refused_peer_reaches_no_handler_and_is_told_why() {
 /// the vault or spend the owner's passphrase attempts.
 #[tokio::test]
 async fn a_protected_install_refuses_the_service_account_before_any_handler() {
+    // Root is an admin principal of every protected install, so there is no refusal to observe.
     if me().uid == 0 {
+        eprintln!("skipped: running as root");
         return;
     }
     let ran = Arc::new(AtomicBool::new(false));
@@ -310,7 +312,8 @@ async fn a_protected_install_refuses_the_service_account_before_any_handler() {
     let principals = AdminPrincipals::new(DeploymentProfile::Protected, me().uid);
     let server = AdminServer::new(principals, handlers, Limits::default());
     let (ours, mut theirs) = UnixStream::pair().unwrap();
-    theirs.write_all(&ping()).await.unwrap();
+    // An unsupported version cannot be decoded: only a server that refuses before reading answers NotAdminPrincipal.
+    theirs.write_all(&raw(u16::MAX, 0, 0, &[])).await.unwrap();
     tokio::time::timeout(PATIENCE, server.serve_connection(ours)).await.unwrap();
     match read_response(&mut theirs).await {
         AdminResponse::Error { code, .. } => assert_eq!(code, ErrorCode::NotAdminPrincipal),

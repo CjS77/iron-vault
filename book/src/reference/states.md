@@ -143,7 +143,7 @@ development mode. Each profile is named in `status`, in `ping`, and as `deployme
 |---|---|---|---|
 | Built with | no feature (the `.deb`) | `--features dev-mode` | `--features container` |
 | Runs as | the `iron-vault` system account | you | the `iron-vault` account in the image |
-| Admin principals | root and `iron-vault`, so you use `sudo` | you | root only |
+| Admin principals | root, so you use `sudo` | you | root only |
 | Unlock at startup | none: starts Locked, `unlock` with the vault passphrase | as protected | from the host unlock handoff when one is there ([files](files.md#container)); otherwise Locked, as protected |
 | Memory not locked against swap | stays Locked: `unlock` is refused with `memory-unprotected` | unlocks anyway; `status` says `NOT protected` | as protected |
 | Callers | peer account, token or listener | token or listener only: a peer caller may never be the service's own account, and in development that is you | see [docker-compose.md](../../../design/docker-compose.md) |

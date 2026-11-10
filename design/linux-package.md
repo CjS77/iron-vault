@@ -497,20 +497,22 @@ The package ships these overrides in `/usr/share/lintian/overrides/iron-vault` (
 
 `scripts/release/linux-install-check.sh` is the release check for an installed package. It runs as root on a disposable
 VM, takes an ordinary test account, and prints a PASS or FAIL line per check. It reads the [ownership table](#ownership)
-from this file, then checks the service's account, locked memory, core limit and dumpability, that the test account
-cannot reach the admin socket, `/proc/<pid>/mem`, `/proc/<pid>/environ` or the vault, that a group-writable
-`/etc/iron-vault` stops a restart, that a second `serve` fails on the state lock, and that a listener socket unit keeps
-its port across a service restart. It refuses to run without `--i-know-this-is-a-disposable-vm`. The refusal of the
+from this file, then checks the service's account, locked memory, core limit and dumpability, that neither the test
+account nor the service account can use the admin socket, that the test account cannot reach `/proc/<pid>/mem`,
+`/proc/<pid>/environ` or the vault, that a group-writable `/etc/iron-vault` stops a restart, that a second `serve` fails
+on the state lock, and that a listener socket unit keeps its port across a service restart. It refuses to run without
+`--i-know-this-is-a-disposable-vm`. The refusal of the
 group-writable directory is read from the journal, because the service's startup error goes to stderr.
 
 ## Admin access
 
 Admin commands run only through `sudo` ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The admin
-principal of a protected install is root alone, fixed by the deployment profile: no administrator acts as the service account, and accepting it would let anything that took over the service lock the vault or spend the owner's passphrase attempts. `admin.sock` is
-the service account's with mode `0600`, and the service checks each connection's peer account before reading
-anything. The package creates no admin group. Membership of the `iron-vault` group grants no admin access: the
-socket's group has no access, and the peer check refuses the account anyway, as it refuses the service account itself. It does grant read access to the audit
-log, because `/var/log/iron-vault` is `0750` and `iron-vault.log` is `0640`, both with the service's group, and
+principal of a protected install is root alone, fixed by the deployment profile. No administrator acts as the service
+account, and accepting it would let anything that took over the service lock the vault or spend the owner's passphrase
+attempts. `admin.sock` is the service account's with mode `0600`, and the service checks each connection's peer account
+before reading anything. The package creates no admin group. Membership of the `iron-vault` group grants no admin
+access: the socket's group has no access, and the peer check refuses the account anyway, as it refuses the service
+account itself. It does grant read access to the audit log, because `/var/log/iron-vault` is `0750` and `iron-vault.log` is `0640`, both with the service's group, and
 anyone who reads the log sees every route, caller and refusal. Only a log collector's own service account belongs in
 the group; never add a login account ([log-operations.md](../book/src/reference/log-operations.md#location-and-permissions)).
 

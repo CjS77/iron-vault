@@ -42,16 +42,16 @@ already rejects container detection, which depends on each runtime's conventions
 `dev-mode`: a build with both fails to compile. `--version` lists `container`, and the Linux package's build check
 refuses it, so a `.deb` never carries the container build.
 
-The Container profile is `Protected` except in three places:
+The Container profile is `Protected` except in two places:
 
 | | Protected | Container | Why |
 |---|---|---|---|
-| Admin principals | root only | root only | [Admin access](#admin-access) |
 | TCP listeners | from socket activation only | bound by the service | [TCP listeners](#tcp-listeners-without-socket-activation) |
 | Startup | always Locked | Checking when the unlock handoff opens the vault, else Locked | [Host unlock](#host-unlock) |
 
 Everything else is `Protected`'s:
 
+- root as the only admin principal ([Admin access](#admin-access));
 - the paths `/etc/iron-vault/config.toml`, `/var/lib/iron-vault` and `/run/iron-vault`;
 - the service account `iron-vault`, which the service must run as (`require_service_account`);
 - the trusted-path rules, with the service account as the expected owner;
