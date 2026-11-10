@@ -402,6 +402,53 @@ fn missing_gshadow_passes() {
     assert_eq!(accounts.check(), Ok(()));
 }
 
+const GROUP_PASSWORD: &str = "group iron-vault: /etc/group sets a group password";
+
+#[test]
+fn group_password_with_no_gshadow_file_is_refused() {
+    let accounts = Accounts {
+        gshadow: None,
+        ..Accounts::sysusers().group_entry("iron-vault:$6$salt$hash:998:")
+    };
+    assert_refused(&accounts, GROUP_PASSWORD);
+}
+
+#[test]
+fn group_password_with_no_gshadow_line_is_refused() {
+    let mut accounts = Accounts::sysusers().group_entry("iron-vault:$6$salt$hash:998:");
+    accounts
+        .gshadow
+        .as_mut()
+        .expect("a gshadow file")
+        .retain(|line| !line.starts_with("iron-vault:"));
+    assert_refused(&accounts, GROUP_PASSWORD);
+}
+
+#[test]
+fn group_password_is_ignored_when_gshadow_has_an_entry() {
+    let accounts = Accounts::sysusers().group_entry("iron-vault:$6$salt$hash:998:");
+    assert_eq!(accounts.check(), Ok(()));
+}
+
+#[test]
+fn unusable_group_passwords_with_no_gshadow_file_pass() {
+    [
+        "iron-vault::998:",
+        "iron-vault:x:998:",
+        "iron-vault:!:998:",
+        "iron-vault:*:998:",
+        "iron-vault:!$6$salt$hash:998:",
+    ]
+    .into_iter()
+    .for_each(|entry| {
+        let accounts = Accounts {
+            gshadow: None,
+            ..Accounts::sysusers().group_entry(entry)
+        };
+        assert_eq!(accounts.check(), Ok(()), "{entry}");
+    });
+}
+
 #[test]
 fn gshadow_without_read_permission_is_refused() {
     use std::os::unix::fs::PermissionsExt;

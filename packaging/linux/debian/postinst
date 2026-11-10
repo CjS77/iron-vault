@@ -21,7 +21,7 @@ service_account_problems() {
         # The first entry is the one getpwnam and getgrnam return.
         FILENAME == passwd && $1 == name && !user { user = 1; pw = $2; uid = $3; gid = $4; home = $6; shell = $7; next }
         FILENAME == passwd { users++; pname[users] = $1; puid[users] = $3; pgid[users] = $4 }
-        FILENAME == group && $1 == name && !grp { grp = 1; ggid = $3; members = $4; next }
+        FILENAME == group && $1 == name && !grp { grp = 1; gpw_group = $2; ggid = $3; members = $4; next }
         # glibc skips blanks before each member name, so " iron-vault" in a member list is a member too.
         FILENAME == group {
             groups++; gname[groups] = $1; ggidof[groups] = $3
@@ -32,6 +32,7 @@ service_account_problems() {
         # so no one can join the group with it; an empty one lets no non-member in either.
         # Every line is read, as gpasswd skips a malformed one and may act on a later one.
         FILENAME == gshadow && $1 == name {
+            if (NF >= 4) gshadowed = 1
             if ($2 != "" && $2 !~ /^[!*]/) gpw = 1
             if ($3 != "") gadmins = gadmins (gadmins == "" ? "" : ",") $3
             if ($4 != "") gmembers_sh = gmembers_sh (gmembers_sh == "" ? "" : ",") $4
@@ -55,6 +56,10 @@ service_account_problems() {
                 # The gshadow member list can differ from the one in /etc/group, and either makes the group joinable.
                 if (gadmins != "") print("group " name ": gshadow names administrators " gadmins)
                 if (gpw) print("group " name ": gshadow sets a group password")
+                # newgrp(1) reads the password from gshadow when it has an entry for the group, and from /etc/group otherwise.
+                # "x" there points at gshadow, so with no entry it is no password anyone can match.
+                if (!gshadowed && gpw_group != "" && gpw_group != "x" && gpw_group !~ /^[!*]/)
+                    print("group " name ": /etc/group sets a group password")
                 if (gmembers_sh != "") print("group " name ": gshadow lists members " gmembers_sh)
                 for (i = 1; i <= users; i++) if (pgid[i] == ggid) print("group " name ": primary group of account " pname[i])
                 for (i = 1; i <= groups; i++) if (ggidof[i] == ggid) print("group " gname[i] ": has the same gid as " name)

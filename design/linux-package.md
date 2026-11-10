@@ -141,6 +141,10 @@ runs. It fails `configure` unless the account is what `systemd-sysusers` would h
   accepted. Every `iron-vault` line is read. A group administrator can add members with
   `gpasswd -a`, and anyone who knows a password can join with `newgrp`. Members are refused here as well as in
   `/etc/group`, because the two lists can differ. A missing `/etc/gshadow` means no group has an entry;
+- when `/etc/gshadow` has no `iron-vault` entry, a usable password in the second field of the `/etc/group` entry, because
+  `newgrp(1)` takes the group's password from `/etc/group` only then. The same rule applies: empty, `!…` and `*…` are
+  unusable. So is `x`, which means "look in `/etc/gshadow`": with no entry there is nothing to match, and `crypt(3)`
+  cannot produce a string that equals it. With a gshadow entry, that entry decides and the field is ignored;
 - no other account with its uid and no other group with its gid, because either would be the same identity under
   another name.
 
@@ -184,9 +188,7 @@ socket refuses the service account's uid ([Admin access](#admin-access);
 [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)).
 
 One gap is left open: an account from a directory service, which neither check would fully close, because `serve`
-still could not see its password state. The `postinst` check does not read the password field of `/etc/group` either;
-it also matters on a host whose `/etc/gshadow` has no `iron-vault` entry, or no `/etc/gshadow` at all, because
-`newgrp(1)` falls back to the `/etc/group` password. Checking that field is follow-up ticket K-290.
+still could not see its password state.
 
 `/usr/lib/tmpfiles.d/iron-vault.conf` creates the three directories:
 

@@ -103,7 +103,7 @@ service starts Locked with no vault, and the installer prints the next command.
 If an `iron-vault` account or group already exists, the install stops with "an iron-vault account or group already exists
 and is not a locked system account", unless it is what the package would have created: a system uid, a `nologin` or
 `false` shell, a locked password, home `/`, `/nonexistent` or `/var/lib/iron-vault`, no other groups, and a group with
-no members, no administrators and no password in `/etc/gshadow`. The package would otherwise hand that account the
+no members, no administrators and no password in `/etc/gshadow` (or in `/etc/group` when `/etc/gshadow` has no entry for it). The package would otherwise hand that account the
 vault and its group the audit log. The message lists each problem. Correct the account, or delete it so the package
 creates its own, then finish the install:
 
