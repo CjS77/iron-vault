@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Release check for a real install of the Linux package (design/linux-package.md; spec 3.1, 3.2, 3.4, 3.11, 3.15).
 #
-# !! RUN THIS ONLY ON A DISPOSABLE VM. !!  It runs as root, restarts the service, makes /etc/iron-vault group-writable
-# for a few seconds, stops the service together with its running listener sockets, and adds one listener socket unit.
-# The service is left Locked, because it was restarted.
+# !! RUN THIS ONLY ON A DISPOSABLE VM. !!  It runs as root, restarts the service, crashes it with SIGSEGV several times,
+# makes /etc/iron-vault group-writable for a few seconds, stops the service together with its running listener sockets,
+# and adds one listener socket unit. The service is left Locked, because it was restarted.
 #
 # Set up:
 #   1. A fresh Ubuntu LTS (or Debian) VM with systemd, journald, and util-linux (runuser).
@@ -32,6 +32,8 @@ SERVICE_ACCOUNT=iron-vault
 CONFIG_DIR=/etc/iron-vault
 LISTENER_NAME=irvcheck
 LISTENER_UNIT="iron-vault-listener@$LISTENER_NAME.socket"
+# More crashes than systemd's default start limit (5 starts in 10 s) allows, so a unit that still has the limit fails.
+CRASHES=7
 DROPIN_DIR="/etc/systemd/system/$LISTENER_UNIT.d"
 
 PORT=7899
@@ -108,7 +110,7 @@ restore_config_mode() {
     [ "$CONFIG_CHANGED" = 1 ] || return 0
     chmod "$CONFIG_MODE" "$CONFIG_DIR" || true
     CONFIG_CHANGED=0
-    # The refused restarts exhausted the start limit; bring the service back.
+    # The refused starts left the service failed or waiting to restart; bring it back now.
     systemctl reset-failed "$SERVICE" || true
     systemctl restart "$SERVICE" || true
 }
@@ -124,6 +126,8 @@ remove_listener() {
     # file descriptor it still holds for the removed listener.
     [ "${#STOPPED_SOCKETS[@]}" -eq 0 ] || systemctl start "${STOPPED_SOCKETS[@]}" || true
     STOPPED_SOCKETS=()
+    # A failed crash-loop check can leave the service at a start limit, which would refuse the restart below.
+    systemctl reset-failed "$SERVICE" || true
     systemctl restart "$SERVICE" || true
 }
 
@@ -307,6 +311,41 @@ port_stays_bound_across_restart() {
     port_owner_is_systemd || { echo "port $PORT is no longer bound by systemd after the restart"; return 1; }
 }
 
+# Crashes the service once and prints the pid systemd restarts it with. SIGSEGV is sent until the pid changes rather than
+# once, because Rust's handler sometimes catches the first one and resets itself. Gives up after 15 s, which a unit that
+# hit its start limit, and so stays down, reaches. The next crash follows at once, so the crashes come faster than the
+# old start limit allows.
+crash_and_wait_for_restart() {
+    local before=$1 now
+    for _ in $(seq 150); do
+        now=$(main_pid)
+        if [ "$now" = "$before" ]; then
+            kill -SEGV "$before" 2>/dev/null || true
+        elif [ "$now" != 0 ]; then
+            echo "$now"
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "the service did not come back within 15 s of crashing pid $before"
+    return 1
+}
+
+# A crash loop past the old start limit must leave the listener socket active and its port bound by systemd.
+crash_loop_keeps_port() {
+    local pid start state
+    pid=$(main_pid)
+    [ "$pid" != 0 ] || { echo "the service is not running"; return 1; }
+    start=$SECONDS
+    for _ in $(seq "$CRASHES"); do
+        pid=$(crash_and_wait_for_restart "$pid") || { echo "$pid"; return 1; }
+    done
+    echo "$CRASHES crashes in $((SECONDS - start)) s, NRestarts=$(systemctl show -p NRestarts --value "$SERVICE")"
+    state=$(systemctl show -p ActiveState --value "$LISTENER_UNIT")
+    [ "$state" = active ] || { echo "$LISTENER_UNIT is $state ($(systemctl show -p Result --value "$LISTENER_UNIT"))"; return 1; }
+    port_owner_is_systemd || { echo "port $PORT is no longer bound by systemd (pid 1) after the crashes"; return 1; }
+}
+
 # --- Driver -------------------------------------------------------------------------------------------------------------
 
 parse_args() {
@@ -366,6 +405,7 @@ run_checks() {
     restore_config_mode
     add_listener
     check "port $PORT stays bound by systemd while the service restarts" port_stays_bound_across_restart
+    check "$LISTENER_UNIT stays active and port $PORT bound through $CRASHES crashes" crash_loop_keeps_port
 }
 
 main() {
