@@ -162,9 +162,9 @@ with a root login is root, and a forward made with any other login is that login
 The admin socket's permissions must admit only admin principals. The peer-credential check refuses every other account
 even if those permissions are wrong.
 
-The CLI must send owner input only to the service. No other process, including one running as the service account, may
-serve at the admin socket's path or otherwise stand in for the service, because the vault and approval passphrases the
-owner types would go to it.
+The CLI must send owner input only to the service. No account but the service account may serve at the admin socket's
+path. Anything running as the service account is treated as the service, because the service already receives the vault
+and approval passphrases and every other owner input.
 
 ### Container installations
 
