@@ -93,25 +93,119 @@ and recipient names. It does not prevent credential theft.
 - Do not describe it in the spec as protection against a compromised service. Describe it as the rule that no account
   but root administers a protected or container installation.
 
-### 3. The service uid may be able to replace the admin socket (Medium, unconfirmed)
+### 3. The service uid can replace the admin socket (Low, confirmed)
 
-**Description.** The service account owns `/run/iron-vault` (`0711`) in both profiles, so a process running as that
-uid can unlink `admin.sock` and bind its own. A fake socket would be owned by the service account, so ownership alone
-cannot tell it from the real one. The server checks its own socket with `lstat` at bind (`admin-protocol.md`, Binding).
-This review found no check in `cli/client.rs` that authenticates the server to the CLI, but did not trace the CLI's
-whole connect path.
+Investigated under K-273 at `0be0b0b`. Spec references here use the current numbering: §5 was §3.2, §7 was §3.4.
 
-**Impact.** If confirmed, an attacker running as the service uid could put up a fake admin socket. They could then
-collect the vault passphrase and approval passphrase the next time root runs `unlock`, `config approve`, `replace` or
-`rm`. That is a larger gain than anything finding 2 withholds, and refusing the service account on the admin socket
-does not prevent it.
+**Description.** In protected and container installations, a process running as the service account can unlink
+`admin.sock` and bind its own socket at the same path. The CLI then sends that process the owner input for the next
+admin command.
+
+*How the CLI reaches the service.* Every client command goes through `run_on` and `exchange` in `cli/client.rs`:
+
+- Without `--admin-socket`, `installation_socket` joins `admin.sock` to the deployment profile's runtime directory.
+  That is `/run/iron-vault` in Protected and Container, and `$XDG_RUNTIME_DIR/iron-vault-dev` in Development
+  (`deployment.rs`, `protected_paths` and `development_paths`).
+- With `--admin-socket PATH`, the CLI uses the path as given.
+- `connect` is a plain `UnixStream::connect`. `converse` then sends the admin request and answers each prompt frame
+  from the owner console.
+
+The CLI reads no peer credentials, checks no owner or mode on the path, and authenticates nothing. Prompts are the
+server's to choose, so a stand-in can ask for any value on any command: the vault passphrase, the approval
+passphrase or the recovery key.
+
+*What the service checks.* At bind (`socket_file.rs`), `remove_stale` removes a leftover only when it is a socket the
+service account owns. `verify` then requires a socket owned by the service account with mode `0600`. On each of its
+own connections, the server checks the peer's uid against the admin principals (`admin/server.rs`,
+`admin/principal.rs`). All of these run in the real service, at bind or on connections that reach it. Nothing
+watches the path afterwards, and a stand-in has the same owner and mode, so `lstat` cannot tell the two apart.
+
+*Can the service uid unlink and rebind `admin.sock`?*
+
+- **Protected: yes.** `tmpfiles.d/iron-vault.conf` creates `/run/iron-vault` as `iron-vault:iron-vault` `0711`.
+  - The owner has write and search permission on the directory, so it may unlink any entry. The directory has no
+    sticky bit, and one would not help: the socket's owner is the same account.
+  - `ProtectSystem=strict` makes `/run` read-only, but `ReadWritePaths=` lists `/run/iron-vault`. It has to: the
+    service removes a stale `admin.sock` and binds there.
+  - `SystemCallFilter=@system-service` and `RestrictAddressFamilies=AF_UNIX …` allow `unlink`, `bind` and `listen`,
+    because the service makes those same calls.
+  - Clearing the directory's write bit would not help either: its owner can `chmod` it back.
+- **Container: yes.** The host's `/run/iron-vault` (`iron-vault`, `0711`, from the host `tmpfiles.d`) is bind-mounted
+  read-write.
+  - `read_only: true` covers only the image's root filesystem, not volumes or bind mounts.
+  - `cap_drop: [ALL]` removes nothing the attack needs, because the uid owns the directory. Docker's default seccomp
+    profile allows the calls.
+  - The host's `sudo iron-vault` connects to the same directory, so it reaches whichever socket was bound there last.
+- **Development: yes**, by design: the service runs as the owner, and development mode promises no isolation from the
+  owner's own processes (§4).
+
+*Reproduced* unprivileged, in development mode under a temporary directory:
+
+1. `serve` ran and `ping` answered.
+2. A Python process running as the same uid unlinked `admin.sock` and bound its own socket there with mode `0600`.
+   `ls -li` showed the same owner and mode and a new inode.
+3. The stand-in answered the request with one prompt frame, "Vault passphrase".
+4. `printf '<passphrase>\n' | iron-vault unlock` sent it the passphrase, which the stand-in recorded. The CLI reported
+   only "the service closed the connection without answering".
+5. The real service kept running, unreachable at its path.
+
+The same client and bind code runs in every profile. Only the directory's owner differs, and in each profile it is
+the account the attacker runs as.
+
+*Who can run as the service uid?*
+
+- **Protected:** nothing but the service. The account has no login shell or password (`sysusers.d`). Only root can
+  start a process as it (`runuser`, `systemd-run --uid`), and root is trusted. The attacker is therefore code running
+  in the service, or a process it started, which stays in the unit's sandbox and cgroup and is killed when the unit
+  stops.
+- **Container:** the same, plus:
+  - `docker exec`, which is runtime administration and outside the threat model;
+  - another container that runs as the uid and mounts the host's `/run/iron-vault`, which the hardening checklist
+    forbids.
+
+**Impact.** Smaller than the investigation assumed. A compromised service already receives every owner input sent to
+the real admin socket, and can send any prompt itself. Passphrases typed while it is compromised are lost with or
+without the replacement. The replacement adds two things:
+
+- **Capture from a separate process.** The service clears `PR_SET_DUMPABLE`, so a process it starts cannot read its
+  memory. Replacing the socket gets that process the passphrases anyway. Under `MemoryDenyWriteExecute=yes`, starting
+  such a process with one `execve` is a much simpler payload than hooking the running service.
+- **Every owner command goes to the stand-in**, `lock` included, which it can acknowledge without locking anything.
+  A compromised service can lie the same way.
+
+The code does not meet §5, which says: "The CLI must send owner input only to the service. No other process,
+including one running as the service account, may serve at the admin socket's path or otherwise stand in for the
+service."
+
+*Other paths in `/run/iron-vault`.* The runtime directory holds only `admin.sock` and Unix request sockets
+(`serve.rs`, `request_listeners.rs`). The service uid can replace a request socket the same way, whether the service
+bound it or a listener socket unit did. systemd keeps its socket open, but the path then names the stand-in. Callers
+would send it their caller tokens and request bodies. A compromised service sees those anyway, and a caller has no
+way to authenticate the server of a Unix socket, so this needs no action. TCP listeners have no path to replace. In
+Protected, systemd holds each port. In Container, the service binds its listeners in its own network namespace.
+
+*Fixes compared.*
+
+| Fix | Protected | Container | `ssh -L` forward | Cost |
+|---|---|---|---|---|
+| A. A socket unit binds `admin.sock` in a root-owned directory and passes it to the service | Closed: neither file permissions nor `ProtectSystem=strict` let the service uid unlink there | Not possible: Docker cannot pass a socket into a container, and without `CAP_DAC_OVERRIDE` the service cannot bind in a root-owned directory | Covered: `sshd` connects to the root-owned path | A new socket unit and admin socket path; the service adopts its admin socket. A connection to it starts a stopped service, as a listener socket unit already does |
+| B. The CLI checks the listening process from `SO_PEERCRED` before it sends anything | Closed: the server's pid must be `iron-vault.service`'s `MainPID`, and a process the service started has another pid | Closed: the server must be PID 1 of its own PID namespace, with its parent in the CLI's namespace, and no other process in the container is | Not covered: the CLI's peer is the local `ssh`, and `sshd` on the server connects without checking | Client only, at one choke point (`exchange`); no service or packaging change |
+| A key pinned at `init` | No help: the key must work while the service is Locked, so it would sit in the state directory, which the service uid reads | Same | — | Ruled out |
+| A check of `/proc/<pid>/exe` and the uid | No help: a process the service started can `execve` `/usr/bin/iron-vault` with `LD_PRELOAD` | Same | — | Ruled out |
+| A separate admin socket directory | Becomes A: the service creates the socket, so a directory it cannot write needs a socket unit | Same as A | — | Not a separate fix |
 
 **Recommendations.**
 
-- Confirm or rule out the gap by tracing how the CLI finds and checks `admin.sock`.
-- If confirmed, open a ticket so that the service uid cannot replace its own admin socket. Options include:
-  - a root-owned runtime directory or socket, created by `tmpfiles.d` or systemd socket activation;
-  - having the CLI authenticate the server before it sends owner input.
+- Build fix B. It closes the gap in both profiles at one point in the CLI and needs no change to the service, the
+  package or the Compose file.
+  - The `ssh -L` forward stays exposed. The default remote form, `ssh -t … sudo iron-vault`, runs the CLI on the
+    server and is covered.
+  - Fix A could be added later for Protected, if the forward must be covered too.
+- **Owner decision.** Fix B meets §5's first sentence and its "or otherwise stand in for the service": the CLI no
+  longer treats a stand-in as the service. It does not stop another process from serving at the path, as the second
+  sentence literally requires. Only fix A does that, and only in Protected. Either reword §5 to the outcome, or treat
+  fix A as required for Protected.
+- No action for request sockets.
 
 ### 4. Spec §3.2's container text described mechanism, not outcomes (Low)
 
@@ -153,8 +247,10 @@ refuse root as they would refuse any other account.
   epic's scope (EP-36). The Windows epic's admin rule (EP-37) is flagged for the owner.
 - **Finding 2:** no separate action. K-272 applies the refusal to every protected profile, and its spec wording will
   state the rule as an outcome rather than as protection against a compromised service.
-- **Finding 3:** ticket K-273 (EP-35), an investigation. Writing it found that `cli/client.rs` `connect` is a plain
-  `UnixStream::connect` with no check of the server, which strengthens the finding but does not yet confirm it. K-273
-  is to confirm or rule out the replacement in each profile, recommend a fix, and record the outcome here.
+- **Finding 3:** confirmed by the K-273 investigation, which also lowered it from Medium to Low.
+  - The replacement works in Protected and Container, and was reproduced unprivileged in Development.
+  - The threat tables in `linux-package.md` and `docker-compose.md` now list it.
+  - Ticket K-286 (EP-35) builds fix B: the CLI refuses a server that is not the service's own process.
+  - Open for the owner: whether §5's "may serve at the admin socket's path" needs rewording, or fix A in Protected.
 - **Finding 4:** open. The remapping clause in §3.2 (line 118) still contradicts `docker-compose.md`. The service
   account parenthetical will be replaced under K-272.
