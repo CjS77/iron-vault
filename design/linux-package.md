@@ -123,6 +123,28 @@ u iron-vault - "Iron Vault credential proxy" - /usr/sbin/nologin
 The account gets a system uid, no login shell, and `systemd-sysusers`'s default home `/`, so no home directory is
 created.
 
+`systemd-sysusers` leaves an existing account or group of that name as it is. A login account called `iron-vault` that
+was there first would own the three directories below, so it could read the encrypted records and change the config
+directory, and anyone in an existing `iron-vault` group could read the audit log. So on the first configure, and the
+first after a purge, `postinst` checks an `iron-vault` account or group that already exists, before `systemd-sysusers`
+runs. It fails `configure` unless the account is what `systemd-sysusers` would have made:
+
+- a system uid, above 0 and at most `SYS_UID_MAX` from `/etc/login.defs` (999 when unset);
+- the shell `nologin` or `false`, under `/usr/sbin`, `/sbin`, `/usr/bin` or `/bin`;
+- a locked password (`!` or `*` first) or none, in `/etc/shadow` or `/etc/passwd`;
+- the home `/`, `/nonexistent` or `/var/lib/iron-vault`, so no `~/.ssh` or other login file belongs to it;
+- `iron-vault` as its primary group and no supplementary group;
+- an `iron-vault` group with no members, which is no other account's primary group;
+- no other account with its uid and no other group with its gid, because either would be the same identity under
+  another name.
+
+The refusal lists each problem and says to correct the account, or delete it (`userdel iron-vault`, and `groupdel
+iron-vault` if the group remains) so the package creates its own, then run `dpkg --configure iron-vault`. Later
+configures skip the check: the account is then the package's own, and its group may hold a log collector's account
+([Admin access](#admin-access)). A purge keeps the account and group, so a collector's membership must be removed
+before reinstalling and added back afterwards. The check reads only the files in `/etc`, not accounts that NSS takes
+from a directory service.
+
 `/usr/lib/tmpfiles.d/iron-vault.conf` creates the three directories:
 
 ```
@@ -294,8 +316,9 @@ instance name. The package's own scripts add the rest, including everything for 
 
 ### Install
 
-`postinst configure` creates the account and the directories ([above](#account-and-directories)), loads the purge
-question's debconf template by sourcing debconf's `confmodule`, then enables and starts `iron-vault.service`. It
+`postinst configure` loads the purge question's debconf template by sourcing debconf's `confmodule`, refuses an
+existing `iron-vault` account or group that is not a locked system account, creates the account and the directories
+([above](#account-and-directories)), then enables and starts `iron-vault.service`. It
 enables no listener socket unit: the administrator creates those. The service starts Locked with no vault, and
 `status` says to run `iron-vault init`. Nothing unlocks it.
 

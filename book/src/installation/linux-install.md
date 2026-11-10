@@ -100,6 +100,22 @@ sudo apt install ./target/debian/iron-vault_*.deb
 The package creates the `iron-vault` account and its directories, and enables and starts `iron-vault.service`. The
 service starts Locked with no vault, and the installer prints the next command.
 
+If an `iron-vault` account or group already exists, the install stops with "an iron-vault account or group already exists
+and is not a locked system account", unless it is what the package would have created: a system uid, a `nologin` or
+`false` shell, a locked password, home `/`, `/nonexistent` or `/var/lib/iron-vault`, no other groups, and a group with
+no members. The package would otherwise hand that account the vault and its group the audit log. The message lists each
+problem. Correct the account, or delete it so the package creates its own, then finish the install:
+
+```sh
+sudo userdel iron-vault
+sudo groupdel iron-vault             # only if the group is still there
+sudo dpkg --configure iron-vault
+```
+
+The same check runs when you reinstall after a purge, which keeps the account. If you gave a
+[log collector](../reference/log-operations.md#location-and-permissions) the `iron-vault` group, take it out of the
+group first and add it back afterwards.
+
 ```sh
 sudo iron-vault init      # prompts for the vault and approval passphrases; shows the recovery key once
 sudo iron-vault unlock    # prompts for the vault passphrase
