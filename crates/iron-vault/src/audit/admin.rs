@@ -71,7 +71,7 @@ impl AdminRefusal {
 }
 
 /// `admin.refused`: an admin connection or request was refused before any command ran. The peer's uid and pid are
-/// recorded when the kernel reported them.
+/// recorded when the kernel reported them; the pid is absent for a peer in another PID namespace.
 #[derive(Debug, Clone, Copy)]
 pub struct AdminRefused {
     /// Why.
@@ -89,7 +89,7 @@ impl AuditEvent for AdminRefused {
             event = Self::NAME.as_str(),
             refusal = self.refusal.label(),
             peer_uid = self.peer.map(|peer| peer.uid()),
-            peer_pid = self.peer.map(|peer| peer.pid()),
+            peer_pid = self.peer.and_then(|peer| peer.pid()),
             "admin request refused",
         );
     }

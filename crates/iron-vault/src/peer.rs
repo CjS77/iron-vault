@@ -21,14 +21,14 @@ pub use adapter::peer_identity;
 pub struct PeerIdentity {
     uid: u32,
     gid: u32,
-    pid: u32,
+    pid: Option<u32>,
 }
 
 impl PeerIdentity {
     /// A peer identity for unit tests of the rules that judge one; outside tests only the adapter builds one.
     #[cfg(test)]
     pub(crate) const fn for_test(uid: u32, gid: u32, pid: u32) -> Self {
-        Self { uid, gid, pid }
+        Self { uid, gid, pid: Some(pid) }
     }
 
     /// The peer's effective uid when it connected; the only field that decides who the peer is.
@@ -42,8 +42,10 @@ impl PeerIdentity {
     }
 
     /// The peer's process ID, for the audit log only. It is never used to look up an executable: `/proc/<pid>/exe`
-    /// cannot tell the owner from malware running as the same account (§7), and the pid may already be reused.
-    pub const fn pid(&self) -> u32 {
+    /// cannot tell the owner from malware running as the same account (§7), and the pid may already be reused. It is
+    /// absent when the peer is in a PID namespace the service cannot see, such as the host CLI talking to the service in
+    /// the Container profile.
+    pub const fn pid(&self) -> Option<u32> {
         self.pid
     }
 }

@@ -237,7 +237,7 @@ async fn each_connection_is_tagged_with_its_listener_and_only_unix_ones_with_a_p
     let unix = accept(&listeners).await;
     assert_eq!(unix.listener(), &name("a-unix"));
     assert_eq!(unix.peer().map(|peer| peer.uid()), Some(rustix::process::getuid().as_raw()));
-    assert_eq!(unix.peer().map(|peer| peer.pid()), Some(std::process::id()));
+    assert_eq!(unix.peer().and_then(|peer| peer.pid()), Some(std::process::id()));
     exchange(&mut unix.establish().await.unwrap(), &mut unix_client).await;
 
     let mut tcp_client = TcpStream::connect(setup.tcp).await.unwrap();
