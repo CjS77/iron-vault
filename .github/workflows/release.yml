@@ -1,0 +1,84 @@
+name: Release
+
+# Package checks run only for releases: when a release is published, or when a release tag is pushed.
+#
+# GitHub's tag filters are globs and cannot express the whole release-tag rule (they let through v1.0.0-, v01.2.3 and
+# v1.2.3-alpha_1), so they are a coarse filter and scripts/check-release-tag.sh applies the exact rule. In a filter,
+# `.` is literal and `+` is one or more of the preceding character; the pattern must match the whole tag name.
+#
+# Publishing a release for a new tag also pushes the tag, so both triggers fire. The concurrency group below queues the
+# second run behind the first for the same tag, and only the `release` event attaches the package to the release, so the
+# repeat only rebuilds and re-uploads the workflow artifact. (cancel-in-progress would be wrong: the run that is
+# cancelled could be the one that attaches the package.)
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_DEB_VERSION: 3.8.0
+  TAG: ${{ github.event.release.tag_name || github.ref_name }}
+
+jobs:
+  deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # The tag is checked before anything is built, so a mistyped tag fails in seconds.
+      - name: Tag is a release tag and names the crate version
+        run: |
+          scripts/check-release-tag-test.sh
+          # rustup reads rust-toolchain.toml; cargo metadata in the check needs the pinned toolchain.
+          rustup toolchain install
+          scripts/check-release-tag.sh "$TAG"
+      - name: Install lintian and dpkg-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends lintian dpkg-dev
+      - name: Cache cargo-deb
+        id: deb-tools
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.deb-tools
+          key: deb-tools-${{ runner.os }}-cargo-deb-${{ env.CARGO_DEB_VERSION }}
+      - name: Install cargo-deb
+        if: steps.deb-tools.outputs.cache-hit != 'true'
+        run: cargo install cargo-deb --version "$CARGO_DEB_VERSION" --locked --root ~/.deb-tools
+      # No IRON_VAULT_SKIP_LINTIAN: the script fails when lintian is missing or reports an error.
+      - name: Build and check the package
+        run: |
+          export PATH="$HOME/.deb-tools/bin:$PATH"
+          scripts/build-deb.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iron-vault-deb
+          path: target/debian/iron-vault_*.deb
+          if-no-files-found: error
+
+  # A separate job so that only this one holds a token that can write to the repository.
+  attach:
+    if: github.event_name == 'release'
+    needs: deb
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: iron-vault-deb
+      - name: Attach the package to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" iron-vault_*.deb --clobber
