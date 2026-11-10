@@ -7,7 +7,10 @@
 # a Compose project named ivcheck from packaging/compose/compose.yaml. All of it is removed on every exit path.
 #
 # Set up:
-#   1. A fresh Ubuntu LTS VM with Docker Engine and the Compose plugin, sudo, util-linux (runuser, script), openssl, curl and jq.
+#   1. A fresh Ubuntu LTS VM with Docker Engine, the Compose plugin and the buildx plugin (BuildKit), sudo, util-linux (runuser, script), openssl, curl and jq.
+#      On Ubuntu's own packages that is docker.io, docker-compose-v2 and docker-buildx; docker.io only suggests the last, and
+#      the legacy builder cannot run the Dockerfile's COPY --chmod. With Docker's apt repository the buildx package is
+#      docker-buildx-plugin. Not needed when --image names an image already built.
 #      Nothing of Iron Vault's may be installed: the script refuses to start if any of the paths above, or an `iron-vault`
 #      account, already exists.
 #   2. An ordinary account to play another host user:  sudo useradd -m testuser
@@ -247,12 +250,21 @@ refuse_leftovers() {
     done
 }
 
+# The service Dockerfile uses COPY --chmod, which only BuildKit builds. Ubuntu's docker.io does not install buildx, and the
+# legacy builder fails with that error minutes into the build, so ask first. An image named by --image is not built.
+require_buildkit() {
+    [ -n "$IMAGE" ] && return 0
+    docker buildx version >/dev/null 2>&1 \
+        || die "building the service image needs BuildKit: install docker-buildx (Ubuntu) or docker-buildx-plugin (Docker's apt repository), or pass --image"
+}
+
 preflight() {
     local tool path
     for tool in openssl script runuser sudo curl getent useradd groupadd userdel groupdel ip; do
         command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
     done
     docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"
+    require_buildkit
     for path in "$HOST_CLI" "$HOST_DIR" "$RUN_DIR" "$UNLOCK_DIR"; do
         [ ! -e "$path" ] || die "$path already exists; this check needs a host with nothing of Iron Vault's on it"
     done

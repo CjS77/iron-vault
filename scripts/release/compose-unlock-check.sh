@@ -8,8 +8,9 @@
 # them, so the first part leaves all of that in place for the second. The second part (or --cleanup) removes it.
 #
 # Set up:
-#   1. A fresh Ubuntu LTS VM with a TPM 2.0 (real, or swtpm under the hypervisor), systemd 250 or later, Docker Engine and the
-#      Compose plugin enabled at boot, and: age (age-keygen), jq, openssl, util-linux (script, findmnt), iproute2 (ss),
+#   1. A fresh Ubuntu LTS VM with a TPM 2.0 (real, or swtpm under the hypervisor), systemd 250 or later, Docker Engine, the
+#      Compose plugin and the buildx plugin (BuildKit; Ubuntu package docker-buildx, Docker's docker-buildx-plugin, not needed
+#      with --image) with Docker enabled at boot, and: age (age-keygen), jq, openssl, util-linux (script, findmnt), iproute2 (ss),
 #      binutils (strings). Nothing of Iron Vault's may be installed: the script refuses to start if any of the paths above, or
 #      an `iron-vault` account, already exists.
 #   2. This repository checked out on the VM, outside /etc and /var (the key scans read those). The service image is built
@@ -152,6 +153,7 @@ preflight_unlock() {
         command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
     done
     docker info >/dev/null 2>&1 || die "the Docker daemon is not reachable"
+    require_buildkit
     systemctl is-enabled docker.service >/dev/null 2>&1 || die "docker.service must be enabled: the reboot check needs Docker at boot"
     systemd-creds has-tpm2 >/dev/null 2>&1 || die "systemd-creds finds no usable TPM2 (real hardware, or swtpm under the hypervisor)"
     case "$REPO" in /etc/* | /var/*) die "check this repository out outside /etc and /var: the key scans read both" ;; esac
