@@ -62,6 +62,7 @@ fn service_unit_has_every_required_directive() {
             ("User", SERVICE_ACCOUNT),
             ("Group", SERVICE_ACCOUNT),
             ("Restart", "on-failure"),
+            ("RestartSec", "1"),
             ("LimitCORE", "0"),
             ("LimitMEMLOCK", "infinity"),
             ("UMask", "0077"),
@@ -79,6 +80,8 @@ fn service_unit_has_every_required_directive() {
             ("MemoryDenyWriteExecute", "yes"),
         ],
     );
+    // A start limit hit by a crash loop would fail every listener socket and release its port (specification §7).
+    assert_directives(&section(&unit, "Unit"), &[("StartLimitIntervalSec", "0")]);
     assert_directives(&section(&unit, "Install"), &[("WantedBy", "multi-user.target")]);
 }
 
@@ -104,6 +107,11 @@ fn listener_template_names_no_address_and_passes_its_socket_to_the_service() {
     ["PartOf", "BindsTo"]
         .iter()
         .for_each(|key| assert!(values(&section(&unit, "Unit"), key).is_empty(), "the template must not set {key}="));
+    // systemd's default trigger limit stays, so a service that keeps exiting cleanly cannot spin forever
+    // (design/linux-package.md, Listener socket units).
+    ["TriggerLimitIntervalSec", "TriggerLimitBurst"]
+        .iter()
+        .for_each(|key| assert!(values(&socket, key).is_empty(), "the template must not set {key}="));
     assert_directives(&section(&unit, "Install"), &[("WantedBy", "sockets.target")]);
 }
 
