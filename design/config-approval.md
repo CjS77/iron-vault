@@ -171,9 +171,10 @@ asks for the next approver; nothing is reserved or signed until one of them auth
 approver's prompt ends the approval as `approval-denied`, as a wrong approval passphrase does today: it does not move
 on to another approver, so switching is the owner's choice, never a retry ([open question 15](#open-questions)).
 Which approver is asked first, the prompt's
-exact text and the protocol frame for "try another way" belong to the approver enrollment design (K-277). Until then
-`init` pins one approver, the software signer labelled `approval passphrase`, and step 2 asks for its passphrase as
-`Approval passphrase for "approval passphrase"`.
+exact text and the switch frame for "try another way" are in
+[approval-signers.md](approval-signers.md#the-approver-prompt). `init` pins one approver, the software signer labelled
+`approval passphrase`, so step 2 asks for its passphrase as `Approval passphrase for "approval passphrase"` until the
+owner enrolls another.
 
 The envelope written at step 3 carries the signer's approver ID, and verification checks the signature with that
 approver's pinned key and algorithm ([storage-formats.md](storage-formats.md#approval-envelope-v1)). Owner presence
@@ -687,10 +688,11 @@ open, and takes its default until the owner decides.
     lets the owner switch to another approval signer at the prompt. *Default:* a wrong passphrase or PIN for the asked
     approver ends the approval as `approval-denied`, and nothing moves on to the next approver by itself, so a guess
     against one signer is never followed by a free guess against another. The alternative offers the next approver
-    after a wrong answer, within the same exchange.
+    after a wrong answer, within the same exchange. [approval-signers.md](approval-signers.md#a-wrong-answer) keeps the default and gives its
+    reasons.
 
 ### Which tickets each question blocks
 
 | Ticket | Open questions |
 |---|---|
-| K-277 | 15 |
+| the approver prompt ticket of [approval-signers.md](approval-signers.md#implementation-tickets) | 15 |

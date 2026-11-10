@@ -454,8 +454,8 @@ Its plaintext is the 32-byte Ed25519 private key (the RFC 8032 seed), raw. Rust:
   so a swapped `approver.age` signs nothing.
 - **One file.** `init` enrolls one software signer, and `approver.age` holds its key. Specification
   [§14](iron-vault-specification.md#14-recipients-startup-and-memory) lets the owner enroll several approval signers,
-  of the same kind or different kinds. Where a second software signer's key lives is decided by the approver
-  enrollment design (K-277).
+  of the same kind or different kinds. [approval-signers.md](approval-signers.md#software-signer-keys) gives every
+  software signer a file of its own, `approver-<approver ID>.age`, `init`'s included.
 - **Lifetime.** A software signer is opened for one approval and dropped; the private key is cleared on drop and never
   cached.
 
@@ -646,8 +646,9 @@ replace returns. Every write reads the manifest from disk first and takes its st
   again at a new version, as specification [§12](iron-vault-specification.md#12-configuration-approval-and-reload)
   says of signing-key rotation.
 
-Signing-key rotation is an enroll followed by a remove. Who may enroll or remove an approver, and how the owner
-authorizes it, is the approver enrollment design (K-277); `init` writes the state with its one approver.
+Signing-key rotation is an enroll followed by a remove. `init` writes the state with its one approver; `approver add`
+and `approver remove` enroll and remove the others, after owner presence or the recovery key
+([approval-signers.md](approval-signers.md#authorization)).
 
 Before each write the service reads the file back and requires it to equal its in-memory state, so a stale copy can
 never write lower counters over newer ones. Restoring the whole state directory from an older copy restores older
