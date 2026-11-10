@@ -23,6 +23,8 @@ struct Accounts {
     passwd: Vec<String>,
     group: Vec<String>,
     shadow: Vec<String>,
+    /// `None` is a host with no `/etc/gshadow`.
+    gshadow: Option<Vec<String>>,
     login_defs: Option<String>,
 }
 
@@ -40,6 +42,7 @@ impl Accounts {
                 "alice:$6$salt$hash:20000:0:99999:7:::",
                 "iron-vault:!*:20000::::::",
             ]),
+            gshadow: Some(lines(&["root:*::", "sudo:*::alice", "alice:!::", "iron-vault:!::"])),
             login_defs: Some("UID_MIN 1000\nSYS_UID_MIN 100\nSYS_UID_MAX 999\n".to_string()),
         }
     }
@@ -49,6 +52,7 @@ impl Accounts {
         let mut accounts = Self::sysusers();
         [&mut accounts.passwd, &mut accounts.group, &mut accounts.shadow]
             .into_iter()
+            .chain(accounts.gshadow.as_mut())
             .for_each(|file| file.retain(|line| !line.starts_with("iron-vault:")));
         accounts
     }
@@ -56,6 +60,16 @@ impl Accounts {
     /// Replaces the `iron-vault` entry of one file.
     fn service_entry(mut self, file: fn(&mut Self) -> &mut Vec<String>, entry: &str) -> Self {
         let lines = file(&mut self);
+        let index = lines
+            .iter()
+            .position(|line| line.starts_with("iron-vault:"))
+            .expect("an iron-vault entry");
+        lines[index] = entry.to_string();
+        self
+    }
+
+    fn gshadow_entry(mut self, entry: &str) -> Self {
+        let lines = self.gshadow.as_mut().expect("a gshadow file");
         let index = lines
             .iter()
             .position(|line| line.starts_with("iron-vault:"))
@@ -82,6 +96,9 @@ impl Accounts {
         fs::write(dir.0.join("passwd"), self.passwd.join("\n") + "\n").unwrap();
         fs::write(dir.0.join("group"), self.group.join("\n") + "\n").unwrap();
         fs::write(dir.0.join("shadow"), self.shadow.join("\n") + "\n").unwrap();
+        if let Some(gshadow) = &self.gshadow {
+            fs::write(dir.0.join("gshadow"), gshadow.join("\n") + "\n").unwrap();
+        }
         if let Some(defs) = &self.login_defs {
             fs::write(dir.0.join("login.defs"), defs).unwrap();
         }
@@ -110,7 +127,7 @@ fn check_block() -> &'static str {
 /// Runs the check in `dir`, which holds the fixture files, reading the shadow entries from `shadow`.
 fn run_check(dir: &Path, shadow: &str) -> Output {
     let script = format!(
-        "{}\npasswd_file=passwd group_file=group shadow_file={shadow} login_defs=login.defs\nrefuse_unsafe_service_account",
+        "{}\npasswd_file=passwd group_file=group shadow_file={shadow} gshadow_file=gshadow login_defs=login.defs\nrefuse_unsafe_service_account",
         check_block()
     );
     Command::new("sh").arg("-c").arg(script).current_dir(dir).output().expect("sh runs")
@@ -336,6 +353,70 @@ fn shadow_without_read_permission_is_refused() {
     fs::set_permissions(&shadow, fs::Permissions::from_mode(0o000)).unwrap();
     // Root reads a mode-000 file anyway, so there is nothing to test when the tests run as root.
     if fs::read(&shadow).is_ok() {
+        eprintln!("skipped: running as root");
+        return;
+    }
+    assert_unreadable_refused(&dir.0, "shadow");
+}
+
+#[test]
+fn gshadow_administrator_is_refused() {
+    let accounts = Accounts::sysusers().gshadow_entry("iron-vault:!:alice:");
+    assert_refused(&accounts, "group iron-vault: gshadow names administrators alice");
+}
+
+#[test]
+fn gshadow_group_password_is_refused() {
+    let accounts = Accounts::sysusers().gshadow_entry("iron-vault:$6$salt$hash::");
+    assert_refused(&accounts, "group iron-vault: gshadow sets a group password");
+}
+
+#[test]
+fn gshadow_member_is_refused() {
+    // /etc/group lists none, so only gshadow shows that alice can join.
+    let accounts = Accounts::sysusers().gshadow_entry("iron-vault:!::alice");
+    assert_refused(&accounts, "group iron-vault: gshadow lists members alice");
+}
+
+#[test]
+fn locked_or_empty_gshadow_passwords_pass() {
+    [
+        "iron-vault:!::",
+        "iron-vault:*::",
+        "iron-vault:!!::",
+        "iron-vault:::",
+        "iron-vault:!$6$salt$hash::",
+    ]
+    .into_iter()
+    .for_each(|entry| assert_eq!(Accounts::sysusers().gshadow_entry(entry).check(), Ok(()), "{entry}"));
+}
+
+#[test]
+fn missing_gshadow_passes() {
+    let accounts = Accounts {
+        gshadow: None,
+        ..Accounts::sysusers()
+    };
+    assert_eq!(accounts.check(), Ok(()));
+}
+
+#[test]
+fn gshadow_without_read_permission_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let accounts = Accounts::sysusers();
+    let dir = Scratch::new();
+    ["passwd", "group", "shadow", "gshadow"].into_iter().for_each(|name| {
+        let lines = match name {
+            "passwd" => &accounts.passwd,
+            "group" => &accounts.group,
+            "shadow" => &accounts.shadow,
+            _ => accounts.gshadow.as_ref().unwrap(),
+        };
+        fs::write(dir.0.join(name), lines.join("\n") + "\n").unwrap();
+    });
+    let gshadow = dir.0.join("gshadow");
+    fs::set_permissions(&gshadow, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&gshadow).is_ok() {
         eprintln!("skipped: running as root");
         return;
     }

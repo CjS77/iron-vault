@@ -9,12 +9,15 @@ set -e
 # systemd-sysusers leaves an existing iron-vault account or group as it is, and the package would then hand that account
 # the service's directories and that group the audit log. Prints one line per way an existing account or group differs
 # from the locked system account sysusers creates, and nothing when neither exists; fails only when a file is unreadable.
-# Reads $passwd_file, $group_file, $shadow_file and $login_defs.
+# Reads $passwd_file, $group_file, $shadow_file, $gshadow_file and $login_defs. A missing gshadow file means no group has a
+# gshadow entry; one that exists but cannot be read fails the function.
 service_account_problems() {
     sys_uid_max=$(awk '$1 == "SYS_UID_MAX" { v = $2 } END { print v }' "$login_defs" 2>/dev/null || true)
     case "$sys_uid_max" in '' | *[!0-9]*) sys_uid_max=999 ;; esac
+    set -- "$passwd_file" "$group_file" "$shadow_file"
+    [ ! -e "$gshadow_file" ] || set -- "$@" "$gshadow_file"
     awk -F: -v name=iron-vault -v max="$sys_uid_max" \
-        -v passwd="$passwd_file" -v group="$group_file" -v shadow="$shadow_file" '
+        -v passwd="$passwd_file" -v group="$group_file" -v shadow="$shadow_file" -v gshadow="$gshadow_file" '
         # The first entry is the one getpwnam and getgrnam return.
         FILENAME == passwd && $1 == name && !user { user = 1; pw = $2; uid = $3; gid = $4; home = $6; shell = $7; next }
         FILENAME == passwd { users++; pname[users] = $1; puid[users] = $3; pgid[users] = $4 }
@@ -25,6 +28,9 @@ service_account_problems() {
             m = "," $4; gsub(/,[ \t]+/, ",", m); gmembers[groups] = m ","
         }
         FILENAME == shadow && $1 == name && !shadowed { shadowed = 1; spw = $2 }
+        # gshadow(5): name:password:administrators:members. A password starting with ! or * is not a valid crypt(3) string,
+        # so no one can join the group with it; an empty one lets no non-member in either.
+        FILENAME == gshadow && $1 == name && !gsh { gsh = 1; gpw = $2; gadmins = $3; gmembers_sh = $4 }
         END {
             if (user) {
                 if (uid !~ /^[0-9]+$/ || uid == 0 || uid + 0 > max)
@@ -41,17 +47,21 @@ service_account_problems() {
             }
             if (grp) {
                 if (members != "") print("group " name ": lists members " members)
+                # The gshadow member list can differ from the one in /etc/group, and either makes the group joinable.
+                if (gadmins != "") print("group " name ": gshadow names administrators " gadmins)
+                if (gpw != "" && gpw !~ /^[!*]/) print("group " name ": gshadow sets a group password")
+                if (gmembers_sh != "") print("group " name ": gshadow lists members " gmembers_sh)
                 for (i = 1; i <= users; i++) if (pgid[i] == ggid) print("group " name ": primary group of account " pname[i])
                 for (i = 1; i <= groups; i++) if (ggidof[i] == ggid) print("group " gname[i] ": has the same gid as " name)
             }
-        }' "$passwd_file" "$group_file" "$shadow_file"
+        }' "$@"
 }
 
 # Fails configure, saying what is wrong and how to fix it, when service_account_problems finds anything.
 refuse_unsafe_service_account() {
     if ! problems=$(service_account_problems); then
         echo "iron-vault: could not check the account files for an existing iron-vault account" >&2
-        echo "iron-vault: check that $passwd_file, $group_file and $shadow_file exist, then run 'sudo dpkg --configure iron-vault'." >&2
+        echo "iron-vault: check that $passwd_file, $group_file, $shadow_file and $gshadow_file are readable, then run 'sudo dpkg --configure iron-vault'." >&2
         return 1
     fi
     [ -n "$problems" ] || return 0
@@ -72,7 +82,7 @@ refuse_unsafe_service_account() {
 # Only on the first configure, or the first after a purge: an account that exists then was not made by this package.
 # Later configures keep the account the package made, whose group may hold a log collector's account.
 if [ "$1" = configure ] && [ -z "$2" ]; then
-    passwd_file=/etc/passwd group_file=/etc/group shadow_file=/etc/shadow login_defs=/etc/login.defs
+    passwd_file=/etc/passwd group_file=/etc/group shadow_file=/etc/shadow gshadow_file=/etc/gshadow login_defs=/etc/login.defs
     refuse_unsafe_service_account || exit 1
 fi
 
