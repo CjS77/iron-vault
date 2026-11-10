@@ -135,6 +135,11 @@ runs. It fails `configure` unless the account is what `systemd-sysusers` would h
 - the home `/`, `/nonexistent` or `/var/lib/iron-vault`, so no `~/.ssh` or other login file belongs to it;
 - `iron-vault` as its primary group and no supplementary group;
 - an `iron-vault` group with no members, which is no other account's primary group;
+- in `/etc/gshadow`, a group with no administrators, no members and no usable password. A password is unusable when
+  it is empty or starts with `!` or `*`, which `gshadow(5)` says is not a valid `crypt(3)` string, so `newgrp` cannot
+  be passed with it. `adduser --system --group` writes `iron-vault:!::`. A group administrator can add members with
+  `gpasswd -a`, and anyone who knows a password can join with `newgrp`. Members are refused here as well as in
+  `/etc/group`, because the two lists can differ. A missing `/etc/gshadow` means no group has an entry;
 - no other account with its uid and no other group with its gid, because either would be the same identity under
   another name.
 
@@ -144,7 +149,7 @@ configures skip the check: the account is then the package's own, and its group 
 ([Admin access](#admin-access)). A purge keeps the account and group, so a collector's membership must be removed
 before reinstalling and added back afterwards. When `postinst` cannot run the check, because a file is missing or
 unreadable or `awk` fails, it says so and fails `configure` too, because an account it could not check may be one it
-should refuse. The check reads only the files in `/etc`, not accounts that NSS takes from a directory service.
+should refuse; that includes an `/etc/gshadow` that exists but cannot be read. The check reads only the files in `/etc`, not accounts that NSS takes from a directory service.
 
 #### Why `serve` does not check the account again
 
@@ -169,21 +174,16 @@ It would cost three things:
 
 Against those costs the gains are small. After install, only root can change the account. Only root can change the
 group's members too, unless the group existed before the package and names a group administrator or has a group
-password (the second gap below). The threat model trusts root and the host's administrators
+password, which `postinst` refuses. The threat model trusts root and the host's administrators
 ([§2](iron-vault-specification.md#2-security-promise-and-limits)). The case the threat model does cover, an account that
 existed before the package and would be adopted by it, is closed at configure, where `postinst` runs as root and reads
-`/etc/shadow`, apart from that second gap. Taking over the service account gives no admin access either: the admin
+`/etc/shadow` and `/etc/gshadow`. Taking over the service account gives no admin access either: the admin
 socket refuses the service account's uid ([Admin access](#admin-access);
 [§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)).
 
-Two gaps are left open:
-
-- an account from a directory service, which neither check would fully close, because `serve` still could not see its
-  password state;
-- an `iron-vault` group that existed before the package and names a group administrator in `/etc/gshadow`, or has a
-  group password. A group administrator can add members with `gpasswd -a` without being root, and anyone who knows the
-  group password can join with `newgrp iron-vault`; either gives read access to the audit log. The `postinst` check
-  does not yet read `/etc/gshadow` or the password field of `/etc/group`.
+One gap is left open: an account from a directory service, which neither check would fully close, because `serve`
+still could not see its password state. The `postinst` check does not read the password field of `/etc/group` either;
+it matters only on a host without `/etc/gshadow`.
 
 `/usr/lib/tmpfiles.d/iron-vault.conf` creates the three directories:
 
@@ -569,9 +569,12 @@ from this file, then checks the service's account, locked memory, core limit and
 account nor the service account can use the admin socket, that the test account cannot reach `/proc/<pid>/mem`,
 `/proc/<pid>/environ` or the vault, that a group-writable `/etc/iron-vault` stops a `systemctl restart` (a reboot would
 repair it), that a second `serve` fails on the state lock, and that a listener socket unit keeps its port across a
-service restart and stays active through seven crashes, past systemd's default start limit. It refuses to run
-without `--i-know-this-is-a-disposable-vm`. The refusal of the group-writable directory is read from the journal,
-because the service's startup error goes to stderr.
+service restart and stays active through seven crashes, past systemd's default start limit. It does not run the
+[account check](#account-and-directories) against `/etc/gshadow`; the fixture tests in
+`crates/iron-vault/tests/package_account_check.rs` do. To check a real host by hand, read the `iron-vault` line of
+`/etc/gshadow`, which should be `iron-vault:!::` or `iron-vault:*::`. It refuses to run without
+`--i-know-this-is-a-disposable-vm`. The refusal of the group-writable directory is read from the journal, because the
+service's startup error goes to stderr.
 
 ## Admin access
 
