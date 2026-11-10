@@ -515,8 +515,8 @@ hardware, so the gate stays open until its two-part output is attached to K-254 
 
 ## Approval signing
 
-v0 keeps the [software signer](glossary.md) inside the service. Its key is in `approver.age` in the state volume,
-opened only by the approval passphrase, which the owner types over the admin socket, for one approval at a time
+v0 keeps the [software signer](glossary.md) inside the service. Its key is in an approver key envelope,
+`approver-<approver ID>.age`, in the state volume, opened only by the approval passphrase, which the owner types over the admin socket, for one approval at a time
 ([storage-formats.md](storage-formats.md#approver-key-envelope)). The host exposes no signing interface, and nothing in
 the container can sign without the owner typing that passphrase. The host unlock identity gives no approval
 authority: the approval passphrase is separate from every unlock factor.

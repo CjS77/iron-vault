@@ -78,7 +78,7 @@ fn a_signed_approval_verifies_against_the_committed_state() {
     assert_eq!((verified.version(), verified.digest()), (version, ConfigDigest::of(CONFIG)));
 }
 
-/// Among several pinned approvers, the envelope names the one whose key `approver.age` holds.
+/// Among several pinned approvers, the key file opens as the one whose key it holds.
 #[test]
 fn the_envelope_names_the_approver_the_signer_was_opened_as() {
     let (envelope, pinned) = sealed("approve me");

@@ -61,7 +61,7 @@ too large, truncated, of an unknown version or fails after its MAC verified. Tel
 because a read failed would send them to replace a recovery path that works.
 
 Nothing is written except the [recovery check record](#the-recovery-check-record). The check never rewraps the
-envelope, never touches `operational.age`, `approver.age` or `approval.age`, and never changes the recipient set or
+envelope, never touches `operational.age`, an approver key envelope (`approver-<approver ID>.age`) or `approval.age`, and never changes the recipient set or
 the approval counters ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)). The unwrapped
 vault identity and the recipient identity are dropped, and cleared, before the service answers. They are never stored
 in the service context: in Ready the vault identity the service already holds is neither used nor replaced, and in

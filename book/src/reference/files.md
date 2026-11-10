@@ -115,7 +115,7 @@ writes its own copy.
 | `recipients.age` | The recipient inventory: who can open the vault (the vault passphrase and the recovery key), each with its role, label and enrolment time. `init` writes it. |
 | `recipients.age.staged` | A recipient change being committed. The next recipient command finishes or discards it. |
 | `operational.age` | The passphrase envelope: the operational identity, sealed with the vault passphrase. |
-| `approver.age` | The approver key envelope: the key that signs config approvals, sealed with the approval passphrase. |
+| `approver-<id>.age` | An approver key envelope, one per software approver: the key that signs config approvals for it, sealed with its approval passphrase. `init` writes one for its approver. |
 | `approval.age` | The approval state: the committed and highest reserved approval versions. |
 | `manifest.age` | The vault manifest: which credential records exist, sealed with a code only the vault identity can make. |
 | `record-<id>.age` | One credential record: its kind, secret and permitted origins. |
@@ -161,8 +161,10 @@ mode rules above protect them.
   is never loaded (`vault.unindexed-file`). A listed record that is missing, swapped for another or unreadable is
   reported as damaged (`vault.record-damaged`); only the routes that use it answer `503`. `iron-vault replace` writes
   a good record.
-- **`identity.age`, `operational.age`, `approver.age` and `approval.age`.** Damage to the shared state makes `unlock`
+- **`identity.age`, `operational.age` and `approval.age`.** Damage to the shared state makes `unlock`
   refuse, or sends the service to Unavailable (`recovery needed`), with `vault.shared-state-damaged` in the log.
+- **`approver-<id>.age`.** Only that approver's prompt reads it: a damaged or swapped key file makes its answer fail
+  for `config approve`, `replace` and `rm`, and signs nothing.
 - **`recovery.toml`** is plain text, so reminders work while the vault is locked. It holds only two times, when
   reminders started counting and when the last recovery check ran, so an edit can change no more than when `status`
   reminds you to check the recovery key.

@@ -40,7 +40,7 @@ the `Debug` rule with a marker secret. Adding a type to this table means adding 
 | `CredentialRecord` | store | a `CredentialMaterial` | its material | `secret_types_tests` |
 | `ResolvedCredential` | store | a `Resolution`, and a borrow of its record's `PermittedOrigins` | its resolution | `secret_types_tests` |
 | `Vault` | store | the `VaultIdentity` and every healthy `CredentialRecord` | its fields | `secret_types_tests` |
-| `ApprovalPassphrase` | store | the approver's passphrase for `approver.age` | `SecretString` | `secret_types_tests` |
+| `ApprovalPassphrase` | store | an approver's passphrase for its approver key envelope, `approver-<approver ID>.age` | `SecretString` | `secret_types_tests` |
 | `SoftwareSignerKey` | store | the software signer's Ed25519 private key | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop (`zeroize` feature); built once into its box, so moves copy only the pointer | `software_signer/tests` |
 | `SoftwareSigner` | store | the opened Ed25519 private key and its `PinnedApprover` | the inner `Box<ed25519_dalek::SigningKey>`, which zeroizes on drop; `SoftwareSigner::new` takes the box from `SoftwareSignerKey` by pointer | `software_signer/tests` |
 | `InitPassphrases` | store | the vault passphrase and the approval passphrase the owner chose at initialization | its `Passphrase` and `ApprovalPassphrase`; the passphrase rules borrow their text and copy none of it | `secret_types_tests` |

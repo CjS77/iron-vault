@@ -217,7 +217,7 @@ signature catch a planted `config.toml`. In `/var/lib/iron-vault`, the [MAC'd fi
 frame](storage-formats.md#macd-file-frame) on the manifest, the approval state and the recipient inventory rejects a
 file written without the vault identity, and a record file is trusted only through the manifest that lists it. The `age`
 envelopes are trusted only through the manifest MAC (`identity.age`, `operational.age`) or the pinned approver key
-(`approver.age`), so a planted one can only make unlock or approval fail. The first exception is `init.unfinished`,
+(`approver-<approver ID>.age`), so a planted one can only make unlock or approval fail. The first exception is `init.unfinished`,
 which the service reads by name alone: its presence is its whole meaning ([unfinished initialization
 file](storage-formats.md#unfinished-initialization-file)). A planted one makes `unlock` refuse the vault as an
 unfinished or unrecognized initialization, and the owner's next `init` then offers to discard the vault's files. That is
