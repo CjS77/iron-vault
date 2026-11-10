@@ -169,7 +169,10 @@ without the replacement. The replacement adds two things:
 
 - **Capture from a separate process.** The service clears `PR_SET_DUMPABLE`, so a process it starts cannot read its
   memory. Replacing the socket gets that process the passphrases anyway. Under `MemoryDenyWriteExecute=yes`, starting
-  such a process with one `execve` is a much simpler payload than hooking the running service.
+  such a process with one `execve` is a much simpler payload than hooking the running service. An `execve` in place,
+  with no fork, also keeps the service's pid (the unit's `MainPID` in Protected, PID 1 in Container) and inherits every
+  file descriptor not marked close-on-exec, which code in the service can clear on its listening sockets. To every
+  check by pid, and on every socket the service holds, the new program is the service.
 - **Every owner command goes to the stand-in**, `lock` included, which it can acknowledge without locking anything.
   A compromised service can lie the same way.
 
@@ -184,27 +187,81 @@ would send it their caller tokens and request bodies. A compromised service sees
 way to authenticate the server of a Unix socket, so this needs no action. TCP listeners have no path to replace. In
 Protected, systemd holds each port. In Container, the service binds its listeners in its own network namespace.
 
-*Fixes compared.*
+*Fixes compared.* Each fix is judged against the payload the Impact names: code in the service that starts a program,
+either with an in-place `execve` or as a child it hands a socket to.
 
 | Fix | Protected | Container | `ssh -L` forward | Cost |
 |---|---|---|---|---|
-| A. A socket unit binds `admin.sock` in a root-owned directory and passes it to the service | Closed: neither file permissions nor `ProtectSystem=strict` let the service uid unlink there | Not possible: Docker cannot pass a socket into a container, and without `CAP_DAC_OVERRIDE` the service cannot bind in a root-owned directory | Covered: `sshd` connects to the root-owned path | A new socket unit and admin socket path; the service adopts its admin socket. A connection to it starts a stopped service, as a listener socket unit already does |
-| B. The CLI checks the listening process from `SO_PEERCRED` before it sends anything | Closed: the server's pid must be `iron-vault.service`'s `MainPID`, and a process the service started has another pid | Closed: the server must be PID 1 of its own PID namespace, with its parent in the CLI's namespace, and no other process in the container is | Not covered: the CLI's peer is the local `ssh`, and `sshd` on the server connects without checking | Client only, at one choke point (`exchange`); no service or packaging change |
+| A. A socket unit binds `admin.sock` in a root-owned directory and passes it to the service | Not closed. The service uid can no longer unlink the path, but the service holds the listening socket systemd passed it. Code in the service clears `FD_CLOEXEC` on it and `execve`s a program in place, or passes it to a process it starts; that program accepts the owner's connections on the real socket | Not possible: Docker cannot pass a socket into a container, and without `CAP_DAC_OVERRIDE` the service cannot bind in a root-owned directory | Not closed, for the same reason: `sshd` reaches the root-owned path, and whatever holds the socket answers | A new socket unit and admin socket path; the service adopts its admin socket. A connection to it starts a stopped service, as a listener socket unit already does |
+| B. The CLI checks the listening process from `SO_PEERCRED` before it sends anything | Not closed. On the client end `SO_PEERCRED` gives the server's credentials as they were at `listen` (unix(7)), and a pid survives `execve`. A program `execve`d in place keeps `MainPID`, then unlinks `admin.sock`, binds and listens there, and passes. So does a socket the service itself binds at the path and hands to a child: the CLI sees the service's pid. Reading `MainPID` from systemd and the peer from `SO_PEERPIDFD` would not change this | Not closed, the same way: the program `execve`d in place stays PID 1 of the container | Not covered: the CLI's peer is the local `ssh`, and `sshd` on the server connects without checking | Client only, at one choke point (`exchange`). Conflicts with A: on a socket systemd bound, the listener is systemd (pid 1, uid 0), so B as described would refuse the real service |
+| C. Once started, the service denies itself `execve` and `execveat` with a seccomp filter | Closed. No program can be started as the service uid. Every process with that uid is the service or a fork of it, which runs the service's own code with a copy of its memory and already receives every owner input | Closed, the same way | Covered: whatever answers at the path is the service or a fork of it | A dependency and a small filter at startup; hardware adapters may not be child processes. See below |
 | A key pinned at `init` | No help: the key must work while the service is Locked, so it would sit in the state directory, which the service uid reads | Same | — | Ruled out |
 | A check of `/proc/<pid>/exe` and the uid | No help: a process the service started can `execve` `/usr/bin/iron-vault` with `LD_PRELOAD` | Same | — | Ruled out |
 | A separate admin socket directory | Becomes A: the service creates the socket, so a directory it cannot write needs a socket unit | Same as A | — | Not a separate fix |
 
+The two bypasses of A and B were reproduced unprivileged, with a temporary directory. A process listened on one socket,
+left it inheritable and `execve`d a second program in place, which bound and listened on another path. The second
+program reported the first one's pid. A client connecting to either socket read that pid from `SO_PEERCRED`, and the
+second program accepted on both.
+
+*Fix C in detail.* The service starts no process: no non-test code uses `std::process::Command`, `tokio::process` or
+an exec call. So it can give up `execve` and `execveat` once it is running, and nothing it does today is lost.
+
+- **systemd cannot apply it.** systemd loads a unit's `SystemCallFilter=` in the process that is about to exec the
+  service binary, just before it does. systemd.exec(5) (systemd 255) says `execve` is implicitly allow-listed, and
+  "access to the execve() system call is required for the execution of the service binary — if it is blocked service
+  invocation will necessarily fail". Checked with systemd 255: under
+  `systemd-run --user -p SystemCallFilter=~execve /bin/true`, systemd's executor is killed by `SIGSYS` before
+  `/bin/true` runs. `~execveat` starts it, but denying `execveat` alone leaves `execve` open. Docker's seccomp profile
+  has the same limit, because the runtime loads it just before it execs the entrypoint.
+- **So the filter is in-process,** installed by `harden_process` (`hardening/linux.rs`).
+  - The workspace forbids `unsafe` code. rustix 1.1 exposes only seccomp's strict mode, not filter mode, and calling
+    `prctl` or `seccomp` through `libc` needs `unsafe`. A crate is therefore needed. `seccompiler` 0.5 (rust-vmm,
+    Apache-2.0 OR BSD-3-Clause) builds and installs the BPF program, and its only required dependency is `libc`, which
+    is already in the lock tree. The `libseccomp` crate would link the C library instead.
+  - Seccomp filter mode needs `no_new_privs` or `CAP_SYS_ADMIN`. Both profiles already set `no_new_privs`
+    (`NoNewPrivileges=yes`, `no-new-privileges:true`), and Development can set it without privilege.
+  - A filter applies to the thread that installs it and to threads started afterwards. `harden_process` runs on the
+    main thread before any other thread starts, before the logger and before `serve::run` builds the tokio runtime,
+    whose blocking pool starts threads on demand. Installed there, every later thread inherits it. Installed any later,
+    it needs `SECCOMP_FILTER_FLAG_TSYNC` to cover threads already running.
+  - The filter must also refuse other system call ABIs. On x86_64, the i386 `execve` has another number, and x32
+    numbers carry bit `0x40000000`. The unit does not set `SystemCallArchitectures=native`, and Docker's default
+    profile admits the x86 and x32 ABIs.
+  - Failing to install the filter would be reported in the hardening report, like the core-dump and memory-lock results.
+- **What it rules out.** Planned work needs no exec in the service, except one adapter that is still only a lead:
+  - The host-side signing helper (K-255) runs on the host. The service reaches it over a Unix socket.
+  - The host unlock runs `systemd-creds` on the host, not in the container.
+  - EP-32 (TPM recipient) and EP-33 (TPM approval signer) name `tss-esapi`/`tpm2-tss` (spec, platform table), a
+    library that talks to `/dev/tpmrm0` from inside the process.
+  - EP-32 and `implementation-specification.md` also name `age-plugin-tpm` as a lead. An `age` plugin is a separate
+    program that `age` runs as a child process, so fix C rules that adapter out. The same holds for
+    `age-plugin-yubikey` (`future-specifications.md` §2.1). Hardware adapters would run in the service, or as host-side
+    helpers reached over a socket, never as child processes of the service.
+- **What it leaves.** A fork of the service can still serve at the path. It is the service's own code with a copy of
+  the service's memory, so it gains nothing the service lacks. Denying process creation too (`fork`, `vfork`, `clone`
+  without `CLONE_THREAD`, and `clone3`, which must fail with `ENOSYS` so the C library falls back to `clone` for
+  threads) would make the service the only process with its uid, at the price of a larger filter.
+
 **Recommendations.**
 
-- Build fix B. It closes the gap in both profiles at one point in the CLI and needs no change to the service, the
-  package or the Compose file.
-  - The `ssh -L` forward stays exposed. The default remote form, `ssh -t … sudo iron-vault`, runs the CLI on the
-    server and is covered.
-  - Fix A could be added later for Protected, if the forward must be covered too.
-- **Owner decision.** Fix B meets §5's first sentence and its "or otherwise stand in for the service": the CLI no
-  longer treats a stand-in as the service. It does not stop another process from serving at the path, as the second
-  sentence literally requires. Only fix A does that, and only in Protected. Either reword §5 to the outcome, or treat
-  fix A as required for Protected.
+- Do not build fix A or fix B. Neither closes the gap: an in-place `execve` keeps the service's pid and its sockets.
+  They also conflict with each other.
+- Fix C is the review's recommendation, for the owner to decide. It is the only fix compared that closes the gap, and
+  it covers Protected, Container and the `ssh -L` forward. It needs no change to the CLI, the package or the Compose
+  file. Its costs are one dependency (`seccompiler`) and a design rule that the service never starts a program, which
+  rules out `age` plugins as hardware adapters.
+- The alternative is no product fix. The gap stays Low: a compromised service already receives every passphrase typed
+  while it runs. What the attacker saves is the work of hooking the running service.
+- **Owner decision.** §5 says no other process, "including one running as the service account", may serve at the admin
+  socket's path or stand in for the service. Can anything short of stopping the service from starting processes meet
+  that? The review finds nothing. Whatever owns the path or the socket, and whatever the CLI checks, a program the
+  service starts inherits the service's pid or its sockets. So either:
+  - build fix C, and §5 holds in outcome. A fork of the service can still serve at the path, so it holds literally
+    only if the filter also denies process creation; or
+  - build nothing, and reword §5 to what holds: no account but the service account can serve at the admin socket's
+    path, and anything running as the service account is treated as the service, because the service already
+    receives every owner input.
 - No action for request sockets.
 
 ### 4. Spec §3.2's container text described mechanism, not outcomes (Low)
@@ -250,7 +307,7 @@ refuse root as they would refuse any other account.
 - **Finding 3:** confirmed by the K-273 investigation, which also lowered it from Medium to Low.
   - The replacement works in Protected and Container, and was reproduced unprivileged in Development.
   - The threat tables in `linux-package.md` and `docker-compose.md` now list it.
-  - Ticket K-286 (EP-35) builds fix B: the CLI refuses a server that is not the service's own process.
-  - Open for the owner: whether §5's "may serve at the admin socket's path" needs rewording, or fix A in Protected.
+  - Ticket K-286 (EP-35) builds fix C, the service denying itself `execve` and `execveat`, if the owner chooses it.
+  - Open for the owner: fix C, or no product fix and §5 reworded to what holds. Fixes A and B are not to be built.
 - **Finding 4:** open. The remapping clause in §3.2 (line 118) still contradicts `docker-compose.md`. The service
   account parenthetical will be replaced under K-272.
