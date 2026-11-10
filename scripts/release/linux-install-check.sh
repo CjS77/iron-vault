@@ -2,7 +2,8 @@
 # Release check for a real install of the Linux package (design/linux-package.md; spec 3.1, 3.2, 3.4, 3.11, 3.15).
 #
 # !! RUN THIS ONLY ON A DISPOSABLE VM. !!  It runs as root, restarts the service, makes /etc/iron-vault group-writable
-# for a few seconds, and adds one listener socket unit. The service is left Locked, because it was restarted.
+# for a few seconds, stops the service together with its running listener sockets, and adds one listener socket unit.
+# The service is left Locked, because it was restarted.
 #
 # Set up:
 #   1. A fresh Ubuntu LTS (or Debian) VM with systemd, journald, and util-linux (runuser).
@@ -19,8 +20,10 @@
 # the script could not start (bad arguments, not root, no opt-in, a missing tool, the package not installed, the service not
 # active, runuser not working, the port busy or the drop-in present). That happens before the script changes anything.
 # The script never edits a vault file. Its only changes are the /etc/iron-vault mode, restored to the table's mode on every
-# exit path, and one listener drop-in, removed on every exit path. Both cleanups are idempotent, and each restarts the
-# service, so it ends Locked and no longer holds the listener socket's file descriptor.
+# exit path, and one listener drop-in, removed on every exit path. Adding the listener stops the service and the listener
+# sockets that were active, as the install guide does; cleanup starts those sockets again and restarts the service. Both
+# cleanups are idempotent, and each restarts the service, so it ends Locked and no longer holds the listener socket's
+# file descriptor.
 set -euo pipefail
 
 BINARY=/usr/bin/iron-vault
@@ -39,6 +42,7 @@ CONFIG_MODE=""
 CONFIG_CHANGED=0
 SAMPLER=""
 DROPIN_MADE=0
+STOPPED_SOCKETS=()
 PASSED=0
 FAILED=0
 
@@ -116,7 +120,10 @@ remove_listener() {
     rmdir "$DROPIN_DIR" || true
     systemctl daemon-reload || true
     DROPIN_MADE=0
-    # The service still holds the file descriptor systemd passed it; a restart drops it.
+    # Sockets that add_listener stopped with the service are started again; the service's restart below drops the
+    # file descriptor it still holds for the removed listener.
+    [ "${#STOPPED_SOCKETS[@]}" -eq 0 ] || systemctl start "${STOPPED_SOCKETS[@]}" || true
+    STOPPED_SOCKETS=()
     systemctl restart "$SERVICE" || true
 }
 
@@ -271,7 +278,15 @@ add_listener() {
     DROPIN_MADE=1
     printf '[Socket]\nListenStream=127.0.0.1:%s\n' "$PORT" >"$DROPIN_DIR/override.conf"
     systemctl daemon-reload
-    systemctl start "$LISTENER_UNIT"
+    # systemd refuses to start a listener socket while its service is active, and a running listener socket would
+    # restart the service, so stop the service and every running listener socket in one call. The sockets are listed
+    # first: stopped instances may be unloaded, which would leave nothing for a glob to match.
+    mapfile -t STOPPED_SOCKETS < <(
+        systemctl list-units --state=active --plain --no-legend 'iron-vault-listener@*.socket' | awk '{print $1}'
+    )
+    systemctl stop "${STOPPED_SOCKETS[@]}" "$SERVICE"
+    systemctl start "${STOPPED_SOCKETS[@]}" "$LISTENER_UNIT"
+    systemctl start "$SERVICE"
 }
 
 # Samples the port every 50 ms across a restart, because a gap shorter than the restart would not show in a before/after look.
