@@ -27,6 +27,7 @@ use zeroize::Zeroizing;
 
 const WRONG_PASSPHRASE: &str = "ADD-wrong-passphrase-6e03";
 const LABEL: &str = "bob's new laptop";
+const HOST_LABEL: &str = "host unlock, new TPM";
 
 /// A ready service with its admin socket served until the test ends, so one test can hold several connections.
 struct Served {
@@ -98,6 +99,16 @@ impl Served {
     /// `recipient add` for `key`, answered with `typed` at the prompt.
     async fn add(&self, key: &RecipientKey, typed: &str) -> common::approval_harness::Exchanged {
         let mut stream = self.connect(add_request(key, LABEL)).await;
+        converse(&mut stream, &[typed]).await
+    }
+
+    /// `recipient add --host-unlock` for `key`, answered with `typed` at the prompt.
+    async fn add_host_unlock(&self, key: &RecipientKey, typed: &str) -> common::approval_harness::Exchanged {
+        let request = AdminRequest::RecipientAddHostUnlock {
+            recipient: key.to_string(),
+            label: HOST_LABEL.to_owned(),
+        };
+        let mut stream = self.connect(request).await;
         converse(&mut stream, &[typed]).await
     }
 }
@@ -430,4 +441,55 @@ async fn an_authorization_for_another_key_or_operation_never_reaches_the_rewrap(
     assert_eq!(refused.len(), 2, "{refused:?}");
     assert!(refused.iter().all(|record| record["refusal"] == "binding_mismatch"));
     assert_eq!(served.entries().await.len(), 2);
+}
+
+#[tokio::test]
+async fn host_unlock_enrols_the_key_with_the_host_unlock_role_after_the_vault_passphrase() {
+    let served = Served::new().await;
+    let (key, identity) = new_recipient();
+
+    let exchanged = served.add_host_unlock(&key, VAULT_PASSPHRASE).await;
+
+    assert_eq!(exchanged.prompts, [vault_passphrase_prompt()]);
+    assert!(
+        matches!(&exchanged.response, AdminResponse::RecipientAdd { recipient, recipients: 3 } if *recipient == key),
+        "{:?}",
+        exchanged.response
+    );
+    let summary =
+        format!("role: host-unlock\n  label: {HOST_LABEL}\n  recipients after the change: 3 (operational 1, recovery 1, host-unlock 1)");
+    assert!(exchanged.notices.contains(&summary), "{}", exchanged.notices);
+    assert!(
+        exchanged.notices.contains(&format!("enrolled {key} as host-unlock;")),
+        "{}",
+        exchanged.notices
+    );
+    let new_envelope = fs::read(served.fixture.path("state/identity.age")).unwrap();
+    assert!(unwrap_identity(&new_envelope, &identity).is_ok());
+    let listed: Vec<_> = served
+        .entries()
+        .await
+        .into_iter()
+        .filter(|entry| entry.key() == &key)
+        .map(|entry| (entry.role(), entry.label().as_str().to_owned()))
+        .collect();
+    assert_eq!(listed, [(RecipientRole::HostUnlock, HOST_LABEL.to_owned())]);
+    let recorded = served.events_for("recipient.added", &key);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0]["recipient_role"], "host-unlock");
+}
+
+#[tokio::test]
+async fn host_unlock_with_a_wrong_vault_passphrase_adds_nothing() {
+    let served = Served::new().await;
+    let (key, _) = new_recipient();
+    let before = served.recipient_files();
+
+    let exchanged = served.add_host_unlock(&key, WRONG_PASSPHRASE).await;
+
+    let (code, _) = error_of(&exchanged.response);
+    assert_eq!(code.name(), "migration-denied");
+    served.assert_nothing_written(&before);
+    assert_eq!(served.entries().await.len(), 2);
+    assert!(served.events_for("recipient.added", &key).is_empty());
 }

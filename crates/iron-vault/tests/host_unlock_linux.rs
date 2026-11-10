@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use common::approval_harness::{Captured, Fixture, assert_audit_record, captured_logs, converse_revealing, get, identity, send};
+use common::approval_harness::{Captured, Exchanged, Fixture, assert_audit_record, captured_logs, converse_revealing, get, identity, send};
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
@@ -32,8 +32,8 @@ use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::ServiceContext;
 use iron_vault::service_state::ServiceState;
 use iron_vault_store::{
-    OperationalIdentity, OsFs, Passphrase, RecipientRole, RecipientSet, RecoveryKey, StateDirLock, seal_passphrase_envelope_for_tests,
-    wrap_identity, write_identity_envelope, write_passphrase_envelope,
+    OperationalIdentity, OsFs, Passphrase, RecipientKey, RecipientRole, RecipientSet, RecoveryKey, StateDirLock,
+    seal_passphrase_envelope_for_tests, wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
 use secrecy::{ExposeSecret, SecretString};
 use tokio::net::UnixStream;
@@ -63,9 +63,10 @@ impl HandoffDir {
         self.0.join("host-unlock")
     }
 
-    /// Writes `secret` as the handoff, `0400` as the host would leave it.
+    /// Writes `secret` as the handoff, `0400` as the host would leave it, in place of any handoff already there.
     fn write(&self, secret: &str) -> PathBuf {
         let path = self.path();
+        let _ = fs::remove_file(&path);
         fs::write(&path, format!("{secret}\n")).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
         path
@@ -262,9 +263,17 @@ async fn uninitialized(fixture: &Fixture, profile: DeploymentProfile, handoff: &
     Arc::new(service)
 }
 
-/// Sends `init` with the host unlock flag as `host_unlock` says and answers its prompts in turn. The admin principal is the
-/// test's own account whatever the service's profile, since the Container profile admits root only.
+/// Sends `init` with the host unlock flag as `host_unlock` says and answers its prompts in turn.
 async fn init(service: &Arc<ServiceContext>, host_unlock: bool) -> (AdminResponse, Vec<String>, usize) {
+    let (exchanged, revealed) = exchange(service, AdminRequest::Init { host_unlock }, &INIT_ANSWERS).await;
+    let prompts = exchanged.prompts.into_iter().map(|prompt| prompt.label).collect();
+    (exchanged.response, prompts, revealed)
+}
+
+/// Sends `request` and answers its prompts in turn with `answers`, returning the exchange and the number of secrets
+/// revealed. The admin principal is the test's own account whatever the service's profile, since the Container profile
+/// admits root only.
+async fn exchange(service: &Arc<ServiceContext>, request: AdminRequest, answers: &[&str]) -> (Exchanged, usize) {
     let paths = service.paths().clone();
     let runtime_dir = paths.runtime_dir.clone().unwrap();
     let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
@@ -273,12 +282,11 @@ async fn init(service: &Arc<ServiceContext>, host_unlock: bool) -> (AdminRespons
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let task = tokio::spawn(async move { server.serve(socket, async { drop(stopped.await) }).await });
     let mut stream = UnixStream::connect(runtime_dir.join(ADMIN_SOCKET_NAME)).await.unwrap();
-    send(&mut stream, &Frame::Request(AdminRequest::Init { host_unlock })).await;
-    let (exchanged, revealed) = converse_revealing(&mut stream, &INIT_ANSWERS).await;
+    send(&mut stream, &Frame::Request(request)).await;
+    let (exchanged, revealed) = converse_revealing(&mut stream, answers).await;
     let _ = stop.send(());
     let _ = task.await;
-    let prompts = exchanged.prompts.into_iter().map(|prompt| prompt.label).collect();
-    (exchanged.response, prompts, revealed.len())
+    (exchanged, revealed.len())
 }
 
 fn file_names(fixture: &Fixture, dir: &str) -> Vec<String> {
@@ -376,4 +384,83 @@ async fn init_host_unlock_then_a_restart_reaches_ready_with_no_unlock() {
     let restarted = container(&fixture);
     assert_eq!(restarted.unlock_at_start(&handoff).await, ServiceState::Ready);
     assert_not_logged(&logs, secret.expose_secret());
+}
+
+/// A Container service on the vault in `fixture`, reading the handoff at `handoff`, after its host unlock at startup.
+async fn restarted(fixture: &Fixture, handoff: &Path) -> (Arc<ServiceContext>, ServiceState) {
+    let service = container(fixture).with_handoff_path(handoff.to_path_buf());
+    let state = service.unlock_at_start(handoff).await;
+    (Arc::new(service), state)
+}
+
+async fn remove(service: &Arc<ServiceContext>, key: &RecipientKey, answers: &[&str]) -> AdminResponse {
+    let request = AdminRequest::RecipientRemove {
+        recipient: key.to_string(),
+    };
+    exchange(service, request, answers).await.0.response
+}
+
+/// The guide's steps after a lost TPM: the host provisions a new identity into the handoff, the owner unlocks and enrols
+/// it with `recipient add --host-unlock`, a restart reaches Ready with no `unlock`, and then the old `host-unlock`
+/// recipient can be removed while the one the handoff holds cannot.
+#[tokio::test]
+async fn a_new_host_unlock_key_reaches_ready_after_a_restart_and_the_old_one_can_then_be_removed() {
+    let (_turn, logs, _before) = turn().await;
+    let fixture = Fixture::new().await;
+    let (old_secret, old_key) = RecoveryKey::generate();
+    let dir = HandoffDir::new();
+    let handoff = dir.write(old_secret.expose_secret());
+    let service = uninitialized(&fixture, DeploymentProfile::Container, &handoff).await;
+    assert!(matches!(init(&service, true).await.0, AdminResponse::Init { .. }));
+    service.stop().await;
+    drop(service);
+
+    let (new_secret, new_key) = RecoveryKey::generate();
+    dir.write(new_secret.expose_secret());
+    let (service, state) = restarted(&fixture, &handoff).await;
+    assert_eq!(state, ServiceState::Locked);
+    assert_passphrase_unlock_works(&service).await;
+    let request = AdminRequest::RecipientAddHostUnlock {
+        recipient: new_key.to_string(),
+        label: "host unlock, new TPM".to_owned(),
+    };
+    let (added, _) = exchange(&service, request, &[PASSPHRASE]).await;
+    assert!(
+        matches!(added.response, AdminResponse::RecipientAdd { recipients: 4, .. }),
+        "{added:?}"
+    );
+    service.stop().await;
+    drop(service);
+
+    let (service, state) = restarted(&fixture, &handoff).await;
+    assert_eq!(state, ServiceState::Ready);
+    let (code, message) = match remove(&service, &new_key, &[]).await {
+        AdminResponse::Error { code, message } => (code, message),
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    assert_eq!(code, ErrorCode::RecipientSetInvalid);
+    assert!(message.contains("unlock handoff holds"), "{message}");
+    assert!(matches!(
+        remove(&service, &old_key, &[APPROVAL_PASSPHRASE]).await,
+        AdminResponse::RecipientRemove { recipients: 3 }
+    ));
+    let host_unlocks: Vec<RecipientKey> = service
+        .list_recipients()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.role() == RecipientRole::HostUnlock)
+        .map(|entry| entry.key().clone())
+        .collect();
+    assert_eq!(host_unlocks, std::slice::from_ref(&new_key));
+    assert!(matches!(
+        remove(&service, &new_key, &[]).await,
+        AdminResponse::Error {
+            code: ErrorCode::RecipientSetInvalid,
+            ..
+        }
+    ));
+    [&old_secret, &new_secret]
+        .into_iter()
+        .for_each(|secret| assert_not_logged(&logs, secret.expose_secret()));
 }
