@@ -300,8 +300,8 @@ fn enroll_refuses_a_duplicate_id_a_pinned_key_and_a_seventeenth_approver_and_tou
     let (fs, mut state) = setup.seeded();
     let (calls, before) = (fs.trace().len(), state.clone());
     let two = approver(2);
-    let same_id = PinnedApprover::new(two.id(), *approver(9).public_key(), two.label().clone(), two.enrolled_at());
-    let same_key = PinnedApprover::new(approver(9).id(), *two.public_key(), two.label().clone(), two.enrolled_at());
+    let same_id = PinnedApprover::software_for_tests(two.id(), *approver(9).public_key(), two.label().clone(), two.enrolled_at());
+    let same_key = PinnedApprover::software_for_tests(approver(9).id(), *two.public_key(), two.label().clone(), two.enrolled_at());
     let mut enroll = |approver| state.enroll_approver(&setup.lock, &fs, &setup.identity, approver);
     assert_eq!(enroll(same_id), Err(ApprovalStateError::DuplicateApproverId(two.id())));
     assert_eq!(enroll(same_key), Err(ApprovalStateError::DuplicateApproverKey));

@@ -38,7 +38,7 @@ pub use software_signer::{
 };
 pub use state::{
     ApprovalState, ApprovalStateError, ApproverId, ApproverLabel, ApproverPublicKey, InvalidKeyReason, MAX_APPROVAL_STATE_LEN,
-    MAX_APPROVERS, PinnedApprover, open_approval_state, seal_approval_state,
+    MAX_APPROVERS, PinnedApprover, SignerKind, open_approval_state, seal_approval_state,
 };
 pub use transaction::{
     AdmissionPaused, ApprovalError, ApprovalFailure, ApprovalProgress, ApprovalStep, ApprovalStorage, CommittedApproval, PendingConfig,

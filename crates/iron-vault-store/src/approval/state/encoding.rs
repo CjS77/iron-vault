@@ -1,6 +1,6 @@
 //! The approval state payload v1 encoding: the plaintext an approval state file seals (`design/storage-formats.md`).
 
-use super::{ApprovalState, ApprovalStateError, ApproverId, ApproverLabel, ApproverPublicKey, MAX_APPROVERS, PinnedApprover};
+use super::{ApprovalState, ApprovalStateError, ApproverId, ApproverLabel, ApproverPublicKey, MAX_APPROVERS, PinnedApprover, SignerKind};
 use crate::UtcSecond;
 use crate::approval::encoding::{header, put_field, read_header};
 use crate::approval::{ApprovalDecodeError, ApprovalVersion, ConfigDigest, SignatureAlgorithm};
@@ -39,10 +39,11 @@ pub(super) fn encode(state: &ApprovalState) -> Vec<u8> {
     out
 }
 
-/// One approver entry: ID, algorithm, public key field, label field, enrolment time.
+/// One approver entry: ID, algorithm, signer kind, public key field, label field, enrolment time.
 fn put_approver(out: &mut Vec<u8>, approver: &PinnedApprover) {
     out.extend_from_slice(approver.id().as_bytes());
     out.push(approver.algorithm().id());
+    out.push(approver.kind().code());
     put_field(out, approver.public_key().as_bytes());
     put_field(out, approver.label().as_str().as_bytes());
     out.extend_from_slice(&approver.enrolled_at().unix_seconds().to_be_bytes());
@@ -82,11 +83,12 @@ fn read_approvers(reader: &mut Reader<'_>) -> Result<Vec<PinnedApprover>, Approv
 fn read_approver(reader: &mut Reader<'_>) -> Result<PinnedApprover, ApprovalStateError> {
     let id = ApproverId::from_bytes(reader.array()?)?;
     let algorithm = SignatureAlgorithm::from_id(reader.u8()?)?;
+    let kind = SignerKind::from_code(reader.u8()?)?;
     let key = ApproverPublicKey::new(algorithm, reader.field()?.to_vec())?;
     let label = std::str::from_utf8(reader.field()?).map_err(|_| ApprovalStateError::ApproverLabelNotUtf8)?;
     let label = ApproverLabel::new(label).map_err(ApprovalStateError::InvalidApproverLabel)?;
     let enrolled_at = UtcSecond::from_unix_seconds(reader.u64()?).map_err(|_| ApprovalStateError::BadEnrolmentTime)?;
-    Ok(PinnedApprover::new(id, key, label, enrolled_at))
+    PinnedApprover::new(id, kind, key, label, enrolled_at)
 }
 
 /// A state or peer generation; the approval state always has a manifest to name, so neither is ever 0.
@@ -122,11 +124,11 @@ mod tests {
     use crate::RecipientLabelError;
     use crate::approval::InvalidKeyReason;
 
-    /// The documented example: vault 3f2b8c1e-…, state generation 6 with peer generation 3, one Ed25519 approver (the
-    /// RFC 8032 test 1 public key) labelled `approval passphrase`, versions 1 and 2 reserved, version 1 committed for an
+    /// The documented example: vault 3f2b8c1e-…, state generation 6 with peer generation 3, one Ed25519 software
+    /// signer approver (the RFC 8032 test 1 public key) labelled `approval passphrase`, versions 1 and 2 reserved, version 1 committed for an
     /// empty config.
     const EXAMPLE_HEX: &str = "4956414d 01 3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b 0000000000000006 0000000000000003 0000000000000001 \
-                               8d1c6f0e2b7a4c599e3d5a4b3c2d1e0f 01 0000000000000020 \
+                               8d1c6f0e2b7a4c599e3d5a4b3c2d1e0f 01 01 0000000000000020 \
                                d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a \
                                0000000000000013 617070726f76616c2070617373706872617365 000000006aeda299 0000000000000002 \
                                01 0000000000000001 0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8";
@@ -135,13 +137,14 @@ mod tests {
     const COUNT: Range<usize> = 37..45;
     const ID: Range<usize> = 45..61;
     const ALGORITHM: Range<usize> = 61..62;
-    const KEY_FIELD: Range<usize> = 62..102;
-    const LABEL_FIELD: Range<usize> = 102..129;
-    const ENROLLED_AT: Range<usize> = 129..137;
-    const ENTRY: Range<usize> = 45..137;
-    const HIGHEST_RESERVED: Range<usize> = 137..145;
-    const TAG: Range<usize> = 145..146;
-    const COMMITTED_VERSION: Range<usize> = 146..154;
+    const KIND: Range<usize> = 62..63;
+    const KEY_FIELD: Range<usize> = 63..103;
+    const LABEL_FIELD: Range<usize> = 103..130;
+    const ENROLLED_AT: Range<usize> = 130..138;
+    const ENTRY: Range<usize> = 45..138;
+    const HIGHEST_RESERVED: Range<usize> = 138..146;
+    const TAG: Range<usize> = 146..147;
+    const COMMITTED_VERSION: Range<usize> = 147..155;
 
     fn unhex(hex: &str) -> Vec<u8> {
         hex.split_whitespace()
@@ -162,7 +165,14 @@ mod tests {
         let key = unhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
         let key = ApproverPublicKey::new(SignatureAlgorithm::Ed25519, key).unwrap();
         let label = ApproverLabel::new("approval passphrase").unwrap();
-        PinnedApprover::new(id, key, label, UtcSecond::from_unix_seconds(0x6aed_a299).unwrap())
+        PinnedApprover::new(
+            id,
+            SignerKind::Software,
+            key,
+            label,
+            UtcSecond::from_unix_seconds(0x6aed_a299).unwrap(),
+        )
+        .unwrap()
     }
 
     fn vault_id() -> VaultId {
@@ -197,7 +207,7 @@ mod tests {
     #[test]
     fn documented_example_matches() {
         let bytes = unhex(EXAMPLE_HEX);
-        assert_eq!(bytes.len(), 186);
+        assert_eq!(bytes.len(), 187);
         assert_eq!(encode(&example()), bytes);
         assert_eq!(decode(&bytes), Ok(example()));
     }
@@ -224,7 +234,7 @@ mod tests {
             ..example()
         };
         let bytes = encode(&new);
-        assert_eq!(bytes.len(), 146);
+        assert_eq!(bytes.len(), 147);
         assert_eq!(
             bytes,
             [&unhex(EXAMPLE_HEX)[..HIGHEST_RESERVED.start], &[0; 8], &[NOT_COMMITTED]].concat()
@@ -283,6 +293,43 @@ mod tests {
                 len: 31
             })
         );
+    }
+
+    #[test]
+    fn reserved_and_unknown_signer_kinds_are_rejected() {
+        assert_eq!(SignerKind::from_code(SignerKind::Software.code()), Ok(SignerKind::Software));
+        assert_eq!(decode(&example_with(KIND, &[0])), Err(ApprovalStateError::UnknownSignerKind(0)));
+        [2, 3].into_iter().for_each(|code| {
+            assert_eq!(
+                decode(&example_with(KIND, &[code])),
+                Err(ApprovalStateError::ReservedSignerKind(code))
+            );
+        });
+        [4, 0xff].into_iter().for_each(|code| {
+            assert_eq!(
+                decode(&example_with(KIND, &[code])),
+                Err(ApprovalStateError::UnknownSignerKind(code))
+            );
+        });
+    }
+
+    /// The only other algorithm ID, reserved ECDSA P-256, is refused before the kind is read; `software` allows only
+    /// Ed25519, so no key this build can hold makes a kind that refuses it.
+    #[test]
+    fn a_software_signer_with_another_algorithm_is_rejected() {
+        let p256 = crate::approval::RESERVED_ECDSA_P256_ID;
+        assert_eq!(
+            decode(&example_with(ALGORITHM, &[p256])),
+            Err(ApprovalDecodeError::UnknownAlgorithm(p256).into())
+        );
+        assert!(SignerKind::Software.allows(SignatureAlgorithm::Ed25519));
+        assert_eq!(example_approver().kind(), SignerKind::Software);
+    }
+
+    #[test]
+    fn a_truncation_inside_the_signer_kind_is_rejected() {
+        let full = unhex(EXAMPLE_HEX);
+        assert_eq!(decode(&full[..KIND.start]), Err(ApprovalDecodeError::Truncated.into()));
     }
 
     fn ed25519(key: Vec<u8>) -> Result<ApproverPublicKey, ApprovalStateError> {
@@ -370,7 +417,7 @@ mod tests {
             decode(&example_with_entries(2, &[entry(&high), entry(&low)])),
             Err(ApprovalStateError::UnsortedApprovers)
         );
-        let same_id = PinnedApprover::new(low.id(), *high.public_key(), high.label().clone(), high.enrolled_at());
+        let same_id = PinnedApprover::software_for_tests(low.id(), *high.public_key(), high.label().clone(), high.enrolled_at());
         assert_eq!(
             decode(&example_with_entries(2, &[entry(&low), entry(&same_id)])),
             Err(ApprovalStateError::DuplicateApproverId(low.id()))
@@ -380,7 +427,7 @@ mod tests {
     #[test]
     fn a_public_key_pinned_twice_is_rejected() {
         let [low, high] = ordered_pair();
-        let same_key = PinnedApprover::new(high.id(), *low.public_key(), high.label().clone(), high.enrolled_at());
+        let same_key = PinnedApprover::software_for_tests(high.id(), *low.public_key(), high.label().clone(), high.enrolled_at());
         assert_eq!(
             decode(&example_with_entries(2, &[entry(&low), entry(&same_key)])),
             Err(ApprovalStateError::DuplicateApproverKey)

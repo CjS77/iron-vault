@@ -30,7 +30,7 @@ async fn read_prompt(cli: &mut UnixStream) -> Prompt {
 /// A pinned approver labelled `label`, with a fresh key.
 fn approver(label: &str) -> PinnedApprover {
     let (_, key) = SoftwareSigner::generate().unwrap();
-    PinnedApprover::new(ApproverId::generate(), key, ApproverLabel::new(label).unwrap(), UtcSecond::EPOCH)
+    PinnedApprover::software_for_tests(ApproverId::generate(), key, ApproverLabel::new(label).unwrap(), UtcSecond::EPOCH)
 }
 
 /// Runs the presence prompt for `asked` with `lock_requested`; the CLI end answers with `answer`, or never answers when it

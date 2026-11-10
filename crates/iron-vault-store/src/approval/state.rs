@@ -31,13 +31,13 @@ use crate::{
 };
 
 pub(crate) use approver::ApproverKey;
-pub use approver::{ApproverId, ApproverLabel, ApproverPublicKey, InvalidKeyReason, MAX_APPROVERS, PinnedApprover};
+pub use approver::{ApproverId, ApproverLabel, ApproverPublicKey, InvalidKeyReason, MAX_APPROVERS, PinnedApprover, SignerKind};
 pub use file::{open_approval_state, seal_approval_state};
 
 /// The largest approval state file accepted, in bytes on disk, checked before any other work; also the payload limit.
 ///
-/// A payload with [`MAX_APPROVERS`] approvers is at most 2,814 bytes. `age` adds a header of at most about 400 bytes plus
-/// a 16-byte nonce and a 16-byte tag, and the file adds 53 bytes of header and MAC: under 3,300 bytes in all. The limit
+/// A payload with [`MAX_APPROVERS`] approvers is at most 2,830 bytes. `age` adds a header of at most about 400 bytes plus
+/// a 16-byte nonce and a 16-byte tag, and the file adds 53 bytes of header and MAC: about 3,315 bytes in all. The limit
 /// keeps a planted file cheap to refuse.
 pub const MAX_APPROVAL_STATE_LEN: usize = 4096;
 
@@ -95,6 +95,20 @@ pub enum ApprovalStateError {
         algorithm: SignatureAlgorithm,
         /// What is wrong with the key.
         reason: InvalidKeyReason,
+    },
+    /// The approver's signer kind code is reserved for a later epic, which this build cannot ask.
+    #[error("signer kind {0} is reserved and not supported by this build")]
+    ReservedSignerKind(u8),
+    /// The approver's signer kind code is not one any build has defined.
+    #[error("unknown signer kind {0}")]
+    UnknownSignerKind(u8),
+    /// The approver's signer kind cannot sign with its key's algorithm.
+    #[error("{} signer kind does not allow {algorithm:?}", kind.name())]
+    KindAlgorithmMismatch {
+        /// The approver's signer kind.
+        kind: SignerKind,
+        /// The algorithm of the approver's key.
+        algorithm: SignatureAlgorithm,
     },
     /// The approver ID is not a random version 4 UUID, so the service did not generate it.
     #[error("approver ID is not a random version 4 UUID")]

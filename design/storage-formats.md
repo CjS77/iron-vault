@@ -555,6 +555,7 @@ not check signatures, verification does.
 49 56 41 53                                        magic "IVAS"
 01                                                 format version 1
 01                                                 algorithm Ed25519
+01                                                 signer kind software
 8d 1c 6f 0e 2b 7a 4c 59 9e 3d 5a 4b 3c 2d 1e 0f    approver ID 8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f
 00 00 00 00 00 00 00 59                            payload length 89
 …                                                  the 89 payload bytes from the example above
@@ -618,12 +619,12 @@ version is damaged shared state: approvals cannot be checked, so the service sto
 
 ### Size limit
 
-A payload with one Ed25519 approver labelled `approval passphrase` is 186 bytes. An approver entry is at most 170 bytes:
-a 16-byte ID, an algorithm byte, an 8-byte length and a public key of at most 65 bytes (an uncompressed P-256 point),
-an 8-byte length and a 64-byte label, and an 8-byte time. With `MAX_APPROVERS` (16) entries the payload is at most
-37 + 8 + 16 × 170 + 49 = 2,814 bytes. `age` adds a header of at most about 400 bytes, a 16-byte payload nonce and a
-16-byte tag, and the file adds 53 bytes of header and MAC: under 3,300 bytes, inside `MAX_APPROVAL_STATE_LEN` (4096
-bytes). The same limit bounds the decrypted payload. Enrolling a seventeenth approver is refused, so the service never
+A payload with one Ed25519 approver labelled `approval passphrase` is 187 bytes. An approver entry is at most 171 bytes:
+a 16-byte ID, an algorithm byte, a signer kind byte, an 8-byte length and a public key of at most 65 bytes (an
+uncompressed P-256 point), an 8-byte length and a 64-byte label, and an 8-byte time. With `MAX_APPROVERS` (16) entries
+the payload is at most 37 + 8 + 16 × 171 + 49 = 2,830 bytes. `age` adds a header of at most about 400 bytes, a 16-byte
+payload nonce and a 16-byte tag, and the file adds 53 bytes of header and MAC: about 3,315 bytes, inside
+`MAX_APPROVAL_STATE_LEN` (4096 bytes). The same limit bounds the decrypted payload. Enrolling a seventeenth approver is refused, so the service never
 writes a state it cannot read back.
 
 ### Writes
@@ -683,6 +684,7 @@ Each approver entry, a **pinned approver**:
 |------|------------------------------------------------------------------------------------------------------------------------|
 | 16   | Approver ID: the 16 bytes of a version 4 UUID, generated when the approver is enrolled                                 |
 | 1    | Algorithm: a signature algorithm ID, as in approval envelope v1                                                        |
+| 1    | Signer kind: `01` `software`; `02` `tpm`, `03` `hardware` reserved ([signer kinds](approval-signers.md#signer-kinds))  |
 | var  | Public key: field; 32 bytes for Ed25519                                                                                |
 | var  | Label: field holding the owner's name for the signer, under the [recipient label](recipients.md#recipient-labels) rule |
 | 8    | Enrolled at: `u64` Unix seconds, a [UTC second](glossary.md)                                                           |
@@ -693,10 +695,11 @@ what a prompt shows the owner, such as `Dave YubiKey 3`; it need not be unique, 
 
 ### Example
 
-Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b` with one Ed25519 approver (the RFC 8032 test 1 public key), enrolled by
-`init` with the label `approval passphrase`, versions 1 and 2 reserved, and version 1 committed for an empty config. Version 2 was reserved for a signing attempt that never
-committed, and stays consumed. After the manifest example above (state generation 3), the state was written three
-times, reserving 1, committing 1 and reserving 2, so it is at state generation 6 with peer generation 3.
+Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b` with one Ed25519 software signer approver (the RFC 8032 test 1 public key),
+enrolled by `init` with the label `approval passphrase`, versions 1 and 2 reserved, and version 1 committed for an empty
+config. Version 2 was reserved for a signing attempt that never committed, and stays consumed. After the manifest
+example above (state generation 3), the state was written three times, reserving 1, committing 1 and reserving 2, so it
+is at state generation 6 with peer generation 3.
 
 ```text
 49 56 41 4d                                        magic "IVAM"
@@ -707,6 +710,7 @@ times, reserving 1, committing 1 and reserving 2, so it is at state generation 6
 00 00 00 00 00 00 00 01                            approver count 1
 8d 1c 6f 0e 2b 7a 4c 59 9e 3d 5a 4b 3c 2d 1e 0f    approver ID 8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f
 01                                                 algorithm Ed25519
+01                                                 signer kind software
 00 00 00 00 00 00 00 20                            public key length 32
 d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a    public key
 0e e1 72 f3 da a6 23 25 af 02 1a 68 f7 07 51 1a
@@ -721,20 +725,22 @@ d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a    public key
 d1 e5 df 47 77 8f 77 87 fa ab 45 cd f1 2f e3 a8
 ```
 
-The payload is 186 bytes. A new vault's payload has the same layout up to the last approver, then eight zero bytes and
-the tag `00`: 146 bytes with this approver.
+The payload is 187 bytes. A new vault's payload has the same layout up to the last approver, then eight zero bytes and
+the tag `00`: 147 bytes with this approver.
 
-A state with one approver was never released, so the approver list joins v1 rather than starting v2.
+A state with one approver was never released, so the approver list and the signer kind join v1 rather than starting
+v2.
 
 ### One encoding per state
 
 Every field has one form, so the same state always encodes to the same bytes. Decoding rejects a wrong magic, an unknown
 format version, a vault ID that is not a version 4 UUID, a state or peer generation of 0, a peer generation not below
 the state generation, an approver count of 0 or above 16, approver IDs that are not version 4 UUIDs or not strictly
-ascending, an unknown or reserved algorithm ID, a public key of the wrong length for its algorithm, a public key that
-is not a valid, non-weak key for its algorithm, a public key pinned twice, a label that breaks its rule, an enrolment
-time outside the UTC second range, a committed tag other than `00` or `01`, committed version 0, a committed version
-above the highest reserved version, truncation and trailing bytes.
+ascending, an unknown or reserved algorithm ID, a reserved signer kind (`02`, `03`) or an unknown one (`00`, above
+`03`), a signer kind whose algorithms exclude the entry's algorithm, a public key of the wrong length for its algorithm,
+a public key that is not a valid, non-weak key for its algorithm, a public key pinned twice, a label that breaks its
+rule, an enrolment time outside the UTC second range, a committed tag other than `00` or `01`, committed version 0, a
+committed version above the highest reserved version, truncation and trailing bytes.
 
 ## Recipient inventory file v1
 

@@ -10,7 +10,7 @@ use super::ApprovalStateError;
 use crate::approval::SignatureAlgorithm;
 use crate::{RecipientLabel, RecipientLabelError, UtcSecond};
 
-/// The most approvers one approval state pins. Each entry is at most 170 bytes, so 16 keep the file well inside
+/// The most approvers one approval state pins. Each entry is at most 171 bytes, so 16 keep the file well inside
 /// [`super::MAX_APPROVAL_STATE_LEN`]; enrolling a seventeenth is refused, so the service never writes a state it cannot
 /// read back.
 pub const MAX_APPROVERS: usize = 16;
@@ -45,6 +45,52 @@ impl ApproverId {
 impl fmt::Display for ApproverId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0.hyphenated(), f)
+    }
+}
+
+/// Which kind of approval signer a pinned approver is: what signs for it, and so how the service asks for it. The
+/// signature algorithm cannot say this, because a TPM and a hardware key may both sign with P-256.
+///
+/// Codes 2 (`tpm`) and 3 (`hardware`) are reserved for later epics and are refused on reading, so those epics need no
+/// new approval state format version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SignerKind {
+    /// The software signer: an Ed25519 key in its own approver key envelope, opened by its approval passphrase.
+    Software,
+}
+
+/// The highest signer kind code reserved for a later epic; codes above it are unknown.
+const LAST_RESERVED_SIGNER_KIND: u8 = 3;
+
+impl SignerKind {
+    /// The kind's code in the approval state payload.
+    pub fn code(self) -> u8 {
+        match self {
+            Self::Software => 1,
+        }
+    }
+
+    /// The kind with `code`, refusing a reserved or unknown code.
+    pub fn from_code(code: u8) -> Result<Self, ApprovalStateError> {
+        match code {
+            1 => Ok(Self::Software),
+            2..=LAST_RESERVED_SIGNER_KIND => Err(ApprovalStateError::ReservedSignerKind(code)),
+            _ => Err(ApprovalStateError::UnknownSignerKind(code)),
+        }
+    }
+
+    /// The name `approver list` prints and the audit log records.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Software => "software",
+        }
+    }
+
+    /// Whether a signer of this kind can sign with `algorithm`.
+    pub fn allows(self, algorithm: SignatureAlgorithm) -> bool {
+        match self {
+            Self::Software => algorithm == SignatureAlgorithm::Ed25519,
+        }
     }
 }
 
@@ -143,33 +189,51 @@ fn invalid(algorithm: SignatureAlgorithm, reason: InvalidKeyReason) -> ApprovalS
     ApprovalStateError::InvalidApproverKey { algorithm, reason }
 }
 
-/// One enrolled approval signer as the approval state records it: its approver ID, public key, label and enrolment time.
+/// One enrolled approval signer as the approval state records it: its approver ID, signer kind, public key, label and
+/// enrolment time. Its kind always allows its key's algorithm.
 ///
 /// A config approval verifies only against a pinned approver's key, never one read from the config or the signature
 /// file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinnedApprover {
     id: ApproverId,
+    kind: SignerKind,
     key: ApproverPublicKey,
     label: ApproverLabel,
     enrolled_at: UtcSecond,
 }
 
 impl PinnedApprover {
-    /// The approver `id` with `key`, labelled `label`, enrolled at `enrolled_at`. The caller reads the clock; the store
-    /// never does.
-    pub fn new(id: ApproverId, key: ApproverPublicKey, label: ApproverLabel, enrolled_at: UtcSecond) -> Self {
-        Self {
-            id,
-            key,
-            label,
-            enrolled_at,
+    /// The approver `id`, a `kind` signer with `key`, labelled `label`, enrolled at `enrolled_at`, refusing a kind that
+    /// does not allow the key's algorithm. The caller reads the clock; the store never does.
+    pub fn new(
+        id: ApproverId,
+        kind: SignerKind,
+        key: ApproverPublicKey,
+        label: ApproverLabel,
+        enrolled_at: UtcSecond,
+    ) -> Result<Self, ApprovalStateError> {
+        let algorithm = key.algorithm();
+        match kind.allows(algorithm) {
+            true => Ok(Self {
+                id,
+                kind,
+                key,
+                label,
+                enrolled_at,
+            }),
+            false => Err(ApprovalStateError::KindAlgorithmMismatch { kind, algorithm }),
         }
     }
 
     /// The approver's ID.
     pub fn id(&self) -> ApproverId {
         self.id
+    }
+
+    /// What kind of signer this approver is, which says how the service asks for it.
+    pub fn kind(&self) -> SignerKind {
+        self.kind
     }
 
     /// The public key approvals by this approver must verify against.
@@ -206,16 +270,22 @@ impl ApproverId {
 
 #[cfg(any(test, feature = "test-support"))]
 impl PinnedApprover {
-    /// `key` pinned as [`ApproverId::for_tests`], with the label `init` gives the software signer, and enrolled at the
+    /// `key` pinned as [`ApproverId::for_tests`], a software signer with the label `init` gives it, and enrolled at the
     /// epoch: for tests that need an approval state and do not care which approver it names. Only `test-support`
     /// exposes it.
     pub fn for_tests(key: ApproverPublicKey) -> Self {
-        Self::new(
+        Self::software_for_tests(
             ApproverId::for_tests(&key),
             key,
             test_label("approval passphrase"),
             UtcSecond::EPOCH,
         )
+    }
+
+    /// A software signer approver from its parts, for tests whose keys are all Ed25519. Only `test-support` exposes it.
+    pub fn software_for_tests(id: ApproverId, key: ApproverPublicKey, label: ApproverLabel, enrolled_at: UtcSecond) -> Self {
+        Self::new(id, SignerKind::Software, key, label, enrolled_at)
+            .unwrap_or_else(|error| unreachable!("a software signer refused its key: {error}"))
     }
 }
 
@@ -227,7 +297,7 @@ impl PinnedApprover {
         let id = ApproverId(uuid::Builder::from_random_bytes([seed; 16]).into_uuid());
         let key = ApproverPublicKey::from_signing_key(&SigningKey::from_bytes(&[seed; 32]));
         let at = UtcSecond::from_unix_seconds(u64::from(seed)).unwrap();
-        Self::new(id, key, test_label(&format!("approver {seed}")), at)
+        Self::software_for_tests(id, key, test_label(&format!("approver {seed}")), at)
     }
 }
 

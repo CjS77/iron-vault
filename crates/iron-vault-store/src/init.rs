@@ -20,9 +20,9 @@ use crate::{
     AdmissionPaused, ApprovalError, ApprovalPassphrase, ApprovalState, ApprovalStorage, ApprovalVersion, ApproverId, ApproverLabel,
     ApproverPublicKey, BeginError, ConfigDigest, ConfigDirLock, EnvelopeError, ErrorKindLabel, InitStateError, InitializationState,
     PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig, PinnedApprover, ReadError, RecipientIdentity, RecipientSet, RecipientSetError,
-    SignError, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs, UtcSecond, Vault, VaultError, VaultId, VaultIdentity, WriteError,
-    approval::seal_signer_key_at, begin_initialization, finish_initialization, open_signer_key, read_identity_envelope, read_signer_key,
-    unwrap_identity, wrap_identity, write_identity_envelope, write_passphrase_envelope, write_signer_key,
+    SignError, SignerKind, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs, UtcSecond, Vault, VaultError, VaultId, VaultIdentity,
+    WriteError, approval::seal_signer_key_at, begin_initialization, finish_initialization, open_signer_key, read_identity_envelope,
+    read_signer_key, unwrap_identity, wrap_identity, write_identity_envelope, write_passphrase_envelope, write_signer_key,
 };
 use crate::{
     RecipientEntry, RecipientInventory, RecipientInventoryError, RecipientInventoryReadError, RecipientInventoryWriteError, RecipientLabel,
@@ -423,11 +423,12 @@ fn seal_approver(
 /// The label `init` pins the software signer under: the owner knows it as the approval passphrase.
 pub const SOFTWARE_APPROVER_LABEL: &str = "approval passphrase";
 
-/// The software signer's public key as step 6 pins it: the approver ID generated with the keys, the label the owner
-/// knows it by, and the initialization time.
+/// The software signer's public key as step 6 pins it: the approver ID generated with the keys, the `software` signer
+/// kind, the label the owner knows it by, and the initialization time.
 fn pin_software_signer(id: ApproverId, key: ApproverPublicKey, enrolled_at: UtcSecond) -> Result<PinnedApprover, InitFailure> {
     let label = ApproverLabel::new(SOFTWARE_APPROVER_LABEL)?;
-    Ok(PinnedApprover::new(id, key, label, enrolled_at))
+    // Pinning is the first step of creating the approval state, so a refused pin is that creation's failure.
+    PinnedApprover::new(id, SignerKind::Software, key, label, enrolled_at).map_err(|error| VaultError::ApprovalState(error).into())
 }
 
 /// Step 7: proves `approver.age` as written opens with the approval passphrase, which is dropped on return.

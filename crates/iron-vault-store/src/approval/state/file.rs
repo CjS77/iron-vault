@@ -230,8 +230,8 @@ mod tests {
     fn a_weak_approver_key_behind_a_valid_mac_is_rejected() {
         let identity = VaultIdentity::generate();
         let mut payload = encoding::encode(&state(VaultId::new_random()));
-        // The public key is the 32 bytes at 70..102; the identity point is small-order.
-        payload[70..102].copy_from_slice(&[[1u8].as_slice(), &[0; 31]].concat());
+        // The public key is the 32 bytes at 71..103; the identity point is small-order.
+        payload[71..103].copy_from_slice(&[[1u8].as_slice(), &[0; 31]].concat());
         let id = VaultId::from_bytes(payload[5..21].try_into().unwrap()).unwrap();
         let file = forged(&identity, id, &payload, &identity.derive_key(APPROVAL_KEY_PERSONA));
         let weak = ApprovalStateError::InvalidApproverKey {
