@@ -400,7 +400,8 @@ not the service's to read. Every other helper failure is `approval-unavailable` 
 settings too weak`, `TPM error 0x…`) and never owner input.
 
 **Audit.** The events that end a prompt already name the approver. A `tpm` approver's denial or unavailability adds a
-`tpm_status` field with the helper's status name, for an answer the helper was asked about, so `tpm-locked-out` and `not-this-tpm` can be told apart in the log.
+`tpm_status` field with the helper's status name, for an answer the helper was asked about, so `tpm-locked-out` and
+`not-this-tpm` can be told apart in the log.
 The events are `config.approval-refused` and `vault.presence-refused`; their `refusal` is `wrong_pin` for a wrong PIN and
 `tpm_refused` for a lockout or any other helper status, and `tpm_status` is one of `wrong_pin`, `locked_out`,
 `not_this_tpm`, `key_mismatch`, `weak_da_settings`, `refused_message`, `tpm_error`, `malformed`, `unreachable` (the socket,

@@ -41,7 +41,8 @@ pub(super) enum PassphraseAnswer {
 /// Why owner presence was not shown. Nothing was written either way.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum NoPresence {
-    /// The passphrase was refused (`approval-denied` for [`PresenceRefusal::Denied`]), or the key check could not run.
+    /// The passphrase was refused (`approval-denied` for [`PresenceRefusal::Denied`] and [`PresenceRefusal::Unusable`]), or the
+    /// key check could not run.
     Refused(PresenceRefusal),
     /// A `lock` came for the service-wide lock while the owner was at the prompt; the key was never checked.
     CancelledByLock,

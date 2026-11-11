@@ -189,8 +189,8 @@ switchable prompt: the vault passphrase first, then each `tpm` approver ([tpm-ap
 
 The TPM method's refusals are `wrong_pin` (`migration-denied`) when the TPM refuses the PIN, `tpm_locked_out`
 (`tpm-locked-out`, 51) when the TPM is in lockout or the helper's reserve withheld the try, and `unavailable`
-(`migration-unavailable`) for any other helper status, with a message naming the status. An answer that is empty or not
-UTF-8 is a wrong PIN and never reaches the TPM. The PIN is never cached: the service derives the authorization value,
+(`migration-unavailable`) for any other helper status, with a message naming the status. An answer that is empty, not
+UTF-8 or shorter than an enrolled PIN is a wrong PIN and never reaches the TPM. The PIN is never cached: the service derives the authorization value,
 uses it for this one proof and drops it.
 
 A hardware device's own lockout applies as the device enforces it, such as the TPM's dictionary-attack protection
@@ -333,7 +333,7 @@ The messages are fixed phrases, apart from the seconds to wait, and none holds o
 | `expired` | the challenge was taken, or the authorization consumed, after its expiry | `migration-denied` |
 | `not_pending` | the slot does not hold the challenge: it was already taken or retired | `migration-denied` |
 | `binding_mismatch` | the consuming operation's vault ID, operation or destination is not the authorization's | `migration-denied` |
-| `wrong_pin` | the TPM refused the PIN, or the input is empty or not UTF-8 | `migration-denied` |
+| `wrong_pin` | the TPM refused the PIN, or the input is empty, not UTF-8 or shorter than an enrolled PIN | `migration-denied` |
 | `tpm_locked_out` | the TPM is in lockout, or the helper's lockout reserve withheld the try | `tpm-locked-out` |
 | `unavailable` | an envelope could not be read or opened for a reason other than the passphrase; the TPM signing helper answered another status, or its signature does not verify against the pinned key; or no method could be asked | `migration-unavailable` |
 | `rate_limited` | the attempt limit is in a cooldown; no prompt was sent | `migration-rate-limited` |
