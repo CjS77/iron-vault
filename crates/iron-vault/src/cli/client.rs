@@ -177,14 +177,24 @@ pub(super) fn run_on(
     console: &mut impl OwnerConsole,
     answer: impl FnOnce(AdminResponse) -> Exit,
 ) -> Exit {
-    let path = match socket.map_or_else(installation_socket, |path| Ok(path.to_path_buf())) {
-        Ok(path) => path,
-        Err(e) => return fail(Exit::Unreachable, &format!("{e:#}")),
-    };
-    match exchange(&path, request, console) {
-        Ok(AdminResponse::Error { code, message }) => fail(Exit::CommandError, &service_error(code, &message)),
-        Ok(response) => answer(response),
-        Err(e) => fail(Exit::Unreachable, &e.to_string()),
+    answered(socket, request, console, &mut Bundle::None).map_or_else(|exit| exit, answer)
+}
+
+/// One exchange that may move a migration bundle through `bundle`, with the prompts answered from `console`. A success
+/// response is returned; an error response and a failed exchange are reported here, and the exit is the error.
+pub(super) fn answered(
+    socket: Option<&Path>,
+    request: AdminRequest,
+    console: &mut impl OwnerConsole,
+    bundle: &mut Bundle<'_>,
+) -> Result<AdminResponse, Exit> {
+    let path = socket
+        .map_or_else(installation_socket, |path| Ok(path.to_path_buf()))
+        .map_err(|e| fail(Exit::Unreachable, &format!("{e:#}")))?;
+    match exchange_bundle(&path, request, console, bundle) {
+        Ok(AdminResponse::Error { code, message }) => Err(fail(Exit::CommandError, &service_error(code, &message))),
+        Ok(response) => Ok(response),
+        Err(e) => Err(fail(Exit::Unreachable, &e.to_string())),
     }
 }
 
@@ -410,13 +420,8 @@ fn invoking_user_name() -> String {
 }
 
 /// Sends `request` to the admin socket at `path`, answers the service's prompts from `console`, and returns the
-/// service's admin response.
-pub fn exchange(path: &Path, request: AdminRequest, console: &mut impl OwnerConsole) -> Result<AdminResponse, ClientError> {
-    exchange_bundle(path, request, console, &mut Bundle::None)
-}
-
-/// [`exchange`] for a command that moves a migration bundle: `bundle` takes the bundle data frames the service sends, or
-/// supplies the ones sent after the request.
+/// service's admin response. For a command that moves a migration bundle, `bundle` takes the bundle data frames the
+/// service sends, or supplies the ones sent after the request; [`Bundle::None`] for any other.
 pub fn exchange_bundle(
     path: &Path,
     request: AdminRequest,
@@ -431,7 +436,7 @@ pub fn exchange_bundle(
 
 /// The migration bundle side of one exchange (`design/migration-bundle.md`, "Transfer"). The bundle is ciphertext and
 /// public metadata, so the CLI holds it in no clearing buffer.
-#[cfg_attr(not(test), expect(dead_code, reason = "`export` and `import` build it once they are wired"))]
+#[cfg_attr(not(test), expect(dead_code, reason = "`import` sends a bundle once it is wired"))]
 pub enum Bundle<'a> {
     /// The exchange moves no bundle, so a bundle data frame is out of turn.
     None,
@@ -455,7 +460,6 @@ pub struct Received {
     pub ended: bool,
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "`export` and `import` call these once they are wired"))]
 impl<'a> Bundle<'a> {
     /// A bundle that is received into `sink`.
     pub fn receiving(sink: &'a mut dyn Write) -> Self {

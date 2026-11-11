@@ -80,7 +80,8 @@ Exit codes:
   2  usage error
   3  no answer from the service: it is not running, this account may not connect, the exchange failed, a prompt
      got no value, or a secret value the service sent could not be shown on a terminal; `reset` also exits 3,
-     before it connects, when stdin is not a terminal or /dev/tty cannot be opened
+     before it connects, when stdin is not a terminal or /dev/tty cannot be opened; `export` also exits 3 when
+     the bundle it received is incomplete or cannot be kept
   4  `status`: the service answered, and it is not Ready; `list`: no vault is open, so the credentials are unknown
 ```
 
@@ -153,6 +154,17 @@ iron-vault reset [OPTIONS]
 ```
 
 Discard the vault and the config, so `init` can make a new vault: the way out when no passphrase, recovery key or approver works. It asks for no owner factor, only a confirmation typed at a terminal, which is the vault ID, or the state directory's path when no vault is Initialized. It refuses a pipe, a file or a missing `/dev/tty` with exit code 3 before it connects. The service locks first, then removes the store's files and the config, keeps any foreign file, and ends Locked. Nothing can be recovered afterwards: keep your own copy of the config.
+
+## `iron-vault export`
+
+```text
+iron-vault export [OPTIONS] <BUNDLE>
+```
+
+Write the vault as a migration bundle to BUNDLE, for `import` on another machine. The service checks the vault, prompts for the vault passphrase to authorize the export, then for a new export passphrase, typed twice, which seals the bundle; `import` asks for it. The bundle arrives in `.<BUNDLE name>.partial` beside BUNDLE, created with mode 0600 before anything is sent, and takes BUNDLE's name only once it is whole. An existing BUNDLE or a leftover partial file is refused before anything is sent. The source vault keeps serving afterwards.
+
+- `<BUNDLE>`: Where to write the bundle; it must not exist.
+  - required
 
 ## `iron-vault caller-token`
 

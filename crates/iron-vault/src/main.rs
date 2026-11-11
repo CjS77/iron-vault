@@ -42,6 +42,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Unlock => Ok(run_client(|| cli::unlock(cli.admin_socket.as_deref()))),
         Command::Lock => Ok(run_client(|| cli::lock(cli.admin_socket.as_deref()))),
         Command::Reset => Ok(run_client(|| cli::reset(cli.admin_socket.as_deref()))),
+        Command::Export { bundle } => Ok(run_client(|| cli::export(cli.admin_socket.as_deref(), &bundle))),
         Command::Init { host_unlock } => Ok(run_client(|| cli::init(cli.admin_socket.as_deref(), host_unlock))),
         Command::CallerToken => Ok(run_client(|| cli::caller_token(cli.admin_socket.as_deref()))),
         Command::Add { name, kind, origins } => Ok(run_client(|| cli::add(cli.admin_socket.as_deref(), name, kind.into(), &origins))),

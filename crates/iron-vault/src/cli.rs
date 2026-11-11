@@ -21,6 +21,8 @@ pub use completions::completions;
 #[cfg(target_os = "linux")]
 mod console;
 #[cfg(target_os = "linux")]
+mod export;
+#[cfg(target_os = "linux")]
 mod init;
 #[cfg(target_os = "linux")]
 mod list;
@@ -63,7 +65,8 @@ Exit codes:
   2  usage error
   3  no answer from the service: it is not running, this account may not connect, the exchange failed, a prompt
      got no value, or a secret value the service sent could not be shown on a terminal; `reset` also exits 3,
-     before it connects, when stdin is not a terminal or /dev/tty cannot be opened
+     before it connects, when stdin is not a terminal or /dev/tty cannot be opened; `export` also exits 3 when
+     the bundle it received is incomplete or cannot be kept
   4  `status`: the service answered, and it is not Ready; `list`: no vault is open, so the credentials are unknown";
 
 /// The exit statuses listed in [`EXIT_CODES`]. Usage errors exit through clap, with its status 2.
@@ -147,6 +150,15 @@ pub enum Command {
     /// code 3 before it connects. The service locks first, then removes the store's files and the config, keeps any
     /// foreign file, and ends Locked. Nothing can be recovered afterwards: keep your own copy of the config.
     Reset,
+    /// Write the vault as a migration bundle to BUNDLE, for `import` on another machine. The service checks the vault,
+    /// prompts for the vault passphrase to authorize the export, then for a new export passphrase, typed twice, which
+    /// seals the bundle; `import` asks for it. The bundle arrives in `.<BUNDLE name>.partial` beside BUNDLE, created
+    /// with mode 0600 before anything is sent, and takes BUNDLE's name only once it is whole. An existing BUNDLE or a
+    /// leftover partial file is refused before anything is sent. The source vault keeps serving afterwards.
+    Export {
+        /// Where to write the bundle; it must not exist.
+        bundle: PathBuf,
+    },
     /// Issue a fresh caller token: it goes to stdout once, and its token_hash line to stderr. The service keeps no copy;
     /// the token works once a config naming the hash is approved with `config approve`.
     CallerToken,
@@ -447,6 +459,18 @@ pub fn reset(socket: Option<&Path>) -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn reset(_socket: Option<&Path>) -> ExitCode {
+    unsupported_platform()
+}
+
+/// `iron-vault export`: sends `export`, answers the service's prompts, and keeps the bundle it sends at `bundle`.
+#[cfg(target_os = "linux")]
+pub fn export(socket: Option<&Path>, bundle: &Path) -> ExitCode {
+    export::run_export(socket, bundle).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn export(_socket: Option<&Path>, _bundle: &Path) -> ExitCode {
     unsupported_platform()
 }
 

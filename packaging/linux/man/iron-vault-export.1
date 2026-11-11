@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-export 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-export \- Write the vault as a migration bundle to BUNDLE, for `import` on another machine. The service checks the vault, prompts for the vault passphrase to authorize the export, then for a new export passphrase, typed twice, which seals the bundle; `import` asks for it. The bundle arrives in `.<BUNDLE name>.partial` beside BUNDLE, created with mode 0600 before anything is sent, and takes BUNDLE\*(Aqs name only once it is whole. An existing BUNDLE or a leftover partial file is refused before anything is sent. The source vault keeps serving afterwards
+.SH SYNOPSIS
+\fBiron\-vault export\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIBUNDLE\fR> 
+.SH DESCRIPTION
+Write the vault as a migration bundle to BUNDLE, for `import` on another machine. The service checks the vault, prompts for the vault passphrase to authorize the export, then for a new export passphrase, typed twice, which seals the bundle; `import` asks for it. The bundle arrives in `.<BUNDLE name>.partial` beside BUNDLE, created with mode 0600 before anything is sent, and takes BUNDLE\*(Aqs name only once it is whole. An existing BUNDLE or a leftover partial file is refused before anything is sent. The source vault keeps serving afterwards
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIBUNDLE\fR>
+Where to write the bundle; it must not exist
