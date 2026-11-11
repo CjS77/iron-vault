@@ -126,6 +126,22 @@ pub(crate) mod tests {
     pub(crate) const P256_SIGNATURE_HEX: &str = "f362509db1d282d1d4bc973055ac5b6b2285126a0ea8bbcf7b531e613fd9a38a \
                                                  531bfbd0db1e248f7ffc34a45b2435b2cc42533bc5d887ef2f8d15b0c7519b85";
 
+    /// The RFC 6979 A.2.5 P-256 public key, uncompressed: `04 ‖ x ‖ y`. The documented TPM approver's pinned key.
+    pub(crate) const P256_KEY_HEX: &str = "0460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6\
+                                           7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299";
+
+    /// The `n`th `text` block of the storage formats' section `heading`, as hex: comments start past column 48.
+    pub(crate) fn documented_block(heading: &str, n: usize) -> String {
+        let doc = include_str!("../../../../design/storage-formats.md");
+        let section = doc.split(heading).nth(1).unwrap();
+        let block = section.split("```text\n").nth(n).unwrap().split("```").next().unwrap();
+        block
+            .lines()
+            .flat_map(|line| line.chars().take(48))
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+
     /// The bytes of the `n`th `text` block of the storage formats' "Approval envelope v1" section, with the payload
     /// example in place of its `…` line: comments start past column 48.
     pub(crate) fn documented_envelope(n: usize) -> Vec<u8> {

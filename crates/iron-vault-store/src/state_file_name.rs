@@ -92,7 +92,7 @@ impl StateFileName {
 
     /// The TPM key blob's file for the TPM approver `id`: `approver-<id>.tpm`, the ID in lowercase hyphenated form, beside
     /// the software approvers' `approver-<id>.age`.
-    pub fn tpm_key_blob(id: ApproverId) -> Self {
+    pub(crate) fn tpm_key_blob(id: ApproverId) -> Self {
         Self(format!("approver-{id}.tpm"))
     }
 

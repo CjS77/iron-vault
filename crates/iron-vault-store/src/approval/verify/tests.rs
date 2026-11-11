@@ -456,10 +456,11 @@ fn rfc6979_sample_signature_verifies_only_with_low_s() {
 /// The storage formats' P-256 envelope example carries a real signature by the key its TPM state example pins.
 #[test]
 fn documented_p256_envelope_verifies_against_the_documented_tpm_approver() {
-    use crate::approval::encoding::tests::{P256_SIGNATURE_HEX, documented_envelope};
+    use crate::approval::encoding::tests::{P256_KEY_HEX, P256_SIGNATURE_HEX, documented_envelope};
     let envelope = ApprovalEnvelope::decode(&documented_envelope(2)).unwrap();
     assert_eq!(envelope.signature(), &unhex(P256_SIGNATURE_HEX)[..]);
     let documented = pinned_tpm(&rfc6979_p256());
+    assert_eq!(documented.public_key().as_bytes(), &unhex(P256_KEY_HEX)[..]);
     let approver = PinnedApprover::new(
         envelope.approver_id(),
         SignerKind::Tpm,

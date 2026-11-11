@@ -4,6 +4,7 @@ use proptest::prelude::*;
 
 use super::*;
 use crate::VaultIdError;
+use crate::approval::encoding::tests::{documented_block, unhex};
 
 /// The documented presence payload: vault `3f2b8c1e-…`, approver `5b0e9a1c-…`, nonce `00 01 … 1f`.
 const PRESENCE_HEX: &str = "49565050 01 3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b 5b0e9a1c7d2f4e83b6a40c1d2e3f4a5b \
@@ -16,14 +17,6 @@ const MIGRATION_PROOF_HEX: &str = "49564d41 01 202122232425262728292a2b2c2d2e2f3
 const VAULT_ID_AT: usize = 5;
 const APPROVER_ID_AT: usize = 21;
 
-fn unhex(hex: &str) -> Vec<u8> {
-    let digits: String = hex.split_whitespace().collect();
-    (0..digits.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&digits[i..i + 2], 16).unwrap())
-        .collect()
-}
-
 fn presence() -> PresencePayload {
     let vault_id = VaultId::from_bytes(unhex("3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b").try_into().unwrap()).unwrap();
     let approver_id = ApproverId::from_bytes(unhex("5b0e9a1c7d2f4e83b6a40c1d2e3f4a5b").try_into().unwrap()).unwrap();
@@ -34,26 +27,14 @@ fn migration_proof() -> MigrationProofPayload {
     MigrationProofPayload::new(std::array::from_fn(|i| 0x20 + i as u8))
 }
 
-/// The `text` block of the storage formats' section `heading`, as hex: comments start past column 48.
-fn documented(heading: &str) -> String {
-    let doc = include_str!("../../../../../design/storage-formats.md");
-    let section = doc.split(heading).nth(1).unwrap();
-    let block = section.split("```text\n").nth(1).unwrap().split("```").next().unwrap();
-    block
-        .lines()
-        .flat_map(|line| line.chars().take(48))
-        .filter(|c| !c.is_whitespace())
-        .collect()
-}
-
 #[test]
 fn documented_examples_are_the_ones_in_the_storage_formats() {
     assert_eq!(
-        documented("## Presence payload v1"),
+        documented_block("## Presence payload v1", 1),
         PRESENCE_HEX.split_whitespace().collect::<String>()
     );
     assert_eq!(
-        documented("## Migration proof payload v1"),
+        documented_block("## Migration proof payload v1", 1),
         MIGRATION_PROOF_HEX.split_whitespace().collect::<String>()
     );
 }

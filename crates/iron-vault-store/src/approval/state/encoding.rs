@@ -123,6 +123,7 @@ mod tests {
     use super::*;
     use crate::RecipientLabelError;
     use crate::approval::InvalidKeyReason;
+    use crate::approval::encoding::tests::{P256_KEY_HEX, documented_block, unhex};
 
     /// The documented example: vault 3f2b8c1e-…, state generation 6 with peer generation 3, one Ed25519 software
     /// signer approver (the RFC 8032 test 1 public key) labelled `approval passphrase`, versions 1 and 2 reserved,
@@ -145,10 +146,6 @@ mod tests {
                                    0000000000000013 617070726f76616c2070617373706872617365 000000006aeda299 0000000000000002 \
                                    01 0000000000000001 0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8";
 
-    /// The RFC 6979 A.2.5 P-256 public key, uncompressed: `04 ‖ x ‖ y`.
-    const P256_KEY_HEX: &str = "0460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6\
-                                7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299";
-
     /// Where the TPM approver's algorithm, kind and key field sit in the second example.
     const TPM_ALGORITHM: Range<usize> = 61..62;
     const TPM_KIND: Range<usize> = 62..63;
@@ -166,16 +163,6 @@ mod tests {
     const HIGHEST_RESERVED: Range<usize> = 138..146;
     const TAG: Range<usize> = 146..147;
     const COMMITTED_VERSION: Range<usize> = 147..155;
-
-    fn unhex(hex: &str) -> Vec<u8> {
-        hex.split_whitespace()
-            .flat_map(|group| {
-                (0..group.len())
-                    .step_by(2)
-                    .map(move |i| u8::from_str_radix(&group[i..i + 2], 16).unwrap())
-            })
-            .collect()
-    }
 
     fn generation(value: u64) -> StateGeneration {
         StateGeneration::new(value).unwrap()
@@ -206,19 +193,6 @@ mod tests {
     fn tpm_example() -> ApprovalState {
         let approvers = vec![tpm_approver(), example_approver()];
         ApprovalState::from_parts(vault_id(), (generation(7), generation(3)), approvers, 2, example().committed).unwrap()
-    }
-
-    /// The `n`th `text` block of the storage formats' "Approval state payload v1" section, as hex: comments start past
-    /// column 48.
-    fn documented_block(n: usize) -> String {
-        let doc = include_str!("../../../../../design/storage-formats.md");
-        let section = doc.split("## Approval state payload v1").nth(1).unwrap();
-        let block = section.split("```text\n").nth(n).unwrap().split("```").next().unwrap();
-        block
-            .lines()
-            .flat_map(|line| line.chars().take(48))
-            .filter(|c| !c.is_whitespace())
-            .collect()
     }
 
     fn vault_id() -> VaultId {
@@ -261,8 +235,14 @@ mod tests {
     /// The example's hex column in `design/storage-formats.md` is these bytes; comments start past column 48.
     #[test]
     fn documented_examples_are_the_ones_in_the_storage_formats() {
-        assert_eq!(documented_block(1), EXAMPLE_HEX.split_whitespace().collect::<String>());
-        assert_eq!(documented_block(2), TPM_EXAMPLE_HEX.split_whitespace().collect::<String>());
+        assert_eq!(
+            documented_block("## Approval state payload v1", 1),
+            EXAMPLE_HEX.split_whitespace().collect::<String>()
+        );
+        assert_eq!(
+            documented_block("## Approval state payload v1", 2),
+            TPM_EXAMPLE_HEX.split_whitespace().collect::<String>()
+        );
     }
 
     #[test]
