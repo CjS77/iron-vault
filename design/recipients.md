@@ -647,8 +647,8 @@ so no owner holds such a vault yet ([open question 2](#open-questions)). The res
 
 `crates/iron-vault/tests/signers/recipients.rs` drives a real service through `init`, `unlock` and the recipient commands,
 with one test per promise of the recipient epic. Each command's own suite (`signers/recipient_list.rs`,
-`signers/recipient_add.rs`, `tests/recipient_add_recovery_linux.rs`, `signers/recipient_remove.rs`) covers its exchange, output
-and refusals; this file covers what only holds across them.
+`signers/recipient_add.rs`, `tests/recipient_add_recovery_linux.rs`, `signers/recipient_remove.rs`) covers its exchange,
+output and refusals; this file covers what only holds across them.
 
 | Promise | Test | Specification |
 |---|---|---|
