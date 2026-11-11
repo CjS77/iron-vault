@@ -440,9 +440,10 @@ struct InterruptedSink<'a> {
 
 impl Write for InterruptedSink<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match std::mem::replace(&mut self.interrupted, !self.interrupted) {
-            false => Err(io::ErrorKind::Interrupted.into()),
-            true => self.bytes.write(buf),
+        self.interrupted = !self.interrupted;
+        match self.interrupted {
+            true => Err(io::ErrorKind::Interrupted.into()),
+            false => self.bytes.write(buf),
         }
     }
 
