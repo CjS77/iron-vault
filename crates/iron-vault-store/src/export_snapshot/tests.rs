@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -288,8 +289,11 @@ fn an_approver_key_file_of_the_wrong_form_is_refused_naming_the_approver() {
     cases.iter().for_each(|(label, bytes)| {
         let fixture = Fixture::new();
         fixture.put(&fixture.approver_file(), bytes);
-        fixture.refusal(EntryName::Approver(fixture.held.approvers()[0].id()));
-        assert_eq!(fixture.check().unwrap_err().step(), SnapshotStep::Check, "{label}");
+        let error = fixture.refusal(EntryName::Approver(fixture.held.approvers()[0].id()));
+        assert!(
+            matches!(error, SnapshotError::Damaged { .. } | SnapshotError::Unreadable { .. }),
+            "{label}"
+        );
     });
 }
 
@@ -328,7 +332,7 @@ fn an_approval_state_that_differs_from_the_held_one_is_refused() {
 }
 
 #[test]
-fn the_stream_repeats_the_checks_before_it_prompts_scrypt_or_writes() {
+fn the_stream_repeats_the_checks_before_it_seals_or_writes() {
     let fixture = Fixture::new();
     durable_remove(
         &fixture.state,
@@ -351,9 +355,15 @@ fn a_record_changed_after_the_check_is_refused_before_its_bytes_are_encoded() {
     let fixture = Fixture::new();
     fixture.check().unwrap();
     let id = *fixture.records.last().unwrap();
-    fixture.put(&StateFileName::record(&id), &noise(200));
-    let error = fixture.stream(Vec::new()).unwrap_err();
+    let changed = noise(200);
+    fixture.put(&StateFileName::record(&id), &changed);
+    let mut bytes = Vec::new();
+    let error = fixture.stream(&mut bytes).unwrap_err();
     assert_eq!((error.step(), error.file()), (SnapshotStep::Snapshot, Some(EntryName::Record(id))));
+    assert!(
+        !bytes.windows(changed.len()).any(|window| window == changed),
+        "the changed record reached the sink"
+    );
 }
 
 #[derive(Debug)]
@@ -389,4 +399,29 @@ fn a_sink_error_is_returned_unchanged_as_a_transfer_failure() {
         SnapshotError::Transfer(inner) => assert!(inner.get_ref().is_some_and(|source| source.is::<Cancelled>())),
         other => panic!("{other}"),
     }
+}
+
+/// Fails its first call and counts every call.
+struct CountingSink<'a>(&'a Cell<usize>);
+
+impl Write for CountingSink<'_> {
+    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+        self.0.set(self.0.get() + 1);
+        Err(io::Error::other(Cancelled))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.set(self.0.get() + 1);
+        Ok(())
+    }
+}
+
+#[test]
+fn the_sink_is_not_called_again_after_it_fails() {
+    let _turn = one_at_a_time();
+    let fixture = Fixture::new();
+    let calls = Cell::new(0);
+    let error = fixture.stream(CountingSink(&calls)).unwrap_err();
+    assert!(matches!(error, SnapshotError::Transfer(_)));
+    assert_eq!(calls.get(), 1);
 }

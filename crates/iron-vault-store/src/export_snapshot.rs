@@ -216,7 +216,11 @@ pub fn check_export_snapshot(
 /// It holds at most one record, the manifest, the config and the bundled approver keys. A record file is read when its
 /// turn comes and its digest is checked before any of its bytes reach the encoder. The export passphrase is dropped
 /// once the identity is sealed. A failure of `sink` is returned as [`SnapshotError::Transfer`] with the sink's own
-/// `io::Error`; the bytes already written are then an incomplete bundle.
+/// `io::Error`, and `sink` is not called again after it.
+///
+/// On any error, `sink` may already hold bytes of the bundle, including bytes the gzip encoder wrote while it was
+/// dropped. The caller must discard everything written to it: a partial bundle is never complete, and the CLI removes
+/// its partial file.
 pub fn stream_export_snapshot<W: Write>(
     state: &StateDirLock,
     config: &ConfigDirLock,
@@ -385,7 +389,7 @@ fn write_bundle<W: Write>(
 ) -> Result<ExportedBundle, SnapshotError> {
     let summary = control.summary;
     let header = BundleHeader::new(summary.vault_id, summary.approver_count, summary.record_count).map_err(SnapshotError::Header)?;
-    let mut encoder = BundleEncoder::new(Counted { inner: sink, count: 0 }, header).map_err(encode_error)?;
+    let mut encoder = BundleEncoder::new(Counted::new(sink), header).map_err(encode_error)?;
     [
         (EntryName::ExportedIdentity, envelope),
         (EntryName::Manifest, &control.manifest_file),
@@ -415,21 +419,44 @@ fn encode_error(error: EncodeError) -> SnapshotError {
     }
 }
 
-/// Counts the bytes that reach the sink, which is the bundle's length.
+/// Counts the bytes that reach the sink, which is the bundle's length, and stops using the sink after its first error.
+///
+/// The gzip encoder writes its trailer when it is dropped, which on a failed export would put more bytes behind a
+/// sink that has already refused some, such as one cancelled by `lock`. The first error passes out unchanged; every
+/// later call fails with the same kind and never reaches the sink.
 struct Counted<W> {
     inner: W,
     count: u64,
+    failed: Option<io::ErrorKind>,
+}
+
+impl<W> Counted<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            count: 0,
+            failed: None,
+        }
+    }
+
+    /// Runs `call` on the sink unless it has failed before, and remembers the kind of a new failure.
+    fn through<T>(&mut self, call: impl FnOnce(&mut W) -> io::Result<T>) -> io::Result<T> {
+        if let Some(kind) = self.failed {
+            return Err(io::Error::from(kind));
+        }
+        call(&mut self.inner).inspect_err(|error| self.failed = Some(error.kind()))
+    }
 }
 
 impl<W: Write> Write for Counted<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let written = self.inner.write(buf)?;
+        let written = self.through(|sink| sink.write(buf))?;
         self.count += written as u64;
         Ok(written)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+        self.through(W::flush)
     }
 }
 
