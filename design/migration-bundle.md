@@ -122,7 +122,7 @@ does not stop it.
 
 #### The config copy
 
-*Default, not yet confirmed by the owner.* `config approve` reads its file in the CLI
+*Decided (owner, 2026-11-11).* `config approve` reads its file in the CLI
 ([CLI client](admin-protocol.md#cli-client)), and the CLI cannot always read the service's config directory. In the
 Compose profile `/etc/iron-vault` is a named volume inside the container, and the owner runs `sudo iron-vault` on the
 host, not inside it ([docker-compose.md](docker-compose.md#admin-access)); over a forwarded admin socket the service's
@@ -131,7 +131,7 @@ files are on another machine. The CLI does hold the bundle, so it gives the owne
 - Before it sends the request, the CLI creates `<bundle>.config.toml` beside the bundle with `O_CREAT | O_EXCL` and
   mode `0600`, so a name already taken shows before any prompt; the error names the file, for the owner to move.
 - After the success response, the CLI decodes the bundle with the store's bundle decoder up to the `config.toml` entry,
-  the fourth, opening no `age` entry. It requires the entry's BLAKE2b-256 to equal the committed config digest in the
+  the fifth, opening no `age` entry. It requires the entry's BLAKE2b-256 to equal the committed config digest in the
   result, which the service took from the approval state the vault identity opened, then writes the entry to the
   copy and fsyncs it. So the CLI holds only the config, which is no secret, and ciphertext, as
   [§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 2 asks.
@@ -569,10 +569,10 @@ are tested with the commands that own them.
 
 ## Open questions
 
-Each point below was open in the specification or decided here against a reading of it. The owner decided points 2
-to 5 on 2026-11-11. Points 1 and 6 are defaults the owner has not yet confirmed.
+Each point below was open in the specification or decided here against a reading of it. The owner decided every
+point on 2026-11-11.
 
-1. **Discarding an Unfinished vault.** *Default, not yet confirmed by the owner.* The ticket asked import to refuse an
+1. **Discarding an Unfinished vault.** *Decided: default accepted (2026-11-11).* The ticket asked import to refuse an
    Unfinished vault. *Default:* import and `init` each discard either kind of unfinished vault, because a refusal would
    leave an owner whose import crashed with no command that starts over, and an Unfinished vault never opened or
    served. An interrupted reset is still refused. *Alternative:* import refuses an Unfinished vault, as the ticket
@@ -602,7 +602,7 @@ to 5 on 2026-11-11. Points 1 and 6 are defaults the owner has not yet confirmed.
    until step 10, and step 9 proves each is on disk before the commit, so a record file a crash loses is discarded with
    the rest. That saves up to 4096 directory fsyncs on a full vault, but reads §13 as allowing one fsync for many
    renames.
-6. **The config the owner approves after import.** *Default, not yet confirmed by the owner.* `config approve` reads
+6. **The config the owner approves after import.** *Decided: default accepted (2026-11-11).* `config approve` reads
    its file in the CLI, which in the Compose profile and over a forwarded admin socket cannot read the service's config
    directory. *Default:* the CLI writes [the config copy](#the-config-copy) beside the bundle, from the bundle's
    `config.toml` entry, checked against the committed config digest in the import's result. *Alternative:* the result
@@ -618,7 +618,7 @@ Each ticket updates the design documents and glossary entries it changes, in the
 | 1 | K-308 | Store: the exported identity envelope, sealed and opened with the export passphrase at exactly `PASSPHRASE_WORK_FACTOR` | K-307 | storage-formats.md "Exported identity envelope" (Rust names); glossary "Export passphrase" and "Exported identity envelope" (Rust types) |
 | 2 | K-309 | Store: the migration bundle codec, decoding as frames arrive | K-307 | storage-formats.md "Migration bundle v1" and the magic table (Rust names); glossary "Migration bundle", "Bundle header" and "Bundled approver key" (Rust types) |
 | 3 | K-310 | Store: the export snapshot, with the config and the bundled approver keys | K-308, K-309 | glossary "Export snapshot" (Rust types) |
-| 4 | new | Protocol and CLI: the bundle data frame, the bundle transfer deadline, commands 19 and 20 (`import`'s host unlock flag), error codes 45 to 48 | K-307 | admin-protocol.md (frame kinds, exchange, commands, error codes, `migration-unavailable` at the export passphrase prompts, Versions); migration-authorization.md (`migration-unavailable`); glossary "Bundle data frame" and "Bundle transfer deadline" (Rust types) |
+| 4 | new | Protocol and CLI: the bundle data frame, the bundle transfer deadline, commands 19 and 20 (`import`'s host unlock flag), error codes 45 to 48 | K-307 | admin-protocol.md (frame kinds, exchange, commands, command 20's result with the committed config digest, error codes, `migration-unavailable` at the export passphrase prompts, Versions); migration-authorization.md (`migration-unavailable`); glossary "Bundle data frame" and "Bundle transfer deadline" (Rust types) |
 | 5 | new | Store: the unfinished import in the initialization state, the store-owned list, and its discard | K-307 | vault-initialization.md "Initialization state", "Discarding an unfinished initialization" and the crash table; recovery.md "Initialization"; storage-formats.md, an "Unfinished import file" section; glossary "Unfinished import" and "Initialization state" |
 | 6 | K-311 | `iron-vault export`: deadlines and the `lock` cancel between frames | K-310, ticket 4 | audit-logging.md (`migration.exported`, `migration.export-failed`, the new fields); the manual's CLI, errors and audit log references |
 | 7 | K-312 | Store: the import write order, `config.toml` and the host unlock recipient included | K-308, K-309, ticket 5 | |
