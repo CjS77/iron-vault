@@ -17,9 +17,19 @@ use crate::serving_snapshot::Admission;
 /// Proof that the owner typed the approval passphrase in this exchange, after the service described the change.
 ///
 /// Only a successful key check constructs one, and a vault change consumes it, so it is never kept or reused. It is
-/// required by type: the write that needs owner presence cannot be called without it.
+/// required by type: the write that needs owner presence cannot be called without it. It names the approver whose key
+/// opened, which an approver change records as the authorizing approver.
 #[derive(Debug)]
-pub struct OwnerPresence(());
+pub struct OwnerPresence {
+    approver: PinnedApprover,
+}
+
+impl OwnerPresence {
+    /// The pinned approver whose key the owner opened.
+    pub fn approver(&self) -> &PinnedApprover {
+        &self.approver
+    }
+}
 
 /// Which check of the approver key refused, kept apart so the audit event can name it without the error's text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,7 +107,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     ) -> Result<OwnerPresence, PresenceRefusal> {
         self.open_approver(passphrase, approver.clone()).await.map(|signer| {
             drop(signer);
-            OwnerPresence(())
+            OwnerPresence {
+                approver: approver.clone(),
+            }
         })
     }
 }

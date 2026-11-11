@@ -17,7 +17,7 @@ use super::{
     SoftwareSigner, open_signer_key, read_signer_key, seal_signer_key_at, write_signer_key,
 };
 use crate::durable::{ReadError, WriteError, durable_remove};
-use crate::{PASSPHRASE_WORK_FACTOR, StateDirLock, StateFileName, StoreFs, UtcSecond, VaultIdentity};
+use crate::{ErrorKindLabel, PASSPHRASE_WORK_FACTOR, StateDirLock, StateFileName, StoreFs, UtcSecond, VaultIdentity};
 
 /// The step of an approver change that failed, as `approver.change-failed` records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +32,18 @@ pub enum ApproverChangeStep {
     ApprovalState,
 }
 
+impl ApproverChangeStep {
+    /// The snake_case label `approver.change-failed` records in its `step` field.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ReadBack => "read_back",
+            Self::KeyFile => "key_file",
+            Self::KeyCheck => "key_check",
+            Self::ApprovalState => "approval_state",
+        }
+    }
+}
+
 /// Whether a failed approver change may have committed.
 ///
 /// There is no "yes": a failure after the commit point is not a failure. A removal that cannot delete its key file still
@@ -43,6 +55,16 @@ pub enum MayHaveCommitted {
     /// The rename of `approval.age` landed but the directory fsync failed, so the disk holds the change but it may not
     /// survive power loss. The owner finds out with `approver list`.
     Unknown,
+}
+
+impl MayHaveCommitted {
+    /// The label `approver.change-failed` records in its `committed` field, as `recipient.change-failed` does.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::No => "no",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 /// What a removal did with the removed approver's key file, which is no longer a pinned approver's.
@@ -121,6 +143,23 @@ impl ApproverChangeError {
         match self {
             Self::ApprovalState(ApprovalStateError::WriteUncertain(_)) => MayHaveCommitted::Unknown,
             _ => MayHaveCommitted::No,
+        }
+    }
+
+    /// The failure as a label that holds no file name, key or error text, for `approver.change-failed`'s `error_kind`.
+    pub fn error_kind_label(&self) -> ErrorKindLabel {
+        match self {
+            Self::ReadBackUnreadable(ApprovalStateError::PartialRestore(_)) => ErrorKindLabel::fixed("partial_restore"),
+            Self::ReadBackUnreadable(_) => ErrorKindLabel::fixed("unreadable"),
+            Self::ReadBackDiffers => ErrorKindLabel::fixed("differs"),
+            Self::OrphanSweep { error, .. } | Self::KeyFile(error) => error.error_kind_label(),
+            Self::ApproverInvalid(_) => ErrorKindLabel::fixed("approver_invalid"),
+            Self::KeySeal(_) => ErrorKindLabel::fixed("key_seal"),
+            Self::KeyCheck(KeyCheckError::Read(_)) => ErrorKindLabel::fixed("read_failed"),
+            Self::KeyCheck(KeyCheckError::Open(_)) => ErrorKindLabel::fixed("key_mismatch"),
+            Self::ApprovalState(ApprovalStateError::Write(error) | ApprovalStateError::WriteUncertain(error)) => error.error_kind_label(),
+            Self::ApprovalState(ApprovalStateError::TooManyApprovers) => ErrorKindLabel::fixed("too_many_approvers"),
+            Self::ApprovalState(_) => ErrorKindLabel::fixed("approval_state"),
         }
     }
 }

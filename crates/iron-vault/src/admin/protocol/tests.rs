@@ -9,7 +9,7 @@ use crate::service_state::{FailureReason, ServiceState};
 use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
 use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
 use iron_vault_policy::{CallerToken, CredentialKind, Port, TokenHash};
-use iron_vault_store::{RecipientRole, RecordDamage, RecordId, UtcSecond, VaultId};
+use iron_vault_store::{ApproverId, RecipientRole, RecordDamage, RecordId, UtcSecond, VaultId};
 
 /// The longest prompt label: the body bound less three field headers and the one-byte secret and switchable flags.
 const MAX_LABEL: usize = MAX_BODY_LEN - 3 * FIELD_HEADER_LEN - 2;
@@ -95,6 +95,7 @@ fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
             },
         ) => a == b && n == m,
         (R::RecipientRemove { recipients: a }, R::RecipientRemove { recipients: b }) => a == b,
+        (R::ApproverAdd { approver: a, approvers: n }, R::ApproverAdd { approver: b, approvers: m }) => a == b && n == m,
         (R::Error { code: a, message: m }, R::Error { code: b, message: n }) => a == b && m == n,
         _ => false,
     }
@@ -194,6 +195,9 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::RecipientEnrolled),
         Just(ErrorCode::UnknownRecipient),
         Just(ErrorCode::RecipientSetInvalid),
+        Just(ErrorCode::ApproverInvalid),
+        Just(ErrorCode::ApproverSetInvalid),
+        Just(ErrorCode::ApproverKindUnavailable),
     ]
 }
 
@@ -233,6 +237,15 @@ fn any_frame() -> impl Strategy<Value = Frame> {
                 .prop_map(|(recipient, label)| AdminRequest::RecipientAddHostUnlock { recipient, label }),
             text(256).prop_map(|label| AdminRequest::RecipientAddRecovery { label }),
             text(256).prop_map(|recipient| AdminRequest::RecipientRemove { recipient }),
+            (
+                prop_oneof![
+                    Just(RequestedSignerKind::Software),
+                    Just(RequestedSignerKind::Tpm),
+                    Just(RequestedSignerKind::Hardware)
+                ],
+                text(256)
+            )
+                .prop_map(|(kind, label)| AdminRequest::ApproverAdd { kind, label }),
             add_request(),
             replace_request(),
             text(256).prop_map(|name| AdminRequest::Rm { name }),
@@ -266,6 +279,10 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             recipients
         })),
         any::<u8>().prop_map(|recipients| Frame::Response(AdminResponse::RecipientRemove { recipients })),
+        (any::<[u8; 16]>(), any::<u8>()).prop_map(|(bytes, approvers)| Frame::Response(AdminResponse::ApproverAdd {
+            approver: ApproverId::from_bytes(v4_bytes(bytes)).unwrap(),
+            approvers
+        })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Add { record_id: v4(bytes) })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Replace { record_id: v4(bytes) })),
         any::<[u8; 32]>().prop_map(|bytes| Frame::Response(AdminResponse::CallerToken {
@@ -571,8 +588,8 @@ fn wrong_state_is_error_code_13() {
 fn a_success_result_must_name_a_command_with_a_result_and_a_known_profile() {
     let no_command = field(2, &[1]);
     assert_eq!(decode_err(&raw(1, 4, &no_command)), FrameError::MissingField(1));
-    let unknown = body(&[field(1, &[0, 17]), field(2, &[1])]);
-    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(17));
+    let unknown = body(&[field(1, &[0, 18]), field(2, &[1])]);
+    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(18));
     let without_profile = field(1, &[0, 1]);
     assert_eq!(decode_err(&raw(1, 4, &without_profile)), FrameError::MissingField(2));
     [&[][..], &[0], &[4], &[1, 1]].into_iter().for_each(|profile| {
@@ -710,7 +727,7 @@ fn unknown_tags_are_refused() {
 
 #[test]
 fn unknown_commands_are_refused_whatever_follows() {
-    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 17]))), FrameError::UnknownCommand(17));
+    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 18]))), FrameError::UnknownCommand(18));
     let with_arguments = body(&[field(1, &[0xff, 0xff]), field(2, b"argument")]);
     assert_eq!(decode_err(&raw(1, 1, &with_arguments)), FrameError::UnknownCommand(0xffff));
 }
@@ -755,7 +772,7 @@ fn malformed_fixed_width_values_and_flags_are_refused() {
 
 #[test]
 fn unknown_error_codes_are_refused() {
-    [0, 40, 0xffff].into_iter().for_each(|code: u16| {
+    [0, 45, 0xffff].into_iter().for_each(|code: u16| {
         let error = body(&[field(1, &code.to_be_bytes()), field(2, b"m")]);
         assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::UnknownErrorCode(code));
     });
@@ -1390,4 +1407,45 @@ fn recipient_remove_has_its_documented_ids_and_bodies() {
 fn a_recipient_count_of_any_other_width_is_refused() {
     let body = raw(1, 4, &[field(1, &[0, 15]), field(2, &[0, 2])].concat());
     assert_eq!(decode_err(&body), FrameError::InvalidValue(2));
+}
+
+#[test]
+fn approver_add_has_its_documented_ids_and_bodies() {
+    let request = AdminRequest::ApproverAdd {
+        kind: RequestedSignerKind::Software,
+        label: "backup".to_owned(),
+    };
+    assert_eq!((AdminCommand::ApproverAdd as u16, request.command().name()), (17, "approver add"));
+    assert_eq!(
+        encoded(&Frame::Request(request)),
+        raw(1, 1, &[field(1, &[0, 17]), field(2, &[1]), field(3, b"backup")].concat())
+    );
+    let id = ApproverId::from_bytes(v4_bytes([7; 16])).unwrap();
+    assert_eq!(
+        encoded(&Frame::Response(AdminResponse::ApproverAdd {
+            approver: id,
+            approvers: 2
+        })),
+        raw(1, 4, &[field(1, &[0, 17]), field(2, id.as_bytes()), field(3, &[2])].concat())
+    );
+    [
+        (ErrorCode::ApproverInvalid, 40, "approver-invalid"),
+        (ErrorCode::ApproverSetInvalid, 42, "approver-set-invalid"),
+        (ErrorCode::ApproverKindUnavailable, 44, "approver-kind-unavailable"),
+    ]
+    .into_iter()
+    .for_each(|(code, number, name)| {
+        assert_eq!((code as u16, code.name()), (number, name));
+        assert_round_trips(&error(code, "m"));
+    });
+}
+
+#[test]
+fn an_approver_kind_outside_its_codes_is_a_malformed_frame() {
+    [0, 4, 255].into_iter().for_each(|kind| {
+        let body = raw(1, 1, &[field(1, &[0, 17]), field(2, &[kind]), field(3, b"backup")].concat());
+        assert_eq!(decode_err(&body), FrameError::InvalidValue(2));
+    });
+    let wide = raw(1, 1, &[field(1, &[0, 17]), field(2, &[0, 1]), field(3, b"backup")].concat());
+    assert_eq!(decode_err(&wide), FrameError::InvalidValue(2));
 }

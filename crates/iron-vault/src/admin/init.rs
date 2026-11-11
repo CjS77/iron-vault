@@ -175,7 +175,7 @@ async fn chosen(
 
 /// The entry as text, once it equals its repeat, compared in constant time, is UTF-8 and is long enough. A refusal
 /// names the rule and nothing typed.
-fn entry_text(entry: &OwnerInput, repeated: &OwnerInput, which: WhichPassphrase) -> Result<SecretString, String> {
+pub(super) fn entry_text(entry: &OwnerInput, repeated: &OwnerInput, which: WhichPassphrase) -> Result<SecretString, String> {
     if !bool::from(entry.expose_secret().ct_eq(repeated.expose_secret())) {
         return Err(format!("the two entries of {which} differ"));
     }

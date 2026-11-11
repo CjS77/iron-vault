@@ -3,11 +3,11 @@
 use super::fields::{self, exact, first, read_flag, read_profile, read_text, read_u16, read_u64};
 use super::status::{self, StatusReport};
 use super::{AdminCommand, AdminRequest, AdminResponse, ApprovalResult, ErrorCode, FrameError, Notice, Prompt, ProposedConfig};
-use super::{add, approver_list, list, recipient_add, recipient_list};
+use super::{add, approver_add, approver_list, list, recipient_add, recipient_list};
 use crate::deployment::DeploymentProfile;
 use iron_vault_policy::CallerToken;
 use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
-use iron_vault_store::{RecipientEntry, RecipientKey, RecipientRole, RecordId, VaultId};
+use iron_vault_store::{ApproverId, RecipientEntry, RecipientKey, RecipientRole, RecordId, VaultId};
 use zeroize::Zeroizing;
 
 use crate::standing::CredentialStanding;
@@ -47,6 +47,7 @@ const COMMAND_RECIPIENT_LIST: u16 = AdminCommand::RecipientList as u16;
 const COMMAND_RECIPIENT_ADD: u16 = AdminCommand::RecipientAdd as u16;
 const COMMAND_RECIPIENT_REMOVE: u16 = AdminCommand::RecipientRemove as u16;
 const COMMAND_APPROVER_LIST: u16 = AdminCommand::ApproverList as u16;
+const COMMAND_APPROVER_ADD: u16 = AdminCommand::ApproverAdd as u16;
 const TAG_RECIPIENT: u16 = 2;
 const TAG_RECIPIENT_COUNT: u16 = 2;
 const TAG_CHECKED_AT: u16 = 3;
@@ -65,6 +66,7 @@ pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameErr
             return Ok(recipient_add::encode_request(COMMAND_RECIPIENT_ADD, recipient, label, true));
         }
         AdminRequest::RecipientAddRecovery { label } => return Ok(recipient_add::encode_recovery_request(COMMAND_RECIPIENT_ADD, label)),
+        AdminRequest::ApproverAdd { kind, label } => return Ok(approver_add::encode_request(COMMAND_APPROVER_ADD, *kind, label)),
         _ => {}
     }
     let mut out = Vec::new();
@@ -106,6 +108,7 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
         COMMAND_RECIPIENT_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::RecipientList),
         COMMAND_APPROVER_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::ApproverList),
         COMMAND_RECIPIENT_ADD => recipient_add::decode_request(&fields),
+        COMMAND_APPROVER_ADD => approver_add::decode_request(&fields),
         COMMAND_REPLACE => add::decode_request(&fields, |name, kind, origins| AdminRequest::Replace { name, kind, origins }),
         COMMAND_RM => {
             let [_, name] = exact(&fields, [TAG_COMMAND, TAG_NAME])?;
@@ -216,6 +219,11 @@ pub(super) fn encode_recipient_list_result(entries: &[RecipientEntry]) -> Result
 /// `recipient add`'s success body: the command it answers, the enrolled key, then the recipient count.
 pub(super) fn encode_recipient_add_result(recipient: &RecipientKey, recipients: u8) -> Vec<u8> {
     recipient_add::encode_result(COMMAND_RECIPIENT_ADD, recipient, recipients)
+}
+
+/// `approver add`'s success body: the command it answers, the new approver ID, then the approver count.
+pub(super) fn encode_approver_add_result(approver: ApproverId, approvers: u8) -> Vec<u8> {
+    approver_add::encode_result(COMMAND_APPROVER_ADD, approver, approvers)
 }
 
 /// `init`'s success body: the command it answers, the new vault's ID as its 16 raw bytes (as `status` sends it), the
@@ -335,6 +343,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
         COMMAND_RECIPIENT_LIST => recipient_list::decode_result(&fields),
         COMMAND_APPROVER_LIST => approver_list::decode_result(&fields),
         COMMAND_RECIPIENT_ADD => recipient_add::decode_result(&fields),
+        COMMAND_APPROVER_ADD => approver_add::decode_result(&fields),
         COMMAND_RECIPIENT_REMOVE => {
             let [_, count] = exact(&fields, [TAG_COMMAND, TAG_RECIPIENT_COUNT])?;
             match count {
@@ -403,6 +412,9 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::UnknownRecipient,
         ErrorCode::RecipientSetInvalid,
         ErrorCode::RecipientInventoryDamaged,
+        ErrorCode::ApproverInvalid,
+        ErrorCode::ApproverSetInvalid,
+        ErrorCode::ApproverKindUnavailable,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

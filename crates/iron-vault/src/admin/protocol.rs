@@ -2,6 +2,7 @@
 //! hands [`decode`] the bytes it has read and sends what [`encode`] writes.
 
 mod add;
+mod approver_add;
 mod approver_list;
 mod body;
 mod fields;
@@ -21,9 +22,10 @@ use zeroize::Zeroizing;
 use crate::deployment::DeploymentProfile;
 use crate::standing::CredentialStanding;
 use iron_vault_policy::{CallerToken, CredentialKind, Port};
-use iron_vault_store::{Passphrase, RecipientEntry, RecipientKey, RecipientRole, RecordId, VaultId};
+use iron_vault_store::{ApproverId, Passphrase, RecipientEntry, RecipientKey, RecipientRole, RecordId, VaultId};
 use secrecy::SecretString;
 
+pub use approver_add::RequestedSignerKind;
 pub use approver_list::ApproverEntry;
 pub use iron_vault_store::MAX_CONFIG_LEN;
 pub use recovery_status::RecoveryStatus;
@@ -125,6 +127,14 @@ pub enum AdminRequest {
     },
     /// Lists every pinned approver in approver order; Ready only. No arguments. Command ID 16.
     ApproverList,
+    /// Enrolls a new approval signer of `kind` after owner presence from a pinned approver; the service prompts for the
+    /// approver's passphrase, then the new signer's secret. Command ID 17.
+    ApproverAdd {
+        /// The signer kind to enroll; the service refuses one this install does not offer.
+        kind: RequestedSignerKind,
+        /// The approver label as the owner wrote it; the service validates it.
+        label: String,
+    },
 }
 
 /// A requested origin: one permitted origin as an `add` or `replace` request carries it. The host stays text on the wire, at most
@@ -159,6 +169,7 @@ impl AdminRequest {
             }
             Self::RecipientRemove { .. } => AdminCommand::RecipientRemove,
             Self::ApproverList => AdminCommand::ApproverList,
+            Self::ApproverAdd { .. } => AdminCommand::ApproverAdd,
         }
     }
 }
@@ -198,6 +209,8 @@ pub enum AdminCommand {
     RecipientRemove = 15,
     /// `approver list`.
     ApproverList = 16,
+    /// `approver add`.
+    ApproverAdd = 17,
 }
 
 impl AdminCommand {
@@ -220,6 +233,7 @@ impl AdminCommand {
             Self::RecipientAdd => "recipient add",
             Self::RecipientRemove => "recipient remove",
             Self::ApproverList => "approver list",
+            Self::ApproverAdd => "approver add",
         }
     }
 
@@ -242,6 +256,7 @@ impl AdminCommand {
             Self::RecipientAdd => "recipient_add",
             Self::RecipientRemove => "recipient_remove",
             Self::ApproverList => "approver_list",
+            Self::ApproverAdd => "approver_add",
         }
     }
 }
@@ -271,10 +286,11 @@ mod no_external_signatures {
             AdminCommand::Rm => &["name"],
             AdminCommand::RecipientAdd => &["recipient", "label"],
             AdminCommand::RecipientRemove => &["recipient"],
+            AdminCommand::ApproverAdd => &["kind", "label"],
         }
     }
 
-    const COMMANDS: [AdminCommand; 16] = [
+    const COMMANDS: [AdminCommand; 17] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::CallerToken,
@@ -291,6 +307,7 @@ mod no_external_signatures {
         AdminCommand::RecipientAdd,
         AdminCommand::RecipientRemove,
         AdminCommand::ApproverList,
+        AdminCommand::ApproverAdd,
     ];
 
     #[test]
@@ -498,6 +515,13 @@ pub enum AdminResponse {
         /// How many recipients the vault has after the removal.
         recipients: u8,
     },
+    /// `approver add` completed: the new approver is pinned.
+    ApproverAdd {
+        /// The new approver's ID.
+        approver: ApproverId,
+        /// How many approvers the vault pins now.
+        approvers: u8,
+    },
     /// `add` completed: the new credential record's ID.
     Add {
         /// The ID of the record the service wrote.
@@ -577,10 +601,12 @@ pub enum ErrorCode {
     ConfigInvalid = 7,
     /// The owner declined at a confirmation prompt.
     Declined = 8,
-    /// `config approve`, `replace`, `rm`: owner presence failed: the approval passphrase did not open the pinned approver's key.
+    /// `config approve`, `replace`, `rm`, `recipient remove`, `approver add`: owner presence failed: the approval passphrase did
+    /// not open the pinned approver's key.
     ApprovalDenied = 9,
-    /// `config approve`: the service cannot run an approval now; no version was reserved. `replace`, `rm`: owner presence
-    /// could not be checked, or a `lock` cancelled the change at its passphrase prompt; nothing was written.
+    /// `config approve`: the service cannot run an approval now; no version was reserved. `replace`, `rm`,
+    /// `recipient remove`, `approver add`: owner presence could not be checked, or a `lock` cancelled the change at its
+    /// passphrase prompt; nothing was written.
     ApprovalUnavailable = 10,
     /// `config approve`: failed after reserving a version, before committing it; the version is consumed.
     ApprovalFailed = 11,
@@ -598,7 +624,7 @@ pub enum ErrorCode {
     UnlockedUnavailable = 16,
     /// `init`: the directories hold an initialized vault, or files init did not write; nothing was changed.
     AlreadyInitialized = 17,
-    /// `init`: a chosen passphrase broke a rule; the message names the rule, never the input.
+    /// `init`, `approver add`: a chosen passphrase broke a rule; the message names the rule, never the input.
     PassphraseRejected = 18,
     /// `init`: a write failed; the message names the step and what to do with the recovery key shown.
     InitFailed = 19,
@@ -606,7 +632,9 @@ pub enum ErrorCode {
     NameTaken = 20,
     /// `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte.
     CredentialInvalid = 21,
-    /// `add`, `replace`: writing the vault failed; the message says whether the write may have committed.
+    /// `add`, `replace`: writing the vault failed; the message says whether the write may have committed. `approver add`:
+    /// the approval state did not read back before the change, or the approver change failed; the message says whether
+    /// it may have committed.
     VaultWriteFailed = 22,
     /// `replace`, `rm`: the manifest holds no credential of that name.
     UnknownCredential = 23,
@@ -654,6 +682,12 @@ pub enum ErrorCode {
     /// `recipient list`, `recipient add`, `recipient remove`: the inventory check found the recipient inventory missing or
     /// damaged; the message names the damage; nothing was changed.
     RecipientInventoryDamaged = 39,
+    /// `approver add`: the label breaks its rule; the message names the rule.
+    ApproverInvalid = 40,
+    /// `approver add`: 16 approvers are already pinned; nothing was changed.
+    ApproverSetInvalid = 42,
+    /// `approver add`: this install does not offer that signer kind yet; nothing was changed.
+    ApproverKindUnavailable = 44,
 }
 
 impl ErrorCode {
@@ -699,6 +733,9 @@ impl ErrorCode {
             Self::UnknownRecipient => "unknown-recipient",
             Self::RecipientSetInvalid => "recipient-set-invalid",
             Self::RecipientInventoryDamaged => "recipient-inventory-damaged",
+            Self::ApproverInvalid => "approver-invalid",
+            Self::ApproverSetInvalid => "approver-set-invalid",
+            Self::ApproverKindUnavailable => "approver-kind-unavailable",
         }
     }
 
@@ -847,6 +884,9 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         }
         Frame::Response(AdminResponse::RecipientAdd { recipient, recipients }) => {
             put_frame(out, FrameKind::Success, &body::encode_recipient_add_result(recipient, *recipients))
+        }
+        Frame::Response(AdminResponse::ApproverAdd { approver, approvers }) => {
+            put_frame(out, FrameKind::Success, &body::encode_approver_add_result(*approver, *approvers))
         }
         Frame::Response(AdminResponse::RecipientRemove { recipients }) => {
             put_frame(out, FrameKind::Success, &body::encode_recipient_remove_result(*recipients))

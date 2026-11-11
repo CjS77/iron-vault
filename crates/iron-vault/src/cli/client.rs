@@ -11,7 +11,7 @@ use anyhow::Context;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::protocol::{
     self, AdminRequest, AdminResponse, ApprovalResult, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, MAX_CONFIG_LEN,
-    OwnerInput, PROTOCOL_VERSION, PromptAnswer, ProposedConfig, RequestedOrigin, digest_text,
+    OwnerInput, PROTOCOL_VERSION, PromptAnswer, ProposedConfig, RequestedOrigin, RequestedSignerKind, digest_text,
 };
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::hardening::MEMLOCK_REMEDIATION;
@@ -281,6 +281,18 @@ pub fn recipient_add(socket: Option<&Path>, recipient: String, label: String, ho
 pub fn recipient_remove(socket: Option<&Path>, recipient: String) -> Exit {
     run(socket, AdminRequest::RecipientRemove { recipient }, |response| match response {
         AdminResponse::RecipientRemove { .. } => Exit::Success,
+        _ => unexpected(),
+    })
+}
+
+/// Runs `approver add`. The service describes the change in a notice, then prompts for an approver's passphrase and the
+/// new one, answered from the owner console. Only the new approver ID goes to stdout, so a script can capture it.
+pub fn approver_add(socket: Option<&Path>, kind: RequestedSignerKind, label: String) -> Exit {
+    run(socket, AdminRequest::ApproverAdd { kind, label }, |response| match response {
+        AdminResponse::ApproverAdd { approver, .. } => {
+            println!("{approver}");
+            Exit::Success
+        }
         _ => unexpected(),
     })
 }

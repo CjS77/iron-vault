@@ -1,0 +1,34 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-approver-add 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-approver\-add \- Enroll another approval signer. The service shows what changes, asks for the approval passphrase of an approver already pinned, then for the new signer\*(Aqs own approval passphrase, twice; choose one different from the vault passphrase. The new signer alone can approve a config, so keep its passphrase apart from the first. Prints the new approver\*(Aqs ID
+.SH SYNOPSIS
+\fBiron\-vault approver add\fR [\fB\-\-admin\-socket\fR] [\fB\-\-kind\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-label\fR> 
+.SH DESCRIPTION
+Enroll another approval signer. The service shows what changes, asks for the approval passphrase of an approver already pinned, then for the new signer\*(Aqs own approval passphrase, twice; choose one different from the vault passphrase. The new signer alone can approve a config, so keep its passphrase apart from the first. Prints the new approver\*(Aqs ID
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-\-label\fR \fI<LABEL>\fR
+What the approver is, 1 to 64 bytes: `backup passphrase`
+.TP
+\fB\-\-kind\fR \fI<KIND>\fR [default: software]
+The signer kind. Only `software` is offered so far; the service refuses the others
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+software: A key sealed to its own approval passphrase
+.IP \(bu 2
+tpm: A TPM approval key with a PIN
+.IP \(bu 2
+hardware: A hardware key with PIN and touch
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)

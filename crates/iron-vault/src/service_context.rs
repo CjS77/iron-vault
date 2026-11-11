@@ -19,6 +19,7 @@
 //! (design/config-approval.md, open question 1).
 
 mod approval;
+mod approver_change;
 mod approver_list;
 mod approver_order;
 mod host_unlock;
@@ -74,6 +75,7 @@ use serving::Serving;
 use unlock::{log_foreign_files, unprotected_reason};
 
 pub use approval::{ApprovalEnd, ApprovalReview};
+pub use approver_change::{ApproverChangePlan, ApproverRefusal};
 pub use approver_list::ApproverListRefusal;
 pub use host_unlock::{HostUnlockOutcome, HostUnlockRefusal};
 pub use init::{HostUnlockUnavailable, InitRefusal, step_names};

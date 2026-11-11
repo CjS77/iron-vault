@@ -45,7 +45,7 @@ use std::sync::LazyLock;
 use clap::builder::TypedValueParser;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use iron_vault::admin::protocol::MAX_ORIGINS;
+use iron_vault::admin::protocol::{MAX_ORIGINS, RequestedSignerKind};
 use iron_vault::deployment;
 use iron_vault_policy::{CredentialKind, Host, Port, parse_origin};
 
@@ -264,6 +264,18 @@ pub enum ApproverCommand {
     /// List every approver, one line each: its approver ID, signer kind, enrolment time, `active` when it signed the active
     /// approval, and label. The first line is the approver a prompt asks first. It works while the service is Ready.
     List,
+    /// Enroll another approval signer. The service shows what changes, asks for the approval passphrase of an approver
+    /// already pinned, then for the new signer's own approval passphrase, twice; choose one different from the vault
+    /// passphrase. The new signer alone can approve a config, so keep its passphrase apart from the first. Prints the new
+    /// approver's ID.
+    Add {
+        /// What the approver is, 1 to 64 bytes: `backup passphrase`.
+        #[arg(long)]
+        label: String,
+        /// The signer kind. Only `software` is offered so far; the service refuses the others.
+        #[arg(long, value_enum, default_value_t = SignerKindArg::Software)]
+        kind: SignerKindArg,
+    },
 }
 
 /// `iron-vault recipient`'s commands.
@@ -306,6 +318,27 @@ pub enum RecipientCommand {
         /// The recipient's `age1...` key, as `recipient list` prints it.
         recipient: String,
     },
+}
+
+/// The signer kinds `approver add --kind` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SignerKindArg {
+    /// A key sealed to its own approval passphrase.
+    Software,
+    /// A TPM approval key with a PIN.
+    Tpm,
+    /// A hardware key with PIN and touch.
+    Hardware,
+}
+
+impl From<SignerKindArg> for RequestedSignerKind {
+    fn from(kind: SignerKindArg) -> Self {
+        match kind {
+            SignerKindArg::Software => RequestedSignerKind::Software,
+            SignerKindArg::Tpm => RequestedSignerKind::Tpm,
+            SignerKindArg::Hardware => RequestedSignerKind::Hardware,
+        }
+    }
 }
 
 impl Cli {
@@ -479,6 +512,19 @@ pub fn approver_list(socket: Option<&Path>) -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn approver_list(_socket: Option<&Path>) -> ExitCode {
+    unsupported_platform()
+}
+
+/// `iron-vault approver add`: sends `approver add`, answers its prompts from the owner console, and prints the new
+/// approver's ID.
+#[cfg(target_os = "linux")]
+pub fn approver_add(socket: Option<&Path>, kind: RequestedSignerKind, label: String) -> ExitCode {
+    client::approver_add(socket, kind, label).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn approver_add(_socket: Option<&Path>, _kind: RequestedSignerKind, _label: String) -> ExitCode {
     unsupported_platform()
 }
 

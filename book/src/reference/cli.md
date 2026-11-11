@@ -297,6 +297,23 @@ iron-vault approver list [OPTIONS]
 
 List every approver, one line each: its approver ID, signer kind, enrolment time, `active` when it signed the active approval, and label. The first line is the approver a prompt asks first. It works while the service is Ready.
 
+## `iron-vault approver add`
+
+```text
+iron-vault approver add [OPTIONS] --label <LABEL>
+```
+
+Enroll another approval signer. The service shows what changes, asks for the approval passphrase of an approver already pinned, then for the new signer's own approval passphrase, twice; choose one different from the vault passphrase. The new signer alone can approve a config, so keep its passphrase apart from the first. Prints the new approver's ID.
+
+- `--label <LABEL>`: What the approver is, 1 to 64 bytes: `backup passphrase`.
+  - required
+- `--kind <KIND>`: The signer kind. Only `software` is offered so far; the service refuses the others.
+  - default: `software`
+  - possible values:
+    - `software`: A key sealed to its own approval passphrase.
+    - `tpm`: A TPM approval key with a PIN.
+    - `hardware`: A hardware key with PIN and touch.
+
 ## `iron-vault completions`
 
 ```text

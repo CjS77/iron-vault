@@ -10,7 +10,7 @@ use secrecy::SecretString;
 use super::protocol::{AdminResponse, ErrorCode, OwnerInput, Prompt, PromptAnswer};
 use super::server::{Exchange, ExchangeError};
 use crate::audit::{AuditEvent, NamedApprover, vault::PresenceRefused};
-use crate::service_context::{DenialKind, OwnerPresence, PresenceRefusal, RecipientRemoval, VaultChangePlan};
+use crate::service_context::{ApproverChangePlan, DenialKind, OwnerPresence, PresenceRefusal, RecipientRemoval, VaultChangePlan};
 
 /// The label of the secret prompt for the approval passphrase of `approver`, which names it by its label, escaped since
 /// the owner chose it.
@@ -113,6 +113,24 @@ impl<F: StoreFs + Send + Sync + 'static> PresencePlan for RecipientRemoval<'_, F
         approver: &PinnedApprover,
     ) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send {
         RecipientRemoval::prove_presence(self, passphrase, approver)
+    }
+}
+
+impl<F: StoreFs + Send + Sync + 'static> PresencePlan for ApproverChangePlan<'_, F> {
+    fn approvers(&self) -> &[PinnedApprover] {
+        ApproverChangePlan::approvers(self)
+    }
+
+    fn lock_requested(&self) -> impl Future<Output = ()> + Send {
+        ApproverChangePlan::lock_requested(self)
+    }
+
+    fn prove_presence(
+        &self,
+        passphrase: ApprovalPassphrase,
+        approver: &PinnedApprover,
+    ) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send {
+        ApproverChangePlan::prove_presence(self, passphrase, approver)
     }
 }
 

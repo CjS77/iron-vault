@@ -20,6 +20,7 @@ mod tests;
 mod vault_events_tests;
 
 pub mod admin;
+pub mod approver;
 pub mod config;
 pub mod corruption;
 pub mod credential;
