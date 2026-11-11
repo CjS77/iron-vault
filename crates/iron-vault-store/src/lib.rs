@@ -94,8 +94,8 @@ pub use init::{
     NewVaultKeys, SOFTWARE_APPROVER_LABEL, SealingKeys, WhichPassphrase, initialize,
 };
 pub use initialization::{
-    BeginError, INITIAL_CONFIG, InitStateError, InitializationState, begin_initialization, ensure_initializable, finish_initialization,
-    require_initialized,
+    BeginError, Discarded, INITIAL_CONFIG, InitStateError, InitializationState, UnfinishedKind, begin_import, begin_initialization,
+    ensure_initializable, finish_import, finish_initialization, require_initialized,
 };
 pub use inventory_check::{ChangeRecovery, CheckedInventory, InventoryCheckError, InventoryDamage, check_recipient_inventory};
 pub use manifest::{

@@ -43,7 +43,9 @@ impl Dirs {
     }
 
     fn begin(&self, fs: &impl StoreFs) -> Result<Vec<String>, InitStateError> {
-        begin_initialization(&self.state, &self.config, fs).map_err(|e| e.cause)
+        begin_initialization(&self.state, &self.config, fs)
+            .map(|discarded| discarded.map(|d| d.files).unwrap_or_default())
+            .map_err(|e| e.cause)
     }
 
     /// The names in both directories, sorted, for comparing what a discard removed.
@@ -147,7 +149,7 @@ fn a_fresh_directory_is_uninitialized() {
 fn only_the_marker_is_unfinished() {
     let dirs = Dirs::new("init-marker");
     dirs.crashed_after(&OsFs, 0);
-    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished);
+    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished(UnfinishedKind::Initialization));
 }
 
 #[test]
@@ -155,7 +157,11 @@ fn every_crash_point_is_unfinished() {
     (0..=LAST_STEP).for_each(|step| {
         let dirs = Dirs::new("init-points");
         dirs.crashed_after(&OsFs, step);
-        assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished, "after step {step}");
+        assert_eq!(
+            dirs.read(&OsFs),
+            InitializationState::Unfinished(UnfinishedKind::Initialization),
+            "after step {step}"
+        );
     });
 }
 
@@ -173,7 +179,7 @@ fn a_manifest_beside_the_marker_is_still_unfinished() {
     let dirs = Dirs::new("init-both");
     Vault::create(&dirs.state, &OsFs, VaultIdentity::generate()).unwrap();
     dirs.put_bytes(&OsFs, "init.unfinished", b"");
-    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished);
+    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished(UnfinishedKind::Initialization));
 }
 
 #[test]
@@ -242,7 +248,7 @@ fn an_owner_lock_beside_the_marker_is_discarded() {
     let dirs = Dirs::new("init-owner-lock-discard");
     dirs.crashed_after(&OsFs, 2);
     dirs.put(&OsFs, "locked-by-owner");
-    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished);
+    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished(UnfinishedKind::Initialization));
     let removed = dirs.begin(&OsFs).unwrap();
     assert!(removed.contains(&"locked-by-owner".to_owned()), "{removed:?}");
     assert_eq!(dirs.state_names(&OsFs), ["init.unfinished", "lock"]);
@@ -314,7 +320,7 @@ fn a_recovery_record_beside_the_marker_is_discarded() {
     let dirs = Dirs::new("init-recovery-discard");
     dirs.crashed_after(&OsFs, 2);
     dirs.put(&OsFs, "recovery.toml");
-    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished);
+    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished(UnfinishedKind::Initialization));
     let removed = dirs.begin(&OsFs).unwrap();
     assert!(removed.contains(&"recovery.toml".to_owned()), "{removed:?}");
     assert_eq!(dirs.state_names(&OsFs), ["init.unfinished", "lock"]);
@@ -374,7 +380,7 @@ fn a_foreign_file_beside_the_marker_or_without_a_manifest_is_unrecognized() {
 fn a_second_approver_key_beside_the_marker_is_unrecognized() {
     let dirs = Dirs::new("init-two-approver-keys");
     dirs.crashed_after(&OsFs, 3);
-    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished);
+    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished(UnfinishedKind::Initialization));
     dirs.put(&OsFs, OTHER_APPROVER_KEY);
     let error = ensure_initializable(&dirs.state, &dirs.config, &OsFs).unwrap_err();
     assert_eq!(
@@ -425,7 +431,7 @@ fn lost_and_found_and_temp_files_are_ignored() {
     std::fs::write(temp, b"stale").unwrap();
     assert_eq!(dirs.read(&OsFs), InitializationState::Uninitialized);
     dirs.crashed_after(&OsFs, 2);
-    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished);
+    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished(UnfinishedKind::Initialization));
     dirs.put(&OsFs, "manifest.age");
     std::fs::remove_file(dirs.marker_path()).unwrap();
     assert_eq!(dirs.read(&OsFs), InitializationState::Initialized);
@@ -463,7 +469,7 @@ fn a_signature_is_judged_by_the_config_beside_it() {
     beside.crashed_after(&OsFs, 0);
     beside.put_config(&OsFs, Active, INITIAL_CONFIG);
     beside.put_config(&OsFs, ActiveSignature, b"signature");
-    assert_eq!(beside.read(&OsFs), InitializationState::Unfinished);
+    assert_eq!(beside.read(&OsFs), InitializationState::Unfinished(UnfinishedKind::Initialization));
 }
 
 #[test]
@@ -472,7 +478,7 @@ fn begin_on_a_fresh_directory_writes_only_the_empty_marker() {
     assert_eq!(dirs.begin(&OsFs), Ok(Vec::new()));
     assert_eq!(dirs.state_names(&OsFs), ["init.unfinished", "lock"]);
     assert_eq!(std::fs::read(dirs.marker_path()).unwrap(), b"");
-    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished);
+    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished(UnfinishedKind::Initialization));
 }
 
 #[test]
@@ -563,7 +569,7 @@ fn an_initializable_directory_is_named_and_left_as_it_was() {
     unfinished.crashed_after(&OsFs, PUBLISHED);
     [
         (&fresh, InitializationState::Uninitialized),
-        (&unfinished, InitializationState::Unfinished),
+        (&unfinished, InitializationState::Unfinished(UnfinishedKind::Initialization)),
     ]
     .into_iter()
     .for_each(|(dirs, expected)| {
@@ -607,7 +613,11 @@ fn a_crash_during_the_discard_reads_unfinished() {
                 fs.cut_power_after(fs.trace().len() + cut);
                 assert!(dirs.begin(&fs).is_err(), "step {step} cut {cut}");
                 fs.crash();
-                assert_eq!(dirs.read(&fs), InitializationState::Unfinished, "step {step} cut {cut}");
+                assert_eq!(
+                    dirs.read(&fs),
+                    InitializationState::Unfinished(UnfinishedKind::Initialization),
+                    "step {step} cut {cut}"
+                );
                 dirs.begin(&fs).unwrap();
                 assert_eq!(dirs.state_names(&fs), ["init.unfinished", "lock"], "step {step} cut {cut}");
                 assert_eq!(dirs.config_names(&fs), ["config.toml.lock"], "step {step} cut {cut}");
@@ -644,7 +654,10 @@ fn begin_on_a_fresh_directory_fails_cleanly_at_every_call() {
     outcomes.iter().for_each(|(i, _, state)| {
         // Only a failed directory fsync leaves the marker behind, and then init reads Unfinished and goes on.
         assert!(
-            matches!(state, InitializationState::Uninitialized | InitializationState::Unfinished),
+            matches!(
+                state,
+                InitializationState::Uninitialized | InitializationState::Unfinished(UnfinishedKind::Initialization)
+            ),
             "call {i}: {state:?}"
         );
     });
@@ -657,7 +670,7 @@ fn begin_on_an_unfinished_directory_fails_cleanly_at_every_call() {
     assert!(outcomes.len() >= 10, "{outcomes:?}");
     outcomes
         .iter()
-        .for_each(|(i, _, state)| assert_eq!(*state, InitializationState::Unfinished, "call {i}"));
+        .for_each(|(i, _, state)| assert_eq!(*state, InitializationState::Unfinished(UnfinishedKind::Initialization), "call {i}"));
 }
 
 /// A discard that fails at any call still names every file it unlinked first, so `vault.init-discarded` can log them.
@@ -676,7 +689,7 @@ fn a_discard_failing_part_way_names_the_files_it_removed() {
             fs.fail_call(fs.trace().len() + i, io::ErrorKind::Other);
             let error = begin_initialization(&dirs.state, &dirs.config, &fs).unwrap_err();
             let after = dirs.all_names(&fs);
-            let mut named = error.discarded.clone();
+            let mut named = error.discarded.clone().map(|d| d.files).unwrap_or_default();
             named.sort();
             let gone: Vec<_> = before.into_iter().filter(|name| !after.contains(name)).collect();
             assert_eq!(named, gone, "call {i}: {error:?}");
@@ -700,7 +713,7 @@ fn finish_removes_the_marker_and_fails_cleanly_at_every_call() {
                 step: WriteStep::Remove,
                 ..
             }),
-            InitializationState::Unfinished
+            InitializationState::Unfinished(UnfinishedKind::Initialization)
         )
     ));
     assert!(matches!(
@@ -757,3 +770,5 @@ fn unlock_on_an_empty_directory_says_to_run_init() {
     assert!(error.to_string().contains("iron-vault init"));
     assert!(UnlockError::InitializationUnfinished.to_string().contains("iron-vault init"));
 }
+
+mod import;

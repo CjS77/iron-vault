@@ -107,6 +107,11 @@ impl StateFileName {
         Self("init.unfinished".to_owned())
     }
 
+    /// The empty file `import.unfinished`, which marks a vault import that has not finished.
+    pub fn unfinished_import() -> Self {
+        Self("import.unfinished".to_owned())
+    }
+
     /// The empty file `reset.unfinished`, which marks a reset past its commit point that has not finished.
     pub fn unfinished_reset() -> Self {
         Self("reset.unfinished".to_owned())
@@ -218,6 +223,7 @@ mod tests {
             StateFileName::new("init.unfinished"),
             Ok(StateFileName::unfinished_initialization())
         );
+        assert_eq!(StateFileName::new("import.unfinished"), Ok(StateFileName::unfinished_import()));
         assert_eq!(StateFileName::new("reset.unfinished"), Ok(StateFileName::unfinished_reset()));
         assert_eq!(StateFileName::new("locked-by-owner"), Ok(StateFileName::owner_lock()));
         let id: RecordId = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();

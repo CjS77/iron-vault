@@ -18,11 +18,12 @@ use crate::initialization::INITIAL_CONFIG;
 use crate::passphrase::seal_at;
 use crate::{
     AdmissionPaused, ApprovalError, ApprovalPassphrase, ApprovalState, ApprovalStorage, ApprovalVersion, ApproverId, ApproverLabel,
-    ApproverPublicKey, BeginError, ConfigDigest, ConfigDirLock, EnvelopeError, ErrorKindLabel, InitStateError, InitializationState,
-    PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig, PinnedApprover, ReadError, RecipientIdentity, RecipientSet, RecipientSetError,
-    SignError, SignerKind, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs, UtcSecond, Vault, VaultError, VaultId, VaultIdentity,
-    WriteError, approval::seal_signer_key_at, begin_initialization, finish_initialization, open_signer_key, read_identity_envelope,
-    read_signer_key, unwrap_identity, wrap_identity, write_identity_envelope, write_passphrase_envelope, write_signer_key,
+    ApproverPublicKey, BeginError, ConfigDigest, ConfigDirLock, Discarded, EnvelopeError, ErrorKindLabel, InitStateError,
+    InitializationState, PASSPHRASE_WORK_FACTOR, Passphrase, PendingConfig, PinnedApprover, ReadError, RecipientIdentity, RecipientSet,
+    RecipientSetError, SignError, SignerKind, SoftwareSigner, SoftwareSignerKey, StateDirLock, StoreFs, UtcSecond, Vault, VaultError,
+    VaultId, VaultIdentity, WriteError, approval::seal_signer_key_at, begin_initialization, finish_initialization, open_signer_key,
+    read_identity_envelope, read_signer_key, unwrap_identity, wrap_identity, write_identity_envelope, write_passphrase_envelope,
+    write_signer_key,
 };
 use crate::{
     RecipientEntry, RecipientInventory, RecipientInventoryError, RecipientInventoryReadError, RecipientInventoryWriteError, RecipientLabel,
@@ -104,7 +105,7 @@ impl fmt::Display for InitStep {
 pub struct InitError {
     step: InitStep,
     cause: InitFailure,
-    discarded: Box<[String]>,
+    discarded: Option<Box<Discarded>>,
     approved: Option<Box<FirstApproval>>,
 }
 
@@ -115,7 +116,7 @@ impl InitError {
         Self {
             step,
             cause,
-            discarded: Box::default(),
+            discarded: None,
             approved: None,
         }
     }
@@ -130,10 +131,11 @@ impl InitError {
         &self.cause
     }
 
-    /// The files the discard removed, for the `vault.init-discarded` log: all of them when a later step failed, those
-    /// removed before the failure when the discard itself failed part-way, and none when nothing was discarded.
-    pub fn discarded(&self) -> &[String] {
-        &self.discarded
+    /// What the discard removed, for the `vault.init-discarded` or `migration.import-discarded` log: all of it when a
+    /// later step failed, what was removed before the failure when the discard itself failed part-way, and `None` when
+    /// nothing was discarded.
+    pub fn discarded(&self) -> Option<&Discarded> {
+        self.discarded.as_deref()
     }
 
     /// Step 8's outcome, set only when the first approval was committed and a later step failed. Its events are the
@@ -205,8 +207,8 @@ pub struct InitializedVault {
     pub digest: ConfigDigest,
     /// The kind of the directory fsync failure that made the first commit uncertain until it was settled, if one did.
     pub commit_uncertain: Option<ErrorKindLabel>,
-    /// The files discarded from an unfinished initialization before step 1, for the `vault.init-discarded` log.
-    pub discarded: Vec<String>,
+    /// The unfinished run discarded before step 1, for the `vault.init-discarded` or `migration.import-discarded` log.
+    pub discarded: Option<Discarded>,
     /// The roles of the recipients enrolled, in the order `identity.age` was wrapped for them: kinds, never keys.
     pub recipients: Vec<RecipientRole>,
 }
@@ -268,7 +270,7 @@ pub(crate) fn initialize_at<F: StoreFs>(
             discarded,
         }),
         Err(error) => Err(InitError {
-            discarded: discarded.into(),
+            discarded: discarded.map(Box::new),
             ..error
         }),
     }
@@ -319,8 +321,11 @@ fn write_vault<F: StoreFs>(
 
 /// The discard and step 1. The state is read first only to name the step a failure belongs to: with the service-wide
 /// lock held, nothing else changes it before `begin_initialization` reads it again.
-fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, InitError> {
-    let unfinished = InitializationState::read(state, config, fs).map_err(at(InitStep::Begin))? == InitializationState::Unfinished;
+fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Option<Discarded>, InitError> {
+    let unfinished = matches!(
+        InitializationState::read(state, config, fs).map_err(at(InitStep::Begin))?,
+        InitializationState::Unfinished(_)
+    );
     begin_initialization(state, config, fs).map_err(|BeginError { cause, discarded }| InitError {
         // Removing a leftover recovery check record or owner-lock file is part of the discard; a failed marker write is `Begin`.
         step: if unfinished
@@ -333,7 +338,7 @@ fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Res
             InitStep::Begin
         },
         cause: cause.into(),
-        discarded: discarded.into(),
+        discarded: discarded.map(Box::new),
         approved: None,
     })
 }
@@ -487,7 +492,7 @@ fn at<E: Into<InitFailure>>(step: InitStep) -> impl FnOnce(E) -> InitError {
     move |error| InitError {
         step,
         cause: error.into(),
-        discarded: Box::default(),
+        discarded: None,
         approved: None,
     }
 }

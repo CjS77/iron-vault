@@ -4,7 +4,6 @@ use std::path::Path;
 use secrecy::{ExposeSecret, SecretString};
 
 use super::*;
-use crate::durable_replace;
 use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::test_dir::TestDir;
 use crate::vault::tests::capture_logs;
@@ -12,6 +11,7 @@ use crate::{
     ConfigDigest, OsFs, RecoveryKeySecret, StanzaKind, StateFileName, read_passphrase_envelope, recover_approval, stanza_kinds,
     unlock_with_passphrase,
 };
+use crate::{UnfinishedKind, durable_replace};
 
 /// The passphrase work factor the tests seal at, so a run does not spend seconds in scrypt.
 const TEST_WORK_FACTOR: u8 = 2;
@@ -204,10 +204,15 @@ fn a_fault_at_the_inventory_write_leaves_it_unfinished_and_the_next_init_discard
     fs.fail_call(rename + 1, io::ErrorKind::Other);
     let error = dirs.init(&fs).unwrap_err();
     assert_eq!(error.step(), InitStep::IdentityEnvelope);
-    assert_eq!(dirs.read(&fs), InitializationState::Unfinished);
+    assert_eq!(dirs.read(&fs), InitializationState::Unfinished(UnfinishedKind::Initialization));
     let (result, secrets) = dirs.init_keeping(&fs);
     let initialized = result.unwrap();
-    assert!(initialized.discarded.contains(&"recipients.age".to_owned()));
+    assert!(
+        initialized
+            .discarded
+            .as_ref()
+            .is_some_and(|d| d.files.contains(&"recipients.age".to_owned()))
+    );
     assert_initialized(&dirs, &fs, &initialized, &secrets);
 }
 
@@ -216,7 +221,7 @@ fn a_fresh_directory_initializes_to_version_1() {
     let dirs = Dirs::new("init-run");
     let (result, secrets) = dirs.init_keeping(&OsFs);
     let initialized = result.unwrap();
-    assert!(initialized.discarded.is_empty(), "{initialized:?}");
+    assert!(initialized.discarded.is_none(), "{initialized:?}");
     assert_eq!(initialized.recipients, [RecipientRole::Operational, RecipientRole::Recovery]);
     assert_initialized(&dirs, &OsFs, &initialized, &secrets);
     assert_eq!(dirs.file(&OsFs, dirs.config_dir.path(), "config.toml"), INITIAL_CONFIG);
@@ -351,11 +356,17 @@ fn an_unfinished_initialization_is_discarded_and_started_over() {
     fail_finish_unlink(&dirs, &fs);
     let error = dirs.init(&fs).unwrap_err();
     assert_eq!(error.step(), InitStep::Finish);
-    assert_eq!(dirs.read(&fs), InitializationState::Unfinished);
+    assert_eq!(dirs.read(&fs), InitializationState::Unfinished(UnfinishedKind::Initialization));
     let expected = discarded(&dirs, &fs);
     let (result, secrets) = dirs.init_keeping(&fs);
     let initialized = result.unwrap();
-    assert_eq!(initialized.discarded, expected);
+    assert_eq!(
+        initialized.discarded,
+        Some(Discarded {
+            kind: UnfinishedKind::Initialization,
+            files: expected
+        })
+    );
     assert_initialized(&dirs, &fs, &initialized, &secrets);
 }
 
@@ -376,12 +387,12 @@ fn a_step_failing_after_a_discard_still_names_the_discarded_files() {
     let dirs = Dirs::new("init-discard-then-fail");
     let fs = dirs.fault_fs();
     fail_finish_unlink(&dirs, &fs);
-    assert!(dirs.init(&fs).unwrap_err().discarded().is_empty());
+    assert!(dirs.init(&fs).unwrap_err().discarded().is_none());
     let expected = discarded(&dirs, &fs);
     fs.fail_first(FsOp::Rename, io::ErrorKind::Other);
     let error = dirs.init(&fs).unwrap_err();
     assert_eq!(error.step(), InitStep::IdentityEnvelope);
-    assert_eq!(error.discarded(), expected);
+    assert_eq!(error.discarded().map(|d| &d.files), Some(&expected));
 }
 
 /// The store reports the first approval to the service, which records its events; the store logs none of them.
@@ -404,9 +415,12 @@ fn assert_left_by(dirs: &Dirs, fs: &FaultFs, error: &InitError, call: usize) {
         (InitStep::Discard, InitFailure::State(InitStateError::LeftoverRecoveryCheck(_) | InitStateError::LeftoverOwnerLock(_))) => {
             &[InitializationState::Uninitialized]
         }
-        (InitStep::Begin, _) => &[InitializationState::Uninitialized, InitializationState::Unfinished],
+        (InitStep::Begin, _) => &[
+            InitializationState::Uninitialized,
+            InitializationState::Unfinished(UnfinishedKind::Initialization),
+        ],
         (InitStep::Finish, InitFailure::State(InitStateError::FinishUncertain { .. })) => &[InitializationState::Initialized],
-        _ => &[InitializationState::Unfinished],
+        _ => &[InitializationState::Unfinished(UnfinishedKind::Initialization)],
     };
     assert!(expected.contains(&state), "call {call}: {error} left {state:?}");
 }
