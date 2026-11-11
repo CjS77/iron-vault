@@ -301,6 +301,17 @@ out=$(run ubuntu-24.04 --portable --accept-no-second-secret)
 grep -q "no clevis binding exists" <<<"$out" || { echo "FAIL the luksmeta warning does not say no binding exists: $out"; status=1; }
 lvm_on_luks; echo "luks-abc UUID=abc /etc/keys/root.key luks" >"$work/crypttab"
 portable "a crypttab key file" 1 "key file /etc/keys/root.key"
+lvm_on_luks; echo "luks-abc UUID=abc none luks,keyscript=/usr/bin/tpm2-initramfs-tool" >"$work/crypttab"
+portable "a crypttab keyscript that is not known to ask a person" 1 "keyscript=/usr/bin/tpm2-initramfs-tool" "remove the keyscript"
+lvm_on_luks; echo "luks-abc UUID=abc none luks,discard,keyscript=tpm2-tool,noauto" >"$work/crypttab"
+portable "a bare-name keyscript among other options" 1 "keyscript=tpm2-tool,"
+for script in /lib/cryptsetup/scripts/decrypt_keyctl /usr/lib/cryptsetup/scripts/decrypt_keyctl decrypt_keyctl \
+    /lib/cryptsetup/askpass /usr/lib/cryptsetup/askpass; do
+    lvm_on_luks; echo "luks-abc UUID=abc none luks,keyscript=$script" >"$work/crypttab"
+    portable "the keyscript $script, which asks a person" 0
+done
+lvm_on_luks; echo "luks-abc UUID=abc none luks,keyscript=/lib/cryptsetup/scripts/decrypt_derived" >"$work/crypttab"
+portable "a keyscript that derives the key from another device" 1 "keyscript=/lib/cryptsetup/scripts/decrypt_derived"
 lvm_on_luks; luks_dump nvme0n1p3 "$(tpm_token false)"; echo "luks-abc UUID=abc none luks,tpm2-device=auto" >"$work/crypttab"
 portable "tpm2-device= with a PIN-less token" 2 "does not need a PIN" "tpm2-device="
 lvm_on_luks; boot_image initrd.img-6.8.0-2 "$(printf 'cryptroot/keyfiles\ncryptroot/keyfiles/cryptroot.key')"

@@ -272,8 +272,8 @@ different risks ([§14](../../../design/iron-vault-specification.md#14-recipient
 - **`--portable`**: for a laptop. The helper checks, once, that something you must supply at boot protects the disk that holds
   the blob: a LUKS passphrase typed at boot, or a LUKS TPM slot that needs a PIN (`systemd-cryptenroll --tpm2-with-pin=yes`).
   On a btrfs or bcachefs filesystem that spans several devices it checks every device. It warns when part of the disk is not
-  encrypted, when a TPM or `clevis` slot needs no PIN, when `/etc/crypttab` or an initramfs holds a key file, and when it
-  cannot tell. With a warning it seals nothing until you accept that anyone who steals the machine can start the vault.
+  encrypted, when a TPM or `clevis` slot needs no PIN, when `/etc/crypttab` or an initramfs holds a key file, when a crypttab
+  `keyscript=` is not one known to ask you, and when it cannot tell. With a warning it seals nothing until you accept that anyone who steals the machine can start the vault.
 
 ```sh
 sudo iron-vault-provision-host-unlock --server       # or --portable
