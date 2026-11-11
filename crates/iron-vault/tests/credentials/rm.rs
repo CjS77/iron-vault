@@ -29,7 +29,7 @@ const OLD_NAME: &str = "old_key";
 
 /// Adds `old_key` to the vault on disk, before the service starts, and returns its record ID.
 fn seed_old_key(fixture: &Fixture) -> RecordId {
-    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let lock = common::approval_harness::state_dir_lock(&fixture.path("state"));
     let (mut vault, _) = Vault::open(&lock, &OsFs, Arc::new(identity())).unwrap();
     let origins = PermittedOrigins::new([("legacy.example".parse().unwrap(), Port::HTTPS)].into()).unwrap();
     let material = CredentialMaterial::Static { key: "old-secret".into() };

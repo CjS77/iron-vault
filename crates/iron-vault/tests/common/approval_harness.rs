@@ -142,13 +142,13 @@ impl Fixture {
     }
 
     fn state_lock(&self) -> StateDirLock {
-        wait_out_held(|| StateDirLock::acquire(&self.path("state")), is_held, "the state-directory lock")
+        state_dir_lock(&self.path("state"))
     }
 
     /// Approves and publishes `config` through the store's transaction, as `config approve` would.
     pub fn approve_through_store(&self, state: &mut ApprovalState, config: &str) {
         let state_dir = self.state_lock();
-        let config_dir = wait_out_held(|| ConfigDirLock::acquire(&self.path("etc")), is_held, "the config-directory lock");
+        let config_dir = config_dir_lock(&self.path("etc"));
         let identity = identity();
         let storage = ApprovalStorage {
             state_dir: &state_dir,
@@ -320,6 +320,19 @@ const LOCK_RETRY: Duration = Duration::from_millis(10);
 
 /// The result of `acquire`, retried while it fails with `held` until [`LOCK_PATIENCE`] has passed; then the last error
 /// fails the test, naming `what`.
+/// Takes the state-directory lock, waiting out a holder that is only a child still between `fork` and `exec`.
+///
+/// Test binaries are grouped into one process, so a sibling test may spawn the CLI at any moment; the child shares the lock's
+/// descriptor until it execs, and a bare `StateDirLock::acquire` straight after a drop would find the lock held.
+pub fn state_dir_lock(dir: &Path) -> StateDirLock {
+    wait_out_held(|| StateDirLock::acquire(dir), is_held, "the state-directory lock")
+}
+
+/// [`state_dir_lock`] for the config-directory lock.
+pub fn config_dir_lock(dir: &Path) -> ConfigDirLock {
+    wait_out_held(|| ConfigDirLock::acquire(dir), is_held, "the config-directory lock")
+}
+
 fn wait_out_held<T, E: std::fmt::Debug>(acquire: impl Fn() -> Result<T, E>, held: fn(&E) -> bool, what: &str) -> T {
     let deadline = Instant::now() + LOCK_PATIENCE;
     loop {

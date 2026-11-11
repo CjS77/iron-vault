@@ -101,7 +101,7 @@ impl Fixture {
     }
 
     fn create_vault(&self) -> ApprovalState {
-        let lock = StateDirLock::acquire(&self.path("state")).unwrap();
+        let lock = common::approval_harness::state_dir_lock(&self.path("state"));
         let mut vault = Vault::create(&lock, &OsFs, identity()).unwrap();
         let material = CredentialMaterial::Static { key: "fx-secret".into() };
         vault
@@ -115,8 +115,8 @@ impl Fixture {
     }
 
     fn approve_through_store(&self, state: &mut ApprovalState, config: &str) {
-        let state_dir = StateDirLock::acquire(&self.path("state")).unwrap();
-        let config_dir = ConfigDirLock::acquire(&self.path("etc")).unwrap();
+        let state_dir = common::approval_harness::state_dir_lock(&self.path("state"));
+        let config_dir = common::approval_harness::config_dir_lock(&self.path("etc"));
         let identity = identity();
         let storage = ApprovalStorage {
             state_dir: &state_dir,

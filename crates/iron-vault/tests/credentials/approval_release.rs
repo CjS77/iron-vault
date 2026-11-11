@@ -62,7 +62,7 @@ fn load_state<F: StoreFs>(lock: &StateDirLock, fs: &F) -> ApprovalState {
 
 /// The committed version and highest reserved version on disk.
 fn counters(fixture: &Fixture) -> (Option<u64>, u64) {
-    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let lock = common::approval_harness::state_dir_lock(&fixture.path("state"));
     let state = load_state(&lock, &OsFs);
     (state.committed().map(|(version, _)| version.get()), state.highest_reserved())
 }
@@ -170,8 +170,8 @@ impl ApprovalSigner for RefusingSigner {
 /// Runs an approval of `config` whose signer fails, on the real filesystem, and returns the version it consumed.
 fn approve_with_failing_signer(fixture: &Fixture, config: &str) -> u64 {
     let (state_dir, config_dir) = (
-        StateDirLock::acquire(&fixture.path("state")).unwrap(),
-        ConfigDirLock::acquire(&fixture.path("etc")).unwrap(),
+        common::approval_harness::state_dir_lock(&fixture.path("state")),
+        common::approval_harness::config_dir_lock(&fixture.path("etc")),
     );
     let mut state = load_state(&state_dir, &OsFs);
     let identity = identity();
@@ -260,7 +260,7 @@ async fn rotating_the_approver_keeps_the_counters_and_the_active_signature_needs
 /// Enrolls a newly generated approver, whose key is sealed under the same approval passphrase, and removes the one
 /// that signed the published pair, returning that one's ID and the new one's.
 fn rotate_approver(fixture: &Fixture) -> (ApproverId, ApproverId) {
-    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let lock = common::approval_harness::state_dir_lock(&fixture.path("state"));
     let mut state = load_state(&lock, &OsFs);
     let (key, pinned) = SoftwareSigner::generate().unwrap();
     let sealed = iron_vault_store::seal_signer_key_for_tests(&key, &approval_passphrase(APPROVAL_PASSPHRASE)).unwrap();
@@ -275,7 +275,7 @@ fn rotate_approver(fixture: &Fixture) -> (ApproverId, ApproverId) {
 
 /// Whether the published pair `pair` still verifies as the committed approval.
 fn verify_published(fixture: &Fixture, pair: &[Vec<u8>; 2]) -> Result<(), VerifyError> {
-    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let lock = common::approval_harness::state_dir_lock(&fixture.path("state"));
     verify_approval(&load_state(&lock, &OsFs), &pair[0], &pair[1]).map(drop)
 }
 
@@ -437,7 +437,7 @@ struct Surviving {
 }
 
 fn surviving(fixture: &Fixture, fs: &SharedFs) -> Surviving {
-    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let lock = common::approval_harness::state_dir_lock(&fixture.path("state"));
     let state = load_state(&lock, fs);
     let (version, digest) = state.committed().unwrap();
     let file = |name: &str| fs.contents(&fixture.path(&format!("etc/{name}")));

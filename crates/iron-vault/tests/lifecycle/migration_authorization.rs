@@ -54,7 +54,7 @@ fn add_recipient() -> MigrationOperation {
 /// `identity.age` holding `vault` for an operational identity and a second recipient, and `operational.age` sealing that
 /// operational identity to [`PASSPHRASE`], as initialization writes them.
 fn write_envelopes(fixture: &Fixture, vault: &VaultIdentity) {
-    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let lock = common::approval_harness::state_dir_lock(&fixture.path("state"));
     let (operational, operational_key) = OperationalIdentity::generate();
     let recipients = RecipientSet::new([operational_key, OperationalIdentity::generate().1]).unwrap();
     write_identity_envelope(&lock, &OsFs, &wrap_identity(vault, &recipients).unwrap()).unwrap();

@@ -35,7 +35,7 @@ const FILES: [&str; 3] = ["state/identity.age", "state/approval.age", "state/man
 fn with_recovery_key(fixture: &Fixture) -> String {
     let (secret, recovery) = RecoveryKey::generate();
     let (_, other) = RecoveryKey::generate();
-    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let lock = common::approval_harness::state_dir_lock(&fixture.path("state"));
     let envelope = wrap_identity(&identity(), &RecipientSet::new([recovery, other]).unwrap()).unwrap();
     write_identity_envelope(&lock, &OsFs, &envelope).unwrap();
     secret.expose_secret().to_owned()

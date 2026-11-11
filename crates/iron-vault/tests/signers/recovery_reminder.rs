@@ -130,7 +130,7 @@ async fn a_successful_recovery_check_clears_the_spacing() {
     let (key, recovery) = RecoveryKey::generate();
     let (_, other) = RecoveryKey::generate();
     let fixture = Fixture::new().await;
-    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let lock = common::approval_harness::state_dir_lock(&fixture.path("state"));
     let envelope = wrap_identity(&identity(), &RecipientSet::new([recovery, other]).unwrap()).unwrap();
     write_identity_envelope(&lock, &OsFs, &envelope).unwrap();
     drop(lock);

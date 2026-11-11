@@ -168,7 +168,7 @@ fn serve(service: &Arc<ServiceContext>, limits: Limits) -> (PathBuf, oneshot::Se
 
 /// `identity.age` and `operational.age` sealed to [`PASSPHRASE`], as initialization writes them.
 fn write_envelopes(fixture: &Fixture) {
-    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let lock = common::approval_harness::state_dir_lock(&fixture.path("state"));
     let (operational, operational_key) = OperationalIdentity::generate();
     let recipients = RecipientSet::new([operational_key, OperationalIdentity::generate().1]).unwrap();
     write_identity_envelope(&lock, &OsFs, &wrap_identity(&identity(), &recipients).unwrap()).unwrap();
@@ -179,7 +179,7 @@ fn write_envelopes(fixture: &Fixture) {
 
 /// Adds [`BIG_RECORDS`] credentials through the store, before the service takes the state directory's lock.
 fn add_big_records(fixture: &Fixture) {
-    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let lock = common::approval_harness::state_dir_lock(&fixture.path("state"));
     let (mut vault, _) = Vault::open(&lock, &OsFs, identity()).unwrap();
     (0..BIG_RECORDS).for_each(|n| {
         let origins = PermittedOrigins::new([("localhost".parse().unwrap(), "443".parse().unwrap())].into()).unwrap();

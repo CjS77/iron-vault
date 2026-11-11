@@ -82,7 +82,7 @@ async fn export() -> Source {
 
 /// `identity.age` and `operational.age` sealed to [`SOURCE_PASSPHRASE`], as initialization writes them.
 fn write_envelopes(fixture: &Fixture) {
-    let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
+    let lock = super::approval_harness::state_dir_lock(&fixture.path("state"));
     let (operational, operational_key) = OperationalIdentity::generate();
     let recipients = RecipientSet::new([operational_key, OperationalIdentity::generate().1]).unwrap();
     write_identity_envelope(&lock, &OsFs, &wrap_identity(&identity(), &recipients).unwrap()).unwrap();
