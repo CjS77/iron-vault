@@ -101,7 +101,7 @@ record files (`record-*.age`), the recovery check record (`recovery.toml`), whic
 something about a vault that may be gone. Beside a manifest, an approver key
 envelope that no pinned approver names is an [orphan](approval-signers.md#orphan-key-files), not a foreign file. The
 staged inventory (`recipients.age.staged`) and a TPM key blob are vault files only beside a manifest: `init` and `import` never
-write them, so beside `init.unfinished` or `import.unfinished` each is foreign ([recipients.md](recipients.md#initialization)). Each matters only beside `init.unfinished`, where it makes the state
+write them, so beside `init.unfinished` or `import.unfinished` each is foreign ([recipients.md](recipients.md#initialization); the key blob, [tpm-approval-signer.md](tpm-approval-signer.md#the-tpm-key-blob)). Each matters only beside `init.unfinished`, where it makes the state
 Unrecognized so the discard never sweeps it into the new vault, and in a state directory with no manifest, where it
 makes Uninitialized impossible. Beside a manifest it changes nothing: `unlock` logs its name at WARN
 (`vault.foreign-file`) and goes on, because `Vault::open` already ignores names it does not know and the manifest alone

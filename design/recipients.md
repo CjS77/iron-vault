@@ -282,7 +282,7 @@ prompt and the recipient change applies it again before it writes.
 and part 3 becomes "at least one recipient of the recovery class":
 
 - **`tpm`** joins the unlock class. Part 1 keeps it while TPM unlock is configured. It never counts as recovery, because
-  it is bound to one machine and fails with it (§16). A TPM vault may drop `operational` once part 2 allows it
+  it is bound to one machine and fails with it (§16). A TPM vault keeps `operational` in v0
   ([open question 11](#open-questions)).
 - **`hardware`** joins the unlock class. Whether a second hardware key may count as recovery is that phase's decision.
 - **`host-unlock`** joins the unlock class. Part 1 keeps it while the host unlock adapter is configured. It never counts
@@ -714,7 +714,9 @@ The design takes the default stated for each, until the owner decides.
     passphrase, because removal grants no access and is a destructive change, and owner presence is the "fresh
     existing-owner authorization" §16 asks for. The alternative also requires migration authorization with a third
     operation tag, so removal needs the vault passphrase.
-11. **`operational` beside a TPM.** *Decided: alternative taken (2026-11-09).*
+11. **`operational` beside a TPM.** *Superseded (owner, 2026-11-11):* `operational` stays enrolled while the vault
+    passphrase is the only source-owner method, and v0 does not relax part 2 for a TPM approver
+    ([tpm-approval-signer.md](tpm-approval-signer.md#open-questions) open question 3). The decision of 2026-11-09 was:
     [§14](iron-vault-specification.md#14-recipients-startup-and-memory) now gives passphrase, TPM and hardware key
     equal weight as the unlock method, with the offline recovery key as the second way in, so the passphrase is not
     required beside another method. The [independence rule](#independence-rule) keeps `operational` only while the

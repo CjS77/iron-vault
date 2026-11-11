@@ -62,12 +62,12 @@ process, the command exits with code 3 before it connects, and nothing is remove
 On success it prints how many files it removed, and any file it left in place:
 
 ```text
-reset: discarded vault 3f1c9a5e-0b9c-4f7e-8a41-6d2b7e0c1a55; 6 files removed
+reset: discarded vault 3f1c9a5e-0b9c-4f7e-8a41-6d2b7e0c1a55; 7 files removed
 next: run `iron-vault init`
 ```
 
 Reset removes the vault's files and the config in the state and config directories, and nothing else. The audit log, the
-lock files, any file it did not recognise, and everything outside those two directories stay: TLS files, and on a Compose
+directory lock files, any file it did not recognise, and everything outside those two directories stay: TLS files, and on a Compose
 or host-unlock installation the host unlock credential. If it names a file it left in place, move that aside before the
 next step.
 

@@ -425,8 +425,8 @@ what makes a short PIN safe to accept as source-owner proof.
 
 [recipients.md](recipients.md#independence-rule) part 2 keeps `operational` enrolled while the vault passphrase is the
 only source-owner method, and the owner decided (2026-11-09, recipients open question 11) that a vault with another
-method may drop it. **This design recommends not relaxing part 2 in v0**, and asks the owner to confirm
-([open question 3](#open-questions)):
+method may drop it. **The owner decided on 2026-11-11 not to relax part 2 in v0**
+([open question 3](#open-questions)), for these reasons:
 
 - a TPM approval key dies with the machine. A vault whose only source-owner method is that key cannot be migrated off a
   machine whose TPM failed, was cleared, or moved to another board, which is exactly when migration is wanted;
@@ -610,7 +610,7 @@ In order, each a separate PR:
 5. **K-333, migration.** The `tpm_pin` method, the switchable step 6 across methods, the refusals and audit fields,
    and in migration-authorization.md the reserve's sentence, plus "Binding digest" and the `tpm_pin` row of
    "Source-owner method", which say the TPM signs the bare binding digest rather than the migration proof payload. **Not** the part 2 relaxation or the `approver remove`
-   refusal, pending [open question 3](#open-questions).
+   refusal ([open question 3](#open-questions)).
 6. **K-334, packaging, release check and manual.** The socket unit (`MaxConnections=1`, `iron-vault:root 0600`) and
    the service unit, the `iron-vault-tpm` account, the
    `libexec` install, linux-package.md's tables and lifecycle (remove and purge stop the socket; the account stays, as
@@ -623,30 +623,28 @@ K-335 (EP-46) then runs the release check on real hardware, and K-255 (EP-45) bu
 
 ## Open questions
 
-1. **PIN length and the interval floor**, one decision ([Lockout reserve](#lockout-reserve)). *Default:* at least 6
-   Unicode scalar values, and a lockout interval of at least 600 seconds: about 9 years on average for a 6-digit PIN
-   against a compromised service. Firmware TPMs commonly ship with intervals far above the floor, so it refuses only
-   weakened settings. The alternatives are 8 characters with the same floor, or a 6-character minimum with a
-   3600-second floor, which refuses more machines. **Decided (owner, 2026-11-11): the default.**
-2. **Which migration method is asked first.** *Default:* the vault passphrase, then TPM approvers
-   ([Migration](#migration)). The alternative puts the active approval's signer first when it is a TPM approver, as the
-   approver prompt does.
-3. **Dropping `operational` once a TPM approver exists. This reverses the owner's decision of 2026-11-09**
-   ([recipients.md](recipients.md#open-questions) open question 11), and needs the owner's confirmation before K-333
-   starts. *Default:* not in v0, for the reasons in [The independence rule stays](#the-independence-rule-stays), which
-   also drops the `approver remove` refusal K-328's card asked for; the rule for when it is allowed is specified there.
-   If the owner keeps the 2026-11-09 decision, K-333 implements that rule and the refusal.
-4. **K-255's host helper.** *Default:* K-255 reuses this helper, PIN through the service, and the helper stays
-   stateless; a host-rendered summary with the PIN typed on the host is a stronger design for a container the host
-   does not trust, and K-255 decides whether Compose needs it. A stateless helper that receives the PIN through the
-   container is the weaker reading of [§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances)'s
-   "the container may request only the service's validated approval transaction": the helper checks the message's
-   form, not that the owner saw what it approves.
-5. **The `tss` group.** *Default:* the package relies on Ubuntu's `tpm-udev` rule (`/dev/tpmrm0` `tss:tss 0660`) and
-   does not create the group. On a machine without it the kind is offered, because the socket exists, but the helper's
-   instance cannot start, and enrollment answers `approver-kind-unavailable` ([Offered](#the-helper-process)).
-   Declaring `Recommends: tpm-udev` is K-334's call. **Decided (owner, 2026-11-11): the default.**
-6. **§4's Linux row.** It names the unlock adapters and "an in-service adapter with a TPM PIN in a later phase", and
-   no adapter for approval signing. *Default:* no spec edit in this ticket; the owner may add "approval signing through
-   a separate TPM signing helper" to the row. That later unlock PIN, if it comes, should go through a helper too, since
-   §14 keeps the service account away from the TPM.
+All six were decided by the owner on 2026-11-11, who accepted the default of each.
+
+1. **PIN length and the interval floor**, one decision ([Lockout reserve](#lockout-reserve)). *Decided (owner,
+   2026-11-11):* at least 6 Unicode scalar values, and a lockout interval of at least 600 seconds: about 9 years on
+   average for a 6-digit PIN against a compromised service. Firmware TPMs commonly ship with intervals far above the
+   floor, so it refuses only weakened settings.
+2. **Which migration method is asked first.** *Decided (owner, 2026-11-11):* the vault passphrase, then TPM approvers
+   ([Migration](#migration)).
+3. **Dropping `operational` once a TPM approver exists.** *Decided (owner, 2026-11-11):* not in v0, for the reasons in
+   [The independence rule stays](#the-independence-rule-stays). This replaces the owner's decision of 2026-11-09
+   ([recipients.md](recipients.md#open-questions) open question 11), and drops the `approver remove` refusal K-328's card
+   asked for; K-333 implements the rule for when dropping is allowed, as specified there.
+4. **K-255's host helper.** *Decided (owner, 2026-11-11):* K-255 reuses this helper, PIN through the service, and the
+   helper stays stateless. A stateless helper that receives the PIN through the container is the weaker reading of
+   [§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances)'s "the container may request only the
+   service's validated approval transaction": the helper checks the message's form, not that the owner saw what it
+   approves. A host-rendered summary with the PIN typed on the host is a stronger design for a container the host does
+   not trust, and K-255 decides whether Compose needs it.
+5. **The `tss` group.** *Decided (owner, 2026-11-11):* the package relies on Ubuntu's `tpm-udev` rule (`/dev/tpmrm0`
+   `tss:tss 0660`) and does not create the group. On a machine without it the kind is offered, because the socket
+   exists, but the helper's instance cannot start, and enrollment answers `approver-kind-unavailable`
+   ([Offered](#the-helper-process)). Declaring `Recommends: tpm-udev` is K-334's call.
+6. **§4's Linux row.** It names the unlock adapters and "an in-service adapter with a TPM PIN in a later phase", and no
+   adapter for approval signing. *Decided (owner, 2026-11-11):* no spec edit in this ticket. That later unlock PIN, if it
+   comes, should go through a helper too, since §14 keeps the service account away from the TPM.
