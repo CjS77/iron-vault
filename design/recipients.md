@@ -260,8 +260,8 @@ on the inventory a change would write. The inventory after the change must hold:
    [Migration authorization](migration-authorization.md#source-owner-method), which `recipient add` and `export` run,
    proves authority through a source-owner method. A vault left with none could never add a recipient or migrate
    again. In v0 the vault passphrase, through `operational`, is the only method, so this part keeps `operational` in
-   every v0 vault. Once the TPM approval signer (EP-33) or a hardware key is a method, a vault that has one may drop
-   `operational`;
+   every v0 vault, even with the TPM approval signer (EP-33) or a hardware key as a method: dropping `operational` is not
+   in v0 ([tpm-approval-signer.md](tpm-approval-signer.md#open-questions) open question 3);
 3. **at least one `recovery` recipient**, an offline key the owner keeps apart from this machine and its unlock
    method;
 4. **at least two recipients, and at most `MAX_RECIPIENTS` (64).**

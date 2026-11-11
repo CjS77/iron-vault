@@ -216,8 +216,8 @@ pub fn check_export_snapshot(
 /// It holds at most one record, the manifest, the config and the bundled approver keys. A record file is read when its
 /// turn comes and its digest is checked before any of its bytes reach the encoder. The export passphrase is dropped
 /// once the identity is sealed. A call that `sink` reports as [`io::ErrorKind::Interrupted`] is retried, including those
-/// of the gzip trailer. Any other failure of `sink` is final: it is returned as [`SnapshotError::Transfer`] with the sink's own `io::Error`, and
-/// `sink` is not called again after it.
+/// of the gzip trailer. Any other failure of `sink` is final: it is returned as [`SnapshotError::Transfer`] with the
+/// sink's own `io::Error`, and `sink` is not called again after it.
 ///
 /// On any error, `sink` may already hold bytes of the bundle, including bytes the gzip encoder wrote while it was
 /// dropped. The caller must discard everything written to it: a partial bundle is never complete, and the CLI removes

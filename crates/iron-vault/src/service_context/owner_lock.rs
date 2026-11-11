@@ -9,9 +9,8 @@ use std::sync::Arc;
 
 use iron_vault_store::{ErrorKindLabel, StoreFs, WriteError, owner_lock_present, remove_owner_lock, write_owner_lock};
 
-use tokio::task::JoinError;
-
 use super::ServiceContext;
+use crate::library_error::LibraryError;
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Writes the owner-lock file on the blocking pool. Returns whether it is now durably there; a failure is logged.
@@ -49,11 +48,11 @@ fn log_failure(what: &str, result: Result<(), ErrorKindLabel>) -> bool {
         .is_ok()
 }
 
-/// The outcome of a blocking task as an error label. A task that did not finish has a label of its own, so it is not
-/// mistaken for a failed directory listing.
-fn finished(joined: Result<Result<(), WriteError>, JoinError>) -> Result<(), ErrorKindLabel> {
+/// The outcome of a blocking task as an error label. A task that did not finish is labelled `task_panicked` or
+/// `task_cancelled`, so it is not mistaken for a failed directory listing.
+fn finished(joined: Result<Result<(), WriteError>, tokio::task::JoinError>) -> Result<(), ErrorKindLabel> {
     match joined {
         Ok(result) => result.map_err(|error| error.error_kind_label()),
-        Err(_) => Err(ErrorKindLabel::fixed("task_interrupted")),
+        Err(joined) => Err(joined.kind_label()),
     }
 }

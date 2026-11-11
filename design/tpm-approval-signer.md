@@ -634,7 +634,7 @@ All six were decided by the owner on 2026-11-11, who accepted the default of eac
 3. **Dropping `operational` once a TPM approver exists.** *Decided (owner, 2026-11-11):* not in v0, for the reasons in
    [The independence rule stays](#the-independence-rule-stays). This replaces the owner's decision of 2026-11-09
    ([recipients.md](recipients.md#open-questions) open question 11), and drops the `approver remove` refusal K-328's card
-   asked for; K-333 implements the rule for when dropping is allowed, as specified there.
+   asked for. The rule for when dropping is allowed is specified there for a later ticket; no v0 ticket, K-333 included, implements it.
 4. **K-255's host helper.** *Decided (owner, 2026-11-11):* K-255 reuses this helper, PIN through the service, and the
    helper stays stateless. A stateless helper that receives the PIN through the container is the weaker reading of
    [§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances)'s "the container may request only the

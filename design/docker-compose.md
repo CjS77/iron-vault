@@ -325,8 +325,8 @@ how the host unlock identity counts. The inventory after any change must hold:
 >    [Migration authorization](migration-authorization.md#source-owner-method), which `recipient add` and `export` run,
 >    proves authority through a source-owner method. A vault left with none could never add a recipient or migrate
 >    again. In v0 the vault passphrase, through `operational`, is the only method, so this part keeps `operational` in
->    every v0 vault. Once the TPM approval signer (EP-33) or a hardware key is a method, a vault that has one may drop
->    `operational`;
+>    every v0 vault, even with the TPM approval signer (EP-33) or a hardware key as a method: dropping `operational` is not
+>    in v0 ([tpm-approval-signer.md](tpm-approval-signer.md#open-questions) open question 3);
 
 Part 3 requires at least one `recovery` recipient, and part 4 between 2 and 64 recipients. For the host unlock
 identity:

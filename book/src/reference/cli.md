@@ -135,7 +135,9 @@ Open the vault: the service prompts for the vault passphrase, read with echo off
 iron-vault lock [OPTIONS]
 ```
 
-Clear the vault identity and every cached secret from the service's memory, leaving it Locked. The lock lasts across restarts: run `unlock` to end it.
+Clear the vault identity and every cached secret from the service's memory, leaving it Locked.
+
+The lock lasts across restarts: run `unlock` to end it.
 
 ## `iron-vault init`
 
