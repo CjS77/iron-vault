@@ -12,13 +12,18 @@
 
 mod common;
 
+use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 
-use common::approval_harness::{Captured, Exchanged, Fixture, assert_audit_record, captured_logs, converse_revealing, get, identity, send};
+use common::approval_harness::{
+    Captured, Exchanged, Fixture, assert_audit_record, captured_logs, converse, converse_revealing, get, identity, send,
+};
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
@@ -29,10 +34,10 @@ use iron_vault::deployment::DeploymentProfile;
 use iron_vault::hardening::{LockUnavailable, MemoryProtection};
 use iron_vault::logging::LogSwitch;
 use iron_vault::path_metadata::invoking_user;
-use iron_vault::service_context::ServiceContext;
+use iron_vault::service_context::{LockOutcome, LockResult, ServiceContext, Unlocked};
 use iron_vault::service_state::ServiceState;
 use iron_vault_store::{
-    OperationalIdentity, OsFs, Passphrase, RecipientKey, RecipientRole, RecipientSet, RecoveryKey, StateDirLock,
+    OperationalIdentity, OsFs, Passphrase, RecipientKey, RecipientRole, RecipientSet, RecoveryKey, StateDirLock, StoreFs, open_manifest,
     seal_passphrase_envelope_for_tests, wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
 use secrecy::{ExposeSecret, SecretString};
@@ -524,4 +529,339 @@ on_both_profiles!(
     init_host_unlock_with_an_untrusted_handoff_names_the_reason_and_not_the_key,
     init_host_unlock_then_a_restart_reaches_ready_with_no_unlock,
     a_new_host_unlock_key_reaches_ready_after_a_restart_and_the_old_one_can_then_be_removed,
+    an_explicit_lock_survives_a_restart_until_a_passphrase_unlock,
+    a_failed_owner_lock_write_still_locks_and_says_so,
+    a_failed_owner_lock_removal_still_unlocks_and_says_so,
+    a_lock_in_locked_writes_nothing,
+    init_removes_a_stale_owner_lock_so_the_new_vault_host_unlocks,
+    reset_writes_the_owner_lock_before_the_discard,
+    a_reset_whose_owner_lock_write_fails_still_completes,
 );
+
+// The owner-lock file (design/tpm-unlock.md, "`lock` across restarts").
+
+const OWNER_LOCK: &str = "locked-by-owner";
+const DRAIN: Duration = Duration::from_secs(5);
+
+/// The real filesystem, except that while armed the rename onto the owner-lock file (its write) or the unlink of it (its
+/// removal) fails. It also notes whether the owner-lock file existed when the manifest was unlinked, the first removal of
+/// a reset's discard. `FaultFs` keeps its state in a `RefCell`, so a service, which shares its filesystem across blocking
+/// tasks, cannot hold one.
+#[derive(Clone, Default)]
+struct OwnerLockFs {
+    fail_write: Arc<AtomicBool>,
+    fail_removal: Arc<AtomicBool>,
+    lock_at_manifest_removal: Arc<StdMutex<Option<bool>>>,
+}
+
+impl OwnerLockFs {
+    fn failing_write() -> Self {
+        let fs = Self::default();
+        fs.fail_write.store(true, Ordering::SeqCst);
+        fs
+    }
+
+    fn failing_removal() -> Self {
+        let fs = Self::default();
+        fs.fail_removal.store(true, Ordering::SeqCst);
+        fs
+    }
+}
+
+fn names_owner_lock(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == OWNER_LOCK)
+}
+
+impl StoreFs for OwnerLockFs {
+    type File = fs::File;
+
+    fn create_private(&self, path: &Path) -> io::Result<fs::File> {
+        OsFs.create_private(path)
+    }
+
+    fn write_all(&self, file: &mut fs::File, bytes: &[u8]) -> io::Result<()> {
+        OsFs.write_all(file, bytes)
+    }
+
+    fn sync_file(&self, file: &fs::File) -> io::Result<()> {
+        OsFs.sync_file(file)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        match names_owner_lock(to) && self.fail_write.load(Ordering::SeqCst) {
+            true => Err(io::ErrorKind::PermissionDenied.into()),
+            false => OsFs.rename(from, to),
+        }
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        if names_owner_lock(path) && self.fail_removal.load(Ordering::SeqCst) {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        if path.file_name().is_some_and(|name| name == "manifest.age") {
+            let present = path.with_file_name(OWNER_LOCK).exists();
+            *self.lock_at_manifest_removal.lock().unwrap() = Some(present);
+        }
+        OsFs.remove_file(path)
+    }
+
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        OsFs.sync_dir(dir)
+    }
+
+    fn list_dir(&self, dir: &Path) -> io::Result<Vec<OsString>> {
+        OsFs.list_dir(dir)
+    }
+
+    fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>> {
+        OsFs.read_bounded(path, max_len)
+    }
+}
+
+fn owner_lock_exists(fixture: &Fixture) -> bool {
+    fixture.path("state").join(OWNER_LOCK).exists()
+}
+
+/// A `profile` service on the vault in `fixture` over `fs`, as `start` leaves it.
+fn start_on<F: StoreFs + Send + Sync + 'static>(fixture: &Fixture, profile: DeploymentProfile, fs: F) -> ServiceContext<F> {
+    fixture.start_as(
+        fs,
+        LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
+        profile,
+        MemoryProtection::Locked,
+    )
+}
+
+/// The outcome and refusal labels of every `vault.host-unlock` record written since `before`.
+fn outcomes_since(logs: &Captured, before: usize) -> Vec<(String, Option<String>)> {
+    logs.events(EVENT)
+        .into_iter()
+        .skip(before)
+        .map(|record| {
+            (
+                record["host_unlock_outcome"].as_str().unwrap().to_owned(),
+                record["refusal"].as_str().map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
+fn locked(outcome: LockOutcome, persisted: bool) -> LockResult {
+    LockResult { outcome, persisted }
+}
+
+async fn an_explicit_lock_survives_a_restart_until_a_passphrase_unlock(profile: DeploymentProfile) {
+    let (_turn, logs, before) = turn().await;
+    let fixture = Fixture::new().await;
+    let (secret, _) = with_host_key(&fixture);
+    let dir = HandoffDir::new();
+    let handoff = dir.write(&secret);
+    let (service, state) = restarted(&fixture, profile, &handoff).await;
+    assert_eq!(state, ServiceState::Ready);
+
+    assert_eq!(service.lock(DRAIN).await, Ok(locked(LockOutcome::Cleared, true)));
+    assert!(owner_lock_exists(&fixture));
+    assert_eq!(fs::read(fixture.path("state").join(OWNER_LOCK)).unwrap(), b"");
+    service.stop().await;
+    drop(service);
+
+    // An untrusted handoff would be a refusal had it been opened: the owner-lock file is read first.
+    fs::set_permissions(&handoff, fs::Permissions::from_mode(0o644)).unwrap();
+    let (service, state) = restarted(&fixture, profile, &handoff).await;
+    assert_eq!(state, ServiceState::Locked);
+    assert_eq!(
+        outcomes_since(&logs, before),
+        [("unlocked".to_owned(), None), ("owner_locked".to_owned(), None)]
+    );
+    let record = &logs.events(EVENT)[before + 1];
+    assert_audit_record(record, "INFO", &["host_unlock_outcome"]);
+    assert!(owner_lock_exists(&fixture), "host unlock never removes the file");
+
+    let unlocked = service.unlock(passphrase()).await.unwrap();
+    assert_eq!(
+        unlocked,
+        Unlocked {
+            state: ServiceState::Ready,
+            owner_lock_removed: true
+        }
+    );
+    assert!(!owner_lock_exists(&fixture));
+    service.stop().await;
+    drop(service);
+
+    dir.write(&secret);
+    let (_, state) = restarted(&fixture, profile, &handoff).await;
+    assert_eq!(state, ServiceState::Ready);
+    assert_eq!(outcomes_since(&logs, before).last(), Some(&("unlocked".to_owned(), None)));
+}
+
+async fn a_failed_owner_lock_write_still_locks_and_says_so(profile: DeploymentProfile) {
+    let (_turn, logs, _before) = turn().await;
+    let fixture = Fixture::new().await;
+    let (secret, _) = with_host_key(&fixture);
+    let dir = HandoffDir::new();
+    let handoff = dir.write(&secret);
+    let service = start_on(&fixture, profile, OwnerLockFs::failing_write());
+    assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Ready);
+
+    let result = service.lock(DRAIN).await;
+
+    assert_eq!(result, Ok(locked(LockOutcome::Cleared, false)));
+    assert_eq!(service.state().await, ServiceState::Locked);
+    assert!(!owner_lock_exists(&fixture));
+    let text = logs.text();
+    assert!(
+        text.contains("owner-lock file write failed") && text.contains("permission_denied"),
+        "{text}"
+    );
+    assert_not_logged(&logs, &secret);
+}
+
+async fn a_failed_owner_lock_removal_still_unlocks_and_says_so(profile: DeploymentProfile) {
+    let (_turn, logs, before) = turn().await;
+    let fixture = Fixture::new().await;
+    let (secret, _) = with_host_key(&fixture);
+    let dir = HandoffDir::new();
+    let handoff = dir.write(&secret);
+    fs::write(fixture.path("state").join(OWNER_LOCK), b"").unwrap();
+    let service = start_on(&fixture, profile, OwnerLockFs::failing_removal());
+    assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Locked);
+    assert_eq!(outcomes_since(&logs, before), [("owner_locked".to_owned(), None)]);
+
+    let unlocked = service.unlock(passphrase()).await.unwrap();
+
+    assert_eq!(
+        unlocked,
+        Unlocked {
+            state: ServiceState::Ready,
+            owner_lock_removed: false
+        }
+    );
+    assert!(owner_lock_exists(&fixture));
+    assert!(logs.text().contains("owner-lock file removal failed"));
+}
+
+async fn a_lock_in_locked_writes_nothing(profile: DeploymentProfile) {
+    let (_turn, _logs, _before) = turn().await;
+    let fixture = Fixture::new().await;
+    with_host_key(&fixture);
+    let dir = HandoffDir::new();
+    let service = start_on(&fixture, profile, OsFs);
+    assert_eq!(service.unlock_at_start(&dir.path()).await, ServiceState::Locked);
+
+    assert!(service.lock(DRAIN).await.is_err());
+
+    assert!(!owner_lock_exists(&fixture));
+}
+
+async fn init_removes_a_stale_owner_lock_so_the_new_vault_host_unlocks(profile: DeploymentProfile) {
+    let (_turn, _logs, _before) = turn().await;
+    let fixture = Fixture::new().await;
+    let (secret, _) = RecoveryKey::generate();
+    let dir = HandoffDir::new();
+    let handoff = dir.write(secret.expose_secret());
+    let service = uninitialized(&fixture, profile, &handoff).await;
+    fs::write(fixture.path("state").join(OWNER_LOCK), b"").unwrap();
+
+    let (response, _, _) = init(&service, true).await;
+
+    assert!(matches!(response, AdminResponse::Init { .. }), "{response:?}");
+    assert!(!owner_lock_exists(&fixture));
+    service.stop().await;
+    drop(service);
+    let (_, state) = restarted(&fixture, profile, &handoff).await;
+    assert_eq!(state, ServiceState::Ready);
+}
+
+/// Resets the vault in `fixture` through a Ready service over `fs` and returns the service's answer.
+async fn reset_over(fixture: &Fixture, fs: OwnerLockFs, profile: DeploymentProfile) -> AdminResponse {
+    let (secret, _) = with_host_key(fixture);
+    let dir = HandoffDir::new();
+    let handoff = dir.write(&secret);
+    let service = Arc::new(start_on(fixture, profile, fs));
+    assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Ready);
+    let id = open_manifest(&identity(), &fs::read(fixture.path("state/manifest.age")).unwrap())
+        .unwrap()
+        .vault_id();
+    let (path, stop) = serve_admin_as_owner(&service);
+    let mut stream = UnixStream::connect(&path).await.unwrap();
+    send(&mut stream, &Frame::Request(AdminRequest::Reset)).await;
+    let exchanged = converse(&mut stream, &[&id.to_string()]).await;
+    let _ = stop.send(());
+    exchanged.response
+}
+
+/// The admin server of `service` on its runtime directory, with the test's own account as the admin principal whatever
+/// the service's profile, since the Container profile admits root only.
+fn serve_admin_as_owner<F: StoreFs + Send + Sync + 'static>(
+    service: &Arc<ServiceContext<F>>,
+) -> (PathBuf, tokio::sync::oneshot::Sender<()>) {
+    let paths = service.paths().clone();
+    let runtime_dir = paths.runtime_dir.clone().unwrap();
+    let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
+    let principals = AdminPrincipals::new(DeploymentProfile::Development, paths.owner.uid);
+    let server = AdminServer::new(principals, Handlers::for_service(service), Limits::default());
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(async move { server.serve(socket, async { drop(stopped.await) }).await });
+    (runtime_dir.join(ADMIN_SOCKET_NAME), stop)
+}
+
+async fn reset_writes_the_owner_lock_before_the_discard(profile: DeploymentProfile) {
+    let (_turn, _logs, _before) = turn().await;
+    let fixture = Fixture::new().await;
+    let fs = OwnerLockFs::default();
+
+    let response = reset_over(&fixture, fs.clone(), profile).await;
+
+    assert!(matches!(response, AdminResponse::Reset { .. }), "{response:?}");
+    assert_eq!(
+        *fs.lock_at_manifest_removal.lock().unwrap(),
+        Some(true),
+        "written before the discard's first removal"
+    );
+    assert!(
+        !owner_lock_exists(&fixture),
+        "a finished reset removes it with the other state files"
+    );
+}
+
+async fn a_reset_whose_owner_lock_write_fails_still_completes(profile: DeploymentProfile) {
+    let (_turn, logs, _before) = turn().await;
+    let fixture = Fixture::new().await;
+    let fs = OwnerLockFs::failing_write();
+
+    let response = reset_over(&fixture, fs.clone(), profile).await;
+
+    assert!(matches!(response, AdminResponse::Reset { .. }), "{response:?}");
+    assert_eq!(*fs.lock_at_manifest_removal.lock().unwrap(), Some(false));
+    assert!(!fixture.path("state/manifest.age").exists());
+    assert!(logs.text().contains("owner-lock file write failed"));
+}
+
+#[tokio::test]
+async fn a_development_service_writes_and_removes_the_owner_lock_but_never_reads_it_at_startup() {
+    let (_turn, logs, before) = turn().await;
+    let fixture = Fixture::new().await;
+    with_host_key(&fixture);
+    let service = start_on(&fixture, DeploymentProfile::Development, OsFs);
+    assert_eq!(service.state().await, ServiceState::Locked);
+    let unlocked = service.unlock(passphrase()).await.unwrap();
+    assert_eq!(
+        unlocked,
+        Unlocked {
+            state: ServiceState::Ready,
+            owner_lock_removed: true
+        }
+    );
+
+    assert_eq!(service.lock(DRAIN).await, Ok(locked(LockOutcome::Cleared, true)));
+    assert!(owner_lock_exists(&fixture));
+    service.stop().await;
+    drop(service);
+
+    let service = start_on(&fixture, DeploymentProfile::Development, OsFs);
+    assert_eq!(service.unlock_at_start(Path::new("/nonexistent")).await, ServiceState::Locked);
+    assert!(service.unlock(passphrase()).await.unwrap().owner_lock_removed);
+    assert!(!owner_lock_exists(&fixture));
+    assert_eq!(logs.events(EVENT).len(), before, "a Development service never tries host unlock");
+}

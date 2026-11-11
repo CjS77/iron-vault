@@ -19,12 +19,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     pub(super) async fn write_owner_lock(&self) -> bool {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let written = tokio::task::spawn_blocking(move || write_owner_lock(&locks.state, &setup.fs)).await;
-        log_failure(
-            "write",
-            written.unwrap_or(Err(WriteError::ListStateDir {
-                kind: std::io::ErrorKind::Interrupted,
-            })),
-        )
+        log_failure("write", written.unwrap_or_else(|_| Err(interrupted())))
     }
 
     /// Removes the owner-lock file on the blocking pool. Returns whether it is now gone, absent or removed; a failure is
@@ -32,12 +27,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     pub(super) async fn remove_owner_lock(&self) -> bool {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let removed = tokio::task::spawn_blocking(move || remove_owner_lock(&locks.state, &setup.fs).map(drop)).await;
-        log_failure(
-            "removal",
-            removed.unwrap_or(Err(WriteError::ListStateDir {
-                kind: std::io::ErrorKind::Interrupted,
-            })),
-        )
+        log_failure("removal", removed.unwrap_or_else(|_| Err(interrupted())))
     }
 
     /// Whether anything is at the owner-lock file's name. Read on the blocking pool; a task that does not finish counts
@@ -58,4 +48,11 @@ fn log_failure(what: &str, result: Result<(), WriteError>) -> bool {
             tracing::warn!(%error_kind, "owner-lock file {what} failed");
         })
         .is_ok()
+}
+
+/// The error for a blocking task that did not finish, which the caller reports like any other failed file operation.
+fn interrupted() -> WriteError {
+    WriteError::ListStateDir {
+        kind: std::io::ErrorKind::Interrupted,
+    }
 }
