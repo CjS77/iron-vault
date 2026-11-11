@@ -374,6 +374,9 @@ signature against the pinned key, and drops the value. Presence still reserves n
   The PIN was just proven, so this spends no try. A failure here is a step 3 failure: the version is consumed and the
   answer is `approval-failed`.
 
+Both helper calls run on the blocking pool, never on the service's runtime thread, so a slow or hung helper delays only
+the approval, not proxying, other admin connections or timers.
+
 Signing at step 2 instead would need the version before the owner is authenticated, which §12's order forbids.
 
 **Approver order** ([approval-signers.md](approval-signers.md#approver-order)) leaves out a `tpm` approver this install

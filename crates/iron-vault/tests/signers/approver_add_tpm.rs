@@ -667,6 +667,79 @@ async fn a_step_3_failure_consumes_the_version() {
     assert_eq!(counters(&fixture), (2, Some(1)));
 }
 
+/// Step 3 waits for the helper off the runtime thread: while the helper holds back the approval signature, a proxied request
+/// on the config's own listener still completes, and the approval commits once the helper answers.
+#[tokio::test]
+async fn a_stalled_step_3_does_not_stop_the_proxy() {
+    let fixture = Fixture::new().await;
+    let stub = serve_stub(&fixture.path("helper.sock"), Script::default());
+    let (running, tpm) = with_tpm_approver(&fixture, &fixture.path("helper.sock")).await;
+    let release = stub.stall_next_approval();
+    let started = std::time::Instant::now();
+    let approving = tokio::spawn({
+        let (path, config) = (running.path.clone(), fixture.config("rates"));
+        async move { approve_config(&path, &config, &via_tpm(PIN)).await }
+    });
+    while !stub.signed_magics().contains(&APPROVAL) {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    let proxied = common::approval_harness::get(&fixture, "fx").await;
+
+    assert_eq!(proxied.status, 200);
+    assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    drop(release);
+    assert_eq!(approved_version(&approving.await.unwrap()), 2);
+    assert_signed_by_tpm(&fixture, tpm);
+}
+
+/// The `(refusal, tpm_status)` of each refusal event of the TPM approver `id` in `event`.
+fn refusals(logs: &Captured, event: &str, id: ApproverId) -> Vec<(String, Option<String>)> {
+    logs.events(event)
+        .iter()
+        .filter(|record| record["approver_id"] == id.to_string().as_str())
+        .map(|record| {
+            (
+                record["refusal"].as_str().unwrap().to_owned(),
+                record["tpm_status"].as_str().map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_pin_too_short_to_be_enrolled_is_denied_without_asking_the_helper() {
+    let logs = captured_logs();
+    let fixture = Fixture::new().await;
+    let stub = serve_stub(&fixture.path("helper.sock"), Script::default());
+    let (running, tpm) = with_tpm_approver(&fixture, &fixture.path("helper.sock")).await;
+    let (calls, before) = (stub.calls(), counters(&fixture));
+
+    let denied = approve_config(&running.path, &fixture.config("rates"), &via_tpm("12345")).await;
+
+    assert_eq!(error_code(&denied.response), ErrorCode::ApprovalDenied, "{denied:?}");
+    assert_eq!(denied.prompts.len(), 3, "no approver was asked after the short PIN");
+    assert_eq!((stub.calls(), counters(&fixture)), (calls, before));
+    assert_eq!(refusals(&logs, "config.approval-refused", tpm), [("wrong_pin".to_owned(), None)]);
+}
+
+#[tokio::test]
+async fn an_empty_pin_at_owner_presence_is_a_presence_refusal_without_a_helper_status() {
+    let logs = captured_logs();
+    let fixture = Fixture::new().await;
+    let stub = serve_stub(&fixture.path("helper.sock"), Script::default());
+    let (running, tpm) = with_tpm_approver(&fixture, &fixture.path("helper.sock")).await;
+    let calls = stub.calls();
+    let mut stream = UnixStream::connect(&running.path).await.unwrap();
+    send(&mut stream, &replace_request(&fixture)).await;
+
+    let denied = converse_switching(&mut stream, &[Answer::Switch, Answer::Input("")]).await;
+
+    assert_eq!(error_code(&denied.response), ErrorCode::ApprovalDenied, "{denied:?}");
+    assert_eq!(stub.calls(), calls);
+    assert_eq!(refusals(&logs, "vault.presence-refused", tpm), [("wrong_pin".to_owned(), None)]);
+}
+
 #[tokio::test]
 async fn a_lockout_is_tpm_locked_out_and_a_software_approver_still_approves() {
     let logs = captured_logs();

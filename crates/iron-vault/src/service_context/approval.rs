@@ -24,8 +24,9 @@ use std::sync::Arc;
 
 use iron_vault_policy::{ActivePolicy, ApprovalSummary, ValidatedConfig, summarize};
 use iron_vault_store::{
-    ApprovalError, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ApprovalVersion, CommittedApproval, ConfigDigest,
-    PendingConfig, PinnedApprover, PreparedApproval, StoreFs, Vault, VaultIdentity,
+    ApprovalEnvelope, ApprovalError, ApprovalPayload, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ApprovalVersion,
+    ApproverPublicKey, CommittedApproval, ConfigDigest, PendingConfig, PinnedApprover, PreparedApproval, SignError, SignatureAlgorithm,
+    StoreFs, Vault, VaultIdentity,
 };
 use tokio::sync::OwnedMutexGuard;
 
@@ -351,7 +352,11 @@ struct Transaction<S> {
 
 impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
     /// Steps 2 to 6 of `transaction` under `inner`, which the caller's task owns.
-    async fn run_approval<S: ApprovalSigner>(&self, inner: &mut Inner, transaction: Transaction<S>) -> Result<ApprovalResult, ApprovalEnd> {
+    async fn run_approval<S: ApprovalSigner + Send + 'static>(
+        &self,
+        inner: &mut Inner,
+        transaction: Transaction<S>,
+    ) -> Result<ApprovalResult, ApprovalEnd> {
         let Transaction {
             started,
             identity,
@@ -364,7 +369,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         let named = NamedApprover::from(&approver);
         let storage = approval_storage(&self.locks, &self.setup.fs, &identity);
         let digest = pending.digest();
-        let prepared = match reserve_and_sign(&storage, pending, &mut approval, (named, signer)) {
+        let prepared = match reserve_and_sign(&storage, pending, &mut approval, (named, signer)).await {
             Ok(prepared) => prepared,
             Err(error) => {
                 // A reservation that took is consumed: `status` reports the counter as it now is.
@@ -475,12 +480,13 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
 
 /// Steps 2 to 4. The reservation is recorded before signing starts, so a signing failure, or a crash while the signer
 /// waits for the owner, follows it in the log.
-fn reserve_and_sign<'s, F: StoreFs, S: ApprovalSigner>(
+async fn reserve_and_sign<'s, F: StoreFs, S: ApprovalSigner + Send + 'static>(
     storage: &ApprovalStorage<'_, F>,
     pending: PendingConfig,
     approval: &'s mut ApprovalState,
     (approver, signer): (NamedApprover<'_>, S),
 ) -> Result<PreparedApproval<'s>, ApprovalError> {
+    let vault_id = approval.vault_id();
     let reserved = pending.reserve(storage, approval).inspect_err(record_uncertain_writes)?;
     VersionReserved {
         version: reserved.version(),
@@ -488,7 +494,50 @@ fn reserve_and_sign<'s, F: StoreFs, S: ApprovalSigner>(
         approver,
     }
     .emit();
-    reserved.sign(storage, signer)
+    let payload = ApprovalPayload::new(vault_id, reserved.version(), reserved.digest());
+    reserved.sign(storage, Presigned::sign(signer, payload).await)
+}
+
+/// A signature made on the blocking pool, handed to step 3 as its signer.
+///
+/// A TPM approver's signature is a round trip to the signing helper, which can take hundreds of milliseconds and, from a
+/// hung helper, up to its 30 s deadline. Made on the service's runtime thread, it would stall proxying, admin connections
+/// and timers meanwhile. Step 3 still checks the envelope against the reserved payload, and a failure here, including a
+/// task that ended without an answer, is a step 3 failure that consumes the version.
+struct Presigned {
+    algorithm: SignatureAlgorithm,
+    public_key: ApproverPublicKey,
+    signed: Result<ApprovalEnvelope, SignError>,
+}
+
+impl Presigned {
+    /// Has `signer` sign `payload` on the blocking pool. The task owns the signer, and with it any TPM authorization
+    /// value, and drops it when it ends, even if the transaction's task is gone by then.
+    async fn sign<S: ApprovalSigner + Send + 'static>(signer: S, payload: ApprovalPayload) -> Self {
+        let (algorithm, public_key) = (signer.algorithm(), signer.public_key());
+        let signed = tokio::task::spawn_blocking(move || signer.sign(&payload))
+            .await
+            .unwrap_or(Err(SignError::Interrupted));
+        Self {
+            algorithm,
+            public_key,
+            signed,
+        }
+    }
+}
+
+impl ApprovalSigner for Presigned {
+    fn algorithm(&self) -> SignatureAlgorithm {
+        self.algorithm
+    }
+
+    fn public_key(&self) -> ApproverPublicKey {
+        self.public_key
+    }
+
+    fn sign(&self, _payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
+        self.signed.clone()
+    }
 }
 
 /// Records an uncertain commit, whether it was settled or not.

@@ -43,6 +43,9 @@ pub enum SignError {
     /// The TPM signing helper could not sign, or the TPM refused; the text names its status and never anything the owner typed.
     #[error("the TPM signing helper cannot sign: {0}")]
     TpmHelper(String),
+    /// The task the signature was made on ended without an answer: it panicked, or the runtime is shutting down.
+    #[error("the signing task ended without an answer")]
+    Interrupted,
     /// The signature does not fit the approval envelope for its algorithm.
     #[error("the signer produced a signature the approval envelope refuses: {0}")]
     Signature(ApprovalDecodeError),

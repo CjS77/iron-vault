@@ -7,6 +7,7 @@ use std::os::fd::OwnedFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
@@ -31,6 +32,8 @@ struct State {
     calls: Vec<&'static str>,
     /// The first four bytes of every message signed: `IVPP` for presence, `IVAP` for an approval.
     signed: Vec<[u8; 4]>,
+    /// Holds the answer to the next approval-payload sign until its sender sends or drops.
+    stall_approval: Option<Receiver<()>>,
 }
 
 /// A running stub: its calls, in order (`create` or `sign`).
@@ -57,6 +60,13 @@ impl Stub {
     /// Replaces the answers the stub gives from now on.
     pub fn set_script(&self, script: Script) {
         self.state().script = script;
+    }
+
+    /// Holds the answer to the next request to sign an approval payload (`IVAP`) until the returned sender sends or drops.
+    pub fn stall_next_approval(&self) -> Sender<()> {
+        let (release, stall) = channel();
+        self.state().stall_approval = Some(stall);
+        release
     }
 
     /// Answers the next sign requests with `answers`, one each, in order; `None` signs for real.
@@ -86,16 +96,23 @@ fn answer(mut stream: UnixStream, state: &Mutex<State>) {
     let key = SigningKey::from_slice(&[7; 32]).unwrap();
     let request = Request::decode(&read_frame(&mut stream).unwrap()).unwrap();
     let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut stall = None;
     let (name, response) = match request {
         Request::Create { .. } => ("create", state.script.create.clone().unwrap_or_else(|| created(&key))),
         Request::Sign(sign) => {
             state.signed.push(sign.message[..4].try_into().unwrap());
+            if sign.message.starts_with(b"IVAP") {
+                stall = state.stall_approval.take();
+            }
             let scripted = state.next_signs.pop_front().unwrap_or_else(|| state.script.sign.clone());
             ("sign", scripted.unwrap_or_else(|| signed(&key, &sign.message)))
         }
     };
     state.calls.push(name);
     drop(state);
+    if let Some(stall) = stall {
+        let _ = stall.recv();
+    }
     stream.write_all(&response.encode().unwrap()).unwrap();
 }
 
