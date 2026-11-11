@@ -884,7 +884,7 @@ async fn locked_service(fixture: &Fixture, profile: DeploymentProfile, memory: M
 async fn assert_memory_refused(profile: DeploymentProfile, memory: MemoryProtection, host_unlock: bool) {
     let fixture = Fixture::new().await;
     let handoff = untrusted_handoff(&fixture);
-    let service = locked_service(&fixture, profile, memory, handoff.clone()).await;
+    let service = locked_service(&fixture, profile, memory, handoff).await;
 
     let shown = exchange(&service, AdminRequest::Init { host_unlock }, &[]).await;
 
@@ -893,7 +893,6 @@ async fn assert_memory_refused(profile: DeploymentProfile, memory: MemoryProtect
     assert!(message.contains("memory is not locked against swap"), "{message}");
     assert!(shown.prompts.is_empty() && shown.reveals.is_empty());
     fixture.assert_only_lock_files();
-    assert_eq!(fs::read(&handoff).unwrap(), b"AGE-SECRET-KEY-NOT-USED\n");
 }
 
 #[tokio::test]

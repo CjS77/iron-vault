@@ -34,6 +34,8 @@ use iron_vault_store::{OsFs, StoreFs, VaultId, open_manifest};
 use tokio::net::UnixStream;
 
 /// The files a reset removes from the fixture's vault: store-owned state files plus the owner lock, the config and its signature.
+/// The owner lock is always counted: the reset writes `locked-by-owner` before its withdrawal, from every state, and the
+/// discard removes it.
 const FULL_VAULT_FILES: u64 = 7;
 const DRAIN: Duration = Duration::from_secs(5);
 const INIT_ANSWERS: [&str; 5] = [
@@ -393,6 +395,8 @@ fn assert_discarded(fixture: &Fixture) {
             .all(|name| !name.ends_with(".age") && !name.contains("config.toml") || name.ends_with(".lock")),
         "{left:?}"
     );
+    // `locked-by-owner` has no `.age` suffix, so the check above cannot see it.
+    assert!(!fixture.path("state/locked-by-owner").exists(), "{left:?}");
 }
 
 /// Resets, runs `init`, then writes `init.unfinished` over the new vault: an Unfinished initialization built from a real one.
