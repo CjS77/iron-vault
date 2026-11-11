@@ -59,7 +59,8 @@ vault identity, so it is known while the vault is locked. The one exception is t
 bytes are compared with the initial config (below). The checks run in this order, and the first that matches decides:
 
 0. **`reset.unfinished` is present.** The state is Unfinished reset, whatever else the directories hold: a reset
-   started and has not reached its commit point, and only `reset` finishes it ([reset.md](reset.md#unfinished-reset)).
+   passed its commit point (`reset.unfinished` written) and has not finished, and only `reset` finishes it
+   ([reset.md](reset.md#unfinished-reset)).
 1. **`init.unfinished` is present.** The state is Unfinished if the state directory holds no file but the lock file
    (`lock`), a `lost+found` directory, stale temp files (`.<name>.tmp`), the files an initialization writes
    (`init.unfinished`, `identity.age`, `recipients.age`, `operational.age`, at most one approver key envelope
@@ -74,7 +75,7 @@ bytes are compared with the initial config (below). The checks run in this order
 
 | State | Meaning |
 |---|---|
-| Unfinished reset | Check 0 matched: a reset started and has not reached its commit point. |
+| Unfinished reset | Check 0 matched: a reset passed its commit point (`reset.unfinished` written) and has not finished; only `reset` finishes it. |
 | Uninitialized | Check 3 matched: nothing of a vault or its config is there. |
 | Unfinished | Check 1 matched: an initialization started and has not reached its commit point. |
 | Initialized | Check 2 matched: a manifest and no `init.unfinished`. |

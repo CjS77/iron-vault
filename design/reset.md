@@ -209,8 +209,10 @@ which carries no arguments, in order:
    `lock`'s withdrawal does. From Locked there is nothing to withdraw.
 5. **Begin.** The service records `vault.reset-confirmed`, then writes `reset.unfinished` with `durable_replace`.
    That write is the commit point. A failed write ends with `reset-failed`, naming the step `begin`; a failed log
-   write stops the service, as every failed audit write does. Either way the directories are as they were before the
-   reset, and the service is Locked.
+   write stops the service, as every failed audit write does. Either way the service is Locked and no file has been
+   removed. A write that fails before its rename leaves the directories as they were. One whose rename lands but whose
+   state directory fsync fails leaves `reset.unfinished` visible over the intact vault, which then reads Unfinished
+   reset, refused by every command but `reset`, until the next `reset` finishes it; this fails closed.
 6. **Discard.** It releases the context's mutex, so `status` can answer, and keeps the service-wide lock. It runs the
    [removal order](#removal-order) and ends with `reset-failed`, naming the step and file, on the first failure.
 7. **Finish.** It removes `reset.unfinished` with `durable_remove`. If the unlink lands but the state directory's
@@ -242,8 +244,8 @@ The **store-owned files** are the names the store writes:
 
 - in the state directory: `identity.age`, `operational.age`, `manifest.age`, `approval.age`, `recipients.age`,
   `recipients.age.staged`, every approver key envelope `approver-<approver ID>.age`, every record file
-  `record-<record ID>.age`, `init.unfinished`, `import.unfinished` (K-307), `reset.unfinished`, the owner-lock file that
-  K-319 adds, the recovery check record `recovery.toml`, and the stale temp file `.<name>.tmp` of each;
+  `record-<record ID>.age`, `init.unfinished`, `import.unfinished` (K-307), `reset.unfinished`, the owner-lock file
+  `locked-by-owner` (K-338), the recovery check record `recovery.toml`, and the stale temp file `.<name>.tmp` of each;
 - in the config directory: `config.toml`, `config.toml.sig`, `config.toml.pending`, `config.toml.sig.staged`, and
   the stale temp file of each.
 
@@ -260,8 +262,8 @@ Under the service-wide lock, after `reset.unfinished` is durable:
 2. **The rest of the state directory's store-owned files**, each with `durable_remove`, in this order:
    `identity.age`, `operational.age`, `recipients.age`, `recipients.age.staged`, the approver key envelopes, then
    `approval.age`, the record files, `recovery.toml` (as [recovery.md](recovery.md#initialization) asks of a discard),
-   `init.unfinished`, `import.unfinished`, the owner-lock file, and the stale temp files. The identity envelope goes
-   first so a crash leaves no file that a recovery key opens.
+   `init.unfinished`, `import.unfinished`, the owner-lock file `locked-by-owner`, and the stale temp files. The
+   identity envelope goes first so a crash leaves no file that a recovery key opens.
 3. **The config directory**, each with an unlink and then the config directory's fsync: `config.toml.sig` and
    `config.toml.sig.staged`, then `config.toml.pending` and `config.toml`, then the stale temp files. Signatures go
    before configs, as in `init`'s [discard](vault-initialization.md#discarding-an-unfinished-initialization).
@@ -301,7 +303,10 @@ before it or of its own row, because each durable write or remove is whole or ab
 | `finish`: `reset.unfinished` unlinked, the directory fsync failed, then a power loss before any `init` or `import` | Unfinished reset if it came back, over directories with no store-owned file; else Uninitialized, or Unrecognized with a foreign file | Locked | `unlock-failed`: reset interrupted, or not initialized | removes `reset.unfinished` again | `already-initialized`: reset interrupted, if it came back; else proceeds. Once `init` or `import` has begun it cannot come back: their first write's directory fsync makes the unlink durable |
 | `finish`: `reset.unfinished` removed | Uninitialized, or Unrecognized with a foreign file | Locked | `unlock-failed`: not initialized | `nothing-to-reset` | proceeds, or refuses naming the foreign file |
 
-A failure without a crash (`reset-failed`) leaves the same row with the service still running and Locked.
+A failure without a crash (`reset-failed`) leaves the same row with the service still running and Locked. A failure at
+`begin` leaves the `none` row, unless the rename of `reset.unfinished` landed and only the state directory's fsync
+failed: then the file is visible and the `begin` row applies, Unfinished reset over the intact vault, until the next
+`reset` finishes it.
 
 ## Result
 
@@ -360,11 +365,11 @@ event carries a secret, a typed confirmation or any file's contents.
   with every other credential on the machine. Reset leaves all of it alone. Startup over an Uninitialized directory
   with a handoff refuses the handoff and stays Locked, and a new `init --host-unlock` or `import --host-unlock` enrols
   the same host unlock identity again.
-- **The owner-lock file** (K-319). `lock` writes it in the state directory so that a crash or reboot does not undo an
-  explicit lock: while it exists, host unlock at startup is skipped, and a passphrase `unlock` clears it. It is
-  store-owned and reset removes it with the other state files, so a new vault starts without it. Reset's withdrawal is
-  `lock`'s, so from Ready or Unavailable it writes the file as `lock` does, and a reset that fails at `begin` leaves
-  the vault locked as `lock` would.
+- **The owner-lock file `locked-by-owner`** (K-338). `lock` writes it in the state directory so that a crash or reboot
+  does not undo an explicit lock: while it exists, host unlock at startup is skipped, and a passphrase `unlock` clears
+  it. It is store-owned and reset removes it with the other state files, so a new vault starts without it. Reset's
+  withdrawal is `lock`'s, so from Ready or Unavailable it writes the file as `lock` does, and a reset that fails at
+  `begin` leaves the vault locked as `lock` would.
 - **Linux package** ([linux-package.md](linux-package.md)). Purge still removes the directories by hand; reset is
   for keeping the installation and replacing the vault.
 

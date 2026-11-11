@@ -407,17 +407,19 @@ the next `init` discards the files the unfinished run wrote and starts over. See
 ## Unfinished reset file
 
 The state-directory file `reset.unfinished` is empty: its presence is the whole of its meaning. `iron-vault reset`
-writes it with a durable replace before it removes any file, and durably removes it as its last step, which is reset's
-commit point. While it exists the vault is an [unfinished reset](glossary.md): `unlock`, `init` and host unlock refuse
-it, and only the next `reset` finishes it, removing whatever store-owned files remain. See
-[reset.md](reset.md#removal-order). Rust: `StateFileName::unfinished_reset`, `iron_vault_store::discard_vault`.
+writes it with a durable replace before it removes any file, and that write is reset's commit point; durably removing it
+is reset's last step. While it exists the vault is an [unfinished reset](glossary.md): `unlock`, host unlock, `init`,
+`import` and `recovery check` refuse it, and only the next `reset` finishes it, removing whatever store-owned files
+remain. See [reset.md](reset.md#removal-order). Rust: `StateFileName::unfinished_reset`,
+`iron_vault_store::discard_vault`.
 
 - **Content.** Zero bytes, read as `init.unfinished` is: only the name is looked at, never the bytes.
 - **Reading.** It is check 0 of the [initialization state](vault-initialization.md#initialization-state): present, it
   decides the state whatever else the directories hold, `init.unfinished` and a manifest included. It is not sealed or
   MAC'd, for the same reason as `init.unfinished`.
-- **Temp file.** A crash during its durable replace can leave `.reset.unfinished.tmp`, which the startup sweep removes,
-  and which the next reset removes with the other stale temp files.
+- **Temp file.** A crash during its durable replace can leave `.reset.unfinished.tmp`, a stale temp file that only the
+  startup sweep removes. Until then the next reset fails at `begin`: its durable replace creates the temp file
+  exclusively and finds the name taken.
 
 ## Recovery check record
 
