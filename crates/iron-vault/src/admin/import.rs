@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use iron_vault_store::migration_bundle::{BundleDecoder, DecodedBundle};
 use iron_vault_store::{
     ExportPassphrase, ImportError, ImportFailure, ImportKeys, ImportProgress, ImportStep, ImportedVault, InitStateError,
-    InitializationState, OpenBundleError, Passphrase, StoreFs, UnfinishedKind, VerifiedBundle, WhichPassphrase,
+    InitializationState, OpenBundleError, Passphrase, SignerKind, StoreFs, UnfinishedKind, VerifiedBundle, WhichPassphrase,
 };
 use secrecy::SecretString;
 use tokio::sync::mpsc;
@@ -195,7 +195,10 @@ fn summary_text(bundle: &VerifiedBundle) -> String {
     let approvers = bundle
         .approvers()
         .iter()
-        .map(|approver| approver.label().to_string())
+        .map(|approver| match approver.kind() {
+            SignerKind::Software => approver.label().to_string(),
+            SignerKind::Tpm => format!("{} (bound to the source machine)", approver.label()),
+        })
         .collect::<Vec<_>>();
     format!(
         "import a migration bundle\n  vault: {}\n  credentials: {}\n  approvers: {}\n  committed approval: version {}; highest reserved \

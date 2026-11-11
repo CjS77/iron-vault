@@ -14,9 +14,9 @@ use crate::migration_bundle::{BundleEncoder, BundleHeader, BundleHeaderError, En
 use crate::{
     ApprovalState, ApprovalVersion, ApproverId, BundledApproverKeyError, ConfigDigest, ConfigDirLock, ConfigFileName, EnvelopeError,
     ErrorKindLabel, ExportPassphrase, MAX_APPROVAL_STATE_LEN, MAX_MANIFEST_LEN, MAX_PASSPHRASE_ENVELOPE_LEN, MAX_RECORD_FILE_LEN,
-    ManifestEntry, RecordId, StateDirLock, StateFileName, StoreFs, VaultId, VaultIdentity, VaultManifest, check_approver_key_form,
-    open_approval_state, open_manifest, read_config_file, read_state_file, record_digest, seal_bundled_approver_key,
-    seal_exported_identity,
+    ManifestEntry, RecordId, SignerKind, StateDirLock, StateFileName, StoreFs, VaultId, VaultIdentity, VaultManifest,
+    check_approver_key_form, open_approval_state, open_manifest, read_config_file, read_state_file, record_digest,
+    seal_bundled_approver_key, seal_exported_identity,
 };
 
 /// Where an export failed, as the `step` of the `migration.export-failed` event.
@@ -137,6 +137,12 @@ pub enum SnapshotError {
     /// The bundle encoder refused an entry.
     #[error("export snapshot step: the bundle encoder refused an entry: {0}")]
     Bundle(EncodeError),
+    /// No pinned approver is a `software` one. A `tpm` approver's key never leaves its TPM, so the bundle would arrive
+    /// with no approver able to sign, and the destination could route nothing until a config is approved.
+    #[error(
+        "export check step: no software approver is pinned, so the destination could not approve a config; enroll a software approver first"
+    )]
+    NoSoftwareApprover,
     /// The sink failed. The error is the sink's own, so the caller can tell a cancellation or a missed deadline from a
     /// store failure.
     #[error("export transfer step: writing the bundle failed: {0}")]
@@ -148,6 +154,7 @@ impl SnapshotError {
     pub fn step(&self) -> SnapshotStep {
         match self {
             Self::Unreadable { step, .. } | Self::Damaged { step, .. } => *step,
+            Self::NoSoftwareApprover => SnapshotStep::Check,
             Self::SealIdentity(_) | Self::SealApprover { .. } => SnapshotStep::Seal,
             Self::Header(_) | Self::Bundle(_) => SnapshotStep::Snapshot,
             Self::Transfer(_) => SnapshotStep::Transfer,
@@ -167,6 +174,7 @@ impl SnapshotError {
         match self {
             Self::Unreadable { kind, .. } => kind.clone(),
             Self::Damaged { .. } => ErrorKindLabel::fixed("damaged"),
+            Self::NoSoftwareApprover => ErrorKindLabel::fixed("no_software_approver"),
             Self::SealIdentity(_) | Self::SealApprover { .. } => ErrorKindLabel::fixed("seal_failed"),
             Self::Header(_) | Self::Bundle(_) => ErrorKindLabel::fixed("bundle_unfit"),
             Self::Transfer(error) => ErrorKindLabel::of_io(error),
@@ -287,6 +295,10 @@ impl<'a, F: StoreFs> Reader<'a, F> {
 
     /// Steps 1 to 3 of the check: the manifest, the approval state, the config and the approver key files.
     fn control(&self, held: &ApprovalState) -> Result<Control, SnapshotError> {
+        let has_software = held.approvers().iter().any(|approver| approver.kind() == SignerKind::Software);
+        if !has_software {
+            return Err(SnapshotError::NoSoftwareApprover);
+        }
         let (manifest_file, manifest) = self.manifest(held)?;
         let (approval_file, version, digest) = self.approval(held)?;
         let config = self.config(&digest)?;
@@ -344,10 +356,12 @@ impl<'a, F: StoreFs> Reader<'a, F> {
         Ok(bytes)
     }
 
-    /// Each pinned approver's key file, in ascending approver ID, checked for form and never opened.
+    /// Each `software` approver's key file, in ascending approver ID, checked for form and never opened. A `tpm`
+    /// approver has none: its key stays in the source machine's TPM.
     fn approver_keys(&self, held: &ApprovalState) -> Result<Vec<(ApproverId, Vec<u8>)>, SnapshotError> {
         held.approvers()
             .iter()
+            .filter(|approver| approver.kind() == SignerKind::Software)
             .map(|approver| {
                 let (id, file) = (approver.id(), EntryName::Approver(approver.id()));
                 let bytes = self.state_file(file, &StateFileName::approver_key(id), MAX_PASSPHRASE_ENVELOPE_LEN as u64)?;

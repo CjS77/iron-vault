@@ -9,7 +9,9 @@
 
 use std::sync::Arc;
 
-use iron_vault_store::{ErrorKindLabel, ExportPassphrase, ExportedBundle, SnapshotStep, SnapshotSummary, StoreFs, WhichPassphrase};
+use iron_vault_store::{
+    ErrorKindLabel, ExportPassphrase, ExportedBundle, SnapshotError, SnapshotStep, SnapshotSummary, StoreFs, WhichPassphrase,
+};
 use tokio::sync::mpsc;
 
 use super::dispatch::{AdminHandler, HandlerFuture};
@@ -216,9 +218,15 @@ fn summary_text(summary: &SnapshotSummary) -> String {
 }
 
 /// Step 3's failure: the snapshot check, recorded by the service, names the step and the file.
-fn check_failed(error: ExportError) -> AdminResponse {
-    match error {
+fn check_failed(failure: ExportError) -> AdminResponse {
+    match failure {
         ExportError::WrongState(state) => wrong_state(state),
+        ExportError::Snapshot(SnapshotError::NoSoftwareApprover) => error(
+            ErrorCode::ApproverSetInvalid,
+            "no software approver is pinned, and a TPM approver's key cannot move to another machine; enroll a software approver \
+             first with `approver add`; nothing was exported"
+                .to_owned(),
+        ),
         ExportError::Snapshot(error) => export_failed(error.to_string()),
         ExportError::Interrupted => export_failed("export check step: the snapshot check did not finish".to_owned()),
     }

@@ -16,8 +16,9 @@ use crate::migration_bundle::{BundleDecoder, DecodedBundle};
 use crate::test_dir::TestDir;
 use crate::test_request::HOST;
 use crate::{
-    ApprovalPassphrase, MAX_CONFIG_LEN, PermittedOrigins, PinnedApprover, SoftwareSigner, Vault, VaultManifest, durable_remove,
-    durable_replace, open_bundled_approver_key, open_exported_identity, seal_manifest, seal_signer_key_for_tests, write_signer_key,
+    ApprovalPassphrase, ApproverPublicKey, MAX_CONFIG_LEN, PermittedOrigins, PinnedApprover, SignatureAlgorithm, SoftwareSigner, Vault,
+    VaultManifest, durable_remove, durable_replace, open_bundled_approver_key, open_exported_identity, seal_manifest,
+    seal_signer_key_for_tests, write_signer_key,
 };
 
 pub(crate) const CONFIG: &[u8] = b"schema_version = 1\n";
@@ -45,6 +46,21 @@ pub(crate) fn with_work_factor(envelope: &[u8], log_n: u8) -> Vec<u8> {
     [&envelope[..line_end - 2], format!(" {log_n}").as_bytes(), &envelope[line_end..]].concat()
 }
 
+/// The approver `seed` names: a software one, or a `tpm` one with a P-256 key.
+fn approver(seed: u8, software: bool) -> PinnedApprover {
+    if software {
+        return PinnedApprover::from_seed(seed);
+    }
+    let point = p256::ecdsa::SigningKey::from_slice(&[seed; 32])
+        .unwrap()
+        .verifying_key()
+        .to_encoded_point(false);
+    let key = ApproverPublicKey::new(SignatureAlgorithm::EcdsaP256, point.as_bytes().to_vec()).unwrap();
+    let id = ApproverId::for_tests(&key);
+    let label = crate::ApproverLabel::new(&format!("tpm {seed}")).unwrap();
+    PinnedApprover::new(id, SignerKind::Tpm, key, label, crate::UtcSecond::EPOCH).unwrap()
+}
+
 fn noise(len: usize) -> Vec<u8> {
     (0..len).map(|i| (i.wrapping_mul(31) ^ (i >> 3)) as u8).collect()
 }
@@ -67,8 +83,19 @@ impl Fixture {
         Self::with_config_on_disk(CONFIG)
     }
 
+    /// The same vault with a second approver that is a `tpm` one, which has no key file; with `tpm_only` the first is a
+    /// `tpm` approver too.
+    pub(crate) fn with_tpm_approver(tpm_only: bool) -> Self {
+        Self::build(CONFIG, [!tpm_only, false])
+    }
+
     /// The approval commits to [`CONFIG`]; `config_on_disk` is what `config.toml` holds.
     fn with_config_on_disk(config_on_disk: &[u8]) -> Self {
+        Self::build(config_on_disk, [true, true])
+    }
+
+    /// `software[i]` says whether approver `i + 1` is a software one; the others are `tpm` approvers.
+    fn build(config_on_disk: &[u8], software: [bool; 2]) -> Self {
         let dirs = (TestDir::new("export-state"), TestDir::new("export-config"));
         let (state, config) = (
             StateDirLock::acquire(dirs.0.path()).unwrap(),
@@ -86,14 +113,15 @@ impl Fixture {
             };
             vault.add(&state, &fs, name.parse().unwrap(), material, origins).unwrap();
         });
-        let (mut held, _) = vault.create_approval_state(&state, &fs, PinnedApprover::from_seed(1)).unwrap();
-        held.enroll_approver(&state, &fs, &identity, PinnedApprover::from_seed(2)).unwrap();
+        let (mut held, _) = vault.create_approval_state(&state, &fs, approver(1, software[0])).unwrap();
+        held.enroll_approver(&state, &fs, &identity, approver(2, software[1])).unwrap();
         let older_approval = read(&state, &fs, &StateFileName::approval_state());
         let version = held.reserve(&state, &fs, &identity).unwrap();
         held.commit(&state, &fs, &identity, version, ConfigDigest::of(CONFIG)).unwrap();
         held.reserve(&state, &fs, &identity).unwrap();
         held.approvers()
             .iter()
+            .filter(|approver| approver.kind() == SignerKind::Software)
             .for_each(|approver| write_signer_key(&state, &fs, approver.id(), &approver_key()).unwrap());
         let records = vault.manifest().entries().keys().copied().collect();
         Self {
@@ -473,4 +501,40 @@ fn an_interrupted_sink_write_is_retried_and_the_export_matches_an_uninterrupted_
         .chain(fixture.records.iter().map(|id| EntryName::Record(*id)));
     names.for_each(|name| assert_eq!(plain.entry(&name).unwrap(), retried.entry(&name).unwrap(), "{name:?}"));
     assert_eq!(plain.header().vault_id(), retried.header().vault_id());
+}
+
+#[test]
+fn a_tpm_approver_has_no_key_file_in_the_bundle() {
+    let _turn = one_at_a_time();
+    let fixture = Fixture::with_tpm_approver(false);
+    let software = fixture
+        .held
+        .approvers()
+        .iter()
+        .find(|a| a.kind() == SignerKind::Software)
+        .unwrap()
+        .id();
+    assert_eq!(fixture.check().unwrap().approver_count, 1);
+
+    let mut bytes = Vec::new();
+    fixture.stream(&mut bytes).unwrap();
+
+    let bundle = decode(&bytes);
+    assert_eq!(bundle.header().approver_count(), 1);
+    let bundled: Vec<_> = bundle
+        .entries()
+        .map(|(name, _)| name)
+        .filter(|name| matches!(name, EntryName::Approver(_)))
+        .collect();
+    assert_eq!(bundled, [EntryName::Approver(software)]);
+}
+
+#[test]
+fn a_vault_with_only_tpm_approvers_is_refused_at_the_check_and_writes_nothing() {
+    let fixture = Fixture::with_tpm_approver(true);
+    let from = fixture.fs.trace().len();
+    let error = fixture.check().unwrap_err();
+    assert!(matches!(error, SnapshotError::NoSoftwareApprover), "{error}");
+    assert_eq!((error.step(), error.file()), (SnapshotStep::Check, None));
+    assert_nothing_written(&fixture.fs, from);
 }

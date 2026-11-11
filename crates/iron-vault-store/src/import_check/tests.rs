@@ -24,7 +24,12 @@ impl Parts {
             (EntryName::ApprovalState, fixture.file(&StateFileName::approval_state())),
             (EntryName::Config, CONFIG.to_vec()),
         ];
-        let approvers = fixture.held.approvers().iter().map(|approver| {
+        let software = fixture
+            .held
+            .approvers()
+            .iter()
+            .filter(|approver| approver.kind() == SignerKind::Software);
+        let approvers = software.map(|approver| {
             let key = fixture.file(&StateFileName::approver_key(approver.id()));
             (EntryName::Approver(approver.id()), seal_bundled_approver_key(&key, &vault).unwrap())
         });
@@ -317,4 +322,21 @@ fn an_exported_bundle_verifies_to_the_source_vault() {
         .collect();
     assert_eq!(verified.records(), &records);
     assert!(!format!("{verified:?}").contains("AGE-SECRET-KEY"));
+}
+
+#[test]
+fn a_bundle_with_no_key_file_for_a_tpm_approver_verifies() {
+    let fixture = Fixture::with_tpm_approver(false);
+    let parts = Parts::of(&fixture);
+    let verified = parts.verify().unwrap();
+    assert_eq!(verified.approvers().len(), 2);
+    assert_eq!(verified.approver_keys().len(), 1);
+}
+
+#[test]
+fn a_key_file_for_a_tpm_approver_is_refused() {
+    let fixture = Fixture::with_tpm_approver(false);
+    let tpm = fixture.held.approvers().iter().find(|a| a.kind() == SignerKind::Tpm).unwrap().id();
+    let sealed = seal_bundled_approver_key(&approver_key(), &fixture.identity.public_key()).unwrap();
+    assert_eq!(Parts::of(&fixture).with(EntryName::Approver(tpm), sealed).refusal(), "counts");
 }

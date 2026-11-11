@@ -19,8 +19,8 @@ use crate::migration_bundle::{BundleHeader, DecodedBundle, EntryName};
 use crate::partial_restore::check_control_generations;
 use crate::{
     ApprovalState, ApprovalVersion, ApproverId, BundledApproverKeyError, ConfigDigest, EnvelopeError, ExportPassphrase, OpenError,
-    PinnedApprover, RecordId, VaultId, VaultIdentity, VaultManifest, check_approver_key_form, check_config_digest, check_record_digest,
-    open_approval_state, open_bundled_approver_key, open_exported_identity, open_manifest,
+    PinnedApprover, RecordId, SignerKind, VaultId, VaultIdentity, VaultManifest, check_approver_key_form, check_config_digest,
+    check_record_digest, open_approval_state, open_bundled_approver_key, open_exported_identity, open_manifest,
 };
 
 /// A bundle check that a migration bundle failed: one check of import step 4, or the exported identity envelope's form
@@ -173,7 +173,7 @@ impl ControlFiles {
     /// pins, so nothing taken from the unauthenticated header can differ from what the vault says.
     pub fn check_counts(&self, header: &BundleHeader) -> Result<(), BundleCheckError> {
         let records = header.record_count() == self.manifest.entries().len();
-        let approvers = header.approver_count() == self.approval.approvers().len();
+        let approvers = header.approver_count() == self.software_approver_ids().count();
         require(records && approvers, BundleCheckError::Counts)
     }
 
@@ -195,10 +195,15 @@ impl ControlFiles {
         check_record_digest(file, entry).map_err(|_| BundleCheckError::RecordDigest)
     }
 
-    /// Requires `ids`, in ascending order, to be exactly the approver IDs the approval state pins.
+    /// Requires `ids`, in ascending order, to be exactly the `software` approver IDs the approval state pins. A `tpm`
+    /// approver has no key file in a bundle: its key never leaves the source machine's TPM.
     pub fn check_approver_ids(&self, ids: impl IntoIterator<Item = ApproverId>) -> Result<(), BundleCheckError> {
-        let pinned = self.approval.approvers().iter().map(PinnedApprover::id);
-        require(ids.into_iter().eq(pinned), BundleCheckError::ApproverIds)
+        require(ids.into_iter().eq(self.software_approver_ids()), BundleCheckError::ApproverIds)
+    }
+
+    fn software_approver_ids(&self) -> impl Iterator<Item = ApproverId> + '_ {
+        let software = |approver: &&PinnedApprover| approver.kind() == SignerKind::Software;
+        self.approval.approvers().iter().filter(software).map(PinnedApprover::id)
     }
 
     /// Requires `file` to have the form of an approver key envelope, by [`check_approver_key_form`]. It reads the header
@@ -233,7 +238,7 @@ impl VerifiedBundle {
         self.control.manifest.entries().len()
     }
 
-    /// The pinned approvers in ascending approver ID, whose labels the import summary lists.
+    /// The pinned approvers in ascending approver ID, whose labels and kinds the import summary lists.
     pub fn approvers(&self) -> &[PinnedApprover] {
         self.control.approval.approvers()
     }
