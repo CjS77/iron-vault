@@ -25,7 +25,7 @@ use OwnedStateFile::{ApproverKeys, Fixed, Records};
 /// Every store-owned file in the state directory, in the order reset removes them. The manifest goes first, so no
 /// binary opens the vault once anything else is gone; the identity envelope next, so a crash leaves no file a recovery
 /// key opens; reset's own commit point, `reset.unfinished`, last.
-pub(crate) const STATE_FILES: [OwnedStateFile; 11] = [
+pub(crate) const STATE_FILES: [OwnedStateFile; 12] = [
     Fixed(StateFileName::manifest),
     Fixed(StateFileName::identity_envelope),
     Fixed(StateFileName::passphrase_envelope),
@@ -36,12 +36,14 @@ pub(crate) const STATE_FILES: [OwnedStateFile; 11] = [
     Records,
     Fixed(StateFileName::recovery_check_record),
     Fixed(StateFileName::unfinished_initialization),
+    Fixed(StateFileName::owner_lock),
     Fixed(StateFileName::unfinished_reset),
 ];
 
 /// The store-owned state files whose presence alone is no vault. `recovery.toml` is the record of a vault already gone,
-/// which `init` removes. Stale temp files are not vault files either.
-const NOT_VAULT_FILES: [fn() -> StateFileName; 1] = [StateFileName::recovery_check_record];
+/// and the owner-lock file says only that the owner locked; `init` removes both. Stale temp files are not vault files
+/// either.
+const NOT_VAULT_FILES: [fn() -> StateFileName; 2] = [StateFileName::recovery_check_record, StateFileName::owner_lock];
 
 /// The config files, in the order every discard removes them: all signatures before any config. A signature with no
 /// config beside it reads as the owner's file, and `publish` can leave `config.toml` beside `config.toml.sig.staged`, so
@@ -113,7 +115,7 @@ mod tests {
     #[test]
     fn every_state_file_name_is_store_owned() {
         let names = constructed_names();
-        assert!(names.len() >= 11, "{names:?}");
+        assert!(names.len() >= 12, "{names:?}");
         names
             .iter()
             .for_each(|name| assert!(is_store_owned(&StateFileName::new(name).unwrap()), "{name} is not store-owned"));
@@ -130,9 +132,9 @@ mod tests {
     }
 
     #[test]
-    fn the_recovery_check_record_is_the_only_store_owned_file_that_is_no_vault() {
+    fn the_recovery_check_record_and_the_owner_lock_are_the_only_store_owned_files_that_are_no_vault() {
         let not_vault: Vec<_> = constructed_names().into_iter().filter(|name| !is_vault_file(name)).collect();
-        assert_eq!(not_vault, ["recovery.toml"]);
+        assert_eq!(not_vault, ["locked-by-owner", "recovery.toml"]);
     }
 
     #[test]
@@ -145,6 +147,7 @@ mod tests {
             format!("approver-{ID}.age"),
             "manifest.age".to_owned(),
             "recovery.toml".to_owned(),
+            "locked-by-owner".to_owned(),
         ]
         .iter()
         .map(|name| StateFileName::new(name).unwrap())
@@ -158,6 +161,7 @@ mod tests {
                 format!("approver-{ID}.age"),
                 format!("record-{ID}.age"),
                 "recovery.toml".to_owned(),
+                "locked-by-owner".to_owned(),
                 "reset.unfinished".to_owned(),
             ]
         );

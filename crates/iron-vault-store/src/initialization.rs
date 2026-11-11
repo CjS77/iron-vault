@@ -10,6 +10,7 @@ use std::io;
 
 use crate::config_dir::remove_config_file;
 use crate::durable::{ReadFailure, ensure_dir_sync_supported, read_in};
+use crate::owner_lock::remove_owner_lock;
 use crate::recovery_record::remove_recovery_check;
 use crate::state_dir::LOCK_FILE;
 use crate::store_owned::{CONFIG_FILES, is_store_owned, is_vault_file};
@@ -94,6 +95,9 @@ pub enum InitStateError {
     /// Removing a leftover `recovery.toml` from an Uninitialized directory failed; nothing else was written.
     #[error("cannot remove the leftover recovery check record: {0}")]
     LeftoverRecoveryCheck(WriteError),
+    /// Removing a stale owner-lock file from an Uninitialized directory failed; nothing else was written.
+    #[error("cannot remove the stale owner-lock file: {0}")]
+    LeftoverOwnerLock(WriteError),
     /// Removing a config file failed.
     #[error(transparent)]
     Config(ConfigWriteError),
@@ -157,7 +161,8 @@ pub fn ensure_initializable(
 /// Starts an initialization: step 1 of the write order, plus the discard of an earlier unfinished one.
 ///
 /// On Uninitialized this durably removes a leftover `recovery.toml`, so the new vault does not inherit the old vault's
-/// `last_checked`, then durably writes an empty `init.unfinished`. The removal is not an audit event, so it is not
+/// `last_checked`, and a stale owner-lock file, so the new vault host-unlocks, then durably writes an empty
+/// `init.unfinished`. The removal is not an audit event, so it is not
 /// reported. On Unfinished it durably removes, in an order that never leaves a signature alone, every file an
 /// initialization writes, and keeps `init.unfinished`; it returns those file names for the `vault.init-discarded` log, and
 /// a discard that fails part-way names them on its error. On Initialized, Unfinished reset and Unrecognized it refuses
@@ -168,6 +173,7 @@ pub fn begin_initialization(state: &StateDirLock, config: &ConfigDirLock, fs: &i
         // Uninitialized: `ensure_initializable` returns no other state.
         _ => remove_recovery_check(state, fs)
             .map_err(InitStateError::LeftoverRecoveryCheck)
+            .and_then(|_| remove_owner_lock(state, fs).map_err(InitStateError::LeftoverOwnerLock))
             .and_then(|_| durable_replace(state, fs, &StateFileName::unfinished_initialization(), b"").map_err(InitStateError::State))
             .map(|()| Vec::new())
             .map_err(Into::into),
@@ -246,6 +252,8 @@ pub(crate) enum Entry {
     ApproverKey,
     /// `recovery.toml`: part of the vault beside a manifest, removed by the discard, and never a foreign file.
     RecoveryRecord,
+    /// `locked-by-owner`: part of no vault, so it blocks nothing, and removed by every discard.
+    OwnerLock,
     /// A `record-*.age` file.
     Record,
     /// Another store-owned file that an initialization never writes, such as `recipients.age.staged`: part of the vault
@@ -282,13 +290,14 @@ impl Survey {
     }
 }
 
-/// The files a discard removes from the state directory, in order: a recovery check record, which beside the marker was
-/// left by an earlier vault and was not written after this one was initialized, then what an initialization writes
-/// except the marker. `approver_keys` are the approver key envelopes present; the name holds an approver ID generated
+/// The files a discard removes from the state directory, in order: a recovery check record and an owner-lock file, which
+/// beside the marker were left by an earlier vault and were not written after this one was initialized, then what an
+/// initialization writes except the marker. `approver_keys` are the approver key envelopes present; the name holds an approver ID generated
 /// with the keys, so it is known only from the listing.
 fn written_files(approver_keys: impl IntoIterator<Item = StateFileName>) -> Vec<StateFileName> {
     [
         StateFileName::recovery_check_record(),
+        StateFileName::owner_lock(),
         StateFileName::approval_state(),
         StateFileName::manifest(),
     ]
@@ -327,6 +336,7 @@ pub(crate) fn classify(name: &OsStr) -> Entry {
         Ok(file) if file == StateFileName::unfinished_initialization() => Entry::Marker,
         Ok(file) if file == StateFileName::manifest() => Entry::Manifest,
         Ok(file) if file == StateFileName::recovery_check_record() => Entry::RecoveryRecord,
+        Ok(file) if file == StateFileName::owner_lock() => Entry::OwnerLock,
         Ok(file) if written_files(None).contains(&file) => Entry::InitFile,
         Ok(file) if StateFileName::approver_key_id(file.as_str()).is_some() => Entry::ApproverKey,
         Ok(file) if is_record_file_name(file.as_str()) => Entry::Record,

@@ -21,6 +21,7 @@ mod inventory_check;
 mod mac_file;
 mod manifest;
 pub mod migration_bundle;
+mod owner_lock;
 mod partial_restore;
 mod passphrase;
 mod permitted_origins;
@@ -94,6 +95,7 @@ pub use manifest::{
     MAX_MANIFEST_ENTRIES, MAX_MANIFEST_LEN, ManifestEntry, ManifestError, VaultManifest, open_manifest, record_digest, seal_manifest,
     unverified_vault_id,
 };
+pub use owner_lock::{owner_lock_present, remove_owner_lock, write_owner_lock};
 pub use partial_restore::PartialRestore;
 #[cfg(any(test, feature = "test-support"))]
 pub use passphrase::seal_passphrase_envelope_for_tests;

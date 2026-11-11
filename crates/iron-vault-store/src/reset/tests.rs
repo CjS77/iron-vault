@@ -66,7 +66,7 @@ impl Dirs {
     }
 
     /// An initialized vault with everything a used one holds beyond `init`'s files: a record, a second approver key
-    /// envelope, a staged inventory, a recovery check record, a pending config and a staged signature.
+    /// envelope, a staged inventory, a recovery check record, the owner-lock file, a pending config and a staged signature.
     fn full_vault(&self, fs: &impl StoreFs) -> VaultId {
         let vault_id = self.init(fs);
         let passphrase = Passphrase::new(SecretString::from(VAULT_PASSPHRASE)).unwrap();
@@ -80,6 +80,7 @@ impl Dirs {
         self.put(fs, OTHER_APPROVER_KEY);
         self.put(fs, "recipients.age.staged");
         write_recovery_check(&self.state, fs, &RecoveryCheckRecord::new(UtcSecond::EPOCH, None).unwrap()).unwrap();
+        crate::write_owner_lock(&self.state, fs).unwrap();
         write_pending(&self.config, fs, b"schema_version = 1\n# next\n").unwrap();
         write_staged(&self.config, fs, b"signature").unwrap();
         vault_id
@@ -150,7 +151,8 @@ fn discarding_a_full_vault_leaves_uninitialized_and_init_makes_a_new_vault() {
     assert_eq!(discarded.removed.get(1).map(String::as_str), Some("identity.age"));
     let config_files = ["config.toml.sig", "config.toml.sig.staged", "config.toml", "config.toml.pending"];
     assert_eq!(discarded.removed[discarded.removed.len() - 4..], config_files);
-    assert_eq!(discarded.removed.len(), 14, "{:?}", discarded.removed);
+    assert_eq!(discarded.removed.len(), 15, "{:?}", discarded.removed);
+    assert!(discarded.removed.contains(&"locked-by-owner".to_owned()), "{:?}", discarded.removed);
     fs.crash();
     assert_eq!(dirs.names(&fs), lock_files_only(), "every removal is durable");
     assert_ne!(dirs.init(&fs), old);
@@ -201,7 +203,7 @@ fn files_that_are_no_vault_leave_nothing_to_reset() {
     };
     only("reset-none-empty", &|_, _| {});
     only("reset-none-recovery", &|dirs, fs| dirs.put(fs, "recovery.toml"));
-    // The owner-lock file is foreign until TPM unlock adds it to the store-owned list; it is no vault file either way.
+    // The owner-lock file is store-owned but no vault file: a directory holding only it has nothing to reset.
     only("reset-none-owner-lock", &|dirs, fs| dirs.put(fs, "locked-by-owner"));
     only("reset-none-temps", &|dirs, fs| {
         [".manifest.age.tmp", ".identity.age.tmp"].iter().for_each(|temp| {

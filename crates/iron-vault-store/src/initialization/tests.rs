@@ -223,6 +223,64 @@ fn the_recovery_record_is_never_a_foreign_file() {
 }
 
 #[test]
+fn the_owner_lock_is_never_a_foreign_file_and_leaves_the_state_uninitialized() {
+    let initialized = Dirs::new("init-owner-lock-vault");
+    Vault::create(&initialized.state, &OsFs, VaultIdentity::generate()).unwrap();
+    initialized.put(&OsFs, "locked-by-owner");
+    assert_eq!(initialized.read(&OsFs), InitializationState::Initialized);
+    assert_eq!(require_initialized(&initialized.state, &initialized.config, &OsFs), Ok(Vec::new()));
+    let alone = Dirs::new("init-owner-lock-alone");
+    alone.put(&OsFs, "locked-by-owner");
+    std::fs::write(alone.state_dir.path().join(".manifest.age.tmp"), b"x").unwrap();
+    assert_eq!(alone.read(&OsFs), InitializationState::Uninitialized);
+    alone.put(&OsFs, "identity.age");
+    assert_eq!(alone.read(&OsFs), InitializationState::Unrecognized);
+}
+
+#[test]
+fn an_owner_lock_beside_the_marker_is_discarded() {
+    let dirs = Dirs::new("init-owner-lock-discard");
+    dirs.crashed_after(&OsFs, 2);
+    dirs.put(&OsFs, "locked-by-owner");
+    assert_eq!(dirs.read(&OsFs), InitializationState::Unfinished);
+    let removed = dirs.begin(&OsFs).unwrap();
+    assert!(removed.contains(&"locked-by-owner".to_owned()), "{removed:?}");
+    assert_eq!(dirs.state_names(&OsFs), ["init.unfinished", "lock"]);
+}
+
+#[test]
+fn begin_removes_a_stale_owner_lock_without_reporting_it() {
+    let dirs = Dirs::new("init-begin-owner-lock");
+    dirs.put(&OsFs, "locked-by-owner");
+    assert_eq!(dirs.begin(&OsFs), Ok(Vec::new()));
+    assert_eq!(dirs.state_names(&OsFs), ["init.unfinished", "lock"]);
+}
+
+#[test]
+fn begin_leaves_no_marker_when_the_stale_owner_lock_cannot_be_removed() {
+    // The owner-lock removal is the second unlink, after the recovery record's; a dry run finds its call number.
+    let dry = Dirs::new("init-begin-owner-lock-dry");
+    let dry_fs = dry.fault_fs();
+    dry.put(&dry_fs, "locked-by-owner");
+    dry.begin(&dry_fs).unwrap();
+    let removal = dry_fs
+        .trace()
+        .iter()
+        .enumerate()
+        .filter(|(_, call)| call.op() == FsOp::RemoveFile)
+        .nth(1)
+        .unwrap()
+        .0;
+    let dirs = Dirs::new("init-begin-owner-lock-fault");
+    let fs = dirs.fault_fs();
+    dirs.put(&fs, "locked-by-owner");
+    fs.fail_call(removal, io::ErrorKind::Other);
+    assert!(matches!(dirs.begin(&fs), Err(InitStateError::LeftoverOwnerLock(_))));
+    assert_eq!(dirs.state_names(&fs), ["lock", "locked-by-owner"]);
+    assert_eq!(dirs.read(&fs), InitializationState::Uninitialized);
+}
+
+#[test]
 fn a_staged_inventory_is_the_vaults_own_file_beside_a_manifest_and_foreign_elsewhere() {
     let vault = Dirs::new("init-staged-vault");
     Vault::create(&vault.state, &OsFs, VaultIdentity::generate()).unwrap();

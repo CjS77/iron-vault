@@ -102,6 +102,12 @@ impl StateFileName {
         Self("reset.unfinished".to_owned())
     }
 
+    /// The owner-lock file, `locked-by-owner`: empty, and while anything is at this name a starting service skips host
+    /// unlock. `lock` writes it and a passphrase `unlock` removes it.
+    pub fn owner_lock() -> Self {
+        Self("locked-by-owner".to_owned())
+    }
+
     /// The recovery check record's file, `recovery.toml`.
     pub fn recovery_check_record() -> Self {
         Self("recovery.toml".to_owned())
@@ -195,6 +201,7 @@ mod tests {
             Ok(StateFileName::unfinished_initialization())
         );
         assert_eq!(StateFileName::new("reset.unfinished"), Ok(StateFileName::unfinished_reset()));
+        assert_eq!(StateFileName::new("locked-by-owner"), Ok(StateFileName::owner_lock()));
         let id: RecordId = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();
         assert_eq!(
             StateFileName::record(&id).as_str(),

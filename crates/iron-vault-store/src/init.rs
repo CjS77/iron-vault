@@ -35,7 +35,7 @@ pub use passphrases::{InitPassphrases, InitPassphrasesError, MIN_PASSPHRASE_CHAR
 /// One step of the write order, or the discard of an unfinished initialization that comes before step 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitStep {
-    /// Removing the files an unfinished initialization wrote, or a leftover `recovery.toml` from an Uninitialized directory.
+    /// Removing the files an unfinished initialization wrote, or a leftover `recovery.toml` or `locked-by-owner` from an Uninitialized directory.
     Discard,
     /// Step 1: writing `init.unfinished`, or refusing a directory init must not write to.
     Begin,
@@ -78,7 +78,7 @@ impl InitStep {
 impl fmt::Display for InitStep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let what = match self {
-            Self::Discard => "discarding the unfinished initialization or a leftover recovery check record",
+            Self::Discard => "discarding the unfinished initialization, a leftover recovery check record or a stale owner-lock file",
             Self::Begin => "writing init.unfinished",
             Self::IdentityEnvelope => "writing and checking the identity envelope and the recipient inventory",
             Self::PassphraseEnvelope => "writing the passphrase envelope",
@@ -322,8 +322,12 @@ fn write_vault<F: StoreFs>(
 fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, InitError> {
     let unfinished = InitializationState::read(state, config, fs).map_err(at(InitStep::Begin))? == InitializationState::Unfinished;
     begin_initialization(state, config, fs).map_err(|BeginError { cause, discarded }| InitError {
-        // Removing a leftover recovery check record is part of the discard; a failed marker write is `Begin`.
-        step: if unfinished || matches!(cause, InitStateError::LeftoverRecoveryCheck(_)) {
+        // Removing a leftover recovery check record or owner-lock file is part of the discard; a failed marker write is `Begin`.
+        step: if unfinished
+            || matches!(
+                cause,
+                InitStateError::LeftoverRecoveryCheck(_) | InitStateError::LeftoverOwnerLock(_)
+            ) {
             InitStep::Discard
         } else {
             InitStep::Begin
