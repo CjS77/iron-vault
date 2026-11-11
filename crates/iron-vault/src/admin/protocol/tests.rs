@@ -97,6 +97,22 @@ fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
         (R::RecipientRemove { recipients: a }, R::RecipientRemove { recipients: b }) => a == b,
         (R::ApproverAdd { approver: a, approvers: n }, R::ApproverAdd { approver: b, approvers: m }) => a == b && n == m,
         (R::ApproverRemove { approvers: a }, R::ApproverRemove { approvers: b }) => a == b,
+        (
+            R::Reset {
+                vault_id: a,
+                removed: n,
+                foreign: f,
+                cleared: c,
+                finish_uncertain: u,
+            },
+            R::Reset {
+                vault_id: b,
+                removed: m,
+                foreign: g,
+                cleared: d,
+                finish_uncertain: v,
+            },
+        ) => (a, n, f, c, u) == (b, m, g, d, v),
         (R::Error { code: a, message: m }, R::Error { code: b, message: n }) => a == b && m == n,
         _ => false,
     }
@@ -223,6 +239,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             Just(AdminRequest::Status),
             Just(AdminRequest::Unlock),
             Just(AdminRequest::Lock),
+            Just(AdminRequest::Reset),
             any::<bool>().prop_map(|host_unlock| AdminRequest::Init { host_unlock }),
             Just(AdminRequest::RecoveryCheck),
             Just(AdminRequest::RecipientList),
@@ -286,6 +303,22 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             approvers
         })),
         any::<u8>().prop_map(|approvers| Frame::Response(AdminResponse::ApproverRemove { approvers })),
+        (
+            proptest::option::of(any::<[u8; 16]>()),
+            any::<u64>(),
+            proptest::collection::vec("[ -~]{1,40}", 0..4),
+            any::<bool>(),
+            any::<bool>()
+        )
+            .prop_map(
+                |(bytes, removed, foreign, cleared, finish_uncertain)| Frame::Response(AdminResponse::Reset {
+                    vault_id: bytes.map(|bytes| VaultId::from_bytes(v4_bytes(bytes)).unwrap()),
+                    removed,
+                    foreign,
+                    cleared,
+                    finish_uncertain
+                })
+            ),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Add { record_id: v4(bytes) })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Replace { record_id: v4(bytes) })),
         any::<[u8; 32]>().prop_map(|bytes| Frame::Response(AdminResponse::CallerToken {
@@ -345,6 +378,7 @@ fn status_report() -> impl Strategy<Value = StatusReport> {
         Just(VaultStatus::Locked),
         Just(VaultStatus::NotInitialized),
         Just(VaultStatus::InitializationUnfinished),
+        Just(VaultStatus::ResetUnfinished),
         unlocked_vault().prop_map(VaultStatus::Unlocked)
     ];
     (state, profile, vault, memory, recovery_status()).prop_map(|(state, profile, vault, memory, recovery)| StatusReport {
@@ -921,6 +955,19 @@ fn add_requests_out_of_bounds_are_not_encoded() {
     ]
     .iter()
     .for_each(|frame| assert_eq!(encode(frame, &mut Vec::new()), Err(FrameError::InvalidValue(4))));
+}
+
+#[test]
+fn the_reset_error_codes_have_their_documented_numbers_and_names() {
+    [
+        (ErrorCode::NothingToReset, 45, "nothing-to-reset"),
+        (ErrorCode::ResetFailed, 46, "reset-failed"),
+    ]
+    .into_iter()
+    .for_each(|(code, number, name)| {
+        assert_eq!((code as u16, code.name()), (number, name));
+        assert_round_trips(&error(code, "m"));
+    });
 }
 
 #[test]

@@ -190,6 +190,10 @@ pub enum AdminOperation {
     /// Prove that the owner's recovery key opens the vault. It changes no service state and keeps no key, so it is
     /// allowed while Locked, where it is most useful, and Ready.
     RecoveryCheck,
+    /// Discard the vault and the config (`design/reset.md`). It is the way out when no owner factor works, so it is offered
+    /// wherever the service has started: Locked, Ready and Unavailable. Its lock-first withdrawal fires the lock event from
+    /// Ready and Unavailable, and from Locked there is nothing to withdraw, so it needs no edge of its own.
+    Reset,
 }
 
 impl ServiceState {
@@ -215,6 +219,7 @@ impl ServiceState {
             (_, A::Ping | A::Status | A::IssueCallerToken) => true,
             (Self::Locked, A::Unlock | A::Initialize) => true,
             (Self::Locked | Self::Ready, A::RecoveryCheck) => true,
+            (Self::Locked | Self::Ready | Self::Unavailable(_), A::Reset) => true,
             (Self::Ready, A::Lock | A::Reload | A::Approve | A::VaultChange) => true,
             (Self::Unavailable(_), A::Lock) => true,
             (Self::Unavailable(FailureReason::PolicyInvalid), A::Approve) => true,

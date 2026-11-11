@@ -56,6 +56,7 @@ fn vault_lines(vault: &VaultStatus) -> [String; 4] {
         ],
         VaultStatus::NotInitialized => closed_vault("not initialized (run iron-vault init)"),
         VaultStatus::InitializationUnfinished => closed_vault("initialization unfinished (run iron-vault init again)"),
+        VaultStatus::ResetUnfinished => closed_vault("reset unfinished (run iron-vault reset again)"),
         VaultStatus::Unlocked(UnlockedVault {
             id,
             committed,
@@ -122,7 +123,7 @@ fn days_ago(days: u64) -> String {
 
 fn credential_lines(vault: &VaultStatus) -> Vec<String> {
     match vault {
-        VaultStatus::Locked | VaultStatus::NotInitialized | VaultStatus::InitializationUnfinished => {
+        VaultStatus::Locked | VaultStatus::NotInitialized | VaultStatus::InitializationUnfinished | VaultStatus::ResetUnfinished => {
             vec![format!("credentials: {UNKNOWN}")]
         }
         VaultStatus::Unlocked(unlocked) if unlocked.credentials.is_empty() => vec!["credentials: none".to_owned()],
@@ -133,7 +134,9 @@ fn credential_lines(vault: &VaultStatus) -> Vec<String> {
 /// One line per route fault; nothing while the vault is locked or no route has one.
 fn route_fault_lines(vault: &VaultStatus) -> Vec<String> {
     match vault {
-        VaultStatus::Locked | VaultStatus::NotInitialized | VaultStatus::InitializationUnfinished => Vec::new(),
+        VaultStatus::Locked | VaultStatus::NotInitialized | VaultStatus::InitializationUnfinished | VaultStatus::ResetUnfinished => {
+            Vec::new()
+        }
         VaultStatus::Unlocked(unlocked) => unlocked.route_faults.iter().map(route_fault_line).collect(),
     }
 }

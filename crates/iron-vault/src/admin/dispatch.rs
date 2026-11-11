@@ -21,6 +21,7 @@ use super::recipient_list::RecipientList;
 use super::recipient_remove::RecipientRemove;
 use super::recovery_check::RecoveryCheck;
 use super::replace::Replace;
+use super::reset::Reset;
 use super::rm::Rm;
 use super::server::{Exchange, ExchangeError};
 use super::unlock::Unlock;
@@ -62,7 +63,7 @@ impl Handlers {
 
     /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile, then `status`,
     /// `unlock`, `lock`, `config approve`, `add`, `replace`, `init`, `list`, `rm`, `recovery check`, `recipient list`,
-    /// `recipient add`, `recipient remove`, `approver list`, `approver add` and `approver remove`.
+    /// `recipient add`, `recipient remove`, `approver list`, `approver add`, `approver remove` and `reset`.
     /// A command that acts on the service registers here with a clone of `service`.
     pub fn for_service<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> Self {
         Self::standard(service.paths().profile)
@@ -95,6 +96,7 @@ impl Handlers {
                 drain,
             },
         )
+        .with(AdminCommand::Reset, Reset::new(Arc::clone(service), drain))
     }
 
     /// Registers `handler` for `command`, replacing any handler it had.

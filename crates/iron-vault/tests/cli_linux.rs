@@ -599,6 +599,23 @@ async fn init_without_a_controlling_terminal_sends_nothing() {
     );
 }
 
+/// `reset`'s confirmation must be typed at a terminal, so a piped stdin ends with exit code 3 before the CLI connects. The
+/// standard handlers have no `reset`, so a CLI that connected anyway would exit 1 with `unknown-command`.
+#[tokio::test]
+async fn reset_with_a_piped_stdin_exits_3_without_connecting() {
+    let dir = TempDir::new();
+    let handlers = Handlers::standard(DeploymentProfile::Protected);
+    let output = serve_and_run(&dir, invoking_user().unwrap().uid, handlers, "reset", b"yes\n".to_vec()).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert_eq!(stdout, "");
+    assert!(
+        stderr.contains("must be typed at a terminal") && stderr.contains("stdin is not a terminal"),
+        "{stderr}"
+    );
+    assert!(stderr.ends_with("nothing was sent\n"), "{stderr}");
+}
+
 /// `caller-token` against the standard handlers: stdout is the token alone, and stderr its hash and how to enroll it.
 #[tokio::test]
 async fn caller_token_prints_the_token_alone_on_stdout_and_its_hash_on_stderr() {

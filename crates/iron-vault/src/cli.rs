@@ -35,6 +35,8 @@ mod recipient_list;
 #[cfg(test)]
 mod reference;
 #[cfg(target_os = "linux")]
+mod reset;
+#[cfg(target_os = "linux")]
 mod status;
 
 use std::ffi::OsStr;
@@ -60,7 +62,8 @@ Exit codes:
   1  the service answered with an error
   2  usage error
   3  no answer from the service: it is not running, this account may not connect, the exchange failed, a prompt
-     got no value, or a secret value the service sent could not be shown on a terminal
+     got no value, or a secret value the service sent could not be shown on a terminal; `reset` also exits 3,
+     before it connects, when stdin is not a terminal or /dev/tty cannot be opened
   4  `status`: the service answered, and it is not Ready; `list`: no vault is open, so the credentials are unknown";
 
 /// The exit statuses listed in [`EXIT_CODES`]. Usage errors exit through clap, with its status 2.
@@ -138,6 +141,12 @@ pub enum Command {
         #[cfg_attr(feature = "dev-mode", arg(skip))]
         host_unlock: bool,
     },
+    /// Discard the vault and the config, so `init` can make a new vault: the way out when no passphrase, recovery key or
+    /// approver works. It asks for no owner factor, only a confirmation typed at a terminal, which is the vault ID, or the
+    /// state directory's path when no vault is Initialized. It refuses a pipe, a file or a missing `/dev/tty` with exit
+    /// code 3 before it connects. The service locks first, then removes the store's files and the config, keeps any
+    /// foreign file, and ends Locked. Nothing can be recovered afterwards: keep your own copy of the config.
+    Reset,
     /// Issue a fresh caller token: it goes to stdout once, and its token_hash line to stderr. The service keeps no copy;
     /// the token works once a config naming the hash is approved with `config approve`.
     CallerToken,
@@ -427,6 +436,18 @@ pub fn unlock(_socket: Option<&Path>) -> ExitCode {
 #[cfg(target_os = "linux")]
 pub fn lock(socket: Option<&Path>) -> ExitCode {
     client::lock(socket).into()
+}
+
+/// `iron-vault reset`: checks that the confirmation can be typed at a terminal, sends `reset`, and prints the result.
+#[cfg(target_os = "linux")]
+pub fn reset(socket: Option<&Path>) -> ExitCode {
+    reset::run_reset(socket).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn reset(_socket: Option<&Path>) -> ExitCode {
+    unsupported_platform()
 }
 
 /// `iron-vault init`: checks for a controlling terminal, sends `init`, answers the service's prompts, shows the

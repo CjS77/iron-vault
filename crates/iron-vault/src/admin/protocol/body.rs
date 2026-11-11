@@ -3,7 +3,7 @@
 use super::fields::{self, exact, first, read_flag, read_profile, read_text, read_u16, read_u64};
 use super::status::{self, StatusReport};
 use super::{AdminCommand, AdminRequest, AdminResponse, ApprovalResult, ErrorCode, FrameError, Notice, Prompt, ProposedConfig};
-use super::{add, approver_add, approver_list, approver_remove, list, recipient_add, recipient_list};
+use super::{add, approver_add, approver_list, approver_remove, list, recipient_add, recipient_list, reset};
 use crate::deployment::DeploymentProfile;
 use iron_vault_policy::CallerToken;
 use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
@@ -49,6 +49,7 @@ const COMMAND_RECIPIENT_REMOVE: u16 = AdminCommand::RecipientRemove as u16;
 const COMMAND_APPROVER_LIST: u16 = AdminCommand::ApproverList as u16;
 const COMMAND_APPROVER_ADD: u16 = AdminCommand::ApproverAdd as u16;
 const COMMAND_APPROVER_REMOVE: u16 = AdminCommand::ApproverRemove as u16;
+const COMMAND_RESET: u16 = AdminCommand::Reset as u16;
 const TAG_RECIPIENT: u16 = 2;
 const TAG_RECIPIENT_COUNT: u16 = 2;
 const TAG_CHECKED_AT: u16 = 3;
@@ -105,6 +106,7 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
             })
         }
         COMMAND_RECOVERY_CHECK => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::RecoveryCheck),
+        COMMAND_RESET => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::Reset),
         COMMAND_ADD => add::decode_request(&fields, |name, kind, origins| AdminRequest::Add { name, kind, origins }),
         COMMAND_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::List),
         COMMAND_RECIPIENT_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::RecipientList),
@@ -234,6 +236,17 @@ pub(super) fn encode_approver_remove_result(approvers: u8) -> Vec<u8> {
     approver_remove::encode_result(COMMAND_APPROVER_REMOVE, approvers)
 }
 
+/// `reset`'s success body: the command it answers, then the result's fields.
+pub(super) fn encode_reset_result(
+    vault_id: Option<VaultId>,
+    removed: u64,
+    foreign: &[String],
+    cleared: bool,
+    finish_uncertain: bool,
+) -> Vec<u8> {
+    reset::encode_result(COMMAND_RESET, vault_id, removed, foreign, cleared, finish_uncertain)
+}
+
 /// `init`'s success body: the command it answers, the new vault's ID as its 16 raw bytes (as `status` sends it), the
 /// committed version, then the code of each recipient role enrolled, one byte each.
 pub(super) fn encode_init_result(vault_id: VaultId, version: u64, recipients: &[RecipientRole]) -> Vec<u8> {
@@ -353,6 +366,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
         COMMAND_RECIPIENT_ADD => recipient_add::decode_result(&fields),
         COMMAND_APPROVER_ADD => approver_add::decode_result(&fields),
         COMMAND_APPROVER_REMOVE => approver_remove::decode_result(&fields),
+        COMMAND_RESET => reset::decode_result(&fields),
         COMMAND_RECIPIENT_REMOVE => {
             let [_, count] = exact(&fields, [TAG_COMMAND, TAG_RECIPIENT_COUNT])?;
             match count {
@@ -426,6 +440,8 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::ApproverSetInvalid,
         ErrorCode::ApproverInUse,
         ErrorCode::ApproverKindUnavailable,
+        ErrorCode::NothingToReset,
+        ErrorCode::ResetFailed,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

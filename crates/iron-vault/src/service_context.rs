@@ -32,6 +32,7 @@ mod recipient_remove;
 mod recipients;
 mod recovery;
 mod reminder;
+mod reset;
 mod serving;
 #[cfg(test)]
 mod tests;
@@ -85,6 +86,7 @@ pub use recipient_add::{AddRefusal, Enrolled, PlanRefusal, RecipientAddPlan};
 pub use recipient_remove::{RecipientRemoval, RemovalRefusal, RemovedRecipient};
 pub use recipients::RecipientRefusal;
 pub use recovery::{RecoveryProof, RecoveryRefusal};
+pub use reset::{PlannedVault, ResetOutcome, ResetPlan, ResetRefusal, failure_step};
 pub use vault_change::{CredentialChanged, CurrentRecord, VaultChangePlan, VaultChangeRefusal};
 
 /// Why an unlock left the service where it was. No variant holds passphrase text.
@@ -468,14 +470,23 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let mut inner = self.inner.lock().await;
         let from = inner.state;
         let state = next(from, ServiceEvent::Lock)?;
-        // Refusing first closes the gate and cancels the in-flight requests before anything else changes.
+        Ok(self.withdraw(&mut inner, from, state))
+    }
+
+    /// The withdrawal `lock` and `reset` share, under the context's mutex: closes the request gate and cancels the
+    /// in-flight requests before anything else changes, then drops what the context keeps of the vault, retires the
+    /// pending migration challenge and moves to `state`. `reset` calls it from Locked too, where nothing changes but the
+    /// retired challenge, and no transition is logged.
+    fn withdraw(&self, inner: &mut Inner, from: ServiceState, state: ServiceState) -> (Withdrawn, Weak<VaultIdentity>) {
         let withdrawn = self.holder.refuse(UnavailableReason::Locked);
         inner.open = None;
         inner.migration.retire();
         let identity = inner.identity.take().as_ref().map_or_else(Weak::new, Arc::downgrade);
         inner.state = state;
-        log_lock_transition(from, state);
-        Ok((withdrawn, identity))
+        if from != state {
+            log_lock_transition(from, state);
+        }
+        (withdrawn, identity)
     }
 
     /// Stops the service on SIGTERM or SIGINT: Ready to Stopped, then drops the snapshot, the vault in it, the approval
@@ -552,6 +563,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         match read {
             Ok(Ok(InitializationState::Uninitialized)) => VaultStatus::NotInitialized,
             Ok(Ok(InitializationState::Unfinished)) => VaultStatus::InitializationUnfinished,
+            Ok(Ok(InitializationState::UnfinishedReset)) => VaultStatus::ResetUnfinished,
             _ => VaultStatus::Locked,
         }
     }

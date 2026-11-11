@@ -11,6 +11,7 @@ mod list;
 mod recipient_add;
 mod recipient_list;
 mod recovery_status;
+mod reset;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -42,6 +43,8 @@ pub const HEADER_LEN: usize = 7;
 pub const MAX_ORIGINS: usize = 32;
 /// The longest requested origin host, in bytes: the DNS name limit.
 pub const MAX_ORIGIN_HOST_LEN: usize = 253;
+/// The most foreign files a `reset` result names: escaped names of up to 255 bytes each must fit one frame.
+pub const MAX_RESET_FOREIGN: usize = 16;
 
 /// One command with its arguments, sent by the CLI as the first frame of an exchange.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,6 +145,9 @@ pub enum AdminRequest {
         /// The approver ID's bytes.
         approver: [u8; 16],
     },
+    /// Discards the vault and the config after a confirmation typed at a terminal; allowed in Locked, Ready and
+    /// Unavailable. No arguments. Command ID 19.
+    Reset,
 }
 
 /// A requested origin: one permitted origin as an `add` or `replace` request carries it. The host stays text on the wire, at most
@@ -178,6 +184,7 @@ impl AdminRequest {
             Self::ApproverList => AdminCommand::ApproverList,
             Self::ApproverAdd { .. } => AdminCommand::ApproverAdd,
             Self::ApproverRemove { .. } => AdminCommand::ApproverRemove,
+            Self::Reset => AdminCommand::Reset,
         }
     }
 }
@@ -221,6 +228,8 @@ pub enum AdminCommand {
     ApproverAdd = 17,
     /// `approver remove`.
     ApproverRemove = 18,
+    /// `reset`.
+    Reset = 19,
 }
 
 impl AdminCommand {
@@ -245,6 +254,7 @@ impl AdminCommand {
             Self::ApproverList => "approver list",
             Self::ApproverAdd => "approver add",
             Self::ApproverRemove => "approver remove",
+            Self::Reset => "reset",
         }
     }
 
@@ -269,6 +279,7 @@ impl AdminCommand {
             Self::ApproverList => "approver_list",
             Self::ApproverAdd => "approver_add",
             Self::ApproverRemove => "approver_remove",
+            Self::Reset => "reset",
         }
     }
 }
@@ -291,6 +302,7 @@ mod no_external_signatures {
             | AdminCommand::RecoveryCheck
             | AdminCommand::RecipientList
             | AdminCommand::ApproverList
+            | AdminCommand::Reset
             | AdminCommand::List => &[],
             AdminCommand::Init => &["host_unlock"],
             AdminCommand::ConfigApprove => &["config"],
@@ -303,7 +315,7 @@ mod no_external_signatures {
         }
     }
 
-    const COMMANDS: [AdminCommand; 18] = [
+    const COMMANDS: [AdminCommand; 19] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::CallerToken,
@@ -322,6 +334,7 @@ mod no_external_signatures {
         AdminCommand::ApproverList,
         AdminCommand::ApproverAdd,
         AdminCommand::ApproverRemove,
+        AdminCommand::Reset,
     ];
 
     #[test]
@@ -574,6 +587,20 @@ pub enum AdminResponse {
         /// Whether the check record was written; false when the write failed, though the check passed.
         recorded: bool,
     },
+    /// `reset` completed: the vault and the config are discarded and the service is Locked over a directory `init` can use.
+    Reset {
+        /// The vault ID that was confirmed; `None` when the confirmation was the state directory's path.
+        vault_id: Option<VaultId>,
+        /// How many store-owned files were removed.
+        removed: u64,
+        /// The foreign files left in the state directory, as escaped names; at most the first
+        /// [`MAX_RESET_FOREIGN`], since the summary named them all.
+        foreign: Vec<String>,
+        /// Whether every snapshot was released within the lock drain and the vault identity was cleared.
+        cleared: bool,
+        /// Whether `reset.unfinished` was unlinked but the directory fsync failed, so it may come back after a power loss.
+        finish_uncertain: bool,
+    },
     /// The command failed. The message is the service's own text and never contains owner input.
     Error {
         /// The stable code scripts act on.
@@ -712,6 +739,11 @@ pub enum ErrorCode {
     ApproverInUse = 43,
     /// `approver add`: this install does not offer that signer kind yet; nothing was changed.
     ApproverKindUnavailable = 44,
+    /// `reset`: the directories hold no vault file, so there is nothing to discard; the message says what to run next.
+    NothingToReset = 45,
+    /// `reset`: writing `reset.unfinished`, a removal or the state read failed; the message names the step and the file, and
+    /// says whether the vault is intact or the next `reset` resumes.
+    ResetFailed = 46,
 }
 
 impl ErrorCode {
@@ -762,6 +794,8 @@ impl ErrorCode {
             Self::ApproverSetInvalid => "approver-set-invalid",
             Self::ApproverInUse => "approver-in-use",
             Self::ApproverKindUnavailable => "approver-kind-unavailable",
+            Self::NothingToReset => "nothing-to-reset",
+            Self::ResetFailed => "reset-failed",
         }
     }
 
@@ -917,6 +951,17 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::ApproverRemove { approvers }) => {
             put_frame(out, FrameKind::Success, &body::encode_approver_remove_result(*approvers))
         }
+        Frame::Response(AdminResponse::Reset {
+            vault_id,
+            removed,
+            foreign,
+            cleared,
+            finish_uncertain,
+        }) => put_frame(
+            out,
+            FrameKind::Success,
+            &body::encode_reset_result(*vault_id, *removed, foreign, *cleared, *finish_uncertain),
+        ),
         Frame::Response(AdminResponse::RecipientRemove { recipients }) => {
             put_frame(out, FrameKind::Success, &body::encode_recipient_remove_result(*recipients))
         }

@@ -37,6 +37,8 @@ mod recovery_check;
 #[cfg(target_os = "linux")]
 mod replace;
 #[cfg(target_os = "linux")]
+mod reset;
+#[cfg(target_os = "linux")]
 mod rm;
 #[cfg(target_os = "linux")]
 pub mod server;

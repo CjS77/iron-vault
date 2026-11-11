@@ -27,7 +27,7 @@ const EVENTS: [ServiceEvent; 12] = [
     E::Stop,
 ];
 
-const OPERATIONS: [AdminOperation; 11] = [
+const OPERATIONS: [AdminOperation; 12] = [
     AdminOperation::Ping,
     AdminOperation::Status,
     AdminOperation::Unlock,
@@ -39,6 +39,7 @@ const OPERATIONS: [AdminOperation; 11] = [
     AdminOperation::Initialize,
     AdminOperation::IssueCallerToken,
     AdminOperation::RecoveryCheck,
+    AdminOperation::Reset,
 ];
 
 /// Every edge of the §15 diagram, and nothing else.
@@ -153,7 +154,15 @@ fn admin_commands_follow_the_state() {
     assert_eq!(allowed(S::Starting), [A::Ping, A::Status, A::IssueCallerToken]);
     assert_eq!(
         allowed(S::Locked),
-        [A::Ping, A::Status, A::Unlock, A::Initialize, A::IssueCallerToken, A::RecoveryCheck]
+        [
+            A::Ping,
+            A::Status,
+            A::Unlock,
+            A::Initialize,
+            A::IssueCallerToken,
+            A::RecoveryCheck,
+            A::Reset
+        ]
     );
     assert_eq!(allowed(S::Checking), [A::Ping, A::Status, A::IssueCallerToken]);
     assert_eq!(
@@ -166,16 +175,17 @@ fn admin_commands_follow_the_state() {
             A::Approve,
             A::VaultChange,
             A::IssueCallerToken,
-            A::RecoveryCheck
+            A::RecoveryCheck,
+            A::Reset
         ]
     );
     assert_eq!(
         allowed(S::Unavailable(FailureReason::PolicyInvalid)),
-        [A::Ping, A::Status, A::Lock, A::Approve, A::IssueCallerToken]
+        [A::Ping, A::Status, A::Lock, A::Approve, A::IssueCallerToken, A::Reset]
     );
     assert_eq!(
         allowed(S::Unavailable(FailureReason::RecoveryNeeded)),
-        [A::Ping, A::Status, A::Lock, A::Repair, A::IssueCallerToken]
+        [A::Ping, A::Status, A::Lock, A::Repair, A::IssueCallerToken, A::Reset]
     );
     assert!(allowed(S::Stopped).is_empty());
 }

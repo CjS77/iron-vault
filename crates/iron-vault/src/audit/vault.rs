@@ -7,6 +7,9 @@ mod service_events;
 #[cfg(target_os = "linux")]
 pub use service_events::{HostUnlock, InitFailed, PresenceRefused, UnlockRefused};
 
+mod reset;
+pub use reset::{ResetConfirmed, ResetFailed, VaultReset};
+
 use iron_vault_store::{ApprovalStateError, ErrorKindLabel, RecipientRole, StateFileName, VaultError, VaultId, WriteError};
 
 use super::{AUDIT_TARGET, AuditEvent, EventName};

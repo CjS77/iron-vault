@@ -158,7 +158,7 @@ pub fn lock(socket: Option<&Path>) -> Exit {
 
 /// One exchange, answering any prompt the service sends from the owner console: `answer` handles a success; an error
 /// response and a failed exchange are reported here.
-fn run(socket: Option<&Path>, request: AdminRequest, answer: impl FnOnce(AdminResponse) -> Exit) -> Exit {
+pub(super) fn run(socket: Option<&Path>, request: AdminRequest, answer: impl FnOnce(AdminResponse) -> Exit) -> Exit {
     run_on(socket, request, &mut ProcessConsole::default(), answer)
 }
 
