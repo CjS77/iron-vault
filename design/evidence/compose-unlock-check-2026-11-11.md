@@ -3,7 +3,7 @@
 Evidence for the [implementation spec §3](../implementation-specification.md#3-implementation-gates-and-unresolved-details)
 "Host unlock handoff" gate, as [docker-compose.md](../docker-compose.md#against-the-implementation-spec-3-gate)
 describes. [`compose-unlock-check.sh`](../../scripts/release/compose-unlock-check.sh) passed every item, with none
-skipped: 5 of 5 in part 1 and 14 of 14 in part 2.
+skipped: all 14 items, 5 in part 1 and 9 in part 2.
 
 ## Host
 
@@ -57,10 +57,16 @@ PASS only the admin socket and the request listeners listen: no signing oracle
 14 passed, 0 failed, 0 skipped (a skipped item has no evidence from this host)
 ```
 
-The 100 skipped keys are the `age` 0.12.1 crate's public test vectors, in the cargo registry the image's build stage
-unpacks and the build cache keeps. They are in no vault.
+Part 2's summary line includes part 1's 5 passes, which it loads from the saved state.
+
+The 100 skipped keys are crate test vectors in the cargo registry the image's build stage unpacks and the build cache
+keeps. They are in no vault. This run's output does not name the crate; the `age` 0.12.1 attribution comes from an
+earlier run's FAIL listing on the same setup (at commit `b287c2d`, before the scan learned to skip crate sources).
 
 ## Not covered
 
-This run used an emulated TPM, which meets the gate's "a host with a TPM". A run on TPM hardware (the A9's AMD fTPM)
-is tracked separately and does not block the gate.
+This run used an emulated TPM. The gate names no TPM type; "a host with a TPM" is the wording of
+[docker-compose.md](../docker-compose.md#against-the-implementation-spec-3-gate), which an emulated TPM meets. A run on
+TPM hardware (the A9's AMD fTPM) is tracked separately (K-305) and does not block the gate.
+
+The caller isolation check, [`compose-check.sh`](../../scripts/release/compose-check.sh), was not part of this run.

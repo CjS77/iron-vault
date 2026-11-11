@@ -511,9 +511,9 @@ persistent plaintext or exposing a signing oracle":
 
 The evidence is the [host unlock release check](#release-checks), [`compose-unlock-check.sh`](../scripts/release/compose-unlock-check.sh),
 run on a host with a TPM. **The gate is met.** On 2026-11-11, at commit `9591715`, it passed every item with none
-skipped (5 in part 1, 14 in part 2) on a fresh Ubuntu 24.04.5 VM with an emulated TPM 2.0 (`swtpm`), Secure Boot and a
-swap file: [the output and host details](evidence/compose-unlock-check-2026-11-11.md). A run on TPM hardware is still
-to come; the gate does not wait for it.
+skipped (14 items: 5 in part 1, 9 in part 2) on a fresh Ubuntu 24.04.5 VM with an emulated TPM 2.0 (`swtpm`), Secure Boot and a
+swap file: [the output and host details](evidence/compose-unlock-check-2026-11-11.md). A run on TPM hardware (K-305) is
+still to come; the gate does not wait for it.
 
 ## Approval signing
 
