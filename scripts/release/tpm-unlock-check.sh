@@ -145,7 +145,8 @@ load_state() {
 # --- Service and log helpers ---------------------------------------------------------------------------------------------------
 
 now() { date -u +%Y-%m-%dT%H:%M:%S; }
-boot_since() { date -u -d "$(uptime -s)" +%Y-%m-%dT%H:%M:%S; }
+# `uptime -s` prints local time, so convert it to epoch seconds before formatting as UTC.
+boot_since() { date -u -d "@$(date -d "$(uptime -s)" +%s)" +%Y-%m-%dT%H:%M:%S; }
 main_pid() { systemctl show -p MainPID --value "$SERVICE"; }
 status_line() { { "$BINARY" status 2>/dev/null || true; } | sed -n "s/^$1: //p"; }
 service_state() { status_line service; }
@@ -237,12 +238,20 @@ retire_tpm_unlock() {
     remove_recipient "$1"
 }
 
-lockout_counter() {
+# The value of a TPM property from `tpm2_getcap properties-variable`. tpm2-tools 5.x prints `TPM2_PT_LOCKOUT_COUNTER: 0x0` on one
+# line; a property with named fields prints `NAME:` and then an indented `raw: 0x...` line, which is the fallback.
+tpm_property() {
     local v
-    v=$(tpm2_getcap properties-variable | awk '/^TPM2_PT_LOCKOUT_COUNTER:/ { f = 1; next } f && /raw:/ { print $2; exit }')
-    [ -n "$v" ] || { echo "cannot read TPM2_PT_LOCKOUT_COUNTER" >&2; return 1; }
+    v=$(tpm2_getcap properties-variable 2>/dev/null | awk -v p="$1" '
+        $1 == p ":" && NF > 1 { print $2; exit }
+        $1 == p ":" { f = 1; next }
+        f && $1 == "raw:" { print $2; exit }
+        f && /^[^ ]/ { exit }')
+    [ -n "$v" ] || { echo "cannot read $1" >&2; return 1; }
     echo "$v"
 }
+
+lockout_counter() { tpm_property TPM2_PT_LOCKOUT_COUNTER; }
 
 # --- Starting ------------------------------------------------------------------------------------------------------------------
 
@@ -281,7 +290,7 @@ preflight() {
     local tool
     on_supported_release || die "TPM unlock is supported on Ubuntu 24.04 LTS only; this machine runs $(os_field PRETTY_NAME)"
     for tool in jq script findmnt runuser ss strings swapon systemctl journalctl logger age-keygen systemd-creds systemd-cryptenroll \
-        tpm2_getcap tpm2_pcrextend cryptsetup losetup mkfs.ext4 mountpoint truncate sha256sum; do
+        tpm2_getcap tpm2_pcrextend lsinitramfs cryptsetup losetup mkfs.ext4 mountpoint truncate sha256sum; do
         command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
     done
     systemd-creds has-tpm2 >/dev/null 2>&1 || die "systemd-creds finds no usable TPM2 (real hardware, or swtpm under the hypervisor)"
@@ -499,7 +508,7 @@ handoff_after_the_service() {
     add_host_unlock "$NEW_KEY" || return 1
     if out=$(remove_recipient "$NEW_KEY" 2>&1); then echo "recipient remove accepted the enrolled host unlock recipient"; return 1; fi
     echo "$out"
-    grep -q 'recipient-set-invalid' <<<"$out" || return 1
+    grep -q 'recipient-set-invalid' <<<"$out" && grep -q 'host unlock identity' <<<"$out" || return 1
     HOST_KEY=$NEW_KEY
     expecting unlocked ready restart_service
 }
@@ -507,7 +516,7 @@ handoff_after_the_service() {
 # Item 9: PCR 7 changes as a Secure Boot update would change it. Then the install guide's six steps after an update.
 failed_unseal_then_reprovision() {
     local since old=$HOST_KEY attrs out
-    LOCKOUT_BEFORE=$(lockout_counter) || return 1
+    LOCKOUT_BEFORE=$(lockout_counter) || LOCKOUT_BEFORE=""   # item 11 fails on an empty value; the failed unseal still has to run
     tpm2_pcrextend "7:sha256=$(printf ivcheck | sha256sum | cut -d' ' -f1)" || return 1
     since=$(now)
     sleep 1
@@ -649,10 +658,15 @@ portable_plain_root() {
 portable_without_cryptsetup() {
     local warnings
     warnings=$(
+        # Without -x shellcheck cannot follow $PROVISION (SC1091), so it sees neither the helper's check_portable calling this
+        # have_tool override (SC2317) nor its WARNINGS array (SC2153).
         # shellcheck source=packaging/linux/iron-vault-provision-host-unlock
+        # shellcheck disable=SC1091,SC2317,SC2153
         source "$PROVISION"
+        # shellcheck disable=SC2317
         have_tool() { if [ "$1" = cryptsetup ]; then return 1; fi; command -v "$1" >/dev/null; }
         check_portable
+        # shellcheck disable=SC2153
         printf '%s\n' "${WARNINGS[@]}"
     )
     grep -q 'cryptsetup is not installed' <<<"$warnings" || { echo "warnings: $warnings"; return 1; }
@@ -720,17 +734,20 @@ helper_stops_on_this_release() {
 
 hypervisor_instructions() {
     local max_fail
-    max_fail=$(tpm2_getcap properties-variable 2>/dev/null | awk '/^TPM2_PT_MAX_AUTH_FAIL:/ { f = 1; next } f && /raw:/ { print $2; exit }')
+    max_fail=$(tpm_property TPM2_PT_MAX_AUTH_FAIL 2>/dev/null || true)
     cat <<TEXT
 
 Two items need the hypervisor, not this script. Record their output with the others.
   Power loss. This TPM's TPM2_PT_MAX_AUTH_FAIL is ${max_fail:-unreadable}, and TPM2_PT_LOCKOUT_COUNTER is $(lockout_counter 2>/dev/null || echo unreadable).
     Item 9 extended PCR 7 on this boot, so first reboot and provision again (the install guide's TPM unlock section). Then, with the
-    service Ready by host unlock (status shows host unlock: unlocked), hard power the VM off, not a guest shutdown. Do that more
-    times than TPM2_PT_MAX_AUTH_FAIL, each after a boot's unseal. It passes when TPM2_PT_LOCKOUT_COUNTER (tpm2_getcap
+    service Ready by host unlock (status shows host unlock: unlocked), hard power the machine off: a VM from the hypervisor, not a
+    guest shutdown. Do that more times than TPM2_PT_MAX_AUTH_FAIL, each after a boot's unseal. It passes when TPM2_PT_LOCKOUT_COUNTER (tpm2_getcap
     properties-variable) is unchanged and the last boot still reaches Ready with no unlock.
   Lockout, on an emulated TPM only, never on a real machine's. On the swtpm VM, make a throwaway object protected by
-    dictionary-attack lockout and give it wrong authorizations until TPM2_PT_LOCKOUT_COUNTER reaches TPM2_PT_MAX_AUTH_FAIL.
+    dictionary-attack lockout and give it wrong authorizations until TPM2_PT_LOCKOUT_COUNTER reaches TPM2_PT_MAX_AUTH_FAIL:
+    tpm2_createprimary -C o -c prim.ctx; tpm2_create -C prim.ctx -i secret -p goodauth -a 'fixedtpm|fixedparent|userwithauth'
+    -u o.pub -r o.priv (no noda, so wrong guesses count); tpm2_load -C prim.ctx -u o.pub -r o.priv -c o.ctx; then tpm2_unseal -c o.ctx
+    -p wrongauth that many times. Afterwards tpm2_dictionarylockout --clear-lockout resets the counter.
     Reboot, and check that the service still reaches Ready with no unlock.
 TEXT
 }
@@ -797,6 +814,8 @@ run_unsupported_release() {
 # Removes what a run kept, never the vault. It acts on what exists, so it also undoes a run that was killed.
 abandon() {
     set +e
+    # Without a run's state directory, /etc/iron-vault-host may hold a real sealed blob; leave it alone.
+    [ -d "$STATE_DIR" ] || { echo "no run to abandon: $STATE_DIR does not exist, so nothing was removed"; return 0; }
     systemctl stop "$HANDOFF_UNIT" >/dev/null 2>&1
     portable_down
     mountpoint -q "$SECRETS" && umount "$SECRETS"
