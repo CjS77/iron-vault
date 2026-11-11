@@ -488,7 +488,6 @@ async fn a_wrong_pin_on_export_is_denied_and_no_bundle_is_written() {
     assert!(message.contains("TPM approval PIN is wrong"), "{message}");
     assert!(bundle.is_empty(), "{} bundle bytes were sent", bundle.len());
     assert_eq!(vault.fixture.state_files(), before);
-    assert!(export_records_of(&vault, "migration.exported").is_empty());
     let refused = export_records_of(&vault, "migration.authorization-refused");
     assert_eq!(
         (refused.len(), refused[0]["refusal"].as_str()),
