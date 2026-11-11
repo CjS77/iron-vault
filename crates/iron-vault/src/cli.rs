@@ -11,6 +11,8 @@
 
 // The client's terminal handling uses rustix and tokio, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
+mod approver_list;
+#[cfg(target_os = "linux")]
 mod caller_token;
 #[cfg(target_os = "linux")]
 mod client;
@@ -23,12 +25,11 @@ mod init;
 #[cfg(target_os = "linux")]
 mod list;
 // Generates the Linux package's man pages; test-only, so the release binary carries none of it.
-#[cfg(target_os = "linux")]
-mod approver_list;
 #[cfg(test)]
 mod man_page;
 #[cfg(target_os = "linux")]
 mod recipient_add_recovery;
+#[cfg(target_os = "linux")]
 mod recipient_list;
 // Generates the book's command reference; test-only, so the release binary carries none of it.
 #[cfg(test)]

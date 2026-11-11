@@ -74,6 +74,7 @@ use serving::Serving;
 use unlock::{log_foreign_files, unprotected_reason};
 
 pub use approval::{ApprovalEnd, ApprovalReview};
+pub use approver_list::ApproverListRefusal;
 pub use host_unlock::{HostUnlockOutcome, HostUnlockRefusal};
 pub use init::{HostUnlockUnavailable, InitRefusal, step_names};
 pub use migration::MigrationSession;

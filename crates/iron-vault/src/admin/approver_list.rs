@@ -10,10 +10,10 @@ use iron_vault_store::StoreFs;
 
 use super::dispatch::{AdminHandler, HandlerFuture};
 use super::principal::AdminPrincipal;
-use super::protocol::{AdminRequest, AdminResponse, ApproverEntry};
-use super::recipient_list::refused;
+use super::protocol::{AdminRequest, AdminResponse, ApproverEntry, ErrorCode};
 use super::server::Exchange;
-use crate::service_context::ServiceContext;
+use super::unlock::state_name;
+use crate::service_context::{ApproverListRefusal, ServiceContext};
 
 /// `approver list`'s handler, acting on the running service.
 pub(super) struct ApproverList<F> {
@@ -42,8 +42,26 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for ApproverList<F> {
                         })
                         .collect(),
                 },
-                Err(refusal) => refused("approver list", refusal),
+                Err(refusal) => refused(refusal),
             })
         })
     }
 }
+
+/// The error answer for a refused `approver list`.
+fn refused(refusal: ApproverListRefusal) -> AdminResponse {
+    let (code, message) = match refusal {
+        ApproverListRefusal::Busy => (ErrorCode::Busy, "another operation is running; try again shortly".to_owned()),
+        ApproverListRefusal::WrongState(state) => (
+            ErrorCode::WrongState,
+            format!(
+                "`approver list` is allowed only while the service is Ready; it is {}",
+                state_name(state)
+            ),
+        ),
+    };
+    AdminResponse::Error { code, message }
+}
+
+#[cfg(test)]
+mod tests;
