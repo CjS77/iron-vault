@@ -661,7 +661,7 @@ portable_without_cryptsetup() {
         # Without -x shellcheck cannot follow $PROVISION (SC1091), so it sees neither the helper's check_portable calling this
         # have_tool override (SC2317) nor its WARNINGS array (SC2153).
         # shellcheck source=packaging/linux/iron-vault-provision-host-unlock
-        # shellcheck disable=SC1091,SC2317,SC2153
+        # shellcheck disable=SC1091
         source "$PROVISION"
         # shellcheck disable=SC2317
         have_tool() { if [ "$1" = cryptsetup ]; then return 1; fi; command -v "$1" >/dev/null; }
@@ -738,17 +738,19 @@ hypervisor_instructions() {
     cat <<TEXT
 
 Two items need the hypervisor, not this script. Record their output with the others.
-  Power loss. This TPM's TPM2_PT_MAX_AUTH_FAIL is ${max_fail:-unreadable}, and TPM2_PT_LOCKOUT_COUNTER is $(lockout_counter 2>/dev/null || echo unreadable).
+  Power loss. This TPM's TPM2_PT_MAX_AUTH_FAIL is ${max_fail:-unreadable},
+    and TPM2_PT_LOCKOUT_COUNTER is $(lockout_counter 2>/dev/null || echo unreadable).
     Item 9 extended PCR 7 on this boot, so first reboot and provision again (the install guide's TPM unlock section). Then, with the
     service Ready by host unlock (status shows host unlock: unlocked), hard power the machine off: a VM from the hypervisor, not a
-    guest shutdown. Do that more times than TPM2_PT_MAX_AUTH_FAIL, each after a boot's unseal. It passes when TPM2_PT_LOCKOUT_COUNTER (tpm2_getcap
-    properties-variable) is unchanged and the last boot still reaches Ready with no unlock.
+    guest shutdown. Do that more times than TPM2_PT_MAX_AUTH_FAIL, each after a boot's unseal. It passes when
+    TPM2_PT_LOCKOUT_COUNTER (tpm2_getcap properties-variable) is unchanged and the last boot still reaches Ready with no unlock.
   Lockout, on an emulated TPM only, never on a real machine's. On the swtpm VM, make a throwaway object protected by
     dictionary-attack lockout and give it wrong authorizations until TPM2_PT_LOCKOUT_COUNTER reaches TPM2_PT_MAX_AUTH_FAIL:
-    tpm2_createprimary -C o -c prim.ctx; tpm2_create -C prim.ctx -i secret -p goodauth -a 'fixedtpm|fixedparent|userwithauth'
+    tpm2_createprimary -C o -c prim.ctx; echo throwaway | tpm2_create -C prim.ctx -i - -p goodauth -a 'fixedtpm|fixedparent|userwithauth'
     -u o.pub -r o.priv (no noda, so wrong guesses count); tpm2_load -C prim.ctx -u o.pub -r o.priv -c o.ctx; then tpm2_unseal -c o.ctx
-    -p wrongauth that many times. Afterwards tpm2_dictionarylockout --clear-lockout resets the counter.
-    Reboot, and check that the service still reaches Ready with no unlock.
+    -p wrongauth that many times; tpm2_getcap properties-variable shows TPM2_PT_LOCKOUT_COUNTER at TPM2_PT_MAX_AUTH_FAIL.
+    Reboot without clearing it, and check that the service still reaches Ready with no unlock. Only then reset it with
+    tpm2_dictionarylockout --clear-lockout.
 TEXT
 }
 

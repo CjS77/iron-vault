@@ -122,7 +122,7 @@ sudo iron-vault unlock
 
 The [installation guide](book/src/installation/linux-install.md) covers what the protection depends on: `sudo` credential caching and a
 second factor, encrypted swap and hibernation storage. It also covers adding a TCP listener, upgrading (the service
-restarts Locked unless TPM unlock is set up, so run `unlock` again), and uninstalling and purging (the vault is kept unless you say otherwise). The
+restarts Locked, so run `unlock` again, unless TPM unlock is set up), and uninstalling and purging (the vault is kept unless you say otherwise). The
 [multi-user guide](book/src/installation/multiuser-linux.md) shows a complete setup.
 
 ## Quickstart
