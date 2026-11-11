@@ -40,7 +40,17 @@ const NO_METHOD: MethodName = MethodName {
     approver: None,
 };
 
-/// Runs steps 5 to 7 for `operation` inside `session`: issues the challenge, asks the methods this install can ask in
+/// The methods step 6 of the exchange in `session` asks, built once before its summary: the summary's `authorize with:`
+/// line and the prompt then name the same methods. They are built under the session's service-wide lock, so they check
+/// against the vault identity held now, and before the challenge, so nothing can fail between issuing it and its closing
+/// record.
+pub async fn askable_methods<F: StoreFs + Send + Sync + 'static>(
+    session: &MigrationSession<'_, F>,
+) -> Result<AskableMethods, NoAuthorization> {
+    session.service().migration_methods().await.map_err(NoAuthorization)
+}
+
+/// Runs steps 5 to 7 for `operation` inside `session`: issues the challenge, asks `methods` (from [`askable_methods`]) in
 /// one switchable secret prompt that a waiting `lock` ends, and checks the answer with the method answered. A wrong
 /// answer ends the exchange; there is no second try and no move to another method. The outer error is a prompt that got
 /// no owner input, which cancels the command.
@@ -51,14 +61,9 @@ pub async fn require_migration_authorization<F: StoreFs + Send + Sync + 'static>
     exchange: &mut Exchange,
     session: &MigrationSession<'_, F>,
     operation: MigrationOperation,
+    methods: &AskableMethods,
 ) -> Result<Result<MigrationAuthorization, NoAuthorization>, ExchangeError> {
     let service = session.service();
-    // Built first so that nothing can fail between issuing the challenge and its closing record. They are still built in
-    // this exchange, under the service-wide lock, so they check against the vault identity held now.
-    let methods = match service.migration_methods().await {
-        Ok(methods) => methods,
-        Err(refusal) => return Ok(Err(NoAuthorization(refusal))),
-    };
     let digest = match service.issue_migration_challenge(operation.clone()).await {
         Ok(digest) => digest,
         Err(refusal) => return Ok(Err(NoAuthorization(refusal))),
@@ -69,16 +74,14 @@ pub async fn require_migration_authorization<F: StoreFs + Send + Sync + 'static>
         method: first.label,
     }
     .emit();
-    let (answered, outcome) = prompt_and_prove(exchange, session, &digest, &methods).await;
+    let (answered, outcome) = prompt_and_prove(exchange, session, &digest, methods).await;
     record_ending(&operation, answered.unwrap_or(first), &outcome);
     outcome
 }
 
-/// What the summary's `authorize with:` line names: the method step 6 asks first. Its methods are built again at step 5,
-/// under the same service-wide lock, so the line names the method the prompt starts at.
-pub async fn authorize_with<F: StoreFs + Send + Sync + 'static>(session: &MigrationSession<'_, F>) -> String {
-    let methods = session.service().migration_methods().await;
-    match methods.as_ref().ok().and_then(|methods| methods.asked().first()) {
+/// What the summary's `authorize with:` line names: the method of `methods` asked first.
+pub fn authorize_with(methods: &AskableMethods) -> String {
+    match methods.asked().first() {
         Some(AskableMethod::TpmPin(method)) => {
             format!("the TPM approval PIN for \"{}\"", NamedApprover::from(method.pinned()).label_text())
         }

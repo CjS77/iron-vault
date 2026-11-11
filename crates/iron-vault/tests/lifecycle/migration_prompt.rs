@@ -14,7 +14,7 @@ use std::time::Duration;
 use common::approval_harness::{Captured, Fixture, assert_audit_record, captured_logs, converse, identity, read_frame, send};
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
-use iron_vault::admin::migration_authorization::{NoAuthorization, no_authorization, require_migration_authorization};
+use iron_vault::admin::migration_authorization::{NoAuthorization, askable_methods, no_authorization, require_migration_authorization};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
 use iron_vault::admin::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode, Frame, Prompt};
 use iron_vault::admin::server::{AdminServer, Exchange, Limits};
@@ -53,7 +53,11 @@ impl AdminHandler for Authorizing {
                 Ok(session) => session,
                 Err(refusal) => return Ok(no_authorization(COMMAND, NoAuthorization(refusal))),
             };
-            let authorization = require_migration_authorization(exchange, &session, self.operation.clone()).await?;
+            let methods = match askable_methods(&session).await {
+                Ok(methods) => methods,
+                Err(none) => return Ok(no_authorization(COMMAND, none)),
+            };
+            let authorization = require_migration_authorization(exchange, &session, self.operation.clone(), &methods).await?;
             Ok(match authorization {
                 Ok(authorization) => {
                     let vault = vault_id(&self.service).await;

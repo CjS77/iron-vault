@@ -220,10 +220,11 @@ capped: 30 s, 1 min, 2 min, 4 min, 8 min, then 15 min for every further failure.
 consecutive failures never limit.
 
 - **What counts.** Only an owner refusal of the vault passphrase: `wrong_passphrase` and `not_this_vault`. A
-  `wrong_pin` is the TPM's to count, not this limit's. An `unavailable` check, a `cancelled` prompt, a `lock` and a refusal for `rate_limited` itself do not, because none shows a wrong guess.
-  `expired`, `not_pending` and `binding_mismatch` follow a proof and are not guesses.
-- **What resets it.** A vault passphrase success, and a restart. A proof by TPM PIN leaves the count as it is. The count is held in memory, and `lock` does not clear it: otherwise
-  a guesser could `lock` after every fourth failure.
+  `wrong_pin` is the TPM's to count, not this limit's. An `unavailable` check, a `cancelled` prompt, a `lock` and a
+  refusal for `rate_limited` itself do not, because none shows a wrong guess. `expired`, `not_pending` and
+  `binding_mismatch` follow a proof and are not guesses.
+- **What resets it.** A vault passphrase success, and a restart. A proof by TPM PIN leaves the count as it is. The count
+  is held in memory, and `lock` does not clear it: otherwise a guesser could `lock` after every fourth failure.
 - **When it is checked.** At step 6, before the `Vault passphrase` prompt, so a limited owner is not asked to type it:
   during a cooldown the prompt leaves the vault passphrase out and asks only the `tpm` approvers, if any. With none, the
   exchange retires its challenge, records `migration.authorization-refused` with `rate_limited` and ends with

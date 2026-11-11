@@ -83,8 +83,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         Ok(inner.migration.issue(vault_id, operation, Instant::now(), nonce)?)
     }
 
-    /// Whether the passphrase attempt limit allows another attempt (step 6), checked before the prompt so a limited
-    /// owner is not asked to type. A refusal retires the pending challenge, which ends the exchange.
+    /// Whether the passphrase attempt limit allows another vault passphrase attempt now, retiring any pending challenge
+    /// when it does not. The exchange reads the limit through [`migration_methods`](Self::migration_methods), which leaves
+    /// the vault passphrase out during a cooldown; tests read it here.
+    #[cfg(any(test, feature = "test-support"))]
     pub async fn check_migration_attempts(&self) -> Result<(), MigrationRefusal> {
         let mut inner = self.inner.lock().await;
         allow_attempt(&inner.attempts).inspect_err(|_| inner.migration.retire())
@@ -118,9 +120,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// order. Build it under the session's service-wide lock, before issuing the challenge, as for
     /// [`vault_passphrase_method`](Self::vault_passphrase_method).
     ///
-    /// Every `tpm` approver is asked: the independence rule's second part holds only while a pinned approver's enrolment
-    /// is not the operational recipient's, and v0 never enrols both from one secret (no TPM unlock enrols the operational
-    /// recipient), so no approver is held back for it.
+    /// Only a cooldown leaves the vault passphrase out. The independence rule's second part keeps the `operational`
+    /// recipient enrolled while the vault passphrase is the only source-owner method, and v0 never drops it, so the
+    /// passphrase always has its envelope. Every `tpm` approver this install can ask is asked.
     pub async fn migration_methods(&self) -> Result<AskableMethods, MigrationRefusal> {
         let passphrase = self.vault_passphrase_method().await?;
         let (cooling, approvers) = {
@@ -165,8 +167,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// In order: the service must be Ready holding the vault identity, the attempt limit must allow an attempt of a method
     /// it bounds, and the challenge must be pending and unexpired, all before the method runs. Then a bounded method's
     /// outcome is recorded in the attempt limit: an owner refusal counts as a failure and a proof resets the count, while
-    /// an unavailable check records nothing. A TPM approval PIN's outcome is the TPM's to count. If the service locked, or holds another vault identity, by the time the method ends, the outcome
-    /// is discarded unrecorded and the refusal is `WrongState`.
+    /// an unavailable check records nothing. A TPM approval PIN's outcome is the TPM's to count. If the service locked, or
+    /// holds another vault identity, by the time the method ends, the outcome is discarded unrecorded and the refusal is
+    /// `WrongState`.
     ///
     /// The caller holds the service-wide lock from step 2 until its response, so no other exchange guesses while this
     /// one's outcome is unrecorded (see the module documentation). If this future is dropped mid-check, the challenge

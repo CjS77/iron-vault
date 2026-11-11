@@ -16,7 +16,7 @@ use iron_vault_store::{
 
 use super::dispatch::{AdminHandler, HandlerFuture};
 use super::init::reveal_recovery_key;
-use super::migration_authorization::{NoAuthorization, authorize_with, no_authorization, require_migration_authorization};
+use super::migration_authorization::{NoAuthorization, askable_methods, authorize_with, no_authorization, require_migration_authorization};
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode};
 use super::recipient_list::{OLD_COPIES, refused as inventory_refused};
@@ -87,9 +87,13 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
             Ok(plan) => plan,
             Err(refusal) => return Ok(plan_refused(refusal)),
         };
-        exchange.notice(&summary(&plan, &authorize_with(&session).await)).await?;
+        let methods = match askable_methods(&session).await {
+            Ok(methods) => methods,
+            Err(none) => return Ok(no_authorization(COMMAND, none)),
+        };
+        exchange.notice(&summary(&plan, &authorize_with(&methods))).await?;
         let operation = MigrationOperation::AddRecipient(key.clone());
-        let authorization = match require_migration_authorization(exchange, &session, operation).await? {
+        let authorization = match require_migration_authorization(exchange, &session, operation, &methods).await? {
             Ok(authorization) => authorization,
             Err(none) => return Ok(no_authorization(COMMAND, none)),
         };
@@ -119,13 +123,17 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
             Ok(plan) => plan,
             Err(refusal) => return Ok(plan_refused(refusal)),
         };
-        exchange.notice(&summary(&plan, &authorize_with(&session).await)).await?;
+        let methods = match askable_methods(&session).await {
+            Ok(methods) => methods,
+            Err(none) => return Ok(no_authorization(COMMAND, none)),
+        };
+        exchange.notice(&summary(&plan, &authorize_with(&methods))).await?;
         if let Err(declined) = reveal_recovery_key(exchange, &secret).await? {
             return Ok(declined);
         }
         drop(secret);
         let operation = MigrationOperation::AddRecipient(key.clone());
-        let authorization = match require_migration_authorization(exchange, &session, operation).await? {
+        let authorization = match require_migration_authorization(exchange, &session, operation, &methods).await? {
             Ok(authorization) => authorization,
             Err(none) => return Ok(key_dead(no_authorization(COMMAND, none))),
         };

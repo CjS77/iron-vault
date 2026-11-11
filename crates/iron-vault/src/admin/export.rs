@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 
 use super::dispatch::{AdminHandler, HandlerFuture};
 use super::init::entry_text;
-use super::migration_authorization::{NoAuthorization, authorize_with, no_authorization, require_migration_authorization};
+use super::migration_authorization::{NoAuthorization, askable_methods, authorize_with, no_authorization, require_migration_authorization};
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode, Prompt};
 use super::server::{Exchange, ExchangeError};
@@ -65,8 +65,12 @@ impl<F: StoreFs + Send + Sync + 'static> Export<F> {
             Ok(summary) => summary,
             Err(error) => return Ok(check_failed(error)),
         };
-        exchange.notice(&summary_text(&summary, &authorize_with(&session).await)).await?;
-        let authorization = match require_migration_authorization(exchange, &session, MigrationOperation::Export).await? {
+        let methods = match askable_methods(&session).await {
+            Ok(methods) => methods,
+            Err(none) => return Ok(no_authorization(COMMAND, none)),
+        };
+        exchange.notice(&summary_text(&summary, &authorize_with(&methods))).await?;
+        let authorization = match require_migration_authorization(exchange, &session, MigrationOperation::Export, &methods).await? {
             Ok(authorization) => authorization,
             Err(none) => return Ok(no_authorization(COMMAND, none)),
         };

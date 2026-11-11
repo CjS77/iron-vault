@@ -28,7 +28,7 @@ use std::sync::Arc;
 use common::approval_harness::{APPROVAL_PASSPHRASE, Captured, Fixture, captured_logs, converse, identity, read_frame, send};
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
-use iron_vault::admin::migration_authorization::{NoAuthorization, no_authorization, require_migration_authorization};
+use iron_vault::admin::migration_authorization::{NoAuthorization, askable_methods, no_authorization, require_migration_authorization};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
 use iron_vault::admin::protocol::{AdminCommand, AdminRequest, AdminResponse, ErrorCode, Frame, OwnerInput, Prompt, VaultStatus};
 use iron_vault::admin::server::{AdminServer, Exchange, Limits};
@@ -73,8 +73,12 @@ impl Gate {
             Ok(session) => session,
             Err(refusal) => return Ok(no_authorization(COMMAND, NoAuthorization(refusal))),
         };
+        let methods = match askable_methods(&session).await {
+            Ok(methods) => methods,
+            Err(none) => return Ok(no_authorization(COMMAND, none)),
+        };
         Ok(
-            match require_migration_authorization(exchange, &session, self.issued_for.clone()).await? {
+            match require_migration_authorization(exchange, &session, self.issued_for.clone(), &methods).await? {
                 Err(none) => no_authorization(COMMAND, none),
                 Ok(authorization) => match authorization.authorize(vault_id(&self.service).await, &self.spend, Instant::now()) {
                     Ok(_) => AdminResponse::Lock {

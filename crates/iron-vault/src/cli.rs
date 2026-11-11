@@ -171,9 +171,10 @@ pub enum Command {
     Reset,
     /// Write the vault as a migration bundle to BUNDLE, for `import` on another machine. The service checks the vault,
     /// prompts for the vault passphrase to authorize the export (switchable to a `tpm` approver's TPM approval PIN), then
-    /// for a new export passphrase, typed twice, which seals the bundle; `import` asks for it. The bundle arrives in `.<BUNDLE name>.partial` beside BUNDLE, created
-    /// with mode 0600 before anything is sent, and takes BUNDLE's name only once it is whole. An existing BUNDLE or a
-    /// leftover partial file is refused before anything is sent. The source vault keeps serving afterwards.
+    /// for a new export passphrase, typed twice, which seals the bundle; `import` asks for it. The bundle arrives in
+    /// `.<BUNDLE name>.partial` beside BUNDLE, created with mode 0600 before anything is sent, and takes BUNDLE's name only
+    /// once it is whole. An existing BUNDLE or a leftover partial file is refused before anything is sent. The source vault
+    /// keeps serving afterwards.
     Export {
         /// Where to write the bundle; it must not exist.
         bundle: PathBuf,
