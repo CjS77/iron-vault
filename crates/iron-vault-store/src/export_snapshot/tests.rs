@@ -472,3 +472,52 @@ fn an_interrupted_sink_write_is_retried_and_the_export_matches_an_uninterrupted_
     names.for_each(|name| assert_eq!(plain.entry(&name).unwrap(), retried.entry(&name).unwrap(), "{name:?}"));
     assert_eq!(plain.header().vault_id(), retried.header().vault_id());
 }
+
+/// Returns `Interrupted` once, from the write numbered `interrupt_at` (counting from zero), and counts every write.
+struct InterruptedAt<'a> {
+    bytes: &'a mut Vec<u8>,
+    writes: usize,
+    interrupt_at: usize,
+    interrupted: bool,
+}
+
+impl Write for InterruptedAt<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let attempt = self.writes;
+        self.writes += 1;
+        match attempt == self.interrupt_at && !std::mem::replace(&mut self.interrupted, true) {
+            true => Err(io::ErrorKind::Interrupted.into()),
+            false => self.bytes.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn an_interrupt_on_the_last_sink_write_still_exports() {
+    let _turn = one_at_a_time();
+    let fixture = Fixture::new();
+    let mut counted = Vec::new();
+    let mut probe = InterruptedAt {
+        bytes: &mut counted,
+        writes: 0,
+        interrupt_at: usize::MAX,
+        interrupted: false,
+    };
+    fixture.stream(&mut probe).unwrap();
+    let last = probe.writes - 1;
+
+    let mut bytes = Vec::new();
+    let sink = InterruptedAt {
+        bytes: &mut bytes,
+        writes: 0,
+        interrupt_at: last,
+        interrupted: false,
+    };
+    let exported = fixture.stream(sink).unwrap();
+    assert_eq!(exported.byte_count, bytes.len() as u64);
+    decode(&bytes);
+}

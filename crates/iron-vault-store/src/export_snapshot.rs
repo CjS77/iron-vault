@@ -215,8 +215,8 @@ pub fn check_export_snapshot(
 ///
 /// It holds at most one record, the manifest, the config and the bundled approver keys. A record file is read when its
 /// turn comes and its digest is checked before any of its bytes reach the encoder. The export passphrase is dropped
-/// once the identity is sealed. A write that `sink` reports as [`io::ErrorKind::Interrupted`] is retried. Any other
-/// failure of `sink` is final: it is returned as [`SnapshotError::Transfer`] with the sink's own `io::Error`, and
+/// once the identity is sealed. A call that `sink` reports as [`io::ErrorKind::Interrupted`] is retried, including those
+/// of the gzip trailer. Any other failure of `sink` is final: it is returned as [`SnapshotError::Transfer`] with the sink's own `io::Error`, and
 /// `sink` is not called again after it.
 ///
 /// On any error, `sink` may already hold bytes of the bundle, including bytes the gzip encoder wrote while it was
@@ -425,8 +425,8 @@ fn encode_error(error: EncodeError) -> SnapshotError {
 ///
 /// The gzip encoder writes its trailer when it is dropped, which on a failed export would put more bytes behind a
 /// sink that has already refused some, such as one cancelled by `lock`. The first error passes out unchanged; every
-/// later call fails with the same kind and never reaches the sink. An `Interrupted` error is not final: `write_all`
-/// retries it, so it passes out unchanged and the retry reaches the sink.
+/// later call fails with the same kind and never reaches the sink. An `Interrupted` error is not final: `Counted`
+/// retries the call itself, because flate2's trailer writes during `finish` do not.
 struct Counted<W> {
     inner: W,
     count: u64,
@@ -442,17 +442,18 @@ impl<W> Counted<W> {
         }
     }
 
-    /// Runs `call` on the sink unless it has failed before, and remembers the kind of a new failure other than
-    /// `Interrupted`, which the caller retries.
-    fn through<T>(&mut self, call: impl FnOnce(&mut W) -> io::Result<T>) -> io::Result<T> {
+    /// Runs `call` on the sink unless it has failed before, retrying while it reports `Interrupted`, and remembers
+    /// the kind of a new failure.
+    fn through<T>(&mut self, mut call: impl FnMut(&mut W) -> io::Result<T>) -> io::Result<T> {
         if let Some(kind) = self.failed {
             return Err(io::Error::from(kind));
         }
-        call(&mut self.inner).inspect_err(|error| {
-            if error.kind() != io::ErrorKind::Interrupted {
-                self.failed = Some(error.kind());
+        loop {
+            match call(&mut self.inner) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                result => return result.inspect_err(|error| self.failed = Some(error.kind())),
             }
-        })
+        }
     }
 }
 
