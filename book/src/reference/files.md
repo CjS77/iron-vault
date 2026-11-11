@@ -123,6 +123,7 @@ writes its own copy.
 | `record-<id>.age` | One credential record: its kind, secret and permitted origins. |
 | `recovery.toml` | When `recovery check` last proved the recovery key. Holds no secret. |
 | `init.unfinished` | An empty marker of an `init` that has not finished. `init` run again discards it. |
+| `locked-by-owner` | An empty file that `lock` writes and a passphrase `unlock` removes. While it is there, a starting service skips host unlock and stays Locked, so a lock survives a restart. `init` and `reset` remove it. |
 | `lock` | The lock that keeps one writer at a time. |
 | `.<name>.tmp` | A temporary file a durable write uses before its rename. |
 

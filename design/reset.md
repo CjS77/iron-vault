@@ -208,9 +208,12 @@ which carries no arguments, in order:
    the serving snapshot is withdrawn (cancelling in-flight requests), the open vault, the approval state and the
    context's copy of the vault identity are dropped, and the [migration challenge](glossary.md) is retired, exactly as
    `lock`'s withdrawal does. From Locked there is nothing to withdraw. The service then releases the context's mutex,
-   so `status` answers during the discard, and keeps the service-wide lock. The withdrawal is `lock`'s but for the
-   [owner-lock file](#interactions): the write of `locked-by-owner` belongs to K-338, and until it lands reset does
-   not write it (it removes the file in step 6 either way).
+   so `status` answers during the discard, and keeps the service-wide lock. The withdrawal is `lock`'s, owner-lock file
+   included: before it fires the event, with the mutex and the service-wide lock held, the service writes
+   `locked-by-owner` with `durable_replace` as `lock` does ([Interactions](#interactions)), from Locked too. A crash between the
+   withdrawal and step 5's write of `reset.unfinished` then cannot let a host-unlock restart reopen the still-intact
+   vault. A failed write is logged at WARN with the error kind only and the reset goes on: step 6 removes the file
+   either way, so a finished reset leaves none.
 5. **Begin.** The service records `vault.reset-confirmed`, then writes `reset.unfinished` with `durable_replace`.
    That write is the commit point. A failed write ends with `reset-failed`, naming the step `begin`; a failed log
    write stops the service, as every failed audit write does. Either way the service is Locked and no file has been
@@ -249,7 +252,7 @@ The **store-owned files** are the names the store writes:
 - in the state directory: `identity.age`, `operational.age`, `manifest.age`, `approval.age`, `recipients.age`,
   `recipients.age.staged`, every approver key envelope `approver-<approver ID>.age`, every record file
   `record-<record ID>.age`, `init.unfinished`, `import.unfinished` (K-307), `reset.unfinished`, the owner-lock file
-  `locked-by-owner` (K-338), the recovery check record `recovery.toml`, and the stale temp file `.<name>.tmp` of each;
+  `locked-by-owner`, the recovery check record `recovery.toml`, and the stale temp file `.<name>.tmp` of each;
 - in the config directory: `config.toml`, `config.toml.sig`, `config.toml.pending`, `config.toml.sig.staged`, and
   the stale temp file of each.
 
@@ -370,11 +373,11 @@ event carries a secret, a typed confirmation or any file's contents.
   with every other credential on the machine. Reset leaves all of it alone. Startup over an Uninitialized directory
   with a handoff refuses the handoff and stays Locked, and a new `init --host-unlock` or `import --host-unlock` enrols
   the same host unlock identity again.
-- **The owner-lock file `locked-by-owner`** (K-338). `lock` writes it in the state directory so that a crash or reboot
+- **The owner-lock file `locked-by-owner`**. `lock` writes it in the state directory so that a crash or reboot
   does not undo an explicit lock: while it exists, host unlock at startup is skipped, and a passphrase `unlock` clears
   it. It is store-owned and reset removes it with the other state files, so a new vault starts without it. Reset's
-  withdrawal is `lock`'s, so from Ready or Unavailable it writes the file as `lock` does, and a reset that fails at
-  `begin` leaves the vault locked as `lock` would.
+  withdrawal is `lock`'s, so it writes the file as `lock` does, in every state it runs from, and a reset that fails at
+  `begin` leaves the vault locked, with the file, as `lock` would.
 - **Linux package** ([linux-package.md](linux-package.md)). Purge still removes the directories by hand; reset is
   for keeping the installation and replacing the vault.
 

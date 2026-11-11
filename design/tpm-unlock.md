@@ -561,10 +561,10 @@ In order:
    [audit-logging.md](audit-logging.md) and the glossary entries *Host unlock*, *Host unlock identity* and
    *Unlock handoff* that now say "container profile". No store change. `import --host-unlock` (K-307's tickets) is
    accepted wherever `init --host-unlock` is, so it needs this first.
-2. **The owner-lock file:** `lock` writes it and reports a failed write, passphrase `unlock` removes it, startup skips
-   host unlock with `owner_locked`, and the initialization state's known names gain it. Docs: admin-protocol.md (the
-   `lock` result), vault-initialization.md, audit-logging.md and docker-compose.md's lifetime. Reset's store-owned list
-   gains it in K-315's implementation.
+2. **The owner-lock file** (done in K-338): `lock` writes it and reports a failed write, passphrase `unlock` removes it,
+   startup skips host unlock with `owner_locked`, and the initialization state's known names gain it. Docs:
+   admin-protocol.md (the `lock` and `unlock` results), vault-initialization.md, audit-logging.md and
+   docker-compose.md's lifetime. Reset's store-owned list gains it and reset writes it before its withdrawal.
 3. **The unseal-failure report:** the service reads `unseal-failed` when the handoff is missing, `unseal_failed` in
    audit-logging.md, and the new `status` field in admin-protocol.md. The unit lines ship with item 4.
 4. **Packaging:** the handoff unit with the unseal-failure lines, the helper with the release check and `--server`,

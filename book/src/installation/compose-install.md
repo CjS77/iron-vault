@@ -333,8 +333,10 @@ only root can open it. Even a login that got through would be refused, because t
   again, and the service comes back Ready with no one present.
 - **A reboot of the host** runs the unlock unit before Docker starts, then Docker starts the stack, and the service
   reads the handoff. Check with `sudo iron-vault status` once it is up.
-- **`lock`** holds only until the container restarts. In this profile whoever controls the runtime can restart it, and
-  it will unlock itself.
+- **`lock`** holds until a passphrase `sudo iron-vault unlock`, across a crash, a restart of the container and a reboot:
+  it leaves an empty file, `locked-by-owner`, in the state volume, and a service that finds it does not read the
+  handoff. Whoever controls the runtime can still delete that file, so this protects your lock from a crash, not from
+  the runtime's administrator.
 - **If the handoff is missing or refused**, the service stays Locked, and `sudo iron-vault unlock` with the vault
   passphrase still works. The reason is in the `vault.host-unlock` record of the
   [audit log](../reference/audit-log.md#service-and-lock-state). A failed host unlock does not count toward the

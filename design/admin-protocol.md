@@ -114,8 +114,8 @@ an error.
 | `1` | `ping` | none | the deployment profile |
 | `2` | `config approve` | the proposed config bytes | the committed version, the config digest and the summary headline |
 | `3` | `caller-token` | none | a fresh [caller token](#caller-token), once |
-| `4` | `unlock` | none | none |
-| `5` | `lock` | none | whether every cached secret was confirmed cleared |
+| `4` | `unlock` | none | whether the [owner-lock file](tpm-unlock.md#lock-across-restarts) is gone |
+| `5` | `lock` | none | whether every cached secret was confirmed cleared, and whether the owner-lock file was written |
 | `6` | `status` | none | the [status report](#status) |
 | `7` | `init` | the [host unlock flag](#init) | the vault ID, the committed version and the recipient roles enrolled |
 | `8` | `add` | the credential name, kind and permitted origins | the [record ID](#add) |
@@ -152,16 +152,25 @@ identity it kept for a repair, which clears it at once unless a request still ho
 Before any of this, `lock` cancels a `config approve` waiting at a prompt, which then answers `approval-unavailable`,
 and waits for the service-wide lock ([config-approval.md](config-approval.md#the-service-wide-lock)).
 
+Once the state check allows the lock, and under the service-wide lock, the service writes the
+[owner-lock file](tpm-unlock.md#lock-across-restarts) `locked-by-owner` with `durable_replace`, before it withdraws
+the serving snapshot, so a crash at any later point still leaves it and no restart undoes the lock by host unlock. It
+does so in every profile. A failed write does not stop the lock: the service still locks and clears the vault, logs the
+failure at WARN with the error kind only, and says so in the result.
+
 The success result:
 
 | Tag | Field | Value |
 |---|---|---|
 | 2 | cleared | flag: `1` when every snapshot was released within the drain and the vault identity was cleared, `0` when a request still held a snapshot or the identity |
+| 3 | persisted | flag: `1` when the owner-lock file was written, `0` when the write failed and the lock will not survive a restart |
 
 `cleared` `0` is a success, not an error: the service is Locked and admits nothing, but a request that ignored its
-cancellation still holds secrets until it ends, and the service logs how many. The CLI prints `locked` for `1`, and for
-`0` also a warning on stderr that secrets may remain in memory; both exit with code `0`. Only a Ready or Unavailable
-service locks: in any other state the command fails with `wrong-state`.
+cancellation still holds secrets until it ends, and the service logs how many. `persisted` `0` is a success too. The
+CLI prints `locked` for any result, then on stderr a warning for `cleared` `0` that secrets may remain in memory, and a
+warning for `persisted` `0` that the lock will not survive a restart; all exit with code `0`. Only a Ready or
+Unavailable service locks: in any other state the command fails with `wrong-state`, and a Locked service has nothing to
+lock and writes nothing.
 
 #### config approve
 
@@ -258,9 +267,22 @@ message gives the seconds left, rounded up. The service stays Locked, and the re
    `unlock-failed`. Either way the service stays Locked, and no other storage is tried (§15). A wrong passphrase adds
    to the attempt count and an opened vault clears it; an envelope that cannot be read adds nothing. There is no second try
    in the same exchange.
-3. The service moves to Checking and runs the config check. Ready answers with a success without a result.
+3. Once the vault identity has unwrapped, and before the answer, the service durably removes the
+   [owner-lock file](tpm-unlock.md#lock-across-restarts), which an earlier `lock` may have left, so the next start
+   host-unlocks again. A failed removal does not fail the unlock; it is logged at WARN with the error kind only.
+4. The service moves to Checking and runs the config check. Ready answers with a success whose result is the flag below.
    Unavailable answers `unlocked-unavailable`, and the message names the redacted reason (`policy invalid` or
-   `recovery needed`), never the check's detail, which goes to the log at WARN.
+   `recovery needed`), never the check's detail, which goes to the log at WARN; when the owner-lock file could not be
+   removed, the message ends by saying the next start stays Locked.
+
+The success result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | owner_lock_removed | flag: `1` when the owner-lock file is gone (removed, or never there), `0` when the removal failed and the next start stays Locked until another `unlock` |
+
+The CLI prints `the vault is unlocked: the service is Ready`, and for `0` also a warning on stderr that the next start
+will stay Locked; both exit with code `0`.
 
 Each state change is recorded at INFO as the audit event `service.lock-transition` under the target `iron-vault.audit`,
 with `from_state` and `to_state` and nothing the owner typed ([audit events](audit-logging.md#audit-events)). scrypt and the config check take a few seconds, inside the CLI's 60-second timeout.

@@ -322,7 +322,7 @@ Unfinished:
 - **Check 1 of the initialization state** also matches `import.unfinished`. With it, the state is Unfinished if the
   state directory holds nothing but the ignored names, the files an import writes (`import.unfinished`, `identity.age`,
   `recipients.age`, `operational.age`, `manifest.age`, `approval.age`, approver key files and record files) and
-  `recovery.toml`, and the config directory holds no config file but `config.toml`. Import writes no other config
+  `recovery.toml` and `locked-by-owner`, and the config directory holds no config file but `config.toml`. Import writes no other config
   file, so `config.toml.sig`, `config.toml.pending` or `config.toml.sig.staged` beside `import.unfinished` makes the
   state Unrecognized. `init.unfinished` and `import.unfinished` together are Unrecognized: no run writes both. A
   `reset.unfinished` beside either is Unfinished reset, which is checked first.
@@ -330,8 +330,8 @@ Unfinished:
   `iron-vault import` again, or `iron-vault init` for a new vault. `recovery check` answers
   `recovery-check-unavailable`, and `status` names it "import unfinished (run iron-vault import again)".
 - **The discard** removes, each with `durable_remove` and only those present: `config.toml` in the config directory,
-  then `recovery.toml`, `approval.age`, `manifest.age`, the record files, the approver key files, `operational.age`,
-  `recipients.age` and `identity.age`. `config.toml` is removed whatever its bytes: beside `import.unfinished` it is
+  then `recovery.toml`, `locked-by-owner`, `approval.age`, `manifest.age`, the record files, the approver key files,
+  `operational.age`, `recipients.age` and `identity.age`. `config.toml` is removed whatever its bytes: beside `import.unfinished` it is
   the bundle's copy, and the bundle and the source still hold it. The Unfinished notice names `config.toml` when one is
   there, so the owner knows that file goes too. The marker stays, so a crash during the discard reads Unfinished again.
 - **Either command discards either kind.** `import` and `init` each discard an unfinished initialization and an
@@ -347,7 +347,7 @@ which fsyncs the file, renames it and fsyncs its directory ([open question 5](#o
 
 | Step | What the service does | Durable change |
 |---|---|---|
-| 1 | Removes a leftover `recovery.toml` on Uninitialized, as `init` does ([recovery.md](recovery.md#initialization)), or discards an unfinished vault. Writes the empty file `import.unfinished`. | `import.unfinished` |
+| 1 | Removes a leftover `recovery.toml` and a stale owner-lock file `locked-by-owner` on Uninitialized, as `init` does ([recovery.md](recovery.md#initialization), [vault-initialization.md](vault-initialization.md#discarding-an-unfinished-initialization)), or discards an unfinished vault. Writes the empty file `import.unfinished`. | `import.unfinished` |
 | 2 | Writes every record file, in ascending record ID, the bundle's bytes. | `record-<record ID>.age` |
 | 3 | Writes every approver key file, in ascending approver ID: the envelope inside its bundled approver key. | `approver-<approver ID>.age` |
 | 4 | Writes `approval.age`, the bundle's bytes. | `approval.age` |
@@ -388,7 +388,7 @@ What each command does after a crash, or any failure, following each step. `stat
 
 | Last step durable | Initialization state | `unlock` | `import` again | `init` |
 |---|---|---|---|---|
-| none | Uninitialized | `unlock-failed`: not initialized | removes a leftover `recovery.toml`, then proceeds from step 1 | proceeds |
+| none | Uninitialized | `unlock-failed`: not initialized | removes a leftover `recovery.toml` and a stale `locked-by-owner`, then proceeds from step 1 | proceeds |
 | 1 `import.unfinished` | Unfinished | `unlock-failed`: import unfinished or in progress | notice, discards (nothing yet), proceeds | notice, discards, removes `import.unfinished`, proceeds |
 | 2 to 8, any part | Unfinished | as row 1 | notice, discards whichever files exist, proceeds | as row 1, discarding whichever files exist |
 | 9 (no write) | Unfinished | as row 1 | as row "2 to 8" | as row "2 to 8" |

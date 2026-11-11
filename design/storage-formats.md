@@ -421,6 +421,24 @@ remain. See [reset.md](reset.md#removal-order). Rust: `StateFileName::unfinished
   startup sweep removes. Until then the next reset fails at `begin`: its durable replace creates the temp file
   exclusively and finds the name taken.
 
+## Owner-lock file
+
+The state-directory file `locked-by-owner` is empty: its presence is the whole of its meaning. `lock` writes it with a
+durable replace before it withdraws the serving snapshot, a passphrase `unlock` durably removes it, and while anything
+is at that name a starting service skips host unlock and stays Locked, so an explicit lock survives a crash, a restart
+and a reboot. See [tpm-unlock.md](tpm-unlock.md#lock-across-restarts). Rust: `StateFileName::owner_lock`,
+`iron_vault_store::{write_owner_lock, remove_owner_lock, owner_lock_present}`.
+
+- **Content.** Zero bytes. Only the name is looked at, never the bytes, and a directory or a dangling symlink at the
+  name counts as present: the test fails closed.
+- **Reading.** It is a known name in the [initialization state](vault-initialization.md#initialization-state), like
+  `recovery.toml`: beside a manifest it is never a foreign file, and a state directory holding only it is
+  Uninitialized. It is no vault file, so reset reads such a directory as `nothing-to-reset`. Reset's discard and `init`
+  remove it.
+- **No MAC.** Forging it can only keep a service Locked, and only the service account can write the state directory.
+- **Temp file.** A crash during its durable replace can leave `.locked-by-owner.tmp`, a stale temp file that the
+  startup sweep removes like any other. Until then the next `lock` fails to write the file and says so.
+
 ## Recovery check record
 
 The [recovery check record](glossary.md), state-directory file `recovery.toml`, holds when the recovery reminder

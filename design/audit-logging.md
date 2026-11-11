@@ -617,7 +617,7 @@ with these fields.
 | `service.log-destination-changed` | INFO | an activated config moved the log destination; written to both destinations | `log_destination`, `previous_log_destination`, `version` |
 | `service.lock-transition` | INFO | a lock transition: Locked to Checking, or Starting to Checking on a host unlock, the outcome of the check that follows, and Ready or Unavailable to Locked | `from_state`, `to_state`; `unavailable_reason` when `to_state` is `unavailable` |
 | `vault.unlock-refused` | WARN | an unlock was refused | `refusal`, such as `wrong_passphrase` or `rate_limited`; `memory_protection` when `refusal` is `memory_unprotected`, a protected install whose memory is not locked; `retry_after` (whole seconds) when `refusal` is `rate_limited`, the vault passphrase attempt limit |
-| `vault.host-unlock` | INFO, or WARN when refused | a Protected or Container service tried the unlock handoff at startup; a Development service never writes it | `host_unlock_outcome`; `refusal` when refused: `memory_unprotected`, `untrusted`, `unreadable`, `not_an_identity`, `not_initialized` or `not_a_recipient` |
+| `vault.host-unlock` | INFO, or WARN when refused | a Protected or Container service tried the unlock handoff at startup, or skipped it because the owner-lock file is there (`owner_locked`); a Development service never writes it | `host_unlock_outcome`; `refusal` when refused: `memory_unprotected`, `untrusted`, `unreadable`, `not_an_identity`, `not_initialized` or `not_a_recipient` |
 | `vault.presence-refused` | WARN | owner presence for `replace`, `rm`, `recipient remove` or an approver command was refused: the approval passphrase was wrong or the key is not the asked approver's; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`), `approver_id`, `approver_label`; no `config_digest`, since no config is involved |
 | `vault.lock-incomplete` | WARN | a lock's drain ended with a serving snapshot or the vault identity still held | `snapshots_held`, `identity_held` |
 
@@ -628,7 +628,10 @@ failed core-dump setting carries is not logged, since it is an OS error's text. 
 `deployment_profile` as a constant field, so the startup event needs no profile field of its own. The state labels are
 fixed strings, never `ServiceState`'s `Debug` output, which writes `Unavailable(PolicyInvalid)`.
 `service.lock-transition` is the struct `audit::LockTransition`. `vault.host-unlock` is `audit::vault::HostUnlock`; it
-never holds the handoff's bytes or its recipient key, and a `memory_unprotected` refusal also writes the
+never holds the handoff's bytes or its recipient key. `owner_locked` is INFO with no `refusal`: the owner locked the
+service, and the startup read the [owner-lock file](tpm-unlock.md#lock-across-restarts) before the memory guard and
+before it opened the handoff. A failed write or removal of that file is a plain WARN line carrying only the error kind,
+not an audit event. A `memory_unprotected` refusal also writes the
 `vault.unlock-refused` record every unlock path's memory guard writes
 ([docker-compose.md](docker-compose.md#in-the-container)).
 
@@ -800,7 +803,7 @@ The fields that only one event uses, or that only audit events use:
 | `config_field` | string | The config key a fact is about, such as `ca_file` |
 | `matches` | number | Scrub pattern matches in one response |
 | `defect` | string | The label of the check a service defect failed |
-| `host_unlock_outcome` | string | `unlocked`, `absent` (no unlock handoff) or `refused` |
+| `host_unlock_outcome` | string | `unlocked`, `absent` (no unlock handoff), `owner_locked` (the owner-lock file is there, so the handoff was not opened) or `refused` |
 | `recovery_outcome` | string | `opened`, `failed` (the key does not open this vault), `invalid` (the text is not a recovery key) or `unavailable` (the check could not run) |
 | `recovery_failure` | string | Why a recovery key failed: `not_a_recipient` or `identity_unverified` |
 | `recorded` | boolean | Whether a successful recovery check's record was written |

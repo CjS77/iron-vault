@@ -22,8 +22,9 @@ Three rules drive the design:
 - **Every step is durable before the next one starts**, and one durable remove is the commit point
   ([§13](iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 - **Init never overwrites or removes what it did not write.** It removes only the files an unfinished initialization
-  can have written (a config file only when its bytes are the initial config) and a leftover
-  [recovery check record](recovery.md#initialization), and refuses anything else.
+  can have written (a config file only when its bytes are the initial config), a leftover
+  [recovery check record](recovery.md#initialization) and a stale [owner-lock file](tpm-unlock.md#lock-across-restarts),
+  and refuses anything else.
 
 Every default this design picks where the specification is silent, or where it departs from the specification's
 wording, is listed under [Open questions](#open-questions); the owner has accepted all but the last.
@@ -64,12 +65,13 @@ bytes are compared with the initial config (below). The checks run in this order
 1. **`init.unfinished` is present.** The state is Unfinished if the state directory holds no file but the lock file
    (`lock`), a `lost+found` directory, stale temp files (`.<name>.tmp`), the files an initialization writes
    (`init.unfinished`, `identity.age`, `recipients.age`, `operational.age`, at most one approver key envelope
-   `approver-<approver ID>.age`, `manifest.age`, `approval.age`) and the recovery check record (`recovery.toml`), and
-   the config directory passes the [config test](#the-config-test). Otherwise it is Unrecognized.
+   `approver-<approver ID>.age`, `manifest.age`, `approval.age`), the recovery check record (`recovery.toml`) and the
+   owner-lock file (`locked-by-owner`), and the config directory passes the [config test](#the-config-test). Otherwise
+   it is Unrecognized.
 2. **`manifest.age` is present.** The state is Initialized, whatever else the directories hold: an Initialized vault
    never depends on the absence of other files.
-3. **The state directory holds only the lock file, a `lost+found` directory, stale temp files and the recovery check
-   record**, and none of `config.toml`, `config.toml.sig`, `config.toml.pending` and `config.toml.sig.staged` is in
+3. **The state directory holds only the lock file, a `lost+found` directory, stale temp files, the recovery check
+   record and the owner-lock file**, and none of `config.toml`, `config.toml.sig`, `config.toml.pending` and `config.toml.sig.staged` is in
    the config directory. The state is Uninitialized.
 4. **Otherwise** the state is Unrecognized.
 
@@ -84,8 +86,10 @@ bytes are compared with the initial config (below). The checks run in this order
 A **foreign file** is a file in the state directory that is not on the lists above: the lock file, `lost+found`, temp
 files, the vault's own files (`identity.age`, `recipients.age`, `recipients.age.staged`, `operational.age`,
 `manifest.age`, `approval.age`, `init.unfinished`, `reset.unfinished`), approver key envelopes (`approver-<approver ID>.age`, the ID a
-version 4 UUID in lowercase hyphenated form), record files (`record-*.age`) and the recovery check record
-(`recovery.toml`), which [recovery.md](recovery.md#initialization) describes. Beside a manifest, an approver key
+version 4 UUID in lowercase hyphenated form), record files (`record-*.age`), the recovery check record
+(`recovery.toml`), which [recovery.md](recovery.md#initialization) describes, and the owner-lock file
+(`locked-by-owner`), which [tpm-unlock.md](tpm-unlock.md#lock-across-restarts) describes. Neither of the last two is a
+vault file: each says something about a vault that may be gone. Beside a manifest, an approver key
 envelope that no pinned approver names is an [orphan](approval-signers.md#orphan-key-files), not a foreign file. The
 staged inventory (`recipients.age.staged`) is a vault file only beside a manifest: `init` never writes it, so beside
 `init.unfinished` it is foreign ([recipients.md](recipients.md#initialization)). It matters only beside `init.unfinished`, where it makes the state
@@ -338,7 +342,7 @@ writes, each durably, and only those present:
   `config.toml.pending`, each removed durably (unlink, then directory fsync). All signatures go before any config,
   because a signature with no config beside it makes the state Unrecognized and `publish` can leave `config.toml`
   beside `config.toml.sig.staged`;
-- in the state directory: `recovery.toml`, `approval.age`, `manifest.age`, the approver key envelope
+- in the state directory: `recovery.toml`, `locked-by-owner`, `approval.age`, `manifest.age`, the approver key envelope
   (`approver-<approver ID>.age`), `operational.age`, `recipients.age` and `identity.age`, each with `durable_remove`.
 
 `init.unfinished` stays, and step 1 then rewrites it, so a crash during the discard leaves the state Unfinished and
@@ -366,11 +370,17 @@ Discarding is logged; see [Logging](#logging).
 
 **A leftover recovery check record.** On Uninitialized the state directory may still hold `recovery.toml`, the record
 of a vault whose files are gone. Init removes it with `durable_remove`, under the service-wide lock and before step 1,
-so the new vault never starts with the old one's `last_checked` ([recovery.md](recovery.md#initialization)). It is
-the one file init removes from an Uninitialized directory, and the removal is not an audit event: the record holds
-no secret and decides nothing but a reminder. A failed removal is handled as a failed discard of an unfinished
-initialization: init ends with `init-failed` naming `discard` and raises `vault.init-failed` with the step `discard`.
-Nothing else has been written, so the state is still Uninitialized and the next init tries the removal again.
+so the new vault never starts with the old one's `last_checked` ([recovery.md](recovery.md#initialization)). The
+removal is not an audit event: the record holds no secret and decides nothing but a reminder. A failed removal is
+handled as a failed discard of an unfinished initialization: init ends with `init-failed` naming `discard` and raises
+`vault.init-failed` with the step `discard`. Nothing else has been written, so the state is still Uninitialized and the
+next init tries the removal again.
+
+**A stale owner-lock file.** Likewise the directory may still hold `locked-by-owner`, left by a `lock` or a `reset` on a
+vault that is gone ([tpm-unlock.md](tpm-unlock.md#lock-across-restarts)). Init removes it in the same place, right
+after `recovery.toml`, so the new vault host-unlocks at the next start instead of staying Locked for an owner who never
+locked it. These two are the only files init removes from an Uninitialized directory. A failed removal is a failed
+discard, as for `recovery.toml`. Beside `init.unfinished` the discard of an unfinished initialization removes it too.
 
 ## Crash table
 
@@ -381,7 +391,7 @@ every row, and names the initialization state: "not initialized (run iron-vault 
 
 | Last step durable | Initialization state | `unlock` | `init` again |
 |---|---|---|---|
-| none | Uninitialized | `unlock-failed`: not initialized, run `iron-vault init` | removes a leftover `recovery.toml`, then proceeds from step 1 |
+| none | Uninitialized | `unlock-failed`: not initialized, run `iron-vault init` | removes a leftover `recovery.toml` and a stale `locked-by-owner`, then proceeds from step 1 |
 | 1 `init.unfinished` | Unfinished | `unlock-failed`: initialization unfinished, an init may be in progress; run `iron-vault init` again if none is | notice, discards (nothing yet), proceeds |
 | 2 `identity.age`, then `recipients.age` | Unfinished | as row 1 | discards whichever of the two exist, proceeds |
 | 3 `operational.age` | Unfinished | as row 1; the passphrase is never asked for, so the vault never reaches Checking | discards both envelopes, proceeds |

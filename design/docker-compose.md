@@ -473,8 +473,11 @@ writes the `vault.unlock-refused` record that every unlock path's memory guard w
 The handoff stays on its ramfs for as long as the stack runs, so a crashed service restarts unattended (§15). It is
 never in an environment variable, an image layer, a named volume or any file that outlives the boot: the unit removes
 it when it stops, and the ramfs goes at shutdown. The service reads it only while Starting. After an explicit `lock`
-the service stays Locked until a passphrase `unlock` or a restart; a restart uses the handoff again, so in this
-profile `lock` holds only until whoever controls the runtime restarts the container.
+the service stays Locked until a passphrase `unlock`, across a crash, a restart of the container and a reboot: `lock`
+writes the [owner-lock file](tpm-unlock.md#lock-across-restarts) `locked-by-owner` in the state volume, and a starting
+service that finds it skips the handoff and records `owner_locked`. Whoever controls the runtime can still delete the
+file, or the volume, and so can restart the service into an unlocked state; the file protects the owner's lock from a
+crash, not from the runtime's administrator.
 
 ### Failure
 

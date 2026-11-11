@@ -145,6 +145,18 @@ HTTP/1.1 429 Too Many Requests
 HTTP/1.1 200 OK
 ```
 
+## A lock survives a restart
+
+`lock` leaves an empty file, `locked-by-owner`, in the [state directory](../reference/files.md#the-state-directory),
+and a passphrase `unlock` removes it. While it is there, a restart, a crash or a reboot leaves the service Locked, even
+where a host unlock would otherwise open the vault with no one present (the Docker Compose install; a TPM unlock is
+[not yet available](roadmap/tpm-unlock.md) on a protected Linux install). The service logs it as `vault.host-unlock`
+with `host_unlock_outcome` `owner_locked`.
+
+If the service cannot write the file, `lock` still locks and clears the vault, and says on stderr that the lock will not
+survive a restart. If a later `unlock` cannot remove it, `unlock` still succeeds and says on stderr that the next start
+will stay Locked; `lock`, then `unlock` again once the state directory is writable, clears it.
+
 ## In a protected install
 
 The same commands run through `sudo`: `sudo iron-vault lock`, `sudo iron-vault unlock`. The service is restarted by
