@@ -1,23 +1,26 @@
 //! The release-check rejection suite for migration authorization (specification §19, §16;
-//! design/migration-authorization.md), driven through a real admin socket by a handler registered only here. The handler
-//! stands in for `export` and `recipient add` (EP-28, EP-30), which will run the same checks through their real commands.
+//! design/migration-authorization.md), driven through a real admin socket. Rows marked *export* run the real `export`
+//! command, and count it authorized once it asks for the new export passphrase, where the test hangs up. The other rows
+//! need a challenge the owner cannot reach through `export`: a proof spent for another operation, a proof presented
+//! twice, a challenge never issued, or a clock moved past the challenge's lifetime. They run through a handler
+//! registered only here, which takes the same steps as `export`.
 //!
 //! One test per rejection §19 names. Cases that `migration_prompt.rs` already pins over the same socket are not
 //! repeated; this file maps them so a reader of the checklist finds every case:
 //!
-//! | §19 case                              | Test                                                                               |
-//! |-----------------------------------------|------------------------------------------------------------------------------------|
-//! | missing                                 | `missing_authorization_has_no_way_to_start`                                        |
-//! | incorrect                               | `incorrect_*` here, and `a_wrong_passphrase_is_denied_with_one_refusal_event`      |
-//! | expired                                 | `expired_between_the_prompt_and_the_check_is_denied`                               |
-//! | replayed                                | `replayed_proof_and_replayed_challenge_are_refused`                                |
-//! | cancelled: CLI closes at the prompt     | `no_owner_input_cancels_with_no_authorization_and_retires_the_challenge` (prompt)  |
-//! | cancelled: a `lock` at the prompt       | `a_lock_at_the_prompt_is_unavailable_and_records_no_failure` (prompt)              |
-//! | bound to one operation and destination  | `bound_*`                                                                          |
-//! | already unlocked, no fresh proof        | `an_unlocked_vault_does_not_authorize_without_a_fresh_proof`                       |
-//! | new export passphrase                   | `a_new_export_passphrase_never_authorizes`                                         |
-//! | attempt limit                           | `the_attempt_limit_applies_after_repeated_wrong_passphrases`                       |
-//! | no typed secret in the log              | `no_typed_secret_reaches_the_log`                                                  |
+//! | §19 case                                    | Test                                                                              |
+//! |---------------------------------------------|-----------------------------------------------------------------------------------|
+//! | missing                                     | `missing_authorization_has_no_way_to_start`                                       |
+//! | incorrect (*export*)                        | `incorrect_*` here, and `a_wrong_passphrase_is_denied_with_one_refusal_event`     |
+//! | expired                                     | `expired_between_the_prompt_and_the_check_is_denied`                              |
+//! | replayed                                    | `replayed_proof_and_replayed_challenge_are_refused`                               |
+//! | cancelled: CLI closes at the prompt         | `no_owner_input_cancels_with_no_authorization_and_retires_the_challenge` (prompt) |
+//! | cancelled: a `lock` at the prompt           | `a_lock_at_the_prompt_is_unavailable_and_records_no_failure` (prompt)             |
+//! | bound to one operation and destination      | `bound_*`                                                                         |
+//! | already unlocked, no fresh proof (*export*) | `an_unlocked_vault_does_not_authorize_without_a_fresh_proof`                      |
+//! | new export passphrase (*export*)            | `a_new_export_passphrase_never_authorizes`                                        |
+//! | attempt limit (*export*)                    | `the_attempt_limit_applies_after_repeated_wrong_passphrases`                      |
+//! | no typed secret in the log (*export*)       | `no_typed_secret_reaches_the_log`                                                 |
 
 #![cfg(target_os = "linux")]
 
@@ -156,6 +159,15 @@ fn write_envelopes(fixture: &Fixture, vault: &VaultIdentity) {
     write_passphrase_envelope(&lock, &OsFs, &sealed).unwrap();
 }
 
+/// How the real `export` ended.
+#[derive(Debug)]
+enum Exported {
+    /// The vault passphrase authorized the export, which asked for the new export passphrase.
+    Authorized,
+    /// The export was refused, with this code and message.
+    Refused(ErrorCode, String),
+}
+
 /// A Ready service and the stand-in command served on its admin socket.
 struct Served {
     service: Arc<ServiceContext>,
@@ -218,6 +230,35 @@ impl Served {
         (exchanged.prompts.len(), exchanged.response)
     }
 
+    /// Runs the real `export`, typing `typed` at the vault passphrase prompt; returns the prompts answered and the ending.
+    async fn export(&self, typed: &str) -> (usize, Exported) {
+        let runtime_dir = self.service.paths().runtime_dir.clone().unwrap();
+        let mut stream = UnixStream::connect(runtime_dir.join(ADMIN_SOCKET_NAME)).await.unwrap();
+        send(&mut stream, &Frame::Request(AdminRequest::Export)).await;
+        let mut prompts = 0;
+        loop {
+            match read_frame(&mut stream).await {
+                Frame::Prompt(prompt) if prompt.label == "Export passphrase" => return (prompts, Exported::Authorized),
+                Frame::Prompt(_) => {
+                    prompts += 1;
+                    let answer = OwnerInput::new(Zeroizing::new(typed.as_bytes().to_vec()));
+                    send(&mut stream, &Frame::OwnerInput(answer)).await;
+                }
+                Frame::Notice(_) => {}
+                Frame::Response(AdminResponse::Error { code, message }) => return (prompts, Exported::Refused(code, message)),
+                other => panic!("unexpected frame from export: {other:?}"),
+            }
+        }
+    }
+
+    /// Runs the real `export` and expects a refusal, whose code and message it returns.
+    async fn export_refused(&self, typed: &str) -> (ErrorCode, String) {
+        match self.export(typed).await.1 {
+            Exported::Refused(code, message) => (code, message),
+            Exported::Authorized => panic!("expected a refusal, but export was authorized"),
+        }
+    }
+
     /// Runs the command and expects an error answer, whose code and message it returns.
     async fn refused(&self, typed: &str) -> (ErrorCode, String) {
         match self.run(typed).await.1 {
@@ -274,7 +315,7 @@ async fn missing_authorization_has_no_way_to_start() {
 async fn incorrect_approval_passphrase_in_place_of_the_vault_passphrase_is_denied() {
     let served = Served::new().await;
 
-    let (code, message) = served.refused(APPROVAL_PASSPHRASE).await;
+    let (code, message) = served.export_refused(APPROVAL_PASSPHRASE).await;
 
     assert_eq!(code, ErrorCode::MigrationDenied);
     assert!(message.contains("vault passphrase was wrong"), "{message}");
@@ -286,7 +327,7 @@ async fn incorrect_another_vaults_passphrase_is_denied_as_not_this_vault() {
     let operation = MigrationOperation::AddRecipient(recipient());
     let served = Served::with(Mode::Spend, operation.clone(), operation, &VaultIdentity::generate()).await;
 
-    let (code, message) = served.refused(PASSPHRASE).await;
+    let (code, message) = served.export_refused(PASSPHRASE).await;
 
     assert_eq!(code, ErrorCode::MigrationDenied);
     assert!(message.contains("does not open this vault"), "{message}");
@@ -362,32 +403,21 @@ async fn an_unlocked_vault_does_not_authorize_without_a_fresh_proof() {
 
     // Ready, with the vault identity in memory since the unlock: still asked, every time, and an earlier proof carries
     // nothing over to the next exchange.
-    let (prompts, first) = served.run(PASSPHRASE).await;
-    assert_eq!(
-        (prompts, matches!(first, AdminResponse::Lock { cleared: true, .. })),
-        (1, true),
-        "{first:?}"
-    );
-    let (prompts, response) = served.run("").await;
+    let (prompts, first) = served.export(PASSPHRASE).await;
+    assert!(matches!((prompts, &first), (1, Exported::Authorized)), "{first:?}");
+    let (prompts, second) = served.export("").await;
 
-    assert_eq!(prompts, 1);
     assert!(
-        matches!(
-            response,
-            AdminResponse::Error {
-                code: ErrorCode::MigrationDenied,
-                ..
-            }
-        ),
-        "{response:?}"
+        matches!((prompts, &second), (1, Exported::Refused(ErrorCode::MigrationDenied, _))),
+        "{second:?}"
     );
 }
 
 #[tokio::test]
 async fn a_new_export_passphrase_never_authorizes() {
-    let served = Served::with(Mode::Spend, MigrationOperation::Export, MigrationOperation::Export, &identity()).await;
+    let served = Served::new().await;
 
-    let (code, _) = served.refused(EXPORT_PASSPHRASE).await;
+    let (code, _) = served.export_refused(EXPORT_PASSPHRASE).await;
 
     assert_eq!(code, ErrorCode::MigrationDenied);
     served.assert_retired().await;
@@ -397,21 +427,14 @@ async fn a_new_export_passphrase_never_authorizes() {
 async fn the_attempt_limit_applies_after_repeated_wrong_passphrases() {
     let served = Served::new().await;
     for _ in 0..FAILURE_THRESHOLD {
-        assert_eq!(served.refused(WRONG_PASSPHRASE).await.0, ErrorCode::MigrationDenied);
+        assert_eq!(served.export_refused(WRONG_PASSPHRASE).await.0, ErrorCode::MigrationDenied);
     }
 
     // Limited: no prompt is shown, so even the right passphrase cannot be typed.
-    let (prompts, response) = served.run(PASSPHRASE).await;
+    let (prompts, response) = served.export(PASSPHRASE).await;
 
-    assert_eq!(prompts, 0);
     assert!(
-        matches!(
-            response,
-            AdminResponse::Error {
-                code: ErrorCode::MigrationRateLimited,
-                ..
-            }
-        ),
+        matches!((prompts, &response), (0, Exported::Refused(ErrorCode::MigrationRateLimited, _))),
         "{response:?}"
     );
     served.assert_retired().await;
@@ -421,7 +444,7 @@ async fn the_attempt_limit_applies_after_repeated_wrong_passphrases() {
 async fn no_typed_secret_reaches_the_log() {
     let served = Served::new().await;
     for typed in [WRONG_PASSPHRASE, APPROVAL_PASSPHRASE, EXPORT_PASSPHRASE, PASSPHRASE] {
-        served.run(typed).await;
+        served.export(typed).await;
     }
 
     let text = served.logs.text();
