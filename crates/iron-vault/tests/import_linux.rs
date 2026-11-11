@@ -747,8 +747,9 @@ async fn host_unlock_dest(dest: &Dest, profile: DeploymentProfile, handoff: &Pat
     Arc::new(service)
 }
 
-/// With no host unlock identity to enrol, `import --host-unlock` ends with `import-failed` naming the reason, before any
-/// prompt, and writes nothing. A Development service has none, and an untrusted handoff is refused without its bytes.
+/// With no trusted host unlock identity to enrol, `import --host-unlock` ends with `import-failed` naming the reason, before
+/// any prompt, and writes nothing. A Development service has none, and an untrusted handoff is refused without its bytes.
+/// An absent handoff is the release check `refuses_an_absent_handoff` in `tests/lifecycle/migration.rs`.
 #[tokio::test(flavor = "multi_thread")]
 async fn import_host_unlock_without_an_identity_to_enrol_ends_with_import_failed_and_writes_nothing() {
     let (_one, source, logs) = begin().await;
@@ -756,12 +757,6 @@ async fn import_host_unlock_without_an_identity_to_enrol_ends_with_import_failed
     let secret = secret.expose_secret().to_owned();
     for profile in [DeploymentProfile::Protected, DeploymentProfile::Container] {
         let handoff = HandoffDir::new();
-        let absent = Dest::new();
-        let service = host_unlock_dest(&absent, profile, &handoff.path()).await;
-        let shown = import_with(&service, true, &source.bytes, &COMPLETE).await;
-        assert_refused_before_any_prompt(&shown, "there is no unlock handoff");
-        absent.assert_only_lock_files();
-
         let untrusted = Dest::new();
         fs::set_permissions(handoff.write(&secret), fs::Permissions::from_mode(0o644)).unwrap();
         let service = host_unlock_dest(&untrusted, profile, &handoff.path()).await;

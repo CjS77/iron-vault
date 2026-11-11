@@ -236,14 +236,25 @@ impl Served {
         (exchanged.prompts.len(), exchanged.response)
     }
 
-    /// Runs the real `export`, typing `typed` at the vault passphrase prompt; returns the prompts answered and the ending.
-    async fn export(&self, typed: &str) -> (usize, Exported) {
+    /// Sends the real `export` and returns the stream with the first frame that is not a notice, which is the vault passphrase
+    /// prompt when the export is allowed to start.
+    async fn start_export(&self) -> (UnixStream, Frame) {
         let runtime_dir = self.service.paths().runtime_dir.clone().unwrap();
         let mut stream = UnixStream::connect(runtime_dir.join(ADMIN_SOCKET_NAME)).await.unwrap();
         send(&mut stream, &Frame::Request(AdminRequest::Export)).await;
+        let mut first = read_frame(&mut stream).await;
+        while matches!(first, Frame::Notice(_)) {
+            first = read_frame(&mut stream).await;
+        }
+        (stream, first)
+    }
+
+    /// Runs the real `export`, typing `typed` at the vault passphrase prompt; returns the prompts answered and the ending.
+    async fn export(&self, typed: &str) -> (usize, Exported) {
+        let (mut stream, mut frame) = self.start_export().await;
         let mut prompts = 0;
         loop {
-            match read_frame(&mut stream).await {
+            match frame {
                 Frame::Prompt(prompt) if prompt.label == "Export passphrase" => return (prompts, Exported::Authorized),
                 Frame::Prompt(_) => {
                     prompts += 1;
@@ -254,6 +265,7 @@ impl Served {
                 Frame::Response(AdminResponse::Error { code, message }) => return (prompts, Exported::Refused(code, message)),
                 other => panic!("unexpected frame from export: {other:?}"),
             }
+            frame = read_frame(&mut stream).await;
         }
     }
 
@@ -342,13 +354,9 @@ async fn incorrect_another_vaults_passphrase_is_denied_as_not_this_vault() {
 #[tokio::test]
 async fn expired_between_the_prompt_and_the_check_is_denied() {
     let served = Served::exporting(&identity()).await;
-    let runtime_dir = served.service.paths().runtime_dir.clone().unwrap();
-    let mut stream = UnixStream::connect(runtime_dir.join(ADMIN_SOCKET_NAME)).await.unwrap();
-    send(&mut stream, &Frame::Request(AdminRequest::Export)).await;
-    let mut first = read_frame(&mut stream).await;
-    while matches!(first, Frame::Notice(_)) {
-        first = read_frame(&mut stream).await;
-    }
+    let expired = || expired_refusals(&served);
+    let before = expired();
+    let (mut stream, first) = served.start_export().await;
     assert!(matches!(first, Frame::Prompt(_)), "{first:?}");
 
     // The right passphrase arrives after the challenge's lifetime; it is refused before it is checked.
@@ -363,9 +371,16 @@ async fn expired_between_the_prompt_and_the_check_is_denied() {
     assert_eq!(code, ErrorCode::MigrationDenied);
     assert!(message.contains("expired"), "{message}");
     served.assert_retired().await;
-    // Only this test lets a challenge expire, so an `expired` refusal in the shared log is its own.
-    let refusals = served.events("migration.authorization-refused");
-    assert!(refusals.iter().any(|record| record["refusal"] == "expired"), "{refusals:?}");
+    assert_eq!(expired(), before + 1, "no expired refusal was recorded for this challenge");
+}
+
+/// The `expired` refusals in the shared log, counted rather than searched for because other tests write to it.
+fn expired_refusals(served: &Served) -> usize {
+    served
+        .events("migration.authorization-refused")
+        .iter()
+        .filter(|record| record["refusal"] == "expired")
+        .count()
 }
 
 #[tokio::test]
