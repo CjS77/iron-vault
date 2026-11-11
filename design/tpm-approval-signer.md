@@ -576,12 +576,15 @@ Two items need the hypervisor or the machine, and are recorded with its output:
 - **A firmware TPM's DA settings:** `tpm2_getcap properties-variable` on the release hardware, recorded, so the
   manual can say what the reserve allows there.
 
-Items 3 to 11, except the interval and maximum arithmetic of item 7 on a firmware TPM, also run against `swtpm` as ignored tests in
-`crates/iron-vault/tests/tpm_approver_linux.rs` ([approval-signers.md](approval-signers.md#tpm-approver)), so a run of the script on a
-VM repeats them with systemd in the loop and the emulator-only steps are skipped.
+Items 3 to 11 also run against `swtpm` as ignored tests in `crates/iron-vault/tests/tpm_approver_linux.rs`
+([approval-signers.md](approval-signers.md#tpm-approver)), without the installed package or systemd. The script repeats them with both
+in the loop. Items 7 and 10 change the dictionary-attack parameters and clear the TPM, so the script runs them only with
+`--emulated-tpm`, in a VM whose TPM is `swtpm` (it refuses the flag on a TPM whose manufacturer is not the emulator's). That run also
+sends wrong PINs from several commands at once, which exercises the socket unit's `MaxConnections=1` as the swtpm tests, which
+serialize their connections themselves, cannot. On hardware the script SKIPs items 7 and 10, and a SKIP is no evidence.
 
-The gate is met by a run on Ubuntu 24.04 in a VM with `swtpm`, and a run on Ubuntu 24.04 hardware with a firmware TPM
-for the non-destructive items and the power-loss item.
+The gate is met by a run with `--emulated-tpm` in an Ubuntu 24.04 VM with `swtpm` (every item except power loss), and a run on
+Ubuntu 24.04 hardware with a firmware TPM for the non-destructive items and the power-loss item.
 
 ## Interactions
 

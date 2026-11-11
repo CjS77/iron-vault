@@ -1,7 +1,7 @@
 # Approve configs with a TPM PIN
 
-*The prompts below are the ones the test suite drives against a software TPM. **This has had no release check on a real
-machine yet**, so don't rely on it for real secrets. Ubuntu 24.04 LTS on a protected install only.*
+*The prompts below match the code; the test suite runs the same steps against a software TPM without asserting their text.
+**This has had no release check on a real machine yet**, so don't rely on it for real secrets. Ubuntu 24.04 LTS on a protected install only.*
 
 At the end of this recipe a signing key held in your machine's TPM approves your configs once you type its PIN, and a
 software approver beside it means a forgotten PIN costs you one command, not the vault.

@@ -238,7 +238,12 @@ async fn enrolling_pins_a_tpm_key_with_a_private_blob_and_keeps_the_counters() {
 
     let id = enrolled_id(&added);
     assert!(added.notices.contains("  kind: tpm\n"), "{}", added.notices);
-    assert_eq!(machine.pinned_kinds(), [SignerKind::Software, SignerKind::Tpm]);
+    // Both approvers are enrolled within one second, so their order in the state follows their random IDs.
+    let kinds = machine.pinned_kinds();
+    assert!(
+        kinds.len() == 2 && kinds.contains(&SignerKind::Software) && kinds.contains(&SignerKind::Tpm),
+        "{kinds:?}"
+    );
     assert_eq!(fs::metadata(machine.blob(id)).unwrap().permissions().mode() & 0o777, 0o600);
     assert_eq!(machine.counters(), before);
     let listed = machine.run(AdminRequest::ApproverList, &[]).await;
@@ -633,23 +638,27 @@ fn hex_string(bytes: &[u8]) -> String {
 // ---- Checks 10 and 11, rotation and a forgotten PIN --------------------------------------------------------------------------
 
 /// Check 10: after a clear (the stand-in for a copied blob or a replaced board) the helper answers `not this TPM`, which the
-/// service reports as unavailable, and the software approver still approves.
+/// service reports as unavailable. The TPM approver signed the active approval, so it is asked first and refused; the software
+/// approver then approves, and from then on the approver order starts at it.
 #[tokio::test]
 #[ignore = "needs swtpm named by IRON_VAULT_SWTPM and the helper built with --features tpm"]
 async fn a_cleared_tpm_is_not_this_tpm_and_the_software_approver_still_approves() {
     let machine = enrolled(32).await;
+    assert_eq!(version_of(&machine.approve("rates", &via_tpm(PIN)).await), 2);
     tool("tpm2_clear", &["--auth-hierarchy=l"], None);
     set_dictionary_attack(32, 600);
 
-    let unavailable = machine.approve("rates", &via_tpm(PIN)).await;
+    let unavailable = machine.approve("rates", &[Answer::Input(PIN)]).await;
 
     assert_eq!(error_code(&unavailable.response), ErrorCode::ApprovalUnavailable, "{unavailable:?}");
     assert!(message_of(&unavailable).contains("not this TPM"), "{unavailable:?}");
     assert_eq!(lockout_counter(), 0);
     let software = machine
-        .approve("rates", &[Answer::Switch, Answer::Switch, Answer::Input(APPROVAL_PASSPHRASE)])
+        .approve("rates", &[Answer::Switch, Answer::Input(APPROVAL_PASSPHRASE)])
         .await;
-    assert_eq!(version_of(&software), 2);
+    assert_eq!(version_of(&software), 3);
+    let starts_at_software = machine.approve("other", &[Answer::Input(APPROVAL_PASSPHRASE)]).await;
+    assert_eq!(version_of(&starts_at_software), 4);
 }
 
 /// Checks 3, 4 and 11 together: software to TPM and back. Each change is authorized by the approver the other direction needs, and

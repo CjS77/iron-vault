@@ -457,6 +457,6 @@ sudo rm -rf /var/lib/iron-vault
 ```
 
 A kept vault whose config went with the purge unlocks into an Unavailable service with an invalid policy until you approve
-a config again ([config-approval.md](../../../design/config-approval.md#recovery-table)). The `iron-vault` account stays after purge, so a
-later account cannot reuse its uid and gain a kept vault's files. To remove it too, after deleting the vault:
-`sudo userdel iron-vault`.
+a config again ([config-approval.md](../../../design/config-approval.md#recovery-table)). The `iron-vault` account and the `iron-vault-tpm` account of the TPM signing helper stay after purge, so a
+later account cannot reuse their uids and gain a kept vault's files. To remove them too, after deleting the vault:
+`sudo userdel iron-vault` and `sudo userdel iron-vault-tpm`.
