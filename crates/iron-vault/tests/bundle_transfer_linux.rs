@@ -5,11 +5,13 @@
 // Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::io;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
 use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
-use iron_vault::admin::protocol::{self, AdminCommand, AdminRequest, AdminResponse, BundleChunk, Decoded, Frame, MAX_BODY_LEN};
+use iron_vault::admin::protocol::{self, AdminCommand, AdminRequest, AdminResponse, BundleChunk, Decoded, ErrorCode, Frame, MAX_BODY_LEN};
 use iron_vault::admin::server::{AdminServer, Exchange, ExchangeError, Limits};
 use iron_vault::deployment::DeploymentProfile;
 use iron_vault::path_metadata::invoking_user;
@@ -243,4 +245,119 @@ async fn a_frame_other_than_bundle_data_mid_bundle_is_out_of_turn() {
     cli.write_all(&frame_bytes(&Frame::Switch)).await.unwrap();
     assert_eq!(outcome(&mut received).await, Err(format!("{:?}", ExchangeError::Unexpected)));
     served.await.unwrap();
+}
+
+/// The test command, registered for `ping`: it sends `chunks` pausing `pause` before the second, reports how the sends
+/// ended, and answers `export-failed` (or success) whatever happened, as an `export` handler would.
+struct Pausing {
+    chunks: Vec<Vec<u8>>,
+    pause: Duration,
+    outcome: mpsc::UnboundedSender<Outcome>,
+}
+
+impl AdminHandler for Pausing {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let mut sent = Ok(());
+            for (n, chunk) in self.chunks.iter().enumerate() {
+                if n == 1 {
+                    tokio::time::sleep(self.pause).await;
+                }
+                sent = exchange.send_bundle_chunk(chunk).await;
+                if sent.is_err() {
+                    break;
+                }
+            }
+            let _ = self.outcome.send(sent.as_ref().map(|()| Vec::new()).map_err(|e| format!("{e:?}")));
+            Ok(match sent {
+                Ok(()) => AdminResponse::Success,
+                Err(e) => AdminResponse::Error {
+                    code: ErrorCode::ExportFailed,
+                    message: format!("{e}"),
+                },
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_transfer_deadline_that_passed_between_frames_is_noticed_before_any_byte_moves() {
+    let (outcomes, mut received) = mpsc::unbounded_channel();
+    let limits = Limits {
+        transfer_deadline: Duration::from_millis(100),
+        ..Limits::default()
+    };
+    let (mut cli, served) = serve(
+        Pausing {
+            chunks: vec![vec![1; 10], vec![2; 10]],
+            pause: Duration::from_millis(300),
+            outcome: outcomes,
+        },
+        limits,
+    );
+    send_ping(&mut cli).await;
+    assert_eq!(outcome(&mut received).await, Err(format!("{:?}", ExchangeError::TransferTimedOut)));
+    // The first frame arrived whole, the second never started, and the response is readable right after the first frame.
+    assert!(matches!(read_frame(&mut cli).await, Frame::BundleData(chunk) if chunk.bytes() == [1; 10]));
+    assert!(matches!(
+        read_frame(&mut cli).await,
+        Frame::Response(AdminResponse::Error {
+            code: ErrorCode::ExportFailed,
+            ..
+        })
+    ));
+    served.await.unwrap();
+}
+
+/// Log lines, shared with the subscriber that records them.
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_frame_write_cut_off_by_its_deadline_leaves_no_response_behind_it() {
+    let logs = Captured::default();
+    let writer = logs.clone();
+    let _logging = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
+    let (outcomes, mut received) = mpsc::unbounded_channel();
+    let limits = Limits {
+        request_deadline: Duration::from_millis(150),
+        ..Limits::default()
+    };
+    let (mut cli, served) = serve(
+        Pausing {
+            chunks: vec![vec![7; MAX_BODY_LEN]; 64],
+            pause: Duration::ZERO,
+            outcome: outcomes,
+        },
+        limits,
+    );
+    send_ping(&mut cli).await;
+    assert_eq!(outcome(&mut received).await, Err(format!("{:?}", ExchangeError::TimedOut)));
+    served.await.unwrap();
+    let logged = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
+    assert!(logged.contains("response was not sent"), "{logged}");
+    // The service closed: the CLI reads to the end of the stream, and every byte of it belongs to bundle data frames.
+    let mut rest = Vec::new();
+    tokio::time::timeout(PATIENCE, cli.read_to_end(&mut rest)).await.unwrap().unwrap();
+    let mut bytes = rest.as_slice();
+    while let Ok(Decoded::Frame { frame, used }) = protocol::decode(bytes) {
+        assert!(matches!(frame, Frame::BundleData(_)), "{frame:?}");
+        bytes = &bytes[used..];
+    }
 }

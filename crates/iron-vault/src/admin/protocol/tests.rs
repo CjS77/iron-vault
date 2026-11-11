@@ -86,7 +86,19 @@ fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
                 recorded: q,
             },
         ) => a == b && t == u && r == q,
-        (R::Export { .. }, R::Export { .. }) | (R::Import(_), R::Import(_)) => format!("{a:?}") == format!("{b:?}"),
+        (
+            R::Export {
+                vault_id: a,
+                records: n,
+                bytes: x,
+            },
+            R::Export {
+                vault_id: b,
+                records: m,
+                bytes: y,
+            },
+        ) => (a, n, x) == (b, m, y),
+        (R::Import(a), R::Import(b)) => a == b,
         (R::RecipientList { entries: a }, R::RecipientList { entries: b }) => a == b,
         (
             R::RecipientAdd {

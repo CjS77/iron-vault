@@ -180,9 +180,10 @@ pub enum AdminOperation {
     Approve,
     /// Authorized repair or recovery of a committed transaction.
     Repair,
-    /// Change the vault: credentials, recipients, export and import.
+    /// Change the vault: credentials, recipients, approvers and export.
     VaultChange,
-    /// Create the vault and approve the initial config. It leaves the service Locked, so it needs no edge of its own.
+    /// Create the vault and approve the initial config, for `init` and `import`. It leaves the service Locked, so it needs no
+    /// edge of its own.
     Initialize,
     /// Generate a fresh caller token for the owner. It touches neither the vault nor the policy, so it is allowed while
     /// Locked or Unavailable too: the owner can prepare the config that fixes an invalid policy.

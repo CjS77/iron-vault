@@ -766,8 +766,8 @@ pub enum ErrorCode {
     RandomSourceFailed = 25,
     /// `list`: the credential list does not fit one frame; the message names the count.
     ListTooLarge = 26,
-    /// `unlock`, `import`: a protected install's memory is not locked, so the vault is not opened; the message names the
-    /// memory-lock limit or the locking error, and the service stays Locked.
+    /// `unlock`, `recovery check`, `init`, `import`: a protected install's memory is not locked, so the vault identity is not
+    /// unwrapped, or for `init` and `import` not generated; the message names the memory-lock limit or the locking error.
     MemoryUnprotected = 27,
     /// `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it
     /// opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing

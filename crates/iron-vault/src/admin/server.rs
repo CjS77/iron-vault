@@ -224,6 +224,10 @@ pub struct Exchange {
     /// When the bundle transfer times out: set by the exchange's first bundle data frame, sent or received, and kept for
     /// the rest of the exchange.
     transfer_deadline: Option<Instant>,
+    /// Whether a frame write was cut off or failed part-way, so the peer may hold the front of a frame. Any later write
+    /// would be read as the rest of that frame's body, so [`respond`](Self::respond) writes nothing and the connection
+    /// just closes.
+    frame_cut: bool,
 }
 
 /// Why a prompt got no owner input. The exchange is over: the handler returns the error, which cancels its command
@@ -235,7 +239,7 @@ pub enum ExchangeError {
     Closed,
     /// No owner input arrived within the prompt deadline, or a prompt or bundle data frame could not be written or read
     /// within the request deadline.
-    #[error("no owner input or bundle data arrived before the deadline")]
+    #[error("a frame did not move before its deadline")]
     TimedOut,
     /// The whole bundle was not written or read within the transfer deadline, though each frame so far met its own.
     #[error("the bundle transfer did not finish before the transfer deadline")]
@@ -244,7 +248,7 @@ pub enum ExchangeError {
     #[error("the admin connection failed: {}", ErrorKindLabel::from(*.0))]
     Io(io::ErrorKind),
     /// The CLI answered with a frame that does not decode.
-    #[error("the CLI answered a prompt with a malformed frame: {0}")]
+    #[error("the CLI sent a malformed frame: {0}")]
     Malformed(FrameError),
     /// The CLI answered with a well-formed frame other than the one the exchange waited for: owner input (a switch frame
     /// only when the prompt was switchable), or a bundle data frame.
@@ -291,6 +295,7 @@ impl Exchange {
             limits,
             approver_deadline: None,
             transfer_deadline: None,
+            frame_cut: false,
         }
     }
 
@@ -390,23 +395,23 @@ impl Exchange {
     /// Sends one bundle data frame of up to [`MAX_BODY_LEN`] bytes of `bytes`; the empty slice ends the bundle. The write
     /// must finish within the request deadline and the bundle within the transfer deadline, which starts with the exchange's
     /// first bundle data frame, so a CLI that stalls or trickles cannot hold the service-wide lock past them. The error
-    /// says which deadline passed, so the handler can end the exchange with `export-failed` while the CLI can still be
-    /// written to.
+    /// says which deadline passed.
+    ///
+    /// A deadline that has already passed when the frame is about to move gives [`ExchangeError::TransferTimedOut`] with
+    /// nothing written, so the CLI holds only whole frames and the handler may still answer `export-failed`. A deadline that
+    /// passes mid-write leaves part of a frame on the socket: the exchange then writes nothing more, its response included,
+    /// and the connection closes, because the CLI would read a response as the rest of the frame.
     pub async fn send_bundle_chunk(&mut self, bytes: &[u8]) -> Result<(), ExchangeError> {
         let mut frame = Vec::with_capacity(HEADER_LEN + bytes.len());
         protocol::encode_bundle_data(bytes, &mut frame).map_err(ExchangeError::Unencodable)?;
-        let (deadline, expired) = self.bundle_frame_deadline();
-        match tokio::time::timeout_at(deadline, self.stream.write_all(&frame)).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(e)) => Err(ExchangeError::Io(e.kind())),
-            Err(_) => Err(expired),
-        }
+        let (deadline, expired) = self.bundle_frame_deadline()?;
+        self.write_until(&frame, deadline, expired).await
     }
 
     /// Reads the next bundle data frame, within the same two deadlines as [`send_bundle_chunk`](Self::send_bundle_chunk).
     /// The empty chunk ends the bundle. Any other kind of frame is [`Unexpected`](ExchangeError::Unexpected).
     pub async fn receive_bundle_chunk(&mut self) -> Result<BundleChunk, ExchangeError> {
-        let (deadline, expired) = self.bundle_frame_deadline();
+        let (deadline, expired) = self.bundle_frame_deadline()?;
         match tokio::time::timeout_at(deadline, self.read_frame()).await {
             Ok(Ok(Frame::BundleData(chunk))) => Ok(chunk),
             Ok(Ok(_)) => Err(ExchangeError::Unexpected),
@@ -418,16 +423,21 @@ impl Exchange {
     }
 
     /// When the bundle data frame about to move times out, and the error that expiry is: one request deadline from now, or
-    /// the transfer deadline, started now if this is the exchange's first bundle frame, whichever comes first.
-    fn bundle_frame_deadline(&mut self) -> (Instant, ExchangeError) {
+    /// the transfer deadline, started now if this is the exchange's first bundle frame, whichever comes first. A transfer
+    /// deadline that has passed is an error here, before any byte moves: a timeout polls its future first, so a frame that
+    /// could move at once would otherwise still succeed.
+    fn bundle_frame_deadline(&mut self) -> Result<(Instant, ExchangeError), ExchangeError> {
         let now = Instant::now();
         let transfer = *self.transfer_deadline.get_or_insert(now + self.limits.transfer_deadline);
+        if now >= transfer {
+            return Err(ExchangeError::TransferTimedOut);
+        }
         let frame = now + self.limits.request_deadline;
-        if transfer <= frame {
+        Ok(if transfer <= frame {
             (transfer, ExchangeError::TransferTimedOut)
         } else {
             (frame, ExchangeError::TimedOut)
-        }
+        })
     }
 
     /// Writes one frame the service sends within the request deadline.
@@ -437,10 +447,19 @@ impl Exchange {
 
     /// Writes an encoded frame within the request deadline.
     async fn write(&mut self, bytes: &[u8]) -> Result<(), ExchangeError> {
-        match tokio::time::timeout(self.limits.request_deadline, self.stream.write_all(bytes)).await {
+        let deadline = Instant::now() + self.limits.request_deadline;
+        self.write_until(bytes, deadline, ExchangeError::TimedOut).await
+    }
+
+    /// Writes an encoded frame by `deadline`, which is `expired` if it passes. A write that fails or is cut off may have
+    /// left part of the frame on the socket, so it is recorded in `frame_cut`.
+    async fn write_until(&mut self, bytes: &[u8], deadline: Instant, expired: ExchangeError) -> Result<(), ExchangeError> {
+        let written = tokio::time::timeout_at(deadline, self.stream.write_all(bytes)).await;
+        self.frame_cut |= !matches!(written, Ok(Ok(())));
+        match written {
             Ok(Ok(())) => Ok(()),
             Ok(Err(e)) => Err(ExchangeError::Io(e.kind())),
-            Err(_) => Err(ExchangeError::TimedOut),
+            Err(_) => Err(expired),
         }
     }
 
@@ -502,8 +521,13 @@ impl Exchange {
     }
 
     /// Sends the exchange's admin response within the request deadline and closes; a peer that has gone is not an
-    /// error.
+    /// error. After a frame write that was cut off it writes nothing and just closes, since the peer would read the
+    /// response as the rest of that frame.
     async fn respond(&mut self, response: AdminResponse) {
+        if self.frame_cut {
+            tracing::warn!("the admin response was not sent: an earlier frame write was cut off, so the connection is closed");
+            return;
+        }
         let sent = tokio::time::timeout(self.limits.request_deadline, write_and_close(&mut self.stream, response)).await;
         if !matches!(sent, Ok(Ok(()))) {
             tracing::warn!("the admin response could not be delivered");
