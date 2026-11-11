@@ -13,6 +13,7 @@ mod durable_faults;
 mod envelope;
 mod error_kind;
 mod export_identity;
+mod export_snapshot;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fault_fs;
 mod init;
@@ -81,6 +82,10 @@ pub use error_kind::ErrorKindLabel;
 pub use export_identity::{
     BundledApproverKeyError, ExportPassphrase, check_approver_key_form, open_bundled_approver_key, open_exported_identity,
     seal_bundled_approver_key, seal_exported_identity,
+};
+pub use export_snapshot::{
+    ExportedBundle, SnapshotDamage, SnapshotError, SnapshotStep, SnapshotSummary, check_config_digest, check_export_snapshot,
+    check_record_digest, stream_export_snapshot,
 };
 pub use init::{
     FirstApproval, InitError, InitFailure, InitPassphrases, InitPassphrasesError, InitStep, InitializedVault, MIN_PASSPHRASE_CHARS,

@@ -107,6 +107,17 @@ pub enum ReadError {
     },
 }
 
+impl ReadError {
+    /// The kind of the failed read as a label that holds no file name or error text.
+    pub fn error_kind_label(&self) -> ErrorKindLabel {
+        match self {
+            Self::Io { kind, .. } => ErrorKindLabel::from(*kind),
+            Self::TooLarge { .. } => ErrorKindLabel::fixed("too_large"),
+            Self::NotARegularFile { .. } => ErrorKindLabel::fixed("not_a_regular_file"),
+        }
+    }
+}
+
 /// Replaces the state file `name` with exactly `bytes`, durably.
 ///
 /// Writes a private `.<name>.tmp`, fsyncs it, renames it over `name` and fsyncs the state directory. A failure before

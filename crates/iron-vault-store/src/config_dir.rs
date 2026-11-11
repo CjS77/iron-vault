@@ -117,6 +117,17 @@ pub enum ConfigReadError {
     },
 }
 
+impl ConfigReadError {
+    /// The kind of the failed read as a label that holds no file name or error text.
+    pub fn error_kind_label(&self) -> ErrorKindLabel {
+        match self {
+            Self::Io { kind, .. } => ErrorKindLabel::from(*kind),
+            Self::TooLarge { .. } => ErrorKindLabel::fixed("too_large"),
+            Self::NotARegularFile { .. } => ErrorKindLabel::fixed("not_a_regular_file"),
+        }
+    }
+}
+
 /// Why [`remove_pending_and_staged`] failed, with the files it removed all the same.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{cause}")]
