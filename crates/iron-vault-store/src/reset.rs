@@ -182,24 +182,20 @@ pub fn discard_vault(state: &StateDirLock, config: &ConfigDirLock, fs: &impl Sto
     let (removals, foreign) = plan(state, config, fs)?;
     let marker = StateFileName::unfinished_reset();
     replace_in(fs, state.dir(), marker.as_str(), b"").map_err(failed(ResetStep::Begin, marker.as_str()))?;
-    let mut removed = Vec::new();
-    removals
-        .iter()
-        .try_for_each(|(dir, name)| {
-            let (unlinked, result) = remove(fs, dir, name);
-            if unlinked {
-                removed.push(name.clone());
-            }
-            result
-        })
-        .map_err(|cause| DiscardError {
-            cause,
-            removed: removed.clone(),
-        })?;
-    let finish_uncertain = finish(state, fs, &marker).map_err(|cause| DiscardError {
-        cause,
-        removed: removed.clone(),
+    let removed = removals.iter().try_fold(Vec::new(), |mut removed, (dir, name)| {
+        let (unlinked, result) = remove(fs, dir, name);
+        if unlinked {
+            removed.push(name.clone());
+        }
+        match result {
+            Ok(()) => Ok(removed),
+            Err(cause) => Err(DiscardError { cause, removed }),
+        }
     })?;
+    let finish_uncertain = match finish(state, fs, &marker) {
+        Ok(uncertain) => uncertain,
+        Err(cause) => return Err(DiscardError { cause, removed }),
+    };
     Ok(DiscardedVault {
         removed,
         foreign,
