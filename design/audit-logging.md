@@ -733,12 +733,13 @@ other approval.
 | `recipient.removed` | INFO | a recipient change that removes a recipient committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` |
 | `recipient.change-failed` | WARN | an add or a removal was refused at its own step 3 (`already_enrolled`, `unknown_recipient`, `set_invalid`), or its recipient change failed (`write_failed`) | `change`, `recipient`, `failure`; `step`, `error_kind` and `committed` for `write_failed` |
 
-**Approvers** ([approval-signers.md](approval-signers.md#audit-events); `approver add` writes these):
+**Approvers** ([approval-signers.md](approval-signers.md#audit-events); `approver add` and `approver remove` write these):
 
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `approver.enrolled` | INFO | an approver change that enrolls committed | `approver_id`, `approver_label`, `signer_kind`, `approvers`, `authorizing_approver_id`, `authorizing_approver_label` |
-| `approver.change-failed` | WARN | `approver add` was refused at step 3 (`set_invalid`, `write_failed`) or step 6 (`passphrase_rejected`), or its approver change failed (`write_failed`) | `change`, `failure`; `approver_id` when known; `step`, `error_kind` and `committed` for `write_failed` |
+| `approver.removed` | INFO | an approver change that removes committed | as `approver.enrolled`, and `key_file` (`removed` or `left`) |
+| `approver.change-failed` | WARN | `approver add` was refused at step 3 (`set_invalid`, `write_failed`) or step 6 (`passphrase_rejected`); `approver remove` was refused at step 3 (`unknown_approver`, `set_invalid`, `in_use`, `write_failed`); or either command's approver change failed (`write_failed`) | `change`, `failure`; `approver_id` when known; `step`, `error_kind` and `committed` for `write_failed` |
 | `approver.orphan-removed` | WARN | step 3 of an approver command removed an orphan key file | `approver_id`, the ID in the file's name |
 
 **Migration authorization** ([migration-authorization.md](migration-authorization.md#audit-events) gives the order of the records of one exchange):

@@ -314,6 +314,17 @@ Enroll another approval signer. The service shows what changes, asks for the app
     - `tpm`: A TPM approval key with a PIN.
     - `hardware`: A hardware key with PIN and touch.
 
+## `iron-vault approver remove`
+
+```text
+iron-vault approver remove [OPTIONS] <APPROVER>
+```
+
+Remove an approval signer, named by the approver ID `approver list` prints. The service shows what changes, then asks for the approval passphrase of any pinned approver, the one being removed included. It refuses the last approver and the approver that signed the active approval: approve the config with another approver first. Copies of the state directory made before still pin the removed approver. Prints nothing on success.
+
+- `<APPROVER>`: The approver ID, a UUID.
+  - required
+
 ## `iron-vault completions`
 
 ```text

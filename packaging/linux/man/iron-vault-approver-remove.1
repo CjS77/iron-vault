@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-approver-remove 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-approver\-remove \- Remove an approval signer, named by the approver ID `approver list` prints. The service shows what changes, then asks for the approval passphrase of any pinned approver, the one being removed included. It refuses the last approver and the approver that signed the active approval: approve the config with another approver first. Copies of the state directory made before still pin the removed approver. Prints nothing on success
+.SH SYNOPSIS
+\fBiron\-vault approver remove\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIAPPROVER\fR> 
+.SH DESCRIPTION
+Remove an approval signer, named by the approver ID `approver list` prints. The service shows what changes, then asks for the approval passphrase of any pinned approver, the one being removed included. It refuses the last approver and the approver that signed the active approval: approve the config with another approver first. Copies of the state directory made before still pin the removed approver. Prints nothing on success
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIAPPROVER\fR>
+The approver ID, a UUID

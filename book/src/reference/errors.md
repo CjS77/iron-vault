@@ -116,19 +116,21 @@ All three commands also answer `wrong-state` outside Ready, `busy` while another
 `vault-write-failed` when settling a staged recipient change failed or, for `recipient add` and `recipient remove`, the
 change itself did; the message says whether it may have committed.
 
-### `approver add`
+### `approver add` and `approver remove`
 
 | Code | Name | Meaning | What to do |
 |---|---|---|---|
-| `40` | `approver-invalid` | The label breaks its rule. The message names the rule. Nothing was changed. | Give a label of 1 to 64 bytes with no control characters. |
-| `42` | `approver-set-invalid` | 16 approvers are already pinned. It was refused before any prompt. Nothing was changed. | Remove an approver you no longer use first. |
+| `40` | `approver-invalid` | `approver add`: the label breaks its rule. `approver remove`: the ID is not a version 4 UUID. The message names the rule. Nothing was changed. | Give a label of 1 to 64 bytes with no control characters, or copy the approver ID from `approver list`. |
+| `41` | `unknown-approver` | `approver remove`: no pinned approver has this ID. It was refused before any prompt. Nothing was changed. | Run `approver list` and copy the ID from it. |
+| `42` | `approver-set-invalid` | `approver add`: 16 approvers are already pinned. `approver remove`: it is the last approver. Either was refused before any prompt. Nothing was changed. | For `add`, remove an approver you no longer use first. The last approver stays: enroll another one before you remove it. |
+| `43` | `approver-in-use` | `approver remove`: this approver signed the active approval, and removing it would stop the active config verifying and take every route down. It was refused before any prompt. Nothing was changed. | Approve the config again with another approver (switch to it at the prompt), then remove this one. |
 | `44` | `approver-kind-unavailable` | This install does not offer that signer kind yet. Only `software` is offered. Nothing was changed. | Leave out `--kind`, or use `--kind software`. |
-| `9` | `approval-denied` | The passphrase did not open the asked approver's key. The vault passphrase and a recovery key never authorize an approver change. Nothing was written. | Type the approval passphrase of the approver the prompt names, or switch to another approver. |
+| `9` | `approval-denied` | The passphrase did not open the asked approver's key. The vault passphrase and a recovery key never authorize an approver change. Any pinned approver may authorize a removal, the one being removed included. Nothing was written. | Type the approval passphrase of the approver the prompt names, or switch to another approver. |
 | `10` | `approval-unavailable` | Owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt. Nothing was written. | Unlock if needed, and run the command again. |
 | `18` | `passphrase-rejected` | The new approval passphrase is under 12 characters, or the two copies differ. Nothing was written. | Run the command again and choose a passphrase that meets the rule, different from the vault passphrase. |
-| `22` | `vault-write-failed` | The approval state (`approval.age`) did not read back before any prompt, or the enrollment failed. The message says whether it may have committed. | When the message says nothing was changed, read the log's `approver.change-failed` and fix its cause. When it may have committed, check the approvers before trying again. |
+| `22` | `vault-write-failed` | The approval state (`approval.age`) did not read back before any prompt, or the enrollment or removal failed. The message says whether it may have committed. | When the message says nothing was changed, read the log's `approver.change-failed` and fix its cause. When it may have committed, check the approvers before trying again. |
 
-It also answers `wrong-state` outside Ready, or when a `lock` cancels it at the new passphrase prompt, and `busy` while
+Both also answer `wrong-state` outside Ready (`approver add` also when a `lock` cancels it at the new passphrase prompt), and `busy` while
 another command holds the service-wide lock.
 
 ### Migration authorization

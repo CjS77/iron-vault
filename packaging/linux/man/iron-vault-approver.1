@@ -21,3 +21,6 @@ List every approver, one line each: its approver ID, signer kind, enrolment time
 .TP
 iron\-vault\-approver\-add(1)
 Enroll another approval signer. The service shows what changes, asks for the approval passphrase of an approver already pinned, then for the new signer\*(Aqs own approval passphrase, twice; choose one different from the vault passphrase. The new signer alone can approve a config, so keep its passphrase apart from the first. Prints the new approver\*(Aqs ID
+.TP
+iron\-vault\-approver\-remove(1)
+Remove an approval signer, named by the approver ID `approver list` prints. The service shows what changes, then asks for the approval passphrase of any pinned approver, the one being removed included. It refuses the last approver and the approver that signed the active approval: approve the config with another approver first. Copies of the state directory made before still pin the removed approver. Prints nothing on success
