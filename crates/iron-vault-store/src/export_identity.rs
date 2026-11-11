@@ -41,11 +41,6 @@ impl ExportPassphrase {
     fn for_age(&self) -> SecretString {
         SecretString::from(self.0.expose_secret())
     }
-
-    /// The passphrase text, borrowed for the rules the caller checks it against.
-    pub fn text(&self) -> &str {
-        self.0.expose_secret()
-    }
 }
 
 impl fmt::Debug for ExportPassphrase {

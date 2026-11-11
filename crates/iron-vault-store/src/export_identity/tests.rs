@@ -98,10 +98,7 @@ fn an_envelope_that_could_cost_scrypt_work_is_refused_first() {
     cases.iter().for_each(|(bytes, expected)| {
         let started = Instant::now();
         let refused = open_exported_identity(bytes, &export("export phrase 1")).unwrap_err();
-        assert!(
-            refused == *expected || (*expected == EnvelopeError::Malformed && matches!(refused, EnvelopeError::UnexpectedStanza(_))),
-            "{refused:?}"
-        );
+        assert_eq!(refused, *expected);
         assert_fast(started);
     });
 }
@@ -160,7 +157,7 @@ fn a_bundled_approver_key_with_a_bad_form_is_refused() {
         open(&high).unwrap_err(),
         BundledApproverKeyError::Form(EnvelopeError::WorkFactorTooHigh)
     );
-    assert!(matches!(open(&doubled).unwrap_err(), BundledApproverKeyError::Form(_)));
+    assert_eq!(open(&doubled).unwrap_err(), BundledApproverKeyError::Form(EnvelopeError::Malformed));
     assert!(matches!(
         open(b"not age").unwrap_err(),
         BundledApproverKeyError::Form(EnvelopeError::Malformed)
