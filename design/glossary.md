@@ -12,13 +12,15 @@ type once one exists.
 From [implementation spec §1](implementation-specification.md#1-implementation-structure). Each crate owns its model; crates do not reach
 into each other's private storage models.
 
-| Crate               | Owns                                                                                                    |
-|---------------------|---------------------------------------------------------------------------------------------------------|
-| `iron-vault-policy` | Caller grants, routes, slots, markers, and the final outgoing-request decision; pure, no I/O            |
-| `iron-vault-kinds`  | Credential resolution, token lifecycle, and provider signing rules                                      |
-| `iron-vault-store`  | Vault identity, recipient envelopes, record files, approval metadata, durable transactions and recovery |
-| `iron-vault`        | Service binary, HTTP/admin interfaces, CLI client, config loading, deployment adapters and scrubbing    |
-| `iron-vault-notify` | Desktop notification agent, from v1: shows owner notifications; no vault, config or admin access        |
+| Crate                     | Owns                                                                                                                       |
+|---------------------------|----------------------------------------------------------------------------------------------------------------------------|
+| `iron-vault-policy`       | Caller grants, routes, slots, markers, and the final outgoing-request decision; pure, no I/O                               |
+| `iron-vault-kinds`        | Credential resolution, token lifecycle, and provider signing rules                                                         |
+| `iron-vault-store`        | Vault identity, recipient envelopes, record files, approval metadata, durable transactions and recovery                    |
+| `iron-vault`              | Service binary, HTTP/admin interfaces, CLI client, config loading, deployment adapters and scrubbing                       |
+| `iron-vault-tpm-protocol` | The TPM signing helper's wire protocol, the TPM key blob's framing, and the TPM approval PIN; pure, no TPM                 |
+| `iron-vault-tpm-signer`   | The TPM signing helper: the TPM approval key, its signatures and the lockout reserve; the only crate that links `tpm2-tss` |
+| `iron-vault-notify`       | Desktop notification agent, from v1: shows owner notifications; no vault, config or admin access                           |
 
 ## Actor disambiguation
 

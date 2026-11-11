@@ -623,7 +623,7 @@ K-335 (EP-46) then runs the release check on real hardware, and K-255 (EP-45) bu
    Unicode scalar values, and a lockout interval of at least 600 seconds: about 9 years on average for a 6-digit PIN
    against a compromised service. Firmware TPMs commonly ship with intervals far above the floor, so it refuses only
    weakened settings. The alternatives are 8 characters with the same floor, or a 6-character minimum with a
-   3600-second floor, which refuses more machines.
+   3600-second floor, which refuses more machines. **Decided (owner, 2026-11-11): the default.**
 2. **Which migration method is asked first.** *Default:* the vault passphrase, then TPM approvers
    ([Migration](#migration)). The alternative puts the active approval's signer first when it is a TPM approver, as the
    approver prompt does.
@@ -641,7 +641,7 @@ K-335 (EP-46) then runs the release check on real hardware, and K-255 (EP-45) bu
 5. **The `tss` group.** *Default:* the package relies on Ubuntu's `tpm-udev` rule (`/dev/tpmrm0` `tss:tss 0660`) and
    does not create the group. On a machine without it the kind is offered, because the socket exists, but the helper's
    instance cannot start, and enrollment answers `approver-kind-unavailable` ([Offered](#the-helper-process)).
-   Declaring `Recommends: tpm-udev` is K-334's call.
+   Declaring `Recommends: tpm-udev` is K-334's call. **Decided (owner, 2026-11-11): the default.**
 6. **§4's Linux row.** It names the unlock adapters and "an in-service adapter with a TPM PIN in a later phase", and
    no adapter for approval signing. *Default:* no spec edit in this ticket; the owner may add "approval signing through
    a separate TPM signing helper" to the row. That later unlock PIN, if it comes, should go through a helper too, since

@@ -1453,6 +1453,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "iron-vault-tpm-protocol"
+version = "0.3.0-alpha"
+dependencies = [
+ "blake2",
+ "static_assertions",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"

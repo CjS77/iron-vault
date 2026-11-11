@@ -1,0 +1,18 @@
+[package]
+name = "iron-vault-tpm-protocol"
+description = "Iron Vault TPM signing helper protocol and key blob"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+blake2.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+static_assertions.workspace = true
+
+[lints]
+workspace = true
