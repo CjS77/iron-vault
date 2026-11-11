@@ -29,6 +29,7 @@ mod record_id;
 mod recovery;
 mod recovery_check;
 mod recovery_record;
+mod reset;
 mod rewrap;
 mod sealed;
 #[cfg(test)]
@@ -39,6 +40,7 @@ mod state_dir;
 mod state_file_name;
 mod state_generation;
 mod store_fs;
+mod store_owned;
 #[cfg(test)]
 mod test_dir;
 #[cfg(test)]
@@ -84,6 +86,7 @@ pub use initialization::{
 pub use inventory_check::{ChangeRecovery, CheckedInventory, InventoryCheckError, InventoryDamage, check_recipient_inventory};
 pub use manifest::{
     MAX_MANIFEST_ENTRIES, MAX_MANIFEST_LEN, ManifestEntry, ManifestError, VaultManifest, open_manifest, record_digest, seal_manifest,
+    unverified_vault_id,
 };
 pub use partial_restore::PartialRestore;
 #[cfg(any(test, feature = "test-support"))]
@@ -109,6 +112,10 @@ pub use recovery_check::{MalformedReason, RecoveryCheck, RecoveryCheckError, che
 pub use recovery_record::{
     MAX_RECOVERY_CHECK_RECORD_LEN, RecoveryCheckReadError, RecoveryCheckRecord, RecoveryCheckRecordError, UtcSecond, UtcSecondError,
     read_recovery_check, write_recovery_check,
+};
+pub use reset::{
+    DiscardError, DiscardFailure, DiscardedVault, ResetScope, ResetStep, UnverifiedVaultIdError, discard_vault, read_unverified_vault_id,
+    reset_scope,
 };
 pub use rewrap::{
     ChangeCommitted, EnvelopeProofError, RecipientChangeError, RecipientChangeFault, RecipientChangeStep, RecipientChangeWriteError,

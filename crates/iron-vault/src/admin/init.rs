@@ -217,6 +217,10 @@ fn refused(refusal: InitRefusal, revealed: bool) -> AdminResponse {
             ErrorCode::AlreadyInitialized,
             dead("the vault is Initialized, so nothing was changed".to_owned()),
         ),
+        InitRefusal::ResetUnfinished => error(
+            ErrorCode::AlreadyInitialized,
+            dead("a reset was interrupted, so nothing was changed; run `iron-vault reset` again".to_owned()),
+        ),
         InitRefusal::Unrecognized(files) => error(
             ErrorCode::AlreadyInitialized,
             dead(format!(

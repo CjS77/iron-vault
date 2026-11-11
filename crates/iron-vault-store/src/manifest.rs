@@ -255,6 +255,13 @@ pub fn open_manifest(identity: &VaultIdentity, file: &[u8]) -> Result<VaultManif
     Ok(manifest)
 }
 
+/// The vault ID in a manifest file's clear header, read without the vault identity. Nothing checks the MAC, so it is
+/// unverified: enough to name the vault a locked manifest claims to belong to, as reset's confirmation does, and never
+/// trusted for anything else.
+pub fn unverified_vault_id(file: &[u8]) -> Result<VaultId, ManifestError> {
+    KIND.unverified_vault_id(file)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use blake2::Blake2bMac;
@@ -468,6 +475,19 @@ pub(crate) mod tests {
     fn a_manifest_from_another_vault_is_damaged() {
         let file = seal_manifest(&VaultIdentity::generate(), &manifest(VaultId::new_random())).unwrap();
         assert_eq!(open_manifest(&VaultIdentity::generate(), &file), Err(ManifestError::Damaged));
+    }
+
+    #[test]
+    fn the_unverified_vault_id_is_read_from_the_header_alone() {
+        let id = VaultId::new_random();
+        let file = seal_manifest(&VaultIdentity::generate(), &manifest(id)).unwrap();
+        assert_eq!(unverified_vault_id(&file), Ok(id));
+        assert_eq!(
+            unverified_vault_id(&unhex(KAT_SIGNED)).map(|id| id.to_string()),
+            Ok("3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b".to_owned())
+        );
+        assert_eq!(unverified_vault_id(&file[..HEADER_LEN - 1]), Err(ManifestError::Truncated));
+        assert_eq!(unverified_vault_id(&[b"IVMX", &file[4..]].concat()), Err(ManifestError::BadMagic));
     }
 
     #[test]

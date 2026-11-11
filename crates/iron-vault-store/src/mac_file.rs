@@ -82,6 +82,13 @@ impl<E: Clone + From<OpenError>> MacFileKind<E> {
         ))
     }
 
+    /// The header's vault ID, read without the MAC check, so unverified: it can name which vault a file claims to
+    /// belong to while the vault is locked, and must never be trusted for anything else.
+    pub(crate) fn unverified_vault_id(&self, file: &[u8]) -> Result<VaultId, E> {
+        let header = file.first_chunk::<HEADER_LEN>().ok_or_else(|| self.truncated.clone())?;
+        VaultId::from_bytes(self.read_header(header)?).map_err(self.invalid_vault_id)
+    }
+
     /// The header's vault ID bytes, after its magic and version. The version is read before the MAC is checked because
     /// it decides how the MAC is computed; the ID is not trusted until the MAC passes.
     fn read_header(&self, header: &[u8; HEADER_LEN]) -> Result<[u8; 16], E> {

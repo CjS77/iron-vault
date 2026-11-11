@@ -169,6 +169,9 @@ pub enum UnlockError {
     /// `init.unfinished` is present: an initialization has not finished, or is running now.
     #[error("the vault initialization is unfinished, or is running now; run `iron-vault init` again if it is not")]
     InitializationUnfinished,
+    /// `reset.unfinished` is present: a reset was interrupted, and only the next reset finishes it.
+    #[error("a reset was interrupted; run `iron-vault reset` again")]
+    ResetUnfinished,
     /// There is no vault in the state directory.
     #[error("there is no vault here; run `iron-vault init`")]
     NotInitialized,
@@ -194,8 +197,8 @@ pub enum UnlockError {
 ///
 /// As with [`unwrap_identity`], the returned identity is trusted only once the vault manifest's MAC verifies.
 ///
-/// It refuses first, before any envelope is read or scrypt runs, while `init.unfinished` exists or when the directory
-/// holds neither `operational.age` nor a manifest.
+/// It refuses first, before any envelope is read or scrypt runs, while `reset.unfinished` or `init.unfinished` exists,
+/// or when the directory holds neither `operational.age` nor a manifest.
 pub fn unlock_with_passphrase(lock: &StateDirLock, fs: &impl StoreFs, passphrase: &Passphrase) -> Result<VaultIdentity, UnlockError> {
     crate::initialization::ensure_unlockable(lock, fs)?;
     let operational = open_passphrase_envelope(&read_passphrase_envelope(lock, fs)?, passphrase).map_err(|error| match error {

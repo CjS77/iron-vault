@@ -97,6 +97,11 @@ impl StateFileName {
         Self("init.unfinished".to_owned())
     }
 
+    /// The empty file `reset.unfinished`, which marks a reset past its commit point that has not finished.
+    pub fn unfinished_reset() -> Self {
+        Self("reset.unfinished".to_owned())
+    }
+
     /// The recovery check record's file, `recovery.toml`.
     pub fn recovery_check_record() -> Self {
         Self("recovery.toml".to_owned())
@@ -189,6 +194,7 @@ mod tests {
             StateFileName::new("init.unfinished"),
             Ok(StateFileName::unfinished_initialization())
         );
+        assert_eq!(StateFileName::new("reset.unfinished"), Ok(StateFileName::unfinished_reset()));
         let id: RecordId = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();
         assert_eq!(
             StateFileName::record(&id).as_str(),

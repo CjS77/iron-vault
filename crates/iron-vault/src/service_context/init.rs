@@ -30,6 +30,8 @@ pub enum InitRefusal {
     WrongState(ServiceState),
     /// The directories hold an initialized vault.
     Initialized,
+    /// A reset was interrupted; only the next reset finishes it.
+    ResetUnfinished,
     /// The directories hold files init did not write; the first of them.
     Unrecognized(Vec<String>),
     /// The initialization state could not be read, so nothing was written.
@@ -230,6 +232,7 @@ fn begin_refusal(error: &InitError) -> Option<InitRefusal> {
 fn directory_refusal(error: &InitStateError) -> Option<InitRefusal> {
     match error {
         InitStateError::AlreadyInitialized => Some(InitRefusal::Initialized),
+        InitStateError::ResetUnfinished => Some(InitRefusal::ResetUnfinished),
         InitStateError::Unrecognized { files } => Some(InitRefusal::Unrecognized(files.clone())),
         _ => None,
     }
