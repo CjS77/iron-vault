@@ -7,10 +7,12 @@
 //! The layout is in `design/storage-formats.md`, "Migration bundle v1".
 
 mod bundle_header;
+mod encoder;
 mod entry_name;
 mod ustar;
 
 pub use bundle_header::{BUNDLE_FORMAT_VERSION, BUNDLE_HEADER_LEN, BundleHeader, BundleHeaderError};
+pub use encoder::{BundleEncoder, EncodeError};
 pub use entry_name::{EntryName, EntryNameError};
 
 /// The largest migration bundle accepted, 260 MiB, bounding both the compressed bytes import receives and the archive
