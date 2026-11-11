@@ -67,6 +67,9 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Approver(ApproverCommand::Add { label, kind }) => {
             Ok(run_client(|| cli::approver_add(cli.admin_socket.as_deref(), kind.into(), label)))
         }
+        Command::Approver(ApproverCommand::Remove { approver }) => {
+            Ok(run_client(|| cli::approver_remove(cli.admin_socket.as_deref(), approver)))
+        }
         Command::Recovery(RecoveryCommand::Check) => Ok(run_client(|| cli::recovery_check(cli.admin_socket.as_deref()))),
         Command::Config(ConfigCommand::Approve { file }) => Ok(run_client(|| cli::config_approve(cli.admin_socket.as_deref(), &file))),
     }

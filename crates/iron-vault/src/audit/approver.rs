@@ -1,10 +1,10 @@
-//! The approver events (`design/approval-signers.md`, "Audit events"): an approver change's `approver.enrolled` and
-//! `approver.change-failed`, and step 3's `approver.orphan-removed`.
+//! The approver events (`design/approval-signers.md`, "Audit events"): an approver change's `approver.enrolled`,
+//! `approver.removed` and `approver.change-failed`, and step 3's `approver.orphan-removed`.
 //!
 //! They hold fixed labels, and approver IDs and labels, which are public (a label is escaped): never a passphrase, a key
 //! or a file's bytes.
 
-use iron_vault_store::{ApproverChangeError, ApproverId, ErrorKindLabel, PinnedApprover};
+use iron_vault_store::{ApproverChangeError, ApproverId, ErrorKindLabel, KeyFileOutcome, PinnedApprover};
 
 use super::{AUDIT_TARGET, AuditEvent, EventName, NamedApprover};
 
@@ -38,11 +38,51 @@ impl AuditEvent for Enrolled<'_> {
     }
 }
 
+/// `approver.removed`: an approver change that removes committed.
+#[derive(Debug, Clone, Copy)]
+pub struct Removed<'a> {
+    /// The approver the change unpinned.
+    pub approver: &'a PinnedApprover,
+    /// How many approvers the vault pins now.
+    pub approvers: usize,
+    /// The approver whose owner presence authorized the change.
+    pub authorizing: NamedApprover<'a>,
+    /// What became of the removed approver's key file.
+    pub key_file: &'a KeyFileOutcome,
+}
+
+impl AuditEvent for Removed<'_> {
+    const NAME: EventName = EventName("approver.removed");
+
+    fn emit(&self) {
+        let removed = NamedApprover::from(self.approver);
+        tracing::info!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            approver_id = removed.id_text().as_str(),
+            approver_label = removed.label_text().as_str(),
+            signer_kind = self.approver.kind().name(),
+            approvers = self.approvers,
+            authorizing_approver_id = self.authorizing.id_text().as_str(),
+            authorizing_approver_label = self.authorizing.label_text().as_str(),
+            key_file = match self.key_file {
+                KeyFileOutcome::Removed => "removed",
+                KeyFileOutcome::Left(_) => "left",
+            },
+            "approver removed",
+        );
+    }
+}
+
 /// Why an approver change was refused at its step 3 or 6, or failed while it was written.
 #[derive(Debug, Clone, Copy)]
 pub enum ChangeFailure<'a> {
     /// The set after the change would break the approver count limits.
     SetInvalid,
+    /// `approver remove` named an ID that no pinned approver has.
+    UnknownApprover,
+    /// `approver remove` named the approver that signed the active approval.
+    InUse,
     /// The new signer's secret broke a passphrase rule.
     PassphraseRejected,
     /// Step 3's read-back or orphan sweep failed, or the approver change failed.
@@ -66,6 +106,8 @@ impl AuditEvent for ChangeFailed<'_> {
     fn emit(&self) {
         let (failure, step, error_kind, committed) = match self.failure {
             ChangeFailure::SetInvalid => ("set_invalid", None, None, None),
+            ChangeFailure::UnknownApprover => ("unknown_approver", None, None, None),
+            ChangeFailure::InUse => ("in_use", None, None, None),
             ChangeFailure::PassphraseRejected => ("passphrase_rejected", None, None, None),
             ChangeFailure::WriteFailed(error) => (
                 "write_failed",

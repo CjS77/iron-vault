@@ -96,6 +96,7 @@ fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
         ) => a == b && n == m,
         (R::RecipientRemove { recipients: a }, R::RecipientRemove { recipients: b }) => a == b,
         (R::ApproverAdd { approver: a, approvers: n }, R::ApproverAdd { approver: b, approvers: m }) => a == b && n == m,
+        (R::ApproverRemove { approvers: a }, R::ApproverRemove { approvers: b }) => a == b,
         (R::Error { code: a, message: m }, R::Error { code: b, message: n }) => a == b && m == n,
         _ => false,
     }
@@ -246,6 +247,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
                 text(256)
             )
                 .prop_map(|(kind, label)| AdminRequest::ApproverAdd { kind, label }),
+            any::<[u8; 16]>().prop_map(|approver| AdminRequest::ApproverRemove { approver }),
             add_request(),
             replace_request(),
             text(256).prop_map(|name| AdminRequest::Rm { name }),
@@ -283,6 +285,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             approver: ApproverId::from_bytes(v4_bytes(bytes)).unwrap(),
             approvers
         })),
+        any::<u8>().prop_map(|approvers| Frame::Response(AdminResponse::ApproverRemove { approvers })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Add { record_id: v4(bytes) })),
         any::<[u8; 16]>().prop_map(|bytes| Frame::Response(AdminResponse::Replace { record_id: v4(bytes) })),
         any::<[u8; 32]>().prop_map(|bytes| Frame::Response(AdminResponse::CallerToken {
@@ -588,8 +591,8 @@ fn wrong_state_is_error_code_13() {
 fn a_success_result_must_name_a_command_with_a_result_and_a_known_profile() {
     let no_command = field(2, &[1]);
     assert_eq!(decode_err(&raw(1, 4, &no_command)), FrameError::MissingField(1));
-    let unknown = body(&[field(1, &[0, 18]), field(2, &[1])]);
-    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(18));
+    let unknown = body(&[field(1, &[0, 19]), field(2, &[1])]);
+    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(19));
     let without_profile = field(1, &[0, 1]);
     assert_eq!(decode_err(&raw(1, 4, &without_profile)), FrameError::MissingField(2));
     [&[][..], &[0], &[4], &[1, 1]].into_iter().for_each(|profile| {
@@ -727,7 +730,7 @@ fn unknown_tags_are_refused() {
 
 #[test]
 fn unknown_commands_are_refused_whatever_follows() {
-    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 18]))), FrameError::UnknownCommand(18));
+    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 19]))), FrameError::UnknownCommand(19));
     let with_arguments = body(&[field(1, &[0xff, 0xff]), field(2, b"argument")]);
     assert_eq!(decode_err(&raw(1, 1, &with_arguments)), FrameError::UnknownCommand(0xffff));
 }
@@ -772,8 +775,7 @@ fn malformed_fixed_width_values_and_flags_are_refused() {
 
 #[test]
 fn unknown_error_codes_are_refused() {
-    // 41 and 43 are left unassigned for `approver remove`'s codes.
-    [0, 41, 43, 45, 0xffff].into_iter().for_each(|code: u16| {
+    [0, 45, 0xffff].into_iter().for_each(|code: u16| {
         let error = body(&[field(1, &code.to_be_bytes()), field(2, b"m")]);
         assert_eq!(decode_err(&raw(1, 5, &error)), FrameError::UnknownErrorCode(code));
     });
@@ -1438,6 +1440,40 @@ fn approver_add_has_its_documented_ids_and_bodies() {
     .for_each(|(code, number, name)| {
         assert_eq!((code as u16, code.name()), (number, name));
         assert_round_trips(&error(code, "m"));
+    });
+}
+
+#[test]
+fn approver_remove_has_its_documented_ids_and_bodies() {
+    let request = AdminRequest::ApproverRemove { approver: [7; 16] };
+    assert_eq!(
+        (AdminCommand::ApproverRemove as u16, request.command().name()),
+        (18, "approver remove")
+    );
+    assert_eq!(
+        encoded(&Frame::Request(request)),
+        raw(1, 1, &[field(1, &[0, 18]), field(2, &[7; 16])].concat())
+    );
+    assert_eq!(
+        encoded(&Frame::Response(AdminResponse::ApproverRemove { approvers: 1 })),
+        raw(1, 4, &[field(1, &[0, 18]), field(2, &[1])].concat())
+    );
+    [
+        (ErrorCode::UnknownApprover, 41, "unknown-approver"),
+        (ErrorCode::ApproverInUse, 43, "approver-in-use"),
+    ]
+    .into_iter()
+    .for_each(|(code, number, name)| {
+        assert_eq!((code as u16, code.name()), (number, name));
+        assert_round_trips(&error(code, "m"));
+    });
+}
+
+#[test]
+fn an_approver_id_that_is_not_16_bytes_is_a_malformed_frame() {
+    [&[7; 15][..], &[7; 17], &[]].into_iter().for_each(|id| {
+        let body = raw(1, 1, &[field(1, &[0, 18]), field(2, id)].concat());
+        assert_eq!(decode_err(&body), FrameError::InvalidValue(2));
     });
 }
 

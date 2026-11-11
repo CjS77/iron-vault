@@ -4,6 +4,7 @@
 mod add;
 mod approver_add;
 mod approver_list;
+mod approver_remove;
 mod body;
 mod fields;
 mod list;
@@ -135,6 +136,12 @@ pub enum AdminRequest {
         /// The approver label as the owner wrote it; the service validates it.
         label: String,
     },
+    /// Removes the approver with this ID after owner presence from any pinned approver, the one removed included. The ID is
+    /// 16 raw bytes; the service decides whether it is a version 4 UUID that names a pinned approver. Command ID 18.
+    ApproverRemove {
+        /// The approver ID's bytes.
+        approver: [u8; 16],
+    },
 }
 
 /// A requested origin: one permitted origin as an `add` or `replace` request carries it. The host stays text on the wire, at most
@@ -170,6 +177,7 @@ impl AdminRequest {
             Self::RecipientRemove { .. } => AdminCommand::RecipientRemove,
             Self::ApproverList => AdminCommand::ApproverList,
             Self::ApproverAdd { .. } => AdminCommand::ApproverAdd,
+            Self::ApproverRemove { .. } => AdminCommand::ApproverRemove,
         }
     }
 }
@@ -211,6 +219,8 @@ pub enum AdminCommand {
     ApproverList = 16,
     /// `approver add`.
     ApproverAdd = 17,
+    /// `approver remove`.
+    ApproverRemove = 18,
 }
 
 impl AdminCommand {
@@ -234,6 +244,7 @@ impl AdminCommand {
             Self::RecipientRemove => "recipient remove",
             Self::ApproverList => "approver list",
             Self::ApproverAdd => "approver add",
+            Self::ApproverRemove => "approver remove",
         }
     }
 
@@ -257,6 +268,7 @@ impl AdminCommand {
             Self::RecipientRemove => "recipient_remove",
             Self::ApproverList => "approver_list",
             Self::ApproverAdd => "approver_add",
+            Self::ApproverRemove => "approver_remove",
         }
     }
 }
@@ -287,10 +299,11 @@ mod no_external_signatures {
             AdminCommand::RecipientAdd => &["recipient", "label"],
             AdminCommand::RecipientRemove => &["recipient"],
             AdminCommand::ApproverAdd => &["kind", "label"],
+            AdminCommand::ApproverRemove => &["approver"],
         }
     }
 
-    const COMMANDS: [AdminCommand; 17] = [
+    const COMMANDS: [AdminCommand; 18] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::CallerToken,
@@ -308,6 +321,7 @@ mod no_external_signatures {
         AdminCommand::RecipientRemove,
         AdminCommand::ApproverList,
         AdminCommand::ApproverAdd,
+        AdminCommand::ApproverRemove,
     ];
 
     #[test]
@@ -522,6 +536,11 @@ pub enum AdminResponse {
         /// How many approvers the vault pins now.
         approvers: u8,
     },
+    /// `approver remove` completed: the approver is unpinned.
+    ApproverRemove {
+        /// How many approvers the vault pins now.
+        approvers: u8,
+    },
     /// `add` completed: the new credential record's ID.
     Add {
         /// The ID of the record the service wrote.
@@ -682,10 +701,15 @@ pub enum ErrorCode {
     /// `recipient list`, `recipient add`, `recipient remove`: the inventory check found the recipient inventory missing or
     /// damaged; the message names the damage; nothing was changed.
     RecipientInventoryDamaged = 39,
-    /// `approver add`: the label breaks its rule; the message names the rule.
+    /// `approver add`: the label breaks its rule; `approver remove`: the ID is not a version 4 UUID. The message names the rule.
     ApproverInvalid = 40,
-    /// `approver add`: 16 approvers are already pinned; nothing was changed.
+    /// `approver remove`: no pinned approver has this ID; nothing was changed.
+    UnknownApprover = 41,
+    /// `approver add`: 16 approvers are already pinned; `approver remove`: it is the last approver. Nothing was changed.
     ApproverSetInvalid = 42,
+    /// `approver remove`: this approver signed the active approval; the message says to approve the config with another
+    /// approver first. Nothing was changed.
+    ApproverInUse = 43,
     /// `approver add`: this install does not offer that signer kind yet; nothing was changed.
     ApproverKindUnavailable = 44,
 }
@@ -734,6 +758,8 @@ impl ErrorCode {
             Self::RecipientSetInvalid => "recipient-set-invalid",
             Self::RecipientInventoryDamaged => "recipient-inventory-damaged",
             Self::ApproverInvalid => "approver-invalid",
+            Self::UnknownApprover => "unknown-approver",
+            Self::ApproverInUse => "approver-in-use",
             Self::ApproverSetInvalid => "approver-set-invalid",
             Self::ApproverKindUnavailable => "approver-kind-unavailable",
         }
@@ -887,6 +913,9 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         }
         Frame::Response(AdminResponse::ApproverAdd { approver, approvers }) => {
             put_frame(out, FrameKind::Success, &body::encode_approver_add_result(*approver, *approvers))
+        }
+        Frame::Response(AdminResponse::ApproverRemove { approvers }) => {
+            put_frame(out, FrameKind::Success, &body::encode_approver_remove_result(*approvers))
         }
         Frame::Response(AdminResponse::RecipientRemove { recipients }) => {
             put_frame(out, FrameKind::Success, &body::encode_recipient_remove_result(*recipients))

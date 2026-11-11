@@ -276,6 +276,23 @@ pub enum ApproverCommand {
         #[arg(long, value_enum, default_value_t = SignerKindArg::Software)]
         kind: SignerKindArg,
     },
+    /// Remove an approval signer, named by the approver ID `approver list` prints. The service shows what changes, then asks
+    /// for the approval passphrase of any pinned approver, the one being removed included. It refuses the last approver and
+    /// the approver that signed the active approval: approve the config with another approver first. Copies of the state
+    /// directory made before still pin the removed approver. Prints nothing on success.
+    Remove {
+        /// The approver ID, a UUID.
+        #[arg(value_parser = parse_approver_id)]
+        approver: [u8; 16],
+    },
+}
+
+/// An approver ID as the 16 bytes the admin protocol carries. Whether it is a version 4 UUID that names a pinned approver
+/// is the service's decision.
+fn parse_approver_id(text: &str) -> Result<[u8; 16], String> {
+    uuid::Uuid::parse_str(text)
+        .map(|id| *id.as_bytes())
+        .map_err(|_| "not a UUID".to_owned())
 }
 
 /// `iron-vault recipient`'s commands.
@@ -525,6 +542,19 @@ pub fn approver_add(socket: Option<&Path>, kind: RequestedSignerKind, label: Str
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn approver_add(_socket: Option<&Path>, _kind: RequestedSignerKind, _label: String) -> ExitCode {
+    unsupported_platform()
+}
+
+/// `iron-vault approver remove`: sends `approver remove`, answers the approval passphrase prompt from the owner console, and
+/// shows the service's notices.
+#[cfg(target_os = "linux")]
+pub fn approver_remove(socket: Option<&Path>, approver: [u8; 16]) -> ExitCode {
+    client::approver_remove(socket, approver).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn approver_remove(_socket: Option<&Path>, _approver: [u8; 16]) -> ExitCode {
     unsupported_platform()
 }
 

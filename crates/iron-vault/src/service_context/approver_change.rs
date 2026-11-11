@@ -1,7 +1,7 @@
 //! The approver commands' side of the service context (`design/approval-signers.md`, "States and the service-wide lock").
 //!
-//! [`ServiceContext::plan_approver_enrollment`] takes the service-wide lock without waiting and runs step 3: it reads
-//! `approval.age` back, sweeps orphan key files against the state read, and checks the approver count. The
+//! [`ServiceContext::plan_approver_enrollment`] and [`ServiceContext::plan_approver_removal`] take the service-wide lock without waiting and runs step 3: it reads
+//! `approval.age` back, sweeps orphan key files against the state read, and check the approver set. The
 //! [`ApproverChangePlan`] it returns holds the lock through the summary, owner presence, the new signer's prompts and the
 //! write, so the summary stays true until the write. Like a recipient removal's plan it keeps no vault identity, so a
 //! `lock` while the owner is at a prompt leaves no copy behind; the write takes the identity from the context again, and
@@ -13,18 +13,20 @@
 use std::sync::Arc;
 
 use iron_vault_store::{
-    ApprovalPassphrase, ApprovalState, ApproverChangeError, ApproverChanges, ApproverLabel, MAX_APPROVERS, MayHaveCommitted,
-    PinnedApprover, StoreFs, VaultId, VaultIdentity,
+    ApprovalPassphrase, ApprovalState, ApproverChangeError, ApproverChanges, ApproverId, ApproverLabel, KeyFileOutcome, MAX_APPROVERS,
+    MayHaveCommitted, PinnedApprover, StoreFs, VaultId, VaultIdentity,
 };
 use tokio::sync::OwnedMutexGuard;
 
 use super::{OwnerPresence, PresenceRefusal, ServiceContext};
-use crate::audit::approver::{ChangeFailed, ChangeFailure, Enrolled, OrphanRemoved};
+use crate::audit::approver::{ChangeFailed, ChangeFailure, Enrolled, OrphanRemoved, Removed};
 use crate::audit::{AuditEvent, NamedApprover};
 use crate::service_state::{AdminOperation, ServiceState};
 
 /// The `change` label of an enrollment's audit records.
 const ADD: &str = "add";
+/// The `change` label of a removal's audit records.
+const REMOVE: &str = "remove";
 
 /// Why an approver command ended without changing the approvers.
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +40,12 @@ pub enum ApproverRefusal {
     /// The approver set after the change would break its count limits; the message names the rule.
     #[error("{0}")]
     SetInvalid(&'static str),
+    /// `approver remove` named an ID that no pinned approver has.
+    #[error("no pinned approver has this ID")]
+    UnknownApprover,
+    /// `approver remove` named the approver that signed the active approval.
+    #[error("this approver signed the active approval")]
+    InUse,
     /// Step 3's read-back or orphan sweep, or the approver change, failed; `committed` says whether it may have committed.
     #[error("{cause}")]
     Failed {
@@ -72,6 +80,32 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             return Err(ApproverRefusal::SetInvalid("16 approvers are already pinned"));
         }
         Ok(plan)
+    }
+
+    /// Steps 2 and 3 of `approver remove`: the lock, the read-back and the orphan sweep, then refuses an ID that no pinned
+    /// approver has, the last approver, and the approver that signed the active approval, in that order. Returns the plan
+    /// and the approver `id` names, which the summary describes.
+    pub async fn plan_approver_removal(&self, id: ApproverId) -> Result<(ApproverChangePlan<'_, F>, PinnedApprover), ApproverRefusal> {
+        let plan = self.plan_approver_change(REMOVE).await?;
+        let refuse = |failure, refusal| {
+            ChangeFailed {
+                change: REMOVE,
+                approver: Some(id),
+                failure,
+            }
+            .emit();
+            Err(refusal)
+        };
+        let Some(approver) = plan.approval.approver(id).cloned() else {
+            return refuse(ChangeFailure::UnknownApprover, ApproverRefusal::UnknownApprover);
+        };
+        if plan.approver_count() == 1 {
+            return refuse(ChangeFailure::SetInvalid, ApproverRefusal::SetInvalid("it is the last approver"));
+        }
+        if self.active_signer() == Some(id) {
+            return refuse(ChangeFailure::InUse, ApproverRefusal::InUse);
+        }
+        Ok((plan, approver))
     }
 
     /// Steps 2 and 3 of an approver command (`change` is `add` or `remove`): the lock, the read-back and the orphan sweep.
@@ -200,15 +234,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
             mut approval,
             ..
         } = self;
-        let identity = {
-            let inner = service.inner.lock().await;
-            let unchanged = inner.state == state && inner.checks == checks;
-            inner
-                .identity
-                .clone()
-                .filter(|_| unchanged)
-                .ok_or(ApproverRefusal::WrongState(inner.state))?
-        };
+        let identity = service.identity_at(state, checks).await?;
         let now = service.clock.now().map_err(|error| ApproverRefusal::Failed {
             committed: MayHaveCommitted::No,
             cause: format!("the clock cannot be read ({error})"),
@@ -233,6 +259,68 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
         }
         .emit();
         Ok((approver, approvers))
+    }
+}
+
+impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
+    /// Steps 6 and 7 of `approver remove`: refuses unless the service is still in the state and at the check generation of
+    /// step 2, then unpins `approver` and deletes its key file. Logs `approver.removed` at the commit point, naming the
+    /// approver `proof` came from, and `approver.change-failed` when the change fails. A key file that cannot be deleted
+    /// is [`KeyFileOutcome::Left`], not a failure: the approver is gone and the next approver command sweeps the file.
+    /// Returns how many approvers remain.
+    pub async fn remove_approver(
+        self,
+        proof: OwnerPresence,
+        approver: &PinnedApprover,
+    ) -> Result<(usize, KeyFileOutcome), ApproverRefusal> {
+        let Self {
+            service,
+            service_wide,
+            state,
+            checks,
+            mut approval,
+            ..
+        } = self;
+        let identity = service.identity_at(state, checks).await?;
+        let (locks, setup, id) = (Arc::clone(&service.locks), Arc::clone(&service.setup), approver.id());
+        let task = tokio::task::spawn_blocking(move || {
+            let removed = ApproverChanges::new(&locks.state, &setup.fs, &identity).remove_approver(&mut approval, id);
+            (service_wide, approval, removed)
+        });
+        let (_held, approval, removed) = task.await.map_err(|_| interrupted())?;
+        service.keep_approval(&approval, (state, checks)).await;
+        let key_file = removed.map_err(|error| {
+            ChangeFailed {
+                change: REMOVE,
+                approver: Some(id),
+                failure: ChangeFailure::WriteFailed(&error),
+            }
+            .emit();
+            failed(&error)
+        })?;
+        let approvers = approval.approvers().len();
+        Removed {
+            approver,
+            approvers,
+            authorizing: NamedApprover::from(proof.approver()),
+            key_file: &key_file,
+        }
+        .emit();
+        Ok((approvers, key_file))
+    }
+}
+
+impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
+    /// The vault identity, provided the service is still in `state` at check generation `checks`, as when a change took
+    /// the lock. The plan keeps no identity so that a `lock` while the owner is at a prompt leaves no copy behind.
+    async fn identity_at(&self, state: ServiceState, checks: u64) -> Result<Arc<VaultIdentity>, ApproverRefusal> {
+        let inner = self.inner.lock().await;
+        let unchanged = inner.state == state && inner.checks == checks;
+        inner
+            .identity
+            .clone()
+            .filter(|_| unchanged)
+            .ok_or(ApproverRefusal::WrongState(inner.state))
     }
 }
 

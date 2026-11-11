@@ -297,6 +297,15 @@ pub fn approver_add(socket: Option<&Path>, kind: RequestedSignerKind, label: Str
     })
 }
 
+/// Runs `approver remove`. The service describes the removal in a notice and prompts for an approver's passphrase, answered
+/// from the owner console; its closing notice confirms the removal, so success prints nothing to stdout.
+pub fn approver_remove(socket: Option<&Path>, approver: [u8; 16]) -> Exit {
+    run(socket, AdminRequest::ApproverRemove { approver }, |response| match response {
+        AdminResponse::ApproverRemove { .. } => Exit::Success,
+        _ => unexpected(),
+    })
+}
+
 /// Runs `recovery check`, answering the key prompt from the owner console. A success names the vault the key opened and
 /// the check time on stdout; when the check record could not be written, stderr says reminders still count from the last
 /// recorded check.

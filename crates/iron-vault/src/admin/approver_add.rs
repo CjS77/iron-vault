@@ -53,7 +53,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverAdd<F> {
         };
         let plan = match self.service.plan_approver_enrollment().await {
             Ok(plan) => plan,
-            Err(refusal) => return Ok(refused(refusal)),
+            Err(refusal) => return Ok(refused(COMMAND, refusal)),
         };
         exchange.notice(&summary(&plan, &label)).await?;
         let proof = match require_owner_presence(exchange, &plan).await? {
@@ -73,7 +73,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverAdd<F> {
                     approvers: u8::try_from(approvers).unwrap_or(u8::MAX),
                 })
             }
-            Err(refusal) => Ok(refused(refusal)),
+            Err(refusal) => Ok(refused(COMMAND, refusal)),
         }
     }
 
@@ -82,7 +82,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverAdd<F> {
     async fn checked(&self, kind: RequestedSignerKind, label: &str) -> Result<ApproverLabel, AdminResponse> {
         let state = self.service.state().await;
         if !state.admin_allows(AdminOperation::VaultChange) {
-            return Err(wrong_state(state));
+            return Err(wrong_state(COMMAND, state));
         }
         let label = ApproverLabel::new(label).map_err(|rule| error(ErrorCode::ApproverInvalid, format!("the label is invalid: {rule}")))?;
         match kind {
@@ -157,11 +157,20 @@ fn completion(approver: &PinnedApprover, approvers: usize) -> String {
     )
 }
 
-fn refused(refusal: ApproverRefusal) -> AdminResponse {
+/// The error answer for an approver command (`command`) that ended without changing the approvers.
+pub(super) fn refused(command: &str, refusal: ApproverRefusal) -> AdminResponse {
     match refusal {
         ApproverRefusal::Busy => error(ErrorCode::Busy, "another operation is running; try again shortly".to_owned()),
-        ApproverRefusal::WrongState(state) => wrong_state(state),
+        ApproverRefusal::WrongState(state) => wrong_state(command, state),
         ApproverRefusal::SetInvalid(rule) => error(ErrorCode::ApproverSetInvalid, format!("{rule}; nothing was changed")),
+        ApproverRefusal::UnknownApprover => error(
+            ErrorCode::UnknownApprover,
+            "no pinned approver has this ID; nothing was changed".to_owned(),
+        ),
+        ApproverRefusal::InUse => error(
+            ErrorCode::ApproverInUse,
+            "this approver signed the active approval; approve the config with another approver first; nothing was changed".to_owned(),
+        ),
         ApproverRefusal::Failed { committed, cause } => error(ErrorCode::VaultWriteFailed, failed_message(committed, &cause)),
     }
 }
@@ -174,11 +183,11 @@ fn failed_message(committed: MayHaveCommitted, cause: &str) -> String {
     }
 }
 
-fn wrong_state(state: ServiceState) -> AdminResponse {
+pub(super) fn wrong_state(command: &str, state: ServiceState) -> AdminResponse {
     error(
         ErrorCode::WrongState,
         format!(
-            "`{COMMAND}` is allowed only while the service is Ready; it is {}",
+            "`{command}` is allowed only while the service is Ready; it is {}",
             state_name(state)
         ),
     )
@@ -191,6 +200,6 @@ fn cancelled_by_lock() -> AdminResponse {
     )
 }
 
-fn error(code: ErrorCode, message: String) -> AdminResponse {
+pub(super) fn error(code: ErrorCode, message: String) -> AdminResponse {
     AdminResponse::Error { code, message }
 }
