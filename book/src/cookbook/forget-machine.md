@@ -111,5 +111,4 @@ See [rotate a key](rotate-key.md).
 - [CLI](../reference/cli.md#iron-vault-forget-machine) and [errors](../reference/errors.md#forget-machine).
 - [Audit log](../reference/audit-log.md): `recipient.forget-checked`.
 - [Forget machine design](../../../design/forget-machine.md): what it checks, and why it runs on the vault that stays.
-- Related: [manage recipients](recipients.md), [reset the vault](reset-vault.md), [unlock at boot with a TPM](tpm-unlock.md)
-  (not yet available).
+- Related: [manage recipients](recipients.md), [reset the vault](reset-vault.md), [unlock at boot with a TPM](tpm-unlock.md).

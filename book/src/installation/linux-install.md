@@ -309,9 +309,6 @@ mount.
   sudo iron-vault recipient add --host-unlock age1… --label "host unlock"
   ```
 
-- **A vault imported from a migration bundle**: provision, start the handoff unit, then run `sudo iron-vault import
-  --host-unlock`.
-
 Then check that a restart needs no `unlock`:
 
 ```sh
@@ -324,8 +321,9 @@ sudo iron-vault status        # service: ready, host unlock: unlocked
 
 ### Before a Secure Boot key or firmware update
 
-A change to the Secure Boot keys or databases (PK, KEK, `db`, `dbx`), to the certificate that verifies the boot chain, or to
-the option ROMs the firmware verifies changes PCR 7, and the blob no longer unseals. Treat a firmware update as one unless the
+These change PCR 7, and the blob no longer unseals: a change to the Secure Boot keys or databases (PK, KEK, `db`, `dbx`),
+turning Secure Boot on or off, a change to the certificate that verifies the boot chain, shim's `MokSBState` or SBAT level,
+and an option ROM the firmware verifies against a different `db` entry. Treat a firmware update as one unless the
 vendor says it leaves the Secure Boot variables alone. `dbx` and KEK updates arrive routinely through `fwupd` and
 distribution updates. **Unattended unlock does not survive them**, and a server that applies them unattended needs someone
 to type the passphrase afterwards, or should hold them for a maintenance window. The vault is not stranded: the service
@@ -398,8 +396,8 @@ sudo apt install ./target/debian/iron-vault_*.deb
 sudo iron-vault unlock
 ```
 
-The upgrade restarts `iron-vault.service`, and it comes back Locked: requests get `503` with reason `locked` until you
-unlock it ([§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)). Listener socket units are not restarted, so
+The upgrade restarts `iron-vault.service`, and it comes back Locked unless TPM unlock is set up: requests get `503` with
+reason `locked` until you unlock it ([§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)). Listener socket units are not restarted, so
 they keep their ports through the upgrade. The vault and config are not touched.
 
 ## Uninstall and purge
