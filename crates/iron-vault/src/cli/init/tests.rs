@@ -40,9 +40,10 @@ fn no_advice_before_the_key_is_shown_even_after_a_yes() {
     assert_eq!(watch.advice(), None);
 }
 
-/// One test, because the signal watcher's advice is process-wide and each watch that reaches a stage sets it.
+/// Holds the signal advice, because it is process-wide and each watch that reaches a stage sets it.
 #[test]
 fn a_shown_key_is_dead_until_yes_is_sent_and_kept_after_it() {
+    let _advice = console::hold_signal_advice();
     let mut watch = RecoveryKeyWatch::new(Scripted(vec![b"no", b"Yes", b"yes"]));
     watch.reveal(&reveal()).unwrap();
     watch.collect(&prompt()).unwrap();
@@ -55,12 +56,12 @@ fn a_shown_key_is_dead_until_yes_is_sent_and_kept_after_it() {
     let unconfirmed = watch.advice().unwrap();
     assert!(unconfirmed.ends_with(UNCONFIRMED_RECOVERY_KEY), "{unconfirmed}");
     assert_eq!(console::signal_advice(), Some(unconfirmed));
-    console::set_signal_advice(None);
 }
 
-/// One test, because the signal watcher's advice is process-wide and each watch that reaches a stage sets it.
+/// Holds the signal advice, because it is process-wide and each watch that reaches a stage sets it.
 #[test]
 fn a_rotation_confirms_at_the_vault_passphrase_and_not_at_yes() {
+    let _advice = console::hold_signal_advice();
     let secret_prompt = Prompt {
         label: "Vault passphrase".to_owned(),
         secret: true,
@@ -75,5 +76,4 @@ fn a_rotation_confirms_at_the_vault_passphrase_and_not_at_yes() {
     watch.collect(&secret_prompt).unwrap();
     let unconfirmed = watch.advice().unwrap();
     assert!(unconfirmed.ends_with(UNCONFIRMED_ROTATED_KEY), "{unconfirmed}");
-    console::set_signal_advice(None);
 }

@@ -102,6 +102,32 @@ pub(super) fn signal_advice() -> Option<String> {
     SIGNAL_ADVICE.lock().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
+/// Held by each test that sets or reads the signal advice, since cargo runs tests on parallel threads and the advice is
+/// one process-wide value.
+#[cfg(test)]
+static SIGNAL_ADVICE_TESTS: Mutex<()> = Mutex::new(());
+
+/// A test's hold on the signal advice; it clears the advice when dropped, so the next test starts without one.
+#[cfg(test)]
+pub(super) struct SignalAdviceTest {
+    _serial: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for SignalAdviceTest {
+    fn drop(&mut self) {
+        set_signal_advice(None);
+    }
+}
+
+/// Waits until no other test holds the signal advice, then holds it until the returned value drops.
+#[cfg(test)]
+pub(super) fn hold_signal_advice() -> SignalAdviceTest {
+    SignalAdviceTest {
+        _serial: SIGNAL_ADVICE_TESTS.lock().unwrap_or_else(PoisonError::into_inner),
+    }
+}
+
 /// Checks that the controlling terminal opens, for a command that will reveal a secret, before it sends its request.
 pub fn ensure_terminal() -> io::Result<()> {
     tty::open_for_reveal().map(drop)
