@@ -68,8 +68,8 @@ next: run `iron-vault init`
 
 Reset removes the vault's files and the config in the state and config directories, and nothing else. The audit log, the
 directory lock files, any file it did not recognise, and everything outside those two directories stay: TLS files, and on a Compose
-or host-unlock installation the host unlock credential. If it names a file it left in place, move that aside before the
-next step.
+or host-unlock installation the host unlock credential. An owner lock from `iron-vault lock` is part of the vault, so its
+`locked-by-owner` file goes with it. If it names a file it left in place, move that aside before the next step.
 
 ### 3. Create the new vault
 
