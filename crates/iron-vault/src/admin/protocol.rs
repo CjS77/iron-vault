@@ -620,11 +620,11 @@ pub enum ErrorCode {
     ConfigInvalid = 7,
     /// The owner declined at a confirmation prompt.
     Declined = 8,
-    /// `config approve`, `replace`, `rm`, `recipient remove`, `approver add`: owner presence failed: the approval passphrase did
+    /// `config approve`, `replace`, `rm`, `recipient remove`, `approver add`, `approver remove`: owner presence failed: the approval passphrase did
     /// not open the pinned approver's key.
     ApprovalDenied = 9,
     /// `config approve`: the service cannot run an approval now; no version was reserved. `replace`, `rm`,
-    /// `recipient remove`, `approver add`: owner presence could not be checked, or a `lock` cancelled the change at its
+    /// `recipient remove`, `approver add`, `approver remove`: owner presence could not be checked, or a `lock` cancelled the change at its
     /// passphrase prompt; nothing was written.
     ApprovalUnavailable = 10,
     /// `config approve`: failed after reserving a version, before committing it; the version is consumed.
@@ -759,8 +759,8 @@ impl ErrorCode {
             Self::RecipientInventoryDamaged => "recipient-inventory-damaged",
             Self::ApproverInvalid => "approver-invalid",
             Self::UnknownApprover => "unknown-approver",
-            Self::ApproverInUse => "approver-in-use",
             Self::ApproverSetInvalid => "approver-set-invalid",
+            Self::ApproverInUse => "approver-in-use",
             Self::ApproverKindUnavailable => "approver-kind-unavailable",
         }
     }

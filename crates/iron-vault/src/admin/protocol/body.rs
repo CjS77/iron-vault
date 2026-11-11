@@ -423,8 +423,8 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::RecipientInventoryDamaged,
         ErrorCode::ApproverInvalid,
         ErrorCode::UnknownApprover,
-        ErrorCode::ApproverInUse,
         ErrorCode::ApproverSetInvalid,
+        ErrorCode::ApproverInUse,
         ErrorCode::ApproverKindUnavailable,
     ]
     .into_iter()
