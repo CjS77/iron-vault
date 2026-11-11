@@ -536,6 +536,23 @@ pub async fn read_frame(stream: &mut UnixStream) -> Frame {
     }
 }
 
+/// Stops `service` and waits for the admin handlers and blocking tasks to drop it, which releases its directory locks
+/// so a restart can take them.
+pub async fn shutdown<F: StoreFs + Send + Sync + 'static>(service: Arc<ServiceContext<F>>) {
+    service.stop().await;
+    let mut service = service;
+    for _ in 0..500 {
+        match Arc::try_unwrap(service) {
+            Ok(owned) => return drop(owned),
+            Err(shared) => {
+                service = shared;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    }
+    panic!("something still holds the service");
+}
+
 /// The committed and highest reserved versions `status` reports.
 pub async fn versions<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> (Option<u64>, u64) {
     match service.status().await {

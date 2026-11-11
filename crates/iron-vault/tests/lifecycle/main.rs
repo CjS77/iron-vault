@@ -10,6 +10,7 @@ mod admin_socket;
 mod bundle_transfer;
 mod export;
 mod init;
+mod migration;
 mod migration_authorization;
 mod migration_prompt;
 mod migration_rejection;

@@ -1,6 +1,8 @@
 //! A migration bundle exported from a real source vault, for the tests of `import`: one source service exports once per
 //! test binary, and the bundle's bytes are read back through the store, so a test compares the destination with what the
 //! source held. The source fixture stays alive, because the bundled config names a listener socket inside its directory.
+//! A test that routes requests through the destination exports a [`fresh_source`] of its own, whose test upstream runs
+//! on the test's own runtime.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,19 +11,19 @@ use tokio::io::AsyncReadExt;
 use tokio::net::UnixStream;
 use tokio::sync::OnceCell;
 
-use super::approval_harness::{Fixture, identity, mkdir, send, versions};
+use super::approval_harness::{APPROVAL_PASSPHRASE, Fixture, approve, error_code, identity, mkdir, send, versions};
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
-use iron_vault::admin::protocol::{self, AdminRequest, AdminResponse, Decoded, Frame, OwnerInput};
+use iron_vault::admin::protocol::{self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, OwnerInput};
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
 use iron_vault::service_context::ServiceContext;
 use iron_vault_store::migration_bundle::BundleDecoder;
 use iron_vault_store::{
-    ApproverId, ExportPassphrase, OperationalIdentity, OsFs, Passphrase, PinnedApprover, RecipientSet, SignerKind, VaultId, open_bundle,
-    seal_passphrase_envelope_for_tests, verify_bundle, wrap_identity, write_identity_envelope, write_passphrase_envelope,
+    ApproverId, ExportPassphrase, OperationalIdentity, OsFs, Passphrase, PinnedApprover, RecipientSet, RecoveryKey, SignerKind, VaultId,
+    open_bundle, seal_passphrase_envelope_for_tests, verify_bundle, wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
 
 /// The source vault's passphrase, which authorizes the export.
@@ -40,6 +42,8 @@ pub struct Source {
     pub digest: [u8; 32],
     /// The `tpm` approver the source pins, if any.
     pub tpm_approver: Option<ApproverId>,
+    /// The text of the recovery key the source's `identity.age` lists.
+    pub recovery_key: String,
     /// The source fixture, kept so that the config's listener socket path stays in a live directory.
     pub fixture: Fixture,
 }
@@ -49,26 +53,37 @@ static TPM_SOURCE: OnceCell<Source> = OnceCell::const_new();
 
 /// The one source, exported on first use.
 pub async fn source() -> &'static Source {
-    SOURCE.get_or_init(|| export(|_| ())).await
+    SOURCE.get_or_init(|| fresh_source(false)).await
 }
 
 /// A source that pins a `tpm` approver beside its software one, exported on first use.
 pub async fn source_with_tpm_approver() -> &'static Source {
     TPM_SOURCE
         .get_or_init(|| {
-            export(|fixture| {
-                fixture.enroll_tpm_approver("laptop TPM");
-            })
+            export(
+                |fixture| {
+                    fixture.enroll_tpm_approver("laptop TPM");
+                },
+                false,
+            )
         })
         .await
 }
 
-async fn export(pin: impl FnOnce(&Fixture)) -> Source {
+/// A source of the caller's own. With `reserve_unused`, its highest reserved version is one past its committed one.
+pub async fn fresh_source(reserve_unused: bool) -> Source {
+    export(|_| (), reserve_unused).await
+}
+
+async fn export(pin: impl FnOnce(&Fixture), reserve_unused: bool) -> Source {
     let fixture = Fixture::new().await;
     pin(&fixture);
-    write_envelopes(&fixture);
+    let recovery_key = write_envelopes(&fixture);
     mkdir(&fixture.path("out"));
     let service = fixture.ready().await;
+    if reserve_unused {
+        reserve_a_version(&fixture, &service).await;
+    }
     let held = versions(&service).await;
     let (socket, stop) = serve(&service);
     let bytes = run_export(&socket).await;
@@ -96,15 +111,28 @@ async fn export(pin: impl FnOnce(&Fixture)) -> Source {
             .iter()
             .find(|a| a.kind() == SignerKind::Tpm)
             .map(PinnedApprover::id),
+        recovery_key,
         fixture,
     }
 }
 
-/// `identity.age` and `operational.age` sealed to [`SOURCE_PASSPHRASE`], as initialization writes them.
-fn write_envelopes(fixture: &Fixture) {
+/// Reserves a version that is never committed: a leftover temp file fails `config approve` at staging, after the
+/// reservation.
+async fn reserve_a_version(fixture: &Fixture, service: &Arc<ServiceContext>) {
+    let blocker = fixture.path("etc/.config.toml.sig.staged.tmp");
+    std::fs::write(&blocker, b"").unwrap();
+    let failed = approve(service, &fixture.config("rates"), &["yes", APPROVAL_PASSPHRASE]).await;
+    assert_eq!(error_code(&failed.response), ErrorCode::ApprovalFailed);
+    std::fs::remove_file(blocker).unwrap();
+}
+
+/// `identity.age` for the operational and a recovery recipient, and `operational.age` sealed to [`SOURCE_PASSPHRASE`], as
+/// initialization writes them; returns the recovery key's text.
+fn write_envelopes(fixture: &Fixture) -> String {
     let lock = super::approval_harness::state_dir_lock(&fixture.path("state"));
     let (operational, operational_key) = OperationalIdentity::generate();
-    let recipients = RecipientSet::new([operational_key, OperationalIdentity::generate().1]).unwrap();
+    let (recovery_key, recovery) = RecoveryKey::generate();
+    let recipients = RecipientSet::new([operational_key, recovery]).unwrap();
     write_identity_envelope(&lock, &OsFs, &wrap_identity(&identity(), &recipients).unwrap()).unwrap();
     let passphrase = Passphrase::new(SecretString::from(SOURCE_PASSPHRASE)).unwrap();
     write_passphrase_envelope(
@@ -113,6 +141,7 @@ fn write_envelopes(fixture: &Fixture) {
         &seal_passphrase_envelope_for_tests(&operational, &passphrase).unwrap(),
     )
     .unwrap();
+    recovery_key.expose_secret().to_owned()
 }
 
 fn serve(service: &Arc<ServiceContext>) -> (PathBuf, tokio::sync::oneshot::Sender<()>) {

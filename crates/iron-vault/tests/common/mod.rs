@@ -12,6 +12,8 @@ pub mod admin_response;
 pub mod approval_harness;
 pub mod body_stream;
 pub mod checked;
+#[cfg(target_os = "linux")]
+pub mod cli_import;
 pub mod gated_fs;
 pub mod h2_refusal;
 pub mod hpack_fields;
@@ -27,6 +29,7 @@ pub mod recipient_harness;
 pub mod request_log;
 #[cfg(target_os = "linux")]
 pub mod scrub_stream;
+pub mod shared_fs;
 #[cfg(target_os = "linux")]
 pub mod tpm_helper;
 

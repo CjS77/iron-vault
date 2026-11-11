@@ -13,15 +13,14 @@
 mod common;
 
 use std::fs;
-use std::io::{Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use common::approval_harness::{APPROVAL_PASSPHRASE, Captured, assert_audit_record, captured_logs, get, mkdir, send};
+use common::cli_import::{CliImport, CliRan};
 use common::migration_source::{
     EXPORT_PASSPHRASE, Source, bundle_frames, read_frame, send_bundle, source, source_with_tpm_approver, write_ignoring_errors,
 };
@@ -902,87 +901,6 @@ async fn the_cli_refuses_without_a_terminal_before_connecting() {
         "{stderr}"
     );
     assert!(listener.accept().is_err(), "the CLI connected");
-}
-
-/// What `iron-vault import` did when the CLI ran as a child process.
-#[derive(Debug)]
-struct CliRan {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
-}
-
-/// A pseudo-terminal the CLI gets as its controlling terminal, which is where it shows the recovery key. The test keeps
-/// the slave open until the CLI is done, and drains the master so a long reveal cannot block the CLI.
-struct Terminal {
-    slave: fs::File,
-    path: String,
-}
-
-impl Terminal {
-    fn open() -> Self {
-        use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
-        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC).unwrap();
-        grantpt(&master).unwrap();
-        unlockpt(&master).unwrap();
-        let path = ptsname(&master, Vec::new()).unwrap().into_string().unwrap();
-        let slave = fs::File::options()
-            .read(true)
-            .write(true)
-            .custom_flags(rustix::fs::OFlags::NOCTTY.bits() as i32)
-            .open(&path)
-            .unwrap();
-        let mut master = fs::File::from(master);
-        std::thread::spawn(move || while matches!(master.read(&mut [0; 1024]), Ok(1..)) {});
-        Self { slave, path }
-    }
-}
-
-/// A running `iron-vault import <bundle>` whose stdin is a pipe the test types the owner's answers into, in `cwd`.
-struct CliImport {
-    child: std::process::Child,
-    _terminal: Terminal,
-}
-
-impl CliImport {
-    /// `setsid` and a shell make the pseudo-terminal the CLI's controlling terminal, and `exec` puts the CLI in the shell's place.
-    fn start(socket: &Path, bundle: &Path, cwd: &Path) -> Self {
-        let terminal = Terminal::open();
-        let child = Command::new("setsid")
-            .args(["sh", "-c", r#"exec 9<"$IV_PTS" && exec 9<&- && exec "$@""#, "sh"])
-            .arg(env!("CARGO_BIN_EXE_iron-vault"))
-            .arg("import")
-            .arg(bundle)
-            .arg("--admin-socket")
-            .arg(socket)
-            .env("IV_PTS", &terminal.path)
-            .current_dir(cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let _ = &terminal.slave;
-        Self {
-            child,
-            _terminal: terminal,
-        }
-    }
-
-    /// Types `answers`, one line each, then closes stdin and waits for the CLI to end.
-    fn finish(mut self, answers: &[&[u8]]) -> CliRan {
-        let mut stdin = self.child.stdin.take().unwrap();
-        answers.iter().for_each(|answer| {
-            let _ = stdin.write_all(answer).and_then(|()| stdin.write_all(b"\n"));
-        });
-        drop(stdin);
-        let output = self.child.wait_with_output().unwrap();
-        CliRan {
-            code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        }
-    }
 }
 
 /// Runs the CLI's `import` of `bundle` (as typed, relative to `cwd`) against `service` with all of `answers` at once.

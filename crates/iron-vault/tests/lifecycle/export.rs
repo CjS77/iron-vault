@@ -277,15 +277,15 @@ async fn export(served: &Served, answers: &[&str]) -> Seen {
 
 /// The output of one run of the binary.
 #[derive(Debug)]
-struct Ran {
-    code: Option<i32>,
-    stdout: String,
-    stderr: String,
+pub(super) struct Ran {
+    pub(super) code: Option<i32>,
+    pub(super) stdout: String,
+    pub(super) stderr: String,
 }
 
 /// Runs `iron-vault export <bundle> --admin-socket <socket>` with `input` on stdin, off the runtime thread, so the
 /// in-process service keeps serving while the binary waits for it.
-async fn run_export(socket: &Path, bundle: &Path, input: &str) -> Ran {
+pub(super) async fn run_export(socket: &Path, bundle: &Path, input: &str) -> Ran {
     let (socket, bundle, input) = (socket.to_path_buf(), bundle.to_path_buf(), input.to_owned());
     let running = tokio::task::spawn_blocking(move || {
         let mut child = Command::new(env!("CARGO_BIN_EXE_iron-vault"))
