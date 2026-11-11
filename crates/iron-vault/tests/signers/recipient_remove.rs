@@ -17,7 +17,7 @@ use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame,
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 use iron_vault::path_metadata::invoking_user;
-use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
+use iron_vault::service_context::{ServiceContext, ServiceSetup};
 use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
@@ -59,7 +59,7 @@ impl Fixture {
             state_dir: self.path("state"),
             runtime_dir: Some(self.dir.path().to_path_buf()),
         };
-        let locks = ServiceLocks::acquire(&paths).unwrap();
+        let locks = common::approval_harness::service_locks(&paths);
         let provisional = locks.unverified_listeners(&OsFs);
         let setup = ServiceSetup {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),

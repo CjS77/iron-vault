@@ -31,7 +31,7 @@ use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, LockUnavailable, MemoryProtection};
 use iron_vault::path_metadata::invoking_user;
-use iron_vault::service_context::{InitRefusal, ServiceContext, ServiceLocks, ServiceSetup, UnlockRefusal};
+use iron_vault::service_context::{InitRefusal, ServiceContext, ServiceSetup, UnlockRefusal};
 use iron_vault::service_state::{ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::Admission;
 use iron_vault::socket_activation::PassedSockets;
@@ -118,7 +118,7 @@ impl Fixture {
             state_dir: self.path("state"),
             runtime_dir: Some(self.dir.path().to_path_buf()),
         };
-        let locks = ServiceLocks::acquire(&paths).unwrap();
+        let locks = common::approval_harness::service_locks(&paths);
         let provisional = locks.unverified_listeners(&OsFs);
         let setup = ServiceSetup {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),

@@ -35,7 +35,7 @@ use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
 use iron_vault::path_metadata::invoking_user;
-use iron_vault::service_context::{ServiceContext, ServiceLocks, ServiceSetup};
+use iron_vault::service_context::{ServiceContext, ServiceSetup};
 use iron_vault::service_state::{FailureReason, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, SnapshotHolder};
 use iron_vault::socket_activation::PassedSockets;
@@ -207,7 +207,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
             state_dir: self.path("state"),
             runtime_dir: Some(self.dir.path().to_path_buf()),
         };
-        let locks = ServiceLocks::acquire(&paths).unwrap();
+        let locks = common::approval_harness::service_locks(&paths);
         let provisional = locks.unverified_listeners(&OsFs);
         let setup = ServiceSetup {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),

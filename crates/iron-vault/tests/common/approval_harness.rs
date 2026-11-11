@@ -281,7 +281,7 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
             state_dir: self.path("state"),
             runtime_dir: Some(self.dir.path().to_path_buf()),
         };
-        let locks = wait_out_held(|| ServiceLocks::acquire(&paths), start_is_held, "the service's locks");
+        let locks = service_locks(&paths);
         let provisional = locks.unverified_listeners(&fs);
         let setup = ServiceSetup {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
@@ -318,8 +318,6 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
 const LOCK_PATIENCE: Duration = Duration::from_secs(5);
 const LOCK_RETRY: Duration = Duration::from_millis(10);
 
-/// The result of `acquire`, retried while it fails with `held` until [`LOCK_PATIENCE`] has passed; then the last error
-/// fails the test, naming `what`.
 /// Takes the state-directory lock, waiting out a holder that is only a child still between `fork` and `exec`.
 ///
 /// Test binaries are grouped into one process, so a sibling test may spawn the CLI at any moment; the child shares the lock's
@@ -333,6 +331,13 @@ pub fn config_dir_lock(dir: &Path) -> ConfigDirLock {
     wait_out_held(|| ConfigDirLock::acquire(dir), is_held, "the config-directory lock")
 }
 
+/// [`state_dir_lock`] for the pair of locks a service holds: the state and config directory locks together.
+pub fn service_locks(paths: &ServicePaths) -> ServiceLocks {
+    wait_out_held(|| ServiceLocks::acquire(paths), start_is_held, "the service's locks")
+}
+
+/// The result of `acquire`, retried while it fails with `held` until [`LOCK_PATIENCE`] has passed; then the last error
+/// fails the test, naming `what`.
 fn wait_out_held<T, E: std::fmt::Debug>(acquire: impl Fn() -> Result<T, E>, held: fn(&E) -> bool, what: &str) -> T {
     let deadline = Instant::now() + LOCK_PATIENCE;
     loop {
