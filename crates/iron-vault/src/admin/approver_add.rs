@@ -8,17 +8,17 @@
 
 use std::sync::Arc;
 
-use iron_vault_store::{ApprovalPassphrase, ApproverLabel, MayHaveCommitted, PinnedApprover, StoreFs, WhichPassphrase};
+use iron_vault_store::{ApprovalPassphrase, ApproverLabel, PinnedApprover, StoreFs, WhichPassphrase};
 
+use super::approver_answer::{error, refused, wrong_state};
 use super::dispatch::{AdminHandler, HandlerFuture};
 use super::init::entry_text;
 use super::owner_presence::{no_presence, require_owner_presence};
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode, OwnerInput, Prompt, RequestedSignerKind};
 use super::server::{Exchange, ExchangeError};
-use super::unlock::state_name;
-use crate::service_context::{ApproverChangePlan, ApproverRefusal, ServiceContext};
-use crate::service_state::{AdminOperation, ServiceState};
+use crate::service_context::{ApproverChangePlan, ServiceContext};
+use crate::service_state::AdminOperation;
 
 /// The command's name in refusal messages.
 const COMMAND: &str = "approver add";
@@ -157,49 +157,9 @@ fn completion(approver: &PinnedApprover, approvers: usize) -> String {
     )
 }
 
-/// The error answer for an approver command (`command`) that ended without changing the approvers.
-pub(super) fn refused(command: &str, refusal: ApproverRefusal) -> AdminResponse {
-    match refusal {
-        ApproverRefusal::Busy => error(ErrorCode::Busy, "another operation is running; try again shortly".to_owned()),
-        ApproverRefusal::WrongState(state) => wrong_state(command, state),
-        ApproverRefusal::SetInvalid(rule) => error(ErrorCode::ApproverSetInvalid, format!("{rule}; nothing was changed")),
-        ApproverRefusal::UnknownApprover => error(
-            ErrorCode::UnknownApprover,
-            "no pinned approver has this ID; nothing was changed".to_owned(),
-        ),
-        ApproverRefusal::InUse => error(
-            ErrorCode::ApproverInUse,
-            "this approver signed the active approval; approve the config with another approver first; nothing was changed".to_owned(),
-        ),
-        ApproverRefusal::Failed { committed, cause } => error(ErrorCode::VaultWriteFailed, failed_message(committed, &cause)),
-    }
-}
-
-/// Says whether the change may have committed, so the owner knows what to check.
-fn failed_message(committed: MayHaveCommitted, cause: &str) -> String {
-    match committed {
-        MayHaveCommitted::No => cause.to_owned(),
-        MayHaveCommitted::Unknown => format!("{cause}; the change may have committed: `iron-vault approver list` settles it"),
-    }
-}
-
-pub(super) fn wrong_state(command: &str, state: ServiceState) -> AdminResponse {
-    error(
-        ErrorCode::WrongState,
-        format!(
-            "`{command}` is allowed only while the service is Ready; it is {}",
-            state_name(state)
-        ),
-    )
-}
-
 fn cancelled_by_lock() -> AdminResponse {
     error(
         ErrorCode::WrongState,
         format!("`{COMMAND}` was cancelled because a `lock` ran while it waited for the new passphrase; nothing was written"),
     )
-}
-
-pub(super) fn error(code: ErrorCode, message: String) -> AdminResponse {
-    AdminResponse::Error { code, message }
 }

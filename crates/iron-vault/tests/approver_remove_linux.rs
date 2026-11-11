@@ -200,9 +200,10 @@ async fn an_approval_state_that_differs_from_memory_fails_before_any_prompt_and_
     assert!(key_file(&fixture, second).exists());
     let records = logs.events("approver.change-failed");
     assert!(
-        records
-            .iter()
-            .any(|record| record["step"] == "read_back" && record["error_kind"] == "differs" && record["committed"] == "no"),
+        records.iter().any(|record| record["step"] == "read_back"
+            && record["error_kind"] == "differs"
+            && record["committed"] == "no"
+            && record["approver_id"] == second.to_string().as_str()),
         "{records:?}"
     );
 }

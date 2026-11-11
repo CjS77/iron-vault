@@ -9,6 +9,8 @@ mod approve;
 #[cfg(target_os = "linux")]
 mod approver_add;
 #[cfg(target_os = "linux")]
+mod approver_answer;
+#[cfg(target_os = "linux")]
 mod approver_list;
 #[cfg(target_os = "linux")]
 mod approver_remove;

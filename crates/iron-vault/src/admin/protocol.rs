@@ -620,8 +620,8 @@ pub enum ErrorCode {
     ConfigInvalid = 7,
     /// The owner declined at a confirmation prompt.
     Declined = 8,
-    /// `config approve`, `replace`, `rm`, `recipient remove`, `approver add`, `approver remove`: owner presence failed: the approval passphrase did
-    /// not open the pinned approver's key.
+    /// `config approve`, `replace`, `rm`, `recipient remove`, `approver add`, `approver remove`: owner presence failed: the approval
+    /// passphrase did not open the pinned approver's key.
     ApprovalDenied = 9,
     /// `config approve`: the service cannot run an approval now; no version was reserved. `replace`, `rm`,
     /// `recipient remove`, `approver add`, `approver remove`: owner presence could not be checked, or a `lock` cancelled the change at its

@@ -1,8 +1,8 @@
 //! The approver commands' side of the service context (`design/approval-signers.md`, "States and the service-wide lock").
 //!
-//! [`ServiceContext::plan_approver_enrollment`] and [`ServiceContext::plan_approver_removal`] take the service-wide lock without waiting and runs step 3: it reads
-//! `approval.age` back, sweeps orphan key files against the state read, and check the approver set. The
-//! [`ApproverChangePlan`] it returns holds the lock through the summary, owner presence, the new signer's prompts and the
+//! [`ServiceContext::plan_approver_enrollment`] and [`ServiceContext::plan_approver_removal`] take the service-wide lock without
+//! waiting and run step 3: they read `approval.age` back, sweep orphan key files against the state read, and check the approver
+//! set. The [`ApproverChangePlan`] they return holds the lock through the summary, owner presence, the new signer's prompts and the
 //! write, so the summary stays true until the write. Like a recipient removal's plan it keeps no vault identity, so a
 //! `lock` while the owner is at a prompt leaves no copy behind; the write takes the identity from the context again, and
 //! refuses unless the service is still in the state and at the check generation it recorded.
@@ -74,9 +74,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Steps 2 and 3 of `approver add`: takes the service-wide lock, refusing at once with [`ApproverRefusal::Busy`] while
     /// another holds it, reads the approval state back and sweeps orphans, then refuses a seventeenth approver.
     pub async fn plan_approver_enrollment(&self) -> Result<ApproverChangePlan<'_, F>, ApproverRefusal> {
-        let plan = self.plan_approver_change(ADD).await?;
+        let plan = self.plan_approver_change(ADD, None).await?;
         if plan.approval.approvers().len() >= MAX_APPROVERS {
-            log_failure(ADD, ChangeFailure::SetInvalid);
+            log_failure(ADD, None, ChangeFailure::SetInvalid);
             return Err(ApproverRefusal::SetInvalid("16 approvers are already pinned"));
         }
         Ok(plan)
@@ -86,7 +86,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// approver has, the last approver, and the approver that signed the active approval, in that order. Returns the plan
     /// and the approver `id` names, which the summary describes.
     pub async fn plan_approver_removal(&self, id: ApproverId) -> Result<(ApproverChangePlan<'_, F>, PinnedApprover), ApproverRefusal> {
-        let plan = self.plan_approver_change(REMOVE).await?;
+        let plan = self.plan_approver_change(REMOVE, Some(id)).await?;
         let refuse = |failure, refusal| {
             ChangeFailed {
                 change: REMOVE,
@@ -109,7 +109,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 
     /// Steps 2 and 3 of an approver command (`change` is `add` or `remove`): the lock, the read-back and the orphan sweep.
-    async fn plan_approver_change(&self, change: &'static str) -> Result<ApproverChangePlan<'_, F>, ApproverRefusal> {
+    /// `approver` is the ID the command names, when it names one, so a failure is logged with it.
+    async fn plan_approver_change(
+        &self,
+        change: &'static str,
+        approver: Option<ApproverId>,
+    ) -> Result<ApproverChangePlan<'_, F>, ApproverRefusal> {
         let service_wide = Arc::clone(&self.service_wide).try_lock_owned().map_err(|_| ApproverRefusal::Busy)?;
         let (state, checks, identity, approval) = {
             let inner = self.inner.lock().await;
@@ -120,7 +125,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 _ => return Err(ApproverRefusal::WrongState(inner.state)),
             }
         };
-        let (service_wide, approval) = self.read_back(change, service_wide, identity, approval).await?;
+        let (service_wide, approval) = self.read_back((change, approver), service_wide, identity, approval).await?;
         self.keep_approval(&approval, (state, checks)).await;
         Ok(ApproverChangePlan {
             service: self,
@@ -137,7 +142,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// `approver.change-failed` at step `read_back`, and never committed anything.
     async fn read_back(
         &self,
-        change: &'static str,
+        (change, approver): (&'static str, Option<ApproverId>),
         held: OwnedMutexGuard<()>,
         identity: Arc<VaultIdentity>,
         mut approval: ApprovalState,
@@ -162,7 +167,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         match swept {
             Ok(_) => Ok((held, approval)),
             Err(error) => {
-                log_failure(change, ChangeFailure::WriteFailed(&error));
+                log_failure(change, approver, ChangeFailure::WriteFailed(&error));
                 Err(failed(&error))
             }
         }
@@ -213,7 +218,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
 
     /// Records step 6's refusal of the new signer's secret as `approver.change-failed`.
     pub fn passphrase_rejected(&self) {
-        log_failure(ADD, ChangeFailure::PassphraseRejected);
+        log_failure(ADD, None, ChangeFailure::PassphraseRejected);
     }
 
     /// Steps 7 and 8 for `software`: refuses unless the service is still in the state and at the check generation of step
@@ -248,7 +253,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
         let (_held, approval, enrolled) = task.await.map_err(|_| interrupted())?;
         service.keep_approval(&approval, (state, checks)).await;
         let approver = enrolled.map_err(|error| {
-            log_failure(ADD, ChangeFailure::WriteFailed(&error));
+            log_failure(ADD, None, ChangeFailure::WriteFailed(&error));
             failed(&error)
         })?;
         let approvers = approval.approvers().len();
@@ -324,13 +329,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-fn log_failure(change: &'static str, failure: ChangeFailure<'_>) {
-    ChangeFailed {
-        change,
-        approver: None,
-        failure,
-    }
-    .emit();
+fn log_failure(change: &'static str, approver: Option<ApproverId>, failure: ChangeFailure<'_>) {
+    ChangeFailed { change, approver, failure }.emit();
 }
 
 fn failed(error: &ApproverChangeError) -> ApproverRefusal {

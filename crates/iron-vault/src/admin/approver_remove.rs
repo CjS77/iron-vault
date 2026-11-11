@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use iron_vault_store::{ApproverId, KeyFileOutcome, PinnedApprover, StoreFs};
 
-use super::approver_add::{error, refused, wrong_state};
+use super::approver_answer::{error, refused, wrong_state};
 use super::dispatch::{AdminHandler, HandlerFuture};
 use super::owner_presence::{no_presence, require_owner_presence};
 use super::principal::AdminPrincipal;
@@ -39,7 +39,7 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for ApproverRemove<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ApproverRemove<F> {
-    /// Steps 1 to 8. A prompt that gets no owner input drops the plan, which releases the service-wide lock, before
+    /// Steps 1 to 7. A prompt that gets no owner input drops the plan, which releases the service-wide lock, before
     /// anything is written.
     async fn run(&self, request: AdminRequest, exchange: &mut Exchange) -> Result<AdminResponse, ExchangeError> {
         let AdminRequest::ApproverRemove { approver } = request else {
