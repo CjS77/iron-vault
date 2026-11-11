@@ -13,7 +13,7 @@ use iron_vault_store::{
 };
 
 use super::unlock::log_foreign_files;
-use super::{ServiceContext, ServiceLocks, ServiceSetup, apply};
+use super::{Inner, ServiceContext, ServiceLocks, ServiceSetup, apply};
 use crate::audit::AuditEvent;
 use crate::audit::vault::HostUnlock;
 use crate::deployment::DeploymentProfile;
@@ -128,10 +128,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             return inner.state;
         }
         if self.owner_lock_present().await {
-            HostUnlock {
-                outcome: HostUnlockOutcome::OwnerLocked,
-            }
-            .emit();
+            record_and_emit(&mut inner, HostUnlockOutcome::OwnerLocked);
             return apply(&self.holder, &mut inner, ServiceEvent::InteractiveUnlockRequired).unwrap_or(inner.state);
         }
         let opened = self.open_with_handoff(handoff).await;
@@ -139,8 +136,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             Ok(None) => self.missing_handoff_outcome(handoff).await,
             _ => outcome_of(&opened),
         };
-        inner.host_unlock_outcome = Some(outcome);
-        HostUnlock { outcome }.emit();
+        record_and_emit(&mut inner, outcome);
         match opened {
             Ok(Some(identity)) => self
                 .check_and_settle_detached(service_wide, inner, ServiceEvent::HostUnlockSucceeded, Arc::new(identity))
@@ -203,6 +199,13 @@ fn unwrap_with_handoff<F: StoreFs>(
     log_foreign_files(&require_initialized(&locks.state, &locks.config, &setup.fs)?);
     let envelope = read_identity_envelope(&locks.state, &setup.fs).map_err(|_| HostUnlockRefusal::Unreadable)?;
     Ok(Some(unwrap_identity(&envelope, &host)?))
+}
+
+/// Keeps the startup outcome for `status` and writes its `vault.host-unlock` record, so no path through the attempt does
+/// one without the other.
+fn record_and_emit(inner: &mut Inner, outcome: HostUnlockOutcome) {
+    inner.host_unlock_outcome = Some(outcome);
+    HostUnlock { outcome }.emit();
 }
 
 const fn outcome_of(opened: &Result<Option<VaultIdentity>, HostUnlockRefusal>) -> HostUnlockOutcome {

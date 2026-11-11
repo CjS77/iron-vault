@@ -751,6 +751,7 @@ async fn an_explicit_lock_survives_a_restart_until_a_passphrase_unlock(profile: 
     fs::set_permissions(&handoff, fs::Permissions::from_mode(0o644)).unwrap();
     let (service, state) = restarted(&fixture, profile, &handoff).await;
     assert_eq!(state, ServiceState::Locked);
+    assert_eq!(service.status().await.host_unlock_outcome, Some(HostUnlockOutcome::OwnerLocked));
     assert_eq!(
         outcomes_since(&logs, before),
         [("unlocked".to_owned(), None), ("owner_locked".to_owned(), None)]

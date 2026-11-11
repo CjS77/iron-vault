@@ -23,12 +23,9 @@ use crate::trusted_path::{self, ExpectedOwner, PathComponent, TrustedPathRule, U
 /// file, so a file that is missing or replaced on the host is seen as such.
 pub const HANDOFF_PATH: &str = "/run/iron-vault-unlock/host-unlock";
 
-/// The unseal-failure file's name, which sits in the handoff's own directory.
+/// The unseal-failure file's name. The file sits in the handoff's own directory, `/run/iron-vault-unlock/unseal-failed`
+/// in production (`design/tpm-unlock.md`, "Reporting a failed unseal").
 pub const UNSEAL_FAILED_NAME: &str = "unseal-failed";
-
-/// Where the handoff unit leaves the unseal-failure file when it fails: `/run/iron-vault-unlock/unseal-failed`
-/// (`design/tpm-unlock.md`, "Reporting a failed unseal").
-pub const UNSEAL_FAILED_PATH: &str = "/run/iron-vault-unlock/unseal-failed";
 
 /// The most bytes a handoff may hold: the 74-byte `AGE-SECRET-KEY-1…` text, a newline, and room to spare. A longer file
 /// is the wrong file, such as `age-keygen` output with its comment lines.
