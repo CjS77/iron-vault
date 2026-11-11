@@ -225,6 +225,9 @@ These follow the Compose profile ([lifetime](docker-compose.md#lifetime), [failu
 - **An existing vault:** run the helper, `systemctl start iron-vault-host-unlock.service`, then
   `sudo iron-vault recipient add --host-unlock <age1…> --label <text>`. A restart of the service then reaches Ready
   with no `unlock`.
+- **After `import` on a new machine:** a host unlock identity is bound to the TPM that sealed it, so none arrives with
+  the vault. The owner provisions this machine's and enrols it with `recipient add --host-unlock`, then removes the old
+  machine's `host-unlock` recipient ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)).
 - **Retiring TPM unlock:** stop the handoff unit, remove `host-unlock.cred`, then `recipient remove` the `host-unlock`
   recipient. Part 1 of the independence rule no longer keeps it.
 - **Decommissioning the machine** is `forget-machine`'s job ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)).
