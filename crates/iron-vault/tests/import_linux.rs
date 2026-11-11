@@ -13,17 +13,21 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::io::{Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::approval_harness::{Captured, assert_audit_record, captured_logs, get, mkdir, send};
+use common::approval_harness::{APPROVAL_PASSPHRASE, Captured, assert_audit_record, captured_logs, get, mkdir, send};
 use common::migration_source::{EXPORT_PASSPHRASE, Source, bundle_frames, read_frame, send_bundle, source, write_ignoring_errors};
 use common::proxy_harness::TempDir;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
-use iron_vault::admin::protocol::{self, AdminRequest, AdminResponse, ErrorCode, Frame, ImportResult, OwnerInput, Prompt, VaultStatus};
+use iron_vault::admin::protocol::{
+    self, AdminRequest, AdminResponse, ErrorCode, Frame, ImportResult, OwnerInput, Prompt, ProposedConfig, VaultStatus,
+};
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
@@ -393,6 +397,15 @@ async fn a_bundle_that_breaks_a_rule_ends_with_bundle_invalid_before_any_prompt(
     });
 }
 
+/// Polls until an import holds the slot.
+async fn wait_for_taken_slot(service: &ServiceContext) {
+    let deadline = tokio::time::Instant::now() + common::WAIT;
+    while service.take_import_slot().is_ok() {
+        assert!(tokio::time::Instant::now() < deadline, "no import ever took the slot");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
 /// Polls until the import slot is free, since a dropped exchange releases it when its task unwinds.
 async fn wait_for_free_slot(service: &ServiceContext) {
     let deadline = tokio::time::Instant::now() + common::WAIT;
@@ -705,4 +718,250 @@ async fn the_cli_refuses_without_a_terminal_before_connecting() {
         "{stderr}"
     );
     assert!(listener.accept().is_err(), "the CLI connected");
+}
+
+/// What `iron-vault import` did when the CLI ran as a child process.
+#[derive(Debug)]
+struct CliRan {
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+/// A pseudo-terminal the CLI gets as its controlling terminal, which is where it shows the recovery key. The test keeps
+/// the slave open until the CLI is done, and drains the master so a long reveal cannot block the CLI.
+struct Terminal {
+    slave: fs::File,
+    path: String,
+}
+
+impl Terminal {
+    fn open() -> Self {
+        use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
+        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC).unwrap();
+        grantpt(&master).unwrap();
+        unlockpt(&master).unwrap();
+        let path = ptsname(&master, Vec::new()).unwrap().into_string().unwrap();
+        let slave = fs::File::options()
+            .read(true)
+            .write(true)
+            .custom_flags(rustix::fs::OFlags::NOCTTY.bits() as i32)
+            .open(&path)
+            .unwrap();
+        let mut master = fs::File::from(master);
+        std::thread::spawn(move || while matches!(master.read(&mut [0; 1024]), Ok(1..)) {});
+        Self { slave, path }
+    }
+}
+
+/// A running `iron-vault import <bundle>` whose stdin is a pipe the test types the owner's answers into, in `cwd`.
+struct CliImport {
+    child: std::process::Child,
+    _terminal: Terminal,
+}
+
+impl CliImport {
+    /// `setsid` and a shell make the pseudo-terminal the CLI's controlling terminal, and `exec` puts the CLI in the shell's place.
+    fn start(socket: &Path, bundle: &Path, cwd: &Path) -> Self {
+        let terminal = Terminal::open();
+        let child = Command::new("setsid")
+            .args(["sh", "-c", r#"exec 9<"$IV_PTS" && exec 9<&- && exec "$@""#, "sh"])
+            .arg(env!("CARGO_BIN_EXE_iron-vault"))
+            .arg("import")
+            .arg(bundle)
+            .arg("--admin-socket")
+            .arg(socket)
+            .env("IV_PTS", &terminal.path)
+            .current_dir(cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let _ = &terminal.slave;
+        Self {
+            child,
+            _terminal: terminal,
+        }
+    }
+
+    /// Types `answers`, one line each, then closes stdin and waits for the CLI to end.
+    fn finish(mut self, answers: &[&[u8]]) -> CliRan {
+        let mut stdin = self.child.stdin.take().unwrap();
+        answers.iter().for_each(|answer| {
+            let _ = stdin.write_all(answer).and_then(|()| stdin.write_all(b"\n"));
+        });
+        drop(stdin);
+        let output = self.child.wait_with_output().unwrap();
+        CliRan {
+            code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+    }
+}
+
+/// Runs the CLI's `import` of `bundle` (as typed, relative to `cwd`) against `service` with all of `answers` at once.
+async fn cli_import(service: &Arc<ServiceContext>, cwd: &Path, bundle: &Path, answers: &[&[u8]]) -> CliRan {
+    let (socket, stop, task) = spawn_admin(service, Limits::default());
+    let (cwd, bundle) = (cwd.to_path_buf(), bundle.to_path_buf());
+    let answers: Vec<Vec<u8>> = answers.iter().map(|answer| answer.to_vec()).collect();
+    let ran = tokio::task::spawn_blocking(move || {
+        let answers: Vec<&[u8]> = answers.iter().map(Vec::as_slice).collect();
+        CliImport::start(&socket, &bundle, &cwd).finish(&answers)
+    })
+    .await
+    .unwrap();
+    let _ = stop.send(());
+    task.await.unwrap();
+    ran
+}
+
+/// The config copy beside `bundle` and its mode, or `None` when there is none.
+fn config_copy(bundle: &Path) -> Option<(Vec<u8>, u32)> {
+    let copy = PathBuf::from(format!("{}.config.toml", bundle.display()));
+    let mode = fs::metadata(&copy).ok()?.permissions().mode() & 0o777;
+    Some((fs::read(&copy).unwrap(), mode))
+}
+
+fn source_config(source: &Source) -> Vec<u8> {
+    fs::read(source.fixture.path("etc/config.toml")).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_config_copy_is_the_sources_config_and_its_printed_command_approves_it_as_all_added() {
+    let (_one, source, _logs) = begin().await;
+    let dest = Dest::new();
+    let service = dest.start();
+    let bundle = dest.path("vault.bundle");
+    fs::write(&bundle, &source.bytes).unwrap();
+
+    let ran = cli_import(&service, dest.dir.path(), &bundle, &COMPLETE).await;
+
+    assert_eq!(ran.code, Some(0), "{ran:?}");
+    assert_eq!(config_copy(&bundle), Some((source_config(source), 0o600)));
+    let command = format!("iron-vault config approve {}.config.toml\n", bundle.display());
+    assert!(ran.stdout.contains(&command), "{}", ran.stdout);
+    assert!(
+        ran.stdout.contains("one of the approvers") && ran.stdout.contains("an edited copy"),
+        "{}",
+        ran.stdout
+    );
+
+    // A restart brings the provisional listeners up, and `unlock` ends Unavailable until the copy is approved.
+    drop(service);
+    let _ = fs::remove_file(source.fixture.socket());
+    let service = dest.start();
+    exchange(&service, AdminRequest::Unlock, &[DEST_PASSPHRASE.as_bytes()]).await;
+    let copy = fs::read(format!("{}.config.toml", bundle.display())).unwrap();
+    let request = AdminRequest::ConfigApprove(ProposedConfig::new(copy).unwrap());
+    let approved = exchange(&service, request, &[b"yes", APPROVAL_PASSPHRASE.as_bytes()]).await;
+    assert!(matches!(approved.response, Some(AdminResponse::ConfigApprove(_))), "{approved:?}");
+    assert!(approved.notices.contains("no active config"), "{}", approved.notices);
+    assert!(!approved.notices.contains("same config"), "{}", approved.notices);
+    ["listeners:", "callers:", "routes:"]
+        .iter()
+        .for_each(|section| assert!(approved.notices.contains(section), "{section} not in {}", approved.notices));
+    assert_eq!(service.state().await, ServiceState::Ready);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_taken_copy_name_is_refused_before_the_request_and_nothing_is_written() {
+    let (_one, source, _logs) = begin().await;
+    let dest = Dest::new();
+    let service = dest.start();
+    let bundle = dest.path("vault.bundle");
+    fs::write(&bundle, &source.bytes).unwrap();
+    let taken = dest.path("vault.bundle.config.toml");
+    fs::write(&taken, b"mine").unwrap();
+
+    let ran = cli_import(&service, dest.dir.path(), &bundle, &COMPLETE).await;
+
+    assert_eq!(ran.code, Some(2), "{ran:?}");
+    assert!(
+        ran.stderr.contains(&taken.display().to_string()) && ran.stderr.contains("nothing was sent"),
+        "{}",
+        ran.stderr
+    );
+    assert_eq!(fs::read(&taken).unwrap(), b"mine");
+    dest.assert_only_lock_files();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_ending_but_success_leaves_no_copy() {
+    let (_one, source, _logs) = begin().await;
+    let dest = Dest::new();
+    let service = dest.start();
+    let mut broken = source.bytes.clone();
+    broken[0] ^= 0xff;
+    let wrong_export: [&[u8]; 1] = [b"EXPORT-wrong-guess-0000"];
+    let declined: [&[u8]; 4] = [
+        EXPORT_PASSPHRASE.as_bytes(),
+        DEST_PASSPHRASE.as_bytes(),
+        DEST_PASSPHRASE.as_bytes(),
+        b"no",
+    ];
+    let cancelled: [&[u8]; 1] = [EXPORT_PASSPHRASE.as_bytes()];
+    let cases: [(&str, &[u8], &[&[u8]]); 4] = [
+        ("import-denied", &source.bytes, &wrong_export),
+        ("bundle-invalid", &broken, &[]),
+        ("declined", &source.bytes, &declined),
+        ("cancelled", &source.bytes, &cancelled),
+    ];
+
+    for (ending, bytes, answers) in cases {
+        let bundle = dest.path(&format!("{ending}.bundle"));
+        fs::write(&bundle, bytes).unwrap();
+
+        let ran = cli_import(&service, dest.dir.path(), &bundle, answers).await;
+
+        assert_ne!(ran.code, Some(0), "{ending}: {ran:?}");
+        assert_eq!(config_copy(&bundle), None, "{ending}: a copy was left");
+        dest.assert_only_lock_files();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bundle_replaced_during_the_import_leaves_no_copy_and_prints_the_digest_with_exit_zero() {
+    let (_one, source, _logs) = begin().await;
+    let dest = Dest::new();
+    let service = dest.start();
+    let bundle = dest.path("vault.bundle");
+    fs::write(&bundle, &source.bytes).unwrap();
+    let (socket, stop, task) = spawn_admin(&service, Limits::default());
+    let import = CliImport::start(&socket, &bundle, dest.dir.path());
+    // The service holds the import slot from its first check, after the CLI has opened the bundle it streams and before the
+    // CLI decodes the path again. A new file under the bundle's name, put there meanwhile, is what that second read finds.
+    wait_for_taken_slot(&service).await;
+    fs::write(dest.path("other"), b"not a bundle").unwrap();
+    fs::rename(dest.path("other"), &bundle).unwrap();
+    let ran = tokio::task::spawn_blocking(move || import.finish(&COMPLETE)).await.unwrap();
+    let _ = stop.send(());
+    task.await.unwrap();
+
+    assert_eq!(ran.code, Some(0), "{ran:?}");
+    assert_eq!(config_copy(&bundle), None);
+    let digest: String = source.digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert!(ran.stdout.contains(&format!("blake2b:{digest}")), "{}", ran.stdout);
+    assert!(ran.stderr.contains("no config copy was kept"), "{}", ran.stderr);
+    assert!(!ran.stdout.contains(".config.toml"), "{}", ran.stdout);
+    assert_eq!(service.status().await.vault, VaultStatus::Locked);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relative_bundle_path_with_a_space_prints_a_quoted_command_for_the_copy_as_created() {
+    let (_one, source, _logs) = begin().await;
+    let dest = Dest::new();
+    let service = dest.start();
+    fs::write(dest.path("my vault.bundle"), &source.bytes).unwrap();
+
+    let ran = cli_import(&service, dest.dir.path(), Path::new("my vault.bundle"), &COMPLETE).await;
+
+    assert_eq!(ran.code, Some(0), "{ran:?}");
+    assert!(
+        ran.stdout.contains("iron-vault config approve 'my vault.bundle.config.toml'\n"),
+        "{}",
+        ran.stdout
+    );
+    assert_eq!(config_copy(&dest.path("my vault.bundle")), Some((source_config(source), 0o600)));
 }

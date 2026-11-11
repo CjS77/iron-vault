@@ -4,6 +4,8 @@
 //! The bundle path stays in the CLI, which opens the file as the owner and streams it after the request. Like `init`, the
 //! command shows the recovery key on the controlling terminal only, so it checks for one before it connects.
 
+mod config_copy;
+
 use std::fs::{self, File, Metadata};
 use std::path::Path;
 
@@ -14,9 +16,10 @@ use super::Exit;
 use super::client::{Bundle, answered, fail, unexpected};
 use super::console::{self, ProcessConsole};
 use super::init::RecoveryKeyWatch;
+use config_copy::{ConfigCopy, shell_word};
 
-/// Runs `import`: refuses without a terminal or a usable `bundle` before it connects, streams the bundle after the
-/// request, and prints the result with the steps that follow.
+/// Runs `import`: refuses without a terminal, a usable `bundle` or a free config copy name before it connects, streams the
+/// bundle after the request, and prints the result with the steps that follow. The copy exists only after a success.
 pub fn run_import(socket: Option<&Path>, bundle: &Path) -> Exit {
     if let Err(e) = console::ensure_terminal() {
         let message =
@@ -25,6 +28,10 @@ pub fn run_import(socket: Option<&Path>, bundle: &Path) -> Exit {
     }
     let mut file = match open_bundle(bundle) {
         Ok(file) => file,
+        Err(message) => return fail(Exit::Usage, &format!("{message}; nothing was sent")),
+    };
+    let copy = match ConfigCopy::create(bundle) {
+        Ok(copy) => copy,
         Err(message) => return fail(Exit::Usage, &format!("{message}; nothing was sent")),
     };
     let mut console = RecoveryKeyWatch::import(ProcessConsole::default());
@@ -36,7 +43,7 @@ pub fn run_import(socket: Option<&Path>, bundle: &Path) -> Exit {
     );
     match (answer, console.advice()) {
         (Ok(AdminResponse::Import(result)), _) => {
-            print_result(&result);
+            print_result(&result, kept_copy(copy, bundle, &result));
             Exit::Success
         }
         (Ok(_), _) => unexpected(),
@@ -60,8 +67,16 @@ fn open_bundle(bundle: &Path) -> Result<File, String> {
     Ok(file)
 }
 
+/// Fills the config copy from the bundle. The import committed whatever happens here, so a copy that cannot be made is
+/// removed and reported as a warning, and the owner checks their own copy of the config against the printed digest.
+fn kept_copy(copy: ConfigCopy, bundle: &Path, result: &ImportResult) -> Option<ConfigCopy> {
+    copy.fill(bundle, &result.digest)
+        .inspect_err(|reason| eprintln!("iron-vault: warning: the import committed, but no config copy was kept: {reason}"))
+        .ok()
+}
+
 /// What the import made and what the owner does next. The vault is Locked and routes nothing until a config is approved.
-fn print_result(result: &ImportResult) {
+fn print_result(result: &ImportResult, copy: Option<ConfigCopy>) {
     let digest: String = result.digest.iter().map(|byte| format!("{byte:02x}")).collect();
     println!(
         "imported vault {}: {} credentials, approval version {} committed, highest reserved version {}",
@@ -74,10 +89,23 @@ fn print_result(result: &ImportResult) {
     println!("the source's committed config has the digest blake2b:{digest}");
     println!("next:");
     println!("  1. iron-vault unlock                    (the service then answers 503 until a config is approved)");
-    println!("  2. iron-vault config approve <config>   the source's config, checked against the digest above, or an edited copy");
+    println!("  2. {}", approve_step(copy.as_ref()));
     println!("  3. iron-vault recovery check            with the new recovery key");
     println!("  4. compare the versions above with the source's `iron-vault status`");
     println!("  5. only then retire the source");
+}
+
+/// Step 2: the exact approval command for the config copy, and which passphrase it asks for. Without a copy the owner
+/// brings the source's config and checks it against the digest first.
+fn approve_step(copy: Option<&ConfigCopy>) -> String {
+    match copy {
+        Some(copy) => format!(
+            "iron-vault config approve {}\n     the source's config, copied beside the bundle. It asks for the approval passphrase of one \
+             of the approvers the summary listed.\n     Approve an edited copy instead if the new host needs changes.",
+            shell_word(copy.path())
+        ),
+        None => "iron-vault config approve <config>   your copy of the source's config, checked against the digest above".to_owned(),
+    }
 }
 
 #[cfg(test)]

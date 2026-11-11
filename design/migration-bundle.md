@@ -108,9 +108,8 @@ vault routes only after the owner approves it once, on the destination:
 - **Reviewed for the new host.** The config was approved for the source host: its listeners, peer accounts and CA files
   may not exist on the destination. The first approval's summary therefore shows the whole config, as for any approval
   with no active config ("no active config", everything added), and never the "same config" line, which the
-  [approval summary](config-approval.md#approval-summary) prints today whenever the pending digest equals the committed
-  one. That line is limited to a service with an active config whose digest it equals; the import ticket makes the
-  change. To change the config for the new host, the owner approves an edited copy instead.
+  [approval summary](config-approval.md#approval-summary) prints only for a service with an active config whose digest
+  equals the pending one. To change the config for the new host, the owner approves an edited copy instead.
 
 The rejected alternative carried `config.toml.sig` too, so the vault would serve at once. It needs §16 step 5 changed,
 and it would serve a config approved for the old host's listeners, peer accounts and CA files without a review.
