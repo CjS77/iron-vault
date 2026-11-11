@@ -2,11 +2,11 @@
 .el .ds Aq '
 .TH iron-vault-lock 1  "Iron Vault" "Iron Vault Manual"
 .SH NAME
-iron\-vault\-lock \- Clear the vault identity and every cached secret from the service\*(Aqs memory, leaving it Locked
+iron\-vault\-lock \- Clear the vault identity and every cached secret from the service\*(Aqs memory, leaving it Locked. The lock lasts across restarts: run `unlock` to end it
 .SH SYNOPSIS
 \fBiron\-vault lock\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
-Clear the vault identity and every cached secret from the service\*(Aqs memory, leaving it Locked
+Clear the vault identity and every cached secret from the service\*(Aqs memory, leaving it Locked. The lock lasts across restarts: run `unlock` to end it
 .SH OPTIONS
 .TP
 \fB\-\-admin\-socket\fR \fI<PATH>\fR

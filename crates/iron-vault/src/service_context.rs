@@ -503,6 +503,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Under the service-wide lock, once the state check allows the lock and before the withdrawal, it writes the
     /// owner-lock file, so that a crash, a restart or a reboot does not undo the lock by host unlock. If the write fails,
     /// the lock still happens: the failure is logged at WARN and the result says the lock will not survive a restart.
+    ///
+    /// Cancel-safe in one benign way: dropping this future while the owner-lock write runs can leave the file with the
+    /// service still unlocked, which only makes the next start stay Locked until a passphrase `unlock`.
     pub async fn lock(&self, drain: Duration) -> Result<LockResult, IllegalTransition> {
         let (mut withdrawn, identity, persisted) = self.withdraw_for_lock().await?;
         let snapshots = withdrawn.released(drain).await;

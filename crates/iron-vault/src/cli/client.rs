@@ -155,7 +155,8 @@ pub fn lock(socket: Option<&Path>) -> Exit {
             }
             if !persisted {
                 eprintln!(
-                    "iron-vault: warning: the lock will not survive a restart: the owner-lock file could not be written; see the service log"
+                    "iron-vault: warning: the lock will not survive a restart: the owner-lock file could not be written; \
+                     see the service log"
                 );
             }
             Exit::Success
@@ -636,7 +637,8 @@ fn service_error(code: ErrorCode, message: &str) -> String {
         ErrorCode::NotAdminPrincipal => Some(SUDO_HINT.to_owned()),
         ErrorCode::UnsupportedVersion => Some("The CLI and the service versions differ; install matching versions.".to_owned()),
         ErrorCode::MemoryUnprotected => Some(format!(
-            "A protected install opens or creates a vault only once its memory is locked against swap: {MEMLOCK_REMEDIATION}, then restart it."
+            "A protected install opens or creates a vault only once its memory is locked against swap: {MEMLOCK_REMEDIATION}, \
+             then restart it."
         )),
         _ => None,
     };

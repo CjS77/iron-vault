@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use iron_vault_store::{ErrorKindLabel, StoreFs, WriteError, owner_lock_present, remove_owner_lock, write_owner_lock};
 
+use tokio::task::JoinError;
+
 use super::ServiceContext;
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
@@ -19,7 +21,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     pub(super) async fn write_owner_lock(&self) -> bool {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let written = tokio::task::spawn_blocking(move || write_owner_lock(&locks.state, &setup.fs)).await;
-        log_failure("write", written.unwrap_or_else(|_| Err(interrupted())))
+        log_failure("write", finished(written))
     }
 
     /// Removes the owner-lock file on the blocking pool. Returns whether it is now gone, absent or removed; a failure is
@@ -27,7 +29,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     pub(super) async fn remove_owner_lock(&self) -> bool {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let removed = tokio::task::spawn_blocking(move || remove_owner_lock(&locks.state, &setup.fs).map(drop)).await;
-        log_failure("removal", removed.unwrap_or_else(|_| Err(interrupted())))
+        log_failure("removal", finished(removed))
     }
 
     /// Whether anything is at the owner-lock file's name. Read on the blocking pool; a task that does not finish counts
@@ -41,18 +43,17 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
 }
 
 /// Logs a failed owner-lock write or removal at WARN, by error kind only, and says whether `result` succeeded.
-fn log_failure(what: &str, result: Result<(), WriteError>) -> bool {
+fn log_failure(what: &str, result: Result<(), ErrorKindLabel>) -> bool {
     result
-        .inspect_err(|error| {
-            let error_kind: ErrorKindLabel = error.error_kind_label();
-            tracing::warn!(%error_kind, "owner-lock file {what} failed");
-        })
+        .inspect_err(|error_kind| tracing::warn!(%error_kind, "owner-lock file {what} failed"))
         .is_ok()
 }
 
-/// The error for a blocking task that did not finish, which the caller reports like any other failed file operation.
-fn interrupted() -> WriteError {
-    WriteError::ListStateDir {
-        kind: std::io::ErrorKind::Interrupted,
+/// The outcome of a blocking task as an error label. A task that did not finish has a label of its own, so it is not
+/// mistaken for a failed directory listing.
+fn finished(joined: Result<Result<(), WriteError>, JoinError>) -> Result<(), ErrorKindLabel> {
+    match joined {
+        Ok(result) => result.map_err(|error| error.error_kind_label()),
+        Err(_) => Err(ErrorKindLabel::fixed("task_interrupted")),
     }
 }

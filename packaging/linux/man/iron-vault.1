@@ -35,7 +35,7 @@ iron\-vault\-unlock(1)
 Open the vault: the service prompts for the vault passphrase, read with echo off or from stdin
 .TP
 iron\-vault\-lock(1)
-Clear the vault identity and every cached secret from the service\*(Aqs memory, leaving it Locked
+Clear the vault identity and every cached secret from the service\*(Aqs memory, leaving it Locked. The lock lasts across restarts: run `unlock` to end it
 .TP
 iron\-vault\-init(1)
 Create the vault: the service prompts for the vault and approval passphrases, shows the recovery key once on the controlling terminal, and once you confirm you saved it, writes the vault and approves the initial config as version 1. It needs a controlling terminal, and leaves the service Locked

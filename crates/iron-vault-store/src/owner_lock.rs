@@ -29,9 +29,10 @@ pub fn remove_owner_lock(lock: &StateDirLock, fs: &impl StoreFs) -> Result<bool,
 /// must not host-unlock a vault the owner may have locked. Only a missing state directory holds nothing.
 pub fn owner_lock_present(lock: &StateDirLock, fs: &impl StoreFs) -> bool {
     match fs.list_dir(lock.dir()) {
-        Ok(names) => names
-            .iter()
-            .any(|name| name.as_os_str() == OsStr::new(StateFileName::owner_lock().as_str())),
+        Ok(names) => {
+            let owner_lock = StateFileName::owner_lock();
+            names.iter().any(|name| name.as_os_str() == OsStr::new(owner_lock.as_str()))
+        }
         Err(error) => error.kind() != io::ErrorKind::NotFound,
     }
 }

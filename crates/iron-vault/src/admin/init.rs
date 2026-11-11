@@ -69,9 +69,9 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Init<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Init<F> {
-    /// Checks the state, the directories and the memory protection, and with `host_unlock` reads the handoff, all before any prompt; collects
-    /// both passphrases, reveals the recovery key, and writes only once the owner answers `yes`; the service context
-    /// checks the state again under its locks.
+    /// Checks the state, the directories and the memory protection, and with `host_unlock` reads the handoff, all before
+    /// any prompt; collects both passphrases, reveals the recovery key, and writes only once the owner answers `yes`; the
+    /// service context checks the state again under its locks.
     async fn run(&self, exchange: &mut Exchange, host_unlock: bool) -> Result<AdminResponse, ExchangeError> {
         let state = self.service.state().await;
         if !state.admin_allows(AdminOperation::Initialize) {

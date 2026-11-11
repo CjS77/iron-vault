@@ -36,7 +36,8 @@ pub use passphrases::{InitPassphrases, InitPassphrasesError, MIN_PASSPHRASE_CHAR
 /// One step of the write order, or the discard of an unfinished initialization that comes before step 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitStep {
-    /// Removing the files an unfinished initialization wrote, or a leftover `recovery.toml` or `locked-by-owner` from an Uninitialized directory.
+    /// Removing the files an unfinished initialization wrote, or a leftover `recovery.toml` or `locked-by-owner` from an
+    /// Uninitialized directory.
     Discard,
     /// Step 1: writing `init.unfinished`, or refusing a directory init must not write to.
     Begin,
