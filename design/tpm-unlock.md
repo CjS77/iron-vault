@@ -285,6 +285,21 @@ unmounted, so it lands in the root `0755` directory beneath, which the service c
 stale one before mounting, and the ramfs hides the directory beneath anyway. `/run` goes at shutdown, so no file
 outlives the boot.
 
+**Why the line runs after a failed decrypt.** systemd sets up a unit's credentials, `LoadCredentialEncrypted=`
+included, only for a command spawned with the `EXEC_WRITE_CREDENTIALS` flag
+([`exec-invoke.c`](https://github.com/systemd/systemd/blob/v255/src/core/exec-invoke.c) lines 4454–4459, which call
+`exec_setup_credentials` in [`exec-credential.c`](https://github.com/systemd/systemd/blob/v255/src/core/exec-credential.c)).
+A failed decrypt there ends that command with `EXIT_CREDENTIALS`, before it executes. In systemd 255's
+[`service.c`](https://github.com/systemd/systemd/blob/v255/src/core/service.c), every `ExecStart=` command of a oneshot
+unit gets the flag (lines 2392 and 2693), and the first `ExecStopPost=` command does not (`service_enter_stop_post`,
+lines 2066–2070). Each later control command gets it only while the unit is in a starting, running or reloading
+state (`service_run_next_control`, line 2657), never in `stop-post`. So after a failed decrypt the first `ExecStart=`
+exits with `EXIT_CREDENTIALS`, the unit's result becomes `exit-code` (`service_sigchld_event`, lines 3773–3774), the
+oneshot goes through `stop-sigterm` to `stop-post` (lines 3812–3818 and 2145–2146), and the `ExecStopPost=` lines run
+with no credential set-up, with `$SERVICE_RESULT` set to that result (lines 1734–1742). It also means the
+`ExecStart=` line that removes a stale file never runs on that path; the `ExecStopPost=` line writes the file again.
+[Release check](#release-checks) 9 confirms this on a real install.
+
 When the handoff is missing, the service looks for the file: a regular file owned by root, not a symlink, means
 `unseal_failed`; anything else means `absent`. It is a diagnostic only and never changes what the service does: both
 outcomes leave it Locked for passphrase `unlock`. Any failure of the handoff unit writes it, not only a failed decrypt;
@@ -550,7 +565,7 @@ machine with a firmware TPM for the non-destructive items and the power-loss ite
   destination's `host-unlock` recipient during the import. The bundle never carries `locked-by-owner`.
 - **Compose profile** ([docker-compose.md](docker-compose.md)). The startup path is shared, so the owner-lock file
   holds there too: [Lifetime](docker-compose.md#lifetime) no longer says `lock` lasts only until a restart. Its
-  handoff unit can take the same unseal-failure lines; until it does, a failed unseal there reads `absent`.
+  handoff unit has the same unseal-failure lines ([docker-compose.md](docker-compose.md#at-boot)).
 
 ## Work that follows
 
@@ -567,7 +582,7 @@ In order:
    docker-compose.md's lifetime. Reset's store-owned list gains it and reset writes it before its withdrawal.
 3. **The unseal-failure report:** the service reads `unseal-failed` when the handoff is missing, `unseal_failed` in
    audit-logging.md, and the new `status` field in admin-protocol.md. The unit lines ship with item 4.
-4. **Packaging:** the handoff unit with the unseal-failure lines, the helper with the release check and `--server`,
+4. **Packaging** (done in K-323; `--portable` stops until item 5): the handoff unit with the unseal-failure lines, the helper with the release check and `--server`,
    the `Wants=` and `After=` lines, the `tmpfiles.d` line, and the [linux-package.md](linux-package.md) edits. The
    handoff unit is installed as a plain file, not through `cargo-deb`'s `systemd-units`, so the maintainer scripts never
    restart it on upgrade; `build-deb.sh` checks it is present and that the service unit still has no `DeviceAllow=`.

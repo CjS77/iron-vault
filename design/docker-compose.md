@@ -408,10 +408,12 @@ ConditionPathExists=/etc/iron-vault-host/host-unlock.cred
 Type=oneshot
 RemainAfterExit=yes
 LoadCredentialEncrypted=host-unlock:/etc/iron-vault-host/host-unlock.cred
+ExecStart=/bin/rm -f /run/iron-vault-unlock/unseal-failed
 ExecStart=/bin/mount -t ramfs -o mode=0711,nosuid,nodev,noexec ramfs /run/iron-vault-unlock
 ExecStart=/usr/bin/install -o iron-vault -g iron-vault -m 0400 %d/host-unlock /run/iron-vault-unlock/host-unlock
 ExecStopPost=-/bin/rm -f /run/iron-vault-unlock/host-unlock
 ExecStopPost=-/bin/umount /run/iron-vault-unlock
+ExecStopPost=-/bin/sh -c 'test "$SERVICE_RESULT" = success || : > /run/iron-vault-unlock/unseal-failed'
 
 [Install]
 WantedBy=docker.service
@@ -429,7 +431,10 @@ WantedBy=docker.service
 - **No sandboxing directives.** The unit has no `PrivateMounts=`, `ProtectSystem=` or other setting that gives it its
   own mount namespace, so its ramfs mount is visible to Docker. The [release check](#release-checks) confirms it with
   `findmnt` ([open question 2](#open-questions)).
-- **`ExecStopPost=`** runs after a stop and after a failed start, so a half-finished start leaves no plaintext.
+- **`ExecStopPost=`** runs after a stop and after a failed start, so a half-finished start leaves no plaintext. Its
+  last line, and the first `ExecStart=` line, keep the
+  [unseal-failure file](tpm-unlock.md#reporting-a-failed-unseal), which tells a failed unseal apart from a host never
+  provisioned.
 
 The handoff could instead be the credentials directory itself, bind-mounted into the container. That is
 [open question 2](#open-questions); the default is the unit's own ramfs, because systemd ties the credentials
@@ -465,8 +470,7 @@ Each attempt writes one audit event, `vault.host-unlock`, which never holds the 
 | `refusal` | when refused: `memory_unprotected`, `untrusted`, `unreadable`, `not_an_identity`, `not_initialized` or `not_a_recipient` |
 
 `unlocked`, `absent` and `owner_locked` are INFO; `refused` and `unseal_failed` are WARN. `status` shows the startup outcome as
-`host unlock: <label>`. Until K-323 gives the Compose handoff unit the lines that write the unseal-failure file, a failed
-unseal there reads `absent`. The field is `host_unlock_outcome`, not `outcome`, which the
+`host unlock: <label>`. The field is `host_unlock_outcome`, not `outcome`, which the
 request event already uses with another meaning, and its labels are snake_case like every fixed label
 ([audit-logging.md](audit-logging.md#field-rules)). A Development service never writes it. A `memory_unprotected` refusal also
 writes the `vault.unlock-refused` record that every unlock path's memory guard writes.
