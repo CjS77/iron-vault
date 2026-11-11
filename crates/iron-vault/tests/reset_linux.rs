@@ -9,21 +9,30 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
+use std::io;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use common::approval_harness::get;
 use common::approval_harness::{
     Exchanged, Fixture, approve, captured_logs, converse, converse_revealing, error_code, identity, read_frame, send, serve_admin,
 };
-use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, Prompt, VaultStatus};
+use common::mock_upstream::Reply;
+use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, Prompt, RequestedOrigin, VaultStatus};
 use iron_vault::service_context::{ServiceContext, UnlockRefusal};
 use iron_vault::service_state::{FailureReason, ServiceState};
 use iron_vault::serving_snapshot::Admission;
-use iron_vault_store::{VaultId, open_manifest};
+use iron_vault_policy::CredentialKind;
+use iron_vault_store::{OsFs, StoreFs, VaultId, open_manifest};
 use tokio::net::UnixStream;
 
+/// The files a reset removes from the fixture's vault: store-owned state files plus the config and its signature.
+const FULL_VAULT_FILES: u64 = 6;
 const DRAIN: Duration = Duration::from_secs(5);
 const INIT_ANSWERS: [&str; 5] = [
     "RESET-vault-passphrase-41c7",
@@ -91,6 +100,13 @@ async fn answer(stream: &mut UnixStream, text: &str) -> AdminResponse {
     }
 }
 
+fn message(response: &AdminResponse) -> &str {
+    match response {
+        AdminResponse::Error { message, .. } => message,
+        other => panic!("expected an error, got {other:?}"),
+    }
+}
+
 fn result(exchanged: &Exchanged) -> (Option<VaultId>, u64, Vec<String>, bool, bool) {
     match &exchanged.response {
         AdminResponse::Reset {
@@ -104,8 +120,9 @@ fn result(exchanged: &Exchanged) -> (Option<VaultId>, u64, Vec<String>, bool, bo
     }
 }
 
-/// Resets the fixture's vault with its vault ID (typed in capitals), then checks the directories and runs `init`.
-async fn reset_then_init(fixture: &Fixture, service: &Arc<ServiceContext>) {
+/// Resets the fixture's vault with its vault ID (typed in capitals), checks that it removed `expected_removed` files and left
+/// no `.age` or config file, then runs `init`.
+async fn reset_then_init(fixture: &Fixture, service: &Arc<ServiceContext>, expected_removed: u64) {
     let id = vault_id(fixture);
     let (path, stop) = serve_admin(service);
 
@@ -114,15 +131,10 @@ async fn reset_then_init(fixture: &Fixture, service: &Arc<ServiceContext>) {
     assert_eq!(exchanged.prompts, [confirmation_prompt(&id.to_string(), "this vault")]);
     let (confirmed, removed, foreign, cleared, uncertain) = result(&exchanged);
     assert_eq!((confirmed, foreign, cleared, uncertain), (Some(id), Vec::new(), true, false));
-    assert!(removed > 3, "{removed}");
+    assert_eq!(removed, expected_removed);
     assert_eq!(service.state().await, ServiceState::Locked);
     assert_eq!(service.status().await.vault, VaultStatus::NotInitialized);
-    let left: Vec<_> = files(fixture).into_keys().collect();
-    assert!(
-        left.iter()
-            .all(|name| !name.ends_with(".age") && !name.contains("config.toml") || name.ends_with(".lock")),
-        "{left:?}"
-    );
+    assert_discarded(fixture);
 
     assert_eq!(error_code(&reset(&path, &[]).await.response), ErrorCode::NothingToReset);
     let mut stream = UnixStream::connect(&path).await.unwrap();
@@ -140,7 +152,7 @@ async fn reset_then_init(fixture: &Fixture, service: &Arc<ServiceContext>) {
 async fn release_check_1_reset_from_ready_ends_uninitialized_and_init_then_works() {
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
-    reset_then_init(&fixture, &service).await;
+    reset_then_init(&fixture, &service, FULL_VAULT_FILES).await;
 }
 
 #[tokio::test]
@@ -148,7 +160,7 @@ async fn release_check_1_reset_from_locked_ends_uninitialized_and_init_then_work
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
     service.lock(DRAIN).await.unwrap();
-    reset_then_init(&fixture, &service).await;
+    reset_then_init(&fixture, &service, FULL_VAULT_FILES).await;
 }
 
 #[tokio::test]
@@ -158,7 +170,16 @@ async fn release_check_1_reset_from_policy_invalid_ends_uninitialized_and_init_t
     fs::write(fixture.path("etc/config.toml"), "not a config").unwrap();
     service.reload().await.unwrap();
     assert_eq!(service.state().await, ServiceState::Unavailable(FailureReason::PolicyInvalid));
-    reset_then_init(&fixture, &service).await;
+    reset_then_init(&fixture, &service, FULL_VAULT_FILES).await;
+}
+
+#[tokio::test]
+async fn release_check_1_reset_from_recovery_needed_ends_uninitialized_and_init_then_works() {
+    let fixture = Fixture::new().await;
+    fs::write(fixture.path("state/approval.age"), b"damaged").unwrap();
+    let service = fixture.start().await;
+    assert_eq!(service.state().await, ServiceState::Unavailable(FailureReason::RecoveryNeeded));
+    reset_then_init(&fixture, &service, FULL_VAULT_FILES).await;
 }
 
 #[tokio::test]
@@ -182,31 +203,76 @@ async fn release_check_2_a_wrong_confirmation_a_cancel_and_a_closed_cli_change_n
     let _ = stop.send(());
 }
 
+/// Release check 10, first clause: a different vault, or no vault, at step 4 declines there, not at the confirmation.
 #[tokio::test]
 async fn release_check_10_a_vault_change_between_the_summary_and_step_4_declines_and_removes_nothing() {
     let fixture = Fixture::new().await;
-    let id = vault_id(&fixture);
+    let id = vault_id(&fixture).to_string();
     let service = fixture.ready().await;
     service.lock(DRAIN).await.unwrap();
     let (path, stop) = serve_admin(&service);
+    let manifest = fs::read(fixture.path("state/manifest.age")).unwrap();
 
     let mut stream = reset_to_prompt(&path).await;
-    let manifest = fs::read(fixture.path("state/manifest.age")).unwrap();
     let mut other = manifest.clone();
     other[5..21].copy_from_slice(&[
         0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x41, 0x11, 0x91, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
     ]);
     fs::write(fixture.path("state/manifest.age"), &other).unwrap();
     let before = files(&fixture);
-    assert_eq!(error_code(&answer(&mut stream, &id.to_string()).await), ErrorCode::Declined);
+    let response = answer(&mut stream, &id).await;
+    assert_eq!(error_code(&response), ErrorCode::Declined);
+    assert!(
+        message(&response).contains("not the one the summary named"),
+        "{}",
+        message(&response)
+    );
     assert_eq!(files(&fixture), before, "a different vault ID");
+    fs::write(fixture.path("state/manifest.age"), &manifest).unwrap();
 
     let mut stream = reset_to_prompt(&path).await;
     fs::remove_file(fixture.path("state/manifest.age")).unwrap();
     let before = files(&fixture);
-    let other_id = "11111111-1111-4111-9111-111111111111";
-    assert_eq!(error_code(&answer(&mut stream, other_id).await), ErrorCode::Declined);
+    let response = answer(&mut stream, &id).await;
+    assert_eq!(error_code(&response), ErrorCode::Declined);
+    assert!(message(&response).contains("at the summary"), "{}", message(&response));
     assert_eq!(files(&fixture), before, "no longer Initialized");
+    let _ = stop.send(());
+}
+
+/// Release check 10, `init` clauses: an `init` that finishes after the summary, or the removal of `init.unfinished`, turns an
+/// Unfinished initialization into an Initialized vault, so step 4 declines and removes nothing.
+#[tokio::test]
+async fn release_check_10_an_init_between_the_summary_and_step_4_declines_and_removes_nothing() {
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    unfinished_init(&fixture, &service).await;
+    let state_dir = fixture.path("state").to_string_lossy().into_owned();
+    let (path, stop) = serve_admin(&service);
+
+    let mut stream = reset_to_prompt(&path).await;
+    let mut init = UnixStream::connect(&path).await.unwrap();
+    send(&mut init, &Frame::Request(AdminRequest::Init { host_unlock: false })).await;
+    let (initialized, _) = converse_revealing(&mut init, &INIT_ANSWERS).await;
+    assert!(
+        matches!(initialized.response, AdminResponse::Init { .. }),
+        "{:?}",
+        initialized.response
+    );
+    let before = files(&fixture);
+    let response = answer(&mut stream, &state_dir).await;
+    assert_eq!(error_code(&response), ErrorCode::Declined);
+    assert!(message(&response).contains("at the summary"), "{}", message(&response));
+    assert_eq!(files(&fixture), before, "an init finished before step 4");
+
+    fs::write(fixture.path("state/init.unfinished"), b"").unwrap();
+    let mut stream = reset_to_prompt(&path).await;
+    fs::remove_file(fixture.path("state/init.unfinished")).unwrap();
+    let before = files(&fixture);
+    let response = answer(&mut stream, &state_dir).await;
+    assert_eq!(error_code(&response), ErrorCode::Declined);
+    assert!(message(&response).contains("at the summary"), "{}", message(&response));
+    assert_eq!(files(&fixture), before, "init.unfinished removed");
     let _ = stop.send(());
 }
 
@@ -308,14 +374,49 @@ async fn release_check_5_an_interrupted_reset_is_reported_refused_by_unlock_and_
     let _ = stop.send(());
 }
 
-/// Removes every file of the state and config directories, leaving the lock files, and writes `marker` into the state directory.
-fn leave_only(fixture: &Fixture, marker: &str) {
+/// Removes every file of the state and config directories, leaving the lock files.
+fn empty_directories(fixture: &Fixture) {
     ["state", "etc"]
         .into_iter()
         .flat_map(|dir| fs::read_dir(fixture.path(dir)).unwrap().map(|entry| entry.unwrap().path()))
         .filter(|path| path.extension().is_none_or(|ext| ext != "lock") && path.file_name() != Some("lock".as_ref()))
         .for_each(|path| fs::remove_file(path).unwrap());
-    fs::write(fixture.path("state").join(marker), b"").unwrap();
+}
+
+/// Asserts the directories hold no `.age` file and no config file: the vault is discarded.
+fn assert_discarded(fixture: &Fixture) {
+    let left: Vec<_> = files(fixture).into_keys().collect();
+    assert!(
+        left.iter()
+            .all(|name| !name.ends_with(".age") && !name.contains("config.toml") || name.ends_with(".lock")),
+        "{left:?}"
+    );
+}
+
+/// Resets, runs `init`, then writes `init.unfinished` over the new vault: an Unfinished initialization built from a real one.
+async fn unfinished_init(fixture: &Fixture, service: &Arc<ServiceContext>) {
+    reset_then_init(fixture, service, FULL_VAULT_FILES).await;
+    fs::write(fixture.path("state/init.unfinished"), b"").unwrap();
+    assert_eq!(service.status().await.vault, VaultStatus::InitializationUnfinished);
+}
+
+/// Adds the credential `fx_key` the fixture's config routes to, with the upstream's origin, to the vault `init` just made.
+async fn add_fx_key(fixture: &Fixture, service: &Arc<ServiceContext>) {
+    let (path, stop) = serve_admin(service);
+    let mut stream = UnixStream::connect(&path).await.unwrap();
+    let origins = vec![RequestedOrigin {
+        host: "localhost".to_owned(),
+        port: fixture.upstream().port().to_string().parse().unwrap(),
+    }];
+    let request = AdminRequest::Add {
+        name: "fx_key".to_owned(),
+        kind: CredentialKind::Static,
+        origins,
+    };
+    send(&mut stream, &Frame::Request(request)).await;
+    let added = converse(&mut stream, &["fx-secret"]).await;
+    assert!(matches!(added.response, AdminResponse::Add { .. }), "{:?}", added.response);
+    let _ = stop.send(());
 }
 
 /// Unlocks the vault `reset_then_init` created.
@@ -330,20 +431,18 @@ async fn release_check_1_the_old_config_and_signature_are_refused_by_the_new_vau
     let fixture = Fixture::new().await;
     let old = fixture.published_pair();
     let service = fixture.ready().await;
-    reset_then_init(&fixture, &service).await;
-
+    reset_then_init(&fixture, &service, FULL_VAULT_FILES).await;
     unlock_new_vault(&service).await;
+    assert_eq!(service.state().await, ServiceState::Ready);
+
     fixture.put_back(&old);
     service.reload().await.unwrap();
 
-    assert!(
-        matches!(service.state().await, ServiceState::Unavailable(_)),
-        "{:?}",
-        service.state().await
-    );
+    assert_eq!(service.state().await, ServiceState::Unavailable(FailureReason::PolicyInvalid));
 }
 
-/// Release check 3: the CLI exits with code 3 before connecting, for a pipe, a file, `/dev/null` and no controlling terminal.
+/// Release check 3: the CLI exits with code 3 before connecting, for a pipe, a file, `/dev/null` and no controlling terminal,
+/// and its message names the check that refused it.
 #[tokio::test]
 async fn release_check_3_the_cli_refuses_without_a_terminal_before_connecting() {
     let fixture = Fixture::new().await;
@@ -352,42 +451,54 @@ async fn release_check_3_the_cli_refuses_without_a_terminal_before_connecting() 
     let path = fixture.path("probe.sock");
     let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
     listener.set_nonblocking(true).unwrap();
-    let stdins = [
-        Stdio::piped(),
-        Stdio::from(fs::File::create(fixture.path("answers")).unwrap()),
-        Stdio::null(),
-    ];
-
+    let answers = Stdio::from(fs::File::create(fixture.path("answers")).unwrap());
     let socket = path.clone();
-    let codes = tokio::task::spawn_blocking(move || {
-        let run = |mut command: Command| command.stdout(Stdio::null()).stderr(Stdio::null()).status().unwrap().code();
-        let cli = |stdin| {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_iron-vault"));
-            command.args(["reset", "--admin-socket"]).arg(&socket).stdin(stdin);
-            command
+
+    let refusals = tokio::task::spawn_blocking(move || {
+        let cli = |stdin: Stdio| {
+            let output = Command::new(env!("CARGO_BIN_EXE_iron-vault"))
+                .args(["reset", "--admin-socket"])
+                .arg(&socket)
+                .stdin(stdin)
+                .output()
+                .unwrap();
+            (output.status.code(), String::from_utf8_lossy(&output.stderr).into_owned())
         };
-        let mut codes: Vec<_> = stdins.into_iter().map(|stdin| run(cli(stdin))).collect();
-        let mut detached = Command::new("setsid");
-        detached
-            .arg("--wait")
-            .arg(env!("CARGO_BIN_EXE_iron-vault"))
-            .args(["reset", "--admin-socket"])
-            .arg(&socket);
-        codes.push(run(detached));
-        codes
+        // `script` gives the command a pseudo-terminal for stdin, and `setsid` then drops it as the controlling terminal, so
+        // only the `/dev/tty` check can refuse. The pseudo-terminal carries stderr too.
+        let detached = Command::new("script")
+            .args([
+                "-qec",
+                &format!(
+                    "setsid --wait {} reset --admin-socket {}",
+                    env!("CARGO_BIN_EXE_iron-vault"),
+                    socket.display()
+                ),
+            ])
+            .arg("/dev/null")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let detached = (detached.status.code(), String::from_utf8_lossy(&detached.stdout).into_owned());
+        [cli(Stdio::piped()), cli(answers), cli(Stdio::null()), detached]
     })
     .await
     .unwrap();
 
-    assert_eq!(codes, [Some(3); 4]);
+    let stdin_not_a_terminal = "stdin is not a terminal";
+    let (codes, messages): (Vec<_>, Vec<_>) = refusals.into_iter().unzip();
+    assert_eq!(codes, [Some(3); 4], "{messages:?}");
+    assert!(messages[..3].iter().all(|m| m.contains(stdin_not_a_terminal)), "{messages:?}");
+    assert!(
+        messages[3].contains("/dev/tty cannot be opened") && !messages[3].contains(stdin_not_a_terminal),
+        "{messages:?}"
+    );
     assert!(listener.accept().is_err(), "the CLI connected");
     fs::remove_file(&path).unwrap();
     fs::remove_file(fixture.path("answers")).unwrap();
     assert_eq!(files(&fixture), before);
 }
 
-/// Release check 4: every approver unusable, so no config can be approved; reset and `init` make the vault usable again, and
-/// the owner's copy of the config is approved against it.
 #[tokio::test]
 async fn release_check_4_a_vault_with_no_usable_approver_is_rebuilt_by_reset_and_init() {
     let fixture = Fixture::new().await;
@@ -399,18 +510,24 @@ async fn release_check_4_a_vault_with_no_usable_approver_is_rebuilt_by_reset_and
         .for_each(|path| fs::remove_file(path).unwrap());
     let service = fixture.ready().await;
     let broken = approve(&service, &config, &["yes", "APPROVAL-correct-3e8b"]).await;
-    assert!(matches!(broken.response, AdminResponse::Error { .. }), "{:?}", broken.response);
+    assert_eq!(
+        error_code(&broken.response),
+        ErrorCode::ApprovalUnavailable,
+        "{:?}",
+        broken.response
+    );
 
-    reset_then_init(&fixture, &service).await;
+    reset_then_init(&fixture, &service, FULL_VAULT_FILES - 1).await;
     unlock_new_vault(&service).await;
+    add_fx_key(&fixture, &service).await;
 
-    let rebuilt = fs::read_to_string(fixture.path("etc/config.toml")).unwrap();
-    let approved = approve(&service, &format!("{rebuilt}# the owner's copy\n"), &["yes", INIT_ANSWERS[2]]).await;
+    let approved = approve(&service, &config, &["yes", INIT_ANSWERS[2]]).await;
     assert!(
         matches!(approved.response, AdminResponse::ConfigApprove { .. }),
         "{:?}",
         approved.response
     );
+    assert_eq!(service.state().await, ServiceState::Ready);
 }
 
 /// Release check 5, last clause: a `reset.unfinished` put back over empty directories reads Unfinished reset, and the next reset
@@ -420,7 +537,8 @@ async fn release_check_5_a_reset_unfinished_over_empty_directories_reads_unfinis
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
     service.lock(DRAIN).await.unwrap();
-    leave_only(&fixture, "reset.unfinished");
+    empty_directories(&fixture);
+    fs::write(fixture.path("state/reset.unfinished"), b"").unwrap();
     let (path, stop) = serve_admin(&service);
     assert_eq!(service.status().await.vault, VaultStatus::ResetUnfinished);
 
@@ -439,8 +557,7 @@ async fn release_check_8_uninitialized_and_a_config_file_alone_are_nothing_to_re
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
     service.lock(DRAIN).await.unwrap();
-    leave_only(&fixture, "scratch");
-    fs::remove_file(fixture.path("state/scratch")).unwrap();
+    empty_directories(&fixture);
     let (path, stop) = serve_admin(&service);
     assert_eq!(error_code(&reset(&path, &[]).await.response), ErrorCode::NothingToReset);
 
@@ -450,22 +567,25 @@ async fn release_check_8_uninitialized_and_a_config_file_alone_are_nothing_to_re
     let _ = stop.send(());
 }
 
-/// Release check 11: an Unfinished initialization, confirmed with the state directory's path, ends Uninitialized.
+/// Release check 11, and check 2's clause: the old vault ID typed for an Unfinished vault is declined; the state directory's
+/// path resets it, leaving no record, `.age` or config file.
 #[tokio::test]
 async fn release_check_11_an_unfinished_initialization_is_reset_with_the_state_directory_path() {
     let fixture = Fixture::new().await;
+    let old_id = vault_id(&fixture).to_string();
     let service = fixture.ready().await;
-    service.lock(DRAIN).await.unwrap();
-    leave_only(&fixture, "init.unfinished");
+    unfinished_init(&fixture, &service).await;
     let (path, stop) = serve_admin(&service);
-    assert_eq!(service.status().await.vault, VaultStatus::InitializationUnfinished);
     let state_dir = fixture.path("state").to_string_lossy().into_owned();
+    let before = files(&fixture);
 
+    assert_eq!(error_code(&reset(&path, &[&old_id]).await.response), ErrorCode::Declined);
+    assert_eq!(files(&fixture), before);
     let exchanged = reset(&path, &[&state_dir]).await;
 
     assert_eq!(exchanged.prompts, [confirmation_prompt(&state_dir, "these files")]);
     assert_eq!(service.status().await.vault, VaultStatus::NotInitialized);
-    assert!(!fixture.path("state/init.unfinished").exists());
+    assert_discarded(&fixture);
     let _ = stop.send(());
 }
 
@@ -499,5 +619,128 @@ async fn release_check_12_the_audit_events_reach_the_log_without_a_secret_or_the
         !text.contains(&typed) && !text.contains("fx-secret") && !text.contains(INIT_ANSWERS[0]),
         "{text}"
     );
+    let _ = stop.send(());
+}
+
+/// Release check 6, in flight: a request waiting on the upstream when the reset withdraws the vault ends at once with 503, or
+/// with its connection closed, rather than waiting out the upstream.
+#[tokio::test]
+async fn release_check_6_a_request_in_flight_is_cancelled_by_the_withdrawal() {
+    let fixture = Arc::new(Fixture::with_reply(Reply::Stall).await);
+    let id = vault_id(&fixture);
+    let service = fixture.ready().await;
+    let caller = Arc::clone(&fixture);
+    let waiting = tokio::spawn(async move { get(&caller, "fx").await });
+    while fixture.upstream().requests().is_empty() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let (path, stop) = serve_admin(&service);
+
+    reset(&path, &[&id.to_string()]).await;
+
+    let ended = tokio::time::timeout(DRAIN, waiting)
+        .await
+        .expect("the request ends instead of hanging");
+    // A closed connection makes the harness's parse of an empty response panic, which a join reports as an error.
+    assert!(ended.map_or(true, |response| response.status == 503));
+    let _ = stop.send(());
+}
+
+/// The real filesystem, except that removing `file` fails while armed.
+#[derive(Clone)]
+struct FailingRemoval {
+    file: &'static str,
+    armed: Arc<AtomicBool>,
+}
+
+impl StoreFs for FailingRemoval {
+    type File = fs::File;
+
+    fn create_private(&self, path: &Path) -> io::Result<fs::File> {
+        OsFs.create_private(path)
+    }
+
+    fn write_all(&self, file: &mut fs::File, bytes: &[u8]) -> io::Result<()> {
+        OsFs.write_all(file, bytes)
+    }
+
+    fn sync_file(&self, file: &fs::File) -> io::Result<()> {
+        OsFs.sync_file(file)
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        OsFs.rename(from, to)
+    }
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        if self.armed.load(Ordering::SeqCst) && path.file_name() == Some(self.file.as_ref()) {
+            return Err(io::Error::other("injected removal failure"));
+        }
+        OsFs.remove_file(path)
+    }
+
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        OsFs.sync_dir(dir)
+    }
+
+    fn list_dir(&self, dir: &Path) -> io::Result<Vec<OsString>> {
+        OsFs.list_dir(dir)
+    }
+
+    fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>> {
+        OsFs.read_bounded(path, max_len)
+    }
+}
+
+/// Release check 12, `vault.reset-failed`, and check 5 at the service: a removal failing after `manifest.age` and the approver key ends in the
+/// partly-discarded error and the event, the directories read Unfinished reset, `init` is refused, and the next reset finishes.
+#[tokio::test]
+async fn release_check_12_a_failed_removal_logs_reset_failed_and_the_next_reset_finishes() {
+    let logs = captured_logs();
+    let fixture = Fixture::new().await;
+    let id = vault_id(&fixture);
+    let fs = FailingRemoval {
+        file: "approval.age",
+        armed: Arc::new(AtomicBool::new(true)),
+    };
+    let service = fixture.ready_on(fs.clone()).await;
+    let (path, stop) = serve_admin(&service);
+
+    let failed = reset(&path, &[&id.to_string()]).await;
+
+    assert_eq!(error_code(&failed.response), ErrorCode::ResetFailed);
+    assert!(
+        message(&failed.response).contains("partly discarded"),
+        "{}",
+        message(&failed.response)
+    );
+    let event = logs
+        .events("vault.reset-failed")
+        .into_iter()
+        .find(|e| e["file"] == "approval.age")
+        .expect("vault.reset-failed names the file");
+    assert_eq!(event["step"].as_str(), Some("remove"));
+    assert!(
+        event["removed"]
+            .as_str()
+            .is_some_and(|removed| removed.starts_with("manifest.age,approver-")),
+        "{event}"
+    );
+    assert!(event["error_kind"].as_str().is_some_and(|kind| !kind.is_empty()), "{event}");
+    assert_eq!(service.status().await.vault, VaultStatus::ResetUnfinished);
+    let mut stream = UnixStream::connect(&path).await.unwrap();
+    send(&mut stream, &Frame::Request(AdminRequest::Init { host_unlock: false })).await;
+    assert_eq!(
+        error_code(&converse(&mut stream, &[]).await.response),
+        ErrorCode::AlreadyInitialized
+    );
+
+    fs.armed.store(false, Ordering::SeqCst);
+    let state_dir = fixture.path("state").to_string_lossy().into_owned();
+    let finished = reset(&path, &[&state_dir]).await;
+
+    assert_eq!(result(&finished).0, None);
+    assert_eq!(service.status().await.vault, VaultStatus::NotInitialized);
+    assert_discarded(&fixture);
     let _ = stop.send(());
 }
