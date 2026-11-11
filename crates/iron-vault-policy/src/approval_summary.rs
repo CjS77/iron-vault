@@ -145,7 +145,8 @@ impl ApprovalSummary {
     }
 
     /// The summary body: "no active config" when nothing is active, then each non-empty section in fixed order, or the
-    /// text-only line when no section has an entry. Every line ends with a newline.
+    /// text-only line when no section has an entry. When the summary is a same-config one, the body is only the line
+    /// "no change; same config as version N". Every line ends with a newline.
     pub fn render(&self) -> String {
         let intro = self.no_active_config.then(|| format!("{NO_ACTIVE}\n"));
         let sections = self
@@ -158,7 +159,10 @@ impl ApprovalSummary {
             });
         let body: String = intro.into_iter().chain(sections).collect();
         match (self.same_as, self.is_empty()) {
-            (Some(version), _) => format!("{}\n", same_config(version)),
+            (Some(version), _) => {
+                let line = same_config(version);
+                format!("{line}\n")
+            }
             (None, true) => format!("{body}{TEXT_ONLY}\n"),
             (None, false) => body,
         }
