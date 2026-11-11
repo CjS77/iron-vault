@@ -211,7 +211,7 @@ fn completed(exported: &ExportedBundle) -> AdminResponse {
 /// The summary the owner confirms by typing the vault passphrase.
 fn summary_text(summary: &SnapshotSummary) -> String {
     format!(
-        "export the vault\n  vault: {}\n  credentials: {}\n  approvers: {}\n  authorize with: the vault passphrase\n  \
+        "export the vault\n  vault: {}\n  credentials: {}\n  approver keys: {}\n  authorize with: the vault passphrase\n  \
          then: a new export passphrase to protect the migration bundle\n",
         summary.vault_id, summary.record_count, summary.approver_count,
     )

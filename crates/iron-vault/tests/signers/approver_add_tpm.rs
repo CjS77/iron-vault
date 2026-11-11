@@ -781,6 +781,58 @@ async fn no_approver_that_can_be_asked_is_approval_unavailable() {
     assert!(refused.prompts.is_empty());
 }
 
+/// A vault whose only approver is a TPM one cannot export: its bundle could not be approved on the destination. The refusal
+/// comes before the summary notice, any prompt or the migration challenge, and nothing is written. The stand-in helper
+/// harness is local to this module, which is why this test is here rather than in `lifecycle/export.rs`.
+#[tokio::test]
+async fn export_of_a_vault_with_only_a_tpm_approver_is_refused_before_any_prompt_or_challenge() {
+    let fixture = Fixture::new().await;
+    serve_stub(&fixture.path("helper.sock"), Script::default());
+    let software = fixture.approver_id();
+    let (running, _) = with_tpm_approver(&fixture, &fixture.path("helper.sock")).await;
+    approve_config(&running.path, &fixture.config("rates"), &via_tpm(PIN)).await;
+    let mut stream = UnixStream::connect(&running.path).await.unwrap();
+    send(
+        &mut stream,
+        &Frame::Request(AdminRequest::ApproverRemove {
+            approver: *software.as_bytes(),
+        }),
+    )
+    .await;
+    assert!(matches!(
+        converse(&mut stream, &[PIN]).await.response,
+        AdminResponse::ApproverRemove { approvers: 1 }
+    ));
+    let logs = captured_logs();
+    let export_records = |event: &str| -> Vec<serde_json::Value> {
+        logs.events(event)
+            .into_iter()
+            .filter(|record| record["operation"] == "export" || record["error_kind"] == "no_software_approver")
+            .collect()
+    };
+
+    let mut stream = UnixStream::connect(&running.path).await.unwrap();
+    send(&mut stream, &Frame::Request(AdminRequest::Export)).await;
+    let refused = converse_switching(&mut stream, &[]).await;
+
+    assert_eq!(error_code(&refused.response), ErrorCode::ApproverSetInvalid, "{refused:?}");
+    assert!(error_message(&refused).contains("enroll a software approver first"), "{refused:?}");
+    assert!(refused.notices.is_empty() && refused.prompts.is_empty(), "{refused:?}");
+    assert!(export_records("migration.challenge-issued").is_empty());
+    let failed = export_records("migration.export-failed");
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(
+        (failed[0]["step"].as_str(), failed[0]["error_kind"].as_str()),
+        (Some("check"), Some("no_software_approver"))
+    );
+    let leftovers = fs::read_dir(fixture.path("."))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".bundle") || name.ends_with(".partial"))
+        .collect::<Vec<_>>();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
 #[tokio::test]
 async fn a_tpm_approver_authorizes_an_approver_change_and_a_lockout_there_is_tpm_locked_out() {
     let fixture = Fixture::new().await;

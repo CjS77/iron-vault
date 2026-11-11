@@ -72,17 +72,17 @@ entry and does not decrypt it, so no credential is ever in plaintext for an expo
 does not match its entry is damage; export refuses it, naming the record, rather than carry a vault that would fail
 its own check on the destination. The owner removes or replaces the damaged credential first.
 
-**Every software approver's key file is carried, under the export passphrase.** A software approver has a key file. An approver key envelope is sealed only to its approval passphrase, which a party holding a copy
-could guess at offline, and §16 step 2 puts every secret-bearing entry under the export passphrase. So export encrypts
-each key file, unopened, to the vault public key, and the bundle entry is that `age` file. Import opens it with the
-vault identity it got from the export passphrase and writes the envelope inside, byte for byte. A pinned software approver whose
-key file is missing, larger than `MAX_PASSPHRASE_ENVELOPE_LEN`, or not one scrypt stanza within the work factor
-bounds is refused by export, naming the approver ID. Anyone who knows the vault public key could put another envelope
-in the entry, but the pinned public key in the MAC'd approval state decides whose signature counts, so a substitute
-only fails to sign. A `tpm` approver (and a `hardware` one, reserved today) is bound to its device and has no key file in the bundle,
-though `approval.age` still pins it. Export refuses with `approver-set-invalid` when no `software` approver is pinned,
-and import lists each `tpm` approver as `bound to the source machine`
-([TPM approval signer](tpm-approval-signer.md#migration-bundles)).
+**Every software approver's key file is carried, under the export passphrase.** An approver key envelope is sealed only to
+its approval passphrase, which a party holding a copy could guess at offline, and §16 step 2 puts every secret-bearing
+entry under the export passphrase. So export encrypts each key file, unopened, to the vault public key, and the bundle
+entry is that `age` file. Import opens it with the vault identity it got from the export passphrase and writes the
+envelope inside, byte for byte. A pinned software approver whose key file is missing, larger than
+`MAX_PASSPHRASE_ENVELOPE_LEN`, or not one scrypt stanza within the work factor bounds is refused by export, naming the
+approver ID. Anyone who knows the vault public key could put another envelope in the entry, but the pinned public key in
+the MAC'd approval state decides whose signature counts, so a substitute only fails to sign. A `tpm` approver (and a
+`hardware` one, reserved today) is bound to its device and has no key file in the bundle, though `approval.age` still
+pins it. Export refuses with `approver-set-invalid` when no `software` approver is pinned, and import lists each `tpm`
+approver as `bound to the source machine`
 
 ### The config
 
@@ -407,7 +407,7 @@ What each command does after a crash, or any failure, following each step. `stat
 |---|---|---|
 | 1 | Ready, holding the vault identity | `wrong-state` |
 | 2 | Try the service-wide lock, recording the state and check generation | `busy` |
-| 3 | The [snapshot checks](#the-snapshot) | `export-failed` (step `check`), naming the file |
+| 3 | The [snapshot checks](#the-snapshot) | `export-failed` (step `check`), naming the file; `approver-set-invalid` (42) when no `software` approver is pinned |
 | 4 | The summary, below | |
 | 5–7 | Migration authorization: challenge, `Vault passphrase`, proof | `busy`, `migration-unavailable`, `migration-rate-limited`, `migration-denied` |
 | 8 | Two secret prompts: `Export passphrase`, `Repeat the export passphrase`, checked by the [passphrase rules](vault-initialization.md#passphrase-rules) once both are in | `passphrase-rejected`; `migration-unavailable` when a `lock` cancels either prompt, and the authorization drops unused; none (cancelled) when a prompt gets no owner input |
@@ -421,7 +421,7 @@ The summary extends the one in [migration-authorization.md](migration-authorizat
 export the vault
   vault: 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b
   credentials: 1
-  approvers: 1
+  approver keys: 1
   authorize with: the vault passphrase
   then: a new export passphrase to protect the migration bundle
 ```
@@ -513,7 +513,8 @@ Four codes join the [admin protocol's table](admin-protocol.md#admin-response-er
 | `48` | `import-failed` | `import`: the host unlock flag was set and the service has no host unlock identity to enrol, raised before any prompt, so nothing was written; or a write failed, and the message names the step, says to run `import` again, which discards the unfinished import, and gives the recovery key advice of [Failing after the reveal](vault-initialization.md#failing-after-the-reveal) |
 
 Existing codes widen to the new commands: `busy` (6) and `wrong-state` (13) to both; `passphrase-rejected` (18) to
-both; `declined` (8), `already-initialized` (17) and `memory-unprotected` (27) to `import`. `export` already raises
+both; `approver-set-invalid` (42) to `export`; `declined` (8), `already-initialized` (17) and `memory-unprotected` (27) to
+`import`. `export` already raises
 `migration-denied` (28), `migration-unavailable` (29) and `migration-rate-limited` (33); `migration-unavailable` widens
 to a `lock` at the export passphrase prompts.
 

@@ -57,7 +57,8 @@ pub struct SnapshotSummary {
     pub vault_id: VaultId,
     /// The number of record files the manifest names.
     pub record_count: usize,
-    /// The number of pinned approvers.
+    /// The number of software approver key files the bundle carries. A `tpm` approver has none, so this can be fewer than the
+    /// pinned approvers.
     pub approver_count: usize,
     /// The committed approval version.
     pub committed_version: ApprovalVersion,
