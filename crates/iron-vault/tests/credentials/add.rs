@@ -45,9 +45,9 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{Capabilities, CredentialKind};
 use iron_vault_store::{
-    ApprovalPassphrase, ApprovalState, ApprovalStorage, ConfigDirLock, CredentialRecord, OsFs, PendingConfig, PermittedOrigins,
-    PinnedApprover, RecordId, SoftwareSigner, StateDirLock, StateFileName, StoreFs, Vault, VaultIdentity, VaultManifest, decode,
-    open_manifest, open_signer_key, seal_signer_key_for_tests, write_signer_key,
+    ApprovalPassphrase, ApprovalState, ApprovalStorage, CredentialRecord, OsFs, PendingConfig, PermittedOrigins, PinnedApprover, RecordId,
+    SoftwareSigner, StateFileName, StoreFs, Vault, VaultIdentity, VaultManifest, decode, open_manifest, open_signer_key,
+    seal_signer_key_for_tests, write_signer_key,
 };
 use secrecy::{ExposeSecret, SecretString};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

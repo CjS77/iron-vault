@@ -24,8 +24,8 @@ use iron_vault::migration_authorization::{
 use iron_vault::service_context::{LockOutcome, LockResult, ServiceContext};
 use iron_vault::service_state::ServiceState;
 use iron_vault_store::{
-    OperationalIdentity, OsFs, Passphrase, RecipientKey, RecipientSet, StateDirLock, StoreFs, VaultId, VaultIdentity,
-    seal_passphrase_envelope_for_tests, wrap_identity, write_identity_envelope, write_passphrase_envelope,
+    OperationalIdentity, OsFs, Passphrase, RecipientKey, RecipientSet, StoreFs, VaultId, VaultIdentity, seal_passphrase_envelope_for_tests,
+    wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
 use secrecy::SecretString;
 use tokio::time::Instant;

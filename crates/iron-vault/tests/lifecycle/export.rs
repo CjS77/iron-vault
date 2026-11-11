@@ -27,7 +27,7 @@ use iron_vault::service_context::ServiceContext;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_store::migration_bundle::{BundleDecoder, DecodedBundle, EntryName};
 use iron_vault_store::{
-    ExportPassphrase, OperationalIdentity, OsFs, Passphrase, PermittedOrigins, RecipientSet, StateDirLock, Vault, open_exported_identity,
+    ExportPassphrase, OperationalIdentity, OsFs, Passphrase, PermittedOrigins, RecipientSet, Vault, open_exported_identity,
     seal_passphrase_envelope_for_tests, wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
 use secrecy::SecretString;

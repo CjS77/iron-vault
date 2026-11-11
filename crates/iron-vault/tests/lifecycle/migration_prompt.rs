@@ -24,7 +24,7 @@ use iron_vault::migration_authorization::{MigrationOperation, MigrationRefusal, 
 use iron_vault::service_context::ServiceContext;
 use iron_vault::service_state::ServiceState;
 use iron_vault_store::{
-    OperationalIdentity, OsFs, Passphrase, RecipientKey, RecipientSet, StateDirLock, seal_passphrase_envelope_for_tests, wrap_identity,
+    OperationalIdentity, OsFs, Passphrase, RecipientKey, RecipientSet, seal_passphrase_envelope_for_tests, wrap_identity,
     write_identity_envelope, write_passphrase_envelope,
 };
 use secrecy::SecretString;

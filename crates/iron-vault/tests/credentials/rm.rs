@@ -23,7 +23,7 @@ use iron_vault::serving_snapshot::{Admission, ServingSnapshot};
 use iron_vault::standing::Standing;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::Port;
-use iron_vault_store::{OsFs, PermittedOrigins, RecordId, StateDirLock, StateFileName, Vault, VaultManifest, open_manifest};
+use iron_vault_store::{OsFs, PermittedOrigins, RecordId, StateFileName, Vault, VaultManifest, open_manifest};
 
 const OLD_NAME: &str = "old_key";
 

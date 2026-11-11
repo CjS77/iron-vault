@@ -31,8 +31,8 @@ use iron_vault::service_state::{FailureReason, ServiceState};
 use iron_vault_store::fault_fs::{FaultFile, FaultFs, FsCall};
 use iron_vault_store::{
     ApprovalEnvelope, ApprovalPayload, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ApproverId, ApproverLabel,
-    ApproverPublicKey, ConfigDigest, ConfigDirLock, OsFs, PendingConfig, PinnedApprover, SignError, SignatureAlgorithm, SoftwareSigner,
-    StateDirLock, StoreFs, UtcSecond, Vault, VerifyError, verify_approval, write_signer_key,
+    ApproverPublicKey, ConfigDigest, OsFs, PendingConfig, PinnedApprover, SignError, SignatureAlgorithm, SoftwareSigner, StateDirLock,
+    StoreFs, UtcSecond, Vault, VerifyError, verify_approval, write_signer_key,
 };
 
 // ---- Helpers shared by the tests below -------------------------------------------------------------------------

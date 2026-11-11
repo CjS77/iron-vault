@@ -17,8 +17,7 @@ use iron_vault::clock::TestClock;
 use iron_vault::service_context::ServiceContext;
 use iron_vault::service_state::ServiceState;
 use iron_vault_store::{
-    OsFs, RecipientSet, RecoveryCheckRecord, RecoveryKey, RecoveryKeySecret, StateDirLock, UtcSecond, wrap_identity,
-    write_identity_envelope,
+    OsFs, RecipientSet, RecoveryCheckRecord, RecoveryKey, RecoveryKeySecret, UtcSecond, wrap_identity, write_identity_envelope,
 };
 use secrecy::{ExposeSecret, SecretString};
 

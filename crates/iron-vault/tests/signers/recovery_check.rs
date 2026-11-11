@@ -22,8 +22,7 @@ use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame,
 use iron_vault::service_context::ServiceContext;
 use iron_vault::service_state::{FailureReason, ServiceState};
 use iron_vault_store::{
-    OsFs, RecipientSet, RecoveryCheckRecord, RecoveryKey, StateDirLock, StoreFs, VaultId, open_manifest, wrap_identity,
-    write_identity_envelope,
+    OsFs, RecipientSet, RecoveryCheckRecord, RecoveryKey, StoreFs, VaultId, open_manifest, wrap_identity, write_identity_envelope,
 };
 use secrecy::ExposeSecret;
 use zeroize::Zeroizing;
