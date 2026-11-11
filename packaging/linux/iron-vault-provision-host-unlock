@@ -156,6 +156,12 @@ host_stack_records() {
     esac
 }
 
+# partition_parent NODE: prints the name of the disk a partition sits on. A partition has no slaves of its own, so a partition
+# of an md or device-mapper device is walked as that device; sysfs links class/block/md0p1 to .../md0/md0p1.
+partition_parent() {
+    [ -e "$1/partition" ] && basename "$(dirname "$(readlink -f "$1")")"
+}
+
 # walk_stack SYSROOT DEVICE [DEPTH [UNDER_CRYPT]]: walks device-mapper's slaves downwards and prints a tab-separated record
 # per layer: `luks MAPNAME BACKING`, `crypt MAPNAME` (dm-crypt with no LUKS header), `plain DEVICE` (a device with nothing
 # below it, reached with no dm-crypt layer above it on that path) or `unresolved DEVICE`. UNDER_CRYPT is 1 once the walk
@@ -163,8 +169,12 @@ host_stack_records() {
 # The walk uses class/block, which lists partitions as well as the /sys/block disks.
 walk_stack() {
     local sys=$1 dev=$2 depth=${3:-0} under=${4:-0}
-    local node=$1/class/block/$2 uuid name slaves slave
+    local node=$1/class/block/$2 uuid name slaves slave parent
     if [ ! -d "$node" ] || [ "$depth" -gt 16 ]; then printf 'unresolved\t%s\n' "$dev"; return 0; fi
+    if parent=$(partition_parent "$node") && [ -n "$(ls -A "$1/class/block/$parent/slaves" 2>/dev/null)" ]; then
+        walk_stack "$sys" "$parent" $((depth + 1)) "$under"
+        return 0
+    fi
     uuid=$(cat "$node/dm/uuid" 2>/dev/null) || uuid=
     name=$(cat "$node/dm/name" 2>/dev/null) || name=$dev
     slaves=$(ls -1 "$node/slaves" 2>/dev/null) || slaves=
@@ -214,7 +224,11 @@ tpm_tokens() {
         END { flush() }' <<<"$1"
 }
 
-# luks1_warnings DEVICE: a LUKS1 header has no tokens; clevis records its binding in luksmeta, under its own UUID.
+# luks1_warnings DEVICE: a LUKS1 header has no tokens; clevis records its binding in luksmeta, under its own UUID. luksmeta show
+# prints one `SLOT active|inactive ...` line per key slot, so output with no such line checked nothing. A volume that never had
+# clevis bound has no luksmeta area, and luksmeta show then fails with "Device is not initialized": that is the one failure that
+# means no binding exists, so the warning says it may be accepted. Its stderr is not matched to hide the warning, because
+# a failure the helper cannot tell from that one must stay a warning.
 luks1_warnings() {
     local dev=$1 meta
     if ! have_tool luksmeta; then
@@ -222,7 +236,12 @@ luks1_warnings() {
             "Fix: install luksmeta and run this again."
     elif ! meta=$(luksmeta show -d "$dev" 2>/dev/null); then
         add_warning "luksmeta show -d $dev failed, so the clevis bindings of this LUKS1 volume were not checked. $RISK" \
-            "Fix: run luksmeta show -d $dev as root to see why, then run this again."
+            "Fix: run luksmeta show -d $dev as root to read why, then run this again. If it says \"Device is not initialized\", no" \
+            "clevis binding exists on this volume and you can accept this warning. Do not initialize luksmeta to clear it:" \
+            "that writes to the LUKS header."
+    elif ! grep -Eq '^[0-9]+ +(active|inactive)' <<<"$meta"; then
+        add_warning "luksmeta show -d $dev listed no key slots, so the clevis bindings of this LUKS1 volume were not checked. $RISK" \
+            "Fix: run luksmeta show -d $dev as root to see its output, then run this again."
     elif grep -qi "$CLEVIS_UUID" <<<"$meta"; then
         add_warning "$dev is LUKS1 with a clevis binding, which asks for nothing at boot. $RISK" \
             "Fix: remove it with clevis luks unbind, and use a passphrase or LUKS2 with systemd-cryptenroll --tpm2-with-pin=yes."

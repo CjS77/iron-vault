@@ -200,6 +200,18 @@ bcachefs_member() { # N device
 # Two members: dm-0 over LUKS on nvme0n1p3 (from lvm_on_luks), and dm-2 over LUKS on nvme0n1p4, or the plain sdb1.
 second_luks() { leaf nvme0n1p4; dm dm-2 CRYPT-LUKS2-def luks-def nvme0n1p4; luks_dump nvme0n1p4 ""; echo "luks-def UUID=def none luks" >>"$work/crypttab"; }
 
+# md0 over the LUKS devices dm-0 and dm-2 (see second_luks), partitioned: md0p1 holds the host directory. As in the kernel's sysfs,
+# class/block/md0p1 links to .../md0/md0p1 and the partition has a `partition` file and no slaves of its own.
+md_partition_on_luks() {
+    lvm_on_luks; second_luks
+    mkdir -p "$work/sys/devices/block/md0/md0p1" "$work/sys/devices/block/md0/slaves"
+    : >"$work/sys/devices/block/md0/slaves/dm-0"; : >"$work/sys/devices/block/md0/slaves/dm-2"
+    : >"$work/sys/devices/block/md0/md0p1/partition"
+    ln -s ../../devices/block/md0 "$work/sys/class/block/md0"
+    ln -s ../../devices/block/md0/md0p1 "$work/sys/class/block/md0p1"
+    echo /dev/md0p1 >"$work/rootdev"
+}
+
 # portable NAME COUNT FRAGMENT...: --portable on the current fixture prints COUNT warnings, each fragment in one of them.
 # With a warning it stops until accepted, and continues with --accept-no-second-secret.
 portable() {
@@ -277,9 +289,16 @@ portable "a LUKS1 clevis binding" 1 "LUKS1 with a clevis binding" "clevis luks u
 lvm_on_luks; luks1_dump nvme0n1p3; printf '0   active empty\n' >"$work/luksmeta/nvme0n1p3"
 portable "LUKS1, passphrase slot only" 0
 lvm_on_luks; luks1_dump nvme0n1p3; : >"$work/luksmeta/nvme0n1p3"
-portable "LUKS1 with an empty luksmeta" 0
+portable "LUKS1 with an empty luksmeta" 1 "listed no key slots" "run luksmeta show -d .* as root"
+lvm_on_luks; luks1_dump nvme0n1p3; printf 'unexpected text\n' >"$work/luksmeta/nvme0n1p3"
+portable "LUKS1 with a luksmeta listing that has no slot line" 1 "listed no key slots"
+lvm_on_luks; luks1_dump nvme0n1p3; printf '0   inactive empty\n' >"$work/luksmeta/nvme0n1p3"
+portable "LUKS1 with only an inactive slot listed" 0
 lvm_on_luks; luks1_dump nvme0n1p3; NOTOOL=luksmeta portable "LUKS1 with no luksmeta" 1 "luksmeta is not installed" "install luksmeta"
 lvm_on_luks; luks1_dump nvme0n1p3; portable "LUKS1 with a failing luksmeta" 1 "luksmeta show -d .* failed"
+out=$(run ubuntu-24.04 --portable --accept-no-second-secret)
+! grep -q "luksmeta init" <<<"$out" || { echo "FAIL a LUKS1 luksmeta warning points at luksmeta init: $out"; status=1; }
+grep -q "no clevis binding exists" <<<"$out" || { echo "FAIL the luksmeta warning does not say no binding exists: $out"; status=1; }
 lvm_on_luks; echo "luks-abc UUID=abc /etc/keys/root.key luks" >"$work/crypttab"
 portable "a crypttab key file" 1 "key file /etc/keys/root.key"
 lvm_on_luks; luks_dump nvme0n1p3 "$(tpm_token false)"; echo "luks-abc UUID=abc none luks,tpm2-device=auto" >"$work/crypttab"
@@ -288,6 +307,11 @@ lvm_on_luks; boot_image initrd.img-6.8.0-2 "$(printf 'cryptroot/keyfiles\ncryptr
 portable "a key file in one of two initramfs images" 1 "initrd.img-6.8.0-2 holds a key file"
 lvm_on_luks; NOTOOL=cryptsetup portable "a missing cryptsetup" 1 "cryptsetup is not installed" "install cryptsetup and run this again"
 lvm_on_luks; NOTOOL=lsinitramfs portable "a missing lsinitramfs" 1 "lsinitramfs is not installed" "install initramfs-tools-core"
+md_partition_on_luks; portable "a partitioned md array over two LUKS devices" 0
+md_partition_on_luks; echo "luks-abc UUID=abc none luks" >"$work/crypttab"
+portable "a partitioned md array whose second LUKS device has no crypttab entry" 1 "no entry named luks-def"
+md_partition_on_luks; leaf sdc1; : >"$work/sys/devices/block/md0/slaves/sdc1"
+portable "a partitioned md array with a plain member" 1 "sdc1, under"
 lvm_on_luks; echo /dev/dm-9 >"$work/rootdev"; portable "a stack that does not resolve" 1 "could not resolve"
 lvm_on_luks; echo tmpfs >"$work/rootdev"; portable "a root that is not a block device" 1 "could not resolve"
 lvm_on_luks; rm "$work/luksdump/nvme0n1p3"; portable "a failed luksDump" 1 "luksDump .* failed"
