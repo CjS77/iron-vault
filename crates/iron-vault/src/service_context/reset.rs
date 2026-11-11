@@ -270,7 +270,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     async fn read_reset_scope(&self) -> Result<ResetScope, ResetRefusal> {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let read = tokio::task::spawn_blocking(move || reset_scope(&locks.state, &locks.config, &setup.fs)).await;
-        read.map_err(|_| unreadable("the read did not finish"))?.map_err(|e| unreadable(e))
+        read.map_err(|_| unreadable("the read did not finish"))?.map_err(unreadable)
     }
 
     async fn read_vault_id(&self) -> Result<VaultId, ResetRefusal> {
