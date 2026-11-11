@@ -225,8 +225,8 @@ These are the fields more than one event uses:
 | `version` | number | An approval version |
 | `committed_version` | number | The committed approval version, left out when nothing is committed |
 | `config_digest` | string | A config digest, as `blake2b:` and 64 lowercase hex digits |
-| `file` | string | A state or config file name, never a path |
-| `step` | string | A fixed step label, such as an approval step, an init step, a reset step (`begin`, `remove`, `finish`), or an approver change step (`read_back`, `key_file`, `key_check`, `approval_state`) |
+| `file` | string | A state or config file name, or a migration bundle entry's name; never a path |
+| `step` | string | A fixed step label, such as an approval step, an init step, a reset step (`begin`, `remove`, `finish`), an approver change step (`read_back`, `key_file`, `key_check`, `approval_state`), or an export step (`check`, `snapshot`, `seal`, `transfer`) |
 | `refusal` | string | Why an admin connection, request, command, migration authorization or host unlock was refused: a fixed label |
 | `unavailable_reason` | string | An unavailable reason: `locked`, `policy_invalid`, `checking` or `recovery_needed` |
 | `detail` | string | A check failure's detail: fixed phrases with versions and configured names only |
@@ -762,6 +762,13 @@ The lock from Ready or Unavailable raises the existing `service.lock-transition`
 | `migration.challenge-issued` | INFO | a migration challenge was issued | `operation`, `method`; `destination_recipient` for `add_recipient` |
 | `migration.authorized` | INFO | a source-owner method proved the challenge | `operation`, `method`; `destination_recipient` for `add_recipient` |
 | `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled, or the authorization was refused when consumed | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
+
+**Migration bundle** ([migration-bundle.md](migration-bundle.md#audit-events) lists the import events still to come):
+
+| Event | Level | When | Fields |
+|---|---|---|---|
+| `migration.exported` | INFO | the last bundle data frame of an export was written | `vault_id`, `records`, `approvers`, `committed_version`, `highest_reserved` |
+| `migration.export-failed` | WARN | an export failed at its snapshot checks, or after its authorization was consumed | `step` (`check`, `snapshot`, `seal` or `transfer`), `error_kind` (`locked` for a `lock`, `deadline` for a missed deadline); `file` when a file failed |
 | `migration.import-discarded` | WARN | an unfinished import was discarded, by `import` or `init` | `files` |
 
 **Owner notifications** (v1; not emitted in v0.
@@ -818,7 +825,9 @@ The fields that only one event uses, or that only audit events use:
 | `authorizing_approver_id` | string | The approver that gave owner presence for an approver change: its approver ID, a hyphenated UUID |
 | `authorizing_approver_label` | string | That approver's label, escaped |
 | `signer_kind` | string | `software`, `tpm` or `hardware` |
-| `approvers` | number | The approver count after an approver change |
+| `approvers` | number | The approver count after an approver change, or that a migration bundle carries |
+| `records` | number | The number of credential records a migration bundle carries |
+| `highest_reserved` | number | The highest reserved approval version |
 | `recipients` | number | The recipient count after a recipient change |
 | `change` | string | `add` or `remove` |
 | `committed` | string | `no`, `unknown` or `yes`: whether a failed recipient change committed; `no` or `unknown` for a failed approver change, always `no` when `step` is `read_back` |

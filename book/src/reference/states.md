@@ -80,7 +80,7 @@ when the vault is open. The rest run only where this table says; elsewhere they 
 | `recovery check` | | yes | | yes | |
 | `lock` | | | | yes | yes |
 | `config approve` | | | | yes | `policy invalid` only |
-| `add`, `replace`, `rm` | | | | yes | |
+| `add`, `replace`, `rm`, `export` | | | | yes | |
 | reload (SIGHUP) | | | | yes | |
 
 A SIGHUP in any state but Ready is ignored, so a reload is never a way out of Unavailable.

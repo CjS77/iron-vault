@@ -147,18 +147,19 @@ the CLI exits with `3` before it connects.
 
 ### Migration authorization
 
-`recipient add` and `export` share these codes. `export` is not a CLI command yet.
+`recipient add` and `export` share these codes.
 
 | Code | Name | Meaning | What to do |
 |---|---|---|---|
 | `28` | `migration-denied` | Migration authorization was refused: the vault passphrase was wrong, the envelopes it opened are not this vault's, or the authorization expired, was used already or is for another operation. Nothing was exported or rewrapped. | Start the command again with the right vault passphrase. |
-| `29` | `migration-unavailable` | Migration authorization could not be checked, or a `lock` cancelled the command at its prompt. Nothing was exported or rewrapped. | Read the message and try again. |
+| `29` | `migration-unavailable` | Migration authorization could not be checked, or a `lock` cancelled the command at its prompt, or at `export`'s export passphrase prompts. Nothing was exported or rewrapped. | Read the message and try again. |
 | `33` | `migration-rate-limited` | Too many wrong vault passphrases in a row. The message gives the seconds to wait. | Wait that long. The limit is the one `unlock` shares. |
 
 ### Migration bundle
 
-`export` and `import` are not CLI commands yet. The service has the four codes below ready for them, and no command raises
-them until those commands land.
+`export` raises `export-failed`. `import` is not a CLI command yet: the service has the other three codes ready for it,
+and no command raises them until it lands. `export` also answers `passphrase-rejected` when the export passphrase is
+under 12 characters or its two copies differ, and `wrong-state` outside Ready.
 
 | Code | Name | Meaning | What to do |
 |---|---|---|---|

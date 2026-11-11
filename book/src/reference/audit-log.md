@@ -214,13 +214,24 @@ file byte is logged.
 
 ### Migration authorization
 
-`recipient add` writes these events, and `export` will: they come from the authorization step the two share.
+`recipient add` and `export` write these events: they come from the authorization step the two share.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `migration.challenge-issued` | INFO | A migration challenge was issued | `operation` (`export` or `add_recipient`), `method` (`vault_passphrase`); `destination_recipient` for `add_recipient` |
 | `migration.authorized` | INFO | The owner proved the challenge | `operation`, `method`; `destination_recipient` for `add_recipient` |
 | `migration.authorization-refused` | WARN | The challenge was refused or cancelled, or the authorization was refused when used | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
+
+### Migration bundle
+
+`export` writes the first two. A refused authorization or a rejected export passphrase writes neither: the
+authorization's own records say what happened. None of these carries a passphrase, a key or a byte of a credential
+record.
+
+| Event | Level | When | Fields |
+|---|---|---|---|
+| `migration.exported` | INFO | The whole bundle was sent | `vault_id`, `records` (the credentials it carries), `approvers` (the approvers it carries), `committed_version`, `highest_reserved` (the highest reserved approval version) |
+| `migration.export-failed` | WARN | The snapshot check before the prompts failed, or the export failed after its authorization was used | `step` (`check`, `snapshot`, `seal` or `transfer`), `error_kind` (`locked` for a `lock`, `deadline` for a missed deadline); `file` when a file failed |
 | `migration.import-discarded` | WARN | An unfinished import was discarded by `init` | `files`: the names removed, `config.toml` among them when the import wrote one |
 
 ## `jq` recipes
