@@ -522,9 +522,9 @@ service is Ready; in any other state the exchange ends with `wrong-state` before
 
 The exchange, after the request, is the eleven steps of [migration-bundle.md](migration-bundle.md#export): the snapshot
 checks, the [migration authorization exchange](migration-authorization.md#admin-exchange) (a notice with the summary, then
-the `Vault passphrase` prompt), the prompts `Export passphrase` and `Repeat the export passphrase`, then the snapshot sent
+the `Vault passphrase` prompt, switchable to each `tpm` approver's PIN), the prompts `Export passphrase` and `Repeat the export passphrase`, then the snapshot sent
 as bundle data frames and the empty frame that ends it. A `lock` that cancels the exchange at either export passphrase
-prompt ends it with `migration-unavailable`, as it does at the vault passphrase prompt.
+prompt ends it with `migration-unavailable`, as it does at the authorization prompt.
 
 The success result:
 
@@ -941,8 +941,8 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
 | `26` | `list-too-large` | `list`: the credential list does not fit one frame; the message names the count |
 | `27` | `memory-unprotected` | `unlock`, `recovery check`, `init`, `import`: a protected install's memory is not locked, so the vault identity is not unwrapped, or for `init` and `import` not generated; the message names the memory-lock limit or the locking error, and the service state is unchanged |
-| `28` | `migration-denied` | `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing was exported or rewrapped |
-| `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its vault passphrase prompt (for `export`, also at either export passphrase prompt); nothing was exported or rewrapped |
+| `28` | `migration-denied` | `export`, `recipient add`: migration authorization was refused: the vault passphrase or TPM approval PIN was wrong, the envelopes it opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing was exported or rewrapped |
+| `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the TPM signing helper refused for a reason other than the PIN or a lockout, the random source failed, no source-owner method could be asked, or a `lock` cancelled the command at its authorization prompt (for `export`, also at either export passphrase prompt); nothing was exported or rewrapped |
 | `30` | `recovery-key-invalid` | `recovery check`: the text is not an `AGE-SECRET-KEY-1…` recovery key; the message holds nothing typed |
 | `31` | `recovery-check-failed` | `recovery check`: the key does not open this vault; the message is fixed |
 | `32` | `recovery-check-unavailable` | `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the key was not judged; the message names the initialization state, or the file and error kind |

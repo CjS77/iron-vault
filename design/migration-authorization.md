@@ -21,8 +21,8 @@ Three rules drive the design:
 
 ## The v0 method: the vault passphrase
 
-In v0 the one source-owner method is the vault passphrase, the vault-unlock `Passphrase`. Inside one exchange the
-service:
+The vault passphrase, the vault-unlock `Passphrase`, is the source-owner method every vault has. The other v0 method is
+a `tpm` approver's PIN ([Source-owner method](#source-owner-method)). Inside one exchange the service:
 
 1. sends a secret prompt, `Vault passphrase`, the label `unlock` uses, since it asks for the same secret;
 2. reads `operational.age` and `identity.age` from disk, opens the passphrase envelope with the passphrase, and unwraps
@@ -102,8 +102,11 @@ The persona separates this digest from every other BLAKE2b use in the service. I
 change to the layout takes a new persona. The times are meaningful only inside the process that issued the challenge,
 which is the only process that ever verifies it.
 
-A source-owner method that signs proves the challenge by signing its binding digest. The TPM approval key (EP-33)
-signs it, and the service verifies the signature against the enrolled key. The passphrase method has nothing to sign.
+A source-owner method that signs proves the challenge by signing its [migration proof
+payload](tpm-approval-signer.md#what-the-helper-signs): magic `IVMA`, a format version and the binding digest, never the
+bare digest, so a signature over a challenge can never be read as one over 32 bytes of some other structure. The TPM
+approval key signs it, and the service verifies the signature against the pinned key. The passphrase method has nothing
+to sign.
 Its binding comes from the service: the challenge it proves is the one the service took out of the pending slot by its
 binding digest, and the authorization it yields carries that challenge.
 
@@ -172,7 +175,7 @@ vault. It is a trait, so `export` and `recipient add` do not depend on which fac
 | Method | Label | Phase | The service proves the challenge by |
 |---|---|---|---|
 | Vault passphrase | `vault_passphrase` | v0 | opening the envelopes from disk with the typed passphrase ([above](#the-v0-method-the-vault-passphrase)) |
-| TPM approval-key PIN | `tpm_pin` | EP-33 | having the TPM sign the binding digest with the approval key under the typed PIN, then verifying the signature |
+| TPM approval-key PIN | `tpm_pin` | v0, for each `tpm` approver | having the TPM signing helper sign the challenge's migration proof payload (`IVMA`) with the approver's key under the typed PIN, then verifying the signature against the pinned key ([tpm-approval-signer.md](tpm-approval-signer.md#migration)) |
 | YubiKey touch | `yubikey_touch` | the hardware-key phase | a fresh touch on the enrolled key for this challenge, plus any PIN its policy requires |
 
 The service starts and verifies every hardware proof itself. A signature over another digest, an earlier touch or a
@@ -181,14 +184,23 @@ started, not that the owner is present.
 
 These do not authorize a migration: the recovery key, which §16 keeps for loss rather than listing as a migration
 factor; the approval passphrase; an earlier unlock or migration authorization; an admin connection; and the export
-passphrase. Which method to ask for when a vault has more than one enrolled is EP-33's decision, made when the TPM
-method lands.
+passphrase. When a vault has more than one method, step 6 of the [admin exchange](#admin-exchange) asks them in a
+switchable prompt: the vault passphrase first, then each `tpm` approver ([tpm-approval-signer.md](tpm-approval-signer.md#migration)).
+
+The TPM method's refusals are `wrong_pin` (`migration-denied`) when the TPM refuses the PIN, `tpm_locked_out`
+(`tpm-locked-out`, 51) when the TPM is in lockout or the helper's reserve withheld the try, and `unavailable`
+(`migration-unavailable`) for any other helper status, with a message naming the status. An answer that is empty or not
+UTF-8 is a wrong PIN and never reaches the TPM. The PIN is never cached: the service derives the authorization value,
+uses it for this one proof and drops it.
 
 A hardware device's own lockout applies as the device enforces it, such as the TPM's dictionary-attack protection
 for the approval key ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)) and its
 dictionary-attack state across power loss ([§15](iron-vault-specification.md#15-service-states-and-errors)). The
-service adds no limit of its own for a device. The vault passphrase has the
-[attempt limit](#passphrase-attempt-limit) below.
+service adds no limit of its own for a device. The TPM signing helper's [lockout
+reserve](tpm-approval-signer.md#lockout-reserve) is not such a limit: it reads the device's own counter and withholds
+the tries that belong to the TPM's other users, and what it withholds the device restores. The vault passphrase has
+the [attempt limit](#passphrase-attempt-limit) below; a wrong PIN does not count toward it, and a proof by PIN does not
+reset it.
 
 ## Passphrase attempt limit
 
@@ -207,15 +219,16 @@ The cooldown after the *n*th consecutive failure, for *n* of 5 or more, is the b
 capped: 30 s, 1 min, 2 min, 4 min, 8 min, then 15 min for every further failure. It runs from the failure. Fewer than 5
 consecutive failures never limit.
 
-- **What counts.** Only an owner refusal: `wrong_passphrase` and `not_this_vault`. An `unavailable` check, a
-  `cancelled` prompt, a `lock` and a refusal for `rate_limited` itself do not, because none shows a wrong guess.
+- **What counts.** Only an owner refusal of the vault passphrase: `wrong_passphrase` and `not_this_vault`. A
+  `wrong_pin` is the TPM's to count, not this limit's. An `unavailable` check, a `cancelled` prompt, a `lock` and a refusal for `rate_limited` itself do not, because none shows a wrong guess.
   `expired`, `not_pending` and `binding_mismatch` follow a proof and are not guesses.
-- **What resets it.** A success, and a restart. The count is held in memory, and `lock` does not clear it: otherwise
+- **What resets it.** A vault passphrase success, and a restart. A proof by TPM PIN leaves the count as it is. The count is held in memory, and `lock` does not clear it: otherwise
   a guesser could `lock` after every fourth failure.
-- **When it is checked.** At step 6, before the `Vault passphrase` prompt, so a limited owner is not asked to type. A
-  limited exchange retires its challenge, records `migration.authorization-refused` with `rate_limited` and ends with
+- **When it is checked.** At step 6, before the `Vault passphrase` prompt, so a limited owner is not asked to type it:
+  during a cooldown the prompt leaves the vault passphrase out and asks only the `tpm` approvers, if any. With none, the
+  exchange retires its challenge, records `migration.authorization-refused` with `rate_limited` and ends with
   `migration-rate-limited`. The message and the record carry `retry_after`, the seconds left in the cooldown, rounded up
-  to a whole second.
+  to a whole second. It is checked again just before the passphrase is tested.
 - **One count for every vault passphrase prompt.** `unlock` asks for the same secret, so a limit on migration alone
   would slow no one: a guesser could `lock` the service and guess through `unlock`. The count lives in the service
   context, not in the migration slot, so `unlock` shares it. Failures at either prompt add to the one count, and a
@@ -243,8 +256,8 @@ their epics'. In order:
 | 3 | The command's own checks, such as that the destination recipient is not already enrolled | the command's own |
 | 4 | The command's summary, as one or more notices | |
 | 5 | Issue the migration challenge, recorded as `migration.challenge-issued` | `busy`, `migration-unavailable` |
-| 6 | The attempt limit allows another attempt; then a secret prompt, `Vault passphrase` | `migration-rate-limited`, none (cancelled), `migration-unavailable` (a `lock`) |
-| 7 | Take the challenge out of the slot and run the method; on success, `migration.authorized` | `migration-denied`, `migration-unavailable` |
+| 6 | A secret prompt, switchable between the [methods this install can ask](#which-method-is-asked) | `migration-rate-limited` or `migration-unavailable` (no method can be asked), none (cancelled), `migration-unavailable` (a `lock`) |
+| 7 | Take the challenge out of the slot and run the method the owner answered; on success, `migration.authorized` | `migration-denied`, `migration-unavailable`, `tpm-locked-out` |
 | 8 | The command's own prompts: for `export`, the export passphrase and its repeat | the command's own; `migration-unavailable` for `export` when a `lock` cancels either prompt |
 | 9 | The service is still in the recorded state and check generation; consume the authorization | `wrong-state`, `migration-denied` |
 | 10 | The operation | the command's own |
@@ -256,7 +269,8 @@ that can take it. A `lock` cancels the exchange at any of its prompts. The servi
 retires any pending challenge, so a dropped exchange leaves none behind.
 
 **The summary names what the challenge binds:** the operation, the vault ID and the destination recipient when there
-is one. It also says which factor is asked for, and for `export` that a new export passphrase follows. The command
+is one. It also says which factor is asked for, naming the method step 6 asks first (`the TPM approval PIN for
+"<label>"` when that is a `tpm` approver), and for `export` that a new export passphrase follows. The command
 writes the rest. For example:
 
 ```text
@@ -273,8 +287,25 @@ add a recipient to the vault
   authorize with: the vault passphrase
 ```
 
-There is no separate `Type yes` confirmation. As with owner presence, typing the vault passphrase after the summary is
-the confirmation, and cancelling the prompt declines.
+There is no separate `Type yes` confirmation. As with owner presence, typing the vault passphrase or PIN after the
+summary is the confirmation, and cancelling the prompt declines.
+
+### Which method is asked
+
+Step 6 asks one secret prompt that the owner may switch between every source-owner method this install can ask, under
+one prompt deadline, as at the [approver prompt](approval-signers.md#approver-order):
+
+1. the vault passphrase (`Vault passphrase`), while `operational` is enrolled and the attempt limit is not in a
+   cooldown. In v0 the [independence rule](recipients.md#independence-rule)'s part 2 keeps `operational` enrolled, so
+   only a cooldown leaves it out;
+2. then each `tpm` approver the [approver order](tpm-approval-signer.md#prompt-and-proof) can ask, in that order
+   (`TPM approval PIN for "<label>"`). One with no `.tpm` file, or any while the helper socket is missing, is left out.
+
+The prompt is switchable when more than one method is left. When none is left, the exchange retires its challenge and
+ends with `migration-rate-limited` if the vault passphrase was left out for a cooldown, and `migration-unavailable`
+otherwise. The vault passphrase comes first because every vault has it, and because a wrong one costs the owner a
+cooldown of their own, while a wrong PIN spends a try of the TPM's counter, shared with the whole machine. A wrong answer
+ends the exchange; the service never moves on to another method. The approval passphrase is never offered.
 
 Only after step 7 succeeds does `export` ask for the export passphrase
 ([§16](iron-vault-specification.md#16-administration-recovery-and-migration): "only after this source-owner check
@@ -283,12 +314,13 @@ not been authorized.
 
 ### Error codes
 
-Three codes join the [admin protocol's table](admin-protocol.md#admin-response-error-kind-5), numbered 28, 29 and 33.
+Three codes join the [admin protocol's table](admin-protocol.md#admin-response-error-kind-5), numbered 28, 29 and 33. A
+TPM lockout at step 7 is `tpm-locked-out` (51, [tpm-approval-signer.md](tpm-approval-signer.md#prompt-and-proof)).
 
 | Code | Name | Meaning |
 |---|---|---|
-| `28` | `migration-denied` | `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing was exported or rewrapped |
-| `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its vault passphrase prompt (for `export`, also at either export passphrase prompt); nothing was exported or rewrapped |
+| `28` | `migration-denied` | `export`, `recipient add`: migration authorization was refused: the vault passphrase or TPM approval PIN was wrong, the envelopes it opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing was exported or rewrapped |
+| `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the TPM signing helper refused for a reason other than the PIN or a lockout, the random source failed, no method could be asked, or a `lock` cancelled the command at its authorization prompt (for `export`, also at either export passphrase prompt); nothing was exported or rewrapped |
 | `33` | `migration-rate-limited` | `export`, `recipient add`: too many wrong vault passphrases in a row; the [attempt limit](#passphrase-attempt-limit) refused the attempt before any prompt, and the message gives the whole seconds to wait; nothing was exported or rewrapped |
 
 The messages are fixed phrases, apart from the seconds to wait, and none holds owner input. Each refusal ends the exchange as follows:
@@ -300,9 +332,11 @@ The messages are fixed phrases, apart from the seconds to wait, and none holds o
 | `expired` | the challenge was taken, or the authorization consumed, after its expiry | `migration-denied` |
 | `not_pending` | the slot does not hold the challenge: it was already taken or retired | `migration-denied` |
 | `binding_mismatch` | the consuming operation's vault ID, operation or destination is not the authorization's | `migration-denied` |
-| `unavailable` | an envelope could not be read or opened for a reason other than the passphrase | `migration-unavailable` |
+| `wrong_pin` | the TPM refused the PIN, or the input is empty or not UTF-8 | `migration-denied` |
+| `tpm_locked_out` | the TPM is in lockout, or the helper's lockout reserve withheld the try | `tpm-locked-out` |
+| `unavailable` | an envelope could not be read or opened for a reason other than the passphrase; the TPM signing helper answered another status, or its signature does not verify against the pinned key; or no method could be asked | `migration-unavailable` |
 | `rate_limited` | the attempt limit is in a cooldown; no prompt was sent | `migration-rate-limited` |
-| `locked` | a `lock` cancelled the command at its vault passphrase prompt | `migration-unavailable` |
+| `locked` | a `lock` cancelled the command at its authorization prompt | `migration-unavailable` |
 | `cancelled` | the prompt got no owner input: the CLI closed, the connection failed, the prompt deadline passed, or the answer was not owner input | as for any prompt without owner input ([prompts](admin-protocol.md#admin-socket)): no response, `unexpected-frame` (code 4) for a well-formed frame out of turn, or the error an undecodable answer maps to |
 
 `not_pending` and `binding_mismatch` cannot be reached through a command, which issues and consumes its own
@@ -317,13 +351,14 @@ owner input.
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `migration.challenge-issued` | INFO | a migration challenge was issued (step 5) | `operation`, `method`; `destination_recipient` for `add_recipient` |
-| `migration.authorized` | INFO | a source-owner method proved the challenge (step 7) | `operation`, `method`; `destination_recipient` for `add_recipient` |
-| `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled (steps 6–7), or the authorization was refused when consumed (step 9) | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
+| `migration.authorized` | INFO | a source-owner method proved the challenge (step 7) | `operation`, `method`; `approver_id` for `tpm_pin`; `destination_recipient` for `add_recipient` |
+| `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled (steps 6–7), or the authorization was refused when consumed (step 9) | `operation`, `method`, `refusal`; `approver_id` for `tpm_pin`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
 
 | Field | Type | Form |
 |---|---|---|
 | `operation` | string | `export` or `add_recipient` |
-| `method` | string | A source-owner method's label: `vault_passphrase` in v0 |
+| `method` | string | A source-owner method's label: `vault_passphrase` or `tpm_pin`. `migration.challenge-issued` names the method asked first; the closing record names the one the owner answered, or the one asked first when none was answered |
+| `approver_id` | string | For `tpm_pin`, the `tpm` approver whose PIN was typed, as a hyphenated UUID |
 | `destination_recipient` | string | The destination recipient key's `age1…` text, which is public |
 | `refusal` | string | One of the refusal labels [above](#error-codes) |
 | `retry_after` | integer | Whole seconds left in the attempt limit's cooldown, rounded up |
@@ -332,7 +367,7 @@ The records of one exchange follow two rules, so the log shows how each attempt 
 
 - **One closing record per challenge.** Each `migration.challenge-issued` is followed by exactly one closing record
   for steps 6 and 7: `migration.authorized`, or `migration.authorization-refused` with `wrong_passphrase`,
-  `not_this_vault`, `expired`, `not_pending`, `unavailable`, `rate_limited`, `locked` or `cancelled`.
+  `not_this_vault`, `wrong_pin`, `tpm_locked_out`, `expired`, `not_pending`, `unavailable`, `rate_limited`, `locked` or `cancelled`.
 - **At most one consume-time refusal, after `migration.authorized`.** Consuming the authorization at step 9 adds
   either nothing or one `migration.authorization-refused` with `expired` or `binding_mismatch`. It never follows a
   refused challenge, and those two labels are the only ones it uses.

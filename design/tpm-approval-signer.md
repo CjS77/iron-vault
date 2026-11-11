@@ -225,8 +225,8 @@ drops the nonce. A signature over an earlier nonce, or for another vault or appr
 | 4 | 1 | Format version: `01` |
 | 5 | 32 | The challenge's [binding digest](migration-authorization.md#binding-digest) |
 
-[migration-authorization.md](migration-authorization.md#binding-digest) says the TPM signs the binding digest. It
-signs this wrapper of it instead, so that a signature over a migration challenge can never be read as one over 32
+The TPM never signs the bare [binding digest](migration-authorization.md#binding-digest), only this wrapper of it, so
+that a signature over a migration challenge can never be read as one over 32
 bytes of some other structure. The magics are the domain separation: no message can be read as another, which is why
 the helper needs no state to refuse being an [arbitrary signing oracle](iron-vault-specification.md#17-docker-remote-servers-and-appliances).
 
@@ -422,7 +422,8 @@ machine ([open question 2](#open-questions)).
 The approval passphrase is still not a migration method; only a `tpm` approver's PIN is, because the TPM's lockout is
 what makes a short PIN safe to accept as source-owner proof.
 
-**`migration.authorized` and `migration.denied`** record the method label, and for `tpm_pin` also the approver ID.
+**`migration.authorized` and `migration.authorization-refused`** record the method label, and for `tpm_pin` also the
+approver ID (`approver_id`).
 
 ### The independence rule stays
 

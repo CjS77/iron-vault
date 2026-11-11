@@ -766,8 +766,8 @@ The `recipient.forget-checked` event ([forget-machine.md](forget-machine.md#audi
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `migration.challenge-issued` | INFO | a migration challenge was issued | `operation`, `method`; `destination_recipient` for `add_recipient` |
-| `migration.authorized` | INFO | a source-owner method proved the challenge | `operation`, `method`; `destination_recipient` for `add_recipient` |
-| `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled, or the authorization was refused when consumed | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
+| `migration.authorized` | INFO | a source-owner method proved the challenge | `operation`, `method`; `approver_id` for `tpm_pin`; `destination_recipient` for `add_recipient` |
+| `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled, or the authorization was refused when consumed | `operation`, `method`, `refusal`; `approver_id` for `tpm_pin`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
 
 **Migration bundle** ([migration-bundle.md](migration-bundle.md#audit-events) gives when each is written):
 
@@ -829,7 +829,7 @@ The fields that only one event uses, or that only audit events use:
 | `recipient` | string | A recipient key's `age1…` text, which is public |
 | `recipient_role` | string | A recipient role's name: `operational`, `recovery`, `added` or `host-unlock` |
 | `recipient_label` | string | A recipient label, escaped |
-| `approver_id` | string | The approver asked for, or that signed, or that an approver command enrolls or finds orphaned: its approver ID, a hyphenated UUID |
+| `approver_id` | string | The approver asked for, or that signed, or whose PIN a migration authorization asked, or that an approver command enrolls or finds orphaned: its approver ID, a hyphenated UUID |
 | `approver_label` | string | That approver's label, escaped |
 | `authorizing_approver_id` | string | The approver that gave owner presence for an approver change: its approver ID, a hyphenated UUID |
 | `authorizing_approver_label` | string | That approver's label, escaped |
@@ -845,7 +845,7 @@ The fields that only one event uses, or that only audit events use:
 | `reminders_since` | string | When the reminder schedule started counting, an RFC 3339 UTC timestamp to the second |
 | `reminder_days` | number | The reminder interval in force, in days |
 | `operation` | string | A migration operation: `export` or `add_recipient` |
-| `method` | string | A source-owner method's label: `vault_passphrase` in v0 |
+| `method` | string | A source-owner method's label: `vault_passphrase` or `tpm_pin` |
 | `destination_recipient` | string | The recipient key a migration adds, in its `age1…` text, which is public |
 | `retry_after` | number | Whole seconds left in the passphrase attempt limit's cooldown, rounded up |
 | `topic` | string | A notification topic label, such as `vault_changed` |
