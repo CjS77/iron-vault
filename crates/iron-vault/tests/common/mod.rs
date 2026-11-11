@@ -25,6 +25,8 @@ pub mod recipient_harness;
 pub mod request_log;
 #[cfg(target_os = "linux")]
 pub mod scrub_stream;
+#[cfg(target_os = "linux")]
+pub mod tpm_helper;
 
 /// How long a test waits for one response, or for a test upstream to record something, before failing.
 pub const WAIT: std::time::Duration = std::time::Duration::from_secs(10);

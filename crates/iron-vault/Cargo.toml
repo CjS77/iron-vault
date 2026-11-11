@@ -102,6 +102,8 @@ http.workspace = true
 # Checks that no `log` backend is installed, so dependency `log` records are discarded.
 log.workspace = true
 proptest.workspace = true
+# The stand-in TPM signing helper signs with a P-256 key, as the real one does.
+p256.workspace = true
 # A CA and leaf certificates for the upstream-trust tests, generated offline.
 rcgen.workspace = true
 # A pseudo-terminal to be the CLI's controlling terminal, and the signals the CLI's signal tests deliver.

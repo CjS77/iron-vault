@@ -1427,6 +1427,7 @@ dependencies = [
  "iron-vault-tpm-protocol",
  "listenfd",
  "log",
+ "p256",
  "proptest",
  "qrcode",
  "rand_core 0.6.4",
