@@ -42,6 +42,8 @@ jobs:
         run: cargo test -p iron-vault --bin iron-vault --locked cli::reference
       - name: Compose release check preflight
         run: scripts/release/compose-check-test.sh
+      - name: TPM unlock release check preflight
+        run: scripts/release/tpm-unlock-check-test.sh
       - name: Host unlock provisioning helper
         run: scripts/provision-host-unlock-test.sh
       - name: Test development mode
