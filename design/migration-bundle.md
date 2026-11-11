@@ -57,7 +57,7 @@ sealed for the transfer:
 | `config.toml.sig` | The destination approves the config for itself before it routes ([§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 5; [The config](#the-config)). |
 | `config.toml.pending`, `config.toml.sig.staged` | Leftovers of an approval that never committed, on the source. |
 | Host unlock handoff, TPM-sealed material, listener TLS keys | Bound to the source host; [§16](iron-vault-specification.md#16-administration-recovery-and-migration) moves no non-exportable key. |
-| The "locked by owner" marker that TPM unlock adds to the state directory | It records an owner's `lock` on the source host; the destination starts with none. |
+| The owner-lock file (`locked-by-owner`), which TPM unlock adds to the state directory | It records an owner's `lock` on the source host; the destination starts with none. |
 
 **The exported identity envelope is not `identity.age`.** [§14](iron-vault-specification.md#14-recipients-startup-and-memory)
 forbids an scrypt stanza in `identity.age` beside other recipients, and
@@ -97,9 +97,11 @@ vault routes only after the owner approves it once, on the destination:
   `unlock`, the config check finds the committed approval's config with no signature beside it, row 7 of the
   [recovery table](config-approval.md#recovery-table), and the service stays Unavailable with `PolicyInvalid`.
   Unavailable with `PolicyInvalid` offers `config approve` (`ServiceState::admin_allows`,
-  `crates/iron-vault/src/service_state.rs`).
-- **One approval, at a new version.** The import's result names the written file, and the CLI prints the exact command,
-  such as `iron-vault config approve /etc/iron-vault/config.toml`. That approval asks an approval passphrase and
+  `crates/iron-vault/src/service_state.rs`). Until then the request listeners are a provisional listener set, bound
+  from the unverified `config.toml`, and answer every request with `503` (`ServiceState::listener_provenance`).
+- **One approval, at a new version.** The CLI writes its own copy of the config beside the bundle
+  ([The config copy](#the-config-copy)) and prints the exact command, such as
+  `iron-vault config approve vault.bundle.config.toml`. That approval asks an approval passphrase and
   reserves the highest reserved version plus one, so the destination routes only after a new approval at a version
   above any the source reserved ([§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 5).
   No state or edge is added to the [service state model](iron-vault-specification.md#15-service-states-and-errors).
@@ -117,6 +119,33 @@ and it would serve a config approved for the old host's listeners, peer accounts
 `config.toml`. It verifies as the committed approval, and the vault serves without a new one. Root is trusted
 ([§2](iron-vault-specification.md#2-security-promise-and-limits)) and could equally approve the config, so the design
 does not stop it.
+
+#### The config copy
+
+*Default, not yet confirmed by the owner.* `config approve` reads its file in the CLI
+([CLI client](admin-protocol.md#cli-client)), and the CLI cannot always read the service's config directory. In the
+Compose profile `/etc/iron-vault` is a named volume inside the container, and the owner runs `sudo iron-vault` on the
+host, not inside it ([docker-compose.md](docker-compose.md#admin-access)); over a forwarded admin socket the service's
+files are on another machine. The CLI does hold the bundle, so it gives the owner a copy of the config from there:
+
+- Before it sends the request, the CLI creates `<bundle>.config.toml` beside the bundle with `O_CREAT | O_EXCL` and
+  mode `0600`, so a name already taken shows before any prompt; the error names the file, for the owner to move.
+- After the success response, the CLI decodes the bundle with the store's bundle decoder up to the `config.toml` entry,
+  the fourth, opening no `age` entry. It requires the entry's BLAKE2b-256 to equal the committed config digest in the
+  result, which the service took from the approval state the vault identity opened, then writes the entry to the
+  copy and fsyncs it. So the CLI holds only the config, which is no secret, and ciphertext, as
+  [§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 2 asks.
+- On any ending but success, the CLI removes the copy. If the import committed but the copy cannot be written or does
+  not match, as when the bundle file changed during the import, the CLI removes it too, says so, and prints the digest
+  `blake2b:<hex>` for the owner to check their own copy of the source's config against before approving it.
+
+The service still writes `config.toml` into its own config directory at write step 5: the provisional listener set
+and the config check read it there. The copy is only what the owner approves.
+
+*Alternative:* the CLI writes no copy. The result carries the committed config digest, and the CLI tells the owner to
+approve their own copy of the source's config and to check it against `blake2b:<hex>` first. It needs no bundle
+decoding in the CLI, but leaves the owner to find and carry the source's config by hand, the friction the bundled
+config was chosen to remove.
 
 ### Counters and routing
 
@@ -199,29 +228,44 @@ recipient inventory leaves the service Ready, and export never reads the invento
 
 ### The snapshot
 
-The **export snapshot** is taken at step 10 of the exchange, after the migration authorization is consumed, under the
-service-wide lock that the exchange has held since step 2 ([admin exchange](migration-authorization.md#admin-exchange)).
-No `add`, `replace`, `rm`, approval or approver change can run in between, so the files read form one consistent vault
-([§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 1). In order:
+The **export snapshot** is checked at step 3 of the exchange and read at step 10, after the migration authorization
+is consumed, both under the service-wide lock that the exchange holds from step 2
+([admin exchange](migration-authorization.md#admin-exchange)). No `add`, `replace`, `rm`, approval or approver change
+can run in between, so the files read form one consistent vault
+([§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 1).
+
+**At step 3**, before any prompt, the read-only checks run, so a damaged vault is refused before the owner spends an
+authorization or chooses an export passphrase:
 
 1. Read `manifest.age` and open it with the vault identity; read `approval.age` and open it, and require it to equal
    the approval state the service holds.
 2. Read `config.toml`, bounded by `MAX_CONFIG_LEN`, and require its BLAKE2b-256 to equal the committed config digest.
 3. For each pinned approver, in ascending approver ID, read its key file, bounded by `MAX_PASSPHRASE_ENVELOPE_LEN`,
    and require exactly one scrypt stanza with a work factor no higher than `MAX_PASSPHRASE_WORK_FACTOR`. It is not
-   opened: export never asks for an approval passphrase. Encrypt it to the vault public key as its bundled approver
-   key.
-4. Seal the vault identity's secret text to the export passphrase as the exported identity envelope, at
+   opened: export never asks for an approval passphrase.
+4. Read each record file the manifest names, one at a time and bounded by `MAX_RECORD_FILE_LEN`, and require its
+   BLAKE2b-256 to equal its manifest entry's. No record file is kept.
+
+**At step 10**, in order:
+
+1. Read the manifest, the approval state, `config.toml` and the approver key files again, with the checks of step 3,
+   and encrypt each approver key file to the vault public key as its bundled approver key.
+2. Seal the vault identity's secret text to the export passphrase as the exported identity envelope, at
    `PASSPHRASE_WORK_FACTOR`. Drop the export passphrase.
-5. Encode and stream the bundle, entry by entry, in [bundle order](storage-formats.md#entries), then the empty bundle
-   data frame. Each record file is read when its turn comes, bounded by `MAX_RECORD_FILE_LEN`, and its digest is
-   checked against its manifest entry before any of its bytes are sent.
+3. Encode and stream the bundle, entry by entry, in [bundle order](storage-formats.md#entries), then the empty bundle
+   data frame. Each record file is read again when its turn comes, and its digest is checked against its manifest
+   entry before any of its bytes are sent.
+
+The files are read again at step 10 rather than kept from step 3, so export holds one record at a time. The lock holds
+off the service's own writers in between; the checks repeat because the bytes sent are the bytes read at step 10.
 
 Between frames export checks for a waiting `lock`, through the same cancellation that cancels a prompt, and for its
 deadlines. A `lock` ends the export with `export-failed` (step `transfer`, "cancelled by lock"), and the lock then
-takes the service-wide lock. The store reads each file once and streams it on; the binary relays the bytes into
-frames. Export writes nothing to the state or config directory and changes no counter. The source keeps serving after
-it.
+takes the service-wide lock. At step 10 the store reads each file once and streams it on; the binary relays the bytes
+into frames. Export writes nothing to the state or config directory and changes no counter. The source keeps serving
+after it. A credential or approval changed on the source after the export is not in the bundle: once imported, the
+destination is the single active writer ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)),
+so the owner makes changes there, or exports again.
 
 ## Import
 
@@ -288,8 +332,8 @@ Unfinished:
 - **The discard** removes, each with `durable_remove` and only those present: `config.toml` in the config directory,
   then `recovery.toml`, `approval.age`, `manifest.age`, the record files, the approver key files, `operational.age`,
   `recipients.age` and `identity.age`. `config.toml` is removed whatever its bytes: beside `import.unfinished` it is
-  the bundle's copy, and the bundle and the source still hold it. The marker stays, so a crash during the discard reads
-  Unfinished again.
+  the bundle's copy, and the bundle and the source still hold it. The Unfinished notice names `config.toml` when one is
+  there, so the owner knows that file goes too. The marker stays, so a crash during the discard reads Unfinished again.
 - **Either command discards either kind.** `import` and `init` each discard an unfinished initialization and an
   unfinished import. When the kind changes, the discard ends by removing the other command's marker durably, which
   leaves Uninitialized, and the command's step 1 then writes its own. A crash between the two reads Uninitialized,
@@ -316,11 +360,13 @@ which fsyncs the file, renames it and fsyncs its directory ([open question 5](#o
 
 Notes on the steps:
 
-- **Progress notices.** A full import writes over 4096 files, each with two fsyncs, and runs scrypt at step 7, which
-  can take longer than the CLI's 60-second socket timeout on slow storage. The service sends a notice before each step
-  and, within step 2, at least every 10 seconds ("writing credentials: 1024 of 4096"). Each notice is a frame, so the
-  CLI's reads never wait 60 seconds, and the owner sees the import move. This is the progress frame the
-  [CLI client](admin-protocol.md#cli-client) foresees, using the existing notice kind; the CLI's timeout is unchanged.
+- **Progress notices.** A full import writes over 4096 files, each with two fsyncs, runs scrypt at step 7 and reads
+  up to 256 MiB back at step 9, which can take longer than the CLI's 60-second socket timeout on slow storage. The
+  service sends a notice before each step and, within steps 2 and 9, at least every 10 seconds ("writing credentials:
+  1024 of 4096"). Each notice is a frame, so the CLI's reads never wait 60 seconds, and the owner sees the import move.
+  This is the progress frame the [CLI client](admin-protocol.md#cli-client) foresees, using the existing notice kind;
+  the CLI's timeout is unchanged. A notice that cannot be written does not stop the write order, which runs on to the
+  commit point, as `init`'s does after the reveal.
 - **Steps 4, 5 and 8 copy bytes.** The manifest and the approval state keep their state and peer generations, so they
   pair on the destination exactly as on the source ([state generation](storage-formats.md#state-generation)). Nothing
   is re-sealed, so nothing can change a counter.
@@ -361,12 +407,12 @@ What each command does after a crash, or any failure, following each step. `stat
 |---|---|---|
 | 1 | Ready, holding the vault identity | `wrong-state` |
 | 2 | Try the service-wide lock, recording the state and check generation | `busy` |
-| 3 | No checks of its own | |
+| 3 | The [snapshot checks](#the-snapshot) | `export-failed` (step `check`), naming the file |
 | 4 | The summary, below | |
 | 5–7 | Migration authorization: challenge, `Vault passphrase`, proof | `busy`, `migration-unavailable`, `migration-rate-limited`, `migration-denied` |
 | 8 | Two secret prompts: `Export passphrase`, `Repeat the export passphrase`, checked by the [passphrase rules](vault-initialization.md#passphrase-rules) once both are in | `passphrase-rejected`; `migration-unavailable` when a `lock` cancels either prompt, and the authorization drops unused; none (cancelled) when a prompt gets no owner input |
 | 9 | Same state and check generation; consume the authorization | `wrong-state`, `migration-denied` |
-| 10 | The [snapshot](#the-snapshot), streamed as bundle data frames, then the empty frame | `export-failed`: a snapshot or seal failure, a missed frame or [transfer deadline](#transfer), or a `lock` between frames |
+| 10 | The [snapshot](#the-snapshot), read again and streamed as bundle data frames, then the empty frame | `export-failed`: a snapshot or seal failure, a missed frame or [transfer deadline](#transfer), or a `lock` between frames |
 | 11 | The success response: the vault ID, the record count and the bundle's byte count | |
 
 The summary extends the one in [migration-authorization.md](migration-authorization.md#admin-exchange) with the counts:
@@ -410,7 +456,7 @@ factor would slow an offline guess at a stolen bundle, at the cost of 1 GiB of l
 | 6 | Two secret prompts, `Vault passphrase` and `Repeat the vault passphrase`, by the [passphrase rules](vault-initialization.md#passphrase-rules) | `passphrase-rejected` |
 | 7 | Generate the operational identity and the recovery key; the [recovery key presentation](vault-initialization.md#recovery-key-presentation): notice, reveal, `Type yes once you have saved the recovery key` | `declined` |
 | 8 | Try the service-wide lock; Locked and the initialization state again; the [write order](#write-order), with its progress notices | `busy`, `wrong-state`, `already-initialized`, `import-failed` |
-| 9 | The success response: the vault ID, the record count, the committed version, the highest reserved version, the path of the written `config.toml`, and the recipient roles enrolled, as `init`'s result gives them | |
+| 9 | The success response: the vault ID, the record count, the committed version, the highest reserved version, the committed config digest, and the recipient roles enrolled, as `init`'s result gives them | |
 
 **Step 4 verifies** what the destination will trust, before any write: the manifest opens with the vault identity and
 names the header's vault ID; the approval state opens, names the same vault ID, pairs with the manifest and has a
@@ -436,11 +482,11 @@ import a migration bundle
   routing starts after iron-vault config approve, at version 3 or later
 ```
 
-After success the CLI prints the next steps: `iron-vault unlock`; then the exact approval command for the written
-file, such as `iron-vault config approve /etc/iron-vault/config.toml`, with one of the approvers listed, and that an
-edited copy may be approved instead if the new host needs changes; then `iron-vault recovery check` with the new key;
-then comparing the versions above with the source's `status`; and only then retiring the source
-([§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 6).
+After success the CLI writes [the config copy](#the-config-copy) and prints the next steps: `iron-vault unlock`; then
+the exact approval command for the copy, such as `iron-vault config approve vault.bundle.config.toml`, with one of the
+approvers listed, and that an edited copy may be approved instead if the new host needs changes; then
+`iron-vault recovery check` with the new key; then comparing the versions above with the source's `status`; and only
+then retiring the source ([§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 6).
 
 **Prompts are not under a lock, and writes are**, as for `init`: step 8 takes the service-wide lock without waiting
 and reads both states again, because another `init` or `import` may have run during the prompts. The endings after the
@@ -461,7 +507,7 @@ Four codes join the [admin protocol's table](admin-protocol.md#admin-response-er
 
 | Code | Name | Meaning |
 |---|---|---|
-| `45` | `export-failed` | `export`: the snapshot or the transfer failed after the authorization was consumed, a transfer deadline passed, or a `lock` cancelled it between frames; the message names the step and, for a file, its name and the error kind; no bundle was completed |
+| `45` | `export-failed` | `export`: the snapshot checks found damage before any prompt; or the snapshot or the transfer failed after the authorization was consumed, a transfer deadline passed, or a `lock` cancelled it between frames; the message names the step and, for a file, its name and the error kind; no bundle was completed |
 | `46` | `bundle-invalid` | `import`: the bytes are not a migration bundle this version reads, exceed `MAX_BUNDLE_LEN`, or fail a check with the vault identity; the message names the rule or check, never a byte of the bundle; nothing was written |
 | `47` | `import-denied` | `import`: the export passphrase does not open the exported identity envelope; nothing was written |
 | `48` | `import-failed` | `import`: the host unlock flag was set and the service has no host unlock identity to enrol, raised before any prompt, so nothing was written; or a write failed, and the message names the step, says to run `import` again, which discards the unfinished import, and gives the recovery key advice of [Failing after the reveal](vault-initialization.md#failing-after-the-reveal) |
@@ -479,7 +525,7 @@ passphrase, a key or a byte of a record.
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `migration.exported` | INFO | the last bundle data frame of an export was written | `vault_id`, `records`, `approvers`, `committed_version`, `highest_reserved` |
-| `migration.export-failed` | WARN | an export failed after its authorization was consumed | `step` (`snapshot`, `seal` or `transfer`), `error_kind` (`locked` for a `lock`, `deadline` for a missed deadline); `file` when a file failed |
+| `migration.export-failed` | WARN | an export failed at its snapshot checks, or after its authorization was consumed | `step` (`check`, `snapshot`, `seal` or `transfer`), `error_kind` (`locked` for a `lock`, `deadline` for a missed deadline); `file` when a file failed |
 | `migration.import-refused` | WARN | an import was refused at steps 2 to 4 | `refusal` (`bundle_invalid` or `wrong_passphrase`); `detail`, the fixed name of the failed rule or check, for `bundle_invalid` |
 | `migration.import-discarded` | WARN | an unfinished import was discarded, by `import` or `init` | `files` |
 | `migration.imported` | INFO | the import's step 10 is durable | `vault_id`, `records`, `approvers`, `committed_version`, `highest_reserved`, `recipients`: the enrolled roles' names |
@@ -508,7 +554,7 @@ two service instances with their own state directories:
 |---|---|---|
 | records | `export_import_preserves_records` | Every record ID, name and record file's bytes on the destination equal the source's, and a request through each route resolves the same credential |
 | counters | `export_import_preserves_counters` | The destination's highest reserved and committed versions equal the source's; the first `config approve` commits the highest reserved plus one; the source's old config and signature pair copied over fails as superseded after it |
-| routing waits for approval | `import_routes_only_after_new_approval` | The destination's config directory holds the source's `config.toml` and no signature; after `unlock` it is Unavailable with `PolicyInvalid` and answers no route; `config approve` of that file shows the whole config as added, and routing starts |
+| routing waits for approval | `import_routes_only_after_new_approval` | The destination's config directory holds the source's `config.toml` and no signature; after `unlock` it is Unavailable with `PolicyInvalid` and answers no route; the CLI's config copy beside the bundle equals the source's config, and `config approve` of the copy shows the whole config as added, and routing starts |
 | recovery access | `import_recovery_key_opens_destination` | The recovery key the import revealed passes `recovery check` on the destination; the source's recovery key does not |
 | service boundary | `export_bundle_holds_no_plaintext_secret` | Neither the bundle file, the CLI's output, nor any file written under the CLI's or the services' directories holds a credential's secret bytes or the vault identity's text; the bundle holds no approver key envelope's bytes in the clear; the destination's `identity.age` holds no scrypt stanza |
 | service boundary | `import_requires_export_passphrase` | A wrong export passphrase writes nothing and ends with `import-denied` |
@@ -523,13 +569,14 @@ are tested with the commands that own them.
 
 ## Open questions
 
-Each point below was open in the specification or decided here against a reading of it. The owner decided every one
-on 2026-11-11; none is still open.
+Each point below was open in the specification or decided here against a reading of it. The owner decided points 2
+to 5 on 2026-11-11. Points 1 and 6 are defaults the owner has not yet confirmed.
 
-1. **Discarding an Unfinished vault.** *Decided: default accepted (2026-11-11).* The ticket asked import to refuse an
+1. **Discarding an Unfinished vault.** *Default, not yet confirmed by the owner.* The ticket asked import to refuse an
    Unfinished vault. *Default:* import and `init` each discard either kind of unfinished vault, because a refusal would
    leave an owner whose import crashed with no command that starts over, and an Unfinished vault never opened or
-   served. An interrupted reset is still refused.
+   served. An interrupted reset is still refused. *Alternative:* import refuses an Unfinished vault, as the ticket
+   asked, and only `init` discards one.
 2. **"Bundle passphrase" and "export passphrase".** *Decided: default accepted (2026-11-11).*
    [§16](iron-vault-specification.md#16-administration-recovery-and-migration) uses both for one secret ("require the
    bundle passphrase on import"; "That export passphrase encrypts the bundle"). *Default:* the glossary keeps
@@ -549,12 +596,18 @@ on 2026-11-11; none is still open.
 5. **A directory fsync for every rename.** *Decided: default accepted (2026-11-11).*
    [§13](iron-vault-specification.md#13-vault-structure-and-durable-writes) requires one for each durable replacement,
    and [§19](iron-vault-specification.md#19-v0-user-acceptance) checks that "every durable rename includes its directory
-   fsync". *Default:* every file of the write order is written with
-   `durable_replace`, its own directory fsync included, and progress notices keep a slow import inside the CLI's
-   timeout. *Alternative:* step 2 renames every record file, then fsyncs the state directory once. The marker makes
-   every record file part of the unfinished import until step 10, and step 9 proves each is on disk before the commit,
-   so a record file a crash loses is discarded with the rest. That saves up to 4096 directory fsyncs on a full vault,
-   but reads §13 as allowing one fsync for many renames.
+   fsync". *Default:* every file of the write order is written with `durable_replace`, its own directory fsync
+   included, and progress notices keep a slow import inside the CLI's timeout. *Alternative:* step 2 renames every
+   record file, then fsyncs the state directory once. The marker makes every record file part of the unfinished import
+   until step 10, and step 9 proves each is on disk before the commit, so a record file a crash loses is discarded with
+   the rest. That saves up to 4096 directory fsyncs on a full vault, but reads §13 as allowing one fsync for many
+   renames.
+6. **The config the owner approves after import.** *Default, not yet confirmed by the owner.* `config approve` reads
+   its file in the CLI, which in the Compose profile and over a forwarded admin socket cannot read the service's config
+   directory. *Default:* the CLI writes [the config copy](#the-config-copy) beside the bundle, from the bundle's
+   `config.toml` entry, checked against the committed config digest in the import's result. *Alternative:* the result
+   carries the digest only, and the owner approves their own copy of the source's config after checking it against
+   `blake2b:<hex>`.
 
 ## Implementation tickets
 
@@ -569,5 +622,5 @@ Each ticket updates the design documents and glossary entries it changes, in the
 | 5 | new | Store: the unfinished import in the initialization state, the store-owned list, and its discard | K-307 | vault-initialization.md "Initialization state", "Discarding an unfinished initialization" and the crash table; recovery.md "Initialization"; storage-formats.md, an "Unfinished import file" section; glossary "Unfinished import" and "Initialization state" |
 | 6 | K-311 | `iron-vault export`: deadlines and the `lock` cancel between frames | K-310, ticket 4 | audit-logging.md (`migration.exported`, `migration.export-failed`, the new fields); the manual's CLI, errors and audit log references |
 | 7 | K-312 | Store: the import write order, `config.toml` and the host unlock recipient included | K-308, K-309, ticket 5 | |
-| 8 | K-313 | `iron-vault import`: `--host-unlock`, the import slot, the receive deadlines, progress notices, the printed `config approve` command, and the first approval's full summary | K-312, ticket 4 | config-approval.md "Approval summary" (the same-config line needs an active config); docker-compose.md "Enrollment" and recipients.md "Initialization" (`import --host-unlock`); audit-logging.md (the `migration.import-*` events and `migration.imported`); the manual's CLI, errors, audit log and states references |
+| 8 | K-313 | `iron-vault import`: `--host-unlock`, the import slot, the receive deadlines, progress notices, the committed config digest in the result, the config copy beside the bundle and its printed `config approve` command, and the first approval's full summary | K-312, ticket 4 | config-approval.md "Approval summary" (the same-config line needs an active config); docker-compose.md "Enrollment" and recipients.md "Initialization" (`import --host-unlock`); audit-logging.md (the `migration.import-*` events and `migration.imported`); the manual's CLI, errors, audit log and states references |
 | 9 | K-314 | Migration release checks and the manual | K-311, K-313 | README features; the manual: the migration recipe out of the roadmap, the files reference |
