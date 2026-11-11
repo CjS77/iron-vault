@@ -553,7 +553,8 @@ Two release checks run on a disposable host and are the evidence for this profil
 - **The host unlock gate:** after provisioning and `init --host-unlock`, a restart and a reboot reach Ready with no
   `unlock`; the recovery key opens the same vault; `identity.age` has three X25519 stanzas; the handoff is on a ramfs
   that `findmnt` shows on the host; no `AGE-SECRET-KEY` appears in the image, the environment, the volumes, `/etc`,
-  `/var` or swap; and a missing or wrong handoff leaves the service Locked with passphrase `unlock` still working.
+  `/var` or swap, other than the public test keys of published crate sources in the build cache; and a missing or
+  wrong handoff leaves the service Locked with passphrase `unlock` still working.
   [`scripts/release/compose-unlock-check.sh`](../scripts/release/compose-unlock-check.sh) runs it in two parts around a
   reboot, behind the same `--i-know-this-is-a-disposable-vm` opt-in as the isolation check, and prints one PASS or
   FAIL line per item, or SKIP for the swap item on a host with no swap. Its last check is that nothing but the admin socket

@@ -32,7 +32,8 @@
 # Scope. `recovery check` needs the recovery key, which init shows once on a terminal. The script holds it only on a ramfs, but the
 # host `iron-vault` process and the pty that read it are ordinary memory, so a key found in swap may be that one and not the
 # service's. The swap check says so when it fails. Keys that appear in the repository (test fixtures, docs) are not counted, because
-# the image's build cache holds a copy of the sources; any other full-length key is.
+# the image's build cache holds a copy of the sources; nor are keys in files under a cargo registry's crate sources (the age crate's
+# test vectors, also in the build cache), which the disk scan counts and prints. Any other full-length key is.
 #
 # The jq programs are single-quoted on purpose: $name in them is jq's, not the shell's.
 # shellcheck disable=SC2016
@@ -344,16 +345,35 @@ stream_strays() { { grep -aoE "$KEY_RE" || true; } | stray_sources; }
 
 tree_strays() { { find "$@" -type f -exec grep -aHoE "$KEY_RE" {} + 2>/dev/null || true; } | stray_sources; }
 
-# Every scan below can only say "none" if the scanner can find one: plant a key in a stream and in a file and expect both.
+# The image's build stage unpacks published crate sources into the cargo registry, and those layers stay in the container runtime's
+# snapshot store as build cache. The age crate's sources there hold test keys: public, in no vault, not the service's identity. Hits
+# there are dropped by place rather than added to ALLOWED_KEYS by value, because a value allowed once is allowed everywhere: a
+# service key that also sat in a registry path would then pass in /etc or a volume too. By place, the same key anywhere else, in a
+# volume or in a containerd snapshot outside the registry, is still a stray.
+REGISTRY_SRC=/usr/local/cargo/registry/src/
+
+# Like tree_strays over the roots $2..., but drops hits under a cargo registry's crate sources and writes how many keys it dropped
+# to the file $1.
+disk_strays() {
+    local tally=$1
+    shift
+    tree_strays "$@" | awk -v src="$REGISTRY_SRC" -v tally="$tally" 'index($0, src) { n += $1; next } { print } END { print n + 0 >tally }'
+}
+
+# Every scan below can only say "none" if the scanner can find one: plant a key in a stream and in a file and expect both. The same
+# key planted in crate sources must be dropped and counted, while the file outside them is still reported.
 scanner_finds_a_planted_key() {
-    local stream tree
+    local stream tree registry src="$WORK/control${REGISTRY_SRC}x"
     stream=$(printf 'x %s y\n' "$CONTROL_KEY" | stream_strays)
-    mkdir "$WORK/control"
+    mkdir -p "$src"
     printf '%s\n' "$CONTROL_KEY" >"$WORK/control/key"
-    tree=$(tree_strays "$WORK/control")
-    rm -rf "$WORK/control"
-    echo "stream: $stream; tree: $tree"
-    [ "$(wc -l <<<"$stream")" -eq 1 ] && [ -n "$stream" ] && [ -n "$tree" ]
+    printf '%s\n' "$CONTROL_KEY" >"$src/key"
+    tree=$(disk_strays "$WORK/control.registry" "$WORK/control")
+    registry=$(cat "$WORK/control.registry")
+    rm -rf "$WORK/control" "$WORK/control.registry"
+    echo "stream: $stream; tree: $tree; registry keys: $registry"
+    [ "$(wc -l <<<"$stream")" -eq 1 ] && [ -n "$stream" ] && [ "$(awk '{ print $2 }' <<<"$tree")" = "$WORK/control/key" ] \
+        && [ "$registry" = 1 ]
 }
 
 # Prints stdin with "$1: " in front of every line.
@@ -404,8 +424,13 @@ no_key_on_disk() {
         case $vol in /etc/* | /var/*) ;; *) roots+=("$vol") ;; esac
     done < <(docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT" | xargs -r docker volume inspect -f '{{.Mountpoint}}')
     [ "$found" -ge 2 ] || { echo "found $found named volumes, want the config and state volumes"; return 1; }
-    out=$(tree_strays "${roots[@]}")
+    out=$(disk_strays "$WORK/registry-keys" "${roots[@]}")
     [ -z "$out" ] || { echo "$out"; return 1; }
+}
+
+# Under no_key_on_disk's PASS or FAIL line, what it skipped.
+registry_note() {
+    echo "     skipped $(cat "$WORK/registry-keys" 2>/dev/null || echo "?") keys in published crate sources (*$REGISTRY_SRC*)"
 }
 
 has_swap() { [ -n "$(swapon --noheadings --raw --show=NAME)" ]; }
@@ -494,6 +519,7 @@ run_part_two() {
         fail_unrun "no age secret key in the image, docker inspect or the service environment"
     fi
     check "no age secret key under /etc, /var or the named volumes" no_key_on_disk
+    registry_note
     if has_swap; then
         check "no age secret key in swap" no_key_in_swap
     else
