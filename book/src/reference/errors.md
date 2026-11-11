@@ -155,6 +155,18 @@ the CLI exits with `3` before it connects.
 | `29` | `migration-unavailable` | Migration authorization could not be checked, or a `lock` cancelled the command at its prompt. Nothing was exported or rewrapped. | Read the message and try again. |
 | `33` | `migration-rate-limited` | Too many wrong vault passphrases in a row. The message gives the seconds to wait. | Wait that long. The limit is the one `unlock` shares. |
 
+### Migration bundle
+
+`export` and `import` are not CLI commands yet. The service has the four codes below ready for them, and no command raises
+them until those commands land.
+
+| Code | Name | Meaning | What to do |
+|---|---|---|---|
+| `45` | `export-failed` | `export`: the snapshot checks found damage before any prompt, or the snapshot or the transfer failed after you authorized it: a deadline passed, or a `lock` cancelled it between frames. The message names the step and, for a file, its name and the error kind. No bundle was completed. | Read the message, fix what it names, and run `export` again. |
+| `46` | `bundle-invalid` | `import`: the bytes are not a migration bundle this version reads, are larger than the limit, or fail a check with the vault identity. The message names the rule or check, never a byte of the bundle. Nothing was written. | Export the bundle again from the source with a matching version. |
+| `47` | `import-denied` | `import`: the export passphrase does not open the bundle's identity envelope. Nothing was written. | Run `import` again with the passphrase chosen at `export`. |
+| `48` | `import-failed` | `import`: you asked for a host unlock identity and this machine has none to enrol, which is raised before any prompt and writes nothing; or a write failed. The message names the step. | For a failed write, run `import` again: it discards the unfinished import. Follow the message's advice about the recovery key shown. |
+
 ## Proxy refusals
 
 A refused request gets one of these statuses. Every body is a short fixed string, the same whatever caused it, so a

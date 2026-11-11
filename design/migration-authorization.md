@@ -245,7 +245,7 @@ their epics'. In order:
 | 5 | Issue the migration challenge, recorded as `migration.challenge-issued` | `busy`, `migration-unavailable` |
 | 6 | The attempt limit allows another attempt; then a secret prompt, `Vault passphrase` | `migration-rate-limited`, none (cancelled), `migration-unavailable` (a `lock`) |
 | 7 | Take the challenge out of the slot and run the method; on success, `migration.authorized` | `migration-denied`, `migration-unavailable` |
-| 8 | The command's own prompts: for `export`, the new export passphrase | the command's own |
+| 8 | The command's own prompts: for `export`, the export passphrase and its repeat | the command's own; `migration-unavailable` for `export` when a `lock` cancels either prompt |
 | 9 | The service is still in the recorded state and check generation; consume the authorization | `wrong-state`, `migration-denied` |
 | 10 | The operation | the command's own |
 
@@ -288,7 +288,7 @@ Three codes join the [admin protocol's table](admin-protocol.md#admin-response-e
 | Code | Name | Meaning |
 |---|---|---|
 | `28` | `migration-denied` | `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing was exported or rewrapped |
-| `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its vault passphrase prompt; nothing was exported or rewrapped |
+| `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its vault passphrase prompt (for `export`, also at either export passphrase prompt); nothing was exported or rewrapped |
 | `33` | `migration-rate-limited` | `export`, `recipient add`: too many wrong vault passphrases in a row; the [attempt limit](#passphrase-attempt-limit) refused the attempt before any prompt, and the message gives the whole seconds to wait; nothing was exported or rewrapped |
 
 The messages are fixed phrases, apart from the seconds to wait, and none holds owner input. Each refusal ends the exchange as follows:

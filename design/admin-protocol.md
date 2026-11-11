@@ -23,7 +23,10 @@ One connection carries one exchange:
    with exactly one **owner input** frame before the service sends anything else, or, only when the prompt is
    switchable, with one **switch** frame. A notice or a reveal is shown to the
    owner and never answered.
-3. The service sends exactly one **admin response**, success or error, and closes the connection.
+3. For `export`, after its prompts, the service sends the migration bundle as **bundle data frames**, the last of them
+   empty. For `import`, the CLI sends them right after its request. Neither side
+   answers a bundle data frame ([Bundle data](#bundle-data-kind-9)).
+4. The service sends exactly one **admin response**, success or error, and closes the connection.
 
 The service, not the CLI, decides what to prompt for: the service owns the operation ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)), so a modified CLI cannot
 skip a step by not asking for it. A frame of a kind the receiver does not expect at that point in the exchange ends
@@ -42,6 +45,8 @@ sequenceDiagram
             Service->>CLI: notice (text)
         else reveal
             Service->>CLI: reveal (secret value)
+        else bundle data (export, last one empty)
+            Service->>CLI: bundle data frame
         end
     end
     Service->>CLI: admin response (success or error)
@@ -69,6 +74,7 @@ Every frame is a 7-byte header followed by its body. Integers are big-endian.
 | `6` | notice | service | fields |
 | `7` | reveal | service | the value itself |
 | `8` | switch | CLI | empty |
+| `9` | bundle data | service for `export`, CLI for `import` | the bytes themselves |
 
 The body bound is 64 KiB (65 536 bytes). It is far above any label, message or typed value an operation needs, and
 small enough that a hostile length costs nothing. A body length above the bound is refused as soon as the header is
@@ -81,7 +87,7 @@ Bytes after a complete frame belong to the next frame.
 
 ## Body encoding
 
-Every body except owner input, a reveal and a switch is a sequence of **fields**:
+Every body except owner input, a reveal, a switch and bundle data is a sequence of **fields**:
 
 | Size | Field part |
 |---|---|
@@ -129,6 +135,8 @@ an error.
 | `16` | `approver list` | none | the pinned approvers, in approver order, each marked active or not ([approval-signers.md](approval-signers.md#admin-protocol)) |
 | `17` | `approver add` | the signer kind and the label ([approval-signers.md](approval-signers.md#admin-protocol)) | the new approver ID and the approver count |
 | `18` | `approver remove` | the approver ID, 16 bytes ([approval-signers.md](approval-signers.md#admin-protocol)) | the approver count after the removal |
+| `19` | `export` | none | the [vault ID, the record count and the bundle's byte count](#export) |
+| `20` | `import` | the [host unlock flag](#import), as `init`'s | the [vault ID, the record count, the committed and highest reserved versions, the config digest and the recipient roles](#import) |
 | `21` | `reset` | none | the [vault ID, the files removed, the foreign files left and whether the vault identity was cleared](#reset) |
 
 **No command accepts an external signature** ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The service signs only the pending config of its own approval
@@ -503,6 +511,60 @@ Errors specific to `init`:
 | `declined` | the owner did not answer the recovery key confirmation with `yes`; the message says the recovery key shown opens nothing and is to be discarded |
 | `init-failed` | the host unlock flag was set and the service has no host unlock identity to enrol: its profile is Development, the handoff is absent, or it was refused (untrusted path, too long, not an `age` secret key, unreadable). Raised before any prompt, so the message says nothing was written. Otherwise a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: a start-over means the key is dead, and `already-initialized` with a vault that is Initialized means a vault stands, which the owner confirms with `iron-vault recovery check` before relying on the key, because a concurrent init may have finished first. A failure of the discard of an unfinished initialization names `discard` as its step |
 
+#### export
+
+Writes the vault as a migration bundle, which the CLI stores where the owner asked ([migration-bundle.md](migration-bundle.md);
+spec [§16](iron-vault-specification.md#16-administration-recovery-and-migration)). It takes no arguments: the bundle path
+stays in the CLI, and the bundle comes back as [bundle data frames](#bundle-data-kind-9). It is allowed only while the
+service is Ready; in any other state the exchange ends with `wrong-state` before any prompt.
+
+The exchange, after the request, is the eleven steps of [migration-bundle.md](migration-bundle.md#export): the snapshot
+checks, the [migration authorization exchange](migration-authorization.md#admin-exchange) (a notice with the summary, then
+the `Vault passphrase` prompt), the prompts `Export passphrase` and `Repeat the export passphrase`, then the snapshot sent
+as bundle data frames and the empty frame that ends it. A `lock` that cancels the exchange at either export passphrase
+prompt ends it with `migration-unavailable`, as it does at the vault passphrase prompt.
+
+The success result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | vault ID | byte value, exactly 16 bytes: the exported vault's ID |
+| 3 | records | `u64`: how many credential records the bundle carries |
+| 4 | bundle size | `u64`: the bundle's byte count, which the CLI checks against the bytes it received |
+
+Errors specific to `export`: `export-failed`, with the migration authorization codes `migration-denied`,
+`migration-unavailable` and `migration-rate-limited`, `passphrase-rejected`, `wrong-state` and `busy`.
+
+#### import
+
+Creates a vault on this machine from a migration bundle ([migration-bundle.md](migration-bundle.md#import)). It is allowed
+only while the service is Locked, the state a service without a vault starts in; in any other state the exchange ends
+with `wrong-state` before any prompt. It leaves the service Locked, as `init` does.
+
+The request's one argument is `init`'s, with its tag, encoding and rule:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | host unlock | flag, exactly 1 byte, as for [`init`](#init) |
+
+The bundle follows the request as [bundle data frames](#bundle-data-kind-9), the last of them empty. The service reads
+them to the empty one at step 2, before any prompt; the remaining steps are those of
+[migration-bundle.md](migration-bundle.md#import), the passphrase and recovery key steps being `init`'s.
+
+The success result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | vault ID | byte value, exactly 16 bytes: the imported vault's ID |
+| 3 | records | `u64`: how many credential records the bundle carried |
+| 4 | committed version | `u64`: the committed approval version |
+| 5 | highest reserved version | `u64`: the highest reserved approval version |
+| 6 | config digest | byte value, exactly 32 bytes: the BLAKE2b-256 digest of the committed config |
+| 7 | recipients | byte value, one byte per recipient role enrolled, as `init`'s tag 4: kinds only, never a key |
+
+Errors specific to `import`: `bundle-invalid`, `import-denied` and `import-failed`, with `wrong-state`,
+`memory-unprotected`, `already-initialized`, `busy`, `passphrase-rejected` and `declined`.
+
 #### reset
 
 Discards the vault and the config so `init` can make a new vault (spec
@@ -663,6 +725,22 @@ the first switchable prompt, a switch does not restart it, and owner input ends 
 this itself, so a handler that loops on switches needs no bound of its own, and switching never holds the service-wide
 lock longer than one prompt can.
 
+### Bundle data (kind 9)
+
+A piece of a migration bundle, in the direction the command names: service to CLI for `export`, CLI to service for
+`import`. The body is up to 65 536 raw bundle bytes, never parsed as fields, so a bundle of up to 260 MiB crosses an
+admin socket whose frame body is at most 64 KiB. An empty bundle data frame ends the bundle; a body above the bound is
+`malformed-frame` from the header alone, as for any frame. A bundle data frame in any other place in the exchange, or
+after the empty one, is `unexpected-frame`. The bytes are ciphertext and public metadata, so the codec holds them in
+ordinary buffers; `BundleChunk`'s `Debug` shows the length only.
+
+In the service, `Exchange::send_bundle_chunk` and `Exchange::receive_bundle_chunk` move one frame each. Each must finish
+within the request deadline (30 seconds) and the whole bundle within the **bundle transfer deadline** (10 minutes,
+`Limits::transfer_deadline`), which starts with the exchange's first bundle data frame. The error says which passed
+(`ExchangeError::TimedOut` for a frame, `ExchangeError::TransferTimedOut` for the transfer), and tells those apart from a
+closed CLI (`Closed`) and a frame out of turn (`Unexpected`), so a handler can end `export` with `export-failed` while the
+CLI can still be written to. A cancelled exchange closes without a response, as when no admin request arrives.
+
 ### Admin response: success (kind 4)
 
 A command without a result answers with an empty body. A command with a result answers with fields:
@@ -672,7 +750,8 @@ A command without a result answers with an empty body. A command with a result a
 | 1 | command | `u16` ID of the command this answers |
 | 2 and up | result | defined with the command |
 
-`config approve`'s result is defined [with the command](#config-approve), `caller-token`'s [with its
+`export`'s and `import`'s results are defined with their [commands](#export), `config approve`'s result is defined
+[with the command](#config-approve), `caller-token`'s [with its
 command](#caller-token), `init`'s [with its command](#init), `replace`'s [with its command](#replace), and
 `recovery check`'s [with its command](#recovery-check).
 
@@ -811,19 +890,19 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `3` | `unknown-command` | the command ID is not one the service knows |
 | `4` | `unexpected-frame` | a well-formed frame arrived out of turn in the exchange |
 | `5` | `not-admin-principal` | the connecting account is not an admin principal; nothing it sent was read |
-| `6` | `busy` | the service is already serving as many admin connections as it allows, or another operation holds the lock a command needs; try again |
+| `6` | `busy` | the service is already serving as many admin connections as it allows, or another operation holds the lock a command needs, or, for `import`, another import holds the import slot; try again |
 | `7` | `config-invalid` | `config approve`: the proposed config is invalid |
-| `8` | `declined` | the owner declined at a confirmation prompt |
+| `8` | `declined` | the owner declined at a confirmation prompt, such as `init`'s and `import`'s recovery key confirmation |
 | `9` | `approval-denied` | `config approve`, `replace`, `rm`, `recipient remove`, `approver add`, `approver remove`: owner presence failed: the approval passphrase did not open the approver key, or the key it opened is not the asked approver's |
 | `10` | `approval-unavailable` | `config approve`: the service cannot run an approval now; `replace`, `rm`, `recipient remove`, `approver add`, `approver remove`: owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt; nothing was written |
 | `11` | `approval-failed` | `config approve`: failed after reserving a version, before committing it |
 | `12` | `committed-not-active` | `config approve`: committed, but not yet published or active; `replace`, `rm`: the change committed, but the config check after it left the service Unavailable |
-| `13` | `wrong-state` | the command is not allowed in the service's current state; the message names the state |
+| `13` | `wrong-state` | the command is not allowed in the service's current state; the message names the state. `export` needs Ready and `import` needs Locked |
 | `14` | `unlock-denied` | `unlock`: the vault passphrase was wrong |
 | `15` | `unlock-failed` | `unlock`: the vault did not open, for a reason other than the passphrase; the service stays Locked |
 | `16` | `unlocked-unavailable` | `unlock`: the vault unlocked, but the config check left the service Unavailable; the message names the redacted reason |
-| `17` | `already-initialized` | `init`: the directories already hold a vault, or files init did not write; nothing was changed. Raised after the reveal, the message says to discard the recovery key shown |
-| `18` | `passphrase-rejected` | `init`, `approver add`: a chosen passphrase broke a rule; the message names the rule, never the input |
+| `17` | `already-initialized` | `init`, `import`: the directories already hold a vault, or files init did not write; nothing was changed. Raised after the reveal, the message says to discard the recovery key shown |
+| `18` | `passphrase-rejected` | `init`, `approver add`, `export`, `import`: a chosen passphrase broke a rule; the message names the rule, never the input |
 | `19` | `init-failed` | `init`: a write failed; the message names the step, says to re-run `init`, which discards the unfinished vault, and says to discard the recovery key shown (at step 9, where the outcome is unknown, to keep it until the re-run decides) |
 | `20` | `name-taken` | `add`: the name is already in the manifest, healthy or damaged; `add` never overwrites |
 | `21` | `credential-invalid` | `add`, `replace`, `rm`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
@@ -832,9 +911,9 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `24` | `credential-in-use` | `replace`, `rm`: a route of the active config uses the name and would not activate after the change; the message names each route and, for `replace`, why |
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
 | `26` | `list-too-large` | `list`: the credential list does not fit one frame; the message names the count |
-| `27` | `memory-unprotected` | `unlock`, `recovery check`, `init`: a protected install's memory is not locked, so the vault identity is not unwrapped, or for `init` not generated; the message names the memory-lock limit or the locking error, and the service state is unchanged |
+| `27` | `memory-unprotected` | `unlock`, `recovery check`, `init`, `import`: a protected install's memory is not locked, so the vault identity is not unwrapped, or for `init` and `import` not generated; the message names the memory-lock limit or the locking error, and the service state is unchanged |
 | `28` | `migration-denied` | `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing was exported or rewrapped |
-| `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its vault passphrase prompt; nothing was exported or rewrapped |
+| `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its vault passphrase prompt (for `export`, also at either export passphrase prompt); nothing was exported or rewrapped |
 | `30` | `recovery-key-invalid` | `recovery check`: the text is not an `AGE-SECRET-KEY-1…` recovery key; the message holds nothing typed |
 | `31` | `recovery-check-failed` | `recovery check`: the key does not open this vault; the message is fixed |
 | `32` | `recovery-check-unavailable` | `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the key was not judged; the message names the initialization state, or the file and error kind |
@@ -850,11 +929,16 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `42` | `approver-set-invalid` | `approver add`: 16 approvers are already pinned; `approver remove`: it is the last approver; nothing was changed |
 | `43` | `approver-in-use` | `approver remove`: this approver signed the active approval; the message says to approve the config with another approver first; nothing was changed |
 | `44` | `approver-kind-unavailable` | `approver add`: this install does not offer that signer kind yet; nothing was changed |
+| `45` | `export-failed` | `export`: the snapshot checks found damage before any prompt; or the snapshot or the transfer failed after the authorization was consumed, a transfer deadline passed, or a `lock` cancelled it between frames; the message names the step and, for a file, its name and the error kind; no bundle was completed ([migration-bundle.md](migration-bundle.md#error-codes)) |
+| `46` | `bundle-invalid` | `import`: the bytes are not a migration bundle this version reads, exceed `MAX_BUNDLE_LEN`, or fail a check with the vault identity; the message names the rule or check, never a byte of the bundle; nothing was written |
+| `47` | `import-denied` | `import`: the export passphrase does not open the exported identity envelope; nothing was written |
+| `48` | `import-failed` | `import`: the host unlock flag was set and the service has no host unlock identity to enrol, raised before any prompt, so nothing was written; or a write failed, and the message names the step and says to run `import` again, which discards the unfinished import |
 | `49` | `nothing-to-reset` | `reset`: no vault file is in the state directory; the message says what to run next ([reset.md](reset.md#result)) |
 | `50` | `reset-failed` | `reset`: the directories could not be read, writing `reset.unfinished` failed, or a removal failed; the message names the step and the file ([reset.md](reset.md#result)) |
 
 The migration codes 28, 29 and 33 are raised by the migration authorization step that `export` and `recipient add`
-share ([migration-authorization.md](migration-authorization.md#error-codes)).
+share ([migration-authorization.md](migration-authorization.md#error-codes)). Codes 45 to 48 are the migration bundle's
+([migration-bundle.md](migration-bundle.md#error-codes)).
 
 ## Versions
 
@@ -864,8 +948,9 @@ byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` 
 `status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), `replace` (command 10), `rm`
 (command 11), `recovery check` (command 12), `recipient list` (command 13), `recipient add` (command 14),
 `recipient remove` (command 15), `approver list` (command 16), `approver add` (command 17), `approver remove` (command 18), `status` tags 13 to 17,
-the prompt's `switchable` tag 3, the switch frame (kind 8), error codes 7 to 39, and error codes 40 to 44 join it
-rather than starting version 2.
+the prompt's `switchable` tag 3, the switch frame (kind 8), error codes 7 to 39, error codes 40 to 44, the bundle data
+frame (kind 9), `export` (command 19), `import` (command 20) and error codes 45 to 48 join it rather than starting
+version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
@@ -940,7 +1025,15 @@ forwarded over SSH; the service judges whoever arrives either way.
 A refused or `busy` connection is answered and closed without the service reading the request, so the CLI's write
 may fail with a reset or broken pipe while the answer is already waiting. The CLI always reads for the admin response
 and reports a failed write only when no response arrives. It reads no more bytes than the decoder asks for, so a reset
-after the last frame does not hide it.
+after the last frame does not hide it. This holds for `import` too: the CLI sends the bundle data frames right after
+the request, so a service that refuses at its first check answers and closes while the CLI is still sending, and the
+CLI reports the service's error, not the broken pipe. A bundle source or sink that fails (a file that cannot be read or
+written) ends the exchange with that error instead, since no response can make it succeed.
+
+`export` writes each bundle data frame's bytes to a sink as it arrives, and `import` reads its source in
+65 536-byte pieces, so the CLI never holds a whole bundle in memory. The CLI checks that the empty frame arrived and
+that the byte count matches the result's. The 60-second socket timeout below is unchanged: a bundle moves in frames,
+each a socket call, and the service's [transfer deadline](#bundle-data-kind-9) bounds the whole transfer.
 
 | Exit code | Meaning |
 |---|---|
