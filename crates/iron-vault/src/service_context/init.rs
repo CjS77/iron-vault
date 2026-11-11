@@ -81,7 +81,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         })
     }
 
-    /// The host unlock identity in the unlock handoff, read on the blocking pool before `init` prompts for anything, so a
+    /// The host unlock identity in the unlock handoff, read on the blocking pool before `init` or `import` prompts for anything, so a
     /// missing or untrusted handoff ends the exchange with nothing written.
     pub async fn read_host_unlock(&self) -> Result<RecipientIdentity, InitRefusal> {
         let setup = Arc::clone(&self.setup);
