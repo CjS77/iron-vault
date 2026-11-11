@@ -92,8 +92,6 @@ clap_mangen.workspace = true
 ed25519-dalek.workspace = true
 # Encodes the secrets the scrub tests expect the service to recognise.
 base64.workspace = true
-# Unpacks and repacks a migration bundle's archive, so the release checks can hand import a hostile one.
-flate2.workspace = true
 # This crate with `test-support`, so the integration tests can pin a test CA.
 iron-vault = { path = ".", features = ["test-support"] }
 # The store with `test-support`, so config check tests can build a vault and an approval in a temporary directory.
