@@ -144,7 +144,7 @@ pub enum Command {
     /// version 1. It needs a controlling terminal, and leaves the service Locked.
     Init {
         /// Also enrol the identity in the unlock handoff as a recipient, so a restart unlocks with no owner present. The
-        /// service refuses to start `init` if the handoff is absent or untrusted. A dev-mode build does not accept this flag.
+        /// service refuses to start `init` if there is no trusted host unlock identity to enrol. A dev-mode build does not accept this flag.
         #[cfg_attr(not(feature = "dev-mode"), arg(long))]
         #[cfg_attr(feature = "dev-mode", arg(skip))]
         host_unlock: bool,
@@ -161,8 +161,8 @@ pub enum Command {
     /// other ending removes the copy. The first approval lists the whole config as added, since nothing is active.
     ///
     /// With --host-unlock, the vault also enrols the identity in the unlock handoff as a recipient, as `init --host-unlock`
-    /// does, so a restart unlocks with no owner present. The service refuses to start the import if the handoff is absent or
-    /// untrusted, before any prompt.
+    /// does, so a restart unlocks with no owner present. The service refuses to start the import if there is no trusted host
+    /// unlock identity to enrol, before any prompt.
     Import {
         /// The bundle file to read.
         bundle: PathBuf,

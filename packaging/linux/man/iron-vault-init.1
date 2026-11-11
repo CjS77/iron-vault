@@ -13,7 +13,7 @@ Create the vault: the service prompts for the vault and approval passphrases, sh
 Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
 .TP
 \fB\-\-host\-unlock\fR
-Also enrol the identity in the unlock handoff as a recipient, so a restart unlocks with no owner present. The service refuses to start `init` if the handoff is absent or untrusted. A dev\-mode build does not accept this flag
+Also enrol the identity in the unlock handoff as a recipient, so a restart unlocks with no owner present. The service refuses to start `init` if there is no trusted host unlock identity to enrol. A dev\-mode build does not accept this flag
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
