@@ -8,10 +8,12 @@ use std::str::FromStr;
 use iron_vault_store::{RecordDamage, VaultId};
 
 use super::fields::{self, exact, read_profile, read_text, read_u64};
+use super::host_unlock_status;
 use super::recovery_status::{self, RecoveryStatus};
 use super::{FrameError, body::TAG_COMMAND};
 use crate::deployment::DeploymentProfile;
 use crate::hardening::MemoryProtection;
+use crate::service_context::HostUnlockOutcome;
 use crate::service_state::{FailureReason, ServiceState};
 use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
 
@@ -40,6 +42,8 @@ pub struct StatusReport {
     pub memory: MemoryStatus,
     /// What the recovery check record says; known in every state, because the record is plaintext.
     pub recovery: RecoveryStatus,
+    /// What the startup host unlock came to; `None` in a profile that tries none (Development).
+    pub host_unlock_outcome: Option<HostUnlockOutcome>,
 }
 
 /// The vault's lock state, and what is known only while it is unlocked.
@@ -131,6 +135,11 @@ pub(super) fn encode(command: u16, report: &StatusReport) -> Vec<u8> {
     fields::put(&mut out, TAG_ROUTE_FAULTS, &faults);
     fields::put(&mut out, TAG_INITIALIZATION, &[initialization]);
     recovery_status::encode(&mut out, &report.recovery);
+    fields::put(
+        &mut out,
+        host_unlock_status::TAG_OUTCOME,
+        &host_unlock_status::encode(report.host_unlock_outcome),
+    );
     out
 }
 
@@ -154,6 +163,7 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
         recovery_days,
         recovery_due,
         recovery_detail,
+        host_unlock,
     ] = exact(
         fields,
         [
@@ -174,6 +184,7 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
             recovery_status::TAG_DAYS,
             recovery_status::TAG_DUE,
             recovery_status::TAG_DETAIL,
+            host_unlock_status::TAG_OUTCOME,
         ],
     )?;
     Ok(StatusReport {
@@ -194,6 +205,7 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
             due: recovery_due,
             detail: recovery_detail,
         })?,
+        host_unlock_outcome: host_unlock_status::decode(host_unlock)?,
     })
 }
 
@@ -398,6 +410,7 @@ mod tests {
                 days: 3,
                 due: false,
             },
+            host_unlock_outcome: Some(HostUnlockOutcome::UnsealFailed),
         }
     }
 

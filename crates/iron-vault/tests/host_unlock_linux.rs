@@ -34,8 +34,9 @@ use iron_vault::deployment::DeploymentProfile;
 use iron_vault::hardening::{LockUnavailable, MemoryProtection};
 use iron_vault::logging::LogSwitch;
 use iron_vault::path_metadata::invoking_user;
-use iron_vault::service_context::{LockOutcome, LockResult, ServiceContext, Unlocked};
+use iron_vault::service_context::{HostUnlockOutcome, LockOutcome, LockResult, ServiceContext, Unlocked};
 use iron_vault::service_state::ServiceState;
+use iron_vault::trusted_path::ExpectedOwner;
 use iron_vault_store::{
     OperationalIdentity, OsFs, Passphrase, RecipientKey, RecipientRole, RecipientSet, RecoveryKey, StateDirLock, StoreFs, open_manifest,
     seal_passphrase_envelope_for_tests, wrap_identity, write_identity_envelope, write_passphrase_envelope,
@@ -103,12 +104,14 @@ fn passphrase() -> Passphrase {
 }
 
 fn start(fixture: &Fixture, profile: DeploymentProfile, memory: MemoryProtection) -> ServiceContext {
-    fixture.start_as(
-        OsFs,
-        LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
-        profile,
-        memory,
-    )
+    fixture
+        .start_as(
+            OsFs,
+            LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
+            profile,
+            memory,
+        )
+        .with_unseal_failure_owner(invoking_user().unwrap())
 }
 
 fn service_on(fixture: &Fixture, profile: DeploymentProfile) -> ServiceContext {
@@ -217,6 +220,79 @@ async fn a_missing_handoff_leaves_it_locked_for_the_passphrase(profile: Deployme
     assert_passphrase_unlock_works(&service).await;
 }
 
+impl HandoffDir {
+    fn unseal_failed(&self) -> PathBuf {
+        self.0.join("unseal-failed")
+    }
+
+    /// An empty unseal-failure file, as the handoff unit's `ExecStopPost=` leaves it.
+    fn write_unseal_failed(&self) -> PathBuf {
+        let path = self.unseal_failed();
+        fs::write(&path, "").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        path
+    }
+}
+
+async fn an_unseal_failure_file_beside_a_missing_handoff_is_reported(profile: DeploymentProfile) {
+    let (_turn, logs, before) = turn().await;
+    let fixture = Fixture::new().await;
+    with_host_key(&fixture);
+    let dir = HandoffDir::new();
+    dir.write_unseal_failed();
+    let service = service_on(&fixture, profile);
+
+    assert_eq!(service.unlock_at_start(&dir.path()).await, ServiceState::Locked);
+
+    assert_one_record(&logs, before, "WARN", "unseal_failed", None);
+    assert_eq!(service.status().await.host_unlock_outcome, Some(HostUnlockOutcome::UnsealFailed));
+    assert_passphrase_unlock_works(&service).await;
+}
+
+/// Each of these at the unseal-failure path is not the file, so a missing handoff is `absent`.
+async fn anything_but_a_regular_file_of_the_expected_owner_is_absent(profile: DeploymentProfile) {
+    let (_turn, logs, before) = turn().await;
+    let fixture = Fixture::new().await;
+    with_host_key(&fixture);
+    let target = fixture.path("some-regular-file");
+    fs::write(&target, "").unwrap();
+    let stagings: [&dyn Fn(&Path); 3] = [&|_| {}, &|path| std::os::unix::fs::symlink(&target, path).unwrap(), &|path| {
+        fs::create_dir(path).unwrap()
+    }];
+    for (n, stage) in stagings.into_iter().enumerate() {
+        let dir = HandoffDir::new();
+        stage(&dir.unseal_failed());
+        let service = service_on(&fixture, profile);
+        assert_eq!(service.unlock_at_start(&dir.path()).await, ServiceState::Locked);
+        assert_one_record(&logs, before + n, "INFO", "absent", None);
+        service.stop().await;
+    }
+    let dir = HandoffDir::new();
+    dir.write_unseal_failed();
+    let other = ExpectedOwner {
+        uid: invoking_user().unwrap().uid.wrapping_add(1),
+    };
+    let service = service_on(&fixture, profile).with_unseal_failure_owner(other);
+    assert_eq!(service.unlock_at_start(&dir.path()).await, ServiceState::Locked);
+    assert_one_record(&logs, before + 3, "INFO", "absent", None);
+    assert_eq!(service.status().await.host_unlock_outcome, Some(HostUnlockOutcome::Absent));
+}
+
+async fn a_stale_unseal_failure_file_does_not_stop_a_good_handoff(profile: DeploymentProfile) {
+    let (_turn, logs, before) = turn().await;
+    let fixture = Fixture::new().await;
+    let (secret, _) = with_host_key(&fixture);
+    let dir = HandoffDir::new();
+    dir.write_unseal_failed();
+    let handoff = dir.write(&secret);
+    let service = service_on(&fixture, profile);
+
+    assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Ready);
+
+    assert_one_record(&logs, before, "INFO", "unlocked", None);
+    assert_eq!(service.status().await.host_unlock_outcome, Some(HostUnlockOutcome::Unlocked));
+}
+
 async fn an_identity_that_is_not_a_recipient_leaves_it_locked_for_the_passphrase(profile: DeploymentProfile) {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
@@ -261,6 +337,7 @@ async fn the_development_profile_never_tries_the_handoff() {
     assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Locked);
 
     assert_eq!(logs.events(EVENT).len(), before);
+    assert_eq!(service.status().await.host_unlock_outcome, None);
 }
 
 fn empty(dir: &Path) {
@@ -518,6 +595,9 @@ async fn a_handoff_that_is_not_an_identity_leaves_it_locked_for_the_passphrase(p
 }
 
 on_both_profiles!(
+    an_unseal_failure_file_beside_a_missing_handoff_is_reported,
+    anything_but_a_regular_file_of_the_expected_owner_is_absent,
+    a_stale_unseal_failure_file_does_not_stop_a_good_handoff,
     a_good_handoff_reaches_ready_and_serves_with_no_unlock,
     without_locked_memory_the_handoff_is_never_opened,
     a_missing_handoff_leaves_it_locked_for_the_passphrase,
@@ -624,12 +704,14 @@ fn owner_lock_exists(fixture: &Fixture) -> bool {
 
 /// A `profile` service on the vault in `fixture` over `fs`, as `start` leaves it.
 fn start_on<F: StoreFs + Send + Sync + 'static>(fixture: &Fixture, profile: DeploymentProfile, fs: F) -> ServiceContext<F> {
-    fixture.start_as(
-        fs,
-        LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
-        profile,
-        MemoryProtection::Locked,
-    )
+    fixture
+        .start_as(
+            fs,
+            LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
+            profile,
+            MemoryProtection::Locked,
+        )
+        .with_unseal_failure_owner(invoking_user().unwrap())
 }
 
 /// The outcome and refusal labels of every `vault.host-unlock` record written since `before`.

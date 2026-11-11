@@ -69,6 +69,7 @@ use crate::service_state::{AdminOperation, IllegalTransition, RequestInterface, 
 use crate::serving_snapshot::{ServingSnapshot, SnapshotHolder, Withdrawn};
 use crate::socket_activation::PassedSockets;
 use crate::standing::{CredentialStanding, RouteFault};
+use crate::trusted_path::ExpectedOwner;
 use crate::trusted_path_report::ServicePaths;
 use crate::unlock_handoff::HANDOFF_PATH;
 use host_unlock::tries_host_unlock;
@@ -270,6 +271,8 @@ pub struct ServiceContext<F = OsFs> {
     reminders: SharedSchedule,
     /// Where `init --host-unlock` and `recipient remove` read the unlock handoff.
     handoff: PathBuf,
+    /// Who must own the unseal-failure file for it to count: root in production.
+    unseal_failure_owner: ExpectedOwner,
 }
 
 /// What the context keeps of an open vault beside the snapshot. They are one value, so a lock, a stop or a failed check
@@ -289,6 +292,8 @@ struct OpenVault {
 #[derive(Debug)]
 struct Inner {
     state: ServiceState,
+    /// What the startup host unlock came to; `None` in a profile that does not try one.
+    host_unlock_outcome: Option<HostUnlockOutcome>,
     /// The vault identity, from unlock until lock or stop: `Some` in Checking, Ready and Unavailable. Each vault opened
     /// from it shares this one copy, so its key bytes are cleared when the last of them drops it.
     identity: Option<Arc<VaultIdentity>>,
@@ -337,6 +342,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         Ok(Self {
             inner: Arc::new(Mutex::new(Inner {
                 state,
+                host_unlock_outcome: None,
                 identity: None,
                 open: None,
                 checks: 0,
@@ -358,6 +364,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             clock: Arc::new(SystemClock),
             reminders: Arc::new(StdMutex::new(ReminderSchedule::default())),
             handoff: PathBuf::from(HANDOFF_PATH),
+            unseal_failure_owner: ExpectedOwner { uid: 0 },
         })
     }
 
@@ -366,6 +373,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_handoff_path(mut self, handoff: PathBuf) -> Self {
         self.handoff = handoff;
+        self
+    }
+
+    /// The context accepting an unseal-failure file owned by `owner` instead of root, so a test can stage one.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_unseal_failure_owner(mut self, owner: ExpectedOwner) -> Self {
+        self.unseal_failure_owner = owner;
         self
     }
 
@@ -583,6 +597,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             vault,
             memory: MemoryStatus::from(&self.setup.hardening.memory),
             recovery,
+            host_unlock_outcome: inner.host_unlock_outcome,
         }
     }
 

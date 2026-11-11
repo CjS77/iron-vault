@@ -5,6 +5,7 @@ use super::fields::FIELD_HEADER_LEN;
 use super::*;
 use crate::deployment::DeploymentProfile;
 use crate::secret_types_tests::MARKER;
+use crate::service_context::{HostUnlockOutcome, HostUnlockRefusal};
 use crate::service_state::{FailureReason, ServiceState};
 use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
 use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
@@ -383,13 +384,36 @@ fn status_report() -> impl Strategy<Value = StatusReport> {
         Just(VaultStatus::ResetUnfinished),
         unlocked_vault().prop_map(VaultStatus::Unlocked)
     ];
-    (state, profile, vault, memory, recovery_status()).prop_map(|(state, profile, vault, memory, recovery)| StatusReport {
-        state,
-        profile,
-        vault,
-        memory,
-        recovery,
-    })
+    (state, profile, vault, memory, recovery_status(), host_unlock_outcome()).prop_map(
+        |(state, profile, vault, memory, recovery, host_unlock_outcome)| StatusReport {
+            state,
+            profile,
+            vault,
+            memory,
+            recovery,
+            host_unlock_outcome,
+        },
+    )
+}
+
+/// Any startup host unlock outcome, or none.
+fn host_unlock_outcome() -> impl Strategy<Value = Option<HostUnlockOutcome>> {
+    let refusals = [
+        HostUnlockRefusal::MemoryUnprotected,
+        HostUnlockRefusal::Untrusted,
+        HostUnlockRefusal::Unreadable,
+        HostUnlockRefusal::NotAnIdentity,
+        HostUnlockRefusal::NotInitialized,
+        HostUnlockRefusal::NotARecipient,
+    ];
+    prop_oneof![
+        Just(None),
+        Just(Some(HostUnlockOutcome::Unlocked)),
+        Just(Some(HostUnlockOutcome::Absent)),
+        Just(Some(HostUnlockOutcome::UnsealFailed)),
+        Just(Some(HostUnlockOutcome::OwnerLocked)),
+        proptest::sample::select(refusals.to_vec()).prop_map(|refusal| Some(HostUnlockOutcome::Refused(refusal))),
+    ]
 }
 
 /// Any recovery check part of a report.
@@ -558,15 +582,16 @@ fn a_status_result_with_a_field_missing_or_extra_is_refused() {
             detail: "no check record yet".to_owned(),
             due: false,
         },
+        host_unlock_outcome: None,
     };
     let frame = Frame::Response(AdminResponse::Status(Box::new(report)));
     assert_round_trips(&frame);
     let mut full = encoded(&frame);
-    let extra = field(18, b"x");
+    let extra = field(19, b"x");
     full.extend_from_slice(&extra);
     let length = u32::try_from(full.len() - HEADER_LEN).unwrap().to_be_bytes();
     full[3..HEADER_LEN].copy_from_slice(&length);
-    assert_eq!(decode_err(&full), FrameError::UnknownTag(18));
+    assert_eq!(decode_err(&full), FrameError::UnknownTag(19));
     assert_eq!(decode_err(&raw(1, 4, &field(1, &[0, 6]))), FrameError::MissingField(2));
 }
 

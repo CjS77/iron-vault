@@ -17,6 +17,11 @@ pub fn render(report: &StatusReport, user: impl FnOnce() -> String) -> String {
     lines.push(profile_line(report.profile, user));
     lines.extend(vault_lines(&report.vault));
     lines.push(memory_line(&report.memory));
+    lines.extend(
+        report
+            .host_unlock_outcome
+            .map(|outcome| format!("host unlock: {}", outcome.label())),
+    );
     lines.push(recovery_line(&report.recovery));
     lines.extend(credential_lines(&report.vault));
     lines.extend(route_fault_lines(&report.vault));

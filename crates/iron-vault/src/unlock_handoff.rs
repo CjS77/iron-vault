@@ -23,6 +23,13 @@ use crate::trusted_path::{self, ExpectedOwner, PathComponent, TrustedPathRule, U
 /// file, so a file that is missing or replaced on the host is seen as such.
 pub const HANDOFF_PATH: &str = "/run/iron-vault-unlock/host-unlock";
 
+/// The unseal-failure file's name, which sits in the handoff's own directory.
+pub const UNSEAL_FAILED_NAME: &str = "unseal-failed";
+
+/// Where the handoff unit leaves the unseal-failure file when it fails: `/run/iron-vault-unlock/unseal-failed`
+/// (`design/tpm-unlock.md`, "Reporting a failed unseal").
+pub const UNSEAL_FAILED_PATH: &str = "/run/iron-vault-unlock/unseal-failed";
+
 /// The most bytes a handoff may hold: the 74-byte `AGE-SECRET-KEY-1…` text, a newline, and room to spare. A longer file
 /// is the wrong file, such as `age-keygen` output with its comment lines.
 pub const MAX_HANDOFF_LEN: usize = 128;
@@ -61,6 +68,14 @@ pub fn read_handoff(profile: DeploymentProfile, owner: ExpectedOwner, path: &Pat
     trusted_path::check(TrustedPathRule::UnlockHandoff, profile, owner, &components)?;
     let ancestors = components.split_last().map_or(&[][..], |(_, ancestors)| ancestors);
     read_leaf(profile, owner, path, ancestors).map(Some)
+}
+
+/// Whether the unseal-failure file is at `path`: a regular file owned by `owner`, found without following a symlink. A
+/// symlink, a directory, another owner's file or any error counts as not there, since the file is a diagnostic and
+/// never a reason to refuse anything.
+pub fn unseal_failed_present(owner: ExpectedOwner, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.uid() == owner.uid)
 }
 
 fn collect_kind(error: &CollectError) -> io::ErrorKind {

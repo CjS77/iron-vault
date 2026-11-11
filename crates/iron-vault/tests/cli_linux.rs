@@ -266,6 +266,7 @@ impl AdminHandler for FixedStatus {
                 detail: "no check record yet".to_owned(),
                 due: false,
             },
+            host_unlock_outcome: None,
         };
         Box::pin(async move { Ok(AdminResponse::Status(Box::new(report))) })
     }

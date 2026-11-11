@@ -15,6 +15,7 @@ use crate::socket_activation::PassedSockets;
 fn inner_in(state: ServiceState) -> Arc<Mutex<Inner>> {
     Arc::new(Mutex::new(Inner {
         state,
+        host_unlock_outcome: None,
         identity: None,
         open: None,
         serving: None,

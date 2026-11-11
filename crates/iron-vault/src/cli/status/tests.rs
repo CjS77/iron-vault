@@ -1,4 +1,5 @@
 use iron_vault::hardening::MemoryProtection;
+use iron_vault::service_context::HostUnlockOutcome;
 use iron_vault::standing::RouteFaultKind;
 use iron_vault_store::{RecordDamage, UtcSecond, VaultId};
 
@@ -29,6 +30,7 @@ fn ready(credentials: Vec<CredentialStanding>) -> StatusReport {
             route_faults: Vec::new(),
         }),
         memory: MemoryStatus::Locked,
+        host_unlock_outcome: None,
         recovery: RecoveryStatus::Unknown {
             detail: "no check record yet".to_owned(),
             due: false,
@@ -249,4 +251,25 @@ fn every_recovery_form_and_due_state_gives_its_exact_line() {
     ]
     .into_iter()
     .for_each(|(recovery, line)| assert_eq!(recovery_line_of(recovery), line));
+}
+
+#[test]
+fn the_host_unlock_outcome_follows_memory_protection_and_only_when_there_is_one() {
+    let line = |outcome| {
+        let report = StatusReport {
+            host_unlock_outcome: outcome,
+            ..locked(ServiceState::Locked)
+        };
+        let text = render(&report, alice);
+        (text.lines().nth(6).map(str::to_owned), text.lines().nth(7).map(str::to_owned))
+    };
+    let (memory, host) = line(Some(HostUnlockOutcome::UnsealFailed));
+    assert_eq!(memory.as_deref(), Some("memory protection: locked against swap"));
+    assert_eq!(host.as_deref(), Some("host unlock: unseal_failed"));
+    assert_eq!(line(Some(HostUnlockOutcome::Unlocked)).1.as_deref(), Some("host unlock: unlocked"));
+    assert_eq!(
+        line(Some(HostUnlockOutcome::OwnerLocked)).1.as_deref(),
+        Some("host unlock: owner_locked")
+    );
+    assert!(!line(None).1.unwrap_or_default().starts_with("host unlock"));
 }

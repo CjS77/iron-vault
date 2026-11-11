@@ -18,15 +18,19 @@ use crate::audit::AuditEvent;
 use crate::audit::vault::HostUnlock;
 use crate::deployment::DeploymentProfile;
 use crate::service_state::{ServiceEvent, ServiceState};
-use crate::unlock_handoff::{HandoffError, read_handoff};
+use crate::unlock_handoff::UNSEAL_FAILED_NAME;
+use crate::unlock_handoff::{HandoffError, read_handoff, unseal_failed_present};
 
 /// What one host unlock attempt came to, as `vault.host-unlock` records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostUnlockOutcome {
     /// The handoff unwrapped the vault identity, and the config check followed.
     Unlocked,
-    /// No handoff was there.
+    /// No handoff was there, and no unseal-failure file either: a machine never provisioned for host unlock.
     Absent,
+    /// No handoff was there, but the handoff unit left the unseal-failure file: its unseal failed, as after a `dbx` or KEK
+    /// update changes PCR 7. A diagnostic only; the service waits Locked for passphrase `unlock`, as for `Absent`.
+    UnsealFailed,
     /// The owner-lock file is there: an explicit `lock` stands, so the handoff and the memory guard were never reached.
     OwnerLocked,
     /// The handoff was there, or memory was not locked, and the vault stayed shut.
@@ -56,6 +60,7 @@ impl HostUnlockOutcome {
         match self {
             Self::Unlocked => "unlocked",
             Self::Absent => "absent",
+            Self::UnsealFailed => "unseal_failed",
             Self::OwnerLocked => "owner_locked",
             Self::Refused(_) => "refused",
         }
@@ -130,10 +135,12 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             return apply(&self.holder, &mut inner, ServiceEvent::InteractiveUnlockRequired).unwrap_or(inner.state);
         }
         let opened = self.open_with_handoff(handoff).await;
-        HostUnlock {
-            outcome: outcome_of(&opened),
-        }
-        .emit();
+        let outcome = match opened {
+            Ok(None) => self.missing_handoff_outcome(handoff).await,
+            _ => outcome_of(&opened),
+        };
+        inner.host_unlock_outcome = Some(outcome);
+        HostUnlock { outcome }.emit();
         match opened {
             Ok(Some(identity)) => self
                 .check_and_settle_detached(service_wide, inner, ServiceEvent::HostUnlockSucceeded, Arc::new(identity))
@@ -151,6 +158,17 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         tokio::task::spawn_blocking(move || unwrap_with_handoff(&locks, &setup, &handoff))
             .await
             .unwrap_or(Err(HostUnlockRefusal::Unreadable))
+    }
+
+    /// `UnsealFailed` when the unseal-failure file sits beside the missing `handoff`, `Absent` otherwise. The file is read
+    /// only now, so a handoff that is there is never second-guessed by a stale one.
+    async fn missing_handoff_outcome(&self, handoff: &Path) -> HostUnlockOutcome {
+        let (owner, flag) = (self.unseal_failure_owner, handoff.with_file_name(UNSEAL_FAILED_NAME));
+        let present = tokio::task::spawn_blocking(move || unseal_failed_present(owner, &flag)).await;
+        match present {
+            Ok(true) => HostUnlockOutcome::UnsealFailed,
+            _ => HostUnlockOutcome::Absent,
+        }
     }
 
     /// The recipient key of the configured host unlock adapter, which part 1 of the independence rule keeps: the

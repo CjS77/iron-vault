@@ -85,6 +85,12 @@ impl AuditEvent for HostUnlock {
                 host_unlock_outcome,
                 "no unlock handoff, the service stays Locked",
             ),
+            HostUnlockOutcome::UnsealFailed => tracing::warn!(
+                target: AUDIT_TARGET,
+                event = Self::NAME.as_str(),
+                host_unlock_outcome,
+                "no unlock handoff and the handoff unit's unseal failed, the service stays Locked",
+            ),
             HostUnlockOutcome::OwnerLocked => tracing::info!(
                 target: AUDIT_TARGET,
                 event = Self::NAME.as_str(),
