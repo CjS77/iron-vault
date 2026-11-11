@@ -1419,6 +1419,7 @@ dependencies = [
  "age",
  "blake2",
  "ed25519-dalek",
+ "flate2",
  "getrandom 0.4.3",
  "iron-vault-kinds",
  "iron-vault-policy",

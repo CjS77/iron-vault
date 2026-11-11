@@ -19,6 +19,7 @@ mod initialization;
 mod inventory_check;
 mod mac_file;
 mod manifest;
+pub mod migration_bundle;
 mod partial_restore;
 mod passphrase;
 mod permitted_origins;
