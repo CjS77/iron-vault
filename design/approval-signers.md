@@ -470,7 +470,9 @@ Five codes are new, the next free numbers after 39:
 | `41` | `unknown-approver` | `approver remove`: no pinned approver has this ID; nothing was changed |
 | `42` | `approver-set-invalid` | `approver add`: 16 approvers are already pinned; `approver remove`: it is the last approver; nothing was changed |
 | `43` | `approver-in-use` | `approver remove`: this approver signed the active approval; the message says to approve the config with another approver first; nothing was changed |
-| `44` | `approver-kind-unavailable` | `approver add`: this install does not offer that signer kind (`tpm` needs the `Protected` profile and the helper's socket, `hardware` is not built yet), or cannot make that kind of signer now because the TPM signing helper refused or could not be reached; the message names the helper's status (a lockout gives the seconds to wait); nothing was changed |
+| `44` | `approver-kind-unavailable` | `approver add`: this install does not offer that signer kind (`tpm` needs the `Protected` profile and the helper's socket, `hardware` is not built yet), or cannot make that kind of signer now because the TPM signing helper refused or could not be reached; the message names the helper's status (a lockout is `tpm-locked-out`, 51); nothing was changed |
+
+`tpm-locked-out` (51, [tpm-approval-signer.md](tpm-approval-signer.md#prompt-and-proof)) covers a TPM lockout at the prompt or at enrollment.
 
 Existing codes widen to cover the approver commands: `approval-denied` (9) and `approval-unavailable` (10) for owner
 presence; `passphrase-rejected` (18) for a new approval passphrase or TPM approval PIN that breaks a rule; `vault-write-failed` (22) for an

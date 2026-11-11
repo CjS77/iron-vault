@@ -241,6 +241,7 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::ApproverInvalid),
         Just(ErrorCode::ApproverSetInvalid),
         Just(ErrorCode::ApproverKindUnavailable),
+        Just(ErrorCode::TpmLockedOut),
         Just(ErrorCode::MachineNotForgotten),
     ]
 }
@@ -1060,6 +1061,13 @@ fn the_reset_error_codes_have_their_documented_numbers_and_names() {
         assert_eq!((code as u16, code.name()), (number, name));
         assert_round_trips(&error(code, "m"));
     });
+}
+
+#[test]
+fn the_tpm_lockout_error_code_has_its_documented_number_and_name() {
+    let code = ErrorCode::TpmLockedOut;
+    assert_eq!((code as u16, code.name()), (51, "tpm-locked-out"));
+    assert_round_trips(&error(code, "m"));
 }
 
 #[test]

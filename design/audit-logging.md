@@ -618,7 +618,7 @@ with these fields.
 | `service.lock-transition` | INFO | a lock transition: Locked to Checking, or Starting to Checking on a host unlock, the outcome of the check that follows, and Ready or Unavailable to Locked | `from_state`, `to_state`; `unavailable_reason` when `to_state` is `unavailable` |
 | `vault.unlock-refused` | WARN | an unlock was refused, or `init` or the host unlock at startup was refused for unprotected memory (`memory_unprotected`) | `refusal`, such as `wrong_passphrase` or `rate_limited`; `memory_protection` when `refusal` is `memory_unprotected`, a protected install whose memory is not locked; `retry_after` (whole seconds) when `refusal` is `rate_limited`, the vault passphrase attempt limit |
 | `vault.host-unlock` | INFO, or WARN when `refused` or `unseal_failed` | a Protected or Container service tried the unlock handoff at startup, or skipped it because the owner-lock file is there (`owner_locked`); a Development service never writes it | `host_unlock_outcome`; `refusal` when refused: `memory_unprotected`, `untrusted`, `unreadable`, `not_an_identity`, `not_initialized` or `not_a_recipient` |
-| `vault.presence-refused` | WARN | owner presence for `replace`, `rm`, `recipient remove` or an approver command was refused: the approval passphrase was wrong or the key is not the asked approver's; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`), `approver_id`, `approver_label`; no `config_digest`, since no config is involved |
+| `vault.presence-refused` | WARN | owner presence for `replace`, `rm`, `recipient remove` or an approver command was refused: the approval passphrase or TPM approval PIN was wrong, the key is not the asked approver's, or the TPM was locked out or its helper refused; nothing was written | `refusal` (`wrong_passphrase`, `key_mismatch`, `wrong_pin` or `tpm_refused`), `tpm_status` (a TPM approver only: the helper's status, see [tpm-approval-signer.md](tpm-approval-signer.md#prompt-and-proof)), `approver_id`, `approver_label`; no `config_digest`, since no config is involved |
 | `vault.lock-incomplete` | WARN | a lock's drain ended with a serving snapshot or the vault identity still held | `snapshots_held`, `identity_held` |
 
 `service.started` carries the hardening report's outcome as fixed labels, so a run without its protections is visible
@@ -655,7 +655,7 @@ completed approval ([§12](iron-vault-specification.md#12-configuration-approval
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `config.approval-refused` | WARN | the approval passphrase was wrong or the key is not the asked approver's; nothing was reserved | `refusal` (`wrong_passphrase` or `key_mismatch`), `config_digest`, `approver_id`, `approver_label` |
+| `config.approval-refused` | WARN | the approval passphrase or TPM approval PIN was wrong, the key is not the asked approver's, or the TPM was locked out or its helper refused; nothing was reserved | `refusal` (`wrong_passphrase`, `key_mismatch`, `wrong_pin` or `tpm_refused`), `tpm_status` (a TPM approver only), `config_digest`, `approver_id`, `approver_label` |
 | `config.version-reserved` | INFO | step 2's reservation is durable | `version`, `config_digest`, `approver_id`, `approver_label` |
 | `config.approval-failed` | WARN | the transaction failed after its reservation and before its commit | `version` (consumed), `config_digest`, `step`, `error_kind` |
 | `config.commit-uncertain` | WARN | step 5's rename of `approval.age` landed, but its directory fsync failed | `version`, `error_kind` |

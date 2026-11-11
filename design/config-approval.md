@@ -575,7 +575,7 @@ types, and the record shape they share. None carries config bytes, signature byt
 
 | Event | Level | When |
 |---|---|---|
-| `config.approval-refused` | WARN | the approval passphrase was wrong or the key is not the asked approver's; nothing was reserved |
+| `config.approval-refused` | WARN | the approval passphrase or TPM approval PIN was wrong, the key is not the asked approver's, or the TPM was locked out or its helper refused; nothing was reserved |
 | `config.version-reserved` | INFO | step 2's reservation is durable |
 | `config.approval-failed` | WARN | the transaction failed after its reservation and before its commit |
 | `config.commit-uncertain` | WARN | step 5's rename of `approval.age` landed, but its directory fsync failed |

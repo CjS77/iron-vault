@@ -69,8 +69,8 @@ These can happen on any command.
 |---|---|---|---|
 | `7` | `config-invalid` | The proposed config does not parse, does not validate, or would not activate. Nothing was reserved, and the active config is unchanged. | Fix what the message names and approve again. A common case: a route sends a credential to a host its record does not permit, which only `replace` can change. |
 | `8` | `declined` | You did not type `yes` at the summary. | Nothing was changed. |
-| `9` | `approval-denied` | The approval passphrase did not open the approver key, or the key it opened is not the vault's pinned approver. Nothing was reserved. | Type the approval passphrase, not the vault passphrase. |
-| `10` | `approval-unavailable` | The service cannot run an approval now, or a `lock` cancelled the approval at its prompt. No version was reserved. | Read the message; the service may be in a state that cannot approve. Try again once `status` shows Ready, or Unavailable with `policy invalid`. |
+| `9` | `approval-denied` | The approval passphrase did not open the approver key, the key it opened is not the vault's pinned approver, or the TPM refused a TPM approver's PIN. Nothing was reserved. | Type the approval passphrase, not the vault passphrase. For a TPM approver, type its TPM approval PIN; each wrong PIN counts against the TPM's lockout, so stop after one miss. |
+| `10` | `approval-unavailable` | The service cannot run an approval now, no pinned approver can be asked on this install, the TPM signing helper refused a TPM approver for a reason other than its PIN or a lockout (the message names its status), or a `lock` cancelled the approval at its prompt. No version was reserved. | Read the message; the service may be in a state that cannot approve. Try again once `status` shows Ready, or Unavailable with `policy invalid`. |
 | `11` | `approval-failed` | The approval failed after it reserved a version and before it committed. That version number is used up. | Read `config.approval-failed` in the log for the step, fix it and approve again. The next approval gets a higher version. |
 | `12` | `committed-not-active` | The approval committed, but it was not published or did not activate, so the service is Unavailable. | Run `status` and read `config.activation-failed` in the log. Approve a corrected config to recover. |
 
@@ -136,7 +136,7 @@ the exit status is `0`.
 | `41` | `unknown-approver` | `approver remove`: no pinned approver has this ID. It was refused before any prompt. Nothing was changed. | Run `approver list` and copy the ID from it. |
 | `42` | `approver-set-invalid` | `approver add`: 16 approvers are already pinned. `approver remove`: it is the last approver. Either was refused before any prompt. Nothing was changed. | For `add`, remove an approver you no longer use first. The last approver stays: enroll another one before you remove it. |
 | `43` | `approver-in-use` | `approver remove`: this approver signed the active approval, and removing it would stop the active config verifying and take every route down. It was refused before any prompt. Nothing was changed. | Approve the config again with another approver (switch to it at the prompt), then remove this one. |
-| `44` | `approver-kind-unavailable` | This install does not offer that signer kind, or cannot make that kind of signer now. `software` is always offered; `tpm` only on a protected install whose TPM signing helper socket exists; `hardware` is not built yet. For `tpm`, the message names why the helper refused (a lockout gives the seconds to wait). Nothing was changed. | Leave out `--kind`, or use `--kind software`. For `tpm`, fix what the message names, such as raising the TPM's dictionary-attack lockout interval to at least 600 seconds. |
+| `44` | `approver-kind-unavailable` | This install does not offer that signer kind, or cannot make that kind of signer now. `software` is always offered; `tpm` only on a protected install whose TPM signing helper socket exists; `hardware` is not built yet. For `tpm`, the message names why the helper refused (a lockout is `tpm-locked-out`, below). Nothing was changed. | Leave out `--kind`, or use `--kind software`. For `tpm`, fix what the message names, such as raising the TPM's dictionary-attack lockout interval to at least 600 seconds. |
 | `9` | `approval-denied` | The passphrase did not open the asked approver's key. The vault passphrase and a recovery key never authorize an approver change. Any pinned approver may authorize a removal, the one being removed included. Nothing was written. | Type the approval passphrase of the approver the prompt names, or switch to another approver. |
 | `10` | `approval-unavailable` | Owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt. Nothing was written. | Unlock if needed, and run the command again. |
 | `18` | `passphrase-rejected` | The new approval passphrase is under 12 characters, or the two copies differ. Nothing was written. | Run the command again and choose a passphrase that meets the rule, different from the vault passphrase. |
@@ -144,6 +144,12 @@ the exit status is `0`.
 
 Both also answer `wrong-state` outside Ready (`approver add` also when a `lock` cancels it at the new passphrase prompt), and `busy` while
 another command holds the service-wide lock.
+
+### TPM approvers
+
+| Code | Name | Meaning | What to do |
+|---|---|---|---|
+| `51` | `tpm-locked-out` | `config approve`, `replace`, `rm`, `recipient remove`, `recipient add`, `approver add`, `approver remove` and `export`: the TPM is in dictionary-attack lockout, or the signing helper is holding back its share of the tries to keep the rest for other users of the TPM. The message gives the whole seconds to wait. Nothing was reserved, signed or changed. | Wait that long, or switch to another approver at the prompt (the software approver is unaffected). The TPM forgets one wrong try per lockout interval. |
 
 ### `reset`
 

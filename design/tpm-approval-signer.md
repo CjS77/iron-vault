@@ -356,8 +356,7 @@ PIN is recovered only through another approver ([Forgotten approval PIN](#forgot
 ## Prompt and proof
 
 The [prompt text](approval-signers.md#prompt-text) for `tpm` is `TPM approval PIN for "<label>"`, secret, switchable
-when more than one approver can be asked. approval-signers.md's table, which reads `TPM PIN for "<label>"` pending this
-design, changes to match.
+when more than one approver can be asked. An answer that is empty or not UTF-8 is a wrong PIN and never reaches the TPM.
 
 **Owner presence** ([credential-commands.md](credential-commands.md#owner-presence)): for a `tpm` approver, the service
 derives the authorization value from the answer, asks the helper to sign a fresh presence payload, verifies the
@@ -384,8 +383,7 @@ switch needs. When no pinned approver can be asked, the command answers `approva
 CLI shows `approval-denied`'s message, which for a `tpm` approver adds that each wrong PIN counts against the TPM's
 lockout.
 
-**Lockout.** One new error code, numbered at the next free value when K-332 lands: 51 at the time of writing, after
-the migration bundle's 45 to 48 and reset's 49 and 50.
+**Lockout.** One new error code, `51` (the migration bundle has 45 to 48, reset 49 and 50, `forget-machine` 52).
 
 | Code | Name | Meaning |
 |---|---|---|
@@ -398,6 +396,11 @@ settings too weak`, `TPM error 0x…`) and never owner input.
 
 **Audit.** The events that end a prompt already name the approver. A `tpm` approver's denial or unavailability adds a
 `tpm_status` field with the helper's status name, so `tpm-locked-out` and `not-this-tpm` can be told apart in the log.
+The events are `config.approval-refused` and `vault.presence-refused`; their `refusal` is `wrong_pin` for a wrong PIN and
+`tpm_refused` for a lockout or any other helper status, and `tpm_status` is one of `wrong_pin`, `locked_out`,
+`not_this_tpm`, `key_mismatch`, `weak_da_settings`, `refused_message`, `tpm_error`, `malformed`, `unreachable` (the socket,
+or an answer the service cannot read) and `bad_signature` (the helper's signature does not verify against the pinned key).
+A step 3 failure is `config.approval-failed` as for any signer.
 
 ## Migration
 
