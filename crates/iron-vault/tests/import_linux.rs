@@ -894,26 +894,28 @@ async fn every_ending_but_success_leaves_no_copy() {
     let service = dest.start();
     let mut broken = source.bytes.clone();
     broken[0] ^= 0xff;
-    let wrong_export: [&[u8]; 1] = [b"EXPORT-wrong-guess-0000"];
-    let declined: [&[u8]; 4] = [
-        EXPORT_PASSPHRASE.as_bytes(),
-        DEST_PASSPHRASE.as_bytes(),
-        DEST_PASSPHRASE.as_bytes(),
-        b"no",
-    ];
-    let cancelled: [&[u8]; 1] = [EXPORT_PASSPHRASE.as_bytes()];
-    let cases: [(&str, &[u8], &[&[u8]]); 4] = [
-        ("import-denied", &source.bytes, &wrong_export),
-        ("bundle-invalid", &broken, &[]),
-        ("declined", &source.bytes, &declined),
-        ("cancelled", &source.bytes, &cancelled),
+    let answers = |given: &[&'static [u8]]| given.to_vec();
+    let cases = [
+        ("import-denied", source.bytes.clone(), answers(&[b"EXPORT-wrong-guess-0000"])),
+        ("bundle-invalid", broken, answers(&[])),
+        (
+            "declined",
+            source.bytes.clone(),
+            answers(&[
+                EXPORT_PASSPHRASE.as_bytes(),
+                DEST_PASSPHRASE.as_bytes(),
+                DEST_PASSPHRASE.as_bytes(),
+                b"no",
+            ]),
+        ),
+        ("cancelled", source.bytes.clone(), answers(&[EXPORT_PASSPHRASE.as_bytes()])),
     ];
 
     for (ending, bytes, answers) in cases {
         let bundle = dest.path(&format!("{ending}.bundle"));
-        fs::write(&bundle, bytes).unwrap();
+        fs::write(&bundle, &bytes).unwrap();
 
-        let ran = cli_import(&service, dest.dir.path(), &bundle, answers).await;
+        let ran = cli_import(&service, dest.dir.path(), &bundle, &answers).await;
 
         assert_ne!(ran.code, Some(0), "{ending}: {ran:?}");
         assert_eq!(config_copy(&bundle), None, "{ending}: a copy was left");
