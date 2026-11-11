@@ -1,14 +1,23 @@
-//! A `tpm` approver's TPM approval PIN as a migration authorization method, end to end over a real admin socket
-//! (`design/migration-authorization.md`, "Which method is asked"; `design/tpm-approval-signer.md`, "Migration"): `recipient
-//! add` asks the vault passphrase first, switches to the TPM approver, and is authorized by the TPM's signature over the
-//! challenge's migration proof payload. `export` runs the same authorization step. A stand-in for the TPM signing helper runs in the default suite; the same
-//! flow against the real helper and `swtpm` is `#[ignore]`d, run as `approver_add_tpm_linux`'s ignored tests are.
+//! A `tpm` approver's TPM approval PIN as a migration authorization method (`design/migration-authorization.md`, "Which
+//! method is asked"; `design/tpm-approval-signer.md`, "Migration"). Over a real admin socket, `recipient add` asks the vault
+//! passphrase first, switches to the TPM approver, and is authorized by the TPM's signature over the challenge's migration
+//! proof payload; `export` runs the same authorization step. In the service context, a PIN answer takes its challenge
+//! once and only before it expires.
+//!
+//! A stand-in for the TPM signing helper runs in the default suite. The same flow against the real helper and `swtpm` is
+//! `#[ignore]`d (see the module documentation of `crates/iron-vault-tpm-signer/tests/swtpm.rs` for starting the emulator).
+//! The emulator is shared, so the ignored tests run one at a time:
+//!
+//! ```sh
+//! cargo build -p iron-vault-tpm-signer --features tpm
+//! IRON_VAULT_SWTPM=swtpm:host=127.0.0.1,port=2321 cargo test -p iron-vault --test lifecycle -- migration_tpm_pin --ignored \
+//!     --test-threads=1
+//! ```
+//! `IRON_VAULT_TPM_SIGNER` names the helper binary when it is not `target/debug/iron-vault-tpm-signer`.
 
 #![cfg(target_os = "linux")]
-// Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,8 +25,9 @@ use std::sync::Arc;
 use common::approval_harness::{Answer, Captured, Exchanged, captured_logs, converse_switching, send, spawn_admin};
 use common::recipient_harness::{self, APPROVAL_PASSPHRASE, Fixture, VAULT_PASSPHRASE};
 use common::tpm_helper::{Script, Stub, serve_real, serve_stub};
-use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, Prompt, RequestedSignerKind};
+use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, OwnerInput, Prompt, RequestedSignerKind};
 use iron_vault::attempt_limit::FAILURE_THRESHOLD;
+use iron_vault::migration_authorization::{AskableMethod, AskableMethods, CHALLENGE_LIFETIME, MigrationOperation, MigrationRefusal};
 use iron_vault::service_context::ServiceContext;
 use iron_vault_store::{ApproverId, RecipientKey, RecoveryKey};
 use iron_vault_tpm_protocol::Response;
@@ -25,8 +35,10 @@ use p256::ecdsa::{Signature, SigningKey};
 use tokio::net::UnixStream;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
+use zeroize::Zeroizing;
 
 const PIN: &str = "correct horse";
+const WRONG_PIN: &str = "wrong horse";
 const TPM_LABEL: &str = "laptop TPM";
 
 /// An unlocked vault with a `tpm` approver enrolled through the helper socket, its admin socket served until the test ends.
@@ -207,7 +219,7 @@ async fn a_wrong_pin_is_denied_writes_nothing_and_does_not_count_toward_the_atte
     let before = vault.fixture.state_files();
     let key = new_key();
 
-    let denied = vault.add(&key, &switch_to("wrong horse")).await;
+    let denied = vault.add(&key, &switch_to(WRONG_PIN)).await;
 
     let (code, message) = error_of(&denied.response);
     assert_eq!(code, ErrorCode::MigrationDenied);
@@ -218,6 +230,7 @@ async fn a_wrong_pin_is_denied_writes_nothing_and_does_not_count_toward_the_atte
         vault.service.check_migration_attempts().await.is_ok(),
         "a wrong PIN counted toward the attempt limit"
     );
+    assert!(!vault.logs.text().contains(WRONG_PIN));
 }
 
 #[tokio::test]
@@ -252,12 +265,21 @@ async fn a_helper_refusal_other_than_the_pin_is_migration_unavailable() {
 }
 
 /// A signature by the approver's key over anything but this challenge's migration proof payload, such as a presence
-/// payload, never authorizes.
+/// payload or an approval payload, never authorizes: it does not verify over the payload the service built.
 #[tokio::test]
 async fn a_signature_over_another_message_never_authorizes() {
     let vault = TpmVault::with_stub().await;
     let presence = [b"IVPP".as_slice(), &[1], &[0; 64]].concat();
-    let signature: Signature = p256::ecdsa::signature::Signer::sign(&SigningKey::from_slice(&[7; 32]).unwrap(), &presence);
+    let approval = [b"IVAP".as_slice(), &[1], &[0; 84]].concat();
+
+    assert_signature_never_authorizes(&vault, &presence).await;
+    assert_signature_never_authorizes(&vault, &approval).await;
+}
+
+/// Has the stub answer the next sign request with its key's signature over `message`, and checks the PIN answered with it
+/// is refused as a signature that does not verify.
+async fn assert_signature_never_authorizes(vault: &TpmVault, message: &[u8]) {
+    let signature: Signature = p256::ecdsa::signature::Signer::sign(&SigningKey::from_slice(&[7; 32]).unwrap(), message);
     let signed = Response::Signed {
         signature: signature.normalize_s().unwrap_or(signature).to_bytes().into(),
     };
@@ -266,8 +288,58 @@ async fn a_signature_over_another_message_never_authorizes() {
 
     let refused = vault.add(&key, &switch_to(PIN)).await;
 
-    assert_eq!(error_of(&refused.response).0, ErrorCode::MigrationUnavailable);
+    let (code, message) = error_of(&refused.response);
+    assert_eq!(code, ErrorCode::MigrationUnavailable);
+    assert!(message.contains("bad_signature"), "{message}");
     vault.assert_refused(&key, "unavailable");
+}
+
+/// The TPM approver's method among those step 6 asks.
+fn pin_method(methods: &AskableMethods) -> &AskableMethod {
+    methods
+        .asked()
+        .iter()
+        .find(|method| matches!(method, AskableMethod::TpmPin(_)))
+        .unwrap()
+}
+
+fn pin_input() -> OwnerInput {
+    OwnerInput::new(Zeroizing::new(PIN.as_bytes().to_vec()))
+}
+
+/// The PIN method takes its challenge without the passphrase attempt limit, so the challenge itself must refuse a replay.
+#[tokio::test]
+async fn a_pin_answer_takes_its_challenge_once() {
+    let vault = TpmVault::with_stub().await;
+    let methods = vault.service.migration_methods().await.unwrap();
+    let digest = vault.service.issue_migration_challenge(MigrationOperation::Export).await.unwrap();
+    let signed = vault.stub().signed_magics().len();
+
+    let first = vault.service.authorize_migration(&digest, pin_method(&methods), pin_input()).await;
+    let replayed = vault.service.authorize_migration(&digest, pin_method(&methods), pin_input()).await;
+
+    assert_eq!(first.err(), None);
+    assert_eq!(replayed.err(), Some(MigrationRefusal::NotPending));
+    assert_eq!(vault.stub().signed_magics().len(), signed + 1, "the replay reached the TPM");
+}
+
+#[tokio::test]
+async fn a_pin_answer_after_the_challenge_expires_is_refused_before_the_tpm_signs() {
+    let vault = TpmVault::with_stub().await;
+    let methods = vault.service.migration_methods().await.unwrap();
+    let digest = vault.service.issue_migration_challenge(MigrationOperation::Export).await.unwrap();
+    let signed = vault.stub().signed_magics().len();
+    tokio::time::pause();
+    tokio::time::advance(CHALLENGE_LIFETIME).await;
+
+    let refused = vault.service.authorize_migration(&digest, pin_method(&methods), pin_input()).await;
+
+    assert_eq!(refused.err(), Some(MigrationRefusal::Expired));
+    assert_eq!(
+        vault.stub().signed_magics().len(),
+        signed,
+        "the TPM signed for an expired challenge"
+    );
 }
 
 #[tokio::test]
@@ -351,7 +423,7 @@ async fn the_real_helper_authorizes_a_migration_by_pin_and_denies_a_wrong_one() 
 
     assert_pin_authorizes_a_recipient_add(&vault).await;
     let key = new_key();
-    let denied = vault.add(&key, &switch_to("wrong horse")).await;
+    let denied = vault.add(&key, &switch_to(WRONG_PIN)).await;
 
     assert_eq!(error_of(&denied.response).0, ErrorCode::MigrationDenied, "{denied:?}");
     vault.assert_refused(&key, "wrong_pin");

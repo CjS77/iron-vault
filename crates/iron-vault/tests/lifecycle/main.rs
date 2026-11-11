@@ -13,4 +13,5 @@ mod init;
 mod migration_authorization;
 mod migration_prompt;
 mod migration_rejection;
+mod migration_tpm_pin;
 mod reset;
