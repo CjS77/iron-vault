@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 use iron_vault_store::migration_bundle::{BundleDecoder, DecodedBundle};
 use iron_vault_store::{
     ExportPassphrase, ImportError, ImportFailure, ImportKeys, ImportProgress, ImportStep, ImportedVault, InitStateError,
-    InitializationState, OpenBundleError, Passphrase, SignerKind, StoreFs, UnfinishedKind, VerifiedBundle, WhichPassphrase,
+    InitializationState, OpenBundleError, Passphrase, RecipientIdentity, SignerKind, StoreFs, UnfinishedKind, VerifiedBundle,
+    WhichPassphrase,
 };
 use secrecy::SecretString;
 use tokio::sync::mpsc;
@@ -56,18 +57,14 @@ struct Checked {
     /// Held until the exchange ends.
     _slot: ImportSlot,
     existing: InitializationState,
+    /// The identity in the unlock handoff, read when `--host-unlock` asked for it.
+    host: Option<RecipientIdentity>,
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Import<F> {
     /// The nine steps of the exchange.
     async fn run(&self, exchange: &mut Exchange, host_unlock: bool) -> Result<AdminResponse, ExchangeError> {
-        if host_unlock {
-            return Ok(error(
-                ErrorCode::ImportFailed,
-                "`import --host-unlock` is not available in this release, so nothing was written".to_owned(),
-            ));
-        }
-        let checked = match self.check().await {
+        let checked = match self.check(host_unlock).await {
             Ok(checked) => checked,
             Err(refusal) => return Ok(refused_by(Creating::Import, refusal, false)),
         };
@@ -82,12 +79,13 @@ impl<F: StoreFs + Send + Sync + 'static> Import<F> {
             Ok(bundle) => bundle,
             Err(response) => return Ok(response),
         };
-        exchange.notice(&summary_text(&bundle)).await?;
+        exchange.notice(&summary_text(&bundle, checked.host.is_some())).await?;
         let passphrase = match vault_passphrase(exchange).await? {
             Ok(passphrase) => passphrase,
             Err(rule) => return Ok(error(ErrorCode::PassphraseRejected, rule)),
         };
         let (keys, secret) = ImportKeys::generate();
+        let keys = checked.host.into_iter().fold(keys, ImportKeys::with_host_unlock);
         if let Err(declined) = reveal_recovery_key(exchange, &secret).await? {
             return Ok(declined);
         }
@@ -96,8 +94,9 @@ impl<F: StoreFs + Send + Sync + 'static> Import<F> {
     }
 
     /// Step 1, before any prompt: Locked, locked memory in a protected install, an initialization state import may
-    /// write over, and the import slot.
-    async fn check(&self) -> Result<Checked, InitRefusal> {
+    /// write over, the import slot and, with `host_unlock`, the unlock handoff. The handoff is read last, so a service
+    /// whose memory is not locked never opens it.
+    async fn check(&self, host_unlock: bool) -> Result<Checked, InitRefusal> {
         let state = self.service.state().await;
         if !state.admin_allows(AdminOperation::Initialize) {
             return Err(InitRefusal::WrongState(state));
@@ -105,7 +104,15 @@ impl<F: StoreFs + Send + Sync + 'static> Import<F> {
         self.service.require_locked_memory_for_init()?;
         let existing = self.service.initializable().await?;
         let slot = self.service.take_import_slot()?;
-        Ok(Checked { _slot: slot, existing })
+        let host = match host_unlock {
+            true => Some(self.service.read_host_unlock().await?),
+            false => None,
+        };
+        Ok(Checked {
+            _slot: slot,
+            existing,
+            host,
+        })
     }
 
     /// Steps 3 and 4: the export passphrase, then the bundle opened and verified with it.
@@ -191,7 +198,7 @@ fn unfinished_notice(kind: UnfinishedKind) -> String {
 }
 
 /// The summary the owner reads before choosing a passphrase, built from the verified files only.
-fn summary_text(bundle: &VerifiedBundle) -> String {
+fn summary_text(bundle: &VerifiedBundle, host_unlock: bool) -> String {
     let approvers = bundle
         .approvers()
         .iter()
@@ -200,10 +207,15 @@ fn summary_text(bundle: &VerifiedBundle) -> String {
             SignerKind::Tpm => format!("{} (bound to the source machine)", approver.label()),
         })
         .collect::<Vec<_>>();
+    let host_line = if host_unlock {
+        "  host unlock: enrolled from this machine's unlock handoff\n"
+    } else {
+        ""
+    };
     format!(
         "import a migration bundle\n  vault: {}\n  credentials: {}\n  approvers: {}\n  committed approval: version {}; highest reserved \
          version: {}\n  config: the source's committed config, to be approved on this machine\n  then: a new vault passphrase and a new \
-         recovery key for this machine\n  routing starts after iron-vault config approve, at version {} or later\n",
+         recovery key for this machine\n{host_line}  routing starts after iron-vault config approve, at version {} or later\n",
         bundle.vault_id(),
         bundle.record_count(),
         approvers.join(", "),

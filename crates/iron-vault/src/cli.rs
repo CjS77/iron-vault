@@ -159,9 +159,17 @@ pub enum Command {
     /// against the committed config's digest, and prints the `config approve` command for it; if the copy cannot be made it
     /// removes it and prints the digest to check your own copy of the source's config against, and still exits 0. Any
     /// other ending removes the copy. The first approval lists the whole config as added, since nothing is active.
+    ///
+    /// With --host-unlock, the vault also enrols the identity in the unlock handoff as a recipient, as `init --host-unlock`
+    /// does, so a restart unlocks with no owner present. The service refuses to start the import if the handoff is absent or
+    /// untrusted, before any prompt.
     Import {
         /// The bundle file to read.
         bundle: PathBuf,
+        /// Also enrol the identity in the unlock handoff as a recipient. A dev-mode build does not accept this flag.
+        #[cfg_attr(not(feature = "dev-mode"), arg(long))]
+        #[cfg_attr(feature = "dev-mode", arg(skip))]
+        host_unlock: bool,
     },
     /// Discard the vault and the config, so `init` can make a new vault: the way out when no passphrase, recovery key or
     /// approver works. It asks for no owner factor, only a confirmation typed at a terminal, which is the vault ID, or the
@@ -506,13 +514,13 @@ pub fn export(_socket: Option<&Path>, _bundle: &Path) -> ExitCode {
 /// `iron-vault import`: checks for a controlling terminal and a usable bundle file, sends `import` and the bundle, answers
 /// the service's prompts, shows the recovery key on the terminal only, and prints the result and the next steps.
 #[cfg(target_os = "linux")]
-pub fn import(socket: Option<&Path>, bundle: &Path) -> ExitCode {
-    import::run_import(socket, bundle).into()
+pub fn import(socket: Option<&Path>, bundle: &Path, host_unlock: bool) -> ExitCode {
+    import::run_import(socket, bundle, host_unlock).into()
 }
 
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
-pub fn import(_socket: Option<&Path>, _bundle: &Path) -> ExitCode {
+pub fn import(_socket: Option<&Path>, _bundle: &Path, _host_unlock: bool) -> ExitCode {
     unsupported_platform()
 }
 

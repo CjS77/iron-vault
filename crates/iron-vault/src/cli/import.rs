@@ -20,7 +20,7 @@ use config_copy::{ConfigCopy, shell_word};
 
 /// Runs `import`: refuses without a terminal, a usable `bundle` or a free config copy name before it connects, streams the
 /// bundle after the request, and prints the result with the steps that follow. The copy exists only after a success.
-pub fn run_import(socket: Option<&Path>, bundle: &Path) -> Exit {
+pub fn run_import(socket: Option<&Path>, bundle: &Path, host_unlock: bool) -> Exit {
     if let Err(e) = console::ensure_terminal() {
         let message =
             format!("`import` shows the recovery key on the controlling terminal only, and there is none ({e}); nothing was sent");
@@ -37,7 +37,7 @@ pub fn run_import(socket: Option<&Path>, bundle: &Path) -> Exit {
     let mut console = RecoveryKeyWatch::import(ProcessConsole::default());
     let answer = answered(
         socket,
-        AdminRequest::Import { host_unlock: false },
+        AdminRequest::Import { host_unlock },
         &mut console,
         &mut Bundle::Send(&mut file),
     );
