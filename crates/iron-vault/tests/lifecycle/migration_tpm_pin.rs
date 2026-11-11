@@ -23,12 +23,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use common::approval_harness::{Answer, Captured, Exchanged, captured_logs, converse_switching, send, spawn_admin};
+use common::migration_source;
 use common::recipient_harness::{self, APPROVAL_PASSPHRASE, Fixture, VAULT_PASSPHRASE};
 use common::tpm_helper::{Script, Stub, serve_real, serve_stub};
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, OwnerInput, Prompt, RequestedSignerKind};
 use iron_vault::attempt_limit::FAILURE_THRESHOLD;
 use iron_vault::migration_authorization::{AskableMethod, AskableMethods, CHALLENGE_LIFETIME, MigrationOperation, MigrationRefusal};
 use iron_vault::service_context::ServiceContext;
+use iron_vault_store::migration_bundle::{BundleDecoder, EntryName};
 use iron_vault_store::{ApproverId, RecipientKey, RecoveryKey};
 use iron_vault_tpm_protocol::Response;
 use p256::ecdsa::{Signature, SigningKey};
@@ -40,6 +42,7 @@ use zeroize::Zeroizing;
 const PIN: &str = "correct horse";
 const WRONG_PIN: &str = "wrong horse";
 const TPM_LABEL: &str = "laptop TPM";
+const EXPORT_PASSPHRASE: &str = "EXPORT-chosen-7c2e-correct";
 
 /// An unlocked vault with a `tpm` approver enrolled through the helper socket, its admin socket served until the test ends.
 struct TpmVault {
@@ -381,6 +384,118 @@ async fn with_the_helper_socket_gone_the_tpm_approver_is_not_asked() {
 
     assert_added(&exchanged, &key);
     assert_eq!(exchanged.prompts, [prompt("Vault passphrase", false)]);
+}
+
+/// `export` answered with `answers`, and the bundle bytes the service streamed before its response.
+async fn export(vault: &TpmVault, answers: &[Answer<'_>]) -> (Exchanged, Vec<u8>) {
+    let mut stream = UnixStream::connect(&vault.path).await.unwrap();
+    send(&mut stream, &Frame::Request(AdminRequest::Export)).await;
+    let (mut notices, mut prompts, mut bundle) = (String::new(), Vec::new(), Vec::new());
+    let mut answers = answers.iter();
+    loop {
+        match migration_source::next_frame(&mut stream).await {
+            Frame::Response(response) => {
+                return (
+                    Exchanged {
+                        notices,
+                        prompts,
+                        response,
+                    },
+                    bundle,
+                );
+            }
+            Frame::Notice(notice) => notices.push_str(&notice.text),
+            Frame::BundleData(chunk) => bundle.extend_from_slice(chunk.bytes()),
+            Frame::Prompt(prompt) => {
+                prompts.push(prompt);
+                let reply = match answers.next().expect("a prompt beyond the answers given") {
+                    Answer::Input(text) => Frame::OwnerInput(OwnerInput::new(Zeroizing::new(text.as_bytes().to_vec()))),
+                    Answer::Switch => Frame::Switch,
+                };
+                send(&mut stream, &reply).await;
+            }
+            other => panic!("unexpected frame {other:?}"),
+        }
+    }
+}
+
+/// The approver IDs of the bundle's `approver-<id>.age` entries. The format has no entry name for a TPM approver's key.
+fn bundled_approvers(bundle: &[u8]) -> Vec<ApproverId> {
+    let mut decoder = BundleDecoder::new();
+    decoder.push(bundle).unwrap();
+    decoder
+        .finish()
+        .unwrap()
+        .entries()
+        .filter_map(|(name, _)| match name {
+            EntryName::Approver(id) => Some(id),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The audit records of `event` for an export that the TPM approver `id` answered. The approver ID is unique to a vault, so
+/// it keeps a sibling test's export out of the count in the log every test shares.
+fn export_records_of(vault: &TpmVault, event: &str) -> Vec<serde_json::Value> {
+    let id = vault.approver.to_string();
+    vault
+        .logs
+        .events(event)
+        .into_iter()
+        .filter(|record| record["approver_id"] == id.as_str() && record["operation"] == "export")
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tpm_approval_pin_authorizes_an_export_whose_bundle_holds_only_the_software_approvers_key() {
+    let vault = TpmVault::with_stub().await;
+    let AdminResponse::ApproverList { entries } = vault.run(AdminRequest::ApproverList, &[]).await.response else {
+        panic!("expected the approver list");
+    };
+    let software: Vec<_> = entries.iter().filter(|e| e.id != vault.approver).map(|e| e.id).collect();
+    assert_eq!(software.len(), 1, "{entries:?}");
+    let answers = [
+        Answer::Switch,
+        Answer::Input(PIN),
+        Answer::Input(EXPORT_PASSPHRASE),
+        Answer::Input(EXPORT_PASSPHRASE),
+    ];
+
+    let (exchanged, bundle) = export(&vault, &answers).await;
+
+    assert!(matches!(exchanged.response, AdminResponse::Export { .. }), "{exchanged:?}");
+    assert_eq!(exchanged.prompts.first(), Some(&prompt("Vault passphrase", true)));
+    assert_eq!(exchanged.prompts.get(1), Some(&pin_prompt(true)));
+    let authorized = export_records_of(&vault, "migration.authorized");
+    assert_eq!(authorized.len(), 1, "{authorized:?}");
+    assert_eq!(authorized[0]["method"], "tpm_pin");
+    assert_eq!(bundled_approvers(&bundle), software);
+    assert_eq!(vault.stub().signed_magics().last(), Some(b"IVMA"));
+    assert!(!vault.logs.text().contains(PIN));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wrong_pin_on_export_is_denied_and_no_bundle_is_written() {
+    let vault = TpmVault::with_stub().await;
+    vault.stub().answer_next_signs([Some(Response::WrongPin)]);
+    let before = vault.fixture.state_files();
+    let answers = [Answer::Switch, Answer::Input(WRONG_PIN)];
+
+    let (denied, bundle) = export(&vault, &answers).await;
+
+    let (code, message) = error_of(&denied.response);
+    assert_eq!(code, ErrorCode::MigrationDenied);
+    assert!(message.contains("TPM approval PIN is wrong"), "{message}");
+    assert!(bundle.is_empty(), "{} bundle bytes were sent", bundle.len());
+    assert_eq!(vault.fixture.state_files(), before);
+    assert!(export_records_of(&vault, "migration.exported").is_empty());
+    let refused = export_records_of(&vault, "migration.authorization-refused");
+    assert_eq!(
+        (refused.len(), refused[0]["refusal"].as_str()),
+        (1, Some("wrong_pin")),
+        "{refused:?}"
+    );
+    assert!(!vault.logs.text().contains(WRONG_PIN));
 }
 
 fn real_helper() -> (PathBuf, String) {
