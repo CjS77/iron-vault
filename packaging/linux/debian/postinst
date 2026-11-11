@@ -111,20 +111,23 @@ fi
 #DEBHELPER#
 
 # cargo-deb generates snippets for iron-vault.service only, so the TPM signing helper's socket is enabled and started here, in the
-# form dh_installsystemd uses: an administrator who disabled it keeps it disabled across an upgrade. It listens on a machine with no
-# TPM too; the helper instance then fails to start and `approver add --kind tpm` says the helper is unavailable.
+# form dh_installsystemd uses for a unit enabled by default: `was-enabled` is true on a fresh install (no state file yet) and false
+# once an administrator has disabled the socket, so an upgrade keeps it disabled. The socket listens on a machine with no TPM too;
+# the helper instance then fails to start and `approver add --kind tpm` says the helper is unavailable.
 tpm_socket=iron-vault-tpm-signer.socket
-if [ "$1" = configure ] && deb-systemd-helper debian-installed "$tpm_socket"; then
-    deb-systemd-helper unmask "$tpm_socket" >/dev/null || true
-    if deb-systemd-helper --quiet was-enabled "$tpm_socket"; then
-        deb-systemd-helper enable "$tpm_socket" >/dev/null || true
-    else
-        deb-systemd-helper update-state "$tpm_socket" >/dev/null || true
-    fi
-    if [ -d /run/systemd/system ]; then
-        deb-systemd-invoke start "$tpm_socket" >/dev/null || true
-    fi
-fi
+case "$1" in
+    configure | abort-upgrade | abort-deconfigure | abort-remove)
+        deb-systemd-helper unmask "$tpm_socket" >/dev/null || true
+        if deb-systemd-helper --quiet was-enabled "$tpm_socket"; then
+            deb-systemd-helper enable "$tpm_socket" >/dev/null || true
+        else
+            deb-systemd-helper update-state "$tpm_socket" >/dev/null || true
+        fi
+        if [ -d /run/systemd/system ]; then
+            deb-systemd-invoke start "$tpm_socket" >/dev/null || true
+        fi
+        ;;
+esac
 
 if [ "$1" = configure ]; then
     if [ -z "$2" ]; then
