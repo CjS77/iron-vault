@@ -72,9 +72,10 @@ Approval passphrase for "approval passphrase":
 New approval passphrase for "approval passphrase 2026":
 Repeat the new approval passphrase:
 enrolled approver a53f9f72-74c7-403e-82a7-c34f9474ce25 (software); the vault has 2 approvers.
+a53f9f72-74c7-403e-82a7-c34f9474ce25
 ```
 
-The last line, the new approver's ID, is the only thing the command writes to stdout; the rest goes to the terminal, so
+The last line, the bare approver ID, is the only thing written to stdout; the rest goes to the terminal, so
 `NEW=$(iron-vault approver add --label ...)` captures just the ID.
 
 If you are only adding a second approver, stop here and store its passphrase. Until you approve a config with the new
@@ -103,6 +104,8 @@ Approval passphrase for "approval passphrase 2026" (Ctrl-Y to try another way):
 approved version 3 (blake2b:10cef10967fbeeaece8a5f087bf247f8e3ad253a88f1fc96e2db4d449122e0c7)
 callers: none; route grants: none; routes: none; listeners: none; limits: none; logging: none; recovery: none
 ```
+
+The file is unchanged: the "no policy change; text changed" line is a known issue, tracked in K-304.
 
 Nothing echoes while you type a passphrase or press Ctrl-Y; `^Y` above marks where it was pressed. `approver list`
 now marks the new approver `active` and lists it first. A wrong passphrase ends the exchange: the service never goes on
@@ -156,7 +159,7 @@ The reply's `Authorization` header reads `Bearer [iron-vault:scrubbed]`, as befo
 ## What can go wrong
 
 - **`approver-in-use`.** The approver signed the active config (`this approver signed the active approval; approve the
-  config with another approver first`). Do step 3, then remove it.
+  config with another approver first; nothing was changed`). Do step 3, then remove it.
 - **`approver-set-invalid`.** `remove` named the last approver: enroll another first. `add` found 16 already pinned:
   remove one first.
 - **`approval-denied`.** The wrong passphrase for the approver the prompt names. The vault passphrase and recovery

@@ -236,13 +236,13 @@ fn encodings_of_text(secret: &str) -> Vec<String> {
 fn encodings_of_key_file(file: &[u8]) -> Vec<String> {
     let header_end = file.windows(5).position(|window| window == b"\n--- ").unwrap();
     let body_start = file[header_end + 1..].iter().position(|&byte| byte == b'\n').unwrap() + header_end + 2;
-    let stanza = String::from_utf8_lossy(file)
-        .lines()
-        .find(|line| line.starts_with("-> scrypt "))
-        .unwrap()
-        .to_owned();
+    let text = String::from_utf8_lossy(file);
+    let mut lines = text.lines().skip_while(|line| !line.starts_with("-> scrypt "));
+    let stanza = lines.next().unwrap().to_owned();
+    let stanza_body = lines.next().unwrap().to_owned();
     vec![
         stanza,
+        stanza_body,
         STANDARD.encode(&file[body_start..]),
         STANDARD_NO_PAD.encode(&file[body_start..]),
         STANDARD.encode(file),
