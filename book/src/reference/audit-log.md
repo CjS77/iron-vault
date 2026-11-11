@@ -219,9 +219,9 @@ file byte is logged.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `migration.challenge-issued` | INFO | A migration challenge was issued | `operation` (`export` or `add_recipient`), `method` (`vault_passphrase`); `destination_recipient` for `add_recipient` |
-| `migration.authorized` | INFO | The owner proved the challenge | `operation`, `method`; `destination_recipient` for `add_recipient` |
-| `migration.authorization-refused` | WARN | The challenge was refused or cancelled, or the authorization was refused when used | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
+| `migration.challenge-issued` | INFO | A migration challenge was issued | `operation` (`export` or `add_recipient`), `method` (the method asked first: `vault_passphrase` or `tpm_pin`); `destination_recipient` for `add_recipient` |
+| `migration.authorized` | INFO | The owner proved the challenge | `operation`, `method` (the method that proved it); `approver_id` for `tpm_pin`; `destination_recipient` for `add_recipient` |
+| `migration.authorization-refused` | WARN | The challenge was refused or cancelled, or the authorization was refused when used | `operation`, `method` (the method answered, or the one asked first), `refusal` (including `wrong_pin` and `tpm_locked_out` for `tpm_pin`); `approver_id` for `tpm_pin`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
 
 ### Migration bundle
 

@@ -2,11 +2,11 @@
 .el .ds Aq '
 .TH iron-vault-recipient-add 1  "Iron Vault" "Iron Vault Manual"
 .SH NAME
-iron\-vault\-recipient\-add \- Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not affected
+iron\-vault\-recipient\-add \- Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace; the prompt can switch to a `tpm` approver\*(Aqs TPM approval PIN. Old copies of `identity.age` are not affected
 .SH SYNOPSIS
 \fBiron\-vault recipient add\fR [\fB\-\-admin\-socket\fR] [\fB\-\-recovery\fR] [\fB\-\-host\-unlock\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-label\fR> [\fIRECIPIENT\fR] 
 .SH DESCRIPTION
-Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not affected.
+Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path: whoever holds the key can open the vault identity, and with it every credential. The service shows what changes, then asks for the vault passphrase, which an unlocked vault does not replace; the prompt can switch to a `tpm` approver\*(Aqs TPM approval PIN. Old copies of `identity.age` are not affected.
 .PP
 With \-\-recovery, the service instead generates a new offline recovery key and shows it once, as `init` does; save it, type yes, then authorize with the vault passphrase. Check it with `recovery check`, then remove the old recovery key with `recipient remove`.
 .PP

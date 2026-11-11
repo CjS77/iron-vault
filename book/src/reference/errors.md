@@ -168,8 +168,8 @@ the CLI exits with `3` before it connects.
 
 | Code | Name | Meaning | What to do |
 |---|---|---|---|
-| `28` | `migration-denied` | Migration authorization was refused: the vault passphrase was wrong, the envelopes it opened are not this vault's, or the authorization expired, was used already or is for another operation. Nothing was exported or rewrapped. | Start the command again with the right vault passphrase. |
-| `29` | `migration-unavailable` | Migration authorization could not be checked, or a `lock` cancelled the command at its prompt, or at `export`'s export passphrase prompts. Nothing was exported or rewrapped. | Read the message and try again. |
+| `28` | `migration-denied` | Migration authorization was refused: the vault passphrase or TPM approval PIN was wrong, the envelopes the passphrase opened are not this vault's, or the authorization expired, was used already or is for another operation. Nothing was exported or rewrapped. | Start the command again with the right vault passphrase or PIN. Each wrong PIN counts against the TPM's lockout. |
+| `29` | `migration-unavailable` | Migration authorization could not be checked (for a TPM approver, the message names the signing helper's status), no method could be asked, or a `lock` cancelled the command at its authorization prompt, or at `export`'s export passphrase prompts. Nothing was exported or rewrapped. | Read the message and try again, or switch to the vault passphrase at the prompt. |
 | `33` | `migration-rate-limited` | Too many wrong vault passphrases in a row. The message gives the seconds to wait. | Wait that long. The limit is the one `unlock` shares. |
 
 ### Migration bundle
