@@ -11,6 +11,7 @@ mod approver_list;
 mod approver_order;
 mod approver_remove;
 mod approvers;
+mod forget_machine;
 mod recipient_add;
 mod recipient_list;
 mod recipient_remove;

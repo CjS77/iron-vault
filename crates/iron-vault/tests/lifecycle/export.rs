@@ -4,10 +4,8 @@
 //! or the log.
 
 #![cfg(target_os = "linux")]
-// Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 use std::fs;

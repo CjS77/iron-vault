@@ -4,10 +4,8 @@
 //! command spawns no process.
 
 #![cfg(target_os = "linux")]
-// Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::sync::Arc;
@@ -318,9 +316,9 @@ async fn the_command_runs_no_tool_it_mentions() {
 #[test]
 fn the_command_spawns_no_process() {
     let sources = [
-        include_str!("../src/admin/forget_machine.rs"),
-        include_str!("../src/service_context/forget_machine.rs"),
-        include_str!("../src/cli/forget_machine.rs"),
+        include_str!("../../src/admin/forget_machine.rs"),
+        include_str!("../../src/service_context/forget_machine.rs"),
+        include_str!("../../src/cli/forget_machine.rs"),
     ];
     let spawners = [
         "std::process",
