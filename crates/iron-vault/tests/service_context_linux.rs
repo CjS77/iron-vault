@@ -1151,7 +1151,8 @@ async fn a_protected_install_without_locked_memory_refuses_unlock_before_any_pro
         report.memory,
         MemoryStatus::Unavailable("RLIMIT_MEMLOCK soft limit is 65536 bytes, not unlimited".to_owned())
     );
-    // Only this test refuses for an unavailable memory lock, so the shared buffer holds its three refusals alone: the startup host unlock's, the handler's and the context's.
+    // Only this test refuses for an unavailable memory lock, so the shared buffer holds its three refusals alone: the
+    // startup host unlock's, the handler's and the context's.
     let refusals: Vec<_> = logs
         .events("vault.unlock-refused")
         .into_iter()

@@ -18,8 +18,9 @@ use crate::deployment::DeploymentProfile;
 use crate::path_metadata::{self, CollectError};
 use crate::trusted_path::{self, ExpectedOwner, PathComponent, TrustedPathRule, UnsafePath};
 
-/// Where the host's unlock handoff appears inside the container. The directory is mounted, not the file, so a file
-/// that is missing or replaced on the host is seen as such.
+/// Where the unlock handoff is read. In a Protected install this is the host path itself, the handoff unit's ramfs. In
+/// the Container profile it is where the host directory appears inside the container; the directory is mounted, not the
+/// file, so a file that is missing or replaced on the host is seen as such.
 pub const HANDOFF_PATH: &str = "/run/iron-vault-unlock/host-unlock";
 
 /// The most bytes a handoff may hold: the 74-byte `AGE-SECRET-KEY-1…` text, a newline, and room to spare. A longer file

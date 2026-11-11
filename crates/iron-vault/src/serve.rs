@@ -1,5 +1,5 @@
 //! `iron-vault serve`: checks the trusted paths, takes the directory locks and sweeps their stale temp files, starts
-//! the service context with its provisional request listeners, Locked or, in the Container profile, unlocked from the
+//! the service context with its provisional request listeners, Locked or, in the Protected and Container profiles, unlocked from the
 //! host's unlock handoff, and serves the admin socket until SIGTERM, SIGINT or a failed log write, then stops the
 //! service. SIGHUP reloads the config (§12).
 

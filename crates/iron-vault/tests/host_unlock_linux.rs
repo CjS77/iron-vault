@@ -80,16 +80,17 @@ impl Drop for HandoffDir {
 }
 
 /// The harness vault with `identity.age` wrapped for an operational identity sealed to [`PASSPHRASE`] and for a fresh
-/// host unlock identity, whose secret text this returns.
-fn with_host_key(fixture: &Fixture) -> String {
+/// host unlock identity, whose secret text and `age1…` recipient key this returns.
+fn with_host_key(fixture: &Fixture) -> (String, String) {
     let (operational, operational_key) = OperationalIdentity::generate();
     let (host, host_key) = RecoveryKey::generate();
+    let host_recipient = host_key.to_string();
     let lock = StateDirLock::acquire(&fixture.path("state")).unwrap();
     let envelope = wrap_identity(&identity(), &RecipientSet::new([operational_key, host_key]).unwrap()).unwrap();
     write_identity_envelope(&lock, &OsFs, &envelope).unwrap();
     let sealed = seal_passphrase_envelope_for_tests(&operational, &passphrase()).unwrap();
     write_passphrase_envelope(&lock, &OsFs, &sealed).unwrap();
-    host.expose_secret().to_owned()
+    (host.expose_secret().to_owned(), host_recipient)
 }
 
 fn passphrase() -> Passphrase {
@@ -161,7 +162,7 @@ async fn assert_passphrase_unlock_works(service: &ServiceContext) {
 async fn a_good_handoff_reaches_ready_and_serves_with_no_unlock(profile: DeploymentProfile) {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
-    let secret = with_host_key(&fixture);
+    let (secret, host_key) = with_host_key(&fixture);
     let dir = HandoffDir::new();
     let handoff = dir.write(&secret);
     let service = service_on(&fixture, profile);
@@ -178,12 +179,13 @@ async fn a_good_handoff_reaches_ready_and_serves_with_no_unlock(profile: Deploym
         "no lock transition from Starting"
     );
     assert_not_logged(&logs, &secret);
+    assert_not_logged(&logs, &host_key);
 }
 
 async fn without_locked_memory_the_handoff_is_never_opened(profile: DeploymentProfile) {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
-    let secret = with_host_key(&fixture);
+    let (secret, _) = with_host_key(&fixture);
     let dir = HandoffDir::new();
     // World-readable, so opening it would be refused as untrusted: the memory refusal shows it was never opened.
     let handoff = dir.write(&secret);
@@ -213,7 +215,7 @@ async fn a_missing_handoff_leaves_it_locked_for_the_passphrase(profile: Deployme
 async fn an_identity_that_is_not_a_recipient_leaves_it_locked_for_the_passphrase(profile: DeploymentProfile) {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
-    with_host_key(&fixture);
+    let (_, host_key) = with_host_key(&fixture);
     let (stranger, _) = RecoveryKey::generate();
     let dir = HandoffDir::new();
     let handoff = dir.write(stranger.expose_secret());
@@ -223,13 +225,14 @@ async fn an_identity_that_is_not_a_recipient_leaves_it_locked_for_the_passphrase
 
     assert_one_record(&logs, before, "WARN", "refused", Some("not_a_recipient"));
     assert_not_logged(&logs, stranger.expose_secret());
+    assert_not_logged(&logs, &host_key);
     assert_passphrase_unlock_works(&service).await;
 }
 
 async fn an_uninitialized_vault_stays_locked(profile: DeploymentProfile) {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
-    let secret = with_host_key(&fixture);
+    let (secret, _) = with_host_key(&fixture);
     ["state", "etc"].into_iter().for_each(|name| empty(&fixture.path(name)));
     let dir = HandoffDir::new();
     let handoff = dir.write(&secret);
@@ -244,7 +247,7 @@ async fn an_uninitialized_vault_stays_locked(profile: DeploymentProfile) {
 async fn the_development_profile_never_tries_the_handoff() {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
-    let secret = with_host_key(&fixture);
+    let (secret, _) = with_host_key(&fixture);
     let dir = HandoffDir::new();
     let handoff = dir.write(&secret);
 
@@ -364,6 +367,8 @@ async fn init_host_unlock_is_refused_by_a_service_that_has_no_host_unlock() {
     };
     assert_eq!((code, prompts.len()), (ErrorCode::InitFailed, 0));
     assert!(message.contains("no host unlock"), "{message}");
+    assert_eq!(file_names(&fixture, "state"), ["lock"]);
+    assert_eq!(file_names(&fixture, "etc"), ["config.toml.lock"]);
 }
 
 async fn init_host_unlock_then_a_restart_reaches_ready_with_no_unlock(profile: DeploymentProfile) {
@@ -467,6 +472,11 @@ async fn a_new_host_unlock_key_reaches_ready_after_a_restart_and_the_old_one_can
             ..
         }
     ));
+    fs::remove_file(&handoff).unwrap();
+    assert!(matches!(
+        remove(&service, &new_key, &[APPROVAL_PASSPHRASE]).await,
+        AdminResponse::RecipientRemove { recipients: 2 }
+    ));
     [&old_secret, &new_secret]
         .into_iter()
         .for_each(|secret| assert_not_logged(&logs, secret.expose_secret()));
@@ -475,7 +485,7 @@ async fn a_new_host_unlock_key_reaches_ready_after_a_restart_and_the_old_one_can
 async fn an_untrusted_handoff_leaves_it_locked_for_the_passphrase(profile: DeploymentProfile) {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
-    let secret = with_host_key(&fixture);
+    let (secret, _) = with_host_key(&fixture);
     let dir = HandoffDir::new();
     let handoff = dir.write(&secret);
     fs::set_permissions(&handoff, fs::Permissions::from_mode(0o644)).unwrap();

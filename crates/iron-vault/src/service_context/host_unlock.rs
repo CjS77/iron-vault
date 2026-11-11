@@ -105,9 +105,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Leaves Starting: to Checking when the unlock handoff at `handoff` opens the vault, then on to Ready or Unavailable
     /// as the config check settles, and to Locked otherwise. Call it once, right after [`start`](Self::start).
     ///
-    /// Only the Container profile tries a host unlock, and only it leaves `start` in Starting; in any other state this
-    /// returns the state unchanged, so another profile is exactly as `start` left it. Each attempt writes one
-    /// `vault.host-unlock` record.
+    /// Only the Protected and Container profiles try a host unlock, and only they leave `start` in Starting; in any other
+    /// state this returns the state unchanged, so a Development service stays Locked, exactly as `start` left it. Each
+    /// attempt writes one `vault.host-unlock` record.
     ///
     /// Cancel-safe once the service enters Checking, as [`enter_checking`](Self::enter_checking) is. A future dropped
     /// before then leaves the service in Starting, which refuses requests as Locked does and unlocks nothing.
@@ -142,9 +142,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 
     /// The recipient key of the configured host unlock adapter, which part 1 of the independence rule keeps: the
-    /// identity the unlock handoff holds now, in the Container profile (`design/docker-compose.md`, "Its role among the
-    /// recipients"). With no readable handoff, or in another profile, no host unlock is configured. The identity is
-    /// dropped as this returns; only its public key is kept.
+    /// identity the unlock handoff holds now, in the Protected and Container profiles (`design/tpm-unlock.md`, "The
+    /// recipient role"; `design/docker-compose.md`, "Its role among the recipients"). With no readable handoff, or in a
+    /// Development service, which has none, no host unlock is configured. The identity is dropped as this returns; only
+    /// its public key is kept.
     pub(super) async fn configured_host_unlock(&self) -> Option<RecipientKey> {
         let setup = Arc::clone(&self.setup);
         if !tries_host_unlock(setup.paths.profile) {

@@ -277,7 +277,7 @@ With --host-unlock, RECIPIENT is a host unlock identity's key, such as a new one
 iron-vault recipient remove [OPTIONS] <RECIPIENT>
 ```
 
-Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient, the last recovery recipient and, in a Docker Compose stack, the `host-unlock` recipient whose identity the unlock handoff holds. It says that copies of `identity.age` made before still open with the removed key.
+Remove an enrolled recipient by its `age1...` key. The service shows what will change, then asks for the approval passphrase. It refuses the operational recipient, the last recovery recipient and, in the Protected and Container profiles, the `host-unlock` recipient whose identity the unlock handoff holds. It says that copies of `identity.age` made before still open with the removed key.
 
 - `<RECIPIENT>`: The recipient's `age1...` key, as `recipient list` prints it.
   - required

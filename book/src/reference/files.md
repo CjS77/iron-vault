@@ -34,7 +34,7 @@ The `.deb` package runs the service as the `iron-vault` system account.
 | `/etc/logrotate.d/iron-vault` | root | `0644` | the package | Log rotation ([log operations](log-operations.md#rotation)). |
 
 The unit lets the service write only `/etc/iron-vault`, `/var/lib/iron-vault`, `/run/iron-vault` and its log
-directory. Uninstalling keeps the vault and the config. Purging deletes `/etc/iron-vault` and asks before it deletes the vault
+directory. A protected install also reads the host unlock handoff when it is there; its two paths are in the [handoff table](#host-unlock-handoff) below. Uninstalling keeps the vault and the config. Purging deletes `/etc/iron-vault` and asks before it deletes the vault
 ([installation guide](../installation/linux-install.md#uninstall-and-purge)).
 
 ## Development mode
@@ -73,16 +73,18 @@ container runtime ([log operations](log-operations.md#docker)). The
 [host layout](../../../design/docker-compose.md#host-layout) and [mounts](../../../design/docker-compose.md#mounts)
 tables in docker-compose.md list every host path and mount.
 
+### Host unlock handoff
+
 The Protected and Container profiles read one more file when it is there, the host unlock handoff:
 
 | Path | Owner | Mode | Made by | What it is |
 |---|---|---|---|---|
-| `/run/iron-vault-unlock/` | root | `0711` on its ramfs; neither group nor others may write it | the host's handoff unit | The host directory, bind-mounted read-only into the container at the same path. The directory is mounted, not the file, so a file missing or replaced on the host is seen as such. |
+| `/run/iron-vault-unlock/` | root | `0711` on its ramfs; neither group nor others may write it | the host's handoff unit | In the Container profile, the host directory, bind-mounted read-only into the container at the same path. The directory is mounted, not the file, so a file missing or replaced on the host is seen as such. In a protected install it is the host's own ramfs from the handoff unit, which the Linux package does not ship yet. |
 | `/run/iron-vault-unlock/host-unlock` | `iron-vault` | `0400` (no group or other bits; at most `0600` is accepted) | the host's handoff unit | The host unlock identity's secret text, one `AGE-SECRET-KEY-1…` line of at most 128 bytes. It lets the service unlock at startup without a passphrase. |
 
 The file must be a regular file, never a symlink, and no directory above it may be writable by group or others, not
 even a sticky one such as `/tmp`. A file that breaks the rule is refused, not read. At startup a
-Container-profile service reads this file. When it opens the vault, the service goes from Starting to Checking with no
+Protected or Container service reads this file. When it opens the vault, the service goes from Starting to Checking with no
 passphrase. A missing file means no handoff, and a refused one (an unsafe path, an unreadable file, a key that is not
 one of the vault's recipients, or memory not locked against swap) is not: either way the service stays
 Locked, and a passphrase `unlock` still works. Each start writes one `vault.host-unlock` record
