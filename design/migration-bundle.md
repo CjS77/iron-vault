@@ -82,7 +82,7 @@ approver ID. Anyone who knows the vault public key could put another envelope in
 the MAC'd approval state decides whose signature counts, so a substitute only fails to sign. A `tpm` approver (and a
 `hardware` one, reserved today) is bound to its device and has no key file in the bundle, though `approval.age` still
 pins it. Export refuses with `approver-set-invalid` when no `software` approver is pinned, and import lists each `tpm`
-approver as `bound to the source machine`
+approver as `bound to the source machine` ([TPM approval signer](tpm-approval-signer.md#migration-bundles)).
 
 ### The config
 
