@@ -67,9 +67,9 @@ Exit codes:
   1  the service answered with an error
   2  usage error
   3  no answer from the service: it is not running, this account may not connect, the exchange failed, a prompt
-     got no value, or a secret value the service sent could not be shown on a terminal; `reset` also exits 3,
-     before it connects, when stdin is not a terminal or /dev/tty cannot be opened; `export` also exits 3 when
-     the bundle it received is incomplete or cannot be kept
+     got no value, or a secret value the service sent could not be shown on a terminal; `reset` and `import` also
+     exit 3, before they connect, when stdin is not a terminal or /dev/tty cannot be opened; `export` also
+     exits 3 when the bundle it received is incomplete or cannot be kept
   4  `status`: the service answered, and it is not Ready; `list`: no vault is open, so the credentials are unknown";
 
 /// The exit statuses listed in [`EXIT_CODES`]. Usage errors exit through clap, with its status 2.

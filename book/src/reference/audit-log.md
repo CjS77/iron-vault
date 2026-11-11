@@ -225,15 +225,18 @@ file byte is logged.
 
 ### Migration bundle
 
-`export` writes the first two. A refused authorization or a rejected export passphrase writes neither: the
-authorization's own records say what happened. None of these carries a passphrase, a key or a byte of a credential
+`export` writes the first two; `import` writes the last four. A refused authorization or a rejected export passphrase
+writes neither: the authorization's own records say what happened. None of these carries a passphrase, a key or a byte of a credential
 record.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `migration.exported` | INFO | The whole bundle was sent | `vault_id`, `records` (the credentials it carries), `approvers` (the approvers it carries), `committed_version`, `highest_reserved` (the highest reserved approval version) |
 | `migration.export-failed` | WARN | The snapshot check before the prompts failed, or the export failed after its authorization was used | `step` (`check`, `snapshot`, `seal` or `transfer`), `error_kind` (`locked` for a `lock`, `deadline` for a missed deadline); `file` when a file failed |
-| `migration.import-discarded` | WARN | An unfinished import was discarded by `init` | `files`: the names removed, `config.toml` among them when the import wrote one |
+| `migration.import-refused` | WARN | An import was refused after the bundle arrived and before anything was written | `refusal` (`bundle_invalid` or `wrong_passphrase`); `detail`, the fixed name of the failed rule or check, for `bundle_invalid` |
+| `migration.import-discarded` | WARN | An unfinished import was discarded by `import` or `init` | `files`: the names removed, `config.toml` among them when the import wrote one |
+| `migration.imported` | INFO | The import's last write is durable | `vault_id`, `records`, `approvers`, `committed_version`, `highest_reserved`, `recipients` (the enrolled roles' names) |
+| `migration.import-failed` | WARN | A write of the import failed | `step` (the import's step number), `error_kind` |
 
 ## `jq` recipes
 

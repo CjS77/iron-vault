@@ -769,13 +769,16 @@ The `recipient.forget-checked` event ([forget-machine.md](forget-machine.md#audi
 | `migration.authorized` | INFO | a source-owner method proved the challenge | `operation`, `method`; `destination_recipient` for `add_recipient` |
 | `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled, or the authorization was refused when consumed | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
 
-**Migration bundle** ([migration-bundle.md](migration-bundle.md#audit-events) lists the import events still to come):
+**Migration bundle** ([migration-bundle.md](migration-bundle.md#audit-events) gives when each is written):
 
 | Event | Level | When | Fields |
 |---|---|---|---|
 | `migration.exported` | INFO | the last bundle data frame of an export was written | `vault_id`, `records`, `approvers`, `committed_version`, `highest_reserved` |
 | `migration.export-failed` | WARN | an export failed at its snapshot checks, or after its authorization was consumed | `step` (`check`, `snapshot`, `seal` or `transfer`), `error_kind` (`locked` for a `lock`, `deadline` for a missed deadline); `file` when a file failed |
+| `migration.import-refused` | WARN | an import was refused at steps 2 to 4 | `refusal` (`bundle_invalid` or `wrong_passphrase`); `detail`, the fixed name of the failed rule or check, for `bundle_invalid` |
 | `migration.import-discarded` | WARN | an unfinished import was discarded, by `import` or `init` | `files` |
+| `migration.imported` | INFO | the import's step 10 is durable | `vault_id`, `records`, `approvers`, `committed_version`, `highest_reserved`, `recipients`: the enrolled roles' names |
+| `migration.import-failed` | WARN | an import write step failed | `step`, `error_kind` |
 
 **Owner notifications** (v1; not emitted in v0.
 [owner-notifications.md](owner-notifications.md#which-events-notify) gives which events raise one):

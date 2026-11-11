@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-import 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-import \- Make the vault from a migration bundle that `export` wrote on another machine. The service prompts for the export passphrase, shows a summary, prompts for a new vault passphrase, shows a new recovery key once on the controlling terminal and, once you confirm you saved it, writes the vault, the source\*(Aqs credentials and approval counters included. It needs a controlling terminal, and leaves the service Locked. The vault routes nothing until you approve a config with `config approve`, at a version above every one the source reserved. The BUNDLE must be a regular file of at most 260 MiB
+.SH SYNOPSIS
+\fBiron\-vault import\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIBUNDLE\fR> 
+.SH DESCRIPTION
+Make the vault from a migration bundle that `export` wrote on another machine. The service prompts for the export passphrase, shows a summary, prompts for a new vault passphrase, shows a new recovery key once on the controlling terminal and, once you confirm you saved it, writes the vault, the source\*(Aqs credentials and approval counters included. It needs a controlling terminal, and leaves the service Locked. The vault routes nothing until you approve a config with `config approve`, at a version above every one the source reserved. The BUNDLE must be a regular file of at most 260 MiB
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIBUNDLE\fR>
+The bundle file to read

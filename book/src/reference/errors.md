@@ -168,8 +168,9 @@ the CLI exits with `3` before it connects.
 
 ### Migration bundle
 
-`export` raises `export-failed`. `import` is not a CLI command yet: the service has the other three codes ready for it,
-and no command raises them until it lands. `export` also answers `passphrase-rejected` when the export passphrase is
+`export` raises `export-failed`; `import` raises the other three. `import` also answers `declined`, `already-initialized`,
+`passphrase-rejected`, `memory-unprotected` and `wrong-state` as `init` does, and `busy` while another `init` or `import`
+holds the service. `export` also answers `passphrase-rejected` when the export passphrase is
 under 12 characters or its two copies differ, and `wrong-state` outside Ready.
 
 | Code | Name | Meaning | What to do |
@@ -177,7 +178,7 @@ under 12 characters or its two copies differ, and `wrong-state` outside Ready.
 | `45` | `export-failed` | `export`: the snapshot checks found damage before any prompt, or the snapshot or the transfer failed after you authorized it: a deadline passed, or a `lock` cancelled it between frames. The message names the step and, for a file, its name and the error kind. No bundle was completed. | Read the message, fix what it names, and run `export` again. |
 | `46` | `bundle-invalid` | `import`: the bytes are not a migration bundle this version reads, are larger than the limit, or fail a check with the vault identity. The message names the rule or check, never a byte of the bundle. Nothing was written. | Export the bundle again from the source with a matching version. |
 | `47` | `import-denied` | `import`: the export passphrase does not open the bundle's identity envelope. Nothing was written. | Run `import` again with the passphrase chosen at `export`. |
-| `48` | `import-failed` | `import`: you asked for a host unlock identity and this machine has none to enrol, which is raised before any prompt and writes nothing; or a write failed. The message names the step. | For a failed write, run `import` again: it discards the unfinished import. Follow the message's advice about the recovery key shown. |
+| `48` | `import-failed` | `import`: a write failed, or `--host-unlock` was asked for, which this release does not implement and refuses before any prompt. The message names the step. | For a failed write, run `import` again: it discards the unfinished import. Follow the message's advice about the recovery key shown. |
 
 ## Proxy refusals
 

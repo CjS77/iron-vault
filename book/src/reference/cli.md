@@ -79,9 +79,9 @@ Exit codes:
   1  the service answered with an error
   2  usage error
   3  no answer from the service: it is not running, this account may not connect, the exchange failed, a prompt
-     got no value, or a secret value the service sent could not be shown on a terminal; `reset` also exits 3,
-     before it connects, when stdin is not a terminal or /dev/tty cannot be opened; `export` also exits 3 when
-     the bundle it received is incomplete or cannot be kept
+     got no value, or a secret value the service sent could not be shown on a terminal; `reset` and `import` also
+     exit 3, before they connect, when stdin is not a terminal or /dev/tty cannot be opened; `export` also
+     exits 3 when the bundle it received is incomplete or cannot be kept
   4  `status`: the service answered, and it is not Ready; `list`: no vault is open, so the credentials are unknown
 ```
 
@@ -148,6 +148,17 @@ iron-vault init [OPTIONS]
 Create the vault: the service prompts for the vault and approval passphrases, shows the recovery key once on the controlling terminal, and once you confirm you saved it, writes the vault and approves the initial config as version 1. It needs a controlling terminal, and leaves the service Locked.
 
 - `--host-unlock`: Also enrol the identity in the unlock handoff as a recipient, so a restart unlocks with no owner present. The service refuses to start `init` if the handoff is absent or untrusted. A dev-mode build does not accept this flag.
+
+## `iron-vault import`
+
+```text
+iron-vault import [OPTIONS] <BUNDLE>
+```
+
+Make the vault from a migration bundle that `export` wrote on another machine. The service prompts for the export passphrase, shows a summary, prompts for a new vault passphrase, shows a new recovery key once on the controlling terminal and, once you confirm you saved it, writes the vault, the source's credentials and approval counters included. It needs a controlling terminal, and leaves the service Locked. The vault routes nothing until you approve a config with `config approve`, at a version above every one the source reserved. The BUNDLE must be a regular file of at most 260 MiB.
+
+- `<BUNDLE>`: The bundle file to read.
+  - required
 
 ## `iron-vault reset`
 
