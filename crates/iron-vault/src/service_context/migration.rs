@@ -19,18 +19,23 @@ use std::sync::{Arc, Weak};
 
 use tokio::sync::OwnedMutexGuard;
 
-use iron_vault_store::{StoreFs, VaultId, VaultIdentity, verify_vault_passphrase};
+use iron_vault_store::{PinnedApprover, SignerKind, StoreFs, VaultId, VaultIdentity, read_tpm_key_blob, verify_vault_passphrase};
+use iron_vault_tpm_protocol::TpmApprovalPin;
 use rand_core::{OsRng, RngCore};
 use tokio::time::Instant;
 
+use super::presence::{DenialKind, PresenceRefusal};
+use super::tpm_helper::TpmStatus;
+use super::tpm_signer::TpmSigner;
 use super::{Inner, ServiceContext};
 use crate::admin::protocol::OwnerInput;
 use crate::attempt_limit::AttemptLimiter;
 use crate::audit::AuditEvent;
 use crate::audit::migration::{AuthorizationRefused, Refusal};
 use crate::migration_authorization::{
-    AuthorizedMigration, BindingDigest, ChallengeBusy, MethodRefusal, MigrationAuthorization, MigrationChallenge, MigrationOperation,
-    MigrationRefusal, SourceOwnerMethod, VaultPassphraseMethod, prove_challenge,
+    AskableMethods, AuthorizedMigration, BindingDigest, ChallengeBusy, MethodName, MethodRefusal, MigrationAuthorization,
+    MigrationChallenge, MigrationOperation, MigrationRefusal, OwnerRefusal, SourceOwnerMethod, TpmApprovalPinMethod, VaultPassphraseMethod,
+    prove_challenge,
 };
 use crate::service_state::ServiceState;
 
@@ -108,13 +113,59 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }))
     }
 
+    /// The methods step 6 asks (design/migration-authorization.md, "Which method is asked"): the vault passphrase, left
+    /// out while the passphrase attempt limit is cooling down, then each `tpm` approver this install can ask, in approver
+    /// order. Build it under the session's service-wide lock, before issuing the challenge, as for
+    /// [`vault_passphrase_method`](Self::vault_passphrase_method).
+    ///
+    /// Every `tpm` approver is asked: the independence rule's second part holds only while a pinned approver's enrolment
+    /// is not the operational recipient's, and v0 never enrols both from one secret (no TPM unlock enrols the operational
+    /// recipient), so no approver is held back for it.
+    pub async fn migration_methods(&self) -> Result<AskableMethods, MigrationRefusal> {
+        let passphrase = self.vault_passphrase_method().await?;
+        let (cooling, approvers) = {
+            let inner = self.inner.lock().await;
+            let approvers = inner
+                .open
+                .as_ref()
+                .map(|open| open.approval.approvers().to_vec())
+                .unwrap_or_default();
+            (inner.attempts.check(Instant::now()).err(), approvers)
+        };
+        let tpm = self
+            .askable_approvers(&approvers)
+            .into_iter()
+            .filter(|approver| approver.kind() == SignerKind::Tpm)
+            .map(|approver| self.tpm_pin_method(approver))
+            .collect();
+        Ok(AskableMethods::new(passphrase, cooling, tpm))
+    }
+
+    /// The TPM approval PIN method for `approver`: reads its key blob and has the helper sign the message with it.
+    fn tpm_pin_method(&self, approver: PinnedApprover) -> TpmApprovalPinMethod {
+        let (locks, setup, socket) = (Arc::clone(&self.locks), Arc::clone(&self.setup), self.tpm_helper_socket());
+        let pinned = approver.clone();
+        TpmApprovalPinMethod::new(approver, move |pin: TpmApprovalPin, message: &[u8]| {
+            let proved = || {
+                let socket = socket.clone().ok_or_else(|| PresenceRefusal::TpmUnavailable {
+                    status: TpmStatus::Unreachable,
+                    message: "the TPM signing helper's socket is missing".to_owned(),
+                })?;
+                let blob = read_tpm_key_blob(&locks.state, &setup.fs, pinned.id())
+                    .map_err(|error| PresenceRefusal::Unavailable(format!("the TPM key blob cannot be read: {error}")))?;
+                TpmSigner::prove(socket, (blob, pinned.clone()), message, pin).map(drop)
+            };
+            proved().map_err(method_refusal)
+        })
+    }
+
     /// Takes the challenge named by `digest` out of the pending slot and runs `method` on it with the owner's `input`
     /// (step 7). Only a proof yields the authorization; every path retires the challenge.
     ///
-    /// In order: the service must be Ready holding the vault identity, the attempt limit must allow an attempt, and the
-    /// challenge must be pending and unexpired, all before the method runs. Then the method's outcome is recorded in the
-    /// attempt limit: an owner refusal counts as a failure and a proof resets the count, while an unavailable check
-    /// records nothing. If the service locked, or holds another vault identity, by the time the method ends, the outcome
+    /// In order: the service must be Ready holding the vault identity, the attempt limit must allow an attempt of a method
+    /// it bounds, and the challenge must be pending and unexpired, all before the method runs. Then a bounded method's
+    /// outcome is recorded in the attempt limit: an owner refusal counts as a failure and a proof resets the count, while
+    /// an unavailable check records nothing. A TPM approval PIN's outcome is the TPM's to count. If the service locked, or holds another vault identity, by the time the method ends, the outcome
     /// is discarded unrecorded and the refusal is `WrongState`.
     ///
     /// The caller holds the service-wide lock from step 2 until its response, so no other exchange guesses while this
@@ -126,26 +177,33 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         method: &M,
         input: OwnerInput,
     ) -> Result<MigrationAuthorization, MigrationRefusal> {
-        let (challenge, held) = self.take_migration_challenge(digest).await?;
+        let (challenge, held) = self.take_migration_challenge(digest, method.attempt_limited()).await?;
         let proved = prove_challenge(method, challenge, input).await;
         let mut inner = self.inner.lock().await;
         if !holds(&inner, &held) {
             return Err(MigrationRefusal::WrongState(inner.state));
         }
-        record_outcome(&mut inner.attempts, proved.as_ref().map(|_| ()));
+        if method.attempt_limited() {
+            record_outcome(&mut inner.attempts, proved.as_ref().map(|_| ()));
+        }
         proved.map_err(MigrationRefusal::from)
     }
 
-    /// The checks before a method runs: Ready with the vault identity held, the attempt limit, then the challenge itself.
+    /// The checks before a method runs: Ready with the vault identity held, the attempt limit when `limited`, then the
+    /// challenge itself.
     /// Returns the challenge and a weak reference to the identity it was taken under, which keeps the identity's memory
     /// cleared on lock while still telling it apart from any identity a later unlock brings.
     async fn take_migration_challenge(
         &self,
         digest: &BindingDigest,
+        limited: bool,
     ) -> Result<(MigrationChallenge, Weak<VaultIdentity>), MigrationRefusal> {
         let mut inner = self.inner.lock().await;
         let now = Instant::now();
-        let allowed = ready_identity(&inner).and_then(|held| allow_attempt(&inner.attempts).map(|()| held));
+        let allowed = ready_identity(&inner).and_then(|held| match limited {
+            true => allow_attempt(&inner.attempts).map(|()| held),
+            false => Ok(held),
+        });
         match allowed {
             Ok(held) => inner.migration.take(digest, now).map(|challenge| (challenge, held)),
             Err(refusal) => {
@@ -190,7 +248,24 @@ fn record_outcome(attempts: &mut AttemptLimiter, outcome: Result<(), &MethodRefu
     match outcome {
         Ok(()) => attempts.record_success(),
         Err(MethodRefusal::Owner(_)) => attempts.record_failure(Instant::now()),
-        Err(MethodRefusal::Unavailable) => {}
+        Err(MethodRefusal::Unavailable | MethodRefusal::TpmLockedOut { .. } | MethodRefusal::TpmUnavailable { .. }) => {}
+    }
+}
+
+/// A TPM approver's presence refusal as the method's: a wrong PIN is the owner's, a lockout and a helper status keep
+/// their meaning, and a check that could not run is logged and unavailable.
+fn method_refusal(refusal: PresenceRefusal) -> MethodRefusal {
+    match refusal {
+        PresenceRefusal::Denied(DenialKind::WrongPin) => MethodRefusal::Owner(OwnerRefusal::WrongPin),
+        PresenceRefusal::TpmLockedOut { wait_seconds } => MethodRefusal::TpmLockedOut { wait_seconds },
+        PresenceRefusal::TpmUnavailable { status, message } => {
+            tracing::warn!(tpm_status = status.label(), %message, "the TPM approval PIN could not be checked");
+            MethodRefusal::TpmUnavailable { status: status.label() }
+        }
+        other => {
+            tracing::warn!(reason = %other, "the TPM approval PIN could not be checked");
+            MethodRefusal::Unavailable
+        }
     }
 }
 
@@ -234,18 +309,19 @@ impl<F: StoreFs + Send + Sync + 'static> MigrationSession<'_, F> {
     ) -> Result<AuthorizedMigration, MigrationRefusal> {
         self.ensure_unchanged().await?;
         let vault_id = open_vault_id(&*self.service.inner.lock().await)?;
+        let proved_by = authorization.proved_by();
         authorization
             .authorize(vault_id, operation, Instant::now())
-            .inspect_err(|refusal| record_refused_on_consume(operation, *refusal))
+            .inspect_err(|refusal| record_refused_on_consume(operation, proved_by, *refusal))
     }
 }
 
 /// Records the refusal of an authorization at step 9, when it names the authorization rather than the service's state.
-fn record_refused_on_consume(operation: &MigrationOperation, refusal: MigrationRefusal) {
+fn record_refused_on_consume(operation: &MigrationOperation, method: MethodName, refusal: MigrationRefusal) {
     if matches!(refusal, MigrationRefusal::Expired | MigrationRefusal::BindingMismatch) {
         AuthorizationRefused {
             operation,
-            method: VaultPassphraseMethod::LABEL,
+            method,
             refusal: Refusal::Refused(refusal),
         }
         .emit();

@@ -11,11 +11,16 @@ use iron_vault_store::migration_bundle::EntryName;
 use iron_vault_store::{ErrorKindLabel, ImportFailure, ImportStep, ImportedVault, SnapshotError, SnapshotStep, SnapshotSummary};
 
 use super::{AUDIT_TARGET, AuditEvent, EventName, count_of};
-use crate::migration_authorization::{MigrationOperation, MigrationRefusal};
+use crate::migration_authorization::{MethodName, MigrationOperation, MigrationRefusal};
 
 /// The destination recipient's `age1...` text for `add_recipient`; left out for `export`, which names none.
 fn destination(operation: &MigrationOperation) -> Option<String> {
     operation.destination().map(ToString::to_string)
+}
+
+/// The `approver_id` field: the approver whose key proves the challenge, for a method that proves with one.
+fn approver_id(method: MethodName) -> Option<String> {
+    method.approver.map(|approver| approver.to_string())
 }
 
 /// `migration.challenge-issued`: a migration challenge went into the pending slot (step 5).
@@ -47,8 +52,8 @@ impl AuditEvent for ChallengeIssued<'_> {
 pub struct Authorized<'a> {
     /// What was authorized.
     pub operation: &'a MigrationOperation,
-    /// The label of the method that proved the challenge.
-    pub method: &'static str,
+    /// The method that proved the challenge.
+    pub method: MethodName,
 }
 
 impl AuditEvent for Authorized<'_> {
@@ -59,7 +64,8 @@ impl AuditEvent for Authorized<'_> {
             target: AUDIT_TARGET,
             event = Self::NAME.as_str(),
             operation = self.operation.label(),
-            method = self.method,
+            method = self.method.label,
+            approver_id = approver_id(self.method).as_deref(),
             destination_recipient = destination(self.operation).as_deref(),
             "migration authorized",
         );
@@ -213,8 +219,8 @@ impl Refusal {
 pub struct AuthorizationRefused<'a> {
     /// What was to be authorized.
     pub operation: &'a MigrationOperation,
-    /// The label of the source-owner method the challenge was for.
-    pub method: &'static str,
+    /// The source-owner method the owner answered, or the one first asked when none was answered.
+    pub method: MethodName,
     /// Why it was refused.
     pub refusal: Refusal,
 }
@@ -227,7 +233,8 @@ impl AuditEvent for AuthorizationRefused<'_> {
             target: AUDIT_TARGET,
             event = Self::NAME.as_str(),
             operation = self.operation.label(),
-            method = self.method,
+            method = self.method.label,
+            approver_id = approver_id(self.method).as_deref(),
             refusal = self.refusal.label(),
             destination_recipient = destination(self.operation).as_deref(),
             retry_after = self.refusal.retry_after(),
@@ -315,10 +322,15 @@ mod tests {
 
     use super::*;
     use crate::attempt_limit::AttemptsCoolingDown;
-    use crate::audit::tests::record_of;
+    use crate::audit::tests::{APPROVER_ID, approver, record_of};
     use crate::migration_authorization::OwnerRefusal;
 
     const RECIPIENT: &str = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p";
+
+    const PASSPHRASE: MethodName = MethodName {
+        label: "vault_passphrase",
+        approver: None,
+    };
 
     fn add() -> MigrationOperation {
         MigrationOperation::AddRecipient(RECIPIENT.parse::<RecipientKey>().unwrap())
@@ -339,7 +351,7 @@ mod tests {
         let added = record_of(
             Authorized {
                 operation: &operation,
-                method: "vault_passphrase",
+                method: PASSPHRASE,
             },
             "INFO",
             &["operation", "method", "destination_recipient"],
@@ -404,7 +416,7 @@ mod tests {
         let operation = MigrationOperation::Export;
         let refused = |refusal| AuthorizationRefused {
             operation: &operation,
-            method: "vault_passphrase",
+            method: PASSPHRASE,
             refusal,
         };
         let fields = ["operation", "method", "refusal"];
@@ -419,6 +431,10 @@ mod tests {
             ),
             (Refusal::Refused(MigrationRefusal::Expired), "expired"),
             (Refusal::Refused(MigrationRefusal::Unavailable), "unavailable"),
+            (
+                Refusal::Refused(MigrationRefusal::TpmLockedOut { wait_seconds: 9 }),
+                "tpm_locked_out",
+            ),
             (Refusal::Cancelled, "cancelled"),
         ]
         .into_iter()
@@ -428,6 +444,33 @@ mod tests {
         assert_eq!(
             (record["refusal"].as_str(), record["retry_after"].as_u64()),
             (Some("rate_limited"), Some(30))
+        );
+    }
+
+    #[test]
+    fn a_tpm_pin_record_names_its_approver() {
+        let tpm = MethodName {
+            label: "tpm_pin",
+            approver: Some(approver().id),
+        };
+        let authorized = Authorized {
+            operation: &MigrationOperation::Export,
+            method: tpm,
+        };
+        let record = record_of(authorized, "INFO", &["operation", "method", "approver_id"]);
+        assert_eq!(
+            (record["method"].as_str(), record["approver_id"].as_str()),
+            (Some("tpm_pin"), Some(APPROVER_ID))
+        );
+        let refused = AuthorizationRefused {
+            operation: &MigrationOperation::Export,
+            method: tpm,
+            refusal: Refusal::Refused(MigrationRefusal::Denied(OwnerRefusal::WrongPin)),
+        };
+        let record = record_of(refused, "WARN", &["operation", "method", "approver_id", "refusal"]);
+        assert_eq!(
+            (record["refusal"].as_str(), record["approver_id"].as_str()),
+            (Some("wrong_pin"), Some(APPROVER_ID))
         );
     }
 }

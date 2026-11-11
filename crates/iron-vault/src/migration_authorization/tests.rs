@@ -18,6 +18,12 @@ assert_not_impl_any!(MigrationAuthorization: Clone, Copy);
 assert_not_impl_any!(MigrationChallenge: Clone, Copy);
 assert_not_impl_any!(AuthorizedMigration: Clone, Copy);
 
+/// The method every authorization these tests prove directly names.
+const PROVED_BY: MethodName = MethodName {
+    label: "vault_passphrase",
+    approver: None,
+};
+
 fn vault() -> VaultId {
     VaultId::from_bytes(VAULT).unwrap()
 }
@@ -118,7 +124,7 @@ fn debug_shows_only_the_operation_and_the_expiry() {
     ["vault_id", "nonce", "issued_at", "origin"]
         .iter()
         .for_each(|hidden| assert!(!shown.contains(hidden), "{shown} shows {hidden}"));
-    let authorization = format!("{:?}", MigrationAuthorization::proved(challenge));
+    let authorization = format!("{:?}", MigrationAuthorization::proved(challenge, PROVED_BY));
     assert!(
         authorization.contains("operation: Export") && !authorization.contains("nonce"),
         "{authorization}"
@@ -248,7 +254,7 @@ async fn take_is_allowed_before_the_expiry_and_refused_at_and_after_it() {
 /// Consumes an `Export` authorization proved now after `elapsed`, on the paused clock.
 async fn authorize_after(elapsed: Duration) -> Result<AuthorizedMigration, MigrationRefusal> {
     let (_, challenge) = taken(MigrationOperation::Export);
-    let authorization = MigrationAuthorization::proved(challenge);
+    let authorization = MigrationAuthorization::proved(challenge, PROVED_BY);
     advance(elapsed).await;
     authorization.authorize(vault(), &MigrationOperation::Export, Instant::now())
 }
@@ -268,7 +274,7 @@ async fn authorize_is_allowed_before_the_expiry_and_refused_at_and_after_it() {
 fn an_authorization_permits_only_its_own_vault_operation_and_destination() {
     let refused = |proved: MigrationOperation, vault_id: VaultId, consumed: MigrationOperation| {
         let (_, challenge) = taken(proved);
-        MigrationAuthorization::proved(challenge)
+        MigrationAuthorization::proved(challenge, PROVED_BY)
             .authorize(vault_id, &consumed, Instant::now())
             .unwrap_err()
     };
@@ -286,7 +292,7 @@ fn an_authorization_permits_only_its_own_vault_operation_and_destination() {
 #[tokio::test(start_paused = true)]
 async fn a_mismatch_is_reported_before_the_expiry() {
     let (_, challenge) = taken(add(RECIPIENT_A));
-    let authorization = MigrationAuthorization::proved(challenge);
+    let authorization = MigrationAuthorization::proved(challenge, PROVED_BY);
     advance(CHALLENGE_LIFETIME * 2).await;
     let refusal = authorization.authorize(vault(), &add(RECIPIENT_B), Instant::now()).unwrap_err();
     assert_eq!(refusal, MigrationRefusal::BindingMismatch);
@@ -295,7 +301,7 @@ async fn a_mismatch_is_reported_before_the_expiry() {
 #[test]
 fn an_authorization_for_a_recipient_authorizes_that_recipient() {
     let (_, challenge) = taken(add(RECIPIENT_A));
-    let authorized = MigrationAuthorization::proved(challenge)
+    let authorized = MigrationAuthorization::proved(challenge, PROVED_BY)
         .authorize(vault(), &add(RECIPIENT_A), Instant::now())
         .unwrap();
     assert_eq!(
@@ -311,6 +317,10 @@ fn a_method_refusal_ends_as_its_migration_refusal() {
         MigrationRefusal::Denied(OwnerRefusal::NotThisVault)
     );
     assert_eq!(MigrationRefusal::from(MethodRefusal::Unavailable), MigrationRefusal::Unavailable);
+    assert_eq!(
+        MigrationRefusal::from(MethodRefusal::TpmLockedOut { wait_seconds: 60 }),
+        MigrationRefusal::TpmLockedOut { wait_seconds: 60 }
+    );
 }
 
 /// The vault passphrase method, over a stand-in for the store's check; it runs on tokio's blocking pool, Linux only.
@@ -382,5 +392,80 @@ mod vault_passphrase {
             !checked.load(Ordering::SeqCst),
             "the store check ran on input that cannot be the passphrase"
         );
+    }
+}
+
+/// The TPM approval PIN method, over a stand-in for the helper's proof; it runs on tokio's blocking pool, Linux only.
+#[cfg(target_os = "linux")]
+mod tpm_pin {
+    use std::sync::{Arc, Mutex};
+
+    use ed25519_dalek::SigningKey;
+    use iron_vault_store::{ApproverPublicKey, MigrationProofPayload, PinnedApprover, SignatureAlgorithm};
+    use iron_vault_tpm_protocol::TpmApprovalPin;
+    use zeroize::Zeroizing;
+
+    use super::*;
+    use crate::admin::protocol::OwnerInput;
+
+    fn approver() -> PinnedApprover {
+        let key = SigningKey::from_bytes(&[7; 32]).verifying_key().to_bytes().to_vec();
+        PinnedApprover::for_tests(ApproverPublicKey::new(SignatureAlgorithm::Ed25519, key).unwrap())
+    }
+
+    /// The method whose proof records each message it is asked to sign and answers `answer`.
+    fn method(answer: Result<(), MethodRefusal>) -> (TpmApprovalPinMethod, Arc<Mutex<Vec<Vec<u8>>>>) {
+        let signed = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&signed);
+        let method = TpmApprovalPinMethod::new(approver(), move |_: TpmApprovalPin, message: &[u8]| {
+            seen.lock().unwrap().push(message.to_vec());
+            answer
+        });
+        (method, signed)
+    }
+
+    fn input(bytes: &[u8]) -> OwnerInput {
+        OwnerInput::new(Zeroizing::new(bytes.to_vec()))
+    }
+
+    #[tokio::test]
+    async fn the_tpm_signs_the_migration_proof_payload_of_the_challenge_it_proves() {
+        let (method, signed) = method(Ok(()));
+        let (_, challenge) = taken(add(RECIPIENT_A));
+        let expected = MigrationProofPayload::new(*challenge.binding_digest().as_bytes()).encode();
+        let authorization = prove_challenge(&method, challenge, input(b"correct horse")).await.unwrap();
+        assert_eq!(*signed.lock().unwrap(), [expected]);
+        assert_eq!(authorization.proved_by(), MethodName::of(&method));
+        assert_eq!(authorization.proved_by().label, "tpm_pin");
+        assert_eq!(authorization.proved_by().approver, Some(approver().id()));
+        assert!(!method.attempt_limited());
+        let refusal = authorization.authorize(vault(), &add(RECIPIENT_B), Instant::now()).unwrap_err();
+        assert_eq!(refusal, MigrationRefusal::BindingMismatch);
+    }
+
+    #[tokio::test]
+    async fn the_helper_refusal_is_the_method_refusal() {
+        let refusals = [
+            MethodRefusal::Owner(OwnerRefusal::WrongPin),
+            MethodRefusal::TpmLockedOut { wait_seconds: 9 },
+            MethodRefusal::TpmUnavailable { status: "not_this_tpm" },
+            MethodRefusal::Unavailable,
+        ];
+        for refusal in refusals {
+            let (_, challenge) = taken(MigrationOperation::Export);
+            let proved = prove_challenge(&method(Err(refusal)).0, challenge, input(b"correct horse")).await;
+            assert_eq!(proved.unwrap_err(), refusal);
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_or_non_utf8_input_is_a_wrong_pin_and_never_reaches_the_tpm() {
+        let (method, signed) = method(Ok(()));
+        for typed in [b"".as_slice(), &[0xff, 0xfe]] {
+            let (_, challenge) = taken(MigrationOperation::Export);
+            let refusal = prove_challenge(&method, challenge, input(typed)).await.unwrap_err();
+            assert_eq!(refusal, MethodRefusal::Owner(OwnerRefusal::WrongPin));
+        }
+        assert!(signed.lock().unwrap().is_empty());
     }
 }

@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 
 use super::dispatch::{AdminHandler, HandlerFuture};
 use super::init::entry_text;
-use super::migration_authorization::{NoAuthorization, no_authorization, require_migration_authorization};
+use super::migration_authorization::{NoAuthorization, authorize_with, no_authorization, require_migration_authorization};
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode, Prompt};
 use super::server::{Exchange, ExchangeError};
@@ -65,7 +65,7 @@ impl<F: StoreFs + Send + Sync + 'static> Export<F> {
             Ok(summary) => summary,
             Err(error) => return Ok(check_failed(error)),
         };
-        exchange.notice(&summary_text(&summary)).await?;
+        exchange.notice(&summary_text(&summary, &authorize_with(&session).await)).await?;
         let authorization = match require_migration_authorization(exchange, &session, MigrationOperation::Export).await? {
             Ok(authorization) => authorization,
             Err(none) => return Ok(no_authorization(COMMAND, none)),
@@ -208,10 +208,10 @@ fn completed(exported: &ExportedBundle) -> AdminResponse {
     }
 }
 
-/// The summary the owner confirms by typing the vault passphrase.
-fn summary_text(summary: &SnapshotSummary) -> String {
+/// The summary the owner confirms by typing the secret of the method named `authorize`.
+fn summary_text(summary: &SnapshotSummary, authorize: &str) -> String {
     format!(
-        "export the vault\n  vault: {}\n  credentials: {}\n  approver keys: {}\n  authorize with: the vault passphrase\n  \
+        "export the vault\n  vault: {}\n  credentials: {}\n  approver keys: {}\n  authorize with: {authorize}\n  \
          then: a new export passphrase to protect the migration bundle\n",
         summary.vault_id, summary.record_count, summary.approver_count,
     )

@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use iron_vault_store::{
     ApprovalEnvelope, ApprovalPassphrase, ApprovalPayload, ApprovalSigner, ApproverId, ApproverPublicKey, PinnedApprover, SignError,
-    SignatureAlgorithm, SignerKind, SoftwareSigner, StoreFs, VaultId, open_signer_key, read_signer_key, read_tpm_key_blob,
+    SignatureAlgorithm, SignerKind, SoftwareSigner, StoreFs, VaultId, open_signer_key, presence_message, read_signer_key,
+    read_tpm_key_blob,
 };
 use iron_vault_tpm_protocol::TpmApprovalPin;
 
@@ -239,7 +240,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let opened = tokio::task::spawn_blocking(move || {
             let blob = read_tpm_key_blob(&locks.state, &setup.fs, approver.id())
                 .map_err(|error| PresenceRefusal::Unavailable(format!("the TPM key blob cannot be read: {error}")))?;
-            TpmSigner::prove(socket, (blob, approver), vault_id, pin)
+            let message = presence_message(vault_id, approver.id()).map_err(|error| PresenceRefusal::Unavailable(error.to_string()))?;
+            TpmSigner::prove(socket, (blob, approver), &message, pin)
         });
         opened
             .await

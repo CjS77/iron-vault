@@ -16,7 +16,7 @@ use iron_vault_store::{
 
 use super::dispatch::{AdminHandler, HandlerFuture};
 use super::init::reveal_recovery_key;
-use super::migration_authorization::{NoAuthorization, no_authorization, require_migration_authorization};
+use super::migration_authorization::{NoAuthorization, authorize_with, no_authorization, require_migration_authorization};
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode};
 use super::recipient_list::{OLD_COPIES, refused as inventory_refused};
@@ -87,7 +87,7 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
             Ok(plan) => plan,
             Err(refusal) => return Ok(plan_refused(refusal)),
         };
-        exchange.notice(&summary(&plan)).await?;
+        exchange.notice(&summary(&plan, &authorize_with(&session).await)).await?;
         let operation = MigrationOperation::AddRecipient(key.clone());
         let authorization = match require_migration_authorization(exchange, &session, operation).await? {
             Ok(authorization) => authorization,
@@ -119,7 +119,7 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientAdd<F> {
             Ok(plan) => plan,
             Err(refusal) => return Ok(plan_refused(refusal)),
         };
-        exchange.notice(&summary(&plan)).await?;
+        exchange.notice(&summary(&plan, &authorize_with(&session).await)).await?;
         if let Err(declined) = reveal_recovery_key(exchange, &secret).await? {
             return Ok(declined);
         }
@@ -145,9 +145,9 @@ fn parse_arguments(recipient: &str, label: &str) -> Result<(RecipientKey, Recipi
     Ok((key, label))
 }
 
-/// The summary the owner confirms by typing the vault passphrase: what the migration challenge binds, what the vault has
-/// afterwards, and what the factor is.
-fn summary(plan: &RecipientAddPlan) -> String {
+/// The summary the owner confirms by typing the secret of the method named `authorize`: what the migration challenge
+/// binds, what the vault has afterwards, and what the factor is.
+fn summary(plan: &RecipientAddPlan, authorize: &str) -> String {
     let (entry, after) = (plan.entry(), plan.after());
     let (title, next) = match entry.role() {
         RecipientRole::Recovery => (
@@ -161,7 +161,7 @@ fn summary(plan: &RecipientAddPlan) -> String {
     };
     format!(
         "{title}\n  vault: {}\n  recipient: {}\n  role: {}\n  label: {}\n  recipients after the change: {}\n  {next}\n  \
-         authorize with: the vault passphrase\n",
+         authorize with: {authorize}\n",
         after.vault_id(),
         entry.key(),
         entry.role().name(),

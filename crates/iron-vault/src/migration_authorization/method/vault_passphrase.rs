@@ -46,6 +46,11 @@ impl SourceOwnerMethod for VaultPassphraseMethod {
         Self::LABEL
     }
 
+    /// The vault passphrase is the one method the passphrase attempt limit bounds.
+    fn attempt_limited(&self) -> bool {
+        true
+    }
+
     /// Runs the check on the blocking pool, because scrypt holds a thread for about a second. The task owns the
     /// passphrase, so a future dropped mid-check still drops it when the task ends.
     fn prove(&self, _challenge: &MigrationChallenge, input: OwnerInput) -> impl Future<Output = Result<(), MethodRefusal>> + Send {

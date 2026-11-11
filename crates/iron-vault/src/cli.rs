@@ -170,8 +170,8 @@ pub enum Command {
     /// foreign file, and ends Locked. Nothing can be recovered afterwards: keep your own copy of the config.
     Reset,
     /// Write the vault as a migration bundle to BUNDLE, for `import` on another machine. The service checks the vault,
-    /// prompts for the vault passphrase to authorize the export, then for a new export passphrase, typed twice, which
-    /// seals the bundle; `import` asks for it. The bundle arrives in `.<BUNDLE name>.partial` beside BUNDLE, created
+    /// prompts for the vault passphrase to authorize the export (switchable to a `tpm` approver's TPM approval PIN), then
+    /// for a new export passphrase, typed twice, which seals the bundle; `import` asks for it. The bundle arrives in `.<BUNDLE name>.partial` beside BUNDLE, created
     /// with mode 0600 before anything is sent, and takes BUNDLE's name only once it is whole. An existing BUNDLE or a
     /// leftover partial file is refused before anything is sent. The source vault keeps serving afterwards.
     Export {
@@ -352,8 +352,8 @@ pub enum RecipientCommand {
     List,
     /// Enroll RECIPIENT, an `age1...` public key, as another way to open the vault. This is the alternate migration path:
     /// whoever holds the key can open the vault identity, and with it every credential. The service shows what changes,
-    /// then asks for the vault passphrase, which an unlocked vault does not replace. Old copies of `identity.age` are not
-    /// affected.
+    /// then asks for the vault passphrase, which an unlocked vault does not replace; the prompt can switch to a `tpm`
+    /// approver's TPM approval PIN. Old copies of `identity.age` are not affected.
     ///
     /// With --recovery, the service instead generates a new offline recovery key and shows it once, as `init` does; save it,
     /// type yes, then authorize with the vault passphrase. Check it with `recovery check`, then remove the old recovery key

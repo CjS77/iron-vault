@@ -12,7 +12,7 @@ mod pending;
 #[cfg(test)]
 mod tests;
 
-use iron_vault_store::{RecipientKey, VaultId};
+use iron_vault_store::{ApproverId, RecipientKey, VaultId};
 
 use crate::attempt_limit::AttemptsCoolingDown;
 use crate::service_state::ServiceState;
@@ -21,7 +21,7 @@ use tokio::time::Instant;
 
 pub use challenge::{BindingDigest, CHALLENGE_LIFETIME, MigrationChallenge};
 #[cfg(target_os = "linux")]
-pub use method::VaultPassphraseMethod;
+pub use method::{AskableMethod, AskableMethods, TpmApprovalPinMethod, VaultPassphraseMethod};
 // Only the service context's migration session proves a challenge, and it is Linux-only.
 #[cfg(target_os = "linux")]
 pub(crate) use method::prove_challenge;
@@ -69,9 +69,10 @@ impl MigrationOperation {
 /// Why a migration authorization was refused, at its issue, its proof or its consumption. The messages are fixed phrases
 /// and hold no owner input.
 ///
-/// `Expired`, `NotPending`, `BindingMismatch` and `Denied` end the exchange with `migration-denied`, `Unavailable` and a
-/// `WrongState` of Locked (a `lock` during the check) with `migration-unavailable`, `AttemptsCoolingDown` with
-/// `migration-rate-limited`, and `Busy` and any other `WrongState` with the admin protocol's `busy` and `wrong-state`.
+/// `Expired`, `NotPending`, `BindingMismatch` and `Denied` end the exchange with `migration-denied`, `Unavailable`,
+/// `TpmUnavailable` and a `WrongState` of Locked (a `lock` during the check) with `migration-unavailable`,
+/// `AttemptsCoolingDown` with `migration-rate-limited`, `TpmLockedOut` with `tpm-locked-out`, and `Busy` and any other
+/// `WrongState` with the admin protocol's `busy` and `wrong-state`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MigrationRefusal {
     /// The challenge was taken, or the authorization consumed, at or after its expiry.
@@ -95,6 +96,18 @@ pub enum MigrationRefusal {
     /// The source-owner factor could not be checked, or the random source failed, so nothing was judged.
     #[error("migration authorization could not be checked")]
     Unavailable,
+    /// The TPM is in dictionary-attack lockout, or the helper's lockout reserve withheld the try.
+    #[error("the TPM is locked out; try again in {wait_seconds} seconds")]
+    TpmLockedOut {
+        /// The whole seconds to wait.
+        wait_seconds: u64,
+    },
+    /// The TPM signing helper answered `status`, which is neither a signature nor a wrong PIN nor a lockout.
+    #[error("the TPM approver cannot be checked: the helper answered {status}")]
+    TpmUnavailable {
+        /// The helper's status label.
+        status: &'static str,
+    },
     /// A challenge is already pending, so no other is issued.
     #[error(transparent)]
     Busy(#[from] ChallengeBusy),
@@ -112,7 +125,8 @@ impl MigrationRefusal {
             Self::AttemptsCoolingDown(_) => "rate_limited",
             Self::WrongState(ServiceState::Locked) => "locked",
             Self::WrongState(_) => "wrong_state",
-            Self::Unavailable => "unavailable",
+            Self::Unavailable | Self::TpmUnavailable { .. } => "unavailable",
+            Self::TpmLockedOut { .. } => "tpm_locked_out",
             Self::Busy(_) => "busy",
         }
     }
@@ -123,6 +137,8 @@ impl From<MethodRefusal> for MigrationRefusal {
         match refusal {
             MethodRefusal::Owner(owner) => Self::Denied(owner),
             MethodRefusal::Unavailable => Self::Unavailable,
+            MethodRefusal::TpmLockedOut { wait_seconds } => Self::TpmLockedOut { wait_seconds },
+            MethodRefusal::TpmUnavailable { status } => Self::TpmUnavailable { status },
         }
     }
 }
@@ -138,18 +154,18 @@ impl From<MethodRefusal> for MigrationRefusal {
 /// challenge, because the trait is sealed:
 ///
 /// ```compile_fail,E0451
-/// use iron_vault::migration_authorization::{MigrationAuthorization, MigrationChallenge};
+/// use iron_vault::migration_authorization::{MethodName, MigrationAuthorization, MigrationChallenge};
 ///
-/// fn forge(challenge: MigrationChallenge) -> MigrationAuthorization {
-///     MigrationAuthorization { challenge }
+/// fn forge(challenge: MigrationChallenge, proved_by: MethodName) -> MigrationAuthorization {
+///     MigrationAuthorization { challenge, proved_by }
 /// }
 /// ```
 ///
 /// ```compile_fail,E0624
-/// use iron_vault::migration_authorization::{MigrationAuthorization, MigrationChallenge};
+/// use iron_vault::migration_authorization::{MethodName, MigrationAuthorization, MigrationChallenge};
 ///
-/// fn forge(challenge: MigrationChallenge) -> MigrationAuthorization {
-///     MigrationAuthorization::proved(challenge)
+/// fn forge(challenge: MigrationChallenge, proved_by: MethodName) -> MigrationAuthorization {
+///     MigrationAuthorization::proved(challenge, proved_by)
 /// }
 /// ```
 ///
@@ -171,14 +187,20 @@ impl From<MethodRefusal> for MigrationRefusal {
 /// ```
 pub struct MigrationAuthorization {
     challenge: MigrationChallenge,
+    proved_by: MethodName,
 }
 
 impl MigrationAuthorization {
-    /// The authorization a source-owner method yields once it has proved `challenge`, taken out of the pending slot.
+    /// The authorization the method `proved_by` yields once it has proved `challenge`, taken out of the pending slot.
     /// Private, so [`method::prove_challenge`] is the only way to one.
     #[cfg(target_os = "linux")]
-    fn proved(challenge: MigrationChallenge) -> Self {
-        Self { challenge }
+    fn proved(challenge: MigrationChallenge, proved_by: MethodName) -> Self {
+        Self { challenge, proved_by }
+    }
+
+    /// The method that proved the challenge, which a refusal at consumption names.
+    pub fn proved_by(&self) -> MethodName {
+        self.proved_by
     }
 
     /// The operation this authorization permits.
@@ -213,6 +235,26 @@ impl std::fmt::Debug for MigrationAuthorization {
             .field("operation", self.challenge.operation())
             .field("expires_at", &self.challenge.expires_at())
             .finish_non_exhaustive()
+    }
+}
+
+/// How the audit events name a source-owner method: its label, and for a method that proves with a pinned approver's key,
+/// that approver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MethodName {
+    /// The method's label, the `method` field.
+    pub label: &'static str,
+    /// The approver whose key proves the challenge, the `approver_id` field.
+    pub approver: Option<ApproverId>,
+}
+
+impl MethodName {
+    /// The name of `method`.
+    pub fn of(method: &impl SourceOwnerMethod) -> Self {
+        Self {
+            label: method.label(),
+            approver: method.approver(),
+        }
     }
 }
 

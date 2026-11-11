@@ -19,7 +19,7 @@ use crate::service_context::{
 
 /// The label of the secret prompt for `approver`, which names it by its label, escaped since the owner chose it: its
 /// approval passphrase, or for a TPM approver its TPM approval PIN.
-fn passphrase_prompt(approver: &PinnedApprover) -> String {
+pub(super) fn passphrase_prompt(approver: &PinnedApprover) -> String {
     let (what, label) = match approver.kind() {
         SignerKind::Software => ("Approval passphrase", NamedApprover::from(approver).label_text()),
         SignerKind::Tpm => ("TPM approval PIN", NamedApprover::from(approver).label_text()),

@@ -1,13 +1,14 @@
 //! A TPM approver's key in use (`design/tpm-approval-signer.md`, "Prompt and proof"): owner presence proves the PIN by
 //! having the TPM signing helper sign a fresh presence payload, and `config approve` keeps the authorization value that
-//! proof used to have the helper sign the approval payload at step 3.
+//! proof used to have the helper sign the approval payload at step 3. Migration authorization proves the PIN the same way
+//! over the challenge's migration proof payload.
 
 use std::fmt;
 use std::path::PathBuf;
 
 use iron_vault_store::{
-    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApproverPublicKey, PinnedApprover, SignError, SignatureAlgorithm, VaultId,
-    presence_message, verify_tpm_signature,
+    ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApproverPublicKey, PinnedApprover, SignError, SignatureAlgorithm,
+    verify_tpm_signature,
 };
 use iron_vault_tpm_protocol::{PUBLIC_KEY_LEN, TpmApprovalPin, TpmAuthValue, TpmKeyBlob};
 
@@ -27,13 +28,13 @@ pub struct TpmSigner {
 }
 
 impl TpmSigner {
-    /// Owner presence for `approver`: derives the authorization value from `pin`, drops the PIN, has the helper at `socket`
-    /// sign a fresh presence payload with the key in `blob`, and verifies the signature against the pinned key. Nothing is
-    /// reserved or written, and a right PIN spends no TPM try.
+    /// Proves `pin` for `approver`: derives the authorization value from it, drops the PIN, has the helper at `socket` sign
+    /// `message` (a fresh presence payload or a migration proof payload) with the key in `blob`, and verifies the signature
+    /// against the pinned key. Nothing is reserved or written, and a right PIN spends no TPM try.
     pub(super) fn prove(
         socket: PathBuf,
         (blob, approver): (TpmKeyBlob, PinnedApprover),
-        vault_id: VaultId,
+        message: &[u8],
         pin: TpmApprovalPin,
     ) -> Result<Self, PresenceRefusal> {
         let auth = TpmAuthValue::derive(approver.id().as_bytes(), &pin);
@@ -43,9 +44,8 @@ impl TpmSigner {
             .as_bytes()
             .try_into()
             .map_err(|_| PresenceRefusal::Unavailable("the pinned TPM key is not a P-256 point".to_owned()))?;
-        let message = presence_message(vault_id, approver.id()).map_err(|error| PresenceRefusal::Unavailable(error.to_string()))?;
-        let signature = sign_message(&socket, (&auth, &blob, &key), &message)?;
-        match verify_tpm_signature(&approver, &message, &signature) {
+        let signature = sign_message(&socket, (&auth, &blob, &key), message)?;
+        match verify_tpm_signature(&approver, message, &signature) {
             true => Ok(Self {
                 socket,
                 auth,
