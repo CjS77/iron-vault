@@ -316,7 +316,7 @@ create_host_layout() {
         --shell /usr/sbin/nologin "$SERVICE_ACCOUNT"
     CREATED_HOST=1
     install -d -m 0711 -o "$SERVICE_ACCOUNT" -g "$SERVICE_ACCOUNT" "$RUN_DIR"
-    install -d -m 0755 "$UNLOCK_DIR"
+    install -d -m 0711 "$UNLOCK_DIR"
     install -d -m 0700 "$HOST_DIR"
     install -d -m 0755 "$HOST_TLS"
 }

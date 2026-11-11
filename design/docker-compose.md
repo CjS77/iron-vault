@@ -87,7 +87,7 @@ What the host holds, outside the Compose project's volumes:
 | `/usr/lib/sysusers.d/iron-vault.conf` | root | `0644` | host setup | the `iron-vault` account at the fixed uid and gid |
 | `/usr/lib/tmpfiles.d/iron-vault-compose.conf` | root | `0644` | host setup | creates the two directories below at boot |
 | `/run/iron-vault` | `iron-vault` | `0711` | `tmpfiles.d` | the runtime directory, bind-mounted into the service container |
-| `/run/iron-vault-unlock` | root | `0755` | `tmpfiles.d` | the mount point for the handoff's ramfs |
+| `/run/iron-vault-unlock` | root | `0711` | `tmpfiles.d` | the mount point for the handoff's ramfs; the ramfs root has the same mode, because every `systemd-tmpfiles --create` re-applies this line's mode through the mount, and anything wider would let any account list the ramfs |
 | `/usr/local/bin/iron-vault` | root | `0755` | host setup | the host CLI: the image's `container` binary, copied out of it |
 | `/etc/iron-vault-host/` | root | `0700` | host setup | the Compose project and the sealed credential |
 | `/etc/iron-vault-host/compose.yaml` | root | `0600` | administrator | the Compose file |
