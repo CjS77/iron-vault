@@ -484,9 +484,9 @@ mod tpm_pin {
     }
 
     #[tokio::test]
-    async fn empty_or_non_utf8_input_is_a_wrong_pin_and_never_reaches_the_tpm() {
+    async fn empty_short_or_non_utf8_input_is_a_wrong_pin_and_never_reaches_the_tpm() {
         let (method, signed) = method(Ok(()));
-        for typed in [b"".as_slice(), &[0xff, 0xfe]] {
+        for typed in [b"".as_slice(), b"12345", &[0xff, 0xfe]] {
             let (_, challenge) = taken(MigrationOperation::Export);
             let refusal = prove_challenge(&method, challenge, input(typed)).await.unwrap_err();
             assert_eq!(refusal, MethodRefusal::Owner(OwnerRefusal::WrongPin));

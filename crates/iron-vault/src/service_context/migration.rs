@@ -154,7 +154,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                     message: "the TPM signing helper's socket is missing".to_owned(),
                 })?;
                 let blob = read_tpm_key_blob(&locks.state, &setup.fs, pinned.id())
-                    .map_err(|error| PresenceRefusal::Unavailable(format!("the TPM key blob cannot be read: {error}")))?;
+                    .map_err(|error| PresenceRefusal::Unavailable(format!("the TPM key blob is unusable: {error}")))?;
                 TpmSigner::prove(socket, (blob, pinned.clone()), message, pin).map(drop)
             };
             proved().map_err(method_refusal)

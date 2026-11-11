@@ -356,7 +356,9 @@ PIN is recovered only through another approver ([Forgotten approval PIN](#forgot
 ## Prompt and proof
 
 The [prompt text](approval-signers.md#prompt-text) for `tpm` is `TPM approval PIN for "<label>"`, secret, switchable
-when more than one approver can be asked. An answer that is empty or not UTF-8 is a wrong PIN and never reaches the TPM.
+when more than one approver can be asked. An answer that is not UTF-8, or has fewer than the 6 Unicode scalar values
+[enrollment](#the-approval-pin) requires (empty included), is a wrong PIN and never reaches the TPM: it cannot be the
+enrolled PIN, so asking would only spend a lockout try. Its refusal event has no `tpm_status`, since the TPM never saw it.
 
 **Owner presence** ([credential-commands.md](credential-commands.md#owner-presence)): for a `tpm` approver, the service
 derives the authorization value from the answer, asks the helper to sign a fresh presence payload, verifies the
@@ -395,7 +397,7 @@ not the service's to read. Every other helper failure is `approval-unavailable` 
 settings too weak`, `TPM error 0x…`) and never owner input.
 
 **Audit.** The events that end a prompt already name the approver. A `tpm` approver's denial or unavailability adds a
-`tpm_status` field with the helper's status name, so `tpm-locked-out` and `not-this-tpm` can be told apart in the log.
+`tpm_status` field with the helper's status name, for an answer the helper was asked about, so `tpm-locked-out` and `not-this-tpm` can be told apart in the log.
 The events are `config.approval-refused` and `vault.presence-refused`; their `refusal` is `wrong_pin` for a wrong PIN and
 `tpm_refused` for a lockout or any other helper status, and `tpm_status` is one of `wrong_pin`, `locked_out`,
 `not_this_tpm`, `key_mismatch`, `weak_da_settings`, `refused_message`, `tpm_error`, `malformed`, `unreachable` (the socket,

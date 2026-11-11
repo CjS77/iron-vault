@@ -42,10 +42,16 @@ pub enum PinRuleError {
 pub struct TpmApprovalPin(Zeroizing<String>);
 
 impl TpmApprovalPin {
-    /// The PIN the owner typed. The PIN rules are checked at enrollment, not here: at a prompt, a PIN that breaks them
-    /// is simply wrong.
+    /// The PIN the owner typed. The PIN rules are checked at enrollment, not here; a prompt answer goes through
+    /// [`answered`](Self::answered).
     pub fn new(text: String) -> Self {
         Self(Zeroizing::new(text))
+    }
+
+    /// The PIN typed at a prompt, or `None` when it is shorter than [`MIN_PIN_SCALARS`] scalar values (empty included).
+    /// Enrollment refuses such a PIN, so it can never be right, and asking the TPM would only spend a lockout try.
+    pub fn answered(text: &str) -> Option<Self> {
+        (text.chars().count() >= MIN_PIN_SCALARS).then(|| Self::new(text.to_owned()))
     }
 
     /// The PIN a new TPM approver is enrolled with, from the owner's two entries: equal (compared in constant time),
@@ -153,6 +159,14 @@ mod tests {
             ),
             Err(PinRuleError::TooShort)
         );
+    }
+
+    #[test]
+    fn an_answer_under_six_scalar_values_is_no_pin() {
+        assert!(TpmApprovalPin::answered("").is_none());
+        assert!(TpmApprovalPin::answered("12345").is_none());
+        assert!(TpmApprovalPin::answered("ééééé").is_none());
+        assert!(TpmApprovalPin::answered("123456").is_some());
     }
 
     #[test]

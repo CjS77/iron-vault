@@ -247,10 +247,11 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
             .map_err(|refusal| self.refused(refusal, approver))
     }
 
-    /// Ends the approval for a secret to `approver` that cannot be the approval passphrase or PIN (empty or not UTF-8),
-    /// which is answered as a wrong one: records `config.approval-refused` and returns the denial.
+    /// Ends the approval for a secret to `approver` that cannot be the approval passphrase or PIN (empty, not UTF-8, or a
+    /// PIN shorter than enrollment allows), which is answered as a wrong one without asking the key or the TPM: records
+    /// `config.approval-refused`, with no `tpm_status`, and returns the denial.
     pub fn refuse_unusable_passphrase(&self, approver: &PinnedApprover) -> ApprovalEnd {
-        self.refused(PresenceRefusal::Denied(DenialKind::wrong_answer(approver.kind())), approver)
+        self.refused(PresenceRefusal::Unusable(DenialKind::wrong_answer(approver.kind())), approver)
     }
 
     /// The one place a refused approval is recorded, with the digest of the config it was for and the approver answered.
@@ -265,8 +266,8 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
             .emit();
         }
         match refusal {
-            PresenceRefusal::Denied(DenialKind::WrongPin) => ApprovalEnd::PinDenied,
-            PresenceRefusal::Denied(_) => ApprovalEnd::Denied,
+            PresenceRefusal::Denied(DenialKind::WrongPin) | PresenceRefusal::Unusable(DenialKind::WrongPin) => ApprovalEnd::PinDenied,
+            PresenceRefusal::Denied(_) | PresenceRefusal::Unusable(_) => ApprovalEnd::Denied,
             PresenceRefusal::TpmLockedOut { wait_seconds } => ApprovalEnd::LockedOut { wait_seconds },
             PresenceRefusal::Unavailable(cause) | PresenceRefusal::TpmUnavailable { message: cause, .. } => {
                 ApprovalEnd::Unavailable(format!("{cause}; nothing was reserved"))

@@ -156,8 +156,8 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientRemoval<'_, F> {
         &self.approvers
     }
 
-    /// Owner presence (`design/credential-commands.md`): opens `approver`'s own key envelope with
-    /// `passphrase` and drops the signer at once. Nothing is reserved, signed or written.
+    /// Owner presence (`design/credential-commands.md`): opens `approver`'s own key with
+    /// `secret` and drops the signer at once. Nothing is reserved, signed or written.
     pub async fn prove_presence(
         &self,
         secret: impl Into<ApproverSecret>,

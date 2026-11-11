@@ -68,7 +68,8 @@ impl SourceOwnerMethod for TpmApprovalPinMethod {
     }
 
     /// Runs the proof on the blocking pool, because the helper answers over a socket and a TPM signature takes a while.
-    /// An answer that is empty or not UTF-8 is a wrong PIN and never reaches the TPM.
+    /// An answer that is not UTF-8, or shorter than any enrolled PIN, is a wrong PIN and never reaches the TPM, so it spends
+    /// no lockout try.
     fn prove(&self, challenge: &MigrationChallenge, input: OwnerInput) -> impl Future<Output = Result<(), MethodRefusal>> + Send {
         let proof = Arc::clone(&self.proof);
         let message = MigrationProofPayload::new(*challenge.binding_digest().as_bytes()).encode();
@@ -87,6 +88,5 @@ impl SourceOwnerMethod for TpmApprovalPinMethod {
 
 /// The owner's input as a PIN; the input's buffer is cleared when it drops here.
 fn pin_of(input: OwnerInput) -> Option<TpmApprovalPin> {
-    let text = std::str::from_utf8(input.expose_secret()).ok()?;
-    (!text.is_empty()).then(|| TpmApprovalPin::new(text.to_owned()))
+    TpmApprovalPin::answered(std::str::from_utf8(input.expose_secret()).ok()?)
 }

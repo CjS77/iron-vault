@@ -31,7 +31,8 @@ pub(super) fn passphrase_prompt(approver: &PinnedApprover) -> String {
 pub(super) enum PassphraseAnswer {
     /// Input that can be the approver's passphrase or PIN, still to be checked against its key.
     Typed(ApproverSecret),
-    /// Empty or non-UTF-8 input, which cannot be the passphrase or PIN and is refused as a wrong one.
+    /// Input that cannot be the passphrase or PIN (empty, not UTF-8, or a PIN shorter than enrollment allows), refused as a
+    /// wrong one before the key or the TPM is asked.
     Unusable,
     /// A `lock` came for the service-wide lock while the owner was at the prompt.
     CancelledByLock,
@@ -164,7 +165,7 @@ pub(super) async fn require_owner_presence(
     };
     let checked = match answer {
         PassphraseAnswer::Typed(passphrase) => plan.prove_presence(passphrase, approver).await.map_err(NoPresence::Refused),
-        PassphraseAnswer::Unusable => Err(NoPresence::Refused(PresenceRefusal::Denied(DenialKind::wrong_answer(
+        PassphraseAnswer::Unusable => Err(NoPresence::Refused(PresenceRefusal::Unusable(DenialKind::wrong_answer(
             approver.kind(),
         )))),
         PassphraseAnswer::CancelledByLock => {
@@ -190,7 +191,9 @@ pub(super) async fn require_owner_presence(
 /// prompt is `approval-unavailable` (design/admin-protocol.md).
 pub(super) fn no_presence(command: &str, none: NoPresence) -> AdminResponse {
     let (code, message) = match none {
-        NoPresence::Refused(denied @ PresenceRefusal::Denied(_)) => (ErrorCode::ApprovalDenied, denied.to_string()),
+        NoPresence::Refused(denied @ (PresenceRefusal::Denied(_) | PresenceRefusal::Unusable(_))) => {
+            (ErrorCode::ApprovalDenied, denied.to_string())
+        }
         NoPresence::Refused(locked @ PresenceRefusal::TpmLockedOut { .. }) => (ErrorCode::TpmLockedOut, locked.to_string()),
         NoPresence::Refused(unavailable) => (ErrorCode::ApprovalUnavailable, unavailable.to_string()),
         NoPresence::CancelledByLock => (
@@ -202,14 +205,15 @@ pub(super) fn no_presence(command: &str, none: NoPresence) -> AdminResponse {
 }
 
 /// The owner's input as the secret a `kind` approver asks for. The input's buffer is cleared when it drops here; a PIN is
-/// not held in plain `String` longer than the authorization value takes to derive.
+/// not held in plain `String` longer than the authorization value takes to derive. A PIN too short to have been enrolled
+/// is `None`, so it never reaches the TPM and spends no lockout try.
 fn typed_secret(kind: SignerKind, input: OwnerInput) -> Option<ApproverSecret> {
     let text = std::str::from_utf8(input.expose_secret()).ok()?;
     match kind {
         SignerKind::Software => ApprovalPassphrase::new(SecretString::from(text))
             .ok()
             .map(ApproverSecret::Passphrase),
-        SignerKind::Tpm => (!text.is_empty()).then(|| ApproverSecret::Pin(TpmApprovalPin::new(text.to_owned()))),
+        SignerKind::Tpm => TpmApprovalPin::answered(text).map(ApproverSecret::Pin),
     }
 }
 

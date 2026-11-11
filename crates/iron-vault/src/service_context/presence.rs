@@ -103,8 +103,8 @@ pub enum DenialKind {
 }
 
 impl DenialKind {
-    /// The refusal for an answer that cannot be a secret of a `kind` approver (empty or not UTF-8), which is answered as a
-    /// wrong one.
+    /// The refusal for an answer that cannot be a secret of a `kind` approver (empty, not UTF-8, or for a TPM approver
+    /// shorter than any enrolled PIN), which is answered as a wrong one.
     pub const fn wrong_answer(kind: SignerKind) -> Self {
         match kind {
             SignerKind::Software => Self::WrongPassphrase,
@@ -130,6 +130,10 @@ pub enum PresenceRefusal {
     /// refused the PIN.
     #[error("{}", denial_text(*.0))]
     Denied(DenialKind),
+    /// The answer cannot be the asked approver's secret (see [`DenialKind::wrong_answer`]), so it was refused as a wrong
+    /// one before the key or the TPM signing helper was asked.
+    #[error("{}", denial_text(*.0))]
+    Unusable(DenialKind),
     /// The approver key could not be read, or the check did not finish.
     #[error("the approver key cannot be checked: {0}")]
     Unavailable(String),
@@ -152,11 +156,11 @@ pub enum PresenceRefusal {
 
 impl PresenceRefusal {
     /// What an audit event records about this refusal, when it is the kind the owner or an attacker causes: the check that
-    /// refused and, for a TPM approver, the helper's status. `None` for a check that could not run.
+    /// refused and, for an answer the TPM signing helper saw, its status. `None` for a check that could not run.
     pub fn audit(&self) -> Option<(DenialKind, Option<TpmStatus>)> {
         match self {
             Self::Denied(DenialKind::WrongPin) => Some((DenialKind::WrongPin, Some(TpmStatus::WrongPin))),
-            Self::Denied(kind) => Some((*kind, None)),
+            Self::Denied(kind) | Self::Unusable(kind) => Some((*kind, None)),
             Self::Unavailable(_) => None,
             Self::TpmLockedOut { .. } => Some((DenialKind::TpmRefused, Some(TpmStatus::LockedOut))),
             Self::TpmUnavailable { status, .. } => Some((DenialKind::TpmRefused, Some(*status))),
@@ -233,13 +237,16 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             status: TpmStatus::Unreachable,
             message: message.to_owned(),
         };
-        let (Some(socket), Some(vault_id)) = (self.tpm_helper_socket(), vault_id) else {
+        let Some(vault_id) = vault_id else {
+            return Err(PresenceRefusal::Unavailable("no vault is open to prove presence for".to_owned()));
+        };
+        let Some(socket) = self.tpm_helper_socket() else {
             return Err(unreachable("the TPM signing helper is unavailable: its socket is missing"));
         };
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let opened = tokio::task::spawn_blocking(move || {
             let blob = read_tpm_key_blob(&locks.state, &setup.fs, approver.id())
-                .map_err(|error| PresenceRefusal::Unavailable(format!("the TPM key blob cannot be read: {error}")))?;
+                .map_err(|error| PresenceRefusal::Unavailable(format!("the TPM key blob is unusable: {error}")))?;
             let message = presence_message(vault_id, approver.id()).map_err(|error| PresenceRefusal::Unavailable(error.to_string()))?;
             TpmSigner::prove(socket, (blob, approver), &message, pin)
         });
