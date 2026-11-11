@@ -374,8 +374,13 @@ warns when any of these hold:
 - a `clevis` token is present, TPM or Tang: neither asks for anything at boot;
 - `/etc/crypttab` names a key file for the device (a third field other than `none` or `-`), or has `tpm2-device=` while
   some `systemd-tpm2` token needs no PIN;
-- the initramfs holds a key file (`lsinitramfs` lists one under `cryptroot/keyfiles/`, where initramfs-tools puts
-  them).
+- an initramfs holds a key file (`lsinitramfs` lists one under `cryptroot/keyfiles/`, where initramfs-tools puts
+  them). Every `/boot/initrd.img-*` is checked, because a kernel update rebuilds them and any of them may boot.
+
+The walk reads `/sys/class/block`, which lists partitions as well as the disks under `/sys/block`. A dm-crypt layer
+with no LUKS header (plain `cryptsetup`) warns that its key was not checked, and so does a LUKS layer with no entry of
+its mapping name in `/etc/crypttab`. A `systemd-tpm2` token counts as needing a PIN only when `luksDump` prints
+`tpm2-pin: true`; a token that prints no such line, as when cryptsetup lacks systemd's token plugin, warns.
 
 **A check that cannot run warns; it never passes.** A missing `cryptsetup` or `lsinitramfs`, a device-mapper stack it
 cannot resolve, a failed `luksDump` or an unreadable crypttab each give a warning naming what could not be checked.
@@ -386,7 +391,8 @@ changes the key slot, not the data. The helper then seals nothing until the admi
 
 - **On a terminal**, the administrator types `yes`; any other answer stops it.
 - **When stdin is not a terminal**, the helper stops unless `--accept-no-second-secret` was given. It never reads an
-  answer from a pipe, so `yes |` cannot accept for anyone.
+  answer from a pipe, so `yes |` cannot accept for anyone. The flag is a usage error with `--server`, as
+  `--accept-physical-access` is with `--portable`.
 
 The check is best effort: it cannot see a passphrase written on the laptop. The choice is the owner's, as §14 allows,
 so the helper warns rather than refuses.
@@ -405,7 +411,12 @@ before sealing:
 - **in the journal**, through `logger -t iron-vault-host-unlock -p auth.notice`, or `auth.warning` when a warning was
   accepted: the mode, each warning, how it was accepted (terminal or flag) and `SUDO_USER`;
 - **in `/etc/iron-vault-host/provisioning.txt`**, root `0600`, beside the blob: the same lines with the time,
-  replaced at each provisioning. The install guide and the release check read it.
+  replaced whole at each provisioning (a temp file in the same directory, then a rename). The install guide and the
+  release check read it.
+
+A record that cannot be written stops the helper before it seals: the journal is written through `logger`, and a
+failed `logger` or file write is an error, not a warning. `--server` has no warning to accept, so its journal lines are
+`auth.notice`.
 
 ## Firmware and Secure Boot updates
 
@@ -584,7 +595,7 @@ In order:
    docker-compose.md's lifetime. Reset's store-owned list gains it and reset writes it before its withdrawal.
 3. **The unseal-failure report:** the service reads `unseal-failed` when the handoff is missing, `unseal_failed` in
    audit-logging.md, and the new `status` field in admin-protocol.md. The unit lines ship with item 4.
-4. **Packaging** (done in K-323; `--portable` stops until item 5): the handoff unit with the unseal-failure lines, the
+4. **Packaging** (done in K-323): the handoff unit with the unseal-failure lines, the
    helper with the release check and `--server`, the `Wants=` and `After=` lines, the `tmpfiles.d` line, and the
    [linux-package.md](linux-package.md) edits. The handoff unit is installed as a plain asset that `systemd-units`'
    `unit-name` leaves out, so the maintainer scripts never restart it on upgrade; `build-deb.sh` checks it is present
@@ -592,7 +603,7 @@ In order:
    [purge](linux-package.md#purge) do. Default: `prerm remove` stops the handoff unit after the service, so its ramfs
    and handoff go, and dpkg removes the unit file; `/etc/iron-vault-host` stays on remove, and purge deletes it only
    when the vault question deletes the vault, since its identity opens only that vault and a kept vault needs it again.
-5. **`--portable` and the acceptance record:** the checks, the terminal rule and its flags, and `provisioning.txt`.
+5. **`--portable` and the acceptance record** (done in K-324): the checks, the terminal rule and its flags, and `provisioning.txt`.
 6. **The release check and the manual:** `tpm-unlock-check.sh`, an installation guide section with the
    before-and-after update lists, a cookbook recipe replacing the roadmap one, and the one-time nature of the
    `--portable` check.

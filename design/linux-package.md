@@ -82,7 +82,8 @@ and `scripts/release/linux-install-check.sh` finds it either way. The two modes 
 `systemd-tmpfiles --create`, which `postinst` runs at each configure, re-applies the `d` line's mode through the mount
 to the ramfs root, and anything wider would let any account list the ramfs. `/etc/iron-vault-host`, root `0700`, and
 the blob in it, root `0600`, have no row: the [provisioning helper](tpm-unlock.md#provisioning) creates them, not the
-package, and a machine never provisioned has neither.
+package, and a machine never provisioned has neither. The helper also writes `provisioning.txt` there, root `0600`: the
+[acceptance record](tpm-unlock.md#the-acceptance-record), replaced whole at each provisioning.
 
 `cargo-deb` may install the units and the `sysusers.d` and `tmpfiles.d` files under `/lib` rather than `/usr/lib`. On
 the merged-`/usr` systems that current Debian and Ubuntu releases are, the two are the same directory.
@@ -633,7 +634,9 @@ instances, because `deb-systemd-invoke` neither disables a unit nor takes a patt
 with `systemctl` as well, under the same check for a running systemd.
 
 `scripts/provision-host-unlock-test.sh`, run in CI, tests the provisioning helper with stub tools and no root or TPM:
-the release check, the mode argument, the terminal rule of `--server` and the refusal of an existing blob.
+the release check, the mode argument, the terminal rule of `--server` and `--portable`, the refusal of an existing blob,
+each `--portable` check on a fake sysfs, crypttab, `/boot` and `luksDump` output (a check that cannot run must warn), and
+the acceptance record.
 
 #### Accepted lintian tags
 

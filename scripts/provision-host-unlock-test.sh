@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests the Linux package's provisioning helper, packaging/linux/iron-vault-provision-host-unlock, without root or a TPM
-# (design/tpm-unlock.md, "Provisioning"). id, age-keygen, systemd-creds and install are stubs in a mktemp dir ahead of
-# PATH, and the helper's /etc paths are pointed into that dir, so it writes nowhere else. The helper only defines
-# functions when sourced, so each case sources it and calls main.
+# (design/tpm-unlock.md, "Provisioning"). id, age-keygen, systemd-creds, install, logger, findmnt, cryptsetup and
+# lsinitramfs are stubs in a mktemp dir ahead of PATH, and the helper's /etc, /sys and /boot paths are pointed into that
+# dir, so it writes nowhere else. The helper only defines functions when sourced, so each case sources it and calls main.
 set -uo pipefail
 
 helper=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/packaging/linux/iron-vault-provision-host-unlock
@@ -42,7 +42,35 @@ done
 # shellcheck disable=SC2086
 exec /usr/bin/install $args
 STUB
+# findmnt names the root device; cryptsetup luksDump and lsinitramfs print the file named after their device or image, and
+# fail when there is none; logger appends what it was given, priority included, to the fake journal.
+cat >"$stubs/findmnt" <<STUB
+#!/bin/sh
+cat "$work/rootdev"
+STUB
+cat >"$stubs/cryptsetup" <<STUB
+#!/bin/sh
+[ "\$1" = luksDump ] && cat "$work/luksdump/\$(basename "\$2")"
+STUB
+cat >"$stubs/lsinitramfs" <<STUB
+#!/bin/sh
+cat "$work/initramfs/\$(basename "\$1")"
+STUB
+cat >"$stubs/logger" <<STUB
+#!/bin/sh
+printf '%s\n' "\$*" >>"$work/journal"
+STUB
 chmod +x "$stubs"/*
+
+# The helper's fixed paths, reassigned after sourcing it. NOTOOL=name makes the helper see that tool as not installed.
+cat >"$work/overrides.sh" <<OVR
+HOST_DIR=$work/host
+OS_RELEASE=$work/\$RELEASE
+SYS_ROOT=$work/sys
+CRYPTTAB=$work/crypttab
+BOOT_DIR=$work/boot
+if [ -n "\${NOTOOL:-}" ]; then have_tool() { [ "\$1" != "\$NOTOOL" ] && command -v "\$1" >/dev/null; }; fi
+OVR
 
 printf 'PRETTY_NAME="Ubuntu 24.04.1 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\nID=ubuntu\n' >"$work/ubuntu-24.04"
 printf 'PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"\nVERSION_ID="12"\nID=debian\n' >"$work/debian-12"
@@ -53,16 +81,17 @@ printf 'PRETTY_NAME="Ubuntu 22.04.4 LTS"\nVERSION_ID="22.04"\nID=ubuntu\n' >"$wo
 run() {
     local release=$1
     shift
-    rm -rf "$work/host" "$sealed"
+    rm -rf "$work/host" "$sealed" "$work/journal"
     [ -z "${BLOB:-}" ] || { mkdir "$work/host" && : >"$work/host/host-unlock.cred"; }
+    [ -z "${OLDREC:-}" ] || { mkdir -p "$work/host" && echo stale >"$work/host/provisioning.txt"; }
     (
         PATH="$stubs:$PATH"
+        # shellcheck disable=SC2034 # read by overrides.sh
+        RELEASE=$release
         # shellcheck source=/dev/null
         source "$helper"
-        # shellcheck disable=SC2034 # read by the sourced helper's main
-        HOST_DIR=$work/host
-        # shellcheck disable=SC2034
-        OS_RELEASE=$work/$release
+        # shellcheck source=/dev/null
+        source "$work/overrides.sh"
         main "$@"
     ) </dev/null 2>&1
 }
@@ -72,9 +101,9 @@ run() {
 run_tty() {
     local answer=$1 release=$2
     shift 2
-    rm -rf "$work/host" "$sealed"
+    rm -rf "$work/host" "$sealed" "$work/journal"
     printf '%s\n' "$answer" | HELPER=$helper STUBS=$stubs WORK=$work RELEASE=$release \
-        script -qec "bash -c 'PATH=\$STUBS:\$PATH; source \$HELPER; HOST_DIR=\$WORK/host; OS_RELEASE=\$WORK/\$RELEASE; main $*'" \
+        script -qec "bash -c 'PATH=\$STUBS:\$PATH; source \$HELPER; source \$WORK/overrides.sh; main $*'" \
         /dev/null 2>&1
 }
 
@@ -89,6 +118,66 @@ check() { # name want-exit got-exit output want-sealed(yes|no) [message-fragment
     fi
 }
 
+# A fake sysfs, crypttab, /boot and luksDump output. sys_reset starts an empty one; leaf and dm add block devices, with
+# dm's trailing arguments the device's slaves.
+sys_reset() {
+    rm -rf "${work:?}/sys" "${work:?}/luksdump" "${work:?}/initramfs" "${work:?}/boot"
+    mkdir -p "$work/sys/class/block" "$work/luksdump" "$work/initramfs" "$work/boot"
+    : >"$work/crypttab"
+}
+leaf() { mkdir -p "$work/sys/class/block/$1"; }
+dm() { # name uuid mapname slave...
+    local d=$work/sys/class/block/$1 s
+    mkdir -p "$d/dm" "$d/slaves"
+    echo "$2" >"$d/dm/uuid"
+    echo "$3" >"$d/dm/name"
+    shift 3
+    for s; do : >"$d/slaves/$s"; done
+}
+luks_dump() { # device tokens-text
+    printf 'LUKS header information\nVersion:       2\n\nKeyslots:\n  0: luks2\n\tKey: 512 bits\n\nTokens:\n%s\nDigests:\n  0: pbkdf2\n' \
+        "$2" >"$work/luksdump/$1"
+}
+boot_image() { # name listing
+    : >"$work/boot/$1"
+    printf '%s\n' "$2" >"$work/initramfs/$1"
+}
+tpm_token() { printf '  0: systemd-tpm2\n\ttpm2-hash-pcrs:   7\n\ttpm2-pin:         %s\n\tKeyslot:    1\n' "$1"; }
+
+# LVM-on-LUKS holding the host directory, opened by a passphrase: no warning.
+lvm_on_luks() {
+    sys_reset
+    leaf nvme0n1p3
+    dm dm-0 CRYPT-LUKS2-abc luks-abc nvme0n1p3
+    dm dm-1 LVM-xyz vg-root dm-0
+    echo /dev/dm-1 >"$work/rootdev"
+    echo "luks-abc UUID=abc none luks" >"$work/crypttab"
+    luks_dump nvme0n1p3 ""
+    boot_image initrd.img-6.8.0-1 "scripts/local-top/cryptroot"
+}
+unencrypted() {
+    sys_reset
+    leaf sda2
+    dm dm-0 LVM-xyz vg-root sda2
+    echo /dev/dm-0 >"$work/rootdev"
+    boot_image initrd.img-6.8.0-1 "scripts/local-top/lvm2"
+}
+
+# portable NAME COUNT FRAGMENT...: --portable on the current fixture prints COUNT warnings, each fragment in one of them.
+# With a warning it stops until accepted, and continues with --accept-no-second-secret.
+portable() {
+    local name=$1 count=$2 out rc got frag
+    shift 2
+    out=$(run ubuntu-24.04 --portable --accept-no-second-secret); rc=$?
+    check "$name: --accept-no-second-secret continues" 0 $rc "$out" yes
+    got=$(grep -c '^warning: ' <<<"$out")
+    [ "$got" = "$count" ] || { echo "FAIL $name: $got warnings, wanted $count: $out"; status=1; }
+    for frag; do grep -q -- "$frag" <<<"$out" || { echo "FAIL $name: no warning mentions '$frag': $out"; status=1; }; done
+    out=$(run ubuntu-24.04 --portable); rc=$?
+    if [ "$count" = 0 ]; then check "$name: no warning, nothing to accept" 0 $rc "$out" yes
+    else check "$name: stops with no terminal and no flag" 1 $rc "$out" no "not a terminal"; fi
+}
+
 for release in debian-12 ubuntu-22.04; do
     out=$(run "$release" --server --accept-physical-access); rc=$?
     check "$release stops, naming the supported release" 1 $rc "$out" no "Ubuntu 24.04 LTS only"
@@ -96,14 +185,12 @@ for release in debian-12 ubuntu-22.04; do
 done
 
 for args in "" "--server --portable" "--portable --server" "--server --server" "--bogus" "--server --bogus" \
-    "--accept-physical-access" "--portable --accept-physical-access"; do
+    "--accept-physical-access" "--portable --accept-physical-access" "--server --accept-no-second-secret" \
+    "--accept-no-second-secret"; do
     # shellcheck disable=SC2086
     out=$(run ubuntu-24.04 $args); rc=$?
     check "'$args' is a usage error" 2 $rc "$out" no "usage:"
 done
-
-out=$(run ubuntu-24.04 --portable); rc=$?
-check "--portable stops: its check is not built yet" 1 $rc "$out" no "not built yet"
 
 out=$(run ubuntu-24.04 --server); rc=$?
 check "--server with no terminal stops without --accept-physical-access" 1 $rc "$out" no "not a terminal"
@@ -130,5 +217,85 @@ grep -qx -- "encrypt --with-key=tpm2 --tpm2-pcrs=7 --name=host-unlock - $work/ho
 out=$(BLOB=1 run ubuntu-24.04 --server --accept-physical-access); rc=$?
 check "an existing blob is refused" 1 $rc "$out" no "exists"
 [ ! -s "$work/host/host-unlock.cred" ] || { echo "FAIL the existing blob was changed"; status=1; }
+
+# --portable's checks, one fixture each.
+unencrypted; portable "an unencrypted stack" 1 "not encrypted" "anyone who steals this machine can boot it and start the vault" "encrypt the disk"
+lvm_on_luks; portable "LVM-on-LUKS, passphrase slot only" 0
+sys_reset; leaf sda2; dm dm-0 LVM-xyz vg sda2; dm dm-1 CRYPT-LUKS2-abc luks-abc dm-0; echo /dev/dm-1 >"$work/rootdev"
+echo "luks-abc UUID=abc none luks" >"$work/crypttab"; luks_dump dm-0 ""; boot_image initrd.img-6.8.0-1 x
+portable "LUKS-on-LVM, passphrase slot only" 0
+lvm_on_luks; luks_dump nvme0n1p3 "$(tpm_token false)"
+portable "a PIN-less systemd-tpm2 token" 1 "does not need a PIN" "tpm2-with-pin=yes"
+lvm_on_luks; luks_dump nvme0n1p3 "$(tpm_token true)"; echo "luks-abc UUID=abc none tpm2-device=auto" >"$work/crypttab"
+portable "a TPM+PIN token" 0
+lvm_on_luks; luks_dump nvme0n1p3 "$(printf '  0: clevis\n\tKeyslot:    1\n')"
+portable "a clevis token" 1 "clevis token"
+lvm_on_luks; echo "luks-abc UUID=abc /etc/keys/root.key luks" >"$work/crypttab"
+portable "a crypttab key file" 1 "key file /etc/keys/root.key"
+lvm_on_luks; luks_dump nvme0n1p3 "$(tpm_token false)"; echo "luks-abc UUID=abc none luks,tpm2-device=auto" >"$work/crypttab"
+portable "tpm2-device= with a PIN-less token" 2 "does not need a PIN" "tpm2-device="
+lvm_on_luks; boot_image initrd.img-6.8.0-2 "$(printf 'cryptroot/keyfiles\ncryptroot/keyfiles/cryptroot.key')"
+portable "a key file in one of two initramfs images" 1 "initrd.img-6.8.0-2 holds a key file"
+lvm_on_luks; NOTOOL=cryptsetup portable "a missing cryptsetup" 1 "cryptsetup is not installed"
+lvm_on_luks; NOTOOL=lsinitramfs portable "a missing lsinitramfs" 1 "lsinitramfs is not installed"
+lvm_on_luks; echo /dev/dm-9 >"$work/rootdev"; portable "a stack that does not resolve" 1 "could not resolve"
+lvm_on_luks; echo tmpfs >"$work/rootdev"; portable "a root that is not a block device" 1 "could not resolve"
+lvm_on_luks; rm "$work/luksdump/nvme0n1p3"; portable "a failed luksDump" 1 "luksDump .* failed"
+lvm_on_luks; echo garbage >"$work/luksdump/nvme0n1p3"; portable "luksDump output not recognised" 1 "printed nothing the helper recognises"
+lvm_on_luks; luks_dump nvme0n1p3 "$(printf '  0: systemd-tpm2\n\tKeyslot:    1\n')"
+portable "a systemd-tpm2 token that shows no tpm2-pin" 1 "not shown"
+lvm_on_luks; : >"$work/crypttab"; portable "no crypttab entry for the LUKS device" 1 "no entry named luks-abc"
+lvm_on_luks; rm "$work/crypttab"; portable "an unreadable crypttab" 1 "could not be read"
+lvm_on_luks; rm "$work/boot/initrd.img-6.8.0-1"; portable "no initramfs image" 1 "no .*initrd.img-.* was found"
+lvm_on_luks; rm "$work/initramfs/initrd.img-6.8.0-1"; portable "an initramfs lsinitramfs cannot list" 1 "could not list"
+lvm_on_luks; dm dm-0 CRYPT-PLAIN-abc luks-abc nvme0n1p3; portable "plain dm-crypt" 1 "plain dm-crypt"
+
+# With a warning the answer comes from a terminal, never a pipe.
+unencrypted
+out=$(yes | run ubuntu-24.04 --portable); rc=$?
+check "'yes |' cannot accept a --portable warning" 1 $rc "$out" no "not a terminal"
+out=$(run_tty no ubuntu-24.04 --portable); rc=$?
+check "at a terminal, any answer but yes stops --portable" 1 $rc "$out" no "not accepted"
+out=$(run_tty no ubuntu-24.04 --portable --accept-no-second-secret); rc=$?
+check "at a terminal, the flag does not skip the prompt" 1 $rc "$out" no "Type yes to accept"
+
+# The acceptance record: the journal and provisioning.txt carry the same lines.
+expect() { # description command...: the command must succeed
+    local d=$1
+    shift
+    "$@" || { echo "FAIL $d"; status=1; }
+}
+expect_not() { # description command...: the command must fail
+    local d=$1
+    shift
+    ! "$@" || { echo "FAIL $d"; status=1; }
+}
+record() { # name mode-line accepted-line priority-wanted priority-unwanted
+    local rec=$work/host/provisioning.txt n=$1 stamp='[0-9T:Z-]*'
+    expect "$n: provisioning.txt has '$2'" grep -qx -- "$stamp $2" "$rec"
+    expect "$n: provisioning.txt has '$3'" grep -qx -- "$stamp $3" "$rec"
+    expect "$n: provisioning.txt has SUDO_USER" grep -qx -- "$stamp sudo-user: alice" "$rec"
+    expect "$n: provisioning.txt is 0600" test "$(stat -c %a "$rec")" = 600
+    expect "$n: only the blob and provisioning.txt are left" test "$(find "$work/host" -type f | wc -l)" = 2
+    expect "$n: the journal has '$2' at $4" grep -q -- "-t iron-vault-host-unlock -p $4 -- $2" "$work/journal"
+    expect "$n: the journal has '$3' at $4" grep -q -- "-p $4 -- $3" "$work/journal"
+    expect "$n: the journal has SUDO_USER" grep -q -- "-p $4 -- sudo-user: alice" "$work/journal"
+    expect_not "$n: the journal has a line at $5" grep -q -- "-p $5 " "$work/journal"
+}
+export SUDO_USER=alice
+unencrypted; out=$(OLDREC=1 run ubuntu-24.04 --portable --accept-no-second-secret)
+record "a --portable warning accepted by flag" "mode: portable" "accepted: flag" auth.warning auth.notice
+expect "provisioning.txt has the warning" grep -q '[0-9Z] warning: .*not encrypted' "$work/host/provisioning.txt"
+expect "the journal has the warning" grep -q -- '-- warning: .*not encrypted' "$work/journal"
+expect_not "provisioning.txt is replaced whole" grep -q stale "$work/host/provisioning.txt"
+out=$(run_tty yes ubuntu-24.04 --portable); rc=$?
+record "a --portable warning accepted at a terminal" "mode: portable" "accepted: terminal" auth.warning auth.notice
+lvm_on_luks; out=$(run ubuntu-24.04 --portable)
+record "--portable with no warning" "mode: portable" "accepted: not needed (no warning)" auth.notice auth.warning
+expect_not "no warning is recorded when none was found" grep -q 'warning: ' "$work/host/provisioning.txt"
+out=$(run ubuntu-24.04 --server --accept-physical-access)
+record "--server by flag" "mode: server" "accepted: flag" auth.notice auth.warning
+out=$(run_tty yes ubuntu-24.04 --server)
+record "--server at a terminal" "mode: server" "accepted: terminal" auth.notice auth.warning
 
 exit $status

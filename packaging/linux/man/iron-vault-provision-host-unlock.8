@@ -1,11 +1,11 @@
-.\" Hand-written. design/tpm-unlock.md ("Provisioning", "Supported releases", "--server") is the full account.
+.\" Hand-written. design/tpm-unlock.md ("Provisioning", "Supported releases", "--portable", "--server", "The acceptance record") is the full account.
 .TH iron-vault-provision-host-unlock 8 "" "Iron Vault" "Iron Vault Manual"
 .SH NAME
 iron\-vault\-provision\-host\-unlock \- seal a host unlock identity to this machine's TPM
 .SH SYNOPSIS
 \fBiron\-vault\-provision\-host\-unlock\fR \fB\-\-server\fR [\fB\-\-accept\-physical\-access\fR]
 .br
-\fBiron\-vault\-provision\-host\-unlock\fR \fB\-\-portable\fR
+\fBiron\-vault\-provision\-host\-unlock\fR \fB\-\-portable\fR [\fB\-\-accept\-no\-second\-secret\fR]
 .SH DESCRIPTION
 Generates a host unlock identity with \fBage\-keygen\fR(1) and seals it to the TPM with \fBsystemd\-creds\fR(1),
 bound to PCR 7, as \fI/etc/iron\-vault\-host/host\-unlock.cred\fR.
@@ -38,14 +38,38 @@ With \fB\-\-server\fR, accepts that condition for a run whose standard input is 
 At a terminal the helper still asks for \fByes\fR.
 .TP
 \fB\-\-portable\fR
-For a laptop or other portable machine, which needs a full\-disk\-encryption pre\-boot secret as well.
-Its check is not built yet, so the helper stops and seals nothing.
+For a laptop or other portable machine, which needs a full\-disk\-encryption pre\-boot secret as well: a LUKS
+passphrase typed at boot, or a LUKS TPM key slot that needs a PIN.
+The helper checks once, now, how the disk holding \fI/etc/iron\-vault\-host\fR is unlocked.
+It warns when the disk is not encrypted, when a \fBsystemd\-tpm2\fR token needs no PIN, when a \fBclevis\fR token exists,
+when \fI/etc/crypttab\fR names a key file for the device or has \fBtpm2\-device=\fR beside a PIN\-less token, and when
+any \fI/boot/initrd.img\-*\fR holds a key file.
+A check that cannot run, for example for want of \fBcryptsetup\fR or \fBlsinitramfs\fR, also warns; it never passes.
+Each warning says that anyone who steals the machine can boot it and start the vault, and names the fix: encrypt the
+disk, remove the key file, or re\-enrol the slot with \fBsystemd\-cryptenroll \-\-tpm2\-with\-pin=yes\fR, which changes the
+key slot, not the data.
+With any warning the helper seals nothing until you type \fByes\fR at a terminal; it never reads the answer from a pipe.
+The check does not see a key slot added later: run the helper again after any change to the disk's key slots.
+.TP
+\fB\-\-accept\-no\-second\-secret\fR
+With \fB\-\-portable\fR, accepts the warnings for a run whose standard input is not a terminal.
+At a terminal the helper still asks for \fByes\fR.
+.SH ACCEPTANCE RECORD
+Before it seals, for both modes, the helper records the mode, each warning, how the risk was accepted (\fBterminal\fR or
+\fBflag\fR) and \fBSUDO_USER\fR.
+The journal gets one entry per line through \fBlogger\fR(1), tag \fIiron\-vault\-host\-unlock\fR, at \fBauth.warning\fR
+when a warning was accepted and \fBauth.notice\fR otherwise.
+\fI/etc/iron\-vault\-host/provisioning.txt\fR holds the same lines with the time, and is replaced whole at each run.
+If either cannot be written the helper stops without sealing.
 .SH EXIT STATUS
 0 when the identity is sealed, 1 when the helper stopped, 2 for a usage error.
 .SH FILES
 .TP
 \fI/etc/iron\-vault\-host/host\-unlock.cred\fR
 The host unlock blob: root, mode 0600, in a root 0700 directory.
+.TP
+\fI/etc/iron\-vault\-host/provisioning.txt\fR
+The acceptance record: root, mode 0600.
 .TP
 \fI/run/iron\-vault\-unlock/host\-unlock\fR
 The unlock handoff, on a ramfs, present only while the handoff unit is active.

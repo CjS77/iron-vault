@@ -8,12 +8,16 @@
 # It never clears the TPM, takes ownership, sets hierarchy authorization or changes dictionary-attack parameters:
 # `systemd-creds` seals under systemd's own storage root key, and nothing else here touches the TPM.
 #
-# usage: iron-vault-provision-host-unlock --server [--accept-physical-access] | --portable
+# usage: iron-vault-provision-host-unlock --server [--accept-physical-access] | --portable [--accept-no-second-secret]
 
 # Fixed paths. They are plain assignments, not read from the environment, so no caller of this root script can move
 # them; the stub test reassigns them after sourcing the file.
 HOST_DIR=/etc/iron-vault-host
 OS_RELEASE=/etc/os-release
+SYS_ROOT=/sys
+DEV_ROOT=/dev
+CRYPTTAB=/etc/crypttab
+BOOT_DIR=/boot
 
 # TPM unlock is supported on this release only (design/tpm-unlock.md, "Supported releases").
 SUPPORTED_ID=ubuntu
@@ -22,6 +26,15 @@ SUPPORTED_NAME="Ubuntu 24.04 LTS"
 
 MODE=
 ACCEPT_PHYSICAL_ACCESS=0
+ACCEPT_NO_SECOND_SECRET=0
+
+# Filled by the --portable checks, one entry per warning, and read by the acceptance prompt and the record.
+WARNINGS=()
+# Whether some systemd-tpm2 token needs no PIN; the crypttab check reads it.
+PINLESS_TPM=0
+# How the administrator accepted: terminal, flag, or "not needed (no warning)".
+ACCEPTED_BY=
+RISK="Without a pre-boot secret, anyone who steals this machine can boot it and start the vault."
 
 die() {
     echo "error: $*" >&2
@@ -29,7 +42,7 @@ die() {
 }
 
 usage() {
-    echo "usage: iron-vault-provision-host-unlock --server [--accept-physical-access] | --portable" >&2
+    echo "usage: iron-vault-provision-host-unlock --server [--accept-physical-access] | --portable [--accept-no-second-secret]" >&2
     exit 2
 }
 
@@ -40,11 +53,13 @@ parse_args() {
         case $arg in
             --server | --portable) [ -z "$MODE" ] || usage; MODE=${arg#--} ;;
             --accept-physical-access) ACCEPT_PHYSICAL_ACCESS=1 ;;
+            --accept-no-second-secret) ACCEPT_NO_SECOND_SECRET=1 ;;
             *) usage ;;
         esac
     done
     [ -n "$MODE" ] || usage
     [ "$ACCEPT_PHYSICAL_ACCESS" = 0 ] || [ "$MODE" = server ] || usage
+    [ "$ACCEPT_NO_SECOND_SECRET" = 0 ] || [ "$MODE" = portable ] || usage
 }
 
 # Prints one field of os-release, unquoted. The file is read, never sourced, so nothing in it runs as root.
@@ -64,34 +79,252 @@ check_host() {
     [ "$(id -u)" -eq 0 ] || die "run as root"
     check_release
     local tool
-    for tool in age-keygen systemd-creds; do
+    for tool in age-keygen systemd-creds logger; do
         command -v "$tool" >/dev/null || die "$tool is not installed"
     done
 }
 
-refuse_portable() {
-    die "--portable needs the full-disk-encryption check, which is not built yet; nothing was sealed"
+have_tool() { command -v "$1" >/dev/null; }
+
+add_warning() { WARNINGS+=("$*"); }
+
+# --- --portable: is there a pre-boot secret? (design/tpm-unlock.md, "--portable") ---
+# Every check appends to WARNINGS and takes its input as arguments, so the stub test feeds it text and a fake sysfs. A
+# check that cannot run adds a warning; nothing here ever passes by default.
+
+# Prints the kernel name (dm-0, nvme0n1p3) of the block device that holds HOST_DIR, or its nearest existing parent.
+host_block_device() {
+    local dir=$HOST_DIR src
+    [ -d "$dir" ] || dir=$(dirname "$dir")
+    src=$(findmnt -n -o SOURCE -T "$dir" 2>/dev/null) || return 1
+    src=${src%%\[*}
+    case $src in /dev/*) ;; *) return 1 ;; esac
+    basename "$(readlink -f "$src" 2>/dev/null || echo "$src")"
 }
 
-# §14: a server may unlock unattended only if its deployment accepts this. At a terminal the administrator always types
-# the answer; the flag only lets a run with no terminal past. The answer is never read from a pipe, so `yes |` cannot
-# accept for anyone.
+# walk_stack SYSROOT DEVICE [DEPTH]: walks device-mapper's slaves downwards and prints a tab-separated record per layer:
+# `luks MAPNAME BACKING`, `crypt MAPNAME` (dm-crypt with no LUKS header) or `unresolved DEVICE`. The walk uses
+# class/block, which lists partitions as well as the /sys/block disks.
+walk_stack() {
+    local sys=$1 dev=$2 depth=${3:-0}
+    local node=$1/class/block/$2 uuid name slaves slave
+    if [ ! -d "$node" ] || [ "$depth" -gt 16 ]; then printf 'unresolved\t%s\n' "$dev"; return 0; fi
+    uuid=$(cat "$node/dm/uuid" 2>/dev/null) || uuid=
+    name=$(cat "$node/dm/name" 2>/dev/null) || name=$dev
+    slaves=$(ls -1 "$node/slaves" 2>/dev/null) || slaves=
+    case $uuid in
+        CRYPT-LUKS*)
+            if [ -n "$slaves" ]; then awk -v n="$name" '{ printf "luks\t%s\t%s\n", n, $0 }' <<<"$slaves"
+            else printf 'unresolved\t%s\n' "$dev"; fi ;;
+        CRYPT-*) printf 'crypt\t%s\n' "$name" ;;
+    esac
+    [ -z "$slaves" ] || while read -r slave; do walk_stack "$sys" "$slave" $((depth + 1)); done <<<"$slaves"
+}
+
+# stack_warnings RECORDS: warns for an unresolved layer, a dm-crypt layer with no LUKS header to read, or no dm-crypt at all.
+stack_warnings() {
+    local kind rest encrypted=0 unresolved=0
+    while IFS=$'\t' read -r kind rest; do
+        case $kind in
+            luks) encrypted=1 ;;
+            crypt)
+                encrypted=1
+                add_warning "$rest is plain dm-crypt, which has no LUKS header to read, so its key was not checked. $RISK" \
+                    "Fix: use LUKS with a passphrase or a TPM slot that needs a PIN." ;;
+            unresolved)
+                unresolved=1
+                add_warning "could not resolve the device stack under $HOST_DIR (at $rest), so its encryption was not checked." \
+                    "$RISK Fix: encrypt the disk with LUKS, then run this again." ;;
+        esac
+    done <<<"$1"
+    [ "$encrypted" = 1 ] || [ "$unresolved" = 1 ] || add_warning "no dm-crypt layer under $HOST_DIR: the disk is not encrypted. $RISK Fix: encrypt the disk."
+}
+
+# tpm_tokens DUMP: prints "TYPE PIN" for each token of a luksDump (LUKS2). PIN is the value of tpm2-pin, empty when the
+# token does not print one, as when cryptsetup lacks systemd's token plugin.
+tpm_tokens() {
+    awk '
+        function flush() { if (have) print type, pin; have = 0 }
+        /^Tokens:/ { in_t = 1; next }
+        /^[^[:space:]]/ { flush(); in_t = 0 }
+        in_t && /^[[:space:]]+[0-9]+:[[:space:]]/ { flush(); type = $2; pin = ""; have = 1; next }
+        in_t && /tpm2-pin:/ { pin = $2 }
+        END { flush() }' <<<"$1"
+}
+
+# luks_dump_warnings DEVICE DUMP: warns for each token that opens the volume without a person present. Only a
+# systemd-tpm2 token that prints `tpm2-pin: true` counts as needing a PIN.
+luks_dump_warnings() {
+    local dev=$1 type pin
+    if ! grep -q '^Version:' <<<"$2"; then
+        add_warning "cryptsetup luksDump $dev printed nothing the helper recognises, so its key slots were not checked. $RISK"
+        return 0
+    fi
+    while read -r type pin; do
+        case $type in
+            systemd-tpm2)
+                [ "$pin" = true ] && continue
+                PINLESS_TPM=1
+                add_warning "$dev has a systemd-tpm2 token that does not need a PIN (tpm2-pin is '${pin:-not shown}'). $RISK" \
+                    "Fix: systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-with-pin=yes $dev (changes the key slot, not the data)." ;;
+            clevis)
+                add_warning "$dev has a clevis token, which asks for nothing at boot. $RISK" \
+                    "Fix: remove it with clevis luks unbind and use systemd-cryptenroll --tpm2-with-pin=yes (changes the key slot, not the data)." ;;
+        esac
+    done < <(tpm_tokens "$2")
+}
+
+# luks_layer_warnings BACKING: reads the LUKS header on BACKING, a kernel name.
+luks_layer_warnings() {
+    local dev=$DEV_ROOT/$1 dump
+    if ! have_tool cryptsetup; then
+        add_warning "cryptsetup is not installed, so the key slots of $dev were not checked. $RISK"
+    elif ! dump=$(cryptsetup luksDump "$dev" 2>/dev/null); then
+        add_warning "cryptsetup luksDump $dev failed, so its key slots were not checked. $RISK"
+    else
+        luks_dump_warnings "$dev" "$dump"
+    fi
+}
+
+# crypttab_warnings TEXT NAME: warns when the entry named NAME has a key file, or tpm2-device= beside a PIN-less token. No
+# entry for a LUKS layer is a warning too, because the check then saw nothing.
+crypttab_warnings() {
+    local text=$1 name=$2 key opts seen=0
+    while read -r _ _ key opts _; do
+        seen=1
+        case ${key:-none} in
+            none | -) ;;
+            *) add_warning "$CRYPTTAB opens $name with the key file $key. $RISK Fix: remove the key file and use a passphrase or a TPM PIN." ;;
+        esac
+        if [ "$PINLESS_TPM" = 1 ] && [[ ,$opts, == *,tpm2-device=* ]]; then
+            add_warning "$CRYPTTAB opens $name with tpm2-device= while a systemd-tpm2 token needs no PIN. $RISK" \
+                "Fix: re-enrol the slot with systemd-cryptenroll --tpm2-with-pin=yes (changes the key slot, not the data)."
+        fi
+    done < <(awk -v n="$name" '$1 == n' <<<"$text")
+    [ "$seen" = 1 ] || add_warning "$CRYPTTAB has no entry named $name, so its key file option was not checked. $RISK"
+}
+
+# initramfs_warnings IMAGE LISTING: initramfs-tools puts a key file under cryptroot/keyfiles/.
+initramfs_warnings() {
+    if grep -q 'cryptroot/keyfiles/.' <<<"$2"; then
+        add_warning "$1 holds a key file, so the disk opens with no person present. $RISK" \
+            "Fix: remove the key file and its KEYFILE_PATTERN, then run update-initramfs -u -k all."
+    fi
+}
+
+# check_initramfs: every /boot/initrd.img-*, because a kernel update rebuilds them.
+check_initramfs() {
+    local images=("$BOOT_DIR"/initrd.img-*) image listing
+    if ! have_tool lsinitramfs; then
+        add_warning "lsinitramfs is not installed, so the initramfs images were not checked for a key file. $RISK"
+    elif [ ! -e "${images[0]}" ]; then
+        add_warning "no $BOOT_DIR/initrd.img-* was found, so no initramfs was checked for a key file. $RISK"
+    else
+        for image in "${images[@]}"; do
+            if listing=$(lsinitramfs "$image" 2>/dev/null); then initramfs_warnings "$image" "$listing"
+            else add_warning "lsinitramfs could not list $image, so it was not checked for a key file. $RISK"; fi
+        done
+    fi
+}
+
+# check_portable: fills WARNINGS; empty means every check ran and passed.
+check_portable() {
+    local records dev kind name backing text names=()
+    WARNINGS=()
+    PINLESS_TPM=0
+    if dev=$(host_block_device); then records=$(walk_stack "$SYS_ROOT" "$dev"); else records=$(printf 'unresolved\t%s\n' "$HOST_DIR"); fi
+    stack_warnings "$records"
+    while IFS=$'\t' read -r kind name backing; do
+        [ "$kind" = luks ] || continue
+        names+=("$name")
+        luks_layer_warnings "$backing"
+    done <<<"$records"
+    if [ ${#names[@]} -gt 0 ]; then
+        if text=$(cat "$CRYPTTAB" 2>/dev/null); then
+            while read -r name; do crypttab_warnings "$text" "$name"; done < <(printf '%s\n' "${names[@]}" | sort -u)
+        else
+            add_warning "$CRYPTTAB could not be read, so its key file options were not checked. $RISK"
+        fi
+    fi
+    check_initramfs
+}
+
+# accept_risk GIVEN FLAG: at a terminal the administrator always types the answer; the flag only lets a run with no
+# terminal past. The answer is never read from a pipe, so `yes |` cannot accept for anyone. Sets ACCEPTED_BY.
+accept_risk() {
+    if [ -t 0 ]; then
+        local answer=
+        printf 'Type yes to accept: ' >&2
+        read -r answer || true
+        [ "$answer" = yes ] || die "not accepted; nothing was sealed"
+        ACCEPTED_BY=terminal
+    elif [ "$1" = 1 ]; then
+        echo "accepted with $2" >&2
+        ACCEPTED_BY=flag
+    else
+        die "stdin is not a terminal; run this at a terminal and type yes, or pass $2"
+    fi
+}
+
+# §14: a server may unlock unattended only if its deployment accepts this.
 confirm_server() {
     cat >&2 <<'TEXT'
 --server: this machine will unlock its vault at every boot with no one present.
 Anyone with physical access to it and a trusted boot image can start the vault and use its credentials.
 Choose --server only for a server or appliance whose deployment accepts that.
 TEXT
-    if [ -t 0 ]; then
-        local answer=
-        printf 'Type yes to accept: ' >&2
-        read -r answer || true
-        [ "$answer" = yes ] || die "not accepted; nothing was sealed"
-    elif [ "$ACCEPT_PHYSICAL_ACCESS" = 1 ]; then
-        echo "accepted with --accept-physical-access" >&2
-    else
-        die "stdin is not a terminal; run this at a terminal and type yes, or pass --accept-physical-access"
+    accept_risk "$ACCEPT_PHYSICAL_ACCESS" --accept-physical-access
+}
+
+# §14: with any warning, nothing is sealed until the administrator accepts that no second secret protects the disk.
+confirm_portable() {
+    if [ ${#WARNINGS[@]} -eq 0 ]; then ACCEPTED_BY="not needed (no warning)"; return 0; fi
+    printf 'warning: %s\n' "${WARNINGS[@]}" >&2
+    echo "--portable: the checks above found no pre-boot secret, or could not find one. Nothing is sealed until you accept that." >&2
+    accept_risk "$ACCEPT_NO_SECOND_SECRET" --accept-no-second-secret
+}
+
+# --- the acceptance record (design/tpm-unlock.md, "The acceptance record"), written before sealing ---
+
+record_lines() {
+    {
+        echo "mode: $MODE"
+        [ ${#WARNINGS[@]} -eq 0 ] || printf 'warning: %s\n' "${WARNINGS[@]}"
+        echo "accepted: $ACCEPTED_BY"
+        echo "sudo-user: ${SUDO_USER:-none}"
+    } | tr -cd '[:print:]\n'
+}
+
+# log_record LINES: one journal entry per line, auth.warning when a warning was accepted.
+log_record() {
+    local priority=auth.notice line
+    [ ${#WARNINGS[@]} -eq 0 ] || priority=auth.warning
+    while IFS= read -r line; do
+        logger -t iron-vault-host-unlock -p "$priority" -- "$line" || die "could not write the journal record; nothing was sealed"
+    done <<<"$1"
+}
+
+# provisioning_file LINES: replaced whole at each provisioning, by renaming a temp file in the same root-only directory.
+provisioning_file() {
+    local tmp stamp
+    stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    tmp=$(mktemp "$HOST_DIR/.provisioning.txt.XXXXXX") || die "could not write $HOST_DIR/provisioning.txt; nothing was sealed"
+    if ! { awk -v t="$stamp" '{ print t, $0 }' <<<"$1" >"$tmp" && chmod 0600 "$tmp" && mv -f "$tmp" "$HOST_DIR/provisioning.txt"; }; then
+        rm -f "$tmp"
+        die "could not write $HOST_DIR/provisioning.txt; nothing was sealed"
     fi
+}
+
+record_acceptance() {
+    local lines
+    lines=$(record_lines)
+    log_record "$lines"
+    provisioning_file "$lines"
+}
+
+prepare_host_dir() {
+    umask 077
+    install -d -m 0700 -o root -g root "$HOST_DIR"
 }
 
 # Seals a fresh identity to PCR 7. grep drops age-keygen's comment lines, and the process substitution derives the
@@ -100,7 +333,6 @@ TEXT
 seal() {
     local cred=$1
     umask 077
-    install -d -m 0700 -o root -g root "$HOST_DIR"
     if ! age-keygen 2>/dev/null \
         | grep '^AGE-SECRET-KEY-1' \
         | tee >(age-keygen -y >&2) \
@@ -121,9 +353,11 @@ main() {
         die "$cred exists; move it aside first, then enrol the new identity"
     fi
     case $MODE in
-        portable) refuse_portable ;;
+        portable) check_portable; confirm_portable ;;
         server) confirm_server ;;
     esac
+    prepare_host_dir
+    record_acceptance
     seal "$cred"
 }
 
