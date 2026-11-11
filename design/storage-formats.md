@@ -21,6 +21,7 @@ separation: those bytes can be read only as the format they name.
 | `IVAM` | Approval metadata: the approval state payload                   |
 | `IVRF` | Recipient inventory file                                        |
 | `IVRP` | Recipient inventory payload                                     |
+| `IVBH` | Bundle header: the first entry of a migration bundle            |
 
 ## Record payload v1
 
@@ -844,3 +845,144 @@ The second entry is the `recovery` key `age1tp56lazs2jtn9ja2a409m7dnpfk6x89su46z
 ```text
 49565250013f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6babababababababababababababababababababababababababababababababab0000000000000003000000000000003e616765317137336865307135797a6675336436346d736433703672766b736e72776a6b3364323539386d67746d6c717439777264723337713276726e37320100000000000000107661756c742070617373706872617365000000006aeda81d000000000000003e61676531747035366c617a73326a746e396a6132613430396d37646e70666b36783839737534367a68743236366a7336773638333565617363757471647802000000000000000c7265636f76657279206b6579000000006aeda81d000000000000003e61676531766a63737276777368656467777039617137386533396771726c71726172356c6a353330727a78617a32786573336b3573336e71786463363936030000000000000011616c696365206c6170746f702032303236000000006aee4480
 ```
+
+## Exported identity envelope
+
+The [exported identity envelope](glossary.md) is the vault identity sealed to the [export passphrase](glossary.md), the
+entry `exported-identity.age` of a [migration bundle](#migration-bundle-v1). It is a plain binary `age` v1 file in
+exactly the format of the [passphrase envelope](#passphrase-envelope), made by the same sealing code, with the vault
+identity's secret text as its plaintext in place of the operational identity's. The design is in
+[migration-bundle.md](migration-bundle.md#what-the-bundle-holds).
+
+- **Stanzas, work factor, size and reading order.** As for the passphrase envelope: exactly one scrypt stanza, sealed at
+  `PASSPHRASE_WORK_FACTOR`, refused above `MAX_PASSPHRASE_WORK_FACTOR` or with any other stanza before scrypt runs,
+  and bounded by `MAX_PASSPHRASE_ENVELOPE_LEN` (1 KiB; the file is 256 bytes). The plaintext must parse as an X25519
+  identity.
+- **Never on disk.** It is not `identity.age`, which never holds an scrypt stanza
+  ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)). Export seals it in memory and streams it;
+  import opens it in memory and wraps the identity it holds into a new `identity.age`.
+- **Trust.** A party without the export passphrase cannot make an envelope that opens with it, because `age`'s header
+  MAC is keyed from the file key the passphrase unwraps. Import still trusts the identity only once the bundle's
+  manifest MAC, keyed from it, verifies.
+
+## Migration bundle v1
+
+A [migration bundle](glossary.md) is the file `iron-vault export` writes and `iron-vault import` reads: a gzip-compressed
+POSIX ustar archive holding a closed list of entries in a fixed order. The archive is a container only. Every entry
+that holds a secret is encrypted on its own, so the archive needs no encryption of its own and its entry names and
+sizes are public. Nothing in it ever becomes a filesystem path: import matches each entry name against the list below
+and writes the state-directory file the list names. The design is in [migration-bundle.md](migration-bundle.md).
+
+### Entries
+
+In this order, each exactly once unless the count says otherwise:
+
+| Entry name | Count | Content | Size limit |
+|---|---|---|---|
+| `bundle-header` | 1 | The bundle header (below) | exactly 37 bytes |
+| `exported-identity.age` | 1 | The [exported identity envelope](#exported-identity-envelope) | `MAX_PASSPHRASE_ENVELOPE_LEN` (1 KiB) |
+| `manifest.age` | 1 | The [manifest file](#manifest-file-v1), byte for byte | `MAX_MANIFEST_LEN` (1 MiB) |
+| `approval.age` | 1 | The [approval state file](#approval-state-file-v1), byte for byte | `MAX_APPROVAL_STATE_LEN` (4 KiB) |
+| `approver-<approver ID>.age` | the header's approver count, 1 to 16 | An [approver key envelope](#approver-key-envelope), byte for byte, in ascending approver ID | `MAX_PASSPHRASE_ENVELOPE_LEN` (1 KiB) |
+| `record-<record ID>.age` | the header's record count, 0 to 4096 | A record file, byte for byte, in ascending record ID | `MAX_RECORD_FILE_LEN` (64 KiB) |
+
+IDs in names are version 4 UUIDs in lowercase hyphenated form, as in the state directory. Lowercase hex sorts in the
+same order as the ID bytes, so ascending names and ascending IDs agree.
+
+The **bundle header** is the format's version gate and lets import refuse a foreign file before any prompt. It uses the
+conventions of record payload v1:
+
+| Offset | Size | Content |
+|---|---|---|
+| 0 | 4 | Magic: ASCII `IVBH` (`49 56 42 48`) |
+| 4 | 1 | Bundle format version: `01` |
+| 5 | 16 | Vault ID |
+| 21 | 8 | Approver count: `u64`, from 1 to `MAX_APPROVERS` (16) |
+| 29 | 8 | Record count: `u64`, at most `MAX_MANIFEST_ENTRIES` (4096) |
+
+The header is not authenticated. Import trusts none of it: once the vault identity is open, it requires the vault ID
+to equal the manifest's and the approval state's, and each count to equal what those files name.
+
+### Entry header
+
+Each entry is a 512-byte ustar header, the entry's bytes, and zero bytes up to the next multiple of 512. Every header
+field is fixed except the name, the size and the checksum:
+
+| Offset | Size | Field | Value |
+|---|---|---|---|
+| 0 | 100 | name | the entry name, then zero bytes |
+| 100 | 8 | mode | `0000600` and a zero byte |
+| 108 | 8 | uid | `0000000` and a zero byte |
+| 116 | 8 | gid | `0000000` and a zero byte |
+| 124 | 12 | size | the entry's length in 11 octal digits, then a zero byte |
+| 136 | 12 | mtime | `00000000000` and a zero byte |
+| 148 | 8 | checksum | the sum of the header's 512 bytes, counting this field as 8 spaces, in 6 octal digits, then a zero byte and a space |
+| 156 | 1 | type | `0`, a regular file |
+| 157 | 100 | link name | zero bytes |
+| 257 | 6 | magic | `ustar` and a zero byte |
+| 263 | 2 | version | `00` |
+| 265 | 247 | user and group names, device numbers, prefix and padding | zero bytes |
+
+After the last entry come two 512-byte blocks of zero bytes, the end of the archive, and nothing else.
+
+The archive is compressed as one gzip member (RFC 1952). The encoder writes no file name, comment or extra field, and
+modification time 0; its compression level is not part of the format. Record files are already encrypted, so
+compression saves little; gzip is there because [§16](iron-vault-specification.md#16-administration-recovery-and-migration)
+names a `.tar.gz`.
+
+### Size limit
+
+`MAX_BUNDLE_LEN` is 260 MiB (272,629,760 bytes) and bounds both the compressed bytes import receives and the archive
+they decompress to, so a small file cannot expand without limit. A full bundle is 1,024 bytes for the header entry,
+1,536 for the exported identity, 1,049,088 for the manifest, 4,608 for the approval state, 16 × 1,536 for the approver
+key files, 4096 × 66,048 for the records and 1,024 for the end: 271,614,464 bytes. Gzip's stored blocks add 5 bytes per
+65,535 and 18 bytes of header and trailer, about 20,700 bytes, so a full bundle compressed fits too.
+
+### Example
+
+The vault of the examples above, `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b`, with its one approver
+`8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f` and its one record `7c9e6679-7425-40de-944b-e07fc1f90ae7`. Its bundle header:
+
+```text
+49 56 42 48                                        magic "IVBH"
+01                                                 bundle format version 1
+3f 2b 8c 1e 5d 4a 4e 6f 9a 7b 1c 2d 3e 4f 5a 6b    vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b
+00 00 00 00 00 00 00 01                            approver count 1
+00 00 00 00 00 00 00 01                            record count 1
+```
+
+The archive before compression. The sizes of the `age` files vary with `age`'s random grease stanza, so the manifest,
+approval state and record sizes here are illustrative; the passphrase-sealed files have fixed sizes:
+
+| Offset | Entry | Size | Size field | Checksum field |
+|---|---|---|---|---|
+| 0 | `bundle-header` | 37 | `00000000045` | `010356` |
+| 1,024 | `exported-identity.age` | 256 | `00000000400` | |
+| 2,048 | `manifest.age` | 466 | `00000000722` | |
+| 3,072 | `approval.age` | 546 | `00000001042` | |
+| 4,608 | `approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age` | 214 | `00000000326` | |
+| 5,632 | `record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age` | 389 | `00000000605` | `014503` |
+| 6,656 | end of archive | 1,024 | | |
+
+The archive is 7,680 bytes. `approval.age` takes two blocks after its header because 546 bytes do not fit in one.
+The two checksums shown are those of the headers' fixed bytes with that name and size.
+
+### One encoding per bundle
+
+The encoder writes exactly the form above, so a reader never has to choose between two readings of an entry. The
+decoder accepts an archive only if it is that form:
+
+- the input is one gzip member with nothing after it, and neither the compressed bytes nor the archive exceed
+  `MAX_BUNDLE_LEN`;
+- each entry header equals the header the encoder would write for its name and size, checksum included. That one rule
+  refuses every other entry type (links, directories, devices, FIFOs), pax and GNU extension headers, an absolute name
+  or one holding `/` or `..`, a name over 100 bytes, other modes, owners and times, and a NUL inside a name;
+- the names are those of the [entries](#entries), in their order: the header first, approvers and records each strictly
+  ascending, so no name repeats, and none is missing or unknown;
+- the header's magic and version are `IVBH` and `01`, its vault ID is a version 4 UUID, its approver count is from 1 to
+  16 and its record count at most 4096, and the approver and record entries number exactly those counts;
+- each entry is within its size limit, checked from the header's size field before the entry's bytes are read;
+- the padding after each entry and the two end blocks are zero bytes, and the archive ends there.
+
+The decoder checks only the form. That the identity opens, the MACs verify, the IDs agree and the record digests match
+is checked by import with the vault identity ([migration-bundle.md](migration-bundle.md#import)).
