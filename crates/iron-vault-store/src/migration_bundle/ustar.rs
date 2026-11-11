@@ -1,6 +1,6 @@
 //! The one ustar entry header form the migration bundle uses: every field fixed except the name, size and checksum.
 
-use super::EntryName;
+use super::{BundleError, EntryName};
 
 /// The ustar block size: each header is one block, and each entry's bytes are padded with zero bytes to a whole block.
 pub(crate) const BLOCK_LEN: usize = 512;
@@ -13,6 +13,7 @@ const MODE: (usize, &[u8]) = (100, b"0000600\0");
 const UID: (usize, &[u8]) = (108, b"0000000\0");
 const GID: (usize, &[u8]) = (116, b"0000000\0");
 const SIZE_AT: usize = 124;
+const SIZE_DIGITS: usize = 11;
 const MTIME: (usize, &[u8]) = (136, b"00000000000\0");
 const CHECKSUM_AT: usize = 148;
 const TYPE_REGULAR_FILE: (usize, &[u8]) = (156, b"0");
@@ -25,6 +26,28 @@ const VERSION: (usize, &[u8]) = (263, b"00");
 /// the format's only definition of an entry header. A `u32` size always fits the 11 octal digits of the size field.
 pub(crate) fn entry_header(name: &EntryName, size: u32) -> [u8; BLOCK_LEN] {
     ustar_header(name.to_string().as_bytes(), size)
+}
+
+/// The name and size a header block gives, if it is exactly [`entry_header`] for them.
+///
+/// The name runs to the first zero byte and the size is read from its octal digits only far enough to rebuild the
+/// header; the comparison then refuses every field, terminator and checksum the encoder would not write.
+pub(crate) fn parse_entry_header(block: &[u8; BLOCK_LEN]) -> Result<(EntryName, u32), BundleError> {
+    let name_field = &block[..NAME_LEN];
+    let name_len = name_field.iter().position(|&byte| byte == 0).unwrap_or(NAME_LEN);
+    let name = EntryName::parse(&name_field[..name_len]).map_err(|_| BundleError::EntryName)?;
+    let size = parse_octal(&block[SIZE_AT..SIZE_AT + SIZE_DIGITS]).ok_or(BundleError::EntryHeader)?;
+    (entry_header(&name, size) == *block)
+        .then_some((name, size))
+        .ok_or(BundleError::EntryHeader)
+}
+
+/// Octal digits as a `u32`, or `None` for any other byte or a value too large for an entry size.
+fn parse_octal(digits: &[u8]) -> Option<u32> {
+    digits.iter().try_fold(0_u32, |value, &digit| match digit {
+        b'0'..=b'7' => value.checked_mul(8)?.checked_add(u32::from(digit - b'0')),
+        _ => None,
+    })
 }
 
 /// Every entry name is at most [`NAME_LEN`] bytes (the longest, an approver's, is 49), so no name is ever cut here.

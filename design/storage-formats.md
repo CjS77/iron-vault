@@ -1031,3 +1031,8 @@ The decoder reads incrementally: it inflates the bytes as they arrive and checks
 needs are in, so the compressed bundle is never held whole. It checks only the form. That the identity opens, the MACs
 verify, the IDs agree, the record and config digests match and the bundled approver keys open is checked by import
 with the vault identity ([migration-bundle.md](migration-bundle.md#import)).
+
+Rust: `BundleDecoder`, which takes each bundle data frame's bytes with `push` and hands out each entry as soon as it is
+complete, so a reader can stop after `config.toml`; `finish` returns the `DecodedBundle`, its entries by `EntryName`.
+A refusal is a `BundleError`, whose `rule` is the fixed short name of the rule broken, such as `gzip_flags`,
+`entry_header`, `entry_order` or `too_large`, and which carries no byte of the bundle.

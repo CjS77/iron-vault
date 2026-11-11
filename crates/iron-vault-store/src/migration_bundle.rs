@@ -7,11 +7,13 @@
 //! The layout is in `design/storage-formats.md`, "Migration bundle v1".
 
 mod bundle_header;
+mod decode;
 mod encoder;
 mod entry_name;
 mod ustar;
 
 pub use bundle_header::{BUNDLE_FORMAT_VERSION, BUNDLE_HEADER_LEN, BundleHeader, BundleHeaderError};
+pub use decode::{BundleDecoder, BundleError, DecodedBundle};
 pub use encoder::{BundleEncoder, EncodeError};
 pub use entry_name::{EntryName, EntryNameError};
 
