@@ -392,8 +392,9 @@ However the stack is walked, the helper warns when any of these hold:
   person holds, so they pass);
 - `/etc/crypttab` names a key file for the device (a third field other than `none` or `-`), has `tpm2-device=` while
   some `systemd-tpm2` token needs no PIN, or has `keyscript=` with a script not known to ask a person. A keyscript such
-  as `tpm2-initramfs-tool` opens the disk with no person present and leaves the third field `none`. The helper cannot read
-  a script, so only `decrypt_keyctl` (under `/lib/cryptsetup/scripts/`, where a bare name resolves) and
+  as `tpm2-initramfs-tool` opens the disk with no person present and leaves the third field `none`. With `keyscript=` the
+  third field is the script's argument (`decrypt_keyctl`'s identifier, `askpass`'s prompt), so it is not checked as a key
+  file. The helper cannot read a script, so only `decrypt_keyctl` (under `/lib/cryptsetup/scripts/`, where a bare name resolves) and
   `/lib/cryptsetup/askpass` pass, and any other script warns and is named;
 - an initramfs holds a key file (`lsinitramfs` lists one under `cryptroot/keyfiles/`, where initramfs-tools puts
   them). Every `/boot/initrd.img-*` is checked, because a kernel update rebuilds them and any of them may boot.
@@ -572,8 +573,8 @@ power failure" gates.
     mismatch.
 12. Nothing but the admin socket and the request listeners listens.
 13. **`--portable`**, on a VM whose root can be rebuilt between cases. It warns, and seals only after `yes`, for: an
-    unencrypted root; a LUKS root with a PIN-less `systemd-tpm2` token; a `clevis` token; a crypttab key file; a crypttab keyscript. It gives
-    no warning for a LUKS root opened by passphrase only, or by a TPM+PIN slot, including on LVM-on-LUKS. With
+    unencrypted root; a LUKS root with a PIN-less `systemd-tpm2` token; a `clevis` token; a crypttab key file; a crypttab
+    keyscript. It gives no warning for a LUKS root opened by passphrase only, or by a TPM+PIN slot, including on LVM-on-LUKS. With
     `cryptsetup` removed it warns that it could not check. Run as `yes | helper --portable`, it stops with nothing
     sealed. Each accepted warning appears in the journal and in `provisioning.txt`.
 14. The helper stops on a release other than Ubuntu 24.04 (SKIP when none is at hand).

@@ -304,12 +304,14 @@ keyscript_asks_person() {
     local script=$1
     case $script in /*) ;; *) script=/lib/cryptsetup/scripts/$script ;; esac
     case ${script#/usr} in
-        # Prompts with askpass for the passphrase and keeps it in the kernel keyring only for the rest of this boot.
+        # Prompts with askpass for the passphrase and caches it in the kernel keyring for 60 s, shared by the entries that give the
+        # same identifier as the third field.
         /lib/cryptsetup/scripts/decrypt_keyctl) ;;
         # The prompt program itself: reads the passphrase from the console.
         /lib/cryptsetup/askpass) ;;
-        # decrypt_derived, decrypt_gnupg, decrypt_opensc, decrypt_ssl and passdev are left out: each derives the key from another
-        # unlocked device or reads it from a file, card or device that can stay with the machine, so none is known to need a person.
+        # The list is kept to askpass-style prompts on purpose. decrypt_derived and passdev run with no person present. decrypt_gnupg,
+        # decrypt_ssl and decrypt_opensc do prompt a person, but accepting them needs a check of what each one reads, so it is a
+        # separate change.
         *) return 1 ;;
     esac
 }
@@ -325,15 +327,21 @@ keyscript_warnings() {
     done < <(tr ',' '\n' <<<"$2" | grep '^keyscript=.')
 }
 
+# has_keyscript OPTS: whether the comma-separated crypttab options OPTS carry a non-empty keyscript=.
+has_keyscript() { [[ ,$1, == *,keyscript=[!,]* ]]; }
+
 # crypttab_warnings TEXT NAME: warns when the entry named NAME has a key file, a keyscript= not known to ask a person, or
-# tpm2-device= beside a PIN-less token. No entry for a LUKS layer is a warning too, because the check then saw nothing.
+# tpm2-device= beside a PIN-less token. With a keyscript= the third field is the script's argument (decrypt_keyctl's identifier,
+# askpass's prompt), not a key file, so only keyscript_warnings judges the entry. No entry for a LUKS layer is a warning too,
+# because the check then saw nothing.
 crypttab_warnings() {
     local text=$1 name=$2 key opts seen=0
     while read -r _ _ key opts _; do
         seen=1
         case ${key:-none} in
             none | -) ;;
-            *) add_warning "$CRYPTTAB opens $name with the key file $key. $RISK Fix: remove the key file and use a passphrase or a TPM PIN." ;;
+            *) has_keyscript "$opts" || add_warning "$CRYPTTAB opens $name with the key file $key. $RISK" \
+                "Fix: remove the key file and use a passphrase or a TPM PIN." ;;
         esac
         keyscript_warnings "$name" "$opts"
         if [ "$PINLESS_TPM" = 1 ] && [[ ,$opts, == *,tpm2-device=* ]]; then
