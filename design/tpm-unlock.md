@@ -360,8 +360,8 @@ check is in the helper, and **it runs once, at provisioning**. A PIN-less slot e
 run the helper again after any change to the disk's key slots.
 
 A TPM PIN for the vault itself needs an adapter that can ask for one, which (a) cannot; it is left for a later
-in-service adapter with role `tpm`. The roadmap recipe [Unlock at boot with a TPM](../book/src/cookbook/roadmap/tpm-unlock.md)
-promises "a laptop unlocks with a TPM PIN", which this design does not deliver in v0; the manual work rewrites it.
+in-service adapter with role `tpm`. The recipe [Unlock at boot with a TPM](../book/src/cookbook/tpm-unlock.md)
+says plainly that v0 has no TPM PIN.
 
 ### `--portable`
 
@@ -609,7 +609,7 @@ In order:
    and handoff go, and dpkg removes the unit file; `/etc/iron-vault-host` stays on remove, and purge deletes it only
    when the vault question deletes the vault, since its identity opens only that vault and a kept vault needs it again.
 5. **`--portable` and the acceptance record** (done in K-324): the checks, the terminal rule and its flags, and `provisioning.txt`.
-6. **The release check and the manual:** `tpm-unlock-check.sh`, an installation guide section with the
+6. **The release check and the manual** (done in K-325): `tpm-unlock-check.sh`, an installation guide section with the
    before-and-after update lists, a cookbook recipe replacing the roadmap one, and the one-time nature of the
    `--portable` check.
 7. **The runs:** the release check on an Ubuntu 24.04 VM and on Ubuntu 24.04 hardware.

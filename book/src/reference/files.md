@@ -32,6 +32,11 @@ The `.deb` package runs the service as the `iron-vault` system account.
 | `/usr/lib/systemd/system/iron-vault.service`, `iron-vault-listener@.socket` | root | `0644` | the package | The service unit, and the template for TCP listener sockets. |
 | `/usr/lib/sysusers.d/iron-vault.conf`, `/usr/lib/tmpfiles.d/iron-vault.conf` | root | `0644` | the package | Create the account and the directories above. |
 | `/etc/logrotate.d/iron-vault` | root | `0644` | the package | Log rotation ([log operations](log-operations.md#rotation)). |
+| `/usr/lib/systemd/system/iron-vault-host-unlock.service` | root | `0644` | the package | The handoff unit: at each boot it unseals the host unlock blob and installs the [handoff](#host-unlock-handoff). It has no `[Install]` section; `iron-vault.service` pulls it in at every start. |
+| `/usr/sbin/iron-vault-provision-host-unlock` | root | `0755` | the package | The provisioning helper, `iron-vault-provision-host-unlock(8)`. It seals a new host unlock identity to the TPM ([TPM unlock](../installation/linux-install.md#tpm-unlock)). |
+| `/etc/iron-vault-host/` | root | `0700` | the helper | The host unlock directory. The service cannot see it. Kept when the package is removed; purged only when the vault is. |
+| `/etc/iron-vault-host/host-unlock.cred` | root | `0600` | the helper | The host unlock blob: the host unlock identity sealed by `systemd-creds` to this TPM and PCR 7. It opens only on this machine at this Secure Boot policy, and a backup copy opens there too. |
+| `/etc/iron-vault-host/provisioning.txt` | root | `0600` | the helper | The acceptance record of the last provisioning: the mode (`server` or `portable`), each `--portable` warning, how it was accepted (`terminal` or `flag`) and `SUDO_USER`, with the time. Replaced whole each time; the same lines are in the journal under `iron-vault-host-unlock`. |
 
 The unit lets the service write only `/etc/iron-vault`, `/var/lib/iron-vault`, `/run/iron-vault` and its log
 directory. A protected install also reads the host unlock handoff when it is there; its two paths are in the [handoff table](#host-unlock-handoff) below. Uninstalling keeps the vault and the config. Purging deletes `/etc/iron-vault` and asks before it deletes the vault

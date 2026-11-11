@@ -6,7 +6,6 @@ feature ships.
 
 | Recipe | Phase |
 |---|---|
-| [Unlock at boot with a TPM](tpm-unlock.md) | v0 |
 | [Approve configs with a TPM PIN](tpm-approval.md) | v0 |
 | [Move a vault to a new machine](migration.md) | v0 |
 | [Log in to an OAuth provider](oauth.md) | v1 |

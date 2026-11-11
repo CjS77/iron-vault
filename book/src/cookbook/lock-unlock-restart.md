@@ -149,8 +149,8 @@ HTTP/1.1 200 OK
 
 `lock` leaves an empty file, `locked-by-owner`, in the [state directory](../reference/files.md#the-state-directory),
 and a passphrase `unlock` removes it. While it is there, a restart, a crash or a reboot leaves the service Locked, even
-where a host unlock would otherwise open the vault with no one present (the Docker Compose install; a TPM unlock is
-[not yet available](roadmap/tpm-unlock.md) on a protected Linux install). The service logs it as `vault.host-unlock`
+where a host unlock would otherwise open the vault with no one present (the Docker Compose install, or a protected Linux
+install with [TPM unlock](tpm-unlock.md)). The service logs it as `vault.host-unlock`
 with `host_unlock_outcome` `owner_locked`.
 
 If the service cannot write the file, `lock` still locks and clears the vault, and says on stderr that the lock will not
@@ -161,8 +161,7 @@ will stay Locked; `lock`, then `unlock` again once the state directory is writab
 
 The same commands run through `sudo`: `sudo iron-vault lock`, `sudo iron-vault unlock`. The service is restarted by
 systemd, with `sudo systemctl restart iron-vault`, and by every package upgrade; each time it comes back Locked and
-needs `sudo iron-vault unlock`. See [protected Linux install](protected-linux.md). An unattended unlock at boot, with
-a TPM, is [not yet available](roadmap/tpm-unlock.md).
+needs `sudo iron-vault unlock`, unless [TPM unlock](tpm-unlock.md) is set up. See [protected Linux install](protected-linux.md).
 
 ## What can go wrong
 

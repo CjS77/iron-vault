@@ -29,7 +29,7 @@ The diagram is the one in the specification. The table below says the same in wo
 | From | To | When |
 |---|---|---|
 | Starting | Locked | The vault needs an interactive unlock: every Development start, and a Protected or Container start whose host unlock handoff was absent or refused. |
-| Starting | Checking | A host unlock succeeded: in the Protected and Container profiles, the unlock handoff opened the vault at startup. TPM unlock is still to come (EP-32). |
+| Starting | Checking | A host unlock succeeded: in the Protected and Container profiles, the unlock handoff opened the vault at startup. On a protected install the host's handoff unit unseals that identity from the TPM ([TPM unlock](../installation/linux-install.md#tpm-unlock)). |
 | Locked | Checking | `iron-vault unlock` succeeded. |
 | Checking | Ready | The config check passed: storage and the current approval verify. |
 | Checking | Unavailable | The config check failed: the policy is invalid, or shared state is damaged. |

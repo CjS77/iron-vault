@@ -242,6 +242,153 @@ sudo systemctl start iron-vault
 sudo iron-vault unlock
 ```
 
+## TPM unlock
+
+TPM unlock lets the service open the vault at boot with no one typing a passphrase. The vault passphrase and the offline
+recovery key keep working: TPM unlock adds a way in and replaces none. It is optional, and **it has had no release check
+on a real machine yet, so don't rely on it for real secrets.** For a walk-through that ends in a reboot that reaches Ready,
+see the [recipe](../cookbook/tpm-unlock.md). The design is [tpm-unlock.md](../../../design/tpm-unlock.md).
+
+**What it needs.** Ubuntu 24.04 LTS only (systemd 255): on any other release the provisioning helper stops, and the service
+starts Locked and waits for `iron-vault unlock` as before. It also needs a TPM 2.0, Secure Boot on (the seal is bound to PCR 7,
+which records the Secure Boot policy) and `age-keygen` (Ubuntu package `age`). **v0 has no TPM PIN.** A laptop gets its second
+secret from full-disk encryption instead, as below.
+
+**How it works.** The host unlock identity is a key that `systemd-creds` seals to the TPM as the root-only file
+`/etc/iron-vault-host/host-unlock.cred`. At each boot the package's handoff unit, `iron-vault-host-unlock.service`, unseals
+it as root onto a ramfs at `/run/iron-vault-unlock` and hands it to the service, which uses it to open the vault. The service
+never opens the TPM, and the identity is never written to disk in the clear. There is nothing to enable: the service pulls the
+handoff unit in at every start, and the unit is skipped on a machine with no blob.
+
+### Provision
+
+Run the helper once, as root, with the choice of mode it asks for. There is no default, because the two modes accept
+different risks ([§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)):
+
+- **`--server`**: for a server or appliance. Anyone with physical access to the machine and a trusted boot image can start
+  the vault. The helper says so and seals nothing until you type `yes`.
+- **`--portable`**: for a laptop. The helper checks, once, that something you must supply at boot protects the disk that holds
+  the blob: a LUKS passphrase typed at boot, or a LUKS TPM slot that needs a PIN (`systemd-cryptenroll --tpm2-with-pin=yes`).
+  It warns when part of the disk is not encrypted, when a TPM or `clevis` slot needs no PIN, when `/etc/crypttab` or an
+  initramfs holds a key file, and when it cannot tell. With a warning it seals nothing until you accept that anyone who steals
+  the machine can start the vault.
+
+```sh
+sudo iron-vault-provision-host-unlock --server       # or --portable
+```
+
+It prints the identity's recipient key, `age1…`, and writes `/etc/iron-vault-host/host-unlock.cred`. It refuses to run when
+the blob exists: move the old one aside first. With no terminal, `yes` is never read from a pipe; pass
+`--accept-physical-access` (`--server`) or `--accept-no-second-secret` (`--portable`) to accept in a script. The choice is
+recorded in the journal (`journalctl -t iron-vault-host-unlock`) and in `/etc/iron-vault-host/provisioning.txt`. The helper
+never clears the TPM, sets a TPM password or changes its lockout settings.
+
+**The `--portable` check runs once, at provisioning.** A PIN-less slot added later, for example with
+`systemd-cryptenroll --tpm2-device=auto`, silently removes the second secret and the helper never sees it. Run the helper
+again, as under [Replace the identity](#replace-the-identity), after any change to the disk's key slots. It cannot see a
+passphrase written on the laptop either.
+
+### Enrol
+
+The handoff unit runs before the service only at boot. On a running install, start it by hand; the running service sees its
+mount.
+
+- **A new vault**: provision, start the handoff unit, then create the vault with the identity as a recipient.
+
+  ```sh
+  sudo systemctl start iron-vault-host-unlock.service
+  sudo iron-vault init --host-unlock
+  sudo iron-vault unlock
+  ```
+
+- **An existing vault**: provision, start the handoff unit, then enrol the recipient key the helper printed. It asks for the
+  vault passphrase.
+
+  ```sh
+  sudo systemctl start iron-vault-host-unlock.service
+  sudo iron-vault recipient add --host-unlock age1… --label "host unlock"
+  ```
+
+- **A vault imported from a migration bundle**: provision, start the handoff unit, then run `sudo iron-vault import
+  --host-unlock`.
+
+Then check that a restart needs no `unlock`:
+
+```sh
+sudo systemctl restart iron-vault
+sudo iron-vault status        # service: ready, host unlock: unlocked
+```
+
+`lock` still wins: a service its owner locked stays Locked across a crash, a restart and a reboot until a passphrase
+`unlock` ([lock, unlock and restart](../cookbook/lock-unlock-restart.md#a-lock-survives-a-restart)).
+
+### Before a Secure Boot key or firmware update
+
+A change to the Secure Boot keys or databases (PK, KEK, `db`, `dbx`), to the certificate that verifies the boot chain, or to
+the option ROMs the firmware verifies changes PCR 7, and the blob no longer unseals. Treat a firmware update as one unless the
+vendor says it leaves the Secure Boot variables alone. `dbx` and KEK updates arrive routinely through `fwupd` and
+distribution updates. **Unattended unlock does not survive them**, and a server that applies them unattended needs someone
+to type the passphrase afterwards, or should hold them for a maintenance window. The vault is not stranded: the service
+starts Locked and `unlock` and the recovery key work as before.
+
+Before the update:
+
+1. Run `sudo iron-vault recovery check` with the offline recovery key, to prove a way in that does not need the TPM.
+2. Confirm that whoever holds the vault passphrase can reach the machine after the reboot.
+3. Schedule it for a window in which callers can do without the vault until the passphrase is typed.
+
+### After the update
+
+After the reboot the service is Locked, `sudo iron-vault status` says `host unlock: unseal_failed`, and the audit log has
+`vault.host-unlock` with `host_unlock_outcome` `unseal_failed`.
+
+1. `sudo iron-vault unlock` with the vault passphrase.
+2. Move the old blob aside and provision a new identity (see [Replace the identity](#replace-the-identity)). The helper
+   prints a new recipient key.
+3. `sudo systemctl restart iron-vault-host-unlock.service`
+4. `sudo iron-vault recipient add --host-unlock <new age1…> --label "host unlock"`
+5. `sudo systemctl restart iron-vault`, and check that `status` reaches Ready with no `unlock`.
+6. `sudo iron-vault recipient remove <old age1…>` (it asks for the approval passphrase), and delete the old blob.
+
+### Replace the identity
+
+Provisioning a new identity is also what to do after a lost TPM or a change to the disk's key slots. The blob must be moved
+aside first, because the helper will not overwrite it:
+
+```sh
+sudo mv /etc/iron-vault-host/host-unlock.cred /etc/iron-vault-host/host-unlock.cred.old
+sudo iron-vault-provision-host-unlock --server       # or --portable
+```
+
+Then restart the handoff unit and enrol the new key as in steps 3 to 6 above. `recipient list` shows the old key as
+`host-unlock` beside the new one until you remove it. `recipient remove` refuses the
+recipient whose identity the handoff currently holds, so if it refuses, you named the new key.
+
+### Retire TPM unlock
+
+1. `sudo systemctl stop iron-vault-host-unlock.service`
+2. `sudo rm /etc/iron-vault-host/host-unlock.cred`
+3. `sudo iron-vault recipient remove <age1…>` for the `host-unlock` recipient.
+4. `sudo systemctl restart iron-vault`: the service starts Locked, with `host unlock: absent`.
+
+A copy of the blob in a backup still opens on this TPM at this PCR 7. To retire the whole machine, see
+[Retire a machine](../cookbook/forget-machine.md).
+
+### Other things to know
+
+- **A distribution upgrade.** `systemd-creds` changes how it binds to the TPM between releases, and whether a blob sealed on
+  one release unseals after an upgrade to the next has not been checked. Have the vault passphrase at hand: a failure reads
+  `unseal_failed`, and the steps above replace the identity.
+- **An owner password set by another OS.** `systemd-creds` seals under the TPM's owner hierarchy, whose password is empty on
+  Linux by default. If another operating system set one, the helper fails with `systemd-creds`'s error. Iron Vault never sets,
+  clears or reads it.
+- **Hibernation.** The unsealed identity is in RAM, so hibernation writes it into the hibernation image. Swap and hibernation
+  storage must be encrypted ([above](#encrypt-swap-and-hibernation-storage)); this matters most on a laptop.
+- **Who can interfere.** A member of the `tss` group can open `/dev/tpmrm0` and clear the TPM or set an owner password. That
+  ends unattended unlock until you provision again; the vault waits Locked, not stranded.
+- **Uninstall and purge.** `apt remove` stops the handoff unit and keeps `/etc/iron-vault-host`. `apt purge` deletes it only
+  when you also let it delete the vault, because that identity opens only that vault.
+
 ## Upgrade
 
 Build the new package as under [Install](#install), then:

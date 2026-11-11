@@ -52,13 +52,19 @@ Done in v0:
 - **Retiring a machine:** `forget-machine <age1…>` checks that a retired machine's recipient key is gone from the vault,
   warns when the recovery path is not verified, and prints the steps to delete the machine's sealed unlock credential and
   clear its TPM only if nothing else uses it. It runs nothing itself. See the [recipe](book/src/cookbook/forget-machine.md).
+- **TPM unlock (Ubuntu 24.04 only):** a protected Linux install can open its vault at boot from an identity that
+  `systemd-creds` seals to the machine's TPM and Secure Boot policy, with the vault passphrase and recovery key still
+  working. v0 has no TPM PIN: a laptop relies on a full-disk-encryption pre-boot secret that the provisioning helper
+  checks once, and a Secure Boot update ends unattended unlock until you provision again. It has had no release check on
+  a real machine yet. See the [recipe](book/src/cookbook/tpm-unlock.md) and the
+  [install guide](book/src/installation/linux-install.md#tpm-unlock).
 - **Audit logging:** typed JSON records of request and administrative events, which never log secret values. See the
   [log operations guide](book/src/reference/log-operations.md).
 
 Still to come in v0:
 
 - migration;
-- TPM unlock and TPM approval signing;
+- TPM approval signing;
 - the v0 release acceptance suite.
 
 Later phases add OAuth login and refresh, owner notifications, more credential kinds
