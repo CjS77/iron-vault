@@ -510,8 +510,10 @@ persistent plaintext or exposing a signing oracle":
   interface that signs or decrypts on request; the unit runs once at boot.
 
 The evidence is the [host unlock release check](#release-checks), [`compose-unlock-check.sh`](../scripts/release/compose-unlock-check.sh),
-run on a host with a TPM. **The evidence is pending:** the script has not yet been run on a VM with `swtpm` or on TPM
-hardware, so the gate stays open until its two-part output is attached to K-254 and linked here.
+run on a host with a TPM. **The gate is met.** On 2026-11-11, at commit `9591715`, it passed every item with none
+skipped (5 in part 1, 14 in part 2) on a fresh Ubuntu 24.04.5 VM with an emulated TPM 2.0 (`swtpm`), Secure Boot and a
+swap file: [the output and host details](evidence/compose-unlock-check-2026-11-11.md). A run on TPM hardware is still
+to come; the gate does not wait for it.
 
 ## Approval signing
 
