@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+use std::io::Read;
 use std::sync::{Mutex, PoisonError};
 
 use iron_vault_kinds::CredentialMaterial;
@@ -360,8 +361,12 @@ fn a_record_changed_after_the_check_is_refused_before_its_bytes_are_encoded() {
     let mut bytes = Vec::new();
     let error = fixture.stream(&mut bytes).unwrap_err();
     assert_eq!((error.step(), error.file()), (SnapshotStep::Snapshot, Some(EntryName::Record(id))));
+    // The bytes are gzip-compressed, so the search runs over the tar they decompress to.
+    let mut tar = Vec::new();
+    // A partial gzip stream is expected here, so whatever decompressed before its end is searched.
+    let _ = flate2::read::GzDecoder::new(bytes.as_slice()).read_to_end(&mut tar);
     assert!(
-        !bytes.windows(changed.len()).any(|window| window == changed),
+        !tar.windows(changed.len()).any(|window| window == changed),
         "the changed record reached the sink"
     );
 }
@@ -424,4 +429,46 @@ fn the_sink_is_not_called_again_after_it_fails() {
     let error = fixture.stream(CountingSink(&calls)).unwrap_err();
     assert!(matches!(error, SnapshotError::Transfer(_)));
     assert_eq!(calls.get(), 1);
+}
+
+/// Returns `Interrupted` from its first write and accepts every later call, as a signal-interrupted pipe would.
+struct InterruptedOnce<'a> {
+    bytes: &'a mut Vec<u8>,
+    interrupted: bool,
+}
+
+impl Write for InterruptedOnce<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match std::mem::replace(&mut self.interrupted, true) {
+            false => Err(io::ErrorKind::Interrupted.into()),
+            true => self.bytes.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn an_interrupted_sink_write_is_retried_and_the_export_matches_an_uninterrupted_one() {
+    let _turn = one_at_a_time();
+    let fixture = Fixture::new();
+    let mut plain = Vec::new();
+    fixture.stream(&mut plain).unwrap();
+    let mut retried = Vec::new();
+    let sink = InterruptedOnce {
+        bytes: &mut retried,
+        interrupted: false,
+    };
+    let exported = fixture.stream(sink).unwrap();
+    assert_eq!(exported.byte_count, retried.len() as u64);
+
+    // The sealed identity and the bundled approver keys are randomized, so only the other entries are compared.
+    let (plain, retried) = (decode(&plain), decode(&retried));
+    let names = [EntryName::Manifest, EntryName::ApprovalState, EntryName::Config]
+        .into_iter()
+        .chain(fixture.records.iter().map(|id| EntryName::Record(*id)));
+    names.for_each(|name| assert_eq!(plain.entry(&name).unwrap(), retried.entry(&name).unwrap(), "{name:?}"));
+    assert_eq!(plain.header().vault_id(), retried.header().vault_id());
 }
