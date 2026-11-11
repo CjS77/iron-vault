@@ -210,6 +210,12 @@ impl DecodedBundle {
     pub fn entries(&self) -> impl Iterator<Item = (EntryName, &[u8])> {
         self.entries.iter().map(|(name, bytes)| (*name, bytes.as_slice()))
     }
+
+    /// The header and the entries after it, moved out so import keeps one copy of a bundle of up to
+    /// [`MAX_BUNDLE_LEN`] bytes.
+    pub(crate) fn into_parts(self) -> (BundleHeader, BTreeMap<EntryName, Vec<u8>>) {
+        (self.header, self.entries)
+    }
 }
 
 #[cfg(test)]

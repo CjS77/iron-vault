@@ -20,27 +20,27 @@ use crate::{
     durable_replace, open_bundled_approver_key, open_exported_identity, seal_manifest, seal_signer_key_for_tests, write_signer_key,
 };
 
-const CONFIG: &[u8] = b"schema_version = 1\n";
+pub(crate) const CONFIG: &[u8] = b"schema_version = 1\n";
 
 /// Sealing the exported identity takes 256 MiB of scrypt memory, so the tests that stream take turns.
 static SEALING: Mutex<()> = Mutex::new(());
 
-fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
     SEALING.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn passphrase() -> ExportPassphrase {
+pub(crate) fn passphrase() -> ExportPassphrase {
     ExportPassphrase::new(SecretString::from("export phrase 1")).unwrap()
 }
 
 /// An approver key envelope sealed at a cheap work factor.
-fn approver_key() -> Vec<u8> {
+pub(crate) fn approver_key() -> Vec<u8> {
     let (key, _) = SoftwareSigner::generate().unwrap();
     seal_signer_key_for_tests(&key, &ApprovalPassphrase::new(SecretString::from("approval phrase")).unwrap()).unwrap()
 }
 
 /// `envelope` with its scrypt stanza's work factor (2) replaced by `log_n`.
-fn with_work_factor(envelope: &[u8], log_n: u8) -> Vec<u8> {
+pub(crate) fn with_work_factor(envelope: &[u8], log_n: u8) -> Vec<u8> {
     let line_end = 22 + envelope[22..].iter().position(|&b| b == b'\n').unwrap();
     [&envelope[..line_end - 2], format!(" {log_n}").as_bytes(), &envelope[line_end..]].concat()
 }
@@ -50,20 +50,20 @@ fn noise(len: usize) -> Vec<u8> {
 }
 
 /// A vault with three records and two approvers, a committed config and a second reserved version, all in a [`FaultFs`].
-struct Fixture {
+pub(crate) struct Fixture {
     _dirs: (TestDir, TestDir),
-    state: StateDirLock,
+    pub(crate) state: StateDirLock,
     config: ConfigDirLock,
-    fs: FaultFs,
-    identity: VaultIdentity,
-    held: ApprovalState,
-    records: Vec<RecordId>,
+    pub(crate) fs: FaultFs,
+    pub(crate) identity: VaultIdentity,
+    pub(crate) held: ApprovalState,
+    pub(crate) records: Vec<RecordId>,
     /// `approval.age` as it was before the last two versions were reserved: a valid file that is not `held`.
-    older_approval: Vec<u8>,
+    pub(crate) older_approval: Vec<u8>,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_config_on_disk(CONFIG)
     }
 
@@ -112,11 +112,11 @@ impl Fixture {
         check_export_snapshot(&self.state, &self.config, &self.fs, &self.identity, &self.held)
     }
 
-    fn stream(&self, sink: impl Write) -> Result<ExportedBundle, SnapshotError> {
+    pub(crate) fn stream(&self, sink: impl Write) -> Result<ExportedBundle, SnapshotError> {
         stream_export_snapshot(&self.state, &self.config, &self.fs, &self.identity, &self.held, passphrase(), sink)
     }
 
-    fn file(&self, name: &StateFileName) -> Vec<u8> {
+    pub(crate) fn file(&self, name: &StateFileName) -> Vec<u8> {
         read(&self.state, &self.fs, name)
     }
 
@@ -160,7 +160,7 @@ fn assert_nothing_written(fs: &FaultFs, from: usize) {
     assert!(trace.iter().all(|call| !writes.contains(&call.op())), "{trace:?}");
 }
 
-fn decode(bytes: &[u8]) -> DecodedBundle {
+pub(crate) fn decode(bytes: &[u8]) -> DecodedBundle {
     let mut decoder = BundleDecoder::new();
     decoder.push(bytes).unwrap();
     decoder.finish().unwrap()

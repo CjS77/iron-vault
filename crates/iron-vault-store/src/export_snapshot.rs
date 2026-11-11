@@ -469,4 +469,4 @@ impl<W: Write> Write for Counted<W> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
