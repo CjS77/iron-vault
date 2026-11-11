@@ -2,8 +2,8 @@
 //! design/migration-authorization.md), driven through a real admin socket. Rows marked *export* run the real `export`
 //! command, and count it authorized once it asks for the new export passphrase, where the test hangs up. The other rows
 //! need a challenge the owner cannot reach through `export`: a proof spent for another operation, a proof presented
-//! twice, a challenge never issued, or a clock moved past the challenge's lifetime. They run through a handler
-//! registered only here, which takes the same steps as `export`.
+//! twice, or a challenge never issued. They run through a handler registered only here, which takes the same steps as
+//! `export`.
 //!
 //! One test per rejection §19 names. Cases that `migration_prompt.rs` already pins over the same socket are not
 //! repeated; this file maps them so a reader of the checklist finds every case:
@@ -11,8 +11,9 @@
 //! | §19 case                                    | Test                                                                              |
 //! |---------------------------------------------|-----------------------------------------------------------------------------------|
 //! | missing                                     | `missing_authorization_has_no_way_to_start`                                       |
-//! | incorrect (*export*)                        | `incorrect_*` here, and `a_wrong_passphrase_is_denied_with_one_refusal_event`     |
-//! | expired                                     | `expired_between_the_prompt_and_the_check_is_denied`                              |
+//! | incorrect (*export*)                        | `incorrect_*`                                                                     |
+//! | incorrect                                   | `a_wrong_passphrase_is_denied_with_one_refusal_event` (prompt)                    |
+//! | expired (*export*)                          | `expired_between_the_prompt_and_the_check_is_denied`                              |
 //! | replayed                                    | `replayed_proof_and_replayed_challenge_are_refused`                               |
 //! | cancelled: CLI closes at the prompt         | `no_owner_input_cancels_with_no_authorization_and_retires_the_challenge` (prompt) |
 //! | cancelled: a `lock` at the prompt           | `a_lock_at_the_prompt_is_unavailable_and_records_no_failure` (prompt)             |
@@ -183,6 +184,11 @@ impl Served {
         Self::with(Mode::Spend, operation.clone(), operation, &identity()).await
     }
 
+    /// A service for the rows that run the real `export`, whose stand-in is never asked.
+    async fn exporting(envelopes_of: &VaultIdentity) -> Self {
+        Self::with(Mode::Spend, MigrationOperation::Export, MigrationOperation::Export, envelopes_of).await
+    }
+
     /// `envelopes_of` is the vault whose envelopes are on disk; the service itself holds [`identity`].
     async fn with(mode: Mode, issued_for: MigrationOperation, spend: MigrationOperation, envelopes_of: &VaultIdentity) -> Self {
         let logs = captured_logs();
@@ -324,8 +330,7 @@ async fn incorrect_approval_passphrase_in_place_of_the_vault_passphrase_is_denie
 
 #[tokio::test]
 async fn incorrect_another_vaults_passphrase_is_denied_as_not_this_vault() {
-    let operation = MigrationOperation::AddRecipient(recipient());
-    let served = Served::with(Mode::Spend, operation.clone(), operation, &VaultIdentity::generate()).await;
+    let served = Served::exporting(&VaultIdentity::generate()).await;
 
     let (code, message) = served.export_refused(PASSPHRASE).await;
 
@@ -336,9 +341,15 @@ async fn incorrect_another_vaults_passphrase_is_denied_as_not_this_vault() {
 
 #[tokio::test]
 async fn expired_between_the_prompt_and_the_check_is_denied() {
-    let served = Served::new().await;
-    let mut stream = served.connect().await;
-    assert!(matches!(read_frame(&mut stream).await, Frame::Prompt(_)));
+    let served = Served::exporting(&identity()).await;
+    let runtime_dir = served.service.paths().runtime_dir.clone().unwrap();
+    let mut stream = UnixStream::connect(runtime_dir.join(ADMIN_SOCKET_NAME)).await.unwrap();
+    send(&mut stream, &Frame::Request(AdminRequest::Export)).await;
+    let mut first = read_frame(&mut stream).await;
+    while matches!(first, Frame::Notice(_)) {
+        first = read_frame(&mut stream).await;
+    }
+    assert!(matches!(first, Frame::Prompt(_)), "{first:?}");
 
     // The right passphrase arrives after the challenge's lifetime; it is refused before it is checked.
     tokio::time::pause();
@@ -352,7 +363,9 @@ async fn expired_between_the_prompt_and_the_check_is_denied() {
     assert_eq!(code, ErrorCode::MigrationDenied);
     assert!(message.contains("expired"), "{message}");
     served.assert_retired().await;
-    assert_eq!(served.events("migration.authorization-refused")[0]["refusal"], "expired");
+    // Only this test lets a challenge expire, so an `expired` refusal in the shared log is its own.
+    let refusals = served.events("migration.authorization-refused");
+    assert!(refusals.iter().any(|record| record["refusal"] == "expired"), "{refusals:?}");
 }
 
 #[tokio::test]
