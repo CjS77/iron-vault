@@ -97,6 +97,9 @@ pub enum KeyCheckError {
     /// The helper's signature over a fresh presence payload does not verify against the key about to be pinned.
     #[error("the helper's signature does not verify against the new key")]
     Signature,
+    /// The operating system gave no random bytes for the check's presence payload.
+    #[error("the check's presence payload could not be made: no random bytes")]
+    Randomness,
 }
 
 /// An approver change or the checks before it failed. Every variant says whether the change may have committed
@@ -174,7 +177,7 @@ impl ApproverChangeError {
             Self::TpmHelper(_) => ErrorKindLabel::fixed("tpm_helper"),
             Self::KeySeal(_) => ErrorKindLabel::fixed("key_seal"),
             Self::KeyCheck(KeyCheckError::Read(_)) => ErrorKindLabel::fixed("read_failed"),
-            Self::KeyCheck(KeyCheckError::Open(_) | KeyCheckError::Blob | KeyCheckError::Signature) => {
+            Self::KeyCheck(KeyCheckError::Open(_) | KeyCheckError::Blob | KeyCheckError::Signature | KeyCheckError::Randomness) => {
                 ErrorKindLabel::fixed("key_mismatch")
             }
             Self::ApprovalState(ApprovalStateError::Write(error) | ApprovalStateError::WriteUncertain(error)) => error.error_kind_label(),
@@ -277,6 +280,7 @@ impl<'a, F: StoreFs> ApproverChanges<'a, F> {
     /// and never fails the removal: the approver is gone and the file is an orphan the next sweep deletes.
     pub fn remove_approver(&self, state: &mut ApprovalState, id: ApproverId) -> Result<KeyFileOutcome, ApproverChangeError> {
         let kind = state.approver(id).map(PinnedApprover::kind);
+        // `remove_approver` below fails for an unknown ID, so on success `kind` is always `Some`; the default is never used.
         state
             .remove_approver(self.lock, self.fs, self.identity, id)
             .map_err(ApproverChangeError::ApprovalState)?;

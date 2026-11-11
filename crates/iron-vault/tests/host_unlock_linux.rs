@@ -27,7 +27,7 @@ use common::approval_harness::{
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
-use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame};
+use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, RequestedSignerKind};
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
 use iron_vault::deployment::DeploymentProfile;
@@ -595,6 +595,7 @@ async fn a_handoff_that_is_not_an_identity_leaves_it_locked_for_the_passphrase(p
 }
 
 on_both_profiles!(
+    the_tpm_approver_kind_is_unavailable_without_a_helper,
     an_unseal_failure_file_beside_a_missing_handoff_is_reported,
     anything_but_a_regular_file_of_the_expected_owner_is_absent,
     a_stale_unseal_failure_file_does_not_stop_a_good_handoff,
@@ -872,6 +873,46 @@ async fn reset_over(fixture: &Fixture, fs: OwnerLockFs, profile: DeploymentProfi
     let exchanged = converse(&mut stream, &[&id.to_string()]).await;
     let _ = stop.send(());
     exchanged.response
+}
+
+fn sorted_names(fixture: &Fixture) -> Vec<String> {
+    let mut names = file_names(fixture, "state");
+    names.sort();
+    names
+}
+
+/// A service that reached Ready by the host unlock handoff offers no `tpm` approver kind: no TPM signing helper socket
+/// exists for it, and a container never has one. The refusal comes before any prompt and changes nothing.
+async fn the_tpm_approver_kind_is_unavailable_without_a_helper(profile: DeploymentProfile) {
+    let fixture = Fixture::new().await;
+    let (secret, _) = with_host_key(&fixture);
+    let dir = HandoffDir::new();
+    let handoff = dir.write(&secret);
+    let service = Arc::new(service_on(&fixture, profile));
+    assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Ready);
+    let before = sorted_names(&fixture);
+    let (path, stop) = serve_admin_as_owner(&service);
+    let mut stream = UnixStream::connect(&path).await.unwrap();
+    let request = AdminRequest::ApproverAdd {
+        kind: RequestedSignerKind::Tpm,
+        label: "laptop TPM".to_owned(),
+    };
+    send(&mut stream, &Frame::Request(request)).await;
+
+    let exchanged = converse(&mut stream, &[]).await;
+
+    let _ = stop.send(());
+    assert!(
+        matches!(
+            exchanged.response,
+            AdminResponse::Error {
+                code: ErrorCode::ApproverKindUnavailable,
+                ..
+            }
+        ),
+        "{exchanged:?}"
+    );
+    assert_eq!((exchanged.prompts.len(), sorted_names(&fixture)), (0, before));
 }
 
 /// The admin server of `service` on its runtime directory, with the test's own account as the admin principal whatever

@@ -63,7 +63,7 @@ use crate::audit::vault::{LockIncomplete, UnlockRefused};
 use crate::audit::{AuditEvent, CheckFailed, LockTransition, ReloadFailed, count_of};
 use crate::clock::{SystemClock, WallClock};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
-use crate::deployment::{DeploymentProfile, PasswdDirectory};
+use crate::deployment::PasswdDirectory;
 use crate::hardening::{HardeningReport, MemoryProtection};
 use crate::logging::{LogSwitch, OpenedLog};
 use crate::migration_authorization::PendingMigration;
@@ -372,7 +372,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             clock: Arc::new(SystemClock),
             reminders: Arc::new(StdMutex::new(ReminderSchedule::default())),
             handoff: PathBuf::from(HANDOFF_PATH),
-            tpm_socket: (setup_profile == DeploymentProfile::Protected).then(|| PathBuf::from(tpm_helper::SIGNER_SOCKET)),
+            tpm_socket: tpm_helper::offered_socket(setup_profile),
             unseal_failure_owner: ExpectedOwner { uid: 0 },
         })
     }

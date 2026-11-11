@@ -9,7 +9,7 @@ use super::{ApproverChangeError, ApproverChanges, KeyCheckError};
 use crate::approval::state::ApproverKey;
 use crate::approval::verify::verify_p256;
 use crate::approval::{
-    ApprovalState, ApproverId, ApproverLabel, ApproverPublicKey, PinnedApprover, PresencePayload, SignError, SignatureAlgorithm, SignerKind,
+    ApprovalState, ApproverId, ApproverLabel, ApproverPublicKey, PinnedApprover, PresencePayload, SignatureAlgorithm, SignerKind,
 };
 use crate::durable::{durable_replace, read_state_file};
 use crate::{StateFileName, StoreFs, UtcSecond};
@@ -100,6 +100,6 @@ impl<F: StoreFs> ApproverChanges<'_, F> {
 /// 32 bytes from the operating system's random source, for one presence payload.
 fn fresh_nonce() -> Result<[u8; 32], ApproverChangeError> {
     let mut nonce = [0; 32];
-    getrandom::fill(&mut nonce).map_err(|_| ApproverChangeError::KeySeal(SignError::Randomness))?;
+    getrandom::fill(&mut nonce).map_err(|_| ApproverChangeError::KeyCheck(KeyCheckError::Randomness))?;
     Ok(nonce)
 }

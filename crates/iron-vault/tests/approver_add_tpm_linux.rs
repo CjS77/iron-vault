@@ -22,8 +22,9 @@ use std::sync::Arc;
 
 use common::approval_harness::{
     APPROVAL_PASSPHRASE, Answer, Exchanged, Fixture, WRONG_PASSPHRASE, captured_logs, converse, converse_switching, error_code, identity,
-    read_frame, send, serve_admin,
+    read_frame, send, serve_admin, spawn_admin,
 };
+use common::recipient_harness;
 use common::tpm_helper::{Script, Stub, serve_real, serve_stub};
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, RequestedSignerKind};
 use iron_vault::deployment::DeploymentProfile;
@@ -181,38 +182,36 @@ async fn removing_a_tpm_approver_removes_its_blob() {
     assert!(blob_files(&fixture).is_empty());
 }
 
-#[tokio::test]
-async fn the_kind_is_not_offered_without_a_helper_socket_or_outside_a_protected_install() {
-    // A development install never sets a helper socket; the second has one configured, but no socket exists there.
-    for configured in [false, true] {
-        let fixture = Fixture::new().await;
-        let (_service, path, _stop) = match configured {
-            true => ready(&fixture, &fixture.path("missing.sock")).await,
-            false => {
-                let service = fixture.ready().await;
-                let (path, stop) = serve_admin(&service);
-                (service, path, stop)
-            }
-        };
-        let before = state_files(&fixture);
+/// `approver add --kind tpm` against `service` is refused as unavailable before any prompt, and changes nothing.
+async fn assert_kind_not_offered(fixture: &Fixture, service: &Arc<ServiceContext>) {
+    let (path, _stop) = serve_admin(service);
+    let before = state_files(fixture);
 
-        let refused = add_tpm(&path, &[]).await;
+    let refused = add_tpm(&path, &[]).await;
 
-        assert_eq!(
-            (error_code(&refused.response), refused.prompts.len()),
-            (ErrorCode::ApproverKindUnavailable, 0),
-            "{refused:?}"
-        );
-        assert_eq!(state_files(&fixture), before);
-    }
+    assert_eq!(
+        (error_code(&refused.response), refused.prompts.len()),
+        (ErrorCode::ApproverKindUnavailable, 0),
+        "{refused:?}"
+    );
+    assert_eq!(state_files(fixture), before);
 }
 
 #[tokio::test]
-async fn a_container_install_never_offers_the_kind() {
+async fn a_development_install_does_not_offer_the_kind() {
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    assert_kind_not_offered(&fixture, &service).await;
+}
+
+#[tokio::test]
+async fn the_kind_is_not_offered_while_the_helper_socket_is_missing() {
     let fixture = Fixture::new().await;
     let log = LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap();
-    let container = fixture.start_as(OsFs, log, DeploymentProfile::Container, MemoryProtection::Unsupported);
-    assert_eq!(container.tpm_helper_socket(), None);
+    let service = fixture.start_as(OsFs, log, DeploymentProfile::Development, MemoryProtection::Unsupported);
+    let service = Arc::new(service.with_tpm_socket(fixture.path("missing.sock")));
+    service.enter_checking(identity()).await.unwrap();
+    assert_kind_not_offered(&fixture, &service).await;
 }
 
 #[tokio::test]
@@ -349,7 +348,7 @@ async fn an_orphan_blob_is_removed_by_the_next_approver_command() {
 }
 
 #[tokio::test]
-async fn the_vault_passphrase_cannot_authorize_a_tpm_enrollment() {
+async fn a_wrong_approval_passphrase_is_denied_before_the_helper_is_asked() {
     let fixture = Fixture::new().await;
     let stub: Stub = serve_stub(&fixture.path("helper.sock"), Script::default());
     let (_service, path, _stop) = ready(&fixture, &fixture.path("helper.sock")).await;
@@ -359,6 +358,23 @@ async fn the_vault_passphrase_cannot_authorize_a_tpm_enrollment() {
 
     assert_eq!(error_code(&denied.response), ErrorCode::ApprovalDenied);
     assert_eq!((denied.prompts.len(), stub.calls(), state_files(&fixture)), (1, vec![], before));
+}
+
+#[tokio::test]
+async fn the_vault_passphrase_cannot_authorize_a_tpm_enrollment() {
+    let vault = recipient_harness::Fixture::new();
+    let socket = vault.path("helper.sock");
+    let stub: Stub = serve_stub(&socket, Script::default());
+    let service = vault.start_offering_tpm(&socket);
+    recipient_harness::init(&service).await;
+    recipient_harness::unlock(&service).await;
+    let before = vault.state_files();
+    let (path, _stop, _task) = spawn_admin(&service);
+
+    let denied = add_tpm(&path, &[Answer::Input(recipient_harness::VAULT_PASSPHRASE)]).await;
+
+    assert_eq!(error_code(&denied.response), ErrorCode::ApprovalDenied, "{denied:?}");
+    assert_eq!((denied.prompts.len(), stub.calls(), vault.state_files()), (1, vec![], before));
 }
 
 fn real_helper() -> (PathBuf, String) {

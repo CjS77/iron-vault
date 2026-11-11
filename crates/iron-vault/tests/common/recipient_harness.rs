@@ -53,6 +53,16 @@ impl Fixture {
 
     /// [`start`](Self::start) with `upstream` settings, such as a pinned test CA for a mock upstream.
     pub fn start_with(&self, upstream: UpstreamSettings) -> Arc<ServiceContext> {
+        Arc::new(self.context(upstream))
+    }
+
+    /// [`start`](Self::start) with the `tpm` approver kind offered through the helper socket at `socket`.
+    pub fn start_offering_tpm(&self, socket: &Path) -> Arc<ServiceContext> {
+        let upstream = UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default());
+        Arc::new(self.context(upstream).with_tpm_socket(socket.to_owned()))
+    }
+
+    fn context(&self, upstream: UpstreamSettings) -> ServiceContext {
         let paths = ServicePaths {
             profile: DeploymentProfile::Development,
             owner: invoking_user().unwrap(),
@@ -74,7 +84,7 @@ impl Fixture {
             },
             log: iron_vault::logging::LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
         };
-        Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap())
+        ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap()
     }
 
     /// Every file of the state directory with its bytes.

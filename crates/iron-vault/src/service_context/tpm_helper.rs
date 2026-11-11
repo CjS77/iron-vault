@@ -9,6 +9,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::deployment::DeploymentProfile;
 use iron_vault_store::{ApproverId, CreatedTpmKey, TpmHelper, TpmHelperFailure};
 use iron_vault_tpm_protocol::{
     PUBLIC_KEY_LEN, Request, Response, SIGNATURE_LEN, SignRequest, TpmApprovalPin, TpmAuthValue, TpmKeyBlob, read_frame,
@@ -16,6 +17,12 @@ use iron_vault_tpm_protocol::{
 
 /// Where the helper's socket is in a protected install; the helper is offered only while it exists.
 pub(super) const SIGNER_SOCKET: &str = "/run/iron-vault-tpm/signer.sock";
+
+/// The helper socket a service of `profile` offers the `tpm` kind through. Only a protected install runs the helper: a
+/// development install has no TPM-bound key to protect, and a container has no TPM device.
+pub(super) fn offered_socket(profile: DeploymentProfile) -> Option<PathBuf> {
+    (profile == DeploymentProfile::Protected).then(|| PathBuf::from(SIGNER_SOCKET))
+}
 
 /// How long the service waits for the helper before it reads silence as the helper being unavailable.
 const DEADLINE: Duration = Duration::from_secs(30);
@@ -113,4 +120,16 @@ fn refusal(response: &Response) -> TpmHelperFailure {
         Response::Created { .. } | Response::Signed { .. } => "an answer the request did not ask for".to_owned(),
     };
     TpmHelperFailure(format!("the TPM signing helper refused: {status}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_protected_install_offers_the_helper_socket() {
+        assert_eq!(offered_socket(DeploymentProfile::Development), None);
+        assert_eq!(offered_socket(DeploymentProfile::Container), None);
+        assert_eq!(offered_socket(DeploymentProfile::Protected), Some(PathBuf::from(SIGNER_SOCKET)));
+    }
 }
