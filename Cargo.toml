@@ -142,3 +142,16 @@ opt-level = 3
 
 [profile.dev.package.salsa20]
 opt-level = 3
+
+# Full debug info made each of the binary crate's ~64 test executables about 230 MB, and linking many of them at once
+# ran the machine out of memory. Line tables keep file and line numbers in backtraces at a fraction of the size.
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies' debug info is rarely stepped into, so leave it out entirely.
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+debug = false
+strip = true
