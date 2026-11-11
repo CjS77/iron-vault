@@ -1,0 +1,36 @@
+[package]
+name = "iron-vault-tpm-signer"
+description = "Iron Vault TPM signing helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "iron-vault-tpm-signer"
+path = "src/main.rs"
+required-features = ["tpm"]
+
+[[test]]
+name = "swtpm"
+path = "tests/swtpm.rs"
+required-features = ["tpm"]
+
+[features]
+# The helper binary and its swtpm tests. Off by default, so a plain workspace build needs no libtss2-dev; the library's
+# pure parts build and test without it.
+tpm = ["dep:anyhow", "dep:bitfield", "dep:clap", "dep:rustix", "dep:sha2", "dep:tss-esapi", "dep:zeroize"]
+
+[dependencies]
+anyhow = { workspace = true, optional = true }
+bitfield = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+iron-vault-tpm-protocol = { path = "../iron-vault-tpm-protocol" }
+p256.workspace = true
+rustix = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+tss-esapi = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
+
+[lints]
+workspace = true

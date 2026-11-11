@@ -69,6 +69,30 @@ jobs:
             exit 1
           fi
 
+  # The TPM signing helper links the system's tpm2-tss, so it builds only here, with its `tpm` feature, and its tests run
+  # against swtpm, the software TPM; tpm2-tools changes the emulator's dictionary-attack settings during them.
+  tpm-signer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Install tpm2-tss and swtpm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libtss2-dev pkg-config swtpm swtpm-tools tpm2-tools
+      - name: Clippy
+        run: cargo clippy -p iron-vault-tpm-signer --features tpm --all-targets --locked -- -D warnings
+      - name: Test against swtpm
+        run: |
+          state="$(mktemp -d)"
+          swtpm socket --tpm2 --tpmstate dir="$state" --server type=tcp,port=2321 --ctrl type=tcp,port=2322 \
+              --flags not-need-init,startup-clear --daemon
+          IRON_VAULT_SWTPM=swtpm:host=127.0.0.1,port=2321 cargo test -p iron-vault-tpm-signer --features tpm --locked -- --include-ignored
+
   book:
     runs-on: ubuntu-latest
     env:
