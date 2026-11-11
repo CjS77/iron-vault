@@ -486,7 +486,6 @@ async fn reserve_and_sign<'s, F: StoreFs, S: ApprovalSigner + Send + 'static>(
     approval: &'s mut ApprovalState,
     (approver, signer): (NamedApprover<'_>, S),
 ) -> Result<PreparedApproval<'s>, ApprovalError> {
-    let vault_id = approval.vault_id();
     let reserved = pending.reserve(storage, approval).inspect_err(record_uncertain_writes)?;
     VersionReserved {
         version: reserved.version(),
@@ -494,8 +493,8 @@ async fn reserve_and_sign<'s, F: StoreFs, S: ApprovalSigner + Send + 'static>(
         approver,
     }
     .emit();
-    let payload = ApprovalPayload::new(vault_id, reserved.version(), reserved.digest());
-    reserved.sign(storage, Presigned::sign(signer, payload).await)
+    let presigned = Presigned::sign(signer, reserved.payload()).await;
+    reserved.sign(storage, presigned)
 }
 
 /// A signature made on the blocking pool, handed to step 3 as its signer.
@@ -535,6 +534,8 @@ impl ApprovalSigner for Presigned {
         self.public_key
     }
 
+    /// Returns the envelope made for the payload [`Presigned::sign`] was given, whatever payload is asked for here. That is
+    /// safe only because step 3 checks the envelope against the reserved payload, and refuses one signed for another.
     fn sign(&self, _payload: &ApprovalPayload) -> Result<ApprovalEnvelope, SignError> {
         self.signed.clone()
     }

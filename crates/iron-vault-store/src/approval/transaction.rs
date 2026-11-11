@@ -244,6 +244,12 @@ impl<'s> ReservedApproval<'s> {
         self.payload.digest()
     }
 
+    /// The payload that must be signed: this version and digest, for this vault. The approval checks the signed envelope
+    /// against it, so a signer cannot sign anything else.
+    pub fn payload(&self) -> ApprovalPayload {
+        self.payload
+    }
+
     /// Steps 3 and 4: signs with `signer` (dropped once it has signed), checks the envelope against the pinned
     /// approver it names, and durably stages it. On failure the pending config and any staged approval are removed, and the
     /// version stays consumed.

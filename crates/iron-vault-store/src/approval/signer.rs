@@ -43,7 +43,9 @@ pub enum SignError {
     /// The TPM signing helper could not sign, or the TPM refused; the text names its status and never anything the owner typed.
     #[error("the TPM signing helper cannot sign: {0}")]
     TpmHelper(String),
-    /// The task the signature was made on ended without an answer: it panicked, or the runtime is shutting down.
+    /// The signer ended without a signature or an error of its own, because whatever was running it (a thread or a task that
+    /// a caller handed it to) panicked or was cancelled. For a caller that signs off its own thread to report, since
+    /// [`ApprovalSigner::sign`] has no other way to say the signer never answered.
     #[error("the signing task ended without an answer")]
     Interrupted,
     /// The signature does not fit the approval envelope for its algorithm.
