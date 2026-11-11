@@ -67,6 +67,13 @@ impl Swtpm {
         self.tool("tpm2_clear", &["--auth-hierarchy=l"]);
     }
 
+    /// Sets the owner hierarchy's authorization, as another OS might, until the guard drops: the tests share the
+    /// emulator, so a failing assertion must not leave it set.
+    fn set_owner_auth(&self) -> OwnerAuth<'_> {
+        self.tool("tpm2_changeauth", &["--object-context=owner", OWNER_AUTH]);
+        OwnerAuth(self)
+    }
+
     fn tool(&self, tool: &str, args: &[&str]) {
         let status = Command::new(tool).args(args).env("TPM2TOOLS_TCTI", &self.tcti).status().unwrap();
         assert!(status.success(), "{tool} {args:?}: {status}");
@@ -137,6 +144,20 @@ impl Swtpm {
     }
 }
 
+const OWNER_AUTH: &str = "another-os";
+
+/// The owner authorization [`Swtpm::set_owner_auth`] set; dropping it restores the empty one.
+struct OwnerAuth<'a>(&'a Swtpm);
+
+impl Drop for OwnerAuth<'_> {
+    fn drop(&mut self) {
+        self.0.tool(
+            "tpm2_changeauth",
+            &["--object-context=owner", &format!("--object-auth={OWNER_AUTH}")],
+        );
+    }
+}
+
 fn auth(pin: &str) -> TpmAuthValue {
     TpmAuthValue::derive(&APPROVER, &TpmApprovalPin::new(pin.to_owned()))
 }
@@ -169,7 +190,8 @@ fn signature(response: Response) -> [u8; 64] {
     }
 }
 
-/// Verifies as the service's approval verifier does: ECDSA P-256 over the SHA-256 of the message, and `s` low.
+/// Verifies as the service's approval verifier does (`verify_p256` in `iron-vault-store`'s `approval/verify.rs`, which
+/// is private; keep the two in step): ECDSA P-256 over the SHA-256 of the message, and `s` low.
 fn assert_verifies(public_key: &[u8; PUBLIC_KEY_LEN], message: &[u8], signature: &[u8; 64]) {
     let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(public_key).unwrap();
     let signature = p256::ecdsa::Signature::from_slice(signature).unwrap();
@@ -253,6 +275,21 @@ fn weak_dictionary_attack_settings_are_refused() {
         assert_eq!(tpm.ask(&Request::Create { auth: auth(PIN) }), Response::WeakDaSettings);
         assert_eq!(tpm.sign(PIN, &key, public_key, &approval_payload()), Response::WeakDaSettings);
     });
+}
+
+/// An owner authorization the helper does not have fails the primary, not the PIN: `08`, never `02`.
+#[test]
+#[ignore = "needs swtpm named by IRON_VAULT_SWTPM"]
+fn an_owner_authorization_is_a_tpm_error_not_a_wrong_pin() {
+    let tpm = swtpm();
+    let (key, public_key) = tpm.create(PIN);
+    let _owner_auth = tpm.set_owner_auth();
+    [
+        tpm.ask(&Request::Create { auth: auth(PIN) }),
+        tpm.sign(PIN, &key, public_key, &approval_payload()),
+    ]
+    .iter()
+    .for_each(|response| assert!(matches!(response, Response::TpmError { code } if *code != 0), "{response:?}"));
 }
 
 #[test]

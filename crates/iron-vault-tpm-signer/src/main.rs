@@ -1,8 +1,10 @@
 //! `iron-vault-tpm-signer`, the TPM signing helper (`design/tpm-approval-signer.md` "The helper process").
 //!
 //! systemd starts one instance per connection to the helper socket (`Accept=yes`, `MaxConnections=1`), with the
-//! connection as standard input and output (`StandardInput=socket`). The instance checks the peer, reads one request
-//! within 5 seconds, answers it and exits: nothing runs between requests, and no request sees another's memory.
+//! connection as standard input (`StandardInput=socket`); the response goes back on that descriptor. Standard output
+//! and error go to the journal (`StandardOutput=journal`), so a diagnostic never reaches the peer. The instance checks
+//! the peer, reads one request within 5 seconds, answers it and exits: nothing runs between requests, and no request
+//! sees another's memory.
 
 mod helper;
 

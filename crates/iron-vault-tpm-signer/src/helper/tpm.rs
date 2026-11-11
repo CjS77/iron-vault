@@ -61,7 +61,7 @@ pub fn answer(tcti: &str, request: Request) -> Response {
     };
     outcome.unwrap_or_else(|stop| match stop {
         Stop::Refuse(response) => *response,
-        Stop::Tss(error) => tss_response(error),
+        Stop::Tss(error) => tpm_error(error),
     })
 }
 
@@ -74,7 +74,7 @@ fn create(tcti: &str, auth: &TpmAuthValue) -> Step<Response> {
         let template = approval_key_template(EccPoint::default())?;
         let auth = Auth::try_from(auth.as_bytes().to_vec())?;
         let created = with_salted_session(context, primary, |context| {
-            context.create(primary, template, Some(auth), None, None, None)
+            Ok(context.create(primary, template, Some(auth), None, None, None)?)
         })?;
         let public_key = public_point(&created.out_public).ok_or(Response::KeyMismatch)?;
         let key = TpmKeyParts {
@@ -112,7 +112,12 @@ fn sign(tcti: &str, request: &SignRequest) -> Step<Response> {
             let scheme = SignatureScheme::EcDsa {
                 hash_scheme: HashScheme::new(HashingAlgorithm::Sha256),
             };
-            let signature = with_salted_session(context, primary, |context| context.sign(key, digest, scheme, null_ticket()?))?;
+            let signature = with_salted_session(context, primary, |context| {
+                let ticket = null_ticket()?;
+                context
+                    .sign(key, digest, scheme, ticket)
+                    .map_err(|error| sign_failure(error, &reserve))
+            })?;
             Ok(Response::Signed {
                 signature: signature_bytes(&signature).ok_or(Response::KeyMismatch)?,
             })
@@ -157,7 +162,7 @@ fn with_primary<T>(context: &mut Context, f: impl FnOnce(&mut Context, KeyHandle
 
 /// Runs `f` with an HMAC session salted with `primary`, with parameter encryption, then flushes the session. Salting
 /// keeps a recorded TPM bus from testing PIN guesses offline against the session HMAC.
-fn with_salted_session<T>(context: &mut Context, primary: KeyHandle, f: impl FnOnce(&mut Context) -> Result<T, Error>) -> Step<T> {
+fn with_salted_session<T>(context: &mut Context, primary: KeyHandle, f: impl FnOnce(&mut Context) -> Step<T>) -> Step<T> {
     let session = context
         .start_auth_session(
             Some(primary),
@@ -175,7 +180,7 @@ fn with_salted_session<T>(context: &mut Context, primary: KeyHandle, f: impl FnO
             .with_decrypt(true)
             .build();
         context.tr_sess_set_attributes(session, attributes, mask)?;
-        Ok(context.execute_with_session(Some(session), f)?)
+        context.execute_with_session(Some(session), f)
     })
 }
 
@@ -291,18 +296,32 @@ fn unmarshall_private(bytes: &[u8]) -> Option<Private> {
     }
 }
 
-/// The status for a TSS failure: a refused authorization value is a wrong PIN, which spent one try; lockout is `03`,
-/// with no wait known, since the TPM went into lockout after the reserve was read; anything else is a TPM error with its
-/// response code.
-fn tss_response(error: Error) -> Response {
-    let Error::Tss2Error(code) = error else {
-        return Response::TpmError { code: 0 };
+/// How the key's own `TPM2_Sign` failed. Only there is a refused authorization value the PIN's: a wrong PIN, one try
+/// spent. Lockout there means the TPM went into lockout after the reserve was read, so the wait is at least the interval
+/// at which the TPM forgets one failure, the earliest it can leave lockout.
+fn sign_failure(error: Error, reserve: &LockoutReserve) -> Stop {
+    let kind = match &error {
+        Error::Tss2Error(code) => code.kind(),
+        Error::WrapperError(_) => None,
     };
-    match code.kind() {
-        Some(Tss2ResponseCodeKind::AuthFail | Tss2ResponseCodeKind::BadAuth) => Response::WrongPin,
-        Some(Tss2ResponseCodeKind::Lockout) => Response::LockedOut { wait_seconds: 0 },
-        _ => Response::TpmError { code: raw_code(code) },
+    match kind {
+        Some(Tss2ResponseCodeKind::AuthFail | Tss2ResponseCodeKind::BadAuth) => Response::WrongPin.into(),
+        Some(Tss2ResponseCodeKind::Lockout) => Response::LockedOut {
+            wait_seconds: u64::from(reserve.interval_seconds),
+        }
+        .into(),
+        _ => Stop::Tss(error),
     }
+}
+
+/// `08` with the TPM response code, or 0 when the failure has none (a TSS wrapper or TCTI error). An authorization
+/// failure anywhere but the key's sign, such as an owner authorization another OS set, lands here: no PIN was tried.
+fn tpm_error(error: Error) -> Response {
+    let code = match error {
+        Error::Tss2Error(code) => raw_code(code),
+        Error::WrapperError(_) => 0,
+    };
+    Response::TpmError { code }
 }
 
 /// The whole `TSS2_RC`, which `tss-esapi` keeps in private fields; its bitfield types give it up through `BitRange`.

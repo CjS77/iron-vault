@@ -77,7 +77,11 @@ the authorization value the helper uses.
   library crate, `iron-vault-tpm-protocol`, that both binaries use.
 - **Activation.** `iron-vault-tpm-signer.socket` listens on `/run/iron-vault-tpm/signer.sock` with `Accept=yes` and
   `MaxConnections=1`. systemd starts one `iron-vault-tpm-signer@.service` instance per connection, which answers one
-  request and exits. Nothing runs between requests, and no request can see another's memory.
+  request and exits. Nothing runs between requests, and no request can see another's memory. The instance unit sets
+  `StandardInput=socket`: the helper reads the request from standard input and writes the response back on that same
+  descriptor. It also sets `StandardOutput=journal`, and stderr follows stdout to the journal. With
+  `StandardInput=socket` alone, systemd would send stdout and stderr to the socket, so the helper's diagnostics would
+  reach the peer.
 - **One request at a time.** `MaxConnections=1` keeps a second instance from running while one is in the TPM, so no two
   instances read the dictionary-attack counter before either spends a try; the [lockout reserve](#lockout-reserve)
   rests on this. systemd closes a connection beyond the limit at once, and the service reads that as the helper being
@@ -270,13 +274,13 @@ record payload conventions. The protocol, with its encode and decode, is in `iro
 |---|---|---|
 | `00` created | The key exists | primary name, public area, private area, public key (65) |
 | `01` signed | The message is signed | signature (64, `r ‖ s`) |
-| `02` wrong PIN | The TPM refused the authorization value (`TPM_RC_AUTH_FAIL` or `TPM_RC_BAD_AUTH`); one try spent | |
+| `02` wrong PIN | The TPM refused the authorization value at the key's sign (`TPM_RC_AUTH_FAIL` or `TPM_RC_BAD_AUTH`); one try spent | |
 | `03` locked out | The TPM is in lockout, or the [lockout reserve](#lockout-reserve) withheld the try | seconds to wait (`u64`) |
 | `04` not this TPM | The primary's name differs from the blob's | |
 | `05` key mismatch | The loaded key's attributes or point are not the pinned key's | |
 | `06` dictionary-attack settings too weak | The interval is below the floor, or the maximum leaves no share ([Lockout reserve](#lockout-reserve)) | |
 | `07` refused message | The message is none of the [three](#what-the-helper-signs) | |
-| `08` TPM error | Any other failure | TPM response code (`u32`) |
+| `08` TPM error | Any other failure, including an authorization failure from any command but the key's sign | TPM response code (`u32`); 0 when the failure has none (a TSS or TCTI error) |
 | `09` malformed | The request does not decode | |
 
 A refusal that needs no authorization (`04` to `07`, `09`) comes before any authorized command, so it spends no try.
