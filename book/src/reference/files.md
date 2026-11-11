@@ -133,6 +133,7 @@ writes its own copy.
 | `record-<id>.age` | One credential record: its kind, secret and permitted origins. |
 | `recovery.toml` | When `recovery check` last proved the recovery key. Holds no secret. |
 | `init.unfinished` | An empty marker of an `init` that has not finished. `init` run again discards it. |
+| `import.unfinished` | An empty marker of an `import` that has not finished. While it is there `unlock` refuses; `import` or `init` run again discards it. |
 | `locked-by-owner` | An empty file that `lock` writes and a passphrase `unlock` removes. While it is there, a starting service skips host unlock and stays Locked, so a lock survives a restart. `init` and `reset` remove it. |
 | `lock` | The lock that keeps one writer at a time. |
 | `.<name>.tmp` | A temporary file a durable write uses before its rename. |
@@ -147,6 +148,17 @@ All are `0600` and owned by the service account. Any other file in the state dir
   `unrecognized_files`. `init` refuses with `already-initialized`.
 
 [How the vault is locked](../security-model.md#how-the-vault-is-locked) explains the envelopes.
+
+## A migration bundle
+
+`export` and `import` read and write these beside the bundle path you give, wherever you choose; none is in the state
+or config directory. See [move a vault to a new machine](../cookbook/move-vault.md).
+
+| File | What it is |
+|---|---|
+| `<bundle>` | The migration bundle: a `.tar.gz` of the encrypted record files, approval state, approver key envelopes and config, with the vault identity sealed with the export passphrase. `0600`. It holds no plaintext secret. |
+| `.<bundle>.partial` | The bundle while `export` receives it, created `0600` before anything is sent. It takes the bundle's name once it is whole, and is removed on any other ending. `export` refuses to start while one is there. |
+| `<bundle>.config.toml` | The source's committed config, which `import` writes beside the bundle, `0600`, for the first `config approve`. Holds no secret. |
 
 ## The log
 

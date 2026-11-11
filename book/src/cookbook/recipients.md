@@ -125,8 +125,9 @@ still open it. If the old key or a machine was lost, rotate the provider credent
 Whoever holds an enrolled key's secret half can decrypt every copy of `identity.age` written from now on, and with it
 every credential. In the [Container profile](../installation/compose-install.md), a key placed in the
 [host unlock handoff](../reference/files.md#container) also opens the vault at startup, with no passphrase. Otherwise
-no v0 command uses the key: `unlock` takes only the vault passphrase. The key is meant as the destination for
-[moving a vault to a new machine](roadmap/migration.md), which is not yet available. Enrol only a key you control.
+no v0 command uses the key: `unlock` takes only the vault passphrase, and
+[moving a vault to a new machine](move-vault.md) seals the vault identity with an export passphrase instead. Enrol only
+a key you control.
 
 Generate the key on the other machine, for example with `age-keygen`, and enrol its public `age1…` key. The secret half
 never leaves that machine. `--label` says which machine it is:
@@ -176,4 +177,4 @@ The [errors reference](../reference/errors.md#recipient-list-recipient-add-and-r
 - [Recipients design](../../../design/recipients.md): the independence rule, and why old copies still open.
 - [Reset the vault](reset-vault.md), when no way into it is left.
 - [Retire a machine](forget-machine.md), once its recipient is removed.
-- Not yet available: [move a vault to a new machine](roadmap/migration.md).
+- [Move a vault to a new machine](move-vault.md).
