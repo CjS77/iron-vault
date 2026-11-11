@@ -211,6 +211,10 @@ fn a_bundled_approver_key_that_does_not_open_to_an_approver_key_envelope_is_refu
             "approver_key_form",
         ),
         (seal_bundled_approver_key(&with_work_factor(&key, 21), &vault), "approver_key_form"),
+        (
+            seal_bundled_approver_key(&vec![b'a'; crate::MAX_PASSPHRASE_ENVELOPE_LEN + 1], &vault),
+            "approver_key_form",
+        ),
     ];
     cases.into_iter().for_each(|(bundled, check)| {
         let parts = Parts::of(&fixture).with(first_approver(&fixture), bundled.unwrap());
@@ -246,6 +250,13 @@ fn the_checks_run_on_the_files_as_read_from_disk() {
     control
         .check_approver_ids(fixture.held.approvers().iter().map(PinnedApprover::id))
         .unwrap();
+    control
+        .check_approver_key(&fixture.file(&StateFileName::approver_key(fixture.held.approvers()[0].id())))
+        .unwrap();
+    assert_eq!(
+        control.check_approver_key(&with_work_factor(&approver_key(), 21)),
+        Err(BundleCheckError::ApproverKeyForm)
+    );
     let other_record = fixture.file(&StateFileName::record(&fixture.records[1]));
     assert_eq!(
         control.check_record(fixture.records[0], &other_record),

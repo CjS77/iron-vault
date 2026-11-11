@@ -18,9 +18,9 @@ use thiserror::Error;
 use crate::migration_bundle::{BundleHeader, DecodedBundle, EntryName};
 use crate::partial_restore::check_control_generations;
 use crate::{
-    ApprovalState, ApprovalVersion, ApproverId, BundledApproverKeyError, ConfigDigest, EnvelopeError, ExportPassphrase, PinnedApprover,
-    RecordId, VaultId, VaultIdentity, VaultManifest, check_config_digest, check_record_digest, open_approval_state,
-    open_bundled_approver_key, open_exported_identity, open_manifest,
+    ApprovalState, ApprovalVersion, ApproverId, BundledApproverKeyError, ConfigDigest, EnvelopeError, ExportPassphrase, OpenError,
+    PinnedApprover, RecordId, VaultId, VaultIdentity, VaultManifest, check_approver_key_form, check_config_digest, check_record_digest,
+    open_approval_state, open_bundled_approver_key, open_exported_identity, open_manifest,
 };
 
 /// A bundle check that a migration bundle failed: one check of import step 4, or the exported identity envelope's form
@@ -145,7 +145,7 @@ pub fn open_bundle(decoded: DecodedBundle, passphrase: &ExportPassphrase) -> Res
 
 /// The manifest and the approval state of one vault, opened with its vault identity and checked against each other:
 /// the two MAC'd files that every other bundle check is held to.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ControlFiles {
     manifest: VaultManifest,
     approval: ApprovalState,
@@ -195,12 +195,16 @@ impl ControlFiles {
         check_record_digest(file, entry).map_err(|_| BundleCheckError::RecordDigest)
     }
 
-    /// Requires `ids`, in ascending order, to be exactly the approver IDs the approval state pins. An approver key
-    /// file's form is checked with [`crate::check_approver_key_form`], whose failure is
-    /// [`BundleCheckError::ApproverKeyForm`].
+    /// Requires `ids`, in ascending order, to be exactly the approver IDs the approval state pins.
     pub fn check_approver_ids(&self, ids: impl IntoIterator<Item = ApproverId>) -> Result<(), BundleCheckError> {
         let pinned = self.approval.approvers().iter().map(PinnedApprover::id);
         require(ids.into_iter().eq(pinned), BundleCheckError::ApproverIds)
+    }
+
+    /// Requires `file` to have the form of an approver key envelope, by [`check_approver_key_form`]. It reads the header
+    /// only, so it needs no approval passphrase.
+    pub fn check_approver_key(&self, file: &[u8]) -> Result<(), BundleCheckError> {
+        check_approver_key_form(file).map_err(|_| BundleCheckError::ApproverKeyForm)
     }
 }
 
@@ -343,7 +347,11 @@ fn split_by_id(entries: BTreeMap<EntryName, Vec<u8>>) -> ById {
                 EntryName::Record(id) => {
                     records.insert(id, bytes);
                 }
-                _ => {}
+                EntryName::BundleHeader
+                | EntryName::ExportedIdentity
+                | EntryName::Manifest
+                | EntryName::ApprovalState
+                | EntryName::Config => {}
             }
             (approvers, records)
         })
@@ -359,7 +367,10 @@ fn open_approver_keys(
         .iter()
         .map(|(id, bytes)| {
             let envelope = open_bundled_approver_key(bytes, identity).map_err(|error| match error {
-                BundledApproverKeyError::Form(_) => BundleCheckError::ApproverKeyForm,
+                // A plaintext over the envelope limit opened, so the key is the vault's; it is no approver key envelope.
+                BundledApproverKeyError::Form(_) | BundledApproverKeyError::Open(OpenError::TooLarge { .. }) => {
+                    BundleCheckError::ApproverKeyForm
+                }
                 _ => BundleCheckError::ApproverKeyOpen,
             })?;
             Ok((*id, envelope))
