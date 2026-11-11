@@ -523,8 +523,8 @@ are tested with the commands that own them.
 
 ## Open questions
 
-Each point below is open in the specification or decided here against a reading of it. The design takes the default
-stated for each, until the owner decides.
+Each point below was open in the specification or decided here against a reading of it. The owner decided every one
+on 2026-11-11; none is still open.
 
 1. **Discarding an Unfinished vault.** *Decided: default accepted (2026-11-11).* The ticket asked import to refuse an
    Unfinished vault. *Default:* import and `init` each discard either kind of unfinished vault, because a refusal would
@@ -538,7 +538,7 @@ stated for each, until the owner decides.
 3. **Device-bound approvers.** *Decided: default accepted (2026-11-11).* A `tpm` or `hardware` approver's key cannot
    move. *Default:* left to the epic that enrolls the first one (EP-33 for `tpm`); v0 decodes neither kind, so no v0
    bundle holds one.
-4. **The destination's approval signer.**
+4. **The destination's approval signer.** *Decided: default accepted (2026-11-11).*
    [§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 5: "The destination … enrolls its
    approval signer". *Default:* the destination's approval signers are the source's pinned approvers, carried in the
    bundle, and "enrolls" is read as their being pinned in the destination's approval state. The first `config approve`
@@ -546,9 +546,10 @@ stated for each, until the owner decides.
    write, asking one carried approver's approval passphrase after the summary, or enrolls a new approver with a new
    approval passphrase. Enrolling re-seals the approval state with the counters unchanged, so it is no longer copied
    byte for byte.
-5. **A directory fsync for every rename.** [§13](iron-vault-specification.md#13-vault-structure-and-durable-writes)
-   requires one for each durable replacement, and [§19](iron-vault-specification.md#19-v0-user-acceptance) checks that
-   "every durable rename includes its directory fsync". *Default:* every file of the write order is written with
+5. **A directory fsync for every rename.** *Decided: default accepted (2026-11-11).*
+   [§13](iron-vault-specification.md#13-vault-structure-and-durable-writes) requires one for each durable replacement,
+   and [§19](iron-vault-specification.md#19-v0-user-acceptance) checks that "every durable rename includes its directory
+   fsync". *Default:* every file of the write order is written with
    `durable_replace`, its own directory fsync included, and progress notices keep a slow import inside the CLI's
    timeout. *Alternative:* step 2 renames every record file, then fsyncs the state directory once. The marker makes
    every record file part of the unfinished import until step 10, and step 9 proves each is on disk before the commit,
