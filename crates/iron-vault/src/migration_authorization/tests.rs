@@ -443,6 +443,31 @@ mod tpm_pin {
         assert_eq!(refusal, MigrationRefusal::BindingMismatch);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_pin_proof_authorizes_only_its_own_vault_and_operation_before_its_expiry() {
+        let (method, _) = method(Ok(()));
+        let proved = || async {
+            let (_, challenge) = taken(add(RECIPIENT_A));
+            prove_challenge(&method, challenge, input(b"correct horse")).await.unwrap()
+        };
+        let consumed = [
+            (other_vault(), add(RECIPIENT_A)),
+            (vault(), MigrationOperation::Export),
+            (vault(), add(RECIPIENT_B)),
+        ];
+        for (vault_id, operation) in consumed {
+            let refusal = proved().await.authorize(vault_id, &operation, Instant::now()).unwrap_err();
+            assert_eq!(refusal, MigrationRefusal::BindingMismatch);
+        }
+        let late = proved().await;
+        advance(CHALLENGE_LIFETIME).await;
+        assert_eq!(
+            late.authorize(vault(), &add(RECIPIENT_A), Instant::now()).unwrap_err(),
+            MigrationRefusal::Expired
+        );
+        assert!(proved().await.authorize(vault(), &add(RECIPIENT_A), Instant::now()).is_ok());
+    }
+
     #[tokio::test]
     async fn the_helper_refusal_is_the_method_refusal() {
         let refusals = [
