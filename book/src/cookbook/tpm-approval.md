@@ -16,8 +16,8 @@ typed. A vault that unlocks at boot with [TPM unlock](tpm-unlock.md) still needs
 
 - The package from [the Linux install guide](../installation/linux-install.md), with the service Ready and a config approved.
   A development build never offers the TPM kind.
-- A TPM 2.0 at `/dev/tpmrm0`, readable by the `tss` group. Ubuntu's `tpm-udev` package sets that up and the Iron Vault package
-  recommends it; install it if `apt` left it out.
+- A TPM 2.0 at `/dev/tpmrm0`, readable by the `tss` group. Ubuntu's `tpm-udev` package sets that up, and installing the Iron Vault
+  package installs it too (the TPM libraries depend on it).
 - A TPM whose dictionary-attack settings limit guessing: a lockout recovery interval of **at least 600 seconds** and a maximum
   of at least 2 failed tries. Firmware TPMs usually ship with far more. `tpm2_getcap properties-variable` shows them. With weaker
   settings the helper refuses to work until an administrator raises them.
@@ -130,7 +130,7 @@ cannot move with a [migration bundle](move-vault.md); a software approver is nee
 - **`approval-unavailable`.** The helper refused for a reason other than the PIN or a lockout; the message names the helper's
   status: `not this TPM`, dictionary-attack settings too weak (raise the interval to 600 seconds or more), or a TPM error.
 - **`approver-kind-unavailable`.** This install does not offer the kind, or the helper cannot start. The usual cause is no
-  `/dev/tpmrm0`, or no `tss` group because `tpm-udev` is not installed.
+  `/dev/tpmrm0`, or a udev rule that does not give the `tss` group that device.
 
 The [errors reference](../reference/errors.md#tpm-approvers) lists the codes.
 

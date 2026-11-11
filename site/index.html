@@ -269,8 +269,9 @@ routes = ["venice-dev"]</pre>
                   <div class="code-bar"><span>bash</span>
                     <button class="copy" type="button" data-copy="c-deb">Copy</button>
                   </div>
-                  <pre id="c-deb">cargo install cargo-deb --locked   <span class="c"># once</span>
-cargo deb -p iron-vault --locked
+                  <pre id="c-deb">sudo apt install libtss2-dev pkg-config lintian   <span class="c"># once</span>
+cargo install cargo-deb --locked   <span class="c"># once</span>
+scripts/build-deb.sh
 sudo apt install ./target/debian/iron-vault_*.deb
 sudo iron-vault init
 sudo iron-vault unlock</pre>

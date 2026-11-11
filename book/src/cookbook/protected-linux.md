@@ -38,8 +38,9 @@ Do these before you install, because the protection rests on them:
 ### 2. Build and install the package
 
 ```sh
+sudo apt install libtss2-dev pkg-config lintian
 cargo install cargo-deb --locked
-cargo deb -p iron-vault --locked
+scripts/build-deb.sh
 sudo apt install ./target/debian/iron-vault_*.deb
 ```
 

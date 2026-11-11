@@ -122,8 +122,9 @@ On Linux the `.deb` package runs Iron Vault as the `iron-vault` system service, 
 out of reach of ordinary accounts:
 
 ```sh
-cargo install cargo-deb --locked       # once; scripts/build-deb.sh then checks the package
-cargo deb -p iron-vault --locked
+sudo apt install libtss2-dev pkg-config lintian   # once: the TPM signing helper links libtss2
+cargo install cargo-deb --locked                   # once
+scripts/build-deb.sh                               # builds both binaries, checks the package, writes target/debian/
 sudo apt install ./target/debian/iron-vault_*.deb
 sudo iron-vault init
 sudo iron-vault unlock

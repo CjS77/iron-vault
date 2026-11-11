@@ -536,7 +536,7 @@ refused message. CI installs `libtss2-dev`, `pkg-config` and `swtpm` and runs th
 **Building without `libtss2-dev`.** `tss-esapi` is an optional dependency of `iron-vault-tpm-signer` behind its `tpm`
 feature, and the binary has `required-features = ["tpm"]`. A plain `cargo build --workspace` or `cargo test
 --workspace` therefore builds and tests everything else, including the protocol crate, on a machine without the TPM
-library. CI, `cargo deb` and the `swtpm` tests enable the feature. To build it locally the machine needs packages no
+library. CI, `scripts/build-deb.sh` and the `swtpm` tests enable the feature. To build it locally the machine needs packages no
 agent can install: `sudo apt install libtss2-dev pkg-config swtpm swtpm-tools tpm2-tools`.
 
 ## Release checks
@@ -659,7 +659,8 @@ All six were decided by the owner on 2026-11-11, who accepted the default of eac
    `tss:tss 0660`) and does not create the group. On a machine without it the kind is offered, because the socket
    exists, but the helper's instance cannot start, and enrollment answers `approver-kind-unavailable`
    ([Offered](#the-helper-process)). The package declares `Recommends: tpm-udev` ([linux-package.md](linux-package.md#tpm-signing-helper)): it owns the group and
-   the rule, a recommendation installs it by default, and a machine with no TPM can decline it.
+   the rule. The `libtss2-esys` and `libtss2-tctildr` packages the helper links `Depend:` on it, so it is always installed and the
+   `tss` group always exists; the recommendation states the package's own need.
 6. **§4's Linux row.** It names the unlock adapters and "an in-service adapter with a TPM PIN in a later phase", and no
    adapter for approval signing. *Decided (owner, 2026-11-11):* no spec edit in this ticket. That later unlock PIN, if it
    comes, should go through a helper too, since §14 keeps the service account away from the TPM.

@@ -85,16 +85,18 @@ If you hibernate, the resume device is the swap device: check it the same way.
 
 ## Install
 
-Build the package from source, or use one you were given. Building needs `cargo-deb`:
+Build the package from source, or use one you were given. Building needs `cargo-deb`, `lintian`, and `libtss2-dev` and
+`pkg-config` for the TPM signing helper:
 
 ```sh
+sudo apt install libtss2-dev pkg-config lintian
 cargo install cargo-deb --locked
-cargo deb -p iron-vault --locked
+scripts/build-deb.sh
 sudo apt install ./target/debian/iron-vault_*.deb
 ```
 
-`scripts/build-deb.sh` builds the package into a temporary directory and checks it, but leaves no `.deb` behind. It needs
-`lintian` (`sudo apt install lintian`), or `IRON_VAULT_SKIP_LINTIAN=1` to skip that one check
+`scripts/build-deb.sh` builds both the service and the helper (`cargo deb` alone builds only the service), checks the package, and
+writes it to `target/debian/`. `IRON_VAULT_SKIP_LINTIAN=1` skips the `lintian` check
 ([details](../../../design/linux-package.md#building-and-checking-the-package)).
 
 The package creates the `iron-vault` account and its directories, and enables and starts `iron-vault.service`. The
@@ -395,9 +397,9 @@ release check on a real machine yet, so don't rely on it for real secrets.** For
 [recipe](../cookbook/tpm-approval.md). The design is [tpm-approval-signer.md](../../../design/tpm-approval-signer.md).
 
 **What it needs.** Ubuntu 24.04 LTS only, a TPM 2.0 at `/dev/tpmrm0` and the `tss` group with the udev rule that gives it that
-device. Ubuntu's `tpm-udev` package provides both and the Iron Vault package recommends it; the package creates no `tss` group
-itself. Without them the kind is still offered, because the socket exists, but `approver add --kind tpm` answers
-`approver-kind-unavailable`.
+device. Ubuntu's `tpm-udev` package provides both, and the TPM libraries the package depends on pull it in, so it is always installed;
+the package creates no `tss` group itself. If the rule does not match your TPM's device, the kind is still offered, because the
+socket exists, but `approver add --kind tpm` answers `approver-kind-unavailable`.
 
 **What the package installs.** A helper, `/usr/libexec/iron-vault/iron-vault-tpm-signer`, run for one connection at a time by
 `iron-vault-tpm-signer.socket` as its own account, `iron-vault-tpm`. The service account and root alone can connect to

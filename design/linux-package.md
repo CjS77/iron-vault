@@ -38,7 +38,7 @@ The package depends on `systemd`, which must be the init system, on `debconf` fo
 [purge question](#purge), and on the `libtss2` libraries the [TPM signing helper](#tpm-signing-helper) links, which `cargo-deb` adds to `$auto`
 from that binary (`/usr/bin/iron-vault` links none). It recommends `logrotate`, which reads the rotation file it ships
 ([log-operations.md](../book/src/reference/log-operations.md#rotation)), and `tpm-udev`, for the
-[TPM signing helper](#tpm-signing-helper).
+[TPM signing helper](#tpm-signing-helper) (the libtss2 packages depend on it anyway).
 
 ## Ownership
 
@@ -351,10 +351,11 @@ built with its `tpm` feature, and two units:
 
 **`Recommends: tpm-udev` (decided).** The helper opens `/dev/tpmrm0` through the `tss` group, and the package does not
 create that group ([tpm-approval-signer.md](tpm-approval-signer.md#open-questions), question 5). Ubuntu's `tpm-udev` owns both
-the group and the rule that gives it the device (`tss:tss`, `0660`), so the package recommends it rather than depends on it: a
-machine with no TPM has no use for it, and `Recommends:` installs it by default where `apt` is not told otherwise. Without
-the rule the socket still listens, an instance cannot start, and `approver add --kind tpm` answers
-`approver-kind-unavailable`.
+the group and the rule that gives it the device (`tss:tss`, `0660`). The `libtss2-esys` and `libtss2-tctildr` packages that
+`$auto` adds both `Depend:` on `tpm-udev`, so it is always installed with the package and cannot be declined, and the `tss` group
+always exists. `Recommends: tpm-udev` stays so the package states its own need instead of leaning on the library packages'
+dependencies. Where the rule does not match the machine's TPM device, the socket still listens, an instance cannot start, and
+`approver add --kind tpm` answers `approver-kind-unavailable`.
 
 `cargo-deb` generates snippets for `iron-vault.service` only, so the package's own scripts handle the socket in the form
 `dh_installsystemd` uses ([Lifecycle](#lifecycle)). The socket listens on a machine with no TPM as well: its absence would

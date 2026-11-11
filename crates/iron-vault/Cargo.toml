@@ -119,7 +119,7 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync
 [lints]
 workspace = true
 
-# The Linux package: `scripts/build-deb.sh` runs `cargo deb -p iron-vault` and checks the result against
+# The Linux package: `scripts/build-deb.sh` builds both binaries, runs `cargo deb -p iron-vault --no-build` and checks the result against
 # `design/linux-package.md`. It names no features, so `dev-mode` is never built in. The service's directories under
 # /etc, /var and /run are created by tmpfiles.d, not shipped, and the only conffile is the logrotate rule.
 [package.metadata.deb]
@@ -138,8 +138,9 @@ changelog = "../../packaging/linux/debian/changelog"
 section = "admin"
 priority = "optional"
 depends = "$auto, systemd, debconf (>= 0.5) | debconf-2.0"
-# tpm-udev owns the tss group and the rule that gives it /dev/tpmrm0, which the TPM signing helper needs; the package does not
-# create the group (design/linux-package.md, "TPM signing helper").
+# tpm-udev owns the tss group and the rule that gives it /dev/tpmrm0, which the TPM signing helper needs. The libtss2 packages
+# depend on it already; it is named here as the package's own need. The package does not create the group
+# (design/linux-package.md, "TPM signing helper").
 recommends = "logrotate, tpm-udev"
 maintainer-scripts = "../../packaging/linux/debian"
 assets = [
