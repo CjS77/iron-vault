@@ -1,0 +1,30 @@
+[Unit]
+Description=Iron Vault TPM signing helper (%i)
+
+[Service]
+ExecStart=/usr/libexec/iron-vault/iron-vault-tpm-signer
+User=iron-vault-tpm
+Group=iron-vault-tpm
+# The group is added to this process alone; the account is not in it in /etc/group.
+SupplementaryGroups=tss
+# The helper reads its request from the accepted connection and writes the response back on it. With StandardInput=socket
+# alone, systemd would send stdout and stderr to the connection as well, and diagnostics would reach the peer.
+StandardInput=socket
+StandardOutput=journal
+StandardError=inherit
+# The resource manager only, never /dev/tpm0.
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+# Ends an instance stuck in the TPM; the service waits no longer than this for an answer.
+RuntimeMaxSec=30
+LimitCORE=0
+UMask=0077
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
+MemoryDenyWriteExecute=yes

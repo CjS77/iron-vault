@@ -1,0 +1,19 @@
+[Unit]
+Description=Iron Vault TPM signing helper socket
+Documentation=file:///usr/share/doc/iron-vault/
+
+[Socket]
+ListenStream=/run/iron-vault-tpm/signer.sock
+# One instance per connection, and one connection at a time: the helper's reserve of dictionary-attack tries reads the
+# counter and then spends a try, which is one step only while no second instance runs (design/tpm-approval-signer.md,
+# "Lockout reserve"). systemd closes a connection beyond the limit at once.
+Accept=yes
+MaxConnections=1
+# The service account and root, and no group: a group-readable socket would admit the log collector's account, which may
+# be in the iron-vault group. The helper also checks SO_PEERCRED.
+SocketUser=iron-vault
+SocketGroup=root
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target

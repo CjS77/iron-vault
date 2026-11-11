@@ -138,7 +138,9 @@ changelog = "../../packaging/linux/debian/changelog"
 section = "admin"
 priority = "optional"
 depends = "$auto, systemd, debconf (>= 0.5) | debconf-2.0"
-recommends = "logrotate"
+# tpm-udev owns the tss group and the rule that gives it /dev/tpmrm0, which the TPM signing helper needs; the package does not
+# create the group (design/linux-package.md, "TPM signing helper").
+recommends = "logrotate, tpm-udev"
 maintainer-scripts = "../../packaging/linux/debian"
 assets = [
     ["target/release/iron-vault", "usr/bin/iron-vault", "755"],
@@ -147,6 +149,11 @@ assets = [
     # does not unseal again; iron-vault.service pulls it in with Wants= (design/tpm-unlock.md, "At boot").
     ["../../packaging/linux/iron-vault-host-unlock.service", "usr/lib/systemd/system/iron-vault-host-unlock.service", "644"],
     ["../../packaging/linux/iron-vault-provision-host-unlock", "usr/sbin/iron-vault-provision-host-unlock", "755"],
+    # The TPM signing helper, built by scripts/build-deb.sh with its `tpm` feature, which links libtss2; /usr/bin/iron-vault never
+    # does. Its socket unit is enabled by postinst, not by cargo-deb's snippets (see the systemd-units table below).
+    ["target/release/iron-vault-tpm-signer", "usr/libexec/iron-vault/iron-vault-tpm-signer", "755"],
+    ["../../packaging/linux/iron-vault-tpm-signer.socket", "usr/lib/systemd/system/iron-vault-tpm-signer.socket", "644"],
+    ["../../packaging/linux/iron-vault-tpm-signer@.service", "usr/lib/systemd/system/iron-vault-tpm-signer@.service", "644"],
     ["../../packaging/linux/sysusers.d/iron-vault.conf", "usr/lib/sysusers.d/iron-vault.conf", "644"],
     ["../../packaging/linux/tmpfiles.d/iron-vault.conf", "usr/lib/tmpfiles.d/iron-vault.conf", "644"],
     ["../../packaging/linux/logrotate.d/iron-vault", "etc/logrotate.d/iron-vault", "644"],
