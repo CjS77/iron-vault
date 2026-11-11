@@ -174,5 +174,6 @@ The [errors reference](../reference/errors.md#recipient-list-recipient-add-and-r
 
 - [CLI](../reference/cli.md#iron-vault-recipient): `recipient list`, `add` and `remove`.
 - [Recipients design](../../../design/recipients.md): the independence rule, and why old copies still open.
+- [Reset the vault](reset-vault.md), when no way into it is left.
 - Not yet available: [move a vault to a new machine](roadmap/migration.md) and
-  [retire a machine, or reset the vault](roadmap/reset.md).
+  [retire a machine](roadmap/forget-machine.md).

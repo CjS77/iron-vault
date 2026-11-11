@@ -19,8 +19,8 @@ approving is a separate lock. See the [security model](../security-model.md#seve
 
 So if you forget every approval passphrase, nothing can enroll a replacement. The vault still unlocks and serves its
 active config, but you can never approve a config, replace or remove a credential, remove a recipient or change the
-approvers again. [`reset`](roadmap/reset.md), which discards the vault so you rebuild it from reissued credentials,
-is the only way out, and it is not yet available.
+approvers again. [`reset`](reset-vault.md), which discards the vault so you rebuild it from reissued credentials,
+is the only way out.
 
 Enroll a second approver while one still answers, with a passphrase kept apart from the first: another password
 manager entry, or a sealed envelope. Then a forgotten passphrase costs one `approver remove`.

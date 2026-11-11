@@ -66,7 +66,7 @@ pins one or more **approvers**, each backed by an approval signer, and any one o
 passphrase and the recovery key open the vault identity but never count as approval: the vault passphrase can mint a
 new recovery key, so a stolen vault passphrase would otherwise approve any config. Only a pinned approver's
 passphrase enrolls or removes an approver. The price is that losing every approver's passphrase leaves
-[`reset`](cookbook/roadmap/reset.md) as the only way out, so
+[`reset`](cookbook/reset-vault.md) as the only way out, so
 [keep a second one](cookbook/approval-signers.md#why-keep-a-second-approver).
 
 ### What this doesn't protect against
