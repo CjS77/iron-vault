@@ -45,6 +45,15 @@ pub enum RecoveryStatus {
     },
 }
 
+impl RecoveryStatus {
+    /// Whether a recovery reminder is due: the one meaning of an overdue recovery check, for `status` and `forget-machine`.
+    pub const fn due(&self) -> bool {
+        match self {
+            Self::Unknown { due, .. } | Self::NeverChecked { due, .. } | Self::Checked { due, .. } => *due,
+        }
+    }
+}
+
 /// Appends tags 13 to 17.
 pub(super) fn encode(out: &mut Vec<u8>, status: &RecoveryStatus) {
     let (record, time, days, due, detail) = match status {

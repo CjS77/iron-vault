@@ -18,6 +18,7 @@ mod approver_remove;
 pub mod dispatch;
 #[cfg(target_os = "linux")]
 mod export;
+mod forget_machine;
 #[cfg(target_os = "linux")]
 mod init;
 #[cfg(target_os = "linux")]

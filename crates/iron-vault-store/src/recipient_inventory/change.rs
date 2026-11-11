@@ -106,6 +106,15 @@ impl RecipientChange {
     }
 }
 
+impl RecipientInventory {
+    /// Whether this inventory, as it is, meets parts 2 to 4 of the independence rule. Part 1 needs the configured host
+    /// unlock identity, which only a change that removes it can break. `forget-machine` asks this of the inventory a past
+    /// removal wrote, to find one restored from an old copy or edited around the service.
+    pub fn independence(&self) -> Result<(), RecipientChangeRefusal> {
+        independence_rule(&self.entries)
+    }
+}
+
 /// The independence rule, part by part in the order `design/recipients.md` numbers them; the first part that fails is
 /// the refusal. Part 1, the configured unlock method's recipient, is checked by `configured_unlock_rule`, because only
 /// the caller knows which host unlock identity is configured; its floor of one unlock-class recipient follows from part

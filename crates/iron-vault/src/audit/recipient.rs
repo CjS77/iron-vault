@@ -94,6 +94,56 @@ impl AuditEvent for Removed<'_> {
     }
 }
 
+/// `recipient.forget-checked`: `forget-machine` ran the inventory check for a key. INFO when the key is gone and nothing
+/// needs the owner's attention, else WARN.
+#[derive(Debug, Clone, Copy)]
+pub struct ForgetChecked<'a> {
+    /// The key checked.
+    pub recipient: &'a RecipientKey,
+    /// The entry the key still has, when it is still enrolled.
+    pub enrolled: Option<&'a RecipientEntry>,
+    /// Whether the independence rule holds for the inventory; meaningful only when the key is not enrolled.
+    pub independence_holds: bool,
+    /// Whether a recovery reminder is due; meaningful only when the key is not enrolled.
+    pub recovery_due: bool,
+}
+
+impl AuditEvent for ForgetChecked<'_> {
+    const NAME: EventName = EventName("recipient.forget-checked");
+
+    fn emit(&self) {
+        let recipient = self.recipient.to_string();
+        match (self.enrolled, self.independence_holds && !self.recovery_due) {
+            (Some(entry), _) => tracing::warn!(
+                target: AUDIT_TARGET,
+                event = Self::NAME.as_str(),
+                recipient = recipient.as_str(),
+                forget_outcome = "still_enrolled",
+                recipient_role = entry.role().name(),
+                "retired machine's recipient is still enrolled",
+            ),
+            (None, true) => tracing::info!(
+                target: AUDIT_TARGET,
+                event = Self::NAME.as_str(),
+                recipient = recipient.as_str(),
+                forget_outcome = "forgotten",
+                independence = "holds",
+                recovery_due = false,
+                "retired machine's recipient is not enrolled",
+            ),
+            (None, false) => tracing::warn!(
+                target: AUDIT_TARGET,
+                event = Self::NAME.as_str(),
+                recipient = recipient.as_str(),
+                forget_outcome = "forgotten",
+                independence = if self.independence_holds { "holds" } else { "broken" },
+                recovery_due = self.recovery_due,
+                "retired machine's recipient is not enrolled, with a warning",
+            ),
+        }
+    }
+}
+
 /// Why a recipient change did not happen, or did not finish.
 #[derive(Debug, Clone)]
 pub enum ChangeFailure {

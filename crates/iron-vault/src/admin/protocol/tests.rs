@@ -111,6 +111,16 @@ fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
             },
         ) => a == b && n == m,
         (R::RecipientRemove { recipients: a }, R::RecipientRemove { recipients: b }) => a == b,
+        (
+            R::ForgetMachine {
+                independence: a,
+                recovery: r,
+            },
+            R::ForgetMachine {
+                independence: b,
+                recovery: s,
+            },
+        ) => a == b && r == s,
         (R::ApproverAdd { approver: a, approvers: n }, R::ApproverAdd { approver: b, approvers: m }) => a == b && n == m,
         (R::ApproverRemove { approvers: a }, R::ApproverRemove { approvers: b }) => a == b,
         (
@@ -231,6 +241,7 @@ fn error_code() -> impl Strategy<Value = ErrorCode> {
         Just(ErrorCode::ApproverInvalid),
         Just(ErrorCode::ApproverSetInvalid),
         Just(ErrorCode::ApproverKindUnavailable),
+        Just(ErrorCode::MachineNotForgotten),
     ]
 }
 
@@ -273,6 +284,7 @@ fn any_frame() -> impl Strategy<Value = Frame> {
                 .prop_map(|(recipient, label)| AdminRequest::RecipientAddHostUnlock { recipient, label }),
             text(256).prop_map(|label| AdminRequest::RecipientAddRecovery { label }),
             text(256).prop_map(|recipient| AdminRequest::RecipientRemove { recipient }),
+            text(256).prop_map(|recipient| AdminRequest::ForgetMachine { recipient }),
             (
                 prop_oneof![
                     Just(RequestedSignerKind::Software),
@@ -333,6 +345,8 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             recipients
         })),
         any::<u8>().prop_map(|recipients| Frame::Response(AdminResponse::RecipientRemove { recipients })),
+        (proptest::option::of("\\PC{1,80}"), recovery_status())
+            .prop_map(|(independence, recovery)| Frame::Response(AdminResponse::ForgetMachine { independence, recovery })),
         (any::<[u8; 16]>(), any::<u8>()).prop_map(|(bytes, approvers)| Frame::Response(AdminResponse::ApproverAdd {
             approver: ApproverId::from_bytes(v4_bytes(bytes)).unwrap(),
             approvers
@@ -703,8 +717,8 @@ fn wrong_state_is_error_code_13() {
 fn a_success_result_must_name_a_command_with_a_result_and_a_known_profile() {
     let no_command = field(2, &[1]);
     assert_eq!(decode_err(&raw(1, 4, &no_command)), FrameError::MissingField(1));
-    let unknown = body(&[field(1, &[0, 22]), field(2, &[1])]);
-    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(22));
+    let unknown = body(&[field(1, &[0, 23]), field(2, &[1])]);
+    assert_eq!(decode_err(&raw(1, 4, &unknown)), FrameError::UnknownCommand(23));
     let without_profile = field(1, &[0, 1]);
     assert_eq!(decode_err(&raw(1, 4, &without_profile)), FrameError::MissingField(2));
     [&[][..], &[0], &[4], &[1, 1]].into_iter().for_each(|profile| {
@@ -842,7 +856,7 @@ fn unknown_tags_are_refused() {
 
 #[test]
 fn unknown_commands_are_refused_whatever_follows() {
-    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 22]))), FrameError::UnknownCommand(22));
+    assert_eq!(decode_err(&raw(1, 1, &field(1, &[0, 23]))), FrameError::UnknownCommand(23));
     let with_arguments = body(&[field(1, &[0xff, 0xff]), field(2, b"argument")]);
     assert_eq!(decode_err(&raw(1, 1, &with_arguments)), FrameError::UnknownCommand(0xffff));
 }
@@ -1040,6 +1054,7 @@ fn the_reset_error_codes_have_their_documented_numbers_and_names() {
     [
         (ErrorCode::NothingToReset, 49, "nothing-to-reset"),
         (ErrorCode::ResetFailed, 50, "reset-failed"),
+        (ErrorCode::MachineNotForgotten, 52, "machine-not-forgotten"),
     ]
     .into_iter()
     .for_each(|(code, number, name)| {
@@ -1815,4 +1830,42 @@ fn the_state_gate_admits_export_only_in_ready_and_import_only_in_locked() {
     };
     assert_eq!(admitted(AdminCommand::Export), [ServiceState::Ready]);
     assert_eq!(admitted(AdminCommand::Import), [ServiceState::Locked]);
+}
+
+#[test]
+fn forget_machine_has_command_id_22_one_key_argument_and_a_fixed_result() {
+    let request = AdminRequest::ForgetMachine {
+        recipient: "age1abc".to_owned(),
+    };
+    assert_eq!(
+        (AdminCommand::ForgetMachine as u16, request.command().name()),
+        (22, "forget-machine")
+    );
+    assert_eq!(
+        encoded(&Frame::Request(request)),
+        raw(1, 1, &body(&[field(1, &[0, 22]), field(2, b"age1abc")]))
+    );
+    let result = AdminResponse::ForgetMachine {
+        independence: None,
+        recovery: RecoveryStatus::Unknown {
+            detail: "no check record yet".to_owned(),
+            due: false,
+        },
+    };
+    assert_eq!(
+        encoded(&Frame::Response(result)),
+        raw(
+            1,
+            4,
+            &body(&[
+                field(1, &[0, 22]),
+                field(2, b""),
+                field(13, &[0]),
+                field(14, &[0; 8]),
+                field(15, &[0; 8]),
+                field(16, &[0]),
+                field(17, b"no check record yet"),
+            ])
+        )
+    );
 }

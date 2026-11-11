@@ -1,9 +1,10 @@
 //! The bodies of every frame kind except owner input, which is never read as fields.
 
 use super::fields::{self, exact, first, read_flag, read_profile, read_text, read_u16, read_u64};
+use super::recovery_status::RecoveryStatus;
 use super::status::{self, StatusReport};
 use super::{AdminCommand, AdminRequest, AdminResponse, ApprovalResult, ErrorCode, FrameError, Notice, Prompt, ProposedConfig};
-use super::{add, approver_add, approver_list, approver_remove, bundle, list, recipient_add, recipient_list, reset};
+use super::{add, approver_add, approver_list, approver_remove, bundle, forget_machine, list, recipient_add, recipient_list, reset};
 use crate::deployment::DeploymentProfile;
 use iron_vault_policy::CallerToken;
 use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
@@ -54,6 +55,7 @@ const COMMAND_APPROVER_REMOVE: u16 = AdminCommand::ApproverRemove as u16;
 const COMMAND_EXPORT: u16 = AdminCommand::Export as u16;
 const COMMAND_IMPORT: u16 = AdminCommand::Import as u16;
 const COMMAND_RESET: u16 = AdminCommand::Reset as u16;
+const COMMAND_FORGET_MACHINE: u16 = AdminCommand::ForgetMachine as u16;
 const TAG_RECIPIENT: u16 = 2;
 const TAG_RECIPIENT_COUNT: u16 = 2;
 const TAG_CHECKED_AT: u16 = 3;
@@ -81,7 +83,9 @@ pub(super) fn encode_request(request: &AdminRequest) -> Result<Vec<u8>, FrameErr
     match request {
         AdminRequest::ConfigApprove(config) => fields::put(&mut out, TAG_CONFIG, config.bytes()),
         AdminRequest::Rm { name } => fields::put(&mut out, TAG_NAME, name.as_bytes()),
-        AdminRequest::RecipientRemove { recipient } => fields::put(&mut out, TAG_RECIPIENT, recipient.as_bytes()),
+        AdminRequest::RecipientRemove { recipient } | AdminRequest::ForgetMachine { recipient } => {
+            fields::put(&mut out, TAG_RECIPIENT, recipient.as_bytes());
+        }
         AdminRequest::Init { host_unlock } | AdminRequest::Import { host_unlock } => {
             fields::put(&mut out, TAG_HOST_UNLOCK, &[u8::from(*host_unlock)]);
         }
@@ -137,6 +141,12 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
         COMMAND_RECIPIENT_REMOVE => {
             let [_, recipient] = exact(&fields, [TAG_COMMAND, TAG_RECIPIENT])?;
             Ok(AdminRequest::RecipientRemove {
+                recipient: read_text(TAG_RECIPIENT, recipient)?,
+            })
+        }
+        COMMAND_FORGET_MACHINE => {
+            let [_, recipient] = exact(&fields, [TAG_COMMAND, TAG_RECIPIENT])?;
+            Ok(AdminRequest::ForgetMachine {
                 recipient: read_text(TAG_RECIPIENT, recipient)?,
             })
         }
@@ -257,6 +267,11 @@ pub(super) fn encode_approver_add_result(approver: ApproverId, approvers: u8) ->
 /// `approver remove`'s success body: the command it answers, then the approver count.
 pub(super) fn encode_approver_remove_result(approvers: u8) -> Vec<u8> {
     approver_remove::encode_result(COMMAND_APPROVER_REMOVE, approvers)
+}
+
+/// `forget-machine`'s success body: the command it answers, the independence failure and the recovery check state.
+pub(super) fn encode_forget_machine_result(independence: Option<&str>, recovery: &RecoveryStatus) -> Vec<u8> {
+    forget_machine::encode_result(COMMAND_FORGET_MACHINE, independence, recovery)
 }
 
 /// `reset`'s success body: the command it answers, then the result's fields.
@@ -409,6 +424,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
         COMMAND_EXPORT => bundle::decode_export_result(&fields),
         COMMAND_IMPORT => bundle::decode_import_result(&fields),
         COMMAND_RESET => reset::decode_result(&fields),
+        COMMAND_FORGET_MACHINE => forget_machine::decode_result(&fields),
         COMMAND_RECIPIENT_REMOVE => {
             let [_, count] = exact(&fields, [TAG_COMMAND, TAG_RECIPIENT_COUNT])?;
             match count {
@@ -488,6 +504,7 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::ImportFailed,
         ErrorCode::NothingToReset,
         ErrorCode::ResetFailed,
+        ErrorCode::MachineNotForgotten,
     ]
     .into_iter()
     .find(|code| *code as u16 == number)

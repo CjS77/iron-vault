@@ -100,7 +100,7 @@ fn memory_line(memory: &MemoryStatus) -> String {
 }
 
 /// The recovery check line. The service counted the days and decided the due flag, so this reads no clock.
-fn recovery_line(recovery: &RecoveryStatus) -> String {
+pub(super) fn recovery_line(recovery: &RecoveryStatus) -> String {
     let overdue = |due: bool| if due { ", overdue" } else { "" };
     let text = match recovery {
         RecoveryStatus::Unknown { detail, due } => format!("unknown ({detail}{})", overdue(*due)),

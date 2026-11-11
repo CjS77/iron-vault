@@ -179,3 +179,16 @@ fn an_added_recipient_with_the_handoff_key_is_not_the_adapters_recipient() {
             .is_ok()
     );
 }
+
+#[test]
+fn an_inventory_is_checked_as_it_stands() {
+    assert_eq!(initial().independence(), Ok(()));
+    assert_eq!(
+        inventory(&[RecipientRole::Operational, RecipientRole::Added]).independence(),
+        Err(RecipientChangeRefusal::NoRecovery)
+    );
+    assert_eq!(
+        inventory(&[RecipientRole::Recovery, RecipientRole::Added]).independence(),
+        Err(RecipientChangeRefusal::NoOperational)
+    );
+}

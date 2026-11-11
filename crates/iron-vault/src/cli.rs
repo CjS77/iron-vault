@@ -22,6 +22,7 @@ pub use completions::completions;
 mod console;
 #[cfg(target_os = "linux")]
 mod export;
+mod forget_machine;
 #[cfg(target_os = "linux")]
 mod init;
 #[cfg(target_os = "linux")]
@@ -207,6 +208,14 @@ pub enum Command {
     /// Manage the approvers that sign configuration approvals.
     #[command(subcommand)]
     Approver(ApproverCommand),
+    /// Check that a retired machine's recipient key is gone from the vault, then print how to decommission the machine. Run it
+    /// on the vault that stays, with the key `recipient list` showed for the machine. It exits 1 with `machine-not-forgotten`,
+    /// naming the `recipient remove` command, while the key is still enrolled. It warns when the vault no longer meets the
+    /// independence rule or the recovery check is overdue. It changes nothing and runs no TPM tool: you run every step it prints.
+    ForgetMachine {
+        /// The retired machine's `age1...` recipient key.
+        recipient: String,
+    },
     /// Print a shell completion script to stdout. It never contacts the service, so it also runs at build time.
     Completions {
         /// The shell to generate the script for.
@@ -562,6 +571,19 @@ pub fn recipient_remove(socket: Option<&Path>, recipient: String) -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn recipient_remove(_socket: Option<&Path>, _recipient: String) -> ExitCode {
+    unsupported_platform()
+}
+
+/// `iron-vault forget-machine`: sends the key, prints the checks and the decommission guidance, and exits 1 while the key is
+/// still enrolled.
+#[cfg(target_os = "linux")]
+pub fn forget_machine(socket: Option<&Path>, recipient: String) -> ExitCode {
+    forget_machine::run_forget_machine(socket, recipient).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn forget_machine(_socket: Option<&Path>, _recipient: String) -> ExitCode {
     unsupported_platform()
 }
 

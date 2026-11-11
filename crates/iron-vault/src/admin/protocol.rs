@@ -8,6 +8,7 @@ mod approver_remove;
 mod body;
 mod bundle;
 mod fields;
+mod forget_machine;
 mod host_unlock_status;
 mod list;
 mod recipient_add;
@@ -162,6 +163,11 @@ pub enum AdminRequest {
     /// Discards the vault and the config after a confirmation typed at a terminal; allowed in Locked, Ready and
     /// Unavailable. No arguments. Command ID 21.
     Reset,
+    /// Checks that a retired machine's recipient key is no longer enrolled; Ready only, and it changes nothing. Command ID 22.
+    ForgetMachine {
+        /// The retired machine's `age1...` key as the owner wrote it; the service parses it.
+        recipient: String,
+    },
 }
 
 /// A requested origin: one permitted origin as an `add` or `replace` request carries it. The host stays text on the wire, at most
@@ -201,6 +207,7 @@ impl AdminRequest {
             Self::Export => AdminCommand::Export,
             Self::Import { .. } => AdminCommand::Import,
             Self::Reset => AdminCommand::Reset,
+            Self::ForgetMachine { .. } => AdminCommand::ForgetMachine,
         }
     }
 }
@@ -250,6 +257,8 @@ pub enum AdminCommand {
     Import = 20,
     /// `reset`.
     Reset = 21,
+    /// `forget-machine`.
+    ForgetMachine = 22,
 }
 
 impl AdminCommand {
@@ -277,6 +286,7 @@ impl AdminCommand {
             Self::Export => "export",
             Self::Import => "import",
             Self::Reset => "reset",
+            Self::ForgetMachine => "forget-machine",
         }
     }
 
@@ -304,6 +314,7 @@ impl AdminCommand {
             Self::Export => "export",
             Self::Import => "import",
             Self::Reset => "reset",
+            Self::ForgetMachine => "forget_machine",
         }
     }
 
@@ -329,6 +340,7 @@ impl AdminCommand {
             | Self::ApproverList
             | Self::ApproverAdd
             | Self::ApproverRemove
+            | Self::ForgetMachine
             | Self::Export => AdminOperation::VaultChange,
         }
     }
@@ -360,13 +372,13 @@ mod no_external_signatures {
             AdminCommand::Add | AdminCommand::Replace => &["name", "kind", "origins"],
             AdminCommand::Rm => &["name"],
             AdminCommand::RecipientAdd => &["recipient", "label"],
-            AdminCommand::RecipientRemove => &["recipient"],
+            AdminCommand::RecipientRemove | AdminCommand::ForgetMachine => &["recipient"],
             AdminCommand::ApproverAdd => &["kind", "label"],
             AdminCommand::ApproverRemove => &["approver"],
         }
     }
 
-    const COMMANDS: [AdminCommand; 21] = [
+    const COMMANDS: [AdminCommand; 22] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::CallerToken,
@@ -388,6 +400,7 @@ mod no_external_signatures {
         AdminCommand::Export,
         AdminCommand::Import,
         AdminCommand::Reset,
+        AdminCommand::ForgetMachine,
     ];
 
     #[test]
@@ -673,6 +686,13 @@ pub enum AdminResponse {
         /// Whether `reset.unfinished` was unlinked but the directory fsync failed, so it may come back after a power loss.
         finish_uncertain: bool,
     },
+    /// `forget-machine` completed: the key is not a recipient. The two facts the guidance is conditional on follow.
+    ForgetMachine {
+        /// Which part of the independence rule the inventory as it stands fails, as a sentence; `None` when it holds.
+        independence: Option<String>,
+        /// The recovery check record, as `status` reports it; a due reminder is the warning.
+        recovery: RecoveryStatus,
+    },
     /// The command failed. The message is the service's own text and never contains owner input.
     Error {
         /// The stable code scripts act on.
@@ -831,6 +851,9 @@ pub enum ErrorCode {
     /// `reset`: writing `reset.unfinished`, a removal or the state read failed; the message names the step and the file, and
     /// says whether the vault is intact or the next `reset` resumes.
     ResetFailed = 50,
+    /// `forget-machine`: the key is still a recipient of the vault; the message names its role and label and says to run
+    /// `recipient remove`. Nothing was changed.
+    MachineNotForgotten = 52,
 }
 
 impl ErrorCode {
@@ -887,6 +910,7 @@ impl ErrorCode {
             Self::ImportFailed => "import-failed",
             Self::NothingToReset => "nothing-to-reset",
             Self::ResetFailed => "reset-failed",
+            Self::MachineNotForgotten => "machine-not-forgotten",
         }
     }
 
@@ -1066,6 +1090,11 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
             put_frame(out, FrameKind::Success, &body::encode_export_result(*vault_id, *records, *bytes))
         }
         Frame::Response(AdminResponse::Import(result)) => put_frame(out, FrameKind::Success, &body::encode_import_result(result)),
+        Frame::Response(AdminResponse::ForgetMachine { independence, recovery }) => put_frame(
+            out,
+            FrameKind::Success,
+            &body::encode_forget_machine_result(independence.as_deref(), recovery),
+        ),
         Frame::Response(AdminResponse::RecipientRemove { recipients }) => {
             put_frame(out, FrameKind::Success, &body::encode_recipient_remove_result(*recipients))
         }

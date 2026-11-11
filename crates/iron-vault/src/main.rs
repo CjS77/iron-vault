@@ -66,6 +66,7 @@ fn run() -> anyhow::Result<ExitCode> {
         Command::Recipient(RecipientCommand::Remove { recipient }) => {
             Ok(run_client(|| cli::recipient_remove(cli.admin_socket.as_deref(), recipient)))
         }
+        Command::ForgetMachine { recipient } => Ok(run_client(|| cli::forget_machine(cli.admin_socket.as_deref(), recipient))),
         Command::Approver(ApproverCommand::Add { label, kind }) => {
             Ok(run_client(|| cli::approver_add(cli.admin_socket.as_deref(), kind.into(), label)))
         }

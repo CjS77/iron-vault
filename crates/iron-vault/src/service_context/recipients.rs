@@ -45,12 +45,17 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// finish or discard a staged recipient change, which it logs as `recipient.change-recovered`; a damaged inventory
     /// is logged as `recipient.inventory-damaged` and never repaired.
     pub async fn list_recipients(&self) -> Result<Vec<RecipientEntry>, RecipientRefusal> {
+        Ok(self.recipient_inventory().await?.entries().cloned().collect())
+    }
+
+    /// The checked recipient inventory under the service-wide lock, which is released before this returns.
+    pub(super) async fn recipient_inventory(&self) -> Result<RecipientInventory, RecipientRefusal> {
         let service_wide = Arc::clone(&self.service_wide)
             .try_lock_owned()
             .map_err(|_| RecipientRefusal::Busy)?;
         let ReadyVault { identity, vault_id, .. } = ready_vault(&*self.inner.lock().await)?;
         let (_, inventory) = self.check_inventory(service_wide, identity, vault_id).await?;
-        Ok(inventory.entries().cloned().collect())
+        Ok(inventory)
     }
 
     /// The inventory check, run by a blocking task that owns `held` (the service-wide lock, in whatever guard the caller has)
