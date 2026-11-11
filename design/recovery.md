@@ -248,15 +248,16 @@ fixed phrases: `the vault is not initialized`, `no check record yet`, and `the c
 the store's `classify` give it a class of its own, the recovery check record, which is not a foreign file:
 
 - **beside a manifest** it is part of the vault, and `unlock` logs nothing about it;
-- **beside `init.unfinished`** it does not make the state Unrecognized, and the
+- **beside `init.unfinished` or `import.unfinished`** it does not make the state Unrecognized, and the
   [discard](vault-initialization.md#discarding-an-unfinished-initialization) removes it with the vault's other files;
 - **with no manifest and no `init.unfinished`** it does not make Uninitialized impossible: it is a record of a vault
   that is no longer there, left when the owner removed a vault's files by hand or restored part of a backup. `init`
   removes it durably, under the service-wide lock and before step 1, so a new vault never starts with an old vault's
-  `last_checked`, which would show a key as checked that never was.
+  `last_checked`, which would show a key as checked that never was. `import` removes it the same way, before its
+  step 1 ([migration-bundle.md](migration-bundle.md#write-order)).
 
 `init`'s rule that it never removes what it did not write still holds, because the service wrote the record. Later
-designs that discard or replace a vault, such as `reset` and `import`, must remove it the same way.
+designs that discard or replace a vault, such as `reset`, must remove it the same way.
 
 ## Logging
 

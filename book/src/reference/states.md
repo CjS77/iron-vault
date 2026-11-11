@@ -108,7 +108,7 @@ credential venice_chat: healthy
 | `service` | `starting`, `locked`, `checking`, `ready`, `unavailable`, `stopped` | The service state. |
 | `reason` | `policy invalid`, `recovery needed` | Only when the service is `unavailable`: why. |
 | `profile` | `protected`, `container`, `development — no isolation from malware running as <user>` | The deployment profile, fixed when the binary was built ([below](#development-mode-and-a-protected-install)). |
-| `vault` | `locked`, `unlocked`, `not initialized (run iron-vault init)`, `initialization unfinished (run iron-vault init again)`, `reset unfinished (run iron-vault reset again)` | Whether a vault exists and is open. `unlocked` means Checking or Ready; Unavailable shows `locked`, because a failed check closes the vault. |
+| `vault` | `locked`, `unlocked`, `not initialized (run iron-vault init)`, `initialization unfinished (run iron-vault init again)`, `import unfinished (run iron-vault import again)`, `reset unfinished (run iron-vault reset again)` | Whether a vault exists and is open. `unlocked` means Checking or Ready; Unavailable shows `locked`, because a failed check closes the vault. |
 | `vault id` | a UUID, or `unknown` | The vault's ID. Unknown while no vault is open. |
 | `approval committed` | a number, `none`, or `unknown while the vault is locked` | The approval version of the active config. |
 | `approval highest reserved` | a number, or `unknown while the vault is locked` | The highest version ever reserved. Higher than the committed version after an approval that failed once it had reserved one. |

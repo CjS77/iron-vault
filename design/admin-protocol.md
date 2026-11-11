@@ -247,7 +247,7 @@ Opens the vault with the interactive passphrase (spec
 is Locked; in any other state the exchange ends with `wrong-state` before any prompt, and the state is unchanged. It
 also needs an initialized vault: unless the [initialization state](vault-initialization.md#initialization-state) is
 Initialized, the exchange ends with `unlock-failed` before any prompt, and the message names the initialization state
-and says to run `iron-vault init`. For Unfinished it adds that an init may be in progress, and for Unrecognized it
+and says to run `iron-vault init`. For Unfinished it adds that an init or an import may be in progress, and for Unrecognized it
 names the first offending files instead. Files beside a manifest never refuse `unlock`: it logs their names at WARN.
 In a protected install whose memory is not locked, the exchange ends with `memory-unprotected` before any prompt, and
 the message names the `RLIMIT_MEMLOCK` soft limit or the locking error
@@ -791,7 +791,7 @@ digest or permitted origin.
 | 9 | memory protection detail | UTF-8 text: why memory is not locked; empty when it is locked or unsupported |
 | 10 | credentials | byte value: the credential list below; empty while the vault is locked |
 | 11 | route faults | byte value: the route fault list below; empty while the vault is locked or no route has a fault |
-| 12 | initialization | `u8`: `0` initialized (locked or open), `1` not initialized, `2` initialization unfinished, `3` [reset unfinished](reset.md#unfinished-reset) (run `iron-vault reset` again); non-zero only while no vault is open |
+| 12 | initialization | `u8`: `0` initialized (locked or open), `1` not initialized, `2` initialization unfinished, `3` [reset unfinished](reset.md#unfinished-reset) (run `iron-vault reset` again), `4` [import unfinished](migration-bundle.md#the-unfinished-import) (run `iron-vault import` again); non-zero only while no vault is open |
 | 13 | recovery check record | `u8`: `0` unknown, `1` never checked, `2` checked |
 | 14 | recovery check time | `u64`: Unix seconds, UTC: `last_checked` when tag 13 is `2`, `since` when it is `1`, `0` when it is `0` |
 | 15 | days since recovery check | `u64`: whole days from tag 14's time to the service's clock, `0` for a time in the future and when tag 13 is `0` |
@@ -1083,7 +1083,7 @@ when no file is given ([open question 12](config-approval.md#open-questions)).
 
 `iron-vault status` prints one field per line, in this order, to stdout: `service`, `reason` (only when Unavailable),
 `profile`, `vault` (`locked`, `unlocked`, `not initialized (run iron-vault init)` or `initialization unfinished (run
-iron-vault init again)`), `vault id`, `approval committed`, `approval highest reserved`, `memory protection`,
+iron-vault init again)`, `import unfinished (run iron-vault import again)` or `reset unfinished (run iron-vault reset again)`), `vault id`, `approval committed`, `approval highest reserved`, `memory protection`,
 `host unlock` (`host unlock: <label>`, only when tag 18 is non-empty), `recovery last checked` (in the [forms recovery.md gives](recovery.md#status)), then one `credential <name>` line per
 credential (or `credentials` alone when there are none or they are unknown), then one `route <name>: unavailable
 (pinned CA unavailable)` line per route fault. A value sealed behind a locked vault prints as `unknown while the vault

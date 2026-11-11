@@ -67,7 +67,15 @@ bytes are compared with the initial config (below). The checks run in this order
    (`init.unfinished`, `identity.age`, `recipients.age`, `operational.age`, at most one approver key envelope
    `approver-<approver ID>.age`, `manifest.age`, `approval.age`), the recovery check record (`recovery.toml`) and the
    owner-lock file (`locked-by-owner`), and the config directory passes the [config test](#the-config-test). Otherwise
-   it is Unrecognized.
+   it is Unrecognized. With `import.unfinished` as well, the state is Unrecognized: no run writes both markers.
+1b. **`import.unfinished` is present** (and `init.unfinished` is not). The state is Unfinished, by an
+   [import](migration-bundle.md#the-unfinished-import), if the state directory holds no file but the lock file, a
+   `lost+found` directory, stale temp files, the files an import writes (`import.unfinished`, `identity.age`,
+   `recipients.age`, `operational.age`, `manifest.age`, `approval.age`, any number of approver key envelopes
+   `approver-<approver ID>.age` and of record files `record-<record ID>.age`), `recovery.toml` and `locked-by-owner`, and
+   the config directory holds no config file but `config.toml`, whatever its bytes. Otherwise it is Unrecognized: a
+   foreign file, `recipients.age.staged`, a TPM key blob, or `config.toml.sig`, `config.toml.pending` or
+   `config.toml.sig.staged` makes it so.
 2. **`manifest.age` is present.** The state is Initialized, whatever else the directories hold: an Initialized vault
    never depends on the absence of other files.
 3. **The state directory holds only the lock file, a `lost+found` directory, stale temp files, the recovery check
@@ -79,21 +87,21 @@ bytes are compared with the initial config (below). The checks run in this order
 |---|---|
 | Unfinished reset | Check 0 matched: a reset passed its commit point (`reset.unfinished` written) and has not finished; only `reset` finishes it. |
 | Uninitialized | Check 3 matched: nothing of a vault or its config is there. |
-| Unfinished | Check 1 matched: an initialization started and has not reached its commit point. |
+| Unfinished | Check 1 or 1b matched: an initialization or an import started and has not reached its commit point. The state records which run left it, by its marker. |
 | Initialized | Check 2 matched: a manifest and no `init.unfinished`. |
 | Unrecognized | No check matched: a foreign file or a config file that is not init's own beside `init.unfinished`, or files of a vault without its manifest, or anything else in a directory with no manifest. |
 
 A **foreign file** is a file in the state directory that is not on the lists above: the lock file, `lost+found`, temp
 files, the vault's own files (`identity.age`, `recipients.age`, `recipients.age.staged`, `operational.age`,
-`manifest.age`, `approval.age`, `init.unfinished`, `reset.unfinished`), approver key envelopes (`approver-<approver ID>.age`, the ID a
+`manifest.age`, `approval.age`, `init.unfinished`, `import.unfinished`, `reset.unfinished`), approver key envelopes (`approver-<approver ID>.age`, the ID a
 version 4 UUID in lowercase hyphenated form), TPM key blobs (`approver-<approver ID>.tpm`, the ID in the same form),
 record files (`record-*.age`), the recovery check record (`recovery.toml`), which
 [recovery.md](recovery.md#initialization) describes, and the owner-lock file (`locked-by-owner`), which
 [tpm-unlock.md](tpm-unlock.md#lock-across-restarts) describes. Neither of the last two is a vault file: each says
 something about a vault that may be gone. Beside a manifest, an approver key
 envelope that no pinned approver names is an [orphan](approval-signers.md#orphan-key-files), not a foreign file. The
-staged inventory (`recipients.age.staged`) and a TPM key blob are vault files only beside a manifest: `init` never writes
-them, so beside `init.unfinished` each is foreign ([recipients.md](recipients.md#initialization)). Each matters only beside `init.unfinished`, where it makes the state
+staged inventory (`recipients.age.staged`) and a TPM key blob are vault files only beside a manifest: `init` and `import` never
+write them, so beside `init.unfinished` or `import.unfinished` each is foreign ([recipients.md](recipients.md#initialization)). Each matters only beside `init.unfinished`, where it makes the state
 Unrecognized so the discard never sweeps it into the new vault, and in a state directory with no manifest, where it
 makes Uninitialized impossible. Beside a manifest it changes nothing: `unlock` logs its name at WARN
 (`vault.foreign-file`) and goes on, because `Vault::open` already ignores names it does not know and the manifest alone
@@ -102,7 +110,7 @@ decides which records exist ([§13](iron-vault-specification.md#13-vault-structu
 lock the owner out of a working vault. `lost+found` is the directory a filesystem check creates on a fresh volume, so
 `init` ignores it like the lock file and temp files ([open question 9](#open-questions)).
 
-Init proceeds only on Uninitialized and Unfinished; on Unfinished reset it ends with `already-initialized`, whose
+Init proceeds only on Uninitialized and Unfinished, of either kind; on Unfinished reset it ends with `already-initialized`, whose
 message says a reset was interrupted and to run `iron-vault reset` again. Examples of Unrecognized:
 
 - envelope files (`identity.age`, `recipients.age`, `operational.age`, `approver-<approver ID>.age`) without
@@ -336,8 +344,8 @@ Notes on the steps:
 
 ## Discarding an unfinished initialization
 
-On Unfinished, under the service-wide lock and before step 1, init removes exactly the files an initialization
-writes, each durably, and only those present:
+On Unfinished by an initialization, under the service-wide lock and before step 1, init removes exactly the files an
+initialization writes, each durably, and only those present:
 
 - in the config directory: first `config.toml.sig` and `config.toml.sig.staged`, then `config.toml` and
   `config.toml.pending`, each removed durably (unlink, then directory fsync). All signatures go before any config,
@@ -356,6 +364,13 @@ state Unrecognized, and init refuses before any prompt.
 The config test is why the discard can delete config files at all. Init starts only from Uninitialized, where the
 config directory holds none of the four, or from Unfinished, where each is init's own, because step 8 is the only
 writer and writes the initial config alone.
+
+**Either command discards either kind.** `init` and `import` each discard an unfinished initialization and an
+unfinished import. [An import's discard](migration-bundle.md#the-unfinished-import) removes the files an import writes,
+and `config.toml` whatever its bytes. When the kind changes, the discard ends by removing the other command's marker
+durably, which leaves Uninitialized, and the command's step 1 then writes its own: a crash between the two reads
+Uninitialized, which either command starts from. The log names what was discarded, not who discarded it:
+`vault.init-discarded` for an unfinished initialization and `migration.import-discarded` for an unfinished import.
 
 **Counters.** Discarding `approval.age` discards approval counters, which
 [§12](iron-vault-specification.md#12-configuration-approval-and-reload) says start at zero "only when creating a new
@@ -380,7 +395,7 @@ next init tries the removal again.
 **A stale owner-lock file.** Likewise the directory may still hold `locked-by-owner`, left by a `lock` or a `reset` on a
 vault that is gone ([tpm-unlock.md](tpm-unlock.md#lock-across-restarts)). Init removes it in the same place, right
 after `recovery.toml`, so the new vault host-unlocks at the next start instead of staying Locked for an owner who never
-locked it. These two are the only files init removes from an Uninitialized directory. A failed removal is a failed
+locked it. These two are the only files init (or `import`) removes from an Uninitialized directory. A failed removal is a failed
 discard, as for `recovery.toml`. Beside `init.unfinished` the discard of an unfinished initialization removes it too.
 
 ## Crash table
@@ -394,6 +409,7 @@ every row, and names the initialization state: "not initialized (run iron-vault 
 |---|---|---|---|
 | none | Uninitialized | `unlock-failed`: not initialized, run `iron-vault init` | removes a leftover `recovery.toml` and a stale `locked-by-owner`, then proceeds from step 1 |
 | 1 `init.unfinished` | Unfinished | `unlock-failed`: initialization unfinished, an init may be in progress; run `iron-vault init` again if none is | notice, discards (nothing yet), proceeds |
+| an unfinished import (see [the import crash table](migration-bundle.md#crash-table)) | Unfinished | `unlock-failed`: import unfinished or in progress | notice, discards the import's files and `import.unfinished`, writes `init.unfinished`, proceeds |
 | 2 `identity.age`, then `recipients.age` | Unfinished | as row 1 | discards whichever of the two exist, proceeds |
 | 3 `operational.age` | Unfinished | as row 1; the passphrase is never asked for, so the vault never reaches Checking | discards both envelopes, proceeds |
 | 4 `approver-<approver ID>.age` | Unfinished | as row 1 | discards the three envelopes, proceeds |

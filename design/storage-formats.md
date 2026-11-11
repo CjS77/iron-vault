@@ -409,6 +409,23 @@ the next `init` discards the files the unfinished run wrote and starts over. See
 - **Temp file.** A crash during its durable replace can leave `.init.unfinished.tmp`, a stale temp file that the
   startup sweep removes like any other.
 
+## Unfinished import file
+
+The state-directory file `import.unfinished` is empty: its presence is the whole of its meaning. `iron-vault import`
+writes it with a durable replace before any other file of the imported vault, and durably removes it as its last step,
+which is import's commit point. While it exists the vault is an [unfinished import](glossary.md): `unlock` refuses it,
+and the next `import` or `init` discards the files the unfinished run wrote, `config.toml` included, and starts over.
+See [migration-bundle.md](migration-bundle.md#the-unfinished-import). Rust: `StateFileName::unfinished_import`,
+`iron_vault_store::{begin_import, finish_import}`.
+
+- **Content.** Zero bytes, read as `init.unfinished` is: only the name is looked at, never the bytes.
+- **Reading.** It is check 1 of the [initialization state](vault-initialization.md#initialization-state), after
+  `init.unfinished`: with it the state is Unfinished if the state directory holds only the files an import writes and the
+  config directory holds no config file but `config.toml`, whatever its bytes. It is not sealed or MAC'd, for the same
+  reason as `init.unfinished`.
+- **Temp file.** A crash during its durable replace can leave `.import.unfinished.tmp`, a stale temp file that the
+  startup sweep removes like any other.
+
 ## Unfinished reset file
 
 The state-directory file `reset.unfinished` is empty: its presence is the whole of its meaning. `iron-vault reset`

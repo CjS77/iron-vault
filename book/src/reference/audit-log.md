@@ -221,6 +221,7 @@ file byte is logged.
 | `migration.challenge-issued` | INFO | A migration challenge was issued | `operation` (`export` or `add_recipient`), `method` (`vault_passphrase`); `destination_recipient` for `add_recipient` |
 | `migration.authorized` | INFO | The owner proved the challenge | `operation`, `method`; `destination_recipient` for `add_recipient` |
 | `migration.authorization-refused` | WARN | The challenge was refused or cancelled, or the authorization was refused when used | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
+| `migration.import-discarded` | WARN | An unfinished import was discarded by `init` | `files`: the names removed, `config.toml` among them when the import wrote one |
 
 ## `jq` recipes
 

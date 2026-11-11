@@ -714,7 +714,7 @@ other approval.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `vault.reset-confirmed` | WARN | the owner confirmed, before `reset.unfinished` is written | `vault_id` (an Initialized vault only), `verified`, `initialization` (`initialized`, `unfinished`, `unfinished_reset` or `unrecognized`), `from_state`, `resumes` |
+| `vault.reset-confirmed` | WARN | the owner confirmed, before `reset.unfinished` is written | `vault_id` (an Initialized vault only), `verified`, `initialization` (`initialized`, `unfinished`, `unfinished_import`, `unfinished_reset` or `unrecognized`), `from_state`, `resumes` |
 | `vault.reset` | WARN | the vault is discarded and `reset.unfinished` is removed | `vault_id`, `files`, `foreign` (escaped names, in a [list](#field-rules)), `finish_uncertain` |
 | `vault.reset-failed` | WARN | writing `reset.unfinished` or a removal failed | `step` (`begin`, `remove` or `finish`), `file`, `error_kind`, `removed` |
 
@@ -762,6 +762,7 @@ The lock from Ready or Unavailable raises the existing `service.lock-transition`
 | `migration.challenge-issued` | INFO | a migration challenge was issued | `operation`, `method`; `destination_recipient` for `add_recipient` |
 | `migration.authorized` | INFO | a source-owner method proved the challenge | `operation`, `method`; `destination_recipient` for `add_recipient` |
 | `migration.authorization-refused` | WARN | the challenge was refused or its prompt cancelled, or the authorization was refused when consumed | `operation`, `method`, `refusal`; `destination_recipient` for `add_recipient`; `retry_after` for `rate_limited` |
+| `migration.import-discarded` | WARN | an unfinished import was discarded, by `import` or `init` | `files` |
 
 **Owner notifications** (v1; not emitted in v0.
 [owner-notifications.md](owner-notifications.md#which-events-notify) gives which events raise one):
@@ -796,7 +797,7 @@ The fields that only one event uses, or that only audit events use:
 | `damage` | string | A record damage or shared-state damage label |
 | `files` | string | File names, in a [list](#field-rules) |
 | `foreign` | string | Foreign file names, escaped, in a [list](#field-rules) |
-| `initialization` | string | The initialization state reset read: `initialized`, `unfinished`, `unfinished_reset` or `unrecognized` |
+| `initialization` | string | The initialization state reset read: `initialized`, `unfinished`, `unfinished_import`, `unfinished_reset` or `unrecognized` |
 | `verified`, `resumes`, `finish_uncertain` | boolean | Whether a reset's vault ID came from an open vault; whether it finishes an interrupted reset; whether the removal of `reset.unfinished` may not survive a power loss |
 | `removed` | string | The files a failed reset removed before it stopped, in a [list](#field-rules) |
 | `vault_id` | string | The vault ID, a hyphenated lowercase UUID |
