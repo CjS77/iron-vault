@@ -18,6 +18,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use common::approval_harness::{APPROVAL_PASSPHRASE, Captured, assert_audit_record, captured_logs, get, mkdir, send};
@@ -41,7 +42,8 @@ use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::Capabilities;
-use iron_vault_store::{OsFs, RecipientRole};
+use iron_vault_store::{OsFs, RecipientRole, RecoveryKey, RecoveryKeySecret, VaultIdentity, unwrap_identity};
+use secrecy::{ExposeSecret, SecretString};
 use tokio::net::UnixStream;
 use tokio::sync::{Mutex, MutexGuard};
 use zeroize::Zeroizing;
@@ -182,8 +184,13 @@ fn spawn_admin(service: &Arc<ServiceContext>, limits: Limits) -> (PathBuf, tokio
 /// Sends the `import` request and the bundle on a new connection. A service that refuses at its first check closes while
 /// the bundle is still going out, so a failed write is not the test's failure.
 async fn start_import(path: &Path, bundle: &[u8]) -> UnixStream {
+    start_import_with(path, false, bundle).await
+}
+
+/// [`start_import`] with the host unlock flag as `host_unlock` says.
+async fn start_import_with(path: &Path, host_unlock: bool, bundle: &[u8]) -> UnixStream {
     let mut stream = UnixStream::connect(path).await.unwrap();
-    send(&mut stream, &Frame::Request(AdminRequest::Import { host_unlock: false })).await;
+    send(&mut stream, &Frame::Request(AdminRequest::Import { host_unlock })).await;
     send_bundle(&mut stream, bundle).await;
     stream
 }
@@ -229,8 +236,13 @@ async fn exchange(service: &Arc<ServiceContext>, request: AdminRequest, answers:
 }
 
 async fn import(service: &Arc<ServiceContext>, bundle: &[u8], answers: &[&[u8]]) -> Exchanged {
+    import_with(service, false, bundle, answers).await
+}
+
+/// `import` with the host unlock flag as `host_unlock` says.
+async fn import_with(service: &Arc<ServiceContext>, host_unlock: bool, bundle: &[u8], answers: &[&[u8]]) -> Exchanged {
     let (path, stop, task) = spawn_admin(service, Limits::default());
-    let mut stream = start_import(&path, bundle).await;
+    let mut stream = start_import_with(&path, host_unlock, bundle).await;
     let exchanged = converse(&mut stream, answers).await;
     let _ = stop.send(());
     task.await.unwrap();
@@ -698,45 +710,165 @@ async fn a_failed_write_step_leaves_an_unfinished_import_that_the_next_import_di
     assert_no_secret_logged(&logs, &[&failed.reveals[0], &finished.reveals[0]]);
 }
 
-/// A protected install whose memory is not locked refuses before any prompt or write, as `init` does.
+/// A protected install whose memory is not locked refuses before any prompt or write, as `init` does. With the host unlock
+/// flag the handoff is a world-readable file, which would end the import with `import-failed` if it were opened, so the
+/// memory refusal shows it never was.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_protected_install_without_locked_memory_refuses_import_before_any_prompt_or_write() {
     let (_one, source, _logs) = begin().await;
     let unavailable = MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 });
+    let handoff = HandoffDir::new();
+    let untrusted = handoff.write(&RecoveryKey::generate().0.expose_secret().to_owned());
+    fs::set_permissions(&untrusted, fs::Permissions::from_mode(0o644)).unwrap();
     for profile in [DeploymentProfile::Protected, DeploymentProfile::Container] {
         for memory in [unavailable.clone(), MemoryProtection::Unsupported] {
-            let dest = Dest::new();
-            let service = dest.context_as(profile, memory);
-            assert_eq!(service.unlock_at_start(&dest.path("no-handoff")).await, ServiceState::Locked);
+            for host_unlock in [false, true] {
+                let dest = Dest::new();
+                let service = dest.context_as(profile, memory.clone()).with_handoff_path(untrusted.clone());
+                assert_eq!(service.unlock_at_start(&dest.path("no-handoff")).await, ServiceState::Locked);
 
-            let shown = import(&Arc::new(service), &source.bytes, &COMPLETE).await;
+                let shown = import_with(&Arc::new(service), host_unlock, &source.bytes, &COMPLETE).await;
 
-            let (code, message) = shown.error();
-            assert_eq!(code, ErrorCode::MemoryUnprotected, "{message}");
-            assert!(message.contains("memory is not locked against swap"), "{message}");
-            assert!(shown.prompts.is_empty() && shown.reveals.is_empty());
-            dest.assert_only_lock_files();
+                let (code, message) = shown.error();
+                assert_eq!(code, ErrorCode::MemoryUnprotected, "{message}");
+                assert!(message.contains("memory is not locked against swap"), "{message}");
+                assert!(shown.prompts.is_empty() && shown.reveals.is_empty());
+                dest.assert_only_lock_files();
+            }
         }
     }
 }
 
+/// A private `0700` directory under the home directory holding a handoff, removed on drop. The trusted-path rule rejects
+/// the shared temporary directory, and a test never touches a system runtime directory.
+struct HandoffDir(PathBuf);
+
+impl HandoffDir {
+    fn new() -> Self {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let home = std::env::var_os("HOME").unwrap();
+        let dir = PathBuf::from(home).join(format!("iv-imp-hu-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        Self(dir)
+    }
+
+    /// Where the handoff is, whether or not it has been written.
+    fn path(&self) -> PathBuf {
+        self.0.join("host-unlock")
+    }
+
+    /// Writes `secret` as the handoff, `0400` as the host would leave it.
+    fn write(&self, secret: &str) -> PathBuf {
+        let path = self.path();
+        let _ = fs::remove_file(&path);
+        fs::write(&path, format!("{secret}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        path
+    }
+}
+
+impl Drop for HandoffDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A destination of `profile` with locked memory that reads its unlock handoff at `handoff`, Locked after startup.
+async fn host_unlock_dest(dest: &Dest, profile: DeploymentProfile, handoff: &Path) -> Arc<ServiceContext> {
+    let service = dest
+        .context_as(profile, MemoryProtection::Locked)
+        .with_handoff_path(handoff.to_path_buf());
+    assert_eq!(service.unlock_at_start(&dest.path("no-handoff")).await, ServiceState::Locked);
+    Arc::new(service)
+}
+
+/// The vault identity in `dest`'s `identity.age`, opened with the age secret key `secret`.
+fn open_identity_with(dest: &Dest, secret: &str) -> VaultIdentity {
+    let key = RecoveryKeySecret::parse(SecretString::from(secret.to_owned())).unwrap();
+    unwrap_identity(&fs::read(dest.path("state/identity.age")).unwrap(), &key).unwrap()
+}
+
+/// Release check `import_host_unlock_enrolls_recipient`: `import --host-unlock` wraps the vault identity for the handoff's
+/// identity beside the operational and recovery recipients, each opens `identity.age`, and a restart reaches the config
+/// check from the handoff alone. An absent handoff ends with `import-failed` before any prompt and writes nothing.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_host_unlock_request_is_refused_before_any_prompt_until_it_is_implemented() {
-    let (_one, source, _logs) = begin().await;
-    let dest = Dest::new();
-    let service = dest.start();
-    let (path, stop, task) = spawn_admin(&service, Limits::default());
-    let mut stream = UnixStream::connect(&path).await.unwrap();
-    send(&mut stream, &Frame::Request(AdminRequest::Import { host_unlock: true })).await;
-    send_bundle(&mut stream, &source.bytes).await;
+async fn import_host_unlock_enrolls_recipient() {
+    let (_one, source, logs) = begin().await;
+    for profile in [DeploymentProfile::Protected, DeploymentProfile::Container] {
+        let dest = Dest::new();
+        let (host_secret, _) = RecoveryKey::generate();
+        let host_secret = host_secret.expose_secret().to_owned();
+        let handoff = HandoffDir::new();
+        let handoff_path = handoff.write(&host_secret);
+        let service = host_unlock_dest(&dest, profile, &handoff_path).await;
 
-    let shown = converse(&mut stream, &[]).await;
+        let shown = import_with(&service, true, &source.bytes, &COMPLETE).await;
 
-    assert_eq!(shown.error().0, ErrorCode::ImportFailed);
-    assert!(shown.prompts.is_empty());
-    let _ = stop.send(());
-    task.await.unwrap();
-    dest.assert_only_lock_files();
+        assert_eq!(shown.prompts.len(), 4, "{shown:?}");
+        assert_eq!(
+            shown.result().recipients,
+            [RecipientRole::Operational, RecipientRole::Recovery, RecipientRole::HostUnlock]
+        );
+        assert!(
+            shown.notices.contains("host unlock: enrolled from this machine's unlock handoff"),
+            "{}",
+            shown.notices
+        );
+        assert!(logs.has_field("migration.imported", "recipients", "operational,recovery,host-unlock"));
+        let vault_id = open_identity_with(&dest, &host_secret).public_key();
+        assert_eq!(open_identity_with(&dest, &shown.reveals[0]).public_key(), vault_id);
+        service.stop().await;
+        drop(service);
+
+        // A restart opens the vault from the handoff alone and runs the config check, which fails: nothing is approved.
+        let restarted = dest
+            .context_as(profile, MemoryProtection::Locked)
+            .with_handoff_path(handoff_path.clone());
+        assert_eq!(
+            restarted.unlock_at_start(&handoff_path).await,
+            ServiceState::Unavailable(FailureReason::PolicyInvalid)
+        );
+        assert_no_secret_logged(&logs, &[&shown.reveals[0], &host_secret]);
+    }
+}
+
+/// With no host unlock identity to enrol, `import --host-unlock` ends with `import-failed` naming the reason, before any
+/// prompt, and writes nothing. A Development service has none, and an untrusted handoff is refused without its bytes.
+#[tokio::test(flavor = "multi_thread")]
+async fn import_host_unlock_without_an_identity_to_enrol_ends_with_import_failed_and_writes_nothing() {
+    let (_one, source, logs) = begin().await;
+    let (secret, _) = RecoveryKey::generate();
+    let secret = secret.expose_secret().to_owned();
+    for profile in [DeploymentProfile::Protected, DeploymentProfile::Container] {
+        let handoff = HandoffDir::new();
+        let absent = Dest::new();
+        let service = host_unlock_dest(&absent, profile, &handoff.path()).await;
+        let shown = import_with(&service, true, &source.bytes, &COMPLETE).await;
+        assert_refused_before_any_prompt(&shown, "there is no unlock handoff");
+        absent.assert_only_lock_files();
+
+        let untrusted = Dest::new();
+        fs::set_permissions(handoff.write(&secret), fs::Permissions::from_mode(0o644)).unwrap();
+        let service = host_unlock_dest(&untrusted, profile, &handoff.path()).await;
+        let shown = import_with(&service, true, &source.bytes, &COMPLETE).await;
+        assert_refused_before_any_prompt(&shown, "not trusted");
+        assert!(!shown.error().1.contains(&secret));
+        untrusted.assert_only_lock_files();
+    }
+    let development = Dest::new();
+    let shown = import_with(&development.start(), true, &source.bytes, &COMPLETE).await;
+    assert_refused_before_any_prompt(&shown, "a development build has no host unlock");
+    development.assert_only_lock_files();
+    assert_no_secret_logged(&logs, &[&secret]);
+}
+
+fn assert_refused_before_any_prompt(shown: &Exchanged, reason: &str) {
+    let (code, message) = shown.error();
+    assert_eq!(code, ErrorCode::ImportFailed, "{message}");
+    assert!(message.contains(reason) && message.contains("nothing was written"), "{message}");
+    assert!(shown.prompts.is_empty() && shown.reveals.is_empty());
 }
 
 /// Without a terminal the CLI shows no recovery key, so it exits before it connects or reads the bundle.

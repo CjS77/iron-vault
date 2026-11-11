@@ -70,6 +70,24 @@ fn init_host_unlock_is_accepted_by_every_build_but_dev_mode() {
     }
 }
 
+/// `import` follows `init`: a dev-mode build has no host unlock to enrol, so its parser does not know the flag.
+#[test]
+fn import_host_unlock_is_accepted_by_every_build_but_dev_mode() {
+    let bundle = PathBuf::from("vault.bundle");
+    assert_eq!(
+        parse(&["import", "vault.bundle"]).unwrap().command,
+        Command::Import {
+            bundle: bundle.clone(),
+            host_unlock: false
+        }
+    );
+    let parsed = parse(&["import", "--host-unlock", "vault.bundle"]);
+    match cfg!(feature = "dev-mode") {
+        false => assert_eq!(parsed.unwrap().command, Command::Import { bundle, host_unlock: true }),
+        true => assert_eq!(parsed.unwrap_err().exit_code(), 2),
+    }
+}
+
 #[test]
 fn recipient_list_is_a_client_command_without_arguments() {
     assert_eq!(
