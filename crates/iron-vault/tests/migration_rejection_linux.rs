@@ -79,7 +79,10 @@ impl Gate {
             match require_migration_authorization(exchange, &session, self.issued_for.clone()).await? {
                 Err(none) => no_authorization(COMMAND, none),
                 Ok(authorization) => match authorization.authorize(vault_id(&self.service).await, &self.spend, Instant::now()) {
-                    Ok(_) => AdminResponse::Lock { cleared: true },
+                    Ok(_) => AdminResponse::Lock {
+                        cleared: true,
+                        persisted: true,
+                    },
                     Err(refusal) => no_authorization(COMMAND, NoAuthorization(refusal)),
                 },
             },
@@ -110,7 +113,10 @@ impl Gate {
             (MigrationRefusal::NotPending, Some(MigrationRefusal::NotPending)) => {
                 no_authorization(COMMAND, NoAuthorization(MigrationRefusal::NotPending))
             }
-            _ => AdminResponse::Lock { cleared: true },
+            _ => AdminResponse::Lock {
+                cleared: true,
+                persisted: true,
+            },
         })
     }
 }
@@ -356,7 +362,7 @@ async fn an_unlocked_vault_does_not_authorize_without_a_fresh_proof() {
     // nothing over to the next exchange.
     let (prompts, first) = served.run(PASSPHRASE).await;
     assert_eq!(
-        (prompts, matches!(first, AdminResponse::Lock { cleared: true })),
+        (prompts, matches!(first, AdminResponse::Lock { cleared: true, .. })),
         (1, true),
         "{first:?}"
     );

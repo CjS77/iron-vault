@@ -127,7 +127,7 @@ pub async fn init(service: &Arc<ServiceContext>) -> String {
 
 pub async fn unlock(service: &Arc<ServiceContext>) {
     let (response, _) = exchange(service, AdminRequest::Unlock, &[VAULT_PASSPHRASE.as_bytes()]).await;
-    assert!(matches!(response, AdminResponse::Success), "{response:?}");
+    assert!(matches!(response, AdminResponse::Unlock { .. }), "{response:?}");
 }
 
 pub async fn list(service: &Arc<ServiceContext>) -> AdminResponse {

@@ -295,7 +295,7 @@ async fn a_lock_at_the_prompt_adds_nothing() {
     assert_eq!(error_of(&response).0, ErrorCode::MigrationUnavailable);
     assert!(matches!(
         read_frame(&mut lock).await,
-        Frame::Response(AdminResponse::Lock { cleared: true })
+        Frame::Response(AdminResponse::Lock { cleared: true, .. })
     ));
     served.assert_nothing_written(&before);
     let refused = served.events_for("migration.authorization-refused", &key);

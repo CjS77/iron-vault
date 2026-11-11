@@ -166,7 +166,6 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             resumes: plan.resumes(),
         }
         .emit();
-        // K-338: `lock` writes `locked-by-owner` before the snapshot is withdrawn; reset's withdrawal writes it the same way.
         let discarded = self.discard().await?;
         // The passphrase the attempt limit counted guesses against is gone with the vault.
         self.inner.lock().await.attempts.record_success();
@@ -206,6 +205,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             ServiceState::Locked => ServiceState::Locked,
             _ => next(from, ServiceEvent::Lock).map_err(|refused| ResetRefusal::WrongState(refused.state))?,
         };
+        // As `lock` does, before the withdrawal: a crash before the discard's `begin` must not let a host-unlock restart
+        // reopen the intact vault. A failed write is logged and does not stop the reset, whose discard removes the file.
+        self.write_owner_lock().await;
         let (withdrawn, identity) = self.withdraw(&mut inner, from, to);
         Ok((service_wide, withdrawn, identity))
     }

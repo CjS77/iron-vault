@@ -174,7 +174,7 @@ async fn set_up(install: &Install, configured: SocketAddr) {
         install.log()
     );
     let unlock = exchange(install, AdminRequest::Unlock, &[vault]).await;
-    assert!(matches!(unlock, AdminResponse::Success), "{unlock:?}\n{}", install.log());
+    assert!(matches!(unlock, AdminResponse::Unlock { .. }), "{unlock:?}\n{}", install.log());
     let config = format!("schema_version = 1\n\n[listeners.{LISTENER}]\naddress = \"{configured}\"\n");
     let proposed = ProposedConfig::new(config.into_bytes()).unwrap();
     let approved = exchange(install, AdminRequest::ConfigApprove(proposed), &["yes", approval]).await;

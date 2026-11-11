@@ -42,7 +42,7 @@ use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, LockUnavailable, MemoryProtection};
 use iron_vault::migration_authorization::{MigrationOperation, MigrationRefusal};
 use iron_vault::path_metadata::invoking_user;
-use iron_vault::service_context::{LockOutcome, ServiceContext, ServiceLocks, ServiceSetup, StartError, UnlockRefusal};
+use iron_vault::service_context::{LockOutcome, LockResult, ServiceContext, ServiceLocks, ServiceSetup, StartError, UnlockRefusal};
 use iron_vault::service_state::{FailureReason, IllegalTransition, ListenerProvenance, ServiceEvent, ServiceState, UnavailableReason};
 use iron_vault::serving_snapshot::{Admission, SnapshotHolder};
 use iron_vault::socket_activation::{AdoptedSocket, PassedSockets};
@@ -63,6 +63,11 @@ use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::oneshot;
 use tracing_subscriber::fmt::MakeWriter;
 use zeroize::Zeroizing;
+
+/// The result of a lock whose owner-lock file was written.
+fn locked(outcome: LockOutcome) -> LockResult {
+    LockResult { outcome, persisted: true }
+}
 
 const IDENTITY: &str = "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE";
 const SECRET: &str = "fx-secret-4b1d";
@@ -972,7 +977,10 @@ async fn unlock_with_the_right_passphrase_reaches_ready_and_a_request_reaches_th
     let fixture = approved().await;
     let service = fixture.start().unwrap();
 
-    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
 
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_served(&get_unix(&fixture.socket(), true).await);
@@ -989,7 +997,10 @@ async fn unlock_evaluates_the_recovery_reminder_schedule_and_starts_the_check_re
     let service = fixture.start().unwrap();
     assert!(!fixture.path("state/recovery.toml").exists());
 
-    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
 
     let record = iron_vault_store::RecoveryCheckRecord::decode(&fs::read(fixture.path("state/recovery.toml")).unwrap()).unwrap();
     assert_eq!(record.last_checked(), None);
@@ -1009,7 +1020,10 @@ async fn the_reminder_interval_is_the_one_the_activated_config_sets() {
     .unwrap();
     let service = fixture.start().unwrap();
 
-    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
 
     let ours: Vec<_> = logs
         .events("recovery.reminder")
@@ -1033,7 +1047,10 @@ async fn a_wrong_passphrase_leaves_the_service_locked() {
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
     assert!(fixture.upstream.requests().is_empty());
     // A later unlock with the right passphrase still works: the refusal changed nothing.
-    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
     assert_no_passphrase_logged(&logs);
 }
 
@@ -1256,7 +1273,13 @@ async fn lock_over_the_admin_socket_leaves_the_service_locked_answering_503_unti
 
     let response = admin(&service, AdminRequest::Lock, "").await.2;
 
-    assert_response(&response, &AdminResponse::Lock { cleared: true });
+    assert_response(
+        &response,
+        &AdminResponse::Lock {
+            cleared: true,
+            persisted: true,
+        },
+    );
     assert_eq!(service.state().await, ServiceState::Locked);
     // The approval state and the credential report go with the vault: status reports no vault and no credentials.
     let report = status(&service).await.1;
@@ -1265,7 +1288,10 @@ async fn lock_over_the_admin_socket_leaves_the_service_locked_answering_503_unti
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
     assert_eq!(fixture.upstream.requests().len(), 1, "the locked service sent nothing upstream");
     assert!(logs.has_transition("ready", "locked", None), "{}", logs.text());
-    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_served(&get_unix(&fixture.socket(), true).await);
 }
@@ -1287,7 +1313,7 @@ async fn a_request_in_flight_is_cancelled_and_its_snapshot_is_gone_before_lock_a
 
     let outcome = service.lock(DRAIN).await;
 
-    assert_eq!(outcome, Ok(LockOutcome::Cleared));
+    assert_eq!(outcome, Ok(locked(LockOutcome::Cleared)));
     assert_eq!(snapshot.strong_count(), 0);
     let response = waiting.await.unwrap();
     assert_eq!(response.status, 503);
@@ -1331,7 +1357,13 @@ async fn lock_from_unavailable_clears_the_kept_vault_identity() {
 
     let response = admin(&service, AdminRequest::Lock, "").await.2;
 
-    assert_response(&response, &AdminResponse::Lock { cleared: true });
+    assert_response(
+        &response,
+        &AdminResponse::Lock {
+            cleared: true,
+            persisted: true,
+        },
+    );
     assert!(kept.upgrade().is_none(), "the vault identity outlived the lock");
     assert!(service.identity_probe().await.is_none());
     let report = status(&service).await.1;
@@ -1355,7 +1387,7 @@ async fn lock_retires_the_pending_migration_challenge() {
         )
         .unwrap();
 
-    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+    assert_eq!(service.lock(DRAIN).await, Ok(locked(LockOutcome::Cleared)));
 
     let mut pending = service.pending_migration().await;
     assert!(!pending.is_pending(), "the challenge outlived the lock");
@@ -1372,7 +1404,7 @@ async fn lock_does_not_reset_the_passphrase_attempt_limit() {
     let mut limiter = service.attempt_limiter().await;
     (0..FAILURE_THRESHOLD).for_each(|_| limiter.record_failure(tokio::time::Instant::now()));
     drop(limiter);
-    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+    assert_eq!(service.lock(DRAIN).await, Ok(locked(LockOutcome::Cleared)));
 
     let limiter = service.attempt_limiter().await;
     assert!(
@@ -1385,10 +1417,13 @@ async fn lock_does_not_reset_the_passphrase_attempt_limit() {
 async fn unlock_after_a_lock_from_unavailable_rechecks_and_reaches_ready_once_the_config_is_fixed() {
     let fixture = approved().await;
     let (service, _) = unavailable_service(&fixture).await;
-    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+    assert_eq!(service.lock(DRAIN).await, Ok(locked(LockOutcome::Cleared)));
     fs::write(fixture.path("etc/config.toml"), fixture.config("")).unwrap();
 
-    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
 
     assert_eq!(service.state().await, ServiceState::Ready);
     assert_served(&get_unix(&fixture.socket(), true).await);
@@ -1405,7 +1440,7 @@ async fn lock_from_unavailable_says_the_identity_is_not_cleared_while_an_old_sna
     fs::write(fixture.path("etc/config.toml"), fixture.config("# edited after approval\n")).unwrap();
     assert_eq!(service.reload().await, Ok(ServiceState::Unavailable(FailureReason::PolicyInvalid)));
 
-    assert_eq!(service.lock(SHORT_DRAIN).await, Ok(LockOutcome::IdentityHeld));
+    assert_eq!(service.lock(SHORT_DRAIN).await, Ok(locked(LockOutcome::IdentityHeld)));
 
     assert_eq!(service.state().await, ServiceState::Locked);
     assert!(kept.upgrade().is_some(), "the held vault lost its identity");
@@ -1424,7 +1459,13 @@ async fn a_request_that_ignores_cancellation_makes_lock_say_the_secrets_are_not_
 
     let response = admin_with(&service, handlers, AdminRequest::Lock, "").await.2;
 
-    assert_response(&response, &AdminResponse::Lock { cleared: false });
+    assert_response(
+        &response,
+        &AdminResponse::Lock {
+            cleared: false,
+            persisted: true,
+        },
+    );
     assert_eq!(service.state().await, ServiceState::Locked);
     assert_refused(&get_unix(&fixture.socket(), true).await, UnavailableReason::Locked);
     assert!(
@@ -1444,7 +1485,7 @@ async fn the_expired_drain_counts_the_snapshots_still_held() {
 
     let outcome = service.lock(SHORT_DRAIN).await;
 
-    assert_eq!(outcome, Ok(LockOutcome::Held { snapshots: 1 }));
+    assert_eq!(outcome, Ok(locked(LockOutcome::Held { snapshots: 1 })));
     drop(stubborn);
 }
 
@@ -1489,7 +1530,7 @@ async fn a_response_streaming_when_lock_runs_holds_the_snapshot_until_its_body_i
 
     let outcome = service.lock(DRAIN).await;
 
-    assert_eq!(outcome, Ok(LockOutcome::Cleared));
+    assert_eq!(outcome, Ok(locked(LockOutcome::Cleared)));
     assert_eq!(snapshot.strong_count(), 0, "lock answered while the body still held the snapshot");
     let mut rest = Vec::new();
     let _ = tokio::time::timeout(WAIT, stream.read_to_end(&mut rest)).await.unwrap();
@@ -1546,7 +1587,7 @@ async fn lock_clears_the_vault_identity_once_its_drain_releases_the_last_snapsho
     let service = ready_service(&fixture).await;
     let identity = service.identity_probe().await.unwrap();
 
-    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+    assert_eq!(service.lock(DRAIN).await, Ok(locked(LockOutcome::Cleared)));
 
     assert!(identity.upgrade().is_none(), "the vault identity outlived the lock drain");
     assert!(service.identity_probe().await.is_none());
@@ -1566,7 +1607,7 @@ async fn after_a_cleared_lock_no_upstream_connection_that_carried_the_credential
         "the credential-bearing connection was not pooled"
     );
 
-    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+    assert_eq!(service.lock(DRAIN).await, Ok(locked(LockOutcome::Cleared)));
 
     // The upstream learns of the close only when the client's FIN reaches it, so the test waits for that.
     eventually(|| (fixture.upstream.open_connections() == 0).then_some(())).await;
@@ -1582,7 +1623,7 @@ async fn a_snapshot_held_past_the_lock_drain_keeps_the_identity_until_it_is_drop
         panic!("a Ready service serves a snapshot");
     };
 
-    assert_eq!(service.lock(SHORT_DRAIN).await, Ok(LockOutcome::Held { snapshots: 1 }));
+    assert_eq!(service.lock(SHORT_DRAIN).await, Ok(locked(LockOutcome::Held { snapshots: 1 })));
 
     assert!(identity.upgrade().is_some(), "the held vault lost its identity");
     drop(stubborn);
@@ -1888,7 +1929,7 @@ async fn a_request_gets_503_locked_at_once_while_an_unlock_is_in_scrypt() {
     assert!(started.elapsed() < PROMPTLY, "the refusal took {:?}", started.elapsed());
     assert_refused(&response, UnavailableReason::Locked);
     release.send(()).unwrap();
-    assert_response(&unlocking.await.unwrap(), &AdminResponse::Success);
+    assert_response(&unlocking.await.unwrap(), &AdminResponse::Unlock { owner_lock_removed: true });
     assert_eq!(service.state().await, ServiceState::Ready);
     session.close().await;
 }
@@ -1906,7 +1947,7 @@ async fn ping_answers_at_once_and_status_waits_for_an_unlock_in_scrypt() {
     assert!(!status.is_finished(), "status did not wait for the unlock");
 
     release.send(()).unwrap();
-    assert_response(&unlocking.await.unwrap(), &AdminResponse::Success);
+    assert_response(&unlocking.await.unwrap(), &AdminResponse::Unlock { owner_lock_removed: true });
     let AdminResponse::Status(report) = status.await.unwrap() else {
         panic!("expected a status report");
     };
@@ -2115,7 +2156,10 @@ async fn one_damaged_credential_record_gives_503_on_its_routes_while_unrelated_r
     fixture.approve(&config.replace("routes = [\"fx\"]", "routes = [\"fx\", \"brave\"]"));
     fs::write(&fixture.brave_record, b"not the record").unwrap();
     let service = fixture.start().unwrap();
-    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
 
     let damaged = get_path(&fixture.socket(), "/brave/latest").await;
 
@@ -2148,7 +2192,10 @@ async fn one_damaged_credential_record_gives_503_on_its_routes_while_unrelated_r
 async fn locking_while_serving_gives_503_locked_and_unlock_restores_serving_at_the_same_committed_version() {
     let fixture = approved().await;
     let service = fixture.start().unwrap();
-    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
     assert_served(&get_unix(&fixture.socket(), true).await);
     let served = fixture.upstream.connections();
     let VaultStatus::Unlocked(before) = status(&service).await.1.vault else {
@@ -2157,11 +2204,17 @@ async fn locking_while_serving_gives_503_locked_and_unlock_restores_serving_at_t
 
     assert_response(
         &admin(&service, AdminRequest::Lock, "").await.2,
-        &AdminResponse::Lock { cleared: true },
+        &AdminResponse::Lock {
+            cleared: true,
+            persisted: true,
+        },
     );
     assert_safe_state(&fixture, &service, ServiceState::Locked, UnavailableReason::Locked, served).await;
 
-    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
     assert_served(&get_unix(&fixture.socket(), true).await);
     let VaultStatus::Unlocked(after) = status(&service).await.1.vault else {
         panic!("the restored vault should be unlocked");
@@ -2347,7 +2400,7 @@ async fn unlock_and_migration_authorization_share_one_attempt_count() {
     assert_eq!(service.enter_checking(identity()).await, Ok(ServiceState::Ready));
     wrong_migration_authorization(&service).await;
     wrong_migration_authorization(&service).await;
-    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+    assert_eq!(service.lock(DRAIN).await, Ok(locked(LockOutcome::Cleared)));
     for _ in 0..3 {
         wrong_unlock(&service).await;
     }
@@ -2364,7 +2417,10 @@ async fn a_successful_unlock_clears_the_count_migration_authorization_reads() {
     let service = fixture.start().unwrap();
     seed_failures(&service, FAILURE_THRESHOLD - 1).await;
 
-    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
 
     seed_failures(&service, FAILURE_THRESHOLD - 1).await;
     service.check_migration_attempts().await.unwrap();
@@ -2378,11 +2434,14 @@ async fn lock_does_not_clear_a_count_built_since_the_last_success() {
         wrong_unlock(&service).await;
     }
     skip_cooldown(Duration::from_secs(30)).await;
-    assert_response(&unlock(&service, PASSPHRASE).await, &AdminResponse::Success);
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
     for _ in 0..FAILURE_THRESHOLD {
         wrong_migration_authorization(&service).await;
     }
-    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+    assert_eq!(service.lock(DRAIN).await, Ok(locked(LockOutcome::Cleared)));
 
     let (_, prompts, response) = admin(&service, AdminRequest::Unlock, PASSPHRASE).await;
 

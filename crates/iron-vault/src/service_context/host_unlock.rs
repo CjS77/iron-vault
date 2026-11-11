@@ -27,6 +27,8 @@ pub enum HostUnlockOutcome {
     Unlocked,
     /// No handoff was there.
     Absent,
+    /// The owner-lock file is there: an explicit `lock` stands, so the handoff and the memory guard were never reached.
+    OwnerLocked,
     /// The handoff was there, or memory was not locked, and the vault stayed shut.
     Refused(HostUnlockRefusal),
 }
@@ -54,6 +56,7 @@ impl HostUnlockOutcome {
         match self {
             Self::Unlocked => "unlocked",
             Self::Absent => "absent",
+            Self::OwnerLocked => "owner_locked",
             Self::Refused(_) => "refused",
         }
     }
@@ -107,7 +110,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     ///
     /// Only the Protected and Container profiles try a host unlock, and only they leave `start` in Starting; in any other
     /// state this returns the state unchanged, so a Development service stays Locked, exactly as `start` left it. Each
-    /// attempt writes one `vault.host-unlock` record.
+    /// attempt writes one `vault.host-unlock` record. The owner-lock file is read first, before the memory guard and
+    /// before the handoff is opened: while anything is at that name the attempt is `owner_locked` and the service
+    /// goes to Locked. Host unlock never removes the file.
     ///
     /// Cancel-safe once the service enters Checking, as [`enter_checking`](Self::enter_checking) is. A future dropped
     /// before then leaves the service in Starting, which refuses requests as Locked does and unlocks nothing.
@@ -116,6 +121,13 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let mut inner = Arc::clone(&self.inner).lock_owned().await;
         if inner.state != ServiceState::Starting {
             return inner.state;
+        }
+        if self.owner_lock_present().await {
+            HostUnlock {
+                outcome: HostUnlockOutcome::OwnerLocked,
+            }
+            .emit();
+            return apply(&self.holder, &mut inner, ServiceEvent::InteractiveUnlockRequired).unwrap_or(inner.state);
         }
         let opened = self.open_with_handoff(handoff).await;
         HostUnlock {

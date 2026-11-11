@@ -334,7 +334,7 @@ async fn init_writes_a_vault_that_stays_locked_and_unlocks_to_ready_at_version_1
     assert_eq!((report.state, report.vault), (ServiceState::Locked, VaultStatus::Locked));
     assert!(matches!(service.holder().load(), Admission::Refuse(UnavailableReason::Locked)));
 
-    assert_response(&unlock(&service).await, &AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Unlock { owner_lock_removed: true });
     let vault = unlocked(&service).await;
     assert_eq!((vault.id, vault.committed, vault.highest_reserved), (vault_id, Some(1), 1));
     assert!(vault.credentials.is_empty() && vault.route_faults.is_empty());
@@ -371,7 +371,7 @@ async fn after_a_restart_init_is_already_initialized_before_any_prompt_and_wrong
     assert_eq!(code, ErrorCode::AlreadyInitialized);
     assert!(message.contains("Initialized") && !message.contains("discard"), "{message}");
 
-    assert_response(&unlock(&service).await, &AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Unlock { owner_lock_removed: true });
     let ready = init(&service, &COMPLETE).await;
     assert!(ready.prompts.is_empty(), "{ready:?}");
     assert_eq!(
@@ -535,7 +535,7 @@ async fn a_foreign_file_beside_the_manifest_is_logged_by_name_and_unlock_goes_on
     let unlocked = exchange(&service, AdminRequest::Unlock, &[VAULT_PASSPHRASE.as_bytes()]).await;
 
     assert_eq!(unlocked.prompts.len(), 1, "{unlocked:?}");
-    assert_response(&unlocked.response, &AdminResponse::Success);
+    assert_response(&unlocked.response, &AdminResponse::Unlock { owner_lock_removed: true });
     let warned: Vec<_> = logs
         .events("vault.foreign-file")
         .into_iter()
@@ -581,7 +581,7 @@ async fn an_unfinished_initialization_refuses_unlock_and_the_next_init_discards_
     ["config.toml", "operational.age", "identity.age"]
         .iter()
         .for_each(|name| assert!(files.contains(name), "{name} not in {files:?}"));
-    assert_response(&unlock(&service).await, &AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Unlock { owner_lock_removed: true });
     assert_no_secret_logged(&logs, &[exchanged.recovery_key()]);
 }
 
@@ -637,7 +637,7 @@ async fn of_two_inits_confirmed_together_one_writes_and_the_other_is_busy() {
     assert!(message.ends_with("the recovery key shown opens nothing: discard it"), "{message}");
     let _ = stop.send(());
     task.await.unwrap();
-    assert_response(&unlock(&service).await, &AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Unlock { owner_lock_removed: true });
     assert_no_secret_logged(&logs, &[&keys[0], &keys[1]]);
 }
 
@@ -668,7 +668,7 @@ async fn a_second_init_confirmed_after_the_first_finished_is_already_initialized
     assert!(message.ends_with("the recovery key shown opens nothing: discard it"), "{message}");
     let _ = stop.send(());
     task.await.unwrap();
-    assert_response(&unlock(&service).await, &AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Unlock { owner_lock_removed: true });
     assert_eq!(unlocked(&service).await.id, vault_id);
     assert_no_secret_logged(&logs, &[&keys[0], &keys[1]]);
 }
@@ -714,7 +714,7 @@ async fn an_init_dropped_while_writing_keeps_its_locks_until_the_writes_end() {
     let second = service.initialize(sealing_keys(), init_passphrases()).await;
     assert!(matches!(second, Err(InitRefusal::Busy)), "{second:?}");
     wait_until(|| !marker.exists()).await;
-    assert_response(&unlock(&service).await, &AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Unlock { owner_lock_removed: true });
     let initialized = unlocked(&service).await.id.to_string();
     assert!(logs.has_field("vault.initialized", "vault_id", &initialized), "{}", logs.text());
 }
@@ -783,7 +783,7 @@ async fn init_unlock_add_and_approve_lead_to_a_request_carrying_the_secret() {
     let service = fixture.start();
     let initialized = init(&service, &COMPLETE).await;
     initialized.vault_id();
-    assert_response(&unlock(&service).await, &AdminResponse::Success);
+    assert_response(&unlock(&service).await, &AdminResponse::Unlock { owner_lock_removed: true });
 
     let add = AdminRequest::Add {
         name: "fx".to_owned(),

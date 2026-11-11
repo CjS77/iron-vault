@@ -13,7 +13,7 @@ use super::protocol::{AdminRequest, AdminResponse, ErrorCode, Prompt};
 use super::server::{Exchange, ExchangeError};
 use crate::audit::AuditEvent;
 use crate::audit::vault::UnlockRefused;
-use crate::service_context::{ServiceContext, UnlockRefusal};
+use crate::service_context::{ServiceContext, UnlockRefusal, Unlocked};
 use crate::service_state::{AdminOperation, ServiceState, UnavailableReason};
 
 /// The label of the one prompt `unlock` sends.
@@ -69,25 +69,32 @@ impl<F: StoreFs + Send + Sync + 'static> Unlock<F> {
             return Ok(refused(refusal));
         };
         Ok(match self.service.unlock(passphrase).await {
-            Ok(state) => settled(state),
+            Ok(unlocked) => settled(unlocked),
             Err(refusal) => refused(refusal),
         })
     }
 }
 
-/// The response for the state a successful unlock settled in: Ready succeeds; Unavailable names its redacted reason.
-fn settled(state: ServiceState) -> AdminResponse {
-    match state {
-        ServiceState::Ready => AdminResponse::Success,
+/// The response for the state a successful unlock settled in: Ready succeeds; Unavailable names its redacted reason and,
+/// when the owner-lock file could not be removed, says the next start stays Locked.
+fn settled(unlocked: Unlocked) -> AdminResponse {
+    match unlocked.state {
+        ServiceState::Ready => AdminResponse::Unlock {
+            owner_lock_removed: unlocked.owner_lock_removed,
+        },
         other => error(
             ErrorCode::UnlockedUnavailable,
             format!(
-                "the vault unlocked, but the config check failed: the service is {}",
-                state_name(other)
+                "the vault unlocked, but the config check failed: the service is {}{}",
+                state_name(other),
+                if unlocked.owner_lock_removed { "" } else { OWNER_LOCK_KEPT },
             ),
         ),
     }
 }
+
+/// What the owner reads when a passphrase `unlock` could not remove the owner-lock file.
+const OWNER_LOCK_KEPT: &str = "; the owner-lock file could not be removed, so the next start stays Locked";
 
 fn refused(refusal: UnlockRefusal) -> AdminResponse {
     match refusal {

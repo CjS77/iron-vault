@@ -132,7 +132,7 @@ async fn init(service: &Arc<ServiceContext>) -> String {
 
 async fn unlock(service: &Arc<ServiceContext>) {
     let (response, _) = exchange(service, AdminRequest::Unlock, &[VAULT_PASSPHRASE.as_bytes()]).await;
-    assert!(matches!(response, AdminResponse::Success), "{response:?}");
+    assert!(matches!(response, AdminResponse::Unlock { .. }), "{response:?}");
 }
 
 /// Sends `request` over a new connection and answers its prompts with `answers`.
@@ -414,7 +414,10 @@ async fn a_lock_at_the_prompt_cancels_the_removal() {
 
     locking.await.unwrap().unwrap();
     assert_eq!(error_code(&cancelled.response), ErrorCode::ApprovalUnavailable);
-    assert_eq!(fixture.state_files(), before);
+    // The lock itself leaves the owner-lock file; the cancelled removal changed nothing else.
+    let mut after = fixture.state_files();
+    assert_eq!(after.remove("locked-by-owner"), Some(Vec::new()));
+    assert_eq!(after, before);
     let _ = stop.send(());
     let _ = task.await;
 }

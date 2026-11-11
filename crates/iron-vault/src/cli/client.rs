@@ -145,10 +145,15 @@ pub fn list(socket: Option<&Path>) -> Exit {
 /// Locked, but the owner must know that a request may still hold secrets.
 pub fn lock(socket: Option<&Path>) -> Exit {
     run(socket, AdminRequest::Lock, |response| match response {
-        AdminResponse::Lock { cleared } => {
+        AdminResponse::Lock { cleared, persisted } => {
             println!("locked");
             if !cleared {
                 eprintln!("iron-vault: warning: a request still holds secrets in the service's memory; see the service log");
+            }
+            if !persisted {
+                eprintln!(
+                    "iron-vault: warning: the lock will not survive a restart: the owner-lock file could not be written; see the service log"
+                );
             }
             Exit::Success
         }
@@ -184,8 +189,13 @@ pub(super) fn run_on(
 /// service in: Ready on stdout, or the service's error, which names an Unavailable state's redacted reason, on stderr.
 pub fn unlock(socket: Option<&Path>) -> Exit {
     run(socket, AdminRequest::Unlock, |response| match response {
-        AdminResponse::Success => {
+        AdminResponse::Unlock { owner_lock_removed } => {
             println!("the vault is unlocked: the service is Ready");
+            if !owner_lock_removed {
+                eprintln!(
+                    "iron-vault: warning: the owner-lock file could not be removed, so the next start will stay Locked; see the service log"
+                );
+            }
             Exit::Success
         }
         _ => unexpected(),

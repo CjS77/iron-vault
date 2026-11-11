@@ -56,7 +56,8 @@ fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
         (R::Ping { profile: a }, R::Ping { profile: b }) => a == b,
         (R::Status(a), R::Status(b)) => a == b,
         (R::ConfigApprove(a), R::ConfigApprove(b)) => a == b,
-        (R::Lock { cleared: a }, R::Lock { cleared: b }) => a == b,
+        (R::Lock { cleared: a, persisted: p }, R::Lock { cleared: b, persisted: q }) => (a, p) == (b, q),
+        (R::Unlock { owner_lock_removed: a }, R::Unlock { owner_lock_removed: b }) => a == b,
         (R::Add { record_id: a }, R::Add { record_id: b }) | (R::Replace { record_id: a }, R::Replace { record_id: b }) => a == b,
         (R::CallerToken { token: a }, R::CallerToken { token: b }) => TokenHash::of(a) == TokenHash::of(b),
         (
@@ -292,7 +293,8 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             Just(DeploymentProfile::Container)
         ]
         .prop_map(|profile| Frame::Response(AdminResponse::Ping { profile })),
-        any::<bool>().prop_map(|cleared| Frame::Response(AdminResponse::Lock { cleared })),
+        (any::<bool>(), any::<bool>()).prop_map(|(cleared, persisted)| Frame::Response(AdminResponse::Lock { cleared, persisted })),
+        any::<bool>().prop_map(|owner_lock_removed| Frame::Response(AdminResponse::Unlock { owner_lock_removed })),
         any::<u8>().prop_map(|recipients| Frame::Response(AdminResponse::RecipientAdd {
             recipient: "age1csc5wgcsw68jdz8uxh9sramjkys02nk8qf740lpywzvlzm9pjf7qxffk4e".parse().unwrap(),
             recipients
@@ -599,10 +601,25 @@ fn lock_has_the_documented_encoding() {
         encoded(&Frame::Request(AdminRequest::Lock)),
         [0, 1, 1, 0, 0, 0, 8, 0, 1, 0, 0, 0, 2, 0, 5]
     );
-    let cleared = [0, 1, 4, 0, 0, 0, 15, 0, 1, 0, 0, 0, 2, 0, 5, 0, 2, 0, 0, 0, 1, 1];
-    assert_eq!(encoded(&Frame::Response(AdminResponse::Lock { cleared: true })), cleared);
-    let (held, _) = decoded(&raw(1, 4, &body(&[field(1, &[0, 5]), field(2, &[0])])));
-    assert!(same(&held, &Frame::Response(AdminResponse::Lock { cleared: false })));
+    let cleared = [
+        0, 1, 4, 0, 0, 0, 22, 0, 1, 0, 0, 0, 2, 0, 5, 0, 2, 0, 0, 0, 1, 1, 0, 3, 0, 0, 0, 1, 0,
+    ];
+    let lock = |cleared, persisted| Frame::Response(AdminResponse::Lock { cleared, persisted });
+    assert_eq!(encoded(&lock(true, false)), cleared);
+    let (held, _) = decoded(&raw(1, 4, &body(&[field(1, &[0, 5]), field(2, &[0]), field(3, &[1])])));
+    assert!(same(&held, &lock(false, true)));
+}
+
+#[test]
+fn unlock_has_the_documented_result() {
+    let removed = Frame::Response(AdminResponse::Unlock { owner_lock_removed: true });
+    assert_eq!(
+        encoded(&removed),
+        [0, 1, 4, 0, 0, 0, 15, 0, 1, 0, 0, 0, 2, 0, 4, 0, 2, 0, 0, 0, 1, 1]
+    );
+    let (kept, _) = decoded(&raw(1, 4, &body(&[field(1, &[0, 4]), field(2, &[0])])));
+    assert!(same(&kept, &Frame::Response(AdminResponse::Unlock { owner_lock_removed: false })));
+    assert_eq!(decode_err(&raw(1, 4, &field(1, &[0, 4]))), FrameError::MissingField(2));
 }
 
 #[test]
@@ -610,7 +627,9 @@ fn lock_takes_no_arguments_and_its_result_needs_a_flag() {
     let with_argument = body(&[field(1, &[0, 5]), field(2, b"x")]);
     assert_eq!(decode_err(&raw(1, 1, &with_argument)), FrameError::UnknownTag(2));
     assert_eq!(decode_err(&raw(1, 4, &field(1, &[0, 5]))), FrameError::MissingField(2));
-    let not_a_flag = body(&[field(1, &[0, 5]), field(2, &[2])]);
+    let no_persisted = body(&[field(1, &[0, 5]), field(2, &[1])]);
+    assert_eq!(decode_err(&raw(1, 4, &no_persisted)), FrameError::MissingField(3));
+    let not_a_flag = body(&[field(1, &[0, 5]), field(2, &[2]), field(3, &[1])]);
     assert_eq!(decode_err(&raw(1, 4, &not_a_flag)), FrameError::InvalidValue(2));
 }
 

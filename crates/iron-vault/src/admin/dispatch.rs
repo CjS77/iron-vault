@@ -136,8 +136,9 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Lock<F> {
     fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
         Box::pin(async move {
             Ok(match self.service.lock(self.drain).await {
-                Ok(outcome) => AdminResponse::Lock {
-                    cleared: outcome == LockOutcome::Cleared,
+                Ok(locked) => AdminResponse::Lock {
+                    cleared: locked.outcome == LockOutcome::Cleared,
+                    persisted: locked.persisted,
                 },
                 Err(refused) => AdminResponse::Error {
                     code: ErrorCode::WrongState,

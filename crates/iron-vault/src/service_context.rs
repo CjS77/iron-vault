@@ -26,6 +26,7 @@ mod host_unlock;
 mod init;
 mod log_destination;
 mod migration;
+mod owner_lock;
 mod presence;
 mod recipient_add;
 mod recipient_remove;
@@ -204,6 +205,25 @@ pub enum LockOutcome {
     /// Every snapshot the lock withdrew was dropped, but something else still holds the vault identity: the vault of a
     /// snapshot that a failed check withdrew earlier, still held by a request that ignored its cancellation.
     IdentityHeld,
+}
+
+/// What an explicit `lock` came to: whether the secrets are confirmed gone, and whether the lock outlasts a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LockResult {
+    /// Whether the vault identity and the serving snapshots were cleared within the drain.
+    pub outcome: LockOutcome,
+    /// Whether the owner-lock file was written. When false the service is Locked now, but a restart may host-unlock it
+    /// again.
+    pub persisted: bool,
+}
+
+/// What a passphrase `unlock` came to besides the state it settled in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unlocked {
+    /// The state the config check settled the service in: Ready or Unavailable.
+    pub state: ServiceState,
+    /// Whether the owner-lock file is gone. When false the vault is open now, but the next start stays Locked.
+    pub owner_lock_removed: bool,
 }
 
 /// What the service runs with besides its locks.
@@ -420,7 +440,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     ///
     /// Cancel-safe: dropping this future during scrypt leaves the service Locked, and dropping it once the service has
     /// entered Checking leaves a task of its own to finish the check, as [`enter_checking`](Self::enter_checking) does.
-    pub async fn unlock(&self, passphrase: Passphrase) -> Result<ServiceState, UnlockRefusal> {
+    pub async fn unlock(&self, passphrase: Passphrase) -> Result<Unlocked, UnlockRefusal> {
         let service_wide = Arc::clone(&self.service_wide).lock_owned().await;
         let mut inner = Arc::clone(&self.inner).lock_owned().await;
         let locked = inner.state;
@@ -434,13 +454,18 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let opened = self.open_identity(passphrase).await;
         record_unlock_outcome(&mut inner.attempts, &opened);
         let identity = opened.inspect_err(|refusal| UnlockRefused { refusal }.emit())?;
+        // The owner is present, so the explicit lock ends here; a failed removal is reported, never an unlock failure.
+        let owner_lock_removed = self.remove_owner_lock().await;
         let settled = self
             .check_and_settle_detached(service_wide, inner, ServiceEvent::UnlockSucceeded, Arc::new(identity))
             .await
             .map_err(|illegal| refuse_unlock(UnlockRefusal::WrongState(illegal.state)))?;
         // The settle task has released the service-wide lock, which a missing record's first write needs.
         self.evaluate_recovery_reminder().await;
-        Ok(settled)
+        Ok(Unlocked {
+            state: settled,
+            owner_lock_removed,
+        })
     }
 
     /// Locks the service on an explicit `lock`: Ready or Unavailable to Locked, clearing the vault identity and every
@@ -456,22 +481,32 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// vault in that snapshot holds the last reference to the identity, so the identity is cleared with it. If the drain
     /// expires, or the identity is still held, it logs a warning and returns an outcome other than
     /// [`LockOutcome::Cleared`], never claiming the secrets are cleared.
-    pub async fn lock(&self, drain: Duration) -> Result<LockOutcome, IllegalTransition> {
-        let (mut withdrawn, identity) = self.withdraw_for_lock().await?;
+    ///
+    /// Under the service-wide lock, once the state check allows the lock and before the withdrawal, it writes the
+    /// owner-lock file, so that a crash, a restart or a reboot does not undo the lock by host unlock. If the write fails,
+    /// the lock still happens: the failure is logged at WARN and the result says the lock will not survive a restart.
+    pub async fn lock(&self, drain: Duration) -> Result<LockResult, IllegalTransition> {
+        let (mut withdrawn, identity, persisted) = self.withdraw_for_lock().await?;
         let snapshots = withdrawn.released(drain).await;
-        Ok(lock_outcome(snapshots, identity.strong_count()))
+        Ok(LockResult {
+            outcome: lock_outcome(snapshots, identity.strong_count()),
+            persisted,
+        })
     }
 
     /// The locked half of [`lock`](Self::lock): moves to Locked, withdraws the snapshot, drops what the context keeps
     /// of the vault and retires the pending migration challenge. Returns the withdrawn snapshots and a weak reference to the dropped identity, to see whether it is
     /// cleared.
-    async fn withdraw_for_lock(&self) -> Result<(Withdrawn, Weak<VaultIdentity>), IllegalTransition> {
+    async fn withdraw_for_lock(&self) -> Result<(Withdrawn, Weak<VaultIdentity>, bool), IllegalTransition> {
         let _request = LockRequest::announce(&self.lock_requests);
         let _service_wide = self.service_wide.lock().await;
         let mut inner = self.inner.lock().await;
         let from = inner.state;
         let state = next(from, ServiceEvent::Lock)?;
-        Ok(self.withdraw(&mut inner, from, state))
+        // Before the withdrawal, so a crash at any later point still leaves the file; a failed write does not stop the lock.
+        let persisted = self.write_owner_lock().await;
+        let (withdrawn, identity) = self.withdraw(&mut inner, from, state);
+        Ok((withdrawn, identity, persisted))
     }
 
     /// The withdrawal `lock` and `reset` share, under the context's mutex: closes the request gate and cancels the

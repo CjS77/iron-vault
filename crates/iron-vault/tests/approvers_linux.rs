@@ -183,7 +183,7 @@ routes = [{granted}]
 
     async fn lock_and_unlock(&self) {
         let locked = self.request(AdminRequest::Lock, &[]).await;
-        assert!(matches!(locked.response, AdminResponse::Lock { cleared: true }), "{locked:?}");
+        assert!(matches!(locked.response, AdminResponse::Lock { cleared: true, .. }), "{locked:?}");
         unlock(&self.service).await;
     }
 

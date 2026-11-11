@@ -20,6 +20,8 @@ const TAG_CODE: u16 = 1;
 const TAG_MESSAGE: u16 = 2;
 const TAG_PROFILE: u16 = 2;
 const TAG_CLEARED: u16 = 2;
+const TAG_PERSISTED: u16 = 3;
+const TAG_OWNER_LOCK_REMOVED: u16 = 2;
 const TAG_CONFIG: u16 = 2;
 const TAG_VERSION: u16 = 2;
 const TAG_DIGEST: u16 = 3;
@@ -161,11 +163,21 @@ pub(super) fn encode_status_result(report: &StatusReport) -> Vec<u8> {
     status::encode(COMMAND_STATUS, report)
 }
 
-/// `lock`'s success body: the command it answers, then whether every cached secret was confirmed cleared.
-pub(super) fn encode_lock_result(cleared: bool) -> Vec<u8> {
+/// `lock`'s success body: the command it answers, whether every cached secret was confirmed cleared, then whether the
+/// owner-lock file was written.
+pub(super) fn encode_lock_result(cleared: bool, persisted: bool) -> Vec<u8> {
     let mut out = Vec::new();
     fields::put(&mut out, TAG_COMMAND, &COMMAND_LOCK.to_be_bytes());
     fields::put(&mut out, TAG_CLEARED, &[u8::from(cleared)]);
+    fields::put(&mut out, TAG_PERSISTED, &[u8::from(persisted)]);
+    out
+}
+
+/// `unlock`'s success body: the command it answers, then whether the owner-lock file is gone.
+pub(super) fn encode_unlock_result(owner_lock_removed: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    fields::put(&mut out, TAG_COMMAND, &COMMAND_UNLOCK.to_be_bytes());
+    fields::put(&mut out, TAG_OWNER_LOCK_REMOVED, &[u8::from(owner_lock_removed)]);
     out
 }
 
@@ -352,9 +364,16 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
         COMMAND_CALLER_TOKEN => decode_caller_token_result(&fields),
         COMMAND_STATUS => status::decode(&fields).map(|report| AdminResponse::Status(Box::new(report))),
         COMMAND_LOCK => {
-            let [_, cleared] = exact(&fields, [TAG_COMMAND, TAG_CLEARED])?;
+            let [_, cleared, persisted] = exact(&fields, [TAG_COMMAND, TAG_CLEARED, TAG_PERSISTED])?;
             Ok(AdminResponse::Lock {
                 cleared: read_flag(TAG_CLEARED, cleared)?,
+                persisted: read_flag(TAG_PERSISTED, persisted)?,
+            })
+        }
+        COMMAND_UNLOCK => {
+            let [_, removed] = exact(&fields, [TAG_COMMAND, TAG_OWNER_LOCK_REMOVED])?;
+            Ok(AdminResponse::Unlock {
+                owner_lock_removed: read_flag(TAG_OWNER_LOCK_REMOVED, removed)?,
             })
         }
         COMMAND_INIT => decode_init_result(&fields),

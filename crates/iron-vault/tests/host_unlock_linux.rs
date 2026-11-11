@@ -156,7 +156,7 @@ fn assert_not_logged(logs: &Captured, secret: &str) {
 
 /// The fallback every refusal must leave: the passphrase still opens the vault.
 async fn assert_passphrase_unlock_works(service: &ServiceContext) {
-    assert_eq!(service.unlock(passphrase()).await.unwrap(), ServiceState::Ready);
+    assert_eq!(service.unlock(passphrase()).await.unwrap().state, ServiceState::Ready);
 }
 
 async fn a_good_handoff_reaches_ready_and_serves_with_no_unlock(profile: DeploymentProfile) {

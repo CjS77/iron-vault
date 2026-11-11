@@ -61,6 +61,7 @@ impl AdminHandler for Authorizing {
                     let vault = vault_id(&self.service).await;
                     AdminResponse::Lock {
                         cleared: authorization.authorize(vault, &self.operation, Instant::now()).is_ok(),
+                        persisted: true,
                     }
                 }
                 Err(none) => no_authorization(COMMAND, none),
@@ -274,7 +275,7 @@ async fn the_right_passphrase_gives_an_authorization_for_the_operation() {
     let (prompts, response) = served.run(PASSPHRASE).await;
 
     assert_eq!(prompts, [denied_prompt()]);
-    assert!(matches!(response, AdminResponse::Lock { cleared: true }), "{response:?}");
+    assert!(matches!(response, AdminResponse::Lock { cleared: true, .. }), "{response:?}");
     served.assert_challenge_issued_once();
     let authorized = served.events("migration.authorized");
     assert_eq!(authorized.len(), 1, "{authorized:?}");
@@ -336,7 +337,7 @@ async fn a_lock_at_the_prompt_is_unavailable_and_records_no_failure() {
     };
     assert!(matches!(
         read_frame(&mut lock).await,
-        Frame::Response(AdminResponse::Lock { cleared: true })
+        Frame::Response(AdminResponse::Lock { cleared: true, .. })
     ));
 
     let (code, message) = error_of(&response);

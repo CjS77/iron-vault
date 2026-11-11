@@ -23,7 +23,7 @@ use iron_vault::attempt_limit::{AttemptsCoolingDown, BASE_COOLDOWN, FAILURE_THRE
 use iron_vault::migration_authorization::{
     BindingDigest, CHALLENGE_LIFETIME, MigrationAuthorization, MigrationOperation, MigrationRefusal, OwnerRefusal, PendingMigration,
 };
-use iron_vault::service_context::{LockOutcome, ServiceContext};
+use iron_vault::service_context::{LockOutcome, LockResult, ServiceContext};
 use iron_vault::service_state::ServiceState;
 use iron_vault_store::{
     OperationalIdentity, OsFs, Passphrase, RecipientKey, RecipientSet, StateDirLock, StoreFs, VaultId, VaultIdentity,
@@ -34,6 +34,11 @@ use tokio::time::Instant;
 use zeroize::Zeroizing;
 
 /// The vault passphrase, a wrong one, and the new export passphrase an owner would choose after authorization.
+/// The result of a lock whose owner-lock file was written.
+fn locked(outcome: LockOutcome) -> LockResult {
+    LockResult { outcome, persisted: true }
+}
+
 const PASSPHRASE: &str = "VAULT-correct-5d1a";
 const WRONG_PASSPHRASE: &str = "VAULT-wrong-0b77";
 const EXPORT_PASSPHRASE: &str = "EXPORT-new-8c3f";
@@ -218,7 +223,7 @@ async fn a_locked_service_issues_no_challenge_and_proves_none() {
     let service = fixture.ready().await;
     let digest = service.issue_migration_challenge(MigrationOperation::Export).await.unwrap();
     let method = service.vault_passphrase_method().await.unwrap();
-    assert_eq!(service.lock(DRAIN).await, Ok(LockOutcome::Cleared));
+    assert_eq!(service.lock(DRAIN).await, Ok(locked(LockOutcome::Cleared)));
 
     let locked = MigrationRefusal::WrongState(ServiceState::Locked);
     assert_eq!(
@@ -245,7 +250,7 @@ async fn lock_mid_check(service: &Arc<ServiceContext<GatedFs>>, fs: &GatedFs, ty
 
     assert_eq!(
         service.lock(DRAIN).await,
-        Ok(LockOutcome::Cleared),
+        Ok(locked(LockOutcome::Cleared)),
         "the check kept the vault identity alive"
     );
     release.send(()).unwrap();

@@ -514,6 +514,14 @@ pub enum AdminResponse {
         /// Whether every snapshot holding secrets was dropped within the lock drain. When false, a request that ignored
         /// its cancellation may still hold them, and the service has logged how many.
         cleared: bool,
+        /// Whether the owner-lock file was written, so the lock survives a crash or restart. When false, a restart may
+        /// undo the lock by host unlock.
+        persisted: bool,
+    },
+    /// `unlock` completed: the vault is open and the service is Ready.
+    Unlock {
+        /// Whether the owner-lock file is gone. When false, the next start stays Locked until another `unlock`.
+        owner_lock_removed: bool,
     },
     /// `list` completed.
     List {
@@ -932,7 +940,12 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Response(AdminResponse::Success) => put_frame(out, FrameKind::Success, &[]),
         Frame::Response(AdminResponse::Ping { profile }) => put_frame(out, FrameKind::Success, &body::encode_ping_result(*profile)),
         Frame::Response(AdminResponse::Status(report)) => put_frame(out, FrameKind::Success, &body::encode_status_result(report)),
-        Frame::Response(AdminResponse::Lock { cleared }) => put_frame(out, FrameKind::Success, &body::encode_lock_result(*cleared)),
+        Frame::Response(AdminResponse::Lock { cleared, persisted }) => {
+            put_frame(out, FrameKind::Success, &body::encode_lock_result(*cleared, *persisted))
+        }
+        Frame::Response(AdminResponse::Unlock { owner_lock_removed }) => {
+            put_frame(out, FrameKind::Success, &body::encode_unlock_result(*owner_lock_removed))
+        }
         Frame::Response(AdminResponse::List { credentials }) => {
             put_frame(out, FrameKind::Success, &body::encode_list_result(credentials.as_deref())?)
         }

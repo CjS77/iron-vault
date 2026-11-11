@@ -332,7 +332,7 @@ async fn scripted_unlock(response: AdminResponse) -> (Output, Vec<Vec<u8>>) {
 
 #[tokio::test]
 async fn unlock_sends_the_piped_passphrase_and_reports_ready_without_echoing_it() {
-    let (output, values) = scripted_unlock(AdminResponse::Success).await;
+    let (output, values) = scripted_unlock(AdminResponse::Unlock { owner_lock_removed: true }).await;
     let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
     assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
     assert_eq!(values, [MARKER.as_bytes().to_vec()]);
@@ -984,9 +984,9 @@ impl AdminHandler for SwitchingUnlock {
                     }
                     Some(PromptAnswer::OwnerInput(input)) => {
                         let _ = self.0.send(Some(input.expose_secret().to_vec()));
-                        return Ok(AdminResponse::Success);
+                        return Ok(AdminResponse::Unlock { owner_lock_removed: true });
                     }
-                    None => return Ok(AdminResponse::Success),
+                    None => return Ok(AdminResponse::Unlock { owner_lock_removed: true }),
                 }
             }
         })
@@ -1137,4 +1137,47 @@ async fn sigint_at_a_switchable_prompt_restores_echo_and_veol() {
     rustix::process::kill_process(rustix::process::Pid::from_child(&run.child), rustix::process::Signal::INT).unwrap();
     let (code, shown) = run.finish().await;
     assert_eq!(code, Some(130), "terminal: {shown}");
+}
+
+#[tokio::test]
+async fn lock_and_unlock_warn_on_stderr_when_the_owner_lock_file_could_not_be_changed() {
+    let (output, _) = scripted_unlock(AdminResponse::Unlock { owner_lock_removed: false }).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(stdout, "the vault is unlocked: the service is Ready\n");
+    assert!(stderr.contains("the next start will stay Locked"), "{stderr}");
+}
+
+/// A test-only `lock` handler that answers with a fixed result.
+struct FixedLock {
+    cleared: bool,
+    persisted: bool,
+}
+
+impl AdminHandler for FixedLock {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, _exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            Ok(AdminResponse::Lock {
+                cleared: self.cleared,
+                persisted: self.persisted,
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn lock_warns_on_stderr_when_the_lock_will_not_survive_a_restart_and_still_exits_zero() {
+    let dir = TempDir::new();
+    let handlers = Handlers::default().with(
+        AdminCommand::Lock,
+        FixedLock {
+            cleared: true,
+            persisted: false,
+        },
+    );
+    let output = serve_and_run(&dir, invoking_user().unwrap().uid, handlers, "lock", Vec::new()).await;
+    let (stdout, stderr) = (text(&output.stdout), text(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(stdout, "locked\n");
+    assert!(stderr.contains("the lock will not survive a restart"), "{stderr}");
 }
