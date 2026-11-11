@@ -16,13 +16,15 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use common::approval_harness::get;
+use common::WAIT;
 use common::approval_harness::{
     Exchanged, Fixture, approve, captured_logs, converse, converse_revealing, error_code, identity, read_frame, send, serve_admin,
 };
 use common::mock_upstream::Reply;
+use common::proxy_harness::{CallerRequest, Via};
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, Prompt, RequestedOrigin, VaultStatus};
 use iron_vault::service_context::{ServiceContext, UnlockRefusal};
 use iron_vault::service_state::{FailureReason, ServiceState};
@@ -31,8 +33,8 @@ use iron_vault_policy::CredentialKind;
 use iron_vault_store::{OsFs, StoreFs, VaultId, open_manifest};
 use tokio::net::UnixStream;
 
-/// The files a reset removes from the fixture's vault: store-owned state files plus the config and its signature.
-const FULL_VAULT_FILES: u64 = 6;
+/// The files a reset removes from the fixture's vault: store-owned state files plus the owner lock, the config and its signature.
+const FULL_VAULT_FILES: u64 = 7;
 const DRAIN: Duration = Duration::from_secs(5);
 const INIT_ANSWERS: [&str; 5] = [
     "RESET-vault-passphrase-41c7",
@@ -433,6 +435,7 @@ async fn release_check_1_the_old_config_and_signature_are_refused_by_the_new_vau
     let service = fixture.ready().await;
     reset_then_init(&fixture, &service, FULL_VAULT_FILES).await;
     unlock_new_vault(&service).await;
+    add_fx_key(&fixture, &service).await;
     assert_eq!(service.state().await, ServiceState::Ready);
 
     fixture.put_back(&old);
@@ -470,7 +473,7 @@ async fn release_check_3_the_cli_refuses_without_a_terminal_before_connecting() 
             .args([
                 "-qec",
                 &format!(
-                    "setsid --wait {} reset --admin-socket {}",
+                    "setsid --wait '{}' reset --admin-socket '{}'",
                     env!("CARGO_BIN_EXE_iron-vault"),
                     socket.display()
                 ),
@@ -478,7 +481,7 @@ async fn release_check_3_the_cli_refuses_without_a_terminal_before_connecting() 
             .arg("/dev/null")
             .stdin(Stdio::null())
             .output()
-            .unwrap();
+            .expect("`script` (util-linux) is needed to give the CLI a terminal without a controlling one");
         let detached = (detached.status.code(), String::from_utf8_lossy(&detached.stdout).into_owned());
         [cli(Stdio::piped()), cli(answers), cli(Stdio::null()), detached]
     })
@@ -622,27 +625,49 @@ async fn release_check_12_the_audit_events_reach_the_log_without_a_secret_or_the
     let _ = stop.send(());
 }
 
-/// Release check 6, in flight: a request waiting on the upstream when the reset withdraws the vault ends at once with 503, or
-/// with its connection closed, rather than waiting out the upstream.
+/// Release check 6, in flight: a request waiting on the upstream when the reset withdraws the vault is cancelled at once, so the
+/// reset returns well inside the lock drain and the caller sees a closed connection or a 503, not a hang.
 #[tokio::test]
 async fn release_check_6_a_request_in_flight_is_cancelled_by_the_withdrawal() {
-    let fixture = Arc::new(Fixture::with_reply(Reply::Stall).await);
+    let fixture = Fixture::with_reply(Reply::Stall).await;
     let id = vault_id(&fixture);
     let service = fixture.ready().await;
-    let caller = Arc::clone(&fixture);
-    let waiting = tokio::spawn(async move { get(&caller, "fx").await });
-    while fixture.upstream().requests().is_empty() {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    let socket = fixture.socket();
+    let waiting = tokio::spawn(async move {
+        let mut stream = UnixStream::connect(socket).await.unwrap();
+        stream
+            .write_all(&CallerRequest::get("/fx/latest").signed(Via::Unix).to_bytes())
+            .await
+            .unwrap();
+        let mut raw = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut raw))
+            .await
+            .map(|_| raw)
+    });
+    tokio::time::timeout(WAIT, async {
+        while fixture.upstream().requests().is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the request reaches the upstream");
     let (path, stop) = serve_admin(&service);
 
-    reset(&path, &[&id.to_string()]).await;
+    let started = Instant::now();
+    let exchanged = reset(&path, &[&id.to_string()]).await;
 
-    let ended = tokio::time::timeout(DRAIN, waiting)
-        .await
-        .expect("the request ends instead of hanging");
-    // A closed connection makes the harness's parse of an empty response panic, which a join reports as an error.
-    assert!(ended.map_or(true, |response| response.status == 503));
+    assert!(result(&exchanged).3, "a request still held the vault");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the reset waited {:?}",
+        started.elapsed()
+    );
+    let raw = waiting.await.unwrap().expect("the request ends instead of waiting on the upstream");
+    assert!(
+        raw.is_empty() || raw.starts_with(b"HTTP/1.1 503"),
+        "{}",
+        String::from_utf8_lossy(&raw)
+    );
     let _ = stop.send(());
 }
 
