@@ -638,7 +638,8 @@ so no owner holds such a vault yet ([open question 2](#open-questions)). The res
 - TPM and hardware-key recipients. Their epics enroll the roles and extend the independence rule as
   [described above](#independence-rule).
 - `forget-machine`, which checks recipient removal and guides TPM clearing
-  ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)).
+  ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)); it is designed in
+  [forget-machine.md](forget-machine.md).
 - Changing the vault passphrase. It reseals `operational.age` around the same operational identity, so it changes no
   recipient and no inventory entry.
 

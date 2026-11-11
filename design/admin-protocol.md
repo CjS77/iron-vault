@@ -138,6 +138,7 @@ an error.
 | `19` | `export` | none | the [vault ID, the record count and the bundle's byte count](#export) |
 | `20` | `import` | the [host unlock flag](#import), as `init`'s | the [vault ID, the record count, the committed and highest reserved versions, the config digest and the recipient roles](#import) |
 | `21` | `reset` | none | the [vault ID, the files removed, the foreign files left and whether the vault identity was cleared](#reset) |
+| `22` | `forget-machine` | the retired machine's recipient key text, tag 2 | whether the [independence rule holds and the recovery check state](#forget-machine) |
 
 **No command accepts an external signature** ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -653,6 +654,26 @@ Errors specific to `recovery check`:
 | `busy` | the service-wide lock is taken (an approval, a vault write, an init, a reload or a config check); try again |
 | `recovery-check-failed` | the key does not open this vault |
 
+#### forget-machine
+
+`forget-machine` (command 22) is allowed in Ready only, as `recipient list` is. It takes one argument, tag 2, the key's
+`age1…` text ([forget-machine.md](forget-machine.md)). The service tries the service-wide lock, runs the inventory
+check and answers `machine-not-forgotten` when the key is still enrolled; otherwise it answers:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | independence | UTF-8 text: empty when the [independence rule](recipients.md#independence-rule) holds for the inventory as it is, else the failed part's sentence |
+| 13 to 17 | recovery check | as in [status](#status): the record's form, time, days elapsed, whether a reminder is due, and the detail when unknown |
+
+Errors specific to `forget-machine`:
+
+| Code | When |
+|---|---|
+| `wrong-state` | the service is not Ready |
+| `recipient-invalid` | the argument is not an `age1…` X25519 recipient key |
+| `machine-not-forgotten` | the key is still a recipient; the message names its role and label and says to run `recipient remove` |
+| `recipient-inventory-damaged`, `vault-write-failed`, `busy` | as for `recipient list` |
+
 ### Prompt (kind 2)
 
 | Tag | Field | Value |
@@ -942,6 +963,7 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `48` | `import-failed` | `import`: the host unlock flag was set and the service has no host unlock identity to enrol, raised before any prompt, so nothing was written; or a write failed, and the message names the step and says to run `import` again, which discards the unfinished import |
 | `49` | `nothing-to-reset` | `reset`: no vault file is in the state directory; the message says what to run next ([reset.md](reset.md#result)) |
 | `50` | `reset-failed` | `reset`: the directories could not be read, writing `reset.unfinished` failed, or a removal failed; the message names the step and the file ([reset.md](reset.md#result)) |
+| `52` | `machine-not-forgotten` | `forget-machine`: the key is still a recipient of the vault; the message names its role and label and says to run `recipient remove` ([forget-machine.md](forget-machine.md#what-it-checks)) |
 
 The migration codes 28, 29 and 33 are raised by the migration authorization step that `export` and `recipient add`
 share ([migration-authorization.md](migration-authorization.md#error-codes)). Codes 45 to 48 are the migration bundle's
@@ -956,7 +978,7 @@ byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` 
 (command 11), `recovery check` (command 12), `recipient list` (command 13), `recipient add` (command 14),
 `recipient remove` (command 15), `approver list` (command 16), `approver add` (command 17), `approver remove` (command 18), `status` tags 13 to 17,
 the prompt's `switchable` tag 3, the switch frame (kind 8), error codes 7 to 39, error codes 40 to 44, the bundle data
-frame (kind 9), `export` (command 19), `import` (command 20) and error codes 45 to 48 join it rather than starting
+frame (kind 9), `export` (command 19), `import` (command 20), `forget-machine` (command 22) and error codes 45 to 48 join it rather than starting
 version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
@@ -1211,6 +1233,14 @@ to stdout and exits `0`; when the result says the check was not recorded, it als
 passed but was not recorded, so recovery reminders still count from the last recorded check; the exit code is still `0`,
 because the key was proved. A service error goes to stderr with exit code 1. Like every client command, it disables core
 dumps first, because the key passes through its memory.
+
+### forget-machine
+
+`iron-vault forget-machine <age1…>` sends the key and needs no owner input. When the key is not a recipient it prints to
+stdout the key, the independence line (`independence rule: holds`, or `independence rule: BROKEN (<part>)`), the
+`recovery last checked:` line `status` prints, and then the fixed [guidance](forget-machine.md#the-guidance); each warning
+goes to stderr as `iron-vault: warning: …` and does not change the exit code `0`. `machine-not-forgotten` and every other
+service error go to stderr with exit code 1. Two runs against an unchanged vault and clock print the same bytes.
 
 ### Owner input
 

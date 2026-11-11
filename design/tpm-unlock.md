@@ -322,7 +322,7 @@ service sees its mount through propagation ([At boot](#at-boot)).
   useless off its TPM and goes with `forget-machine`.
 - **Retiring TPM unlock:** stop the handoff unit, remove `host-unlock.cred`, then `recipient remove` the `host-unlock`
   recipient. Part 1 of the independence rule no longer keeps it.
-- **Decommissioning the machine** is `forget-machine`'s job ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)).
+- **Decommissioning the machine** is `forget-machine`'s job ([§16](iron-vault-specification.md#16-administration-recovery-and-migration); [forget-machine.md](forget-machine.md)).
 
 ## Portable machines and the second secret
 

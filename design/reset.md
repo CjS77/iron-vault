@@ -45,7 +45,8 @@ it does for `lock` and `init`. The owner's decisions on the points the specifica
 - **Not a recovery path.** Nothing the old vault held can be recovered through `reset`. While any way in still works,
   `recovery check`, `recipient add --recovery`, `approver add` or `export` keep the vault; reset discards it.
 - **Not TPM clearing.** Reset touches only files in the state and config directories. Clearing a retired TPM is
-  `forget-machine`'s guidance ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)).
+  `forget-machine`'s guidance ([§16](iron-vault-specification.md#16-administration-recovery-and-migration);
+  [forget-machine.md](forget-machine.md)).
 
 ## Authorization
 

@@ -746,6 +746,12 @@ The lock from Ready or Unavailable raises the existing `service.lock-transition`
 | `recipient.removed` | INFO | a recipient change that removes a recipient committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` |
 | `recipient.change-failed` | WARN | an add or a removal was refused at its own step 3 (`already_enrolled`, `unknown_recipient`, `set_invalid`), or its recipient change failed (`write_failed`) | `change`, `recipient`, `failure`; `step`, `error_kind` and `committed` for `write_failed` |
 
+The `recipient.forget-checked` event ([forget-machine.md](forget-machine.md#audit-event)) is written by `forget-machine`:
+
+| Event | Level | When | Fields |
+|---|---|---|---|
+| `recipient.forget-checked` | INFO when the key is not a recipient, the independence rule holds and no recovery reminder is due, else WARN | `forget-machine` parsed the key and ran the inventory check | `recipient`, `forget_outcome` (`forgotten` or `still_enrolled`), `recipient_role` (`still_enrolled` only), `independence` (`holds` or `broken`) and `recovery_due`, `forgotten` only |
+
 **Approvers** ([approval-signers.md](approval-signers.md#audit-events); `approver add` and `approver remove` write these):
 
 | Event | Level | When | Fields |
