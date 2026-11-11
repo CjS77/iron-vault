@@ -75,7 +75,7 @@ Steps 1 to 3 run as root on the retired machine. In order:
    `--tpm2-pcrlock` depend on, and `tpm2-totp`). Remember other software that keeps keys in the TPM, and the machine's other users.
 2. **Delete the sealed credential.** `systemctl stop iron-vault-host-unlock.service`, then
    `rm /etc/iron-vault-host/host-unlock.cred`. A copy of that file in a backup still opens on this TPM.
-3. **Clear the TPM only if nothing else needs it.** Use the firmware's clear-TPM setting, or `tpm2_clear`. If step 1 found
+3. **Clear the TPM only if nothing else needs it and the recovery path is verified.** Use the firmware's clear-TPM setting, or `tpm2_clear`. If step 1 found
    another user, leave the TPM alone: step 2 has retired the machine from this vault, and only old backup copies stay
    reachable through this TPM. Do not clear a shared TPM.
 

@@ -851,8 +851,8 @@ pub enum ErrorCode {
     /// `reset`: writing `reset.unfinished`, a removal or the state read failed; the message names the step and the file, and
     /// says whether the vault is intact or the next `reset` resumes.
     ResetFailed = 50,
-    /// `forget-machine`: the key is still a recipient of the vault; the message names its role and label and says to run
-    /// `recipient remove`. Nothing was changed.
+    /// `forget-machine`: the key is still a recipient of the vault; the message names the key's role only, says to run
+    /// `recipient remove` with the same key, and never repeats the key or the label. Nothing was changed.
     MachineNotForgotten = 52,
 }
 

@@ -1054,13 +1054,19 @@ fn the_reset_error_codes_have_their_documented_numbers_and_names() {
     [
         (ErrorCode::NothingToReset, 49, "nothing-to-reset"),
         (ErrorCode::ResetFailed, 50, "reset-failed"),
-        (ErrorCode::MachineNotForgotten, 52, "machine-not-forgotten"),
     ]
     .into_iter()
     .for_each(|(code, number, name)| {
         assert_eq!((code as u16, code.name()), (number, name));
         assert_round_trips(&error(code, "m"));
     });
+}
+
+#[test]
+fn the_forget_machine_error_code_has_its_documented_number_and_name() {
+    let code = ErrorCode::MachineNotForgotten;
+    assert_eq!((code as u16, code.name()), (52, "machine-not-forgotten"));
+    assert_round_trips(&error(code, "m"));
 }
 
 #[test]

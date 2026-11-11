@@ -125,7 +125,7 @@ change itself did; the message says whether it may have committed.
 
 `forget-machine` also answers `recipient-invalid` for a key that is not an `age1...` recipient key, `wrong-state` outside Ready,
 `busy` while another command holds the service-wide lock, `recipient-inventory-damaged` and `vault-write-failed` as the
-recipient commands do. A warning (a recovery check that is overdue or has never run, a broken independence rule) is not an error: it goes to stderr and
+recipient commands do. A warning (a recovery check that is overdue, has never run or is not on record, or a broken independence rule) is not an error: it goes to stderr and
 the exit status is `0`.
 
 ### `approver add` and `approver remove`
