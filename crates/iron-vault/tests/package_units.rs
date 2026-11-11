@@ -232,14 +232,15 @@ fn service_directories() -> Vec<Directory> {
 }
 
 #[test]
-fn unlock_mount_point_is_roots_and_readable_by_the_service() {
-    // The unseal-failure file lands here beneath the unmounted ramfs, and the service must be able to see it
-    // (design/tpm-unlock.md, "Reporting a failed unseal").
+fn unlock_mount_point_is_roots_and_searchable_but_not_listable() {
+    // The unseal-failure file lands here beneath the unmounted ramfs, and the service opens it by name
+    // (design/tpm-unlock.md, "Reporting a failed unseal"). The mode matches the ramfs root's, because every
+    // `systemd-tmpfiles --create` re-applies it through the mount: anything wider would let any account list the ramfs.
     let dir = tmpfiles_directories()
         .into_iter()
         .find(|d| d.path == Path::new(UNLOCK_MOUNT_POINT))
         .unwrap();
-    assert_eq!((dir.owner.as_str(), dir.group.as_str(), dir.mode), ("root", "root", 0o755));
+    assert_eq!((dir.owner.as_str(), dir.group.as_str(), dir.mode), ("root", "root", 0o711));
 }
 
 #[test]

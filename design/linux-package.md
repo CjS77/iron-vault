@@ -73,14 +73,16 @@ not a valid config.
 | `/etc/iron-vault` | `iron-vault:iron-vault` | `0700` | `tmpfiles.d` | `ConfigDir`: a directory owned by the service account, mode exactly `0700` |
 | `/var/lib/iron-vault` | `iron-vault:iron-vault` | `0700` | `tmpfiles.d` | `StateDir`: a directory owned by the service account, mode exactly `0700` |
 | `/run/iron-vault` | `iron-vault:iron-vault` | `0711` | `tmpfiles.d` | `RuntimeDir`: a directory owned by the service account, writable by neither group nor others |
-| `/run/iron-vault-unlock` | `root:root` | `0755` | `tmpfiles.d` | none: the service only opens the unlock handoff and the unseal-failure file in it, by name ([tpm-unlock.md](tpm-unlock.md#at-boot)) |
+| `/run/iron-vault-unlock` | `root:root` | `0711` | `tmpfiles.d` | none: the service only opens the unlock handoff and the unseal-failure file in it, by name ([tpm-unlock.md](tpm-unlock.md#at-boot)) |
 | `/var/log/iron-vault` | `iron-vault:iron-vault` | `0750` | the service unit's `LogsDirectory=` | `LogDir`: a directory owned by the service account, no more open than `0750` |
 
 `/run/iron-vault-unlock` is the [handoff unit](tpm-unlock.md#at-boot)'s mount point. While that unit is active, a ramfs
-owned by root with mode `0711` is mounted over it, so the table's row holds on a machine with no host unlock blob, which
-is how `scripts/release/linux-install-check.sh` expects to find it. `/etc/iron-vault-host`, root `0700`, and the blob in
-it, root `0600`, have no row: the [provisioning helper](tpm-unlock.md#provisioning) creates them, not the package, and a
-machine never provisioned has neither.
+owned by root with the same mode, `0711`, is mounted over it, so the table's row holds before and after provisioning,
+and `scripts/release/linux-install-check.sh` finds it either way. The two modes must match: every
+`systemd-tmpfiles --create`, which `postinst` runs at each configure, re-applies the `d` line's mode through the mount
+to the ramfs root, and anything wider would let any account list the ramfs. `/etc/iron-vault-host`, root `0700`, and
+the blob in it, root `0600`, have no row: the [provisioning helper](tpm-unlock.md#provisioning) creates them, not the
+package, and a machine never provisioned has neither.
 
 `cargo-deb` may install the units and the `sysusers.d` and `tmpfiles.d` files under `/lib` rather than `/usr/lib`. On
 the merged-`/usr` systems that current Debian and Ubuntu releases are, the two are the same directory.
@@ -212,7 +214,7 @@ still could not see its password state.
 d /etc/iron-vault        0700 iron-vault iron-vault -
 d /var/lib/iron-vault    0700 iron-vault iron-vault -
 d /run/iron-vault        0711 iron-vault iron-vault -
-d /run/iron-vault-unlock 0755 root       root       -
+d /run/iron-vault-unlock 0711 root       root       -
 ```
 
 `postinst` runs `systemd-sysusers` and then `systemd-tmpfiles --create` before it starts any unit. At every boot
@@ -313,8 +315,9 @@ does not name `/run/iron-vault-unlock`: the service only reads there.
 
 The handoff unit, `iron-vault-host-unlock.service`, is listed in [tpm-unlock.md](tpm-unlock.md#at-boot). The package
 installs it as a plain asset, and `systemd-units`' `unit-name = "iron-vault"` keeps `cargo-deb` from generating
-snippets for it; with no `[Install]` section as well, no maintainer script enables, starts or restarts it. It runs as root with no sandboxing directives, which would give it a
-private mount namespace and hide its ramfs from the service.
+snippets for it. With no `[Install]` section as well, no install or upgrade enables, starts or restarts it; `prerm`
+stops it on remove only. It runs as root with no sandboxing directives, which would give it a private mount namespace
+and hide its ramfs from the service.
 
 ## Listener socket units
 
@@ -467,10 +470,10 @@ reloads systemd and restarts `iron-vault.service`. The old service keeps running
 comes back Locked, and an interactive-unlock profile waits for `sudo iron-vault unlock`. Listener socket units are
 not restarted, so they keep their ports through the upgrade.
 
-The handoff unit is not restarted either: no maintainer script names it. The service's restart finds it active, by
-`RemainAfterExit=yes`, so the TPM is not used again and the service reads the same handoff and reaches Ready with no
-`unlock`, unless the owner [locked it](tpm-unlock.md#lock-across-restarts). A handoff unit that failed earlier in the
-boot is started again by the service's `Wants=`, which retries the unseal.
+The handoff unit is not restarted either: no generated snippet names it, and `prerm` stops it on remove only. The
+service's restart finds it active, by `RemainAfterExit=yes`, so the TPM is not used again and the service reads the same
+handoff and reaches Ready with no `unlock`, unless the owner [locked it](tpm-unlock.md#lock-across-restarts). A handoff
+unit that failed earlier in the boot is started again by the service's `Wants=`, which retries the unseal.
 
 ### Remove
 
@@ -646,7 +649,7 @@ The package ships these overrides in `/usr/share/lintian/overrides/iron-vault` (
 | Tag | Level | Why it is accepted |
 |---|---|---|
 | `no-debconf-config` | error | The only debconf question is the [vault question](#the-vault-question), which `postrm` asks at purge time, as `mariadb-server` does. Nothing is asked at configure time, so there is no `config` script. |
-| `maintainer-script-calls-systemctl` (`prerm`) | warning | `prerm` stops and disables the listener socket instances, and `deb-systemd-invoke` neither disables a unit nor takes a pattern (above). |
+| `maintainer-script-calls-systemctl` (`prerm`) | warning | `prerm` stops and disables the listener socket instances, and `deb-systemd-invoke` neither disables a unit nor takes a pattern (above). On remove it also stops the handoff unit, which has no generated snippets. |
 | `initial-upload-closes-no-bugs` | warning | The package is built from this repository and never uploaded to Debian, so its first changelog entry has no ITP bug to close. |
 
 ### Checking a real install

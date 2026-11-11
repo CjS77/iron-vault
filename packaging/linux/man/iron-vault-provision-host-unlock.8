@@ -34,7 +34,8 @@ The helper says so and seals nothing until you type \fByes\fR at a terminal.
 It never reads the answer from a pipe.
 .TP
 \fB\-\-accept\-physical\-access\fR
-With \fB\-\-server\fR, accepts that condition without a prompt, for a run with no terminal.
+With \fB\-\-server\fR, accepts that condition for a run whose standard input is not a terminal.
+At a terminal the helper still asks for \fByes\fR.
 .TP
 \fB\-\-portable\fR
 For a laptop or other portable machine, which needs a full\-disk\-encryption pre\-boot secret as well.

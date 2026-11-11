@@ -215,8 +215,10 @@ After=iron-vault-host-unlock.service
   A handoff unit started later, while the service runs (the [enrolment](#enrolment-and-retirement) steps), reaches the
   service through mount propagation: systemd makes a service's namespace a slave of the host's. The release check
   confirms both. The service needs no `ReadWritePaths=` entry for it.
-- **`/run/iron-vault-unlock`** is the mount point, created by the package's `tmpfiles.d` as root `0755`. The ramfs
-  mounted over it is root `0711`, so the service account opens the one file it knows the name of and can list nothing.
+- **`/run/iron-vault-unlock`** is the mount point, created by the package's `tmpfiles.d` as root `0711`. The ramfs
+  mounted over it is root `0711` too, so the service account opens the one file it knows the name of and can list
+  nothing. The modes match because every `systemd-tmpfiles --create` re-applies the mount point's mode through the
+  mount, to the ramfs root.
 
 The ramfs, the file's owner and mode and the `ExecStopPost=` clean-up have the reasons given for the Compose unit
 ([docker-compose.md](docker-compose.md#at-boot)).
@@ -281,9 +283,9 @@ which stays on its ramfs for the whole boot.
 
 The handoff unit's last `ExecStopPost=` line writes the **unseal-failure file**, the empty root `0644` file
 `/run/iron-vault-unlock/unseal-failed`, whenever `$SERVICE_RESULT` is not `success`. It runs after the ramfs is
-unmounted, so it lands in the root `0755` directory beneath, which the service can read. A successful start removes a
-stale one before mounting, and the ramfs hides the directory beneath anyway. `/run` goes at shutdown, so no file
-outlives the boot.
+unmounted, so it lands in the root `0711` directory beneath, which the service can open by name. A successful start
+removes a stale one before mounting, and the ramfs hides the directory beneath anyway. `/run` goes at shutdown, so no
+file outlives the boot.
 
 **Why the line runs after a failed decrypt.** systemd sets up a unit's credentials, `LoadCredentialEncrypted=`
 included, only for a command spawned with the `EXEC_WRITE_CREDENTIALS` flag
@@ -582,14 +584,14 @@ In order:
    docker-compose.md's lifetime. Reset's store-owned list gains it and reset writes it before its withdrawal.
 3. **The unseal-failure report:** the service reads `unseal-failed` when the handoff is missing, `unseal_failed` in
    audit-logging.md, and the new `status` field in admin-protocol.md. The unit lines ship with item 4.
-4. **Packaging** (done in K-323; `--portable` stops until item 5): the handoff unit with the unseal-failure lines, the helper with the release check and `--server`,
-   the `Wants=` and `After=` lines, the `tmpfiles.d` line, and the [linux-package.md](linux-package.md) edits. The
-   handoff unit is installed as a plain asset that `systemd-units`' `unit-name` leaves out, so the maintainer scripts never
-   restart it on upgrade; `build-deb.sh` checks it is present and that the service unit still has no `DeviceAllow=`.
-   It also says what [remove](linux-package.md#remove) and [purge](linux-package.md#purge) do. Default: `prerm
-   remove` stops the handoff unit after the service, so its ramfs and handoff go, and dpkg removes the unit file;
-   `/etc/iron-vault-host` stays on remove, and purge deletes it only when the vault question deletes the vault, since
-   its identity opens only that vault and a kept vault needs it again.
+4. **Packaging** (done in K-323; `--portable` stops until item 5): the handoff unit with the unseal-failure lines, the
+   helper with the release check and `--server`, the `Wants=` and `After=` lines, the `tmpfiles.d` line, and the
+   [linux-package.md](linux-package.md) edits. The handoff unit is installed as a plain asset that `systemd-units`'
+   `unit-name` leaves out, so the maintainer scripts never restart it on upgrade; `build-deb.sh` checks it is present
+   and that the service unit still has no `DeviceAllow=`. It also says what [remove](linux-package.md#remove) and
+   [purge](linux-package.md#purge) do. Default: `prerm remove` stops the handoff unit after the service, so its ramfs
+   and handoff go, and dpkg removes the unit file; `/etc/iron-vault-host` stays on remove, and purge deletes it only
+   when the vault question deletes the vault, since its identity opens only that vault and a kept vault needs it again.
 5. **`--portable` and the acceptance record:** the checks, the terminal rule and its flags, and `provisioning.txt`.
 6. **The release check and the manual:** `tpm-unlock-check.sh`, an installation guide section with the
    before-and-after update lists, a cookbook recipe replacing the roadmap one, and the one-time nature of the

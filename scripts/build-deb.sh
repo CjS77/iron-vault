@@ -108,8 +108,8 @@ done
 
 echo "== host unlock units"
 # The service never opens the TPM: the handoff unit unseals as root, and the service only wants it
-# (design/tpm-unlock.md, "At boot"). The handoff unit has no [Install] section and no maintainer script names it,
-# so an install or upgrade never starts it and never unseals again.
+# (design/tpm-unlock.md, "At boot"). The handoff unit has no [Install] section and no generated snippet names it,
+# so an install or upgrade never starts it and never unseals again. prerm stops it by hand on remove only.
 unit_text() { dpkg-deb --fsys-tarfile "$deb" | tar -xO "./usr/lib/systemd/system/$1"; }
 service_unit=$(unit_text iron-vault.service)
 handoff_unit=$(unit_text iron-vault-host-unlock.service)
@@ -131,7 +131,10 @@ for script in postinst prerm postrm; do
     [ -x "$work/control/$script" ] || fail "$script is not executable"
     grep -q '#DEBHELPER#' "$work/control/$script" && fail "$script still has its #DEBHELPER# token"
 done
-grep -q 'iron-vault-host-unlock' "$work/control/postinst" && fail "postinst names the handoff unit, so an upgrade could unseal again"
+for script in postinst prerm postrm; do
+    grep -qE 'deb-systemd-(helper|invoke)[^#]*iron-vault-host-unlock' "$work/control/$script" \
+        && fail "a generated $script snippet names the handoff unit, so an install or upgrade could unseal again"
+done
 echo ok
 
 echo "== lintian"

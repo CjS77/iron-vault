@@ -73,21 +73,22 @@ refuse_portable() {
     die "--portable needs the full-disk-encryption check, which is not built yet; nothing was sealed"
 }
 
-# §14: a server may unlock unattended only if its deployment accepts this. The answer is read only from a terminal,
-# so `yes |` cannot accept for anyone.
+# §14: a server may unlock unattended only if its deployment accepts this. At a terminal the administrator always types
+# the answer; the flag only lets a run with no terminal past. The answer is never read from a pipe, so `yes |` cannot
+# accept for anyone.
 confirm_server() {
     cat >&2 <<'TEXT'
 --server: this machine will unlock its vault at every boot with no one present.
 Anyone with physical access to it and a trusted boot image can start the vault and use its credentials.
 Choose --server only for a server or appliance whose deployment accepts that.
 TEXT
-    if [ "$ACCEPT_PHYSICAL_ACCESS" = 1 ]; then
-        echo "accepted with --accept-physical-access" >&2
-    elif [ -t 0 ]; then
+    if [ -t 0 ]; then
         local answer=
         printf 'Type yes to accept: ' >&2
         read -r answer || true
         [ "$answer" = yes ] || die "not accepted; nothing was sealed"
+    elif [ "$ACCEPT_PHYSICAL_ACCESS" = 1 ]; then
+        echo "accepted with --accept-physical-access" >&2
     else
         die "stdin is not a terminal; run this at a terminal and type yes, or pass --accept-physical-access"
     fi

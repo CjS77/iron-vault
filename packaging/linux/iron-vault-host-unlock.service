@@ -4,8 +4,9 @@ Before=iron-vault.service
 After=systemd-tmpfiles-setup.service
 ConditionPathExists=/etc/iron-vault-host/host-unlock.cred
 
-# No [Install] section: iron-vault.service pulls this unit in with Wants=, and the package installs it as a plain file,
-# so no maintainer script starts or restarts it and an upgrade does not unseal again.
+# No [Install] section: iron-vault.service pulls this unit in with Wants=. The package's systemd-units unit-name
+# leaves this unit out of cargo-deb's generated snippets, so no install or upgrade starts or restarts it and none
+# unseals again.
 [Service]
 Type=oneshot
 RemainAfterExit=yes
@@ -17,7 +18,7 @@ ExecStart=/bin/mount -t ramfs -o mode=0711,nosuid,nodev,noexec ramfs /run/iron-v
 ExecStart=/usr/bin/install -o iron-vault -g iron-vault -m 0400 %d/host-unlock /run/iron-vault-unlock/host-unlock
 # ExecStopPost= also runs after a failed start, so a half-finished start leaves no plaintext. systemd sets up no
 # credentials for it, so it runs after a failed decrypt too, and the last line then leaves the unseal-failure file in
-# the root 0755 directory beneath the unmounted ramfs (design/tpm-unlock.md, "Reporting a failed unseal").
+# the root 0711 directory beneath the unmounted ramfs (design/tpm-unlock.md, "Reporting a failed unseal").
 ExecStopPost=-/bin/rm -f /run/iron-vault-unlock/host-unlock
 ExecStopPost=-/bin/umount /run/iron-vault-unlock
 ExecStopPost=-/bin/sh -c 'test "$SERVICE_RESULT" = success || : > /run/iron-vault-unlock/unseal-failed'

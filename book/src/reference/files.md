@@ -79,7 +79,7 @@ The Protected and Container profiles read one more file when it is there, the ho
 
 | Path | Owner | Mode | Made by | What it is |
 |---|---|---|---|---|
-| `/run/iron-vault-unlock/` | root | `0711` on its ramfs; neither group nor others may write it | the host's handoff unit | In the Container profile, the host directory, bind-mounted read-only into the container at the same path. The directory is mounted, not the file, so a file missing or replaced on the host is seen as such. In a protected install it is the host's own ramfs, which the package's handoff unit `iron-vault-host-unlock.service` mounts over a root `0755` directory that `tmpfiles.d` creates. |
+| `/run/iron-vault-unlock/` | root | `0711` on its ramfs; neither group nor others may write it | the host's handoff unit | In the Container profile, the host directory, bind-mounted read-only into the container at the same path. The directory is mounted, not the file, so a file missing or replaced on the host is seen as such. In a protected install it is the host's own ramfs, which the package's handoff unit `iron-vault-host-unlock.service` mounts over a root `0711` directory that `tmpfiles.d` creates. |
 | `/run/iron-vault-unlock/host-unlock` | `iron-vault` | `0400` (no group or other bits; at most `0600` is accepted) | the host's handoff unit | The host unlock identity's secret text, one `AGE-SECRET-KEY-1…` line of at most 128 bytes. It lets the service unlock at startup without a passphrase. |
 
 The file must be a regular file, never a symlink, and no directory above it may be writable by group or others, not

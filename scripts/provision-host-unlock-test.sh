@@ -67,6 +67,17 @@ run() {
     ) </dev/null 2>&1
 }
 
+# run_tty ANSWER OS_RELEASE ARGS...: as run, but with stdin a terminal: util-linux script(1) gives the helper a pty and
+# types ANSWER into it.
+run_tty() {
+    local answer=$1 release=$2
+    shift 2
+    rm -rf "$work/host" "$sealed"
+    printf '%s\n' "$answer" | HELPER=$helper STUBS=$stubs WORK=$work RELEASE=$release \
+        script -qec "bash -c 'PATH=\$STUBS:\$PATH; source \$HELPER; HOST_DIR=\$WORK/host; OS_RELEASE=\$WORK/\$RELEASE; main $*'" \
+        /dev/null 2>&1
+}
+
 check() { # name want-exit got-exit output want-sealed(yes|no) [message-fragment]
     local seen=no
     [ ! -e "$sealed" ] || seen=yes
@@ -102,8 +113,14 @@ grep -q "physical access" <<<"$out" || { echo "FAIL --server does not state the 
 out=$(yes | run ubuntu-24.04 --server); rc=$?
 check "'yes |' cannot accept for anyone" 1 $rc "$out" no "not a terminal"
 
+# At a terminal the administrator always answers: the flag does not skip the prompt.
+out=$(run_tty no ubuntu-24.04 --server --accept-physical-access); rc=$?
+check "at a terminal, --accept-physical-access still prompts" 1 $rc "$out" no "Type yes to accept"
+out=$(run_tty yes ubuntu-24.04 --server); rc=$?
+check "at a terminal, typing yes seals" 0 $rc "$out" yes "age1stubrecipient"
+
 out=$(run ubuntu-24.04 --server --accept-physical-access); rc=$?
-check "--server --accept-physical-access seals" 0 $rc "$out" yes "age1stubrecipient"
+check "--server --accept-physical-access with no terminal seals" 0 $rc "$out" yes "age1stubrecipient"
 grep -qx -- "encrypt --with-key=tpm2 --tpm2-pcrs=7 --name=host-unlock - $work/host/host-unlock.cred" "$sealed" \
     || { echo "FAIL systemd-creds was called with: $(cat "$sealed")"; status=1; }
 [ "$(stat -c %a "$work/host" "$work/host/host-unlock.cred" | tr '\n' ' ')" = "700 600 " ] \
