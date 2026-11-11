@@ -134,7 +134,11 @@ fn listener_template_names_no_address_and_passes_its_socket_to_the_service() {
 
 #[test]
 fn sysusers_creates_the_service_account_with_no_login_shell() {
-    let line = packaging("sysusers.d/iron-vault.conf");
+    let file = packaging("sysusers.d/iron-vault.conf");
+    let line = file
+        .lines()
+        .find(|l| l.split_whitespace().nth(1) == Some(SERVICE_ACCOUNT))
+        .unwrap_or_default();
     let fields: Vec<&str> = line.split_whitespace().collect();
     assert_eq!(
         fields,
