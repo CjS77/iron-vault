@@ -170,7 +170,7 @@ The output is a function of the service's answer, so two runs on the same state 
 | 3 | [Read `approval.age` back](#reading-the-approval-state-back), then remove [orphan key files](#orphan-key-files); fewer than `MAX_APPROVERS` (16) approvers are pinned | `vault-write-failed`, `approver-set-invalid` |
 | 4 | The [summary](#summaries), as notices | |
 | 5 | Owner presence: the [approver prompt](#the-approver-prompt) | `approval-denied`, `approval-unavailable` |
-| 6 | The new signer's secret. For `software`, two secret prompts, `New approval passphrase for "<label>"` and `Repeat the new approval passphrase`, checked by the [passphrase rules](vault-initialization.md#passphrase-rules): at least 12 Unicode scalar values, and the two must match, compared in constant time | `passphrase-rejected` |
+| 6 | The new signer's secret. For `software`, two secret prompts, `New approval passphrase for "<label>"` and `Repeat the new approval passphrase`, checked by the [passphrase rules](vault-initialization.md#passphrase-rules): at least 12 Unicode scalar values, and the two must match, compared in constant time. A `lock` at either prompt cancels the command, as step 7 would | `passphrase-rejected`, `wrong-state` |
 | 7 | Still Ready at the recorded check generation | `wrong-state` |
 | 8 | The [approver change](#approver-changes) that enrolls, then the [completion notice](#the-completion-notice) | `vault-write-failed` |
 

@@ -212,6 +212,37 @@ async fn an_approval_state_that_does_not_read_back_fails_before_any_prompt_and_d
     );
 }
 
+/// An older approval state and its manifest put back together are a consistent pair, so they open; the state then
+/// differs from the one in memory, which pins an approver they do not. Its key file must survive.
+#[tokio::test]
+async fn an_approval_state_that_differs_from_memory_fails_before_any_prompt_and_deletes_no_key_file() {
+    let logs = captured_logs();
+    let fixture = Fixture::new().await;
+    let older = ["state/approval.age", "state/manifest.age"].map(|name| (name, fs::read(fixture.path(name)).unwrap()));
+    let second = fixture.enroll_second_approver("second", "SECOND-passphrase-0001", UtcSecond::from_unix_seconds(100).unwrap());
+    let (_service, path, _stop) = ready(&fixture).await;
+    older.iter().for_each(|(name, bytes)| fs::write(fixture.path(name), bytes).unwrap());
+
+    let failed = add(&path, APPROVAL_PASSPHRASE, [NEW_PASSPHRASE, NEW_PASSPHRASE]).await;
+
+    match &failed.response {
+        AdminResponse::Error { code, message } => {
+            assert_eq!(*code, ErrorCode::VaultWriteFailed);
+            assert!(message.contains("nothing was changed"), "{message}");
+        }
+        other => panic!("expected vault-write-failed, got {other:?}"),
+    }
+    assert!(failed.prompts.is_empty());
+    assert!(fixture.path(&format!("state/approver-{second}.age")).exists());
+    let records = logs.events("approver.change-failed");
+    assert!(
+        records
+            .iter()
+            .any(|record| record["step"] == "read_back" && record["error_kind"] == "differs" && record["committed"] == "no"),
+        "{records:?}"
+    );
+}
+
 #[tokio::test]
 async fn step_three_removes_an_orphan_key_file() {
     let logs = captured_logs();
