@@ -136,14 +136,11 @@ priority = "optional"
 depends = "$auto, systemd, debconf (>= 0.5) | debconf-2.0"
 recommends = "logrotate"
 maintainer-scripts = "../../packaging/linux/debian"
-# Installs iron-vault.service and generates its enable, start, restart and stop snippets. The template unit (its name
-# contains '@') gets no generated snippets; prerm handles its instances.
-systemd-units = { unit-scripts = "../../packaging/linux", enable = true, start = true, restart-after-upgrade = true }
 assets = [
     ["target/release/iron-vault", "usr/bin/iron-vault", "755"],
     ["../../packaging/linux/iron-vault-listener@.socket", "usr/lib/systemd/system/iron-vault-listener@.socket", "644"],
-    # A plain file, not in systemd-units, so no maintainer script starts or restarts it and an upgrade does not unseal
-    # again; iron-vault.service pulls it in with Wants= (design/tpm-unlock.md, "At boot").
+    # A plain asset that systemd-units' unit-name leaves out, so no maintainer script starts or restarts it and an upgrade
+    # does not unseal again; iron-vault.service pulls it in with Wants= (design/tpm-unlock.md, "At boot").
     ["../../packaging/linux/iron-vault-host-unlock.service", "usr/lib/systemd/system/iron-vault-host-unlock.service", "644"],
     ["../../packaging/linux/iron-vault-provision-host-unlock", "usr/sbin/iron-vault-provision-host-unlock", "755"],
     ["../../packaging/linux/sysusers.d/iron-vault.conf", "usr/lib/sysusers.d/iron-vault.conf", "644"],
@@ -156,3 +153,13 @@ assets = [
     ["../../packaging/linux/man/iron-vault-provision-host-unlock.8", "usr/share/man/man8/iron-vault-provision-host-unlock.8", "644"],
     ["../../packaging/linux/lintian/iron-vault", "usr/share/lintian/overrides/iron-vault", "644"],
 ]
+
+# Installs iron-vault.service and generates its enable, start, restart and stop snippets. cargo-deb generates them for
+# every non-template unit among the assets, so unit-name limits them to iron-vault.service: no maintainer script may start
+# the handoff unit. The template unit (its name contains '@') gets no generated snippets; prerm handles its instances.
+[package.metadata.deb.systemd-units]
+unit-scripts = "../../packaging/linux"
+unit-name = "iron-vault"
+enable = true
+start = true
+restart-after-upgrade = true

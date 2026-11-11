@@ -584,7 +584,7 @@ In order:
    audit-logging.md, and the new `status` field in admin-protocol.md. The unit lines ship with item 4.
 4. **Packaging** (done in K-323; `--portable` stops until item 5): the handoff unit with the unseal-failure lines, the helper with the release check and `--server`,
    the `Wants=` and `After=` lines, the `tmpfiles.d` line, and the [linux-package.md](linux-package.md) edits. The
-   handoff unit is installed as a plain file, not through `cargo-deb`'s `systemd-units`, so the maintainer scripts never
+   handoff unit is installed as a plain asset that `systemd-units`' `unit-name` leaves out, so the maintainer scripts never
    restart it on upgrade; `build-deb.sh` checks it is present and that the service unit still has no `DeviceAllow=`.
    It also says what [remove](linux-package.md#remove) and [purge](linux-package.md#purge) do. Default: `prerm
    remove` stops the handoff unit after the service, so its ramfs and handoff go, and dpkg removes the unit file;

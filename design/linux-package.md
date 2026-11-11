@@ -312,8 +312,8 @@ TPM unlock adds no device: the handoff unit unseals as root and the service read
 does not name `/run/iron-vault-unlock`: the service only reads there.
 
 The handoff unit, `iron-vault-host-unlock.service`, is listed in [tpm-unlock.md](tpm-unlock.md#at-boot). The package
-installs it as a plain file, not through `cargo-deb`'s `systemd-units`, and it has no `[Install]` section, so no
-maintainer script enables, starts or restarts it. It runs as root with no sandboxing directives, which would give it a
+installs it as a plain asset, and `systemd-units`' `unit-name = "iron-vault"` keeps `cargo-deb` from generating
+snippets for it; with no `[Install]` section as well, no maintainer script enables, starts or restarts it. It runs as root with no sandboxing directives, which would give it a
 private mount namespace and hide its ramfs from the service.
 
 ## Listener socket units
