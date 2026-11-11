@@ -718,7 +718,7 @@ async fn a_protected_install_without_locked_memory_refuses_import_before_any_pro
     let (_one, source, _logs) = begin().await;
     let unavailable = MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 });
     let handoff = HandoffDir::new();
-    let untrusted = handoff.write(&RecoveryKey::generate().0.expose_secret().to_owned());
+    let untrusted = handoff.write(RecoveryKey::generate().0.expose_secret());
     fs::set_permissions(&untrusted, fs::Permissions::from_mode(0o644)).unwrap();
     for profile in [DeploymentProfile::Protected, DeploymentProfile::Container] {
         for memory in [unavailable.clone(), MemoryProtection::Unsupported] {
