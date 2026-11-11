@@ -267,6 +267,25 @@ async fn an_enrolled_approver_approves_and_the_envelope_names_it() {
 }
 
 #[tokio::test]
+async fn reapproving_the_active_bytes_says_so_and_commits_the_next_version_signed_by_the_answering_approver() {
+    let session = Session::new().await;
+    let second = enrolled(&session.add(APPROVAL_PASSPHRASE, NEW_PASSPHRASE).await);
+
+    let again = session.approve(&["fx"], &[Answer::Switch, Answer::Input(NEW_PASSPHRASE)]).await;
+
+    assert!(is_approved(&again), "{again:?}");
+    assert!(again.notices.contains("committed version: 2\n"), "{}", again.notices);
+    assert!(again.notices.contains("version to commit: 3\n"), "{}", again.notices);
+    assert!(again.notices.contains("no change; same config as version 2\n"), "{}", again.notices);
+    assert!(!again.notices.contains("text changed"), "{}", again.notices);
+    assert_eq!(session.signer_of_published(), second);
+    match again.response {
+        AdminResponse::ConfigApprove(result) => assert_eq!(result.version, 3),
+        other => panic!("expected an approval, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn rotating_the_approver_keeps_routes_serving() {
     let session = Session::new().await;
     let second = enrolled(&session.add(APPROVAL_PASSPHRASE, NEW_PASSPHRASE).await);

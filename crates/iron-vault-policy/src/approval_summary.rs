@@ -25,6 +25,12 @@ use crate::validated::ValidatedConfig;
 /// The line printed when the bytes differ but no section has an entry (whitespace or comments, spec §12).
 const TEXT_ONLY: &str = "no policy change; text changed";
 
+/// The line printed, with the committed version, when the pending config's bytes equal the active config's: the
+/// approval only signs the same config again, as when an approval signer is rotated.
+fn same_config(version: u64) -> String {
+    format!("no change; same config as version {version}")
+}
+
 /// The line printed when there is no active config to diff against.
 const NO_ACTIVE: &str = "no active config";
 
@@ -70,6 +76,8 @@ type Field = (&'static str, String);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalSummary {
     no_active_config: bool,
+    /// The committed version whose config the pending bytes repeat, when they are identical.
+    same_as: Option<u64>,
     callers: Vec<Entry>,
     grants: Vec<Entry>,
     routes: Vec<Entry>,
@@ -82,7 +90,7 @@ pub struct ApprovalSummary {
 /// Diffs `pending` against `active`; `None` means nothing is active, so everything is listed as added.
 ///
 /// Call it only for a config whose bytes differ from the active config's: a summary with no entries renders as "no
-/// policy change; text changed".
+/// policy change; text changed". For identical bytes use [`ApprovalSummary::same_config`].
 pub fn summarize(active: Option<&ValidatedConfig>, pending: &ValidatedConfig) -> ApprovalSummary {
     let (no_callers, no_routes, no_listeners) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
     let old_callers = active.map_or(&no_callers, ValidatedConfig::callers);
@@ -91,6 +99,7 @@ pub fn summarize(active: Option<&ValidatedConfig>, pending: &ValidatedConfig) ->
     let old_limits = active.map_or_else(Limits::default, |c| *c.limits());
     ApprovalSummary {
         no_active_config: active.is_none(),
+        same_as: None,
         callers: diff_maps(old_callers, pending.callers(), caller_fields, caller_extra),
         grants: grant_entries(old_callers, pending.callers()),
         routes: diff_maps(old_routes, pending.routes(), route_fields, |_, _| None),
@@ -102,6 +111,22 @@ pub fn summarize(active: Option<&ValidatedConfig>, pending: &ValidatedConfig) ->
 }
 
 impl ApprovalSummary {
+    /// The summary of a pending config whose bytes equal the config committed as `version`: it has no entries and
+    /// renders as "no change; same config as version N", so the owner sees the approval only signs the config again.
+    pub fn same_config(version: u64) -> Self {
+        Self {
+            no_active_config: false,
+            same_as: Some(version),
+            callers: Vec::new(),
+            grants: Vec::new(),
+            routes: Vec::new(),
+            listeners: Vec::new(),
+            limits: Vec::new(),
+            logging: Vec::new(),
+            recovery: Vec::new(),
+        }
+    }
+
     fn sections(&self) -> [(&'static str, &Vec<Entry>); 7] {
         [
             ("callers", &self.callers),
@@ -132,9 +157,10 @@ impl ApprovalSummary {
                 format!("{title}:\n{lines}")
             });
         let body: String = intro.into_iter().chain(sections).collect();
-        match self.is_empty() {
-            true => format!("{body}{TEXT_ONLY}\n"),
-            false => body,
+        match (self.same_as, self.is_empty()) {
+            (Some(version), _) => format!("{}\n", same_config(version)),
+            (None, true) => format!("{body}{TEXT_ONLY}\n"),
+            (None, false) => body,
         }
     }
 
@@ -440,6 +466,17 @@ mod tests {
         let summary = summarize(Some(&spec()), &spec());
         assert!(summary.is_empty());
         assert_eq!(summary.render(), "no policy change; text changed\n");
+    }
+
+    #[test]
+    fn identical_bytes_render_the_same_config_line() {
+        let summary = ApprovalSummary::same_config(7);
+        assert!(summary.is_empty());
+        assert_eq!(summary.render(), "no change; same config as version 7\n");
+        assert_eq!(
+            summary.headline(),
+            "callers: none; route grants: none; routes: none; listeners: none; limits: none; logging: none; recovery: none"
+        );
     }
 
     #[test]

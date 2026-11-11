@@ -553,6 +553,10 @@ The order is fixed, so the same two configs always give the same text:
    shown like any other change.
 9. **Text only**: when the bytes differ but no section above has an entry, the line "no policy change; text changed"
    (whitespace or comments), so the summary is never empty.
+10. **Same config**: when the pending config's digest equals the committed one's, the service does not diff and prints
+    only the line "no change; same config as version N", N being the committed version. The approval commits version
+    N+1 over identical bytes, so the owner sees it only signs again, as when an
+    [approval signer is rotated](approval-signers.md).
 
 Within each section, entries are in name order (`BTreeMap` order). Each entry is marked `+` added, `-` removed or `~`
 changed. Every configured name is printed through the configured-name escaping, so a hostile name cannot forge a

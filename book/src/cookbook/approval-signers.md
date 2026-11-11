@@ -97,7 +97,7 @@ vault: 4c3dce89-4e6e-42ad-830b-e0bb5eb39c36
 version to commit: 3
 config digest: blake2b:10cef10967fbeeaece8a5f087bf247f8e3ad253a88f1fc96e2db4d449122e0c7
 committed version: 2
-no policy change; text changed
+no change; same config as version 2
 Approve this config as version 3? Type yes to approve: yes
 Approval passphrase for "approval passphrase" (Ctrl-Y to try another way): ^Y
 Approval passphrase for "approval passphrase 2026" (Ctrl-Y to try another way):
@@ -105,7 +105,8 @@ approved version 3 (blake2b:10cef10967fbeeaece8a5f087bf247f8e3ad253a88f1fc96e2db
 callers: none; route grants: none; routes: none; listeners: none; limits: none; logging: none; recovery: none
 ```
 
-The file is unchanged: the "no policy change; text changed" line is a known issue, tracked in K-304.
+The file is unchanged, so the summary says "no change; same config as version 2" instead of listing a diff. The
+approval still commits version 3, signed by the approver that answered.
 
 Nothing echoes while you type a passphrase or press Ctrl-Y; `^Y` above marks where it was pressed. `approver list`
 now marks the new approver `active` and lists it first. A wrong passphrase ends the exchange: the service never goes on

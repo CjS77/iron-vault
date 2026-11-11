@@ -133,7 +133,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             service: self,
             service_wide,
             started,
-            summary: summarize(active.as_ref(), policy.config()),
+            summary: summary_of(active.as_ref(), policy.config(), &approval, pending.digest()),
             pending,
             approval,
             approvers,
@@ -170,6 +170,20 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
 
     fn storage<'s>(&'s self, identity: &'s VaultIdentity) -> ApprovalStorage<'s, F> {
         approval_storage(&self.locks, &self.setup.fs, identity)
+    }
+}
+
+/// The summary of `pending` against `active`. Bytes identical to the committed config's (same digest) are not diffed:
+/// the approval only signs that config again, which is how an approval signer is rotated.
+fn summary_of(
+    active: Option<&ValidatedConfig>,
+    pending: &ValidatedConfig,
+    approval: &ApprovalState,
+    digest: ConfigDigest,
+) -> ApprovalSummary {
+    match approval.committed() {
+        Some((version, committed)) if committed == digest => ApprovalSummary::same_config(version.get()),
+        _ => summarize(active, pending),
     }
 }
 
