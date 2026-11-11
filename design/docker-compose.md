@@ -617,9 +617,9 @@ gets no container column.
    systemd versions on current Ubuntu LTS releases, whether they mount the credentials directory in a private
    namespace by default, and whether a unit that loads a credential gets its own mount namespace, which would hide the
    ramfs from Docker. The host unlock release check settles these with `findmnt` on the target release.
-3. **Whether `status` shows the last host unlock failure.** *Decided: default accepted (2026-11-09).* *Default:* no,
-   the audit log only. `status` already shows Locked and the memory protection; the `vault.host-unlock` record says
-   why.
+3. **Whether `status` shows the last host unlock failure.** *Superseded (2026-11-11)* by
+   [TPM unlock](tpm-unlock.md#in-the-service): `status` shows the startup's host unlock outcome in both profiles. The
+   earlier decision (2026-11-09) was the default: no, the audit log only.
 4. **Whether the Linux package and the Compose stack may share a host.** *Decided: default accepted (2026-11-09).*
    *Default:* no. Both use `/run/iron-vault`, the `iron-vault` account (at a dynamic uid in the package, a fixed one
    here) and `/usr/lib/sysusers.d/iron-vault.conf`.
