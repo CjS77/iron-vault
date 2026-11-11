@@ -380,7 +380,7 @@ async fn proxy_case(slot: Slot) {
 
 /// §10: "The outbound client must disable environment proxy discovery, including `HTTPS_PROXY` and `ALL_PROXY`."
 #[tokio::test]
-async fn s3_7_no_proxy_discovery_proxy_variables_never_see_a_connection() {
+async fn no_proxy_discovery_proxy_variables_never_see_a_connection() {
     proxy_case(Slot::Header).await;
     proxy_case(Slot::Query).await;
 }
@@ -398,7 +398,7 @@ async fn built_in_roots_case(slot: Slot) {
 
 /// §10: "It must not inherit trust roots from `SSL_CERT_FILE`, `SSL_CERT_DIR`": the built-in roots stay the only ones.
 #[tokio::test]
-async fn s3_7_no_inherited_trust_ssl_cert_variables_add_no_built_in_root() {
+async fn no_inherited_trust_ssl_cert_variables_add_no_built_in_root() {
     built_in_roots_case(Slot::Header).await;
     built_in_roots_case(Slot::Query).await;
 }
@@ -426,7 +426,7 @@ async fn pinned_case(slot: Slot, pin_upstream_ca: bool) {
 /// §10: a route "may reference an administrator-installed pinned CA"; `SSL_CERT_FILE` and `SSL_CERT_DIR` naming the
 /// upstream's CA neither add to the pinned CA nor stand in for it.
 #[tokio::test]
-async fn s3_7_no_inherited_trust_a_pinned_ca_alone_decides_under_ssl_cert_variables() {
+async fn no_inherited_trust_a_pinned_ca_alone_decides_under_ssl_cert_variables() {
     pinned_case(Slot::Header, true).await;
     pinned_case(Slot::Query, true).await;
     pinned_case(Slot::Header, false).await;
@@ -446,7 +446,7 @@ async fn wrong_name_case(slot: Slot) {
 
 /// §10: "The service must verify certificates and hostnames", also against a pinned CA.
 #[tokio::test]
-async fn s3_7_hostname_verified_a_pinned_cas_certificate_for_another_name_is_refused() {
+async fn hostname_verified_a_pinned_cas_certificate_for_another_name_is_refused() {
     wrong_name_case(Slot::Header).await;
     wrong_name_case(Slot::Query).await;
 }
@@ -470,7 +470,7 @@ async fn key_log_case(slot: Slot) {
 
 /// §10: "The package must disable raw connection logging": `SSLKEYLOGFILE` cannot make it log TLS session keys.
 #[tokio::test]
-async fn s3_7_no_raw_connection_logging_sslkeylogfile_gets_no_key_log() {
+async fn no_raw_connection_logging_sslkeylogfile_gets_no_key_log() {
     key_log_case(Slot::Header).await;
     key_log_case(Slot::Query).await;
 }
@@ -494,7 +494,7 @@ async fn redirect_case(slot: Slot) {
 /// §11: "The client must never follow an upstream redirect automatically", so a redirect cannot carry the credential
 /// to another origin.
 #[tokio::test]
-async fn s3_8_no_redirect_following_a_redirect_is_returned_unfollowed() {
+async fn no_redirect_following_a_redirect_is_returned_unfollowed() {
     redirect_case(Slot::Header).await;
     redirect_case(Slot::Query).await;
 }
@@ -578,7 +578,7 @@ fn is_capped_target(token: &str) -> bool {
 /// a child that sets it, not that the caps hold. `caps_hold_under_a_trace_global_level` in `logging.rs` proves the caps
 /// hold under a `TRACE` global level; cite that test for the caps.
 #[tokio::test]
-async fn s3_7_capped_dependency_logs_rust_log_lifts_no_level_and_logs_no_credential() {
+async fn capped_dependency_logs_rust_log_lifts_no_level_and_logs_no_credential() {
     rust_log_case(Slot::Header, "trace").await;
     rust_log_case(Slot::Query, "trace").await;
     rust_log_case(Slot::Header, "hyper=trace,rustls=trace,h2=trace").await;
@@ -590,7 +590,7 @@ async fn s3_7_capped_dependency_logs_rust_log_lifts_no_level_and_logs_no_credent
 /// `logging::init()` ignores `RUST_LOG` today, so this shows what comes out; `caps_hold_under_a_trace_global_level` in
 /// `logging.rs` is the proof that the caps hold.
 #[tokio::test]
-async fn s3_7_capped_dependency_logs_over_h2_log_no_credential_and_no_verbose_line() {
+async fn capped_dependency_logs_over_h2_log_no_credential_and_no_verbose_line() {
     for rust_log in ["trace", "hyper=trace,rustls=trace,h2=trace"] {
         h2_rust_log_case(Slot::Header, rust_log).await;
         h2_rust_log_case(Slot::Query, rust_log).await;

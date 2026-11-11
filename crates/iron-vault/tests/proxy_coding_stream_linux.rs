@@ -67,7 +67,7 @@ async fn received_split(proxy: &common::proxy_harness::Proxy, route: &str, at: u
 }
 
 #[tokio::test]
-async fn s3_8_a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes() {
+async fn a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes() {
     let ca = TestCa::new("coding stream CA");
     // A static key with URL-reserved characters and a Basic credential: every scrub pattern of each, in one body.
     for make in [edge, basic] {
@@ -90,7 +90,7 @@ async fn s3_8_a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_by
 }
 
 #[tokio::test]
-async fn s3_8_a_br_body_split_at_chosen_compressed_offsets_scrubs_to_the_same_bytes() {
+async fn a_br_body_split_at_chosen_compressed_offsets_scrubs_to_the_same_bytes() {
     let ca = TestCa::new("coding stream CA");
     let cred = basic();
     let (plain, scrubbed) = body_with_every_form(&cred);
@@ -106,7 +106,7 @@ async fn s3_8_a_br_body_split_at_chosen_compressed_offsets_scrubs_to_the_same_by
 }
 
 #[tokio::test]
-async fn s3_8_a_secret_across_two_decoder_output_pieces_is_scrubbed() {
+async fn a_secret_across_two_decoder_output_pieces_is_scrubbed() {
     let ca = TestCa::new("coding stream CA");
     let cred = fx();
     let secret = cred.forms.iter().find(|form| form.len() == 32).unwrap().clone();
@@ -206,12 +206,12 @@ fn sse_events(count: usize) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn s3_8_a_gzip_sse_event_reaches_the_caller_decoded_before_the_next_is_sent() {
+async fn a_gzip_sse_event_reaches_the_caller_decoded_before_the_next_is_sent() {
     stream_gzip_events(&sse_events(3), &[]).await;
 }
 
 #[tokio::test]
-async fn s3_8_a_gzip_sse_event_reaches_the_caller_recompressed_before_the_next_is_sent() {
+async fn a_gzip_sse_event_reaches_the_caller_recompressed_before_the_next_is_sent() {
     stream_gzip_events(&sse_events(3), &[("Accept-Encoding", "gzip, identity;q=0")]).await;
 }
 
@@ -304,7 +304,7 @@ fn chunked_body(raw: &[u8]) -> (Vec<u8>, Vec<usize>, bool) {
 }
 
 #[tokio::test]
-async fn s3_8_a_realistic_gzip_json_reply_without_a_secret_decodes_to_the_same_bytes() {
+async fn a_realistic_gzip_json_reply_without_a_secret_decodes_to_the_same_bytes() {
     let plain = json_listing(300 * 1024);
     let codings: [(&str, Encode); 3] = [("gzip", gzip), ("deflate", deflate), ("br", br)];
     for (coding, encode) in codings {
@@ -324,7 +324,7 @@ async fn s3_8_a_realistic_gzip_json_reply_without_a_secret_decodes_to_the_same_b
 }
 
 #[tokio::test]
-async fn s3_8_the_default_limits_accept_a_10_mib_gzip_json_reply() {
+async fn the_default_limits_accept_a_10_mib_gzip_json_reply() {
     let plain = json_listing(10 << 20);
     let coded = gzip(&plain);
     assert!(
@@ -389,7 +389,7 @@ async fn bombed(cred: Cred, bomb: Vec<u8>) -> Vec<u8> {
 /// the caller never sees a chunk over one decoder piece plus the scrubber's hold-back. Prints what the caller received;
 /// run with `--nocapture`.
 #[tokio::test]
-async fn s3_8_a_decompression_bomb_is_cut_off_with_no_chunk_over_one_decoder_step_plus_the_hold_back() {
+async fn a_decompression_bomb_is_cut_off_with_no_chunk_over_one_decoder_step_plus_the_hold_back() {
     let cred = fx();
     let hold_back = cred.longest().len() - 1;
     let bomb = bomb(&cred);

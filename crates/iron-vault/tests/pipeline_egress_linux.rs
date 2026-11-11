@@ -251,7 +251,7 @@ fn assert_no_secret(response: &Response) {
 // Positive: the credential goes to the enrolled origin and the selected slot, and nowhere else.
 
 #[tokio::test]
-async fn s3_15_fx_query_slot_sends_the_credential_in_the_query_only() {
+async fn fx_query_slot_sends_the_credential_in_the_query_only() {
     let (_ca, upstreams, proxy) = start_all().await;
 
     let response = proxy.get("/fx/latest?base=USD").await;
@@ -269,7 +269,7 @@ async fn s3_15_fx_query_slot_sends_the_credential_in_the_query_only() {
 }
 
 #[tokio::test]
-async fn s3_6_query_slot_replaces_every_caller_supplied_occurrence_of_the_parameter() {
+async fn query_slot_replaces_every_caller_supplied_occurrence_of_the_parameter() {
     let (_ca, upstreams, proxy) = start_all().await;
     // The second value is the route's own marker, percent-encoded because a raw `{` is not valid in a request target.
     let target = "/fx/latest?access_key=stale&base=USD&access_key=%7Biv%3Afx_key%7D";
@@ -284,7 +284,7 @@ async fn s3_6_query_slot_replaces_every_caller_supplied_occurrence_of_the_parame
 }
 
 #[tokio::test]
-async fn s3_15_brave_header_slot_sends_the_credential_in_its_header_exactly_once() {
+async fn brave_header_slot_sends_the_credential_in_its_header_exactly_once() {
     let (_ca, upstreams, proxy) = start_all().await;
     // Both caller-supplied copies go, whatever their case: the first is the route's own marker, the second a stale value.
     let request = CallerRequest::get("/brave/res/v1/web/search?q=rust")
@@ -304,7 +304,7 @@ async fn s3_15_brave_header_slot_sends_the_credential_in_its_header_exactly_once
 }
 
 #[tokio::test]
-async fn s3_4_a_token_caller_on_the_loopback_listener_reaches_its_route() {
+async fn a_token_caller_on_the_loopback_listener_reaches_its_route() {
     let (_ca, upstreams, proxy) = start_all().await;
     let request = CallerRequest::get("/brave/res/v1/web/search?q=rust").signed(Via::Tcp);
 
@@ -321,7 +321,7 @@ async fn s3_4_a_token_caller_on_the_loopback_listener_reaches_its_route() {
 }
 
 #[tokio::test]
-async fn s3_15_brave_over_http2_sends_the_credential_to_the_enrolled_authority_only() {
+async fn brave_over_http2_sends_the_credential_to_the_enrolled_authority_only() {
     let ca = TestCa::new("egress test CA");
     let brave = MockH2Upstream::start(&ca, H2Reply::ok("ok")).await;
     // The other upstreams are never reached; their ports refuse connections and are held so nothing else can take them.
@@ -348,7 +348,7 @@ async fn s3_15_brave_over_http2_sends_the_credential_to_the_enrolled_authority_o
 }
 
 #[tokio::test]
-async fn s3_6_venice_bearer_slot_forwards_the_post_body_byte_for_byte_and_streams_the_reply() {
+async fn venice_bearer_slot_forwards_the_post_body_byte_for_byte_and_streams_the_reply() {
     let ca = TestCa::new("egress test CA");
     let gate = Arc::new(tokio::sync::Notify::new());
     let streamed = Reply::TwoChunks {
@@ -385,7 +385,7 @@ async fn s3_6_venice_bearer_slot_forwards_the_post_body_byte_for_byte_and_stream
 }
 
 #[tokio::test]
-async fn s3_6_basic_slot_replaces_the_callers_authorization_with_one_basic_value() {
+async fn basic_slot_replaces_the_callers_authorization_with_one_basic_value() {
     let (_ca, upstreams, proxy) = start_all().await;
     let request = CallerRequest::get("/billing/v1/invoices")
         .header("Authorization", "Bearer callers-own-credential")
@@ -408,7 +408,7 @@ async fn s3_6_basic_slot_replaces_the_callers_authorization_with_one_basic_value
 // Negative: no credentialed egress, and no connection to any upstream at all.
 
 #[tokio::test]
-async fn s3_12_a_missing_or_wrong_token_is_401() {
+async fn a_missing_or_wrong_token_is_401() {
     let (_ca, upstreams, proxy) = start_all().await;
     let target = "/brave/res/v1/web/search?q=rust";
     let (unix, tcp) = (Via::Unix, Via::Tcp);
@@ -435,7 +435,7 @@ async fn s3_12_a_missing_or_wrong_token_is_401() {
 }
 
 #[tokio::test]
-async fn s3_12_a_route_the_caller_is_not_granted_is_403() {
+async fn a_route_the_caller_is_not_granted_is_403() {
     let (_ca, upstreams, proxy) = start_all().await;
     let narrow = |target: &str| CallerRequest::get(target).with_token(Via::Unix, NARROW_TOKEN);
     let requests = [
@@ -459,7 +459,7 @@ async fn s3_12_a_route_the_caller_is_not_granted_is_403() {
 }
 
 #[tokio::test]
-async fn s3_12_a_prefix_no_route_has_is_404() {
+async fn a_prefix_no_route_has_is_404() {
     let (_ca, upstreams, proxy) = start_all().await;
     // Lookalikes of `/fx` match on whole segments only (§9).
     let targets = [
@@ -481,7 +481,7 @@ async fn s3_12_a_prefix_no_route_has_is_404() {
 }
 
 #[tokio::test]
-async fn s3_6_hostile_paths_are_400_before_any_upstream_work() {
+async fn hostile_paths_are_400_before_any_upstream_work() {
     let (_ca, upstreams, proxy) = start_all().await;
     // A handful of the `hostile_paths.rs` families: dot segments, mixed-case and double-encoded dots, encoded and raw
     // separators, NUL, a malformed escape and repeated empty segments, each under a granted prefix.
@@ -511,7 +511,7 @@ async fn s3_6_hostile_paths_are_400_before_any_upstream_work() {
 }
 
 #[tokio::test]
-async fn s3_5_an_absolute_form_or_authority_form_target_is_refused_before_any_upstream_work() {
+async fn an_absolute_form_or_authority_form_target_is_refused_before_any_upstream_work() {
     let (_ca, upstreams, proxy) = start_all().await;
     let requests = [
         CallerRequest::get("http://evil.example/fx/latest"),
@@ -529,7 +529,7 @@ async fn s3_5_an_absolute_form_or_authority_form_target_is_refused_before_any_up
 }
 
 #[tokio::test]
-async fn s3_6_override_rewrite_and_forwarding_headers_are_stripped_not_refused() {
+async fn override_rewrite_and_forwarding_headers_are_stripped_not_refused() {
     let (_ca, upstreams, proxy) = start_all().await;
     let stripped = [
         ("X-HTTP-Method-Override", "DELETE"),
@@ -576,7 +576,7 @@ async fn s3_6_override_rewrite_and_forwarding_headers_are_stripped_not_refused()
 }
 
 #[tokio::test]
-async fn s3_6_a_marker_naming_another_credential_in_the_slot_is_400() {
+async fn a_marker_naming_another_credential_in_the_slot_is_400() {
     let (_ca, upstreams, proxy) = start_all().await;
     let requests = [
         // Header slot, header slot with a format, query slot (percent-encoded), and a marker that does not parse.
@@ -598,7 +598,7 @@ async fn s3_6_a_marker_naming_another_credential_in_the_slot_is_400() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn s3_5_concurrent_requests_cannot_exceed_a_bucket() {
+async fn concurrent_requests_cannot_exceed_a_bucket() {
     let (_ca, upstreams, proxy) = start_all().await;
     let endpoints = proxy.endpoints();
     let request = CallerRequest::get("/quota/latest").signed(Via::Unix);

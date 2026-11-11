@@ -168,8 +168,8 @@ corrupt, truncated or past a limit aborts the caller's connection after the head
 `Content-Encoding` and `Content-Length` unless the caller refuses identity, when it gets gzip of the scrubbed body.
 
 **Default limits.** `max_decompressed_response_bytes` is 64 MiB and `max_decompression_ratio` is 100, checked once 1 MiB
-has decoded. `s3_8_the_default_limits_accept_a_10_mib_gzip_json_reply` sends 10 MiB of JSON that gzip shrinks 3.8 times and
-requires it byte for byte. `s3_8_a_decompression_bomb_is_cut_off_with_no_chunk_over_one_decoder_step_plus_the_hold_back`
+has decoded. `the_default_limits_accept_a_10_mib_gzip_json_reply` sends 10 MiB of JSON that gzip shrinks 3.8 times and
+requires it byte for byte. `a_decompression_bomb_is_cut_off_with_no_chunk_over_one_decoder_step_plus_the_hold_back`
 sends 16 MiB of zeros (a thousandfold, 17 KB compressed) with a key planted past the limit, all in one upstream chunk. The
 caller's connection is aborted, receives under 2 MiB, never sees the key, and no chunk it received exceeds `PIECE_SIZE`
 (64 KiB) plus the longest pattern minus one.
@@ -191,17 +191,17 @@ event decoded. Median, 95th percentile and maximum on one development machine (L
 | debug | 105 / 113 / 286 us | 127 / 136 / 311 us |
 | release | 13 / 16 / 74 us | 15 / 17 / 63 us |
 
-`s3_8_a_gzip_sse_event_reaches_the_caller_decoded_before_the_next_is_sent` and its `..._recompressed_...` twin gate the
+`a_gzip_sse_event_reaches_the_caller_decoded_before_the_next_is_sent` and its `..._recompressed_...` twin gate the
 upstream on a channel, so they prove the event is relayed before the next exists without a timing threshold.
 
 **Throughput** comes from `measure_gzip_decode_throughput`: a 10 MiB gzip JSON body (2.8 MB compressed) sent in one
 write, timed from the caller's request to the end of the response, best of five. Release: 122 ms, 82 MiB/s decoded.
 Debug: 3.7 s, 3 MiB/s. It includes TLS to the upstream, decode, scrub and the Unix socket.
 
-**Boundaries.** `s3_8_a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes` splits the compressed bytes of a
+**Boundaries.** `a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes` splits the compressed bytes of a
 body holding every pattern of a Basic credential and of a static key at every offset; the `br` test does so at eight.
-`s3_8_a_secret_across_two_decoder_output_pieces_is_scrubbed` plants a key across the 64 KiB piece boundary at three
-offsets. `s3_8_a_realistic_gzip_json_reply_without_a_secret_decodes_to_the_same_bytes` requires gzip, deflate and br
+`a_secret_across_two_decoder_output_pieces_is_scrubbed` plants a key across the 64 KiB piece boundary at three
+offsets. `a_realistic_gzip_json_reply_without_a_secret_decodes_to_the_same_bytes` requires gzip, deflate and br
 replies without a secret to decode byte for byte.
 
 ## Clearing a vault
