@@ -102,11 +102,11 @@ On Linux, Iron Vault run as a system service under a dedicated account. Installa
 requires administrator access once. Ordinary users must not have access to the service executable, startup
 definition, trusted settings, vault, or runtime directory.
 
-| Platform | Required service boundary                                                                                                                | Key integration                                                                                |
-|----------|------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
-| Linux    | Root-owned package or binary; system service under `iron-vault`; private state at `/var/lib/iron-vault`; sockets under `/run/iron-vault` | TPM through the verified `systemd-creds` host unlock adapter                                   |
-| Windows  | Administrator-owned installation; service under a dedicated virtual account; equivalent restrictive ACLs                                 | TPM-backed operations through the Platform Crypto Provider                                     |
-| macOS    | Administrator-owned installation; launchd daemon under a dedicated account; equivalent restrictive permissions                           | Secure Enclave adapter where validated; otherwise interactive passphrase unlock                |
+| Platform | Required service boundary                                                                                                                | Key integration                                                                                                     |
+|----------|------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|
+| Linux    | Root-owned package or binary; system service under `iron-vault`; private state at `/var/lib/iron-vault`; sockets under `/run/iron-vault` | TPM through the verified `systemd-creds` host unlock adapter; an in-service adapter with a TPM PIN in a later phase |
+| Windows  | Administrator-owned installation; service under a dedicated virtual account; equivalent restrictive ACLs                                 | TPM-backed operations through the Platform Crypto Provider                                                          |
+| macOS    | Administrator-owned installation; launchd daemon under a dedicated account; equivalent restrictive permissions                           | Secure Enclave adapter where validated; otherwise interactive passphrase unlock                                     |
 
 ### Linux
 
@@ -844,10 +844,10 @@ proves which boot policy started the machine, not who is using it:
 - A server or appliance may unlock unattended if its deployment accepts that anyone with physical access and a
   trusted boot image can start it.
 - A routine firmware update must not strand the vault.
-- The TPM does not know which program is asking. Only root, through the host's init system, may reach the service's
-  TPM objects; the service account and ordinary accounts never open the TPM. On Linux the host unseals a host unlock
-  identity with `systemd-creds` and hands it to the service, as in [§17](#containerised-deployments). The package
-  must document the hardware and firmware policy it provisions.
+- The TPM does not know which program is asking. Only root, through the host's init system, may read or unseal the
+  service's TPM-sealed credential; the service account never opens the TPM. On Linux the host unseals a host unlock
+  identity with `systemd-creds` and hands it to the service, as in [§17](#containerised-deployments). The package must
+  document the hardware and firmware policy it provisions.
 
 **Memory.** The service must keep secrets out of logs, dumps and swap:
 
