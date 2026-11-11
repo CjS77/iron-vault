@@ -15,7 +15,8 @@ protected installation](../reference/cli.md#sudo-in-a-protected-installation)).
 ## Prerequisites
 
 - **The source**, running and Ready, and its **vault passphrase**. Export asks for it every time, even while the vault
-  is unlocked.
+  is unlocked. If the source has a `tpm` approver, its TPM approval PIN can authorize the export in place of the vault
+  passphrase: the prompt can switch to it.
 - **The new machine**, with Iron Vault installed and its service running, and no vault: `iron-vault status` shows
   `vault: not initialized`. Import never overwrites a vault.
 - **A software approver** on the source, and its approval passphrase. The new machine's first `config approve` asks
@@ -94,10 +95,14 @@ iron-vault unlock
 iron-vault config approve vault.bundle.config.toml
 ```
 
-After `unlock` the service is Unavailable, with the reason `policy invalid`, and answers `503` to every caller: the new
-machine has the config, but no approval of it. `config approve` shows the whole config as added, because nothing is
-active yet, and asks for an approval passphrase: a software approver's, since a TPM approver cannot sign here. Edit the copy first if the new machine needs a different listener
-address or path.
+`unlock` opens the vault, then ends with `unlocked-unavailable` (error 16), "the vault unlocked, but the config check
+failed", and a non-zero exit status. That is expected here: the new machine has the config, but no approval of it, so
+the service is Unavailable with the reason `policy invalid` and answers `503` to every caller. A script that stops on
+the first failure, such as one under `set -e`, must let this `unlock` fail.
+
+`config approve` shows the whole config as added, because nothing is active yet, and asks for an approval passphrase:
+a software approver's, since a TPM approver cannot sign here. Edit the copy first if the new machine needs a different
+listener address or path.
 
 Once it is approved, send a request through a route you use, as [getting started](getting-started.md) does. It works
 with the credential the source held.
@@ -126,8 +131,9 @@ Type the recovery key that import showed. See [check and store your recovery key
 ### 7. Compare the versions with the source
 
 On the source, run `iron-vault status` and compare its `approval committed` and `approval highest reserved` lines with
-the versions import printed. If the source shows higher versions, someone approved a config there after the export:
-export again, and import into a fresh state directory.
+the versions import printed. If the source shows higher versions, someone approved a config there after the export.
+Export again, run [`iron-vault reset`](../reference/cli.md#iron-vault-reset) on the new machine to discard the vault
+you imported, and import the new bundle.
 
 ### 8. Retire the source
 

@@ -156,7 +156,7 @@ or config directory. See [move a vault to a new machine](../cookbook/move-vault.
 
 | File | What it is |
 |---|---|
-| `<bundle>` | The migration bundle: a `.tar.gz` of the encrypted record files, approval state, approver key envelopes and config, with the vault identity sealed with the export passphrase. `0600`. It holds no plaintext secret. |
+| `<bundle>` | The migration bundle: a `.tar.gz` of the encrypted record files, manifest, approval state, approver key envelopes and config, with the vault identity sealed with the export passphrase. `0600`. It holds no plaintext secret. |
 | `.<bundle>.partial` | The bundle while `export` receives it, created `0600` before anything is sent. It takes the bundle's name once it is whole, and is removed on any other ending. `export` refuses to start while one is there. |
 | `<bundle>.config.toml` | The source's committed config, which `import` writes beside the bundle, `0600`, for the first `config approve`. Holds no secret. |
 

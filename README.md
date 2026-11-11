@@ -58,11 +58,11 @@ Done in v0:
   checks once, and a Secure Boot update ends unattended unlock until you provision again. It has had no release check on
   a real machine yet. See the [recipe](book/src/cookbook/tpm-unlock.md) and the
   [install guide](book/src/installation/linux-install.md#tpm-unlock).
-- **Migration:** `export` writes the vault as an encrypted bundle after a fresh vault passphrase proof, sealed with an
-  export passphrase you choose; `import` makes the vault from it on a new machine, with a new vault passphrase and
-  recovery key, and the source's records and approval counters unchanged. No plaintext secret is written on the way, and
-  the new machine routes only after a config approval above every version the source reserved. See the
-  [recipe](book/src/cookbook/move-vault.md).
+- **Migration:** `export` writes the vault as an encrypted bundle after a fresh proof of the vault passphrase (or a
+  `tpm` approver's TPM approval PIN), sealed with an export passphrase you choose; `import` makes the vault from it on a
+  new machine, with a new vault passphrase and recovery key, and the source's records and approval counters unchanged.
+  No plaintext secret is written on the way, and the new machine routes only after a config approval above every
+  version the source reserved. See the [recipe](book/src/cookbook/move-vault.md).
 - **Audit logging:** typed JSON records of request and administrative events, which never log secret values. See the
   [log operations guide](book/src/reference/log-operations.md).
 
