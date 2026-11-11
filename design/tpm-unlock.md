@@ -6,10 +6,10 @@ which recipient role it enrols, how a portable machine gets its second secret, w
 does, how power loss affects the TPM's dictionary-attack state, and what the release check must show. The passphrase
 and the offline recovery key stay as they are: TPM unlock adds a way in, it replaces none.
 
-The decisions marked **owner to confirm** change what the specification or another design says, and are listed word
-for word under [Proposed specification changes](#proposed-specification-changes). Nothing in
-[`iron-vault-specification.md`](iron-vault-specification.md), [`implementation-specification.md`](implementation-specification.md)
-or the other designs is changed by this document.
+The owner confirmed these decisions on 2026-11-11. The specification follows them: §4's Linux row and §14's TPM
+unlock bullets and method table in [`iron-vault-specification.md`](iron-vault-specification.md), the "TPM unlock
+binding" gate in [`implementation-specification.md`](implementation-specification.md), and the service unit in
+[linux-package.md](linux-package.md#service-unit).
 
 This document introduces four terms, defined in the [glossary](glossary.md): *TPM unlock*, *Host unlock credential*,
 *Handoff unit* and *Pre-boot secret*.
@@ -92,7 +92,7 @@ A separate oneshot unit fails on its own, and the service then starts without a 
 
 ## The recipient role
 
-**Decision (owner to confirm): TPM unlock on Linux is host unlock.** It enrols the host unlock identity with role
+**Decision: TPM unlock on Linux is host unlock.** It enrols the host unlock identity with role
 `host-unlock`, code 6, which the store already accepts, and reuses everything built for it:
 
 - the [unlock handoff](docker-compose.md#format) `/run/iron-vault-unlock/host-unlock` and its format;
@@ -217,7 +217,7 @@ These follow the Compose profile ([lifetime](docker-compose.md#lifetime), [failu
   toward the [passphrase attempt limit](migration-authorization.md#passphrase-attempt-limit).
 - A failed unseal leaves no handoff, so the service records `absent`, the same as a machine never provisioned. The
   reason is in the handoff unit's journal and in `systemctl --failed`
-  ([open question 2](#open-questions)).
+  ([open question 1](#open-questions)).
 
 ### Enrolment and retirement
 
@@ -234,7 +234,7 @@ These follow the Compose profile ([lifetime](docker-compose.md#lifetime), [failu
 
 ## Portable machines and the second secret
 
-§14: "On a portable device, TPM unlock must be combined with a second secret: a full-disk-encryption pre-boot PIN or a
+§14: "On a portable device, TPM unlock should be combined with a second secret: a full-disk-encryption pre-boot PIN or a
 TPM unlock PIN." `systemd-creds` has no PIN, so in v0 the second secret is the **pre-boot secret** of full-disk
 encryption: a LUKS passphrase typed at boot, or a LUKS TPM key slot that needs a PIN
 (`systemd-cryptenroll --tpm2-with-pin=yes`,
@@ -248,9 +248,16 @@ passphrase (§14).
 The service cannot see how the disk was opened, and the profile does not distinguish a laptop from a server. The
 check is in the helper:
 
-- **`--portable`** refuses unless `/etc/iron-vault-host` is on a `dm-crypt` device, and every LUKS key slot of that
-  device's TPM tokens (`cryptsetup luksDump`) requires a PIN. It is best effort: it cannot see a passphrase written on
-  the laptop. The refusal names the slot to fix.
+- **`--portable`** checks that `/etc/iron-vault-host` is on a `dm-crypt` device, and that every LUKS key slot of that
+  device's TPM tokens (`cryptsetup luksDump`) requires a PIN. When either check fails it warns, and seals nothing until
+  the administrator accepts the risk:
+  - the warning says that anyone who steals the machine can boot it and start the vault;
+  - it names the fix: encrypt the disk, or re-enrol the slot it names with `systemd-cryptenroll --tpm2-with-pin=yes`,
+    which changes the key slot, not the data;
+  - the administrator types `yes` to continue without a second secret; any other answer stops it.
+
+  The check is best effort: it cannot see a passphrase written on the laptop. The choice is the owner's, as §14 allows,
+  so the helper warns rather than refuses.
 - **`--server`** prints, and asks the administrator to confirm, §14's condition: anyone with physical access and a
   trusted boot image can start the vault.
 
@@ -295,7 +302,7 @@ afterwards. A server that cannot have that should hold Secure Boot updates for a
 **Not offered: a bridge seal.** Before a planned update the helper could seal a second credential to no PCR, valid for
 one boot, and re-seal to PCR 7 afterwards. While it exists, any OS booted on the machine can unseal it; on a server
 without full-disk encryption that is anyone with physical access. That is worse than a Locked service, so the default
-is not to offer it ([open question 3](#open-questions)).
+is not to offer it ([open question 2](#open-questions)).
 
 **Later:** a signed PCR 11 policy (`--tpm2-public-key`) or `systemd-pcrlock`, which predicts PCR 7 after a `dbx`
 update, could keep unattended unlock across updates. The implementation spec defers PCR 11; both wait for that work.
@@ -333,7 +340,7 @@ TPMs implement it themselves, so the release check measures it on hardware.
 | A compromised service unseals other secrets or exhausts the TPM's lockout counter | The service has no TPM device (`PrivateDevices=yes`, no `DeviceAllow=`); root unseals once per boot | None from the service |
 | An ordinary account reads the intermediate identity | The handoff is the service account's `0400` in a root `0711` ramfs; the credential is root `0600` in a root `0700` directory | A member of the `tss` group can open `/dev/tpmrm0` (`tss:tss 0660` on Ubuntu) but cannot read the sealed blob |
 | A thief boots a stolen server from a trusted image | None: §14 accepts it for a server | The administrator declares `--server` |
-| A thief boots a stolen laptop | The pre-boot secret protects the disk that holds the sealed blob | A laptop whose disk the TPM opens with no PIN is refused by `--portable`, best effort |
+| A thief boots a stolen laptop | The pre-boot secret protects the disk that holds the sealed blob | A laptop whose disk is unencrypted, or opened by the TPM with no PIN, after the administrator accepts `--portable`'s warning |
 | A Secure Boot update ends unattended unlock | Passphrase `unlock` and the recovery key; documented re-provisioning | A server waits Locked until someone comes |
 | The plaintext identity reaches disk | ramfs and the credentials directory, both unswappable; nothing in the environment or a persistent file | The same as the Compose profile |
 | A backup copies the sealed blob | It opens only on this TPM, at this PCR 7 | A backup with the blob and access to this machine at the same PCR 7 unseals it, as the machine itself does |
@@ -374,7 +381,7 @@ non-destructive items and the power-loss item.
 
 ## Work that follows
 
-Once the owner confirms the role decision:
+In order:
 
 1. **The profile change:** `tries_host_unlock` accepts `Protected`, `init --host-unlock` in a default build, and the
    wording in [docker-compose.md](docker-compose.md), [recipients.md](recipients.md),
@@ -388,80 +395,17 @@ Once the owner confirms the role decision:
    replacing the roadmap one, and the re-provisioning procedure.
 4. **The runs:** the release check on a VM and on hardware.
 
-## Proposed specification changes
-
-**All owner to confirm; none is applied.** Each gives the text to replace and its replacement.
-
-### §14 TPM unlock, the last bullet
-
-Replace:
-
-> - The TPM does not know which program is asking. Only the service account may reach the service's TPM objects, and
->   the package must document the hardware and firmware policy it provisions.
-
-with:
-
-> - The TPM does not know which program is asking. Only root, through the host's init system, may reach the service's
->   TPM objects; the service account and ordinary accounts never open the TPM. On Linux the host unseals a host unlock
->   identity with `systemd-creds` and hands it to the service, as in [§17](iron-vault-specification.md#containerised-deployments). The package
->   must document the hardware and firmware policy it provisions.
-
-### §14 unlock method table, the TPM row's Unlock cell
-
-Replace `Unattended, or with a TPM PIN` with `Unattended; a TPM PIN in a later phase`.
-
-### §4 platform table, the Linux row
-
-Replace:
-
-> TPM through a host adapter using `tss-esapi`/`tpm2-tss`, or a verified `systemd-creds` adapter
-
-with:
-
-> TPM through the verified `systemd-creds` host unlock adapter
-
-### Implementation spec §3, the "TPM unlock binding" gate
-
-Replace:
-
-> Demonstrate interoperable wrap, recovery and restart through the chosen adapter (`age-plugin-tpm` is a lead, not a
-> verified dependency). Bind to PCR 7, which records Secure Boot policy but does not identify the installed OS; avoid
-> PCR 0–4, which routine firmware updates change; evaluate signed PCR 11 later. Grant `/dev/tpmrm0` to the service
-> account explicitly, without relying on a shared device group
-
-with:
-
-> Demonstrate interoperable wrap, recovery and restart through the `systemd-creds` host unlock adapter
-> ([tpm-unlock.md](tpm-unlock.md)). Bind to PCR 7, which records Secure Boot policy but does not identify the installed
-> OS; avoid PCR 0–4, which routine firmware updates change; evaluate signed PCR 11 later. Give the service account no
-> TPM device access: root's init system unseals and hands the intermediate identity over
-
-### [linux-package.md](linux-package.md#service-unit)
-
-Replace:
-
-> The TPM epics will add `DeviceAllow=/dev/tpmrm0 rw`. With `PrivateDevices=yes`, they must check that the systemd
-> versions the package supports make an allowed device node visible in the private `/dev`, or replace
-> `PrivateDevices=yes` with `DevicePolicy=closed`.
-
-with:
-
-> TPM unlock adds no device: the handoff unit unseals as root and the service reads the result from
-> `/run/iron-vault-unlock` ([tpm-unlock.md](tpm-unlock.md#at-boot)). `PrivateDevices=yes` stays.
-
 ## Open questions
 
-1. **Role: `host-unlock` or `tpm`.** *Default:* `host-unlock` ([The recipient role](#the-recipient-role)). Owner to
-   confirm.
-2. **Whether the service can tell a failed unseal from no credential.** *Default:* no; both are `absent`, and the
+1. **Whether the service can tell a failed unseal from no credential.** *Default:* no; both are `absent`, and the
    handoff unit's journal says which. The service cannot see `/etc/iron-vault-host`. A marker file the unit writes on
    failure would let `vault.host-unlock` say `unseal_failed`, at the cost of a second file in the handoff mount.
-3. **A bridge seal for planned Secure Boot updates.** *Default:* not offered
+2. **A bridge seal for planned Secure Boot updates.** *Default:* not offered
    ([Firmware and Secure Boot updates](#firmware-and-secure-boot-updates)).
-4. **systemd upgrades.** systemd changes how `systemd-creds` binds to the storage root key between releases. Not
+3. **systemd upgrades.** systemd changes how `systemd-creds` binds to the storage root key between releases. Not
    checked: whether a credential sealed under one distribution release still decrypts after an upgrade to the next.
    *Default:* the release check covers the installed release only, and the install guide tells the administrator to
    have the vault passphrase at hand for a distribution upgrade; a failure there is a Secure Boot change in effect.
-5. **An owner hierarchy password.** `systemd-creds` creates its storage root key under the owner hierarchy, whose
+4. **An owner hierarchy password.** `systemd-creds` creates its storage root key under the owner hierarchy, whose
    authorization is empty on Linux by default. A machine where another OS set it is not checked. *Default:* the helper
    fails with `systemd-creds`'s error, and the guide says so.

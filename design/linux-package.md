@@ -293,9 +293,8 @@ WantedBy=multi-user.target
 | `MemoryDenyWriteExecute=yes` | No memory is both writable and executable. The service generates no code at run time. |
 | `WantedBy=multi-user.target` | Enabling the unit starts the service at boot. |
 
-The TPM epics will add `DeviceAllow=/dev/tpmrm0 rw`. With `PrivateDevices=yes`, they must check that the systemd
-versions the package supports make an allowed device node visible in the private `/dev`, or replace
-`PrivateDevices=yes` with `DevicePolicy=closed`.
+TPM unlock adds no device: the handoff unit unseals as root and the service reads the result from
+`/run/iron-vault-unlock` ([tpm-unlock.md](tpm-unlock.md#at-boot)). `PrivateDevices=yes` stays.
 
 ## Listener socket units
 

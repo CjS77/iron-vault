@@ -104,7 +104,7 @@ definition, trusted settings, vault, or runtime directory.
 
 | Platform | Required service boundary                                                                                                                | Key integration                                                                                |
 |----------|------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
-| Linux    | Root-owned package or binary; system service under `iron-vault`; private state at `/var/lib/iron-vault`; sockets under `/run/iron-vault` | TPM through a host adapter using `tss-esapi`/`tpm2-tss`, or a verified `systemd-creds` adapter |
+| Linux    | Root-owned package or binary; system service under `iron-vault`; private state at `/var/lib/iron-vault`; sockets under `/run/iron-vault` | TPM through the verified `systemd-creds` host unlock adapter                                   |
 | Windows  | Administrator-owned installation; service under a dedicated virtual account; equivalent restrictive ACLs                                 | TPM-backed operations through the Platform Crypto Provider                                     |
 | macOS    | Administrator-owned installation; launchd daemon under a dedicated account; equivalent restrictive permissions                           | Secure Enclave adapter where validated; otherwise interactive passphrase unlock                |
 
@@ -806,7 +806,7 @@ choices, and none is the default:
 | Method       | Unlock                              | Approval signer                           | Reasons to choose it                                                                                                                                                        | Phase       |
 |--------------|-------------------------------------|-------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------|
 | Passphrase   | Typed by the owner after each start | A separate approval passphrase            | Needs no hardware and works on every platform. Moves with the vault. Only as strong as the passphrase, and the service stays Locked after a restart until the owner returns | v0          |
-| TPM          | Unattended, or with a TPM PIN       | A TPM signing key with a PIN              | Restarts without the owner. The key cannot be copied off the machine, but it fails with the machine                                                                         | v0, to come |
+| TPM          | Unattended; a TPM PIN comes later   | A TPM signing key with a PIN              | Restarts without the owner. The key cannot be copied off the machine, but it fails with the machine                                                                         | v0, to come |
 | Hardware key | PIN and touch                       | A hardware signing key with PIN and touch | The key cannot be copied, moves between machines, and a touch shows the owner is physically present. The device must be at hand for every start                             | Later phase |
 
 A method is offered only after it passes its release checks on that platform
@@ -838,13 +838,16 @@ The prompt names the signer it is waiting for and lets the owner switch to anoth
 **TPM unlock.** The TPM opens only the intermediate identity; credentials stay on disk, not in TPM storage. A TPM
 proves which boot policy started the machine, not who is using it:
 
-- On a portable device, TPM unlock must be combined with a second secret: a full-disk-encryption pre-boot PIN or a
-  TPM unlock PIN. The approval signer's PIN does not count.
+- On a portable device, TPM unlock should be combined with a second secret: a full-disk-encryption pre-boot PIN or a
+  TPM unlock PIN. The approval signer's PIN does not count. Without one, setup must warn that anyone who steals the
+  device can start its vault, name the remedy, and continue only when the administrator accepts that risk.
 - A server or appliance may unlock unattended if its deployment accepts that anyone with physical access and a
   trusted boot image can start it.
 - A routine firmware update must not strand the vault.
-- The TPM does not know which program is asking. Only the service account may reach the service's TPM objects, and
-  the package must document the hardware and firmware policy it provisions.
+- The TPM does not know which program is asking. Only root, through the host's init system, may reach the service's
+  TPM objects; the service account and ordinary accounts never open the TPM. On Linux the host unseals a host unlock
+  identity with `systemd-creds` and hands it to the service, as in [§17](#containerised-deployments). The package
+  must document the hardware and firmware policy it provisions.
 
 **Memory.** The service must keep secrets out of logs, dumps and swap:
 
