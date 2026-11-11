@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use common::approval_harness::{
-    APPROVAL_PASSPHRASE, Exchanged, Fixture, IDENTITY, approve, captured_logs, converse, converse_revealing, error_code, get, identity,
-    mkdir, send, service_locks, shutdown, spawn_admin, versions,
+    APPROVAL_PASSPHRASE, Captured, Exchanged, Fixture, IDENTITY, approve, captured_logs, converse, converse_revealing, error_code, get,
+    identity, mkdir, send, service_locks, shutdown, spawn_admin, versions,
 };
 use common::cli_import::{CliImport, CliRan};
 use common::migration_source::{EXPORT_PASSPHRASE, SOURCE_PASSPHRASE, Source, fresh_source, send_bundle, source, write_ignoring_errors};
@@ -278,6 +278,12 @@ async fn export_import_preserves_counters() {
     let Imported { dest, service, result, .. } = imported(&source).await;
 
     assert_eq!((result.version, result.highest_reserved), (1, 2));
+    let stored = |dir: &Path| fs::read(dir.join("approval.age")).unwrap();
+    assert_eq!(
+        stored(&dest.path("state")),
+        stored(&source.fixture.path("state")),
+        "import copies approval.age unchanged"
+    );
     let version = unlock_and_approve(&source, &service).await;
     assert_eq!(version, 3, "the first approval commits the highest reserved version plus one");
     assert_eq!(versions(&service).await, (Some(3), 3));
@@ -285,9 +291,19 @@ async fn export_import_preserves_counters() {
         .iter()
         .zip(&old_pair)
         .for_each(|(file, bytes)| fs::write(dest.path(&format!("etc/{file}")), bytes).unwrap());
+    let superseded = || superseded_refusals(&logs);
+    let before = superseded();
     assert_eq!(service.reload().await, Ok(ServiceState::Unavailable(FailureReason::PolicyInvalid)));
+    assert_eq!(superseded(), before + 1, "the old pair was not refused as superseded");
+}
+
+/// The `config.check-failed` records that refuse an approval of version 1 as superseded by a committed version 3.
+fn superseded_refusals(logs: &Captured) -> usize {
     let superseded = "the config approval is for version 1, but version 3 is committed";
-    assert!(logs.text().contains(superseded), "the old pair was not refused as superseded");
+    logs.events("config.check-failed")
+        .iter()
+        .filter(|record| record["detail"].as_str().is_some_and(|detail| detail.contains(superseded)))
+        .count()
 }
 
 /// Runs `iron-vault import <bundle>` against `service` as an owner who completes it, in the bundle's directory.
@@ -404,7 +420,8 @@ async fn export_bundle_holds_no_plaintext_secret() {
     );
 }
 
-/// No byte string of the source's approver key envelopes is in the bundle, nor in any entry of its archive.
+/// No entry of the bundle's archive holds a source approver key envelope's bytes. The gzip-compressed bundle itself is
+/// not searched: compression would hide an envelope from a byte search anyway.
 fn assert_no_approver_key_in_the_clear(source: &Source, bundle: &[u8]) {
     let mut decoder = BundleDecoder::new();
     decoder.push(bundle).unwrap();
@@ -416,7 +433,6 @@ fn assert_no_approver_key_in_the_clear(source: &Source, bundle: &[u8]) {
         .collect();
     assert!(!envelopes.is_empty());
     envelopes.iter().for_each(|envelope| {
-        assert!(!contains(bundle, envelope));
         decoded
             .entries()
             .for_each(|(name, bytes)| assert!(!contains(bytes, envelope), "{name} holds an approver key envelope in the clear"));
@@ -445,12 +461,13 @@ async fn import_refuses_initialized_vault() {
     let initialized = Fixture::new().await;
     let service = initialized.ready().await;
     service.lock(std::time::Duration::from_secs(5)).await.unwrap();
-    let before = regular_files(&initialized.path("state"));
+    let initialized_files = || [regular_files(&initialized.path("state")), regular_files(&initialized.path("etc"))].concat();
+    let before = initialized_files();
 
     let (shown, _) = import(&service, &source.bytes, &COMPLETE).await;
 
     assert_eq!(error_code(&shown.response), ErrorCode::AlreadyInitialized);
-    assert_eq!(regular_files(&initialized.path("state")), before);
+    assert_eq!(initialized_files(), before);
 
     let unrecognized = Dest::new();
     fs::write(unrecognized.path("state/foreign-notes.txt"), b"mine").unwrap();
