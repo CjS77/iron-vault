@@ -315,7 +315,7 @@ pub(crate) fn open_scrypt_file(
 }
 
 /// Refuses, from the header alone, anything but one scrypt stanza at an accepted work factor.
-fn check_header(envelope: &[u8]) -> Result<(), EnvelopeError> {
+pub(crate) fn check_header(envelope: &[u8]) -> Result<(), EnvelopeError> {
     let header = parse_header(envelope)
         .filter(|header| header.complete)
         .ok_or(EnvelopeError::Malformed)?;

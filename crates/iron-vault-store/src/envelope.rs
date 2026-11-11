@@ -56,6 +56,10 @@ pub enum EnvelopeError {
     /// refused before any scrypt work.
     #[error("the passphrase envelope's scrypt work factor is above the accepted maximum")]
     WorkFactorTooHigh,
+    /// The exported identity envelope's scrypt stanza asks for a work factor other than
+    /// [`crate::PASSPHRASE_WORK_FACTOR`]; it was refused before any scrypt work.
+    #[error("the envelope's scrypt work factor is not the one exports use")]
+    WrongWorkFactor,
     /// The passphrase does not open the passphrase envelope. A damaged scrypt stanza looks the same to `age`.
     #[error("wrong passphrase")]
     WrongPassphrase,

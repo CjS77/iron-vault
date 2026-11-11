@@ -15,9 +15,9 @@ use static_assertions::{assert_impl_all, assert_not_impl_any};
 use crate::test_dir::TestDir;
 use crate::test_request::{HOST, header_request};
 use crate::{
-    ApprovalPassphrase, CredentialRecord, InitPassphrases, NewVaultKeys, OsFs, Passphrase, PermittedOrigins, RecipientIdentity, RecordId,
-    RecoveryKey, RecoveryKeySecret, ResolvedCredential, SealingKeys, SoftwareSigner, SoftwareSignerKey, Source, StateDirLock, Vault,
-    VaultIdentity,
+    ApprovalPassphrase, CredentialRecord, ExportPassphrase, InitPassphrases, NewVaultKeys, OsFs, Passphrase, PermittedOrigins,
+    RecipientIdentity, RecordId, RecoveryKey, RecoveryKeySecret, ResolvedCredential, SealingKeys, SoftwareSigner, SoftwareSignerKey,
+    Source, StateDirLock, Vault, VaultIdentity,
 };
 
 assert_not_impl_any!(VaultIdentity: Clone, Copy, Display, Serialize, Deserialize<'static>);
@@ -26,6 +26,8 @@ assert_not_impl_any!(ResolvedCredential<'static>: Clone, Copy, Display, Serializ
 assert_not_impl_any!(CredentialRecord: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Vault: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(Passphrase: Clone, Copy, Display, Serialize, Deserialize<'static>);
+// `ExportPassphrase` is a type of its own, so a `Passphrase` cannot be passed where one is expected.
+assert_not_impl_any!(ExportPassphrase: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(RecoveryKeySecret: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(ApprovalPassphrase: Clone, Copy, Display, Serialize, Deserialize<'static>);
 assert_not_impl_any!(SoftwareSignerKey: Clone, Copy, Display, Serialize, Deserialize<'static>);

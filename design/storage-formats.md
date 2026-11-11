@@ -869,7 +869,8 @@ The [exported identity envelope](glossary.md) is the vault identity sealed to th
 entry `exported-identity.age` of a [migration bundle](#migration-bundle-v1). It is a plain binary `age` v1 file in
 exactly the format of the [passphrase envelope](#passphrase-envelope), made by the same sealing code, with the vault
 identity's secret text as its plaintext in place of the operational identity's. The design is in
-[migration-bundle.md](migration-bundle.md#what-the-bundle-holds).
+[migration-bundle.md](migration-bundle.md#what-the-bundle-holds). In `iron-vault-store`, `seal_exported_identity` and
+`open_exported_identity` seal and open it with an `ExportPassphrase`.
 
 - **Stanzas, work factor, size and reading order.** As for the passphrase envelope: exactly one scrypt stanza, refused
   with any other stanza before scrypt runs, and bounded by `MAX_PASSPHRASE_ENVELOPE_LEN` (1 KiB; the file is 256
@@ -918,7 +919,8 @@ export passphrase ([§16](iron-vault-specification.md#16-administration-recovery
 `age` v1 file with exactly one X25519 stanza, to the vault public key, whose plaintext is the envelope's bytes as they
 were in the state directory. Import opens it with the vault identity, refuses any other stanza, and requires the
 plaintext to be an approver key envelope within `MAX_PASSPHRASE_ENVELOPE_LEN` with exactly one scrypt stanza and a
-work factor no higher than `MAX_PASSPHRASE_WORK_FACTOR`. The plaintext is what import writes. `MAX_BUNDLED_APPROVER_LEN`
+work factor no higher than `MAX_PASSPHRASE_WORK_FACTOR`. The plaintext is what import writes. In `iron-vault-store`, `seal_bundled_approver_key` and `open_bundled_approver_key`
+seal and open it, and `check_approver_key_form` is the form check, which reads the header only. `MAX_BUNDLED_APPROVER_LEN`
 is 2 KiB: a 1 KiB envelope, plus the `age` header with its X25519 stanza and a grease stanza, the payload nonce and the
 tag.
 

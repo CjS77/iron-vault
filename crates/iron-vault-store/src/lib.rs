@@ -12,6 +12,7 @@ mod durable;
 mod durable_faults;
 mod envelope;
 mod error_kind;
+mod export_identity;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fault_fs;
 mod init;
@@ -76,6 +77,10 @@ pub use envelope::{
     EnvelopeError, MAX_IDENTITY_ENVELOPE_LEN, read_identity_envelope, stanza_kinds, unwrap_identity, wrap_identity, write_identity_envelope,
 };
 pub use error_kind::ErrorKindLabel;
+pub use export_identity::{
+    BundledApproverKeyError, ExportPassphrase, check_approver_key_form, open_bundled_approver_key, open_exported_identity,
+    seal_bundled_approver_key, seal_exported_identity,
+};
 pub use init::{
     FirstApproval, InitError, InitFailure, InitPassphrases, InitPassphrasesError, InitStep, InitializedVault, MIN_PASSPHRASE_CHARS,
     NewVaultKeys, SOFTWARE_APPROVER_LABEL, SealingKeys, WhichPassphrase, initialize,

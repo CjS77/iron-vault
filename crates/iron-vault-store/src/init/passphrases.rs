@@ -27,6 +27,8 @@ pub enum WhichPassphrase {
     Vault,
     /// The approval passphrase.
     Approval,
+    /// The export passphrase.
+    Export,
 }
 
 impl fmt::Display for WhichPassphrase {
@@ -34,6 +36,7 @@ impl fmt::Display for WhichPassphrase {
         f.write_str(match self {
             Self::Vault => "the vault passphrase",
             Self::Approval => "the approval passphrase",
+            Self::Export => "the export passphrase",
         })
     }
 }
