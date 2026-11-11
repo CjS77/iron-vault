@@ -180,6 +180,13 @@ pub fn write_pending(lock: &ConfigDirLock, fs: &impl StoreFs, bytes: &[u8]) -> R
     write_config_file(lock, fs, ConfigFileName::Pending, bytes)
 }
 
+/// Durably writes `bytes` as `config.toml`, alone: import's write step 5, which copies a bundle's committed config and
+/// writes no signature beside it (design/migration-bundle.md, "The config"). Every other change to `config.toml` is a
+/// [`publish`] of the pending config.
+pub(crate) fn write_imported_config(lock: &ConfigDirLock, fs: &impl StoreFs, bytes: &[u8]) -> Result<(), ConfigWriteError> {
+    write_config_file(lock, fs, ConfigFileName::Active, bytes)
+}
+
 /// Durably writes `bytes` as `config.toml.sig.staged`. Step 4 of the approval transaction.
 pub fn write_staged(lock: &ConfigDirLock, fs: &impl StoreFs, bytes: &[u8]) -> Result<(), ConfigWriteError> {
     write_config_file(lock, fs, ConfigFileName::StagedSignature, bytes)

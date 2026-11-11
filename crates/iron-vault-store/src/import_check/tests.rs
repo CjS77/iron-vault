@@ -8,7 +8,7 @@ use crate::{StateFileName, StateGeneration, seal_approval_state, seal_bundled_ap
 
 /// A bundle's entries and its header's vault ID, changed one at a time before they are encoded. The header's counts
 /// always follow the entries, because the encoder refuses any other.
-struct Parts {
+pub(crate) struct Parts {
     vault_id: VaultId,
     entries: BTreeMap<EntryName, Vec<u8>>,
 }
@@ -16,7 +16,7 @@ struct Parts {
 impl Parts {
     /// The fixture's vault as export bundles it. The exported identity envelope is a stand-in: step 4 never reads it,
     /// and sealing it would run scrypt.
-    fn of(fixture: &Fixture) -> Self {
+    pub(crate) fn of(fixture: &Fixture) -> Self {
         let vault = fixture.identity.public_key();
         let fixed = [
             (EntryName::ExportedIdentity, b"stand-in".to_vec()),
@@ -48,7 +48,7 @@ impl Parts {
         self
     }
 
-    fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         let count = |id_entry: fn(&EntryName) -> bool| self.entries.keys().filter(|name| id_entry(name)).count();
         let approvers = count(|name| matches!(name, EntryName::Approver(_)));
         let records = count(|name| matches!(name, EntryName::Record(_)));
@@ -62,14 +62,19 @@ impl Parts {
 
     /// Step 4 on the encoded and decoded bundle, with the fixture's vault identity as step 3 would have opened it.
     fn verify(&self) -> Result<VerifiedBundle, BundleCheckError> {
-        let (header, entries) = decode(&self.encode()).into_parts();
-        let identity = VaultIdentity::from_secret(KAT_IDENTITY);
-        verify_bundle(OpenedBundle { header, entries, identity })
+        verify_encoded(&self.encode())
     }
 
     fn refusal(&self) -> &'static str {
         self.verify().unwrap_err().name()
     }
+}
+
+/// Step 4 on the bundle `encoded`, with the fixture's vault identity as step 3 would have opened it.
+pub(crate) fn verify_encoded(encoded: &[u8]) -> Result<VerifiedBundle, BundleCheckError> {
+    let (header, entries) = decode(encoded).into_parts();
+    let identity = VaultIdentity::from_secret(KAT_IDENTITY);
+    verify_bundle(OpenedBundle { header, entries, identity })
 }
 
 /// The fixture's manifest sealed again with `vault_id`, recording the current approval state as its peer, so it is the

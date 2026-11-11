@@ -16,6 +16,7 @@ mod export_identity;
 mod export_snapshot;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fault_fs;
+mod import;
 mod import_check;
 mod init;
 mod initialization;
@@ -88,6 +89,7 @@ pub use export_snapshot::{
     ExportedBundle, SnapshotDamage, SnapshotError, SnapshotStep, SnapshotSummary, check_config_digest, check_export_snapshot,
     check_record_digest, stream_export_snapshot,
 };
+pub use import::{ImportError, ImportFailure, ImportKeys, ImportProgress, ImportStep, ImportedVault, import_vault};
 pub use import_check::{BundleCheckError, ControlFiles, OpenBundleError, OpenedBundle, VerifiedBundle, open_bundle, verify_bundle};
 pub use init::{
     FirstApproval, InitError, InitFailure, InitPassphrases, InitPassphrasesError, InitStep, InitializedVault, MIN_PASSPHRASE_CHARS,

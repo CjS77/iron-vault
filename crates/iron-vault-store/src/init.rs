@@ -346,11 +346,11 @@ fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Res
 /// One recipient init enrols: its identity, role and default label.
 type Enrolment<'a> = (&'a RecipientIdentity, RecipientRole, &'static str);
 
-/// Step 2. Every recipient path is proved on the file as read back, before anything depends on it, while the recovery
-/// key the owner saved still means nothing: each identity must unwrap the same vault identity. Then the recipient
-/// inventory is written for the same keys and read back, so `recipients.age` exists from the moment the vault does.
-/// The recovery and host unlock identities are dropped on return. Returns the roles enrolled.
-fn write_checked_identity(
+/// Step 2, and import's step 6. Every recipient path is proved on the file as read back, before anything depends on
+/// it, while the recovery key the owner saved still means nothing: each identity must unwrap the same vault identity.
+/// Then the recipient inventory is written for the same keys and read back, so `recipients.age` exists from the moment
+/// the vault does. The recovery and host unlock identities are dropped on return. Returns the roles enrolled.
+pub(crate) fn write_checked_identity(
     state: &StateDirLock,
     fs: &impl StoreFs,
     (vault, vault_id): (&VaultIdentity, VaultId),
@@ -407,8 +407,8 @@ fn write_checked_inventory(
     }
 }
 
-/// Step 3. The operational identity and the vault passphrase are dropped on return.
-fn seal_operational(
+/// Step 3, and import's step 7. The operational identity and the vault passphrase are dropped on return.
+pub(crate) fn seal_operational(
     state: &StateDirLock,
     fs: &impl StoreFs,
     operational: RecipientIdentity,

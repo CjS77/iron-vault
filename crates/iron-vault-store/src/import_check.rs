@@ -383,4 +383,4 @@ fn require(holds: bool, check: BundleCheckError) -> Result<(), BundleCheckError>
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
