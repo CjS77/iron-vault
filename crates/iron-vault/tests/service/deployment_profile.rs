@@ -1,0 +1,69 @@
+//! Checks the binary's `--version` output and how its deployment profile starts on this machine.
+
+#![cfg(target_os = "linux")]
+
+use std::process::{Command, Output};
+
+fn run(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_iron-vault"))
+        .args(args)
+        .output()
+        .expect("spawn iron-vault")
+}
+
+#[test]
+fn version_names_the_enabled_features() {
+    let output = run(&["--version"]);
+    assert!(output.status.success(), "exit status {:?}", output.status);
+    let enabled: Vec<&str> = [
+        ("dev-mode", cfg!(feature = "dev-mode")),
+        ("container", cfg!(feature = "container")),
+        ("test-support", cfg!(feature = "test-support")),
+    ]
+    .into_iter()
+    .filter_map(|(name, on)| on.then_some(name))
+    .collect();
+    let features = if enabled.is_empty() {
+        "none".to_string()
+    } else {
+        enabled.join(", ")
+    };
+    let expected = format!("iron-vault {} (features: {features})\n", env!("CARGO_PKG_VERSION"));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "", "--version must not log");
+}
+
+#[cfg(not(feature = "dev-mode"))]
+#[test]
+fn a_protected_build_without_the_service_account_names_it() {
+    let passwd = std::fs::read_to_string("/etc/passwd").expect("read /etc/passwd");
+    if passwd.lines().any(|line| line.starts_with("iron-vault:")) {
+        return;
+    }
+    let output = run(&["serve"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr: {stderr}");
+    assert!(stderr.contains("the service account `iron-vault` does not exist"), "{stderr}");
+}
+
+#[cfg(feature = "dev-mode")]
+#[test]
+fn a_development_build_warns_that_it_gives_no_isolation() {
+    // The runtime directory's parent does not exist, so the service stops right after the warning instead of serving.
+    let output = Command::new(env!("CARGO_BIN_EXE_iron-vault"))
+        .args(["serve", "--log-to-stdout"])
+        .env("XDG_RUNTIME_DIR", "/nonexistent/iron-vault-test")
+        .output()
+        .expect("spawn iron-vault");
+    let (stdout, stderr) = (String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    assert!(!output.status.success(), "stderr: {stderr}");
+    if rustix::process::getuid().is_root() {
+        assert!(stderr.contains("must never be installed as the system service"), "{stderr}");
+    } else {
+        // The warning is a log record, and `--log-to-stdout` puts the log on stdout.
+        assert!(
+            stdout.contains("development mode: no isolation from malware running as "),
+            "stdout: {stdout}\nstderr: {stderr}"
+        );
+    }
+}

@@ -1,0 +1,438 @@
+//! The upstream client against a recording TLS test upstream (specification §8 step 9, §9, §10, §15).
+//!
+//! Each test sends a checked request built through the public policy API and asserts on what the upstream actually
+//! received, not on the request the client was given.
+//!
+//! Linux only: the test upstream terminates TLS with `tokio-rustls`, which this crate depends on only on Linux.
+
+#![cfg(target_os = "linux")]
+
+use crate::common;
+
+use std::time::Duration;
+
+use common::body_stream::{body as body_of, eventually, failing_body};
+use common::checked::checked;
+use common::mock_upstream::{MockUpstream, RecordedRequest, Reply, TestCa, UPSTREAM_HOST};
+use iron_vault::upstream::body::UpstreamBody;
+use iron_vault::upstream::client::{TransportLimits, UpstreamClient, UpstreamResponse};
+use iron_vault::upstream::transport_error::TransportError;
+use iron_vault::upstream::trust::UpstreamTrust;
+use iron_vault_policy::Method;
+use reqwest::StatusCode;
+
+/// The credential every test injects; it must never appear in an error.
+const SECRET: &str = "IVmarker5ecret";
+
+fn client(trust: &UpstreamTrust) -> UpstreamClient {
+    UpstreamClient::new(trust, TransportLimits::default()).unwrap()
+}
+
+fn sorted(mut headers: Vec<(String, String)>) -> Vec<(String, String)> {
+    headers.sort();
+    headers
+}
+
+fn pairs(headers: &[(&str, &str)]) -> Vec<(String, String)> {
+    sorted(headers.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect())
+}
+
+/// The only request `upstream` recorded.
+fn only_request(upstream: &MockUpstream) -> RecordedRequest {
+    let requests = upstream.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    requests.into_iter().next().unwrap()
+}
+
+async fn body(mut response: UpstreamResponse) -> Vec<u8> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.unwrap() {
+        body.extend_from_slice(&chunk);
+    }
+    body
+}
+
+/// Sends a GET for `target` through the query-slot route with the credential marker in the query, expecting failure.
+async fn failure(trust: &UpstreamTrust, limits: TransportLimits, origin: &str) -> TransportError {
+    let request = checked(origin, Method::Get, "/query/rates?base=USD", &[], SECRET);
+    UpstreamClient::new(trust, limits)
+        .unwrap()
+        .send(request, UpstreamBody::empty())
+        .await
+        .unwrap_err()
+}
+
+#[tokio::test]
+async fn the_upstream_receives_exactly_the_checked_method_target_and_headers() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("hello")).await;
+    let caller_headers = [
+        ("Accept", "application/json"),
+        ("X-Custom", "one"),
+        ("Proxy-Authorization", "Bearer ivt_caller"),
+    ];
+    let request = checked(&upstream.origin(), Method::Get, "/header/rates?base=USD", &caller_headers, SECRET);
+
+    let response = client(&ca.trust()).send(request, UpstreamBody::empty()).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body(response).await, b"hello");
+    let received = only_request(&upstream);
+    assert_eq!(
+        received.server_name.as_deref(),
+        Some(UPSTREAM_HOST),
+        "SNI names the checked upstream"
+    );
+    assert_eq!(received.request_line(), "GET /v1/rates?base=USD HTTP/1.1");
+    let host = format!("{UPSTREAM_HOST}:{}", upstream.port());
+    assert_eq!(
+        sorted(received.headers()),
+        pairs(&[
+            ("accept", "application/json"),
+            ("host", &host),
+            ("x-api-key", SECRET),
+            ("x-custom", "one")
+        ]),
+        "no Accept-Encoding, cookie, Referer or proxy header may be added"
+    );
+}
+
+#[tokio::test]
+async fn a_query_slot_reaches_the_upstream_in_the_query() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("")).await;
+    let request = checked(
+        &upstream.origin(),
+        Method::Post,
+        "/query/rates?base=USD",
+        &[("Accept", "*/*")],
+        SECRET,
+    );
+
+    client(&ca.trust()).send(request, UpstreamBody::empty()).await.unwrap();
+
+    let received = only_request(&upstream);
+    assert_eq!(
+        received.request_line(),
+        format!("POST /v1/rates?base=USD&access_key={SECRET} HTTP/1.1")
+    );
+    let host = format!("{UPSTREAM_HOST}:{}", upstream.port());
+    assert_eq!(sorted(received.headers()), pairs(&[("accept", "*/*"), ("host", &host)]));
+}
+
+/// reqwest adds `Accept: */*` to a request that has none, and its builder cannot stop it. This pins that behaviour, so
+/// a reqwest upgrade that changes it is noticed.
+#[tokio::test]
+async fn reqwest_adds_only_accept_to_a_request_without_one() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("")).await;
+    let request = checked(&upstream.origin(), Method::Get, "/header/x", &[], SECRET);
+
+    client(&ca.trust()).send(request, UpstreamBody::empty()).await.unwrap();
+
+    let host = format!("{UPSTREAM_HOST}:{}", upstream.port());
+    assert_eq!(
+        sorted(only_request(&upstream).headers()),
+        pairs(&[("accept", "*/*"), ("host", &host), ("x-api-key", SECRET)])
+    );
+}
+
+#[tokio::test]
+async fn a_redirect_is_returned_and_never_followed() {
+    let ca = TestCa::new("Test CA");
+    let elsewhere = MockUpstream::start(&ca, Reply::ok("followed")).await;
+    let location = format!("{}/v1/elsewhere", elsewhere.origin());
+    let upstream = MockUpstream::start(&ca, Reply::redirect(&location)).await;
+    let request = checked(&upstream.origin(), Method::Get, "/header/x", &[], SECRET);
+
+    let response = client(&ca.trust()).send(request, UpstreamBody::empty()).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::FOUND);
+    assert_eq!(response.headers()["location"], location.as_str());
+    assert_eq!(upstream.requests().len(), 1);
+    assert_eq!(elsewhere.connections(), 0, "the redirect target saw a connection");
+}
+
+#[tokio::test]
+async fn a_stalled_upstream_times_out_with_504() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::Stall).await;
+    let limits = TransportLimits {
+        response_headers: Duration::from_millis(200),
+        ..TransportLimits::default()
+    };
+
+    let error = failure(&ca.trust(), limits, &upstream.origin()).await;
+
+    assert_eq!(error, TransportError::Timeout);
+    assert_eq!(error.status(), StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(upstream.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn an_upstream_certificate_from_another_ca_is_a_tls_failure() {
+    let upstream = MockUpstream::start(&TestCa::new("Upstream CA"), Reply::ok("")).await;
+
+    let error = failure(&TestCa::new("Pinned CA").trust(), TransportLimits::default(), &upstream.origin()).await;
+
+    assert_eq!(error, TransportError::Tls);
+    assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(upstream.requests(), []);
+}
+
+#[tokio::test]
+async fn the_built_in_roots_refuse_a_private_ca() {
+    let upstream = MockUpstream::start(&TestCa::new("Private CA"), Reply::ok("")).await;
+
+    let error = failure(&UpstreamTrust::BuiltIn, TransportLimits::default(), &upstream.origin()).await;
+
+    assert_eq!(error, TransportError::Tls);
+    assert_eq!(upstream.requests(), []);
+}
+
+#[tokio::test]
+async fn a_closed_port_is_a_connect_failure() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("https://{UPSTREAM_HOST}:{}", listener.local_addr().unwrap().port());
+    drop(listener);
+
+    let error = failure(&UpstreamTrust::BuiltIn, TransportLimits::default(), &origin).await;
+
+    assert_eq!(error, TransportError::Connect);
+    assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
+}
+
+/// Every failure above, sent with the credential in the query, formats without the credential or any part of the URL.
+#[tokio::test]
+async fn transport_errors_show_neither_the_credential_nor_the_url() {
+    let ca = TestCa::new("Test CA");
+    let stalled = MockUpstream::start(&ca, Reply::Stall).await;
+    let foreign = MockUpstream::start(&TestCa::new("Other CA"), Reply::ok("")).await;
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let closed_origin = format!("https://{UPSTREAM_HOST}:{}", closed.local_addr().unwrap().port());
+    drop(closed);
+    let short = TransportLimits {
+        response_headers: Duration::from_millis(200),
+        ..TransportLimits::default()
+    };
+    let errors = [
+        failure(&ca.trust(), short, &stalled.origin()).await,
+        failure(&ca.trust(), short, &foreign.origin()).await,
+        failure(&ca.trust(), short, &closed_origin).await,
+    ];
+    assert_eq!(errors, [TransportError::Timeout, TransportError::Tls, TransportError::Connect]);
+
+    errors.iter().for_each(|error| {
+        [error.to_string(), format!("{error:?}"), format!("{error:#?}")]
+            .iter()
+            .for_each(|text| {
+                [SECRET, UPSTREAM_HOST, "https", "/v1", "access_key", "base=USD"]
+                    .iter()
+                    .for_each(|forbidden| assert!(!text.contains(forbidden), "{text:?} contains {forbidden:?}"));
+            });
+    });
+}
+
+/// The only request `upstream` records, waited for, since an aborted request is recorded after `send` has failed.
+async fn recorded(upstream: &MockUpstream) -> RecordedRequest {
+    eventually(|| upstream.requests().into_iter().next()).await
+}
+
+fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers.iter().find(|(found, _)| found == name).map(|(_, value)| value.as_str())
+}
+
+const CHAT: &str = "/header/chat";
+
+#[tokio::test]
+async fn a_fixed_length_body_arrives_byte_for_byte() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+    let chunks = ["{\"prompt\":", "\"h\u{e9}llo ", "w\u{f6}rld\"}"];
+    let sent = chunks.concat();
+
+    let response = client(&ca.trust())
+        .send(request, body_of(Some(sent.len() as u64), &chunks))
+        .await
+        .unwrap();
+
+    assert_eq!(body(response).await, b"done");
+    let received = only_request(&upstream);
+    assert_eq!(received.request_line(), "POST /v1/chat HTTP/1.1");
+    assert_eq!(header(&received.headers(), "content-length"), Some(sent.len().to_string().as_str()));
+    assert_eq!(header(&received.headers(), "transfer-encoding"), None);
+    assert_eq!(received.body, sent.as_bytes());
+    assert!(received.body_complete);
+}
+
+#[tokio::test]
+async fn a_body_of_unknown_length_arrives_chunked_byte_for_byte() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+    let chunks = ["one,", "two,", "three"];
+
+    client(&ca.trust()).send(request, body_of(None, &chunks)).await.unwrap();
+
+    let received = only_request(&upstream);
+    assert_eq!(header(&received.headers(), "transfer-encoding"), Some("chunked"));
+    assert_eq!(header(&received.headers(), "content-length"), None);
+    assert_eq!(received.body, chunks.concat().as_bytes());
+    assert!(received.body_complete);
+}
+
+/// A caller's `Content-Length` and `Transfer-Encoding` are dropped by `sanitize`; the transport frames the body from the
+/// length it is given, so a caller cannot make the framing disagree with the bytes.
+#[tokio::test]
+async fn the_callers_own_framing_headers_never_reach_the_upstream() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[("Content-Length", "999")], SECRET);
+
+    client(&ca.trust()).send(request, body_of(None, &["abc"])).await.unwrap();
+
+    let received = only_request(&upstream);
+    assert_eq!(header(&received.headers(), "content-length"), None);
+    assert_eq!(received.body, b"abc");
+}
+
+#[tokio::test]
+async fn a_body_stream_that_fails_partway_aborts_the_request() {
+    for length in [None, Some(100)] {
+        let ca = TestCa::new("Test CA");
+        let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+        let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+
+        let error = client(&ca.trust())
+            .send(request, failing_body(length, &["partial ", "body"]))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.status(), StatusCode::BAD_GATEWAY, "{length:?}: {error:?}");
+        let received = recorded(&upstream).await;
+        assert!(
+            !received.body_complete,
+            "{length:?}: the upstream saw a complete request: {received:?}"
+        );
+        assert_eq!(
+            received.body, b"partial body",
+            "{length:?}: the chunks before the failure were forwarded"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_body_stream_that_ends_short_of_its_declared_length_aborts_the_request() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+
+    let error = client(&ca.trust()).send(request, body_of(Some(100), &["short"])).await.unwrap_err();
+
+    assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
+    // hyper may refuse before it writes anything, so the upstream records no request at all; it must never record a
+    // complete one.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(upstream.requests().iter().all(|received| !received.body_complete));
+}
+
+#[tokio::test]
+async fn a_body_stream_longer_than_its_declared_length_aborts_the_request() {
+    // "abcde" alone completes the declared 5 bytes, so hyper would stop polling there and send a whole, truncated
+    // request; the "fg" after it must still be seen and refuse the request. A declared 0 is never polled by hyper at all.
+    for (length, chunks) in [(5, &["toolong"][..]), (5, &["abcde", "fg"][..]), (0, &["x"][..])] {
+        let ca = TestCa::new("Test CA");
+        let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+        let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+
+        let error = client(&ca.trust()).send(request, body_of(Some(length), chunks)).await.unwrap_err();
+
+        assert_eq!(error.status(), StatusCode::BAD_GATEWAY, "{length} {chunks:?}: {error:?}");
+        // The upstream must never record a request that looks whole but was cut to the declared length.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            upstream.requests().iter().all(|received| !received.body_complete),
+            "{length} {chunks:?}: {:?}",
+            upstream.requests()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_zero_length_body_is_sent_as_content_length_zero() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("done")).await;
+    let request = checked(&upstream.origin(), Method::Post, CHAT, &[], SECRET);
+
+    client(&ca.trust()).send(request, body_of(Some(0), &["", ""])).await.unwrap();
+
+    let received = only_request(&upstream);
+    assert_eq!(header(&received.headers(), "content-length"), Some("0"));
+    assert_eq!(header(&received.headers(), "transfer-encoding"), None);
+    assert_eq!(received.body, b"");
+    assert!(received.body_complete);
+}
+
+#[tokio::test]
+async fn a_get_without_a_body_sends_no_body_and_no_framing_headers() {
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::ok("")).await;
+    let request = checked(&upstream.origin(), Method::Get, "/header/rates", &[], SECRET);
+
+    client(&ca.trust()).send(request, UpstreamBody::empty()).await.unwrap();
+
+    let received = only_request(&upstream);
+    assert_eq!(header(&received.headers(), "content-length"), None);
+    assert_eq!(header(&received.headers(), "transfer-encoding"), None);
+    assert_eq!(received.body, b"");
+    assert!(received.body_complete);
+}
+
+#[test]
+fn only_a_timeout_maps_to_504() {
+    let statuses = [
+        TransportError::Timeout,
+        TransportError::Connect,
+        TransportError::Tls,
+        TransportError::Protocol,
+        TransportError::Body,
+    ]
+    .map(TransportError::status);
+    assert_eq!(
+        statuses,
+        [
+            StatusCode::GATEWAY_TIMEOUT,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::BAD_GATEWAY
+        ]
+    );
+}
+
+#[tokio::test]
+async fn dropping_the_client_closes_its_idle_connection() {
+    // The upstream keeps every connection for the client's next request, so only the client can close one.
+    let ca = TestCa::new("Test CA");
+    let upstream = MockUpstream::start(&ca, Reply::KeepAlive("kept".to_owned())).await;
+    let client = client(&ca.trust());
+    let send = || {
+        client.send(
+            checked(&upstream.origin(), Method::Get, "/header/rates", &[], SECRET),
+            UpstreamBody::empty(),
+        )
+    };
+    assert_eq!(body(send().await.unwrap()).await, b"kept");
+    assert_eq!(body(send().await.unwrap()).await, b"kept");
+    assert_eq!(
+        (upstream.connections(), upstream.open_connections()),
+        (1, 1),
+        "the pool should keep and reuse the connection"
+    );
+
+    drop(client);
+
+    // The upstream learns of the close only when the client's FIN reaches it.
+    eventually(|| (upstream.open_connections() == 0).then_some(())).await;
+}
