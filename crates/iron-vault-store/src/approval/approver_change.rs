@@ -9,8 +9,11 @@
 
 #[cfg(test)]
 mod tests;
+mod tpm;
 
 use thiserror::Error;
+
+pub use tpm::{CreatedTpmKey, TpmHelper, TpmHelperFailure};
 
 use super::{
     ApprovalPassphrase, ApprovalState, ApprovalStateError, ApproverId, ApproverLabel, MAX_APPROVERS, PinnedApprover, SignError, SignerKind,
@@ -24,6 +27,8 @@ use crate::{ErrorKindLabel, PASSPHRASE_WORK_FACTOR, StateDirLock, StateFileName,
 pub enum ApproverChangeStep {
     /// Step 3 of the commands: reading `approval.age` back, and the orphan sweep that follows. Nothing is ever committed.
     ReadBack,
+    /// The TPM signing helper creating or using the new TPM approver's key.
+    TpmHelper,
     /// Generating, sealing or writing the approver's key file.
     KeyFile,
     /// Reading the new key file back and opening it as the approver about to be pinned.
@@ -37,6 +42,7 @@ impl ApproverChangeStep {
     pub fn label(self) -> &'static str {
         match self {
             Self::ReadBack => "read_back",
+            Self::TpmHelper => "tpm_helper",
             Self::KeyFile => "key_file",
             Self::KeyCheck => "key_check",
             Self::ApprovalState => "approval_state",
@@ -85,6 +91,12 @@ pub enum KeyCheckError {
     /// The file does not open with the passphrase as the key of the approver about to be pinned.
     #[error("it does not open as the new approver's key: {0}")]
     Open(SignError),
+    /// The blob read back is not a well-formed key blob for the approver about to be pinned.
+    #[error("it is not a key blob for the new approver")]
+    Blob,
+    /// The helper's signature over a fresh presence payload does not verify against the key about to be pinned.
+    #[error("the helper's signature does not verify against the new key")]
+    Signature,
 }
 
 /// An approver change or the checks before it failed. Every variant says whether the change may have committed
@@ -111,6 +123,10 @@ pub enum ApproverChangeError {
     /// The generated key does not make a valid approver. Nothing was written.
     #[error("the generated approver is invalid: {0}; nothing was written")]
     ApproverInvalid(ApprovalStateError),
+    /// The TPM signing helper refused or could not be reached while creating the key or signing the read-back check.
+    /// The approval state is as it was; a key blob may be left as an orphan.
+    #[error("the TPM signing helper cannot enroll the key: {0}; nothing was committed")]
+    TpmHelper(TpmHelperFailure),
     /// The key could not be generated or sealed. Nothing was written.
     #[error("cannot generate or seal the approver key ({0}); nothing was committed")]
     KeySeal(SignError),
@@ -131,6 +147,7 @@ impl ApproverChangeError {
     pub fn step(&self) -> ApproverChangeStep {
         match self {
             Self::ReadBackUnreadable(_) | Self::ReadBackDiffers | Self::OrphanSweep { .. } => ApproverChangeStep::ReadBack,
+            Self::TpmHelper(_) => ApproverChangeStep::TpmHelper,
             Self::ApproverInvalid(_) | Self::KeySeal(_) | Self::KeyFile(_) => ApproverChangeStep::KeyFile,
             Self::KeyCheck(_) => ApproverChangeStep::KeyCheck,
             Self::ApprovalState(_) => ApproverChangeStep::ApprovalState,
@@ -154,9 +171,12 @@ impl ApproverChangeError {
             Self::ReadBackDiffers => ErrorKindLabel::fixed("differs"),
             Self::OrphanSweep { error, .. } | Self::KeyFile(error) => error.error_kind_label(),
             Self::ApproverInvalid(_) => ErrorKindLabel::fixed("approver_invalid"),
+            Self::TpmHelper(_) => ErrorKindLabel::fixed("tpm_helper"),
             Self::KeySeal(_) => ErrorKindLabel::fixed("key_seal"),
             Self::KeyCheck(KeyCheckError::Read(_)) => ErrorKindLabel::fixed("read_failed"),
-            Self::KeyCheck(KeyCheckError::Open(_)) => ErrorKindLabel::fixed("key_mismatch"),
+            Self::KeyCheck(KeyCheckError::Open(_) | KeyCheckError::Blob | KeyCheckError::Signature) => {
+                ErrorKindLabel::fixed("key_mismatch")
+            }
             Self::ApprovalState(ApprovalStateError::Write(error) | ApprovalStateError::WriteUncertain(error)) => error.error_kind_label(),
             Self::ApprovalState(ApprovalStateError::TooManyApprovers) => ErrorKindLabel::fixed("too_many_approvers"),
             Self::ApprovalState(_) => ErrorKindLabel::fixed("approval_state"),
@@ -256,13 +276,16 @@ impl<'a, F: StoreFs> ApproverChanges<'a, F> {
     /// before it and change nothing. After it, a key file that cannot be deleted is reported as [`KeyFileOutcome::Left`]
     /// and never fails the removal: the approver is gone and the file is an orphan the next sweep deletes.
     pub fn remove_approver(&self, state: &mut ApprovalState, id: ApproverId) -> Result<KeyFileOutcome, ApproverChangeError> {
+        let kind = state.approver(id).map(PinnedApprover::kind);
         state
             .remove_approver(self.lock, self.fs, self.identity, id)
             .map_err(ApproverChangeError::ApprovalState)?;
-        Ok(match durable_remove(self.lock, self.fs, &StateFileName::approver_key(id)) {
-            Ok(()) | Err(WriteError::NotFound { .. }) => KeyFileOutcome::Removed,
-            Err(error) => KeyFileOutcome::Left(error),
-        })
+        Ok(
+            match durable_remove(self.lock, self.fs, &key_file_name(kind.unwrap_or(SignerKind::Software), id)) {
+                Ok(()) | Err(WriteError::NotFound { .. }) => KeyFileOutcome::Removed,
+                Err(error) => KeyFileOutcome::Left(error),
+            },
+        )
     }
 
     /// Loads `approval.age` from disk, opening it and checking it against the manifest as every approval does, and
@@ -285,8 +308,8 @@ impl<'a, F: StoreFs> ApproverChanges<'a, F> {
         Ok(ReadBack(on_disk))
     }
 
-    /// Deletes every `approver-<id>.age` whose ID no approver pinned in `read_back` has, and returns the IDs removed in
-    /// ascending order of file name.
+    /// Deletes every `approver-<id>.age` and `approver-<id>.tpm` whose ID no approver pinned in `read_back` has, and
+    /// returns the IDs removed in ascending order of file name.
     ///
     /// Only the state [`Self::read_back_approval_state`] returned is accepted, never the in-memory state: an in-memory
     /// state that missed a committed enrollment would make that approver's key file look like an orphan, and this would
@@ -300,14 +323,29 @@ impl<'a, F: StoreFs> ApproverChanges<'a, F> {
         let mut removed = Vec::new();
         let swept = names
             .iter()
-            .filter_map(|name| StateFileName::approver_key_id(name.to_str()?))
-            .filter(|id| read_back.state().approver(*id).is_none())
-            .try_for_each(|id| durable_remove(self.lock, self.fs, &StateFileName::approver_key(id)).map(|()| removed.push(id)));
+            .filter_map(|name| orphan_candidate(name.to_str()?))
+            .filter(|(id, _)| read_back.state().approver(*id).is_none())
+            .try_for_each(|(id, file)| durable_remove(self.lock, self.fs, &file).map(|()| removed.push(id)));
         match swept {
             Ok(()) => Ok(removed),
             Err(error) => Err(ApproverChangeError::OrphanSweep { error, removed }),
         }
     }
+}
+
+/// The state file that holds a `kind` approver's key: the software approver's `approver-<id>.age`, or the TPM approver's key
+/// blob `approver-<id>.tpm`.
+fn key_file_name(kind: SignerKind, id: ApproverId) -> StateFileName {
+    match kind {
+        SignerKind::Software => StateFileName::approver_key(id),
+        SignerKind::Tpm => StateFileName::tpm_key_blob(id),
+    }
+}
+
+/// The approver ID and file when `name` is exactly an approver's key file of either kind.
+fn orphan_candidate(name: &str) -> Option<(ApproverId, StateFileName)> {
+    let software = StateFileName::approver_key_id(name).map(|id| (id, key_file_name(SignerKind::Software, id)));
+    software.or_else(|| StateFileName::tpm_key_blob_id(name).map(|id| (id, key_file_name(SignerKind::Tpm, id))))
 }
 
 /// The approval state [`ApproverChanges::read_back_approval_state`] read from disk and checked. Only that call builds

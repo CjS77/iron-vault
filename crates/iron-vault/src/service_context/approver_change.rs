@@ -10,14 +10,17 @@
 //! Every write runs on a blocking task that owns the lock guard and the approval state, and hands both back, so the
 //! in-memory approval state is replaced under the lock even when the caller's future is dropped mid-write.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use iron_vault_store::{
     ApprovalPassphrase, ApprovalState, ApproverChangeError, ApproverChanges, ApproverId, ApproverLabel, KeyFileOutcome, MAX_APPROVERS,
-    MayHaveCommitted, PinnedApprover, StoreFs, VaultId, VaultIdentity,
+    MayHaveCommitted, PinnedApprover, StoreFs, UtcSecond, VaultId, VaultIdentity,
 };
+use iron_vault_tpm_protocol::TpmApprovalPin;
 use tokio::sync::OwnedMutexGuard;
 
+use super::tpm_helper::HelperSession;
 use super::{OwnerPresence, PresenceRefusal, ServiceContext};
 use crate::audit::approver::{ChangeFailed, ChangeFailure, Enrolled, OrphanRemoved, Removed};
 use crate::audit::{AuditEvent, NamedApprover};
@@ -46,6 +49,10 @@ pub enum ApproverRefusal {
     /// `approver remove` named the approver that signed the active approval.
     #[error("this approver signed the active approval")]
     InUse,
+    /// The TPM signing helper refused or could not be reached while enrolling a TPM approver; the message names its status.
+    /// Nothing was committed.
+    #[error("{0}")]
+    KindUnavailable(String),
     /// Step 3's read-back or orphan sweep, or the approver change, failed; `committed` says whether it may have committed.
     #[error("{cause}")]
     Failed {
@@ -231,6 +238,36 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
         label: ApproverLabel,
         passphrase: ApprovalPassphrase,
     ) -> Result<(PinnedApprover, usize), ApproverRefusal> {
+        self.enroll_with(proof, move |changes, approval, now| {
+            changes.enroll_software_approver(approval, label, &passphrase, now)
+        })
+        .await
+    }
+
+    /// Steps 7 and 8 for `tpm`, as [`Self::enroll_software`], with the helper at `socket` making the key under `pin`. A
+    /// helper that refuses or cannot be reached is [`ApproverRefusal::KindUnavailable`].
+    pub async fn enroll_tpm(
+        self,
+        proof: OwnerPresence,
+        socket: PathBuf,
+        label: ApproverLabel,
+        pin: TpmApprovalPin,
+    ) -> Result<(PinnedApprover, usize), ApproverRefusal> {
+        self.enroll_with(proof, move |changes, approval, now| {
+            changes.enroll_tpm_approver(approval, label, now, &mut HelperSession::new(socket, pin))
+        })
+        .await
+    }
+
+    /// Runs `enroll` on a blocking task that owns the lock guard and the approval state, once the service is confirmed to be
+    /// where step 2 recorded it.
+    async fn enroll_with(
+        self,
+        proof: OwnerPresence,
+        enroll: impl FnOnce(&ApproverChanges<'_, F>, &mut ApprovalState, UtcSecond) -> Result<PinnedApprover, ApproverChangeError>
+        + Send
+        + 'static,
+    ) -> Result<(PinnedApprover, usize), ApproverRefusal> {
         let Self {
             service,
             service_wide,
@@ -246,8 +283,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
         })?;
         let (locks, setup) = (Arc::clone(&service.locks), Arc::clone(&service.setup));
         let task = tokio::task::spawn_blocking(move || {
-            let enrolled =
-                ApproverChanges::new(&locks.state, &setup.fs, &identity).enroll_software_approver(&mut approval, label, &passphrase, now);
+            let enrolled = enroll(&ApproverChanges::new(&locks.state, &setup.fs, &identity), &mut approval, now);
             (service_wide, approval, enrolled)
         });
         let (_held, approval, enrolled) = task.await.map_err(|_| interrupted())?;
@@ -334,9 +370,12 @@ fn log_failure(change: &'static str, approver: Option<ApproverId>, failure: Chan
 }
 
 fn failed(error: &ApproverChangeError) -> ApproverRefusal {
-    ApproverRefusal::Failed {
-        committed: error.may_have_committed(),
-        cause: error.to_string(),
+    match error {
+        ApproverChangeError::TpmHelper(_) => ApproverRefusal::KindUnavailable(error.to_string()),
+        _ => ApproverRefusal::Failed {
+            committed: error.may_have_committed(),
+            cause: error.to_string(),
+        },
     }
 }
 

@@ -208,9 +208,9 @@ file byte is logged.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `approver.enrolled` | INFO | An `approver add` committed | `approver_id`, `approver_label`, `signer_kind` (`software`), `approvers` (the count after the change), `authorizing_approver_id` and `authorizing_approver_label` (the approver whose passphrase authorized it) |
+| `approver.enrolled` | INFO | An `approver add` committed | `approver_id`, `approver_label`, `signer_kind` (`software` or `tpm`), `approvers` (the count after the change), `authorizing_approver_id` and `authorizing_approver_label` (the approver whose passphrase authorized it) |
 | `approver.removed` | INFO | An `approver remove` committed | as `approver.enrolled`, for the approver removed, and `key_file`: `removed`, or `left` when the key file could not be deleted (the next approver command removes it) |
-| `approver.change-failed` | WARN | An `approver add` or `approver remove` was refused (16 approvers pinned, the new passphrase broke a rule, no such approver, the last approver or the active approval's signer), the approval state did not read back, or the change failed | `change` (`add` or `remove`), `failure`: `set_invalid`, `passphrase_rejected`, `unknown_approver`, `in_use` or `write_failed`; `approver_id` when known; for `write_failed` also `step` (`read_back`, `key_file`, `key_check` or `approval_state`), `error_kind` and `committed` (`no` or `unknown`) |
+| `approver.change-failed` | WARN | An `approver add` or `approver remove` was refused (16 approvers pinned, the new passphrase broke a rule, no such approver, the last approver or the active approval's signer), the approval state did not read back, or the change failed | `change` (`add` or `remove`), `failure`: `set_invalid`, `passphrase_rejected`, `unknown_approver`, `in_use` or `write_failed`; `approver_id` when known; for `write_failed` also `step` (`read_back`, `tpm_helper`, `key_file`, `key_check` or `approval_state`), `error_kind` and `committed` (`no` or `unknown`) |
 | `approver.orphan-removed` | WARN | Before its prompts, `approver add` or `approver remove` removed a key file no pinned approver has, left by an enrollment that failed or a removal that could not delete it | `approver_id`, the ID in the file's name |
 
 ### Migration authorization

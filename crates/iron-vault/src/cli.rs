@@ -304,7 +304,7 @@ pub enum ApproverCommand {
         /// What the approver is, 1 to 64 bytes: `backup passphrase`.
         #[arg(long)]
         label: String,
-        /// The signer kind. Only `software` is offered so far; the service refuses the others.
+        /// The signer kind. `tpm` is offered only on a protected install with the TPM signing helper, and asks for a PIN of at least 6 characters; the service refuses the kinds it does not offer.
         #[arg(long, value_enum, default_value_t = SignerKindArg::Software)]
         kind: SignerKindArg,
     },

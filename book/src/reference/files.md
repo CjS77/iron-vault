@@ -122,6 +122,7 @@ writes its own copy.
 | `recipients.age.staged` | A recipient change being committed. The next recipient command finishes or discards it. |
 | `operational.age` | The passphrase envelope: the operational identity, sealed with the vault passphrase. |
 | `approver-<id>.age` | An approver key envelope, one per software approver: the key that signs config approvals for it, sealed with its approval passphrase. `init` writes one for its approver. |
+| `approver-<id>.tpm` | A TPM key blob, one per TPM approver: the wrapped key only the TPM that made it can load. It is not secret. |
 | `approval.age` | The approval state: the committed and highest reserved approval versions. |
 | `manifest.age` | The vault manifest: which credential records exist, sealed with a code only the vault identity can make. |
 | `record-<id>.age` | One credential record: its kind, secret and permitted origins. |

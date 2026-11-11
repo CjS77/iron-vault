@@ -1424,6 +1424,7 @@ dependencies = [
  "iron-vault-kinds",
  "iron-vault-policy",
  "iron-vault-store",
+ "iron-vault-tpm-protocol",
  "listenfd",
  "log",
  "proptest",
@@ -1492,6 +1493,7 @@ dependencies = [
  "getrandom 0.4.3",
  "iron-vault-kinds",
  "iron-vault-policy",
+ "iron-vault-tpm-protocol",
  "libc",
  "p256",
  "proptest",
@@ -1513,6 +1515,7 @@ version = "0.3.0-alpha"
 dependencies = [
  "blake2",
  "static_assertions",
+ "subtle",
  "thiserror 2.0.21",
  "zeroize",
 ]

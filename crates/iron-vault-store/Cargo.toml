@@ -14,6 +14,8 @@ flate2.workspace = true
 getrandom.workspace = true
 iron-vault-kinds = { path = "../iron-vault-kinds" }
 iron-vault-policy = { path = "../iron-vault-policy" }
+# The TPM key blob's framing, which an enrollment writes and reads back.
+iron-vault-tpm-protocol = { path = "../iron-vault-tpm-protocol" }
 p256.workspace = true
 secrecy.workspace = true
 subtle.workspace = true

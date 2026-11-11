@@ -3,13 +3,14 @@
 use std::io;
 use std::path::PathBuf;
 
+use iron_vault_tpm_protocol::TpmKeyBlob;
 use secrecy::SecretString;
 
 use super::*;
 use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::manifest::tests::KAT_IDENTITY;
 use crate::test_dir::TestDir;
-use crate::{VaultId, VaultManifest, WriteStep, durable_replace};
+use crate::{SignatureAlgorithm, VaultId, VaultManifest, WriteStep, durable_replace};
 
 const PASSPHRASE: &str = "a new approval passphrase";
 
@@ -489,4 +490,131 @@ fn a_removal_whose_commit_fsync_fails_reports_unknown_and_keeps_the_key_file_for
     assert!(setup.has_key_file(id));
     assert_eq!(setup.settle(), [id]);
     assert!(setup.state.approver(id).is_none());
+}
+
+/// A stand-in for the TPM signing helper that holds a P-256 key in memory and can be told to fail.
+struct FakeHelper {
+    key: p256::ecdsa::SigningKey,
+    fail_create: bool,
+    fail_sign: bool,
+    wrong_signer: bool,
+}
+
+impl FakeHelper {
+    fn new() -> Self {
+        Self {
+            key: p256::ecdsa::SigningKey::from_slice(&[7; 32]).unwrap(),
+            fail_create: false,
+            fail_sign: false,
+            wrong_signer: false,
+        }
+    }
+}
+
+impl TpmHelper for FakeHelper {
+    fn create(&mut self, id: ApproverId) -> Result<CreatedTpmKey, TpmHelperFailure> {
+        if self.fail_create {
+            return Err(TpmHelperFailure("dictionary-attack settings too weak".to_owned()));
+        }
+        let parts = iron_vault_tpm_protocol::TpmKeyParts {
+            primary_name: vec![1; 34],
+            public: vec![2; 90],
+            private: vec![3; 100],
+        };
+        let public_key = self.key.verifying_key().to_encoded_point(false).as_bytes().try_into().unwrap();
+        Ok(CreatedTpmKey {
+            blob: TpmKeyBlob::new(*id.as_bytes(), parts),
+            public_key,
+        })
+    }
+
+    fn sign(&mut self, _: &TpmKeyBlob, _: &[u8; 65], message: &[u8]) -> Result<[u8; 64], TpmHelperFailure> {
+        if self.fail_sign {
+            return Err(TpmHelperFailure("locked out".to_owned()));
+        }
+        let key = match self.wrong_signer {
+            true => p256::ecdsa::SigningKey::from_slice(&[9; 32]).unwrap(),
+            false => self.key.clone(),
+        };
+        let signature: p256::ecdsa::Signature = p256::ecdsa::signature::Signer::sign(&key, message);
+        Ok(signature.normalize_s().unwrap_or(signature).to_bytes().into())
+    }
+}
+
+impl Setup {
+    fn enroll_tpm(&mut self, helper: &mut FakeHelper) -> Result<PinnedApprover, ApproverChangeError> {
+        ApproverChanges::new(&self.lock, &self.fs, &self.identity).enroll_tpm_approver(
+            &mut self.state,
+            label("laptop TPM"),
+            UtcSecond::EPOCH,
+            helper,
+        )
+    }
+
+    fn tpm_blob_ids(&self) -> Vec<ApproverId> {
+        let names = self.fs.list_dir(self.lock.dir()).unwrap();
+        names.iter().filter_map(|n| StateFileName::tpm_key_blob_id(n.to_str()?)).collect()
+    }
+}
+
+#[test]
+fn an_enrolled_tpm_approver_is_pinned_with_a_blob_and_removal_deletes_the_blob() {
+    let mut setup = Setup::new();
+    let counters = (setup.state.highest_reserved(), setup.state.committed());
+
+    let approver = setup.enroll_tpm(&mut FakeHelper::new()).unwrap();
+
+    assert_eq!(
+        (approver.kind(), approver.algorithm()),
+        (SignerKind::Tpm, SignatureAlgorithm::EcdsaP256)
+    );
+    assert_eq!(setup.load(), setup.state);
+    assert_eq!(setup.tpm_blob_ids(), [approver.id()]);
+    assert_eq!(counters, (setup.state.highest_reserved(), setup.state.committed()));
+    assert_eq!(setup.remove(approver.id()).unwrap(), KeyFileOutcome::Removed);
+    assert!(setup.tpm_blob_ids().is_empty());
+}
+
+#[test]
+fn a_helper_refusal_at_create_writes_nothing() {
+    let mut setup = Setup::new();
+    let before = setup.fs.trace().len();
+
+    let failed = setup
+        .enroll_tpm(&mut FakeHelper {
+            fail_create: true,
+            ..FakeHelper::new()
+        })
+        .unwrap_err();
+
+    assert!(matches!(failed, ApproverChangeError::TpmHelper(_)));
+    assert_eq!(failed.step(), ApproverChangeStep::TpmHelper);
+    assert!(setup.mutations(before).is_empty());
+    assert_eq!(setup.load().approvers().len(), 1);
+}
+
+#[test]
+fn a_failed_read_back_signature_leaves_an_orphan_blob_the_next_sweep_removes() {
+    let refusals = [
+        FakeHelper {
+            fail_sign: true,
+            ..FakeHelper::new()
+        },
+        FakeHelper {
+            wrong_signer: true,
+            ..FakeHelper::new()
+        },
+    ];
+    for mut helper in refusals {
+        let mut setup = Setup::new();
+
+        let failed = setup.enroll_tpm(&mut helper).unwrap_err();
+
+        assert_eq!(failed.may_have_committed(), MayHaveCommitted::No);
+        assert_eq!(setup.load().approvers().len(), 1);
+        let orphans = setup.tpm_blob_ids();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(setup.settle(), orphans);
+        assert!(setup.tpm_blob_ids().is_empty());
+    }
 }

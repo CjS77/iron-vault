@@ -39,6 +39,7 @@ mod reset;
 mod serving;
 #[cfg(test)]
 mod tests;
+mod tpm_helper;
 mod unlock;
 mod vault_change;
 
@@ -62,7 +63,7 @@ use crate::audit::vault::{LockIncomplete, UnlockRefused};
 use crate::audit::{AuditEvent, CheckFailed, LockTransition, ReloadFailed, count_of};
 use crate::clock::{SystemClock, WallClock};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
-use crate::deployment::PasswdDirectory;
+use crate::deployment::{DeploymentProfile, PasswdDirectory};
 use crate::hardening::{HardeningReport, MemoryProtection};
 use crate::logging::{LogSwitch, OpenedLog};
 use crate::migration_authorization::PendingMigration;
@@ -275,6 +276,8 @@ pub struct ServiceContext<F = OsFs> {
     reminders: SharedSchedule,
     /// Where `init --host-unlock` and `recipient remove` read the unlock handoff.
     handoff: PathBuf,
+    /// The TPM signing helper's socket, in a profile that offers the `tpm` approver kind (`Protected`) and `None` in the rest.
+    tpm_socket: Option<PathBuf>,
     /// Who must own the unseal-failure file for it to count: root in production.
     unseal_failure_owner: ExpectedOwner,
 }
@@ -331,6 +334,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         provisional: &BTreeMap<ListenerName, ListenerConfig>,
         mut passed: PassedSockets,
     ) -> Result<Self, IllegalTransition> {
+        let setup_profile = setup.paths.profile;
         let (listeners, failures) = RequestListeners::open_each(provisional, &setup.paths, &mut passed);
         failures
             .iter()
@@ -368,6 +372,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             clock: Arc::new(SystemClock),
             reminders: Arc::new(StdMutex::new(ReminderSchedule::default())),
             handoff: PathBuf::from(HANDOFF_PATH),
+            tpm_socket: (setup_profile == DeploymentProfile::Protected).then(|| PathBuf::from(tpm_helper::SIGNER_SOCKET)),
             unseal_failure_owner: ExpectedOwner { uid: 0 },
         })
     }
@@ -378,6 +383,20 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     pub fn with_handoff_path(mut self, handoff: PathBuf) -> Self {
         self.handoff = handoff;
         self
+    }
+
+    /// The context offering the `tpm` approver kind with the helper's socket at `socket`, whatever its profile, so a test
+    /// points it at a stand-in helper.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_tpm_socket(mut self, socket: PathBuf) -> Self {
+        self.tpm_socket = Some(socket);
+        self
+    }
+
+    /// The TPM signing helper's socket when this install offers the `tpm` approver kind: a `Protected` profile (or a test's
+    /// socket) whose helper socket exists. Otherwise `None`.
+    pub fn tpm_helper_socket(&self) -> Option<PathBuf> {
+        self.tpm_socket.clone().filter(|socket| socket.exists())
     }
 
     /// The context accepting an unseal-failure file owned by `owner` instead of root, so a test can stage one.

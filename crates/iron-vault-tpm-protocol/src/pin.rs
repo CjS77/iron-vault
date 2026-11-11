@@ -5,6 +5,7 @@ use std::fmt;
 
 use blake2::Blake2b256;
 use blake2::digest::{CustomizedInit, Digest};
+use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
 use crate::APPROVER_ID_LEN;
@@ -15,6 +16,24 @@ const AUTH_VALUE_PERSONA: &[u8] = b"iv-tpm-pin-v1";
 
 /// The length of an authorization value: the SHA-256 `nameAlg` digest length, the most a TPM accepts for the key.
 pub const AUTH_VALUE_LEN: usize = 32;
+
+/// The fewest Unicode scalar values a TPM approval PIN has at enrollment: the TPM's dictionary-attack lockout, not the
+/// PIN's length, limits guessing, so the minimum is short enough to type at every approval.
+pub const MIN_PIN_SCALARS: usize = 6;
+
+/// Why the two entries of a new TPM approval PIN do not make one. No variant carries what was typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PinRuleError {
+    /// The entry and its repeat differ.
+    #[error("the two entries of the TPM approval PIN differ")]
+    Differ,
+    /// The entry is not UTF-8.
+    #[error("the TPM approval PIN is not valid UTF-8")]
+    NotUtf8,
+    /// The entry has fewer than [`MIN_PIN_SCALARS`] Unicode scalar values.
+    #[error("the TPM approval PIN needs at least {MIN_PIN_SCALARS} Unicode scalar values")]
+    TooShort,
+}
 
 /// The secret that authorizes a TPM approval key, as the owner typed it: never trimmed or normalized.
 ///
@@ -27,6 +46,19 @@ impl TpmApprovalPin {
     /// is simply wrong.
     pub fn new(text: String) -> Self {
         Self(Zeroizing::new(text))
+    }
+
+    /// The PIN a new TPM approver is enrolled with, from the owner's two entries: equal (compared in constant time),
+    /// UTF-8, and at least [`MIN_PIN_SCALARS`] scalar values. Nothing is trimmed or normalized.
+    pub fn from_entries(entry: &[u8], repeated: &[u8]) -> Result<Self, PinRuleError> {
+        if !bool::from(entry.ct_eq(repeated)) {
+            return Err(PinRuleError::Differ);
+        }
+        let text = std::str::from_utf8(entry).map_err(|_| PinRuleError::NotUtf8)?;
+        match text.chars().count() >= MIN_PIN_SCALARS {
+            true => Ok(Self::new(text.to_owned())),
+            false => Err(PinRuleError::TooShort),
+        }
     }
 }
 
@@ -101,6 +133,25 @@ mod tests {
         assert_ne!(
             TpmAuthValue::derive(&APPROVER, &pin).as_bytes(),
             TpmAuthValue::derive(&other, &pin).as_bytes()
+        );
+    }
+
+    #[test]
+    fn a_new_pin_needs_two_equal_entries_of_six_scalar_values() {
+        let entries = |a: &[u8], b: &[u8]| TpmApprovalPin::from_entries(a, b).map(drop);
+        assert_eq!(entries(b"123456", b"123456"), Ok(()));
+        assert_eq!(entries("p\u{e9}pe\u{301}!".as_bytes(), "p\u{e9}pe\u{301}!".as_bytes()), Ok(()));
+        assert_eq!(entries(b"12345", b"12345"), Err(PinRuleError::TooShort));
+        assert_eq!(entries(b"123456", b"123457"), Err(PinRuleError::Differ));
+        assert_eq!(entries(&[0xff; 6], &[0xff; 6]), Err(PinRuleError::NotUtf8));
+        // Six scalar values, not six bytes: nothing is trimmed, and a space counts.
+        assert_eq!(entries(b" 1234 ", b" 1234 "), Ok(()));
+        assert_eq!(
+            entries(
+                "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}".as_bytes(),
+                "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}".as_bytes()
+            ),
+            Err(PinRuleError::TooShort)
         );
     }
 

@@ -32,7 +32,8 @@ use thiserror::Error;
 use crate::vault_id::{VaultId, VaultIdError};
 
 pub use approver_change::{
-    ApproverChangeError, ApproverChangeStep, ApproverChanges, KeyCheckError, KeyFileOutcome, MayHaveCommitted, ReadBack,
+    ApproverChangeError, ApproverChangeStep, ApproverChanges, CreatedTpmKey, KeyCheckError, KeyFileOutcome, MayHaveCommitted, ReadBack,
+    TpmHelper, TpmHelperFailure,
 };
 pub use proof_payload::{MigrationProofPayload, PresencePayload};
 pub use recovery::{ApprovalRecoveryError, DiscardedFile, PublishedPairFault, RecoveredApproval, RecoveryFailure, recover_approval};

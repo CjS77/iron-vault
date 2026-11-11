@@ -165,14 +165,14 @@ The output is a function of the service's answer, so two runs on the same state 
 
 | Step | What the service does | Refusal |
 |---|---|---|
-| 1 | The service is Ready; the label follows its rule; this install offers the kind | `wrong-state`, `approver-invalid`, `approver-kind-unavailable` |
+| 1 | The service is Ready; the label follows its rule; this install offers the kind (`software` always; `tpm` in the `Protected` profile when the helper's socket exists, see [Offered](tpm-approval-signer.md#the-helper-process)) | `wrong-state`, `approver-invalid`, `approver-kind-unavailable` |
 | 2 | Try the service-wide lock, recording the state and check generation | `busy` |
 | 3 | [Read `approval.age` back](#reading-the-approval-state-back), then remove [orphan key files](#orphan-key-files); fewer than `MAX_APPROVERS` (16) approvers are pinned | `vault-write-failed`, `approver-set-invalid` |
 | 4 | The [summary](#summaries), as notices | |
 | 5 | Owner presence: the [approver prompt](#the-approver-prompt) | `approval-denied`, `approval-unavailable` |
-| 6 | The new signer's secret. For `software`, two secret prompts, `New approval passphrase for "<label>"` and `Repeat the new approval passphrase`, checked by the [passphrase rules](vault-initialization.md#passphrase-rules): at least 12 Unicode scalar values, and the two must match, compared in constant time. A `lock` at either prompt cancels the command, as step 7 would | `passphrase-rejected`, `wrong-state` |
+| 6 | The new signer's secret. For `tpm`, two secret prompts, `New TPM approval PIN for "<label>"` and `Repeat the new TPM approval PIN`, checked by the [PIN rules](tpm-approval-signer.md#the-approval-pin): the two must match, compared in constant time, and the PIN has at least 6 Unicode scalar values, nothing trimmed or normalized. For `software`, two secret prompts, `New approval passphrase for "<label>"` and `Repeat the new approval passphrase`, checked by the [passphrase rules](vault-initialization.md#passphrase-rules): at least 12 Unicode scalar values, and the two must match, compared in constant time. A `lock` at either prompt cancels the command, as step 7 would | `passphrase-rejected`, `wrong-state` |
 | 7 | Still Ready at the recorded check generation | `wrong-state` |
-| 8 | The [approver change](#approver-changes) that enrolls, then the [completion notice](#the-completion-notice) | `vault-write-failed` |
+| 8 | The [approver change](#approver-changes) that enrolls, then the [completion notice](#the-completion-notice) | `vault-write-failed`, `approver-kind-unavailable` |
 
 The result is the new approver ID and the approver count. The CLI prints the approver ID and a newline to stdout, so a
 script can capture it, and nothing else.
@@ -258,17 +258,23 @@ file look like an orphan, and the sweep would delete the only key of a pinned ap
 
 ### Orphan key files
 
-A key file whose approver ID no pinned approver has is an orphan: an enrollment that failed before its commit point
+A key file, `approver-<approver ID>.age` or a TPM approver's `approver-<approver ID>.tpm`, whose approver ID no pinned
+approver has is an orphan: an enrollment that failed before its commit point
 left it, or a removal could not delete it. It signs nothing, because the service opens a key file only for the pinned
 approver it names, and `open_signer_key` refuses a key that is not that approver's. `approver add` and
 `approver remove` remove orphans at their step 3, after reading the approval state back and before any prompt, and log
 each with `approver.orphan-removed`. Nothing else removes them: `unlock` and the config check never write. An orphan is not a
-foreign file, because `approver-<approver ID>.age` names are the vault's own
+foreign file, because `approver-<approver ID>.age` and `approver-<approver ID>.tpm` names are the vault's own
 ([vault-initialization.md](vault-initialization.md#initialization-state)).
 
 Removing an approver reaches future copies of the state directory only. A backup taken before still holds the key file
 and an `approval.age` that pins it, and restoring the whole directory restores both; that is whole-storage rollback,
 which [§12](iron-vault-specification.md#12-configuration-approval-and-reload) leaves outside v0. The summary says so.
+
+**Enroll, for `tpm`:** the helper makes the key and the service writes its blob, `approver-<approver ID>.tpm`, before
+the commit point, as [tpm-approval-signer.md](tpm-approval-signer.md#enrollment) lays out. A helper that refuses or is
+unreachable at the create or the read-back signature ends the change with `approver-kind-unavailable`; the blob written
+by then is an orphan. Remove deletes the `.tpm` file in place of the `.age` file.
 
 ## Software signer keys
 
@@ -323,7 +329,7 @@ The service writes the prompt label from the approver's kind and label:
 | Kind | Label | Secret |
 |---|---|---|
 | `software` | `Approval passphrase for "<label>"` | yes |
-| `tpm` | `TPM PIN for "<label>"`, which EP-33 confirms | yes |
+| `tpm` | `TPM approval PIN for "<label>"` | yes |
 | `hardware` | the hardware-key phase's, for a PIN and then a touch, such as `Tap "<label>" to approve` | |
 
 The label is the pinned approver's own, which the CLI shows with control characters removed, as it shows every label.
@@ -464,10 +470,10 @@ Five codes are new, the next free numbers after 39:
 | `41` | `unknown-approver` | `approver remove`: no pinned approver has this ID; nothing was changed |
 | `42` | `approver-set-invalid` | `approver add`: 16 approvers are already pinned; `approver remove`: it is the last approver; nothing was changed |
 | `43` | `approver-in-use` | `approver remove`: this approver signed the active approval; the message says to approve the config with another approver first; nothing was changed |
-| `44` | `approver-kind-unavailable` | `approver add`: this install does not offer that signer kind yet; nothing was changed |
+| `44` | `approver-kind-unavailable` | `approver add`: this install does not offer that signer kind (`tpm` needs the `Protected` profile and the helper's socket, `hardware` is not built yet), or cannot make that kind of signer now because the TPM signing helper refused or could not be reached; the message names the helper's status (a lockout gives the seconds to wait); nothing was changed |
 
 Existing codes widen to cover the approver commands: `approval-denied` (9) and `approval-unavailable` (10) for owner
-presence; `passphrase-rejected` (18) for a new approval passphrase that breaks a rule; `vault-write-failed` (22) for an
+presence; `passphrase-rejected` (18) for a new approval passphrase or TPM approval PIN that breaks a rule; `vault-write-failed` (22) for an
 approver change that failed, whose message says whether it may have committed, and for an approval state that does
 not read back at step 3. `busy` and `wrong-state` already cover them.
 
@@ -499,8 +505,9 @@ Fields [audit-logging.md](audit-logging.md#audit-events) already defines, which 
 - `failure` gains `unknown_approver`, `in_use` and `passphrase_rejected` for `approver.change-failed`, beside
   `set_invalid` and `write_failed`, which `recipient.change-failed` already uses;
 - `committed` also says whether a failed approver change committed: always `no` when `step` is `read_back`;
-- `step` gains `read_back` (step 3's [read-back](#reading-the-approval-state-back)), `key_file`, `key_check` and
-  `approval_state`, the steps of an [approver change](#approver-changes).
+- `step` gains `read_back` (step 3's [read-back](#reading-the-approval-state-back)), `tpm_helper` (the TPM signing
+  helper's create or read-back signature), `key_file`, `key_check` and `approval_state`, the steps of an
+  [approver change](#approver-changes).
 
 `change` keeps its values, `add` and `remove`. Owner presence refusals keep their own event,
 `vault.presence-refused`, which names the asked approver, and its "When" widens to the approver commands. A refusal at

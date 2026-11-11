@@ -16,7 +16,7 @@ Use the admin socket at PATH instead of this installation\*(Aqs, for example one
 What the approver is, 1 to 64 bytes: `backup passphrase`
 .TP
 \fB\-\-kind\fR \fI<KIND>\fR [default: software]
-The signer kind. Only `software` is offered so far; the service refuses the others
+The signer kind. `tpm` is offered only on a protected install with the TPM signing helper, and asks for a PIN of at least 6 characters; the service refuses the kinds it does not offer
 .br
 
 .br

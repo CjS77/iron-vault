@@ -21,6 +21,7 @@ pub(super) fn refused(command: &str, refusal: ApproverRefusal) -> AdminResponse 
             ErrorCode::ApproverInUse,
             "this approver signed the active approval; approve the config with another approver first; nothing was changed".to_owned(),
         ),
+        ApproverRefusal::KindUnavailable(cause) => error(ErrorCode::ApproverKindUnavailable, cause),
         ApproverRefusal::Failed { committed, cause } => error(ErrorCode::VaultWriteFailed, failed_message(committed, &cause)),
     }
 }

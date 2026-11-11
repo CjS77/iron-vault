@@ -15,7 +15,7 @@ mod wire;
 
 pub use blob::{MAX_TPM_KEY_BLOB_LEN, TpmKeyBlob};
 pub use frame::{MAX_FRAME_LEN, read_frame};
-pub use pin::{AUTH_VALUE_LEN, TpmApprovalPin, TpmAuthValue};
+pub use pin::{AUTH_VALUE_LEN, MIN_PIN_SCALARS, PinRuleError, TpmApprovalPin, TpmAuthValue};
 pub use request::{Request, SignRequest};
 pub use response::Response;
 

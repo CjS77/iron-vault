@@ -226,7 +226,7 @@ These are the fields more than one event uses:
 | `committed_version` | number | The committed approval version, left out when nothing is committed |
 | `config_digest` | string | A config digest, as `blake2b:` and 64 lowercase hex digits |
 | `file` | string | A state or config file name, or a migration bundle entry's name; never a path |
-| `step` | string | A fixed step label, such as an approval step, an init step, a reset step (`begin`, `remove`, `finish`), an approver change step (`read_back`, `key_file`, `key_check`, `approval_state`), or an export step (`check`, `snapshot`, `seal`, `transfer`) |
+| `step` | string | A fixed step label, such as an approval step, an init step, a reset step (`begin`, `remove`, `finish`), an approver change step (`read_back`, `tpm_helper`, `key_file`, `key_check`, `approval_state`), or an export step (`check`, `snapshot`, `seal`, `transfer`) |
 | `refusal` | string | Why an admin connection, request, command, migration authorization or host unlock was refused: a fixed label |
 | `unavailable_reason` | string | An unavailable reason: `locked`, `policy_invalid`, `checking` or `recovery_needed` |
 | `detail` | string | A check failure's detail: fixed phrases with versions and configured names only |
@@ -756,7 +756,7 @@ The `recipient.forget-checked` event ([forget-machine.md](forget-machine.md#audi
 
 | Event | Level | When | Fields |
 |---|---|---|---|
-| `approver.enrolled` | INFO | an approver change that enrolls committed | `approver_id`, `approver_label`, `signer_kind`, `approvers`, `authorizing_approver_id`, `authorizing_approver_label` |
+| `approver.enrolled` | INFO | an approver change that enrolls committed (`signer_kind` is `software` or `tpm`) | `approver_id`, `approver_label`, `signer_kind`, `approvers`, `authorizing_approver_id`, `authorizing_approver_label` |
 | `approver.removed` | INFO | an approver change that removes committed | as `approver.enrolled`, and `key_file` (`removed` or `left`) |
 | `approver.change-failed` | WARN | `approver add` was refused at step 3 (`set_invalid`, `write_failed`) or step 6 (`passphrase_rejected`); `approver remove` was refused at step 3 (`unknown_approver`, `set_invalid`, `in_use`, `write_failed`); or either command's approver change failed (`write_failed`) | `change`, `failure`; `approver_id` when known; `step`, `error_kind` and `committed` for `write_failed` |
 | `approver.orphan-removed` | WARN | step 3 of an approver command removed an orphan key file | `approver_id`, the ID in the file's name |

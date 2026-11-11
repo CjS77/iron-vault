@@ -181,7 +181,7 @@ fn verify_ed25519(key: &VerifyingKey, message: &[u8], signature: &[u8]) -> Resul
 ///
 /// ECDSA accepts both `s` and `n − s`; the signer writes the low one, and a high `s` is refused, so each approval has
 /// one signature encoding and a rewritten signature never verifies. The pinned key is already a point on the curve.
-fn verify_p256(key: &p256::ecdsa::VerifyingKey, message: &[u8], signature: &[u8]) -> Result<(), VerifyError> {
+pub(super) fn verify_p256(key: &p256::ecdsa::VerifyingKey, message: &[u8], signature: &[u8]) -> Result<(), VerifyError> {
     let signature = p256::ecdsa::Signature::from_slice(signature).map_err(|_| VerifyError::BadSignature)?;
     if signature.normalize_s().is_some() {
         return Err(VerifyError::BadSignature);

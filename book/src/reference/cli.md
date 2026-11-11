@@ -331,7 +331,7 @@ Enroll another approval signer. The service shows what changes, asks for the app
 
 - `--label <LABEL>`: What the approver is, 1 to 64 bytes: `backup passphrase`.
   - required
-- `--kind <KIND>`: The signer kind. Only `software` is offered so far; the service refuses the others.
+- `--kind <KIND>`: The signer kind. `tpm` is offered only on a protected install with the TPM signing helper, and asks for a PIN of at least 6 characters; the service refuses the kinds it does not offer.
   - default: `software`
   - possible values:
     - `software`: A key sealed to its own approval passphrase.
