@@ -500,6 +500,10 @@ handoff takes effect at the next restart.
   prompt, as Starting does, and refuses `init` if it is absent or refused, naming the reason. Init then wraps
   `identity.age` for the operational identity, the recovery key and the host unlock identity, and proves that each
   opens it. Init's summary and the `vault.initialized` record name the kinds enrolled, never a key.
+- **A migrated vault:** `import --host-unlock <bundle>`, accepted wherever `init --host-unlock` is. The service reads the
+  handoff before any prompt and ends with `import-failed`, naming the reason, if it is absent or refused. Import then
+  wraps `identity.age` for the new operational identity, the new recovery key and the host unlock identity
+  ([`migration-bundle.md`](migration-bundle.md#destination-recipients)).
 - **An existing vault:** `iron-vault recipient add --host-unlock <age1…> --label <text>`, a form of `recipient add` in
   [`recipients.md`](recipients.md#recipient-add---host-unlock-age1) (owner decision, 2026-11-10). It takes the host
   unlock identity's recipient key, which the provisioning script prints, runs migration authorization with

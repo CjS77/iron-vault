@@ -20,9 +20,9 @@ one.
 
 ## Host unlock
 
-`iron-vault init --host-unlock` also enrols the host unlock identity from the unlock handoff as a recipient of the new
-vault. The packaged and Container builds accept it; a `dev-mode` build rejects it as an unexpected argument
-([design](../../../design/docker-compose.md#enrollment)).
+`iron-vault init --host-unlock` and `iron-vault import --host-unlock` also enrol the host unlock identity from the unlock
+handoff as a recipient of the new vault. The packaged and Container builds accept it; a `dev-mode` build rejects it as an unexpected
+argument ([design](../../../design/docker-compose.md#enrollment)).
 
 ## The admin socket
 
@@ -157,8 +157,11 @@ iron-vault import [OPTIONS] <BUNDLE>
 
 Make the vault from a migration bundle that `export` wrote on another machine. The service prompts for the export passphrase, shows a summary, prompts for a new vault passphrase, shows a new recovery key once on the controlling terminal and, once you confirm you saved it, writes the vault, the source's credentials and approval counters included. It needs a controlling terminal, and leaves the service Locked. The vault routes nothing until you approve a config with `config approve`, at a version above every one the source reserved. The BUNDLE must be a regular file of at most 260 MiB. Before it connects, the command creates `<BUNDLE>.config.toml` beside the bundle with mode 0600, and refuses a name already taken. After the import it fills that copy from the bundle's config, checked against the committed config's digest, and prints the `config approve` command for it; if the copy cannot be made it removes it and prints the digest to check your own copy of the source's config against, and still exits 0. Any other ending removes the copy. The first approval lists the whole config as added, since nothing is active.
 
+With --host-unlock, the vault also enrols the identity in the unlock handoff as a recipient, as `init --host-unlock` does, so a restart unlocks with no owner present. The service refuses to start the import if the handoff is absent or untrusted, before any prompt.
+
 - `<BUNDLE>`: The bundle file to read.
   - required
+- `--host-unlock`: Also enrol the identity in the unlock handoff as a recipient. A dev-mode build does not accept this flag.
 
 ## `iron-vault reset`
 
