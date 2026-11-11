@@ -146,7 +146,7 @@ pub enum AdminRequest {
         approver: [u8; 16],
     },
     /// Discards the vault and the config after a confirmation typed at a terminal; allowed in Locked, Ready and
-    /// Unavailable. No arguments. Command ID 19.
+    /// Unavailable. No arguments. Command ID 21.
     Reset,
 }
 
@@ -229,7 +229,7 @@ pub enum AdminCommand {
     /// `approver remove`.
     ApproverRemove = 18,
     /// `reset`.
-    Reset = 19,
+    Reset = 21,
 }
 
 impl AdminCommand {
@@ -740,10 +740,10 @@ pub enum ErrorCode {
     /// `approver add`: this install does not offer that signer kind yet; nothing was changed.
     ApproverKindUnavailable = 44,
     /// `reset`: the directories hold no vault file, so there is nothing to discard; the message says what to run next.
-    NothingToReset = 45,
+    NothingToReset = 49,
     /// `reset`: writing `reset.unfinished`, a removal or the state read failed; the message names the step and the file, and
     /// says whether the vault is intact or the next `reset` resumes.
-    ResetFailed = 46,
+    ResetFailed = 50,
 }
 
 impl ErrorCode {

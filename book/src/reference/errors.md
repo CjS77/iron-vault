@@ -137,8 +137,8 @@ another command holds the service-wide lock.
 
 | Code | Name | Meaning | What to do |
 |---|---|---|---|
-| `45` | `nothing-to-reset` | No vault file is there, at the request or after you confirmed. The message says to run `init`, or names the first file that is there and says to move it aside first. Nothing was removed. | Run `iron-vault init`, or move the named file aside. |
-| `46` | `reset-failed` | Writing the reset marker or removing a file failed. The message says whether the vault is intact (the marker was not written) or the next `reset` finishes the job. | Fix the cause the message names, then run `iron-vault reset` again. `status` shows `reset unfinished` until it ends. |
+| `49` | `nothing-to-reset` | No vault file is there, at the request or after you confirmed. The message says to run `init`, or names the first file that is there and says to move it aside first. Nothing was removed. | Run `iron-vault init`, or move the named file aside. |
+| `50` | `reset-failed` | Writing the reset marker or removing a file failed. The message says whether the vault is intact (the marker was not written) or the next `reset` finishes the job. | Fix the cause the message names, then run `iron-vault reset` again. `status` shows `reset unfinished` until it ends. |
 
 `reset` also answers `wrong-state` in Starting, Checking and Stopped, and `declined` when what you typed does not match, or when
 the vault changed between the summary and your confirmation. When stdin is not a terminal or `/dev/tty` cannot be opened,

@@ -163,7 +163,7 @@ In Unfinished reset:
   and only a confirmed reset removes such a vault; `init`'s and `import`'s discards are for vaults that never opened.
 - `recovery check` ends with `recovery-check-unavailable`, naming the state.
 - `status` reports, in tag 12 (initialization), a new value meaning "reset unfinished (run iron-vault reset again)";
-  the value is 3 (command 19, error codes 45 `nothing-to-reset` and 46 `reset-failed`;
+  the value is 3 (command 21, error codes 49 `nothing-to-reset` and 50 `reset-failed`;
   see [admin-protocol.md](admin-protocol.md#reset)).
 - **Startup does not finish it.** The service starts Locked, as always, and waits for an admin principal to run
   `reset` again ([decision 4](#owner-decisions)). A reset finished at startup would have no principal to record,
@@ -317,8 +317,9 @@ failed: then the file is visible and the `begin` row applies, Unfinished reset o
 The success result carries the vault ID that was confirmed (empty when the confirmation was the state directory's
 path), the number of files removed, the foreign files left, whether the lock drain cleared the vault identity (as
 `lock`'s result does), and whether the removal of `reset.unfinished` is uncertain. The CLI prints them, then the next
-step: `iron-vault init`. The command ID, tags, error codes and the status value are the next free numbers in
-[admin-protocol.md](admin-protocol.md) when the command is built.
+step: `iron-vault init`. The command ID (21), the error codes (49 and 50) and the status value (3) are the next free numbers in
+[admin-protocol.md](admin-protocol.md) after those [migration-bundle.md](migration-bundle.md) reserves (commands 19 and 20,
+codes 45 to 48).
 
 | Error | When |
 |---|---|

@@ -129,7 +129,7 @@ an error.
 | `16` | `approver list` | none | the pinned approvers, in approver order, each marked active or not ([approval-signers.md](approval-signers.md#admin-protocol)) |
 | `17` | `approver add` | the signer kind and the label ([approval-signers.md](approval-signers.md#admin-protocol)) | the new approver ID and the approver count |
 | `18` | `approver remove` | the approver ID, 16 bytes ([approval-signers.md](approval-signers.md#admin-protocol)) | the approver count after the removal |
-| `19` | `reset` | none | the [vault ID, the files removed, the foreign files left and whether the vault identity was cleared](#reset) |
+| `21` | `reset` | none | the [vault ID, the files removed, the foreign files left and whether the vault identity was cleared](#reset) |
 
 **No command accepts an external signature** ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -825,8 +825,8 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `42` | `approver-set-invalid` | `approver add`: 16 approvers are already pinned; `approver remove`: it is the last approver; nothing was changed |
 | `43` | `approver-in-use` | `approver remove`: this approver signed the active approval; the message says to approve the config with another approver first; nothing was changed |
 | `44` | `approver-kind-unavailable` | `approver add`: this install does not offer that signer kind yet; nothing was changed |
-| `45` | `nothing-to-reset` | `reset`: no vault file is in the state directory; the message says what to run next ([reset.md](reset.md#result)) |
-| `46` | `reset-failed` | `reset`: the directories could not be read, writing `reset.unfinished` failed, or a removal failed; the message names the step and the file ([reset.md](reset.md#result)) |
+| `49` | `nothing-to-reset` | `reset`: no vault file is in the state directory; the message says what to run next ([reset.md](reset.md#result)) |
+| `50` | `reset-failed` | `reset`: the directories could not be read, writing `reset.unfinished` failed, or a removal failed; the message names the step and the file ([reset.md](reset.md#result)) |
 
 The migration codes 28, 29 and 33 are raised by the migration authorization step that `export` and `recipient add`
 share ([migration-authorization.md](migration-authorization.md#error-codes)).
