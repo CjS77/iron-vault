@@ -119,4 +119,4 @@ iron-vault list
 - [CLI](../reference/cli.md#iron-vault-reset) and [errors](../reference/errors.md#reset).
 - [Audit log](../reference/audit-log.md): `vault.reset-confirmed`, `vault.reset` and `vault.reset-failed`.
 - [Reset design](../../../design/reset.md): what is removed, in what order, and why.
-- Related: [start over in development mode](start-over.md), [retire a machine](roadmap/forget-machine.md) (not yet available).
+- Related: [start over in development mode](start-over.md), [retire a machine](forget-machine.md).

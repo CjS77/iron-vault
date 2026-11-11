@@ -49,6 +49,9 @@ Done in v0:
   clear the count.
 - **Reset:** `reset` discards a vault whose every way in is lost, after a confirmation typed at a terminal, so you can `init`
   again and rebuild from your own copy of the config. It is not secure erasure.
+- **Retiring a machine:** `forget-machine <age1…>` checks that a retired machine's recipient key is gone from the vault,
+  warns when the recovery check is overdue, and prints the steps to delete the machine's sealed unlock credential and
+  clear its TPM only if nothing else uses it. It runs nothing itself. See the [recipe](book/src/cookbook/forget-machine.md).
 - **Audit logging:** typed JSON records of request and administrative events, which never log secret values. See the
   [log operations guide](book/src/reference/log-operations.md).
 

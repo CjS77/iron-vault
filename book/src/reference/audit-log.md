@@ -189,8 +189,8 @@ A `reset` writes three more, all at `WARN`:
 ### Recipients
 
 The first two are written by the inventory check that every recipient command, `recipient list` included, runs first;
-neither carries a recipient key or label. `recipient add` and `recipient remove` write the other three, which name the public
-recipient key; `recipient.added` and `recipient.removed` also carry the label, escaped.
+neither carries a recipient key or label. `recipient add` and `recipient remove` write the next three, which name the public
+recipient key, and `forget-machine` writes `recipient.forget-checked`; `recipient.added` and `recipient.removed` also carry the label, escaped.
 
 | Event | Level | When | Fields |
 |---|---|---|---|
@@ -199,6 +199,7 @@ recipient key; `recipient.added` and `recipient.removed` also carry the label, e
 | `recipient.change-recovered` | WARN | The inventory check finished a committed recipient change or removed a staged inventory | `recovery`: `completed` or `discarded` |
 | `recipient.removed` | INFO | A removal committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` (the count after the removal) |
 | `recipient.change-failed` | WARN | An add or a removal was refused because the key is already enrolled, is not enrolled or would break the independence rule, or it failed while written | `change` (`add` or `remove`), `recipient`, `failure`: `already_enrolled`, `unknown_recipient`, `set_invalid` or `write_failed`; for `write_failed` also `step`, `error_kind` and `committed` (`no`, `unknown` or `yes`) |
+| `recipient.forget-checked` | INFO when the key is not a recipient, the independence rule holds and no recovery reminder is due, else WARN | `forget-machine` checked a key | `recipient`, `forget_outcome` (`forgotten` or `still_enrolled`), `recipient_role` (`still_enrolled` only), `independence` (`holds` or `broken`) and `recovery_due` (`forgotten` only) |
 
 ### Approvers
 

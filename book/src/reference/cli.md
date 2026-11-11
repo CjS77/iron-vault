@@ -347,6 +347,17 @@ Remove an approval signer, named by the approver ID `approver list` prints. The 
 - `<APPROVER>`: The approver ID, a UUID.
   - required
 
+## `iron-vault forget-machine`
+
+```text
+iron-vault forget-machine [OPTIONS] <RECIPIENT>
+```
+
+Check that a retired machine's recipient key is gone from the vault, then print how to decommission the machine. Run it on the vault that stays, with the key `recipient list` showed for the machine. It exits 1 with `machine-not-forgotten`, naming the `recipient remove` command, while the key is still enrolled. It warns when the vault no longer meets the independence rule or the recovery check is overdue. It changes nothing and runs no TPM tool: you run every step it prints.
+
+- `<RECIPIENT>`: The retired machine's `age1...` recipient key.
+  - required
+
 ## `iron-vault completions`
 
 ```text
