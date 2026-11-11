@@ -647,6 +647,8 @@ async fn an_init_and_an_import_swapped_under_the_confirmation_decline_and_remove
     let mut stream = reset_to_prompt(&path).await;
     fs::remove_file(fixture.path("state/init.unfinished")).unwrap();
     fs::write(fixture.path("state/import.unfinished"), b"").unwrap();
+    // `init` signed its config; an import's directories hold no signature.
+    let _ = fs::remove_file(fixture.path("etc/config.toml.sig"));
     assert_eq!(service.status().await.vault, VaultStatus::ImportUnfinished);
     let before = files(&fixture);
     assert_eq!(error_code(&answer(&mut stream, &state_dir).await), ErrorCode::Declined);

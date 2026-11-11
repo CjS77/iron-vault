@@ -171,7 +171,7 @@ pub enum UnlockError {
     InitializationUnfinished,
     /// `import.unfinished` is present: an import has not finished, or is running now.
     #[error(
-        "the vault import is unfinished, or is running now; run `iron-vault import` again if it is not, or `iron-vault init` for a new vault"
+        "the vault import is unfinished, or is running now; run `iron-vault import` again if it is not, or `iron-vault init` for a new one"
     )]
     ImportUnfinished,
     /// `reset.unfinished` is present: a reset was interrupted, and only the next reset finishes it.

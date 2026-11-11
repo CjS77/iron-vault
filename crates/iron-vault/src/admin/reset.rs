@@ -101,7 +101,11 @@ fn discarding(plan: &ResetPlan) -> String {
         }
         (InitializationState::Unfinished(UnfinishedKind::Initialization), _) => "the unfinished initialization".to_owned(),
         (InitializationState::Unfinished(UnfinishedKind::Import), _) => {
-            format!("the unfinished import and its {} record files", scope.record_files)
+            let files = scope.record_files;
+            format!(
+                "the unfinished import and its {files} record file{}",
+                if files == 1 { "" } else { "s" }
+            )
         }
         (InitializationState::UnfinishedReset, _) => "the files of an interrupted reset".to_owned(),
         _ => "vault files with no Initialized vault".to_owned(),

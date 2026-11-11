@@ -262,6 +262,28 @@ async fn an_unavailable_service_and_a_vault_that_is_not_initialized_end_before_t
     let _ = stop.send(());
 }
 
+/// An import that has not reached its commit point is not an initialized vault: the check ends before any prompt and names
+/// the command that finishes or replaces the import.
+#[tokio::test]
+async fn an_unfinished_import_is_unavailable_before_the_prompt_and_names_import() {
+    let fixture = Fixture::new().await;
+    with_recovery_key(&fixture);
+    let service = fixture.ready().await;
+    let (path, stop) = serve_admin(&service);
+    lock(&service).await;
+    // The signature goes too: a config file other than `config.toml` beside the marker would read Unrecognized.
+    fs::remove_file(fixture.path("etc/config.toml.sig")).unwrap();
+    fs::write(fixture.path("state/import.unfinished"), b"").unwrap();
+
+    let unfinished = check(&path, &[]).await;
+
+    assert_eq!(error_code(&unfinished.response), ErrorCode::RecoveryCheckUnavailable);
+    assert!(message(&unfinished.response).contains("iron-vault import"), "{unfinished:?}");
+    assert!(unfinished.prompts.is_empty(), "{unfinished:?}");
+    assert_eq!(record(&fixture), None);
+    let _ = stop.send(());
+}
+
 #[tokio::test]
 async fn a_held_service_wide_lock_is_busy_and_the_check_does_not_wait() {
     let fixture = Fixture::new().await;

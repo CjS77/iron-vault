@@ -88,8 +88,8 @@ bytes are compared with the initial config (below). The checks run in this order
 | Unfinished reset | Check 0 matched: a reset passed its commit point (`reset.unfinished` written) and has not finished; only `reset` finishes it. |
 | Uninitialized | Check 3 matched: nothing of a vault or its config is there. |
 | Unfinished | Check 1 or 1b matched: an initialization or an import started and has not reached its commit point. The state records which run left it, by its marker. |
-| Initialized | Check 2 matched: a manifest and no `init.unfinished`. |
-| Unrecognized | No check matched: a foreign file or a config file that is not init's own beside `init.unfinished`, or files of a vault without its manifest, or anything else in a directory with no manifest. |
+| Initialized | Check 2 matched: a manifest and neither `init.unfinished` nor `import.unfinished`. |
+| Unrecognized | No check matched: a foreign file or a config file that is not init's own beside `init.unfinished`, a foreign or staged file, a TPM key blob or a config file other than `config.toml` beside `import.unfinished`, both markers together, or files of a vault without its manifest, or anything else in a directory with no manifest. |
 
 A **foreign file** is a file in the state directory that is not on the lists above: the lock file, `lost+found`, temp
 files, the vault's own files (`identity.age`, `recipients.age`, `recipients.age.staged`, `operational.age`,

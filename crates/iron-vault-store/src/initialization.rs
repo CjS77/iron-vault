@@ -47,9 +47,9 @@ pub enum InitializationState {
     Uninitialized,
     /// An initialization or an import started and has not reached its commit point.
     Unfinished(UnfinishedKind),
-    /// A manifest and no `init.unfinished`.
+    /// A manifest and neither `init.unfinished` nor `import.unfinished`.
     Initialized,
-    /// Files init did not write, or a vault's files without its manifest. Nothing may be written or removed.
+    /// Files init or import did not write, or a vault's files without its manifest. Nothing may be written or removed.
     Unrecognized,
     /// A reset past its commit point that has not finished: `reset.unfinished` is there. Only the next reset finishes
     /// it; every other command refuses it.
@@ -106,7 +106,7 @@ pub enum InitStateError {
     #[error("a reset was interrupted; run `iron-vault reset` again")]
     ResetUnfinished,
     /// The directories hold files init and import did not write; neither will write or remove anything there.
-    #[error("the vault directories hold files that initialization did not write, first {files:?}; move them aside")]
+    #[error("the vault directories hold files that init or import did not write, first {files:?}; move them aside")]
     Unrecognized {
         /// The first offending names, sorted state-directory names first.
         files: Vec<String>,
@@ -367,11 +367,12 @@ impl Survey {
     }
 }
 
-/// The files a discard of an unfinished initialization removes from the state directory, in order: a recovery check
-/// record and an owner-lock file, which beside the marker were left by an earlier vault and were not written after this
-/// one was initialized, then what an initialization writes except the marker. `approver_keys` are the approver key
-/// envelopes present; the name holds an approver ID generated with the keys, so it is known only from the listing.
-fn written_files(approver_keys: impl IntoIterator<Item = StateFileName>) -> Vec<StateFileName> {
+/// The files a discard of an unfinished initialization or import removes from the state directory, in order: a recovery
+/// check record and an owner-lock file, which beside the marker were left by an earlier vault and were not written after
+/// this one was initialized, then what the run writes except the marker. `variable_files` sit between `manifest.age` and
+/// `operational.age`: the approver key envelopes and, for an import, the record files. Their names hold generated IDs, so
+/// they are known only from the listing.
+fn written_files(variable_files: impl IntoIterator<Item = StateFileName>) -> Vec<StateFileName> {
     [
         StateFileName::recovery_check_record(),
         StateFileName::owner_lock(),
@@ -379,7 +380,7 @@ fn written_files(approver_keys: impl IntoIterator<Item = StateFileName>) -> Vec<
         StateFileName::manifest(),
     ]
     .into_iter()
-    .chain(approver_keys)
+    .chain(variable_files)
     .chain([
         StateFileName::passphrase_envelope(),
         StateFileName::recipient_inventory(),
@@ -406,21 +407,9 @@ fn family(listing: &[StateFileName], is_member: fn(&str) -> bool) -> Vec<StateFi
 /// The files a discard of an unfinished import removes from the state directory, in order: the leftovers of an earlier
 /// vault, then what an import writes except the marker. All of them are on the store-owned list.
 fn import_files(listing: &[StateFileName]) -> Vec<StateFileName> {
-    [
-        StateFileName::recovery_check_record(),
-        StateFileName::owner_lock(),
-        StateFileName::approval_state(),
-        StateFileName::manifest(),
-    ]
-    .into_iter()
-    .chain(family(listing, is_record_file_name))
-    .chain(family(listing, |name| StateFileName::approver_key_id(name).is_some()))
-    .chain([
-        StateFileName::passphrase_envelope(),
-        StateFileName::recipient_inventory(),
-        StateFileName::identity_envelope(),
-    ])
-    .collect()
+    let records = family(listing, is_record_file_name);
+    let approver_keys = family(listing, |name| StateFileName::approver_key_id(name).is_some());
+    written_files(records.into_iter().chain(approver_keys))
 }
 
 /// What the state-directory entry `name` means to the initialization state. A name not on the store-owned list is
@@ -459,10 +448,7 @@ fn survey(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Re
     if has(Entry::Marker) && has(Entry::ImportMarker) {
         // No run writes both markers, so neither is known to be the directory's own.
         let markers = names_where(|k| matches!(k, Entry::Marker | Entry::ImportMarker)).collect();
-        return Ok(Survey::new(
-            InitializationState::Unfinished(UnfinishedKind::Initialization),
-            markers,
-        ));
+        return Ok(Survey::new(InitializationState::Unrecognized, markers));
     }
     if has(Entry::Marker) {
         return unfinished_initialization(config, fs, &entries);
