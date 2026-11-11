@@ -367,18 +367,18 @@ says plainly that v0 has no TPM PIN.
 
 The helper finds every LUKS device under `/etc/iron-vault-host` by walking the device-mapper stack down from the
 filesystem's device (`/sys/class/block/*/slaves`, which lists partitions as well as the disks under `/sys/block`), so a
-root on LVM-on-LUKS, or LUKS on LVM, resolves to its LUKS layer. `findmnt` names only one device, so when the
-filesystem is `btrfs` or `bcachefs`, which can span several, the helper walks every member instead, each path judged
-on its own. A partition of an md or device-mapper device (`md0p1`) is walked as its parent device, since a partition has no
-slaves of its own:
+root on LVM-on-LUKS, or LUKS on LVM, resolves to its LUKS layer. A partition of an md or device-mapper device (`md0p1`)
+is walked as its parent device, since a partition has no slaves of its own. `findmnt` names only one device, so when the
+filesystem is `btrfs` or `bcachefs`, which can span several, the helper walks every member of the filesystem whose UUID
+`findmnt` reports, each path judged on its own:
 
 - btrfs: each entry of `/sys/fs/btrfs/UUID/devices/`, named for its block device;
 - bcachefs: each `/sys/fs/bcachefs/UUID/dev-N/block` link, which the kernel's bcachefs sysfs makes to the member's block
-  device. The helper has not read this layout on a real multi-device bcachefs, so it treats any member it cannot read
-  as the whole list being unreadable.
+  device. This layout is unverified on a real multi-device bcachefs, so the helper treats any member it cannot read as
+  the whole list being unreadable.
 
-UUID is the filesystem UUID that `findmnt` reports. A btrfs filesystem over a LUKS member and a plain one therefore
-warns about the plain one, as an LV over a LUKS PV and a plain PV does. It warns when any of these hold:
+A btrfs filesystem over a LUKS member and a plain one therefore warns about the plain one, as an LV over a LUKS PV and a
+plain PV does. The helper warns when any of these hold:
 
 - some path in the stack reaches a disk with no `dm-crypt` layer above it: that part of the disk is unencrypted, as when
   an LV spans a LUKS PV and a plain one, or a btrfs filesystem a LUKS member and a plain one;

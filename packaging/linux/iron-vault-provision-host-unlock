@@ -166,7 +166,8 @@ partition_parent() {
 # per layer: `luks MAPNAME BACKING`, `crypt MAPNAME` (dm-crypt with no LUKS header), `plain DEVICE` (a device with nothing
 # below it, reached with no dm-crypt layer above it on that path) or `unresolved DEVICE`. UNDER_CRYPT is 1 once the walk
 # has passed a dm-crypt layer, so each path is judged on its own: an LV over a LUKS PV and a plain PV yields a `plain`.
-# The walk uses class/block, which lists partitions as well as the /sys/block disks.
+# The walk uses class/block, which lists partitions as well as the /sys/block disks. A partition whose parent has slaves
+# (an md or device-mapper partition) is walked as the parent.
 walk_stack() {
     local sys=$1 dev=$2 depth=${3:-0} under=${4:-0}
     local node=$1/class/block/$2 uuid name slaves slave parent
