@@ -34,9 +34,11 @@ The unit, `sysusers.d` and `tmpfiles.d` files are not specific to Debian, so ano
 an Arch package or a tarball would each be a later ticket. A tarball cannot create the service account or enable the
 units by itself, so it would also need an install script.
 
-The package depends on `systemd`, which must be the init system, and on `debconf` for the
-[purge question](#purge). It recommends `logrotate`, which reads the rotation file it ships
-([log-operations.md](../book/src/reference/log-operations.md#rotation)).
+The package depends on `systemd`, which must be the init system, on `debconf` for the
+[purge question](#purge), and on the `libtss2` libraries the [TPM signing helper](#tpm-signing-helper) links, which `cargo-deb` adds to `$auto`
+from that binary (`/usr/bin/iron-vault` links none). It recommends `logrotate`, which reads the rotation file it ships
+([log-operations.md](../book/src/reference/log-operations.md#rotation)), and `tpm-udev`, for the
+[TPM signing helper](#tpm-signing-helper).
 
 ## Ownership
 
@@ -49,6 +51,9 @@ Created by column means a file in the `.deb`'s data archive, which dpkg owns and
 | `/usr/lib/systemd/system/iron-vault.service` | `root:root` | `0644` | package | not checked by the service; root-owned and unwritable by users ([§4](iron-vault-specification.md#4-installation-and-ownership)) |
 | `/usr/lib/systemd/system/iron-vault-listener@.socket` | `root:root` | `0644` | package | as above |
 | `/usr/lib/systemd/system/iron-vault-host-unlock.service` | `root:root` | `0644` | package | as above |
+| `/usr/lib/systemd/system/iron-vault-tpm-signer.socket` | `root:root` | `0644` | package | as above |
+| `/usr/lib/systemd/system/iron-vault-tpm-signer@.service` | `root:root` | `0644` | package | as above |
+| `/usr/libexec/iron-vault/iron-vault-tpm-signer` | `root:root` | `0755` | package | not checked by the service; run only by systemd as `iron-vault-tpm` |
 | `/usr/sbin/iron-vault-provision-host-unlock` | `root:root` | `0755` | package | not checked by the service; run only by root |
 | `/usr/lib/sysusers.d/iron-vault.conf` | `root:root` | `0644` | package | as above |
 | `/usr/lib/tmpfiles.d/iron-vault.conf` | `root:root` | `0644` | package | as above |
@@ -73,6 +78,7 @@ not a valid config.
 | `/etc/iron-vault` | `iron-vault:iron-vault` | `0700` | `tmpfiles.d` | `ConfigDir`: a directory owned by the service account, mode exactly `0700` |
 | `/var/lib/iron-vault` | `iron-vault:iron-vault` | `0700` | `tmpfiles.d` | `StateDir`: a directory owned by the service account, mode exactly `0700` |
 | `/run/iron-vault` | `iron-vault:iron-vault` | `0711` | `tmpfiles.d` | `RuntimeDir`: a directory owned by the service account, writable by neither group nor others |
+| `/run/iron-vault-tpm` | `root:root` | `0755` | the signer socket unit | none: the service connects to `signer.sock` in it, owned by `iron-vault` with mode `0600` |
 | `/run/iron-vault-unlock` | `root:root` | `0711` | `tmpfiles.d` | none: the service only opens the unlock handoff and the unseal-failure file in it, by name ([tpm-unlock.md](tpm-unlock.md#at-boot)) |
 | `/var/log/iron-vault` | `iron-vault:iron-vault` | `0750` | the service unit's `LogsDirectory=` | `LogDir`: a directory owned by the service account, no more open than `0750` |
 
@@ -134,7 +140,14 @@ u iron-vault - "Iron Vault credential proxy" - /usr/sbin/nologin
 ```
 
 The account gets a system uid, no login shell, and `systemd-sysusers`'s default home `/`, so no home directory is
-created.
+created. The same file creates the [TPM signing helper](#tpm-signing-helper)'s account the same way:
+
+```
+u iron-vault-tpm - "Iron Vault TPM signing helper" - /usr/sbin/nologin
+```
+
+`postinst`'s check below covers `iron-vault` only. An `iron-vault-tpm` account that was there first owns nothing
+of the package's, and the helper's socket admits only the service account, so the check would protect nothing.
 
 `systemd-sysusers` leaves an existing account or group of that name as it is. A login account called `iron-vault` that
 was there first would own the three directories below, so it could read the encrypted records and change the config
@@ -320,6 +333,34 @@ snippets for it. With no `[Install]` section as well, no install or upgrade enab
 stops it on remove only. It runs as root with no sandboxing directives, which would give it a private mount namespace
 and hide its ramfs from the service.
 
+## TPM signing helper
+
+The helper is [the adapter for TPM approval signing](tpm-approval-signer.md#the-helper-process): a separate binary, so
+`/usr/bin/iron-vault` never links `libtss2`. The package installs it as `/usr/libexec/iron-vault/iron-vault-tpm-signer`,
+built with its `tpm` feature, and two units:
+
+- **`iron-vault-tpm-signer.socket`** listens on `/run/iron-vault-tpm/signer.sock` with `Accept=yes`, `MaxConnections=1`,
+  `SocketUser=iron-vault`, `SocketGroup=root` and `SocketMode=0600`: the service account and root, and no group. The
+  connection limit is what serialises the helper's reads of the dictionary-attack counter.
+- **`iron-vault-tpm-signer@.service`** is started once per connection. It runs as `iron-vault-tpm` with `tss` as a
+  supplementary group of the process only, `DevicePolicy=closed` with `DeviceAllow=/dev/tpmrm0 rw`, `RuntimeMaxSec=30`,
+  and the hardening list of the design. `StandardInput=socket` hands the helper its connection, and
+  `StandardOutput=journal` with `StandardError=inherit` keeps its diagnostics off that connection.
+
+`iron-vault.service` is unchanged: `PrivateDevices=yes` stays and it has no `DeviceAllow=`.
+
+**`Recommends: tpm-udev` (decided).** The helper opens `/dev/tpmrm0` through the `tss` group, and the package does not
+create that group ([tpm-approval-signer.md](tpm-approval-signer.md#open-questions), question 5). Ubuntu's `tpm-udev` owns both
+the group and the rule that gives it the device (`tss:tss`, `0660`), so the package recommends it rather than depends on it: a
+machine with no TPM has no use for it, and `Recommends:` installs it by default where `apt` is not told otherwise. Without
+the rule the socket still listens, an instance cannot start, and `approver add --kind tpm` answers
+`approver-kind-unavailable`.
+
+`cargo-deb` generates snippets for `iron-vault.service` only, so the package's own scripts handle the socket in the form
+`dh_installsystemd` uses ([Lifecycle](#lifecycle)). The socket listens on a machine with no TPM as well: its absence would
+be a simpler check for the service, but the service already reads the helper's refusal, and one rule for the kind being
+offered is easier to review than a second.
+
 ## Listener socket units
 
 In a protected install every TCP listener comes from systemd socket activation: the service refuses to bind one
@@ -459,7 +500,8 @@ instance name. The package's own scripts add the rest, including everything for 
 `postinst configure` loads the purge question's debconf template by sourcing debconf's `confmodule`, refuses an
 existing `iron-vault` account or group that is not a locked system account, creates the account and the directories
 ([above](#account-and-directories)), then enables and starts `iron-vault.service`. It
-enables no listener socket unit: the administrator creates those. The service starts Locked with no vault, and
+enables no listener socket unit: the administrator creates those. It does enable and start
+`iron-vault-tpm-signer.socket`, unless the administrator disabled it earlier. The service starts Locked with no vault, and
 `status` says to run `iron-vault init`. Nothing unlocks it: the service's `Wants=` pulls in the handoff unit, which
 `ConditionPathExists=` skips until the administrator provisions a host unlock blob
 ([tpm-unlock.md](tpm-unlock.md#enrolment-and-retirement)).
@@ -497,13 +539,16 @@ The service unit, the listener instances and the handoff unit are taken out of u
   so the plaintext identity does not stay in memory once the package is gone. It has no `[Install]` section, so
   there is nothing to disable or mask.
 
-dpkg then removes the binary, the provisioning helper, the units and the `sysusers.d` and `tmpfiles.d` files. Remove
+- **The TPM signing socket** is stopped by the package's own `prerm remove`, ahead of the generated stop, and masked by
+  `postrm remove`. Instances end within their `RuntimeMaxSec`. Purge runs `deb-systemd-helper purge` and unmasks it.
+
+dpkg then removes the binary, the helpers, the units and the `sysusers.d` and `tmpfiles.d` files. Remove
 keeps:
 
 - `/etc/iron-vault`, `/var/lib/iron-vault` and `/var/log/iron-vault`;
 - `/etc/iron-vault-host` and the host unlock blob in it, which a reinstall needs to unlock the kept vault again;
 - the listener drop-ins under `/etc/systemd/system`;
-- the `iron-vault` account.
+- the `iron-vault` and `iron-vault-tpm` accounts.
 
 A later install finds the vault and its config where they were and starts Locked, or, on a machine provisioned for TPM
 unlock, unlocks it from the kept host unlock blob, as at boot. The administrator enables each
@@ -527,7 +572,7 @@ dpkg removes the conffile `/etc/logrotate.d/iron-vault`, then `postrm purge`:
    a later install needs it to unlock that vault with no one present.
 4. Purges the package's debconf entries.
 
-The `iron-vault` account stays, as Debian packages' system accounts usually do. A kept vault is owned by it, and
+The `iron-vault` and `iron-vault-tpm` accounts stay, as Debian packages' system accounts usually do. A kept vault is owned by it, and
 deleting the account could let a later account reuse its uid and gain the vault's files.
 
 #### The vault question
@@ -593,7 +638,9 @@ treats each of them as the service.
 
 ## Building and checking the package
 
-`scripts/build-deb.sh` builds the `.deb` with `cargo deb -p iron-vault` and checks it. It needs `cargo-deb`
+`scripts/build-deb.sh` builds the `.deb` with `cargo deb -p iron-vault --no-build` and checks it. It builds `iron-vault` and, with
+`--features tpm`, `iron-vault-tpm-signer` itself first, because `cargo-deb` cannot enable a feature of a second package; the
+helper needs `libtss2-dev` and `pkg-config` on the build machine. It needs `cargo-deb`
 (`cargo install cargo-deb --locked`), `dpkg-deb` and `lintian` (`sudo apt install lintian`). Without `lintian` it exits non-zero;
 `IRON_VAULT_SKIP_LINTIAN=1` is the explicit opt-out, and the script then ends with "package checks passed WITHOUT lintian". It fails when:
 - the package `Version:` is not the crate version with its first `-` turned into `~` plus the revision `-1`, or still holds a
@@ -603,6 +650,10 @@ treats each of them as the service.
 - the packaged binary's `--version` lists any feature, so a `dev-mode` package is refused;
 - a file's owner or mode differs from the [ownership table](#ownership), a path is owned by anyone but root, or
   anything is shipped under `/etc/iron-vault`, `/var/lib/iron-vault`, `/var/log/iron-vault` or `/run/iron-vault`;
+- `/usr/bin/iron-vault` links `libtss2`, or the helper does not (it was built without its `tpm` feature);
+- the signer socket unit lacks any of the settings above, or the instance unit lacks the account, the supplementary group,
+  `StandardInput=socket`, `StandardOutput=journal`, `DevicePolicy=closed`, `RuntimeMaxSec=30` or the hardening list, or has a
+  `DeviceAllow=` for anything but `/dev/tpmrm0`;
 - `iron-vault.service` lacks the `Wants=` or `After=` line for the handoff unit, has a `DeviceAllow=` line, or has lost
   `PrivateDevices=yes`; or the handoff unit has an `[Install]` section;
 - the conffiles are anything but `/etc/logrotate.d/iron-vault`, a maintainer script is missing or not executable, or

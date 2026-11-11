@@ -21,6 +21,11 @@ if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
     done
 fi
 
+# The TPM signing helper's socket stops with the service; an instance running at that moment ends within its RuntimeMaxSec.
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+    deb-systemd-invoke stop iron-vault-tpm-signer.socket >/dev/null || true
+fi
+
 #DEBHELPER#
 
 # The generated snippet above has stopped the service. Stopping the handoff unit runs its ExecStopPost= lines, which

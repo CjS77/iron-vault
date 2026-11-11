@@ -154,7 +154,7 @@ pub fn serve_real(path: &Path, binary: PathBuf, tcti: String) {
 }
 
 /// The name of the account running the tests.
-fn current_user() -> String {
+pub fn current_user() -> String {
     let uid = rustix::process::getuid().as_raw().to_string();
     std::fs::read_to_string("/etc/passwd")
         .unwrap()

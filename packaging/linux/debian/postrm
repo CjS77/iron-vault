@@ -44,4 +44,15 @@ fi
 
 #DEBHELPER#
 
+# The TPM signing helper's socket, as dh_installsystemd handles a unit: remove masks it, so a removed package cannot be started by
+# name, and purge forgets its state and unmasks it. Neither touches the iron-vault-tpm account, which stays as iron-vault does.
+tpm_socket=iron-vault-tpm-signer.socket
+if [ "$1" = remove ] && [ -x /usr/bin/deb-systemd-helper ]; then
+    deb-systemd-helper mask "$tpm_socket" >/dev/null || true
+fi
+if [ "$1" = purge ] && [ -x /usr/bin/deb-systemd-helper ]; then
+    deb-systemd-helper purge "$tpm_socket" >/dev/null || true
+    deb-systemd-helper unmask "$tpm_socket" >/dev/null || true
+fi
+
 exit 0

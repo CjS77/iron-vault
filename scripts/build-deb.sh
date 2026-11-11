@@ -15,10 +15,13 @@
 #    (`0.2.0-alpha` becomes `0.2.0~alpha-1`), so a pre-release sorts below the final release; no `-` may precede the revision;
 #  - the changelog's newest entry is that package version;
 #  - the packaged binary's `--version` lists no feature, so neither `dev-mode` nor `container` is packaged;
+#  - /usr/bin/iron-vault does not link libtss2: only the TPM signing helper does (design/tpm-approval-signer.md);
 #  - every file's owner and mode match the design's ownership table, and nothing is owned by a non-root account;
 #  - iron-vault.service wants and follows the host unlock handoff unit, keeps PrivateDevices=yes and has no DeviceAllow=;
 #    the handoff unit has no [Install] section, and postinst never names it;
 #  - nothing is shipped under the service's own directories, and the only conffile is the logrotate rule;
+#  - the TPM signer's socket unit and instance unit carry the settings that confine the helper to the service account and
+#    /dev/tpmrm0 (design/tpm-approval-signer.md, "The helper process");
 #  - the maintainer scripts are present and executable;
 #  - lintian reports no error. A missing lintian fails the script; IRON_VAULT_SKIP_LINTIAN=1 opts out explicitly.
 # A package that passes every check, lintian included, is copied to target/debian/<package>_<version>_<arch>.deb.
@@ -40,8 +43,16 @@ deb_version="${crate_version/-/\~}-1"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-echo "== cargo deb -p iron-vault $*"
-cargo deb -p iron-vault --locked --deb-version "$deb_version" -o "$work/pkg.deb" "$@"
+# cargo-deb cannot build the helper: it links libtss2-esys, so it builds only with its `tpm` feature, which cargo-deb has no way
+# to enable for a second package. Both binaries are built here and cargo-deb packages them as they are. The extra arguments
+# select iron-vault's features, so a `--features dev-mode` package is still built, and still refused below.
+echo "== cargo build -p iron-vault $*"
+cargo build --release --locked -p iron-vault "$@"
+echo "== cargo build -p iron-vault-tpm-signer --features tpm"
+cargo build --release --locked -p iron-vault-tpm-signer --features tpm
+
+echo "== cargo deb -p iron-vault --no-build"
+cargo deb -p iron-vault --no-build --locked --deb-version "$deb_version" -o "$work/pkg.deb"
 deb="$work/pkg.deb"
 
 echo "== package version"
@@ -70,6 +81,13 @@ case "$version" in
     *) fail "the packaged binary lists features; a package must be built with default features only" ;;
 esac
 
+echo "== no libtss2 in the service binary"
+# The helper is its own binary so the service, which holds the vault, never links the TPM library.
+if ldd "$work/iron-vault" | grep -q libtss2; then fail "/usr/bin/iron-vault links libtss2"; fi
+dpkg-deb --fsys-tarfile "$deb" | tar -xO ./usr/libexec/iron-vault/iron-vault-tpm-signer >"$work/signer"
+ldd "$work/signer" | grep -q libtss2 || fail "the TPM signing helper does not link libtss2; was it built without its tpm feature?"
+echo ok
+
 echo "== file owners and modes"
 contents=$(dpkg-deb -c "$deb")
 expected=$(cat <<'TABLE'
@@ -77,6 +95,9 @@ expected=$(cat <<'TABLE'
 ./usr/lib/systemd/system/iron-vault.service -rw-r--r--
 ./usr/lib/systemd/system/iron-vault-listener@.socket -rw-r--r--
 ./usr/lib/systemd/system/iron-vault-host-unlock.service -rw-r--r--
+./usr/lib/systemd/system/iron-vault-tpm-signer.socket -rw-r--r--
+./usr/lib/systemd/system/iron-vault-tpm-signer@.service -rw-r--r--
+./usr/libexec/iron-vault/iron-vault-tpm-signer -rwxr-xr-x
 ./usr/sbin/iron-vault-provision-host-unlock -rwxr-xr-x
 ./usr/lib/sysusers.d/iron-vault.conf -rw-r--r--
 ./usr/lib/tmpfiles.d/iron-vault.conf -rw-r--r--
@@ -118,6 +139,22 @@ grep -qx 'After=iron-vault-host-unlock.service' <<<"$service_unit" || fail "iron
 grep -qx 'PrivateDevices=yes' <<<"$service_unit" || fail "iron-vault.service has lost PrivateDevices=yes"
 ! grep -q '^DeviceAllow=' <<<"$service_unit" || fail "iron-vault.service has a DeviceAllow= line"
 ! grep -qx '\[Install\]' <<<"$handoff_unit" || fail "iron-vault-host-unlock.service has an [Install] section"
+echo ok
+
+echo "== TPM signing helper units"
+# Each line is one setting of the design; a unit that loses one widens who can reach the TPM or the helper.
+socket_unit=$(unit_text iron-vault-tpm-signer.socket)
+signer_unit=$(unit_text iron-vault-tpm-signer@.service)
+for line in ListenStream=/run/iron-vault-tpm/signer.sock Accept=yes MaxConnections=1 SocketUser=iron-vault SocketGroup=root SocketMode=0600; do
+    grep -qx "$line" <<<"$socket_unit" || fail "iron-vault-tpm-signer.socket has no $line"
+done
+for line in User=iron-vault-tpm SupplementaryGroups=tss StandardInput=socket StandardOutput=journal DevicePolicy=closed \
+    'DeviceAllow=/dev/tpmrm0 rw' RuntimeMaxSec=30 ProtectSystem=strict ProtectHome=yes PrivateTmp=yes PrivateNetwork=yes \
+    NoNewPrivileges=yes CapabilityBoundingSet= RestrictAddressFamilies=AF_UNIX SystemCallFilter=@system-service \
+    MemoryDenyWriteExecute=yes LimitCORE=0 UMask=0077; do
+    grep -qx "$line" <<<"$signer_unit" || fail "iron-vault-tpm-signer@.service has no $line"
+done
+[ "$(grep -c '^DeviceAllow=' <<<"$signer_unit")" = 1 ] || fail "iron-vault-tpm-signer@.service allows more than /dev/tpmrm0"
 echo ok
 
 echo "== conffiles and maintainer scripts"
