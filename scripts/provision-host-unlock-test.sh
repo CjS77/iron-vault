@@ -42,12 +42,17 @@ done
 # shellcheck disable=SC2086
 exec /usr/bin/install $args
 STUB
-# findmnt names the root device; cryptsetup luksDump, luksmeta show -d and lsinitramfs print the file named after their
+# findmnt prints the file named after the field asked for with -o: $work/rootdev for SOURCE, fstype for FSTYPE (ext4 when
+# there is none) and fsuuid for UUID. cryptsetup luksDump, luksmeta show -d and lsinitramfs print the file named after their
 # device or image, and fail when there is none; logger appends what it was given, priority included, to the fake journal,
 # and fails when the file $work/loggerfail exists.
 cat >"$stubs/findmnt" <<STUB
 #!/bin/sh
-cat "$work/rootdev"
+case "\$*" in
+    *FSTYPE*) cat "$work/fstype" 2>/dev/null || echo ext4 ;;
+    *UUID*) cat "$work/fsuuid" ;;
+    *) cat "$work/rootdev" ;;
+esac
 STUB
 cat >"$stubs/cryptsetup" <<STUB
 #!/bin/sh
@@ -128,7 +133,7 @@ check() { # name want-exit got-exit output want-sealed(yes|no) [message-fragment
 # A fake sysfs, crypttab, /boot and luksDump output. sys_reset starts an empty one; leaf and dm add block devices, with
 # dm's trailing arguments the device's slaves.
 sys_reset() {
-    rm -rf "${work:?}/sys" "${work:?}/luksdump" "${work:?}/luksmeta" "${work:?}/initramfs" "${work:?}/boot"
+    rm -rf "${work:?}/fstype" "${work:?}/fsuuid" "${work:?}/sys" "${work:?}/luksdump" "${work:?}/luksmeta" "${work:?}/initramfs" "${work:?}/boot"
     mkdir -p "$work/sys/class/block" "$work/luksdump" "$work/luksmeta" "$work/initramfs" "$work/boot"
     : >"$work/crypttab"
 }
@@ -179,6 +184,21 @@ lvm_over_two() {
     leaf sdb1
     dm dm-1 LVM-xyz vg-root dm-0 sdb1
 }
+
+# A multi-device filesystem: findmnt names only the encrypted one (dm-1, over dm-0) and the fake sysfs lists the members. btrfs lists them in
+# /sys/fs/btrfs/UUID/devices; bcachefs has a dev-N/block symlink for each, named as the kernel does.
+fs_uuid=11111111-2222-3333-4444-555555555555
+multi_fs() { # fstype
+    lvm_on_luks
+    echo "$1" >"$work/fstype"
+    echo "$fs_uuid" >"$work/fsuuid"
+}
+btrfs_member() { mkdir -p "$work/sys/fs/btrfs/$fs_uuid/devices" && ln -s "../../../../devices/block/$1" "$work/sys/fs/btrfs/$fs_uuid/devices/$1"; }
+bcachefs_member() { # N device
+    mkdir -p "$work/sys/fs/bcachefs/$fs_uuid/dev-$1" && ln -s "../../../../devices/block/$2" "$work/sys/fs/bcachefs/$fs_uuid/dev-$1/block"
+}
+# Two members: dm-0 over LUKS on nvme0n1p3 (from lvm_on_luks), and dm-2 over LUKS on nvme0n1p4, or the plain sdb1.
+second_luks() { leaf nvme0n1p4; dm dm-2 CRYPT-LUKS2-def luks-def nvme0n1p4; luks_dump nvme0n1p4 ""; echo "luks-def UUID=def none luks" >>"$work/crypttab"; }
 
 # portable NAME COUNT FRAGMENT...: --portable on the current fixture prints COUNT warnings, each fragment in one of them.
 # With a warning it stops until accepted, and continues with --accept-no-second-secret.
@@ -280,6 +300,30 @@ lvm_on_luks; rm "$work/boot/initrd.img-6.8.0-1"; portable "no initramfs image" 1
 lvm_on_luks; rm "$work/initramfs/initrd.img-6.8.0-1"; portable "an initramfs lsinitramfs cannot list" 1 "could not list"
 lvm_on_luks; : >"$work/initramfs/initrd.img-6.8.0-1"; portable "an empty initramfs listing" 1 "listed nothing"
 lvm_on_luks; dm dm-0 CRYPT-PLAIN-abc luks-abc nvme0n1p3; portable "plain dm-crypt" 1 "plain dm-crypt"
+
+# A btrfs or bcachefs filesystem is walked member by member, whatever findmnt names.
+multi_fs btrfs; second_luks; btrfs_member dm-0; btrfs_member dm-2
+portable "btrfs over two LUKS members" 0
+multi_fs btrfs; leaf sdb1; btrfs_member dm-0; btrfs_member sdb1
+portable "btrfs over a LUKS member and a plain one" 1 "sdb1, under .* not encrypted" "every device"
+multi_fs btrfs; leaf sdb1; btrfs_member sdb1; btrfs_member dm-0
+portable "btrfs whose plain member is first" 1 "sdb1, under .* not encrypted"
+multi_fs btrfs; portable "btrfs with no devices directory" 1 "could not list the devices of the btrfs filesystem" "mount /sys"
+multi_fs btrfs; mkdir -p "$work/sys/fs/btrfs/$fs_uuid/devices"; portable "btrfs with an empty devices directory" 1 "could not list"
+multi_fs btrfs; : >"$work/fsuuid"; btrfs_member dm-0; portable "btrfs with no filesystem UUID" 1 "could not list"
+multi_fs btrfs; echo "../../x" >"$work/fsuuid"; btrfs_member dm-0; portable "btrfs with a UUID that is not hex" 1 "could not list"
+multi_fs btrfs; btrfs_member dm-9; portable "a btrfs member the device stack does not know" 1 "could not resolve"
+multi_fs bcachefs; second_luks; bcachefs_member 0 dm-0; bcachefs_member 1 dm-2
+portable "bcachefs over two LUKS members" 0
+multi_fs bcachefs; leaf sdb1; bcachefs_member 0 dm-0; bcachefs_member 1 sdb1
+portable "bcachefs over a LUKS member and a plain one" 1 "sdb1, under .* not encrypted"
+multi_fs bcachefs; portable "bcachefs with no member list" 1 "could not list the devices of the bcachefs filesystem"
+multi_fs bcachefs; mkdir -p "$work/sys/fs/bcachefs/$fs_uuid/dev-0"; portable "bcachefs with an unreadable member" 1 "could not list the devices of the bcachefs"
+multi_fs bcachefs; second_luks; bcachefs_member 0 dm-0; mkdir -p "$work/sys/fs/bcachefs/$fs_uuid/dev-1"
+portable "bcachefs with one unreadable member among readable ones" 1 "could not list"
+multi_fs bcachefs; mkdir -p "$work/sys/fs/bcachefs/$fs_uuid"; portable "bcachefs with no dev-N entries" 1 "could not list"
+multi_fs ext4; second_luks; leaf sdb1; btrfs_member sdb1
+portable "other filesystems are walked from the findmnt device only" 0
 
 # With a warning the answer comes from a terminal, never a pipe.
 unencrypted

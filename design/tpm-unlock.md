@@ -367,10 +367,20 @@ says plainly that v0 has no TPM PIN.
 
 The helper finds every LUKS device under `/etc/iron-vault-host` by walking the device-mapper stack down from the
 filesystem's device (`/sys/class/block/*/slaves`, which lists partitions as well as the disks under `/sys/block`), so a
-root on LVM-on-LUKS, or LUKS on LVM, resolves to its LUKS layer. It warns when any of these hold:
+root on LVM-on-LUKS, or LUKS on LVM, resolves to its LUKS layer. `findmnt` names only one device, so when the
+filesystem is `btrfs` or `bcachefs`, which can span several, the helper walks every member instead, each path judged
+on its own:
+
+- btrfs: each entry of `/sys/fs/btrfs/UUID/devices/`, named for its block device;
+- bcachefs: each `/sys/fs/bcachefs/UUID/dev-N/block` link, which the kernel's bcachefs sysfs makes to the member's block
+  device. The helper has not read this layout on a real multi-device bcachefs, so it treats any member it cannot read
+  as the whole list being unreadable.
+
+UUID is the filesystem UUID that `findmnt` reports. A btrfs filesystem over a LUKS member and a plain one therefore
+warns about the plain one, as an LV over a LUKS PV and a plain PV does. It warns when any of these hold:
 
 - some path in the stack reaches a disk with no `dm-crypt` layer above it: that part of the disk is unencrypted, as when
-  an LV spans a LUKS PV and a plain one;
+  an LV spans a LUKS PV and a plain one, or a btrfs filesystem a LUKS member and a plain one;
 - a `systemd-tpm2` token in `cryptsetup luksDump` does not need a PIN (`tpm2-pin` false);
 - a `clevis` token is present, TPM or Tang: neither asks for anything at boot. A LUKS1 header has no tokens, so there
   the helper runs `luksmeta show -d DEVICE` and warns on clevis's UUID, `cb6e8904-81ff-40da-a84a-07ab9ab5715e`;
@@ -387,8 +397,9 @@ with no entry of its mapping name in `/etc/crypttab`. A `systemd-tpm2` token cou
 warns.
 
 **A check that cannot run warns; it never passes.** A missing `cryptsetup`, `luksmeta` (on a LUKS1 volume) or
-`lsinitramfs`, a device-mapper stack it cannot resolve, a failed `luksDump` or `luksmeta`, an unreadable crypttab, or an
-initramfs listing that is empty each give a warning naming what could not be checked and how to fix that.
+`lsinitramfs`, a device-mapper stack it cannot resolve, a btrfs or bcachefs member list that is missing, empty or
+unreadable, a failed `luksDump` or `luksmeta`, an unreadable crypttab, or an initramfs listing that is empty each give a
+warning naming what could not be checked and how to fix that.
 
 Each warning says that anyone who steals the machine can boot it and start the vault, and names the fix: encrypt the
 disk, remove the key file, or re-enrol the slot it names with `systemd-cryptenroll --tpm2-with-pin=yes`, which

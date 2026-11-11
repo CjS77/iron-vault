@@ -94,14 +94,66 @@ add_warning() { WARNINGS+=("$*"); }
 # Every check appends to WARNINGS and takes its input as arguments, so the stub test feeds it text and a fake sysfs. A
 # check that cannot run adds a warning; nothing here ever passes by default.
 
-# Prints the kernel name (dm-0, nvme0n1p3) of the block device that holds HOST_DIR, or its nearest existing parent.
-host_block_device() {
-    local dir=$HOST_DIR src
+# host_mount_field FIELD: findmnt's FIELD (SOURCE, FSTYPE, UUID) for HOST_DIR, or its nearest existing parent.
+host_mount_field() {
+    local dir=$HOST_DIR
     [ -d "$dir" ] || dir=$(dirname "$dir")
-    src=$(findmnt -n -o SOURCE -T "$dir" 2>/dev/null) || return 1
+    findmnt -n -o "$1" -T "$dir" 2>/dev/null
+}
+
+# Prints the kernel name (dm-0, nvme0n1p3) of the block device that holds HOST_DIR, or its nearest existing parent.
+# findmnt names only one device, so a filesystem that can span several is walked by host_stack_records instead.
+host_block_device() {
+    local src
+    src=$(host_mount_field SOURCE) || return 1
     src=${src%%\[*}
     case $src in /dev/*) ;; *) return 1 ;; esac
     basename "$(readlink -f "$src" 2>/dev/null || echo "$src")"
+}
+
+# fs_members SYSROOT FSTYPE UUID: prints the kernel name of each block device of a btrfs or bcachefs filesystem, one per line
+# and in the namespace of class/block. It fails when the list cannot be read or is empty. UUID comes from findmnt, so it is
+# checked before it is put in a path.
+#   btrfs:    the entries of /sys/fs/btrfs/UUID/devices/, each named for its device (dm-0, sdb1).
+#   bcachefs: /sys/fs/bcachefs/UUID/dev-N/block, a symlink the kernel makes to each member's block device; its target's
+#             last component is the name. This is from the kernel's bcachefs sysfs code and is unchecked on a real
+#             multi-device filesystem, so any member whose link cannot be read fails the whole list: a guess is a false pass.
+fs_members() {
+    local sys=$1 fs=$2 uuid=$3 dir entry target
+    case $uuid in '' | *[!0-9a-fA-F-]*) return 1 ;; esac
+    case $fs in
+        btrfs) ls -1 "$sys/fs/btrfs/$uuid/devices" 2>/dev/null ;;
+        bcachefs)
+            dir=$sys/fs/bcachefs/$uuid
+            [ -d "$dir" ] || return 1
+            for entry in "$dir"/dev-*; do
+                [ -d "$entry" ] || return 1
+                target=$(readlink "$entry/block" 2>/dev/null) && [ -n "$target" ] || return 1
+                basename "$target"
+            done ;;
+        *) return 1 ;;
+    esac
+}
+
+# walk_filesystem SYSROOT FSTYPE UUID: walk_stack from every member of a multi-device filesystem, each judged on its own.
+# When the members cannot be listed it prints `members FSTYPE`, never a walk of the one device findmnt knows.
+walk_filesystem() {
+    local members member
+    if ! members=$(fs_members "$1" "$2" "$3") || [ -z "$members" ]; then printf 'members\t%s\n' "$2"; return 0; fi
+    while read -r member; do walk_stack "$1" "$member"; done <<<"$members"
+}
+
+# host_stack_records: the walk_stack records for everything that holds HOST_DIR.
+host_stack_records() {
+    local fstype uuid dev
+    fstype=$(host_mount_field FSTYPE) || fstype=
+    case $fstype in
+        btrfs | bcachefs)
+            uuid=$(host_mount_field UUID) || uuid=
+            walk_filesystem "$SYS_ROOT" "$fstype" "$uuid" ;;
+        *)
+            if dev=$(host_block_device); then walk_stack "$SYS_ROOT" "$dev"; else printf 'unresolved\t%s\n' "$HOST_DIR"; fi ;;
+    esac
 }
 
 # walk_stack SYSROOT DEVICE [DEPTH [UNDER_CRYPT]]: walks device-mapper's slaves downwards and prints a tab-separated record
@@ -128,7 +180,7 @@ walk_stack() {
 }
 
 # stack_warnings RECORDS: warns for an unresolved layer, a dm-crypt layer with no LUKS header to read, or any path that
-# reaches a device with no dm-crypt layer above it.
+# reaches a device with no dm-crypt layer above it, or a multi-device filesystem whose members could not be listed.
 stack_warnings() {
     local kind rest
     while IFS=$'\t' read -r kind rest; do
@@ -139,6 +191,10 @@ stack_warnings() {
             plain)
                 add_warning "$rest, under $HOST_DIR, has no dm-crypt layer above it: that part of the disk is not encrypted. $RISK" \
                     "Fix: encrypt the disk (every device the filesystem uses), then run this again." ;;
+            members)
+                add_warning "could not list the devices of the $rest filesystem under $HOST_DIR, so its encryption was not checked." \
+                    "$RISK Fix: mount /sys so the filesystem's member list is readable and run this again; if it stays unreadable," \
+                    "check by hand that every device of the filesystem is encrypted before accepting this warning." ;;
             unresolved)
                 add_warning "could not resolve the device stack under $HOST_DIR (at $rest), so its encryption was not checked." \
                     "$RISK Fix: encrypt the disk with LUKS, then run this again." ;;
@@ -276,10 +332,10 @@ check_initramfs() {
 
 # check_portable: fills WARNINGS; empty means every check ran and passed.
 check_portable() {
-    local records dev kind name backing text names=()
+    local records kind name backing text names=()
     WARNINGS=()
     PINLESS_TPM=0
-    if dev=$(host_block_device); then records=$(walk_stack "$SYS_ROOT" "$dev"); else records=$(printf 'unresolved\t%s\n' "$HOST_DIR"); fi
+    records=$(host_stack_records)
     stack_warnings "$records"
     while IFS=$'\t' read -r kind name backing; do
         [ "$kind" = luks ] || continue

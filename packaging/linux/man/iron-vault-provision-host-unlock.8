@@ -41,6 +41,7 @@ At a terminal the helper still asks for \fByes\fR.
 For a laptop or other portable machine, which needs a full\-disk\-encryption pre\-boot secret as well: a LUKS
 passphrase typed at boot, or a LUKS TPM key slot that needs a PIN.
 The helper checks once, now, how the disk holding \fI/etc/iron\-vault\-host\fR is unlocked.
+On a btrfs or bcachefs filesystem it checks every device of the filesystem, not only the one \fBfindmnt\fR names.
 It warns when any part of the disk is not encrypted, when a \fBsystemd\-tpm2\fR token needs no PIN, when a \fBclevis\fR
 token or LUKS1 \fBluksmeta\fR binding exists, when a token is of a type it does not recognise,
 when \fI/etc/crypttab\fR names a key file for the device or has \fBtpm2\-device=\fR beside a PIN\-less token, and when
