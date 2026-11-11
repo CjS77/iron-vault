@@ -47,12 +47,14 @@ Done in v0:
 - **Vault passphrase attempt limit:** after 5 wrong vault passphrases, `unlock` and migration authorization share one
   cooldown, starting at 30 s and doubling to 15 min. A limited owner is refused before any prompt, and `lock` does not
   clear the count.
+- **Reset:** `reset` discards a vault whose every way in is lost, after a confirmation typed at a terminal, so you can `init`
+  again and rebuild from your own copy of the config. It is not secure erasure.
 - **Audit logging:** typed JSON records of request and administrative events, which never log secret values. See the
   [log operations guide](book/src/reference/log-operations.md).
 
 Still to come in v0:
 
-- migration and reset;
+- migration;
 - TPM unlock and TPM approval signing;
 - the v0 release acceptance suite.
 

@@ -161,6 +161,14 @@ Each of these also has `remediation`.
 | `vault.initialized` | INFO | `init`'s last step is durable | `vault_id`, `recipients` (the enrolled roles' names, such as `operational,recovery`) |
 | `vault.init-failed` | WARN | An `init` step failed | `step`, `error_kind` |
 
+A `reset` writes three more, all at `WARN`:
+
+| Event | Level | When | Fields |
+|---|---|---|---|
+| `vault.reset-confirmed` | WARN | You confirmed; written before the reset marker | `vault_id` (an Initialized vault only), `verified`, `initialization`, `from_state`, `resumes` |
+| `vault.reset` | WARN | The vault is discarded | `vault_id`, `files`, `foreign` (escaped names), `finish_uncertain` |
+| `vault.reset-failed` | WARN | Writing the marker or a removal failed | `step` (`begin`, `remove` or `finish`), `file`, `error_kind`, `removed` |
+
 `init` also writes `config.version-reserved` and `config.approval-completed` for version 1.
 
 ### Routes and responses

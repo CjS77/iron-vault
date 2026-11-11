@@ -163,7 +163,8 @@ In Unfinished reset:
   and only a confirmed reset removes such a vault; `init`'s and `import`'s discards are for vaults that never opened.
 - `recovery check` ends with `recovery-check-unavailable`, naming the state.
 - `status` reports, in tag 12 (initialization), a new value meaning "reset unfinished (run iron-vault reset again)";
-  its number is assigned when K-317 is built.
+  the value is 3 (command 19, error codes 45 `nothing-to-reset` and 46 `reset-failed`;
+  see [admin-protocol.md](admin-protocol.md#reset)).
 - **Startup does not finish it.** The service starts Locked, as always, and waits for an admin principal to run
   `reset` again ([decision 4](#owner-decisions)). A reset finished at startup would have no principal to record,
   and a service that deletes files on its own at boot is one wrong classification away from destroying a vault.
@@ -206,15 +207,18 @@ which carries no arguments, in order:
    directories under reset. Then, from Ready or Unavailable, it fires `ServiceEvent::Lock`: the request gate closes,
    the serving snapshot is withdrawn (cancelling in-flight requests), the open vault, the approval state and the
    context's copy of the vault identity are dropped, and the [migration challenge](glossary.md) is retired, exactly as
-   `lock`'s withdrawal does. From Locked there is nothing to withdraw.
+   `lock`'s withdrawal does. From Locked there is nothing to withdraw. The service then releases the context's mutex,
+   so `status` answers during the discard, and keeps the service-wide lock. The withdrawal is `lock`'s but for the
+   [owner-lock file](#interactions): the write of `locked-by-owner` belongs to K-338, and until it lands reset does
+   not write it (it removes the file in step 6 either way).
 5. **Begin.** The service records `vault.reset-confirmed`, then writes `reset.unfinished` with `durable_replace`.
    That write is the commit point. A failed write ends with `reset-failed`, naming the step `begin`; a failed log
    write stops the service, as every failed audit write does. Either way the service is Locked and no file has been
    removed. A write that fails before its rename leaves the directories as they were. One whose rename lands but whose
    state directory fsync fails leaves `reset.unfinished` visible over the intact vault, which then reads Unfinished
    reset, refused by every command but `reset`, until the next `reset` finishes it; this fails closed.
-6. **Discard.** It releases the context's mutex, so `status` can answer, and keeps the service-wide lock. It runs the
-   [removal order](#removal-order) and ends with `reset-failed`, naming the step and file, on the first failure.
+6. **Discard.** With the mutex already released and the service-wide lock still held, it runs the
+   [removal order](#removal-order), in one blocking call that also does the step 5 write, and ends with `reset-failed`, naming the step and file, on the first failure.
 7. **Finish.** It removes `reset.unfinished` with `durable_remove`. If the unlink lands but the state directory's
    fsync fails, the run still succeeds, with a warning that `reset.unfinished` may come back after a power loss. It can
    only come back over a directory holding no vault file: `init`'s and `import`'s first write is their own unfinished

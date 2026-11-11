@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-reset 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-reset \- Discard the vault and the config, so `init` can make a new vault: the way out when no passphrase, recovery key or approver works. It asks for no owner factor, only a confirmation typed at a terminal, which is the vault ID, or the state directory\*(Aqs path when no vault is Initialized. It refuses a pipe, a file or a missing `/dev/tty` with exit code 3 before it connects. The service locks first, then removes the store\*(Aqs files and the config, keeps any foreign file, and ends Locked. Nothing can be recovered afterwards: keep your own copy of the config
+.SH SYNOPSIS
+\fBiron\-vault reset\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Discard the vault and the config, so `init` can make a new vault: the way out when no passphrase, recovery key or approver works. It asks for no owner factor, only a confirmation typed at a terminal, which is the vault ID, or the state directory\*(Aqs path when no vault is Initialized. It refuses a pipe, a file or a missing `/dev/tty` with exit code 3 before it connects. The service locks first, then removes the store\*(Aqs files and the config, keeps any foreign file, and ends Locked. Nothing can be recovered afterwards: keep your own copy of the config
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

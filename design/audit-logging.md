@@ -226,7 +226,7 @@ These are the fields more than one event uses:
 | `committed_version` | number | The committed approval version, left out when nothing is committed |
 | `config_digest` | string | A config digest, as `blake2b:` and 64 lowercase hex digits |
 | `file` | string | A state or config file name, never a path |
-| `step` | string | A fixed step label, such as an approval step, an init step, or an approver change step (`read_back`, `key_file`, `key_check`, `approval_state`) |
+| `step` | string | A fixed step label, such as an approval step, an init step, a reset step (`begin`, `remove`, `finish`), or an approver change step (`read_back`, `key_file`, `key_check`, `approval_state`) |
 | `refusal` | string | Why an admin connection, request, command, migration authorization or host unlock was refused: a fixed label |
 | `unavailable_reason` | string | An unavailable reason: `locked`, `policy_invalid`, `checking` or `recovery_needed` |
 | `detail` | string | A check failure's detail: fixed phrases with versions and configured names only |
@@ -707,6 +707,16 @@ Each corruption event also carries `remediation`, a fixed phrase the service hol
 Init's version 1 also records `config.version-reserved` and `config.approval-completed`, so it is audited like any
 other approval.
 
+**Reset** ([reset.md](reset.md#logging) gives when each fires):
+
+| Event | Level | When | Fields |
+|---|---|---|---|
+| `vault.reset-confirmed` | WARN | the owner confirmed, before `reset.unfinished` is written | `vault_id` (an Initialized vault only), `verified`, `initialization` (`initialized`, `unfinished`, `unfinished_reset` or `unrecognized`), `from_state`, `resumes` |
+| `vault.reset` | WARN | the vault is discarded and `reset.unfinished` is removed | `vault_id`, `files`, `foreign` (escaped names, in a [list](#field-rules)), `finish_uncertain` |
+| `vault.reset-failed` | WARN | writing `reset.unfinished` or a removal failed | `step` (`begin`, `remove` or `finish`), `file`, `error_kind`, `removed` |
+
+The lock from Ready or Unavailable raises the existing `service.lock-transition`.
+
 **Routes and responses:**
 
 | Event | Level | When | Fields |
@@ -782,6 +792,10 @@ The fields that only one event uses, or that only audit events use:
 | `len` | number | A secret's length in bytes |
 | `damage` | string | A record damage or shared-state damage label |
 | `files` | string | File names, in a [list](#field-rules) |
+| `foreign` | string | Foreign file names, escaped, in a [list](#field-rules) |
+| `initialization` | string | The initialization state reset read: `initialized`, `unfinished`, `unfinished_reset` or `unrecognized` |
+| `verified`, `resumes`, `finish_uncertain` | boolean | Whether a reset's vault ID came from an open vault; whether it finishes an interrupted reset; whether the removal of `reset.unfinished` may not survive a power loss |
+| `removed` | string | The files a failed reset removed before it stopped, in a [list](#field-rules) |
 | `vault_id` | string | The vault ID, a hyphenated lowercase UUID |
 | `config_field` | string | The config key a fact is about, such as `ca_file` |
 | `matches` | number | Scrub pattern matches in one response |

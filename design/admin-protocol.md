@@ -129,6 +129,7 @@ an error.
 | `16` | `approver list` | none | the pinned approvers, in approver order, each marked active or not ([approval-signers.md](approval-signers.md#admin-protocol)) |
 | `17` | `approver add` | the signer kind and the label ([approval-signers.md](approval-signers.md#admin-protocol)) | the new approver ID and the approver count |
 | `18` | `approver remove` | the approver ID, 16 bytes ([approval-signers.md](approval-signers.md#admin-protocol)) | the approver count after the removal |
+| `19` | `reset` | none | the [vault ID, the files removed, the foreign files left and whether the vault identity was cleared](#reset) |
 
 **No command accepts an external signature** ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -478,6 +479,52 @@ Errors specific to `init`:
 | `declined` | the owner did not answer the recovery key confirmation with `yes`; the message says the recovery key shown opens nothing and is to be discarded |
 | `init-failed` | the host unlock flag was set and the service has no host unlock identity to enrol: its profile is Development, the handoff is absent, or it was refused (untrusted path, too long, not an `age` secret key, unreadable). Raised before any prompt, so the message says nothing was written. Otherwise a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: a start-over means the key is dead, and `already-initialized` with a vault that is Initialized means a vault stands, which the owner confirms with `iron-vault recovery check` before relying on the key, because a concurrent init may have finished first. A failure of the discard of an unfinished initialization names `discard` as its step |
 
+#### reset
+
+Discards the vault and the config so `init` can make a new vault (spec
+[§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns),
+[§16](iron-vault-specification.md#16-administration-recovery-and-migration)). The design, including the confirmation, the
+removal order and what a crash leaves, is [reset.md](reset.md). It takes no arguments and asks for no owner factor: an
+admin principal and a confirmation typed at a terminal are the whole gate. It is allowed while the service is Locked,
+Ready or Unavailable; in Starting, Checking or Stopped the exchange ends with `wrong-state` before any prompt. It ends
+with the service Locked.
+
+The exchange, after the request ([reset.md](reset.md#the-exchange)):
+
+1. The service checks its state and reads the [initialization state](vault-initialization.md#initialization-state)
+   without the vault identity. No vault file there ends the exchange with `nothing-to-reset`.
+2. **Summary.** One or more notices: what will be discarded, the service state, the credentials or record files that go
+   with it, the config files, each foreign file that stays (escaped), and that nothing can be recovered afterwards, so
+   the owner keeps their own copy of the config and of the `list` output.
+3. **Confirmation.** A prompt, not secret: `Type <text> to discard this vault`, where the text is the vault ID of an
+   Initialized vault (compared ASCII case-insensitively), else the state directory's absolute path, with `to discard
+   these files` (compared byte for byte). Any other answer ends with `declined`. Nothing is written before this point.
+4. After the confirmation no prompt remains, so a cancel or a lost connection does not stop the rest, which runs in a
+   task the service owns. The service waits for the service-wide lock, checks the service state and the initialization
+   state again (`nothing-to-reset`, or `declined` naming the change), and withdraws the vault as `lock` does.
+5. It records `vault.reset-confirmed`, writes `reset.unfinished`, removes the store-owned files and then
+   `reset.unfinished`, clears the vault passphrase attempt limit and records `vault.reset`, or
+   `vault.reset-failed` on a failure. It then waits for the lock drain.
+
+The success result:
+
+| Tag | Field | Value |
+|---|---|---|
+| 2 | vault ID | byte value: the 16 bytes of the vault ID that was confirmed, or empty when the confirmation was the state directory's path |
+| 3 | files removed | `u64`: how many store-owned files were removed, `reset.unfinished` not counted |
+| 4 | foreign files | UTF-8 text: the foreign files left in the state directory, as escaped names, one per line; at most the first 16 |
+| 5 | cleared | flag: as `lock`'s, `1` when every snapshot was released within the lock drain and the vault identity was cleared |
+| 6 | finish uncertain | flag: `1` when `reset.unfinished` was unlinked but the state directory fsync failed, so it may come back after a power loss |
+
+Errors specific to `reset`:
+
+| Code | When |
+|---|---|
+| `wrong-state` | the service is Starting, Checking or Stopped, at the request or at step 4 |
+| `declined` | the confirmation does not match; or the initialization state, or the vault ID, changed between the summary and step 4, and nothing was removed |
+| `nothing-to-reset` | no vault file is there, at the request or at step 4; the message says to run `init`, or names the first file that is there and says to move it aside first |
+| `reset-failed` | the directories could not be read, writing `reset.unfinished` failed, or a removal failed; the message names the step and the file, and says whether the vault is intact (`begin`) or the next `reset` resumes (every later step) |
+
 #### recovery check
 
 Proves that the owner's offline recovery key opens the current vault (spec
@@ -634,7 +681,7 @@ digest or permitted origin.
 | 9 | memory protection detail | UTF-8 text: why memory is not locked; empty when it is locked or unsupported |
 | 10 | credentials | byte value: the credential list below; empty while the vault is locked |
 | 11 | route faults | byte value: the route fault list below; empty while the vault is locked or no route has a fault |
-| 12 | initialization | `u8`: `0` initialized (locked or open), `1` not initialized, `2` initialization unfinished; non-zero only while no vault is open |
+| 12 | initialization | `u8`: `0` initialized (locked or open), `1` not initialized, `2` initialization unfinished, `3` [reset unfinished](reset.md#unfinished-reset) (run `iron-vault reset` again); non-zero only while no vault is open |
 | 13 | recovery check record | `u8`: `0` unknown, `1` never checked, `2` checked |
 | 14 | recovery check time | `u64`: Unix seconds, UTC: `last_checked` when tag 13 is `2`, `since` when it is `1`, `0` when it is `0` |
 | 15 | days since recovery check | `u64`: whole days from tag 14's time to the service's clock, `0` for a time in the future and when tag 13 is `0` |
@@ -650,7 +697,7 @@ with no credentials has a non-empty vault ID and an empty list.
 
 While no vault is open the service reads the state and config directories for the initialization state
 ([vault-initialization.md](vault-initialization.md)), without the vault identity. Nothing on disk reports `1`, an
-`init.unfinished` marker reports `2`, and an initialized vault reports `0`. Unrecognized files, or a directory that
+`init.unfinished` marker reports `2`, a `reset.unfinished` marker reports `3`, and an initialized vault reports `0`. Unrecognized files, or a directory that
 cannot be listed, also report `0`: `status` has no error to give, and `unlock` and `init` name the files when the owner runs them.
 
 Memory protection is reported from the process hardening report and never claims swap protection unless `mlockall`
@@ -778,6 +825,8 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `42` | `approver-set-invalid` | `approver add`: 16 approvers are already pinned; `approver remove`: it is the last approver; nothing was changed |
 | `43` | `approver-in-use` | `approver remove`: this approver signed the active approval; the message says to approve the config with another approver first; nothing was changed |
 | `44` | `approver-kind-unavailable` | `approver add`: this install does not offer that signer kind yet; nothing was changed |
+| `45` | `nothing-to-reset` | `reset`: no vault file is in the state directory; the message says what to run next ([reset.md](reset.md#result)) |
+| `46` | `reset-failed` | `reset`: the directories could not be read, writing `reset.unfinished` failed, or a removal failed; the message names the step and the file ([reset.md](reset.md#result)) |
 
 The migration codes 28, 29 and 33 are raised by the migration authorization step that `export` and `recipient add`
 share ([migration-authorization.md](migration-authorization.md#error-codes)).
@@ -873,7 +922,7 @@ after the last frame does not hide it.
 | `0` | the command succeeded |
 | `1` | the service answered with an error response |
 | `2` | usage error |
-| `3` | no admin response: no socket or nothing listening, permission denied, the exchange failed or timed out, a prompt got no value, or a reveal could not be shown on a terminal |
+| `3` | no admin response: no socket or nothing listening, permission denied, the exchange failed or timed out, a prompt got no value, or a reveal could not be shown on a terminal; `reset` also exits `3`, before it connects, when stdin is not a terminal or `/dev/tty` cannot be opened |
 | `4` | `status`: the service answered, and it is not Ready; `list`: the service answered, and no vault is open |
 | `128 + n` | signal `n` after the CLI opened its owner console: `129` for SIGHUP, `130` for SIGINT, `131` for SIGQUIT, `143` for SIGTERM |
 
@@ -954,6 +1003,17 @@ with the key, because the service cannot say so over a closed connection; after 
 On success it prints `initialized vault <vault ID>: approval version 1 committed`, `recipients: <role names>` (such as
 `operational, recovery, host-unlock`; kinds, never keys) and `run iron-vault unlock to start serving` to stdout; the
 recovery key never goes there. Otherwise it prints the service's error to stderr and exits with code 1.
+
+### reset
+
+`iron-vault reset` takes no argument. Its confirmation must be typed at a terminal ([reset.md](reset.md#typed-at-a-terminal)),
+so before it connects it checks that stdin is a terminal and that `/dev/tty` opens. If either check fails it names the
+failed check on stderr and exits with code 3 without connecting, so the service takes no lock and records nothing;
+`yes | iron-vault reset`, a heredoc, `< /dev/null` and a cron job are all refused this way. The service's summary is shown
+as notices and the confirmation is read from `/dev/tty` with echo on. On success it prints `reset: discarded vault <vault ID>;
+<n> files removed` (`the vault files` when the confirmation was the path), one line for each foreign file left, and
+`next: run iron-vault init` to stdout, and warns on stderr when the vault identity was not confirmed cleared or
+`reset.unfinished` may come back. A service error goes to stderr with exit code 1.
 
 ### caller-token
 

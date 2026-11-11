@@ -10,8 +10,8 @@ The commands below were run with `XDG_CONFIG_HOME` and `XDG_STATE_HOME` pointing
 and the `tee` copy of the log were in a scratch directory too, and were removed from there.
 
 This is for development mode only. A protected install is removed with `apt purge`, which asks before it deletes the
-vault; see [Uninstall and purge](../installation/linux-install.md#uninstall-and-purge). A supported `iron-vault reset`
-is [not yet available](roadmap/reset.md).
+vault; see [Uninstall and purge](../installation/linux-install.md#uninstall-and-purge). To keep the installation and replace the vault, use
+[`iron-vault reset`](../reference/cli.md#iron-vault-reset).
 
 ## Prerequisites
 
