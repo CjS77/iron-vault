@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use super::add::Add;
 use super::approve::Approve;
+use super::approver_list::ApproverList;
 use super::init::Init;
 use super::list::List;
 use super::principal::AdminPrincipal;
@@ -59,7 +60,7 @@ impl Handlers {
 
     /// The running service's handlers: [`standard`](Self::standard)'s, for `service`'s profile, then `status`,
     /// `unlock`, `lock`, `config approve`, `add`, `replace`, `init`, `list`, `rm`, `recovery check`, `recipient list`,
-    /// `recipient add` and `recipient remove`.
+    /// `recipient add`, `recipient remove` and `approver list`.
     /// A command that acts on the service registers here with a clone of `service`.
     pub fn for_service<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> Self {
         Self::standard(service.paths().profile)
@@ -75,6 +76,7 @@ impl Handlers {
             .with(AdminCommand::RecipientList, RecipientList::new(Arc::clone(service)))
             .with(AdminCommand::RecipientAdd, RecipientAdd::new(Arc::clone(service)))
             .with(AdminCommand::RecipientRemove, RecipientRemove::new(Arc::clone(service)))
+            .with(AdminCommand::ApproverList, ApproverList::new(Arc::clone(service)))
             .with_lock_drain(service, LOCK_DRAIN)
     }
 

@@ -2,6 +2,7 @@
 //! hands [`decode`] the bytes it has read and sends what [`encode`] writes.
 
 mod add;
+mod approver_list;
 mod body;
 mod fields;
 mod list;
@@ -23,6 +24,7 @@ use iron_vault_policy::{CallerToken, CredentialKind, Port};
 use iron_vault_store::{Passphrase, RecipientEntry, RecipientKey, RecipientRole, RecordId, VaultId};
 use secrecy::SecretString;
 
+pub use approver_list::ApproverEntry;
 pub use iron_vault_store::MAX_CONFIG_LEN;
 pub use recovery_status::RecoveryStatus;
 pub use status::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
@@ -121,6 +123,8 @@ pub enum AdminRequest {
         /// The recipient key's `age1...` text, as the owner wrote it; the service parses it.
         recipient: String,
     },
+    /// Lists every pinned approver in approver order; Ready only. No arguments. Command ID 16.
+    ApproverList,
 }
 
 /// A requested origin: one permitted origin as an `add` or `replace` request carries it. The host stays text on the wire, at most
@@ -154,6 +158,7 @@ impl AdminRequest {
                 AdminCommand::RecipientAdd
             }
             Self::RecipientRemove { .. } => AdminCommand::RecipientRemove,
+            Self::ApproverList => AdminCommand::ApproverList,
         }
     }
 }
@@ -191,6 +196,8 @@ pub enum AdminCommand {
     RecipientAdd = 14,
     /// `recipient remove`.
     RecipientRemove = 15,
+    /// `approver list`.
+    ApproverList = 16,
 }
 
 impl AdminCommand {
@@ -212,6 +219,7 @@ impl AdminCommand {
             Self::RecipientList => "recipient list",
             Self::RecipientAdd => "recipient add",
             Self::RecipientRemove => "recipient remove",
+            Self::ApproverList => "approver list",
         }
     }
 
@@ -233,6 +241,7 @@ impl AdminCommand {
             Self::RecipientList => "recipient_list",
             Self::RecipientAdd => "recipient_add",
             Self::RecipientRemove => "recipient_remove",
+            Self::ApproverList => "approver_list",
         }
     }
 }
@@ -254,6 +263,7 @@ mod no_external_signatures {
             | AdminCommand::Lock
             | AdminCommand::RecoveryCheck
             | AdminCommand::RecipientList
+            | AdminCommand::ApproverList
             | AdminCommand::List => &[],
             AdminCommand::Init => &["host_unlock"],
             AdminCommand::ConfigApprove => &["config"],
@@ -264,7 +274,7 @@ mod no_external_signatures {
         }
     }
 
-    const COMMANDS: [AdminCommand; 15] = [
+    const COMMANDS: [AdminCommand; 16] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::CallerToken,
@@ -280,6 +290,7 @@ mod no_external_signatures {
         AdminCommand::RecipientList,
         AdminCommand::RecipientAdd,
         AdminCommand::RecipientRemove,
+        AdminCommand::ApproverList,
     ];
 
     #[test]
@@ -469,6 +480,11 @@ pub enum AdminResponse {
     RecipientList {
         /// Every enrolled recipient, in inventory order. Public keys and labels only.
         entries: Vec<RecipientEntry>,
+    },
+    /// `approver list` completed.
+    ApproverList {
+        /// Every pinned approver in approver order, the one that signed the active approval marked.
+        entries: Vec<ApproverEntry>,
     },
     /// `recipient add` completed: the vault identity is wrapped for the new recipient too.
     RecipientAdd {
@@ -825,6 +841,9 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         }
         Frame::Response(AdminResponse::RecipientList { entries }) => {
             put_frame(out, FrameKind::Success, &body::encode_recipient_list_result(entries)?)
+        }
+        Frame::Response(AdminResponse::ApproverList { entries }) => {
+            put_frame(out, FrameKind::Success, &body::encode_approver_list_result(entries)?)
         }
         Frame::Response(AdminResponse::RecipientAdd { recipient, recipients }) => {
             put_frame(out, FrameKind::Success, &body::encode_recipient_add_result(recipient, *recipients))

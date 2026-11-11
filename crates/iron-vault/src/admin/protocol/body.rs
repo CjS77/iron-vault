@@ -3,7 +3,7 @@
 use super::fields::{self, exact, first, read_flag, read_profile, read_text, read_u16, read_u64};
 use super::status::{self, StatusReport};
 use super::{AdminCommand, AdminRequest, AdminResponse, ApprovalResult, ErrorCode, FrameError, Notice, Prompt, ProposedConfig};
-use super::{add, list, recipient_add, recipient_list};
+use super::{add, approver_list, list, recipient_add, recipient_list};
 use crate::deployment::DeploymentProfile;
 use iron_vault_policy::CallerToken;
 use iron_vault_policy::caller_token::CALLER_TOKEN_LEN;
@@ -46,6 +46,7 @@ const COMMAND_RECOVERY_CHECK: u16 = AdminCommand::RecoveryCheck as u16;
 const COMMAND_RECIPIENT_LIST: u16 = AdminCommand::RecipientList as u16;
 const COMMAND_RECIPIENT_ADD: u16 = AdminCommand::RecipientAdd as u16;
 const COMMAND_RECIPIENT_REMOVE: u16 = AdminCommand::RecipientRemove as u16;
+const COMMAND_APPROVER_LIST: u16 = AdminCommand::ApproverList as u16;
 const TAG_RECIPIENT: u16 = 2;
 const TAG_RECIPIENT_COUNT: u16 = 2;
 const TAG_CHECKED_AT: u16 = 3;
@@ -103,6 +104,7 @@ pub(super) fn decode_request(body: &[u8]) -> Result<AdminRequest, FrameError> {
         COMMAND_ADD => add::decode_request(&fields, |name, kind, origins| AdminRequest::Add { name, kind, origins }),
         COMMAND_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::List),
         COMMAND_RECIPIENT_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::RecipientList),
+        COMMAND_APPROVER_LIST => exact(&fields, [TAG_COMMAND]).map(|_| AdminRequest::ApproverList),
         COMMAND_RECIPIENT_ADD => recipient_add::decode_request(&fields),
         COMMAND_REPLACE => add::decode_request(&fields, |name, kind, origins| AdminRequest::Replace { name, kind, origins }),
         COMMAND_RM => {
@@ -199,6 +201,11 @@ pub(super) fn encode_recipient_remove_result(recipients: u8) -> Vec<u8> {
     fields::put(&mut out, TAG_COMMAND, &COMMAND_RECIPIENT_REMOVE.to_be_bytes());
     fields::put(&mut out, TAG_RECIPIENT_COUNT, &[recipients]);
     out
+}
+
+/// `approver list`'s success body: the command it answers, then the entries.
+pub(super) fn encode_approver_list_result(entries: &[super::ApproverEntry]) -> Result<Vec<u8>, FrameError> {
+    approver_list::encode_result(COMMAND_APPROVER_LIST, entries)
 }
 
 /// `recipient list`'s success body: the command it answers, then the entries.
@@ -326,6 +333,7 @@ pub(super) fn decode_success(body: &[u8]) -> Result<AdminResponse, FrameError> {
         COMMAND_ADD => add::decode_result(&fields).map(|record_id| AdminResponse::Add { record_id }),
         COMMAND_LIST => list::decode_result(&fields),
         COMMAND_RECIPIENT_LIST => recipient_list::decode_result(&fields),
+        COMMAND_APPROVER_LIST => approver_list::decode_result(&fields),
         COMMAND_RECIPIENT_ADD => recipient_add::decode_result(&fields),
         COMMAND_RECIPIENT_REMOVE => {
             let [_, count] = exact(&fields, [TAG_COMMAND, TAG_RECIPIENT_COUNT])?;

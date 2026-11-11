@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 
-use iron_vault_store::{ApprovalPassphrase, PinnedApprover, SignError, SoftwareSigner, StoreFs, open_signer_key, read_signer_key};
+use iron_vault_store::{
+    ApprovalPassphrase, ApproverId, PinnedApprover, SignError, SoftwareSigner, StoreFs, open_signer_key, read_signer_key,
+};
 
 use super::ServiceContext;
 use super::approver_order::approver_order;
@@ -75,11 +77,15 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// `approvers` in [approver order](approver_order), by the signer of the active approval the serving snapshot was built
     /// from. The service is Unavailable, with no active approval, when it holds no snapshot.
     pub(super) fn ordered_approvers(&self, approvers: &[PinnedApprover]) -> Vec<PinnedApprover> {
-        let active = match self.holder.load() {
+        approver_order(approvers, self.active_signer())
+    }
+
+    /// The approver that signed the active approval, when the service is serving one.
+    pub(super) fn active_signer(&self) -> Option<ApproverId> {
+        match self.holder.load() {
             Admission::Serve(snapshot) => snapshot.signer(),
             Admission::Refuse(_) => None,
-        };
-        approver_order(approvers, active)
+        }
     }
 
     /// Owner presence: [`open_approver`](Self::open_approver) as the `approver` the owner answered, dropping the signer at
