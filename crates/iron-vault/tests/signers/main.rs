@@ -7,6 +7,7 @@
 mod common;
 
 mod approver_add;
+mod approver_add_tpm;
 mod approver_list;
 mod approver_order;
 mod approver_remove;

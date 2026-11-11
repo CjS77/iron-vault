@@ -5,15 +5,13 @@
 //!
 //! ```sh
 //! cargo build -p iron-vault-tpm-signer --features tpm
-//! IRON_VAULT_SWTPM=swtpm:host=127.0.0.1,port=2321 cargo test -p iron-vault --test approver_add_tpm_linux -- --ignored
+//! IRON_VAULT_SWTPM=swtpm:host=127.0.0.1,port=2321 cargo test -p iron-vault --test signers -- approver_add_tpm --ignored
 //! ```
 //! `IRON_VAULT_TPM_SIGNER` names the helper binary when it is not `target/debug/iron-vault-tpm-signer`.
 
 #![cfg(target_os = "linux")]
-// Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeMap;
 use std::fs;
