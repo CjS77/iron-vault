@@ -40,9 +40,9 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::Capabilities;
 use iron_vault_store::{
-    ApprovalPassphrase, ApprovalState, ApprovalStorage, ApproverId, ApproverLabel, ConfigDigest, ConfigDirLock, LockError, OsFs,
-    PendingConfig, PermittedOrigins, PinnedApprover, SoftwareSigner, StateDirLock, StoreFs, UtcSecond, Vault, VaultIdentity,
-    open_signer_key, seal_signer_key_for_tests, write_signer_key,
+    ApprovalPassphrase, ApprovalState, ApprovalStorage, ApproverId, ApproverLabel, ApproverPublicKey, ConfigDigest, ConfigDirLock,
+    LockError, OsFs, PendingConfig, PermittedOrigins, PinnedApprover, SignatureAlgorithm, SignerKind, SoftwareSigner, StateDirLock,
+    StoreFs, UtcSecond, Vault, VaultIdentity, open_signer_key, seal_signer_key_for_tests, write_signer_key,
 };
 use secrecy::SecretString;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -138,6 +138,29 @@ impl Fixture {
         write_signer_key(&lock, &OsFs, id, &sealed).unwrap();
         let approver = PinnedApprover::software_for_tests(id, pinned, ApproverLabel::new(label).unwrap(), enrolled_at);
         state.enroll_approver(&lock, &OsFs, &identity(), approver).unwrap();
+        id
+    }
+
+    /// Enrolls a `tpm` approver labelled `label` with a P-256 key and a stand-in key blob, beside the approvers already
+    /// pinned, and returns its ID. Call it before the service starts.
+    pub fn enroll_tpm_approver(&self, label: &str) -> ApproverId {
+        let lock = self.state_lock();
+        let (vault, _) = Vault::open(&lock, &OsFs, identity()).unwrap();
+        let mut state = vault.load_approval_state(&lock, &OsFs).unwrap();
+        let point = p256::ecdsa::SigningKey::from_slice(&[7; 32])
+            .unwrap()
+            .verifying_key()
+            .to_encoded_point(false);
+        let key = ApproverPublicKey::new(SignatureAlgorithm::EcdsaP256, point.as_bytes().to_vec()).unwrap();
+        let id = ApproverId::generate();
+        let label = ApproverLabel::new(label).unwrap();
+        let approver = PinnedApprover::new(id, SignerKind::Tpm, key, label, UtcSecond::EPOCH).unwrap();
+        state.enroll_approver(&lock, &OsFs, &identity(), approver).unwrap();
+        fs::write(
+            self.path(&format!("state/approver-{id}.tpm")),
+            b"a blob for the source machine's TPM",
+        )
+        .unwrap();
         id
     }
 

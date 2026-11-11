@@ -65,9 +65,15 @@ impl Served {
 
     /// With `big`, [`BIG_RECORDS`] more credentials of [`BIG_LEN`] bytes each.
     async fn with(big: bool, limits: Limits) -> Self {
+        Self::pinning(big, limits, |_| ()).await
+    }
+
+    /// A service whose vault `pin` has changed before it starts.
+    async fn pinning(big: bool, limits: Limits, pin: impl FnOnce(&Fixture)) -> Self {
         let one = ONE_AT_A_TIME.lock().await;
         let logs = captured_logs();
         let fixture = Fixture::new().await;
+        pin(&fixture);
         write_envelopes(&fixture);
         if big {
             add_big_records(&fixture);
@@ -562,4 +568,30 @@ async fn an_existing_bundle_or_a_leftover_partial_file_is_refused_before_connect
     );
     assert_eq!(fs::read(&partial).unwrap(), b"a crashed export");
     assert!(!bundle.exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tpm_approver_is_pinned_in_the_bundle_but_its_key_blob_is_not() {
+    let software = std::cell::Cell::new(None);
+    let served = Served::pinning(false, Limits::default(), |fixture| {
+        software.set(Some(fixture.approver_id()));
+        fixture.enroll_tpm_approver("laptop TPM");
+    })
+    .await;
+    let software = software.get().unwrap();
+    let input = format!("{PASSPHRASE}\n{EXPORT_PASSPHRASE}\n{EXPORT_PASSPHRASE}\n");
+    let ran = run_export(&served.path, &served.bundle_path(), &input).await;
+    assert_eq!(ran.code, Some(0), "{ran:?}");
+
+    let bundle = decoded(&fs::read(served.bundle_path()).unwrap());
+    let approvers: Vec<_> = bundle
+        .entries()
+        .filter(|(name, _)| matches!(name, EntryName::Approver(_)))
+        .collect();
+    assert_eq!(bundle.header().approver_count(), 1);
+    assert_eq!(
+        approvers.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+        [EntryName::Approver(software)]
+    );
+    assert!(bundle.entries().all(|(name, _)| !name.to_string().ends_with(".tpm")));
 }

@@ -21,7 +21,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::approval_harness::{APPROVAL_PASSPHRASE, Captured, assert_audit_record, captured_logs, get, mkdir, send};
-use common::migration_source::{EXPORT_PASSPHRASE, Source, bundle_frames, read_frame, send_bundle, source, write_ignoring_errors};
+use common::migration_source::{
+    EXPORT_PASSPHRASE, Source, bundle_frames, read_frame, send_bundle, source, source_with_tpm_approver, write_ignoring_errors,
+};
 use common::proxy_harness::TempDir;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
@@ -331,6 +333,56 @@ async fn an_import_makes_a_locked_vault_with_the_sources_fields_and_unlock_leave
     assert_eq!(imported[0]["recipients"], "operational,recovery");
     assert_eq!(imported[0]["highest_reserved"].as_u64(), Some(source.highest_reserved));
     assert_no_secret_logged(&logs, &[&shown.reveals[0]]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tpm_approver_is_listed_as_bound_to_the_source_machine_and_the_software_approver_approves_first() {
+    let _one = ONE_AT_A_TIME.lock().await;
+    let source = source_with_tpm_approver().await;
+    let tpm = source.tpm_approver.unwrap();
+    let dest = Dest::new();
+    let service = dest.start();
+
+    let shown = import(&service, &source.bytes, &COMPLETE).await;
+
+    shown.result();
+    assert!(
+        shown.notices.contains("laptop TPM (bound to the source machine)"),
+        "{}",
+        shown.notices
+    );
+    assert!(!shown.notices.contains("approval passphrase (bound"), "{}", shown.notices);
+    let (state, _) = dest.files();
+    assert!(!state.iter().any(|name| name.ends_with(".tpm")), "{state:?}");
+
+    drop(service);
+    let _ = fs::remove_file(source.fixture.socket());
+    let service = dest.start();
+    exchange(&service, AdminRequest::Unlock, &[DEST_PASSPHRASE.as_bytes()]).await;
+    let config = ProposedConfig::new(source.fixture.config("fx").into_bytes()).unwrap();
+    let approved = exchange(
+        &service,
+        AdminRequest::ConfigApprove(config),
+        &[b"yes", APPROVAL_PASSPHRASE.as_bytes()],
+    )
+    .await;
+    assert_eq!(
+        approved.labels().last(),
+        Some(&"Approval passphrase for \"approval passphrase\""),
+        "{approved:?}"
+    );
+    assert!(matches!(approved.response, Some(AdminResponse::ConfigApprove(_))), "{approved:?}");
+
+    let removed = exchange(
+        &service,
+        AdminRequest::ApproverRemove { approver: *tpm.as_bytes() },
+        &[APPROVAL_PASSPHRASE.as_bytes()],
+    )
+    .await;
+    assert!(
+        matches!(removed.response, Some(AdminResponse::ApproverRemove { approvers: 1 })),
+        "{removed:?}"
+    );
 }
 
 /// Each of the write order's ten steps is announced before it starts, in order.

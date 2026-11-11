@@ -18,8 +18,8 @@ use iron_vault::admin::socket::AdminSocket;
 use iron_vault::service_context::ServiceContext;
 use iron_vault_store::migration_bundle::BundleDecoder;
 use iron_vault_store::{
-    ExportPassphrase, OperationalIdentity, OsFs, Passphrase, RecipientSet, VaultId, open_bundle, seal_passphrase_envelope_for_tests,
-    verify_bundle, wrap_identity, write_identity_envelope, write_passphrase_envelope,
+    ApproverId, ExportPassphrase, OperationalIdentity, OsFs, Passphrase, PinnedApprover, RecipientSet, SignerKind, VaultId,
+    open_bundle, seal_passphrase_envelope_for_tests, verify_bundle, wrap_identity, write_identity_envelope, write_passphrase_envelope,
 };
 use secrecy::SecretString;
 use zeroize::Zeroizing;
@@ -38,19 +38,34 @@ pub struct Source {
     pub committed: u64,
     pub highest_reserved: u64,
     pub digest: [u8; 32],
+    /// The `tpm` approver the source pins, if any.
+    pub tpm_approver: Option<ApproverId>,
     /// The source fixture, kept so that the config's listener socket path stays in a live directory.
     pub fixture: Fixture,
 }
 
 static SOURCE: OnceCell<Source> = OnceCell::const_new();
+static TPM_SOURCE: OnceCell<Source> = OnceCell::const_new();
 
 /// The one source, exported on first use.
 pub async fn source() -> &'static Source {
-    SOURCE.get_or_init(export).await
+    SOURCE.get_or_init(|| export(|_| ())).await
 }
 
-async fn export() -> Source {
+/// A source that pins a `tpm` approver beside its software one, exported on first use.
+pub async fn source_with_tpm_approver() -> &'static Source {
+    TPM_SOURCE
+        .get_or_init(|| {
+            export(|fixture| {
+                fixture.enroll_tpm_approver("laptop TPM");
+            })
+        })
+        .await
+}
+
+async fn export(pin: impl FnOnce(&Fixture)) -> Source {
     let fixture = Fixture::new().await;
+    pin(&fixture);
     write_envelopes(&fixture);
     mkdir(&fixture.path("out"));
     let service = fixture.ready().await;
@@ -76,6 +91,11 @@ async fn export() -> Source {
         committed: verified.committed_version().get(),
         highest_reserved: verified.highest_reserved(),
         digest: *verified.config_digest().as_bytes(),
+        tpm_approver: verified
+            .approvers()
+            .iter()
+            .find(|a| a.kind() == SignerKind::Tpm)
+            .map(PinnedApprover::id),
         fixture,
     }
 }

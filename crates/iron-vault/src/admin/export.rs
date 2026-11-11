@@ -262,3 +262,20 @@ fn export_failed(message: String) -> AdminResponse {
 fn error(code: ErrorCode, message: String) -> AdminResponse {
     AdminResponse::Error { code, message }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_snapshot_with_no_software_approver_is_answered_approver_set_invalid() {
+        let AdminResponse::Error { code, message } = check_failed(ExportError::Snapshot(SnapshotError::NoSoftwareApprover)) else {
+            panic!("expected an error");
+        };
+        assert_eq!(code, ErrorCode::ApproverSetInvalid);
+        assert!(
+            message.contains("enroll a software approver first") && message.ends_with("nothing was exported"),
+            "{message}"
+        );
+    }
+}
