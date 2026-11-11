@@ -118,7 +118,8 @@ iron-vault approver remove <approver ID>
 ```
 
 If you want a TPM approver on the new machine, enroll a new one there with
-[`approver add --kind tpm`](../reference/cli.md#iron-vault-approver-add).
+[`approver add --kind tpm`](../reference/cli.md#iron-vault-approver-add), as in
+[approve configs with a TPM PIN](tpm-approval.md).
 
 ### 6. Check the recovery key
 

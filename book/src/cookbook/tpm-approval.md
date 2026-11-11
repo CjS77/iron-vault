@@ -120,7 +120,7 @@ the way out:
 
 Both approval counters carry over. A vault whose only approver is a lost TPM approver has no way left to authorize anything:
 [`reset`](reset-vault.md) is the only way out, which is why this recipe keeps a software approver. The TPM approver's key
-cannot move with a [migration bundle](roadmap/migration.md); a software approver is needed on the destination.
+cannot move with a [migration bundle](move-vault.md); a software approver is needed on the destination.
 
 ## What can go wrong
 

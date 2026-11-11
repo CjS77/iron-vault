@@ -63,11 +63,12 @@ Done in v0:
   new machine, with a new vault passphrase and recovery key, and the source's records and approval counters unchanged.
   No plaintext secret is written on the way, and the new machine routes only after a config approval above every
   version the source reserved. See the [recipe](book/src/cookbook/move-vault.md).
-- **TPM approval signer (Ubuntu 24.04 only):** a protected Linux install can pin a TPM-resident signing key as an approver. It
-  signs a config approval, or proves your presence for `replace`, `rm` and the migration commands, once you type its PIN
-  (at least 6 characters). A helper process of its own reaches the TPM, so the service never does, and it holds back half the
-  TPM's wrong-PIN tries for other users. Keep a software approver beside it: a forgotten PIN is recovered through another
-  approver. It has had no release check on a real machine yet. See the [recipe](book/src/cookbook/tpm-approval.md).
+- **TPM approval signer (Ubuntu 24.04 only):** a protected Linux install can pin a TPM-resident signing key as an
+  approver. It signs a config approval, or proves your presence for `replace`, `rm` and the migration commands, once you
+  type its PIN (at least 6 characters). A helper process of its own reaches the TPM, so the service never does, and it
+  holds back half the TPM's wrong-PIN tries for other users. Keep a software approver beside it: a forgotten PIN is
+  recovered through another approver. It has had no release check on a real machine yet. See the
+  [recipe](book/src/cookbook/tpm-approval.md).
 - **Audit logging:** typed JSON records of request and administrative events, which never log secret values. See the
   [log operations guide](book/src/reference/log-operations.md).
 
