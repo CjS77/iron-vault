@@ -313,7 +313,9 @@ done
 lvm_on_luks; echo "luks-abc UUID=abc cryptkey luks,keyscript=decrypt_keyctl" >"$work/crypttab"
 portable "a keyscript that asks a person, with its identifier as the third field" 0
 lvm_on_luks; echo "luks-abc UUID=abc /dev/sdb1:/key luks,keyscript=passdev" >"$work/crypttab"
-portable "a keyscript that is not known to ask a person, with a third field that is its argument" 1 "keyscript=passdev"
+portable "a keyscript that is not known to ask a person, with a key file as its argument" 2 "keyscript=passdev" "key file /dev/sdb1:/key"
+lvm_on_luks; echo "luks-abc UUID=abc /etc/keys/root.key luks,keyscript=decrypt_keyctl" >"$work/crypttab"
+portable "an accepted keyscript does not hide an absolute key file, which systemd reads" 1 "key file /etc/keys/root.key"
 lvm_on_luks; echo "luks-abc UUID=abc none luks,keyscript=/lib/cryptsetup/scripts/decrypt_derived" >"$work/crypttab"
 portable "a keyscript that derives the key from another device" 1 "keyscript=/lib/cryptsetup/scripts/decrypt_derived"
 lvm_on_luks; luks_dump nvme0n1p3 "$(tpm_token false)"; echo "luks-abc UUID=abc none luks,tpm2-device=auto" >"$work/crypttab"

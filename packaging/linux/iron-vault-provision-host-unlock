@@ -331,15 +331,18 @@ keyscript_warnings() {
 has_keyscript() { [[ ,$1, == *,keyscript=[!,]* ]]; }
 
 # crypttab_warnings TEXT NAME: warns when the entry named NAME has a key file, a keyscript= not known to ask a person, or
-# tpm2-device= beside a PIN-less token. With a keyscript= the third field is the script's argument (decrypt_keyctl's identifier,
-# askpass's prompt), not a key file, so only keyscript_warnings judges the entry. No entry for a LUKS layer is a warning too,
-# because the check then saw nothing.
+# tpm2-device= beside a PIN-less token. The initramfs hands the third field to a keyscript= as its argument (decrypt_keyctl's
+# identifier, askpass's prompt), so a non-absolute field beside a keyscript= is not a key file. systemd-cryptsetup opens every entry
+# the initramfs does not (a separate /var, a data disk), ignores keyscript= and reads the third field as a key file, so an absolute
+# path is warned as a key file even beside a keyscript=. No entry for a LUKS layer is a warning too, because the check then saw nothing.
 crypttab_warnings() {
     local text=$1 name=$2 key opts seen=0
     while read -r _ _ key opts _; do
         seen=1
         case ${key:-none} in
             none | -) ;;
+            /*) add_warning "$CRYPTTAB opens $name with the key file $key. $RISK" \
+                "Fix: remove the key file and use a passphrase or a TPM PIN." ;;
             *) has_keyscript "$opts" || add_warning "$CRYPTTAB opens $name with the key file $key. $RISK" \
                 "Fix: remove the key file and use a passphrase or a TPM PIN." ;;
         esac

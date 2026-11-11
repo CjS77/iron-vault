@@ -392,9 +392,11 @@ However the stack is walked, the helper warns when any of these hold:
   person holds, so they pass);
 - `/etc/crypttab` names a key file for the device (a third field other than `none` or `-`), has `tpm2-device=` while
   some `systemd-tpm2` token needs no PIN, or has `keyscript=` with a script not known to ask a person. A keyscript such
-  as `tpm2-initramfs-tool` opens the disk with no person present and leaves the third field `none`. With `keyscript=` the
-  third field is the script's argument (`decrypt_keyctl`'s identifier, `askpass`'s prompt), so it is not checked as a key
-  file. The helper cannot read a script, so only `decrypt_keyctl` (under `/lib/cryptsetup/scripts/`, where a bare name resolves) and
+  as `tpm2-initramfs-tool` opens the disk with no person present and leaves the third field `none`. The initramfs passes the
+  third field to a `keyscript=` as its argument (`decrypt_keyctl`'s identifier, `askpass`'s prompt), so a field that is not an
+  absolute path is not checked as a key file. systemd opens every entry the initramfs does not (a separate `/var`, a data disk),
+  ignores `keyscript=` and reads the third field as a key file, so an absolute path is still warned.
+  The helper cannot read a script, so only `decrypt_keyctl` (under `/lib/cryptsetup/scripts/`, where a bare name resolves) and
   `/lib/cryptsetup/askpass` pass, and any other script warns and is named;
 - an initramfs holds a key file (`lsinitramfs` lists one under `cryptroot/keyfiles/`, where initramfs-tools puts
   them). Every `/boot/initrd.img-*` is checked, because a kernel update rebuilds them and any of them may boot.
