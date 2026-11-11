@@ -369,7 +369,8 @@ The helper finds every LUKS device under `/etc/iron-vault-host` by walking the d
 filesystem's device (`/sys/class/block/*/slaves`, which lists partitions as well as the disks under `/sys/block`), so a
 root on LVM-on-LUKS, or LUKS on LVM, resolves to its LUKS layer. `findmnt` names only one device, so when the
 filesystem is `btrfs` or `bcachefs`, which can span several, the helper walks every member instead, each path judged
-on its own:
+on its own. A partition of an md or device-mapper device (`md0p1`) is walked as its parent device, since a partition has no
+slaves of its own:
 
 - btrfs: each entry of `/sys/fs/btrfs/UUID/devices/`, named for its block device;
 - bcachefs: each `/sys/fs/bcachefs/UUID/dev-N/block` link, which the kernel's bcachefs sysfs makes to the member's block
@@ -383,7 +384,11 @@ warns about the plain one, as an LV over a LUKS PV and a plain PV does. It warns
   an LV spans a LUKS PV and a plain one, or a btrfs filesystem a LUKS member and a plain one;
 - a `systemd-tpm2` token in `cryptsetup luksDump` does not need a PIN (`tpm2-pin` false);
 - a `clevis` token is present, TPM or Tang: neither asks for anything at boot. A LUKS1 header has no tokens, so there
-  the helper runs `luksmeta show -d DEVICE` and warns on clevis's UUID, `cb6e8904-81ff-40da-a84a-07ab9ab5715e`;
+  the helper runs `luksmeta show -d DEVICE` and warns on clevis's UUID, `cb6e8904-81ff-40da-a84a-07ab9ab5715e`. Real
+  luksmeta prints a `SLOT active|inactive` line per key slot, so output without one is a check that could not run. A
+  passphrase-only LUKS1 volume has no luksmeta area, so `luksmeta show` fails with "Device is not initialized": the warning
+  stays, because the helper does not read luksmeta's stderr, and it says that this message means no clevis binding exists, so
+  the administrator can accept it. It never suggests initializing luksmeta, which writes to the LUKS header;
 - a LUKS2 token is of a type the helper does not recognise (`systemd-fido2` and `systemd-pkcs11` need a device the
   person holds, so they pass);
 - `/etc/crypttab` names a key file for the device (a third field other than `none` or `-`), or has `tpm2-device=` while
@@ -398,7 +403,8 @@ warns.
 
 **A check that cannot run warns; it never passes.** A missing `cryptsetup`, `luksmeta` (on a LUKS1 volume) or
 `lsinitramfs`, a device-mapper stack it cannot resolve, a btrfs or bcachefs member list that is missing, empty or
-unreadable, a failed `luksDump` or `luksmeta`, an unreadable crypttab, or an initramfs listing that is empty each give a
+unreadable, a failed `luksDump` or `luksmeta`, a `luksmeta` listing with no key slot, an unreadable crypttab, or an initramfs
+listing that is empty each give a
 warning naming what could not be checked and how to fix that.
 
 Each warning says that anyone who steals the machine can boot it and start the vault, and names the fix: encrypt the
