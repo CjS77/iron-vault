@@ -27,7 +27,7 @@ use OwnedStateFile::{ApproverKeys, Fixed, Records, TpmKeyBlobs};
 /// Every store-owned file in the state directory, in the order reset removes them. The manifest goes first, so no
 /// binary opens the vault once anything else is gone; the identity envelope next, so a crash leaves no file a recovery
 /// key opens; reset's own commit point, `reset.unfinished`, last.
-pub(crate) const STATE_FILES: [OwnedStateFile; 12] = [
+pub(crate) const STATE_FILES: [OwnedStateFile; 13] = [
     Fixed(StateFileName::manifest),
     Fixed(StateFileName::identity_envelope),
     Fixed(StateFileName::passphrase_envelope),
@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn every_state_file_name_is_store_owned() {
         let names = constructed_names();
-        assert!(names.len() >= 12, "{names:?}");
+        assert!(names.len() >= 13, "{names:?}");
         names
             .iter()
             .for_each(|name| assert!(is_store_owned(&StateFileName::new(name).unwrap()), "{name} is not store-owned"));

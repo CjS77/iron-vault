@@ -156,7 +156,7 @@ fn discarding_a_full_vault_leaves_uninitialized_and_init_makes_a_new_vault() {
     assert_eq!(discarded.removed.get(1).map(String::as_str), Some("identity.age"));
     let config_files = ["config.toml.sig", "config.toml.sig.staged", "config.toml", "config.toml.pending"];
     assert_eq!(discarded.removed[discarded.removed.len() - 4..], config_files);
-    assert_eq!(discarded.removed.len(), 15, "{:?}", discarded.removed);
+    assert_eq!(discarded.removed.len(), 16, "{:?}", discarded.removed);
     assert!(discarded.removed.contains(&"locked-by-owner".to_owned()), "{:?}", discarded.removed);
     fs.crash();
     assert_eq!(dirs.names(&fs), lock_files_only(), "every removal is durable");
