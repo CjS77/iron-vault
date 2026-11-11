@@ -187,9 +187,9 @@ mod tests {
 
     #[test]
     fn committed_page_is_current() {
-        // The Container build adds `init --host-unlock` to the parser, so only the other builds match the page. The page's
+        // A dev-mode build leaves `init --host-unlock` out of the parser, so only the other builds match the page. The page's
         // introduction names the option.
-        if cfg!(feature = "container") {
+        if cfg!(feature = "dev-mode") {
             return;
         }
         let page = committed();

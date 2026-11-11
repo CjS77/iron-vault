@@ -18,11 +18,10 @@ service prompt for it, and the CLI reads the answer in one of two ways:
 `init` is the exception: it shows the recovery key, so it needs a controlling terminal and refuses to run without
 one.
 
-## Options of the Container build
+## Host unlock
 
-The sections below describe the packaged and development builds. The Container build, made for a Docker Compose stack,
-adds one option, `iron-vault init --host-unlock`, which also enrols the host unlock identity from the unlock handoff as a
-recipient of the new vault. The other builds reject it as an unexpected argument
+`iron-vault init --host-unlock` also enrols the host unlock identity from the unlock handoff as a recipient of the new
+vault. The packaged and Container builds accept it; a `dev-mode` build rejects it as an unexpected argument
 ([design](../../../design/docker-compose.md#enrollment)).
 
 ## The admin socket
@@ -143,6 +142,8 @@ iron-vault init [OPTIONS]
 ```
 
 Create the vault: the service prompts for the vault and approval passphrases, shows the recovery key once on the controlling terminal, and once you confirm you saved it, writes the vault and approves the initial config as version 1. It needs a controlling terminal, and leaves the service Locked.
+
+- `--host-unlock`: Also enrol the identity in the unlock handoff as a recipient, so a restart unlocks with no owner present. The service refuses to start `init` if the handoff is absent or untrusted. A dev-mode build does not accept this flag.
 
 ## `iron-vault caller-token`
 

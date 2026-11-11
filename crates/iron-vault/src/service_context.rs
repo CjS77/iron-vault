@@ -289,8 +289,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Starts the service on `locks` in Starting, with the provisional listener set open on `provisional`, adopting from
     /// the sockets systemd `passed`. Call it inside the async runtime.
     ///
-    /// A profile with no host unlock needs an interactive unlock, so it moves on to Locked here. The Container profile
-    /// stays in Starting, refusing requests as Locked does, until [`unlock_at_start`](Self::unlock_at_start) tries the
+    /// A profile with no host unlock needs an interactive unlock, so it moves on to Locked here. The Protected and Container
+    /// profiles stay in Starting, refusing requests as Locked does, until [`unlock_at_start`](Self::unlock_at_start) tries the
     /// unlock handoff: that needs the blocking pool and the detached config check, which this synchronous constructor
     /// cannot await. A provisional listener that cannot be opened is logged at WARN and left out.
     pub fn start(

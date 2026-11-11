@@ -133,9 +133,9 @@ pub enum Command {
     /// version 1. It needs a controlling terminal, and leaves the service Locked.
     Init {
         /// Also enrol the identity in the unlock handoff as a recipient, so a restart unlocks with no owner present. The
-        /// service refuses to start `init` if the handoff is absent or untrusted. Only a Container build accepts this flag.
-        #[cfg_attr(feature = "container", arg(long))]
-        #[cfg_attr(not(feature = "container"), arg(skip))]
+        /// service refuses to start `init` if the handoff is absent or untrusted. A dev-mode build does not accept this flag.
+        #[cfg_attr(not(feature = "dev-mode"), arg(long))]
+        #[cfg_attr(feature = "dev-mode", arg(skip))]
         host_unlock: bool,
     },
     /// Issue a fresh caller token: it goes to stdout once, and its token_hash line to stderr. The service keeps no copy;

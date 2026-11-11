@@ -1,4 +1,4 @@
-//! The Container profile's host unlock at startup (specification §15; design/docker-compose.md, "In the container"):
+//! The Protected and Container profiles' host unlock at startup (specification §15; design/tpm-unlock.md, "In the service"):
 //! a good unlock handoff takes the service from Starting through Checking to Ready with no `unlock`, and every other
 //! outcome leaves it Locked with passphrase `unlock` still offered.
 //!
@@ -105,8 +105,27 @@ fn start(fixture: &Fixture, profile: DeploymentProfile, memory: MemoryProtection
     )
 }
 
-fn container(fixture: &Fixture) -> ServiceContext {
-    start(fixture, DeploymentProfile::Container, MemoryProtection::Locked)
+fn service_on(fixture: &Fixture, profile: DeploymentProfile) -> ServiceContext {
+    start(fixture, profile, MemoryProtection::Locked)
+}
+
+/// Runs each case once as a Protected service and once as a Container service: both try the unlock handoff.
+macro_rules! on_both_profiles {
+    ($($case:ident),* $(,)?) => {$(
+        mod $case {
+            use super::*;
+
+            #[tokio::test]
+            async fn protected() {
+                super::$case(DeploymentProfile::Protected).await;
+            }
+
+            #[tokio::test]
+            async fn container() {
+                super::$case(DeploymentProfile::Container).await;
+            }
+        }
+    )*};
 }
 
 /// The turn and the log, with the number of host unlock records already in it.
@@ -139,14 +158,13 @@ async fn assert_passphrase_unlock_works(service: &ServiceContext) {
     assert_eq!(service.unlock(passphrase()).await.unwrap(), ServiceState::Ready);
 }
 
-#[tokio::test]
-async fn a_good_handoff_reaches_ready_and_serves_with_no_unlock() {
+async fn a_good_handoff_reaches_ready_and_serves_with_no_unlock(profile: DeploymentProfile) {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
     let secret = with_host_key(&fixture);
     let dir = HandoffDir::new();
     let handoff = dir.write(&secret);
-    let service = container(&fixture);
+    let service = service_on(&fixture, profile);
     assert_eq!(service.state().await, ServiceState::Starting);
 
     assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Ready);
@@ -162,8 +180,7 @@ async fn a_good_handoff_reaches_ready_and_serves_with_no_unlock() {
     assert_not_logged(&logs, &secret);
 }
 
-#[tokio::test]
-async fn without_locked_memory_the_handoff_is_never_opened() {
+async fn without_locked_memory_the_handoff_is_never_opened(profile: DeploymentProfile) {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
     let secret = with_host_key(&fixture);
@@ -172,7 +189,7 @@ async fn without_locked_memory_the_handoff_is_never_opened() {
     let handoff = dir.write(&secret);
     fs::set_permissions(&handoff, fs::Permissions::from_mode(0o644)).unwrap();
     let memory = MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 });
-    let service = start(&fixture, DeploymentProfile::Container, memory);
+    let service = start(&fixture, profile, memory);
 
     assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Locked);
 
@@ -180,13 +197,12 @@ async fn without_locked_memory_the_handoff_is_never_opened() {
     assert_not_logged(&logs, &secret);
 }
 
-#[tokio::test]
-async fn a_missing_handoff_leaves_it_locked_for_the_passphrase() {
+async fn a_missing_handoff_leaves_it_locked_for_the_passphrase(profile: DeploymentProfile) {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
     with_host_key(&fixture);
     let dir = HandoffDir::new();
-    let service = container(&fixture);
+    let service = service_on(&fixture, profile);
 
     assert_eq!(service.unlock_at_start(&dir.path()).await, ServiceState::Locked);
 
@@ -194,15 +210,14 @@ async fn a_missing_handoff_leaves_it_locked_for_the_passphrase() {
     assert_passphrase_unlock_works(&service).await;
 }
 
-#[tokio::test]
-async fn an_identity_that_is_not_a_recipient_leaves_it_locked_for_the_passphrase() {
+async fn an_identity_that_is_not_a_recipient_leaves_it_locked_for_the_passphrase(profile: DeploymentProfile) {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
     with_host_key(&fixture);
     let (stranger, _) = RecoveryKey::generate();
     let dir = HandoffDir::new();
     let handoff = dir.write(stranger.expose_secret());
-    let service = container(&fixture);
+    let service = service_on(&fixture, profile);
 
     assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Locked);
 
@@ -211,15 +226,14 @@ async fn an_identity_that_is_not_a_recipient_leaves_it_locked_for_the_passphrase
     assert_passphrase_unlock_works(&service).await;
 }
 
-#[tokio::test]
-async fn an_uninitialized_vault_stays_locked() {
+async fn an_uninitialized_vault_stays_locked(profile: DeploymentProfile) {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
     let secret = with_host_key(&fixture);
     ["state", "etc"].into_iter().for_each(|name| empty(&fixture.path(name)));
     let dir = HandoffDir::new();
     let handoff = dir.write(&secret);
-    let service = container(&fixture);
+    let service = service_on(&fixture, profile);
 
     assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Locked);
 
@@ -227,19 +241,16 @@ async fn an_uninitialized_vault_stays_locked() {
 }
 
 #[tokio::test]
-async fn other_profiles_never_try_the_handoff() {
+async fn the_development_profile_never_tries_the_handoff() {
     let (_turn, logs, before) = turn().await;
     let fixture = Fixture::new().await;
     let secret = with_host_key(&fixture);
     let dir = HandoffDir::new();
     let handoff = dir.write(&secret);
 
-    for profile in [DeploymentProfile::Development, DeploymentProfile::Protected] {
-        let service = start(&fixture, profile, MemoryProtection::Locked);
-        assert_eq!(service.state().await, ServiceState::Locked, "{profile:?}");
-        assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Locked, "{profile:?}");
-        drop(service);
-    }
+    let service = service_on(&fixture, DeploymentProfile::Development);
+    assert_eq!(service.state().await, ServiceState::Locked);
+    assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Locked);
 
     assert_eq!(logs.events(EVENT).len(), before);
 }
@@ -296,12 +307,11 @@ fn file_names(fixture: &Fixture, dir: &str) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test]
-async fn init_host_unlock_with_no_handoff_is_refused_before_any_prompt_and_writes_nothing() {
+async fn init_host_unlock_with_no_handoff_is_refused_before_any_prompt_and_writes_nothing(profile: DeploymentProfile) {
     let (_turn, _logs, _before) = turn().await;
     let fixture = Fixture::new().await;
     let dir = HandoffDir::new();
-    let service = uninitialized(&fixture, DeploymentProfile::Container, &dir.path()).await;
+    let service = uninitialized(&fixture, profile, &dir.path()).await;
 
     let (response, prompts, revealed) = init(&service, true).await;
 
@@ -318,15 +328,14 @@ async fn init_host_unlock_with_no_handoff_is_refused_before_any_prompt_and_write
     assert_eq!(file_names(&fixture, "etc"), ["config.toml.lock"]);
 }
 
-#[tokio::test]
-async fn init_host_unlock_with_an_untrusted_handoff_names_the_reason_and_not_the_key() {
+async fn init_host_unlock_with_an_untrusted_handoff_names_the_reason_and_not_the_key(profile: DeploymentProfile) {
     let (_turn, logs, _before) = turn().await;
     let fixture = Fixture::new().await;
     let (secret, _) = RecoveryKey::generate();
     let dir = HandoffDir::new();
     let handoff = dir.write(secret.expose_secret());
     fs::set_permissions(&handoff, fs::Permissions::from_mode(0o644)).unwrap();
-    let service = uninitialized(&fixture, DeploymentProfile::Container, &dir.path()).await;
+    let service = uninitialized(&fixture, profile, &dir.path()).await;
 
     let (response, prompts, _) = init(&service, true).await;
 
@@ -357,14 +366,13 @@ async fn init_host_unlock_is_refused_by_a_service_that_has_no_host_unlock() {
     assert!(message.contains("no host unlock"), "{message}");
 }
 
-#[tokio::test]
-async fn init_host_unlock_then_a_restart_reaches_ready_with_no_unlock() {
+async fn init_host_unlock_then_a_restart_reaches_ready_with_no_unlock(profile: DeploymentProfile) {
     let (_turn, logs, _before) = turn().await;
     let fixture = Fixture::new().await;
     let (secret, _) = RecoveryKey::generate();
     let dir = HandoffDir::new();
     let handoff = dir.write(secret.expose_secret());
-    let service = uninitialized(&fixture, DeploymentProfile::Container, &handoff).await;
+    let service = uninitialized(&fixture, profile, &handoff).await;
 
     let (response, prompts, revealed) = init(&service, true).await;
 
@@ -381,14 +389,14 @@ async fn init_host_unlock_then_a_restart_reaches_ready_with_no_unlock() {
     service.stop().await;
     drop(service);
 
-    let restarted = container(&fixture);
+    let restarted = service_on(&fixture, profile);
     assert_eq!(restarted.unlock_at_start(&handoff).await, ServiceState::Ready);
     assert_not_logged(&logs, secret.expose_secret());
 }
 
-/// A Container service on the vault in `fixture`, reading the handoff at `handoff`, after its host unlock at startup.
-async fn restarted(fixture: &Fixture, handoff: &Path) -> (Arc<ServiceContext>, ServiceState) {
-    let service = container(fixture).with_handoff_path(handoff.to_path_buf());
+/// A `profile` service on the vault in `fixture`, reading the handoff at `handoff`, after its host unlock at startup.
+async fn restarted(fixture: &Fixture, profile: DeploymentProfile, handoff: &Path) -> (Arc<ServiceContext>, ServiceState) {
+    let service = service_on(fixture, profile).with_handoff_path(handoff.to_path_buf());
     let state = service.unlock_at_start(handoff).await;
     (Arc::new(service), state)
 }
@@ -403,21 +411,20 @@ async fn remove(service: &Arc<ServiceContext>, key: &RecipientKey, answers: &[&s
 /// The guide's steps after a lost TPM: the host provisions a new identity into the handoff, the owner unlocks and enrols
 /// it with `recipient add --host-unlock`, a restart reaches Ready with no `unlock`, and then the old `host-unlock`
 /// recipient can be removed while the one the handoff holds cannot.
-#[tokio::test]
-async fn a_new_host_unlock_key_reaches_ready_after_a_restart_and_the_old_one_can_then_be_removed() {
+async fn a_new_host_unlock_key_reaches_ready_after_a_restart_and_the_old_one_can_then_be_removed(profile: DeploymentProfile) {
     let (_turn, logs, _before) = turn().await;
     let fixture = Fixture::new().await;
     let (old_secret, old_key) = RecoveryKey::generate();
     let dir = HandoffDir::new();
     let handoff = dir.write(old_secret.expose_secret());
-    let service = uninitialized(&fixture, DeploymentProfile::Container, &handoff).await;
+    let service = uninitialized(&fixture, profile, &handoff).await;
     assert!(matches!(init(&service, true).await.0, AdminResponse::Init { .. }));
     service.stop().await;
     drop(service);
 
     let (new_secret, new_key) = RecoveryKey::generate();
     dir.write(new_secret.expose_secret());
-    let (service, state) = restarted(&fixture, &handoff).await;
+    let (service, state) = restarted(&fixture, profile, &handoff).await;
     assert_eq!(state, ServiceState::Locked);
     assert_passphrase_unlock_works(&service).await;
     let request = AdminRequest::RecipientAddHostUnlock {
@@ -432,7 +439,7 @@ async fn a_new_host_unlock_key_reaches_ready_after_a_restart_and_the_old_one_can
     service.stop().await;
     drop(service);
 
-    let (service, state) = restarted(&fixture, &handoff).await;
+    let (service, state) = restarted(&fixture, profile, &handoff).await;
     assert_eq!(state, ServiceState::Ready);
     let (code, message) = match remove(&service, &new_key, &[]).await {
         AdminResponse::Error { code, message } => (code, message),
@@ -464,3 +471,47 @@ async fn a_new_host_unlock_key_reaches_ready_after_a_restart_and_the_old_one_can
         .into_iter()
         .for_each(|secret| assert_not_logged(&logs, secret.expose_secret()));
 }
+
+async fn an_untrusted_handoff_leaves_it_locked_for_the_passphrase(profile: DeploymentProfile) {
+    let (_turn, logs, before) = turn().await;
+    let fixture = Fixture::new().await;
+    let secret = with_host_key(&fixture);
+    let dir = HandoffDir::new();
+    let handoff = dir.write(&secret);
+    fs::set_permissions(&handoff, fs::Permissions::from_mode(0o644)).unwrap();
+    let service = service_on(&fixture, profile);
+
+    assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Locked);
+
+    assert_one_record(&logs, before, "WARN", "refused", Some("untrusted"));
+    assert_not_logged(&logs, &secret);
+    assert_passphrase_unlock_works(&service).await;
+}
+
+async fn a_handoff_that_is_not_an_identity_leaves_it_locked_for_the_passphrase(profile: DeploymentProfile) {
+    let (_turn, logs, before) = turn().await;
+    let fixture = Fixture::new().await;
+    with_host_key(&fixture);
+    let dir = HandoffDir::new();
+    let handoff = dir.write("not an age secret key");
+    let service = service_on(&fixture, profile);
+
+    assert_eq!(service.unlock_at_start(&handoff).await, ServiceState::Locked);
+
+    assert_one_record(&logs, before, "WARN", "refused", Some("not_an_identity"));
+    assert_passphrase_unlock_works(&service).await;
+}
+
+on_both_profiles!(
+    a_good_handoff_reaches_ready_and_serves_with_no_unlock,
+    without_locked_memory_the_handoff_is_never_opened,
+    a_missing_handoff_leaves_it_locked_for_the_passphrase,
+    an_identity_that_is_not_a_recipient_leaves_it_locked_for_the_passphrase,
+    an_uninitialized_vault_stays_locked,
+    an_untrusted_handoff_leaves_it_locked_for_the_passphrase,
+    a_handoff_that_is_not_an_identity_leaves_it_locked_for_the_passphrase,
+    init_host_unlock_with_no_handoff_is_refused_before_any_prompt_and_writes_nothing,
+    init_host_unlock_with_an_untrusted_handoff_names_the_reason_and_not_the_key,
+    init_host_unlock_then_a_restart_reaches_ready_with_no_unlock,
+    a_new_host_unlock_key_reaches_ready_after_a_restart_and_the_old_one_can_then_be_removed,
+);

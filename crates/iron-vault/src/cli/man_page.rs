@@ -89,8 +89,8 @@ mod tests {
 
     #[test]
     fn committed_pages_are_current() {
-        // The Container build adds `init --host-unlock` to the parser, and it is never packaged.
-        if cfg!(feature = "container") {
+        // A dev-mode build leaves `init --host-unlock` out of the parser, so only the other builds match the pages.
+        if cfg!(feature = "dev-mode") {
             return;
         }
         let expected = pages();

@@ -62,7 +62,7 @@ impl AuditEvent for UnlockRefused<'_> {
     }
 }
 
-/// `vault.host-unlock`: a container-profile service tried the unlock handoff while Starting. It never holds the
+/// `vault.host-unlock`: a Protected or Container service tried the unlock handoff while Starting. It never holds the
 /// handoff's bytes or its recipient key. Its outcome is `host_unlock_outcome`, since `outcome` is the request event's.
 #[derive(Debug, Clone, Copy)]
 pub struct HostUnlock {

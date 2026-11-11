@@ -1,4 +1,4 @@
-//! Reading the host unlock handoff: the file through which the host gives a container-profile service the host unlock
+//! Reading the host unlock handoff: the file through which the host gives a Protected or Container service the host unlock
 //! identity (`design/docker-compose.md`, specification §17).
 //!
 //! The file holds the recovery key's secret text, so it is read only through its own trusted-path rule: whoever could

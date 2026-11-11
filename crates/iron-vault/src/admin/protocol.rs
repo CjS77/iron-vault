@@ -61,7 +61,7 @@ pub enum AdminRequest {
     /// Creates the vault and approves the initial config as version 1; the service prompts for both passphrases and
     /// reveals the recovery key. Command ID 7.
     Init {
-        /// Also enrol the identity in the unlock handoff as a recipient, which only a Container-profile service accepts.
+        /// Also enrol the identity in the unlock handoff as a recipient, which a Development service refuses.
         host_unlock: bool,
     },
     /// Lists every credential with its kind, permitted origins and standing; allowed in every state. No arguments.

@@ -1,5 +1,5 @@
-//! The host unlock at startup (`design/docker-compose.md`, "In the container"; specification §15): a container-profile
-//! service leaves Starting for Checking when the unlock handoff opens the vault, and for Locked otherwise.
+//! The host unlock at startup (`design/docker-compose.md`, "In the container"; specification §15): a Protected or
+//! Container service leaves Starting for Checking when the unlock handoff opens the vault, and for Locked otherwise.
 //!
 //! Every step's failure leaves the service Locked with passphrase `unlock` still offered, since the operational identity
 //! is still a recipient. None counts toward the passphrase attempt limit: a host unlock failure is not a guess, and only
@@ -182,8 +182,20 @@ const fn outcome_of(opened: &Result<Option<VaultIdentity>, HostUnlockRefusal>) -
     }
 }
 
-/// Whether `start` leaves this profile in Starting for [`ServiceContext::unlock_at_start`]: only the Container profile
-/// tries a host unlock.
+/// Whether `start` leaves this profile in Starting for [`ServiceContext::unlock_at_start`]: the Protected and Container
+/// profiles try a host unlock. A Development service runs as the invoking user, so no root-owned handoff unit exists to trust.
 pub(super) const fn tries_host_unlock(profile: DeploymentProfile) -> bool {
-    matches!(profile, DeploymentProfile::Container)
+    matches!(profile, DeploymentProfile::Protected | DeploymentProfile::Container)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_protected_and_container_profiles_try_a_host_unlock() {
+        assert!(tries_host_unlock(DeploymentProfile::Protected));
+        assert!(tries_host_unlock(DeploymentProfile::Container));
+        assert!(!tries_host_unlock(DeploymentProfile::Development));
+    }
 }

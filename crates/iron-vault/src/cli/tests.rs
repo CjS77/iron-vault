@@ -60,13 +60,13 @@ fn init_is_a_client_command_without_arguments() {
     assert_eq!(parse(&["init", "hunter2-correct"]).unwrap_err().exit_code(), 2);
 }
 
-/// Only a Container build has a host unlock to enrol, so every other build's parser does not know the flag.
+/// A dev-mode build has no host unlock to enrol, so its parser does not know the flag.
 #[test]
-fn init_host_unlock_is_accepted_only_by_a_container_build() {
+fn init_host_unlock_is_accepted_by_every_build_but_dev_mode() {
     let parsed = parse(&["init", "--host-unlock"]);
-    match cfg!(feature = "container") {
-        true => assert_eq!(parsed.unwrap().command, Command::Init { host_unlock: true }),
-        false => assert_eq!(parsed.unwrap_err().exit_code(), 2),
+    match cfg!(feature = "dev-mode") {
+        false => assert_eq!(parsed.unwrap().command, Command::Init { host_unlock: true }),
+        true => assert_eq!(parsed.unwrap_err().exit_code(), 2),
     }
 }
 

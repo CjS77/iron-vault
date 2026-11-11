@@ -49,9 +49,9 @@ pub enum InitRefusal {
 /// Why `init --host-unlock` has no host unlock identity to enrol. No variant carries the handoff's bytes.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum HostUnlockUnavailable {
-    /// Only a Container-profile service has a host unlock.
-    #[error("this build has no host unlock")]
-    NotContainer,
+    /// A Development service has no host unlock: it runs as the invoking user, with no root-owned handoff to trust.
+    #[error("a development build has no host unlock")]
+    Development,
     /// Nothing is at the handoff path.
     #[error("there is no unlock handoff")]
     Absent,
@@ -66,7 +66,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     pub async fn read_host_unlock(&self) -> Result<RecipientIdentity, InitRefusal> {
         let setup = Arc::clone(&self.setup);
         if !tries_host_unlock(setup.paths.profile) {
-            return Err(InitRefusal::HostUnlock(HostUnlockUnavailable::NotContainer));
+            return Err(InitRefusal::HostUnlock(HostUnlockUnavailable::Development));
         }
         let path = self.handoff.clone();
         let read = tokio::task::spawn_blocking(move || read_handoff(setup.paths.profile, setup.paths.owner, &path)).await;

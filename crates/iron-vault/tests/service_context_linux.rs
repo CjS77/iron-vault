@@ -1075,8 +1075,9 @@ async fn unlock_while_ready_is_refused_before_any_prompt_and_changes_nothing() {
 }
 
 /// A protected service on a [`GatedFs`] armed on `operational.age` whose memory is not locked, with an admin session the
-/// test's account can use. Returns the service, the session and the signal that the passphrase envelope was read.
-fn protected_without_locked_memory(
+/// test's account can use, left Locked by a host unlock that finds no handoff. Returns the service, the session and the
+/// signal that the passphrase envelope was read.
+async fn protected_without_locked_memory(
     fixture: &Fixture,
     memory: MemoryProtection,
 ) -> (Arc<ServiceContext<GatedFs>>, AdminSession, oneshot::Receiver<()>) {
@@ -1085,6 +1086,7 @@ fn protected_without_locked_memory(
     let service = fixture
         .start_as(fs, PassedSockets::default(), DeploymentProfile::Protected, memory)
         .unwrap();
+    service.unlock_at_start(&fixture.path("no-handoff")).await;
     let session = AdminSession::open_for(&service, DeploymentProfile::Development);
     (service, session, reached)
 }
@@ -1092,12 +1094,14 @@ fn protected_without_locked_memory(
 #[tokio::test]
 async fn a_protected_install_without_locked_memory_refuses_recovery_check_before_any_prompt_and_reads_nothing() {
     let fixture = approved().await;
-    let memory = MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 });
+    // Unsupported, not Unavailable: the other memory test counts the refusals recorded for an unavailable lock.
+    let memory = MemoryProtection::Unsupported;
     let fs = GatedFs::default();
     let (mut reached, _release) = fs.arm("identity.age");
     let service = fixture
         .start_as(fs, PassedSockets::default(), DeploymentProfile::Protected, memory)
         .unwrap();
+    service.unlock_at_start(&fixture.path("no-handoff")).await;
     let session = AdminSession::open_for(&service, DeploymentProfile::Development);
     let (key, _) = iron_vault_store::RecoveryKey::generate();
     let key = secrecy::ExposeSecret::expose_secret(&key).to_owned();
@@ -1126,7 +1130,7 @@ async fn a_protected_install_without_locked_memory_refuses_unlock_before_any_pro
     let logs = captured_logs();
     let fixture = approved().await;
     let memory = MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 });
-    let (service, session, mut reached) = protected_without_locked_memory(&fixture, memory);
+    let (service, session, mut reached) = protected_without_locked_memory(&fixture, memory).await;
 
     let (_, prompts, response) = converse(&session.socket, AdminRequest::Unlock, PASSPHRASE.to_owned()).await;
 
@@ -1147,17 +1151,13 @@ async fn a_protected_install_without_locked_memory_refuses_unlock_before_any_pro
         report.memory,
         MemoryStatus::Unavailable("RLIMIT_MEMLOCK soft limit is 65536 bytes, not unlimited".to_owned())
     );
-    // Only this test refuses for memory, so the shared buffer holds its two refusals alone: the handler's and the context's.
+    // Only this test refuses for an unavailable memory lock, so the shared buffer holds its three refusals alone: the startup host unlock's, the handler's and the context's.
     let refusals: Vec<_> = logs
         .events("vault.unlock-refused")
         .into_iter()
-        .filter(|record| record["refusal"] == "memory_unprotected")
+        .filter(|record| record["refusal"] == "memory_unprotected" && record["memory_protection"] == "unavailable")
         .collect();
-    assert_eq!(refusals.len(), 2, "{}", logs.text());
-    assert!(
-        refusals.iter().all(|record| record["memory_protection"] == "unavailable"),
-        "{refusals:?}"
-    );
+    assert_eq!(refusals.len(), 3, "{}", logs.text());
     assert_no_passphrase_logged(&logs);
     session.close().await;
 }
@@ -1167,7 +1167,7 @@ async fn an_uninitialized_protected_install_names_init_before_its_memory() {
     let fixture = Fixture::new().await;
     fs::remove_dir_all(fixture.path("state")).unwrap();
     mkdir(&fixture.path("state"), 0o700);
-    let (_service, session, _reached) = protected_without_locked_memory(&fixture, MemoryProtection::Unsupported);
+    let (_service, session, _reached) = protected_without_locked_memory(&fixture, MemoryProtection::Unsupported).await;
 
     let response = session.send(AdminRequest::Unlock, PASSPHRASE).await.unwrap();
 
