@@ -58,6 +58,8 @@ The **initialization state** is read from the names in the state directory and t
 vault identity, so it is known while the vault is locked. The one exception is the config directory's own files, whose
 bytes are compared with the initial config (below). The checks run in this order, and the first that matches decides:
 
+0. **`reset.unfinished` is present.** The state is Unfinished reset, whatever else the directories hold: a reset
+   started and has not reached its commit point, and only `reset` finishes it ([reset.md](reset.md#unfinished-reset)).
 1. **`init.unfinished` is present.** The state is Unfinished if the state directory holds no file but the lock file
    (`lock`), a `lost+found` directory, stale temp files (`.<name>.tmp`), the files an initialization writes
    (`init.unfinished`, `identity.age`, `recipients.age`, `operational.age`, at most one approver key envelope
@@ -72,6 +74,7 @@ bytes are compared with the initial config (below). The checks run in this order
 
 | State | Meaning |
 |---|---|
+| Unfinished reset | Check 0 matched: a reset started and has not reached its commit point. |
 | Uninitialized | Check 3 matched: nothing of a vault or its config is there. |
 | Unfinished | Check 1 matched: an initialization started and has not reached its commit point. |
 | Initialized | Check 2 matched: a manifest and no `init.unfinished`. |
@@ -79,7 +82,7 @@ bytes are compared with the initial config (below). The checks run in this order
 
 A **foreign file** is a file in the state directory that is not on the lists above: the lock file, `lost+found`, temp
 files, the vault's own files (`identity.age`, `recipients.age`, `recipients.age.staged`, `operational.age`,
-`manifest.age`, `approval.age`, `init.unfinished`), approver key envelopes (`approver-<approver ID>.age`, the ID a
+`manifest.age`, `approval.age`, `init.unfinished`, `reset.unfinished`), approver key envelopes (`approver-<approver ID>.age`, the ID a
 version 4 UUID in lowercase hyphenated form), record files (`record-*.age`) and the recovery check record
 (`recovery.toml`), which [recovery.md](recovery.md#initialization) describes. Beside a manifest, an approver key
 envelope that no pinned approver names is an [orphan](approval-signers.md#orphan-key-files), not a foreign file. The
@@ -93,7 +96,8 @@ decides which records exist ([§13](iron-vault-specification.md#13-vault-structu
 lock the owner out of a working vault. `lost+found` is the directory a filesystem check creates on a fresh volume, so
 `init` ignores it like the lock file and temp files ([open question 9](#open-questions)).
 
-Init proceeds only on Uninitialized and Unfinished. Examples of Unrecognized:
+Init proceeds only on Uninitialized and Unfinished; on Unfinished reset it ends with `already-initialized`, whose
+message says a reset was interrupted and to run `iron-vault reset` again. Examples of Unrecognized:
 
 - envelope files (`identity.age`, `recipients.age`, `operational.age`, `approver-<approver ID>.age`) without
   `init.unfinished` or a manifest: a crash cannot leave them, because `init.unfinished` is durable before the first of

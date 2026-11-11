@@ -119,8 +119,10 @@ service state gate, and `admin_allows` offers it in those three states.
 [§15](iron-vault-specification.md#15-service-states-and-errors) needs no new state or edge.
 
 Reset also reads the initialization state, without the vault identity. A **vault file** here is a store-owned file in
-the state directory other than the recovery check record: `recovery.toml` alone is the record of a vault already gone,
-and `init` removes it ([recovery.md](recovery.md#initialization)). Reset proceeds on:
+the state directory other than the recovery check record, the owner-lock file and stale temp files. None of them alone
+is a vault: `recovery.toml` is the record of a vault already gone, and `init` removes it
+([recovery.md](recovery.md#initialization)); the owner-lock file says only that the owner locked; and a temp file is a
+write that never landed, which check 3 already lets an Uninitialized directory hold. Reset proceeds on:
 
 | Initialization state | What reset does | Confirmation text |
 |---|---|---|
@@ -144,8 +146,8 @@ A new initialization state, checked before every other:
 
 0. **`reset.unfinished` is present.** The state is Unfinished reset, whatever else the directories hold.
 
-Checks 1 to 4 of [vault-initialization.md](vault-initialization.md#initialization-state) follow unchanged; K-316 adds
-check 0 there. A new file, not `init.unfinished`, because the two mean opposite things: `init.unfinished` says files
+Checks 1 to 4 of [vault-initialization.md](vault-initialization.md#initialization-state) follow unchanged, and that
+document lists check 0 with them. A new file, not `init.unfinished`, because the two mean opposite things: `init.unfinished` says files
 are being added and lets `init` remove only what an init writes, while a vault being reset holds record files, the
 staged inventory and several approver key envelopes. Beside `init.unfinished` they would read Unrecognized and strand
 the owner. Checked first, `reset.unfinished` decides the state whatever `init.unfinished` or `import.unfinished` lies
