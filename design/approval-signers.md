@@ -557,6 +557,29 @@ them.
 | A removed approver's passphrase no longer gives owner presence, and its key file is gone | `a_removed_approver_gives_no_presence_and_leaves_no_key_file` | [§14](iron-vault-specification.md#14-recipients-startup-and-memory) |
 | No typed passphrase or key file byte reaches the log | `no_typed_secret_reaches_the_log_through_approver_commands` | [§18](iron-vault-specification.md#18-logging) |
 
+### TPM approver
+
+`crates/iron-vault/tests/tpm_approver_linux.rs` runs the same service against the real
+[TPM signing helper](tpm-approval-signer.md#the-helper-process) and `swtpm`, one test per
+[release check](tpm-approval-signer.md#release-checks) an emulated TPM can show. The tests are `#[ignore]`d and run one at a time
+(`cargo test -p iron-vault --test tpm_approver_linux -- --ignored --test-threads=1` with `IRON_VAULT_SWTPM` naming the emulator). The
+checks that need the installed package, systemd or a firmware TPM are in `scripts/release/tpm-signer-check.sh`.
+
+| Promise | Test | Specification |
+|---|---|---|
+| Enrolling pins a `tpm` approver with a `0600` key blob, shows it in `approver list` and leaves both approval counters where they were | `enrolling_pins_a_tpm_key_with_a_private_blob_and_keeps_the_counters` | [§12](iron-vault-specification.md#12-configuration-approval-and-reload), [§14](iron-vault-specification.md#14-recipients-startup-and-memory) |
+| A config approved with the TPM is a 191-byte envelope with algorithm `02` that a restarted service verifies | `a_config_approved_with_the_tpm_is_a_191_byte_envelope_that_verifies_after_a_restart` | [§12](iron-vault-specification.md#12-configuration-approval-and-reload) |
+| `replace`, `rm` and `recipient remove` accept the PIN as owner presence | `replace_and_rm_accept_the_pin_as_owner_presence`, `recipient_add_export_and_recipient_remove_accept_the_pin` | [§14](iron-vault-specification.md#14-recipients-startup-and-memory) |
+| A wrong PIN is `approval-denied` and the dictionary-attack counter rises by exactly one | `a_wrong_pin_is_denied_and_spends_exactly_one_try` | [§12](iron-vault-specification.md#12-configuration-approval-and-reload) |
+| The helper stops at its share of the tries (`tpm-locked-out`), a PIN-protected key outside Iron Vault still authorizes, and the software approver still approves | `the_reserve_keeps_the_counter_at_the_share_and_other_keys_working` | [§12](iron-vault-specification.md#12-configuration-approval-and-reload), [§15](iron-vault-specification.md#15-service-states-and-errors) |
+| An interval under 600 seconds, or a maximum of 1, makes the approver unavailable and spends no try | `weak_dictionary_attack_settings_make_the_approver_unavailable_without_spending_a_try` | [§12](iron-vault-specification.md#12-configuration-approval-and-reload) |
+| `recipient add` and `export` accept the PIN by switching to the TPM approver, and the audit log names `tpm_pin` and the approver | `recipient_add_export_and_recipient_remove_accept_the_pin` | [§16](iron-vault-specification.md#16-administration-recovery-and-migration) |
+| A TCTI trace of an enrollment and an approval holds neither the PIN nor its authorization value: the session is protected | `a_recorded_tcti_trace_holds_neither_the_pin_nor_the_authorization_value` | [§12](iron-vault-specification.md#12-configuration-approval-and-reload) |
+| A cleared TPM is `not this TPM`, and the software approver still approves | `a_cleared_tpm_is_not_this_tpm_and_the_software_approver_still_approves` | [§12](iron-vault-specification.md#12-configuration-approval-and-reload) |
+| Rotation from software to TPM and back works, and removing the TPM approver deletes its blob | `rotating_from_software_to_tpm_and_back` | [§14](iron-vault-specification.md#14-recipients-startup-and-memory) |
+| A forgotten PIN is recovered through another approver, and the counters carry over | `a_forgotten_pin_is_recovered_through_another_approver_with_the_counters_kept` | [§12](iron-vault-specification.md#12-configuration-approval-and-reload) |
+| No PIN, right or wrong, and no authorization value reaches the log | `no_pin_reaches_the_log` | [§18](iron-vault-specification.md#18-logging) |
+
 ## Implementation tickets
 
 Each ticket updates the design documents and glossary entries it changes, in the same branch as its code.

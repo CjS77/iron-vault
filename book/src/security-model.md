@@ -69,6 +69,15 @@ passphrase enrolls or removes an approver. The price is that losing every approv
 [`reset`](cookbook/reset-vault.md) as the only way out, so
 [keep a second one](cookbook/approval-signers.md#why-keep-a-second-approver).
 
+An approver can be a key held in the machine's TPM behind a PIN ([recipe](cookbook/tpm-approval.md)). The service never
+opens the TPM: a separate helper, running as its own account and reachable only by the service account, signs the three fixed
+payloads the service sends it, and only under the PIN you typed. The TPM limits guessing by itself, and the helper refuses to
+work on a TPM whose lockout interval is under 600 seconds, so a compromised service gets 16 guesses and then about one per ten
+minutes; the PIN is at least 6 characters for that reason. The TPM keeps no copy of the PIN, so a forgotten PIN is recovered
+through another approver, and a vault whose only approver is a lost TPM one is back to `reset`. This protects the approval from
+a stolen vault passphrase or a service that took over a running process. It does not protect against someone who controls the
+host: root, or any member of the `tss` group, can weaken the TPM's lockout settings, and the helper then refuses to sign.
+
 ### What this doesn't protect against
 
 - **Removing a recipient doesn't reach old copies.** It only changes future versions of `identity.age`. A backup

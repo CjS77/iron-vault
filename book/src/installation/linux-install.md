@@ -251,7 +251,7 @@ see the [recipe](../cookbook/tpm-unlock.md). The design is [tpm-unlock.md](../..
 
 **What it needs.** Ubuntu 24.04 LTS only (systemd 255): on any other release the provisioning helper stops, and the service
 starts Locked and waits for `iron-vault unlock` as before. It also needs a TPM 2.0, Secure Boot on (the seal is bound to PCR 7,
-which records the Secure Boot policy) and `age-keygen` (Ubuntu package `age`). **v0 has no TPM PIN.** A laptop gets its second
+which records the Secure Boot policy) and `age-keygen` (Ubuntu package `age`). **TPM unlock has no PIN in v0** (the [TPM approver](#tpm-approval-signer) has one). A laptop gets its second
 secret from full-disk encryption instead, as below.
 
 **How it works.** The host unlock identity is a key that `systemd-creds` seals to the TPM as the root-only file
@@ -386,6 +386,38 @@ A copy of the blob in a backup still opens on this TPM at this PCR 7. To retire 
   ends unattended unlock until you provision again; the vault waits Locked, not stranded.
 - **Uninstall and purge.** `apt remove` stops the handoff unit and keeps `/etc/iron-vault-host`. `apt purge` deletes it only
   when you also let it delete the vault, because that identity opens only that vault.
+
+## TPM approval signer
+
+The package can also use the machine's TPM as an approval signer: a key that never leaves the TPM approves your configs and the
+changes that need you present, once you type its PIN. It is optional, adds an approver and replaces none, and **it has had no
+release check on a real machine yet, so don't rely on it for real secrets.** For the commands, see the
+[recipe](../cookbook/tpm-approval.md). The design is [tpm-approval-signer.md](../../../design/tpm-approval-signer.md).
+
+**What it needs.** Ubuntu 24.04 LTS only, a TPM 2.0 at `/dev/tpmrm0` and the `tss` group with the udev rule that gives it that
+device. Ubuntu's `tpm-udev` package provides both and the Iron Vault package recommends it; the package creates no `tss` group
+itself. Without them the kind is still offered, because the socket exists, but `approver add --kind tpm` answers
+`approver-kind-unavailable`.
+
+**What the package installs.** A helper, `/usr/libexec/iron-vault/iron-vault-tpm-signer`, run for one connection at a time by
+`iron-vault-tpm-signer.socket` as its own account, `iron-vault-tpm`. The service account and root alone can connect to
+`/run/iron-vault-tpm/signer.sock`. `iron-vault.service` is unchanged: it still has no access to any TPM device. Install enables
+and starts the socket, and remove stops it; both accounts are kept, as `iron-vault` is.
+
+**The PIN.** At least 6 characters, typed twice at enrollment. The TPM keeps no copy of it. The TPM counts every wrong try, and
+shares one counter among everything on the machine that uses a PIN, such as a disk-encryption slot. The helper therefore spends
+at most half of the TPM's tries, never more than 16 at a time, and refuses to work at all when the TPM's lockout recovery
+interval is under 600 seconds (one forgotten try is forgiven per interval). A wrong try is also counted after a power cut that
+follows a use of the key.
+
+**Recovery advice.**
+
+- Keep a software approver beside the TPM one. A forgotten PIN, a firmware reset that cleared the TPM, or a replaced board are
+  all recovered by enrolling another approver and removing the TPM one; both approval counters carry over.
+- If the TPM approver is the only one and it is lost, only [`reset`](../cookbook/reset-vault.md) remains.
+- The recovery key and the vault passphrase are not approvers and cannot enroll or remove one.
+- The key works on this machine only, and does not move in a migration bundle.
+- To retire the TPM approver, `approver remove` it; that deletes its blob. Nothing of Iron Vault's stays in the TPM.
 
 ## Upgrade
 

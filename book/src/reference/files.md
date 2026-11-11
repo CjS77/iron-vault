@@ -33,6 +33,9 @@ The `.deb` package runs the service as the `iron-vault` system account.
 | `/usr/lib/sysusers.d/iron-vault.conf`, `/usr/lib/tmpfiles.d/iron-vault.conf` | root | `0644` | the package | Create the account and the directories above. |
 | `/etc/logrotate.d/iron-vault` | root | `0644` | the package | Log rotation ([log operations](log-operations.md#rotation)). |
 | `/usr/lib/systemd/system/iron-vault-host-unlock.service` | root | `0644` | the package | The handoff unit: at each boot it unseals the host unlock blob and installs the [handoff](#host-unlock-handoff). It has no `[Install]` section; `iron-vault.service` pulls it in at every start. |
+| `/usr/libexec/iron-vault/iron-vault-tpm-signer` | root | `0755` | the package | The TPM signing helper, the only program that opens the TPM for approvals ([recipe](../cookbook/tpm-approval.md)). `/usr/bin/iron-vault` never links the TPM library. |
+| `/usr/lib/systemd/system/iron-vault-tpm-signer.socket`, `iron-vault-tpm-signer@.service` | root | `0644` | the package | The helper's socket, and the instance started for each connection, as the `iron-vault-tpm` account with the `tss` group. |
+| `/run/iron-vault-tpm/signer.sock` | `iron-vault` | `0600` | systemd | The helper's socket. Only the service account and root can connect, one connection at a time. The service offers the `tpm` approver kind while it exists. |
 | `/usr/sbin/iron-vault-provision-host-unlock` | root | `0755` | the package | The provisioning helper, `iron-vault-provision-host-unlock(8)`. It seals a new host unlock identity to the TPM ([TPM unlock](../installation/linux-install.md#tpm-unlock)). |
 | `/etc/iron-vault-host/` | root | `0700` | the helper | The host unlock directory. The service cannot see it. Kept when the package is removed; purged only when the vault is. |
 | `/etc/iron-vault-host/host-unlock.cred` | root | `0600` | the helper | The host unlock blob: the host unlock identity sealed by `systemd-creds` to this TPM and PCR 7. It opens only on this machine at this Secure Boot policy, and a backup copy opens there too. |
@@ -127,7 +130,7 @@ writes its own copy.
 | `recipients.age.staged` | A recipient change being committed. The next recipient command finishes or discards it. |
 | `operational.age` | The passphrase envelope: the operational identity, sealed with the vault passphrase. |
 | `approver-<id>.age` | An approver key envelope, one per software approver: the key that signs config approvals for it, sealed with its approval passphrase. `init` writes one for its approver. |
-| `approver-<id>.tpm` | A TPM key blob, one per TPM approver: the wrapped key only the TPM that made it can load. It is not secret. |
+| `approver-<id>.tpm` | A TPM key blob, one per TPM approver, mode `0600`: the wrapped key only the TPM that made it can load. It is not secret. |
 | `approval.age` | The approval state: the committed and highest reserved approval versions. |
 | `manifest.age` | The vault manifest: which credential records exist, sealed with a code only the vault identity can make. |
 | `record-<id>.age` | One credential record: its kind, secret and permitted origins. |

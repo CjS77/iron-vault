@@ -49,8 +49,8 @@ reaches its route.
 ## Not yet built
 
 - **A TPM approval key.** The service signs each approval with a key opened by the approval passphrase, which you
-  type over the admin socket. A key in the host's TPM, with a host-side helper that signs only the service's approval
-  transaction, waits for the TPM approval signer; see [Approve configs with a TPM PIN](roadmap/tpm-approval.md).
+  type over the admin socket. A key in the host's TPM, reached through a host-side helper that signs only the service's
+  approval transaction, is built for the [Linux package](tpm-approval.md) but not yet wired into this profile.
 
 ## Reference
 

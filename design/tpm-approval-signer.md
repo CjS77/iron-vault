@@ -576,6 +576,10 @@ Two items need the hypervisor or the machine, and are recorded with its output:
 - **A firmware TPM's DA settings:** `tpm2_getcap properties-variable` on the release hardware, recorded, so the
   manual can say what the reserve allows there.
 
+Items 3 to 11, except the interval and maximum arithmetic of item 7 on a firmware TPM, also run against `swtpm` as ignored tests in
+`crates/iron-vault/tests/tpm_approver_linux.rs` ([approval-signers.md](approval-signers.md#tpm-approver)), so a run of the script on a
+VM repeats them with systemd in the loop and the emulator-only steps are skipped.
+
 The gate is met by a run on Ubuntu 24.04 in a VM with `swtpm`, and a run on Ubuntu 24.04 hardware with a firmware TPM
 for the non-destructive items and the power-loss item.
 
@@ -654,7 +658,8 @@ All six were decided by the owner on 2026-11-11, who accepted the default of eac
 5. **The `tss` group.** *Decided (owner, 2026-11-11):* the package relies on Ubuntu's `tpm-udev` rule (`/dev/tpmrm0`
    `tss:tss 0660`) and does not create the group. On a machine without it the kind is offered, because the socket
    exists, but the helper's instance cannot start, and enrollment answers `approver-kind-unavailable`
-   ([Offered](#the-helper-process)). Declaring `Recommends: tpm-udev` is K-334's call.
+   ([Offered](#the-helper-process)). The package declares `Recommends: tpm-udev` ([linux-package.md](linux-package.md#tpm-signing-helper)): it owns the group and
+   the rule, a recommendation installs it by default, and a machine with no TPM can decline it.
 6. **§4's Linux row.** It names the unlock adapters and "an in-service adapter with a TPM PIN in a later phase", and no
    adapter for approval signing. *Decided (owner, 2026-11-11):* no spec edit in this ticket. That later unlock PIN, if it
    comes, should go through a helper too, since §14 keeps the service account away from the TPM.

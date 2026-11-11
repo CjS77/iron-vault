@@ -5,7 +5,8 @@
 At the end of this recipe your vault has a new approval passphrase, the old one no longer approves anything, and every
 route kept serving throughout. It also shows why to keep a second approver.
 
-An **approval signer** is whatever signs your config approvals; in v0 it is a key sealed under an approval passphrase.
+An **approval signer** is whatever signs your config approvals: a key sealed under an approval passphrase, or on a protected
+Linux install a key held in the TPM behind a PIN ([the TPM recipe](tpm-approval.md)).
 The vault pins one **approver** for each signer, and any one of them gives the service your approval: for `config
 approve`, and for `replace`, `rm`, `recipient remove`, `approver add` and `approver remove`. Rotating means enrolling the new
 approver, approving the active config with it, then removing the old one.
@@ -23,7 +24,8 @@ approvers again. [`reset`](reset-vault.md), which discards the vault so you rebu
 is the only way out.
 
 Enroll a second approver while one still answers, with a passphrase kept apart from the first: another password
-manager entry, or a sealed envelope. Then a forgotten passphrase costs one `approver remove`.
+manager entry, or a sealed envelope. Then a forgotten passphrase costs one `approver remove`. If you add a TPM approver, keep
+a software approver beside it for the same reason: a TPM keeps no copy of its PIN.
 
 If the approver you forgot signed the config now in force (it shows `active` in `approver list`), approve the config
 with the other approver first, as in step 3, or the remove fails with `approver-in-use`. Only then remove the
