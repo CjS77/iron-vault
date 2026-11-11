@@ -468,7 +468,7 @@ Five codes are new, the next free numbers after 39:
 |---|---|---|
 | `40` | `approver-invalid` | `approver add`: the label breaks its rule; `approver remove`: the ID is not a version 4 UUID; the message names the rule |
 | `41` | `unknown-approver` | `approver remove`: no pinned approver has this ID; nothing was changed |
-| `42` | `approver-set-invalid` | `approver add`: 16 approvers are already pinned; `approver remove`: it is the last approver; nothing was changed |
+| `42` | `approver-set-invalid` | `approver add`: 16 approvers are already pinned; `approver remove`: it is the last approver; `export`: no `software` approver is pinned; nothing was changed |
 | `43` | `approver-in-use` | `approver remove`: this approver signed the active approval; the message says to approve the config with another approver first; nothing was changed |
 | `44` | `approver-kind-unavailable` | `approver add`: this install does not offer that signer kind (`tpm` needs the `Protected` profile and the helper's socket, `hardware` is not built yet), or cannot make that kind of signer now because the TPM signing helper refused or could not be reached; the message names the helper's status (a lockout is `tpm-locked-out`, 51); nothing was changed |
 

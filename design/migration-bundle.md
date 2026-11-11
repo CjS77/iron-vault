@@ -72,16 +72,17 @@ entry and does not decrypt it, so no credential is ever in plaintext for an expo
 does not match its entry is damage; export refuses it, naming the record, rather than carry a vault that would fail
 its own check on the destination. The owner removes or replaces the damaged credential first.
 
-**Every pinned approver's key file is carried, under the export passphrase.** v0 pins only software approvers, each
-with its key file. An approver key envelope is sealed only to its approval passphrase, which a party holding a copy
+**Every software approver's key file is carried, under the export passphrase.** A software approver has a key file. An approver key envelope is sealed only to its approval passphrase, which a party holding a copy
 could guess at offline, and §16 step 2 puts every secret-bearing entry under the export passphrase. So export encrypts
 each key file, unopened, to the vault public key, and the bundle entry is that `age` file. Import opens it with the
-vault identity it got from the export passphrase and writes the envelope inside, byte for byte. A pinned approver whose
+vault identity it got from the export passphrase and writes the envelope inside, byte for byte. A pinned software approver whose
 key file is missing, larger than `MAX_PASSPHRASE_ENVELOPE_LEN`, or not one scrypt stanza within the work factor
 bounds is refused by export, naming the approver ID. Anyone who knows the vault public key could put another envelope
 in the entry, but the pinned public key in the MAC'd approval state decides whose signature counts, so a substitute
-only fails to sign. TPM and hardware approvers (signer kinds `tpm` and `hardware`, reserved today) are bound to their
-device and cannot move; the epic that enrolls one decides how export treats it ([open question 3](#open-questions)).
+only fails to sign. A `tpm` approver (and a `hardware` one, reserved today) is bound to its device and has no key file in the bundle,
+though `approval.age` still pins it. Export refuses with `approver-set-invalid` when no `software` approver is pinned,
+and import lists each `tpm` approver as `bound to the source machine`
+([TPM approval signer](tpm-approval-signer.md#migration-bundles)).
 
 ### The config
 
@@ -461,7 +462,7 @@ factor would slow an offline guess at a stolen bundle, at the cost of 1 GiB of l
 names the header's vault ID; the approval state opens, names the same vault ID, pairs with the manifest and has a
 committed approval; the config's BLAKE2b-256 equals the committed config digest; the manifest's entries and the record
 entries name the same record IDs, and each record file's digest equals its entry's; the bundled approver keys name
-exactly the pinned approvers, and each opens with the vault identity to an approver key envelope of at most
+exactly the pinned software approvers, and each opens with the vault identity to an approver key envelope of at most
 `MAX_PASSPHRASE_ENVELOPE_LEN` with exactly one scrypt stanza and a work factor no higher than
 `MAX_PASSPHRASE_WORK_FACTOR`; and the counts equal the header's. Each failure names the check, never a byte of the
 bundle.
@@ -582,8 +583,9 @@ point on 2026-11-11.
    *export passphrase*, and the import prompt is `Export passphrase`, so the owner types it under the name it was
    chosen under.
 3. **Device-bound approvers.** *Decided: default accepted (2026-11-11).* A `tpm` or `hardware` approver's key cannot
-   move. *Default:* left to the epic that enrolls the first one (EP-33 for `tpm`); v0 decodes neither kind, so no v0
-   bundle holds one.
+   move. *Default:* left to the epic that enrolls the first one. *Settled for `tpm`:* export carries no `.tpm` file, refuses
+   when no software approver is pinned, and import lists each `tpm` approver as bound to the source machine
+   ([tpm-approval-signer.md](tpm-approval-signer.md#migration-bundles)). A `hardware` approver is still open.
 4. **The destination's approval signer.** *Decided: default accepted (2026-11-11).*
    [§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 5: "The destination … enrolls its
    approval signer". *Default:* the destination's approval signers are the source's pinned approvers, carried in the
