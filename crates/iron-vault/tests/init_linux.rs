@@ -585,6 +585,47 @@ async fn an_unfinished_initialization_refuses_unlock_and_the_next_init_discards_
     assert_no_secret_logged(&logs, &[exchanged.recovery_key()]);
 }
 
+#[tokio::test]
+async fn an_unfinished_import_refuses_unlock_and_the_next_init_discards_it_and_logs_the_import() {
+    let logs = captured_logs();
+    let fixture = Fixture::new().await;
+    ["import.unfinished", "identity.age", "operational.age"]
+        .iter()
+        .for_each(|name| fs::write(fixture.path(&format!("state/{name}")), b"").unwrap());
+    fs::write(fixture.path("etc/config.toml"), b"[listeners.a]\naddress = \"127.0.0.1:1\"\n").unwrap();
+    let service = fixture.start();
+    assert_eq!(service.status().await.vault, VaultStatus::ImportUnfinished);
+
+    let refused = exchange(&service, AdminRequest::Unlock, &[VAULT_PASSPHRASE.as_bytes()]).await;
+    let (code, message) = refused.error();
+    assert_eq!(code, ErrorCode::UnlockFailed);
+    assert!(message.contains("iron-vault import"), "{message}");
+    assert!(refused.prompts.is_empty(), "{refused:?}");
+
+    let exchanged = init(&service, &COMPLETE).await;
+    exchanged.vault_id();
+    assert!(exchanged.notices.starts_with("An unfinished import"), "{}", exchanged.notices);
+    let discarded = logs.events("migration.import-discarded");
+    let files: Vec<&str> = discarded
+        .iter()
+        .filter_map(|record| record["files"].as_str())
+        .find(|files| files.contains("operational.age"))
+        .unwrap()
+        .split(',')
+        .collect();
+    ["config.toml", "operational.age", "identity.age", "import.unfinished"]
+        .iter()
+        .for_each(|name| assert!(files.contains(name), "{name} not in {files:?}"));
+    assert!(
+        logs.events("vault.init-discarded")
+            .iter()
+            .all(|record| !record["files"].as_str().is_some_and(|files| files.contains("import.unfinished"))),
+        "{}",
+        logs.text()
+    );
+    assert_response(&unlock(&service).await, &AdminResponse::Unlock { owner_lock_removed: true });
+}
+
 /// Drives one init over `stream` up to its confirmation prompt, with the recovery key shown.
 async fn to_confirmation(stream: &mut UnixStream) -> String {
     send(stream, &Frame::Request(AdminRequest::Init { host_unlock: false })).await;

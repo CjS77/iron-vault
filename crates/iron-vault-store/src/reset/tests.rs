@@ -12,7 +12,7 @@ use crate::test_dir::TestDir;
 use crate::test_request::HOST;
 use crate::{
     AdmissionPaused, ApprovalPassphrase, InitPassphrases, NewVaultKeys, OsFs, Passphrase, PermittedOrigins, RecoveryCheckRecord,
-    UnlockError, UtcSecond, Vault, begin_initialization, durable_replace, ensure_initializable, require_initialized,
+    UnfinishedKind, UnlockError, UtcSecond, Vault, begin_initialization, durable_replace, ensure_initializable, require_initialized,
     unlock_with_passphrase, write_pending, write_recovery_check, write_staged,
 };
 
@@ -180,6 +180,50 @@ fn the_scope_describes_the_vault_without_its_identity() {
         }
     );
     assert_eq!(read_unverified_vault_id(&dirs.state, &fs), Ok(vault_id));
+}
+
+/// Reset tells an unfinished import from an unfinished initialization in the scope, and removes the import's marker, its
+/// record files and its `config.toml` whatever its bytes.
+#[test]
+fn an_unfinished_import_is_scoped_by_its_kind_and_discarded_whole() {
+    let dirs = Dirs::new("reset-import");
+    let fs = dirs.fault_fs();
+    [
+        "import.unfinished",
+        "identity.age",
+        "manifest.age",
+        "record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age",
+    ]
+    .iter()
+    .for_each(|name| dirs.put(&fs, name));
+    crate::write_pending(&dirs.config, &fs, b"anything the bundle held").unwrap();
+    crate::publish(&dirs.config, &fs, crate::PublishSet::ConfigOnly).unwrap();
+    let scope = dirs.scope(&fs);
+    assert_eq!(scope.state, InitializationState::Unfinished(UnfinishedKind::Import));
+    assert_eq!((scope.record_files, scope.config_files), (1, vec![ConfigFileName::Active]));
+    let discarded = dirs.discard(&fs).unwrap();
+    assert_eq!(
+        discarded.removed,
+        [
+            "manifest.age",
+            "identity.age",
+            "record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age",
+            "import.unfinished",
+            "config.toml"
+        ]
+    );
+    assert_eq!(dirs.names(&fs), lock_files_only());
+}
+
+#[test]
+fn an_unfinished_initialization_is_scoped_by_its_kind() {
+    let dirs = Dirs::new("reset-init-kind");
+    let fs = dirs.fault_fs();
+    ["init.unfinished", "identity.age"].iter().for_each(|name| dirs.put(&fs, name));
+    assert_eq!(
+        dirs.scope(&fs).state,
+        InitializationState::Unfinished(UnfinishedKind::Initialization)
+    );
 }
 
 #[test]

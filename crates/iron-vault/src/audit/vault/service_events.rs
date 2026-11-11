@@ -176,6 +176,7 @@ const fn unlock_refusal_label(refusal: &UnlockRefusal) -> &'static str {
         UnlockRefusal::Failed(UnlockError::PassphraseEnvelope(_)) => "passphrase_envelope",
         UnlockRefusal::Failed(UnlockError::IdentityEnvelope(_)) => "identity_envelope",
         UnlockRefusal::Failed(UnlockError::InitializationUnfinished) => "initialization_unfinished",
+        UnlockRefusal::Failed(UnlockError::ImportUnfinished) => "import_unfinished",
         UnlockRefusal::Failed(UnlockError::ResetUnfinished) => "reset_unfinished",
         UnlockRefusal::Failed(UnlockError::NotInitialized) => "not_initialized",
         UnlockRefusal::Failed(UnlockError::Unrecognized { .. }) => "unrecognized_files",

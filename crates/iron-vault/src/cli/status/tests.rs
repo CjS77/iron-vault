@@ -185,6 +185,10 @@ fn an_uninitialized_or_unfinished_vault_says_what_to_run() {
             VaultStatus::InitializationUnfinished,
             "vault: initialization unfinished (run iron-vault init again)",
         ),
+        (
+            VaultStatus::ImportUnfinished,
+            "vault: import unfinished (run iron-vault import again)",
+        ),
     ]
     .into_iter()
     .for_each(|(vault, line)| {

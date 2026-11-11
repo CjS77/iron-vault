@@ -1,5 +1,6 @@
 //! The migration authorization events: `migration.challenge-issued`, `migration.authorized` and
-//! `migration.authorization-refused` (`design/migration-authorization.md`, "Audit events").
+//! `migration.authorization-refused` (`design/migration-authorization.md`, "Audit events"), and
+//! `migration.import-discarded` (`design/migration-bundle.md`, "Audit events").
 //!
 //! Each holds the operation, the method's label, fixed refusal labels and a count of seconds: never the owner's input, a
 //! challenge's nonce or a binding digest. The destination recipient is a public key.
@@ -56,6 +57,27 @@ impl AuditEvent for Authorized<'_> {
             method = self.method,
             destination_recipient = destination(self.operation).as_deref(),
             "migration authorized",
+        );
+    }
+}
+
+/// `migration.import-discarded`: the files of an unfinished import were removed, by `import` or by `init`. They are names
+/// the service wrote, and `config.toml` is the bundle's copy.
+#[derive(Debug, Clone, Copy)]
+pub struct ImportDiscarded<'a> {
+    /// The removed file names.
+    pub files: &'a [String],
+}
+
+impl AuditEvent for ImportDiscarded<'_> {
+    const NAME: EventName = EventName("migration.import-discarded");
+
+    fn emit(&self) {
+        tracing::warn!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            files = self.files.join(",").as_str(),
+            "an unfinished import was discarded",
         );
     }
 }
@@ -156,6 +178,13 @@ mod tests {
             (added["operation"].as_str(), added["destination_recipient"].as_str()),
             (Some("add_recipient"), Some(RECIPIENT))
         );
+    }
+
+    #[test]
+    fn a_discarded_import_names_its_files() {
+        let files = ["config.toml".to_owned(), "identity.age".to_owned()];
+        let record = record_of(ImportDiscarded { files: &files }, "WARN", &["files"]);
+        assert_eq!(record["files"], "config.toml,identity.age");
     }
 
     #[test]

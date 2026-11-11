@@ -8,8 +8,9 @@
 use std::sync::Arc;
 
 use iron_vault_store::{
-    ConfigDigest, FirstApproval, INITIAL_CONFIG, InitError, InitFailure, InitPassphrases, InitStateError, InitStep, InitializationState,
-    InitializedVault, RecipientIdentity, SOFTWARE_APPROVER_LABEL, SealingKeys, StoreFs, ensure_initializable, initialize,
+    ConfigDigest, Discarded, FirstApproval, INITIAL_CONFIG, InitError, InitFailure, InitPassphrases, InitStateError, InitStep,
+    InitializationState, InitializedVault, RecipientIdentity, SOFTWARE_APPROVER_LABEL, SealingKeys, StoreFs, UnfinishedKind,
+    ensure_initializable, initialize,
 };
 use tokio::task::JoinError;
 
@@ -17,6 +18,7 @@ use super::host_unlock::tries_host_unlock;
 use super::unlock::memory_guard;
 use super::{ServiceContext, UnlockRefusal};
 use crate::audit::config::{VersionReserved, record_commit_uncertain, record_failed_approval};
+use crate::audit::migration::ImportDiscarded;
 use crate::audit::vault::{InitDiscarded, InitFailed, UnlockRefused, VaultInitialized, emit_commit_uncertain};
 use crate::audit::{ApprovalCompleted, AuditEvent, NamedApprover};
 use crate::hardening::MemoryProtection;
@@ -161,12 +163,8 @@ fn software_approver(keys: &SealingKeys) -> NamedApprover<'static> {
 /// Logs how the writes ended: the files a discard removed, then the new vault or the failed step. A refusal of the
 /// directories is not a failure, since nothing was written, and its caller is told why.
 fn log_outcome(written: &Result<InitializedVault, InitError>, approver: NamedApprover<'_>) {
-    let discarded = written
-        .as_ref()
-        .map_or_else(InitError::discarded, |vault| vault.discarded.as_slice());
-    if !discarded.is_empty() {
-        InitDiscarded { files: discarded }.emit();
-    }
+    let discarded = written.as_ref().map_or_else(InitError::discarded, |vault| vault.discarded.as_ref());
+    emit_discarded(discarded);
     match written {
         Ok(vault) => {
             record_first_approval(&vault.approved(), approver);
@@ -189,6 +187,15 @@ fn log_outcome(written: &Result<InitializedVault, InitError>, approver: NamedApp
         }
         Err(_) => {}
     }
+}
+
+/// Logs a discard by the kind it removed: `vault.init-discarded` or `migration.import-discarded`. Nothing discarded, or
+/// nothing unlinked before a failure, logs nothing.
+fn emit_discarded(discarded: Option<&Discarded>) {
+    discarded.filter(|d| !d.files.is_empty()).iter().for_each(|d| match d.kind {
+        UnfinishedKind::Initialization => InitDiscarded { files: &d.files }.emit(),
+        UnfinishedKind::Import => ImportDiscarded { files: &d.files }.emit(),
+    });
 }
 
 /// Records the uncertain writes behind a failed step before its `vault.init-failed`, the order a success records its

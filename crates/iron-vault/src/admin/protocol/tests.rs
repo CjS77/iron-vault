@@ -414,6 +414,7 @@ fn status_report() -> impl Strategy<Value = StatusReport> {
         Just(VaultStatus::NotInitialized),
         Just(VaultStatus::InitializationUnfinished),
         Just(VaultStatus::ResetUnfinished),
+        Just(VaultStatus::ImportUnfinished),
         unlocked_vault().prop_map(VaultStatus::Unlocked)
     ];
     (state, profile, vault, memory, recovery_status(), host_unlock_outcome()).prop_map(

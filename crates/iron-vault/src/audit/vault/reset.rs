@@ -1,7 +1,7 @@
 //! The three events of `reset` (`design/reset.md`, "Logging"). None carries a secret, a typed confirmation or a file's
 //! contents; foreign file names, which the service did not choose, are escaped.
 
-use iron_vault_store::{ErrorKindLabel, InitializationState, ResetStep, VaultId};
+use iron_vault_store::{ErrorKindLabel, InitializationState, ResetStep, UnfinishedKind, VaultId};
 
 use crate::audit::{AUDIT_TARGET, AuditEvent, EventName, state_label};
 use crate::service_state::ServiceState;
@@ -110,7 +110,8 @@ fn escaped_names(names: &[String]) -> String {
 const fn initialization_label(state: InitializationState) -> &'static str {
     match state {
         InitializationState::Uninitialized => "uninitialized",
-        InitializationState::Unfinished => "unfinished",
+        InitializationState::Unfinished(UnfinishedKind::Initialization) => "unfinished",
+        InitializationState::Unfinished(UnfinishedKind::Import) => "unfinished_import",
         InitializationState::Initialized => "initialized",
         InitializationState::Unrecognized => "unrecognized",
         InitializationState::UnfinishedReset => "unfinished_reset",

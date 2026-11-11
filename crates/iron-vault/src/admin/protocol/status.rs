@@ -56,6 +56,8 @@ pub enum VaultStatus {
     NotInitialized,
     /// An initialization started and never finished; `iron-vault init` run again starts it over.
     InitializationUnfinished,
+    /// An import started and never finished; `iron-vault import` run again starts it over.
+    ImportUnfinished,
     /// A reset was interrupted after its commit point; `iron-vault reset` run again finishes it, and every other command
     /// refuses.
     ResetUnfinished,
@@ -107,6 +109,7 @@ pub(super) fn encode(command: u16, report: &StatusReport) -> Vec<u8> {
         VaultStatus::NotInitialized => (1, Vec::new(), 0, 0, Vec::new(), Vec::new()),
         VaultStatus::InitializationUnfinished => (2, Vec::new(), 0, 0, Vec::new(), Vec::new()),
         VaultStatus::ResetUnfinished => (3, Vec::new(), 0, 0, Vec::new(), Vec::new()),
+        VaultStatus::ImportUnfinished => (4, Vec::new(), 0, 0, Vec::new(), Vec::new()),
         VaultStatus::Unlocked(vault) => (
             0,
             vault.id.as_bytes().to_vec(),
@@ -251,6 +254,7 @@ fn read_vault(initialization: &[u8], id: &[u8], committed: u64, reserved: u64, l
             [1] => VaultStatus::NotInitialized,
             [2] => VaultStatus::InitializationUnfinished,
             [3] => VaultStatus::ResetUnfinished,
+            [4] => VaultStatus::ImportUnfinished,
             _ => return Err(FrameError::InvalidValue(TAG_INITIALIZATION)),
         };
         return nothing.then_some(closed).ok_or(FrameError::InvalidValue(TAG_VAULT_ID));
@@ -477,6 +481,8 @@ mod tests {
                     VaultStatus::Locked,
                     VaultStatus::NotInitialized,
                     VaultStatus::InitializationUnfinished,
+                    VaultStatus::ResetUnfinished,
+                    VaultStatus::ImportUnfinished,
                     unlocked(credentials.clone()),
                     unlocked(Vec::new()),
                     with_faults(credentials.clone(), faults.clone()),

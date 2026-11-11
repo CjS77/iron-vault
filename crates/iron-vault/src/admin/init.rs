@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use iron_vault_store::{
     ApprovalPassphrase, InitError, InitFailure, InitPassphrases, InitStateError, InitializationState, NewVaultKeys, Passphrase,
-    RecipientIdentity, RecoveryKeySecret, SealingKeys, StoreFs, WhichPassphrase,
+    RecipientIdentity, RecoveryKeySecret, SealingKeys, StoreFs, UnfinishedKind, WhichPassphrase,
 };
 use secrecy::{ExposeSecret, SecretString};
 use subtle::ConstantTimeEq;
@@ -36,6 +36,12 @@ const UNFINISHED_NOTICE: &str = "An unfinished initialization is here, or anothe
 Once you confirm the new recovery key, an unfinished initialization is discarded, and any recovery key it showed opens nothing. \
 A run still writing is never discarded: this init then writes nothing and ends with `busy`, or with `already-initialized` once \
 that run has finished.\n";
+
+/// Sent when an unfinished import is there. Like [`UNFINISHED_NOTICE`], it covers an import still writing.
+const UNFINISHED_IMPORT_NOTICE: &str = "An unfinished import is here, or an import is writing its vault right now. \
+Once you confirm the new recovery key, the unfinished import is discarded, its copy of the config included, and any recovery key it \
+showed opens nothing. A run still writing is never discarded: this init then writes nothing and ends with `busy`, or with \
+`already-initialized` once that run has finished.\n";
 
 const RECOVERY_NOTICE: &str = "\
 The recovery key follows. It is shown this once, and the service keeps no copy.
@@ -82,8 +88,10 @@ impl<F: StoreFs + Send + Sync + 'static> Init<F> {
             Ok(host) => host,
             Err(refusal) => return Ok(refused(refusal, false)),
         };
-        if existing == InitializationState::Unfinished {
-            exchange.notice(UNFINISHED_NOTICE).await?;
+        match existing {
+            InitializationState::Unfinished(UnfinishedKind::Initialization) => exchange.notice(UNFINISHED_NOTICE).await?,
+            InitializationState::Unfinished(UnfinishedKind::Import) => exchange.notice(UNFINISHED_IMPORT_NOTICE).await?,
+            _ => {}
         }
         let passphrases = match chosen_passphrases(exchange).await? {
             Ok(passphrases) => passphrases,

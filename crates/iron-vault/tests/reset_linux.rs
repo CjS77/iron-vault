@@ -587,15 +587,72 @@ async fn release_check_11_an_unfinished_initialization_is_reset_with_the_state_d
     let exchanged = reset(&path, &[&state_dir]).await;
 
     assert_eq!(exchanged.prompts, [confirmation_prompt(&state_dir, "these files")]);
+    assert!(
+        exchanged.notices.contains("discard the unfinished initialization"),
+        "{}",
+        exchanged.notices
+    );
+    assert!(!exchanged.notices.contains("unfinished import"), "{}", exchanged.notices);
     assert_eq!(service.status().await.vault, VaultStatus::NotInitialized);
     assert_discarded(&fixture);
     let _ = stop.send(());
 }
 
-/// Release check 11, import clause: an unfinished import is reset the same way. Unfinished imports are not built yet.
+/// The fixture's vault as an import left it: the import marker, and no config file but `config.toml` (its signature is
+/// removed, so the directories read Unfinished and not Unrecognized). The credential's record file stays.
+async fn unfinished_import(fixture: &Fixture, service: &Arc<ServiceContext>) {
+    service.lock(DRAIN).await.unwrap();
+    fs::write(fixture.path("state/import.unfinished"), b"").unwrap();
+    fs::remove_file(fixture.path("etc/config.toml.sig")).unwrap();
+    assert_eq!(service.status().await.vault, VaultStatus::ImportUnfinished);
+}
+
+/// Release check 11, import clause: the old vault ID typed for an unfinished import is declined; the state directory's path
+/// resets it, and the summary names the import and its record file.
 #[tokio::test]
-#[ignore = "an unfinished import cannot be created until import lands (K-312, K-313)"]
-async fn release_check_11_an_unfinished_import_is_reset_with_the_state_directory_path() {}
+async fn release_check_11_an_unfinished_import_is_reset_with_the_state_directory_path() {
+    let fixture = Fixture::new().await;
+    let old_id = vault_id(&fixture).to_string();
+    let service = fixture.ready().await;
+    unfinished_import(&fixture, &service).await;
+    let (path, stop) = serve_admin(&service);
+    let state_dir = fixture.path("state").to_string_lossy().into_owned();
+    let before = files(&fixture);
+
+    assert_eq!(error_code(&reset(&path, &[&old_id]).await.response), ErrorCode::Declined);
+    assert_eq!(files(&fixture), before);
+    let exchanged = reset(&path, &[&state_dir]).await;
+
+    assert_eq!(exchanged.prompts, [confirmation_prompt(&state_dir, "these files")]);
+    assert!(
+        exchanged.notices.contains("discard the unfinished import and its 1 record file"),
+        "{}",
+        exchanged.notices
+    );
+    assert!(exchanged.notices.contains("config.toml"), "{}", exchanged.notices);
+    assert_eq!(service.status().await.vault, VaultStatus::NotInitialized);
+    assert_discarded(&fixture);
+    let _ = stop.send(());
+}
+
+/// An init and an import swapped under the confirmation decline the reset and remove nothing.
+#[tokio::test]
+async fn an_init_and_an_import_swapped_under_the_confirmation_decline_and_remove_nothing() {
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    unfinished_init(&fixture, &service).await;
+    let (path, stop) = serve_admin(&service);
+    let state_dir = fixture.path("state").to_string_lossy().into_owned();
+
+    let mut stream = reset_to_prompt(&path).await;
+    fs::remove_file(fixture.path("state/init.unfinished")).unwrap();
+    fs::write(fixture.path("state/import.unfinished"), b"").unwrap();
+    assert_eq!(service.status().await.vault, VaultStatus::ImportUnfinished);
+    let before = files(&fixture);
+    assert_eq!(error_code(&answer(&mut stream, &state_dir).await), ErrorCode::Declined);
+    assert_eq!(files(&fixture), before);
+    let _ = stop.send(());
+}
 
 /// Release check 10, import clause: an import writing at the summary that finishes before step 4 declines the reset.
 #[tokio::test]

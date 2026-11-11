@@ -48,8 +48,8 @@ use std::time::Duration;
 use iron_vault_policy::{Capabilities, CredentialName, Limits, ListenerConfig, ListenerName, ParsedConfig};
 use iron_vault_store::{
     ApprovalState, ApprovalVersion, ConfigDirLock, ConfigFileName, InitializationState, LockError, OsFs, Passphrase, RecordId,
-    StateDirLock, StateFileName, StoreFs, UnlockError, VaultIdentity, read_config_file, sweep_stale_config_temps, sweep_stale_temps,
-    unlock_with_passphrase,
+    StateDirLock, StateFileName, StoreFs, UnfinishedKind, UnlockError, VaultIdentity, read_config_file, sweep_stale_config_temps,
+    sweep_stale_temps, unlock_with_passphrase,
 };
 use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 use tokio::time::Instant;
@@ -613,7 +613,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let read = tokio::task::spawn_blocking(move || InitializationState::read(&locks.state, &locks.config, &setup.fs)).await;
         match read {
             Ok(Ok(InitializationState::Uninitialized)) => VaultStatus::NotInitialized,
-            Ok(Ok(InitializationState::Unfinished)) => VaultStatus::InitializationUnfinished,
+            Ok(Ok(InitializationState::Unfinished(UnfinishedKind::Initialization))) => VaultStatus::InitializationUnfinished,
+            Ok(Ok(InitializationState::Unfinished(UnfinishedKind::Import))) => VaultStatus::ImportUnfinished,
             Ok(Ok(InitializationState::UnfinishedReset)) => VaultStatus::ResetUnfinished,
             _ => VaultStatus::Locked,
         }

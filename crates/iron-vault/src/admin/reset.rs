@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use iron_vault_store::{DiscardError, InitializationState, StoreFs};
+use iron_vault_store::{DiscardError, InitializationState, StoreFs, UnfinishedKind};
 
 use super::dispatch::{AdminHandler, HandlerFuture};
 use super::principal::AdminPrincipal;
@@ -99,7 +99,10 @@ fn discarding(plan: &ResetPlan) -> String {
             };
             format!("the vault {}{unverified}", vault.id)
         }
-        (InitializationState::Unfinished, _) => "the unfinished initialization".to_owned(),
+        (InitializationState::Unfinished(UnfinishedKind::Initialization), _) => "the unfinished initialization".to_owned(),
+        (InitializationState::Unfinished(UnfinishedKind::Import), _) => {
+            format!("the unfinished import and its {} record files", scope.record_files)
+        }
         (InitializationState::UnfinishedReset, _) => "the files of an interrupted reset".to_owned(),
         _ => "vault files with no Initialized vault".to_owned(),
     }
