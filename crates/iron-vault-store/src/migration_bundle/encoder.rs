@@ -22,6 +22,9 @@ const PADDING: [u8; BLOCK_LEN] = [0; BLOCK_LEN];
 /// [`BundleEncoder::new`] writes the bundle header; [`BundleEncoder::write_entry`] then takes every other entry in
 /// bundle order, and [`BundleEncoder::finish`] ends the archive once every entry the header counts is in. The gzip
 /// member has no file name, comment or extra field and modification time 0, so the output depends only on the entries.
+///
+/// Dropping an encoder that was not finished still writes a gzip trailer to `W`, after however much of the archive got
+/// there, so the output of an encoder that failed or was dropped must be discarded, never kept as a bundle.
 pub struct BundleEncoder<W: Write> {
     gzip: GzEncoder<W>,
     header: BundleHeader,

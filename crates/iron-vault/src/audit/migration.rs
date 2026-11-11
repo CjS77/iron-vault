@@ -1,11 +1,16 @@
-//! The migration authorization events: `migration.challenge-issued`, `migration.authorized` and
-//! `migration.authorization-refused` (`design/migration-authorization.md`, "Audit events"), and
-//! `migration.import-discarded` (`design/migration-bundle.md`, "Audit events").
+//! The migration events: the authorization events `migration.challenge-issued`, `migration.authorized` and
+//! `migration.authorization-refused` (`design/migration-authorization.md`, "Audit events"), and the bundle events
+//! `migration.exported`, `migration.export-failed` and `migration.import-discarded` (`design/migration-bundle.md`,
+//! "Audit events").
 //!
-//! Each holds the operation, the method's label, fixed refusal labels and a count of seconds: never the owner's input, a
-//! challenge's nonce or a binding digest. The destination recipient is a public key.
+//! Each holds the operation, the method's label, fixed labels, counts, versions, a vault ID, file names and bundle entry
+//! names: never the owner's input, a passphrase, a key, a byte of a record, a challenge's nonce or a binding digest. The
+//! destination recipient is a public key.
 
-use super::{AUDIT_TARGET, AuditEvent, EventName};
+use iron_vault_store::migration_bundle::EntryName;
+use iron_vault_store::{ErrorKindLabel, SnapshotError, SnapshotStep, SnapshotSummary};
+
+use super::{AUDIT_TARGET, AuditEvent, EventName, count_of};
 use crate::migration_authorization::{MigrationOperation, MigrationRefusal};
 
 /// The destination recipient's `age1...` text for `add_recipient`; left out for `export`, which names none.
@@ -134,6 +139,78 @@ impl AuditEvent for AuthorizationRefused<'_> {
             destination_recipient = destination(self.operation).as_deref(),
             retry_after = self.refusal.retry_after(),
             "migration authorization refused",
+        );
+    }
+}
+
+/// `migration.exported`: the last bundle data frame of an export was written. It closes the exchange's
+/// `migration.authorized`.
+#[derive(Debug, Clone, Copy)]
+pub struct Exported<'a> {
+    /// What the bundle holds.
+    pub summary: &'a SnapshotSummary,
+}
+
+impl AuditEvent for Exported<'_> {
+    const NAME: EventName = EventName("migration.exported");
+
+    fn emit(&self) {
+        let summary = self.summary;
+        tracing::info!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            vault_id = summary.vault_id.to_string().as_str(),
+            records = count_of(summary.record_count),
+            approvers = count_of(summary.approver_count),
+            committed_version = summary.committed_version.get(),
+            highest_reserved = summary.highest_reserved,
+            "vault exported",
+        );
+    }
+}
+
+/// `migration.export-failed`: an export failed at its snapshot checks, or after its authorization was consumed.
+#[derive(Debug, Clone)]
+pub struct ExportFailed {
+    /// The step that failed: `check`, `snapshot`, `seal` or `transfer`.
+    pub step: SnapshotStep,
+    /// Why: a fixed label, `locked` for a `lock` and `deadline` for a missed deadline.
+    pub error_kind: ErrorKindLabel,
+    /// The bundle entry whose file failed, when a file did.
+    pub file: Option<EntryName>,
+}
+
+impl ExportFailed {
+    /// The record of a failed snapshot check or stream.
+    pub fn of(error: &SnapshotError) -> Self {
+        Self {
+            step: error.step(),
+            error_kind: error.error_kind_label(),
+            file: error.file(),
+        }
+    }
+
+    /// The record of a transfer that ended for `error_kind`, with no file at fault.
+    pub fn transfer(error_kind: ErrorKindLabel) -> Self {
+        Self {
+            step: SnapshotStep::Transfer,
+            error_kind,
+            file: None,
+        }
+    }
+}
+
+impl AuditEvent for ExportFailed {
+    const NAME: EventName = EventName("migration.export-failed");
+
+    fn emit(&self) {
+        tracing::warn!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            step = self.step.as_str(),
+            error_kind = self.error_kind.as_str(),
+            file = self.file.map(|file| file.to_string()).as_deref(),
+            "export failed",
         );
     }
 }

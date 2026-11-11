@@ -17,6 +17,8 @@ mod approver_remove;
 #[cfg(target_os = "linux")]
 pub mod dispatch;
 #[cfg(target_os = "linux")]
+mod export;
+#[cfg(target_os = "linux")]
 mod init;
 #[cfg(target_os = "linux")]
 mod list;
