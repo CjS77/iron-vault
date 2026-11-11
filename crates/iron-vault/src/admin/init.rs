@@ -19,12 +19,12 @@ use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode, OwnerInput, Prompt};
 use super::server::{Exchange, ExchangeError};
 use super::unlock::state_name;
-use super::{DEAD_RECOVERY_KEY, UNCONFIRMED_RECOVERY_KEY};
+use super::{DEAD_RECOVERY_KEY, UNCONFIRMED_IMPORT_KEY, UNCONFIRMED_RECOVERY_KEY, import};
 use crate::service_context::{InitRefusal, ServiceContext, step_names, unprotected_reason};
 use crate::service_state::AdminOperation;
 
 /// The vault passphrase's two secret prompts: the entry, then its repeat.
-const VAULT_PROMPTS: [&str; 2] = ["Vault passphrase", "Repeat the vault passphrase"];
+pub(super) const VAULT_PROMPTS: [&str; 2] = ["Vault passphrase", "Repeat the vault passphrase"];
 /// The approval passphrase's two secret prompts.
 const APPROVAL_PROMPTS: [&str; 2] = ["Approval passphrase", "Repeat the approval passphrase"];
 /// The confirmation after the reveal; any answer but exactly `yes` writes nothing.
@@ -169,7 +169,7 @@ async fn chosen_passphrases(exchange: &mut Exchange) -> Result<Result<InitPassph
 }
 
 /// One passphrase, entered twice. Both inputs are cleared when they drop here.
-async fn chosen(
+pub(super) async fn chosen(
     exchange: &mut Exchange,
     [label, repeat]: [&str; 2],
     which: WhichPassphrase,
@@ -202,8 +202,37 @@ fn both(vault: SecretString, approval: SecretString) -> Result<InitPassphrases, 
     InitPassphrases::new(vault, approval).map_err(|rule| rule.to_string())
 }
 
+/// Which command is creating the vault: it names itself in a refusal's advice and picks the code of a failed write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Creating {
+    Init,
+    Import,
+}
+
+impl Creating {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Init => "init",
+            Self::Import => "import",
+        }
+    }
+
+    const fn failed_code(self) -> ErrorCode {
+        match self {
+            Self::Init => ErrorCode::InitFailed,
+            Self::Import => ErrorCode::ImportFailed,
+        }
+    }
+}
+
 /// The response for `refusal`. After the reveal, a refusal also says the recovery key shown is dead.
 fn refused(refusal: InitRefusal, revealed: bool) -> AdminResponse {
+    refused_by(Creating::Init, refusal, revealed)
+}
+
+/// [`refused`] for `creating`, which `import` shares: the same endings, worded for the command that ran.
+pub(super) fn refused_by(creating: Creating, refusal: InitRefusal, revealed: bool) -> AdminResponse {
+    let command = creating.name();
     let dead = |message: String| match revealed {
         true => format!("{message}; {DEAD_RECOVERY_KEY}"),
         false => message,
@@ -211,16 +240,15 @@ fn refused(refusal: InitRefusal, revealed: bool) -> AdminResponse {
     match refusal {
         InitRefusal::Busy => error(
             ErrorCode::Busy,
-            dead(
-                "another init, an approval, a vault write, a reload or a config check is running, so nothing was written; \
-                 run `iron-vault init` again"
-                    .to_owned(),
-            ),
+            dead(format!(
+                "another init or import, an approval, a vault write, a reload or a config check is running, so nothing was written; \
+                 run `iron-vault {command}` again"
+            )),
         ),
         InitRefusal::WrongState(state) => error(
             ErrorCode::WrongState,
             dead(format!(
-                "`init` is allowed only while the service is Locked; it is {}",
+                "`{command}` is allowed only while the service is Locked; it is {}",
                 state_name(state)
             )),
         ),
@@ -235,13 +263,13 @@ fn refused(refusal: InitRefusal, revealed: bool) -> AdminResponse {
         InitRefusal::Unrecognized(files) => error(
             ErrorCode::AlreadyInitialized,
             dead(format!(
-                "the directories are Unrecognized: they hold files init did not write, first {}; nothing was changed: move \
-                 them aside and run `iron-vault init` again",
+                "the directories are Unrecognized: they hold files {command} did not write, first {}; nothing was changed: move \
+                 them aside and run `iron-vault {command}` again",
                 files.join(", ")
             )),
         ),
         InitRefusal::Unreadable(detail) => error(
-            ErrorCode::InitFailed,
+            creating.failed_code(),
             format!("cannot read the initialization state, so nothing was written: {detail}"),
         ),
         InitRefusal::MemoryUnprotected(memory) => error(
@@ -253,18 +281,30 @@ fn refused(refusal: InitRefusal, revealed: bool) -> AdminResponse {
             ),
         ),
         InitRefusal::HostUnlock(reason) => error(
-            ErrorCode::InitFailed,
+            creating.failed_code(),
             format!("cannot enrol the host unlock identity, so nothing was written: {reason}"),
         ),
         InitRefusal::Clock(detail) => error(
-            ErrorCode::InitFailed,
+            creating.failed_code(),
             dead(format!("cannot read the service clock, so nothing was written: {detail}")),
         ),
         InitRefusal::Failed(failure) => failed(&failure),
+        InitRefusal::Import(failure) => import::failed(&failure),
         InitRefusal::Interrupted => error(
-            ErrorCode::InitFailed,
-            format!("init did not finish: its task ended without a result; {UNCONFIRMED_RECOVERY_KEY}"),
+            creating.failed_code(),
+            format!(
+                "{command} did not finish: its task ended without a result; {}",
+                unconfirmed(creating)
+            ),
         ),
+    }
+}
+
+/// What the owner does with a recovery key when `creating` may or may not have written its vault.
+const fn unconfirmed(creating: Creating) -> &'static str {
+    match creating {
+        Creating::Init => UNCONFIRMED_RECOVERY_KEY,
+        Creating::Import => UNCONFIRMED_IMPORT_KEY,
     }
 }
 
@@ -279,7 +319,7 @@ fn failed(failure: &InitError) -> AdminResponse {
     error(ErrorCode::InitFailed, format!("init failed at {at}: {}; {advice}", failure.cause()))
 }
 
-fn error(code: ErrorCode, message: String) -> AdminResponse {
+pub(super) fn error(code: ErrorCode, message: String) -> AdminResponse {
     AdminResponse::Error { code, message }
 }
 

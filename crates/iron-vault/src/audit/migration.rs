@@ -1,14 +1,14 @@
 //! The migration events: the authorization events `migration.challenge-issued`, `migration.authorized` and
 //! `migration.authorization-refused` (`design/migration-authorization.md`, "Audit events"), and the bundle events
-//! `migration.exported`, `migration.export-failed` and `migration.import-discarded` (`design/migration-bundle.md`,
-//! "Audit events").
+//! `migration.exported`, `migration.export-failed`, `migration.import-refused`, `migration.import-discarded`,
+//! `migration.imported` and `migration.import-failed` (`design/migration-bundle.md`, "Audit events").
 //!
 //! Each holds the operation, the method's label, fixed labels, counts, versions, a vault ID, file names and bundle entry
 //! names: never the owner's input, a passphrase, a key, a byte of a record, a challenge's nonce or a binding digest. The
 //! destination recipient is a public key.
 
 use iron_vault_store::migration_bundle::EntryName;
-use iron_vault_store::{ErrorKindLabel, SnapshotError, SnapshotStep, SnapshotSummary};
+use iron_vault_store::{ErrorKindLabel, ImportFailure, ImportStep, ImportedVault, SnapshotError, SnapshotStep, SnapshotSummary};
 
 use super::{AUDIT_TARGET, AuditEvent, EventName, count_of};
 use crate::migration_authorization::{MigrationOperation, MigrationRefusal};
@@ -84,6 +84,99 @@ impl AuditEvent for ImportDiscarded<'_> {
             files = self.files.join(",").as_str(),
             "an unfinished import was discarded",
         );
+    }
+}
+
+/// `migration.import-refused`: an import was refused at step 2, 3 or 4, before the owner chose anything. It names the rule
+/// or check by its fixed name, never a byte of the bundle.
+#[derive(Debug, Clone, Copy)]
+pub enum ImportRefused {
+    /// The bytes break a rule of the bundle's encoding (step 2) or fail a check with the vault identity (step 4).
+    BundleInvalid {
+        /// The rule's or check's fixed name.
+        detail: &'static str,
+    },
+    /// The export passphrase did not open the exported identity envelope (step 3).
+    WrongPassphrase,
+}
+
+impl AuditEvent for ImportRefused {
+    const NAME: EventName = EventName("migration.import-refused");
+
+    fn emit(&self) {
+        let (refusal, detail) = match self {
+            Self::BundleInvalid { detail } => ("bundle_invalid", Some(*detail)),
+            Self::WrongPassphrase => ("wrong_passphrase", None),
+        };
+        tracing::warn!(target: AUDIT_TARGET, event = Self::NAME.as_str(), refusal, detail, "an import was refused");
+    }
+}
+
+/// `migration.imported`: the import's step 10 is durable, so the vault is Initialized and still Locked.
+#[derive(Debug, Clone, Copy)]
+pub struct Imported<'a> {
+    /// What was written.
+    pub vault: &'a ImportedVault,
+}
+
+impl AuditEvent for Imported<'_> {
+    const NAME: EventName = EventName("migration.imported");
+
+    fn emit(&self) {
+        let vault = self.vault;
+        tracing::info!(
+            target: AUDIT_TARGET,
+            event = Self::NAME.as_str(),
+            vault_id = vault.vault_id.to_string().as_str(),
+            records = count_of(vault.records),
+            approvers = count_of(vault.approvers),
+            committed_version = vault.committed_version.get(),
+            highest_reserved = vault.highest_reserved,
+            recipients = vault.recipients.iter().map(|role| role.name()).collect::<Vec<_>>().join(",").as_str(),
+            "vault imported",
+        );
+    }
+}
+
+/// `migration.import-failed`: a step of the import's write order failed, or its task ended without a result.
+#[derive(Debug, Clone, Copy)]
+pub enum ImportFailed<'a> {
+    /// A step failed with `cause`, recorded by its variant only.
+    Step {
+        /// The failed step.
+        step: ImportStep,
+        /// Why it failed.
+        cause: &'a ImportFailure,
+    },
+    /// The task ended without a result, so no step is known.
+    TaskEnded,
+}
+
+impl AuditEvent for ImportFailed<'_> {
+    const NAME: EventName = EventName("migration.import-failed");
+
+    fn emit(&self) {
+        let (step, error_kind) = match self {
+            Self::Step { step, cause } => (
+                Some(step.number().map_or_else(|| "discard".to_owned(), |n| n.to_string())),
+                Some(failure_label(cause)),
+            ),
+            Self::TaskEnded => (None, None),
+        };
+        tracing::warn!(target: AUDIT_TARGET, event = Self::NAME.as_str(), step = step.as_deref(), error_kind, "import failed");
+    }
+}
+
+/// A failure's variant as a fixed label: the underlying errors name paths and bytes, so none is logged.
+const fn failure_label(cause: &ImportFailure) -> &'static str {
+    match cause {
+        ImportFailure::State(_) => "init_state",
+        ImportFailure::Write(_) => "state_write",
+        ImportFailure::ConfigWrite(_) => "config_write",
+        ImportFailure::Identity(_) => "identity",
+        ImportFailure::Read(_) => "state_read",
+        ImportFailure::ConfigRead(_) => "config_read",
+        ImportFailure::Check(_) => "bundle_check",
     }
 }
 
@@ -262,6 +355,48 @@ mod tests {
         let files = ["config.toml".to_owned(), "identity.age".to_owned()];
         let record = record_of(ImportDiscarded { files: &files }, "WARN", &["files"]);
         assert_eq!(record["files"], "config.toml,identity.age");
+    }
+
+    #[test]
+    fn an_import_refusal_names_the_rule_only_for_a_bad_bundle() {
+        let invalid = record_of(
+            ImportRefused::BundleInvalid { detail: "gzip_header" },
+            "WARN",
+            &["refusal", "detail"],
+        );
+        assert_eq!(
+            (invalid["refusal"].as_str(), invalid["detail"].as_str()),
+            (Some("bundle_invalid"), Some("gzip_header"))
+        );
+        let denied = record_of(ImportRefused::WrongPassphrase, "WARN", &["refusal"]);
+        assert_eq!(denied["refusal"], "wrong_passphrase");
+    }
+
+    #[test]
+    fn a_failed_import_records_its_step_and_a_label_and_a_lost_task_neither() {
+        let cause = ImportFailure::State(iron_vault_store::InitStateError::AlreadyInitialized);
+        let failed = record_of(
+            ImportFailed::Step {
+                step: ImportStep::Config,
+                cause: &cause,
+            },
+            "WARN",
+            &["step", "error_kind"],
+        );
+        assert_eq!(
+            (failed["step"].as_str(), failed["error_kind"].as_str()),
+            (Some("5"), Some("init_state"))
+        );
+        let discard = record_of(
+            ImportFailed::Step {
+                step: ImportStep::Discard,
+                cause: &cause,
+            },
+            "WARN",
+            &["step", "error_kind"],
+        );
+        assert_eq!(discard["step"], "discard");
+        record_of(ImportFailed::TaskEnded, "WARN", &[]);
     }
 
     #[test]

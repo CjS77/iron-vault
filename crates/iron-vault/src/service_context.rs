@@ -25,6 +25,7 @@ mod approver_order;
 mod export;
 mod forget_machine;
 mod host_unlock;
+mod import;
 mod init;
 mod log_destination;
 mod migration;
@@ -87,6 +88,7 @@ pub use approver_list::ApproverListRefusal;
 pub use export::{ExportError, ExportStream};
 pub use forget_machine::ForgetCheck;
 pub use host_unlock::{HostUnlockOutcome, HostUnlockRefusal};
+pub use import::{BundleRefusal, ImportSlot};
 pub use init::{HostUnlockUnavailable, InitRefusal, step_names};
 pub use migration::MigrationSession;
 pub use presence::{DenialKind, OwnerPresence, PresenceRefusal};
@@ -265,6 +267,10 @@ pub struct ServiceContext<F = OsFs> {
     /// recheck and a `lock` wait for it; each takes it before the context's mutex. Shared, so a blocking task can own its
     /// guard and keep it until the task ends, even if the future that started the task is dropped.
     service_wide: Arc<Mutex<()>>,
+    /// The import slot: held by the one `import` that is past its first step, so a second is refused with `busy` and the
+    /// bundle an import keeps in memory is never doubled. Separate from `service_wide`, which an import takes only to
+    /// write, after its prompts.
+    import_slot: Arc<Mutex<()>>,
     /// How many `lock` calls are waiting for the service-wide lock. An approval at a prompt ends while it is non-zero.
     lock_requests: watch::Sender<usize>,
     /// Shared for the same reason as `service_wide`: the task that settles a check, and init's write task, own their
@@ -368,6 +374,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             locks: Arc::new(locks),
             holder,
             service_wide: Arc::new(Mutex::new(())),
+            import_slot: Arc::new(Mutex::new(())),
             lock_requests: watch::Sender::new(0),
             clock: Arc::new(SystemClock),
             reminders: Arc::new(StdMutex::new(ReminderSchedule::default())),

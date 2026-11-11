@@ -135,7 +135,7 @@ async fn export_passphrase<F: StoreFs + Send + Sync + 'static>(
         .and_then(|text| ExportPassphrase::new(text).map_err(|e| rejected(e.to_string()))))
 }
 
-fn secret_prompt(label: &str) -> Prompt {
+pub(super) fn secret_prompt(label: &str) -> Prompt {
     Prompt {
         label: label.to_owned(),
         secret: true,

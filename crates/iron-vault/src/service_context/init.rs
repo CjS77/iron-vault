@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use iron_vault_store::{
-    ConfigDigest, Discarded, FirstApproval, INITIAL_CONFIG, InitError, InitFailure, InitPassphrases, InitStateError, InitStep,
+    ConfigDigest, Discarded, FirstApproval, INITIAL_CONFIG, ImportError, InitError, InitFailure, InitPassphrases, InitStateError, InitStep,
     InitializationState, InitializedVault, RecipientIdentity, SOFTWARE_APPROVER_LABEL, SealingKeys, StoreFs, UnfinishedKind,
     ensure_initializable, initialize,
 };
@@ -48,6 +48,8 @@ pub enum InitRefusal {
     HostUnlock(HostUnlockUnavailable),
     /// A step of the write order, or the discard before it, failed.
     Failed(InitError),
+    /// A step of `import`'s write order, or the discard before it, failed.
+    Import(ImportError),
     /// The task writing the vault ended without a result, so how far it got is unknown.
     Interrupted,
 }
@@ -188,7 +190,7 @@ fn log_outcome(written: &Result<InitializedVault, InitError>, approver: NamedApp
 
 /// Logs a discard by the kind it removed: `vault.init-discarded` or `migration.import-discarded`. Nothing discarded, or
 /// nothing unlinked before a failure, logs nothing.
-fn emit_discarded(discarded: Option<&Discarded>) {
+pub(super) fn emit_discarded(discarded: Option<&Discarded>) {
     discarded.filter(|d| !d.files.is_empty()).iter().for_each(|d| match d.kind {
         UnfinishedKind::Initialization => InitDiscarded { files: &d.files }.emit(),
         UnfinishedKind::Import => ImportDiscarded { files: &d.files }.emit(),
@@ -252,7 +254,7 @@ fn begin_refusal(error: &InitError) -> Option<InitRefusal> {
 }
 
 /// The refusal for directories init must not write to; `None` for any other error.
-fn directory_refusal(error: &InitStateError) -> Option<InitRefusal> {
+pub(super) fn directory_refusal(error: &InitStateError) -> Option<InitRefusal> {
     match error {
         InitStateError::AlreadyInitialized => Some(InitRefusal::Initialized),
         InitStateError::ResetUnfinished => Some(InitRefusal::ResetUnfinished),

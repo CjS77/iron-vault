@@ -15,6 +15,8 @@ pub mod checked;
 pub mod gated_fs;
 pub mod h2_refusal;
 pub mod hpack_fields;
+#[cfg(target_os = "linux")]
+pub mod migration_source;
 pub mod mock_upstream;
 pub mod mock_upstream_h2;
 #[cfg(target_os = "linux")]

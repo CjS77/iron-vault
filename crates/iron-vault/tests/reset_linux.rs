@@ -23,6 +23,7 @@ use common::WAIT;
 use common::approval_harness::{
     Exchanged, Fixture, approve, captured_logs, converse, converse_revealing, error_code, identity, read_frame, send, serve_admin,
 };
+use common::migration_source::{EXPORT_PASSPHRASE, send_bundle, source};
 use common::mock_upstream::Reply;
 use common::proxy_harness::{CallerRequest, Via};
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, Prompt, RequestedOrigin, VaultStatus};
@@ -661,9 +662,29 @@ async fn an_init_and_an_import_swapped_under_the_confirmation_decline_and_remove
 }
 
 /// Release check 10, import clause: an import writing at the summary that finishes before step 4 declines the reset.
-#[tokio::test]
-#[ignore = "import does not exist yet (K-312, K-313)"]
-async fn release_check_10_an_import_finishing_before_step_4_declines_the_reset() {}
+#[tokio::test(flavor = "multi_thread")]
+async fn release_check_10_an_import_finishing_before_step_4_declines_the_reset() {
+    let source = source().await;
+    let fixture = Fixture::new().await;
+    let service = fixture.ready().await;
+    unfinished_import(&fixture, &service).await;
+    let state_dir = fixture.path("state").to_string_lossy().into_owned();
+    let (path, stop) = serve_admin(&service);
+
+    let mut stream = reset_to_prompt(&path).await;
+    let mut import = UnixStream::connect(&path).await.unwrap();
+    send(&mut import, &Frame::Request(AdminRequest::Import { host_unlock: false })).await;
+    send_bundle(&mut import, &source.bytes).await;
+    let answers = [EXPORT_PASSPHRASE, INIT_ANSWERS[0], INIT_ANSWERS[1], "yes"];
+    let (imported, _) = converse_revealing(&mut import, &answers).await;
+    assert!(matches!(imported.response, AdminResponse::Import(_)), "{:?}", imported.response);
+    let before = files(&fixture);
+    let response = answer(&mut stream, &state_dir).await;
+    assert_eq!(error_code(&response), ErrorCode::Declined);
+    assert!(message(&response).contains("at the summary"), "{}", message(&response));
+    assert_eq!(files(&fixture), before, "an import finished before step 4");
+    let _ = stop.send(());
+}
 
 /// Release check 12: the three audit events reach the log, and none holds a secret or the typed confirmation.
 #[tokio::test]

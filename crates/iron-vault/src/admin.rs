@@ -20,6 +20,8 @@ pub mod dispatch;
 mod export;
 mod forget_machine;
 #[cfg(target_os = "linux")]
+mod import;
+#[cfg(target_os = "linux")]
 mod init;
 #[cfg(target_os = "linux")]
 mod list;
@@ -81,3 +83,12 @@ pub const UNCONFIRMED_RECOVERY_KEY: &str = "keep the recovery key and run `iron-
     run it again. If it answers `already-initialized` and says the vault is Initialized, a vault stands, but it may not be \
     the one this key opens: once the vault is unlocked, confirm the key with `iron-vault recovery check` and keep it only if \
     that passes. If it says Unrecognized, files init did not write are present and the key is not confirmed either";
+
+/// [`UNCONFIRMED_RECOVERY_KEY`] for `import`: what the owner does with a recovery key when `import` may or may not have
+/// written its vault, which the service says when the commit point may not survive power loss and the CLI says when the
+/// command ends after `yes` without an answer.
+pub const UNCONFIRMED_IMPORT_KEY: &str = "keep the recovery key and run `iron-vault import` again. If it starts over with a new \
+    recovery key, this key is dead: discard it. If it answers `busy`, the first run is still writing: wait a few seconds and \
+    run it again. If it answers `already-initialized` and says the vault is Initialized, a vault stands, but it may not be \
+    the one this key opens: once the vault is unlocked, confirm the key with `iron-vault recovery check` and keep it only if \
+    that passes. If it says Unrecognized, files import did not write are present and the key is not confirmed either";

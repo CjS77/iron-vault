@@ -24,6 +24,8 @@ mod console;
 mod export;
 mod forget_machine;
 #[cfg(target_os = "linux")]
+mod import;
+#[cfg(target_os = "linux")]
 mod init;
 #[cfg(target_os = "linux")]
 mod list;
@@ -146,6 +148,16 @@ pub enum Command {
         #[cfg_attr(not(feature = "dev-mode"), arg(long))]
         #[cfg_attr(feature = "dev-mode", arg(skip))]
         host_unlock: bool,
+    },
+    /// Make the vault from a migration bundle that `export` wrote on another machine. The service prompts for the export
+    /// passphrase, shows a summary, prompts for a new vault passphrase, shows a new recovery key once on the controlling
+    /// terminal and, once you confirm you saved it, writes the vault, the source's credentials and approval counters
+    /// included. It needs a controlling terminal, and leaves the service Locked. The vault routes nothing until you
+    /// approve a config with `config approve`, at a version above every one the source reserved. The BUNDLE must be a
+    /// regular file of at most 260 MiB.
+    Import {
+        /// The bundle file to read.
+        bundle: PathBuf,
     },
     /// Discard the vault and the config, so `init` can make a new vault: the way out when no passphrase, recovery key or
     /// approver works. It asks for no owner factor, only a confirmation typed at a terminal, which is the vault ID, or the
@@ -483,6 +495,19 @@ pub fn export(socket: Option<&Path>, bundle: &Path) -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn export(_socket: Option<&Path>, _bundle: &Path) -> ExitCode {
+    unsupported_platform()
+}
+
+/// `iron-vault import`: checks for a controlling terminal and a usable bundle file, sends `import` and the bundle, answers
+/// the service's prompts, shows the recovery key on the terminal only, and prints the result and the next steps.
+#[cfg(target_os = "linux")]
+pub fn import(socket: Option<&Path>, bundle: &Path) -> ExitCode {
+    import::run_import(socket, bundle).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn import(_socket: Option<&Path>, _bundle: &Path) -> ExitCode {
     unsupported_platform()
 }
 

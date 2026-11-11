@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, OwnerInput, Prompt, PromptAnswer, RevealedSecret};
-use iron_vault::admin::{DEAD_RECOVERY_KEY, UNCONFIRMED_RECOVERY_KEY, UNCONFIRMED_ROTATED_KEY};
+use iron_vault::admin::{DEAD_RECOVERY_KEY, UNCONFIRMED_IMPORT_KEY, UNCONFIRMED_RECOVERY_KEY, UNCONFIRMED_ROTATED_KEY};
 
 use super::Exit;
 use super::client::{fail, run_on, unexpected};
@@ -65,6 +65,8 @@ enum Stage {
 enum Shower {
     /// `init`: the owner's `yes` is the confirmation, and the vault is then written.
     Init,
+    /// `import`: the owner's `yes` is the confirmation, as for `init`, and the vault is then written from the bundle.
+    Import,
     /// `recipient add --recovery`: `yes` only asks for the vault passphrase; the rewrap may start once the passphrase (the
     /// next secret prompt) is sent.
     Rotation,
@@ -88,6 +90,14 @@ impl<C> RecoveryKeyWatch<C> {
         }
     }
 
+    /// Watches an `import` exchange through `console`.
+    pub fn import(console: C) -> Self {
+        Self {
+            shower: Shower::Import,
+            ..Self::new(console)
+        }
+    }
+
     /// Watches a `recipient add --recovery` exchange through `console`.
     pub fn rotation(console: C) -> Self {
         Self {
@@ -106,6 +116,12 @@ impl<C> RecoveryKeyWatch<C> {
             (Shower::Init, Stage::Confirmed) => Some(format!(
                 "init ended without an answer after `yes`, so the vault may or may not be written: {UNCONFIRMED_RECOVERY_KEY}"
             )),
+            (Shower::Import, Stage::Shown) => Some(format!(
+                "import ended before the recovery key was confirmed, so the service wrote nothing; {DEAD_RECOVERY_KEY}"
+            )),
+            (Shower::Import, Stage::Confirmed) => Some(format!(
+                "import ended without an answer after `yes`, so the vault may or may not be written: {UNCONFIRMED_IMPORT_KEY}"
+            )),
             (Shower::Rotation, Stage::Shown) => Some(format!(
                 "recipient add ended before the vault passphrase was sent, so nothing was enrolled; {DEAD_RECOVERY_KEY}"
             )),
@@ -120,7 +136,7 @@ impl<C> RecoveryKeyWatch<C> {
     /// unknown outcome's advice is still safe.
     fn collected(&mut self, prompt: &Prompt, input: &OwnerInput) {
         let confirms = match self.shower {
-            Shower::Init => input.expose_secret() == b"yes",
+            Shower::Init | Shower::Import => input.expose_secret() == b"yes",
             Shower::Rotation => prompt.secret,
         };
         if self.stage == Stage::Shown && confirms {

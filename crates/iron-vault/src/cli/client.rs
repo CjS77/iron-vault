@@ -437,7 +437,6 @@ pub fn exchange_bundle(
 
 /// The migration bundle side of one exchange (`design/migration-bundle.md`, "Transfer"). The bundle is ciphertext and
 /// public metadata, so the CLI holds it in no clearing buffer.
-#[cfg_attr(not(test), expect(dead_code, reason = "`import` sends a bundle once it is wired"))]
 pub enum Bundle<'a> {
     /// The exchange moves no bundle, so a bundle data frame is out of turn.
     None,
