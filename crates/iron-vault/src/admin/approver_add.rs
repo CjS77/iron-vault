@@ -69,6 +69,7 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverAdd<F> {
                 exchange.notice(&completion(&approver, approvers)).await?;
                 Ok(AdminResponse::ApproverAdd {
                     approver: approver.id(),
+                    // At most `MAX_APPROVERS` (16) are ever pinned, so the count always fits and the clamp never applies.
                     approvers: u8::try_from(approvers).unwrap_or(u8::MAX),
                 })
             }
@@ -101,7 +102,7 @@ async fn new_passphrase<F: StoreFs + Send + Sync + 'static>(
     plan: &ApproverChangePlan<'_, F>,
     label: &ApproverLabel,
 ) -> Result<Result<ApprovalPassphrase, AdminResponse>, ExchangeError> {
-    let shown = label.as_str().chars().filter(|c| !c.is_control()).collect::<String>();
+    let shown = shown_label(label);
     let Some(entry) = secret_prompt(exchange, plan, format!("New approval passphrase for \"{shown}\"")).await? else {
         return Ok(Err(cancelled_by_lock()));
     };
@@ -132,7 +133,7 @@ async fn secret_prompt<F: StoreFs + Send + Sync + 'static>(
 
 /// The summary the owner reads before owner presence.
 fn summary<F: StoreFs + Send + Sync + 'static>(plan: &ApproverChangePlan<'_, F>, label: &ApproverLabel) -> String {
-    let label = label.as_str().chars().filter(|c| !c.is_control()).collect::<String>();
+    let label = shown_label(label);
     format!(
         "enroll an approval signer\n  vault: {}\n  kind: software\n  label: {label}\n  approvers after the change: {}\n  \
          the new signer alone can approve a config and authorize replace, rm, recipient remove and approver changes\n  \
@@ -140,6 +141,11 @@ fn summary<F: StoreFs + Send + Sync + 'static>(plan: &ApproverChangePlan<'_, F>,
         plan.vault_id(),
         plan.approver_count() + 1,
     )
+}
+
+/// `label` as the owner sees it, escaped as the approver prompt escapes a pinned approver's label, since the owner chose it.
+fn shown_label(label: &ApproverLabel) -> String {
+    iron_vault_policy::escaped(label.as_str())
 }
 
 /// The notice after the enrollment committed.
