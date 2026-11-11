@@ -187,16 +187,17 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// The summary of `pending` against `active`. Bytes identical to the committed config's (same digest) are not diffed:
-/// the approval only signs that config again, which is how an approval signer is rotated.
+/// The summary of `pending` against `active`. Bytes identical to the committed config's (same digest) are not diffed when
+/// the service serves that config: the approval only signs it again, which is how an approval signer is rotated. With no
+/// active config, as after `import`, the committed config was approved for another host, so the whole of it is listed.
 fn summary_of(
     active: Option<&ValidatedConfig>,
     pending: &ValidatedConfig,
     approval: &ApprovalState,
     digest: ConfigDigest,
 ) -> ApprovalSummary {
-    match approval.committed() {
-        Some((version, committed)) if committed == digest => ApprovalSummary::same_config(version.get()),
+    match (active, approval.committed()) {
+        (Some(_), Some((version, committed))) if committed == digest => ApprovalSummary::same_config(version.get()),
         _ => summarize(active, pending),
     }
 }
