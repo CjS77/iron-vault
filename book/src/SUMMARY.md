@@ -27,6 +27,7 @@
 - [Lock, unlock and restart](cookbook/lock-unlock-restart.md)
 - [Check and store your recovery key](cookbook/recovery-key.md)
 - [Rotate the recovery key, or add a machine's key](cookbook/recipients.md)
+- [Rotate the approval passphrase, and keep a second approver](cookbook/approval-signers.md)
 - [Tamper detection and recovery](cookbook/tamper-detection.md)
 - [Start over in development mode](cookbook/start-over.md)
 - [Run Iron Vault in Docker Compose](cookbook/compose.md)

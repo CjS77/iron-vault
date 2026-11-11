@@ -33,6 +33,9 @@ Done in v0:
 - **Credential commands:** `add`, `replace`, `rm` and `list`; `replace` and `rm` need the approval passphrase.
 - **Response scrubbing:** removes the credential's known forms from response headers, compressed bodies and streamed
   responses.
+- **Approval signers:** more than one approver can sign config approvals, each with its own approval passphrase. `approver list`, `add` and
+  `remove` rotate them; only a pinned approver authorizes the change, never the vault passphrase or a recovery key, so keep a second approver
+  (`reset` is the only way out when none can answer).
 - **Recipients:** `recipient list` shows who can open the vault. `recipient add` needs the vault passphrase;
   `recipient add --recovery` generates and shows a new recovery key, to rotate the old one. `recipient remove` needs
   the approval passphrase; removal protects future copies of `identity.age` only.

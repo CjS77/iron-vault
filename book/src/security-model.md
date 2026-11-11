@@ -59,6 +59,16 @@ makes one extra key pair, the **operational identity**:
 
 Unlocking goes: passphrase → operational identity → vault identity.
 
+### Several approval signers
+
+Approving a config, and the changes that need your presence, is a separate lock from unlocking the vault. The vault
+pins one or more **approvers**, each backed by an approval signer, and any one of them speaks for you. The vault
+passphrase and the recovery key open the vault identity but never count as approval: the vault passphrase can mint a
+new recovery key, so a stolen vault passphrase would otherwise approve any config. Only a pinned approver's
+passphrase enrols or removes an approver. The price is that losing every approver's passphrase leaves
+[`reset`](cookbook/roadmap/reset.md) as the only way out, so
+[keep a second one](cookbook/approval-signers.md#why-keep-a-second-approver).
+
 ### What this doesn't protect against
 
 - **Removing a recipient doesn't reach old copies.** It only changes future versions of `identity.age`. A backup
