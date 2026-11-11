@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH iron-vault-approver 1  "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-approver \- Manage the approvers that sign configuration approvals
+.SH SYNOPSIS
+\fBiron\-vault approver\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Manage the approvers that sign configuration approvals
+.SH OPTIONS
+.TP
+\fB\-\-admin\-socket\fR \fI<PATH>\fR
+Use the admin socket at PATH instead of this installation\*(Aqs, for example one forwarded over SSH. Every client command takes it; `serve` refuses it, because the service always binds its own installation\*(Aqs socket
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+iron\-vault\-approver\-list(1)
+List every approver, one line each: its approver ID, signer kind, enrolment time, `active` when it signed the active approval, and label. The first line is the approver a prompt asks first. It works while the service is Ready

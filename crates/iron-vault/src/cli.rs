@@ -23,11 +23,12 @@ mod init;
 #[cfg(target_os = "linux")]
 mod list;
 // Generates the Linux package's man pages; test-only, so the release binary carries none of it.
+#[cfg(target_os = "linux")]
+mod approver_list;
 #[cfg(test)]
 mod man_page;
 #[cfg(target_os = "linux")]
 mod recipient_add_recovery;
-#[cfg(target_os = "linux")]
 mod recipient_list;
 // Generates the book's command reference; test-only, so the release binary carries none of it.
 #[cfg(test)]
@@ -181,6 +182,9 @@ pub enum Command {
     /// Manage the keys that can open the vault.
     #[command(subcommand)]
     Recipient(RecipientCommand),
+    /// Manage the approvers that sign configuration approvals.
+    #[command(subcommand)]
+    Approver(ApproverCommand),
     /// Print a shell completion script to stdout. It never contacts the service, so it also runs at build time.
     Completions {
         /// The shell to generate the script for.
@@ -251,6 +255,14 @@ pub enum RecoveryCommand {
     /// from stdin, so `pass show iron-vault-recovery | sudo iron-vault recovery check` works. It works while the service
     /// is Locked or Ready, changes nothing but the time it records, and keeps no copy of the key.
     Check,
+}
+
+/// `iron-vault approver`'s commands.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum ApproverCommand {
+    /// List every approver, one line each: its approver ID, signer kind, enrolment time, `active` when it signed the active
+    /// approval, and label. The first line is the approver a prompt asks first. It works while the service is Ready.
+    List,
 }
 
 /// `iron-vault recipient`'s commands.
@@ -454,6 +466,18 @@ pub fn recipient_remove(socket: Option<&Path>, recipient: String) -> ExitCode {
 /// The client is Linux-only for now, like the service.
 #[cfg(not(target_os = "linux"))]
 pub fn recipient_remove(_socket: Option<&Path>, _recipient: String) -> ExitCode {
+    unsupported_platform()
+}
+
+/// `iron-vault approver list`: sends `approver list` and prints one line per approver.
+#[cfg(target_os = "linux")]
+pub fn approver_list(socket: Option<&Path>) -> ExitCode {
+    client::approver_list(socket).into()
+}
+
+/// The client is Linux-only for now, like the service.
+#[cfg(not(target_os = "linux"))]
+pub fn approver_list(_socket: Option<&Path>) -> ExitCode {
     unsupported_platform()
 }
 

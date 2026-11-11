@@ -126,6 +126,7 @@ an error.
 | `13` | `recipient list` | none | the enrolled recipients, in inventory order ([recipients.md](recipients.md#admin-protocol)) |
 | `14` | `recipient add` | the recipient key text and label ([recipients.md](recipients.md#admin-protocol)) | the key and the recipient count after the change |
 | `15` | `recipient remove` | the recipient key | the recipient count after the removal ([recipients.md](recipients.md#admin-protocol)) |
+| `16` | `approver list` | none | the pinned approvers, in approver order, each marked active or not ([approval-signers.md](approval-signers.md#admin-protocol)) |
 
 **No command accepts an external signature** ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -781,7 +782,7 @@ is refused before its kind or length is read. Version 1 has not been released, s
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
 `status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), `replace` (command 10), `rm`
 (command 11), `recovery check` (command 12), `recipient list` (command 13), `recipient add` (command 14),
-`recipient remove` (command 15), `status` tags 13 to 17, the prompt's `switchable` tag 3, the switch frame (kind 8),
+`recipient remove` (command 15), `approver list` (command 16), `status` tags 13 to 17, the prompt's `switchable` tag 3, the switch frame (kind 8),
 and error codes 7 to 39 join it rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
@@ -985,6 +986,13 @@ message names the routes to remove from the config first.
 service's notices show the summary before the prompt and, once the removal commits, say that removing a recipient
 protects future copies of `identity.age` only. On success nothing goes to stdout; a service error goes to stderr with
 exit code 1.
+
+### approver list
+
+`iron-vault approver list` takes no argument and needs no owner input. It prints one line per approver to stdout, in the
+order the result gives, and exits `0`; the line format is in [approval-signers.md](approval-signers.md#approver-list).
+Two runs against an unchanged vault print the same bytes. A service error goes to stderr with exit code 1: `wrong-state`
+outside Ready, `busy` while another operation holds the service-wide lock.
 
 ### recovery check
 

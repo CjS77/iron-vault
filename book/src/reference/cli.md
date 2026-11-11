@@ -281,6 +281,22 @@ Remove an enrolled recipient by its `age1...` key. The service shows what will c
 - `<RECIPIENT>`: The recipient's `age1...` key, as `recipient list` prints it.
   - required
 
+## `iron-vault approver`
+
+```text
+iron-vault approver [OPTIONS] <COMMAND>
+```
+
+Manage the approvers that sign configuration approvals.
+
+## `iron-vault approver list`
+
+```text
+iron-vault approver list [OPTIONS]
+```
+
+List every approver, one line each: its approver ID, signer kind, enrolment time, `active` when it signed the active approval, and label. The first line is the approver a prompt asks first. It works while the service is Ready.
+
 ## `iron-vault completions`
 
 ```text

@@ -239,6 +239,17 @@ pub fn rm(socket: Option<&Path>, name: String) -> Exit {
     })
 }
 
+/// Runs `approver list` and prints one line per approver on stdout.
+pub fn approver_list(socket: Option<&Path>) -> Exit {
+    run(socket, AdminRequest::ApproverList, |response| match response {
+        AdminResponse::ApproverList { entries } => {
+            print!("{}", super::approver_list::render(&entries));
+            Exit::Success
+        }
+        _ => unexpected(),
+    })
+}
+
 /// Runs `recipient list` and prints one line per enrolled recipient on stdout.
 pub fn recipient_list(socket: Option<&Path>) -> Exit {
     run(socket, AdminRequest::RecipientList, |response| match response {

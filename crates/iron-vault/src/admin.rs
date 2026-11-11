@@ -7,6 +7,8 @@ mod add;
 #[cfg(target_os = "linux")]
 mod approve;
 #[cfg(target_os = "linux")]
+mod approver_list;
+#[cfg(target_os = "linux")]
 pub mod dispatch;
 #[cfg(target_os = "linux")]
 mod init;
