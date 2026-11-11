@@ -225,6 +225,6 @@ fn completion(approver: &PinnedApprover, approvers: usize) -> String {
 fn cancelled_by_lock() -> AdminResponse {
     error(
         ErrorCode::WrongState,
-        format!("`{COMMAND}` was cancelled because a `lock` ran while it waited for the new passphrase; nothing was written"),
+        format!("`{COMMAND}` was cancelled because a `lock` ran while it waited for the new passphrase or PIN; nothing was written"),
     )
 }
