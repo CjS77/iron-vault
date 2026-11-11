@@ -26,11 +26,15 @@ fn a_healthy_vault_prints_the_checks_then_the_guidance_and_no_warning() {
 fn the_guidance_names_the_host_unlock_steps_and_the_lost_machine_case() {
     [
         "systemd-cryptenroll",
-        "LoadCredentialEncrypted",
+        "LoadCredentialEncrypted|SetCredentialEncrypted|ImportCredential",
+        "/run/credstore.encrypted",
+        "/usr/local/lib/credstore.encrypted",
         "tpm2_getcap handles-persistent",
+        "tpm2_getcap handles-nv-index",
         "/etc/iron-vault-host/host-unlock.cred",
         "tpm2_clear",
-        "iron-vault replace NAME",
+        "iron-vault replace NAME --origin ORIGIN",
+        "On the vault that stays",
     ]
     .iter()
     .for_each(|needle| assert!(GUIDANCE.contains(needle), "guidance lacks {needle}"));
@@ -44,6 +48,29 @@ fn an_overdue_recovery_check_is_a_warning_and_the_guidance_still_prints() {
     assert!(warned[0].contains("overdue") && warned[0].contains("recovery check"));
     assert!(render(KEY, None, &recovery).contains("97 days ago, overdue"));
     assert!(render(KEY, None, &recovery).ends_with(GUIDANCE));
+}
+
+#[test]
+fn a_never_checked_or_unknown_recovery_record_is_a_warning_even_when_no_reminder_is_due() {
+    let never = RecoveryStatus::NeverChecked {
+        since: UtcSecond::from_unix_seconds(1_800_000_000).unwrap(),
+        days: 3,
+        due: false,
+    };
+    let unknown = RecoveryStatus::Unknown {
+        detail: "no check record yet".to_owned(),
+        due: false,
+    };
+    [(never, "has never run"), (unknown, "is not on record")]
+        .iter()
+        .for_each(|(recovery, state)| {
+            let warned = warnings(None, recovery);
+            assert_eq!(warned.len(), 1, "{recovery:?}");
+            assert!(
+                warned[0].contains(state) && warned[0].contains("iron-vault recovery check"),
+                "{warned:?}"
+            );
+        });
 }
 
 #[test]

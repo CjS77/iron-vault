@@ -107,11 +107,12 @@ async fn a_key_that_is_still_a_recipient_is_not_forgotten_and_nothing_changes() 
     let (code, message) = refusal(forget(&service, &laptop).await);
 
     assert_eq!(code, ErrorCode::MachineNotForgotten);
+    assert!(message.contains("run `iron-vault recipient remove` with the same key"), "{message}");
+    assert!(message.contains("role added"), "{message}");
     assert!(
-        message.contains(&format!("run `iron-vault recipient remove {laptop}`")),
-        "{message}"
+        !message.contains(&laptop.to_string()) && !message.contains("old laptop"),
+        "the message echoes owner input: {message}"
     );
-    assert!(message.contains("role added") && message.contains("label old laptop"), "{message}");
     assert_eq!(fixture.state_files(), before);
     assert!(logs.has_field("recipient.forget-checked", "forget_outcome", "still_enrolled"));
     assert!(logs.has_field("recipient.forget-checked", "recipient_role", "added"));
@@ -161,25 +162,61 @@ async fn a_removed_key_with_a_healthy_recovery_path_is_forgotten() {
             ours["level"].as_str(),
             ours["forget_outcome"].as_str(),
             ours["independence"].as_str(),
-            ours["recovery_due"].as_bool()
+            ours["recovery"].as_str()
         ),
-        (Some("INFO"), Some("forgotten"), Some("holds"), Some(false))
+        (Some("INFO"), Some("forgotten"), Some("holds"), Some("verified"))
     );
 }
 
 #[tokio::test]
-async fn an_overdue_recovery_check_is_reported_as_due() {
+async fn an_overdue_recovery_check_is_not_verified() {
+    let logs = captured_logs();
     let fixture = Fixture::new();
     let (service, _) = ready(&fixture).await;
     write_record(&fixture, now() - 100 * 86_400);
+    let key = stranger();
 
-    match forget(&service, &stranger()).await {
+    match forget(&service, &key).await {
         AdminResponse::ForgetMachine { independence, recovery } => {
             assert_eq!(independence, None);
-            assert!(recovery.due(), "{recovery:?}");
+            assert!(matches!(recovery, RecoveryStatus::Checked { due: true, .. }), "{recovery:?}");
         }
         other => panic!("expected the result, got {other:?}"),
     }
+    assert_unverified_warning(&logs, &key);
+}
+
+/// The audit event for `key` is a WARN whose recovery path is unverified. The log is shared by the tests of this binary.
+fn assert_unverified_warning(logs: &common::approval_harness::Captured, key: &RecipientKey) {
+    let recorded = logs.events("recipient.forget-checked");
+    let ours = recorded
+        .iter()
+        .find(|record| record["recipient"] == key.to_string().as_str())
+        .unwrap();
+    assert_eq!(
+        (ours["level"].as_str(), ours["recovery"].as_str()),
+        (Some("WARN"), Some("unverified")),
+        "{ours}"
+    );
+}
+
+/// A vault that has never had a recovery check is not a verified recovery path, however young it is.
+#[tokio::test]
+async fn a_fresh_vault_with_no_recovery_check_is_not_verified() {
+    let logs = captured_logs();
+    let fixture = Fixture::new();
+    let (service, _) = ready(&fixture).await;
+    let key = stranger();
+
+    match forget(&service, &key).await {
+        AdminResponse::ForgetMachine { independence, recovery } => {
+            assert_eq!(independence, None);
+            assert!(!recovery.verified(), "{recovery:?}");
+            assert!(!matches!(recovery, RecoveryStatus::Checked { .. }), "{recovery:?}");
+        }
+        other => panic!("expected the result, got {other:?}"),
+    }
+    assert_unverified_warning(&logs, &key);
 }
 
 #[tokio::test]
@@ -216,7 +253,68 @@ async fn it_is_refused_outside_ready_and_for_a_malformed_key() {
     assert_eq!(refusal(exchange(&service, request, &[]).await.0).0, ErrorCode::RecipientInvalid);
 }
 
-/// The command never runs a TPM tool because it runs nothing: none of the code it executes names a way to start a process.
+/// Every tool the guidance names, as a shim that records that it ran.
+const TOOLS: [&str; 10] = [
+    "tpm2_clear",
+    "tpm2_getcap",
+    "systemd-cryptenroll",
+    "systemd-creds",
+    "systemctl",
+    "rm",
+    "grep",
+    "ls",
+    "clevis",
+    "tpm2_pkcs11_tool",
+];
+
+/// A directory of one marker-writing shim per tool, and the directory the markers go in.
+fn shims(fixture: &Fixture) -> (std::path::PathBuf, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let (bin, markers) = (fixture.path("shim-bin"), fixture.path("shim-markers"));
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(&markers).unwrap();
+    TOOLS.iter().for_each(|tool| {
+        let shim = bin.join(tool);
+        fs::write(&shim, format!("#!/bin/sh\necho ran > '{}'\n", markers.join(tool).display())).unwrap();
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+    });
+    (bin, markers)
+}
+
+/// The real CLI against the Ready service, with a `PATH` that holds only shims for the tools the guidance mentions: it prints the
+/// guidance and the warning for the unchecked recovery path, exits 0, and starts none of the tools.
+#[tokio::test]
+async fn the_command_runs_no_tool_it_mentions() {
+    let fixture = Fixture::new();
+    let (service, _) = ready(&fixture).await;
+    let (bin, markers) = shims(&fixture);
+    let (socket, stop) = common::approval_harness::serve_admin(&service);
+    let key = stranger().to_string();
+
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_iron-vault"))
+            .args(["forget-machine", &key, "--admin-socket"])
+            .arg(&socket)
+            .env("PATH", &bin)
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    let _ = stop.send(());
+
+    let (stdout, stderr) = (String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stdout.contains("is not a recipient of this vault") && stdout.contains("tpm2_clear"),
+        "{stdout}"
+    );
+    assert!(stderr.contains("warning: the recovery check"), "{stderr}");
+    let ran: Vec<_> = fs::read_dir(&markers).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    assert!(ran.is_empty(), "the command started {ran:?}");
+}
+
+/// A second guard: none of the code the command runs names a way to start a process.
 #[test]
 fn the_command_spawns_no_process() {
     let sources = [

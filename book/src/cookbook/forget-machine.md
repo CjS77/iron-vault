@@ -40,7 +40,7 @@ iron-vault forget-machine age1…
 ```
 
 If the key is still a recipient, the command exits with code 1 and the code `machine-not-forgotten`; the message gives
-the key's role and the `recipient remove` command to run. Nothing is changed.
+the key's role and says to run `recipient remove` with the same key. Nothing is changed.
 
 If the key is not a recipient, the command prints three facts and then the steps for the retired machine:
 
@@ -53,22 +53,26 @@ recovery last checked: 2026-11-04 (7 days ago)
 It cannot tell a removed key from one that was never a recipient, so a mistyped key reads as gone. Compare the key it
 repeats with the one on the retired machine.
 
-A warning on stderr means something needs fixing before you clear any TPM:
+Any warnings are printed first, on stderr, above the steps. A warning means something needs fixing before you clear any TPM:
 
-- **`the recovery check is overdue`.** Run [`recovery check`](recovery-key.md) with your offline recovery key. Retiring a
-  machine removes one way into the vault; the check proves another still works.
+- **`the recovery check is overdue`, `has never run` or `is not on record`.** Run [`recovery check`](recovery-key.md) with
+  your offline recovery key. Retiring a machine removes one way into the vault; the check proves another still works. A new
+  vault that has never run the check gets this warning too, however young it is.
 - **`the vault no longer meets the independence rule`.** The vault lacks an `operational` or `recovery` recipient, or has
   too few recipients. Add the missing one with `recipient add` before you go on.
 
 ### 3. Follow the steps it prints, on the retired machine
 
-The steps run as root on the retired machine. In order:
+Steps 1 to 3 run as root on the retired machine. In order:
 
 1. **Find out what else uses the TPM.** Clearing it destroys every key it holds. List the TPM keyslots of each LUKS
    device with `systemd-cryptenroll DEVICE`; look for other sealed credentials with
-   `grep -rl LoadCredentialEncrypted /etc/systemd /usr/lib/systemd` and `ls /etc/credstore.encrypted`; list the persistent
-   handles with `tpm2_getcap handles-persistent`. The handle `0x81000001` is systemd's storage root key, shared by every
-   `systemd-creds` user on the machine. Remember other software that keeps keys in the TPM, and the machine's other users.
+   `grep -rlE 'LoadCredentialEncrypted|SetCredentialEncrypted|ImportCredential' /etc/systemd /run/systemd /usr/lib/systemd`
+   and `ls /etc/credstore.encrypted /run/credstore.encrypted /usr/lib/credstore.encrypted /usr/local/lib/credstore.encrypted`;
+   list the persistent handles with `tpm2_getcap handles-persistent`. The handle `0x81000001` is systemd's storage root key,
+   shared by every `systemd-creds` user on the machine. List the NV indices with `tpm2_getcap handles-nv-index`: clearing
+   the TPM destroys them, and other software keeps state there (the systemd-pcrlock policy, which LUKS keyslots enrolled with
+   `--tpm2-pcrlock` depend on, and `tpm2-totp`). Remember other software that keeps keys in the TPM, and the machine's other users.
 2. **Delete the sealed credential.** `systemctl stop iron-vault-host-unlock.service`, then
    `rm /etc/iron-vault-host/host-unlock.cred`. A copy of that file in a backup still opens on this TPM.
 3. **Clear the TPM only if nothing else needs it.** Use the firmware's clear-TPM setting, or `tpm2_clear`. If step 1 found
@@ -77,10 +81,13 @@ The steps run as root on the retired machine. In order:
 
 If the machine held only an added or recovery key, there is no TPM step: delete that key where it was kept.
 
+The machine may also still hold its own copy of the vault. Retire it with [`iron-vault reset`](reset-vault.md) or by
+purging the package, and delete `/etc/iron-vault-host/provisioning.txt` beside the sealed credential.
+
 ### 4. If the machine was lost or stolen, rotate
 
-Removing a recipient cannot revoke ciphertext an attacker already holds. For each credential in `iron-vault list`, have the
-provider reissue the key, then:
+Run this on the vault that stays. Removing a recipient cannot revoke ciphertext an attacker already holds. For each
+credential in `iron-vault list`, have the provider reissue the key, then give the name and the origins `list` shows:
 
 ```sh
 iron-vault replace NAME --origin api.fx.example
@@ -90,7 +97,7 @@ See [rotate a key](rotate-key.md).
 
 ## What can go wrong
 
-- **`machine-not-forgotten`.** The key is still a recipient. Run the `recipient remove` command the message names. If
+- **`machine-not-forgotten`.** The key is still a recipient. Run `recipient remove` with the same key. If
   that is refused because the key is the host unlock identity this service holds, you ran the command on the machine being
   retired; run it on the vault that stays.
 - **`wrong-state`.** The service is not Ready. Run `iron-vault unlock`.

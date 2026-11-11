@@ -2,11 +2,11 @@
 .el .ds Aq '
 .TH iron-vault-forget-machine 1  "Iron Vault" "Iron Vault Manual"
 .SH NAME
-iron\-vault\-forget\-machine \- Check that a retired machine\*(Aqs recipient key is gone from the vault, then print how to decommission the machine. Run it on the vault that stays, with the key `recipient list` showed for the machine. It exits 1 with `machine\-not\-forgotten`, naming the `recipient remove` command, while the key is still enrolled. It warns when the vault no longer meets the independence rule or the recovery check is overdue. It changes nothing and runs no TPM tool: you run every step it prints
+iron\-vault\-forget\-machine \- Check that a retired machine\*(Aqs recipient key is gone from the vault, then print how to decommission the machine. Run it on the vault that stays, with the key `recipient list` showed for the machine. It exits 1 with `machine\-not\-forgotten`, telling you to run `recipient remove`, while the key is still enrolled. It warns when the vault no longer meets the independence rule or no recovery check has run lately. It changes nothing and runs no TPM tool: you run every step it prints
 .SH SYNOPSIS
 \fBiron\-vault forget\-machine\fR [\fB\-\-admin\-socket\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIRECIPIENT\fR> 
 .SH DESCRIPTION
-Check that a retired machine\*(Aqs recipient key is gone from the vault, then print how to decommission the machine. Run it on the vault that stays, with the key `recipient list` showed for the machine. It exits 1 with `machine\-not\-forgotten`, naming the `recipient remove` command, while the key is still enrolled. It warns when the vault no longer meets the independence rule or the recovery check is overdue. It changes nothing and runs no TPM tool: you run every step it prints
+Check that a retired machine\*(Aqs recipient key is gone from the vault, then print how to decommission the machine. Run it on the vault that stays, with the key `recipient list` showed for the machine. It exits 1 with `machine\-not\-forgotten`, telling you to run `recipient remove`, while the key is still enrolled. It warns when the vault no longer meets the independence rule or no recovery check has run lately. It changes nothing and runs no TPM tool: you run every step it prints
 .SH OPTIONS
 .TP
 \fB\-\-admin\-socket\fR \fI<PATH>\fR

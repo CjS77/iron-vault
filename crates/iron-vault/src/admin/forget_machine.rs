@@ -14,7 +14,7 @@ use super::protocol::{AdminRequest, AdminResponse, ErrorCode};
 use super::recipient_list::refused as inventory_refused;
 use super::server::Exchange;
 use crate::audit::AuditEvent;
-use crate::audit::recipient::ForgetChecked;
+use crate::audit::recipient::{ForgetChecked, ForgetOutcome};
 use crate::service_context::{ForgetCheck, ServiceContext};
 
 /// `forget-machine`'s handler, acting on the running service.
@@ -43,7 +43,7 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for ForgetMachine<F> {
             Ok(match self.service.check_forgotten(&key).await {
                 Ok(check) => {
                     audit(&key, &check).emit();
-                    answer(&key, check)
+                    answer(check)
                 }
                 Err(refusal) => inventory_refused("forget-machine", refusal),
             })
@@ -53,37 +53,29 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for ForgetMachine<F> {
 
 /// The audit event for what the check found.
 fn audit<'a>(key: &'a RecipientKey, check: &'a ForgetCheck) -> ForgetChecked<'a> {
-    match check {
-        ForgetCheck::Enrolled(entry) => ForgetChecked {
-            recipient: key,
-            enrolled: Some(entry),
-            independence_holds: true,
-            recovery_due: false,
-        },
-        ForgetCheck::Forgotten { independence, recovery } => ForgetChecked {
-            recipient: key,
-            enrolled: None,
+    let outcome = match check {
+        ForgetCheck::Enrolled(entry) => ForgetOutcome::StillEnrolled(entry),
+        ForgetCheck::Forgotten { independence, recovery } => ForgetOutcome::Forgotten {
             independence_holds: independence.is_none(),
-            recovery_due: recovery.due(),
+            recovery_verified: recovery.verified(),
         },
-    }
+    };
+    ForgetChecked { recipient: key, outcome }
 }
 
-/// A key still enrolled is an error whose message is the next step; otherwise the facts for the guidance.
-fn answer(key: &RecipientKey, check: ForgetCheck) -> AdminResponse {
+/// A key still enrolled is an error whose message is the next step; otherwise the facts for the guidance. The message names the
+/// role only: the admin protocol never echoes owner input.
+fn answer(check: ForgetCheck) -> AdminResponse {
     match check {
-        ForgetCheck::Enrolled(entry) => {
-            let label: String = entry.label().as_str().chars().filter(|c| !c.is_control()).collect();
-            error(
-                ErrorCode::MachineNotForgotten,
-                format!(
-                    "{key} is still a recipient of this vault (role {}, label {label}); run `iron-vault recipient remove {key}`, then \
-                     `forget-machine` again. If that is refused because the key is the host unlock identity this machine's unlock \
-                     handoff holds, this is the machine being retired: run `forget-machine` on the vault that stays",
-                    entry.role().name()
-                ),
-            )
-        }
+        ForgetCheck::Enrolled(entry) => error(
+            ErrorCode::MachineNotForgotten,
+            format!(
+                "the key is still a recipient of this vault (role {}); run `iron-vault recipient remove` with the same key, then \
+                 `forget-machine` again. If that is refused because the key is the host unlock identity this machine's unlock \
+                 handoff holds, this is the machine being retired: run `forget-machine` on the vault that stays",
+                entry.role().name()
+            ),
+        ),
         ForgetCheck::Forgotten { independence, recovery } => AdminResponse::ForgetMachine { independence, recovery },
     }
 }

@@ -210,8 +210,8 @@ pub enum Command {
     Approver(ApproverCommand),
     /// Check that a retired machine's recipient key is gone from the vault, then print how to decommission the machine. Run it
     /// on the vault that stays, with the key `recipient list` showed for the machine. It exits 1 with `machine-not-forgotten`,
-    /// naming the `recipient remove` command, while the key is still enrolled. It warns when the vault no longer meets the
-    /// independence rule or the recovery check is overdue. It changes nothing and runs no TPM tool: you run every step it prints.
+    /// telling you to run `recipient remove`, while the key is still enrolled. It warns when the vault no longer meets the
+    /// independence rule or no recovery check has run lately. It changes nothing and runs no TPM tool: you run every step it prints.
     ForgetMachine {
         /// The retired machine's `age1...` recipient key.
         recipient: String,

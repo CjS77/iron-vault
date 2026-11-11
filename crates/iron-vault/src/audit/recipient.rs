@@ -100,12 +100,22 @@ impl AuditEvent for Removed<'_> {
 pub struct ForgetChecked<'a> {
     /// The key checked.
     pub recipient: &'a RecipientKey,
-    /// The entry the key still has, when it is still enrolled.
-    pub enrolled: Option<&'a RecipientEntry>,
-    /// Whether the independence rule holds for the inventory; meaningful only when the key is not enrolled.
-    pub independence_holds: bool,
-    /// Whether a recovery reminder is due; meaningful only when the key is not enrolled.
-    pub recovery_due: bool,
+    /// What the check found.
+    pub outcome: ForgetOutcome<'a>,
+}
+
+/// What `forget-machine`'s inventory check found for the key.
+#[derive(Debug, Clone, Copy)]
+pub enum ForgetOutcome<'a> {
+    /// The key is still a recipient, with this entry.
+    StillEnrolled(&'a RecipientEntry),
+    /// The key is not a recipient.
+    Forgotten {
+        /// Whether the independence rule holds for the inventory.
+        independence_holds: bool,
+        /// Whether the recovery path is verified: a check ran and no reminder is due.
+        recovery_verified: bool,
+    },
 }
 
 impl AuditEvent for ForgetChecked<'_> {
@@ -113,8 +123,8 @@ impl AuditEvent for ForgetChecked<'_> {
 
     fn emit(&self) {
         let recipient = self.recipient.to_string();
-        match (self.enrolled, self.independence_holds && !self.recovery_due) {
-            (Some(entry), _) => tracing::warn!(
+        match self.outcome {
+            ForgetOutcome::StillEnrolled(entry) => tracing::warn!(
                 target: AUDIT_TARGET,
                 event = Self::NAME.as_str(),
                 recipient = recipient.as_str(),
@@ -122,22 +132,28 @@ impl AuditEvent for ForgetChecked<'_> {
                 recipient_role = entry.role().name(),
                 "retired machine's recipient is still enrolled",
             ),
-            (None, true) => tracing::info!(
+            ForgetOutcome::Forgotten {
+                independence_holds: true,
+                recovery_verified: true,
+            } => tracing::info!(
                 target: AUDIT_TARGET,
                 event = Self::NAME.as_str(),
                 recipient = recipient.as_str(),
                 forget_outcome = "forgotten",
                 independence = "holds",
-                recovery_due = false,
+                recovery = "verified",
                 "retired machine's recipient is not enrolled",
             ),
-            (None, false) => tracing::warn!(
+            ForgetOutcome::Forgotten {
+                independence_holds,
+                recovery_verified,
+            } => tracing::warn!(
                 target: AUDIT_TARGET,
                 event = Self::NAME.as_str(),
                 recipient = recipient.as_str(),
                 forget_outcome = "forgotten",
-                independence = if self.independence_holds { "holds" } else { "broken" },
-                recovery_due = self.recovery_due,
+                independence = if independence_holds { "holds" } else { "broken" },
+                recovery = if recovery_verified { "verified" } else { "unverified" },
                 "retired machine's recipient is not enrolled, with a warning",
             ),
         }

@@ -46,11 +46,10 @@ pub enum RecoveryStatus {
 }
 
 impl RecoveryStatus {
-    /// Whether a recovery reminder is due: the one meaning of an overdue recovery check, for `status` and `forget-machine`.
-    pub const fn due(&self) -> bool {
-        match self {
-            Self::Unknown { due, .. } | Self::NeverChecked { due, .. } | Self::Checked { due, .. } => *due,
-        }
+    /// Whether a recovery check has run and no reminder is due: the only status `forget-machine` accepts as proof that another
+    /// recovery path exists. A vault that was never checked, or whose record is unusable, has not shown one.
+    pub const fn verified(&self) -> bool {
+        matches!(self, Self::Checked { due: false, .. })
     }
 }
 

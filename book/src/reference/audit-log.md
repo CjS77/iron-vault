@@ -199,7 +199,7 @@ recipient key, and `forget-machine` writes `recipient.forget-checked`; `recipien
 | `recipient.change-recovered` | WARN | The inventory check finished a committed recipient change or removed a staged inventory | `recovery`: `completed` or `discarded` |
 | `recipient.removed` | INFO | A removal committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` (the count after the removal) |
 | `recipient.change-failed` | WARN | An add or a removal was refused because the key is already enrolled, is not enrolled or would break the independence rule, or it failed while written | `change` (`add` or `remove`), `recipient`, `failure`: `already_enrolled`, `unknown_recipient`, `set_invalid` or `write_failed`; for `write_failed` also `step`, `error_kind` and `committed` (`no`, `unknown` or `yes`) |
-| `recipient.forget-checked` | INFO when the key is not a recipient, the independence rule holds and no recovery reminder is due, else WARN | `forget-machine` checked a key | `recipient`, `forget_outcome` (`forgotten` or `still_enrolled`), `recipient_role` (`still_enrolled` only), `independence` (`holds` or `broken`) and `recovery_due` (`forgotten` only) |
+| `recipient.forget-checked` | INFO when the key is not a recipient, the independence rule holds and the recovery path is verified (a check ran, no reminder due), else WARN | `forget-machine` checked a key | `recipient`, `forget_outcome` (`forgotten` or `still_enrolled`), `recipient_role` (`still_enrolled` only), `independence` (`holds` or `broken`) and `recovery` (`verified` or `unverified`; `forgotten` only) |
 
 ### Approvers
 

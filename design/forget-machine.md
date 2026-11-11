@@ -46,20 +46,23 @@ In this order, under the service-wide lock the inventory check takes (tried, so 
    `recipient-invalid`.
 2. **The key is not a recipient.** The inventory check runs (`recipient-inventory-damaged` or `vault-write-failed` when
    it cannot); a key that is still enrolled ends the command with `machine-not-forgotten`. The message gives the key's
-   role and label and the command to run, `iron-vault recipient remove <key>`. Nothing is changed. Every role counts,
+   role and says to run `iron-vault recipient remove` with the same key; it repeats neither the key nor the label,
+   because the admin protocol never echoes owner input. Nothing is changed. Every role counts,
    `operational` and `recovery` included: the command never says a key in use is gone.
 3. **The independence rule holds** on the inventory as it is
    ([recipients.md](recipients.md#independence-rule), parts 2 to 4; part 1 needs the host unlock configuration, which
    a removal already checked). A removal enforces the rule, so this fails only for an inventory restored from an old
    copy or edited around the service. The result carries which part failed.
-4. **The recovery path is recent.** The [recovery check record](recovery.md#the-recovery-check-record) says the last
-   successful `recovery check` is no older than the config's `reminder_days` (90 by default): the same fact `status`
-   shows as `overdue`, taken from the same code. A recipient of role `recovery` is what part 3 of the rule already
-   demands; this part says whether the owner has lately proved the key opens the vault. A record that is `never
-   checked`, `unknown` or past the interval is a warning.
+4. **The recovery path is verified.** The [recovery check record](recovery.md#the-recovery-check-record) says a
+   successful `recovery check` has run and is no older than the config's `reminder_days` (90 by default): the same
+   interval `status` shows as `overdue`, taken from the same code. A recipient of role `recovery` is what part 3 of the
+   rule already demands; this part says whether the owner has proved the key opens the vault, and lately. Only a
+   record that is `checked` with no reminder due passes. A record that is `never checked`, `unknown` or past the
+   interval is a warning, however young the vault is: §16 asks for another recovery path to be *verified* before a TPM
+   is cleared, and a vault that has never run the check has verified nothing.
 
 Steps 3 and 4 never stop the command. A failed one is a **warning** on stderr and in the result, and the guidance still
-prints with the warning above it: the question the command answers, whether the key is gone, has its answer, and
+prints under the warnings, which are written first: the question the command answers, whether the key is gone, has its answer, and
 withholding the steps would leave an administrator holding a lost machine with nothing. The warning says what to fix
 before clearing any TPM. The command exits 0 when the key is not a recipient, and 1 with `machine-not-forgotten` when
 it is.
@@ -73,25 +76,31 @@ output or `recipient list` ([decision 3](#decisions)).
 Printed to stdout after the checks, the same for every call so that it is testable byte for byte. The retired machine
 held one of two things, and the text covers both rather than asking which:
 
-> Iron Vault runs none of these steps. Run them on the retired machine, as root.
+> Iron Vault runs none of these steps. Steps 1 to 3 are for the retired machine, run as root there; the lost-or-stolen
+> steps below run on the vault that stays.
 >
 > If this machine held TPM unlock, its recipient had the role `host-unlock`:
 >
 > 1. Find out what else uses the TPM. Clearing it destroys every key it holds.
 >    - disk encryption: `systemd-cryptenroll DEVICE` for each LUKS device lists its TPM keyslots;
->    - other sealed credentials: `grep -rl LoadCredentialEncrypted /etc/systemd /usr/lib/systemd` and
->      `ls /etc/credstore.encrypted`;
+>    - other sealed credentials, in unit files and in the credstore directories:
+>      `grep -rlE 'LoadCredentialEncrypted|SetCredentialEncrypted|ImportCredential' /etc/systemd /run/systemd /usr/lib/systemd`
+>      and `ls /etc/credstore.encrypted /run/credstore.encrypted /usr/lib/credstore.encrypted
+>      /usr/local/lib/credstore.encrypted`;
 >    - persistent handles: `tpm2_getcap handles-persistent`. The handle `0x81000001` is systemd's storage root key,
 >      shared by every `systemd-creds` user on the machine;
+>    - NV indices: `tpm2_getcap handles-nv-index`. Clearing the TPM destroys them, and other software keeps state there:
+>      the systemd-pcrlock policy (LUKS keyslots enrolled with `--tpm2-pcrlock` depend on it) and `tpm2-totp`;
 >    - other software that keeps keys in the TPM, such as Clevis or `tpm2-pkcs11`, and every other user of the machine.
 > 2. Delete the sealed credential: `systemctl stop iron-vault-host-unlock.service`, then
 >    `rm /etc/iron-vault-host/host-unlock.cred`. A copy of that file in a backup still opens on this TPM.
-> 3. Clear the TPM only when step 1 found nothing else that needs it and the recovery check above is recent. Use the
+> 3. Clear the TPM only when step 1 found nothing else that needs it and the recovery path is verified (no warning above). Use the
 >    firmware's clear-TPM setting, or `tpm2_clear`. If anything else uses the TPM, leave it: step 2 has retired the
 >    machine from this vault, and only the old backup copies stay reachable through this TPM.
 >
-> If the machine was lost or stolen, removing its recipient could not revoke what was already copied. Reissue every
-> provider credential, then `iron-vault replace NAME` each one; `iron-vault list` names them.
+> If the machine was lost or stolen, removing its recipient could not revoke what was already copied. On the vault that
+> stays, reissue every provider credential at its provider, then run `iron-vault replace NAME --origin ORIGIN` for each
+> one. Give the names and origins that `iron-vault list` shows.
 >
 > If the machine held only an `added` or `recovery` key, there is no TPM step: delete that key where it was kept.
 
@@ -115,8 +124,9 @@ The specification and the ticket leave these open; each is decided here, with it
    reserved ([tpm-unlock.md](tpm-unlock.md#the-recipient-role)), and when it is enrolled its guidance is these steps.
 4. **A warning does not stop the guidance, and does not change the exit status.** *Reason:* see [What it
    checks](#what-it-checks). A script that must know reads the warnings on stderr, or the audit event.
-5. **Overdue means the reminder is due.** One definition of "recent" for `status`, the reminder and this command.
-   *Reason:* a second interval would let `status` say overdue while this command says fine.
+5. **Verified means checked, with no reminder due.** The interval is the one `status` and the reminder use. *Reason:* a
+   second interval would let `status` say overdue while this command says fine; and a record that says nothing has
+   been checked is not a verification, so the never-checked and unknown records warn too.
 6. **The inventory check may settle a staged change.** *Reason:* a staged change means `recipients.age` and
    `identity.age` disagree about the set; reading either alone could say a key is gone that is still in the envelope.
    The check is the same function `recipient list` runs and logs `recipient.change-recovered` when it settles one.
@@ -143,9 +153,9 @@ and which part failed, and the recovery check state as `status` carries it (tags
 | `forget_outcome` | `forgotten` or `still_enrolled` |
 | `recipient_role` | the enrolled role's name, `still_enrolled` only |
 | `independence` | `holds`, or `broken`; `forgotten` only |
-| `recovery_due` | whether the recovery reminder is due; `forgotten` only |
+| `recovery` | `verified` (a check ran and no reminder is due) or `unverified`; `forgotten` only |
 
-INFO when the key is forgotten, the rule holds and no reminder is due; WARN otherwise. It holds no label and no secret.
+INFO when the key is forgotten, the rule holds and the recovery path is verified; WARN otherwise. It holds no label and no secret.
 
 ## Interactions
 
@@ -164,6 +174,7 @@ On a real service, with a vault holding an `operational`, a `recovery` and a `ho
    inventory is as it was.
 2. After `recipient remove` of that key and a `recovery check`, `forget-machine` for it exits 0 and prints the guidance
    and no warning.
-3. The same call 100 days later with no check prints the overdue warning and the guidance.
+3. The same call 100 days later with no check prints the overdue warning and the guidance; so does a call on a vault
+   that has never run `recovery check`.
 4. In Locked, it ends with `wrong-state`.
 5. `strace -f -e trace=execve,fork,clone` on the service across a run shows no `execve`.

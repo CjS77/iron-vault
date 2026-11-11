@@ -671,7 +671,7 @@ Errors specific to `forget-machine`:
 |---|---|
 | `wrong-state` | the service is not Ready |
 | `recipient-invalid` | the argument is not an `age1…` X25519 recipient key |
-| `machine-not-forgotten` | the key is still a recipient; the message names its role and label and says to run `recipient remove` |
+| `machine-not-forgotten` | the key is still a recipient; the message names its role and says to run `recipient remove` with the same key; it never repeats the key or the label |
 | `recipient-inventory-damaged`, `vault-write-failed`, `busy` | as for `recipient list` |
 
 ### Prompt (kind 2)
@@ -963,7 +963,7 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `48` | `import-failed` | `import`: the host unlock flag was set and the service has no host unlock identity to enrol, raised before any prompt, so nothing was written; or a write failed, and the message names the step and says to run `import` again, which discards the unfinished import |
 | `49` | `nothing-to-reset` | `reset`: no vault file is in the state directory; the message says what to run next ([reset.md](reset.md#result)) |
 | `50` | `reset-failed` | `reset`: the directories could not be read, writing `reset.unfinished` failed, or a removal failed; the message names the step and the file ([reset.md](reset.md#result)) |
-| `52` | `machine-not-forgotten` | `forget-machine`: the key is still a recipient of the vault; the message names its role and label and says to run `recipient remove` ([forget-machine.md](forget-machine.md#what-it-checks)) |
+| `52` | `machine-not-forgotten` | `forget-machine`: the key is still a recipient of the vault; the message names its role and says to run `recipient remove` with the same key ([forget-machine.md](forget-machine.md#what-it-checks)) |
 
 The migration codes 28, 29 and 33 are raised by the migration authorization step that `export` and `recipient add`
 share ([migration-authorization.md](migration-authorization.md#error-codes)). Codes 45 to 48 are the migration bundle's
@@ -1239,7 +1239,7 @@ dumps first, because the key passes through its memory.
 `iron-vault forget-machine <age1…>` sends the key and needs no owner input. When the key is not a recipient it prints to
 stdout the key, the independence line (`independence rule: holds`, or `independence rule: BROKEN (<part>)`), the
 `recovery last checked:` line `status` prints, and then the fixed [guidance](forget-machine.md#the-guidance); each warning
-goes to stderr as `iron-vault: warning: …` and does not change the exit code `0`. `machine-not-forgotten` and every other
+goes to stderr as `iron-vault: warning: …`, before anything is printed to stdout, and does not change the exit code `0`. `machine-not-forgotten` and every other
 service error go to stderr with exit code 1. Two runs against an unchanged vault and clock print the same bytes.
 
 ### Owner input

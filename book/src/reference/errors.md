@@ -121,11 +121,11 @@ change itself did; the message says whether it may have committed.
 
 | Code | Name | Meaning | What to do |
 |---|---|---|---|
-| `52` | `machine-not-forgotten` | The key is still a recipient of the vault. The message gives its role and label and the `recipient remove` command to run. Nothing was changed. | Run the command the message names, then `forget-machine` again. If `recipient remove` refuses because the key is this machine's own host unlock identity, run `forget-machine` on the vault that stays. |
+| `52` | `machine-not-forgotten` | The key is still a recipient of the vault. The message gives its role and says to run `recipient remove` with the same key. Nothing was changed. | Run the command the message names, then `forget-machine` again. If `recipient remove` refuses because the key is this machine's own host unlock identity, run `forget-machine` on the vault that stays. |
 
 `forget-machine` also answers `recipient-invalid` for a key that is not an `age1...` recipient key, `wrong-state` outside Ready,
 `busy` while another command holds the service-wide lock, `recipient-inventory-damaged` and `vault-write-failed` as the
-recipient commands do. A warning (an overdue recovery check, a broken independence rule) is not an error: it goes to stderr and
+recipient commands do. A warning (a recovery check that is overdue or has never run, a broken independence rule) is not an error: it goes to stderr and
 the exit status is `0`.
 
 ### `approver add` and `approver remove`
