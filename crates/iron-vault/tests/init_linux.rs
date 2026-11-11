@@ -31,7 +31,7 @@ use iron_vault::admin::socket::AdminSocket;
 use iron_vault::clock::WallClock;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
-use iron_vault::hardening::{CoreDumps, HardeningReport, MemoryProtection};
+use iron_vault::hardening::{CoreDumps, HardeningReport, LockUnavailable, MemoryProtection};
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{InitRefusal, ServiceContext, ServiceLocks, ServiceSetup, UnlockRefusal};
 use iron_vault::service_state::{ServiceState, UnavailableReason};
@@ -108,8 +108,13 @@ impl Fixture {
     }
 
     fn context(&self) -> ServiceContext {
+        self.context_as(DeploymentProfile::Development, MemoryProtection::Unsupported)
+    }
+
+    /// The service as a `profile` install whose hardening left `memory`.
+    fn context_as(&self, profile: DeploymentProfile, memory: MemoryProtection) -> ServiceContext {
         let paths = ServicePaths {
-            profile: DeploymentProfile::Development,
+            profile,
             owner: invoking_user().unwrap(),
             config: self.path("etc/config.toml"),
             state_dir: self.path("state"),
@@ -126,7 +131,7 @@ impl Fixture {
                 .with_pinned_trust(self.ca.trust()),
             hardening: HardeningReport {
                 core_dumps: CoreDumps::Disabled,
-                memory: MemoryProtection::Unsupported,
+                memory,
             },
             log: iron_vault::logging::LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
         };
@@ -214,9 +219,28 @@ impl Exchanged {
     }
 }
 
+/// The harness's admin server, but with the test's own account as the admin principal whatever the service's profile, so
+/// a Protected or Container service can be asked to `init` without root.
+fn spawn_owner_admin(service: &Arc<ServiceContext>) -> (PathBuf, tokio::sync::oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+    let owner = service.paths().owner;
+    let runtime_dir = service.paths().runtime_dir.clone().unwrap();
+    let socket = AdminSocket::bind(&runtime_dir, owner).unwrap();
+    let principals = AdminPrincipals::new(DeploymentProfile::Development, owner.uid);
+    let server = AdminServer::new(principals, Handlers::for_service(service), Limits::default());
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        let _ = server
+            .serve(socket, async {
+                let _ = stopped.await;
+            })
+            .await;
+    });
+    (runtime_dir.join(iron_vault::admin::ADMIN_SOCKET_NAME), stop, task)
+}
+
 /// Sends `request` over the service's admin socket and answers the prompts in turn with `answers`.
 async fn exchange(service: &Arc<ServiceContext>, request: AdminRequest, answers: &[&[u8]]) -> Exchanged {
-    let (path, stop, task) = spawn_admin(service);
+    let (path, stop, task) = spawn_owner_admin(service);
     let mut stream = UnixStream::connect(path).await.unwrap();
     send(&mut stream, &Frame::Request(request)).await;
     let exchanged = converse(&mut stream, answers).await;
@@ -798,4 +822,69 @@ async fn init_unlock_add_and_approve_lead_to_a_request_carrying_the_secret() {
         "{injected:?}"
     );
     assert_no_secret_logged(&logs, &[initialized.recovery_key()]);
+}
+
+/// A handoff that is world-readable, so opening it would end `init --host-unlock` with `init-failed` (untrusted); a
+/// memory refusal therefore shows the file was never opened.
+fn untrusted_handoff(fixture: &Fixture) -> PathBuf {
+    let path = fixture.path("handoff");
+    fs::write(&path, "AGE-SECRET-KEY-NOT-USED\n").unwrap();
+    fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    path
+}
+
+/// A `profile` service past Starting: with no vault there is nothing to unlock at startup, so it settles in Locked.
+async fn locked_service(fixture: &Fixture, profile: DeploymentProfile, memory: MemoryProtection, handoff: PathBuf) -> Arc<ServiceContext> {
+    let service = fixture.context_as(profile, memory).with_handoff_path(handoff.clone());
+    assert_eq!(service.unlock_at_start(&fixture.path("no-handoff")).await, ServiceState::Locked);
+    Arc::new(service)
+}
+
+async fn assert_memory_refused(profile: DeploymentProfile, memory: MemoryProtection, host_unlock: bool) {
+    let fixture = Fixture::new().await;
+    let handoff = untrusted_handoff(&fixture);
+    let service = locked_service(&fixture, profile, memory, handoff.clone()).await;
+
+    let shown = exchange(&service, AdminRequest::Init { host_unlock }, &[]).await;
+
+    let (code, message) = shown.error();
+    assert_eq!(code, ErrorCode::MemoryUnprotected, "{message}");
+    assert!(message.contains("memory is not locked against swap"), "{message}");
+    assert!(shown.prompts.is_empty() && shown.reveals.is_empty());
+    fixture.assert_only_lock_files();
+    assert_eq!(fs::read(&handoff).unwrap(), b"AGE-SECRET-KEY-NOT-USED\n");
+}
+
+#[tokio::test]
+async fn a_protected_install_without_locked_memory_refuses_init_before_any_prompt_or_write() {
+    let unavailable = MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 });
+    for profile in [DeploymentProfile::Protected, DeploymentProfile::Container] {
+        for memory in [unavailable.clone(), MemoryProtection::Unsupported] {
+            for host_unlock in [false, true] {
+                assert_memory_refused(profile, memory.clone(), host_unlock).await;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_protected_install_with_locked_memory_goes_on_to_the_prompts() {
+    for profile in [DeploymentProfile::Protected, DeploymentProfile::Container] {
+        let fixture = Fixture::new().await;
+        let service = locked_service(&fixture, profile, MemoryProtection::Locked, fixture.path("no-handoff")).await;
+
+        let shown = init(&service, &COMPLETE).await;
+
+        shown.vault_id();
+        assert_eq!(shown.prompts, prompts(5));
+    }
+}
+
+#[tokio::test]
+async fn a_development_service_with_unlocked_memory_still_inits() {
+    let fixture = Fixture::new().await;
+    let unavailable = MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 });
+    let service = Arc::new(fixture.context_as(DeploymentProfile::Development, unavailable));
+
+    init(&service, &COMPLETE).await.vault_id();
 }

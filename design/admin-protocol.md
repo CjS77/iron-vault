@@ -435,7 +435,8 @@ The exchange, after the request:
    ([vault-initialization.md](vault-initialization.md#the-exchange), step 1). (The CLI has already checked for a
    controlling terminal, and never sends the request without one; see [the CLI's `init`](#init-1).) With the host
    unlock flag, the service then reads the unlock handoff, and an absent or refused handoff ends the exchange with
-   `init-failed` before any prompt, naming the reason and nothing of the file's bytes.
+   `init-failed` before any prompt, naming the reason and nothing of the file's bytes. Before the handoff is read, a
+   Protected or Container install whose memory is not locked ends the exchange with `memory-unprotected`.
 2. **Passphrases.** Four prompts, all secret: `Vault passphrase`, `Repeat the vault passphrase`, `Approval passphrase`,
    `Repeat the approval passphrase`. A value that breaks a
    [passphrase rule](vault-initialization.md#passphrase-rules) ends the exchange with `passphrase-rejected`, whose
@@ -474,6 +475,7 @@ Errors specific to `init`:
 |---|---|
 | `already-initialized` | the directories hold an initialized vault, or files no initialization explains; the message says which, and names the first such files. Raised by the re-check under the lock (step 5), after the reveal, it also says the recovery key shown opens nothing and is to be discarded |
 | `busy` | step 5 found the service-wide lock taken (another init, an approval, a vault write, a reload or a config check) and did not wait. It comes after the reveal, so the message says the recovery key shown opens nothing and is to be discarded, and to run `iron-vault init` again |
+| `memory-unprotected` | a Protected or Container install's memory is not locked against swap, so `init` would generate keys and take passphrases in swappable memory. Raised after the state and initialization checks and before the handoff is read, any prompt or any write; the message names the memory-lock limit or the locking error, and says nothing was written. Logged as `vault.unlock-refused` |
 | `wrong-state` | the service is not Locked: at the request, before any prompt, or at the re-check under the lock after the reveal, when the message also says the recovery key shown opens nothing and is to be discarded |
 | `passphrase-rejected` | a passphrase broke a rule; the message names the rule |
 | `declined` | the owner did not answer the recovery key confirmation with `yes`; the message says the recovery key shown opens nothing and is to be discarded |
@@ -807,7 +809,7 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `24` | `credential-in-use` | `replace`, `rm`: a route of the active config uses the name and would not activate after the change; the message names each route and, for `replace`, why |
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
 | `26` | `list-too-large` | `list`: the credential list does not fit one frame; the message names the count |
-| `27` | `memory-unprotected` | `unlock`, `recovery check`: a protected install's memory is not locked, so the vault identity is not unwrapped; the message names the memory-lock limit or the locking error, and the service state is unchanged |
+| `27` | `memory-unprotected` | `unlock`, `recovery check`, `init`: a protected install's memory is not locked, so the vault identity is not unwrapped, or for `init` not generated; the message names the memory-lock limit or the locking error, and the service state is unchanged |
 | `28` | `migration-denied` | `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing was exported or rewrapped |
 | `29` | `migration-unavailable` | `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its vault passphrase prompt; nothing was exported or rewrapped |
 | `30` | `recovery-key-invalid` | `recovery check`: the text is not an `AGE-SECRET-KEY-1…` recovery key; the message holds nothing typed |

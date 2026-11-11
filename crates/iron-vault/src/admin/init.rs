@@ -20,7 +20,7 @@ use super::protocol::{AdminRequest, AdminResponse, ErrorCode, OwnerInput, Prompt
 use super::server::{Exchange, ExchangeError};
 use super::unlock::state_name;
 use super::{DEAD_RECOVERY_KEY, UNCONFIRMED_RECOVERY_KEY};
-use crate::service_context::{InitRefusal, ServiceContext, step_names};
+use crate::service_context::{InitRefusal, ServiceContext, step_names, unprotected_reason};
 use crate::service_state::AdminOperation;
 
 /// The vault passphrase's two secret prompts: the entry, then its repeat.
@@ -63,7 +63,7 @@ impl<F: StoreFs + Send + Sync + 'static> AdminHandler for Init<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> Init<F> {
-    /// Checks the state and the directories, and with `host_unlock` reads the handoff, all before any prompt; collects
+    /// Checks the state, the directories and the memory protection, and with `host_unlock` reads the handoff, all before any prompt; collects
     /// both passphrases, reveals the recovery key, and writes only once the owner answers `yes`; the service context
     /// checks the state again under its locks.
     async fn run(&self, exchange: &mut Exchange, host_unlock: bool) -> Result<AdminResponse, ExchangeError> {
@@ -75,6 +75,9 @@ impl<F: StoreFs + Send + Sync + 'static> Init<F> {
             Ok(existing) => existing,
             Err(refusal) => return Ok(refused(refusal, false)),
         };
+        if let Err(refusal) = self.service.require_locked_memory_for_init() {
+            return Ok(refused(refusal, false));
+        }
         let host = match self.host_identity(host_unlock).await {
             Ok(host) => host,
             Err(refusal) => return Ok(refused(refusal, false)),
@@ -232,6 +235,14 @@ fn refused(refusal: InitRefusal, revealed: bool) -> AdminResponse {
         InitRefusal::Unreadable(detail) => error(
             ErrorCode::InitFailed,
             format!("cannot read the initialization state, so nothing was written: {detail}"),
+        ),
+        InitRefusal::MemoryUnprotected(memory) => error(
+            ErrorCode::MemoryUnprotected,
+            format!(
+                "memory is not locked against swap ({}), so a protected install does not generate keys or take passphrases; \
+                 nothing was written",
+                unprotected_reason(&memory)
+            ),
         ),
         InitRefusal::HostUnlock(reason) => error(
             ErrorCode::InitFailed,

@@ -145,7 +145,7 @@ development mode. Each profile is named in `status`, in `ping`, and as `deployme
 | Runs as | the `iron-vault` system account | you | the `iron-vault` account in the image |
 | Admin principals | root, so you use `sudo` | you | root only |
 | Unlock at startup | from the host unlock handoff when one is there ([files](files.md#container)); otherwise Locked, `unlock` with the vault passphrase | none: starts Locked | from the host unlock handoff when one is there ([files](files.md#container)); otherwise Locked, as protected |
-| Memory not locked against swap | stays Locked: `unlock` is refused with `memory-unprotected` | unlocks anyway; `status` says `NOT protected` | as protected |
+| Memory not locked against swap | stays Locked: `unlock` and `init` are refused with `memory-unprotected` | unlocks anyway; `status` says `NOT protected` | as protected |
 | Callers | peer account, token or listener | token or listener only: a peer caller may never be the service's own account, and in development that is you | see [docker-compose.md](../../../design/docker-compose.md) |
 | TCP listeners | from systemd socket units | bound by the service | bound by the service |
 | Files | [system paths](files.md#protected-install) | [your XDG directories](files.md#development-mode) | the protected paths, inside the container |

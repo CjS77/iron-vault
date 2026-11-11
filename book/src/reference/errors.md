@@ -51,6 +51,7 @@ These can happen on any command.
 | `17` | `already-initialized` | The state directory already holds a vault, or files `init` did not write. Nothing was changed. | `init` never overwrites a vault. If you meant to start over, see [Start over in development mode](../cookbook/start-over.md). If the key was already shown, discard it: it opens nothing. |
 | `18` | `passphrase-rejected` | A passphrase broke a rule: it is under 12 characters, the two copies differ, or the vault and approval passphrases are the same. The message names the rule. | Choose a passphrase that meets the rule. |
 | `19` | `init-failed` | A write failed. The message names the step. | Fix the cause the message names, then run `init` again: it discards the unfinished vault first. Discard the recovery key shown, unless the message says to keep it until the re-run decides. |
+| `27` | `memory-unprotected` | A protected or container install's memory is not locked against swap, so `init` would put the new keys and passphrases in swappable memory. Nothing was written, and no prompt was shown. | Raise the memory-lock limit as for `unlock` (see [`unlock`](#unlock)), restart the service and run `init` again. |
 
 ### `unlock`
 

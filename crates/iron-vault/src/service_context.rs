@@ -73,7 +73,8 @@ use crate::unlock_handoff::HANDOFF_PATH;
 use host_unlock::tries_host_unlock;
 use reminder::{ReminderSchedule, SharedSchedule, with_schedule};
 use serving::Serving;
-use unlock::{log_foreign_files, unprotected_reason};
+use unlock::log_foreign_files;
+pub(crate) use unlock::unprotected_reason;
 
 pub use approval::{ApprovalEnd, ApprovalReview};
 pub use approver_change::{ApproverChangePlan, ApproverRefusal};

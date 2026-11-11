@@ -506,7 +506,7 @@ fn service_error(code: ErrorCode, message: &str) -> String {
         ErrorCode::NotAdminPrincipal => Some(SUDO_HINT.to_owned()),
         ErrorCode::UnsupportedVersion => Some("The CLI and the service versions differ; install matching versions.".to_owned()),
         ErrorCode::MemoryUnprotected => Some(format!(
-            "A protected install unlocks only once its memory is locked against swap: {MEMLOCK_REMEDIATION}, then restart it."
+            "A protected install opens or creates a vault only once its memory is locked against swap: {MEMLOCK_REMEDIATION}, then restart it."
         )),
         _ => None,
     };

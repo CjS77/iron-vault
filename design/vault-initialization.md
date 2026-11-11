@@ -139,7 +139,7 @@ before the first write, because another init may have run during the prompts.
 
 After the admin request, in order:
 
-1. **Check.** The service checks that it is Locked (`wrong-state` otherwise) and reads the initialization state:
+1. **Check.** The service checks that it is Locked (`wrong-state` otherwise), reads the initialization state and checks memory:
    Initialized or Unrecognized ends with `already-initialized`, whose message names which, and for Unrecognized the
    first offending file names. On Unfinished, the service sends a notice that an unfinished initialization is here,
    or that another init is writing its vault right now: the prompts take no lock (see **Locking** below), so the
@@ -147,6 +147,13 @@ After the admin request, in order:
    discarded, and any recovery key it showed opens nothing. A run still writing holds the service-wide lock, so it is
    never discarded: this init then writes nothing and ends with `busy`, or with `already-initialized` once that run
    has finished.
+
+   In a Protected or Container service whose memory is not locked, the exchange then ends with
+   `memory-unprotected` ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)): `init` generates the
+   vault identity and the recovery key and takes both passphrases, so it takes the memory guard `unlock` takes, before
+   it reads the handoff, prompts or writes anything. A Development service goes on. The refusal is logged as
+   `vault.unlock-refused` with `memory_unprotected`, as for `unlock`. The order is state, initialization state, memory,
+   so a directory that is already Initialized still says so.
 
    With `--host-unlock` (not accepted by a dev-mode build), the service then reads the
    [unlock handoff](docker-compose.md#enrollment) as Starting does, and a Development service, an

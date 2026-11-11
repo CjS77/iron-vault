@@ -13,11 +13,13 @@ use iron_vault_store::{
 };
 use tokio::task::JoinError;
 
-use super::ServiceContext;
 use super::host_unlock::tries_host_unlock;
+use super::unlock::memory_guard;
+use super::{ServiceContext, UnlockRefusal};
 use crate::audit::config::{VersionReserved, record_commit_uncertain, record_failed_approval};
-use crate::audit::vault::{InitDiscarded, InitFailed, VaultInitialized, emit_commit_uncertain};
+use crate::audit::vault::{InitDiscarded, InitFailed, UnlockRefused, VaultInitialized, emit_commit_uncertain};
 use crate::audit::{ApprovalCompleted, AuditEvent, NamedApprover};
+use crate::hardening::MemoryProtection;
 use crate::service_state::{AdminOperation, ServiceState};
 use crate::unlock_handoff::{HandoffError, read_handoff};
 
@@ -38,6 +40,9 @@ pub enum InitRefusal {
     Unreadable(String),
     /// The service clock could not be read for the first approval's enrolment time, before any write.
     Clock(String),
+    /// A protected install's memory is not locked against swap, so `init` would put fresh secrets in swappable memory
+    /// (§14). Refused before the handoff is read, any prompt or any write.
+    MemoryUnprotected(MemoryProtection),
     /// `init --host-unlock` found no identity to enrol, before any prompt.
     HostUnlock(HostUnlockUnavailable),
     /// A step of the write order, or the discard before it, failed.
@@ -61,6 +66,20 @@ pub enum HostUnlockUnavailable {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
+    /// Refuses `init` in a protected install whose memory is not locked, since `init` generates the vault identity and
+    /// the recovery key and takes both passphrases. It runs [`memory_guard`], as `unlock` does, before the handoff is
+    /// read, any prompt or any write, and logs the refusal as `vault.unlock-refused` with `memory_unprotected`, the one
+    /// event for a memory refusal wherever it comes from.
+    pub fn require_locked_memory_for_init(&self) -> Result<(), InitRefusal> {
+        memory_guard(self.setup.paths.profile, &self.setup.hardening.memory).map_err(|refusal| {
+            UnlockRefused { refusal: &refusal }.emit();
+            match refusal {
+                UnlockRefusal::MemoryUnprotected(memory) => InitRefusal::MemoryUnprotected(memory),
+                other => InitRefusal::Unreadable(other.to_string()),
+            }
+        })
+    }
+
     /// The host unlock identity in the unlock handoff, read on the blocking pool before `init` prompts for anything, so a
     /// missing or untrusted handoff ends the exchange with nothing written.
     pub async fn read_host_unlock(&self) -> Result<RecipientIdentity, InitRefusal> {
