@@ -366,24 +366,29 @@ promises "a laptop unlocks with a TPM PIN", which this design does not deliver i
 ### `--portable`
 
 The helper finds every LUKS device under `/etc/iron-vault-host` by walking the device-mapper stack down from the
-filesystem's device (`/sys/block/*/slaves`), so a root on LVM-on-LUKS, or LUKS on LVM, resolves to its LUKS layer. It
-warns when any of these hold:
+filesystem's device (`/sys/class/block/*/slaves`, which lists partitions as well as the disks under `/sys/block`), so a
+root on LVM-on-LUKS, or LUKS on LVM, resolves to its LUKS layer. It warns when any of these hold:
 
-- the stack has no `dm-crypt` layer: the disk is unencrypted;
+- some path in the stack reaches a disk with no `dm-crypt` layer above it: that part of the disk is unencrypted, as when
+  an LV spans a LUKS PV and a plain one;
 - a `systemd-tpm2` token in `cryptsetup luksDump` does not need a PIN (`tpm2-pin` false);
-- a `clevis` token is present, TPM or Tang: neither asks for anything at boot;
+- a `clevis` token is present, TPM or Tang: neither asks for anything at boot. A LUKS1 header has no tokens, so there
+  the helper runs `luksmeta show -d DEVICE` and warns on clevis's UUID, `cb6e8904-81ff-40da-a84a-07ab9ab5715e`;
+- a LUKS2 token is of a type the helper does not recognise (`systemd-fido2` and `systemd-pkcs11` need a device the
+  person holds, so they pass);
 - `/etc/crypttab` names a key file for the device (a third field other than `none` or `-`), or has `tpm2-device=` while
   some `systemd-tpm2` token needs no PIN;
 - an initramfs holds a key file (`lsinitramfs` lists one under `cryptroot/keyfiles/`, where initramfs-tools puts
   them). Every `/boot/initrd.img-*` is checked, because a kernel update rebuilds them and any of them may boot.
 
-The walk reads `/sys/class/block`, which lists partitions as well as the disks under `/sys/block`. A dm-crypt layer
-with no LUKS header (plain `cryptsetup`) warns that its key was not checked, and so does a LUKS layer with no entry of
-its mapping name in `/etc/crypttab`. A `systemd-tpm2` token counts as needing a PIN only when `luksDump` prints
-`tpm2-pin: true`; a token that prints no such line, as when cryptsetup lacks systemd's token plugin, warns.
+A dm-crypt layer with no LUKS header (plain `cryptsetup`) warns that its key was not checked, and so does a LUKS layer
+with no entry of its mapping name in `/etc/crypttab`. A `systemd-tpm2` token counts as needing a PIN only when
+`luksDump` prints `tpm2-pin: true`; a token that prints no such line, as when cryptsetup lacks systemd's token plugin,
+warns.
 
-**A check that cannot run warns; it never passes.** A missing `cryptsetup` or `lsinitramfs`, a device-mapper stack it
-cannot resolve, a failed `luksDump` or an unreadable crypttab each give a warning naming what could not be checked.
+**A check that cannot run warns; it never passes.** A missing `cryptsetup`, `luksmeta` (on a LUKS1 volume) or
+`lsinitramfs`, a device-mapper stack it cannot resolve, a failed `luksDump` or `luksmeta`, an unreadable crypttab, or an
+initramfs listing that is empty each give a warning naming what could not be checked and how to fix that.
 
 Each warning says that anyone who steals the machine can boot it and start the vault, and names the fix: encrypt the
 disk, remove the key file, or re-enrol the slot it names with `systemd-cryptenroll --tpm2-with-pin=yes`, which

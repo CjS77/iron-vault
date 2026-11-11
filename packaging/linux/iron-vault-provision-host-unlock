@@ -30,6 +30,8 @@ ACCEPT_NO_SECOND_SECRET=0
 
 # Filled by the --portable checks, one entry per warning, and read by the acceptance prompt and the record.
 WARNINGS=()
+# The UUID under which clevis stores its binding in a LUKS1 header's luksmeta.
+CLEVIS_UUID=cb6e8904-81ff-40da-a84a-07ab9ab5715e
 # Whether some systemd-tpm2 token needs no PIN; the crypttab check reads it.
 PINLESS_TPM=0
 # How the administrator accepted: terminal, flag, or "not needed (no warning)".
@@ -102,11 +104,13 @@ host_block_device() {
     basename "$(readlink -f "$src" 2>/dev/null || echo "$src")"
 }
 
-# walk_stack SYSROOT DEVICE [DEPTH]: walks device-mapper's slaves downwards and prints a tab-separated record per layer:
-# `luks MAPNAME BACKING`, `crypt MAPNAME` (dm-crypt with no LUKS header) or `unresolved DEVICE`. The walk uses
-# class/block, which lists partitions as well as the /sys/block disks.
+# walk_stack SYSROOT DEVICE [DEPTH [UNDER_CRYPT]]: walks device-mapper's slaves downwards and prints a tab-separated record
+# per layer: `luks MAPNAME BACKING`, `crypt MAPNAME` (dm-crypt with no LUKS header), `plain DEVICE` (a device with nothing
+# below it, reached with no dm-crypt layer above it on that path) or `unresolved DEVICE`. UNDER_CRYPT is 1 once the walk
+# has passed a dm-crypt layer, so each path is judged on its own: an LV over a LUKS PV and a plain PV yields a `plain`.
+# The walk uses class/block, which lists partitions as well as the /sys/block disks.
 walk_stack() {
-    local sys=$1 dev=$2 depth=${3:-0}
+    local sys=$1 dev=$2 depth=${3:-0} under=${4:-0}
     local node=$1/class/block/$2 uuid name slaves slave
     if [ ! -d "$node" ] || [ "$depth" -gt 16 ]; then printf 'unresolved\t%s\n' "$dev"; return 0; fi
     uuid=$(cat "$node/dm/uuid" 2>/dev/null) || uuid=
@@ -114,30 +118,32 @@ walk_stack() {
     slaves=$(ls -1 "$node/slaves" 2>/dev/null) || slaves=
     case $uuid in
         CRYPT-LUKS*)
+            under=1
             if [ -n "$slaves" ]; then awk -v n="$name" '{ printf "luks\t%s\t%s\n", n, $0 }' <<<"$slaves"
             else printf 'unresolved\t%s\n' "$dev"; fi ;;
-        CRYPT-*) printf 'crypt\t%s\n' "$name" ;;
+        CRYPT-*) under=1; printf 'crypt\t%s\n' "$name" ;;
     esac
-    [ -z "$slaves" ] || while read -r slave; do walk_stack "$sys" "$slave" $((depth + 1)); done <<<"$slaves"
+    if [ -n "$slaves" ]; then while read -r slave; do walk_stack "$sys" "$slave" $((depth + 1)) "$under"; done <<<"$slaves"
+    elif [ "$under" = 0 ]; then printf 'plain\t%s\n' "$dev"; fi
 }
 
-# stack_warnings RECORDS: warns for an unresolved layer, a dm-crypt layer with no LUKS header to read, or no dm-crypt at all.
+# stack_warnings RECORDS: warns for an unresolved layer, a dm-crypt layer with no LUKS header to read, or any path that
+# reaches a device with no dm-crypt layer above it.
 stack_warnings() {
-    local kind rest encrypted=0 unresolved=0
+    local kind rest
     while IFS=$'\t' read -r kind rest; do
         case $kind in
-            luks) encrypted=1 ;;
             crypt)
-                encrypted=1
                 add_warning "$rest is plain dm-crypt, which has no LUKS header to read, so its key was not checked. $RISK" \
                     "Fix: use LUKS with a passphrase or a TPM slot that needs a PIN." ;;
+            plain)
+                add_warning "$rest, under $HOST_DIR, has no dm-crypt layer above it: that part of the disk is not encrypted. $RISK" \
+                    "Fix: encrypt the disk (every device the filesystem uses), then run this again." ;;
             unresolved)
-                unresolved=1
                 add_warning "could not resolve the device stack under $HOST_DIR (at $rest), so its encryption was not checked." \
                     "$RISK Fix: encrypt the disk with LUKS, then run this again." ;;
         esac
     done <<<"$1"
-    [ "$encrypted" = 1 ] || [ "$unresolved" = 1 ] || add_warning "no dm-crypt layer under $HOST_DIR: the disk is not encrypted. $RISK Fix: encrypt the disk."
 }
 
 # tpm_tokens DUMP: prints "TYPE PIN" for each token of a luksDump (LUKS2). PIN is the value of tpm2-pin, empty when the
@@ -152,14 +158,26 @@ tpm_tokens() {
         END { flush() }' <<<"$1"
 }
 
-# luks_dump_warnings DEVICE DUMP: warns for each token that opens the volume without a person present. Only a
-# systemd-tpm2 token that prints `tpm2-pin: true` counts as needing a PIN.
-luks_dump_warnings() {
-    local dev=$1 type pin
-    if ! grep -q '^Version:' <<<"$2"; then
-        add_warning "cryptsetup luksDump $dev printed nothing the helper recognises, so its key slots were not checked. $RISK"
-        return 0
+# luks1_warnings DEVICE: a LUKS1 header has no tokens; clevis records its binding in luksmeta, under its own UUID.
+luks1_warnings() {
+    local dev=$1 meta
+    if ! have_tool luksmeta; then
+        add_warning "$dev is LUKS1 and luksmeta is not installed, so its clevis bindings were not checked. $RISK" \
+            "Fix: install luksmeta and run this again."
+    elif ! meta=$(luksmeta show -d "$dev" 2>/dev/null); then
+        add_warning "luksmeta show -d $dev failed, so the clevis bindings of this LUKS1 volume were not checked. $RISK" \
+            "Fix: run luksmeta show -d $dev as root to see why, then run this again."
+    elif grep -qi "$CLEVIS_UUID" <<<"$meta"; then
+        add_warning "$dev is LUKS1 with a clevis binding, which asks for nothing at boot. $RISK" \
+            "Fix: remove it with clevis luks unbind, and use a passphrase or LUKS2 with systemd-cryptenroll --tpm2-with-pin=yes."
     fi
+}
+
+# luks_token_warnings DEVICE DUMP: warns for each LUKS2 token that opens the volume without a person present. Only a
+# systemd-tpm2 token that prints `tpm2-pin: true` counts as needing a PIN; FIDO2 and PKCS#11 tokens need a device the
+# person holds, and any other type is one the helper cannot judge.
+luks_token_warnings() {
+    local dev=$1 type pin
     while read -r type pin; do
         case $type in
             systemd-tpm2)
@@ -170,17 +188,33 @@ luks_dump_warnings() {
             clevis)
                 add_warning "$dev has a clevis token, which asks for nothing at boot. $RISK" \
                     "Fix: remove it with clevis luks unbind and use systemd-cryptenroll --tpm2-with-pin=yes (changes the key slot, not the data)." ;;
+            systemd-fido2 | systemd-pkcs11) ;;
+            *)
+                add_warning "$dev has a $type token, which the helper does not recognise, so whether it needs a person was not checked." \
+                    "$RISK Fix: remove the token; passphrase, FIDO2, PKCS#11 and TPM PIN slots are recognised." ;;
         esac
     done < <(tpm_tokens "$2")
+}
+
+# luks_dump_warnings DEVICE DUMP: dispatches on the header version.
+luks_dump_warnings() {
+    case $(awk '/^Version:/ { print $2; exit }' <<<"$2") in
+        1) luks1_warnings "$1" ;;
+        2) luks_token_warnings "$1" "$2" ;;
+        *) add_warning "cryptsetup luksDump $1 printed nothing the helper recognises, so its key slots were not checked. $RISK" \
+            "Fix: run cryptsetup luksDump $1 as root to see why, then run this again." ;;
+    esac
 }
 
 # luks_layer_warnings BACKING: reads the LUKS header on BACKING, a kernel name.
 luks_layer_warnings() {
     local dev=$DEV_ROOT/$1 dump
     if ! have_tool cryptsetup; then
-        add_warning "cryptsetup is not installed, so the key slots of $dev were not checked. $RISK"
+        add_warning "cryptsetup is not installed, so the key slots of $dev were not checked. $RISK" \
+            "Fix: install cryptsetup and run this again."
     elif ! dump=$(cryptsetup luksDump "$dev" 2>/dev/null); then
-        add_warning "cryptsetup luksDump $dev failed, so its key slots were not checked. $RISK"
+        add_warning "cryptsetup luksDump $dev failed, so its key slots were not checked. $RISK" \
+            "Fix: run cryptsetup luksDump $dev as root to see why (a detached header is not supported), then run this again."
     else
         luks_dump_warnings "$dev" "$dump"
     fi
@@ -201,7 +235,8 @@ crypttab_warnings() {
                 "Fix: re-enrol the slot with systemd-cryptenroll --tpm2-with-pin=yes (changes the key slot, not the data)."
         fi
     done < <(awk -v n="$name" '$1 == n' <<<"$text")
-    [ "$seen" = 1 ] || add_warning "$CRYPTTAB has no entry named $name, so its key file option was not checked. $RISK"
+    [ "$seen" = 1 ] || add_warning "$CRYPTTAB has no entry named $name, so its key file option was not checked. $RISK" \
+        "Fix: add an entry named $name to $CRYPTTAB, then run this again."
 }
 
 # initramfs_warnings IMAGE LISTING: initramfs-tools puts a key file under cryptroot/keyfiles/.
@@ -212,18 +247,30 @@ initramfs_warnings() {
     fi
 }
 
+# check_image IMAGE: a listing that cannot be read, or is empty, checked nothing.
+check_image() {
+    local listing
+    if ! listing=$(lsinitramfs "$1" 2>/dev/null); then
+        add_warning "lsinitramfs could not list $1, so it was not checked for a key file. $RISK" \
+            "Fix: run lsinitramfs $1 as root to see why, then run this again."
+    elif [ -z "$listing" ]; then
+        add_warning "lsinitramfs listed nothing for $1, so it was not checked for a key file. $RISK" \
+            "Fix: run update-initramfs -u -k all, then run this again."
+    else initramfs_warnings "$1" "$listing"; fi
+}
+
 # check_initramfs: every /boot/initrd.img-*, because a kernel update rebuilds them.
 check_initramfs() {
-    local images=("$BOOT_DIR"/initrd.img-*) image listing
+    local images=("$BOOT_DIR"/initrd.img-*) image
     if ! have_tool lsinitramfs; then
-        add_warning "lsinitramfs is not installed, so the initramfs images were not checked for a key file. $RISK"
+        add_warning "lsinitramfs is not installed, so the initramfs images were not checked for a key file. $RISK" \
+            "Fix: install initramfs-tools-core and run this again."
     elif [ ! -e "${images[0]}" ]; then
-        add_warning "no $BOOT_DIR/initrd.img-* was found, so no initramfs was checked for a key file. $RISK"
+        add_warning "no $BOOT_DIR/initrd.img-* was found, so no initramfs was checked for a key file. $RISK" \
+            "Fix: run update-initramfs -u -k all, then run this again."
     else
-        for image in "${images[@]}"; do
-            if listing=$(lsinitramfs "$image" 2>/dev/null); then initramfs_warnings "$image" "$listing"
-            else add_warning "lsinitramfs could not list $image, so it was not checked for a key file. $RISK"; fi
-        done
+        # A for loop, not a pipe into while: a subshell would lose the warnings.
+        for image in "${images[@]}"; do check_image "$image"; done
     fi
 }
 
@@ -243,7 +290,8 @@ check_portable() {
         if text=$(cat "$CRYPTTAB" 2>/dev/null); then
             while read -r name; do crypttab_warnings "$text" "$name"; done < <(printf '%s\n' "${names[@]}" | sort -u)
         else
-            add_warning "$CRYPTTAB could not be read, so its key file options were not checked. $RISK"
+            add_warning "$CRYPTTAB could not be read, so its key file options were not checked. $RISK" \
+                "Fix: make $CRYPTTAB readable by root and run this again."
         fi
     fi
     check_initramfs
@@ -309,7 +357,7 @@ provisioning_file() {
     local tmp stamp
     stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     tmp=$(mktemp "$HOST_DIR/.provisioning.txt.XXXXXX") || die "could not write $HOST_DIR/provisioning.txt; nothing was sealed"
-    if ! { awk -v t="$stamp" '{ print t, $0 }' <<<"$1" >"$tmp" && chmod 0600 "$tmp" && mv -f "$tmp" "$HOST_DIR/provisioning.txt"; }; then
+    if ! { awk -v t="$stamp" '{ print t, $0 }' <<<"$1" >"$tmp" && chmod 0600 "$tmp" && mv -fT "$tmp" "$HOST_DIR/provisioning.txt"; }; then
         rm -f "$tmp"
         die "could not write $HOST_DIR/provisioning.txt; nothing was sealed"
     fi

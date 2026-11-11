@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests the Linux package's provisioning helper, packaging/linux/iron-vault-provision-host-unlock, without root or a TPM
-# (design/tpm-unlock.md, "Provisioning"). id, age-keygen, systemd-creds, install, logger, findmnt, cryptsetup and
+# (design/tpm-unlock.md, "Provisioning"). id, age-keygen, systemd-creds, install, logger, findmnt, cryptsetup, luksmeta and
 # lsinitramfs are stubs in a mktemp dir ahead of PATH, and the helper's /etc, /sys and /boot paths are pointed into that
 # dir, so it writes nowhere else. The helper only defines functions when sourced, so each case sources it and calls main.
 set -uo pipefail
@@ -42,8 +42,9 @@ done
 # shellcheck disable=SC2086
 exec /usr/bin/install $args
 STUB
-# findmnt names the root device; cryptsetup luksDump and lsinitramfs print the file named after their device or image, and
-# fail when there is none; logger appends what it was given, priority included, to the fake journal.
+# findmnt names the root device; cryptsetup luksDump, luksmeta show -d and lsinitramfs print the file named after their
+# device or image, and fail when there is none; logger appends what it was given, priority included, to the fake journal,
+# and fails when the file $work/loggerfail exists.
 cat >"$stubs/findmnt" <<STUB
 #!/bin/sh
 cat "$work/rootdev"
@@ -52,12 +53,17 @@ cat >"$stubs/cryptsetup" <<STUB
 #!/bin/sh
 [ "\$1" = luksDump ] && cat "$work/luksdump/\$(basename "\$2")"
 STUB
+cat >"$stubs/luksmeta" <<STUB
+#!/bin/sh
+[ "\$1 \$2" = "show -d" ] && cat "$work/luksmeta/\$(basename "\$3")"
+STUB
 cat >"$stubs/lsinitramfs" <<STUB
 #!/bin/sh
 cat "$work/initramfs/\$(basename "\$1")"
 STUB
 cat >"$stubs/logger" <<STUB
 #!/bin/sh
+[ ! -e "$work/loggerfail" ] || exit 1
 printf '%s\n' "\$*" >>"$work/journal"
 STUB
 chmod +x "$stubs"/*
@@ -83,6 +89,7 @@ run() {
     shift
     rm -rf "$work/host" "$sealed" "$work/journal"
     [ -z "${BLOB:-}" ] || { mkdir "$work/host" && : >"$work/host/host-unlock.cred"; }
+    [ -z "${DIRREC:-}" ] || mkdir -p "$work/host/provisioning.txt"
     [ -z "${OLDREC:-}" ] || { mkdir -p "$work/host" && echo stale >"$work/host/provisioning.txt"; }
     (
         PATH="$stubs:$PATH"
@@ -121,8 +128,8 @@ check() { # name want-exit got-exit output want-sealed(yes|no) [message-fragment
 # A fake sysfs, crypttab, /boot and luksDump output. sys_reset starts an empty one; leaf and dm add block devices, with
 # dm's trailing arguments the device's slaves.
 sys_reset() {
-    rm -rf "${work:?}/sys" "${work:?}/luksdump" "${work:?}/initramfs" "${work:?}/boot"
-    mkdir -p "$work/sys/class/block" "$work/luksdump" "$work/initramfs" "$work/boot"
+    rm -rf "${work:?}/sys" "${work:?}/luksdump" "${work:?}/luksmeta" "${work:?}/initramfs" "${work:?}/boot"
+    mkdir -p "$work/sys/class/block" "$work/luksdump" "$work/luksmeta" "$work/initramfs" "$work/boot"
     : >"$work/crypttab"
 }
 leaf() { mkdir -p "$work/sys/class/block/$1"; }
@@ -137,6 +144,9 @@ dm() { # name uuid mapname slave...
 luks_dump() { # device tokens-text
     printf 'LUKS header information\nVersion:       2\n\nKeyslots:\n  0: luks2\n\tKey: 512 bits\n\nTokens:\n%s\nDigests:\n  0: pbkdf2\n' \
         "$2" >"$work/luksdump/$1"
+}
+luks1_dump() { # device
+    printf 'LUKS header information for %s\n\nVersion:       1\nCipher name:    aes\n\nKey Slot 0: ENABLED\n' "$1" >"$work/luksdump/$1"
 }
 boot_image() { # name listing
     : >"$work/boot/$1"
@@ -161,6 +171,13 @@ unencrypted() {
     dm dm-0 LVM-xyz vg-root sda2
     echo /dev/dm-0 >"$work/rootdev"
     boot_image initrd.img-6.8.0-1 "scripts/local-top/lvm2"
+}
+
+# A volume with LVM over one LUKS PV (dm-0 on nvme0n1p3) and a second PV, sdb1, that is not encrypted.
+lvm_over_two() {
+    lvm_on_luks
+    leaf sdb1
+    dm dm-1 LVM-xyz vg-root dm-0 sdb1
 }
 
 # portable NAME COUNT FRAGMENT...: --portable on the current fixture prints COUNT warnings, each fragment in one of them.
@@ -221,6 +238,7 @@ check "an existing blob is refused" 1 $rc "$out" no "exists"
 # --portable's checks, one fixture each.
 unencrypted; portable "an unencrypted stack" 1 "not encrypted" "anyone who steals this machine can boot it and start the vault" "encrypt the disk"
 lvm_on_luks; portable "LVM-on-LUKS, passphrase slot only" 0
+lvm_over_two; portable "an LV over a LUKS PV and a plain PV" 1 "sdb1" "no dm-crypt layer above it" "every device"
 sys_reset; leaf sda2; dm dm-0 LVM-xyz vg sda2; dm dm-1 CRYPT-LUKS2-abc luks-abc dm-0; echo /dev/dm-1 >"$work/rootdev"
 echo "luks-abc UUID=abc none luks" >"$work/crypttab"; luks_dump dm-0 ""; boot_image initrd.img-6.8.0-1 x
 portable "LUKS-on-LVM, passphrase slot only" 0
@@ -230,14 +248,26 @@ lvm_on_luks; luks_dump nvme0n1p3 "$(tpm_token true)"; echo "luks-abc UUID=abc no
 portable "a TPM+PIN token" 0
 lvm_on_luks; luks_dump nvme0n1p3 "$(printf '  0: clevis\n\tKeyslot:    1\n')"
 portable "a clevis token" 1 "clevis token"
+lvm_on_luks; luks_dump nvme0n1p3 "$(printf '  0: systemd-fido2\n\tKeyslot:    1\n  1: systemd-pkcs11\n\tKeyslot:    2\n')"
+portable "FIDO2 and PKCS#11 tokens" 0
+lvm_on_luks; luks_dump nvme0n1p3 "$(printf '  0: ssh-agent-key\n\tKeyslot:    1\n')"
+portable "an unrecognised token type" 1 "ssh-agent-key token" "does not recognise"
+lvm_on_luks; luks1_dump nvme0n1p3; printf '0   active empty\n1   active cb6e8904-81ff-40da-a84a-07ab9ab5715e\n' >"$work/luksmeta/nvme0n1p3"
+portable "a LUKS1 clevis binding" 1 "LUKS1 with a clevis binding" "clevis luks unbind"
+lvm_on_luks; luks1_dump nvme0n1p3; printf '0   active empty\n' >"$work/luksmeta/nvme0n1p3"
+portable "LUKS1, passphrase slot only" 0
+lvm_on_luks; luks1_dump nvme0n1p3; : >"$work/luksmeta/nvme0n1p3"
+portable "LUKS1 with an empty luksmeta" 0
+lvm_on_luks; luks1_dump nvme0n1p3; NOTOOL=luksmeta portable "LUKS1 with no luksmeta" 1 "luksmeta is not installed" "install luksmeta"
+lvm_on_luks; luks1_dump nvme0n1p3; portable "LUKS1 with a failing luksmeta" 1 "luksmeta show -d .* failed"
 lvm_on_luks; echo "luks-abc UUID=abc /etc/keys/root.key luks" >"$work/crypttab"
 portable "a crypttab key file" 1 "key file /etc/keys/root.key"
 lvm_on_luks; luks_dump nvme0n1p3 "$(tpm_token false)"; echo "luks-abc UUID=abc none luks,tpm2-device=auto" >"$work/crypttab"
 portable "tpm2-device= with a PIN-less token" 2 "does not need a PIN" "tpm2-device="
 lvm_on_luks; boot_image initrd.img-6.8.0-2 "$(printf 'cryptroot/keyfiles\ncryptroot/keyfiles/cryptroot.key')"
 portable "a key file in one of two initramfs images" 1 "initrd.img-6.8.0-2 holds a key file"
-lvm_on_luks; NOTOOL=cryptsetup portable "a missing cryptsetup" 1 "cryptsetup is not installed"
-lvm_on_luks; NOTOOL=lsinitramfs portable "a missing lsinitramfs" 1 "lsinitramfs is not installed"
+lvm_on_luks; NOTOOL=cryptsetup portable "a missing cryptsetup" 1 "cryptsetup is not installed" "install cryptsetup and run this again"
+lvm_on_luks; NOTOOL=lsinitramfs portable "a missing lsinitramfs" 1 "lsinitramfs is not installed" "install initramfs-tools-core"
 lvm_on_luks; echo /dev/dm-9 >"$work/rootdev"; portable "a stack that does not resolve" 1 "could not resolve"
 lvm_on_luks; echo tmpfs >"$work/rootdev"; portable "a root that is not a block device" 1 "could not resolve"
 lvm_on_luks; rm "$work/luksdump/nvme0n1p3"; portable "a failed luksDump" 1 "luksDump .* failed"
@@ -248,6 +278,7 @@ lvm_on_luks; : >"$work/crypttab"; portable "no crypttab entry for the LUKS devic
 lvm_on_luks; rm "$work/crypttab"; portable "an unreadable crypttab" 1 "could not be read"
 lvm_on_luks; rm "$work/boot/initrd.img-6.8.0-1"; portable "no initramfs image" 1 "no .*initrd.img-.* was found"
 lvm_on_luks; rm "$work/initramfs/initrd.img-6.8.0-1"; portable "an initramfs lsinitramfs cannot list" 1 "could not list"
+lvm_on_luks; : >"$work/initramfs/initrd.img-6.8.0-1"; portable "an empty initramfs listing" 1 "listed nothing"
 lvm_on_luks; dm dm-0 CRYPT-PLAIN-abc luks-abc nvme0n1p3; portable "plain dm-crypt" 1 "plain dm-crypt"
 
 # With a warning the answer comes from a terminal, never a pipe.
@@ -288,6 +319,14 @@ record "a --portable warning accepted by flag" "mode: portable" "accepted: flag"
 expect "provisioning.txt has the warning" grep -q '[0-9Z] warning: .*not encrypted' "$work/host/provisioning.txt"
 expect "the journal has the warning" grep -q -- '-- warning: .*not encrypted' "$work/journal"
 expect_not "provisioning.txt is replaced whole" grep -q stale "$work/host/provisioning.txt"
+
+# A record that cannot be written stops before sealing.
+: >"$work/loggerfail"
+out=$(run ubuntu-24.04 --server --accept-physical-access); rc=$?
+check "a failing logger stops before sealing" 1 $rc "$out" no "could not write the journal record"
+rm -f "$work/loggerfail"
+out=$(DIRREC=1 run ubuntu-24.04 --server --accept-physical-access); rc=$?
+check "a provisioning.txt that is a directory stops before sealing" 1 $rc "$out" no "could not write"
 out=$(run_tty yes ubuntu-24.04 --portable); rc=$?
 record "a --portable warning accepted at a terminal" "mode: portable" "accepted: terminal" auth.warning auth.notice
 lvm_on_luks; out=$(run ubuntu-24.04 --portable)
