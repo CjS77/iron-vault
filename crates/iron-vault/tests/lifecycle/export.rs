@@ -46,8 +46,9 @@ const BIG_RECORDS: usize = 16;
 const BIG_LEN: usize = 48_000;
 
 /// Each export runs scrypt at 256 MiB, twice when it seals; one test at a time keeps the binary's memory bounded, and lets
-/// a test count the audit records it added to the log every test shares.
-static ONE_AT_A_TIME: Mutex<()> = Mutex::const_new(());
+/// a test count the audit records it added to the log every test shares. The migration release checks, which export
+/// too, take it as well.
+pub(super) static ONE_AT_A_TIME: Mutex<()> = Mutex::const_new(());
 
 /// A Ready service whose envelopes open with [`PASSPHRASE`], with the service's handlers on its admin socket.
 struct Served {

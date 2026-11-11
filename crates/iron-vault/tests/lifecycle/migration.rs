@@ -43,7 +43,7 @@ use iron_vault_store::fault_fs::FsCall;
 use iron_vault_store::migration_bundle::{BundleDecoder, EntryName, MAX_BUNDLE_LEN};
 use iron_vault_store::{OsFs, StoreFs, open_manifest};
 use tokio::net::UnixStream;
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::MutexGuard;
 
 const DEST_PASSPHRASE: &str = "DEST-vault-passphrase-6e0d";
 /// The source's one credential's secret.
@@ -51,10 +51,9 @@ const FX_SECRET: &str = "fx-secret";
 /// The answers of an owner who knows the export passphrase, chooses a vault passphrase and confirms the recovery key.
 const COMPLETE: [&str; 4] = [EXPORT_PASSPHRASE, DEST_PASSPHRASE, DEST_PASSPHRASE, "yes"];
 
-static ONE_AT_A_TIME: Mutex<()> = Mutex::const_new(());
-
+/// The export tests' lock: these tests export too, and the export tests count the `migration.exported` records they add.
 async fn one_at_a_time() -> MutexGuard<'static, ()> {
-    ONE_AT_A_TIME.lock().await
+    super::export::ONE_AT_A_TIME.lock().await
 }
 
 /// The destination: empty state and config directories in a temporary directory that is also the runtime directory.
