@@ -478,14 +478,7 @@ Errors specific to `init`:
 | `declined` | the owner did not answer the recovery key confirmation with `yes`; the message says the recovery key shown opens nothing and is to be discarded |
 | `init-failed` | the host unlock flag was set and the service has no host unlock identity to enrol: its profile is not Container, the handoff is absent, or it was refused (untrusted path, too long, not an `age` secret key, unreadable). Raised before any prompt, so the message says nothing was written. Otherwise a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: a start-over means the key is dead, and `already-initialized` with a vault that is Initialized means a vault stands, which the owner confirms with `iron-vault recovery check` before relying on the key, because a concurrent init may have finished first. A failure of the discard of an unfinished initialization names `discard` as its step |
 
-#### approver remove
-
-`iron-vault approver remove <approver ID>` sends the ID, which `approver list` prints, as 16 bytes. An argument that is not a
-UUID is a usage error in the CLI; a UUID that is not version 4 is the service's `approver-invalid`. The service's notices
-show the summary; the answer to its prompt is any pinned approver's passphrase, the removed approver's included. On
-success nothing goes to stdout; a service error goes to stderr with exit code 1.
-
-### recovery check
+#### recovery check
 
 Proves that the owner's offline recovery key opens the current vault (spec
 [§16](iron-vault-specification.md#16-administration-recovery-and-migration)). The design, including what the check
@@ -1015,6 +1008,13 @@ outside Ready, `busy` while another operation holds the service-wide lock.
 label. The service's notices show the summary; the answers to its prompts are an approver's passphrase, then the new
 approval passphrase twice. On success the new approver ID and a newline go to stdout and nothing else, so a script can
 capture it; a service error goes to stderr with exit code 1.
+
+### approver remove
+
+`iron-vault approver remove <approver ID>` sends the ID, which `approver list` prints, as 16 bytes. An argument that is not a
+UUID is a usage error in the CLI; a UUID that is not version 4 is the service's `approver-invalid`. The service's notices
+show the summary; the answer to its prompt is any pinned approver's passphrase, the removed approver's included. On
+success nothing goes to stdout; a service error goes to stderr with exit code 1.
 
 ### recovery check
 
