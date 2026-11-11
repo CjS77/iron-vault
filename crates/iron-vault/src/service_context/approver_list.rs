@@ -5,7 +5,7 @@ use std::sync::Arc;
 use iron_vault_store::{PinnedApprover, StoreFs};
 
 use super::ServiceContext;
-use super::recipients::{RecipientRefusal, ready_vault};
+use super::recipients::ready_vault;
 use crate::service_state::ServiceState;
 
 /// Why `approver list` was refused.
@@ -19,14 +19,6 @@ pub enum ApproverListRefusal {
     WrongState(ServiceState),
 }
 
-/// `ready_vault` refuses only for the state; any other refusal cannot occur there.
-fn wrong_state(refusal: RecipientRefusal) -> ApproverListRefusal {
-    match refusal {
-        RecipientRefusal::WrongState(state) => ApproverListRefusal::WrongState(state),
-        _ => ApproverListRefusal::Busy,
-    }
-}
-
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// Every pinned approver in approver order, each with whether it signed the active approval.
     ///
@@ -37,7 +29,11 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let _service_wide = Arc::clone(&self.service_wide)
             .try_lock_owned()
             .map_err(|_| ApproverListRefusal::Busy)?;
-        let approvers = ready_vault(&*self.inner.lock().await).map_err(wrong_state)?.approvers;
+        let inner = self.inner.lock().await;
+        let approvers = ready_vault(&inner)
+            .map_err(|_| ApproverListRefusal::WrongState(inner.state))?
+            .approvers;
+        drop(inner);
         let active = self.active_signer();
         Ok(self
             .ordered_approvers(&approvers)
