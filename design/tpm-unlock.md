@@ -66,9 +66,9 @@ Why:
   a new subsystem.
 - **Nothing outlives the boot.** The secret text is in the sealed blob on disk and, once unsealed, only in
   non-swappable memory: the unit's credentials directory and the handoff's ramfs.
-- **No dependency changes.** (a) adds no crate. `Cargo.lock` already holds a second `rand` (0.8.8), `rand_core`
-  (0.6.4) and `getrandom` (0.2.17) beside the 0.10 line, forced by `age` and `age-core`; `tss-esapi` 7.7 would add no
-  third copy, but a C library and its build tooling. `age-plugin-tpm` is not a verified dependency.
+- **No dependency changes.** (a) adds no crate. `Cargo.lock` already holds a second `rand` (0.8.8) and `rand_core`
+  (0.6.4) beside the 0.10 line, and a second `getrandom` (0.2.17) beside 0.4.3, forced by `age` and `age-core`;
+  `tss-esapi` 7.7 would add no third copy, but a C library and its build tooling. `age-plugin-tpm` is not a verified dependency.
 
 What (a) costs:
 
