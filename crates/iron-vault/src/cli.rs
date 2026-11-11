@@ -121,8 +121,8 @@ pub enum Command {
     },
     /// Check that the service is running and show its deployment profile.
     Ping,
-    /// Show the service, vault, approval, memory protection and credential states, without secrets. It exits 4 when
-    /// the service answers and is not Ready.
+    /// Show the service, vault, approval, memory protection, host unlock outcome and credential states, without
+    /// secrets. It exits 4 when the service answers and is not Ready.
     Status,
     /// List every credential with its kind, permitted origins and standing, never a secret. It needs an open vault,
     /// and exits 4 while none is open.

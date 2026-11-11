@@ -113,6 +113,7 @@ credential venice_chat: healthy
 | `approval committed` | a number, `none`, or `unknown while the vault is locked` | The approval version of the active config. |
 | `approval highest reserved` | a number, or `unknown while the vault is locked` | The highest version ever reserved. Higher than the committed version after an approval that failed once it had reserved one. |
 | `memory protection` | `locked against swap`, `NOT protected, swap protection unavailable (<why>)`, `NOT protected, unsupported on this platform` | Whether the service's memory is kept out of swap. Only `locked against swap` means it is. |
+| `host unlock` | `unlocked`, `absent`, `unseal_failed`, `owner_locked`, `refused` | How the startup host unlock came out; the line is absent in the development profile, which tries none. `unseal_failed` means the host's TPM unseal failed, as after a firmware `dbx` or KEK update, and the service waits for a passphrase `unlock`. |
 | `recovery last checked` | see below | When `recovery check` last proved the recovery key opens this vault. |
 | `credential <name>` | `healthy`, or `damaged (<damage>); unavailable routes: <routes>` | One line per credential, in name order. The damage is `missing`, `substituted` or `unreadable`. |
 | `credentials` | `none`, `unknown while the vault is locked` | Printed instead of the credential lines when there are none, or they are unknown. |

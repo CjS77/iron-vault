@@ -88,7 +88,11 @@ Protected or Container service reads this file. When it opens the vault, the ser
 passphrase. A missing file means no handoff, and a refused one (an unsafe path, an unreadable file, a key that is not
 one of the vault's recipients, or memory not locked against swap) is not: either way the service stays
 Locked, and a passphrase `unlock` still works. Each start writes one `vault.host-unlock` record
-([audit log](audit-log.md#service-and-lock-state)). The host side, which unseals the identity from the TPM onto a ramfs, is in
+([audit log](audit-log.md#service-and-lock-state)).
+When the file is missing, the service also looks for the **unseal-failure file**, `/run/iron-vault-unlock/unseal-failed`: an
+empty file that the host's handoff unit leaves when it fails, such as when a firmware update changes PCR 7. It counts only
+as a regular file owned by root, not a symlink. Present, the record says `unseal_failed` instead of `absent`; either way the
+service stays Locked, so it is a diagnostic only. The file is not read when the handoff is there. The host side, which unseals the identity from the TPM onto a ramfs, is in
 [docker-compose.md](../../../design/docker-compose.md#host-unlock).
 
 ## The config directory

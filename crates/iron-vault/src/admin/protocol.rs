@@ -56,7 +56,7 @@ pub enum AdminRequest {
     ConfigApprove(ProposedConfig),
     /// Generates a fresh caller token and returns it once; it touches neither the vault nor the policy. Command ID 3.
     CallerToken,
-    /// Reports service, vault, approval, memory protection and credential states; allowed in every state. Command ID 6.
+    /// Reports service, vault, approval, memory protection, host unlock outcome and credential states; allowed in every state. Command ID 6.
     Status,
     /// Opens the vault with the passphrase the service prompts for; no arguments and no result. Command ID 4.
     Unlock,

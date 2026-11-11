@@ -337,8 +337,10 @@ jq -c 'select(.event == "recovery.reminder")
 ```
 
 Host unlocks, in the Protected and Container profiles. Each start writes one `vault.host-unlock`: `unlocked` and `absent` (no unlock
-handoff) at INFO, and `refused` at WARN with its `refusal`, such as `untrusted` or `not_a_recipient`. A refused or absent
-host unlock leaves the service Locked until a passphrase `unlock`, so alert on `refused`:
+handoff) at INFO, `unseal_failed` (no unlock handoff because the host's TPM unseal failed, as after a firmware `dbx` or KEK
+update) at WARN, and `refused` at WARN with its `refusal`, such as `untrusted` or `not_a_recipient`. Any host unlock that is
+not `unlocked` leaves the service Locked until a passphrase `unlock`, so alert on `refused` and `unseal_failed`. `iron-vault
+status` shows the same outcome as `host unlock: <label>`:
 
 ```sh
 docker compose logs --no-log-prefix iron-vault \

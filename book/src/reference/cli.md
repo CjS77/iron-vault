@@ -110,7 +110,7 @@ Check that the service is running and show its deployment profile.
 iron-vault status [OPTIONS]
 ```
 
-Show the service, vault, approval, memory protection and credential states, without secrets. It exits 4 when the service answers and is not Ready.
+Show the service, vault, approval, memory protection, host unlock outcome and credential states, without secrets. It exits 4 when the service answers and is not Ready.
 
 ## `iron-vault list`
 

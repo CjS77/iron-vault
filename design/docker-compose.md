@@ -447,7 +447,8 @@ Starting:
 2. **Read.** The file must pass the `UnlockHandoff` trusted-path rule: a regular file, not a symlink, owned by the
    service account, with no group or other permission bits, in a directory owned by the service account or root that
    neither group nor others can write. It is opened with `O_NOFOLLOW` and checked again through the open descriptor,
-   as `admin_file::read` does, and read into a buffer cleared on drop. A missing file is **absent**, not an error.
+   as `admin_file::read` does, and read into a buffer cleared on drop. A missing file is **absent**, not an error, unless the handoff unit left the
+   [unseal-failure file](tpm-unlock.md#reporting-a-failed-unseal) beside it, which makes it `unseal_failed`.
 3. **Initialized.** The vault must be Initialized, as for passphrase `unlock`
    ([vault-initialization.md](vault-initialization.md#state-before-and-after)).
 4. **Unwrap.** The identity unwraps `identity.age` (`unwrap_identity`), and the manifest's MAC verifies, as for
@@ -460,10 +461,12 @@ Each attempt writes one audit event, `vault.host-unlock`, which never holds the 
 
 | Field | Values |
 |---|---|
-| `host_unlock_outcome` | `unlocked`, `absent` or `refused` |
+| `host_unlock_outcome` | `unlocked`, `absent`, `unseal_failed`, `owner_locked` or `refused` |
 | `refusal` | when refused: `memory_unprotected`, `untrusted`, `unreadable`, `not_an_identity`, `not_initialized` or `not_a_recipient` |
 
-`unlocked` and `absent` are INFO, `refused` is WARN. The field is `host_unlock_outcome`, not `outcome`, which the
+`unlocked`, `absent` and `owner_locked` are INFO; `refused` and `unseal_failed` are WARN. `status` shows the startup outcome as
+`host unlock: <label>`. Until K-323 gives the Compose handoff unit the lines that write the unseal-failure file, a failed
+unseal there reads `absent`. The field is `host_unlock_outcome`, not `outcome`, which the
 request event already uses with another meaning, and its labels are snake_case like every fixed label
 ([audit-logging.md](audit-logging.md#field-rules)). A Development service never writes it. A `memory_unprotected` refusal also
 writes the `vault.unlock-refused` record that every unlock path's memory guard writes.

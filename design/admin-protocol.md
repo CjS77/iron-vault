@@ -711,6 +711,7 @@ digest or permitted origin.
 | 15 | days since recovery check | `u64`: whole days from tag 14's time to the service's clock, `0` for a time in the future and when tag 13 is `0` |
 | 16 | recovery reminder due | flag: `1` when a [recovery reminder](recovery.md#reminders) is due |
 | 17 | recovery check detail | UTF-8 text: why tag 13 is `0`, a fixed phrase; empty otherwise |
+| 18 | host unlock outcome | byte value: empty when the profile tries no host unlock (Development); else the startup outcome, `1` unlocked, `2` absent, `3` unseal failed, `4` owner locked, or `5` followed by a refusal code (`0` memory unprotected, `1` untrusted, `2` unreadable, `3` not an identity, `4` not initialized, `5` not a recipient) |
 
 The vault ID, both approval versions, the credentials and the route faults are sealed behind the vault identity
 (`approval.age`, the manifest), so they are unknown while no vault is open. No vault is open in Starting, Locked and
@@ -983,7 +984,7 @@ when no file is given ([open question 12](config-approval.md#open-questions)).
 `iron-vault status` prints one field per line, in this order, to stdout: `service`, `reason` (only when Unavailable),
 `profile`, `vault` (`locked`, `unlocked`, `not initialized (run iron-vault init)` or `initialization unfinished (run
 iron-vault init again)`), `vault id`, `approval committed`, `approval highest reserved`, `memory protection`,
-`recovery last checked` (in the [forms recovery.md gives](recovery.md#status)), then one `credential <name>` line per
+`host unlock` (`host unlock: <label>`, only when tag 18 is non-empty), `recovery last checked` (in the [forms recovery.md gives](recovery.md#status)), then one `credential <name>` line per
 credential (or `credentials` alone when there are none or they are unknown), then one `route <name>: unavailable
 (pinned CA unavailable)` line per route fault. A value sealed behind a locked vault prints as `unknown while the vault
 is locked`. Under the development profile the profile line is exactly `profile: development — no isolation from
