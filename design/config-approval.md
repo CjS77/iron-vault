@@ -399,10 +399,10 @@ the listener set is rebuilt from the verified config on entry to Ready.
 
 ### Power loss around the commit
 
-`crates/iron-vault/tests/approval_release_linux.rs` runs `config approve` through a running service on an in-memory
+`crates/iron-vault/tests/credentials/approval_release.rs` runs `config approve` through a running service on an in-memory
 filesystem that models power loss (`FaultFs`), cuts the power after each filesystem call the service makes from the
 request on, restarts a service on whatever survived, and checks what it serves against the tables above. `cargo test
--p iron-vault --test approval_release_linux -- --nocapture` prints one row per cut and per way the crash can treat the
+-p iron-vault --test credentials -- approval_release --nocapture` prints one row per cut and per way the crash can treat the
 renames that no directory fsync had yet covered: *lose all* (the pessimistic model), *keep all*, or *keep* one of
 the two renames of a publish alone. Reads count as calls, so the numbers below are for the current code; the
 steps are what to compare. After every restart that reaches Ready, a second `config approve` is checked to reserve

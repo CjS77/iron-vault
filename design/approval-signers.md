@@ -543,7 +543,7 @@ Two constraints carry over:
 
 ## Release checks
 
-`crates/iron-vault/tests/approvers_linux.rs` drives a real service through `init`, `unlock` and the approver
+`crates/iron-vault/tests/signers/approvers.rs` drives a real service through `init`, `unlock` and the approver
 commands. Each command's own tests cover its exchange, output and refusals; this file covers what only holds across
 them.
 

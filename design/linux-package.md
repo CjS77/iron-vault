@@ -668,7 +668,7 @@ without `--i-know-this-is-a-disposable-vm`. The refusal of the group-writable di
 because the service's startup error goes to stderr.
 
 The script does not run the [account check](#account-and-directories) against `/etc/gshadow`; the fixture tests in
-`crates/iron-vault/tests/package_account_check.rs` do. To check a real host by hand, read the `iron-vault` line of
+`crates/iron-vault/tests/service/package_account_check.rs` do. To check a real host by hand, read the `iron-vault` line of
 `/etc/gshadow`, which should be `iron-vault:!*::` on a package install.
 
 ## Admin access

@@ -114,7 +114,7 @@ operation.
 
 ## Streamed response compatibility
 
-[Implementation spec §3](implementation-specification.md#3-implementation-gates-and-unresolved-details) asks for measured overlap buffering and SSE latency. `crates/iron-vault/tests/proxy_scrub_stream_linux.rs` runs
+[Implementation spec §3](implementation-specification.md#3-implementation-gates-and-unresolved-details) asks for measured overlap buffering and SSE latency. `crates/iron-vault/tests/proxy/proxy_scrub_stream.rs` runs
 the real request server and pipeline against a test upstream that sends scripted chunks, each flushed as its own write.
 
 The scrubber holds back only the tail of the pending bytes that is a proper prefix of some pattern (`Scrubber::scan`
@@ -156,7 +156,7 @@ Compressed bodies are covered in the next section.
 ### Compressed responses
 
 Spec [§11](iron-vault-specification.md#11-responses-redirects-and-scrubbing) and [implementation spec §3](implementation-specification.md#3-implementation-gates-and-unresolved-details) ask for tests that combine compression with chunk boundaries and unchanged traffic, and for measured
-decompression limits. `crates/iron-vault/tests/proxy_coding_stream_linux.rs` runs the same assembled service against an
+decompression limits. `crates/iron-vault/tests/proxy/proxy_coding_stream.rs` runs the same assembled service against an
 upstream that sends already compressed, scripted chunks; the refusals are in `proxy_coding_linux.rs`.
 
 **Supported codings and refusals.** The service decodes `gzip`, `deflate` (zlib) and `br`, and asks upstreams for

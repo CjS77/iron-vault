@@ -4,7 +4,7 @@
 # unit is enabled: the administrator creates those. Messages go to stderr because debconf's confmodule owns stdout.
 set -e
 
-# BEGIN service account check. crates/iron-vault/tests/package_account_check.rs runs this block against fixture files.
+# BEGIN service account check. crates/iron-vault/tests/service/package_account_check.rs runs this block against fixture files.
 
 # systemd-sysusers leaves an existing iron-vault account or group as it is, and the package would then hand that account
 # the service's directories and that group the audit log. Prints one line per way an existing account or group differs
