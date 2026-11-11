@@ -1,0 +1,246 @@
+//! Bundle data frames over the admin server's exchange (`design/migration-bundle.md`, "Transfer"): the service sends a
+//! bundle and receives one, and each frame and the whole transfer have a deadline.
+
+#![cfg(target_os = "linux")]
+// Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::time::Duration;
+
+use iron_vault::admin::dispatch::{AdminHandler, HandlerFuture, Handlers};
+use iron_vault::admin::principal::{AdminPrincipal, AdminPrincipals};
+use iron_vault::admin::protocol::{self, AdminCommand, AdminRequest, AdminResponse, BundleChunk, Decoded, Frame, MAX_BODY_LEN};
+use iron_vault::admin::server::{AdminServer, Exchange, ExchangeError, Limits};
+use iron_vault::deployment::DeploymentProfile;
+use iron_vault::path_metadata::invoking_user;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+
+/// How long a test waits for anything the server should do promptly.
+const PATIENCE: Duration = Duration::from_secs(5);
+
+/// What a handler reports: the bundle bytes it received, or the `Debug` form of the exchange error that ended it.
+type Outcome = Result<Vec<u8>, String>;
+
+/// The test command, registered for `ping`: it sends `chunks` and then the end of the bundle.
+struct Sending {
+    chunks: Vec<Vec<u8>>,
+    outcome: mpsc::UnboundedSender<Outcome>,
+}
+
+impl AdminHandler for Sending {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let mut sent = Ok(());
+            for chunk in self.chunks.iter().map(Vec::as_slice).chain([&[][..]]) {
+                sent = exchange.send_bundle_chunk(chunk).await;
+                if sent.is_err() {
+                    break;
+                }
+            }
+            let _ = self.outcome.send(sent.as_ref().map(|()| Vec::new()).map_err(|e| format!("{e:?}")));
+            sent.map(|()| AdminResponse::Success)
+        })
+    }
+}
+
+/// The test command, registered for `ping`: it receives bundle data frames up to the empty one.
+struct Receiving(mpsc::UnboundedSender<Outcome>);
+
+impl AdminHandler for Receiving {
+    fn handle<'a>(&'a self, _principal: AdminPrincipal, _request: AdminRequest, exchange: &'a mut Exchange) -> HandlerFuture<'a> {
+        Box::pin(async move {
+            let mut bundle = Vec::new();
+            let received = loop {
+                match exchange.receive_bundle_chunk().await {
+                    Ok(chunk) if chunk.is_end() => break Ok(bundle),
+                    Ok(chunk) => bundle.extend_from_slice(chunk.bytes()),
+                    Err(e) => break Err(e),
+                }
+            };
+            let _ = self.0.send(received.as_ref().map(Clone::clone).map_err(|e| format!("{e:?}")));
+            received.map(|_| AdminResponse::Success)
+        })
+    }
+}
+
+/// Serves one connection with `handler` under `limits`; returns the CLI's end and the served connection.
+fn serve(handler: impl AdminHandler + 'static, limits: Limits) -> (UnixStream, JoinHandle<()>) {
+    let me = invoking_user().unwrap();
+    let handlers = Handlers::default().with(AdminCommand::Ping, handler);
+    let server = AdminServer::new(AdminPrincipals::new(DeploymentProfile::Development, me.uid), handlers, limits);
+    let (ours, theirs) = UnixStream::pair().unwrap();
+    (theirs, tokio::spawn(async move { server.serve_connection(ours).await }))
+}
+
+fn frame_bytes(frame: &Frame) -> Vec<u8> {
+    let mut out = Vec::new();
+    protocol::encode(frame, &mut out).unwrap();
+    out
+}
+
+fn chunk_bytes(bytes: &[u8]) -> Vec<u8> {
+    frame_bytes(&Frame::BundleData(BundleChunk::new(bytes.to_vec()).unwrap()))
+}
+
+async fn send_ping(cli: &mut UnixStream) {
+    cli.write_all(&frame_bytes(&Frame::Request(AdminRequest::Ping))).await.unwrap();
+}
+
+/// Reads one frame, stopping at its end.
+async fn read_frame(stream: &mut UnixStream) -> Frame {
+    let read = async {
+        let mut bytes = Vec::new();
+        loop {
+            match protocol::decode(&bytes).unwrap() {
+                Decoded::Frame { frame, .. } => return frame,
+                Decoded::NeedMore(n) => {
+                    let mut more = vec![0; n];
+                    let read = stream.read(&mut more).await.unwrap();
+                    assert_ne!(read, 0, "connection closed after {} bytes", bytes.len());
+                    bytes.extend_from_slice(more.get(..read).unwrap());
+                }
+            }
+        }
+    };
+    tokio::time::timeout(PATIENCE, read).await.expect("a frame arrives")
+}
+
+async fn outcome(received: &mut mpsc::UnboundedReceiver<Outcome>) -> Outcome {
+    tokio::time::timeout(PATIENCE, received.recv()).await.unwrap().unwrap()
+}
+
+/// A bundle of three frames: a full one, a short one and a single byte.
+fn bundle_chunks() -> Vec<Vec<u8>> {
+    vec![vec![1; MAX_BODY_LEN], vec![2; 100], vec![3]]
+}
+
+#[tokio::test]
+async fn the_service_sends_a_bundle_the_cli_receives_whole() {
+    let (outcomes, mut received) = mpsc::unbounded_channel();
+    let chunks = bundle_chunks();
+    let (mut cli, served) = serve(
+        Sending {
+            chunks: chunks.clone(),
+            outcome: outcomes,
+        },
+        Limits::default(),
+    );
+    send_ping(&mut cli).await;
+    let mut bundle = Vec::new();
+    loop {
+        match read_frame(&mut cli).await {
+            Frame::BundleData(chunk) if chunk.is_end() => break,
+            Frame::BundleData(chunk) => bundle.extend_from_slice(chunk.bytes()),
+            other => panic!("expected a bundle data frame, got {other:?}"),
+        }
+    }
+    assert_eq!(bundle, chunks.concat());
+    assert!(matches!(read_frame(&mut cli).await, Frame::Response(AdminResponse::Success)));
+    assert_eq!(outcome(&mut received).await, Ok(Vec::new()));
+    served.await.unwrap();
+}
+
+#[tokio::test]
+async fn the_service_receives_a_bundle_the_cli_sends() {
+    let (outcomes, mut received) = mpsc::unbounded_channel();
+    let (mut cli, served) = serve(Receiving(outcomes), Limits::default());
+    send_ping(&mut cli).await;
+    let chunks = bundle_chunks();
+    for frame in chunks.iter().map(|chunk| chunk_bytes(chunk)).chain([chunk_bytes(&[])]) {
+        cli.write_all(&frame).await.unwrap();
+    }
+    assert_eq!(outcome(&mut received).await, Ok(chunks.concat()));
+    assert!(matches!(read_frame(&mut cli).await, Frame::Response(AdminResponse::Success)));
+    served.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cli_that_stalls_between_frames_misses_the_frame_deadline() {
+    let (outcomes, mut received) = mpsc::unbounded_channel();
+    let limits = Limits {
+        request_deadline: Duration::from_millis(150),
+        ..Limits::default()
+    };
+    let (mut cli, served) = serve(Receiving(outcomes), limits);
+    send_ping(&mut cli).await;
+    cli.write_all(&chunk_bytes(b"first")).await.unwrap();
+    assert_eq!(outcome(&mut received).await, Err(format!("{:?}", ExchangeError::TimedOut)));
+    served.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cli_that_trickles_frames_misses_the_transfer_deadline() {
+    let (outcomes, mut received) = mpsc::unbounded_channel();
+    let limits = Limits {
+        request_deadline: Duration::from_millis(300),
+        transfer_deadline: Duration::from_millis(500),
+        ..Limits::default()
+    };
+    let (mut cli, served) = serve(Receiving(outcomes), limits);
+    send_ping(&mut cli).await;
+    let trickle = async {
+        loop {
+            if cli.write_all(&chunk_bytes(b"x")).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    let ended = tokio::select! {
+        ended = outcome(&mut received) => ended,
+        () = trickle => panic!("the service never ended the transfer"),
+    };
+    assert_eq!(ended, Err(format!("{:?}", ExchangeError::TransferTimedOut)));
+    served.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_cli_that_stops_reading_misses_the_frame_deadline_and_then_the_transfer_deadline() {
+    let big = vec![vec![7; MAX_BODY_LEN]; 64];
+    for (request, transfer, expected) in [
+        (150, 60_000, ExchangeError::TimedOut),
+        (60_000, 150, ExchangeError::TransferTimedOut),
+    ] {
+        let (outcomes, mut received) = mpsc::unbounded_channel();
+        let limits = Limits {
+            request_deadline: Duration::from_millis(request),
+            transfer_deadline: Duration::from_millis(transfer),
+            ..Limits::default()
+        };
+        let (mut cli, served) = serve(
+            Sending {
+                chunks: big.clone(),
+                outcome: outcomes,
+            },
+            limits,
+        );
+        send_ping(&mut cli).await;
+        assert_eq!(outcome(&mut received).await, Err(format!("{expected:?}")));
+        served.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_cli_that_closes_before_the_end_of_the_bundle_is_a_closed_peer() {
+    let (outcomes, mut received) = mpsc::unbounded_channel();
+    let (mut cli, served) = serve(Receiving(outcomes), Limits::default());
+    send_ping(&mut cli).await;
+    cli.write_all(&chunk_bytes(b"first")).await.unwrap();
+    cli.shutdown().await.unwrap();
+    assert_eq!(outcome(&mut received).await, Err(format!("{:?}", ExchangeError::Closed)));
+    served.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_frame_other_than_bundle_data_mid_bundle_is_out_of_turn() {
+    let (outcomes, mut received) = mpsc::unbounded_channel();
+    let (mut cli, served) = serve(Receiving(outcomes), Limits::default());
+    send_ping(&mut cli).await;
+    cli.write_all(&chunk_bytes(b"first")).await.unwrap();
+    cli.write_all(&frame_bytes(&Frame::Switch)).await.unwrap();
+    assert_eq!(outcome(&mut received).await, Err(format!("{:?}", ExchangeError::Unexpected)));
+    served.await.unwrap();
+}

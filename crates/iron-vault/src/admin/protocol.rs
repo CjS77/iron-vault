@@ -6,6 +6,7 @@ mod approver_add;
 mod approver_list;
 mod approver_remove;
 mod body;
+mod bundle;
 mod fields;
 mod host_unlock_status;
 mod list;
@@ -23,6 +24,7 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::deployment::DeploymentProfile;
+use crate::service_state::AdminOperation;
 use crate::standing::CredentialStanding;
 use iron_vault_policy::{CallerToken, CredentialKind, Port};
 use iron_vault_store::{ApproverId, Passphrase, RecipientEntry, RecipientKey, RecipientRole, RecordId, VaultId};
@@ -30,6 +32,7 @@ use secrecy::SecretString;
 
 pub use approver_add::RequestedSignerKind;
 pub use approver_list::ApproverEntry;
+pub use bundle::{BundleChunk, ImportResult};
 pub use iron_vault_store::MAX_CONFIG_LEN;
 pub use recovery_status::RecoveryStatus;
 pub use status::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
@@ -147,6 +150,15 @@ pub enum AdminRequest {
         /// The approver ID's bytes.
         approver: [u8; 16],
     },
+    /// Exports the vault as a migration bundle after migration authorization; Ready only. No arguments: the bundle comes
+    /// back as bundle data frames ([`Frame::BundleData`]). Command ID 19.
+    Export,
+    /// Imports a migration bundle into a service that holds no vault; Locked only. The bundle follows the request as bundle
+    /// data frames. Command ID 20.
+    Import {
+        /// Also enrol the identity in the unlock handoff as a recipient, as for [`Self::Init`].
+        host_unlock: bool,
+    },
     /// Discards the vault and the config after a confirmation typed at a terminal; allowed in Locked, Ready and
     /// Unavailable. No arguments. Command ID 21.
     Reset,
@@ -186,6 +198,8 @@ impl AdminRequest {
             Self::ApproverList => AdminCommand::ApproverList,
             Self::ApproverAdd { .. } => AdminCommand::ApproverAdd,
             Self::ApproverRemove { .. } => AdminCommand::ApproverRemove,
+            Self::Export => AdminCommand::Export,
+            Self::Import { .. } => AdminCommand::Import,
             Self::Reset => AdminCommand::Reset,
         }
     }
@@ -230,6 +244,10 @@ pub enum AdminCommand {
     ApproverAdd = 17,
     /// `approver remove`.
     ApproverRemove = 18,
+    /// `export`.
+    Export = 19,
+    /// `import`.
+    Import = 20,
     /// `reset`.
     Reset = 21,
 }
@@ -256,6 +274,8 @@ impl AdminCommand {
             Self::ApproverList => "approver list",
             Self::ApproverAdd => "approver add",
             Self::ApproverRemove => "approver remove",
+            Self::Export => "export",
+            Self::Import => "import",
             Self::Reset => "reset",
         }
     }
@@ -281,7 +301,35 @@ impl AdminCommand {
             Self::ApproverList => "approver_list",
             Self::ApproverAdd => "approver_add",
             Self::ApproverRemove => "approver_remove",
+            Self::Export => "export",
+            Self::Import => "import",
             Self::Reset => "reset",
+        }
+    }
+
+    /// The admin operation class the state gate decides this command on: each command maps onto exactly one.
+    pub const fn operation(self) -> AdminOperation {
+        match self {
+            Self::Ping => AdminOperation::Ping,
+            Self::Status | Self::List => AdminOperation::Status,
+            Self::Unlock => AdminOperation::Unlock,
+            Self::Lock => AdminOperation::Lock,
+            Self::ConfigApprove => AdminOperation::Approve,
+            Self::CallerToken => AdminOperation::IssueCallerToken,
+            // `import` runs where `init` does: a Locked service with no vault.
+            Self::Init | Self::Import => AdminOperation::Initialize,
+            Self::RecoveryCheck => AdminOperation::RecoveryCheck,
+            Self::Reset => AdminOperation::Reset,
+            Self::Add
+            | Self::Replace
+            | Self::Rm
+            | Self::RecipientList
+            | Self::RecipientAdd
+            | Self::RecipientRemove
+            | Self::ApproverList
+            | Self::ApproverAdd
+            | Self::ApproverRemove
+            | Self::Export => AdminOperation::VaultChange,
         }
     }
 }
@@ -305,8 +353,9 @@ mod no_external_signatures {
             | AdminCommand::RecipientList
             | AdminCommand::ApproverList
             | AdminCommand::Reset
+            | AdminCommand::Export
             | AdminCommand::List => &[],
-            AdminCommand::Init => &["host_unlock"],
+            AdminCommand::Init | AdminCommand::Import => &["host_unlock"],
             AdminCommand::ConfigApprove => &["config"],
             AdminCommand::Add | AdminCommand::Replace => &["name", "kind", "origins"],
             AdminCommand::Rm => &["name"],
@@ -317,7 +366,7 @@ mod no_external_signatures {
         }
     }
 
-    const COMMANDS: [AdminCommand; 19] = [
+    const COMMANDS: [AdminCommand; 21] = [
         AdminCommand::Ping,
         AdminCommand::ConfigApprove,
         AdminCommand::CallerToken,
@@ -336,6 +385,8 @@ mod no_external_signatures {
         AdminCommand::ApproverList,
         AdminCommand::ApproverAdd,
         AdminCommand::ApproverRemove,
+        AdminCommand::Export,
+        AdminCommand::Import,
         AdminCommand::Reset,
     ];
 
@@ -597,6 +648,17 @@ pub enum AdminResponse {
         /// Whether the check record was written; false when the write failed, though the check passed.
         recorded: bool,
     },
+    /// `export` completed: the bundle was sent as bundle data frames, the last of them the empty one.
+    Export {
+        /// The exported vault's ID.
+        vault_id: VaultId,
+        /// How many credential records the bundle carries.
+        records: u64,
+        /// The bundle's size, which the CLI checks against the bytes it received.
+        bytes: u64,
+    },
+    /// `import` completed: the vault is written and its committed approval kept; the service is still Locked.
+    Import(ImportResult),
     /// `reset` completed: the vault and the config are discarded and the service is Locked over a directory `init` can use.
     Reset {
         /// The vault ID that was confirmed; `None` when the confirmation was the state directory's path.
@@ -651,11 +713,12 @@ pub enum ErrorCode {
     UnexpectedFrame = 4,
     /// The connecting account is not an admin principal; nothing it sent was read.
     NotAdminPrincipal = 5,
-    /// The service is already serving as many admin connections as it allows.
+    /// The service is already serving as many admin connections as it allows, or another operation holds the lock a command
+    /// needs; `import` and `export` also raise it while another import holds the import slot.
     Busy = 6,
     /// `config approve`: the proposed config fails parsing, validation or activation.
     ConfigInvalid = 7,
-    /// The owner declined at a confirmation prompt.
+    /// The owner declined at a confirmation prompt: `init`'s recovery key confirmation, `import`'s, and `reset`'s.
     Declined = 8,
     /// `config approve`, `replace`, `rm`, `recipient remove`, `approver add`, `approver remove`: owner presence failed: the approval
     /// passphrase did not open the pinned approver's key.
@@ -669,7 +732,8 @@ pub enum ErrorCode {
     /// `config approve`: committed, but not published or active; the service is Unavailable. `replace`, `rm`: the change
     /// committed, but the config check after it left the service Unavailable.
     CommittedNotActive = 12,
-    /// The command is not allowed in the service's current state; the message names the state.
+    /// The command is not allowed in the service's current state; the message names the state. `export` needs Ready and
+    /// `import` needs Locked.
     WrongState = 13,
     /// `unlock`: the vault passphrase was wrong.
     UnlockDenied = 14,
@@ -678,9 +742,10 @@ pub enum ErrorCode {
     /// `unlock`: the vault unlocked, but the config check left the service Unavailable; the message names the redacted
     /// reason.
     UnlockedUnavailable = 16,
-    /// `init`: the directories hold an initialized vault, or files init did not write; nothing was changed.
+    /// `init`, `import`: the directories hold an initialized vault, or files init did not write; nothing was changed.
     AlreadyInitialized = 17,
-    /// `init`, `approver add`: a chosen passphrase broke a rule; the message names the rule, never the input.
+    /// `init`, `approver add`, `export`, `import`: a chosen passphrase broke a rule; the message names the rule, never the
+    /// input.
     PassphraseRejected = 18,
     /// `init`: a write failed; the message names the step and what to do with the recovery key shown.
     InitFailed = 19,
@@ -701,7 +766,7 @@ pub enum ErrorCode {
     RandomSourceFailed = 25,
     /// `list`: the credential list does not fit one frame; the message names the count.
     ListTooLarge = 26,
-    /// `unlock`: a protected install's memory is not locked, so the vault is not opened; the message names the
+    /// `unlock`, `import`: a protected install's memory is not locked, so the vault is not opened; the message names the
     /// memory-lock limit or the locking error, and the service stays Locked.
     MemoryUnprotected = 27,
     /// `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it
@@ -709,8 +774,8 @@ pub enum ErrorCode {
     /// was exported or rewrapped.
     MigrationDenied = 28,
     /// `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a
-    /// reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its prompt;
-    /// nothing was exported or rewrapped.
+    /// reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its prompt (for
+    /// `export`, at the vault passphrase prompt or at either export passphrase prompt); nothing was exported or rewrapped.
     MigrationUnavailable = 29,
     /// `recovery check`: the text is not an `AGE-SECRET-KEY-1...` recovery key; the message holds nothing typed.
     RecoveryKeyInvalid = 30,
@@ -749,6 +814,18 @@ pub enum ErrorCode {
     ApproverInUse = 43,
     /// `approver add`: this install does not offer that signer kind yet; nothing was changed.
     ApproverKindUnavailable = 44,
+    /// `export`: the snapshot checks found damage before any prompt; or the snapshot or the transfer failed after the
+    /// authorization was consumed, a transfer deadline passed, or a `lock` cancelled it between frames; the message names the
+    /// step and, for a file, its name and the error kind; no bundle was completed.
+    ExportFailed = 45,
+    /// `import`: the bytes are not a migration bundle this version reads, exceed the size limit, or fail a check with the
+    /// vault identity; the message names the rule or check, never a byte of the bundle; nothing was written.
+    BundleInvalid = 46,
+    /// `import`: the export passphrase does not open the exported identity envelope; nothing was written.
+    ImportDenied = 47,
+    /// `import`: the host unlock flag was set and the service has no host unlock identity to enrol, raised before any prompt;
+    /// or a write failed, and the message names the step and says to run `import` again.
+    ImportFailed = 48,
     /// `reset`: the directories hold no vault file, so there is nothing to discard; the message says what to run next.
     NothingToReset = 49,
     /// `reset`: writing `reset.unfinished`, a removal or the state read failed; the message names the step and the file, and
@@ -804,6 +881,10 @@ impl ErrorCode {
             Self::ApproverSetInvalid => "approver-set-invalid",
             Self::ApproverInUse => "approver-in-use",
             Self::ApproverKindUnavailable => "approver-kind-unavailable",
+            Self::ExportFailed => "export-failed",
+            Self::BundleInvalid => "bundle-invalid",
+            Self::ImportDenied => "import-denied",
+            Self::ImportFailed => "import-failed",
             Self::NothingToReset => "nothing-to-reset",
             Self::ResetFailed => "reset-failed",
         }
@@ -837,6 +918,8 @@ pub enum Frame {
     Reveal(RevealedSecret),
     /// Kind 8, CLI to service: the answer to a switchable prompt that asks for the next approver. Its body is empty.
     Switch,
+    /// Kind 9, either way: a piece of a migration bundle, service to CLI for `export` and CLI to service for `import`.
+    BundleData(BundleChunk),
 }
 
 /// What [`decode`] found at the start of its input.
@@ -912,6 +995,7 @@ enum FrameKind {
     Notice = 6,
     Reveal = 7,
     Switch = 8,
+    BundleData = 9,
 }
 
 impl FrameKind {
@@ -925,6 +1009,7 @@ impl FrameKind {
             Self::Notice,
             Self::Reveal,
             Self::Switch,
+            Self::BundleData,
         ]
         .into_iter()
         .find(|kind| *kind as u8 == byte)
@@ -977,6 +1062,10 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
             FrameKind::Success,
             &body::encode_reset_result(*vault_id, *removed, foreign, *cleared, *finish_uncertain),
         ),
+        Frame::Response(AdminResponse::Export { vault_id, records, bytes }) => {
+            put_frame(out, FrameKind::Success, &body::encode_export_result(*vault_id, *records, *bytes))
+        }
+        Frame::Response(AdminResponse::Import(result)) => put_frame(out, FrameKind::Success, &body::encode_import_result(result)),
         Frame::Response(AdminResponse::RecipientRemove { recipients }) => {
             put_frame(out, FrameKind::Success, &body::encode_recipient_remove_result(*recipients))
         }
@@ -1006,7 +1095,14 @@ pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
         Frame::Notice(notice) => put_frame(out, FrameKind::Notice, &body::encode_notice(notice)),
         Frame::Reveal(secret) => encode_reveal(secret.expose_secret(), out),
         Frame::Switch => put_frame(out, FrameKind::Switch, &[]),
+        Frame::BundleData(chunk) => encode_bundle_data(chunk.bytes(), out),
     }
+}
+
+/// Appends a bundle data frame carrying `bytes` to `out`. It takes the bytes rather than a [`Frame`], so the service sends
+/// a bundle straight from its own buffer without a copy. An empty `bytes` is the frame that ends the bundle.
+pub fn encode_bundle_data(bytes: &[u8], out: &mut Vec<u8>) -> Result<(), FrameError> {
+    put_frame(out, FrameKind::BundleData, bytes)
 }
 
 /// Appends a reveal frame carrying `value` to `out`, which holds the value afterwards, so the caller passes a clearing
@@ -1043,6 +1139,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, FrameError> {
         FrameKind::Reveal => Frame::Reveal(RevealedSecret::new(Zeroizing::new(body.to_vec()))),
         FrameKind::Switch if !body.is_empty() => return Err(FrameError::UnexpectedBody(FrameKind::Switch as u8)),
         FrameKind::Switch => Frame::Switch,
+        FrameKind::BundleData => Frame::BundleData(BundleChunk::new(body.to_vec()).ok_or(FrameError::BodyTooLong)?),
     };
     Ok(Decoded::Frame { frame, used })
 }

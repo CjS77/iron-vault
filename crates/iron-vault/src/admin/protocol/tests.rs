@@ -44,6 +44,7 @@ fn same(a: &Frame, b: &Frame) -> bool {
         (Frame::Notice(a), Frame::Notice(b)) => a == b,
         (Frame::Reveal(a), Frame::Reveal(b)) => a.expose_secret() == b.expose_secret(),
         (Frame::Switch, Frame::Switch) => true,
+        (Frame::BundleData(a), Frame::BundleData(b)) => a == b,
         _ => false,
     }
 }
@@ -85,6 +86,7 @@ fn same_response(a: &AdminResponse, b: &AdminResponse) -> bool {
                 recorded: q,
             },
         ) => a == b && t == u && r == q,
+        (R::Export { .. }, R::Export { .. }) | (R::Import(_), R::Import(_)) => format!("{a:?}") == format!("{b:?}"),
         (R::RecipientList { entries: a }, R::RecipientList { entries: b }) => a == b,
         (
             R::RecipientAdd {
@@ -243,6 +245,8 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             Just(AdminRequest::Lock),
             Just(AdminRequest::Reset),
             any::<bool>().prop_map(|host_unlock| AdminRequest::Init { host_unlock }),
+            any::<bool>().prop_map(|host_unlock| AdminRequest::Import { host_unlock }),
+            Just(AdminRequest::Export),
             Just(AdminRequest::RecoveryCheck),
             Just(AdminRequest::RecipientList),
             (
@@ -283,6 +287,22 @@ fn any_frame() -> impl Strategy<Value = Frame> {
             switchable
         })),
         Just(()).prop_map(|()| Frame::Switch),
+        prop::collection::vec(any::<u8>(), 0..256).prop_map(|bytes| Frame::BundleData(BundleChunk::new(bytes).unwrap())),
+        (any::<[u8; 16]>(), any::<u64>(), any::<u64>()).prop_map(|(bytes, records, size)| Frame::Response(AdminResponse::Export {
+            vault_id: VaultId::from_bytes(v4_bytes(bytes)).unwrap(),
+            records,
+            bytes: size
+        })),
+        (any::<[u8; 16]>(), any::<[u64; 3]>(), any::<[u8; 32]>(), any::<bool>()).prop_map(
+            |(bytes, [records, version, highest_reserved], digest, host)| {
+                Frame::Response(AdminResponse::Import(import_result(
+                    bytes,
+                    [records, version, highest_reserved],
+                    digest,
+                    host,
+                )))
+            }
+        ),
         owner_bytes().prop_map(|bytes| owner_input(&bytes)),
         owner_bytes()
             .prop_filter("a reveal is never empty", |bytes| !bytes.is_empty())
@@ -519,7 +539,7 @@ proptest! {
     }
 
     #[test]
-    fn random_bodies_never_panic_and_accepted_frames_re_encode_exactly(kind in 0u8..8, body in field_soup()) {
+    fn random_bodies_never_panic_and_accepted_frames_re_encode_exactly(kind in 0u8..10, body in field_soup()) {
         let bytes = raw(PROTOCOL_VERSION, kind, &body);
         if let Ok(Decoded::Frame { frame, used }) = decode(&bytes) {
             prop_assert_eq!(used, bytes.len());
@@ -544,6 +564,7 @@ fn every_frame_kind_round_trips_with_its_kind_byte() {
         ),
         (reveal(b"AGE-SECRET-KEY-1"), 7),
         (Frame::Switch, 8),
+        (Frame::BundleData(BundleChunk::new(b"bundle".to_vec()).unwrap()), 9),
     ];
     frames.iter().for_each(|(frame, kind)| {
         assert_eq!(encoded(frame)[2], *kind);
@@ -789,7 +810,7 @@ fn an_unsupported_version_is_refused_before_the_kind() {
 
 #[test]
 fn unknown_frame_kinds_are_refused() {
-    [0, 9, 255]
+    [0, 10, 255]
         .into_iter()
         .for_each(|kind| assert_eq!(decode_err(&raw(1, kind, &[])), FrameError::UnknownKind(kind)));
 }
@@ -872,7 +893,7 @@ fn no_error_carries_the_bytes_of_the_frame_it_refused() {
     let marker = MARKER.as_bytes();
     let refused = [
         raw(2, 3, marker),
-        raw(1, 9, marker),
+        raw(1, 10, marker),
         raw(1, 1, &body(&[field(1, &[0, 1]), field(2, marker)])),
         raw(1, 1, &body(&[field(1, &[0, 9]), field(2, marker)])),
         raw(1, 2, &body(&[field(1, &[marker, &[0xff][..]].concat()), field(2, &[1])])),
@@ -1576,4 +1597,209 @@ fn an_approver_kind_outside_its_codes_is_a_malformed_frame() {
     });
     let wide = raw(1, 1, &[field(1, &[0, 17]), field(2, &[0, 1]), field(3, b"backup")].concat());
     assert_eq!(decode_err(&wide), FrameError::InvalidValue(2));
+}
+
+fn import_result(vault_id: [u8; 16], [records, version, highest_reserved]: [u64; 3], digest: [u8; 32], host: bool) -> ImportResult {
+    ImportResult {
+        vault_id: VaultId::from_bytes(v4_bytes(vault_id)).unwrap(),
+        records,
+        version,
+        highest_reserved,
+        digest,
+        recipients: enrolled(host),
+    }
+}
+
+fn chunk(len: usize) -> Frame {
+    Frame::BundleData(BundleChunk::new(vec![0xa5; len]).unwrap())
+}
+
+#[test]
+fn a_bundle_data_frame_is_its_bytes_unframed_with_kind_9() {
+    [0, 1, MAX_BODY_LEN].into_iter().for_each(|len| {
+        let frame = chunk(len);
+        assert_eq!(encoded(&frame), raw(1, 9, &vec![0xa5; len]));
+        assert_round_trips(&frame);
+    });
+    let end = Frame::BundleData(BundleChunk::end());
+    assert_eq!(encoded(&end), raw(1, 9, &[]));
+    assert!(matches!(decoded(&encoded(&end)).0, Frame::BundleData(chunk) if chunk.is_end()));
+}
+
+#[test]
+fn a_bundle_data_frame_over_the_body_bound_is_refused_both_ways() {
+    assert!(BundleChunk::new(vec![0; MAX_BODY_LEN + 1]).is_none());
+    assert_eq!(
+        encode_bundle_data(&vec![0; MAX_BODY_LEN + 1], &mut Vec::new()),
+        Err(FrameError::BodyTooLong)
+    );
+    let header = raw(1, 9, &[])[..HEADER_LEN - 4]
+        .iter()
+        .copied()
+        .chain(u32::try_from(MAX_BODY_LEN + 1).unwrap().to_be_bytes())
+        .collect::<Vec<_>>();
+    assert_eq!(decode_err(&header), FrameError::BodyTooLong);
+}
+
+#[test]
+fn a_bundle_chunk_shows_only_its_length_in_debug() {
+    assert_eq!(
+        format!("{:?}", BundleChunk::new(MARKER.as_bytes().to_vec()).unwrap()),
+        format!("BundleChunk({} bytes)", MARKER.len())
+    );
+}
+
+#[test]
+fn export_has_command_id_19_and_takes_no_arguments() {
+    assert_eq!((AdminCommand::Export as u16, AdminRequest::Export.command().name()), (19, "export"));
+    let request = Frame::Request(AdminRequest::Export);
+    assert_eq!(encoded(&request), raw(1, 1, &field(1, &[0, 19])));
+    assert_round_trips(&request);
+    assert_eq!(
+        decode_err(&raw(1, 1, &body(&[field(1, &[0, 19]), field(2, &[0])]))),
+        FrameError::UnknownTag(2)
+    );
+}
+
+#[test]
+fn import_has_command_id_20_and_takes_the_host_unlock_flag_at_tag_2() {
+    let import = |host_unlock| AdminRequest::Import { host_unlock };
+    assert_eq!((AdminCommand::Import as u16, import(false).command().name()), (20, "import"));
+    [false, true].iter().for_each(|flag| {
+        let request = Frame::Request(import(*flag));
+        assert_eq!(
+            encoded(&request),
+            raw(1, 1, &body(&[field(1, &[0, 20]), field(2, &[u8::from(*flag)])]))
+        );
+        assert_round_trips(&request);
+    });
+    let refused = [
+        (body(&[field(1, &[0, 20])]), FrameError::MissingField(2)),
+        (body(&[field(1, &[0, 20]), field(2, &[2])]), FrameError::InvalidValue(2)),
+        (body(&[field(1, &[0, 20]), field(2, &[0, 0])]), FrameError::InvalidValue(2)),
+        (
+            body(&[field(1, &[0, 20]), field(2, &[0]), field(3, b"x")]),
+            FrameError::UnknownTag(3),
+        ),
+    ];
+    refused
+        .iter()
+        .for_each(|(request, error)| assert_eq!(decode_err(&raw(1, 1, request)), *error));
+}
+
+#[test]
+fn the_export_result_carries_the_vault_id_the_record_count_and_the_byte_count() {
+    let vault_id = VaultId::from_bytes(v4_bytes([7; 16])).unwrap();
+    let result = Frame::Response(AdminResponse::Export {
+        vault_id,
+        records: 3,
+        bytes: 4096,
+    });
+    let expected = body(&[
+        field(1, &[0, 19]),
+        field(2, vault_id.as_bytes()),
+        field(3, &3u64.to_be_bytes()),
+        field(4, &4096u64.to_be_bytes()),
+    ]);
+    assert_eq!(encoded(&result), raw(1, 4, &expected));
+    assert_round_trips(&result);
+    let refused = [
+        (
+            body(&[field(1, &[0, 19]), field(2, &[7; 15]), field(3, &[0; 8]), field(4, &[0; 8])]),
+            FrameError::InvalidValue(2),
+        ),
+        (
+            body(&[
+                field(1, &[0, 19]),
+                field(2, vault_id.as_bytes()),
+                field(3, &[0; 4]),
+                field(4, &[0; 8]),
+            ]),
+            FrameError::InvalidValue(3),
+        ),
+        (
+            body(&[
+                field(1, &[0, 19]),
+                field(2, vault_id.as_bytes()),
+                field(3, &[0; 8]),
+                field(4, &[0; 4]),
+            ]),
+            FrameError::InvalidValue(4),
+        ),
+        (
+            body(&[field(1, &[0, 19]), field(2, vault_id.as_bytes()), field(3, &[0; 8])]),
+            FrameError::MissingField(4),
+        ),
+    ];
+    refused
+        .iter()
+        .for_each(|(result, error)| assert_eq!(decode_err(&raw(1, 4, result)), *error));
+}
+
+#[test]
+fn the_import_result_carries_the_versions_the_config_digest_and_the_recipient_roles() {
+    let result = import_result([7; 16], [3, 1, 2], [0xd1; 32], true);
+    let expected = body(&[
+        field(1, &[0, 20]),
+        field(2, result.vault_id.as_bytes()),
+        field(3, &3u64.to_be_bytes()),
+        field(4, &1u64.to_be_bytes()),
+        field(5, &2u64.to_be_bytes()),
+        field(6, &[0xd1; 32]),
+        field(7, &[1, 2, 6]),
+    ]);
+    let frame = Frame::Response(AdminResponse::Import(result.clone()));
+    assert_eq!(encoded(&frame), raw(1, 4, &expected));
+    assert_round_trips(&frame);
+    let with = |tag: u16, value: &[u8]| {
+        let fields = [
+            (2, result.vault_id.as_bytes().to_vec()),
+            (3, 3u64.to_be_bytes().to_vec()),
+            (4, 1u64.to_be_bytes().to_vec()),
+            (5, 2u64.to_be_bytes().to_vec()),
+            (6, vec![0xd1; 32]),
+            (7, vec![1]),
+        ]
+        .map(|(t, v)| if t == tag { field(t, value) } else { field(t, &v) });
+        raw(1, 4, &[field(1, &[0, 20])].into_iter().chain(fields).collect::<Vec<_>>().concat())
+    };
+    [(2, &[7; 15][..]), (3, &[0; 7]), (4, &[0; 9]), (5, &[]), (6, &[0; 31]), (7, &[4])]
+        .into_iter()
+        .for_each(|(tag, value)| assert_eq!(decode_err(&with(tag, value)), FrameError::InvalidValue(tag)));
+}
+
+#[test]
+fn the_bundle_error_codes_have_their_documented_numbers_and_names() {
+    [
+        (ErrorCode::ExportFailed, 45, "export-failed"),
+        (ErrorCode::BundleInvalid, 46, "bundle-invalid"),
+        (ErrorCode::ImportDenied, 47, "import-denied"),
+        (ErrorCode::ImportFailed, 48, "import-failed"),
+    ]
+    .into_iter()
+    .for_each(|(code, number, name)| {
+        assert_eq!((code as u16, code.name()), (number, name));
+        assert_round_trips(&error(code, "m"));
+    });
+}
+
+#[test]
+fn the_state_gate_admits_export_only_in_ready_and_import_only_in_locked() {
+    use crate::service_state::{FailureReason, ServiceState};
+    let states = [
+        ServiceState::Starting,
+        ServiceState::Locked,
+        ServiceState::Checking,
+        ServiceState::Ready,
+        ServiceState::Unavailable(FailureReason::PolicyInvalid),
+        ServiceState::Stopped,
+    ];
+    let admitted = |command: AdminCommand| {
+        states
+            .into_iter()
+            .filter(|state| state.admin_allows(command.operation()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(admitted(AdminCommand::Export), [ServiceState::Ready]);
+    assert_eq!(admitted(AdminCommand::Import), [ServiceState::Locked]);
 }

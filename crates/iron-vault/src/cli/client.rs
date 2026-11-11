@@ -10,8 +10,8 @@ use std::time::Duration;
 use anyhow::Context;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::protocol::{
-    self, AdminRequest, AdminResponse, ApprovalResult, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, MAX_CONFIG_LEN,
-    OwnerInput, PROTOCOL_VERSION, PromptAnswer, ProposedConfig, RequestedOrigin, RequestedSignerKind, digest_text,
+    self, AdminRequest, AdminResponse, ApprovalResult, BundleChunk, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN,
+    MAX_CONFIG_LEN, OwnerInput, PROTOCOL_VERSION, PromptAnswer, ProposedConfig, RequestedOrigin, RequestedSignerKind, digest_text,
 };
 use iron_vault::deployment::{Accounts, DeploymentProfile, ProfileEnv};
 use iron_vault::hardening::MEMLOCK_REMEDIATION;
@@ -73,6 +73,9 @@ pub enum ClientError {
     /// Nothing arrived from the service, or it took nothing, for the socket timeout.
     #[error("the service stopped answering: nothing moved on the admin socket for {} seconds", SOCKET_TIMEOUT.as_secs())]
     TimedOut,
+    /// The bundle could not be read from its source or written to its sink.
+    #[error("the migration bundle could not be read or written: {0}")]
+    BundleFile(io::Error),
     /// The owner input for a prompt was not collected, so the command was cancelled.
     #[error("the command was cancelled: {0}")]
     Input(InputError),
@@ -409,15 +412,127 @@ fn invoking_user_name() -> String {
 /// Sends `request` to the admin socket at `path`, answers the service's prompts from `console`, and returns the
 /// service's admin response.
 pub fn exchange(path: &Path, request: AdminRequest, console: &mut impl OwnerConsole) -> Result<AdminResponse, ClientError> {
+    exchange_bundle(path, request, console, &mut Bundle::None)
+}
+
+/// [`exchange`] for a command that moves a migration bundle: `bundle` takes the bundle data frames the service sends, or
+/// supplies the ones sent after the request.
+pub fn exchange_bundle(
+    path: &Path,
+    request: AdminRequest,
+    console: &mut impl OwnerConsole,
+    bundle: &mut Bundle<'_>,
+) -> Result<AdminResponse, ClientError> {
     let mut stream = connect(path)?;
     stream.set_read_timeout(Some(SOCKET_TIMEOUT))?;
     stream.set_write_timeout(Some(SOCKET_TIMEOUT))?;
-    converse(&mut stream, request, console)
+    converse(&mut stream, request, console, bundle)
 }
 
-/// The exchange on a connected stream: the request, one owner input for each prompt, then the admin response.
-fn converse(stream: &mut UnixStream, request: AdminRequest, console: &mut impl OwnerConsole) -> Result<AdminResponse, ClientError> {
+/// The migration bundle side of one exchange (`design/migration-bundle.md`, "Transfer"). The bundle is ciphertext and
+/// public metadata, so the CLI holds it in no clearing buffer.
+#[cfg_attr(not(test), expect(dead_code, reason = "`export` and `import` build it once they are wired"))]
+pub enum Bundle<'a> {
+    /// The exchange moves no bundle, so a bundle data frame is out of turn.
+    None,
+    /// `export`: the service's bundle data frames are written to `sink` until the empty one.
+    Receive {
+        /// Where the bundle bytes go.
+        sink: &'a mut dyn Write,
+        /// How much arrived so far.
+        received: Received,
+    },
+    /// `import`: the bundle is read from this source and sent right after the request, then the empty frame.
+    Send(&'a mut dyn Read),
+}
+
+/// How much of a bundle a [`Bundle::Receive`] took in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Received {
+    /// The bundle bytes written to the sink, for the caller to check against the result's byte count.
+    pub bytes: u64,
+    /// Whether the empty bundle data frame arrived, so the bundle is whole.
+    pub ended: bool,
+}
+
+#[cfg_attr(not(test), expect(dead_code, reason = "`export` and `import` call these once they are wired"))]
+impl<'a> Bundle<'a> {
+    /// A bundle that is received into `sink`.
+    pub fn receiving(sink: &'a mut dyn Write) -> Self {
+        Self::Receive {
+            sink,
+            received: Received::default(),
+        }
+    }
+
+    /// What a receiving bundle has taken in so far; `None` for any other.
+    pub fn received(&self) -> Option<Received> {
+        match self {
+            Self::Receive { received, .. } => Some(*received),
+            _ => None,
+        }
+    }
+
+    /// Writes a bundle data frame's bytes to the sink. A frame after the end, or in an exchange that does not receive a
+    /// bundle, is out of turn.
+    fn accept(&mut self, chunk: &BundleChunk) -> Result<(), ClientError> {
+        match self {
+            Self::Receive { sink, received } if !received.ended => {
+                sink.write_all(chunk.bytes()).map_err(ClientError::BundleFile)?;
+                received.bytes = received
+                    .bytes
+                    .saturating_add(u64::try_from(chunk.bytes().len()).unwrap_or(u64::MAX));
+                received.ended = chunk.is_end();
+                Ok(())
+            }
+            _ => Err(ClientError::Unexpected),
+        }
+    }
+
+    /// Sends the bundle to be sent, if any, as the request's follow-up. The outer error is the source failing; the inner is
+    /// the socket failing, which `converse` weighs against any response already waiting.
+    fn send(&mut self, stream: &mut impl Write) -> Result<io::Result<()>, ClientError> {
+        match self {
+            Self::Send(source) => send_bundle(stream, source),
+            _ => Ok(Ok(())),
+        }
+    }
+}
+
+/// Sends `source` as full bundle data frames, then the empty one that ends the bundle. It stops at the first socket
+/// failure and returns it, so a service that refused the request and closed is not written to further.
+fn send_bundle(stream: &mut impl Write, source: &mut dyn Read) -> Result<io::Result<()>, ClientError> {
+    let limit = u64::try_from(MAX_BODY_LEN).unwrap_or(u64::MAX);
+    loop {
+        let mut chunk = Vec::with_capacity(MAX_BODY_LEN);
+        Read::take(&mut *source, limit)
+            .read_to_end(&mut chunk)
+            .map_err(ClientError::BundleFile)?;
+        let sent = send_bundle_chunk(stream, &chunk);
+        if sent.is_err() || chunk.is_empty() {
+            return Ok(sent);
+        }
+    }
+}
+
+fn send_bundle_chunk(stream: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
+    let mut frame = Vec::with_capacity(HEADER_LEN + bytes.len());
+    protocol::encode_bundle_data(bytes, &mut frame).map_err(io::Error::other)?;
+    stream.write_all(&frame)
+}
+
+/// The exchange on a connected stream: the request and the bundle sent after it, one owner input for each prompt, the
+/// bundle received, then the admin response.
+fn converse(
+    stream: &mut UnixStream,
+    request: AdminRequest,
+    console: &mut impl OwnerConsole,
+    bundle: &mut Bundle<'_>,
+) -> Result<AdminResponse, ClientError> {
     let mut sent = send_request(stream, request);
+    if sent.is_ok() {
+        sent = bundle.send(stream)?;
+    }
     loop {
         // A refusing or busy service writes its answer and closes without reading, and a service whose prompt deadline
         // passed closes while the owner types, so a write may fail with a reset or broken pipe while an answer waits to
@@ -432,6 +547,7 @@ fn converse(stream: &mut UnixStream, request: AdminRequest, console: &mut impl O
             // A notice or a reveal comes only after the service has read the request, so the request was sent.
             Frame::Notice(notice) => Ok(console.notice(&notice.text).map_err(ClientError::Input)?),
             Frame::Reveal(secret) => Ok(console.reveal(&secret).map_err(ClientError::Input)?),
+            Frame::BundleData(chunk) => Ok(bundle.accept(&chunk)?),
             Frame::Request(_) | Frame::OwnerInput(_) | Frame::Switch => return Err(ClientError::Unexpected),
         };
     }

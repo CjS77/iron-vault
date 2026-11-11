@@ -591,7 +591,7 @@ async fn a_prompt_answered_out_of_turn_is_answered_unexpected_frame() {
 async fn a_prompt_answered_with_a_malformed_frame_is_answered_malformed_frame() {
     let (mut cli, mut received, served) = serve_prompting(PATIENCE);
     ping_until_prompted(&mut cli).await;
-    cli.write_all(&raw(1, 9, 0, &[])).await.unwrap();
+    cli.write_all(&raw(1, 10, 0, &[])).await.unwrap();
     assert_eq!(error_code(&read_response(&mut cli).await), ErrorCode::MalformedFrame);
     assert!(handler_answer(&mut received).await.unwrap_err().starts_with("Malformed"));
     served.await.unwrap();

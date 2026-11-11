@@ -19,8 +19,8 @@ use zeroize::{Zeroize, Zeroizing};
 use super::dispatch::Handlers;
 use super::principal::{AdminPrincipal, AdminPrincipals, peer_identity};
 use super::protocol::{
-    self, AdminRequest, AdminResponse, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, Notice, OwnerInput, Prompt,
-    PromptAnswer,
+    self, AdminRequest, AdminResponse, BundleChunk, Decoded, ErrorCode, Frame, FrameError, HEADER_LEN, MAX_BODY_LEN, Notice, OwnerInput,
+    Prompt, PromptAnswer,
 };
 use super::socket::AdminSocket;
 use crate::audit::AuditEvent;
@@ -34,8 +34,12 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 /// The server's bounds on time and connections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
-    /// How long a peer has to send its whole admin request, and the server to write a prompt or its response.
+    /// How long a peer has to send its whole admin request, and the server to write a prompt or its response. It is also
+    /// how long each bundle data frame may take to be written or read.
     pub request_deadline: Duration,
+    /// How long a whole migration bundle may take to cross the socket, in either direction: the
+    /// [bundle transfer deadline](Exchange::send_bundle_chunk), which starts at the exchange's first bundle data frame.
+    pub transfer_deadline: Duration,
     /// How long the server waits for owner input after sending a prompt: a person is typing, so it is longer than the
     /// request deadline.
     pub prompt_deadline: Duration,
@@ -49,6 +53,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             request_deadline: Duration::from_secs(30),
+            transfer_deadline: Duration::from_secs(10 * 60),
             prompt_deadline: Duration::from_secs(5 * 60),
             max_connections: 4,
             shutdown_grace: Duration::from_secs(5),
@@ -216,28 +221,34 @@ pub struct Exchange {
     /// switching never stretches the approver prompt past one prompt deadline (`design/approval-signers.md`,
     /// "Switching"). Owner input ends the approver prompt and clears it.
     approver_deadline: Option<Instant>,
+    /// When the bundle transfer times out: set by the exchange's first bundle data frame, sent or received, and kept for
+    /// the rest of the exchange.
+    transfer_deadline: Option<Instant>,
 }
 
 /// Why a prompt got no owner input. The exchange is over: the handler returns the error, which cancels its command
 /// before it changes anything. The messages never hold frame bodies, so none can carry owner input.
 #[derive(Debug, thiserror::Error)]
 pub enum ExchangeError {
-    /// The CLI closed the connection instead of answering.
-    #[error("the CLI closed the connection before sending owner input")]
+    /// The CLI closed the connection instead of answering, or before the end of the bundle.
+    #[error("the CLI closed the connection before sending what the exchange waited for")]
     Closed,
-    /// No owner input arrived within the prompt deadline, or the prompt could not be written within the request
-    /// deadline.
-    #[error("no owner input arrived before the deadline")]
+    /// No owner input arrived within the prompt deadline, or a prompt or bundle data frame could not be written or read
+    /// within the request deadline.
+    #[error("no owner input or bundle data arrived before the deadline")]
     TimedOut,
+    /// The whole bundle was not written or read within the transfer deadline, though each frame so far met its own.
+    #[error("the bundle transfer did not finish before the transfer deadline")]
+    TransferTimedOut,
     /// The connection failed.
     #[error("the admin connection failed: {}", ErrorKindLabel::from(*.0))]
     Io(io::ErrorKind),
     /// The CLI answered with a frame that does not decode.
     #[error("the CLI answered a prompt with a malformed frame: {0}")]
     Malformed(FrameError),
-    /// The CLI answered with a well-formed frame other than owner input, or a switch frame when the prompt was not
-    /// switchable.
-    #[error("the CLI answered a prompt with a frame other than owner input")]
+    /// The CLI answered with a well-formed frame other than the one the exchange waited for: owner input (a switch frame
+    /// only when the prompt was switchable), or a bundle data frame.
+    #[error("the CLI sent a frame other than the one the exchange waited for")]
     Unexpected,
     /// The handler asked to send a frame the codec refuses, such as an empty reveal: a bug in the handler. Nothing was
     /// sent.
@@ -250,9 +261,9 @@ impl ExchangeError {
     /// connection is closed without one, as when no admin request arrives.
     fn response(&self) -> Option<AdminResponse> {
         match self {
-            Self::Closed | Self::TimedOut | Self::Io(_) | Self::Unencodable(_) => None,
+            Self::Closed | Self::TimedOut | Self::TransferTimedOut | Self::Io(_) | Self::Unencodable(_) => None,
             Self::Malformed(e) => Some(error(ErrorCode::for_frame_error(*e), &e.to_string())),
-            Self::Unexpected => Some(error(ErrorCode::UnexpectedFrame, "a prompt must be answered with owner input")),
+            Self::Unexpected => Some(error(ErrorCode::UnexpectedFrame, "the frame is out of turn in this exchange")),
         }
     }
 }
@@ -279,6 +290,7 @@ impl Exchange {
             buffer: Zeroizing::new(vec![0; HEADER_LEN + MAX_BODY_LEN]),
             limits,
             approver_deadline: None,
+            transfer_deadline: None,
         }
     }
 
@@ -373,6 +385,49 @@ impl Exchange {
         let mut frame = Zeroizing::new(Vec::with_capacity(HEADER_LEN + value.len()));
         protocol::encode_reveal(value, &mut frame).map_err(ExchangeError::Unencodable)?;
         self.write(&frame).await
+    }
+
+    /// Sends one bundle data frame of up to [`MAX_BODY_LEN`] bytes of `bytes`; the empty slice ends the bundle. The write
+    /// must finish within the request deadline and the bundle within the transfer deadline, which starts with the exchange's
+    /// first bundle data frame, so a CLI that stalls or trickles cannot hold the service-wide lock past them. The error
+    /// says which deadline passed, so the handler can end the exchange with `export-failed` while the CLI can still be
+    /// written to.
+    pub async fn send_bundle_chunk(&mut self, bytes: &[u8]) -> Result<(), ExchangeError> {
+        let mut frame = Vec::with_capacity(HEADER_LEN + bytes.len());
+        protocol::encode_bundle_data(bytes, &mut frame).map_err(ExchangeError::Unencodable)?;
+        let (deadline, expired) = self.bundle_frame_deadline();
+        match tokio::time::timeout_at(deadline, self.stream.write_all(&frame)).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(ExchangeError::Io(e.kind())),
+            Err(_) => Err(expired),
+        }
+    }
+
+    /// Reads the next bundle data frame, within the same two deadlines as [`send_bundle_chunk`](Self::send_bundle_chunk).
+    /// The empty chunk ends the bundle. Any other kind of frame is [`Unexpected`](ExchangeError::Unexpected).
+    pub async fn receive_bundle_chunk(&mut self) -> Result<BundleChunk, ExchangeError> {
+        let (deadline, expired) = self.bundle_frame_deadline();
+        match tokio::time::timeout_at(deadline, self.read_frame()).await {
+            Ok(Ok(Frame::BundleData(chunk))) => Ok(chunk),
+            Ok(Ok(_)) => Err(ExchangeError::Unexpected),
+            Ok(Err(ReadError::Closed)) => Err(ExchangeError::Closed),
+            Ok(Err(ReadError::Io(e))) => Err(ExchangeError::Io(e.kind())),
+            Ok(Err(ReadError::Frame(e))) => Err(ExchangeError::Malformed(e)),
+            Err(_) => Err(expired),
+        }
+    }
+
+    /// When the bundle data frame about to move times out, and the error that expiry is: one request deadline from now, or
+    /// the transfer deadline, started now if this is the exchange's first bundle frame, whichever comes first.
+    fn bundle_frame_deadline(&mut self) -> (Instant, ExchangeError) {
+        let now = Instant::now();
+        let transfer = *self.transfer_deadline.get_or_insert(now + self.limits.transfer_deadline);
+        let frame = now + self.limits.request_deadline;
+        if transfer <= frame {
+            (transfer, ExchangeError::TransferTimedOut)
+        } else {
+            (frame, ExchangeError::TimedOut)
+        }
     }
 
     /// Writes one frame the service sends within the request deadline.
