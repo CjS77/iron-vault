@@ -9,10 +9,12 @@
 //! The approval state, which pins the approvers and holds the version counters, is in [`state`]; checking an approval
 //! against it is in [`verify`]. The signer that produces approvals is [`signer`], with the software signer in
 //! [`software_signer`]. The approval transaction's durable steps, which build on all of these, are in [`transaction`],
-//! and the approval recovery every config check runs first is in [`recovery`].
+//! and the approval recovery every config check runs first is in [`recovery`]. The presence and migration proof payloads,
+//! the other messages a TPM approver signs, are in [`proof_payload`].
 
 mod approver_change;
 mod encoding;
+mod proof_payload;
 mod recovery;
 mod signer;
 mod software_signer;
@@ -32,6 +34,7 @@ use crate::vault_id::{VaultId, VaultIdError};
 pub use approver_change::{
     ApproverChangeError, ApproverChangeStep, ApproverChanges, KeyCheckError, KeyFileOutcome, MayHaveCommitted, ReadBack,
 };
+pub use proof_payload::{MigrationProofPayload, PresencePayload};
 pub use recovery::{ApprovalRecoveryError, DiscardedFile, PublishedPairFault, RecoveredApproval, RecoveryFailure, recover_approval};
 pub use signer::{ApprovalSigner, SignError};
 pub(crate) use software_signer::seal_signer_key_at;
@@ -52,8 +55,8 @@ pub use verify::{VerifiedApproval, VerifyError, verify_approval};
 
 /// The largest approval envelope accepted, in bytes, checked before anything else is read.
 ///
-/// A v1 envelope with an Ed25519 signature is 191 bytes and one with a DER ECDSA P-256 signature at most 199. The
-/// limit leaves room for a later algorithm with a large signature while keeping a planted file cheap to refuse.
+/// A v1 envelope is 191 bytes with either algorithm, since both signatures are 64 bytes. The limit leaves room for a
+/// later algorithm with a large signature while keeping a planted file cheap to refuse.
 pub const MAX_APPROVAL_ENVELOPE_LEN: usize = 4096;
 
 /// The purpose every approval payload names, so a signature made for anything else is never read as a config
@@ -132,22 +135,22 @@ impl Eq for ConfigDigest {}
 
 /// The algorithm a config approval is signed with, by its one-byte wire ID.
 ///
-/// ID `00` is never valid. ID `02` is reserved for ECDSA P-256, which the TPM signer will use; it is not a variant
-/// until that signer exists, so this build refuses it as unknown.
+/// ID `00` is never valid, and any ID without a variant is unknown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SignatureAlgorithm {
     /// Ed25519 (RFC 8032), used by the software signer; a signature is exactly 64 bytes.
     Ed25519,
+    /// ECDSA over NIST P-256 with SHA-256, used by the TPM signer; a signature is exactly 64 bytes, `r ‖ s` big-endian,
+    /// with `s` in the low half of the curve order.
+    EcdsaP256,
 }
-
-/// The wire ID reserved for ECDSA P-256 with SHA-256, the TPM signer's algorithm.
-pub const RESERVED_ECDSA_P256_ID: u8 = 0x02;
 
 impl SignatureAlgorithm {
     /// The algorithm's wire ID.
     pub fn id(self) -> u8 {
         match self {
             Self::Ed25519 => 0x01,
+            Self::EcdsaP256 => 0x02,
         }
     }
 
@@ -155,6 +158,7 @@ impl SignatureAlgorithm {
     pub fn from_id(id: u8) -> Result<Self, ApprovalDecodeError> {
         match id {
             0x01 => Ok(Self::Ed25519),
+            0x02 => Ok(Self::EcdsaP256),
             _ => Err(ApprovalDecodeError::UnknownAlgorithm(id)),
         }
     }
@@ -162,7 +166,7 @@ impl SignatureAlgorithm {
     /// Whether `len` is a valid signature length for this algorithm.
     fn accepts_signature_len(self, len: usize) -> bool {
         match self {
-            Self::Ed25519 => len == 64,
+            Self::Ed25519 | Self::EcdsaP256 => len == 64,
         }
     }
 }
@@ -292,7 +296,8 @@ impl fmt::Debug for ApprovalEnvelope {
     }
 }
 
-/// Bytes that are not an approval payload or envelope. No variant carries input bytes.
+/// Bytes that are not an approval payload, an approval envelope, or one of the other messages an approver signs (a
+/// presence or migration proof payload). No variant carries input bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ApprovalDecodeError {
     /// The envelope is larger than [`MAX_APPROVAL_ENVELOPE_LEN`]; nothing else was read.
@@ -307,8 +312,8 @@ pub enum ApprovalDecodeError {
     /// A length prefix reaches past the end of the bytes.
     #[error("approval data field length runs past the end")]
     LengthPastEnd,
-    /// The bytes do not start with the payload or envelope magic.
-    #[error("not an approval payload or envelope")]
+    /// The bytes do not start with the magic of the format being read.
+    #[error("not the approval format expected: wrong magic")]
     BadMagic,
     /// The payload or envelope has a format version this build cannot read.
     #[error("unknown approval format version {0}")]
@@ -376,12 +381,12 @@ mod tests {
     }
 
     #[test]
-    fn algorithm_ids_round_trip_and_reserved_ids_are_unknown() {
-        assert_eq!(
-            SignatureAlgorithm::from_id(SignatureAlgorithm::Ed25519.id()),
-            Ok(SignatureAlgorithm::Ed25519)
-        );
-        [0x00, RESERVED_ECDSA_P256_ID, 0xff]
+    fn algorithm_ids_round_trip_and_other_ids_are_unknown() {
+        [SignatureAlgorithm::Ed25519, SignatureAlgorithm::EcdsaP256]
+            .into_iter()
+            .for_each(|algorithm| assert_eq!(SignatureAlgorithm::from_id(algorithm.id()), Ok(algorithm)));
+        assert_eq!(SignatureAlgorithm::EcdsaP256.id(), 0x02);
+        [0x00, 0x03, 0xff]
             .into_iter()
             .for_each(|id| assert_eq!(SignatureAlgorithm::from_id(id), Err(ApprovalDecodeError::UnknownAlgorithm(id))));
     }

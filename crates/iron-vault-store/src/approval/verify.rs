@@ -10,6 +10,7 @@ mod tests;
 use std::cmp::Ordering;
 
 use ed25519_dalek::{Signature, VerifyingKey};
+use p256::ecdsa::signature::Verifier;
 use thiserror::Error;
 
 use super::state::ApproverKey;
@@ -159,10 +160,13 @@ fn check_signature(state: &ApprovalState, envelope: &ApprovalEnvelope) -> Result
     }
 }
 
-/// Checks the envelope's signature against one approver's key.
+/// Checks the envelope's signature against one approver's key, over the payload's encoding, which is exactly the
+/// payload field's bytes because decoding accepts only that encoding.
 fn verify_with(approver: &PinnedApprover, envelope: &ApprovalEnvelope) -> Result<(), VerifyError> {
+    let message = envelope.payload().encode();
     match approver.public_key().key() {
-        ApproverKey::Ed25519(key) => verify_ed25519(key, &envelope.payload().encode(), envelope.signature()),
+        ApproverKey::Ed25519(key) => verify_ed25519(key, &message, envelope.signature()),
+        ApproverKey::EcdsaP256 { key, .. } => verify_p256(key, &message, envelope.signature()),
     }
 }
 
@@ -171,6 +175,18 @@ fn verify_with(approver: &PinnedApprover, envelope: &ApprovalEnvelope) -> Result
 fn verify_ed25519(key: &VerifyingKey, message: &[u8], signature: &[u8]) -> Result<(), VerifyError> {
     let signature = Signature::from_slice(signature).map_err(|_| VerifyError::BadSignature)?;
     key.verify_strict(message, &signature).map_err(|_| VerifyError::BadSignature)
+}
+
+/// ECDSA P-256 verification over the SHA-256 of `message`, of a 64-byte `r ‖ s` signature with each in `1..n`.
+///
+/// ECDSA accepts both `s` and `n − s`; the signer writes the low one, and a high `s` is refused, so each approval has
+/// one signature encoding and a rewritten signature never verifies. The pinned key is already a point on the curve.
+fn verify_p256(key: &p256::ecdsa::VerifyingKey, message: &[u8], signature: &[u8]) -> Result<(), VerifyError> {
+    let signature = p256::ecdsa::Signature::from_slice(signature).map_err(|_| VerifyError::BadSignature)?;
+    if signature.normalize_s().is_some() {
+        return Err(VerifyError::BadSignature);
+    }
+    key.verify(message, &signature).map_err(|_| VerifyError::BadSignature)
 }
 
 /// Accepts only the committed approval: its version and its digest.

@@ -33,6 +33,10 @@ clap_mangen = { version = "0.3.3", default-features = false }
 # std, fast tables and rand_core stay off: verify_strict needs no feature, and key generation fills the seed from
 # getrandom directly.
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["zeroize"] }
+# ECDSA P-256 verification of the TPM signer's approvals (algorithm `02`); the version age already brings. `ecdsa` is
+# the narrowest feature that exposes the verifying key; std, pem and pkcs8 stay off. Its random-number trait is the
+# rand_core 0.6 already in the build.
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa"] }
 # gzip and deflate response decoding on the pure-Rust miniz_oxide backend (no C build), through the low-level `Decompress`
 # API so each step's output is bounded. Default features are off: that drops only `runtime_detection`, so crc32fast falls
 # back to its compile-time CPU features. flate2 hard-wires miniz_oxide's `simd` feature, which pulls simd-adler32, a crate

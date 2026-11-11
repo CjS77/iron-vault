@@ -51,22 +51,25 @@ impl fmt::Display for ApproverId {
 /// Which kind of approval signer a pinned approver is: what signs for it, and so how the service asks for it. The
 /// signature algorithm cannot say this, because a TPM and a hardware key may both sign with P-256.
 ///
-/// Codes 2 (`tpm`) and 3 (`hardware`) are reserved for later epics and are refused on reading, so those epics need no
-/// new approval state format version.
+/// Code 3 (`hardware`) is reserved for a later epic and is refused on reading, so that epic needs no new approval state
+/// format version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignerKind {
     /// The software signer: an Ed25519 key in its own approver key envelope, opened by its approval passphrase.
     Software,
+    /// The TPM signer: an ECDSA P-256 key that never leaves the TPM, used through the TPM signing helper under its PIN.
+    Tpm,
 }
 
-/// The highest signer kind code reserved for a later epic; codes above it are unknown.
-const LAST_RESERVED_SIGNER_KIND: u8 = 3;
+/// The signer kind code reserved for the hardware-key signer; codes above it are unknown.
+const RESERVED_HARDWARE_SIGNER_KIND: u8 = 3;
 
 impl SignerKind {
     /// The kind's code in the approval state payload.
     pub fn code(self) -> u8 {
         match self {
             Self::Software => 1,
+            Self::Tpm => 2,
         }
     }
 
@@ -74,7 +77,8 @@ impl SignerKind {
     pub fn from_code(code: u8) -> Result<Self, ApprovalStateError> {
         match code {
             1 => Ok(Self::Software),
-            2..=LAST_RESERVED_SIGNER_KIND => Err(ApprovalStateError::ReservedSignerKind(code)),
+            2 => Ok(Self::Tpm),
+            RESERVED_HARDWARE_SIGNER_KIND => Err(ApprovalStateError::ReservedSignerKind(code)),
             _ => Err(ApprovalStateError::UnknownSignerKind(code)),
         }
     }
@@ -83,13 +87,16 @@ impl SignerKind {
     pub fn name(self) -> &'static str {
         match self {
             Self::Software => "software",
+            Self::Tpm => "tpm",
         }
     }
 
-    /// Whether a signer of this kind can sign with `algorithm`.
+    /// Whether a signer of this kind can sign with `algorithm`. Each kind allows exactly one, so a pinned approver's
+    /// kind and algorithm can never disagree.
     pub fn allows(self, algorithm: SignatureAlgorithm) -> bool {
         match self {
             Self::Software => algorithm == SignatureAlgorithm::Ed25519,
+            Self::Tpm => algorithm == SignatureAlgorithm::EcdsaP256,
         }
     }
 }
@@ -129,7 +136,17 @@ pub struct ApproverPublicKey(ApproverKey);
 pub(crate) enum ApproverKey {
     /// An Ed25519 key that is a valid, non-weak point.
     Ed25519(VerifyingKey),
+    /// A P-256 point on the curve, with its 65-byte uncompressed SEC1 encoding (`04 ‖ x ‖ y`), the only form pinned.
+    EcdsaP256 {
+        /// The point, for verification.
+        key: p256::ecdsa::VerifyingKey,
+        /// The encoding the approval state holds, kept so the key has one byte form without re-encoding.
+        sec1: [u8; P256_KEY_LEN],
+    },
 }
+
+/// The length of an uncompressed SEC1 P-256 point: the `04` tag, then `x` and `y` of 32 bytes each.
+const P256_KEY_LEN: usize = 65;
 
 /// Why a public key cannot be pinned as an approver. Carries no key bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,18 +160,11 @@ pub enum InvalidKeyReason {
 impl ApproverPublicKey {
     /// The key `public_key` for `algorithm`, refusing a key of the wrong length, a non-point or a weak key.
     pub fn new(algorithm: SignatureAlgorithm, public_key: Vec<u8>) -> Result<Self, ApprovalStateError> {
-        match algorithm {
-            SignatureAlgorithm::Ed25519 => {
-                let bytes: [u8; 32] = public_key
-                    .try_into()
-                    .map_err(|key: Vec<u8>| ApprovalStateError::PublicKeyLength { algorithm, len: key.len() })?;
-                let key = VerifyingKey::from_bytes(&bytes).map_err(|_| invalid(algorithm, InvalidKeyReason::NotAPoint))?;
-                match key.is_weak() {
-                    true => Err(invalid(algorithm, InvalidKeyReason::WeakKey)),
-                    false => Ok(Self(ApproverKey::Ed25519(key))),
-                }
-            }
-        }
+        let key = match algorithm {
+            SignatureAlgorithm::Ed25519 => ed25519_key(sized(algorithm, public_key)?)?,
+            SignatureAlgorithm::EcdsaP256 => p256_key(sized(algorithm, public_key)?)?,
+        };
+        Ok(Self(key))
     }
 
     /// The Ed25519 public key of `signing_key`.
@@ -169,6 +179,7 @@ impl ApproverPublicKey {
     pub fn algorithm(&self) -> SignatureAlgorithm {
         match self.0 {
             ApproverKey::Ed25519(_) => SignatureAlgorithm::Ed25519,
+            ApproverKey::EcdsaP256 { .. } => SignatureAlgorithm::EcdsaP256,
         }
     }
 
@@ -176,12 +187,43 @@ impl ApproverPublicKey {
     pub fn as_bytes(&self) -> &[u8] {
         match &self.0 {
             ApproverKey::Ed25519(key) => key.as_bytes(),
+            ApproverKey::EcdsaP256 { sec1, .. } => sec1,
         }
     }
 
     /// The validated key approvals must verify against.
     pub(crate) fn key(&self) -> &ApproverKey {
         &self.0
+    }
+}
+
+/// The key bytes as the fixed length `algorithm` needs, refusing any other length.
+fn sized<const N: usize>(algorithm: SignatureAlgorithm, public_key: Vec<u8>) -> Result<[u8; N], ApprovalStateError> {
+    public_key
+        .try_into()
+        .map_err(|key: Vec<u8>| ApprovalStateError::PublicKeyLength { algorithm, len: key.len() })
+}
+
+/// An Ed25519 key, refusing a non-point or a small-order point, which strict verification would refuse for every
+/// signature.
+fn ed25519_key(bytes: [u8; 32]) -> Result<ApproverKey, ApprovalStateError> {
+    let algorithm = SignatureAlgorithm::Ed25519;
+    let key = VerifyingKey::from_bytes(&bytes).map_err(|_| invalid(algorithm, InvalidKeyReason::NotAPoint))?;
+    match key.is_weak() {
+        true => Err(invalid(algorithm, InvalidKeyReason::WeakKey)),
+        false => Ok(ApproverKey::Ed25519(key)),
+    }
+}
+
+/// A P-256 key, accepted only as the uncompressed SEC1 encoding of a point on the curve. Re-encoding and comparing
+/// refuses every other form: a compressed or hybrid tag, or a coordinate at or above the field prime. The identity has
+/// no 65-byte encoding, and P-256 has prime order, so a point on the curve has no weak form to refuse.
+fn p256_key(sec1: [u8; P256_KEY_LEN]) -> Result<ApproverKey, ApprovalStateError> {
+    let not_a_point = || invalid(SignatureAlgorithm::EcdsaP256, InvalidKeyReason::NotAPoint);
+    let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(&sec1).map_err(|_| not_a_point())?;
+    match key.to_encoded_point(false).as_bytes() == sec1 {
+        true => Ok(ApproverKey::EcdsaP256 { key, sec1 }),
+        false => Err(not_a_point()),
     }
 }
 

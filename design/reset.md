@@ -250,7 +250,8 @@ durable removes, more on a vault with many records, well inside the CLI's 60-sec
 The **store-owned files** are the names the store writes:
 
 - in the state directory: `identity.age`, `operational.age`, `manifest.age`, `approval.age`, `recipients.age`,
-  `recipients.age.staged`, every approver key envelope `approver-<approver ID>.age`, every record file
+  `recipients.age.staged`, every approver key envelope `approver-<approver ID>.age`, every TPM key blob
+  `approver-<approver ID>.tpm`, every record file
   `record-<record ID>.age`, `init.unfinished`, `import.unfinished` (K-307), `reset.unfinished`, the owner-lock file
   `locked-by-owner`, the recovery check record `recovery.toml`, and the stale temp file `.<name>.tmp` of each;
 - in the config directory: `config.toml`, `config.toml.sig`, `config.toml.pending`, `config.toml.sig.staged`, and

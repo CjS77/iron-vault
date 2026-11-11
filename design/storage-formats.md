@@ -19,6 +19,11 @@ separation: those bytes can be read only as the format they name.
 | `IVAS` | Approval signature: the envelope in `config.toml.sig`                 |
 | `IVAF` | Approval state file                                                   |
 | `IVAM` | Approval metadata: the approval state payload                         |
+| `IVPP` | Presence payload: the bytes a TPM approver signs for owner presence   |
+| `IVMA` | Migration proof payload: the bytes a TPM approver signs for migration |
+| `IVTK` | TPM key blob, `approver-<approver ID>.tpm` ([tpm-approval-signer.md](tpm-approval-signer.md#the-tpm-key-blob)) |
+| `IVTQ` | TPM signing helper request ([tpm-approval-signer.md](tpm-approval-signer.md#helper-protocol))           |
+| `IVTR` | TPM signing helper response ([tpm-approval-signer.md](tpm-approval-signer.md#helper-protocol))          |
 | `IVRF` | Recipient inventory file                                              |
 | `IVRP` | Recipient inventory payload                                           |
 | `IVBH` | Bundle header: the first entry of a migration bundle (`BundleHeader`) |
@@ -567,9 +572,16 @@ all write this one envelope ([implementation spec §2.2](implementation-specific
 |------|----------------------------------------------------------------------------|
 | `00` | Never valid                                                                |
 | `01` | Ed25519 (RFC 8032), the software signer; the signature is exactly 64 bytes |
-| `02` | Reserved for ECDSA P-256 with SHA-256, the TPM signer; not accepted in v0  |
+| `02` | ECDSA P-256 with SHA-256, the TPM signer; the signature is exactly 64 bytes |
 
 Any other ID is refused as unknown. The signature is over exactly the bytes inside the payload field.
+
+An ECDSA P-256 signature (algorithm `02`) is `r ‖ s`, each a 32-byte big-endian integer from 1 to n − 1, where n is
+the order of the P-256 group, and it is never DER-encoded. ECDSA accepts both `s` and `n − s` for the same message, so
+the signer writes the low one, `s ≤ ⌊n / 2⌋`, and the verifier refuses a high `s`: each approval then has one signature
+encoding, as it has one payload encoding. The verifier hashes the payload field's bytes with SHA-256 and checks the
+signature against the approver's pinned key, the 65-byte uncompressed SEC1 point (see
+[approval state payload v1](#approval-state-payload-v1)).
 
 The envelope carries **no public key**. Specification [§12](iron-vault-specification.md#12-configuration-approval-and-reload) forbids trusting a key from the signature file. The
 approver ID only says which pinned approver to check: the verifier looks it up among the approvers pinned in the
@@ -603,18 +615,98 @@ not check signatures, verification does.
 
 The whole file is 191 bytes.
 
+The same payload signed by a TPM approver, `5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b`, whose key is the P-256 key of
+RFC 6979 A.2.5. This signature is real: RFC 6979 deterministic signing with that key's private half, `s` already in its
+low form. The store's tests read this block and verify it against the key in the second example of
+[approval state payload v1](#approval-state-payload-v1).
+
+```text
+49 56 41 53                                        magic "IVAS"
+01                                                 format version 1
+02                                                 algorithm ECDSA P-256
+5b 0e 9a 1c 7d 2f 4e 83 b6 a4 0c 1d 2e 3f 4a 5b    approver ID 5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b
+00 00 00 00 00 00 00 59                            payload length 89
+…                                                  the 89 payload bytes from the example above
+00 00 00 00 00 00 00 40                            signature length 64
+f3 62 50 9d b1 d2 82 d1 d4 bc 97 30 55 ac 5b 6b    r
+22 85 12 6a 0e a8 bb cf 7b 53 1e 61 3f d9 a3 8a
+53 1b fb d0 db 1e 24 8f 7f fc 34 a4 5b 24 35 b2    s (low)
+cc 42 53 3b c5 d8 87 ef 2f 8d 15 b0 c7 51 9b 85
+```
+
+It is 191 bytes too: a v1 envelope is the same size with either algorithm.
+
 ### One encoding per envelope
 
-Decoding rejects a wrong magic, an unknown format version, an unknown or reserved algorithm ID, an approver ID that is
+Decoding rejects a wrong magic, an unknown format version, an unknown algorithm ID, an approver ID that is
 not a version 4 UUID, a payload that is not a canonical approval payload v1 (including trailing bytes inside the
 payload field), a signature of the wrong length for its algorithm, truncation and trailing bytes. Whether the approver
-ID is pinned is the verifier's check, not the decoder's.
+ID is pinned, and whether an ECDSA signature's `r` and `s` are in range with `s` low, are the verifier's checks, not
+the decoder's.
 
 ### Size limit
 
-`MAX_APPROVAL_ENVELOPE_LEN` is 4096 bytes, checked before anything else is read. A v1 envelope is 191 bytes with an
-Ed25519 signature and at most 199 with a DER-encoded ECDSA P-256 one; the limit leaves room for a later algorithm with
-a larger signature while keeping a planted file cheap to refuse.
+`MAX_APPROVAL_ENVELOPE_LEN` is 4096 bytes, checked before anything else is read. A v1 envelope is exactly 191 bytes
+with either algorithm, since both signatures are 64 bytes; the limit leaves room for a later algorithm with a larger
+signature while keeping a planted file cheap to refuse.
+
+## Presence payload v1
+
+The bytes a TPM approver signs to prove owner presence: at owner presence, at step 2 of a config approval, and at the
+read-back of a TPM enrollment ([tpm-approval-signer.md](tpm-approval-signer.md#what-the-helper-signs)). The service
+draws the nonce fresh for each prompt, verifies the signature against the asked approver's pinned key, and drops the
+nonce, so a signature over an earlier nonce, or for another vault or approver, proves nothing. It uses the conventions
+of record payload v1. Rust: `iron_vault_store::PresencePayload::{encode, decode}`.
+
+| Offset | Size | Content                                                                          |
+|--------|------|----------------------------------------------------------------------------------|
+| 0      | 4    | Magic: ASCII `IVPP` (`49 56 50 50`)                                              |
+| 4      | 1    | Format version: `01`                                                             |
+| 5      | 16   | Vault ID: the 16 bytes of a version 4 UUID                                       |
+| 21     | 16   | Approver ID of the approver asked: the 16 bytes of a version 4 UUID              |
+| 37     | 32   | Nonce: 32 bytes from the operating system's random source, fresh for this prompt |
+
+A payload is always 69 bytes. The signature over it is as for algorithm `02` in
+[approval envelope v1](#approval-envelope-v1): ECDSA P-256 with SHA-256, 64-byte `r ‖ s`, low `s`.
+
+Vault `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b` asking approver `5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b`, with the
+stand-in nonce `00 01 … 1f`:
+
+```text
+49 56 50 50                                        magic "IVPP"
+01                                                 format version 1
+3f 2b 8c 1e 5d 4a 4e 6f 9a 7b 1c 2d 3e 4f 5a 6b    vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b
+5b 0e 9a 1c 7d 2f 4e 83 b6 a4 0c 1d 2e 3f 4a 5b    approver ID 5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b
+00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f    nonce
+10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f
+```
+
+Decoding rejects a wrong magic, an unknown format version, a vault ID or approver ID that is not a version 4 UUID,
+truncation and trailing bytes.
+
+## Migration proof payload v1
+
+The bytes a TPM approver signs to prove a [migration challenge](migration-authorization.md#binding-digest): the
+challenge's 32-byte binding digest, wrapped so that the signature can never be read as one over 32 bytes of some other
+structure ([tpm-approval-signer.md](tpm-approval-signer.md#what-the-helper-signs)). It uses the conventions of record
+payload v1. Rust: `iron_vault_store::MigrationProofPayload::{encode, decode}`.
+
+| Offset | Size | Content                                                                                   |
+|--------|------|-------------------------------------------------------------------------------------------|
+| 0      | 4    | Magic: ASCII `IVMA` (`49 56 4d 41`)                                                       |
+| 4      | 1    | Format version: `01`                                                                      |
+| 5      | 32   | The challenge's [binding digest](migration-authorization.md#binding-digest)               |
+
+A payload is always 37 bytes, signed as a presence payload is. With the stand-in binding digest `20 21 … 3f`:
+
+```text
+49 56 4d 41                                        magic "IVMA"
+01                                                 format version 1
+20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f    binding digest
+30 31 32 33 34 35 36 37 38 39 3a 3b 3c 3d 3e 3f
+```
+
+Decoding rejects a wrong magic, an unknown format version, truncation and trailing bytes.
 
 ## Approval state file v1
 
@@ -719,10 +811,14 @@ Each approver entry, a **pinned approver**:
 |------|------------------------------------------------------------------------------------------------------------------------|
 | 16   | Approver ID: the 16 bytes of a version 4 UUID, generated when the approver is enrolled                                 |
 | 1    | Algorithm: a signature algorithm ID, as in approval envelope v1                                                        |
-| 1    | Signer kind: `01` `software`; `02` `tpm`, `03` `hardware` reserved ([signer kinds](approval-signers.md#signer-kinds))  |
-| var  | Public key: field; 32 bytes for Ed25519                                                                                |
+| 1    | Signer kind: `01` `software`, `02` `tpm`; `03` `hardware` reserved ([signer kinds](approval-signers.md#signer-kinds))  |
+| var  | Public key: field; 32 bytes for Ed25519, 65 for ECDSA P-256 (below)                                                    |
 | var  | Label: field holding the owner's name for the signer, under the [recipient label](recipients.md#recipient-labels) rule |
 | 8    | Enrolled at: `u64` Unix seconds, a [UTC second](glossary.md)                                                           |
+
+A signer kind allows exactly one algorithm: `software` Ed25519 (`01`), `tpm` ECDSA P-256 (`02`). An ECDSA P-256 public
+key is the 65-byte uncompressed SEC1 point, `04 ‖ x ‖ y` with each coordinate a 32-byte big-endian integer below the
+field prime; the compressed and hybrid forms are refused, so a key has one encoding.
 
 The approver ID is the approver's identity: the approval envelope names it, and an audit event records it. It is
 never reused, so an envelope signed by a removed approver can never be read as signed by a later one. The label is
@@ -763,6 +859,48 @@ d1 e5 df 47 77 8f 77 87 fa ab 45 cd f1 2f e3 a8
 The payload is 187 bytes. A new vault's payload has the same layout up to the last approver, then eight zero bytes and
 the tag `00`: 147 bytes with this approver.
 
+The same vault after `approver add --kind tpm` enrolled a TPM approver labelled `laptop TPM`, whose key is the P-256
+key of RFC 6979 A.2.5, at 2026-11-10T08:00:00Z: one more state write, so state generation 7. Its approver ID sorts
+before the software approver's, so it comes first.
+
+```text
+49 56 41 4d                                        magic "IVAM"
+01                                                 format version 1
+3f 2b 8c 1e 5d 4a 4e 6f 9a 7b 1c 2d 3e 4f 5a 6b    vault ID 3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b
+00 00 00 00 00 00 00 07                            state generation 7
+00 00 00 00 00 00 00 03                            peer generation 3
+00 00 00 00 00 00 00 02                            approver count 2
+5b 0e 9a 1c 7d 2f 4e 83 b6 a4 0c 1d 2e 3f 4a 5b    approver ID 5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b
+02                                                 algorithm ECDSA P-256
+02                                                 signer kind tpm
+00 00 00 00 00 00 00 41                            public key length 65
+04                                                 uncompressed point
+60 fe d4 ba 25 5a 9d 31 c9 61 eb 74 c6 35 6d 68    x
+c0 49 b8 92 3b 61 fa 6c e6 69 62 2e 60 f2 9f b6
+79 03 fe 10 08 b8 bc 99 a4 1a e9 e9 56 28 bc 64    y
+f2 f1 b2 0c 2d 7e 9f 51 77 a3 c2 94 d4 46 22 99
+00 00 00 00 00 00 00 0a                            label length 10
+6c 61 70 74 6f 70 20 54 50 4d                      "laptop TPM"
+00 00 00 00 6a f2 cf 00                            enrolled at 2026-11-10T08:00:00Z
+8d 1c 6f 0e 2b 7a 4c 59 9e 3d 5a 4b 3c 2d 1e 0f    approver ID 8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f
+01                                                 algorithm Ed25519
+01                                                 signer kind software
+00 00 00 00 00 00 00 20                            public key length 32
+d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a    public key
+0e e1 72 f3 da a6 23 25 af 02 1a 68 f7 07 51 1a
+00 00 00 00 00 00 00 13                            label length 19
+61 70 70 72 6f 76 61 6c 20 70 61 73 73 70 68 72    "approval passphr"
+61 73 65                                           "ase"
+00 00 00 00 6a ed a2 99                            enrolled at 2026-11-06T09:49:13Z
+00 00 00 00 00 00 00 02                            highest reserved version 2
+01                                                 an approval is committed
+00 00 00 00 00 00 00 01                            committed version 1
+0e 57 51 c0 26 e5 43 b2 e8 ab 2e b0 60 99 da a1    committed config digest
+d1 e5 df 47 77 8f 77 87 fa ab 45 cd f1 2f e3 a8
+```
+
+The payload is 304 bytes: the TPM approver's entry is 117.
+
 A state with one approver was never released, so the approver list and the signer kind join v1 rather than starting
 v2.
 
@@ -771,9 +909,10 @@ v2.
 Every field has one form, so the same state always encodes to the same bytes. Decoding rejects a wrong magic, an unknown
 format version, a vault ID that is not a version 4 UUID, a state or peer generation of 0, a peer generation not below
 the state generation, an approver count of 0 or above 16, approver IDs that are not version 4 UUIDs or not strictly
-ascending, an unknown or reserved algorithm ID, a reserved signer kind (`02`, `03`) or an unknown one (`00`, above
-`03`), a signer kind whose algorithms exclude the entry's algorithm, a public key of the wrong length for its algorithm,
-a public key that is not a valid, non-weak key for its algorithm, a public key pinned twice, a label that breaks its
+ascending, an unknown algorithm ID, a reserved signer kind (`03`) or an unknown one (`00`, above `03`), a signer kind
+that does not allow the entry's algorithm (`software` with `02`, `tpm` with `01`), a public key of the wrong length for
+its algorithm, a public key that is not a valid, non-weak key for its algorithm (for P-256: not the uncompressed
+encoding of a point on the curve), a public key pinned twice, a label that breaks its
 rule, an enrolment time outside the UTC second range, a committed tag other than `00` or `01`, committed version 0, a
 committed version above the highest reserved version, truncation and trailing bytes.
 

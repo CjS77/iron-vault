@@ -133,6 +133,27 @@ mod tests {
                                0000000000000013 617070726f76616c2070617373706872617365 000000006aeda299 0000000000000002 \
                                01 0000000000000001 0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8";
 
+    /// The documented second example: the first after `approver add --kind tpm`, at state generation 7, with a TPM
+    /// approver labelled `laptop TPM` (the RFC 6979 A.2.5 P-256 public key) before the software approver.
+    const TPM_EXAMPLE_HEX: &str = "4956414d 01 3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b 0000000000000007 0000000000000003 0000000000000002 \
+                                   5b0e9a1c7d2f4e83b6a40c1d2e3f4a5b 02 02 0000000000000041 \
+                                   04 60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6 \
+                                   7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299 \
+                                   000000000000000a 6c6170746f702054504d 000000006af2cf00 \
+                                   8d1c6f0e2b7a4c599e3d5a4b3c2d1e0f 01 01 0000000000000020 \
+                                   d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a \
+                                   0000000000000013 617070726f76616c2070617373706872617365 000000006aeda299 0000000000000002 \
+                                   01 0000000000000001 0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8";
+
+    /// The RFC 6979 A.2.5 P-256 public key, uncompressed: `04 ‖ x ‖ y`.
+    const P256_KEY_HEX: &str = "0460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6\
+                                7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299";
+
+    /// Where the TPM approver's algorithm, kind and key field sit in the second example.
+    const TPM_ALGORITHM: Range<usize> = 61..62;
+    const TPM_KIND: Range<usize> = 62..63;
+    const TPM_KEY: Range<usize> = 71..136;
+
     /// Where each field of the example sits.
     const COUNT: Range<usize> = 37..45;
     const ID: Range<usize> = 45..61;
@@ -175,6 +196,31 @@ mod tests {
         .unwrap()
     }
 
+    fn tpm_approver() -> PinnedApprover {
+        let id = ApproverId::from_bytes(unhex("5b0e9a1c7d2f4e83b6a40c1d2e3f4a5b").try_into().unwrap()).unwrap();
+        let key = ApproverPublicKey::new(SignatureAlgorithm::EcdsaP256, unhex(P256_KEY_HEX)).unwrap();
+        let label = ApproverLabel::new("laptop TPM").unwrap();
+        PinnedApprover::new(id, SignerKind::Tpm, key, label, UtcSecond::from_unix_seconds(0x6af2_cf00).unwrap()).unwrap()
+    }
+
+    fn tpm_example() -> ApprovalState {
+        let approvers = vec![tpm_approver(), example_approver()];
+        ApprovalState::from_parts(vault_id(), (generation(7), generation(3)), approvers, 2, example().committed).unwrap()
+    }
+
+    /// The `n`th `text` block of the storage formats' "Approval state payload v1" section, as hex: comments start past
+    /// column 48.
+    fn documented_block(n: usize) -> String {
+        let doc = include_str!("../../../../../design/storage-formats.md");
+        let section = doc.split("## Approval state payload v1").nth(1).unwrap();
+        let block = section.split("```text\n").nth(n).unwrap().split("```").next().unwrap();
+        block
+            .lines()
+            .flat_map(|line| line.chars().take(48))
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+
     fn vault_id() -> VaultId {
         VaultId::from_bytes(unhex("3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b").try_into().unwrap()).unwrap()
     }
@@ -214,16 +260,22 @@ mod tests {
 
     /// The example's hex column in `design/storage-formats.md` is these bytes; comments start past column 48.
     #[test]
-    fn documented_example_is_the_one_in_the_storage_formats() {
-        let doc = include_str!("../../../../../design/storage-formats.md");
-        let section = doc.split("## Approval state payload v1").nth(1).unwrap();
-        let block = section.split("```text\n").nth(1).unwrap().split("```").next().unwrap();
-        let hex: String = block
-            .lines()
-            .flat_map(|line| line.chars().take(48))
-            .filter(|c| !c.is_whitespace())
-            .collect();
-        assert_eq!(hex, EXAMPLE_HEX.split_whitespace().collect::<String>());
+    fn documented_examples_are_the_ones_in_the_storage_formats() {
+        assert_eq!(documented_block(1), EXAMPLE_HEX.split_whitespace().collect::<String>());
+        assert_eq!(documented_block(2), TPM_EXAMPLE_HEX.split_whitespace().collect::<String>());
+    }
+
+    #[test]
+    fn documented_tpm_example_matches() {
+        let bytes = unhex(TPM_EXAMPLE_HEX);
+        assert_eq!(bytes.len(), 304);
+        assert_eq!(entry(&tpm_approver()).len(), 117);
+        assert_eq!(encode(&tpm_example()), bytes);
+        let decoded = decode(&bytes).unwrap();
+        assert_eq!(decoded, tpm_example());
+        let tpm = &decoded.approvers[0];
+        assert_eq!((tpm.kind(), tpm.algorithm()), (SignerKind::Tpm, SignatureAlgorithm::EcdsaP256));
+        assert_eq!(tpm.public_key().as_bytes(), &unhex(P256_KEY_HEX)[..]);
     }
 
     #[test]
@@ -279,7 +331,7 @@ mod tests {
 
     #[test]
     fn unknown_algorithms_and_wrong_key_lengths_are_rejected() {
-        [0x00, 0x02, 0xff].into_iter().for_each(|id| {
+        [0x00, 0x03, 0xff].into_iter().for_each(|id| {
             assert_eq!(
                 decode(&example_with(ALGORITHM, &[id])),
                 Err(ApprovalDecodeError::UnknownAlgorithm(id).into())
@@ -293,18 +345,32 @@ mod tests {
                 len: 31
             })
         );
+        // An Ed25519-sized key under the P-256 algorithm, and the compressed form of the P-256 key.
+        assert_eq!(
+            decode(&example_with(ALGORITHM, &[0x02])),
+            Err(ApprovalStateError::PublicKeyLength {
+                algorithm: SignatureAlgorithm::EcdsaP256,
+                len: 32
+            })
+        );
+        let compressed: Vec<u8> = [0x03].into_iter().chain(unhex(P256_KEY_HEX)[1..33].iter().copied()).collect();
+        assert_eq!(
+            p256(compressed),
+            Err(ApprovalStateError::PublicKeyLength {
+                algorithm: SignatureAlgorithm::EcdsaP256,
+                len: 33
+            })
+        );
     }
 
     #[test]
     fn reserved_and_unknown_signer_kinds_are_rejected() {
-        assert_eq!(SignerKind::from_code(SignerKind::Software.code()), Ok(SignerKind::Software));
+        [SignerKind::Software, SignerKind::Tpm]
+            .into_iter()
+            .for_each(|kind| assert_eq!(SignerKind::from_code(kind.code()), Ok(kind)));
+        assert_eq!((SignerKind::Tpm.code(), SignerKind::Tpm.name()), (2, "tpm"));
         assert_eq!(decode(&example_with(KIND, &[0])), Err(ApprovalStateError::UnknownSignerKind(0)));
-        [2, 3].into_iter().for_each(|code| {
-            assert_eq!(
-                decode(&example_with(KIND, &[code])),
-                Err(ApprovalStateError::ReservedSignerKind(code))
-            );
-        });
+        assert_eq!(decode(&example_with(KIND, &[3])), Err(ApprovalStateError::ReservedSignerKind(3)));
         [4, 0xff].into_iter().for_each(|code| {
             assert_eq!(
                 decode(&example_with(KIND, &[code])),
@@ -313,17 +379,82 @@ mod tests {
         });
     }
 
-    /// The only other algorithm ID, reserved ECDSA P-256, is refused before the kind is read; `software` allows only
-    /// Ed25519, so no key this build can hold makes a kind that refuses it.
+    /// `software` allows only Ed25519 and `tpm` only ECDSA P-256; any other pairing is refused, read or built.
     #[test]
-    fn a_software_signer_with_another_algorithm_is_rejected() {
-        let p256 = crate::approval::RESERVED_ECDSA_P256_ID;
+    fn a_kind_with_an_algorithm_it_does_not_allow_is_rejected() {
+        let mismatch = |kind, algorithm| ApprovalStateError::KindAlgorithmMismatch { kind, algorithm };
+        let tpm_with_ed25519 = mismatch(SignerKind::Tpm, SignatureAlgorithm::Ed25519);
+        assert_eq!(decode(&example_with(KIND, &[2])).err(), Some(tpm_with_ed25519.clone()));
+        let software_with_p256 = mismatch(SignerKind::Software, SignatureAlgorithm::EcdsaP256);
+        let tpm_bytes = unhex(TPM_EXAMPLE_HEX);
+        let mut software = tpm_bytes.clone();
+        software.splice(TPM_KIND, [1]);
+        assert_eq!(decode(&software).err(), Some(software_with_p256.clone()));
+        let mut ed25519_algorithm = tpm_bytes;
+        ed25519_algorithm.splice(TPM_ALGORITHM, [1]);
+        let length = ApprovalStateError::PublicKeyLength {
+            algorithm: SignatureAlgorithm::Ed25519,
+            len: 65,
+        };
+        assert_eq!(decode(&ed25519_algorithm), Err(length));
+        let approver = tpm_approver();
+        let built = |kind, key| PinnedApprover::new(approver.id(), kind, key, approver.label().clone(), approver.enrolled_at());
+        assert_eq!(built(SignerKind::Software, *approver.public_key()).err(), Some(software_with_p256));
         assert_eq!(
-            decode(&example_with(ALGORITHM, &[p256])),
-            Err(ApprovalDecodeError::UnknownAlgorithm(p256).into())
+            built(SignerKind::Tpm, *example_approver().public_key()).err(),
+            Some(tpm_with_ed25519)
         );
-        assert!(SignerKind::Software.allows(SignatureAlgorithm::Ed25519));
-        assert_eq!(example_approver().kind(), SignerKind::Software);
+    }
+
+    /// `MAX_APPROVERS` TPM approvers, each with the longest key and label, make the largest payload the size limit allows
+    /// for.
+    #[test]
+    fn the_largest_state_is_the_documented_size() {
+        let tpm = |seed: u8| {
+            let key = p256::ecdsa::SigningKey::from_slice(&[seed; 32]).unwrap();
+            let key = p256(key.verifying_key().to_encoded_point(false).as_bytes().to_vec()).unwrap();
+            let label = ApproverLabel::new(&"x".repeat(64)).unwrap();
+            PinnedApprover::new(ApproverId::for_tests(&key), SignerKind::Tpm, key, label, UtcSecond::EPOCH).unwrap()
+        };
+        let mut approvers: Vec<_> = (1..=MAX_APPROVERS as u8).map(tpm).collect();
+        approvers.sort_by_key(PinnedApprover::id);
+        assert!(approvers.iter().all(|approver| entry(approver).len() == 171));
+        let state = ApprovalState::from_parts(vault_id(), (generation(2), generation(1)), approvers, 2, example().committed).unwrap();
+        let bytes = encode(&state);
+        assert_eq!(bytes.len(), 2_830);
+        assert_eq!(decode(&bytes), Ok(state));
+    }
+
+    fn p256(key: Vec<u8>) -> Result<ApproverPublicKey, ApprovalStateError> {
+        ApproverPublicKey::new(SignatureAlgorithm::EcdsaP256, key)
+    }
+
+    /// Only the uncompressed SEC1 encoding of a point on the curve is pinned.
+    #[test]
+    fn p256_keys_off_the_curve_or_in_another_form_are_rejected() {
+        let key = unhex(P256_KEY_HEX);
+        assert_eq!(p256(key.clone()).map(|k| k.as_bytes().to_vec()), Ok(key.clone()));
+        let not_a_point = Err(ApprovalStateError::InvalidApproverKey {
+            algorithm: SignatureAlgorithm::EcdsaP256,
+            reason: InvalidKeyReason::NotAPoint,
+        });
+        let with = |at: usize, byte: u8| {
+            let mut changed = key.clone();
+            changed[at] = byte;
+            changed
+        };
+        // y + 1 is off the curve; tags 00, 02, 05 and 06 are other forms; x of all ones is above the field prime.
+        let off_curve = with(64, key[64] ^ 0x01);
+        let other_forms = [0x00, 0x02, 0x05, 0x06].map(|tag| with(0, tag));
+        let x_too_large: Vec<u8> = [0x04].into_iter().chain([0xff; 32]).chain(key[33..].iter().copied()).collect();
+        [off_curve.clone(), x_too_large, vec![0; 65], vec![0x04; 65]]
+            .into_iter()
+            .chain(other_forms)
+            .for_each(|bad| assert_eq!(p256(bad.clone()), not_a_point, "{bad:02x?}"));
+        // Decoding applies the same checks.
+        let mut bytes = unhex(TPM_EXAMPLE_HEX);
+        bytes.splice(TPM_KEY, off_curve);
+        assert_eq!(decode(&bytes).err(), not_a_point.err());
     }
 
     #[test]
@@ -539,7 +670,13 @@ mod tests {
             highest in 0..=u64::MAX,
             committed in any::<Option<u64>>(),
             config in proptest::collection::vec(any::<u8>(), 0..64),
+            with_tpm in any::<bool>(),
         ) {
+            let mut approvers = approvers;
+            if with_tpm && approvers.len() < MAX_APPROVERS {
+                approvers.push(tpm_approver());
+                approvers.sort_by_key(PinnedApprover::id);
+            }
             let committed = committed.and_then(|c| ApprovalVersion::new(c.min(highest))).map(|v| (v, ConfigDigest::of(&config)));
             // Any peer generation from 1 to one below the state generation.
             let generations = (generation(state), generation(1 + peer % (state - 1)));

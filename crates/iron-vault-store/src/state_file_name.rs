@@ -87,9 +87,19 @@ impl StateFileName {
     /// The approver ID `name` is the approver key envelope of, if it is exactly [`StateFileName::approver_key`] of a
     /// version 4 UUID. Any other spelling of an ID, such as upper case, names no approver key.
     pub(crate) fn approver_key_id(name: &str) -> Option<ApproverId> {
-        let uuid = Uuid::try_parse(name.strip_prefix("approver-")?.strip_suffix(".age")?).ok()?;
-        let id = ApproverId::from_bytes(uuid.into_bytes()).ok()?;
-        (Self::approver_key(id).as_str() == name).then_some(id)
+        approver_file_id(name, ".age", Self::approver_key)
+    }
+
+    /// The TPM key blob's file for the TPM approver `id`: `approver-<id>.tpm`, the ID in lowercase hyphenated form, beside
+    /// the software approvers' `approver-<id>.age`.
+    pub fn tpm_key_blob(id: ApproverId) -> Self {
+        Self(format!("approver-{id}.tpm"))
+    }
+
+    /// The approver ID `name` is the TPM key blob of, if it is exactly [`StateFileName::tpm_key_blob`] of a version 4
+    /// UUID. Any other spelling of an ID names no key blob.
+    pub(crate) fn tpm_key_blob_id(name: &str) -> Option<ApproverId> {
+        approver_file_id(name, ".tpm", Self::tpm_key_blob)
     }
 
     /// The empty file `init.unfinished`, which marks a vault initialization that has not finished.
@@ -141,6 +151,14 @@ impl fmt::Display for StateFileName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
+}
+
+/// The approver ID in `name`, if `name` is exactly `file` of it: `approver-`, the ID, then `suffix`. Comparing with the
+/// name `file` builds refuses every other spelling of the same ID.
+fn approver_file_id(name: &str, suffix: &str, file: fn(ApproverId) -> StateFileName) -> Option<ApproverId> {
+    let uuid = Uuid::try_parse(name.strip_prefix("approver-")?.strip_suffix(suffix)?).ok()?;
+    let id = ApproverId::from_bytes(uuid.into_bytes()).ok()?;
+    (file(id).as_str() == name).then_some(id)
 }
 
 fn is_name_byte(b: u8) -> bool {
@@ -219,6 +237,27 @@ mod tests {
         assert_eq!(name.as_str(), "approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age");
         assert_eq!(StateFileName::new(name.as_str()).as_ref(), Ok(&name));
         assert_eq!(StateFileName::approver_key_id(name.as_str()), Some(id));
+        assert_eq!(StateFileName::tpm_key_blob_id(name.as_str()), None);
+    }
+
+    #[test]
+    fn tpm_key_blob_names_carry_the_lowercase_hyphenated_id() {
+        let id = ApproverId::from_bytes(*Uuid::parse_str("5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b").unwrap().as_bytes()).unwrap();
+        let name = StateFileName::tpm_key_blob(id);
+        assert_eq!(name.as_str(), "approver-5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b.tpm");
+        assert_eq!(StateFileName::new(name.as_str()).as_ref(), Ok(&name));
+        assert_eq!(StateFileName::tpm_key_blob_id(name.as_str()), Some(id));
+        assert_eq!(StateFileName::approver_key_id(name.as_str()), None);
+        [
+            "approver-.tpm",
+            "approver-5B0E9A1C-7D2F-4E83-B6A4-0C1D2E3F4A5B.tpm",
+            "approver-5b0e9a1c7d2f4e83b6a40c1d2e3f4a5b.tpm",
+            "approver-5b0e9a1c-7d2f-1e83-b6a4-0c1d2e3f4a5b.tpm",
+            "approver-5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b.tpm.tmp",
+            "approver-5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b.age",
+        ]
+        .iter()
+        .for_each(|n| assert_eq!(StateFileName::tpm_key_blob_id(n), None, "{n:?}"));
     }
 
     #[test]

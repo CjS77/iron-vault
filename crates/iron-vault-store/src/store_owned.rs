@@ -16,11 +16,13 @@ pub(crate) enum OwnedStateFile {
     Fixed(fn() -> StateFileName),
     /// Every approver key envelope, `approver-<approver ID>.age`.
     ApproverKeys,
+    /// Every TPM key blob, `approver-<approver ID>.tpm`.
+    TpmKeyBlobs,
     /// Every record file, `record-<record ID>.age`.
     Records,
 }
 
-use OwnedStateFile::{ApproverKeys, Fixed, Records};
+use OwnedStateFile::{ApproverKeys, Fixed, Records, TpmKeyBlobs};
 
 /// Every store-owned file in the state directory, in the order reset removes them. The manifest goes first, so no
 /// binary opens the vault once anything else is gone; the identity envelope next, so a crash leaves no file a recovery
@@ -32,6 +34,7 @@ pub(crate) const STATE_FILES: [OwnedStateFile; 12] = [
     Fixed(StateFileName::recipient_inventory),
     Fixed(StateFileName::staged_recipient_inventory),
     ApproverKeys,
+    TpmKeyBlobs,
     Fixed(StateFileName::approval_state),
     Records,
     Fixed(StateFileName::recovery_check_record),
@@ -60,6 +63,7 @@ impl OwnedStateFile {
         match self {
             Fixed(file) => file() == *name,
             ApproverKeys => StateFileName::approver_key_id(name.as_str()).is_some(),
+            TpmKeyBlobs => StateFileName::tpm_key_blob_id(name.as_str()).is_some(),
             Records => is_record_file_name(name.as_str()),
         }
     }
@@ -123,9 +127,16 @@ mod tests {
 
     #[test]
     fn lock_files_and_foreign_names_are_not_store_owned() {
-        ["notes.txt", "record.age", "approver-x.age", "manifest.age.bak", "lost-found"]
-            .iter()
-            .for_each(|name| assert!(!is_store_owned(&StateFileName::new(name).unwrap()), "{name}"));
+        [
+            "notes.txt",
+            "record.age",
+            "approver-x.age",
+            "approver-x.tpm",
+            "manifest.age.bak",
+            "lost-found",
+        ]
+        .iter()
+        .for_each(|name| assert!(!is_store_owned(&StateFileName::new(name).unwrap()), "{name}"));
         ["lock", "lost+found", ".manifest.age.tmp"]
             .iter()
             .for_each(|name| assert!(!is_vault_file(name), "{name}"));
@@ -144,6 +155,7 @@ mod tests {
             format!("record-{ID}.age"),
             "identity.age".to_owned(),
             "notes.txt".to_owned(),
+            format!("approver-{ID}.tpm"),
             format!("approver-{ID}.age"),
             "manifest.age".to_owned(),
             "recovery.toml".to_owned(),
@@ -159,6 +171,7 @@ mod tests {
                 "manifest.age".to_owned(),
                 "identity.age".to_owned(),
                 format!("approver-{ID}.age"),
+                format!("approver-{ID}.tpm"),
                 format!("record-{ID}.age"),
                 "recovery.toml".to_owned(),
                 "locked-by-owner".to_owned(),

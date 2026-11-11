@@ -86,13 +86,14 @@ bytes are compared with the initial config (below). The checks run in this order
 A **foreign file** is a file in the state directory that is not on the lists above: the lock file, `lost+found`, temp
 files, the vault's own files (`identity.age`, `recipients.age`, `recipients.age.staged`, `operational.age`,
 `manifest.age`, `approval.age`, `init.unfinished`, `reset.unfinished`), approver key envelopes (`approver-<approver ID>.age`, the ID a
-version 4 UUID in lowercase hyphenated form), record files (`record-*.age`), the recovery check record
-(`recovery.toml`), which [recovery.md](recovery.md#initialization) describes, and the owner-lock file
-(`locked-by-owner`), which [tpm-unlock.md](tpm-unlock.md#lock-across-restarts) describes. Neither of the last two is a
-vault file: each says something about a vault that may be gone. Beside a manifest, an approver key
+version 4 UUID in lowercase hyphenated form), TPM key blobs (`approver-<approver ID>.tpm`, the ID in the same form),
+record files (`record-*.age`), the recovery check record (`recovery.toml`), which
+[recovery.md](recovery.md#initialization) describes, and the owner-lock file (`locked-by-owner`), which
+[tpm-unlock.md](tpm-unlock.md#lock-across-restarts) describes. Neither of the last two is a vault file: each says
+something about a vault that may be gone. Beside a manifest, an approver key
 envelope that no pinned approver names is an [orphan](approval-signers.md#orphan-key-files), not a foreign file. The
-staged inventory (`recipients.age.staged`) is a vault file only beside a manifest: `init` never writes it, so beside
-`init.unfinished` it is foreign ([recipients.md](recipients.md#initialization)). It matters only beside `init.unfinished`, where it makes the state
+staged inventory (`recipients.age.staged`) and a TPM key blob are vault files only beside a manifest: `init` never writes
+them, so beside `init.unfinished` each is foreign ([recipients.md](recipients.md#initialization)). Each matters only beside `init.unfinished`, where it makes the state
 Unrecognized so the discard never sweeps it into the new vault, and in a state directory with no manifest, where it
 makes Uninitialized impossible. Beside a manifest it changes nothing: `unlock` logs its name at WARN
 (`vault.foreign-file`) and goes on, because `Vault::open` already ignores names it does not know and the manifest alone

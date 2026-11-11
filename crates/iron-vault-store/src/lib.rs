@@ -62,10 +62,10 @@ pub use approval::{
     ApprovalPayload, ApprovalProgress, ApprovalRecoveryError, ApprovalSigner, ApprovalState, ApprovalStateError, ApprovalStep,
     ApprovalStorage, ApprovalVersion, ApproverChangeError, ApproverChangeStep, ApproverChanges, ApproverId, ApproverLabel,
     ApproverPublicKey, CommittedApproval, ConfigDigest, DiscardedFile, InvalidKeyReason, KeyCheckError, KeyFileOutcome,
-    MAX_APPROVAL_ENVELOPE_LEN, MAX_APPROVAL_STATE_LEN, MAX_APPROVERS, MayHaveCommitted, PendingConfig, PinnedApprover, PreparedApproval,
-    PublishedPairFault, RESERVED_ECDSA_P256_ID, ReadBack, RecoveredApproval, RecoveryFailure, ReservedApproval, SignError,
-    SignatureAlgorithm, SignerKind, SoftwareSigner, SoftwareSignerKey, VerifiedApproval, VerifyError, open_approval_state, open_signer_key,
-    read_signer_key, recover_approval, seal_approval_state, seal_signer_key, verify_approval, write_signer_key,
+    MAX_APPROVAL_ENVELOPE_LEN, MAX_APPROVAL_STATE_LEN, MAX_APPROVERS, MayHaveCommitted, MigrationProofPayload, PendingConfig,
+    PinnedApprover, PreparedApproval, PresencePayload, PublishedPairFault, ReadBack, RecoveredApproval, RecoveryFailure, ReservedApproval,
+    SignError, SignatureAlgorithm, SignerKind, SoftwareSigner, SoftwareSignerKey, VerifiedApproval, VerifyError, open_approval_state,
+    open_signer_key, read_signer_key, recover_approval, seal_approval_state, seal_signer_key, verify_approval, write_signer_key,
 };
 pub use config_dir::{
     ConfigDirLock, ConfigReadError, ConfigWriteError, PublishSet, RemoveStagingError, publish, read_config_file, remove_pending_and_staged,

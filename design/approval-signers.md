@@ -38,13 +38,13 @@ it. The algorithm alone cannot say that: a TPM and a hardware key may both sign 
 | Code | Kind | Algorithms | What signs | Phase |
 |---|---|---|---|---|
 | `1` | `software` | Ed25519 (`01`) | The [software signer](glossary.md): an Ed25519 key in its own approver key envelope, opened by its approval passphrase | v0 |
-| `2` | `tpm` | reserved; EP-33 chooses, P-256 (`02`) expected | A TPM approval key with a PIN ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)) | EP-33 |
+| `2` | `tpm` | ECDSA P-256 (`02`) | A [TPM approval key](tpm-approval-signer.md) with a PIN ([§12](iron-vault-specification.md#12-configuration-approval-and-reload)) | EP-33 |
 | `3` | `hardware` | reserved | A hardware key with PIN and touch ([future spec §2.1](future-specifications.md#21-hardware-key-recipients-signers-and-touch-confirmation)) | the hardware-key phase |
 
 The kind is one byte in each approver entry of the [approval state payload v1](storage-formats.md#approval-state-payload-v1),
-directly after the algorithm. As with [recipient roles](recipients.md#recipient-roles), codes 2 and 3 are reserved now
-so that later epics need no new format version: this release refuses them when it reads the approval state, and the
-epic that enrolls one makes the decoder accept it. A code above 3 is unknown, and decoding also refuses an entry whose
+directly after the algorithm. As with [recipient roles](recipients.md#recipient-roles), code 3 is reserved now so that
+a later epic needs no new format version: this release refuses it when it reads the approval state, and the epic that
+enrolls one makes the decoder accept it, as EP-33 did for code 2. A code above 3 is unknown, and decoding also refuses an entry whose
 algorithm its kind does not allow. The approval state v1 has not been released, so the byte joins v1: each entry grows
 to at most 171 bytes, the one-approver example payload becomes 187 bytes (147 for a new vault), and 16 entries fit in
 37 + 8 + 16 × 171 + 49 = 2,830 bytes, inside `MAX_APPROVAL_STATE_LEN`. The kind names are what `approver list` prints

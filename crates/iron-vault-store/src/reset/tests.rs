@@ -21,6 +21,9 @@ const VAULT_PASSPHRASE: &str = "correct horse battery";
 /// A second approver's key envelope, beside the one `init` writes.
 const OTHER_APPROVER_KEY: &str = "approver-3f2a9b1c-7d4e-4a8b-b6c5-0e1d2c3b4a59.age";
 
+/// A TPM approver's key blob.
+const TPM_KEY_BLOB: &str = "approver-5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b.tpm";
+
 struct Paused;
 
 impl AdmissionPaused for Paused {}
@@ -66,7 +69,8 @@ impl Dirs {
     }
 
     /// An initialized vault with everything a used one holds beyond `init`'s files: a record, a second approver key
-    /// envelope, a staged inventory, a recovery check record, the owner-lock file, a pending config and a staged signature.
+    /// envelope, a TPM key blob, a staged inventory, a recovery check record, the owner-lock file, a pending config and a
+    /// staged signature.
     fn full_vault(&self, fs: &impl StoreFs) -> VaultId {
         let vault_id = self.init(fs);
         let passphrase = Passphrase::new(SecretString::from(VAULT_PASSPHRASE)).unwrap();
@@ -78,6 +82,7 @@ impl Dirs {
         };
         vault.add(&self.state, fs, "fx_key".parse().unwrap(), material, origins).unwrap();
         self.put(fs, OTHER_APPROVER_KEY);
+        self.put(fs, TPM_KEY_BLOB);
         self.put(fs, "recipients.age.staged");
         write_recovery_check(&self.state, fs, &RecoveryCheckRecord::new(UtcSecond::EPOCH, None).unwrap()).unwrap();
         crate::write_owner_lock(&self.state, fs).unwrap();

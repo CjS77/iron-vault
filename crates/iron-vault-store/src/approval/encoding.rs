@@ -104,7 +104,7 @@ impl From<WireError> for ApprovalDecodeError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use proptest::prelude::*;
 
     use super::*;
@@ -119,7 +119,36 @@ mod tests {
                                3f2b8c1e5d4a4e6f9a7b1c2d3e4f5a6b 0000000000000001 \
                                0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8";
 
-    fn unhex(hex: &str) -> Vec<u8> {
+    /// The documented TPM approver's ID, 5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b.
+    const TPM_APPROVER: &str = "5b0e9a1c7d2f4e83b6a40c1d2e3f4a5b";
+
+    /// The documented P-256 signature over the payload example: RFC 6979 deterministic, by the RFC 6979 A.2.5 key, low S.
+    pub(crate) const P256_SIGNATURE_HEX: &str = "f362509db1d282d1d4bc973055ac5b6b2285126a0ea8bbcf7b531e613fd9a38a \
+                                                 531bfbd0db1e248f7ffc34a45b2435b2cc42533bc5d887ef2f8d15b0c7519b85";
+
+    /// The bytes of the `n`th `text` block of the storage formats' "Approval envelope v1" section, with the payload
+    /// example in place of its `…` line: comments start past column 48.
+    pub(crate) fn documented_envelope(n: usize) -> Vec<u8> {
+        let doc = include_str!("../../../../design/storage-formats.md");
+        let section = doc.split("## Approval envelope v1").nth(1).unwrap();
+        let block = section.split("```text\n").nth(n).unwrap().split("```").next().unwrap();
+        let hex: String = block
+            .lines()
+            .flat_map(|line| {
+                if line.starts_with('…') {
+                    PAYLOAD_HEX.to_owned()
+                } else {
+                    line.chars().take(48).collect()
+                }
+                .chars()
+                .collect::<Vec<_>>()
+            })
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        unhex(&hex)
+    }
+
+    pub(crate) fn unhex(hex: &str) -> Vec<u8> {
         hex.split_whitespace()
             .flat_map(|group| {
                 (0..group.len())
@@ -129,7 +158,7 @@ mod tests {
             .collect()
     }
 
-    fn payload() -> ApprovalPayload {
+    pub(crate) fn payload() -> ApprovalPayload {
         let vault_id = VaultId::from_bytes(unhex(VAULT).try_into().unwrap()).unwrap();
         ApprovalPayload::new(vault_id, ApprovalVersion::FIRST, ConfigDigest::of(b""))
     }
@@ -173,8 +202,21 @@ mod tests {
         );
         let bytes = unhex(&hex);
         assert_eq!(bytes.len(), 191);
+        assert_eq!(documented_envelope(1), bytes);
         assert_eq!(envelope().encode(), bytes);
         assert_eq!(ApprovalEnvelope::decode(&bytes), Ok(envelope()));
+    }
+
+    #[test]
+    fn documented_p256_envelope_example_matches() {
+        let hex = format!("49564153 01 02 {TPM_APPROVER} 0000000000000059 {PAYLOAD_HEX} 0000000000000040 {P256_SIGNATURE_HEX}");
+        let bytes = unhex(&hex);
+        assert_eq!(bytes.len(), 191);
+        assert_eq!(documented_envelope(2), bytes);
+        let approver = ApproverId::from_bytes(unhex(TPM_APPROVER).try_into().unwrap()).unwrap();
+        let p256 = ApprovalEnvelope::new(SignatureAlgorithm::EcdsaP256, approver, payload(), unhex(P256_SIGNATURE_HEX)).unwrap();
+        assert_eq!(p256.encode(), bytes);
+        assert_eq!(ApprovalEnvelope::decode(&bytes), Ok(p256));
     }
 
     #[test]
@@ -227,18 +269,18 @@ mod tests {
     #[test]
     fn unknown_algorithms_and_wrong_signature_lengths_are_rejected() {
         let payload = unhex(PAYLOAD_HEX);
-        [0x00, 0x02, 0xff].into_iter().for_each(|id| {
+        [0x00, 0x03, 0xff].into_iter().for_each(|id| {
             let decoded = ApprovalEnvelope::decode(&envelope_bytes(id, &payload, &[0x5a; 64]));
             assert_eq!(decoded, Err(ApprovalDecodeError::UnknownAlgorithm(id)));
         });
-        let short = ApprovalEnvelope::decode(&envelope_bytes(1, &payload, &[0x5a; 63]));
-        assert_eq!(
-            short,
-            Err(ApprovalDecodeError::SignatureLength {
-                algorithm: SignatureAlgorithm::Ed25519,
-                len: 63
-            })
-        );
+        [(1, SignatureAlgorithm::Ed25519), (2, SignatureAlgorithm::EcdsaP256)]
+            .into_iter()
+            .for_each(|(id, algorithm)| {
+                [0, 63, 65, 72].into_iter().for_each(|len| {
+                    let decoded = ApprovalEnvelope::decode(&envelope_bytes(id, &payload, &vec![0x5a; len]));
+                    assert_eq!(decoded, Err(ApprovalDecodeError::SignatureLength { algorithm, len }));
+                });
+            });
     }
 
     #[test]

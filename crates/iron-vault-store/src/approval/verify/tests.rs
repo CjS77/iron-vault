@@ -1,12 +1,13 @@
 //! Approval verification: each check accepts the committed approval and refuses everything else with its own variant.
 
 use ed25519_dalek::{Signer, SigningKey};
+use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey};
 
 use super::*;
 use crate::fault_fs::FaultFs;
 use crate::manifest::tests::{KAT_IDENTITY, write_first_manifest};
 use crate::test_dir::TestDir;
-use crate::{ApprovalPayload, ApproverId, ApproverPublicKey, StateDirLock, VaultId, VaultIdentity};
+use crate::{ApprovalPayload, ApproverId, ApproverLabel, ApproverPublicKey, SignerKind, StateDirLock, UtcSecond, VaultId, VaultIdentity};
 
 const APPROVER_SEED: [u8; 32] = [7; 32];
 
@@ -90,10 +91,24 @@ impl Vault {
 
     /// Pins a further approver whose key has `seed`, returning its ID.
     fn enroll(&mut self, seed: [u8; 32]) -> ApproverId {
-        let approver = pinned(seed);
+        self.enroll_pinned(pinned(seed))
+    }
+
+    /// Pins `approver`, returning its ID.
+    fn enroll_pinned(&mut self, approver: PinnedApprover) -> ApproverId {
         let id = approver.id();
         self.state.enroll_approver(&self.lock, &self.fs, &self.identity, approver).unwrap();
         id
+    }
+
+    /// Reserves, signs with the P-256 `key` as approver `id`, and commits the next version, returning its envelope.
+    fn approve_next_p256(&mut self, key: &P256SigningKey, id: ApproverId) -> Vec<u8> {
+        let v = self.state.reserve(&self.lock, &self.fs, &self.identity).unwrap();
+        let envelope = sign_p256(key, id, self.payload(v.get()));
+        self.state
+            .commit(&self.lock, &self.fs, &self.identity, v, ConfigDigest::of(&config(v.get())))
+            .unwrap();
+        envelope
     }
 
     fn payload(&self, v: u64) -> ApprovalPayload {
@@ -124,17 +139,15 @@ fn malformed_envelope_is_refused() {
     assert!(matches!(vault.verify(&config(1), b""), Err(VerifyError::Malformed(_))));
 }
 
-/// Only Ed25519 exists, so another algorithm byte is unknown to this build and refused while decoding.
+/// An algorithm ID this build does not know is refused while decoding, before any approver is looked up.
 #[test]
-fn wrong_algorithm_byte_is_refused() {
+fn unknown_algorithm_byte_is_refused() {
     let (vault, envelopes) = Vault::approved("verify-algorithm", 1);
     let mut envelope = envelopes[0].clone();
-    envelope[5] = crate::RESERVED_ECDSA_P256_ID;
+    envelope[5] = 0x03;
     assert_eq!(
         vault.verify(&config(1), &envelope),
-        Err(VerifyError::Malformed(ApprovalDecodeError::UnknownAlgorithm(
-            crate::RESERVED_ECDSA_P256_ID
-        )))
+        Err(VerifyError::Malformed(ApprovalDecodeError::UnknownAlgorithm(0x03)))
     );
 }
 
@@ -350,5 +363,220 @@ fn error_messages_carry_no_key_or_signature_bytes() {
     assert_eq!(
         message,
         "the config approval signature does not verify against the named approver's key"
+    );
+}
+
+/// The private half of the RFC 6979 A.2.5 P-256 key, whose public half the storage formats' TPM examples pin.
+const RFC6979_P256_X: &str = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721";
+
+/// The order `n` of the P-256 group: a signature scalar must lie in `1..n`.
+const P256_ORDER: &str = "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551";
+
+fn rfc6979_p256() -> P256SigningKey {
+    P256SigningKey::from_slice(&unhex(RFC6979_P256_X)).unwrap()
+}
+
+fn p256_key(seed: u8) -> P256SigningKey {
+    P256SigningKey::from_slice(&[seed; 32]).unwrap()
+}
+
+/// `key` pinned as a `tpm` approver with the ID [`ApproverId::for_tests`] gives it.
+fn pinned_tpm(key: &P256SigningKey) -> PinnedApprover {
+    let public = key.verifying_key().to_encoded_point(false).as_bytes().to_vec();
+    let public = ApproverPublicKey::new(SignatureAlgorithm::EcdsaP256, public).unwrap();
+    let label = ApproverLabel::new("laptop TPM").unwrap();
+    PinnedApprover::new(ApproverId::for_tests(&public), SignerKind::Tpm, public, label, UtcSecond::EPOCH).unwrap()
+}
+
+/// `config.toml.sig` bytes for `payload` signed by the P-256 `key` as approver `id`, with `s` in its low form as a TPM
+/// approver's helper writes it.
+fn sign_p256(key: &P256SigningKey, id: ApproverId, payload: ApprovalPayload) -> Vec<u8> {
+    let signature: P256Signature = p256::ecdsa::signature::Signer::sign(key, &payload.encode());
+    let low = signature.normalize_s().unwrap_or(signature);
+    ApprovalEnvelope::new(SignatureAlgorithm::EcdsaP256, id, payload, low.to_bytes().to_vec())
+        .unwrap()
+        .encode()
+}
+
+/// The envelope with its signature replaced by `signature`, which must be 64 bytes.
+fn with_signature(envelope: &[u8], signature: &[u8]) -> Vec<u8> {
+    [&envelope[..envelope.len() - 64], signature].concat()
+}
+
+/// `n − s` for the 32-byte big-endian `s`: the other signature ECDSA accepts for the same `r`.
+fn negate_mod_n(s: &[u8]) -> Vec<u8> {
+    let n = unhex(P256_ORDER);
+    let mut borrow = 0i16;
+    let mut out: Vec<u8> = n
+        .iter()
+        .zip(s)
+        .rev()
+        .map(|(&a, &b)| {
+            let diff = i16::from(a) - i16::from(b) - borrow;
+            borrow = i16::from(diff < 0);
+            (diff + 256 * borrow) as u8
+        })
+        .collect();
+    out.reverse();
+    out
+}
+
+fn unhex(hex: &str) -> Vec<u8> {
+    crate::approval::encoding::tests::unhex(hex)
+}
+
+/// A vault whose first approver is the software one and whose second is a `tpm` approver with `key`, with version 1
+/// signed by the `tpm` approver and committed.
+fn tpm_approved(label: &str, key: &P256SigningKey) -> (Vault, ApproverId, Vec<u8>) {
+    let mut vault = Vault::new(label);
+    let id = vault.enroll_pinned(pinned_tpm(key));
+    let envelope = vault.approve_next_p256(key, id);
+    (vault, id, envelope)
+}
+
+/// RFC 6979 A.2.5, message `sample` with SHA-256: the RFC's `s` is the high one, so only `n − s` is accepted.
+#[test]
+fn rfc6979_sample_signature_verifies_only_with_low_s() {
+    let key = *rfc6979_p256().verifying_key();
+    let r = unhex("efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716");
+    let high = unhex("f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8");
+    let low = negate_mod_n(&high);
+    assert_eq!(low, unhex("0834e36ad29a83bf2bc9385e491d6099c8fdf9d1ed67aa7ea5f51f93782857a9"));
+    assert_eq!(verify_p256(&key, b"sample", &[&r[..], &low].concat()), Ok(()));
+    assert_eq!(
+        verify_p256(&key, b"sample", &[&r[..], &high].concat()),
+        Err(VerifyError::BadSignature)
+    );
+    assert_eq!(
+        verify_p256(&key, b"samplf", &[&r[..], &low].concat()),
+        Err(VerifyError::BadSignature)
+    );
+}
+
+/// The storage formats' P-256 envelope example carries a real signature by the key its TPM state example pins.
+#[test]
+fn documented_p256_envelope_verifies_against_the_documented_tpm_approver() {
+    use crate::approval::encoding::tests::{P256_SIGNATURE_HEX, documented_envelope};
+    let envelope = ApprovalEnvelope::decode(&documented_envelope(2)).unwrap();
+    assert_eq!(envelope.signature(), &unhex(P256_SIGNATURE_HEX)[..]);
+    let documented = pinned_tpm(&rfc6979_p256());
+    let approver = PinnedApprover::new(
+        envelope.approver_id(),
+        SignerKind::Tpm,
+        *documented.public_key(),
+        documented.label().clone(),
+        UtcSecond::EPOCH,
+    )
+    .unwrap();
+    assert_eq!(verify_with(&approver, &envelope), Ok(()));
+    let other = pinned_tpm(&p256_key(9));
+    assert_eq!(verify_with(&other, &envelope), Err(VerifyError::BadSignature));
+}
+
+#[test]
+fn approval_signed_by_a_tpm_approver_verifies() {
+    let key = p256_key(5);
+    let (vault, id, envelope) = tpm_approved("verify-tpm", &key);
+    assert_eq!(vault.state.approvers().len(), 2);
+    let verified = vault.verify(&config(1), &envelope).unwrap();
+    assert_eq!((verified.version(), verified.approver()), (version(1), id));
+}
+
+/// A signature by another P-256 key, or over another payload, fails; so does every flipped signature bit.
+#[test]
+fn p256_signature_by_another_key_or_over_other_bytes_is_refused() {
+    let key = p256_key(5);
+    let (mut vault, id, envelope) = tpm_approved("verify-tpm-refused", &key);
+    let forged = sign_p256(&p256_key(6), id, vault.payload(1));
+    assert_eq!(vault.verify(&config(1), &forged), Err(VerifyError::BadSignature));
+    // The payload field starts at byte 30; the signature is checked before any of its fields is compared.
+    (30..30 + 89).for_each(|at| {
+        let mut edited = envelope.clone();
+        edited[at] ^= 0x01;
+        let refused = vault.verify(&config(1), &edited);
+        assert!(
+            matches!(refused, Err(VerifyError::BadSignature | VerifyError::Malformed(_))),
+            "byte {at}: {refused:?}"
+        );
+    });
+    let signature = &envelope[envelope.len() - 64..];
+    vault.approve_next();
+    let replayed = with_signature(&sign_p256(&key, id, vault.payload(2)), signature);
+    assert_eq!(vault.verify(&config(2), &replayed), Err(VerifyError::BadSignature));
+    (0..64 * 8).for_each(|bit| {
+        let mut flipped = signature.to_vec();
+        flipped[bit / 8] ^= 1 << (bit % 8);
+        let changed = with_signature(&envelope, &flipped);
+        assert_eq!(vault.verify(&config(1), &changed), Err(VerifyError::BadSignature), "bit {bit}");
+    });
+}
+
+/// `(r, n − s)` verifies under plain ECDSA; refusing it leaves each approval one signature encoding. Scalars outside
+/// `1..n` are refused before any curve arithmetic.
+#[test]
+fn high_s_and_out_of_range_scalars_are_refused() {
+    let key = p256_key(5);
+    let (vault, _, envelope) = tpm_approved("verify-tpm-high-s", &key);
+    let signature = &envelope[envelope.len() - 64..];
+    let (r, s) = signature.split_at(32);
+    let n = unhex(P256_ORDER);
+    let refused = [
+        [r, &negate_mod_n(s)].concat(),
+        [&[0u8; 32][..], s].concat(),
+        [r, &[0u8; 32]].concat(),
+        [&n[..], s].concat(),
+        [r, &n[..]].concat(),
+        [r, &[0xff; 32]].concat(),
+    ];
+    refused.iter().for_each(|bad| {
+        assert_eq!(
+            vault.verify(&config(1), &with_signature(&envelope, bad)),
+            Err(VerifyError::BadSignature),
+            "{bad:02x?}"
+        );
+    });
+    assert!(vault.verify(&config(1), &envelope).is_ok());
+}
+
+#[test]
+fn p256_signature_of_the_wrong_length_is_malformed() {
+    let key = p256_key(5);
+    let (vault, id, envelope) = tpm_approved("verify-tpm-length", &key);
+    let truncated = [
+        &envelope[..envelope.len() - 72],
+        &63u64.to_be_bytes(),
+        &envelope[envelope.len() - 64..][..63],
+    ]
+    .concat();
+    assert_eq!(
+        vault.verify(&config(1), &truncated),
+        Err(VerifyError::Malformed(ApprovalDecodeError::SignatureLength {
+            algorithm: SignatureAlgorithm::EcdsaP256,
+            len: 63
+        }))
+    );
+    assert!(vault.verify(&config(1), &sign_p256(&key, id, vault.payload(1))).is_ok());
+}
+
+/// The envelope's algorithm must be the named approver's: a P-256 envelope naming the software approver, or an
+/// Ed25519 envelope naming the TPM approver, is refused before any signature check.
+#[test]
+fn algorithm_that_is_not_the_named_approvers_is_refused() {
+    let key = p256_key(5);
+    let (vault, tpm, _) = tpm_approved("verify-tpm-algorithm", &key);
+    let software = pinned(APPROVER_SEED).id();
+    assert_eq!(
+        vault.verify(&config(1), &sign_p256(&key, software, vault.payload(1))),
+        Err(VerifyError::WrongAlgorithm {
+            pinned: SignatureAlgorithm::Ed25519,
+            envelope: SignatureAlgorithm::EcdsaP256
+        })
+    );
+    assert_eq!(
+        vault.verify(&config(1), &sign_as(tpm, APPROVER_SEED, vault.payload(1))),
+        Err(VerifyError::WrongAlgorithm {
+            pinned: SignatureAlgorithm::EcdsaP256,
+            envelope: SignatureAlgorithm::Ed25519
+        })
     );
 }

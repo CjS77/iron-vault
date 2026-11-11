@@ -280,19 +280,24 @@ fn begin_leaves_no_marker_when_the_stale_owner_lock_cannot_be_removed() {
     assert_eq!(dirs.read(&fs), InitializationState::Uninitialized);
 }
 
+/// A staged inventory and a TPM key blob are store-owned files an initialization never writes.
 #[test]
-fn a_staged_inventory_is_the_vaults_own_file_beside_a_manifest_and_foreign_elsewhere() {
-    let vault = Dirs::new("init-staged-vault");
-    Vault::create(&vault.state, &OsFs, VaultIdentity::generate()).unwrap();
-    vault.put(&OsFs, "recipients.age.staged");
-    assert_eq!(require_initialized(&vault.state, &vault.config, &OsFs), Ok(Vec::new()));
-    let beside_marker = Dirs::new("init-staged-marker");
-    beside_marker.crashed_after(&OsFs, 3);
-    beside_marker.put(&OsFs, "recipients.age.staged");
-    assert_eq!(beside_marker.read(&OsFs), InitializationState::Unrecognized);
-    let alone = Dirs::new("init-staged-alone");
-    alone.put(&OsFs, "recipients.age.staged");
-    assert_eq!(alone.read(&OsFs), InitializationState::Unrecognized);
+fn owned_files_init_never_writes_are_the_vaults_own_beside_a_manifest_and_foreign_elsewhere() {
+    ["recipients.age.staged", "approver-5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b.tpm"]
+        .into_iter()
+        .for_each(|name| {
+            let vault = Dirs::new("init-owned-vault");
+            Vault::create(&vault.state, &OsFs, VaultIdentity::generate()).unwrap();
+            vault.put(&OsFs, name);
+            assert_eq!(require_initialized(&vault.state, &vault.config, &OsFs), Ok(Vec::new()), "{name}");
+            let beside_marker = Dirs::new("init-owned-marker");
+            beside_marker.crashed_after(&OsFs, 3);
+            beside_marker.put(&OsFs, name);
+            assert_eq!(beside_marker.read(&OsFs), InitializationState::Unrecognized, "{name}");
+            let alone = Dirs::new("init-owned-alone");
+            alone.put(&OsFs, name);
+            assert_eq!(alone.read(&OsFs), InitializationState::Unrecognized, "{name}");
+        });
 }
 
 #[test]
