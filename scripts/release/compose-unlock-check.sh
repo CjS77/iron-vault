@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Release check for the Compose profile's host unlock handoff, the evidence for implementation spec §3's "Host unlock handoff" gate
-# (design/docker-compose.md "Against the implementation spec §3 gate"; spec 3.11, 3.12, 3.14, 3.15).
+# (design/docker-compose.md "Against the implementation spec §3 gate";
+# product spec §14 Recipients, startup, and memory; §15 Service states and errors; §17 Docker, remote servers, and appliances;
+# §18 Logging; §19 V0 user acceptance).
 #
 # !! RUN THIS ONLY ON A DISPOSABLE VM WITH A TPM. !!  It runs as root and, on the host, creates the `iron-vault` account (uid 460),
 # /run/iron-vault, /run/iron-vault-unlock, /etc/iron-vault-host, /usr/local/bin/iron-vault, the host unlock unit, tmpfiles.d and

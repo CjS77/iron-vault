@@ -87,7 +87,8 @@ fn service_unit_has_every_required_directive() {
 
 #[test]
 fn service_unit_sets_no_environment() {
-    // The service must not inherit an administrator's proxy or trust-root variables (specification 3.7).
+    // The service must not inherit an administrator's proxy or trust-root variables
+    // (product specification §10 Outbound TLS and environment).
     let service = section(&packaging("iron-vault.service"), "Service");
     ["Environment", "EnvironmentFile", "PassEnvironment", "UnsetEnvironment"]
         .iter()

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Release check for a real install of the Linux package (design/linux-package.md; spec 3.1, 3.2, 3.4, 3.11, 3.15).
+# Release check for a real install of the Linux package (design/linux-package.md;
+# product spec §4 Installation and ownership, §5 Service and CLI separation of concerns, §7 Caller authentication and listeners,
+# §14 Recipients, startup, and memory, §18 Logging, §19 V0 user acceptance).
 #
 # !! RUN THIS ONLY ON A DISPOSABLE VM. !!  It runs as root, restarts the service, crashes it with SIGSEGV several times,
 # makes /etc/iron-vault group-writable for a few seconds, stops the service together with its running listener sockets,
