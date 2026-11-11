@@ -258,6 +258,10 @@ pub enum ExchangeError {
     /// sent.
     #[error("the service could not encode an admin frame: {0}")]
     Unencodable(FrameError),
+    /// An earlier frame write was cut off part-way, so nothing more is written: the CLI would read it as the rest of that
+    /// frame.
+    #[error("an earlier frame write was cut off, so the exchange writes nothing more")]
+    Cut,
 }
 
 impl ExchangeError {
@@ -265,7 +269,7 @@ impl ExchangeError {
     /// connection is closed without one, as when no admin request arrives.
     fn response(&self) -> Option<AdminResponse> {
         match self {
-            Self::Closed | Self::TimedOut | Self::TransferTimedOut | Self::Io(_) | Self::Unencodable(_) => None,
+            Self::Closed | Self::TimedOut | Self::TransferTimedOut | Self::Io(_) | Self::Unencodable(_) | Self::Cut => None,
             Self::Malformed(e) => Some(error(ErrorCode::for_frame_error(*e), &e.to_string())),
             Self::Unexpected => Some(error(ErrorCode::UnexpectedFrame, "the frame is out of turn in this exchange")),
         }
@@ -451,13 +455,20 @@ impl Exchange {
         self.write_until(bytes, deadline, ExchangeError::TimedOut).await
     }
 
-    /// Writes an encoded frame by `deadline`, which is `expired` if it passes. A write that fails or is cut off may have
-    /// left part of the frame on the socket, so it is recorded in `frame_cut`.
+    /// Writes an encoded frame by `deadline`, which is `expired` if it passes. `frame_cut` is set before the write and
+    /// cleared only once the whole frame is written, so a write that fails, is cut off, or whose future is dropped
+    /// part-way leaves it set, and no later write follows it.
     async fn write_until(&mut self, bytes: &[u8], deadline: Instant, expired: ExchangeError) -> Result<(), ExchangeError> {
+        if self.frame_cut {
+            return Err(ExchangeError::Cut);
+        }
+        self.frame_cut = true;
         let written = tokio::time::timeout_at(deadline, self.stream.write_all(bytes)).await;
-        self.frame_cut |= !matches!(written, Ok(Ok(())));
         match written {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(())) => {
+                self.frame_cut = false;
+                Ok(())
+            }
             Ok(Err(e)) => Err(ExchangeError::Io(e.kind())),
             Err(_) => Err(expired),
         }

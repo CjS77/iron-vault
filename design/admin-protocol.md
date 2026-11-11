@@ -740,12 +740,12 @@ within the request deadline (30 seconds) and the whole bundle within the **bundl
 (`ExchangeError::TimedOut` for a frame, `ExchangeError::TransferTimedOut` for the transfer), and tells those apart from a
 closed CLI (`Closed`) and a frame out of turn (`Unexpected`).
 
-A frame is either whole on the socket or the exchange writes nothing more. A deadline that has already passed when a
-frame is about to move (the transfer deadline checked before each frame, the request deadline when a frame was never
-started) returns the error with no byte written, so the handler may still answer `export-failed` and the CLI reads it. A
-write that is cut off part-way by its deadline, or fails, may leave the front of a frame on the socket; the exchange
-records that, writes no response (a WARN is logged) and closes, because the CLI would read the response as the rest of
-the frame. So `export-failed` for a missed deadline reaches the CLI only when the deadline was missed at a frame
+A frame is either whole on the socket or the exchange writes nothing more. A transfer deadline that has already passed
+when a frame is about to move (it is checked before each frame) returns the error with no byte written, so the handler
+may still answer `export-failed` and the CLI reads it. A write that is cut off part-way by its deadline, or fails, may
+leave the front of a frame on the socket; the exchange records that before each write and clears it only once the
+frame is whole, so it then writes nothing more (`ExchangeError::Cut`), no response either (a WARN is logged), and
+closes, because the CLI would read the response as the rest of the frame. So `export-failed` for a missed deadline reaches the CLI only when the deadline was missed at a frame
 boundary, and the CLI sees a closed connection otherwise, as it does when no admin request arrives.
 
 ### Admin response: success (kind 4)
@@ -1037,10 +1037,11 @@ the request, so a service that refuses at its first check answers and closes whi
 CLI reports the service's error, not the broken pipe. A bundle source or sink that fails (a file that cannot be read or
 written) ends the exchange with that error instead, since no response can make it succeed.
 
-`export` writes each bundle data frame's bytes to a sink as it arrives, and `import` reads its source in
-65 536-byte pieces, so the CLI never holds a whole bundle in memory. `Bundle::received()` tells the caller how many bytes arrived and whether
-the empty frame did; `export` checks both against the result's byte count before it keeps the bundle (K-311). The 60-second socket timeout below is unchanged: a bundle moves in frames,
-each a socket call, and the service's [transfer deadline](#bundle-data-kind-9) bounds the whole transfer.
+`export` writes each bundle data frame's bytes to a sink as it arrives, and `import` reads its source in 65 536-byte
+pieces, so the CLI never holds a whole bundle in memory. `Bundle::received()` tells the caller how many bytes arrived
+and whether the empty frame did; `export` checks both against the result's byte count before it keeps the bundle. The
+60-second socket timeout below is unchanged: a bundle moves in frames, each a socket call, and the service's
+[transfer deadline](#bundle-data-kind-9) bounds the whole transfer.
 
 | Exit code | Meaning |
 |---|---|

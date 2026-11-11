@@ -352,7 +352,8 @@ async fn a_frame_write_cut_off_by_its_deadline_leaves_no_response_behind_it() {
     served.await.unwrap();
     let logged = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
     assert!(logged.contains("response was not sent"), "{logged}");
-    // The service closed: the CLI reads to the end of the stream, and every byte of it belongs to bundle data frames.
+    // The service closed: the CLI reads to the end of the stream, and every byte of it belongs to bundle data frames,
+    // the last of them cut off part-way.
     let mut rest = Vec::new();
     tokio::time::timeout(PATIENCE, cli.read_to_end(&mut rest)).await.unwrap().unwrap();
     let mut bytes = rest.as_slice();
@@ -360,4 +361,9 @@ async fn a_frame_write_cut_off_by_its_deadline_leaves_no_response_behind_it() {
         assert!(matches!(frame, Frame::BundleData(_)), "{frame:?}");
         bytes = &bytes[used..];
     }
+    assert!(
+        matches!(protocol::decode(bytes), Ok(Decoded::NeedMore(_))),
+        "{} bytes left over",
+        bytes.len()
+    );
 }
