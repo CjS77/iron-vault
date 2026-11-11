@@ -73,7 +73,7 @@ container runtime ([log operations](log-operations.md#docker)). The
 [host layout](../../../design/docker-compose.md#host-layout) and [mounts](../../../design/docker-compose.md#mounts)
 tables in docker-compose.md list every host path and mount.
 
-The Container profile has one more file, the host unlock handoff:
+The Protected and Container profiles read one more file when it is there, the host unlock handoff:
 
 | Path | Owner | Mode | Made by | What it is |
 |---|---|---|---|---|

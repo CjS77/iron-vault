@@ -28,8 +28,8 @@ The diagram is the one in the specification. The table below says the same in wo
 
 | From | To | When |
 |---|---|---|
-| Starting | Locked | The vault needs an interactive unlock: every start outside the Container profile, and a container start whose host unlock handoff was absent or refused. |
-| Starting | Checking | A host unlock succeeded: in the Container profile, the unlock handoff opened the vault at startup. TPM unlock is still to come (EP-32). |
+| Starting | Locked | The vault needs an interactive unlock: every Development start, and a Protected or Container start whose host unlock handoff was absent or refused. |
+| Starting | Checking | A host unlock succeeded: in the Protected and Container profiles, the unlock handoff opened the vault at startup. TPM unlock is still to come (EP-32). |
 | Locked | Checking | `iron-vault unlock` succeeded. |
 | Checking | Ready | The config check passed: storage and the current approval verify. |
 | Checking | Unavailable | The config check failed: the policy is invalid, or shared state is damaged. |
@@ -144,7 +144,7 @@ development mode. Each profile is named in `status`, in `ping`, and as `deployme
 | Built with | no feature (the `.deb`) | `--features dev-mode` | `--features container` |
 | Runs as | the `iron-vault` system account | you | the `iron-vault` account in the image |
 | Admin principals | root, so you use `sudo` | you | root only |
-| Unlock at startup | none: starts Locked, `unlock` with the vault passphrase | as protected | from the host unlock handoff when one is there ([files](files.md#container)); otherwise Locked, as protected |
+| Unlock at startup | from the host unlock handoff when one is there ([files](files.md#container)); otherwise Locked, `unlock` with the vault passphrase | none: starts Locked | from the host unlock handoff when one is there ([files](files.md#container)); otherwise Locked, as protected |
 | Memory not locked against swap | stays Locked: `unlock` is refused with `memory-unprotected` | unlocks anyway; `status` says `NOT protected` | as protected |
 | Callers | peer account, token or listener | token or listener only: a peer caller may never be the service's own account, and in development that is you | see [docker-compose.md](../../../design/docker-compose.md) |
 | TCP listeners | from systemd socket units | bound by the service | bound by the service |

@@ -333,7 +333,7 @@ identity:
 
 - **Part 1 keeps the host unlock identity while the host unlock adapter is configured.** That design leaves "configured"
   to this epic. Here, the adapter is configured for the host unlock identity whose recipient key the current unlock
-  handoff holds. In the Container profile, `recipient remove` reads the handoff before any prompt, as Starting does,
+  handoff holds. In the Protected and Container profiles, `recipient remove` reads the handoff before any prompt, as Starting does,
   and part 1 keeps that one recipient. Any other `host-unlock` recipient, such as an old host's or one whose TPM was
   replaced, is not configured and can be removed. With no readable handoff, no host unlock is configured.
   Whether a recipient can be removed depends on the host's handoff at the time of the command, never on how the
@@ -437,6 +437,8 @@ directory's lifetime and visibility to the unit, and gives its files to the unit
 
 ### In the container
 
+The Protected profile tries the same handoff at startup; see [tpm-unlock.md](tpm-unlock.md#in-the-service).
+
 Only the service container mounts the host's `/run/iron-vault-unlock`, read-only. It reads the handoff once, while
 Starting:
 
@@ -463,7 +465,7 @@ Each attempt writes one audit event, `vault.host-unlock`, which never holds the 
 
 `unlocked` and `absent` are INFO, `refused` is WARN. The field is `host_unlock_outcome`, not `outcome`, which the
 request event already uses with another meaning, and its labels are snake_case like every fixed label
-([audit-logging.md](audit-logging.md#field-rules)). Other profiles never write it. A `memory_unprotected` refusal also
+([audit-logging.md](audit-logging.md#field-rules)). A Development service never writes it. A `memory_unprotected` refusal also
 writes the `vault.unlock-refused` record that every unlock path's memory guard writes.
 
 ### Lifetime
@@ -484,7 +486,7 @@ handoff takes effect at the next restart.
 
 ### Enrollment
 
-- **A new vault:** `init --host-unlock`, accepted only by a container build. The service reads the handoff before any
+- **A new vault:** `init --host-unlock`, accepted by every build but dev-mode. The service reads the handoff before any
   prompt, as Starting does, and refuses `init` if it is absent or refused, naming the reason. Init then wraps
   `identity.age` for the operational identity, the recovery key and the host unlock identity, and proves that each
   opens it. Init's summary and the `vault.initialized` record name the kinds enrolled, never a key.

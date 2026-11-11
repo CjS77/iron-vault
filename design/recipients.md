@@ -41,7 +41,7 @@ whether the recipient counts toward the [independence rule](#independence-rule).
 | `3` | `added` | none | A recipient key the owner supplied, such as a destination device for the alternate migration path ([§16](iron-vault-specification.md#16-administration-recovery-and-migration)) | `recipient add <age1…>` |
 | `4` | `tpm` | unlock | Reserved: a TPM-sealed intermediate identity ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)) | the TPM epic |
 | `5` | `hardware` | unlock | Reserved: a hardware-key intermediate identity ([future spec §2.1](future-specifications.md#21-hardware-key-recipients-signers-and-touch-confirmation)) | the hardware-key phase |
-| `6` | `host-unlock` | unlock | The intermediate identity of a host unlock adapter, read from the unlock handoff ([§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances)) | `init --host-unlock` in a container build, `recipient add --host-unlock <age1…>` |
+| `6` | `host-unlock` | unlock | The intermediate identity of a host unlock adapter, read from the unlock handoff ([§17](iron-vault-specification.md#17-docker-remote-servers-and-appliances)) | `init --host-unlock` in a build that is not dev-mode, `recipient add --host-unlock <age1…>` |
 
 Codes 4 and 5 are reserved now so that later epics need no new format version: this release refuses them when it reads
 an inventory, and the epic that enrolls one makes the decoder accept it. Code 6 is accepted: the Compose epic enrolls
@@ -287,7 +287,7 @@ and part 3 becomes "at least one recipient of the recovery class":
 - **`hardware`** joins the unlock class. Whether a second hardware key may count as recovery is that phase's decision.
 - **`host-unlock`** joins the unlock class. Part 1 keeps it while the host unlock adapter is configured. It never counts
   as recovery, because its secret lives on the host. The adapter is configured for the `host-unlock` recipient whose
-  key the unlock handoff holds when the command runs, in the Container profile
+  key the unlock handoff holds when the command runs, in the Protected and Container profiles
   ([docker-compose.md](docker-compose.md#its-role-among-the-recipients)); any other `host-unlock` recipient, and any
   `added` one, is not kept by part 1.
 
@@ -393,7 +393,7 @@ or a change to the bound PCR: the host provisions a new identity, whose recipien
 and the owner enrolls it with this command. Once a restart reaches Ready with no `unlock`, the unlock handoff holds the
 new identity, so part 1 of the [independence rule](#independence-rule) no longer keeps the old `host-unlock` recipient,
 and `recipient remove` takes it out. An `added` recipient never counts as the host unlock adapter's recipient: only role
-`host-unlock` does. Every profile accepts the command; the role only matters to part 1 in the Container profile, where
+`host-unlock` does. Every profile accepts the command; the role only matters to part 1 in the Protected and Container profiles, where
 a host unlock adapter can be configured.
 
 ### `recipient add --recovery`
@@ -433,7 +433,7 @@ that will refuse to show it. Every ending after the reveal says what to do with 
 |---|---|---|
 | 1 | The service is Ready; the key parses as a recipient key | `wrong-state`, `recipient-invalid` |
 | 2 | Try the service-wide lock, recording the state and check generation | `busy` |
-| 3 | The inventory check; the key is enrolled; in the Container profile, read the unlock handoff for the configured host unlock recipient; the independence rule allows the set without it | `recipient-inventory-damaged`, `vault-write-failed`, `unknown-recipient`, `recipient-set-invalid` |
+| 3 | The inventory check; the key is enrolled; in the Protected and Container profiles, read the unlock handoff for the configured host unlock recipient; the independence rule allows the set without it | `recipient-inventory-damaged`, `vault-write-failed`, `unknown-recipient`, `recipient-set-invalid` |
 | 4 | The summary, as notices | |
 | 5 | Owner presence: the `Approval passphrase for "<label>"` prompt | `approval-denied`, `approval-unavailable` |
 | 6 | Still Ready at the recorded check generation | `wrong-state` |
@@ -595,7 +595,7 @@ not repeated in `recipient.change-failed`: migration authorization records `migr
 ## Initialization
 
 `init` writes the first inventory: the `operational` and `recovery` recipients, with the labels `vault passphrase` and
-`recovery key` and the init time. A container build's `init --host-unlock` adds a third entry, role `host-unlock`,
+`recovery key` and the init time. A build that is not dev-mode accepts `init --host-unlock`, which adds a third entry, role `host-unlock`,
 labelled `host unlock`, for the identity in the unlock handoff. It is the only moment the service knows the recovery
 key's recipient key, so a vault whose `init` did not write one can never have one.
 

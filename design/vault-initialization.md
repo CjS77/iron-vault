@@ -148,8 +148,8 @@ After the admin request, in order:
    never discarded: this init then writes nothing and ends with `busy`, or with `already-initialized` once that run
    has finished.
 
-   With `--host-unlock` (a container build only), the service then reads the
-   [unlock handoff](docker-compose.md#enrollment) as Starting does, and a service whose profile is not Container, an
+   With `--host-unlock` (not accepted by a dev-mode build), the service then reads the
+   [unlock handoff](docker-compose.md#enrollment) as Starting does, and a Development service, an
    absent handoff or a refused one ends with `init-failed` before any prompt, naming the reason and nothing of the
    file's bytes. Nothing is written.
 2. **Passphrases.** Four prompts, all secret: `Vault passphrase`, `Repeat the vault passphrase`,

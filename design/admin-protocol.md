@@ -423,7 +423,7 @@ The request's one argument:
 
 | Tag | Field | Value |
 |---|---|---|
-| 2 | host unlock | flag, exactly 1 byte: `1` to also enrol the host unlock identity from the [unlock handoff](docker-compose.md#enrollment) as a third recipient, else `0`. The CLI sends `1` only for `init --host-unlock`, which only a `container` build accepts, and a service whose profile is not Container refuses it |
+| 2 | host unlock | flag, exactly 1 byte: `1` to also enrol the host unlock identity from the [unlock handoff](docker-compose.md#enrollment) as a third recipient, else `0`. The CLI sends `1` only for `init --host-unlock`, which a dev-mode build does not accept, and a Development service refuses it |
 
 The exchange, after the request:
 
@@ -476,7 +476,7 @@ Errors specific to `init`:
 | `wrong-state` | the service is not Locked: at the request, before any prompt, or at the re-check under the lock after the reveal, when the message also says the recovery key shown opens nothing and is to be discarded |
 | `passphrase-rejected` | a passphrase broke a rule; the message names the rule |
 | `declined` | the owner did not answer the recovery key confirmation with `yes`; the message says the recovery key shown opens nothing and is to be discarded |
-| `init-failed` | the host unlock flag was set and the service has no host unlock identity to enrol: its profile is not Container, the handoff is absent, or it was refused (untrusted path, too long, not an `age` secret key, unreadable). Raised before any prompt, so the message says nothing was written. Otherwise a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: a start-over means the key is dead, and `already-initialized` with a vault that is Initialized means a vault stands, which the owner confirms with `iron-vault recovery check` before relying on the key, because a concurrent init may have finished first. A failure of the discard of an unfinished initialization names `discard` as its step |
+| `init-failed` | the host unlock flag was set and the service has no host unlock identity to enrol: its profile is Development, the handoff is absent, or it was refused (untrusted path, too long, not an `age` secret key, unreadable). Raised before any prompt, so the message says nothing was written. Otherwise a write failed; the message names the failed step (its number, or `discard`), says to run `iron-vault init` again, which discards the unfinished vault, and says to discard the recovery key shown, which opens nothing. A failure at step 9 leaves the outcome unknown, so the message says to keep the key and run `init` again: a start-over means the key is dead, and `already-initialized` with a vault that is Initialized means a vault stands, which the owner confirms with `iron-vault recovery check` before relying on the key, because a concurrent init may have finished first. A failure of the discard of an unfinished initialization names `discard` as its step |
 
 #### recovery check
 
@@ -935,7 +935,7 @@ redacted reason, and exits with code 1.
 
 ### init
 
-`iron-vault init` takes one option, `--host-unlock`, which only a `container` build accepts (any other build's parser
+`iron-vault init` takes one option, `--host-unlock`, which a `dev-mode` build does not accept (its parser
 reports an unexpected argument) and which sets the request's host unlock flag. The passphrases are answers to the
 service's secret prompts, read as for any prompt, and the recovery key arrives in a reveal. Before it sends the request it checks that it can open `/dev/tty`,
 and without a controlling terminal it reports that on stderr and exits with code 3, so the service never generates a
