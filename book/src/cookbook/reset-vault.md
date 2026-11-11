@@ -52,8 +52,8 @@ it does not recognise (these stay), and what to keep. It then asks you to type t
 Type 3f1c9a5e-0b9c-4f7e-8a41-6d2b7e0c1a55 to discard this vault
 ```
 
-Type the ID, or paste it. `yes` is not accepted, and neither is an empty line. Anything else, or Ctrl-C, removes nothing. Only once you have typed the confirmation
-does the service stop serving and stay Locked; until then it keeps serving requests.
+Type the ID, or paste it. `yes` is not accepted, and neither is an empty line. Anything else, or Ctrl-C, removes nothing.
+Until you type the confirmation the service keeps serving requests; once you do, it stops serving and stays Locked.
 When no vault is Initialized (a half-finished `init`), you type the state directory's path instead.
 
 The confirmation must come from a terminal. With standard input a pipe, a file or `/dev/null`, or with no terminal for the

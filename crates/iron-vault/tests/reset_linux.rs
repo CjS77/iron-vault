@@ -717,8 +717,9 @@ impl StoreFs for FailingRemoval {
     }
 }
 
-/// Release check 12, `vault.reset-failed`, and check 5 at the service: a removal failing after `manifest.age` and the approver key ends in the
-/// partly-discarded error and the event, the directories read Unfinished reset, `init` is refused, and the next reset finishes.
+/// Release check 12, `vault.reset-failed`, and check 5 at the service: a removal failing after `manifest.age` and the approver key
+/// ends in the partly-discarded error and the event, the directories read Unfinished reset, `init` is refused, and the next reset
+/// finishes.
 #[tokio::test]
 async fn release_check_12_a_failed_removal_logs_reset_failed_and_the_next_reset_finishes() {
     let logs = captured_logs();
