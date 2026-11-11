@@ -10,18 +10,18 @@ Every format below starts with four ASCII bytes naming it: `IV` for Iron Vault, 
 reader refuses a file whose magic is not the one it expects. In a signed or MAC'd payload the magic is also domain
 separation: those bytes can be read only as the format they name.
 
-| Magic  | Format                                                          |
-|--------|-----------------------------------------------------------------|
-| `IVCR` | Credential record (record payload v1)                           |
-| `IVMF` | Manifest file                                                   |
-| `IVMP` | Manifest payload                                                |
-| `IVAP` | Approval payload: the bytes a config approval signs             |
-| `IVAS` | Approval signature: the envelope in `config.toml.sig`           |
-| `IVAF` | Approval state file                                             |
-| `IVAM` | Approval metadata: the approval state payload                   |
-| `IVRF` | Recipient inventory file                                        |
-| `IVRP` | Recipient inventory payload                                     |
-| `IVBH` | Bundle header: the first entry of a migration bundle            |
+| Magic  | Format                                                                |
+|--------|-----------------------------------------------------------------------|
+| `IVCR` | Credential record (record payload v1)                                 |
+| `IVMF` | Manifest file                                                         |
+| `IVMP` | Manifest payload                                                      |
+| `IVAP` | Approval payload: the bytes a config approval signs                   |
+| `IVAS` | Approval signature: the envelope in `config.toml.sig`                 |
+| `IVAF` | Approval state file                                                   |
+| `IVAM` | Approval metadata: the approval state payload                         |
+| `IVRF` | Recipient inventory file                                              |
+| `IVRP` | Recipient inventory payload                                           |
+| `IVBH` | Bundle header: the first entry of a migration bundle (`BundleHeader`) |
 
 ## Record payload v1
 
@@ -891,7 +891,8 @@ POSIX ustar archive holding a closed list of entries in a fixed order. The archi
 that holds a secret is encrypted on its own, so the archive needs no encryption of its own and its entry names and
 sizes are public. Nothing in it ever becomes a filesystem path: import matches each entry name against the list below
 and writes the state-directory or config-directory file the list names. The design is in
-[migration-bundle.md](migration-bundle.md).
+[migration-bundle.md](migration-bundle.md). Rust: `iron_vault_store::migration_bundle`, with `MAX_BUNDLE_LEN`,
+`MAX_BUNDLED_APPROVER_LEN` and `BUNDLE_FORMAT_VERSION`.
 
 ### Entries
 
@@ -909,7 +910,8 @@ In this order, each exactly once unless the count says otherwise:
 
 IDs in names are version 4 UUIDs in lowercase hyphenated form, as in the state directory. Lowercase hex sorts in the
 same order as the ID bytes, so ascending names and ascending IDs agree. Import parses each ID from its entry name and
-formats the state-directory file name from the parsed UUID, never from the name's bytes.
+formats the state-directory file name from the parsed UUID, never from the name's bytes. Rust: `EntryName`, whose
+variants order as the table does.
 
 A **bundled approver key** is an [approver key envelope](#approver-key-envelope) encrypted again, so it sits under the
 export passphrase ([§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 2): a plain binary
@@ -933,6 +935,7 @@ conventions of record payload v1:
 
 The header is not authenticated. Import trusts none of it: once the vault identity is open, it requires the vault ID
 to equal the manifest's and the approval state's, and each count to equal what those files name.
+Rust: `BundleHeader`.
 
 ### Entry header
 
@@ -954,12 +957,13 @@ field is fixed except the name, the size and the checksum:
 | 263 | 2 | version | `00` |
 | 265 | 247 | user and group names, device numbers, prefix and padding | zero bytes |
 
-After the last entry come two 512-byte blocks of zero bytes, the end of the archive, and nothing else.
+After the last entry come two 512-byte blocks of zero bytes, the end of the archive, and nothing else. Rust:
+`entry_header`, crate-private: the code's only definition of an entry header.
 
 The archive is compressed as one gzip member (RFC 1952). The encoder writes no file name, comment or extra field, and
 modification time 0; its compression level is not part of the format. Record files are already encrypted, so
 compression saves little; gzip is there because [§16](iron-vault-specification.md#16-administration-recovery-and-migration)
-names a `.tar.gz`.
+names a `.tar.gz`. Rust: `BundleEncoder`, which streams one entry at a time.
 
 ### Size limit
 
