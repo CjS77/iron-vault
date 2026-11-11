@@ -854,10 +854,12 @@ exactly the format of the [passphrase envelope](#passphrase-envelope), made by t
 identity's secret text as its plaintext in place of the operational identity's. The design is in
 [migration-bundle.md](migration-bundle.md#what-the-bundle-holds).
 
-- **Stanzas, work factor, size and reading order.** As for the passphrase envelope: exactly one scrypt stanza, sealed at
-  `PASSPHRASE_WORK_FACTOR`, refused above `MAX_PASSPHRASE_WORK_FACTOR` or with any other stanza before scrypt runs,
-  and bounded by `MAX_PASSPHRASE_ENVELOPE_LEN` (1 KiB; the file is 256 bytes). The plaintext must parse as an X25519
-  identity.
+- **Stanzas, work factor, size and reading order.** As for the passphrase envelope: exactly one scrypt stanza, refused
+  with any other stanza before scrypt runs, and bounded by `MAX_PASSPHRASE_ENVELOPE_LEN` (1 KiB; the file is 256
+  bytes). The plaintext must parse as an X25519 identity.
+- **Exactly one work factor.** Export always seals at `PASSPHRASE_WORK_FACTOR` (2^18), and import refuses any other
+  work factor before scrypt runs, not only one above `MAX_PASSPHRASE_WORK_FACTOR`. The bundle comes from outside the
+  machine, so its sender must not choose how much locked memory and time the service spends.
 - **Never on disk.** It is not `identity.age`, which never holds an scrypt stanza
   ([§14](iron-vault-specification.md#14-recipients-startup-and-memory)). Export seals it in memory and streams it;
   import opens it in memory and wraps the identity it holds into a new `identity.age`.
@@ -871,7 +873,8 @@ A [migration bundle](glossary.md) is the file `iron-vault export` writes and `ir
 POSIX ustar archive holding a closed list of entries in a fixed order. The archive is a container only. Every entry
 that holds a secret is encrypted on its own, so the archive needs no encryption of its own and its entry names and
 sizes are public. Nothing in it ever becomes a filesystem path: import matches each entry name against the list below
-and writes the state-directory file the list names. The design is in [migration-bundle.md](migration-bundle.md).
+and writes the state-directory or config-directory file the list names. The design is in
+[migration-bundle.md](migration-bundle.md).
 
 ### Entries
 
@@ -883,11 +886,22 @@ In this order, each exactly once unless the count says otherwise:
 | `exported-identity.age` | 1 | The [exported identity envelope](#exported-identity-envelope) | `MAX_PASSPHRASE_ENVELOPE_LEN` (1 KiB) |
 | `manifest.age` | 1 | The [manifest file](#manifest-file-v1), byte for byte | `MAX_MANIFEST_LEN` (1 MiB) |
 | `approval.age` | 1 | The [approval state file](#approval-state-file-v1), byte for byte | `MAX_APPROVAL_STATE_LEN` (4 KiB) |
-| `approver-<approver ID>.age` | the header's approver count, 1 to 16 | An [approver key envelope](#approver-key-envelope), byte for byte, in ascending approver ID | `MAX_PASSPHRASE_ENVELOPE_LEN` (1 KiB) |
+| `config.toml` | 1 | The committed config, byte for byte; its BLAKE2b-256 is the approval state's committed config digest | `MAX_CONFIG_LEN` (60 KiB) |
+| `approver-<approver ID>.age` | the header's approver count, 1 to 16 | A bundled approver key (below), in ascending approver ID | `MAX_BUNDLED_APPROVER_LEN` (2 KiB) |
 | `record-<record ID>.age` | the header's record count, 0 to 4096 | A record file, byte for byte, in ascending record ID | `MAX_RECORD_FILE_LEN` (64 KiB) |
 
 IDs in names are version 4 UUIDs in lowercase hyphenated form, as in the state directory. Lowercase hex sorts in the
-same order as the ID bytes, so ascending names and ascending IDs agree.
+same order as the ID bytes, so ascending names and ascending IDs agree. Import parses each ID from its entry name and
+formats the state-directory file name from the parsed UUID, never from the name's bytes.
+
+A **bundled approver key** is an [approver key envelope](#approver-key-envelope) encrypted again, so it sits under the
+export passphrase ([§16](iron-vault-specification.md#16-administration-recovery-and-migration) step 2): a plain binary
+`age` v1 file with exactly one X25519 stanza, to the vault public key, whose plaintext is the envelope's bytes as they
+were in the state directory. Import opens it with the vault identity, refuses any other stanza, and requires the
+plaintext to be an approver key envelope within `MAX_PASSPHRASE_ENVELOPE_LEN` with exactly one scrypt stanza and a
+work factor no higher than `MAX_PASSPHRASE_WORK_FACTOR`. The plaintext is what import writes. `MAX_BUNDLED_APPROVER_LEN`
+is 2 KiB: a 1 KiB envelope, plus the `age` header with its X25519 stanza and a grease stanza, the payload nonce and the
+tag.
 
 The **bundle header** is the format's version gate and lets import refuse a foreign file before any prompt. It uses the
 conventions of record payload v1:
@@ -934,9 +948,10 @@ names a `.tar.gz`.
 
 `MAX_BUNDLE_LEN` is 260 MiB (272,629,760 bytes) and bounds both the compressed bytes import receives and the archive
 they decompress to, so a small file cannot expand without limit. A full bundle is 1,024 bytes for the header entry,
-1,536 for the exported identity, 1,049,088 for the manifest, 4,608 for the approval state, 16 × 1,536 for the approver
-key files, 4096 × 66,048 for the records and 1,024 for the end: 271,614,464 bytes. Gzip's stored blocks add 5 bytes per
-65,535 and 18 bytes of header and trailer, about 20,700 bytes, so a full bundle compressed fits too.
+1,536 for the exported identity, 1,049,088 for the manifest, 4,608 for the approval state, 61,952 for the config,
+16 × 2,560 for the bundled approver keys, 4096 × 66,048 for the records and 1,024 for the end: 271,692,800 bytes.
+Gzip's stored blocks add 5 bytes per 65,535 and 18 bytes of header and trailer, about 20,750 bytes, so a full bundle
+compressed fits too.
 
 ### Example
 
@@ -951,8 +966,9 @@ The vault of the examples above, `3f2b8c1e-5d4a-4e6f-9a7b-1c2d3e4f5a6b`, with it
 00 00 00 00 00 00 00 01                            record count 1
 ```
 
-The archive before compression. The sizes of the `age` files vary with `age`'s random grease stanza, so the manifest,
-approval state and record sizes here are illustrative; the passphrase-sealed files have fixed sizes:
+The archive before compression. The committed config is the [initial config](vault-initialization.md#initial-config),
+`schema_version = 1\n`. The sizes of the `age` files vary with `age`'s random grease stanza, so the manifest, approval
+state, bundled approver key and record sizes here are illustrative; the exported identity envelope has a fixed size:
 
 | Offset | Entry | Size | Size field | Checksum field |
 |---|---|---|---|---|
@@ -960,12 +976,13 @@ approval state and record sizes here are illustrative; the passphrase-sealed fil
 | 1,024 | `exported-identity.age` | 256 | `00000000400` | |
 | 2,048 | `manifest.age` | 466 | `00000000722` | |
 | 3,072 | `approval.age` | 546 | `00000001042` | |
-| 4,608 | `approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age` | 214 | `00000000326` | |
-| 5,632 | `record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age` | 389 | `00000000605` | `014503` |
-| 6,656 | end of archive | 1,024 | | |
+| 4,608 | `config.toml` | 19 | `00000000023` | `010072` |
+| 5,632 | `approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age` | 471 | `00000000727` | `015333` |
+| 6,656 | `record-7c9e6679-7425-40de-944b-e07fc1f90ae7.age` | 389 | `00000000605` | `014503` |
+| 7,680 | end of archive | 1,024 | | |
 
-The archive is 7,680 bytes. `approval.age` takes two blocks after its header because 546 bytes do not fit in one.
-The two checksums shown are those of the headers' fixed bytes with that name and size.
+The archive is 8,704 bytes. `approval.age` takes two blocks after its header because 546 bytes do not fit in one.
+The checksums shown are those of the headers' fixed bytes with that name and size.
 
 ### One encoding per bundle
 
@@ -974,6 +991,9 @@ decoder accepts an archive only if it is that form:
 
 - the input is one gzip member with nothing after it, and neither the compressed bytes nor the archive exceed
   `MAX_BUNDLE_LEN`;
+- the gzip header has compression method 8 and no flag set: FTEXT, FHCRC, FEXTRA, FNAME, FCOMMENT and the reserved
+  bits are all refused. Its modification time, XFL and OS bytes are not checked, because they do not change the
+  archive. The trailer's CRC-32 and ISIZE must equal those of the decompressed archive;
 - each entry header equals the header the encoder would write for its name and size, checksum included. That one rule
   refuses every other entry type (links, directories, devices, FIFOs), pax and GNU extension headers, an absolute name
   or one holding `/` or `..`, a name over 100 bytes, other modes, owners and times, and a NUL inside a name;
@@ -984,5 +1004,7 @@ decoder accepts an archive only if it is that form:
 - each entry is within its size limit, checked from the header's size field before the entry's bytes are read;
 - the padding after each entry and the two end blocks are zero bytes, and the archive ends there.
 
-The decoder checks only the form. That the identity opens, the MACs verify, the IDs agree and the record digests match
-is checked by import with the vault identity ([migration-bundle.md](migration-bundle.md#import)).
+The decoder reads incrementally: it inflates the bytes as they arrive and checks each rule as soon as the bytes it
+needs are in, so the compressed bundle is never held whole. It checks only the form. That the identity opens, the MACs
+verify, the IDs agree, the record and config digests match and the bundled approver keys open is checked by import
+with the vault identity ([migration-bundle.md](migration-bundle.md#import)).
