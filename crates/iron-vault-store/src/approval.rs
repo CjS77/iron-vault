@@ -29,7 +29,9 @@ use thiserror::Error;
 
 use crate::vault_id::{VaultId, VaultIdError};
 
-pub use approver_change::{ApproverChangeError, ApproverChangeStep, ApproverChanges, KeyCheckError, KeyFileOutcome, MayHaveCommitted};
+pub use approver_change::{
+    ApproverChangeError, ApproverChangeStep, ApproverChanges, KeyCheckError, KeyFileOutcome, MayHaveCommitted, ReadBack,
+};
 pub use recovery::{ApprovalRecoveryError, DiscardedFile, PublishedPairFault, RecoveredApproval, RecoveryFailure, recover_approval};
 pub use signer::{ApprovalSigner, SignError};
 pub(crate) use software_signer::seal_signer_key_at;

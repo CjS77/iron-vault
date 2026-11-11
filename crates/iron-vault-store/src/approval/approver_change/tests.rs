@@ -97,7 +97,7 @@ impl Setup {
             .collect()
     }
 
-    fn read_back(&mut self) -> Result<ApprovalState, ApproverChangeError> {
+    fn read_back(&mut self) -> Result<ReadBack, ApproverChangeError> {
         ApproverChanges::new(&self.lock, &self.fs, &self.identity).read_back_approval_state(&mut self.state)
     }
 
@@ -107,6 +107,26 @@ impl Setup {
         let read = changes.read_back_approval_state(&mut self.state).unwrap();
         changes.remove_orphan_key_files(&read).unwrap()
     }
+
+    /// Plants key files for two new orphans and returns their IDs in file name order.
+    fn plant_two_orphans(&self) -> [ApproverId; 2] {
+        let mut orphans = [ApproverId::generate(), ApproverId::generate()];
+        orphans.sort();
+        orphans.iter().for_each(|id| self.plant_key_file(*id));
+        orphans
+    }
+}
+
+/// The indices, from the end of `prepare`, of the calls of `op` that `act` makes on a fresh [`Setup`], so a test fails a
+/// call by what it is and not by a count that changes with the implementation. `prepare` and `act` make the same calls
+/// whenever they run, whatever IDs they use.
+fn calls_of<T>(op: FsOp, prepare: impl Fn(&mut Setup) -> T, act: impl Fn(&mut Setup, T)) -> Vec<usize> {
+    let mut setup = Setup::new();
+    let prepared = prepare(&mut setup);
+    let from = setup.fs.trace().len();
+    act(&mut setup, prepared);
+    let calls = setup.fs.trace().split_off(from);
+    (0..calls.len()).filter(|i| calls[*i].op() == op).collect()
 }
 
 /// The calls a clean enrollment makes on a fresh [`Setup`].
@@ -223,15 +243,58 @@ fn a_failed_directory_fsync_after_the_rename_reports_unknown_and_the_read_back_s
 }
 
 #[test]
-fn sweeping_against_the_in_memory_state_would_delete_the_key_of_a_pinned_approver() {
+fn a_read_back_of_an_older_approval_state_restored_while_unsettled_is_refused_and_keeps_every_key_file() {
     let mut setup = Setup::new();
+    let older = setup
+        .fs
+        .contents(&setup.dir.path().join(StateFileName::approval_state().as_str()))
+        .unwrap();
     let last = setup.fs.trace().len() + enroll_calls() - 1;
     setup.fs.fail_call(last, io::ErrorKind::StorageFull);
     setup.enroll().unwrap_err();
+    assert!(setup.state.is_unsettled());
+    let enrolled = setup.key_file_ids();
+    assert_eq!(enrolled.len(), 1, "the premise: a key file only the newer state pins");
+    // A write that follows the enrollment records its approval state generation in the manifest.
+    let newer = setup.load();
+    let generation = |n| crate::StateGeneration::new(n).unwrap();
+    let manifest = VaultManifest::new(newer.vault_id(), generation(4), Some(newer.state_generation()), Default::default()).unwrap();
+    durable_replace(
+        &setup.lock,
+        &setup.fs,
+        &StateFileName::manifest(),
+        &crate::seal_manifest(&setup.identity, &manifest).unwrap(),
+    )
+    .unwrap();
+    durable_replace(&setup.lock, &setup.fs, &StateFileName::approval_state(), &older).unwrap();
+    let vault_id = setup.state.vault_id();
+    let adopted = ApprovalState::read(&setup.lock, &setup.fs, &setup.identity, vault_id).unwrap();
+    assert_eq!(
+        adopted.approvers().len(),
+        1,
+        "the premise: a read without the manifest check would adopt it"
+    );
+    let unsettled = setup.state.clone();
+    let from = setup.fs.trace().len();
 
-    let stale = setup.changes().remove_orphan_key_files(&setup.state.clone()).unwrap();
+    let error = setup.read_back().unwrap_err();
 
-    assert_eq!(stale.len(), 1, "the premise: the in-memory state misses the committed enrollment");
+    assert!(
+        matches!(
+            &error,
+            ApproverChangeError::ReadBackUnreadable(ApprovalStateError::PartialRestore(_))
+        ),
+        "{error}"
+    );
+    assert!(error.to_string().contains("nothing was changed"), "{error}");
+    assert_eq!(
+        (error.step(), error.may_have_committed()),
+        (ApproverChangeStep::ReadBack, MayHaveCommitted::No)
+    );
+    assert!(setup.state.is_unsettled());
+    assert_eq!(setup.state, unsettled);
+    assert_eq!(setup.mutations(from), []);
+    assert_eq!(setup.key_file_ids(), enrolled);
 }
 
 #[test]
@@ -284,9 +347,7 @@ fn a_read_back_of_a_file_that_does_not_open_or_is_missing_is_refused_and_deletes
 fn the_sweep_removes_only_ids_the_read_back_state_does_not_pin() {
     let mut setup = Setup::new();
     let pinned = setup.enroll().unwrap().id();
-    let mut orphans = [ApproverId::generate(), ApproverId::generate()];
-    orphans.sort();
-    orphans.iter().for_each(|id| setup.plant_key_file(*id));
+    let orphans = setup.plant_two_orphans();
     let others = ["approver-NOT-A-UUID.age", "record-1.age", "notes.txt"];
     others
         .iter()
@@ -300,6 +361,34 @@ fn the_sweep_removes_only_ids_the_read_back_state_does_not_pin() {
     let names = setup.fs.list_dir(setup.lock.dir()).unwrap();
     assert!(others.iter().all(|other| names.iter().any(|n| n == other)));
     assert_eq!(setup.settle(), []);
+}
+
+#[test]
+fn a_sweep_that_fails_partway_reports_the_orphans_it_already_deleted() {
+    let prepare = |setup: &mut Setup| {
+        setup.plant_two_orphans();
+        setup.read_back().unwrap()
+    };
+    let act = |setup: &mut Setup, read: ReadBack| drop(setup.changes().remove_orphan_key_files(&read));
+    let second_unlink = calls_of(FsOp::RemoveFile, prepare, act)[1];
+    let mut setup = Setup::new();
+    let orphans = setup.plant_two_orphans();
+    let read = setup.read_back().unwrap();
+    setup
+        .fs
+        .fail_call(setup.fs.trace().len() + second_unlink, io::ErrorKind::PermissionDenied);
+
+    let error = setup.changes().remove_orphan_key_files(&read).unwrap_err();
+
+    assert!(
+        matches!(&error, ApproverChangeError::OrphanSweep { error: WriteError::Io { step: WriteStep::Remove, .. }, removed } if *removed == [orphans[0]]),
+        "{error:?}"
+    );
+    assert_eq!(
+        (error.step(), error.may_have_committed()),
+        (ApproverChangeStep::ReadBack, MayHaveCommitted::No)
+    );
+    assert_eq!(setup.key_file_ids(), [orphans[1]]);
 }
 
 #[test]
@@ -362,10 +451,12 @@ fn a_key_file_that_cannot_be_deleted_after_the_removal_is_left_and_the_removal_s
 
 #[test]
 fn a_directory_fsync_failing_after_the_key_file_unlink_leaves_the_removal_successful() {
+    let prepare = |setup: &mut Setup| setup.enroll().unwrap().id();
+    let act = |setup: &mut Setup, id| drop(setup.remove(id));
+    let unlink_sync = *calls_of(FsOp::SyncDir, prepare, act).last().unwrap();
     let mut setup = Setup::new();
-    let id = setup.enroll().unwrap().id();
-    let from = setup.fs.trace().len();
-    setup.fs.fail_call(from + 8, io::ErrorKind::StorageFull);
+    let id = prepare(&mut setup);
+    setup.fs.fail_call(setup.fs.trace().len() + unlink_sync, io::ErrorKind::StorageFull);
 
     let outcome = setup.remove(id).unwrap();
 
@@ -380,7 +471,7 @@ fn a_directory_fsync_failing_after_the_key_file_unlink_leaves_the_removal_succes
         "{outcome:?}"
     );
     assert!(setup.state.approver(id).is_none());
-    assert_eq!(setup.fs.trace().len() - from, 9);
+    assert!(!setup.has_key_file(id));
 }
 
 #[test]

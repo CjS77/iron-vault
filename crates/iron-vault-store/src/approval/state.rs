@@ -57,7 +57,8 @@ pub struct ApprovalState {
     highest_reserved: u64,
     committed: Option<(ApprovalVersion, ConfigDigest)>,
     /// Set when a write renamed the new state into place but its directory fsync failed, so the disk may hold a state
-    /// this one does not. An unsettled state accepts no write; [`ApprovalState::load`] gives the state to continue with.
+    /// this one does not. An unsettled state accepts no write; [`ApprovalState::load`], which the approver change read-back calls,
+    /// state to continue with.
     unsettled: bool,
 }
 
@@ -515,7 +516,8 @@ impl ApprovalState {
     }
 
     /// Whether an earlier write of this state renamed the new file into place but failed its directory fsync, so the disk
-    /// may hold a state this one does not. Such a state accepts no write until [`ApprovalState::load`] replaces it.
+    /// may hold a state this one does not. Such a state accepts no write until [`ApprovalState::load`], or the approver change read-back that calls it,
+    /// replaces it.
     pub fn is_unsettled(&self) -> bool {
         self.unsettled
     }

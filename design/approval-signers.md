@@ -246,11 +246,14 @@ Step 3 of `approver add` and `approver remove` reads `approval.age` from disk an
 or asked. When an earlier write left the in-memory approval state unsettled (its directory fsync failed after the
 rename, so that state accepts no more writes), the state read from disk replaces it, as the next approval does after
 such a reservation. Otherwise the two must be equal, the check the store makes before every approval-state write
-([storage-formats.md](storage-formats.md#writes)). A file that cannot be read or opened, or that differs from the
+([storage-formats.md](storage-formats.md#writes)). The file is loaded as every approval loads it, so it is checked
+against the manifest as well: an older `approval.age` restored beside a newer manifest is a partial restore
+([storage-formats.md](storage-formats.md#state-generation)) and is refused whether or not the in-memory state is
+unsettled. A file that cannot be read or opened, that is half of a partial restore, or that differs from the
 in-memory state, ends the command with `vault-write-failed`, whose message says nothing was changed, and no key file is
 deleted.
 
-The orphan sweep relies on this. An in-memory state that missed a committed enrollment would make that approver's key
+The orphan sweep relies on this, and takes only the state the read-back returned. An in-memory state that missed a committed enrollment would make that approver's key
 file look like an orphan, and the sweep would delete the only key of a pinned approver.
 
 ### Orphan key files
