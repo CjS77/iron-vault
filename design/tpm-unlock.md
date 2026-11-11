@@ -377,8 +377,7 @@ filesystem is `btrfs` or `bcachefs`, which can span several, the helper walks ev
   device. This layout is unverified on a real multi-device bcachefs, so the helper treats any member it cannot read as
   the whole list being unreadable.
 
-A btrfs filesystem over a LUKS member and a plain one therefore warns about the plain one, as an LV over a LUKS PV and a
-plain PV does. The helper warns when any of these hold:
+However the stack is walked, the helper warns when any of these hold:
 
 - some path in the stack reaches a disk with no `dm-crypt` layer above it: that part of the disk is unencrypted, as when
   an LV spans a LUKS PV and a plain one, or a btrfs filesystem a LUKS member and a plain one;

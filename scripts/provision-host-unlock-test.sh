@@ -336,6 +336,11 @@ multi_fs btrfs; portable "btrfs with no devices directory" 1 "could not list the
 multi_fs btrfs; mkdir -p "$work/sys/fs/btrfs/$fs_uuid/devices"; portable "btrfs with an empty devices directory" 1 "could not list"
 multi_fs btrfs; : >"$work/fsuuid"; btrfs_member dm-0; portable "btrfs with no filesystem UUID" 1 "could not list"
 multi_fs btrfs; echo "../../x" >"$work/fsuuid"; btrfs_member dm-0; portable "btrfs with a UUID that is not hex" 1 "could not list"
+# A UUID the hex guard must refuse: unguarded, it climbs out of its own directory and back into it, and lists the members.
+multi_fs btrfs; echo "$fs_uuid/../$fs_uuid" >"$work/fsuuid"; btrfs_member dm-0; portable "btrfs with a UUID that climbs out and back" 1 "could not list"
+# Two members over one LUKS device (dm-1 is the LV on dm-0) reach the same LUKS layer; its warning is given once.
+multi_fs btrfs; luks_dump nvme0n1p3 "$(tpm_token false)"; btrfs_member dm-0; btrfs_member dm-1
+portable "btrfs members sharing one LUKS layer" 1 "does not need a PIN"
 multi_fs btrfs; btrfs_member dm-9; portable "a btrfs member the device stack does not know" 1 "could not resolve"
 multi_fs bcachefs; second_luks; bcachefs_member 0 dm-0; bcachefs_member 1 dm-2
 portable "bcachefs over two LUKS members" 0

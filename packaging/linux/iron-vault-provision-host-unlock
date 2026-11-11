@@ -136,11 +136,12 @@ fs_members() {
 }
 
 # walk_filesystem SYSROOT FSTYPE UUID: walk_stack from every member of a multi-device filesystem, each judged on its own.
-# When the members cannot be listed it prints `members FSTYPE`, never a walk of the one device findmnt knows.
+# When the members cannot be listed it prints `members FSTYPE`, never a walk of the one device findmnt knows. Members that
+# share a LUKS layer print the same record, so a repeat is dropped (in order) lest its warnings are said twice.
 walk_filesystem() {
     local members member
     if ! members=$(fs_members "$1" "$2" "$3") || [ -z "$members" ]; then printf 'members\t%s\n' "$2"; return 0; fi
-    while read -r member; do walk_stack "$1" "$member"; done <<<"$members"
+    while read -r member; do walk_stack "$1" "$member"; done <<<"$members" | awk '!seen[$0]++'
 }
 
 # host_stack_records: the walk_stack records for everything that holds HOST_DIR.
