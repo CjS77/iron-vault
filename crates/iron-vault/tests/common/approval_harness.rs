@@ -405,11 +405,27 @@ pub fn serve_admin<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceCont
 
 /// [`serve_admin`], with the server's task, which ends once the handlers' references to the service are dropped.
 pub fn spawn_admin<F: StoreFs + Send + Sync + 'static>(service: &Arc<ServiceContext<F>>) -> (PathBuf, oneshot::Sender<()>, JoinHandle<()>) {
+    spawn_admin_for(service, service.paths().profile)
+}
+
+/// [`spawn_admin`] with the test's own account as the admin principal whatever the service's profile, so a Protected or
+/// Container service can be asked without root.
+pub fn spawn_owner_admin<F: StoreFs + Send + Sync + 'static>(
+    service: &Arc<ServiceContext<F>>,
+) -> (PathBuf, oneshot::Sender<()>, JoinHandle<()>) {
+    spawn_admin_for(service, DeploymentProfile::Development)
+}
+
+/// The admin server whose principals are those of `principals`' profile.
+fn spawn_admin_for<F: StoreFs + Send + Sync + 'static>(
+    service: &Arc<ServiceContext<F>>,
+    principals: DeploymentProfile,
+) -> (PathBuf, oneshot::Sender<()>, JoinHandle<()>) {
     let paths = service.paths().clone();
     let runtime_dir = paths.runtime_dir.clone().unwrap();
     let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
     let server = AdminServer::new(
-        AdminPrincipals::new(paths.profile, paths.owner.uid),
+        AdminPrincipals::new(principals, paths.owner.uid),
         Handlers::for_service(service),
         Limits::default(),
     );

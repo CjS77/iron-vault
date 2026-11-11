@@ -16,6 +16,8 @@ pub mod checked;
 pub mod cli_import;
 pub mod gated_fs;
 pub mod h2_refusal;
+#[cfg(target_os = "linux")]
+pub mod handoff_dir;
 pub mod hpack_fields;
 #[cfg(target_os = "linux")]
 pub mod migration_source;

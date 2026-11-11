@@ -549,8 +549,7 @@ recovery access, and the service boundary without writing plaintext secret artif
 "missing, incorrect, expired, replayed, or cancelled source-owner authorization". The authorization cases are tested
 by the migration authorization rejection suite, whose rows name `export` ([release checks](migration-authorization.md#release-checks)).
 Each part of the first bullet is one test in `crates/iron-vault/tests/lifecycle/migration.rs`, each moving a vault
-between two service instances with their own state directories. `import_host_unlock_enrolls_recipient` waits for
-`import --host-unlock`, which is refused until it is implemented:
+between two service instances with their own state directories:
 
 | §19 part | Test | What it proves |
 |---|---|---|

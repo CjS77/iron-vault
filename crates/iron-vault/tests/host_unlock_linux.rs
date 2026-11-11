@@ -20,13 +20,14 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use common::approval_harness::{
     Captured, Exchanged, Fixture, assert_audit_record, captured_logs, converse, converse_revealing, get, identity, send,
 };
+use common::handoff_dir::HandoffDir;
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::Handlers;
 use iron_vault::admin::principal::AdminPrincipals;
@@ -53,40 +54,6 @@ const EVENT: &str = "vault.host-unlock";
 
 /// One test at a time, so the records a test counts are its own.
 static TURN: Mutex<()> = Mutex::const_new(());
-
-/// A private `0700` directory holding the handoff, removed on drop.
-struct HandoffDir(PathBuf);
-
-impl HandoffDir {
-    fn new() -> Self {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let base = std::env::var_os("XDG_RUNTIME_DIR").or_else(|| std::env::var_os("HOME")).unwrap();
-        let dir = PathBuf::from(base).join(format!("iv-hu-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir(&dir).unwrap();
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
-        Self(dir)
-    }
-
-    fn path(&self) -> PathBuf {
-        self.0.join("host-unlock")
-    }
-
-    /// Writes `secret` as the handoff, `0400` as the host would leave it, in place of any handoff already there.
-    fn write(&self, secret: &str) -> PathBuf {
-        let path = self.path();
-        let _ = fs::remove_file(&path);
-        fs::write(&path, format!("{secret}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
-        path
-    }
-}
-
-impl Drop for HandoffDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 
 /// The harness vault with `identity.age` wrapped for an operational identity sealed to [`PASSPHRASE`] and for a fresh
 /// host unlock identity, whose secret text and `age1…` recipient key this returns.
@@ -225,7 +192,7 @@ async fn a_missing_handoff_leaves_it_locked_for_the_passphrase(profile: Deployme
 
 impl HandoffDir {
     fn unseal_failed(&self) -> PathBuf {
-        self.0.join("unseal-failed")
+        self.dir().join("unseal-failed")
     }
 
     /// An empty unseal-failure file, as the handoff unit's `ExecStopPost=` leaves it.

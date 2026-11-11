@@ -6,8 +6,6 @@
 //! A test that routes through the destination exports a source of its own, because the bundled config's listener is a
 //! socket in the source's directory and its route forwards to the source's test upstream. Each import runs scrypt at
 //! 256 MiB twice, so one test runs at a time.
-//!
-//! `import_host_unlock_enrolls_recipient` is not here yet: `import --host-unlock` is refused until it is implemented.
 
 #![cfg(target_os = "linux")]
 
@@ -20,9 +18,10 @@ use std::sync::Arc;
 
 use common::approval_harness::{
     APPROVAL_PASSPHRASE, Captured, Exchanged, Fixture, IDENTITY, approve, captured_logs, converse, converse_revealing, error_code, get,
-    identity, mkdir, send, service_locks, shutdown, spawn_admin, versions,
+    identity, mkdir, send, service_locks, shutdown, spawn_admin, spawn_owner_admin, versions,
 };
 use common::cli_import::{CliImport, CliRan};
+use common::handoff_dir::HandoffDir;
 use common::migration_source::{EXPORT_PASSPHRASE, SOURCE_PASSPHRASE, Source, fresh_source, send_bundle, source, write_ignoring_errors};
 use common::proxy_harness::TempDir;
 use common::shared_fs::SharedFs;
@@ -41,7 +40,8 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::Capabilities;
 use iron_vault_store::fault_fs::FsCall;
 use iron_vault_store::migration_bundle::{BundleDecoder, EntryName, MAX_BUNDLE_LEN};
-use iron_vault_store::{OsFs, StoreFs, open_manifest};
+use iron_vault_store::{OsFs, RecipientRole, RecoveryKey, RecoveryKeySecret, StoreFs, VaultIdentity, open_manifest, unwrap_identity};
+use secrecy::{ExposeSecret, SecretString};
 use tokio::net::UnixStream;
 use tokio::sync::MutexGuard;
 
@@ -77,10 +77,21 @@ impl Dest {
         self.start_on(source, OsFs)
     }
 
-    /// The service on this destination's directories through `fs`, trusting the source's test upstream.
+    /// The development service on this destination's directories through `fs`.
     fn start_on<F: StoreFs + Send + Sync + 'static>(&self, source: &Source, fs: F) -> Arc<ServiceContext<F>> {
+        Arc::new(self.context_as(source, DeploymentProfile::Development, MemoryProtection::Unsupported, fs))
+    }
+
+    /// The service of `profile` on this destination's directories through `fs`, trusting the source's test upstream.
+    fn context_as<F: StoreFs + Send + Sync + 'static>(
+        &self,
+        source: &Source,
+        profile: DeploymentProfile,
+        memory: MemoryProtection,
+        fs: F,
+    ) -> ServiceContext<F> {
         let paths = ServicePaths {
-            profile: DeploymentProfile::Development,
+            profile,
             owner: invoking_user().unwrap(),
             config: self.path("etc/config.toml"),
             state_dir: self.path("state"),
@@ -97,11 +108,11 @@ impl Dest {
                 .with_pinned_trust(source.fixture.ca().trust()),
             hardening: HardeningReport {
                 core_dumps: CoreDumps::Disabled,
-                memory: MemoryProtection::Unsupported,
+                memory,
             },
             log: LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap(),
         };
-        Arc::new(ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap())
+        ServiceContext::start(locks, setup, &provisional, PassedSockets::default()).unwrap()
     }
 
     /// Every file in the state and config directories with its bytes, the lock files included.
@@ -145,9 +156,19 @@ async fn import<F: StoreFs + Send + Sync + 'static>(
     bundle: &[u8],
     answers: &[&str],
 ) -> (Exchanged, Vec<String>) {
-    let (path, stop, task) = spawn_admin(service);
+    import_with(service, false, bundle, answers).await
+}
+
+/// [`import`] with the host unlock flag as `host_unlock` says.
+async fn import_with<F: StoreFs + Send + Sync + 'static>(
+    service: &Arc<ServiceContext<F>>,
+    host_unlock: bool,
+    bundle: &[u8],
+    answers: &[&str],
+) -> (Exchanged, Vec<String>) {
+    let (path, stop, task) = spawn_owner_admin(service);
     let mut stream = UnixStream::connect(path).await.unwrap();
-    send(&mut stream, &Frame::Request(AdminRequest::Import { host_unlock: false })).await;
+    send(&mut stream, &Frame::Request(AdminRequest::Import { host_unlock })).await;
     send_bundle(&mut stream, bundle).await;
     let (exchanged, revealed) = converse_revealing(&mut stream, answers).await;
     let _ = stop.send(());
@@ -478,6 +499,104 @@ async fn import_refuses_initialized_vault() {
 
     assert_eq!(error_code(&shown.response), ErrorCode::AlreadyInitialized);
     assert_eq!(unrecognized.files(), before);
+}
+
+/// A destination of `profile` with locked memory whose unlock handoff is `handoff`, Locked after startup.
+async fn host_unlock_dest(dest: &Dest, source: &Source, profile: DeploymentProfile, handoff: &Path) -> Arc<ServiceContext> {
+    let service = dest
+        .context_as(source, profile, MemoryProtection::Locked, OsFs)
+        .with_handoff_path(handoff.to_path_buf());
+    assert_eq!(service.unlock_at_start(&dest.path("no-handoff")).await, ServiceState::Locked);
+    Arc::new(service)
+}
+
+/// The vault identity in `dest`'s `identity.age`, opened with the age secret key `secret`.
+fn open_identity_with(dest: &Dest, secret: &str) -> VaultIdentity {
+    let key = RecoveryKeySecret::parse(SecretString::from(secret.to_owned())).unwrap();
+    unwrap_identity(&fs::read(dest.path("state/identity.age")).unwrap(), &key).unwrap()
+}
+
+/// The `migration.imported` records that name the host unlock recipient. Only this test writes one into the shared log,
+/// so each profile's pass proves its own import by adding exactly one.
+fn host_unlock_imports(logs: &Captured) -> usize {
+    logs.events("migration.imported")
+        .iter()
+        .filter(|record| record["recipients"] == "operational,recovery,host-unlock")
+        .count()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn import_host_unlock_enrolls_recipient() {
+    let _one = one_at_a_time().await;
+    let logs = captured_logs();
+    let source = source().await;
+    for profile in [DeploymentProfile::Protected, DeploymentProfile::Container] {
+        enrols_the_handoffs_identity(source, profile, &logs).await;
+        refuses_an_absent_handoff(source, profile).await;
+    }
+}
+
+/// `import --host-unlock` wraps the vault identity for the handoff's identity beside the operational and recovery
+/// recipients, each opens `identity.age`, and a restart reaches the config check from the handoff alone.
+async fn enrols_the_handoffs_identity(source: &Source, profile: DeploymentProfile, logs: &Captured) {
+    let dest = Dest::new();
+    let host_secret = RecoveryKey::generate().0.expose_secret().to_owned();
+    let handoff = HandoffDir::new();
+    let handoff_path = handoff.write(&host_secret);
+    let service = host_unlock_dest(&dest, source, profile, &handoff_path).await;
+    let before = host_unlock_imports(logs);
+
+    let (shown, revealed) = import_with(&service, true, &source.bytes, &COMPLETE).await;
+
+    let AdminResponse::Import(result) = &shown.response else {
+        panic!("{profile:?}: expected an import, got {shown:?}")
+    };
+    assert_eq!(
+        result.recipients,
+        [RecipientRole::Operational, RecipientRole::Recovery, RecipientRole::HostUnlock]
+    );
+    assert!(
+        shown.notices.contains("host unlock: enrolled from this machine's unlock handoff"),
+        "{}",
+        shown.notices
+    );
+    assert_eq!(host_unlock_imports(logs), before + 1, "{profile:?}");
+    let vault_key = open_identity_with(&dest, &host_secret).public_key();
+    assert_eq!(open_identity_with(&dest, &revealed[0]).public_key(), vault_key);
+    shutdown(service).await;
+
+    // A restart opens the vault from the handoff alone and runs the config check, which fails: nothing is approved.
+    let restarted = dest
+        .context_as(source, profile, MemoryProtection::Locked, OsFs)
+        .with_handoff_path(handoff_path.clone());
+    let reached = restarted.unlock_at_start(&handoff_path).await;
+    assert_eq!(reached, ServiceState::Unavailable(FailureReason::PolicyInvalid), "{profile:?}");
+    let text = logs.text();
+    [&host_secret, &revealed[0]]
+        .iter()
+        .flat_map(|secret| [secret.to_string(), secret.to_lowercase()])
+        .for_each(|secret| assert!(!text.contains(&secret), "a secret reached the log"));
+}
+
+/// With no handoff to read, `import --host-unlock` ends with `import-failed` before any prompt and writes nothing.
+async fn refuses_an_absent_handoff(source: &Source, profile: DeploymentProfile) {
+    let handoff = HandoffDir::new();
+    let dest = Dest::new();
+    let service = host_unlock_dest(&dest, source, profile, &handoff.path()).await;
+    let before = dest.files();
+
+    let (shown, revealed) = import_with(&service, true, &source.bytes, &COMPLETE).await;
+
+    let AdminResponse::Error { code, message } = &shown.response else {
+        panic!("{profile:?}: expected import-failed, got {shown:?}")
+    };
+    assert_eq!(*code, ErrorCode::ImportFailed, "{message}");
+    assert!(
+        message.contains("there is no unlock handoff") && message.contains("nothing was written"),
+        "{message}"
+    );
+    assert!(shown.prompts.is_empty() && revealed.is_empty(), "{profile:?}");
+    assert_eq!(dest.files(), before, "{profile:?}");
 }
 
 /// The ustar header fields the hostile bundles change.

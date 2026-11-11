@@ -16,11 +16,11 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use common::approval_harness::{APPROVAL_PASSPHRASE, Captured, assert_audit_record, captured_logs, get, mkdir, send};
 use common::cli_import::{CliImport, CliRan};
+use common::handoff_dir::HandoffDir;
 use common::migration_source::{
     EXPORT_PASSPHRASE, Source, bundle_frames, read_frame, send_bundle, source, source_with_tpm_approver, write_ignoring_errors,
 };
@@ -41,8 +41,8 @@ use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_policy::Capabilities;
-use iron_vault_store::{OsFs, RecipientRole, RecoveryKey, RecoveryKeySecret, VaultIdentity, unwrap_identity};
-use secrecy::{ExposeSecret, SecretString};
+use iron_vault_store::{OsFs, RecipientRole, RecoveryKey};
+use secrecy::ExposeSecret;
 use tokio::net::UnixStream;
 use tokio::sync::{Mutex, MutexGuard};
 use zeroize::Zeroizing;
@@ -738,42 +738,6 @@ async fn a_protected_install_without_locked_memory_refuses_import_before_any_pro
     }
 }
 
-/// A private `0700` directory under the home directory holding a handoff, removed on drop. The trusted-path rule rejects
-/// the shared temporary directory, and a test never touches a system runtime directory.
-struct HandoffDir(PathBuf);
-
-impl HandoffDir {
-    fn new() -> Self {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let home = std::env::var_os("HOME").unwrap();
-        let dir = PathBuf::from(home).join(format!("iv-imp-hu-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir(&dir).unwrap();
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
-        Self(dir)
-    }
-
-    /// Where the handoff is, whether or not it has been written.
-    fn path(&self) -> PathBuf {
-        self.0.join("host-unlock")
-    }
-
-    /// Writes `secret` as the handoff, `0400` as the host would leave it.
-    fn write(&self, secret: &str) -> PathBuf {
-        let path = self.path();
-        let _ = fs::remove_file(&path);
-        fs::write(&path, format!("{secret}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
-        path
-    }
-}
-
-impl Drop for HandoffDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
 /// A destination of `profile` with locked memory that reads its unlock handoff at `handoff`, Locked after startup.
 async fn host_unlock_dest(dest: &Dest, profile: DeploymentProfile, handoff: &Path) -> Arc<ServiceContext> {
     let service = dest
@@ -781,56 +745,6 @@ async fn host_unlock_dest(dest: &Dest, profile: DeploymentProfile, handoff: &Pat
         .with_handoff_path(handoff.to_path_buf());
     assert_eq!(service.unlock_at_start(&dest.path("no-handoff")).await, ServiceState::Locked);
     Arc::new(service)
-}
-
-/// The vault identity in `dest`'s `identity.age`, opened with the age secret key `secret`.
-fn open_identity_with(dest: &Dest, secret: &str) -> VaultIdentity {
-    let key = RecoveryKeySecret::parse(SecretString::from(secret.to_owned())).unwrap();
-    unwrap_identity(&fs::read(dest.path("state/identity.age")).unwrap(), &key).unwrap()
-}
-
-/// Release check `import_host_unlock_enrolls_recipient`: `import --host-unlock` wraps the vault identity for the handoff's
-/// identity beside the operational and recovery recipients, each opens `identity.age`, and a restart reaches the config
-/// check from the handoff alone. An absent handoff ends with `import-failed` before any prompt and writes nothing.
-#[tokio::test(flavor = "multi_thread")]
-async fn import_host_unlock_enrolls_recipient() {
-    let (_one, source, logs) = begin().await;
-    for profile in [DeploymentProfile::Protected, DeploymentProfile::Container] {
-        let dest = Dest::new();
-        let (host_secret, _) = RecoveryKey::generate();
-        let host_secret = host_secret.expose_secret().to_owned();
-        let handoff = HandoffDir::new();
-        let handoff_path = handoff.write(&host_secret);
-        let service = host_unlock_dest(&dest, profile, &handoff_path).await;
-
-        let shown = import_with(&service, true, &source.bytes, &COMPLETE).await;
-
-        assert_eq!(shown.prompts.len(), 4, "{shown:?}");
-        assert_eq!(
-            shown.result().recipients,
-            [RecipientRole::Operational, RecipientRole::Recovery, RecipientRole::HostUnlock]
-        );
-        assert!(
-            shown.notices.contains("host unlock: enrolled from this machine's unlock handoff"),
-            "{}",
-            shown.notices
-        );
-        assert!(logs.has_field("migration.imported", "recipients", "operational,recovery,host-unlock"));
-        let vault_id = open_identity_with(&dest, &host_secret).public_key();
-        assert_eq!(open_identity_with(&dest, &shown.reveals[0]).public_key(), vault_id);
-        service.stop().await;
-        drop(service);
-
-        // A restart opens the vault from the handoff alone and runs the config check, which fails: nothing is approved.
-        let restarted = dest
-            .context_as(profile, MemoryProtection::Locked)
-            .with_handoff_path(handoff_path.clone());
-        assert_eq!(
-            restarted.unlock_at_start(&handoff_path).await,
-            ServiceState::Unavailable(FailureReason::PolicyInvalid)
-        );
-        assert_no_secret_logged(&logs, &[&shown.reveals[0], &host_secret]);
-    }
 }
 
 /// With no host unlock identity to enrol, `import --host-unlock` ends with `import-failed` naming the reason, before any
