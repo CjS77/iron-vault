@@ -2,7 +2,7 @@
 //! design/migration-authorization.md), driven through a real admin socket by a handler registered only here. The handler
 //! stands in for `export` and `recipient add` (EP-28, EP-30), which will run the same checks through their real commands.
 //!
-//! One test per rejection §19 names. Cases that `migration_prompt_linux.rs` already pins over the same socket are not
+//! One test per rejection §19 names. Cases that `migration_prompt.rs` already pins over the same socket are not
 //! repeated; this file maps them so a reader of the checklist finds every case:
 //!
 //! | §19 case                              | Test                                                                               |

@@ -5,10 +5,15 @@
 //! The handoff lives in a private directory under `$XDG_RUNTIME_DIR` or `$HOME`, because the `UnlockHandoff` rule
 //! refuses a sticky `/tmp` ancestor. The log buffer is shared by every test of this binary, so the tests take turns and
 //! each counts only the records written while it held the turn.
+//!
+//! This file is its own test binary: `init`'s `locked_service` writes `vault.host-unlock` records into the same shared
+//! log buffer, and these tests count those records exactly, so sharing a binary with the lifecycle tests would skew them.
 
 #![cfg(target_os = "linux")]
+// Test helpers outside `#[test]` functions: a failed setup step should stop the test where it happened.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use crate::common;
+mod common;
 
 use std::ffi::OsString;
 use std::fs;

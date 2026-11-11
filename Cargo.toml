@@ -152,9 +152,8 @@ opt-level = 3
 opt-level = 3
 
 # Full debug info made each of the binary crate's test executables about 230 MB, and linking many of them at once ran
-# the machine out of memory. The integration tests are now grouped into a few binaries under `tests/<group>/`, each
-# linking the library once.
-# Line tables keep file and line numbers in backtraces at a fraction of the size.
+# the machine out of memory. Line tables keep file and line numbers in backtraces at a fraction of the size. The
+# integration tests are also grouped into a few binaries under `tests/<group>/`, each linking the library once.
 [profile.dev]
 debug = "line-tables-only"
 

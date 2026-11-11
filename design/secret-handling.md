@@ -157,7 +157,7 @@ Compressed bodies are covered in the next section.
 
 Spec [§11](iron-vault-specification.md#11-responses-redirects-and-scrubbing) and [implementation spec §3](implementation-specification.md#3-implementation-gates-and-unresolved-details) ask for tests that combine compression with chunk boundaries and unchanged traffic, and for measured
 decompression limits. `crates/iron-vault/tests/proxy/proxy_coding_stream.rs` runs the same assembled service against an
-upstream that sends already compressed, scripted chunks; the refusals are in `proxy_coding_linux.rs`.
+upstream that sends already compressed, scripted chunks; the refusals are in `crates/iron-vault/tests/proxy/proxy_coding.rs`.
 
 **Supported codings and refusals.** The service decodes `gzip`, `deflate` (zlib) and `br`, and asks upstreams for
 exactly `Accept-Encoding: gzip, deflate, br`. It refuses with `502` and sends none of the body for an unknown coding
@@ -254,7 +254,7 @@ out; the `UpstreamClients` that own them live only in a `ServingSnapshot`. So th
 or, if a background connect is still running, when it ends, at most `TransportLimits::connect` later. The snapshot drops
 its clients before the sender it releases last, so without a background connect the lock drain sees the release only
 after every idle handle has gone; with one, the drain does not wait for it (residual table below). `after_a_cleared_lock_no_upstream_connection_that_carried_the_credential_is_open`
-(`service_context_linux.rs`) and `dropping_the_client_closes_its_idle_connection` (`upstream_client.rs`, and its HTTP/2
+(`service_context_linux.rs`) and `dropping_the_client_closes_its_idle_connection` (`tests/upstream/upstream_client.rs`, and its HTTP/2
 twin in `upstream_client_h2.rs`) hold this in place against an upstream that keeps every connection open.
 
 **Decision (K-143): keep the pool, and keep the snapshot its only owner.** The options considered:
