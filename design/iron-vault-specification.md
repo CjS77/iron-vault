@@ -149,8 +149,9 @@ The owner's login account is never an admin principal in a protected or containe
 the owner cannot administer the service. The owner acts only by becoming a host administrator, for example through
 `sudo`, and that step is only as strong as the host's privilege-escalation settings.
 
-Destructive and policy-changing operations require owner approval. A borrowed administrator session alone cannot
-approve a configuration.
+Destructive and policy-changing operations require owner approval, except `reset`, which
+[§16](#16-administration-recovery-and-migration) allows on explicit owner or administrator action alone. A borrowed
+administrator session alone cannot approve a configuration.
 
 ### How the service identifies an admin principal
 
@@ -650,7 +651,8 @@ The service keeps two distinct values in protected metadata: the highest reserve
 approval `(version, hash)`. Initialize the highest reserved version to zero only when creating a new vault; reserve
 version 1 for the first approval. Serialize all approvals and persist a reservation before signing. Failed attempts
 consume their versions. Never reuse a version, reset it on restart or signing-key replacement, or wrap on overflow.
-Counter exhaustion must fail without signing.
+`iron-vault reset` discards a vault with its approval state, and the `init` after it creates a new vault, which starts
+at zero. Counter exhaustion must fail without signing.
 
 The approval transaction must follow this order:
 
