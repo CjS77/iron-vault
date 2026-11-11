@@ -97,6 +97,7 @@ refuse_unsafe_service_account() {
 # END service account check.
 
 # Registers the purge question's template with debconf; the question itself is asked by postrm.
+# shellcheck source=/dev/null
 [ -e /usr/share/debconf/confmodule ] && . /usr/share/debconf/confmodule
 
 # Only on the first configure, or the first after a purge: an account that exists then was not made by this package.

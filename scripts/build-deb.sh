@@ -16,6 +16,8 @@
 #  - the changelog's newest entry is that package version;
 #  - the packaged binary's `--version` lists no feature, so neither `dev-mode` nor `container` is packaged;
 #  - every file's owner and mode match the design's ownership table, and nothing is owned by a non-root account;
+#  - iron-vault.service wants and follows the host unlock handoff unit, keeps PrivateDevices=yes and has no DeviceAllow=;
+#    the handoff unit has no [Install] section, and postinst never names it;
 #  - nothing is shipped under the service's own directories, and the only conffile is the logrotate rule;
 #  - the maintainer scripts are present and executable;
 #  - lintian reports no error. A missing lintian fails the script; IRON_VAULT_SKIP_LINTIAN=1 opts out explicitly.
@@ -74,6 +76,8 @@ expected=$(cat <<'TABLE'
 ./usr/bin/iron-vault -rwxr-xr-x
 ./usr/lib/systemd/system/iron-vault.service -rw-r--r--
 ./usr/lib/systemd/system/iron-vault-listener@.socket -rw-r--r--
+./usr/lib/systemd/system/iron-vault-host-unlock.service -rw-r--r--
+./usr/sbin/iron-vault-provision-host-unlock -rwxr-xr-x
 ./usr/lib/sysusers.d/iron-vault.conf -rw-r--r--
 ./usr/lib/tmpfiles.d/iron-vault.conf -rw-r--r--
 ./etc/logrotate.d/iron-vault -rw-r--r--
@@ -81,6 +85,7 @@ expected=$(cat <<'TABLE'
 ./usr/share/doc/iron-vault/changelog.Debian.gz -rw-r--r--
 ./usr/share/man/man1/iron-vault.1.gz -rw-r--r--
 ./usr/share/man/man5/iron-vault-config.5.gz -rw-r--r--
+./usr/share/man/man8/iron-vault-provision-host-unlock.8.gz -rw-r--r--
 ./usr/share/lintian/overrides/iron-vault -rw-r--r--
 TABLE
 )
@@ -101,6 +106,20 @@ echo "$expected" | while read -r path mode; do
     echo "ok $mode $path"
 done
 
+echo "== host unlock units"
+# The service never opens the TPM: the handoff unit unseals as root, and the service only wants it
+# (design/tpm-unlock.md, "At boot"). The handoff unit has no [Install] section and no maintainer script names it,
+# so an install or upgrade never starts it and never unseals again.
+unit_text() { dpkg-deb --fsys-tarfile "$deb" | tar -xO "./usr/lib/systemd/system/$1"; }
+service_unit=$(unit_text iron-vault.service)
+handoff_unit=$(unit_text iron-vault-host-unlock.service)
+grep -qx 'Wants=iron-vault-host-unlock.service' <<<"$service_unit" || fail "iron-vault.service has no Wants=iron-vault-host-unlock.service"
+grep -qx 'After=iron-vault-host-unlock.service' <<<"$service_unit" || fail "iron-vault.service has no After=iron-vault-host-unlock.service"
+grep -qx 'PrivateDevices=yes' <<<"$service_unit" || fail "iron-vault.service has lost PrivateDevices=yes"
+! grep -q '^DeviceAllow=' <<<"$service_unit" || fail "iron-vault.service has a DeviceAllow= line"
+! grep -qx '\[Install\]' <<<"$handoff_unit" || fail "iron-vault-host-unlock.service has an [Install] section"
+echo ok
+
 echo "== conffiles and maintainer scripts"
 dpkg-deb -e "$deb" "$work/control"
 conffiles=$(cat "$work/control/conffiles" 2>/dev/null || true)
@@ -112,6 +131,7 @@ for script in postinst prerm postrm; do
     [ -x "$work/control/$script" ] || fail "$script is not executable"
     grep -q '#DEBHELPER#' "$work/control/$script" && fail "$script still has its #DEBHELPER# token"
 done
+grep -q 'iron-vault-host-unlock' "$work/control/postinst" && fail "postinst names the handoff unit, so an upgrade could unseal again"
 echo ok
 
 echo "== lintian"

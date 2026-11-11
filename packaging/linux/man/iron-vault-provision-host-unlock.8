@@ -1,0 +1,52 @@
+.\" Hand-written. design/tpm-unlock.md ("Provisioning", "Supported releases", "--server") is the full account.
+.TH iron-vault-provision-host-unlock 8 "" "Iron Vault" "Iron Vault Manual"
+.SH NAME
+iron\-vault\-provision\-host\-unlock \- seal a host unlock identity to this machine's TPM
+.SH SYNOPSIS
+\fBiron\-vault\-provision\-host\-unlock\fR \fB\-\-server\fR [\fB\-\-accept\-physical\-access\fR]
+.br
+\fBiron\-vault\-provision\-host\-unlock\fR \fB\-\-portable\fR
+.SH DESCRIPTION
+Generates a host unlock identity with \fBage\-keygen\fR(1) and seals it to the TPM with \fBsystemd\-creds\fR(1),
+bound to PCR 7, as \fI/etc/iron\-vault\-host/host\-unlock.cred\fR.
+At each boot \fIiron\-vault\-host\-unlock.service\fR unseals it as root and hands it to \fIiron\-vault.service\fR,
+which then unlocks the vault with no one present.
+The service itself never opens the TPM.
+.PP
+The secret text exists only in pipes.
+Of the identity, only its recipient key is printed, \fBage1\fR..., to enrol with \fBiron\-vault init \-\-host\-unlock\fR or
+\fBiron\-vault recipient add \-\-host\-unlock\fR.
+The vault passphrase and the offline recovery key keep working: if the unseal ever fails, the service starts Locked
+and waits for \fBiron\-vault unlock\fR.
+.PP
+Run it once, as root.
+It refuses to run when the blob already exists; move the old one aside first.
+It never clears the TPM, takes ownership, sets hierarchy authorization or changes dictionary\-attack parameters.
+.PP
+TPM unlock is supported on Ubuntu 24.04 LTS only, and the helper stops on any other release.
+.SH OPTIONS
+One of \fB\-\-server\fR and \fB\-\-portable\fR is required; there is no default.
+.TP
+\fB\-\-server\fR
+For a server or appliance.
+Anyone with physical access to the machine and a trusted boot image can start the vault.
+The helper says so and seals nothing until you type \fByes\fR at a terminal.
+It never reads the answer from a pipe.
+.TP
+\fB\-\-accept\-physical\-access\fR
+With \fB\-\-server\fR, accepts that condition without a prompt, for a run with no terminal.
+.TP
+\fB\-\-portable\fR
+For a laptop or other portable machine, which needs a full\-disk\-encryption pre\-boot secret as well.
+Its check is not built yet, so the helper stops and seals nothing.
+.SH EXIT STATUS
+0 when the identity is sealed, 1 when the helper stopped, 2 for a usage error.
+.SH FILES
+.TP
+\fI/etc/iron\-vault\-host/host\-unlock.cred\fR
+The host unlock blob: root, mode 0600, in a root 0700 directory.
+.TP
+\fI/run/iron\-vault\-unlock/host\-unlock\fR
+The unlock handoff, on a ramfs, present only while the handoff unit is active.
+.SH SEE ALSO
+\fBiron\-vault\fR(1), \fBiron\-vault\-init\fR(1), \fBiron\-vault\-recipient\-add\fR(1), \fBsystemd\-creds\fR(1)

@@ -81,8 +81,26 @@ fn service_unit_has_every_required_directive() {
         ],
     );
     // A start limit hit by a crash loop would fail every listener socket and release its port (specification §7).
-    assert_directives(&section(&unit, "Unit"), &[("StartLimitIntervalSec", "0")]);
+    // The handoff unit is wanted, not required, so a failed unseal leaves the service starting Locked
+    // (design/tpm-unlock.md, "At boot").
+    assert_directives(
+        &section(&unit, "Unit"),
+        &[
+            ("StartLimitIntervalSec", "0"),
+            ("Wants", "iron-vault-host-unlock.service"),
+            ("After", "iron-vault-host-unlock.service"),
+        ],
+    );
     assert_directives(&section(&unit, "Install"), &[("WantedBy", "multi-user.target")]);
+}
+
+#[test]
+fn service_unit_never_opens_the_tpm() {
+    // Root unseals the host unlock blob in the handoff unit; the service gets no device and no credential of its own.
+    let service = section(&packaging("iron-vault.service"), "Service");
+    ["DeviceAllow", "LoadCredential", "LoadCredentialEncrypted", "SetCredentialEncrypted"]
+        .iter()
+        .for_each(|key| assert!(values(&service, key).is_empty(), "the service unit must not set {key}="));
 }
 
 #[test]
@@ -193,18 +211,40 @@ fn rule_for(path: &Path) -> TrustedPathRule {
     }
 }
 
+/// The handoff unit's mount point, root's, which no trusted-path rule covers: the service only opens files in it.
+const UNLOCK_MOUNT_POINT: &str = "/run/iron-vault-unlock";
+
 #[test]
-fn tmpfiles_creates_exactly_the_three_service_directories() {
+fn tmpfiles_creates_the_three_service_directories_and_the_unlock_mount_point() {
     let paths: Vec<PathBuf> = tmpfiles_directories().into_iter().map(|d| d.path).collect();
     assert_eq!(
         paths,
-        ["/etc/iron-vault", "/var/lib/iron-vault", "/run/iron-vault"].map(PathBuf::from)
+        ["/etc/iron-vault", "/var/lib/iron-vault", "/run/iron-vault", UNLOCK_MOUNT_POINT].map(PathBuf::from)
     );
+}
+
+/// The tmpfiles directories the service owns, which its trusted-path rules check.
+fn service_directories() -> Vec<Directory> {
+    tmpfiles_directories()
+        .into_iter()
+        .filter(|dir| dir.path != Path::new(UNLOCK_MOUNT_POINT))
+        .collect()
+}
+
+#[test]
+fn unlock_mount_point_is_roots_and_readable_by_the_service() {
+    // The unseal-failure file lands here beneath the unmounted ramfs, and the service must be able to see it
+    // (design/tpm-unlock.md, "Reporting a failed unseal").
+    let dir = tmpfiles_directories()
+        .into_iter()
+        .find(|d| d.path == Path::new(UNLOCK_MOUNT_POINT))
+        .unwrap();
+    assert_eq!((dir.owner.as_str(), dir.group.as_str(), dir.mode), ("root", "root", 0o755));
 }
 
 #[test]
 fn tmpfiles_directories_pass_the_trusted_path_rules() {
-    tmpfiles_directories().iter().for_each(|dir| {
+    service_directories().iter().for_each(|dir| {
         assert_eq!(
             (dir.owner.as_str(), dir.group.as_str()),
             (SERVICE_ACCOUNT, SERVICE_ACCOUNT),

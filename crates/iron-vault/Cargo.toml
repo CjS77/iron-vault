@@ -142,6 +142,10 @@ systemd-units = { unit-scripts = "../../packaging/linux", enable = true, start =
 assets = [
     ["target/release/iron-vault", "usr/bin/iron-vault", "755"],
     ["../../packaging/linux/iron-vault-listener@.socket", "usr/lib/systemd/system/iron-vault-listener@.socket", "644"],
+    # A plain file, not in systemd-units, so no maintainer script starts or restarts it and an upgrade does not unseal
+    # again; iron-vault.service pulls it in with Wants= (design/tpm-unlock.md, "At boot").
+    ["../../packaging/linux/iron-vault-host-unlock.service", "usr/lib/systemd/system/iron-vault-host-unlock.service", "644"],
+    ["../../packaging/linux/iron-vault-provision-host-unlock", "usr/sbin/iron-vault-provision-host-unlock", "755"],
     ["../../packaging/linux/sysusers.d/iron-vault.conf", "usr/lib/sysusers.d/iron-vault.conf", "644"],
     ["../../packaging/linux/tmpfiles.d/iron-vault.conf", "usr/lib/tmpfiles.d/iron-vault.conf", "644"],
     ["../../packaging/linux/logrotate.d/iron-vault", "etc/logrotate.d/iron-vault", "644"],
@@ -149,5 +153,6 @@ assets = [
     ["../../packaging/linux/man/*.1", "usr/share/man/man1/", "644"],
     # Hand-written; `iron-vault-policy`'s `config_man_page` test checks it against the parser.
     ["../../packaging/linux/man/iron-vault-config.5", "usr/share/man/man5/iron-vault-config.5", "644"],
+    ["../../packaging/linux/man/iron-vault-provision-host-unlock.8", "usr/share/man/man8/iron-vault-provision-host-unlock.8", "644"],
     ["../../packaging/linux/lintian/iron-vault", "usr/share/lintian/overrides/iron-vault", "644"],
 ]

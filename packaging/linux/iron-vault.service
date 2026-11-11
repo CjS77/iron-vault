@@ -1,6 +1,8 @@
 [Unit]
 Description=Iron Vault credential proxy
 StartLimitIntervalSec=0
+Wants=iron-vault-host-unlock.service
+After=iron-vault-host-unlock.service
 
 [Service]
 Type=exec

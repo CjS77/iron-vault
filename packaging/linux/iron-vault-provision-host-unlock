@@ -1,0 +1,130 @@
+#!/bin/bash
+# Generates the host unlock identity and seals it to this machine's TPM, for iron-vault.service's handoff unit
+# (design/tpm-unlock.md, "Provisioning"). Run once, as root. See iron-vault-provision-host-unlock(8).
+#
+# The secret text exists only in pipes: it is never a file, an argument or an environment variable. Only the recipient
+# key, `age1...`, is printed, to enrol with `iron-vault init --host-unlock` or `iron-vault recipient add --host-unlock`.
+#
+# It never clears the TPM, takes ownership, sets hierarchy authorization or changes dictionary-attack parameters:
+# `systemd-creds` seals under systemd's own storage root key, and nothing else here touches the TPM.
+#
+# usage: iron-vault-provision-host-unlock --server [--accept-physical-access] | --portable
+
+# Fixed paths. They are plain assignments, not read from the environment, so no caller of this root script can move
+# them; the stub test reassigns them after sourcing the file.
+HOST_DIR=/etc/iron-vault-host
+OS_RELEASE=/etc/os-release
+
+# TPM unlock is supported on this release only (design/tpm-unlock.md, "Supported releases").
+SUPPORTED_ID=ubuntu
+SUPPORTED_VERSION_ID=24.04
+SUPPORTED_NAME="Ubuntu 24.04 LTS"
+
+MODE=
+ACCEPT_PHYSICAL_ACCESS=0
+
+die() {
+    echo "error: $*" >&2
+    exit 1
+}
+
+usage() {
+    echo "usage: iron-vault-provision-host-unlock --server [--accept-physical-access] | --portable" >&2
+    exit 2
+}
+
+# Exactly one mode, with no default, so the administrator chooses which §14 condition the machine meets.
+parse_args() {
+    local arg
+    for arg in "$@"; do
+        case $arg in
+            --server | --portable) [ -z "$MODE" ] || usage; MODE=${arg#--} ;;
+            --accept-physical-access) ACCEPT_PHYSICAL_ACCESS=1 ;;
+            *) usage ;;
+        esac
+    done
+    [ -n "$MODE" ] || usage
+    [ "$ACCEPT_PHYSICAL_ACCESS" = 0 ] || [ "$MODE" = server ] || usage
+}
+
+# Prints one field of os-release, unquoted. The file is read, never sourced, so nothing in it runs as root.
+os_release_field() {
+    sed -n "s/^$1=//p" "$OS_RELEASE" 2>/dev/null | head -n 1 | tr -d "\"'"
+}
+
+check_release() {
+    [ "$(os_release_field ID)" = "$SUPPORTED_ID" ] && [ "$(os_release_field VERSION_ID)" = "$SUPPORTED_VERSION_ID" ] && return
+    local found
+    found=$(os_release_field PRETTY_NAME)
+    die "TPM unlock is supported on $SUPPORTED_NAME only; this machine runs ${found:-an unknown release}." \
+        "The service still starts Locked and waits for 'iron-vault unlock'."
+}
+
+check_host() {
+    [ "$(id -u)" -eq 0 ] || die "run as root"
+    check_release
+    local tool
+    for tool in age-keygen systemd-creds; do
+        command -v "$tool" >/dev/null || die "$tool is not installed"
+    done
+}
+
+refuse_portable() {
+    die "--portable needs the full-disk-encryption check, which is not built yet; nothing was sealed"
+}
+
+# §14: a server may unlock unattended only if its deployment accepts this. The answer is read only from a terminal,
+# so `yes |` cannot accept for anyone.
+confirm_server() {
+    cat >&2 <<'TEXT'
+--server: this machine will unlock its vault at every boot with no one present.
+Anyone with physical access to it and a trusted boot image can start the vault and use its credentials.
+Choose --server only for a server or appliance whose deployment accepts that.
+TEXT
+    if [ "$ACCEPT_PHYSICAL_ACCESS" = 1 ]; then
+        echo "accepted with --accept-physical-access" >&2
+    elif [ -t 0 ]; then
+        local answer=
+        printf 'Type yes to accept: ' >&2
+        read -r answer || true
+        [ "$answer" = yes ] || die "not accepted; nothing was sealed"
+    else
+        die "stdin is not a terminal; run this at a terminal and type yes, or pass --accept-physical-access"
+    fi
+}
+
+# Seals a fresh identity to PCR 7. grep drops age-keygen's comment lines, and the process substitution derives the
+# recipient key from the same pipe. A failed seal removes what it wrote, so a partial blob is never mistaken for a
+# real one by the existence check.
+seal() {
+    local cred=$1
+    umask 077
+    install -d -m 0700 -o root -g root "$HOST_DIR"
+    if ! age-keygen 2>/dev/null \
+        | grep '^AGE-SECRET-KEY-1' \
+        | tee >(age-keygen -y >&2) \
+        | systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs=7 --name=host-unlock - "$cred"; then
+        rm -f "$cred"
+        die "sealing failed; nothing was kept"
+    fi
+    chmod 0600 "$cred"
+    echo "sealed $cred (--with-key=tpm2, PCR 7); enrol the recipient key printed above" >&2
+}
+
+main() {
+    set -euo pipefail
+    parse_args "$@"
+    check_host
+    local cred=$HOST_DIR/host-unlock.cred
+    if [ -e "$cred" ] || [ -L "$cred" ]; then
+        die "$cred exists; move it aside first, then enrol the new identity"
+    fi
+    case $MODE in
+        portable) refuse_portable ;;
+        server) confirm_server ;;
+    esac
+    seal "$cred"
+}
+
+# Sourcing the file (to test it) defines the functions and runs nothing.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi

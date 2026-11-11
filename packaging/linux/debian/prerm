@@ -1,5 +1,6 @@
 #!/bin/sh
-# On remove, stops and disables the listener socket instances before the generated snippet stops the service.
+# On remove, stops and disables the listener socket instances before the generated snippet stops the service, and
+# stops the host unlock handoff unit after it.
 # cargo-deb generates nothing for the template unit (its name contains '@'). The listeners go first so that no
 # connection can start the service again through socket activation once it has stopped.
 #
@@ -21,5 +22,12 @@ if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
 fi
 
 #DEBHELPER#
+
+# The generated snippet above has stopped the service. Stopping the handoff unit runs its ExecStopPost= lines, which
+# remove the unlock handoff and unmount its ramfs, so the plaintext identity goes with the package; dpkg then removes
+# the unit file. The unit has no [Install] section, so there is nothing to disable.
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+    systemctl stop iron-vault-host-unlock.service || true
+fi
 
 exit 0

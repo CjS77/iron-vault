@@ -1,0 +1,23 @@
+[Unit]
+Description=Iron Vault host unlock handoff
+Before=iron-vault.service
+After=systemd-tmpfiles-setup.service
+ConditionPathExists=/etc/iron-vault-host/host-unlock.cred
+
+# No [Install] section: iron-vault.service pulls this unit in with Wants=, and the package installs it as a plain file,
+# so no maintainer script starts or restarts it and an upgrade does not unseal again.
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+LoadCredentialEncrypted=host-unlock:/etc/iron-vault-host/host-unlock.cred
+# No sandboxing directives: they would give the unit a private mount namespace and hide this mount from the service.
+# The mount's root stays root's 0711, so the service account can open the one file it knows the name of and nothing else.
+ExecStart=/bin/rm -f /run/iron-vault-unlock/unseal-failed
+ExecStart=/bin/mount -t ramfs -o mode=0711,nosuid,nodev,noexec ramfs /run/iron-vault-unlock
+ExecStart=/usr/bin/install -o iron-vault -g iron-vault -m 0400 %d/host-unlock /run/iron-vault-unlock/host-unlock
+# ExecStopPost= also runs after a failed start, so a half-finished start leaves no plaintext. systemd sets up no
+# credentials for it, so it runs after a failed decrypt too, and the last line then leaves the unseal-failure file in
+# the root 0755 directory beneath the unmounted ramfs (design/tpm-unlock.md, "Reporting a failed unseal").
+ExecStopPost=-/bin/rm -f /run/iron-vault-unlock/host-unlock
+ExecStopPost=-/bin/umount /run/iron-vault-unlock
+ExecStopPost=-/bin/sh -c 'test "$SERVICE_RESULT" = success || : > /run/iron-vault-unlock/unseal-failed'

@@ -32,7 +32,9 @@ mkdir "$socket.d"
 printf '[Socket]\nListenStream=/run/iron-vault/probe.sock\n' >"$socket.d/listen.conf"
 
 echo "== systemd-analyze verify"
-systemd-analyze verify "$service" "$socket" "$host_unit"
+# The package's and the Compose host's handoff units share a name, so each is verified in a run of its own.
+systemd-analyze verify "$service" "$socket" "$units/iron-vault-host-unlock.service"
+systemd-analyze verify "$host_unit"
 echo "ok"
 
 echo

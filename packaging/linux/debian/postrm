@@ -1,9 +1,11 @@
 #!/bin/sh
 # Purge deletes what the service wrote outside dpkg's knowledge: /etc/iron-vault, /var/log/iron-vault and the listener
-# drop-ins. It deletes the vault only if the owner answers yes to the debconf question, asked now as mariadb-server
-# does; no answer, a non-interactive purge or a missing debconf keeps it. Messages go to stderr (see postinst).
+# drop-ins. It deletes the vault, and with it the host unlock blob in /etc/iron-vault-host, only if the owner answers
+# yes to the debconf question, asked now as mariadb-server does; no answer, a non-interactive purge or a missing
+# debconf keeps both. Messages go to stderr (see postinst).
 set -e
 
+# shellcheck source=/dev/null
 [ "$1" = purge ] && [ -e /usr/share/debconf/confmodule ] && . /usr/share/debconf/confmodule
 
 vault=/var/lib/iron-vault
@@ -22,6 +24,8 @@ purge_vault_question() {
     [ -d "$vault" ] || return 0
     if delete_vault_requested; then
         rm -rf "$vault"
+        # The host unlock identity opens only this vault, so it goes with it. A kept vault needs it again.
+        rm -rf /etc/iron-vault-host
     else
         echo "iron-vault: kept $vault, which holds the encrypted credentials." >&2
         echo "iron-vault: to delete it: sudo rm -rf $vault" >&2
