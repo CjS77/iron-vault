@@ -33,7 +33,14 @@ printf '[Socket]\nListenStream=/run/iron-vault/probe.sock\n' >"$socket.d/listen.
 
 echo "== systemd-analyze verify"
 # The package's and the Compose host's handoff units share a name, so each is verified in a run of its own.
-systemd-analyze verify "$service" "$socket" "$units/iron-vault-host-unlock.service"
+# The signer's instance unit is verified with its socket: a template needs an instance name, and ExecStart= points at an existing
+# executable when the helper is not installed here, as for the service.
+signer="$work/iron-vault-tpm-signer@probe.service"
+helper=/usr/libexec/iron-vault/iron-vault-tpm-signer
+[ -x "$helper" ] || helper=$(command -v true)
+sed "s#^ExecStart=/usr/libexec/iron-vault/iron-vault-tpm-signer#ExecStart=$helper#" "$units/iron-vault-tpm-signer@.service" >"$signer"
+cp "$units/iron-vault-tpm-signer.socket" "$work/"
+systemd-analyze verify "$service" "$socket" "$units/iron-vault-host-unlock.service" "$work/iron-vault-tpm-signer.socket" "$signer"
 systemd-analyze verify "$host_unit"
 echo "ok"
 
