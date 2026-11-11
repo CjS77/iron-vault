@@ -95,7 +95,7 @@ Every audit event has the target `iron-vault.audit`. The fields are those beyond
 | `vault.unlock-refused` | WARN | An unlock was refused | `refusal`: `wrong_passphrase`, `rate_limited`, `memory_unprotected`, `wrong_state`, `state_read`, `passphrase_envelope`, `identity_envelope`, `initialization_unfinished`, `not_initialized`, `unrecognized_files`, `state_unreadable` or `interrupted`; `memory_protection` for `memory_unprotected`; `retry_after` (whole seconds) for `rate_limited` |
 | `vault.host-unlock` | INFO when `unlocked` or `absent`, WARN when `refused` | A Container-profile service tried the unlock handoff at startup; other profiles never write it | `host_unlock_outcome` (`unlocked`, `absent` or `refused`); `refusal` when refused: `memory_unprotected`, `untrusted`, `unreadable`, `not_an_identity`, `not_initialized` or `not_a_recipient`. Never the handoff's bytes or its recipient key. A `memory_unprotected` refusal also writes `vault.unlock-refused`. |
 | `vault.foreign-file` | WARN | `unlock` found a file beside the manifest that the vault does not use; the file is never read, and the unlock goes on | `file`, escaped |
-| `vault.presence-refused` | WARN | The approval passphrase for `replace` or `rm` was refused; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`), `approver_id`, `approver_label` |
+| `vault.presence-refused` | WARN | The approval passphrase for `replace`, `rm`, `recipient remove` or `approver add` was refused; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`), `approver_id`, `approver_label` |
 | `vault.lock-incomplete` | WARN | A lock finished while a request still held a snapshot or the vault identity | `snapshots_held` (number), `identity_held` (boolean) |
 
 ### Admin commands and caller tokens
@@ -191,6 +191,17 @@ recipient key; `recipient.added` and `recipient.removed` also carry the label, e
 | `recipient.change-recovered` | WARN | The inventory check finished a committed recipient change or removed a staged inventory | `recovery`: `completed` or `discarded` |
 | `recipient.removed` | INFO | A removal committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` (the count after the removal) |
 | `recipient.change-failed` | WARN | An add or a removal was refused because the key is already enrolled, is not enrolled or would break the independence rule, or it failed while written | `change` (`add` or `remove`), `recipient`, `failure`: `already_enrolled`, `unknown_recipient`, `set_invalid` or `write_failed`; for `write_failed` also `step`, `error_kind` and `committed` (`no`, `unknown` or `yes`) |
+
+### Approvers
+
+`approver add` writes these. They name approvers by their public approver ID and label (escaped); no passphrase or key
+file byte is logged.
+
+| Event | Level | When | Fields |
+|---|---|---|---|
+| `approver.enrolled` | INFO | An `approver add` committed | `approver_id`, `approver_label`, `signer_kind` (`software`), `approvers` (the count after the change), `authorizing_approver_id` and `authorizing_approver_label` (the approver whose passphrase authorized it) |
+| `approver.change-failed` | WARN | An `approver add` was refused because 16 approvers are pinned or the new passphrase broke a rule, or the approval state did not read back, or the enrollment failed | `change` (`add`), `failure`: `set_invalid`, `passphrase_rejected` or `write_failed`; for `write_failed` also `step` (`read_back`, `key_file`, `key_check` or `approval_state`), `error_kind` and `committed` (`no` or `unknown`) |
+| `approver.orphan-removed` | WARN | Before its prompts, `approver add` removed a key file no pinned approver has, left by an enrollment that failed | `approver_id`, the ID in the file's name |
 
 ### Migration authorization
 

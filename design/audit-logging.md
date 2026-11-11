@@ -226,7 +226,7 @@ These are the fields more than one event uses:
 | `committed_version` | number | The committed approval version, left out when nothing is committed |
 | `config_digest` | string | A config digest, as `blake2b:` and 64 lowercase hex digits |
 | `file` | string | A state or config file name, never a path |
-| `step` | string | A fixed step label, such as an approval step or an init step |
+| `step` | string | A fixed step label, such as an approval step, an init step, or an approver change step (`read_back`, `key_file`, `key_check`, `approval_state`) |
 | `refusal` | string | Why an admin connection, request, command, migration authorization or host unlock was refused: a fixed label |
 | `unavailable_reason` | string | An unavailable reason: `locked`, `policy_invalid`, `checking` or `recovery_needed` |
 | `detail` | string | A check failure's detail: fixed phrases with versions and configured names only |
@@ -618,7 +618,7 @@ with these fields.
 | `service.lock-transition` | INFO | a lock transition: Locked to Checking, or Starting to Checking on a host unlock, the outcome of the check that follows, and Ready or Unavailable to Locked | `from_state`, `to_state`; `unavailable_reason` when `to_state` is `unavailable` |
 | `vault.unlock-refused` | WARN | an unlock was refused | `refusal`, such as `wrong_passphrase` or `rate_limited`; `memory_protection` when `refusal` is `memory_unprotected`, a protected install whose memory is not locked; `retry_after` (whole seconds) when `refusal` is `rate_limited`, the vault passphrase attempt limit |
 | `vault.host-unlock` | INFO, or WARN when refused | a Container-profile service tried the unlock handoff at startup; other profiles never write it | `host_unlock_outcome`; `refusal` when refused: `memory_unprotected`, `untrusted`, `unreadable`, `not_an_identity`, `not_initialized` or `not_a_recipient` |
-| `vault.presence-refused` | WARN | owner presence for `replace` or `rm` was refused: the approval passphrase was wrong or the key is not the asked approver's; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`), `approver_id`, `approver_label`; no `config_digest`, since no config is involved |
+| `vault.presence-refused` | WARN | owner presence for `replace`, `rm`, `recipient remove` or an approver command was refused: the approval passphrase was wrong or the key is not the asked approver's; nothing was written | `refusal` (`wrong_passphrase` or `key_mismatch`), `approver_id`, `approver_label`; no `config_digest`, since no config is involved |
 | `vault.lock-incomplete` | WARN | a lock's drain ended with a serving snapshot or the vault identity still held | `snapshots_held`, `identity_held` |
 
 `service.started` carries the hardening report's outcome as fixed labels, so a run without its protections is visible
@@ -733,6 +733,14 @@ other approval.
 | `recipient.removed` | INFO | a recipient change that removes a recipient committed | `recipient`, `recipient_role`, `recipient_label`, `recipients` |
 | `recipient.change-failed` | WARN | an add or a removal was refused at its own step 3 (`already_enrolled`, `unknown_recipient`, `set_invalid`), or its recipient change failed (`write_failed`) | `change`, `recipient`, `failure`; `step`, `error_kind` and `committed` for `write_failed` |
 
+**Approvers** ([approval-signers.md](approval-signers.md#audit-events); `approver add` writes these):
+
+| Event | Level | When | Fields |
+|---|---|---|---|
+| `approver.enrolled` | INFO | an approver change that enrolls committed | `approver_id`, `approver_label`, `signer_kind`, `approvers`, `authorizing_approver_id`, `authorizing_approver_label` |
+| `approver.change-failed` | WARN | `approver add` was refused at step 3 (`set_invalid`, `write_failed`) or step 6 (`passphrase_rejected`), or its approver change failed (`write_failed`) | `change`, `failure`; `approver_id` when known; `step`, `error_kind` and `committed` for `write_failed` |
+| `approver.orphan-removed` | WARN | step 3 of an approver command removed an orphan key file | `approver_id`, the ID in the file's name |
+
 **Migration authorization** ([migration-authorization.md](migration-authorization.md#audit-events) gives the order of the records of one exchange):
 
 | Event | Level | When | Fields |
@@ -763,7 +771,7 @@ The fields that only one event uses, or that only audit events use:
 | `snapshots_held` | number | Serving snapshots still held when the lock's drain ended |
 | `identity_held` | boolean | Whether the vault identity was still held when the lock's drain ended |
 | `summary` | string | The approval summary's text, or `initial config` for version 1 |
-| `failure` | string | A config check failure's fixed label, one per check failure variant, never its `Display` text; for `recipient.change-failed`, `already_enrolled`, `unknown_recipient`, `set_invalid` or `write_failed` |
+| `failure` | string | A config check failure's fixed label, one per check failure variant, never its `Display` text; for `recipient.change-failed`, `already_enrolled`, `unknown_recipient`, `set_invalid` or `write_failed`; for `approver.change-failed`, `set_invalid`, `passphrase_rejected` or `write_failed` |
 | `renames` | string | The publish renames run, as fixed labels in a [list](#field-rules) |
 | `signed_for` | number | The approval version a staged approval was signed for |
 | `kind`, `old_kind` | string | A credential kind label, such as `static` or `basic` |
@@ -786,11 +794,15 @@ The fields that only one event uses, or that only audit events use:
 | `recipient` | string | A recipient key's `age1…` text, which is public |
 | `recipient_role` | string | A recipient role's name: `operational`, `recovery`, `added` or `host-unlock` |
 | `recipient_label` | string | A recipient label, escaped |
-| `approver_id` | string | The approver asked for, or that signed: its approver ID, a hyphenated UUID |
+| `approver_id` | string | The approver asked for, or that signed, or that an approver command enrolls or finds orphaned: its approver ID, a hyphenated UUID |
 | `approver_label` | string | That approver's label, escaped |
+| `authorizing_approver_id` | string | The approver that gave owner presence for an approver change: its approver ID, a hyphenated UUID |
+| `authorizing_approver_label` | string | That approver's label, escaped |
+| `signer_kind` | string | `software`, `tpm` or `hardware` |
+| `approvers` | number | The approver count after an approver change |
 | `recipients` | number | The recipient count after a recipient change |
 | `change` | string | `add` or `remove` |
-| `committed` | string | `no`, `unknown` or `yes`: whether a failed recipient change committed |
+| `committed` | string | `no`, `unknown` or `yes`: whether a failed recipient change committed; `no` or `unknown` for a failed approver change, always `no` when `step` is `read_back` |
 | `recovery_record` | string | The recovery check record's form: `checked`, `never_checked` or `unusable` |
 | `last_checked` | string | The record's last successful recovery check, an RFC 3339 UTC timestamp to the second |
 | `reminders_since` | string | When the reminder schedule started counting, an RFC 3339 UTC timestamp to the second |
@@ -838,8 +850,8 @@ follows the [library error](#library-errors) rule:
 
 ### Event names
 
-An event name is `<subject>.<name>`: a lowercase subject (`admin`, `caller`, `config`, `credential`, `migration`,
-`owner`, `recipient`, `recovery`, `request`, `response`, `route`, `service`, `vault`), a dot, and a kebab-case name,
+An event name is `<subject>.<name>`: a lowercase subject (`admin`, `approver`, `caller`, `config`, `credential`,
+`migration`, `owner`, `recipient`, `recovery`, `request`, `response`, `route`, `service`, `vault`), a dot, and a kebab-case name,
 matching `^[a-z]+\.[a-z]+(-[a-z]+)*$`. Event names keep the kebab-case already in use in the code and the design
 docs; only field names and label values are snake_case. Names are stable: renaming or removing one changes the schema
 version. Each name is defined once, as an `audit::EventName` constant beside its struct.

@@ -116,6 +116,21 @@ All three commands also answer `wrong-state` outside Ready, `busy` while another
 `vault-write-failed` when settling a staged recipient change failed or, for `recipient add` and `recipient remove`, the
 change itself did; the message says whether it may have committed.
 
+### `approver add`
+
+| Code | Name | Meaning | What to do |
+|---|---|---|---|
+| `40` | `approver-invalid` | The label breaks its rule. The message names the rule. Nothing was changed. | Give a label of 1 to 64 bytes with no control characters. |
+| `42` | `approver-set-invalid` | 16 approvers are already pinned. It was refused before any prompt. Nothing was changed. | Remove an approver you no longer use first. |
+| `44` | `approver-kind-unavailable` | This install does not offer that signer kind yet. Only `software` is offered. Nothing was changed. | Leave out `--kind`, or use `--kind software`. |
+| `9` | `approval-denied` | The passphrase did not open the asked approver's key. The vault passphrase and a recovery key never authorize an approver change. Nothing was written. | Type the approval passphrase of the approver the prompt names, or switch to another approver. |
+| `10` | `approval-unavailable` | Owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt. Nothing was written. | Unlock if needed, and run the command again. |
+| `18` | `passphrase-rejected` | The new approval passphrase is under 12 characters, or the two copies differ. Nothing was written. | Run the command again and choose a passphrase that meets the rule, different from the vault passphrase. |
+| `22` | `vault-write-failed` | The approval state (`approval.age`) did not read back before any prompt, or the enrollment failed. The message says whether it may have committed. | When the message says nothing was changed, read the log's `approver.change-failed` and fix its cause. When it may have committed, check the approvers before trying again. |
+
+It also answers `wrong-state` outside Ready, or when a `lock` cancels it at the new passphrase prompt, and `busy` while
+another command holds the service-wide lock.
+
 ### Migration authorization
 
 `recipient add` and `export` share these codes. `export` is not a CLI command yet.

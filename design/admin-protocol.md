@@ -127,6 +127,7 @@ an error.
 | `14` | `recipient add` | the recipient key text and label ([recipients.md](recipients.md#admin-protocol)) | the key and the recipient count after the change |
 | `15` | `recipient remove` | the recipient key | the recipient count after the removal ([recipients.md](recipients.md#admin-protocol)) |
 | `16` | `approver list` | none | the pinned approvers, in approver order, each marked active or not ([approval-signers.md](approval-signers.md#admin-protocol)) |
+| `17` | `approver add` | the signer kind and the label ([approval-signers.md](approval-signers.md#admin-protocol)) | the new approver ID and the approver count |
 
 **No command accepts an external signature** ([§5](iron-vault-specification.md#5-service-and-cli-separation-of-concerns)). The service signs only the pending config of its own approval
 transaction, and no command takes a signature, an approval envelope or a signing key as an argument, or as owner
@@ -740,8 +741,8 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `6` | `busy` | the service is already serving as many admin connections as it allows, or another operation holds the lock a command needs; try again |
 | `7` | `config-invalid` | `config approve`: the proposed config is invalid |
 | `8` | `declined` | the owner declined at a confirmation prompt |
-| `9` | `approval-denied` | `config approve`, `replace`, `rm`, `recipient remove`: owner presence failed: the approval passphrase did not open the approver key, or the key it opened is not the asked approver's |
-| `10` | `approval-unavailable` | `config approve`: the service cannot run an approval now; `replace`, `rm`, `recipient remove`: owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt; nothing was written |
+| `9` | `approval-denied` | `config approve`, `replace`, `rm`, `recipient remove`, `approver add`: owner presence failed: the approval passphrase did not open the approver key, or the key it opened is not the asked approver's |
+| `10` | `approval-unavailable` | `config approve`: the service cannot run an approval now; `replace`, `rm`, `recipient remove`, `approver add`: owner presence could not be checked, or a `lock` cancelled the change at its passphrase prompt; nothing was written |
 | `11` | `approval-failed` | `config approve`: failed after reserving a version, before committing it |
 | `12` | `committed-not-active` | `config approve`: committed, but not yet published or active; `replace`, `rm`: the change committed, but the config check after it left the service Unavailable |
 | `13` | `wrong-state` | the command is not allowed in the service's current state; the message names the state |
@@ -749,11 +750,11 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `15` | `unlock-failed` | `unlock`: the vault did not open, for a reason other than the passphrase; the service stays Locked |
 | `16` | `unlocked-unavailable` | `unlock`: the vault unlocked, but the config check left the service Unavailable; the message names the redacted reason |
 | `17` | `already-initialized` | `init`: the directories already hold a vault, or files init did not write; nothing was changed. Raised after the reveal, the message says to discard the recovery key shown |
-| `18` | `passphrase-rejected` | `init`: a chosen passphrase broke a rule; the message names the rule, never the input |
+| `18` | `passphrase-rejected` | `init`, `approver add`: a chosen passphrase broke a rule; the message names the rule, never the input |
 | `19` | `init-failed` | `init`: a write failed; the message names the step, says to re-run `init`, which discards the unfinished vault, and says to discard the recovery key shown (at step 9, where the outcome is unknown, to keep it until the re-run decides) |
 | `20` | `name-taken` | `add`: the name is already in the manifest, healthy or damaged; `add` never overwrites |
 | `21` | `credential-invalid` | `add`, `replace`, `rm`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte |
-| `22` | `vault-write-failed` | `add`, `replace`, `rm`, `recipient remove`: the vault write failed; the message says whether it may have committed |
+| `22` | `vault-write-failed` | `add`, `replace`, `rm`, `recipient remove`: the vault write failed; `approver add`: the approval state did not [read back](approval-signers.md#reading-the-approval-state-back) before any prompt, or the approver change failed; the message says whether it may have committed |
 | `23` | `unknown-credential` | `replace`, `rm`: the manifest holds no credential of that name |
 | `24` | `credential-in-use` | `replace`, `rm`: a route of the active config uses the name and would not activate after the change; the message names each route and, for `replace`, why |
 | `25` | `random-source-failed` | `caller-token`: the operating system's random source failed; no token was made |
@@ -771,6 +772,9 @@ the message itself, and neither the code nor the message ever contains owner inp
 | `37` | `unknown-recipient` | `recipient remove`: no enrolled recipient has this key; nothing was changed |
 | `38` | `recipient-set-invalid` | `recipient add`, `recipient remove`: the set after the change would break the independence rule or hold more than 64 recipients; the message names which part; nothing was changed |
 | `39` | `recipient-inventory-damaged` | `recipient list`, `recipient add`, `recipient remove`: the inventory check found the recipient inventory missing or damaged; the message names the damage and nothing was changed ([recipients.md](recipients.md#error-codes)) |
+| `40` | `approver-invalid` | `approver add`: the label breaks its rule; the message names the rule ([approval-signers.md](approval-signers.md#error-codes)) |
+| `42` | `approver-set-invalid` | `approver add`: 16 approvers are already pinned; nothing was changed |
+| `44` | `approver-kind-unavailable` | `approver add`: this install does not offer that signer kind yet; nothing was changed |
 
 The migration codes 28, 29 and 33 are raised by the migration authorization step that `export` and `recipient add`
 share ([migration-authorization.md](migration-authorization.md#error-codes)).
@@ -782,8 +786,9 @@ is refused before its kind or length is read. Version 1 has not been released, s
 byte values, `config approve` (command 2), `caller-token` (command 3), `unlock` (command 4), `lock` (command 5),
 `status` (command 6), `init` (command 7), `add` (command 8), `list` (command 9), `replace` (command 10), `rm`
 (command 11), `recovery check` (command 12), `recipient list` (command 13), `recipient add` (command 14),
-`recipient remove` (command 15), `approver list` (command 16), `status` tags 13 to 17, the prompt's `switchable` tag 3, the switch frame (kind 8),
-and error codes 7 to 39 join it rather than starting version 2.
+`recipient remove` (command 15), `approver list` (command 16), `approver add` (command 17), `status` tags 13 to 17,
+the prompt's `switchable` tag 3, the switch frame (kind 8), error codes 7 to 39, and error codes 40, 42 and 44 join it
+rather than starting version 2.
 That is a default for the owner to confirm
 ([open question 11](config-approval.md#open-questions)).
 
@@ -993,6 +998,13 @@ exit code 1.
 order the result gives, and exits `0`; the line format is in [approval-signers.md](approval-signers.md#approver-list).
 Two runs against an unchanged vault print the same bytes. A service error goes to stderr with exit code 1: `wrong-state`
 outside Ready, `busy` while another operation holds the service-wide lock.
+
+### approver add
+
+`iron-vault approver add --label <text> [--kind software|tpm|hardware]` sends the kind, `software` by default, and the
+label. The service's notices show the summary; the answers to its prompts are an approver's passphrase, then the new
+approval passphrase twice. On success the new approver ID and a newline go to stdout and nothing else, so a script can
+capture it; a service error goes to stderr with exit code 1.
 
 ### recovery check
 
