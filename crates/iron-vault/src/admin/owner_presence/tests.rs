@@ -3,7 +3,7 @@
 
 use std::future::{self, Future};
 
-use iron_vault_store::{ApproverId, ApproverLabel, SoftwareSigner, UtcSecond};
+use iron_vault_store::{ApproverId, ApproverLabel, ApproverPublicKey, SignatureAlgorithm, SignerKind, SoftwareSigner, UtcSecond};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use zeroize::Zeroizing;
@@ -80,7 +80,7 @@ async fn prompt_for<L: Future<Output = ()>>(
     label: &str,
     answer: Option<&'static [u8]>,
     lock_requested: impl Fn() -> L,
-) -> (Prompt, Result<ApprovalPassphrase, NoPresence>) {
+) -> (Prompt, Result<ApproverSecret, NoPresence>) {
     let reply = answer.map_or(Reply::Silence, Reply::Input);
     let (mut prompts, outcome) = ask_with(&[approver(label)], vec![reply], lock_requested).await;
     let prompt = prompts.remove(0);
@@ -96,7 +96,7 @@ async fn prompt_for<L: Future<Output = ()>>(
 async fn presence_with<L: Future<Output = ()>>(
     answer: Option<&'static [u8]>,
     lock_requested: impl Fn() -> L,
-) -> (Prompt, Result<ApprovalPassphrase, NoPresence>) {
+) -> (Prompt, Result<ApproverSecret, NoPresence>) {
     prompt_for("approval passphrase", answer, lock_requested).await
 }
 
@@ -138,6 +138,38 @@ async fn a_usable_passphrase_goes_on_to_the_key_check() {
     let (_, outcome) = presence_with(Some(b"APPROVAL-typed-91c2"), future::pending::<()>).await;
 
     assert!(outcome.is_ok());
+}
+
+/// A pinned TPM approver labelled `label`.
+fn tpm_approver(label: &str) -> PinnedApprover {
+    let key = p256::ecdsa::SigningKey::from_slice(&[7; 32])
+        .unwrap()
+        .verifying_key()
+        .to_encoded_point(false);
+    let key = ApproverPublicKey::new(SignatureAlgorithm::EcdsaP256, key.as_bytes().to_vec()).unwrap();
+    PinnedApprover::new(
+        ApproverId::generate(),
+        SignerKind::Tpm,
+        key,
+        ApproverLabel::new(label).unwrap(),
+        UtcSecond::EPOCH,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_tpm_approver_is_asked_for_its_pin_and_the_answer_is_a_pin() {
+    let (prompts, outcome) = ask_with(&[tpm_approver("laptop TPM")], vec![Reply::Input(b"123456")], future::pending::<()>).await;
+
+    assert_eq!(shown(&prompts), [("TPM approval PIN for \"laptop TPM\"", false)]);
+    assert!(matches!(outcome, Some((_, PassphraseAnswer::Typed(ApproverSecret::Pin(_))))));
+}
+
+#[tokio::test]
+async fn an_empty_pin_is_refused_without_asking_the_tpm() {
+    let (_, outcome) = ask_with(&[tpm_approver("laptop TPM")], vec![Reply::Input(b"")], future::pending::<()>).await;
+
+    assert!(matches!(outcome, Some((_, PassphraseAnswer::Unusable))));
 }
 
 /// The labels of the prompts the CLI saw, and whether each could switch.

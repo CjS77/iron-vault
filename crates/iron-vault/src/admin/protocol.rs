@@ -851,6 +851,10 @@ pub enum ErrorCode {
     /// `reset`: writing `reset.unfinished`, a removal or the state read failed; the message names the step and the file, and
     /// says whether the vault is intact or the next `reset` resumes.
     ResetFailed = 50,
+    /// `config approve`, `replace`, `rm`, `recipient remove`, `recipient add`, `approver add`, `approver remove` and `export`:
+    /// the TPM is in dictionary-attack lockout, or the lockout reserve withheld the try. The message gives the whole seconds to
+    /// wait; nothing was reserved, signed or changed.
+    TpmLockedOut = 51,
     /// `forget-machine`: the key is still a recipient of the vault; the message names the key's role only, says to run
     /// `recipient remove` with the same key, and never repeats the key or the label. Nothing was changed.
     MachineNotForgotten = 52,
@@ -910,6 +914,7 @@ impl ErrorCode {
             Self::ImportFailed => "import-failed",
             Self::NothingToReset => "nothing-to-reset",
             Self::ResetFailed => "reset-failed",
+            Self::TpmLockedOut => "tpm-locked-out",
             Self::MachineNotForgotten => "machine-not-forgotten",
         }
     }

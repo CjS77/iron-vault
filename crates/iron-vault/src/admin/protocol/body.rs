@@ -504,6 +504,7 @@ fn error_code(number: u16) -> Result<ErrorCode, FrameError> {
         ErrorCode::ImportFailed,
         ErrorCode::NothingToReset,
         ErrorCode::ResetFailed,
+        ErrorCode::TpmLockedOut,
         ErrorCode::MachineNotForgotten,
     ]
     .into_iter()

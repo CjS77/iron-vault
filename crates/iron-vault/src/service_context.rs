@@ -41,6 +41,7 @@ mod serving;
 #[cfg(test)]
 mod tests;
 mod tpm_helper;
+mod tpm_signer;
 mod unlock;
 mod vault_change;
 
@@ -82,7 +83,7 @@ use serving::Serving;
 use unlock::log_foreign_files;
 pub(crate) use unlock::unprotected_reason;
 
-pub use approval::{ApprovalEnd, ApprovalReview};
+pub use approval::{ApprovalEnd, ApprovalReview, NO_ASKABLE_APPROVER};
 pub use approver_change::{ApproverChangePlan, ApproverRefusal};
 pub use approver_list::ApproverListRefusal;
 pub use export::{ExportError, ExportStream};
@@ -91,12 +92,14 @@ pub use host_unlock::{HostUnlockOutcome, HostUnlockRefusal};
 pub use import::{BundleRefusal, ImportSlot};
 pub use init::{HostUnlockUnavailable, InitRefusal, step_names};
 pub use migration::MigrationSession;
-pub use presence::{DenialKind, OwnerPresence, PresenceRefusal};
+pub use presence::{ApproverSecret, ApproverSigner, DenialKind, OwnerPresence, PresenceRefusal};
 pub use recipient_add::{AddRefusal, Enrolled, PlanRefusal, RecipientAddPlan};
 pub use recipient_remove::{RecipientRemoval, RemovalRefusal, RemovedRecipient};
 pub use recipients::RecipientRefusal;
 pub use recovery::{RecoveryProof, RecoveryRefusal};
 pub use reset::{PlannedVault, ResetOutcome, ResetPlan, ResetRefusal, failure_step};
+pub use tpm_helper::TpmStatus;
+pub use tpm_signer::TpmSigner;
 pub use vault_change::{CredentialChanged, CurrentRecord, VaultChangePlan, VaultChangeRefusal};
 
 /// Why an unlock left the service where it was. No variant holds passphrase text.

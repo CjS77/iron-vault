@@ -13,7 +13,7 @@ mod tpm;
 
 use thiserror::Error;
 
-pub use tpm::{CreatedTpmKey, TpmHelper, TpmHelperFailure};
+pub use tpm::{CreatedTpmKey, TpmBlobError, TpmHelper, TpmHelperFailure, presence_message, read_tpm_key_blob, verify_tpm_signature};
 
 use super::{
     ApprovalPassphrase, ApprovalState, ApprovalStateError, ApproverId, ApproverLabel, MAX_APPROVERS, PinnedApprover, SignError, SignerKind,

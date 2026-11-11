@@ -220,6 +220,7 @@ fn approval_refused_records_its_kind_the_digest_and_the_approver() {
     let digest = ConfigDigest::of(CONFIG.as_bytes());
     let event = ApprovalRefused {
         refusal: DenialKind::KeyMismatch,
+        tpm_status: None,
         digest,
         approver: approver(),
     };
@@ -227,6 +228,25 @@ fn approval_refused_records_its_kind_the_digest_and_the_approver() {
     assert_eq!(record["refusal"], "key_mismatch");
     assert_eq!(record["config_digest"], digest.to_string());
     assert_names_the_approver(&record);
+}
+
+#[test]
+fn approval_refused_names_the_tpm_status_of_a_tpm_approver() {
+    let event = ApprovalRefused {
+        refusal: DenialKind::TpmRefused,
+        tpm_status: Some(TpmStatus::LockedOut),
+        digest: ConfigDigest::of(CONFIG.as_bytes()),
+        approver: approver(),
+    };
+    let record = record_of(
+        event,
+        "WARN",
+        &["refusal", "tpm_status", "config_digest", "approver_id", "approver_label"],
+    );
+    assert_eq!(
+        (record["refusal"].as_str(), record["tpm_status"].as_str()),
+        (Some("tpm_refused"), Some("locked_out"))
+    );
 }
 
 #[test]
@@ -406,6 +426,7 @@ fn no_audit_event_records_a_constant_field() {
         .emit();
         ApprovalRefused {
             refusal: DenialKind::WrongPassphrase,
+            tpm_status: None,
             digest: ConfigDigest::of(b""),
             approver: approver(),
         }

@@ -33,7 +33,7 @@ use crate::vault_id::{VaultId, VaultIdError};
 
 pub use approver_change::{
     ApproverChangeError, ApproverChangeStep, ApproverChanges, CreatedTpmKey, KeyCheckError, KeyFileOutcome, MayHaveCommitted, ReadBack,
-    TpmHelper, TpmHelperFailure,
+    TpmBlobError, TpmHelper, TpmHelperFailure, presence_message, read_tpm_key_blob, verify_tpm_signature,
 };
 pub use proof_payload::{MigrationProofPayload, PresencePayload};
 pub use recovery::{ApprovalRecoveryError, DiscardedFile, PublishedPairFault, RecoveredApproval, RecoveryFailure, recover_approval};

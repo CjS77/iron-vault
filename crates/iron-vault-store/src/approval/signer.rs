@@ -40,6 +40,9 @@ pub enum SignError {
     /// The operating system's random source failed, so no key was generated.
     #[error("the operating system's random source failed; no approver key was generated")]
     Randomness,
+    /// The TPM signing helper could not sign, or the TPM refused; the text names its status and never anything the owner typed.
+    #[error("the TPM signing helper cannot sign: {0}")]
+    TpmHelper(String),
     /// The signature does not fit the approval envelope for its algorithm.
     #[error("the signer produced a signature the approval envelope refuses: {0}")]
     Signature(ApprovalDecodeError),

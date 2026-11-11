@@ -21,10 +21,12 @@ use std::sync::Arc;
 
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::CredentialName;
-use iron_vault_store::{ApprovalPassphrase, PermittedOrigins, PinnedApprover, RecordId, StoreFs, VaultError, VaultIdentity};
+use iron_vault_store::{PermittedOrigins, PinnedApprover, RecordId, StoreFs, VaultError, VaultIdentity};
 use tokio::sync::OwnedMutexGuard;
 
-use super::super::{Inner, OpenVault, OwnerPresence, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, log_task_crash};
+use super::super::{
+    ApproverSecret, Inner, OpenVault, OwnerPresence, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, log_task_crash,
+};
 use super::{VaultChangeRefusal, audit_write_report, kind_of, log_committed};
 use crate::audit::corruption::open_vault;
 use crate::audit::vault::emit_commit_uncertain;
@@ -119,7 +121,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             service: self,
             service_wide,
             checks: inner.checks,
-            approvers: self.ordered_approvers(open.approval.approvers()),
+            approvers: self.askable_approvers(open.approval.approvers()),
             summary: VaultChangeSummary::new(change, current, before, snapshot.policy()),
         })
     }
@@ -160,10 +162,10 @@ impl<F: StoreFs + Send + Sync + 'static> VaultChangePlan<'_, F> {
     /// `passphrase` and drops the signer at once. Nothing is reserved, signed or written.
     pub async fn prove_presence(
         &self,
-        passphrase: ApprovalPassphrase,
+        secret: impl Into<ApproverSecret>,
         approver: &PinnedApprover,
     ) -> Result<OwnerPresence, PresenceRefusal> {
-        self.service.prove_presence(passphrase, approver).await
+        self.service.prove_presence(secret.into(), approver).await
     }
 
     /// Writes the planned change, then runs the config check from Ready through [`ServiceEvent::VaultChanged`] and

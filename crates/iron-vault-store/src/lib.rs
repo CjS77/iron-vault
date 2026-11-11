@@ -67,9 +67,9 @@ pub use approval::{
     ApproverPublicKey, CommittedApproval, ConfigDigest, CreatedTpmKey, DiscardedFile, InvalidKeyReason, KeyCheckError, KeyFileOutcome,
     MAX_APPROVAL_ENVELOPE_LEN, MAX_APPROVAL_STATE_LEN, MAX_APPROVERS, MayHaveCommitted, MigrationProofPayload, PendingConfig,
     PinnedApprover, PreparedApproval, PresencePayload, PublishedPairFault, ReadBack, RecoveredApproval, RecoveryFailure, ReservedApproval,
-    SignError, SignatureAlgorithm, SignerKind, SoftwareSigner, SoftwareSignerKey, TpmHelper, TpmHelperFailure, VerifiedApproval,
-    VerifyError, open_approval_state, open_signer_key, read_signer_key, recover_approval, seal_approval_state, seal_signer_key,
-    verify_approval, write_signer_key,
+    SignError, SignatureAlgorithm, SignerKind, SoftwareSigner, SoftwareSignerKey, TpmBlobError, TpmHelper, TpmHelperFailure,
+    VerifiedApproval, VerifyError, open_approval_state, open_signer_key, presence_message, read_signer_key, read_tpm_key_blob,
+    recover_approval, seal_approval_state, seal_signer_key, verify_approval, verify_tpm_signature, write_signer_key,
 };
 pub use config_dir::{
     ConfigDirLock, ConfigReadError, ConfigWriteError, PublishSet, RemoveStagingError, publish, read_config_file, remove_pending_and_staged,

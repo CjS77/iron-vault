@@ -18,7 +18,7 @@ use super::{AuditEvent, EventName, RequestId};
 use crate::admin::protocol::{AdminCommand, FrameError};
 use crate::hardening::{LockUnavailable, MemoryProtection};
 use crate::peer::PeerIdentity;
-use crate::service_context::{DenialKind, UnlockRefusal};
+use crate::service_context::{DenialKind, TpmStatus, UnlockRefusal};
 use crate::service_state::ServiceState;
 
 fn credential() -> CredentialName {
@@ -88,6 +88,20 @@ fn an_inventory_write_failure_is_a_state_write() {
 }
 
 #[test]
+fn a_tpm_presence_refusal_adds_the_helper_status() {
+    let event = PresenceRefused {
+        refusal: DenialKind::WrongPin,
+        tpm_status: Some(TpmStatus::WrongPin),
+        approver: approver(),
+    };
+    let record = record_of(event, "WARN", &["refusal", "tpm_status", "approver_id", "approver_label"]);
+    assert_eq!(
+        (record["refusal"].as_str(), record["tpm_status"].as_str()),
+        (Some("wrong_pin"), Some("wrong_pin"))
+    );
+}
+
+#[test]
 fn a_presence_refusal_names_its_kind_and_the_approver_and_nothing_else() {
     [
         (DenialKind::WrongPassphrase, "wrong_passphrase"),
@@ -97,6 +111,7 @@ fn a_presence_refusal_names_its_kind_and_the_approver_and_nothing_else() {
     .for_each(|(refusal, label)| {
         let event = PresenceRefused {
             refusal,
+            tpm_status: None,
             approver: approver(),
         };
         let record = record_of(event, "WARN", &["refusal", "approver_id", "approver_label"]);
@@ -409,6 +424,7 @@ pub(super) fn emit_every_event() {
     .emit();
     PresenceRefused {
         refusal: DenialKind::KeyMismatch,
+        tpm_status: None,
         approver: approver(),
     }
     .emit();

@@ -8,14 +8,14 @@
 
 use std::sync::Arc;
 
-use iron_vault_store::{PinnedApprover, SoftwareSigner, StoreFs};
+use iron_vault_store::{PinnedApprover, StoreFs};
 
 use super::dispatch::{AdminHandler, HandlerFuture};
 use super::owner_presence::{PassphraseAnswer, ask_approval_passphrase};
 use super::principal::AdminPrincipal;
 use super::protocol::{AdminRequest, AdminResponse, ErrorCode, Prompt};
 use super::server::{Exchange, ExchangeError};
-use crate::service_context::{ApprovalEnd, ApprovalReview, ServiceContext};
+use crate::service_context::{ApprovalEnd, ApprovalReview, ApproverSigner, NO_ASKABLE_APPROVER, ServiceContext};
 
 /// `config approve`'s handler, acting on the running service.
 pub(super) struct Approve<F> {
@@ -61,7 +61,7 @@ impl<F: StoreFs + Send + Sync + 'static> Approve<F> {
     }
 }
 
-/// Shows the summary, asks for the confirmation, then the approval passphrase, and opens the signer with it. The outer
+/// Shows the summary, asks for the confirmation, then the approval passphrase or PIN, and opens the signer with it. The outer
 /// error is a prompt that got no owner input; the inner one ends the approval before any reservation.
 ///
 /// A `lock` waiting for the service-wide lock ends the approval at either prompt with [`ApprovalEnd::CancelledByLock`].
@@ -69,7 +69,7 @@ impl<F: StoreFs + Send + Sync + 'static> Approve<F> {
 async fn authorize<F: StoreFs + Send + Sync + 'static>(
     review: &ApprovalReview<'_, F>,
     exchange: &mut Exchange,
-) -> Result<Result<(PinnedApprover, SoftwareSigner), ApprovalEnd>, ExchangeError> {
+) -> Result<Result<(PinnedApprover, ApproverSigner), ApprovalEnd>, ExchangeError> {
     exchange.notice(&review.summary()).await?;
     let confirm = Prompt {
         label: format!("Approve this config as version {}? Type yes to approve", review.version()),
@@ -83,7 +83,7 @@ async fn authorize<F: StoreFs + Send + Sync + 'static>(
         return Ok(Err(ApprovalEnd::Declined));
     }
     let Some((approver, answer)) = ask_approval_passphrase(exchange, review.approvers(), || review.lock_requested()).await? else {
-        return Ok(Err(ApprovalEnd::Unavailable("the approval state pins no approver".to_owned())));
+        return Ok(Err(ApprovalEnd::Unavailable(NO_ASKABLE_APPROVER.to_owned())));
     };
     let passphrase = match answer {
         PassphraseAnswer::Typed(passphrase) => passphrase,
@@ -107,7 +107,8 @@ fn refused(end: ApprovalEnd) -> AdminResponse {
         ApprovalEnd::WrongState(_) | ApprovalEnd::Unavailable(_) | ApprovalEnd::CancelledByLock => ErrorCode::ApprovalUnavailable,
         ApprovalEnd::Invalid(_) => ErrorCode::ConfigInvalid,
         ApprovalEnd::Declined => ErrorCode::Declined,
-        ApprovalEnd::Denied => ErrorCode::ApprovalDenied,
+        ApprovalEnd::Denied | ApprovalEnd::PinDenied => ErrorCode::ApprovalDenied,
+        ApprovalEnd::LockedOut { .. } => ErrorCode::TpmLockedOut,
         ApprovalEnd::Failed { .. } => ErrorCode::ApprovalFailed,
         ApprovalEnd::NotActive { .. } => ErrorCode::CommittedNotActive,
     };

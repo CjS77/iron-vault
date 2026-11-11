@@ -40,7 +40,7 @@ use crate::hardening::{CoreDumps, HardeningReport, MEMLOCK_REMEDIATION, MemoryPr
 #[cfg(target_os = "linux")]
 use crate::logging::LogDestination;
 #[cfg(target_os = "linux")]
-use crate::service_context::DenialKind;
+use crate::service_context::{DenialKind, TpmStatus};
 use crate::service_state::{ServiceState, UnavailableReason};
 
 /// The `tracing` target of every audit event. A hyphen cannot appear in a Rust path, so no module's target starts with
@@ -276,13 +276,16 @@ impl AuditEvent for ApprovalCompleted<'_> {
     }
 }
 
-/// `config.approval-refused`: the approval passphrase was wrong or the key is not the asked approver's; nothing was reserved.
+/// `config.approval-refused`: the approval passphrase or PIN was wrong, the key is not the asked approver's, or the TPM was
+/// locked out or its helper refused; nothing was reserved.
 // Its refusal is the service context's, and only the service context's approval emits it.
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy)]
 pub struct ApprovalRefused<'a> {
     /// Which check of the approver key refused.
     pub refusal: DenialKind,
+    /// The TPM signing helper's status, when the approver asked is a TPM approver.
+    pub tpm_status: Option<TpmStatus>,
     /// The digest of the config that was being approved.
     pub digest: ConfigDigest,
     /// The approver that was asked.
@@ -298,6 +301,7 @@ impl AuditEvent for ApprovalRefused<'_> {
             target: AUDIT_TARGET,
             event = Self::NAME.as_str(),
             refusal = self.refusal.label(),
+            tpm_status = self.tpm_status.map(TpmStatus::label),
             config_digest = self.digest.to_string().as_str(),
             approver_id = self.approver.id_text().as_str(),
             approver_label = self.approver.label_text().as_str(),

@@ -6,7 +6,7 @@
 
 use std::io::Write;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::deployment::DeploymentProfile;
@@ -26,6 +26,116 @@ pub(super) fn offered_socket(profile: DeploymentProfile) -> Option<PathBuf> {
 
 /// How long the service waits for the helper before it reads silence as the helper being unavailable.
 const DEADLINE: Duration = Duration::from_secs(30);
+
+/// The helper's answer, or the lack of one, named for the audit log's `tpm_status` field. Never owner input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TpmStatus {
+    /// The TPM refused the authorization value (helper status `02`).
+    WrongPin,
+    /// The TPM is in lockout, or the lockout reserve withheld the try (`03`).
+    LockedOut,
+    /// The key blob belongs to another TPM, or this one after a clear (`04`).
+    NotThisTpm,
+    /// The loaded key is not the pinned key (`05`).
+    KeyMismatch,
+    /// The TPM's dictionary-attack settings are too weak to limit guessing (`06`).
+    WeakDaSettings,
+    /// The message is none of the three the helper signs (`07`).
+    RefusedMessage,
+    /// Any other TPM failure (`08`).
+    TpmError,
+    /// The request did not decode (`09`).
+    Malformed,
+    /// The helper could not be reached, or its answer was not one the request asked for.
+    Unreachable,
+    /// The helper signed, but the signature does not verify against the pinned key.
+    BadSignature,
+}
+
+impl TpmStatus {
+    /// The snake_case label audit events record.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::WrongPin => "wrong_pin",
+            Self::LockedOut => "locked_out",
+            Self::NotThisTpm => "not_this_tpm",
+            Self::KeyMismatch => "key_mismatch",
+            Self::WeakDaSettings => "weak_da_settings",
+            Self::RefusedMessage => "refused_message",
+            Self::TpmError => "tpm_error",
+            Self::Malformed => "malformed",
+            Self::Unreachable => "unreachable",
+            Self::BadSignature => "bad_signature",
+        }
+    }
+}
+
+/// Why a helper request did not return what it asked for. The text names the status and never anything the owner typed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub(super) enum HelperError {
+    /// The TPM refused the authorization value; one try is spent.
+    #[error("the TPM signing helper refused: the TPM refused the authorization value")]
+    WrongPin,
+    /// The TPM is in lockout, or the reserve withheld the try.
+    #[error("the TPM signing helper refused: the TPM is locked out; try again in {wait_seconds} seconds")]
+    LockedOut {
+        /// The whole seconds to wait.
+        wait_seconds: u64,
+    },
+    /// Any other refusal, or no usable answer.
+    #[error("{message}")]
+    Failed {
+        /// The status the audit log names.
+        status: TpmStatus,
+        /// What to tell the owner.
+        message: String,
+    },
+}
+
+impl From<HelperError> for TpmHelperFailure {
+    fn from(error: HelperError) -> Self {
+        match error {
+            HelperError::LockedOut { wait_seconds } => Self::locked_out(error.to_string(), wait_seconds),
+            other => Self::new(other.to_string()),
+        }
+    }
+}
+
+/// The helper's answer to `request` over a fresh connection to the socket at `socket`.
+fn ask(socket: &Path, request: &Request) -> Result<Response, HelperError> {
+    let mut stream = UnixStream::connect(socket).map_err(|e| unavailable(&format!("cannot connect ({})", e.kind())))?;
+    stream
+        .set_read_timeout(Some(DEADLINE))
+        .and_then(|()| stream.set_write_timeout(Some(DEADLINE)))
+        .map_err(|e| unavailable(&e.kind().to_string()))?;
+    let frame = request.encode().map_err(|e| unavailable(&e.to_string()))?;
+    stream
+        .write_all(&frame)
+        .map_err(|e| unavailable(&format!("cannot send ({})", e.kind())))?;
+    let body = read_frame(&mut stream).map_err(|e| unavailable(&format!("no answer ({e})")))?;
+    Response::decode(&body).map_err(|e| unavailable(&format!("an answer that does not decode ({e})")))
+}
+
+/// Has the helper at `socket` sign `message` with the key in `blob` under `auth`.
+///
+/// Blocks until the helper answers or the deadline passes, so an async caller runs it on the blocking pool; the
+/// approval transaction's step 3 calls it directly, a moment after step 2 proved the same value.
+pub(super) fn sign_message(
+    socket: &Path,
+    (auth, blob, pinned_key): (&TpmAuthValue, &TpmKeyBlob, &[u8; PUBLIC_KEY_LEN]),
+    message: &[u8],
+) -> Result<[u8; SIGNATURE_LEN], HelperError> {
+    let request = Request::Sign(SignRequest {
+        auth: auth.clone(),
+        key: blob.key().clone(),
+        pinned_key: *pinned_key,
+        message: message.to_vec(),
+    });
+    match ask(socket, &request)? {
+        Response::Signed { signature } => Ok(signature),
+        other => Err(refusal(&other)),
+    }
+}
 
 /// One enrollment's conversation with the helper.
 pub(super) struct HelperSession {
@@ -49,34 +159,21 @@ impl HelperSession {
         if let Some(pin) = self.pin.take() {
             self.auth = Some(TpmAuthValue::derive(id.as_bytes(), &pin));
         }
-        self.auth.clone().ok_or_else(|| unavailable("the authorization value is gone"))
-    }
-
-    /// The helper's answer to `request`.
-    fn ask(&self, request: &Request) -> Result<Response, TpmHelperFailure> {
-        let mut stream = UnixStream::connect(&self.socket).map_err(|e| unavailable(&format!("cannot connect ({})", e.kind())))?;
-        stream
-            .set_read_timeout(Some(DEADLINE))
-            .and_then(|()| stream.set_write_timeout(Some(DEADLINE)))
-            .map_err(|e| unavailable(&e.kind().to_string()))?;
-        let frame = request.encode().map_err(|e| unavailable(&e.to_string()))?;
-        stream
-            .write_all(&frame)
-            .map_err(|e| unavailable(&format!("cannot send ({})", e.kind())))?;
-        let body = read_frame(&mut stream).map_err(|e| unavailable(&format!("no answer ({e})")))?;
-        Response::decode(&body).map_err(|e| unavailable(&format!("an answer that does not decode ({e})")))
+        self.auth
+            .clone()
+            .ok_or_else(|| unavailable("the authorization value is gone").into())
     }
 }
 
 impl TpmHelper for HelperSession {
     fn create(&mut self, id: ApproverId) -> Result<CreatedTpmKey, TpmHelperFailure> {
         let auth = self.auth_for(&id)?;
-        match self.ask(&Request::Create { auth })? {
+        match ask(&self.socket, &Request::Create { auth })? {
             Response::Created { key, public_key } => Ok(CreatedTpmKey {
                 blob: TpmKeyBlob::new(*id.as_bytes(), key),
                 public_key,
             }),
-            other => Err(refusal(&other)),
+            other => Err(refusal(&other).into()),
         }
     }
 
@@ -87,39 +184,40 @@ impl TpmHelper for HelperSession {
         message: &[u8],
     ) -> Result<[u8; SIGNATURE_LEN], TpmHelperFailure> {
         let id = ApproverId::from_bytes(*blob.approver_id()).map_err(|_| unavailable("the key blob names no approver"))?;
-        let request = Request::Sign(SignRequest {
-            auth: self.auth_for(&id)?,
-            key: blob.key().clone(),
-            pinned_key: *pinned_key,
-            message: message.to_vec(),
-        });
-        match self.ask(&request)? {
-            Response::Signed { signature } => Ok(signature),
-            other => Err(refusal(&other)),
-        }
+        let auth = self.auth_for(&id)?;
+        Ok(sign_message(&self.socket, (&auth, blob, pinned_key), message)?)
     }
 }
 
-fn unavailable(detail: &str) -> TpmHelperFailure {
-    TpmHelperFailure(format!("the TPM signing helper is unavailable: {detail}"))
+fn unavailable(detail: &str) -> HelperError {
+    HelperError::Failed {
+        status: TpmStatus::Unreachable,
+        message: format!("the TPM signing helper is unavailable: {detail}"),
+    }
 }
 
-/// A helper answer that is not the success the request wanted, named by its status and never by owner input.
-fn refusal(response: &Response) -> TpmHelperFailure {
-    let status = match response {
-        Response::WrongPin => "the TPM refused the authorization value".to_owned(),
-        Response::LockedOut { wait_seconds } => format!("the TPM is locked out; try again in {wait_seconds} seconds"),
-        Response::NotThisTpm => "not this TPM".to_owned(),
-        Response::KeyMismatch => "key mismatch".to_owned(),
-        Response::WeakDaSettings => {
-            "dictionary-attack settings too weak: the lockout interval is under 600 seconds, or the maximum leaves no share".to_owned()
-        }
-        Response::RefusedMessage => "refused message".to_owned(),
-        Response::TpmError { code } => format!("TPM error {code:#010x}"),
-        Response::Malformed => "malformed request".to_owned(),
-        Response::Created { .. } | Response::Signed { .. } => "an answer the request did not ask for".to_owned(),
+/// A helper answer that is not the success the request wanted.
+fn refusal(response: &Response) -> HelperError {
+    let failed = |status, text: &str| HelperError::Failed {
+        status,
+        message: format!("the TPM signing helper refused: {text}"),
     };
-    TpmHelperFailure(format!("the TPM signing helper refused: {status}"))
+    match response {
+        Response::WrongPin => HelperError::WrongPin,
+        Response::LockedOut { wait_seconds } => HelperError::LockedOut {
+            wait_seconds: *wait_seconds,
+        },
+        Response::NotThisTpm => failed(TpmStatus::NotThisTpm, "not this TPM"),
+        Response::KeyMismatch => failed(TpmStatus::KeyMismatch, "key mismatch"),
+        Response::WeakDaSettings => failed(
+            TpmStatus::WeakDaSettings,
+            "dictionary-attack settings too weak: the lockout interval is under 600 seconds, or the maximum leaves no share",
+        ),
+        Response::RefusedMessage => failed(TpmStatus::RefusedMessage, "refused message"),
+        Response::TpmError { code } => failed(TpmStatus::TpmError, &format!("TPM error {code:#010x}")),
+        Response::Malformed => failed(TpmStatus::Malformed, "malformed request"),
+        Response::Created { .. } | Response::Signed { .. } => failed(TpmStatus::Unreachable, "an answer the request did not ask for"),
+    }
 }
 
 #[cfg(test)]

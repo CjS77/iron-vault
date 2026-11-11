@@ -5,7 +5,7 @@ use iron_vault_store::{InitFailure, InitStep, RecipientInventoryWriteError, Unlo
 
 use crate::audit::{AUDIT_TARGET, AuditEvent, EventName, NamedApprover, memory_label};
 use crate::hardening::MemoryProtection;
-use crate::service_context::{DenialKind, HostUnlockOutcome, UnlockRefusal, step_names};
+use crate::service_context::{DenialKind, HostUnlockOutcome, TpmStatus, UnlockRefusal, step_names};
 
 /// `vault.init-failed`: an init step failed, or its task ended without a result. `step` is the step number, or `discard`;
 /// it is left out when no step is known.
@@ -113,6 +113,8 @@ impl AuditEvent for HostUnlock {
 pub struct PresenceRefused<'a> {
     /// Which check of the approver key refused.
     pub refusal: DenialKind,
+    /// The TPM signing helper's status, when the approver asked is a TPM approver.
+    pub tpm_status: Option<TpmStatus>,
     /// The approver that was asked.
     pub approver: NamedApprover<'a>,
 }
@@ -125,6 +127,7 @@ impl AuditEvent for PresenceRefused<'_> {
             target: AUDIT_TARGET,
             event = Self::NAME.as_str(),
             refusal = self.refusal.label(),
+            tpm_status = self.tpm_status.map(TpmStatus::label),
             approver_id = self.approver.id_text().as_str(),
             approver_label = self.approver.label_text().as_str(),
             "owner presence refused; nothing was written",

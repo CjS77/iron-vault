@@ -514,7 +514,7 @@ impl FakeHelper {
 impl TpmHelper for FakeHelper {
     fn create(&mut self, id: ApproverId) -> Result<CreatedTpmKey, TpmHelperFailure> {
         if self.fail_create {
-            return Err(TpmHelperFailure("dictionary-attack settings too weak".to_owned()));
+            return Err(TpmHelperFailure::new("dictionary-attack settings too weak"));
         }
         let parts = iron_vault_tpm_protocol::TpmKeyParts {
             primary_name: vec![1; 34],
@@ -530,7 +530,7 @@ impl TpmHelper for FakeHelper {
 
     fn sign(&mut self, _: &TpmKeyBlob, _: &[u8; 65], message: &[u8]) -> Result<[u8; 64], TpmHelperFailure> {
         if self.fail_sign {
-            return Err(TpmHelperFailure("locked out".to_owned()));
+            return Err(TpmHelperFailure::locked_out("locked out", 60));
         }
         let key = match self.wrong_signer {
             true => p256::ecdsa::SigningKey::from_slice(&[9; 32]).unwrap(),

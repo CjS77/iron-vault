@@ -21,7 +21,7 @@ use iron_vault_tpm_protocol::TpmApprovalPin;
 use tokio::sync::OwnedMutexGuard;
 
 use super::tpm_helper::HelperSession;
-use super::{OwnerPresence, PresenceRefusal, ServiceContext};
+use super::{ApproverSecret, OwnerPresence, PresenceRefusal, ServiceContext};
 use crate::audit::approver::{ChangeFailed, ChangeFailure, Enrolled, OrphanRemoved, Removed};
 use crate::audit::{AuditEvent, NamedApprover};
 use crate::service_state::{AdminOperation, ServiceState};
@@ -53,6 +53,10 @@ pub enum ApproverRefusal {
     /// Nothing was committed.
     #[error("{0}")]
     KindUnavailable(String),
+    /// The TPM was in dictionary-attack lockout, or the lockout reserve withheld the try, while enrolling a TPM approver.
+    /// Nothing was committed.
+    #[error("{0}")]
+    TpmLockedOut(String),
     /// Step 3's read-back or orphan sweep, or the approver change, failed; `committed` says whether it may have committed.
     #[error("{cause}")]
     Failed {
@@ -139,7 +143,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             service_wide,
             state,
             checks,
-            approvers: self.ordered_approvers(approval.approvers()),
+            approvers: self.askable_approvers(approval.approvers()),
             approval,
         })
     }
@@ -217,10 +221,10 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
     /// Owner presence with `approver`'s key; see [`ServiceContext::prove_presence`].
     pub async fn prove_presence(
         &self,
-        passphrase: ApprovalPassphrase,
+        secret: impl Into<ApproverSecret>,
         approver: &PinnedApprover,
     ) -> Result<OwnerPresence, PresenceRefusal> {
-        self.service.prove_presence(passphrase, approver).await
+        self.service.prove_presence(secret.into(), approver).await
     }
 
     /// Records step 6's refusal of the new signer's secret as `approver.change-failed`.
@@ -371,6 +375,7 @@ fn log_failure(change: &'static str, approver: Option<ApproverId>, failure: Chan
 
 fn failed(error: &ApproverChangeError) -> ApproverRefusal {
     match error {
+        ApproverChangeError::TpmHelper(failure) if failure.locked_out_for.is_some() => ApproverRefusal::TpmLockedOut(error.to_string()),
         ApproverChangeError::TpmHelper(_) => ApproverRefusal::KindUnavailable(error.to_string()),
         _ => ApproverRefusal::Failed {
             committed: error.may_have_committed(),

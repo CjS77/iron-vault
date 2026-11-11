@@ -1,28 +1,37 @@
-//! The approval passphrase prompt (specification §12, §6): `config approve` asks it before signing, and `replace`
-//! and `rm` ask it as owner presence (design/credential-commands.md, "Owner presence"). Both use this one prompt and
-//! the service context's one key check, so the two cannot drift apart.
+//! The approver prompt (specification §12, §6): `config approve` asks it before signing, and `replace` and `rm` ask it
+//! as owner presence (design/credential-commands.md, "Owner presence"). Both use this one prompt and the service
+//! context's one key check, so the two cannot drift apart. A software approver is asked for its approval passphrase and
+//! a TPM approver for its TPM approval PIN.
 
 use std::future::Future;
 
-use iron_vault_store::{ApprovalPassphrase, PinnedApprover, StoreFs};
+use iron_vault_store::{ApprovalPassphrase, PinnedApprover, SignerKind, StoreFs};
+use iron_vault_tpm_protocol::TpmApprovalPin;
 use secrecy::SecretString;
 
 use super::protocol::{AdminResponse, ErrorCode, OwnerInput, Prompt, PromptAnswer};
 use super::server::{Exchange, ExchangeError};
 use crate::audit::{AuditEvent, NamedApprover, vault::PresenceRefused};
-use crate::service_context::{ApproverChangePlan, DenialKind, OwnerPresence, PresenceRefusal, RecipientRemoval, VaultChangePlan};
+use crate::service_context::NO_ASKABLE_APPROVER;
+use crate::service_context::{
+    ApproverChangePlan, ApproverSecret, DenialKind, OwnerPresence, PresenceRefusal, RecipientRemoval, VaultChangePlan,
+};
 
-/// The label of the secret prompt for the approval passphrase of `approver`, which names it by its label, escaped since
-/// the owner chose it.
+/// The label of the secret prompt for `approver`, which names it by its label, escaped since the owner chose it: its
+/// approval passphrase, or for a TPM approver its TPM approval PIN.
 fn passphrase_prompt(approver: &PinnedApprover) -> String {
-    format!("Approval passphrase for \"{}\"", NamedApprover::from(approver).label_text())
+    let (what, label) = match approver.kind() {
+        SignerKind::Software => ("Approval passphrase", NamedApprover::from(approver).label_text()),
+        SignerKind::Tpm => ("TPM approval PIN", NamedApprover::from(approver).label_text()),
+    };
+    format!("{what} for \"{label}\"")
 }
 
-/// The owner's answer to the approval passphrase prompt.
+/// The owner's answer to the approver prompt.
 pub(super) enum PassphraseAnswer {
-    /// Input that can be the approval passphrase, still to be checked against the approver key.
-    Typed(ApprovalPassphrase),
-    /// Empty or non-UTF-8 input, which cannot be the passphrase and is refused as a wrong one.
+    /// Input that can be the approver's passphrase or PIN, still to be checked against its key.
+    Typed(ApproverSecret),
+    /// Empty or non-UTF-8 input, which cannot be the passphrase or PIN and is refused as a wrong one.
     Unusable,
     /// A `lock` came for the service-wide lock while the owner was at the prompt.
     CancelledByLock,
@@ -59,7 +68,9 @@ pub(super) async fn ask_approval_passphrase<'a, L: Future<Output = ()>>(
         let answer = match exchange.prompt_or_switch_unless(&prompt, lock_requested()).await? {
             None => PassphraseAnswer::CancelledByLock,
             Some(PromptAnswer::Switch) => continue,
-            Some(PromptAnswer::OwnerInput(input)) => approval_passphrase(input).map_or(PassphraseAnswer::Unusable, PassphraseAnswer::Typed),
+            Some(PromptAnswer::OwnerInput(input)) => {
+                typed_secret(approver.kind(), input).map_or(PassphraseAnswer::Unusable, PassphraseAnswer::Typed)
+            }
         };
         return Ok(Some((approver, answer)));
     }
@@ -75,7 +86,7 @@ pub(super) trait PresencePlan {
     /// Opens `approver`'s key with `passphrase`; see [`require_owner_presence`].
     fn prove_presence(
         &self,
-        passphrase: ApprovalPassphrase,
+        secret: ApproverSecret,
         approver: &PinnedApprover,
     ) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send;
 }
@@ -91,10 +102,10 @@ impl<F: StoreFs + Send + Sync + 'static> PresencePlan for VaultChangePlan<'_, F>
 
     fn prove_presence(
         &self,
-        passphrase: ApprovalPassphrase,
+        secret: ApproverSecret,
         approver: &PinnedApprover,
     ) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send {
-        VaultChangePlan::prove_presence(self, passphrase, approver)
+        VaultChangePlan::prove_presence(self, secret, approver)
     }
 }
 
@@ -109,10 +120,10 @@ impl<F: StoreFs + Send + Sync + 'static> PresencePlan for RecipientRemoval<'_, F
 
     fn prove_presence(
         &self,
-        passphrase: ApprovalPassphrase,
+        secret: ApproverSecret,
         approver: &PinnedApprover,
     ) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send {
-        RecipientRemoval::prove_presence(self, passphrase, approver)
+        RecipientRemoval::prove_presence(self, secret, approver)
     }
 }
 
@@ -127,10 +138,10 @@ impl<F: StoreFs + Send + Sync + 'static> PresencePlan for ApproverChangePlan<'_,
 
     fn prove_presence(
         &self,
-        passphrase: ApprovalPassphrase,
+        secret: ApproverSecret,
         approver: &PinnedApprover,
     ) -> impl Future<Output = Result<OwnerPresence, PresenceRefusal>> + Send {
-        ApproverChangePlan::prove_presence(self, passphrase, approver)
+        ApproverChangePlan::prove_presence(self, secret, approver)
     }
 }
 
@@ -148,20 +159,25 @@ pub(super) async fn require_owner_presence(
     plan: &impl PresencePlan,
 ) -> Result<Result<OwnerPresence, NoPresence>, ExchangeError> {
     let Some((approver, answer)) = ask_approval_passphrase(exchange, plan.approvers(), || plan.lock_requested()).await? else {
-        let none = PresenceRefusal::Unavailable("the approval state pins no approver".to_owned());
+        let none = PresenceRefusal::Unavailable(NO_ASKABLE_APPROVER.to_owned());
         return Ok(Err(NoPresence::Refused(none)));
     };
     let checked = match answer {
         PassphraseAnswer::Typed(passphrase) => plan.prove_presence(passphrase, approver).await.map_err(NoPresence::Refused),
-        PassphraseAnswer::Unusable => Err(NoPresence::Refused(PresenceRefusal::Denied(DenialKind::WrongPassphrase))),
+        PassphraseAnswer::Unusable => Err(NoPresence::Refused(PresenceRefusal::Denied(DenialKind::wrong_answer(
+            approver.kind(),
+        )))),
         PassphraseAnswer::CancelledByLock => {
             tracing::warn!("change cancelled at its prompt by a lock; nothing was written");
             Err(NoPresence::CancelledByLock)
         }
     };
-    if let Err(NoPresence::Refused(PresenceRefusal::Denied(refusal))) = &checked {
+    if let Err(NoPresence::Refused(refusal)) = &checked
+        && let Some((refusal, tpm_status)) = refusal.audit()
+    {
         PresenceRefused {
-            refusal: *refusal,
+            refusal,
+            tpm_status,
             approver: approver.into(),
         }
         .emit();
@@ -169,12 +185,13 @@ pub(super) async fn require_owner_presence(
     Ok(checked)
 }
 
-/// The answer when owner presence for `command` was not shown, so nothing was written. A wrong passphrase is
-/// `approval-denied`, and a key check that could not run or a `lock` at the passphrase prompt is
-/// `approval-unavailable` (design/admin-protocol.md).
+/// The answer when owner presence for `command` was not shown, so nothing was written. A wrong passphrase or PIN is
+/// `approval-denied`, a TPM lockout is `tpm-locked-out`, and a key check that could not run or a `lock` at the passphrase
+/// prompt is `approval-unavailable` (design/admin-protocol.md).
 pub(super) fn no_presence(command: &str, none: NoPresence) -> AdminResponse {
     let (code, message) = match none {
         NoPresence::Refused(denied @ PresenceRefusal::Denied(_)) => (ErrorCode::ApprovalDenied, denied.to_string()),
+        NoPresence::Refused(locked @ PresenceRefusal::TpmLockedOut { .. }) => (ErrorCode::TpmLockedOut, locked.to_string()),
         NoPresence::Refused(unavailable) => (ErrorCode::ApprovalUnavailable, unavailable.to_string()),
         NoPresence::CancelledByLock => (
             ErrorCode::ApprovalUnavailable,
@@ -184,10 +201,16 @@ pub(super) fn no_presence(command: &str, none: NoPresence) -> AdminResponse {
     AdminResponse::Error { code, message }
 }
 
-/// The owner's input as an approval passphrase. The input's buffer is cleared when it drops here.
-fn approval_passphrase(input: OwnerInput) -> Option<ApprovalPassphrase> {
+/// The owner's input as the secret a `kind` approver asks for. The input's buffer is cleared when it drops here; a PIN is
+/// not held in plain `String` longer than the authorization value takes to derive.
+fn typed_secret(kind: SignerKind, input: OwnerInput) -> Option<ApproverSecret> {
     let text = std::str::from_utf8(input.expose_secret()).ok()?;
-    ApprovalPassphrase::new(SecretString::from(text)).ok()
+    match kind {
+        SignerKind::Software => ApprovalPassphrase::new(SecretString::from(text))
+            .ok()
+            .map(ApproverSecret::Passphrase),
+        SignerKind::Tpm => (!text.is_empty()).then(|| ApproverSecret::Pin(TpmApprovalPin::new(text.to_owned()))),
+    }
 }
 
 #[cfg(test)]

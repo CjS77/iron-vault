@@ -11,14 +11,38 @@ use crate::approval::verify::verify_p256;
 use crate::approval::{
     ApprovalState, ApproverId, ApproverLabel, ApproverPublicKey, PinnedApprover, PresencePayload, SignatureAlgorithm, SignerKind,
 };
-use crate::durable::{durable_replace, read_state_file};
-use crate::{StateFileName, StoreFs, UtcSecond};
+use crate::durable::{ReadError, durable_replace, read_state_file};
+use crate::{StateDirLock, StateFileName, StoreFs, UtcSecond, VaultId};
 
 /// Why the TPM signing helper did not make or use a key: its refusal by status, or that it could not be reached. The text
 /// names the status and never anything the owner typed.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("{0}")]
-pub struct TpmHelperFailure(pub String);
+#[error("{message}")]
+pub struct TpmHelperFailure {
+    /// What the helper said, by status.
+    pub message: String,
+    /// The whole seconds to wait when the failure is the TPM's lockout (or the reserve withholding the try); `None` for
+    /// every other failure.
+    pub locked_out_for: Option<u64>,
+}
+
+impl TpmHelperFailure {
+    /// A failure other than a lockout.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            locked_out_for: None,
+        }
+    }
+
+    /// The TPM is in lockout, or the reserve withheld the try; the owner waits `wait_seconds`.
+    pub fn locked_out(message: impl Into<String>, wait_seconds: u64) -> Self {
+        Self {
+            message: message.into(),
+            locked_out_for: Some(wait_seconds),
+        }
+    }
+}
 
 /// A TPM approval key the helper created.
 #[derive(Debug)]
@@ -67,7 +91,7 @@ impl<F: StoreFs> ApproverChanges<'_, F> {
         let bytes = created
             .blob
             .encode()
-            .map_err(|e| ApproverChangeError::TpmHelper(TpmHelperFailure(format!("returned an unusable key: {e}"))))?;
+            .map_err(|e| ApproverChangeError::TpmHelper(TpmHelperFailure::new(format!("returned an unusable key: {e}"))))?;
         durable_replace(self.lock, self.fs, &StateFileName::tpm_key_blob(id), &bytes).map_err(ApproverChangeError::KeyFile)?;
         self.check_tpm_blob(&approver, state, (&created.public_key, helper))?;
         state
@@ -85,21 +109,59 @@ impl<F: StoreFs> ApproverChanges<'_, F> {
         (pinned_key, helper): (&[u8; PUBLIC_KEY_LEN], &mut impl TpmHelper),
     ) -> Result<(), ApproverChangeError> {
         let check = |error| ApproverChangeError::KeyCheck(error);
-        let file = StateFileName::tpm_key_blob(approver.id());
-        let bytes = read_state_file(self.lock, self.fs, &file, MAX_TPM_KEY_BLOB_LEN as u64).map_err(|e| check(KeyCheckError::Read(e)))?;
-        let blob = TpmKeyBlob::decode(&bytes, approver.id().as_bytes()).map_err(|_| check(KeyCheckError::Blob))?;
-        let message = PresencePayload::new(state.vault_id(), approver.id(), fresh_nonce()?).encode();
+        let blob = read_tpm_key_blob(self.lock, self.fs, approver.id()).map_err(|error| check(error.into()))?;
+        let message = presence_message(state.vault_id(), approver.id()).map_err(check)?;
         let signature = helper.sign(&blob, pinned_key, &message).map_err(ApproverChangeError::TpmHelper)?;
-        match approver.public_key().key() {
-            ApproverKey::EcdsaP256 { key, .. } => verify_p256(key, &message, &signature).map_err(|_| check(KeyCheckError::Signature)),
-            ApproverKey::Ed25519(_) => Err(check(KeyCheckError::Signature)),
+        match verify_tpm_signature(approver, &message, &signature) {
+            true => Ok(()),
+            false => Err(check(KeyCheckError::Signature)),
         }
     }
 }
 
+/// Why `approver-<id>.tpm` cannot be used as a key blob.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum TpmBlobError {
+    /// The file cannot be read: it may not exist.
+    #[error("it cannot be read: {0}")]
+    Read(ReadError),
+    /// The file is not a well-formed key blob for the approver.
+    #[error("it is not a key blob for the approver")]
+    Blob,
+}
+
+impl From<TpmBlobError> for KeyCheckError {
+    fn from(error: TpmBlobError) -> Self {
+        match error {
+            TpmBlobError::Read(error) => Self::Read(error),
+            TpmBlobError::Blob => Self::Blob,
+        }
+    }
+}
+
+/// Reads the key blob of the TPM approver `id`, `approver-<id>.tpm`, and checks its framing and the approver ID it names.
+pub fn read_tpm_key_blob(lock: &StateDirLock, fs: &impl StoreFs, id: ApproverId) -> Result<TpmKeyBlob, TpmBlobError> {
+    let bytes = read_state_file(lock, fs, &StateFileName::tpm_key_blob(id), MAX_TPM_KEY_BLOB_LEN as u64).map_err(TpmBlobError::Read)?;
+    TpmKeyBlob::decode(&bytes, id.as_bytes()).map_err(|_| TpmBlobError::Blob)
+}
+
+/// A presence payload for `approver_id` of `vault_id` with a fresh nonce from the operating system's random source: the
+/// bytes the helper signs to prove owner presence. The caller verifies the signature and drops the message.
+pub fn presence_message(vault_id: VaultId, approver_id: ApproverId) -> Result<Vec<u8>, KeyCheckError> {
+    Ok(PresencePayload::new(vault_id, approver_id, fresh_nonce()?).encode())
+}
+
+/// Whether `signature` (`r ‖ s`) over `message` verifies against the key `approver` pins.
+pub fn verify_tpm_signature(approver: &PinnedApprover, message: &[u8], signature: &[u8]) -> bool {
+    match approver.public_key().key() {
+        ApproverKey::EcdsaP256 { key, .. } => verify_p256(key, message, signature).is_ok(),
+        ApproverKey::Ed25519(_) => false,
+    }
+}
+
 /// 32 bytes from the operating system's random source, for one presence payload.
-fn fresh_nonce() -> Result<[u8; 32], ApproverChangeError> {
+fn fresh_nonce() -> Result<[u8; 32], KeyCheckError> {
     let mut nonce = [0; 32];
-    getrandom::fill(&mut nonce).map_err(|_| ApproverChangeError::KeyCheck(KeyCheckError::Randomness))?;
+    getrandom::fill(&mut nonce).map_err(|_| KeyCheckError::Randomness)?;
     Ok(nonce)
 }

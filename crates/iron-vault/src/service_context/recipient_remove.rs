@@ -13,13 +13,13 @@
 use std::sync::Arc;
 
 use iron_vault_store::{
-    ApprovalPassphrase, ChangeCommitted, PinnedApprover, RecipientChange, RecipientChangeError, RecipientChangeRefusal,
-    RecipientChangeWriteError, RecipientEntry, RecipientInventory, RecipientKey, StoreFs, rewrap_identity,
+    ChangeCommitted, PinnedApprover, RecipientChange, RecipientChangeError, RecipientChangeRefusal, RecipientChangeWriteError,
+    RecipientEntry, RecipientInventory, RecipientKey, StoreFs, rewrap_identity,
 };
 use tokio::sync::OwnedMutexGuard;
 
 use super::recipients::{ReadyVault, log_failure, ready_vault, step_failure, unwritten};
-use super::{OwnerPresence, PresenceRefusal, RecipientRefusal, ServiceContext};
+use super::{ApproverSecret, OwnerPresence, PresenceRefusal, RecipientRefusal, ServiceContext};
 use crate::audit::AuditEvent;
 use crate::audit::recipient::{ChangeFailure, Removed};
 use crate::service_state::ServiceState;
@@ -100,7 +100,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             service_wide,
             state,
             checks,
-            approvers: self.ordered_approvers(&approvers),
+            approvers: self.askable_approvers(&approvers),
             inventory,
             removed,
             after,
@@ -160,10 +160,10 @@ impl<F: StoreFs + Send + Sync + 'static> RecipientRemoval<'_, F> {
     /// `passphrase` and drops the signer at once. Nothing is reserved, signed or written.
     pub async fn prove_presence(
         &self,
-        passphrase: ApprovalPassphrase,
+        secret: impl Into<ApproverSecret>,
         approver: &PinnedApprover,
     ) -> Result<OwnerPresence, PresenceRefusal> {
-        self.service.prove_presence(passphrase, approver).await
+        self.service.prove_presence(secret.into(), approver).await
     }
 
     /// Step 7: rewraps the vault identity for the set without the recipient, if the service is still in the state and at

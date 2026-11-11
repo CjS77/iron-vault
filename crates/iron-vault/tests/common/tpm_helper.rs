@@ -2,11 +2,12 @@
 //! service side of enrollment: a stub that holds one P-256 key in memory and answers as told, and a bridge that starts the
 //! real helper binary per connection against `swtpm`, as systemd's socket unit does.
 
+use std::collections::VecDeque;
 use std::os::fd::OwnedFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use iron_vault_tpm_protocol::{Request, Response, TpmKeyParts, read_frame};
@@ -21,38 +22,80 @@ pub struct Script {
     pub sign: Option<Response>,
 }
 
+/// The stub's state, shared with the thread that serves it.
+#[derive(Default)]
+struct State {
+    script: Script,
+    /// Answers for the next sign requests, one each, in order; `None` signs for real. Ahead of the script.
+    next_signs: VecDeque<Option<Response>>,
+    calls: Vec<&'static str>,
+    /// The first four bytes of every message signed: `IVPP` for presence, `IVAP` for an approval.
+    signed: Vec<[u8; 4]>,
+}
+
 /// A running stub: its calls, in order (`create` or `sign`).
 #[derive(Clone)]
 pub struct Stub {
-    calls: Arc<Mutex<Vec<&'static str>>>,
+    state: Arc<Mutex<State>>,
 }
 
 impl Stub {
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// The requests the stub has answered, in order.
     pub fn calls(&self) -> Vec<&'static str> {
-        self.calls.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        self.state().calls.clone()
+    }
+
+    /// The magic of each message the stub was asked to sign, in order.
+    pub fn signed_magics(&self) -> Vec<[u8; 4]> {
+        self.state().signed.clone()
+    }
+
+    /// Replaces the answers the stub gives from now on.
+    pub fn set_script(&self, script: Script) {
+        self.state().script = script;
+    }
+
+    /// Answers the next sign requests with `answers`, one each, in order; `None` signs for real.
+    pub fn answer_next_signs(&self, answers: impl IntoIterator<Item = Option<Response>>) {
+        self.state().next_signs = answers.into_iter().collect();
     }
 }
 
 /// Serves `script` on a socket at `path` from a detached thread.
 pub fn serve_stub(path: &Path, script: Script) -> Stub {
-    let (listener, stub) = (UnixListener::bind(path).unwrap(), Stub { calls: Arc::default() });
-    let calls = Arc::clone(&stub.calls);
+    let listener = UnixListener::bind(path).unwrap();
+    let stub = Stub {
+        state: Arc::new(Mutex::new(State {
+            script,
+            ..State::default()
+        })),
+    };
+    let state = Arc::clone(&stub.state);
     thread::spawn(move || {
-        listener.incoming().flatten().for_each(|stream| answer(stream, &script, &calls));
+        listener.incoming().flatten().for_each(|stream| answer(stream, &state));
     });
     stub
 }
 
-fn answer(mut stream: UnixStream, script: &Script, calls: &Mutex<Vec<&'static str>>) {
+fn answer(mut stream: UnixStream, state: &Mutex<State>) {
     use std::io::Write;
     let key = SigningKey::from_slice(&[7; 32]).unwrap();
     let request = Request::decode(&read_frame(&mut stream).unwrap()).unwrap();
+    let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
     let (name, response) = match request {
-        Request::Create { .. } => ("create", script.create.clone().unwrap_or_else(|| created(&key))),
-        Request::Sign(sign) => ("sign", script.sign.clone().unwrap_or_else(|| signed(&key, &sign.message))),
+        Request::Create { .. } => ("create", state.script.create.clone().unwrap_or_else(|| created(&key))),
+        Request::Sign(sign) => {
+            state.signed.push(sign.message[..4].try_into().unwrap());
+            let scripted = state.next_signs.pop_front().unwrap_or_else(|| state.script.sign.clone());
+            ("sign", scripted.unwrap_or_else(|| signed(&key, &sign.message)))
+        }
     };
-    calls.lock().unwrap_or_else(PoisonError::into_inner).push(name);
+    state.calls.push(name);
+    drop(state);
     stream.write_all(&response.encode().unwrap()).unwrap();
 }
 

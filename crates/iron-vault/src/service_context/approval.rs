@@ -24,13 +24,14 @@ use std::sync::Arc;
 
 use iron_vault_policy::{ActivePolicy, ApprovalSummary, ValidatedConfig, summarize};
 use iron_vault_store::{
-    ApprovalError, ApprovalPassphrase, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ApprovalVersion,
-    CommittedApproval, ConfigDigest, PendingConfig, PinnedApprover, PreparedApproval, SoftwareSigner, StoreFs, Vault, VaultIdentity,
+    ApprovalError, ApprovalProgress, ApprovalSigner, ApprovalState, ApprovalStorage, ApprovalVersion, CommittedApproval, ConfigDigest,
+    PendingConfig, PinnedApprover, PreparedApproval, StoreFs, Vault, VaultIdentity,
 };
 use tokio::sync::OwnedMutexGuard;
 
 use super::{
-    DenialKind, Inner, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, apply, log_destination, log_task_crash,
+    ApproverSecret, ApproverSigner, DenialKind, Inner, PresenceRefusal, ServiceContext, ServiceLocks, SettleGuard, Settler, apply,
+    log_destination, log_task_crash,
 };
 use crate::admin::protocol::ApprovalResult;
 use crate::audit::config::{VersionReserved, record_commit_uncertain, record_uncertain_writes};
@@ -62,6 +63,15 @@ pub enum ApprovalEnd {
     /// The approval passphrase did not open the pinned approver's key.
     #[error("the approval passphrase does not open the approver key")]
     Denied,
+    /// The TPM refused the approval PIN of a TPM approver; nothing was reserved.
+    #[error("the TPM approval PIN is wrong; each wrong PIN counts against the TPM's lockout; no version was reserved")]
+    PinDenied,
+    /// The TPM is in lockout, or the lockout reserve withheld the try; nothing was reserved or signed.
+    #[error("the TPM is locked out; try again in {wait_seconds} seconds; nothing was reserved, signed or changed")]
+    LockedOut {
+        /// The whole seconds to wait.
+        wait_seconds: u64,
+    },
     /// The approval cannot run: the approval state, the approver key or a write failed, and nothing was reserved.
     ///
     /// One exception: when the task running the transaction ends without a result (it panicked, or the runtime is
@@ -86,6 +96,10 @@ pub enum ApprovalEnd {
         state: ServiceState,
     },
 }
+
+/// What an approval or presence prompt says when no pinned approver can be asked on this install.
+pub const NO_ASKABLE_APPROVER: &str =
+    "no pinned approver can be asked on this install; a TPM approver needs its key file and the TPM signing helper";
 
 /// Step 1 done: the pending config is durable and valid, and the owner has yet to review it. See the module docs.
 pub struct ApprovalReview<'a, F> {
@@ -117,9 +131,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         let (started, identity, active) = self.approval_start().await?;
         let (vault, _) = open_vault(&self.locks.state, &self.setup.fs, Arc::clone(&identity)).map_err(unavailable)?;
         let approval = vault.load_approval_state(&self.locks.state, &self.setup.fs).map_err(unavailable)?;
-        let approvers = self.ordered_approvers(approval.approvers());
+        let approvers = self.askable_approvers(approval.approvers());
         if approvers.is_empty() {
-            return Err(unavailable("the approval state pins no approver"));
+            return Err(unavailable(NO_ASKABLE_APPROVER));
         }
         let pending = PendingConfig::write(&self.storage(&identity), config).map_err(unavailable)?;
         let policy = match self.servable(pending.bytes(), &vault) {
@@ -219,34 +233,44 @@ impl<F: StoreFs + Send + Sync + 'static> ApprovalReview<'_, F> {
         &self.approvers
     }
 
-    /// Opens `approver`'s own key envelope with `passphrase` as its signer, through the check owner presence makes too.
-    /// A wrong passphrase, or a key that is not `approver`'s, is [`ApprovalEnd::Denied`], with no fall-through to another
-    /// approver; a check that cannot run or does not finish refuses the approval before anything is reserved.
-    pub async fn open_signer(&self, approver: &PinnedApprover, passphrase: ApprovalPassphrase) -> Result<SoftwareSigner, ApprovalEnd> {
+    /// Opens `approver`'s own key with what the owner typed, through the check owner presence makes too: for a TPM approver
+    /// that is step 2's presence payload, signed under the PIN. A wrong secret, or a key that is not `approver`'s, is
+    /// [`ApprovalEnd::Denied`] (or [`ApprovalEnd::PinDenied`]), with no fall-through to another approver; a lockout is
+    /// [`ApprovalEnd::LockedOut`]; a check that cannot run or does not finish refuses the approval before anything is
+    /// reserved.
+    pub async fn open_signer(&self, approver: &PinnedApprover, secret: impl Into<ApproverSecret>) -> Result<ApproverSigner, ApprovalEnd> {
+        let vault_id = Some(self.approval.vault_id());
         self.service
-            .open_approver(passphrase, approver.clone())
+            .open_approver(secret.into(), approver.clone(), vault_id)
             .await
-            .map_err(|refusal| match refusal {
-                PresenceRefusal::Denied(kind) => self.refused(kind, approver),
-                PresenceRefusal::Unavailable(cause) => ApprovalEnd::Unavailable(format!("{cause}; nothing was reserved")),
-            })
+            .map_err(|refusal| self.refused(refusal, approver))
     }
 
-    /// Ends the approval for a passphrase to `approver` that cannot be the approval passphrase (empty or not UTF-8), which
-    /// is answered as a wrong one: records `config.approval-refused` and returns [`ApprovalEnd::Denied`].
+    /// Ends the approval for a secret to `approver` that cannot be the approval passphrase or PIN (empty or not UTF-8),
+    /// which is answered as a wrong one: records `config.approval-refused` and returns the denial.
     pub fn refuse_unusable_passphrase(&self, approver: &PinnedApprover) -> ApprovalEnd {
-        self.refused(DenialKind::WrongPassphrase, approver)
+        self.refused(PresenceRefusal::Denied(DenialKind::wrong_answer(approver.kind())), approver)
     }
 
-    /// The one place a denied approval is recorded, with the digest of the config it was for and the approver answered.
-    fn refused(&self, refusal: DenialKind, approver: &PinnedApprover) -> ApprovalEnd {
-        ApprovalRefused {
-            refusal,
-            digest: self.pending.digest(),
-            approver: NamedApprover::from(approver),
+    /// The one place a refused approval is recorded, with the digest of the config it was for and the approver answered.
+    fn refused(&self, refusal: PresenceRefusal, approver: &PinnedApprover) -> ApprovalEnd {
+        if let Some((kind, tpm_status)) = refusal.audit() {
+            ApprovalRefused {
+                refusal: kind,
+                tpm_status,
+                digest: self.pending.digest(),
+                approver: NamedApprover::from(approver),
+            }
+            .emit();
         }
-        .emit();
-        ApprovalEnd::Denied
+        match refusal {
+            PresenceRefusal::Denied(DenialKind::WrongPin) => ApprovalEnd::PinDenied,
+            PresenceRefusal::Denied(_) => ApprovalEnd::Denied,
+            PresenceRefusal::TpmLockedOut { wait_seconds } => ApprovalEnd::LockedOut { wait_seconds },
+            PresenceRefusal::Unavailable(cause) | PresenceRefusal::TpmUnavailable { message: cause, .. } => {
+                ApprovalEnd::Unavailable(format!("{cause}; nothing was reserved"))
+            }
+        }
     }
 
     /// Ends the approval before any reservation: removes the pending config and releases the service-wide lock.
