@@ -11,7 +11,7 @@ use crate::APPROVER_ID_LEN;
 
 /// The BLAKE2b personalization of the authorization value, which separates it from every other BLAKE2b use. BLAKE2b
 /// takes at most 16 bytes of personalization; `v1` versions the derivation, so a change takes a new persona.
-const AUTH_VALUE_PERSONA: &[u8] = b"iv-tpm-auth-v1";
+const AUTH_VALUE_PERSONA: &[u8] = b"iv-tpm-pin-v1";
 
 /// The length of an authorization value: the SHA-256 `nameAlg` digest length, the most a TPM accepts for the key.
 pub const AUTH_VALUE_LEN: usize = 32;
@@ -84,13 +84,13 @@ mod tests {
     }
 
     // Known answer computed independently with Python's
-    // `hashlib.blake2b(b"0123456789abcdef" + "123456".encode(), digest_size=32, person=b"iv-tpm-auth-v1")`.
+    // `hashlib.blake2b(b"0123456789abcdef" + "123456".encode(), digest_size=32, person=b"iv-tpm-pin-v1")`.
     #[test]
     fn the_auth_value_matches_its_known_answer() {
         let value = TpmAuthValue::derive(&APPROVER, &TpmApprovalPin::new("123456".to_owned()));
         assert_eq!(
             hex(value.as_bytes()),
-            "7dd28a5d69a46a94893988917bc59d669a827c2d3e971b4934aa1750c847cec0"
+            "925371743c0410baef78d4755c5593145eea8c278fdc134347eca1d10e9d355f"
         );
     }
 

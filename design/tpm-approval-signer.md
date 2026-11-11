@@ -175,7 +175,7 @@ session" §12 requires, and the release check proves it with a recorded session 
   broken rule ends the exchange with `passphrase-rejected` (18), whose message names the rule. Like a new approval
   passphrase, it is not compared with the vault passphrase
   ([approval-signers.md](approval-signers.md#approver-add)).
-- **Authorization value.** The service derives it as BLAKE2b-256, personalized with `iv-tpm-approval-pin-v1`, of the
+- **Authorization value.** The service derives it as BLAKE2b-256, personalized with `iv-tpm-pin-v1`, of the
   approver ID's 16 bytes followed by the PIN's UTF-8 bytes. The value is exactly the length of the key's `nameAlg` digest, which
   is the most a TPM accepts, and binding the approver ID gives two keys with the same PIN different values. The PIN is
   cleared as soon as the value exists. A fast hash is enough: nothing derived from the PIN is written anywhere, the
