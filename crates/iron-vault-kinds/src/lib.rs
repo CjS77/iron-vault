@@ -1,9 +1,10 @@
 //! Kinds: the code that turns a stored credential into the secret text one request carries.
 //!
 //! This crate is the kinds bounded context. The store decrypts a credential record into [`CredentialMaterial`] and
-//! calls [`resolve()`]; the kind returns a [`Resolution`] holding the bare [`SlotValue`](iron_vault_policy::SlotValue)
+//! calls [`resolve()`]. The kind returns a [`Resolution`] holding the bare [`SlotValue`](iron_vault_policy::SlotValue)
 //! for the route's slot and the [`ScrubPatterns`] that response scrubbing must remove. v0 has two kinds, `static` and
-//! `basic`; OAuth tokens and provider signatures will arrive here as further kinds (future spec §2.2).
+//! `basic`. OAuth tokens and provider signatures arrive here as later kinds
+//! ([future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)).
 //!
 //! ```text
 //! credential record ──store decrypts──▶ CredentialMaterial
@@ -17,7 +18,7 @@
 //!       adds the slot's format or encoding            removes them from the response
 //! ```
 //!
-//! A kind returns bare secret text and never formats it: slot filling owns formats and query encoding, so adding a kind
+//! A kind returns bare secret text and never formats it. Slot filling owns formats and query encoding, so adding a kind
 //! never touches routing.
 
 mod basic_kind;

@@ -1,7 +1,10 @@
-//! The `basic` kind: sends a username and password as HTTP Basic authorization (spec §9, future spec §2.2; RFC 7617).
+//! The `basic` kind: sends a username and password as HTTP `Basic` authorization
+//! ([spec §9](../../../design/iron-vault-specification.md#9-url-header-and-slot-rules),
+//! [future spec §2.2](../../../design/future-specifications.md#22-credential-kinds),
+//! [RFC 7617](https://www.rfc-editor.org/rfc/rfc7617)).
 //!
-//! The kind joins the pair as `username:password` and base64-encodes it into the Basic token; slot filling then writes
-//! `Authorization: Basic <token>`. RFC 7617's own example:
+//! The kind joins the pair as `username:password` and base64-encodes it into the `Basic` authorization token. Slot
+//! filling then writes `Authorization: Basic <token>`. The example from RFC 7617:
 //!
 //! ```text
 //! username "Aladdin", password "open sesame"
@@ -23,26 +26,32 @@ use crate::scrub::{ScrubPatterns, copy};
 /// The kind's name in errors.
 const KIND: &str = "basic";
 
-/// The authentication scheme and separator the slot filler writes before the token (RFC 7617 §2).
+/// The scheme and separator that slot filling writes before the token
+/// ([RFC 7617 §2](https://www.rfc-editor.org/rfc/rfc7617#section-2)). The scrub patterns include the token with this
+/// prefix, the complete `Authorization` header value.
 const SCHEME_PREFIX: &str = "Basic ";
 
-/// A username or password that cannot form a Basic token. Its text names the rule broken, never the value.
+/// Says why a username or password cannot form a `Basic` authorization token. The message names the broken rule, never
+/// the value.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum BasicCredentialError {
     /// The username is empty.
     #[error("basic credential username is empty")]
     EmptyUsername,
-    /// The username contains `:`, which would move the split between username and password (RFC 7617 §2).
+    /// The username contains `:`, which would move the split between username and password
+    /// ([RFC 7617 §2](https://www.rfc-editor.org/rfc/rfc7617#section-2)).
     #[error("basic credential username contains ':'")]
     ColonInUsername,
-    /// The username or password contains a control character, which RFC 7617 §2 forbids in both.
+    /// The username or password contains a control character, which
+    /// [RFC 7617 §2](https://www.rfc-editor.org/rfc/rfc7617#section-2) forbids in both.
     #[error("basic credential contains a control character")]
     ControlChar,
 }
 
-/// Returns the Basic token as the slot value, with its scrub patterns.
+/// Returns the `Basic` authorization token as the slot value, with its scrub patterns.
 ///
-/// Refuses a header or query slot: either would send the token without its `Basic` scheme, which no upstream accepts.
+/// Fails with [`KindError::SlotMismatch`] for a `header` or `query` slot: either would send the token without its
+/// `Basic` scheme, which no upstream accepts.
 pub(crate) fn resolve(
     username: &SecretString,
     password: &SecretString,
@@ -63,7 +72,8 @@ pub(crate) fn resolve(
     Ok(Resolution::new(value, patterns))
 }
 
-/// Checks a username and password against RFC 7617 §2 without building a token.
+/// Checks a username and password against [RFC 7617 §2](https://www.rfc-editor.org/rfc/rfc7617#section-2) without
+/// building a token.
 pub(crate) fn validate(username: &str, password: &str) -> Result<(), BasicCredentialError> {
     if username.is_empty() {
         Err(BasicCredentialError::EmptyUsername)
@@ -76,11 +86,11 @@ pub(crate) fn validate(username: &str, password: &str) -> Result<(), BasicCreden
     }
 }
 
-/// Lists every form of the credential an upstream may echo: the token, the complete header value, the `user:pass`
-/// pair and the password.
+/// Lists every form of the credential an upstream may echo: the token, the complete `Authorization` header value, the
+/// `username:password` pair and the password.
 ///
 /// The username alone is scrubbed only when the password is empty. Then the username is the API key (Stripe's
-/// `sk_live_…:` is one), and an upstream error may echo it. Beside a password the username is usually an email
+/// `sk_live_…:` is one), and an upstream error may echo it. Beside a password, the username is usually an email
 /// address or account ID, and scrubbing it would corrupt ordinary responses.
 fn scrub_patterns(token: &str, user_pass: &str, username: &str, password: &str) -> ScrubPatterns {
     let mut patterns = ScrubPatterns::default();
@@ -95,7 +105,8 @@ fn scrub_patterns(token: &str, user_pass: &str, username: &str, password: &str) 
     patterns
 }
 
-/// Concatenates `parts` into a buffer sized up front, so building it never reallocates and leaves no unwiped copy behind.
+/// Concatenates `parts` into a wiped-on-drop buffer sized up front, so building it never reallocates and leaves no
+/// unwiped copy behind.
 fn join(parts: &[&str]) -> Zeroizing<String> {
     let mut out = Zeroizing::new(String::with_capacity(parts.iter().map(|part| part.len()).sum()));
     parts.iter().for_each(|part| out.push_str(part));

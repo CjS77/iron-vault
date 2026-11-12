@@ -1,8 +1,9 @@
-//! Credential material: the decrypted secret fields of one credential record, in the shape its kind consumes (spec §6,
-//! future spec §2.2).
+//! Credential material: the decrypted secret fields of one credential record, in the shape its kind consumes
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+//! [future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)).
 //!
-//! The store decrypts a record and builds the material; the kinds in this crate only read it. Keeping record parsing
-//! out of this crate means a kind never sees a file format, and the store never needs to know how a kind uses a field.
+//! The store decrypts a record and builds the material; the kinds in this crate only read it. A kind never sees a file
+//! format, and the store never needs to know how a kind uses a field.
 
 use iron_vault_policy::SlotValue;
 use secrecy::{ExposeSecret, SecretString};
@@ -12,19 +13,19 @@ use crate::resolve::KindError;
 
 /// The decrypted secret fields of one credential record, one variant per kind.
 ///
-/// It is a closed enum so that adding a kind is a new variant every `match` in this crate must handle. The store maps
-/// a decrypted record into it; this crate never reads records. `Debug` shows the variant only: every field is a
-/// [`secrecy`] type whose own `Debug` is redacted.
+/// It is a closed enum, so a new kind is a new variant that every `match` in this crate must handle. The store maps a
+/// decrypted record into it. `Debug` shows the variant only: every field is a [`secrecy`] type whose own `Debug` is
+/// redacted.
 #[derive(Debug)]
 pub enum CredentialMaterial {
-    /// A provider key sent as stored (`static`, future spec §2.2).
+    /// A provider key sent as stored: the `static` kind.
     Static {
         /// The provider key.
         key: SecretString,
     },
-    /// A username and password sent as HTTP Basic authorization (`basic`, future spec §2.2).
+    /// A username and password sent as HTTP `Basic` authorization: the `basic` kind.
     Basic {
-        /// The user-id; non-empty and without `:` (RFC 7617 §2).
+        /// The username: non-empty and without `:` ([RFC 7617 §2](https://www.rfc-editor.org/rfc/rfc7617#section-2)).
         username: SecretString,
         /// The password; may be empty.
         password: SecretString,
@@ -34,8 +35,8 @@ pub enum CredentialMaterial {
 impl CredentialMaterial {
     /// Checks the material against its kind's rules, the same ones [`resolve`](crate::resolve()) applies.
     ///
-    /// The store calls this when it reads a record, so a record that could never fill a slot fails at once rather
-    /// than on its first request.
+    /// The store calls this when it reads a record, so a record that could never fill a slot fails when it is read,
+    /// not on its first request.
     pub fn validate(&self) -> Result<(), KindError> {
         match self {
             CredentialMaterial::Static { key } => Ok(SlotValue::validate(key.expose_secret())?),

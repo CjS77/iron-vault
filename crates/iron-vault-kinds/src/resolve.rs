@@ -1,4 +1,5 @@
-//! The kind boundary: credential material in, slot value and scrub patterns out (future spec §2.2).
+//! The kind boundary: credential material in, slot value and scrub patterns out
+//! ([future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)).
 //!
 //! [`resolve()`] is the one entry point the store calls for each request. It dispatches on the material's variant to the
 //! kind that handles it, so every caller outside this crate stays the same when a kind is added.
@@ -13,7 +14,7 @@ use crate::static_kind;
 
 /// Holds what a kind produced for one request: the value for the route's slot and the forms of it to scrub.
 ///
-/// The two travel together so that the scrubber always watches for exactly the secret that was injected.
+/// The two travel together so the scrubber watches for exactly the secret that was injected.
 #[derive(Debug)]
 pub struct Resolution {
     value: SlotValue,
@@ -23,18 +24,19 @@ pub struct Resolution {
 /// Says why a kind could not produce a slot value. No variant carries secret bytes, so the error is safe to log.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum KindError {
-    /// The credential's kind cannot fill this kind of slot, such as a static key on a Basic slot.
+    /// The credential's kind cannot fill this kind of slot, such as a `static` key on a `basic` slot.
     #[error("a {kind} credential cannot fill a {slot} slot")]
     SlotMismatch {
-        /// The credential's kind.
+        /// The credential's kind: `static` or `basic`.
         kind: &'static str,
-        /// The slot's kind.
+        /// The slot's kind: `header`, `query` or `basic`.
         slot: &'static str,
     },
     /// The produced value cannot be placed in a slot; the inner error names the rule, never the value.
     #[error(transparent)]
     InvalidValue(#[from] SlotValueError),
-    /// A Basic credential's username or password breaks an RFC 7617 rule; the inner error names the rule, never the
+    /// A `basic` credential's username or password breaks an
+    /// [RFC 7617 §2](https://www.rfc-editor.org/rfc/rfc7617#section-2) rule; the inner error names the rule, never the
     /// value.
     #[error(transparent)]
     InvalidBasic(#[from] BasicCredentialError),
@@ -63,8 +65,8 @@ impl Resolution {
 
 /// Resolves `material` into the value for `slot` and its scrub patterns.
 ///
-/// Every kind receives the authorized request (future spec §2.2). The `static` and `basic` kinds ignore it, but a
-/// signing kind will need the final method and path, so the boundary carries it from the start.
+/// Every kind receives the authorized request ([future spec §2.2](../../../design/future-specifications.md#22-credential-kinds)). The
+/// `static` and `basic` kinds ignore it, but a signing kind needs the final method and path.
 ///
 /// Fails with [`KindError::SlotMismatch`] when the kind cannot fill this slot, and with a validation error when the
 /// stored fields cannot form a slot value.
@@ -96,7 +98,8 @@ mod tests {
 
     use super::*;
 
-    /// The §6 FX and Brave routes, plus a Basic route to show a static key refused there.
+    /// The FX and Brave routes from [spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration),
+    /// plus a `basic` route to show a `static` key refused there.
     const CONFIG: &str = r#"schema_version = 1
 
 [listeners.local]
@@ -152,7 +155,7 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
         }
     }
 
-    /// Each credential's record, of the kind `kind` gives it, permitting its route's upstream.
+    /// Gives each credential the kind the wrapped function names and permits its route's upstream.
     struct Catalog(fn(&CredentialName) -> CredentialKind);
 
     impl CredentialCatalog for Catalog {
@@ -169,7 +172,7 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
         }
     }
 
-    /// The kind each route's slot suits: Basic for the Basic route, static otherwise.
+    /// The kind each route's slot suits: `basic` for the `basic` route, `static` otherwise.
     fn natural_kind(name: &CredentialName) -> CredentialKind {
         match name.as_str() {
             "basic" => CredentialKind::Basic,
@@ -318,7 +321,7 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
         assert!(["QZJW", "XKVQ", token].iter().all(|secret| !debug.contains(secret)), "{debug}");
     }
 
-    /// Routes `activate` refuses when every credential is of `kind`.
+    /// Lists the routes `activate` refuses when `kind` gives each credential its kind.
     fn refused_at_activation(kind: fn(&CredentialName) -> CredentialKind) -> Vec<String> {
         let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
         let errors = activate(&config, &Catalog(kind), &NoAccounts).err().unwrap_or_default();
@@ -331,7 +334,7 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
             .collect()
     }
 
-    /// Routes `resolve` refuses for `material` with a slot mismatch.
+    /// Lists the routes `resolve` refuses for `material` with a slot mismatch.
     fn refused_at_resolve(material: &CredentialMaterial) -> Vec<String> {
         [("basic", "/basic/x"), ("brave", "/brave/x"), ("fx", "/fx/latest")]
             .iter()

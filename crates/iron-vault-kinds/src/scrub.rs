@@ -1,4 +1,5 @@
-//! Scrub patterns: the byte forms of an injected secret that response scrubbing removes (spec §11).
+//! Scrub patterns: the byte forms of an injected secret that response scrubbing removes
+//! ([spec §11](../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing)).
 //!
 //! Each kind builds a [`ScrubPatterns`] set alongside its slot value. The scrubber in the `iron-vault` crate replaces
 //! every occurrence of every pattern in the response headers and body. An upstream rarely echoes a secret in exactly
@@ -54,7 +55,7 @@ impl ScrubPatterns {
         self.0.len()
     }
 
-    /// Returns whether the set is empty.
+    /// Returns `true` if and only if the set holds no patterns.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -67,7 +68,7 @@ impl ScrubPatterns {
     }
 
     /// Adds `secret` as sent, URL-encoded in both hex cases, and in standard and URL-safe base64 with and without
-    /// padding. Kinds that inject a secret verbatim share this list.
+    /// padding: the forms of a secret that a kind injects verbatim.
     pub(crate) fn insert_encodings(&mut self, secret: &str) {
         self.insert_url_forms(secret);
         [STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD]
@@ -91,8 +92,8 @@ impl fmt::Debug for ScrubPatterns {
     }
 }
 
-/// Copies `bytes` into a wiped-on-drop buffer sized up front, so the copy never reallocates and leaves no stale partial
-/// copy behind.
+/// Copies `bytes` into a wiped-on-drop buffer sized up front, so the copy never reallocates and leaves no unwiped
+/// partial copy behind.
 ///
 /// Base64 output needs no such care: the engine allocates it at the exact encoded length.
 pub(crate) fn copy(bytes: &[u8]) -> Zeroizing<Vec<u8>> {

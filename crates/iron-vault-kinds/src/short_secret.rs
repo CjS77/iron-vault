@@ -1,10 +1,12 @@
-//! Finds short secrets: stored secret fields so short that they are probably a mistake (spec §11, §18, future spec
-//! §2.2).
+//! Finds short secrets: stored secret fields so short that they are probably a mistake
+//! ([spec §11](../../../design/iron-vault-specification.md#11-responses-redirects-and-scrubbing),
+//! [§18](../../../design/iron-vault-specification.md#18-logging)).
 //!
-//! The store reports them when a credential is added or replaced, and the service logs a warning that names the field
-//! and its length, never the value. A short value is still allowed, since only the owner sets values. It is worth a
-//! warning for two reasons: it usually means the wrong field was pasted, and response scrubbing blanks every
-//! occurrence of it. A password of `abc` would turn `abcdef` in a response body into `[iron-vault:scrubbed]def`.
+//! The store reports them when a credential is added or replaced, and the service logs a `credential.short-secret`
+//! warning ([audit log catalogue](../../../design/audit-logging.md#catalogue)) that names the field and its length,
+//! never the value. A short value is still allowed, since only the owner sets values. It earns a warning for two
+//! reasons: it usually means the wrong field was pasted, and response scrubbing blanks every occurrence of it. A
+//! password of `abc` would turn `abcdef` in a response body into `[iron-vault:scrubbed]def`.
 
 use std::fmt;
 
@@ -14,19 +16,19 @@ use crate::CredentialMaterial;
 
 /// Secret fields shorter than this many bytes are short secrets.
 ///
-/// Eight bytes is below every provider-issued key and token format, so those never warn, yet long enough that a value
-/// at or above it rarely occurs by chance in response text the scrubber would blank. A genuine human-chosen Basic
-/// password of 6 or 7 characters still warns, rightly: scrubbing will blank it wherever it appears in a response.
+/// Eight bytes is below every provider-issued key and token format, so those never warn. A value of eight bytes or
+/// more rarely occurs by chance in response text. A human-chosen `basic` password of 6 or 7 characters still warns,
+/// because scrubbing blanks it wherever it appears in a response.
 pub const SHORT_SECRET_LEN: usize = 8;
 
 /// Names the secret field a [`ShortSecret`] refers to. It never carries the value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SecretField {
-    /// A static credential's key.
+    /// A `static` credential's key.
     Key,
-    /// A Basic credential's username, the secret when the password is empty.
+    /// A `basic` credential's username, the secret when the password is empty.
     Username,
-    /// A Basic credential's password.
+    /// A `basic` credential's password.
     Password,
 }
 
@@ -52,7 +54,8 @@ pub struct ShortSecret {
 impl CredentialMaterial {
     /// Lists the secret fields shorter than [`SHORT_SECRET_LEN`], so the store can warn the owner about them.
     ///
-    /// A Basic username counts only when the password is empty: then the username is the secret the scrubber watches.
+    /// A `basic` username counts only when the password is empty: then the username is the secret the scrubber
+    /// watches.
     /// The result is a `Vec` because later kinds may hold several secrets.
     pub fn short_secrets(&self) -> Vec<ShortSecret> {
         let secret = match self {
