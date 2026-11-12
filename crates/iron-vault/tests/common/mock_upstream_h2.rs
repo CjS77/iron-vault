@@ -9,6 +9,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use bytes::Bytes;
 use h2::Reason;
@@ -22,7 +23,7 @@ use tokio_rustls::server::TlsStream;
 
 use super::h2_refusal::{Refusal, refuse};
 use super::hpack_fields::{Field, first_header_fields};
-use super::mock_upstream::{OpenConnection, TestCa, UPSTREAM_HOST};
+use super::mock_upstream::{OpenConnection, Script, Step, TestCa, UPSTREAM_HOST};
 
 /// What the HTTP/2 test upstream does once it has recorded a request.
 #[derive(Debug, Clone)]
@@ -45,6 +46,10 @@ pub enum H2Reply {
     /// Answers `200 OK` with this body and keeps the connection open, as a real upstream does, until the client closes
     /// it. Later streams on the connection get no answer.
     KeepOpen(Vec<u8>),
+    /// Answers `200` with the script's headers, sends each scripted chunk as its own DATA frame and waits where the
+    /// script waits, ends the stream with an empty DATA frame, then shuts the connection down gracefully so the client's
+    /// next request opens a new one. The HTTP/1.1 upstream plays the same [`Script`], so a test can run over either.
+    Script(Script),
 }
 
 impl H2Reply {
@@ -198,6 +203,8 @@ impl Server {
 
     /// Records the first request on `stream` and replies; a failed handshake records nothing.
     async fn serve(self, stream: TcpStream) {
+        // Each DATA frame must leave as soon as it is written, not wait for Nagle to coalesce it with the next.
+        let _ = stream.set_nodelay(true);
         let Ok(tls) = self.acceptor.accept(stream).await else {
             return;
         };
@@ -222,6 +229,7 @@ impl Server {
         let fields = first_header_fields(&received.lock().unwrap());
         self.heads.fetch_add(1, Ordering::SeqCst);
         let mut recorded = record(server_name, alpn, &request, fields);
+        let target = recorded.path.clone().unwrap_or_default();
         // The connection must be polled while the body is read, or h2 never delivers its frames.
         let (body, body_complete) = tokio::select! {
             read = read_body(request.body_mut()) => read,
@@ -231,7 +239,7 @@ impl Server {
         recorded.body_complete = body_complete;
         self.requests.lock().unwrap().push(recorded);
         if body_complete {
-            reply(&self.reply, connection, respond).await;
+            reply(&self.reply, &target, connection, respond).await;
         }
     }
 }
@@ -280,8 +288,9 @@ async fn drive(connection: &mut H2Connection) {
     while let Some(Ok(_)) = connection.accept().await {}
 }
 
-/// Sends `reply` and drives the connection until the client closes it, so every frame is flushed.
-async fn reply(reply: &H2Reply, mut connection: H2Connection, mut respond: SendResponse<Bytes>) {
+/// Sends `reply` to the request for `target` and drives the connection until the client closes it, so every frame is
+/// flushed.
+async fn reply(reply: &H2Reply, target: &str, mut connection: H2Connection, mut respond: SendResponse<Bytes>) {
     match reply {
         H2Reply::Respond { status, body } => {
             let response = Response::builder().status(*status).body(()).unwrap();
@@ -295,9 +304,41 @@ async fn reply(reply: &H2Reply, mut connection: H2Connection, mut respond: SendR
         }
         H2Reply::Reset(reason) => respond.send_reset(*reason),
         H2Reply::GoAway(reason) => connection.abrupt_shutdown(*reason),
+        H2Reply::Script(script) => {
+            // The connection must be polled while the script runs, or its frames are queued but never written.
+            let played = tokio::select! {
+                () = play(script, target, respond) => true,
+                () = drive(&mut connection) => false,
+            };
+            if played {
+                connection.graceful_shutdown();
+            }
+        }
         H2Reply::Refuse(_) => unreachable!("a refusing server never accepts a stream through h2"),
     }
     while let Some(Ok(_)) = connection.accept().await {}
+}
+
+/// Sends the script's head, then each step in order, then END_STREAM on an empty DATA frame.
+async fn play(script: &Script, target: &str, mut respond: SendResponse<Bytes>) {
+    let head = script
+        .content_headers()
+        .into_iter()
+        .fold(Response::builder().status(200), |head, (name, value)| head.header(name, value));
+    let Ok(mut stream) = respond.send_response(head.body(()).unwrap(), false) else {
+        return;
+    };
+    for step in script.steps(target) {
+        match step {
+            Step::Chunk(bytes) if bytes.is_empty() => {}
+            Step::Chunk(bytes) => {
+                script.sent.lock().unwrap().push(Instant::now());
+                let _ = stream.send_data(Bytes::from(bytes), false);
+            }
+            Step::Wait(gate) => gate.notified().await,
+        }
+    }
+    let _ = stream.send_data(Bytes::new(), true);
 }
 
 /// A stream that keeps a copy of every byte read through it, so the test upstream can inspect the raw HTTP/2 frames

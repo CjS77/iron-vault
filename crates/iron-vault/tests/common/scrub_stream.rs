@@ -1,5 +1,5 @@
 //! Shared setup for the streamed-response release tests: the credentials the tests scrub for, a proxy serving a scripted
-//! upstream, and a caller that reads the chunked response body chunk by chunk while the upstream is still sending it.
+//! upstream over HTTP/1.1 or HTTP/2, and a caller that reads the chunked response body chunk by chunk while the upstream is still sending it.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
@@ -12,7 +12,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 
-use super::mock_upstream::{MockUpstream, TestCa};
+use super::mock_upstream::{MockUpstream, Reply, Script, TestCa};
+use super::mock_upstream_h2::{H2Reply, MockH2Upstream};
 use super::proxy_harness::{CallerRequest, Credential, Proxy, Setup, TOKEN_BYTES, Via, WAIT, token_hash};
 
 /// How long the held-back measurement waits for more bytes before it takes what has arrived as all that will.
@@ -114,10 +115,49 @@ pub fn unique(forms: impl IntoIterator<Item = String>) -> Vec<String> {
     forms.into_iter().collect::<BTreeSet<_>>().into_iter().collect()
 }
 
-/// The proxy serving every credential's route to `upstream`, for one caller. The rate limit is lifted so a loop of
-/// requests is never refused.
-pub async fn start(ca: &TestCa, upstream: &MockUpstream, creds: Vec<Cred>) -> Proxy {
-    let port = upstream.port();
+/// The HTTP version the scripted test upstream speaks.
+#[derive(Debug, Clone, Copy)]
+pub enum Http {
+    One,
+    Two,
+}
+
+impl std::fmt::Display for Http {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::One => "HTTP/1.1",
+            Self::Two => "HTTP/2",
+        })
+    }
+}
+
+/// A test upstream playing a [`Script`] over either HTTP version, stopped when dropped.
+pub enum Scripted {
+    One(MockUpstream),
+    Two(MockH2Upstream),
+}
+
+impl Scripted {
+    /// Starts an upstream that answers every request with `script` over `http`.
+    pub async fn start(ca: &TestCa, http: Http, script: Script) -> Self {
+        match http {
+            Http::One => Self::One(MockUpstream::start(ca, Reply::Script(script)).await),
+            Http::Two => Self::Two(MockH2Upstream::start(ca, H2Reply::Script(script)).await),
+        }
+    }
+
+    /// The port the upstream listens on.
+    pub fn port(&self) -> u16 {
+        match self {
+            Self::One(upstream) => upstream.port(),
+            Self::Two(upstream) => upstream.port(),
+        }
+    }
+}
+
+/// The proxy serving every credential's route to the test upstream on `port`, for one caller. The rate limit is lifted
+/// so a loop of requests is never refused.
+pub async fn start(ca: &TestCa, port: u16, creds: Vec<Cred>) -> Proxy {
     let hash = token_hash(TOKEN_BYTES);
     let routes = creds.iter().map(|c| format!("\"{}\"", c.route)).collect::<Vec<_>>().join(", ");
     let sections: String = creds

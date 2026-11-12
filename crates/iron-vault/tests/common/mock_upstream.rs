@@ -157,19 +157,34 @@ impl Script {
         self
     }
 
+    /// The headers the reply carries besides its framing: `content-type`, and `content-encoding` when the chunks are
+    /// coded. The HTTP/2 test upstream plays the same script, so both modes send the same fields.
+    pub fn content_headers(&self) -> Vec<(&'static str, String)> {
+        [
+            ("content-type", Some(self.content_type.clone())),
+            ("content-encoding", self.content_encoding.clone()),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| Some((name, value?)))
+        .collect()
+    }
+
+    /// The steps for a request to `target`.
+    pub fn steps(&self, target: &str) -> Vec<Step> {
+        (self.plan)(target)
+    }
+
     /// Sends the head, then each step in order, then the last chunk.
     async fn play(&self, tls: &mut (impl AsyncWriteExt + Unpin), target: &str) {
-        let encoding = self
-            .content_encoding
-            .as_ref()
-            .map_or_else(String::new, |coding| format!("content-encoding: {coding}\r\n"));
-        let head = format!(
-            "HTTP/1.1 200 Test\r\ncontent-type: {}\r\n{encoding}transfer-encoding: chunked\r\nconnection: close\r\n\r\n",
-            self.content_type
-        );
+        let fields: String = self
+            .content_headers()
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect();
+        let head = format!("HTTP/1.1 200 Test\r\n{fields}transfer-encoding: chunked\r\nconnection: close\r\n\r\n");
         let _ = tls.write_all(head.as_bytes()).await;
         let _ = tls.flush().await;
-        for step in (self.plan)(target) {
+        for step in self.steps(target) {
             match step {
                 Step::Chunk(bytes) if bytes.is_empty() => {}
                 Step::Chunk(bytes) => {

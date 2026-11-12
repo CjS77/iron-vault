@@ -1,6 +1,6 @@
 //! Release checks for streamed-response scrubbing on the assembled service (specification §11, §19, implementation spec §3 "Streamed
 //! response compatibility"): a caller on the Unix request socket, the real request server and pipeline, and a test
-//! upstream that sends scripted chunks. `design/secret-handling.md` quotes the numbers the measuring tests print.
+//! upstream that sends scripted chunks, as HTTP/1.1 chunks or as HTTP/2 DATA frames. `design/secret-handling.md` quotes the numbers the measuring tests print.
 
 #![cfg(target_os = "linux")]
 
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::mock_upstream::{MockUpstream, Reply, Script, Step, TestCa};
-use common::scrub_stream::{Cred, Streamed, basic, body_with_every_form, brave, edge, fx, replacement, start, venice};
+use common::scrub_stream::{Cred, Http, Scripted, Streamed, basic, body_with_every_form, brave, edge, fx, replacement, start, venice};
 use tokio::sync::Notify;
 
 /// Every offset in `body` at which a run splits it into two chunks; the offset past the end is the unsplit body.
@@ -26,22 +26,35 @@ fn split_script(body: String) -> Script {
     })
 }
 
-#[tokio::test]
-async fn a_body_split_at_every_byte_offset_scrubs_to_the_same_bytes() {
+/// Sends a body holding every scrub pattern of a Basic credential and of a static key with URL-reserved characters, split
+/// into two upstream chunks at every byte offset over `http`, and requires the caller to receive the one-shot scrubbed body.
+async fn assert_every_split_scrubs(http: Http) {
     let ca = TestCa::new("scrub stream CA");
     // One upstream and proxy per credential: the upstream's script holds that credential's body.
     for make in [basic, edge] {
         let cred = make();
         let (plain, scrubbed) = body_with_every_form(&cred);
         let (route, name) = (cred.route, cred.name);
-        let upstream = MockUpstream::start(&ca, Reply::Script(split_script(plain.clone()))).await;
-        let proxy = start(&ca, &upstream, vec![cred]).await;
+        let upstream = Scripted::start(&ca, http, split_script(plain.clone())).await;
+        let proxy = start(&ca, upstream.port(), vec![cred]).await;
         for at in 1..=plain.len() {
             let chunks = Streamed::open(&proxy, &format!("/{route}/split-{at}")).await.all().await;
             let received = String::from_utf8(chunks.concat()).unwrap();
-            assert_eq!(received, scrubbed, "{name} body split at byte {at} of {}", plain.len());
+            assert_eq!(received, scrubbed, "{name} body over {http} split at byte {at} of {}", plain.len());
         }
     }
+}
+
+#[tokio::test]
+async fn a_body_split_at_every_byte_offset_scrubs_to_the_same_bytes() {
+    assert_every_split_scrubs(Http::One).await;
+}
+
+/// §19 check 5: "Scrubbing handles supported representations, compression, and arbitrary stream chunk boundaries while
+/// preserving ordinary streaming responses." Over HTTP/2 the body arrives as two DATA frames split at every byte offset.
+#[tokio::test]
+async fn an_http2_body_split_at_every_byte_offset_across_two_data_frames_scrubs_to_the_same_bytes() {
+    assert_every_split_scrubs(Http::Two).await;
 }
 
 /// The steps of a server-sent-event stream: each event, then a gate the test opens once it has seen the event.
@@ -53,16 +66,16 @@ fn sse_steps(events: &[String], gates: &[Arc<Notify>]) -> Vec<Step> {
         .collect()
 }
 
-/// Streams `events` through the `fx` route one at a time, opening the next only after the caller has received the
-/// previous one, and returns what the caller received (each event read until `expected` of the same index has arrived) and how long each event took from the upstream's write to the
-/// caller's read.
-async fn stream_events(events: &[String], expected: &[String]) -> (Vec<String>, Vec<Duration>) {
+/// Streams `events` over `http` through the `fx` route one at a time, opening the next only after the caller has
+/// received the previous one, and returns what the caller received (each event read until `expected` of the same index
+/// has arrived) and how long each event took from the upstream's write to the caller's read.
+async fn stream_events(http: Http, events: &[String], expected: &[String]) -> (Vec<String>, Vec<Duration>) {
     let ca = TestCa::new("scrub stream CA");
     let gates: Vec<_> = events.iter().map(|_| Arc::new(Notify::new())).collect();
     let script = Script::fixed("text/event-stream", sse_steps(events, &gates));
     let sent = Arc::clone(&script.sent);
-    let upstream = MockUpstream::start(&ca, Reply::Script(script)).await;
-    let proxy = start(&ca, &upstream, vec![fx()]).await;
+    let upstream = Scripted::start(&ca, http, script).await;
+    let proxy = start(&ca, upstream.port(), vec![fx()]).await;
     let mut body = Streamed::open(&proxy, "/fx/events").await;
     let mut received = Vec::new();
     let mut latencies = Vec::new();
@@ -81,7 +94,18 @@ async fn stream_events(events: &[String], expected: &[String]) -> (Vec<String>, 
 async fn an_sse_event_reaches_the_caller_before_the_next_one_is_sent() {
     let events = ["data: a\n\n".to_owned(), "data: b\n\n".to_owned()];
 
-    let (received, _) = stream_events(&events, &events).await;
+    let (received, _) = stream_events(Http::One, &events, &events).await;
+
+    assert_eq!(received, events);
+}
+
+/// §19 check 5: "Scrubbing handles supported representations, compression, and arbitrary stream chunk boundaries while
+/// preserving ordinary streaming responses." The upstream sends nothing more over HTTP/2 until the caller has an event.
+#[tokio::test]
+async fn an_http2_sse_event_reaches_the_caller_before_the_next_one_is_sent() {
+    let events = ["data: a\n\n".to_owned(), "data: b\n\n".to_owned()];
+
+    let (received, _) = stream_events(Http::Two, &events, &events).await;
 
     assert_eq!(received, events);
 }
@@ -97,23 +121,35 @@ async fn an_sse_event_holding_the_secret_is_scrubbed_and_released_with_its_own_e
         "data: c\n\n".to_owned(),
     ];
 
-    let (received, _) = stream_events(&events, &scrubbed).await;
+    let (received, _) = stream_events(Http::One, &events, &scrubbed).await;
 
     assert_eq!(received[1], format!("data: {}\n\n", replacement()));
 }
 
-/// Prints the added latency per event over 200 events. Run with `--nocapture`; the numbers are in `secret-handling.md`.
+/// Prints the added latency per event over 200 events from an HTTP/1.1 upstream. Run with `--nocapture`; the numbers
+/// are in `secret-handling.md`.
 #[tokio::test]
 async fn measure_sse_latency_per_event() {
+    print_sse_latency(Http::One).await;
+}
+
+/// Prints the added latency per event over 200 events from an HTTP/2 upstream. Run with `--nocapture`; the numbers are
+/// in `secret-handling.md`.
+#[tokio::test]
+async fn measure_http2_sse_latency_per_event() {
+    print_sse_latency(Http::Two).await;
+}
+
+async fn print_sse_latency(http: Http) {
     let events: Vec<_> = (0..200).map(|i| format!("data: {{\"delta\":\"token {i}\"}}\n\n")).collect();
 
-    let (received, mut latencies) = stream_events(&events, &events).await;
+    let (received, mut latencies) = stream_events(http, &events, &events).await;
 
     assert_eq!(received, events);
     latencies.sort();
     let micros = |d: Duration| d.as_micros();
     eprintln!(
-        "SSE latency over {} events: median {} us, p95 {} us, max {} us",
+        "SSE latency from {http} upstream over {} events: median {} us, p95 {} us, max {} us",
         latencies.len(),
         micros(latencies[latencies.len() / 2]),
         micros(latencies[latencies.len() * 95 / 100]),
@@ -123,21 +159,31 @@ async fn measure_sse_latency_per_event() {
 
 #[tokio::test]
 async fn a_streamed_chat_completion_without_the_secret_arrives_unchanged_and_in_at_least_as_many_chunks() {
+    assert_chat_completion_unchanged(Http::One).await;
+}
+
+/// §19 check 5: "Scrubbing handles supported representations, compression, and arbitrary stream chunk boundaries while
+/// preserving ordinary streaming responses." Each event of the reply is its own HTTP/2 DATA frame.
+#[tokio::test]
+async fn an_http2_streamed_chat_completion_without_the_secret_arrives_unchanged_and_in_at_least_as_many_chunks() {
+    assert_chat_completion_unchanged(Http::Two).await;
+}
+
+/// Streams a chat completion holding no secret over `http`, one upstream chunk per event, and requires the caller to
+/// receive the same bytes in no fewer chunks.
+async fn assert_chat_completion_unchanged(http: Http) {
     let ca = TestCa::new("scrub stream CA");
     let sent: Vec<Vec<u8>> = chat_completion();
-    let upstream = MockUpstream::start(
-        &ca,
-        Reply::Script(Script::fixed("text/event-stream", sent.iter().cloned().map(Step::Chunk).collect())),
-    )
-    .await;
-    let proxy = start(&ca, &upstream, vec![venice()]).await;
+    let script = Script::fixed("text/event-stream", sent.iter().cloned().map(Step::Chunk).collect());
+    let upstream = Scripted::start(&ca, http, script).await;
+    let proxy = start(&ca, upstream.port(), vec![venice()]).await;
 
     let received = Streamed::open(&proxy, "/venice/chat").await.all().await;
 
     assert_eq!(received.concat(), sent.concat());
     assert!(
         received.len() >= sent.len(),
-        "{} chunks sent, {} received",
+        "{http}: {} chunks sent, {} received",
         sent.len(),
         received.len()
     );
@@ -176,7 +222,7 @@ async fn held_back(cred: Cred) -> (usize, usize) {
     ];
     let upstream = MockUpstream::start(&ca, Reply::Script(Script::fixed("text/event-stream", steps))).await;
     let route = cred.route;
-    let proxy = start(&ca, &upstream, vec![cred]).await;
+    let proxy = start(&ca, upstream.port(), vec![cred]).await;
     let mut body = Streamed::open(&proxy, &format!("/{route}/held")).await;
 
     // The caller has all of the typical chunk before the upstream sends another, so nothing of it is held.

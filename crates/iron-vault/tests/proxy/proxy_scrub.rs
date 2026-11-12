@@ -13,6 +13,7 @@ use std::time::Duration;
 use common::approval_harness::{Captured, assert_audit_record, captured_logs};
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Credential, Proxy, Response, Setup, TOKEN_BYTES, Via, WAIT, token_hash};
+use common::scrub_stream::{self, Streamed, basic, body_with_every_form, edge};
 use iron_vault::scrub::SCRUB_REPLACEMENT;
 use iron_vault_kinds::CredentialMaterial;
 
@@ -139,6 +140,52 @@ async fn the_secret_its_basic_token_and_its_url_encoded_form_are_all_replaced() 
         .iter()
         .chain([&token])
         .for_each(|form| assert!(!raw.contains(form.as_str()), "{form} reached the caller: {raw}"));
+}
+
+/// §19 check 5: "Scrubbing handles supported representations, compression, and arbitrary stream chunk boundaries while
+/// preserving ordinary streaming responses."
+///
+/// The upstream echoes every form the credential's kind derives (`iron-vault-kinds/src/scrub.rs`) once in a header of
+/// its own and once in the body: for the static key, the raw key, its `%XX` forms in both hex cases and each base64
+/// variant; for the Basic credential, the token, `Basic <token>` and the URL forms of `user:pass` and the password.
+#[tokio::test]
+async fn every_derived_form_echoed_in_a_header_and_the_body_is_replaced_in_both() {
+    let ca = TestCa::new("scrub test CA");
+    for cred in [edge(), basic()] {
+        let (plain, scrubbed) = body_with_every_form(&cred);
+        let (route, forms) = (cred.route, cred.forms.clone());
+        let headers: Vec<_> = forms
+            .iter()
+            .enumerate()
+            .map(|(i, form)| (format!("x-echo-{i}"), format!("v={form};")))
+            .collect();
+        let upstream = MockUpstream::start(
+            &ca,
+            Reply::Respond {
+                status: 200,
+                headers,
+                body: plain.into_bytes(),
+            },
+        )
+        .await;
+        let proxy = scrub_stream::start(&ca, upstream.port(), vec![cred]).await;
+
+        let streamed = Streamed::open(&proxy, &format!("/{route}/echo")).await;
+        let received_headers = streamed.headers.clone();
+        let body = String::from_utf8(streamed.all().await.concat()).unwrap();
+
+        assert_eq!(body, scrubbed, "{route}");
+        let echoed: Vec<_> = received_headers.iter().filter(|(name, _)| name.starts_with("x-echo-")).collect();
+        assert_eq!(echoed.len(), forms.len(), "{route}: {received_headers:?}");
+        let r = replacement();
+        echoed
+            .iter()
+            .for_each(|(name, value)| assert_eq!(value, &format!("v={r};"), "{route}: {name}"));
+        let raw = format!("{received_headers:?}{body}");
+        forms
+            .iter()
+            .for_each(|form| assert!(!raw.contains(form.as_str()), "{route}: {form} reached the caller: {raw}"));
+    }
 }
 
 /// Answers `502` with the fixed body, and the upstream was asked for the service's codings, not the caller's.

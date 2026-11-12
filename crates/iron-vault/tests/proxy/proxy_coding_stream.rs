@@ -64,43 +64,47 @@ async fn received_split(proxy: &common::proxy_harness::Proxy, route: &str, at: u
     Streamed::open(proxy, &format!("/{route}/split-{at}")).await.all().await.concat()
 }
 
-#[tokio::test]
-async fn a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes() {
+/// Sends a body holding every scrub pattern of a static key with URL-reserved characters and of a Basic credential,
+/// coded with `encode` and split into two upstream chunks at every offset of the compressed stream, and requires the
+/// caller to receive the one-shot scrubbed body.
+async fn assert_every_coded_split_scrubs(coding: &str, encode: Encode) {
     let ca = TestCa::new("coding stream CA");
-    // A static key with URL-reserved characters and a Basic credential: every scrub pattern of each, in one body.
     for make in [edge, basic] {
         let cred = make();
         let (plain, scrubbed) = body_with_every_form(&cred);
         let (route, name) = (cred.route, cred.name);
-        let coded = gzip(plain.as_bytes());
+        let coded = encode(plain.as_bytes());
         let length = coded.len();
-        let upstream = MockUpstream::start(&ca, Reply::Script(split_script(coded, "gzip"))).await;
-        let proxy = start(&ca, &upstream, vec![cred]).await;
+        let upstream = MockUpstream::start(&ca, Reply::Script(split_script(coded, coding))).await;
+        let proxy = start(&ca, upstream.port(), vec![cred]).await;
         for at in 1..=length {
             let received = received_split(&proxy, route, at).await;
             assert_eq!(
                 String::from_utf8(received).unwrap(),
                 scrubbed,
-                "{name}: gzip split at byte {at} of {length}"
+                "{name}: {coding} split at byte {at} of {length}"
             );
         }
     }
 }
 
 #[tokio::test]
-async fn a_br_body_split_at_chosen_compressed_offsets_scrubs_to_the_same_bytes() {
-    let ca = TestCa::new("coding stream CA");
-    let cred = basic();
-    let (plain, scrubbed) = body_with_every_form(&cred);
-    let route = cred.route;
-    let coded = br(plain.as_bytes());
-    let length = coded.len();
-    let upstream = MockUpstream::start(&ca, Reply::Script(split_script(coded, "br"))).await;
-    let proxy = start(&ca, &upstream, vec![cred]).await;
-    for at in [1, 2, 3, length / 4, length / 2, length - 2, length - 1, length] {
-        let received = received_split(&proxy, route, at).await;
-        assert_eq!(String::from_utf8(received).unwrap(), scrubbed, "br split at byte {at} of {length}");
-    }
+async fn a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes() {
+    assert_every_coded_split_scrubs("gzip", gzip).await;
+}
+
+/// §19 check 5: "Scrubbing handles supported representations, compression, and arbitrary stream chunk boundaries while
+/// preserving ordinary streaming responses." The body is zlib-wrapped deflate, as `Content-Encoding: deflate` means.
+#[tokio::test]
+async fn a_deflate_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes() {
+    assert_every_coded_split_scrubs("deflate", deflate).await;
+}
+
+/// §19 check 5: "Scrubbing handles supported representations, compression, and arbitrary stream chunk boundaries while
+/// preserving ordinary streaming responses."
+#[tokio::test]
+async fn a_br_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes() {
+    assert_every_coded_split_scrubs("br", br).await;
 }
 
 #[tokio::test]
@@ -119,7 +123,7 @@ async fn a_secret_across_two_decoder_output_pieces_is_scrubbed() {
             body: coded,
         };
         let upstream = MockUpstream::start(&ca, reply).await;
-        let proxy = start(&ca, &upstream, vec![fx()]).await;
+        let proxy = start(&ca, upstream.port(), vec![fx()]).await;
 
         let received = Streamed::open(&proxy, &format!("/{route}/pieces")).await.all().await.concat();
 
@@ -131,38 +135,63 @@ async fn a_secret_across_two_decoder_output_pieces_is_scrubbed() {
     }
 }
 
-/// The caller's decoded view of a gzip SSE stream: the events, each coded and sync-flushed by the upstream as its own
-/// chunk, then the trailer.
-fn coded_events(events: &[String]) -> Vec<Vec<u8>> {
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+/// An SSE stream as the upstream sends it in `coding`: the events, each coded and flushed as its own chunk, then the
+/// end of the coded stream.
+fn coded_events(coding: &str, events: &[String]) -> Vec<Vec<u8>> {
+    let level = flate2::Compression::default();
+    match coding {
+        "gzip" => flushed(
+            flate2::write::GzEncoder::new(Vec::new(), level),
+            events,
+            |e| e.get_mut(),
+            |e| e.finish().unwrap(),
+        ),
+        "deflate" => flushed(
+            flate2::write::ZlibEncoder::new(Vec::new(), level),
+            events,
+            |e| e.get_mut(),
+            |e| e.finish().unwrap(),
+        ),
+        "br" => flushed(
+            brotli::CompressorWriter::new(Vec::new(), 4096, 5, 22),
+            events,
+            |e| e.get_mut(),
+            |e| e.into_inner(),
+        ),
+        other => panic!("no encoder for {other}"),
+    }
+}
+
+/// Each event written to `encoder` and flushed, as the bytes that flush produced, then what `finish` adds.
+fn flushed<E: Write>(mut encoder: E, events: &[String], output: fn(&mut E) -> &mut Vec<u8>, finish: fn(E) -> Vec<u8>) -> Vec<Vec<u8>> {
     let mut chunks: Vec<_> = events
         .iter()
         .map(|event| {
             encoder.write_all(event.as_bytes()).unwrap();
             encoder.flush().unwrap();
-            std::mem::take(encoder.get_mut())
+            std::mem::take(output(&mut encoder))
         })
         .collect();
-    chunks.push(encoder.finish().unwrap());
+    chunks.push(finish(encoder));
     chunks
 }
 
-/// Streams `events` as gzip SSE, the upstream sending each only after the caller has received the one before, and returns
-/// how long each took from the upstream's write to the moment the caller had the event in full. `request_headers` choose
-/// whether the caller gets identity or recompressed gzip.
-async fn stream_gzip_events(events: &[String], request_headers: &[(&str, &str)]) -> Vec<Duration> {
+/// Streams `events` as SSE coded in `coding`, the upstream sending each only after the caller has received the one before,
+/// and returns how long each took from the upstream's write to the moment the caller had the event in full.
+/// `request_headers` choose whether the caller gets identity or recompressed gzip.
+async fn stream_coded_events(coding: &str, events: &[String], request_headers: &[(&str, &str)]) -> Vec<Duration> {
     let ca = TestCa::new("coding stream CA");
     let gates: Vec<_> = events.iter().map(|_| Arc::new(Notify::new())).collect();
-    let steps = coded_events(events)
+    let steps = coded_events(coding, events)
         .into_iter()
         .zip(gates.iter().map(Some).chain([None]))
         .flat_map(|(chunk, gate)| [Some(Step::Chunk(chunk)), gate.map(|gate| Step::Wait(Arc::clone(gate)))])
         .flatten()
         .collect();
-    let script = Script::fixed("text/event-stream", steps).encoded("gzip");
+    let script = Script::fixed("text/event-stream", steps).encoded(coding);
     let sent = Arc::clone(&script.sent);
     let upstream = MockUpstream::start(&ca, Reply::Script(script)).await;
-    let proxy = start(&ca, &upstream, vec![fx()]).await;
+    let proxy = start(&ca, upstream.port(), vec![fx()]).await;
     let recompressed = request_headers.iter().any(|(_, value)| value.contains("identity;q=0"));
     let mut body = Streamed::open_with(&proxy, "/fx/events", request_headers).await;
     assert_eq!(
@@ -205,27 +234,36 @@ fn sse_events(count: usize) -> Vec<String> {
 
 #[tokio::test]
 async fn a_gzip_sse_event_reaches_the_caller_decoded_before_the_next_is_sent() {
-    stream_gzip_events(&sse_events(3), &[]).await;
+    stream_coded_events("gzip", &sse_events(3), &[]).await;
 }
 
 #[tokio::test]
 async fn a_gzip_sse_event_reaches_the_caller_recompressed_before_the_next_is_sent() {
-    stream_gzip_events(&sse_events(3), &[("Accept-Encoding", "gzip, identity;q=0")]).await;
+    stream_coded_events("gzip", &sse_events(3), &[("Accept-Encoding", "gzip, identity;q=0")]).await;
 }
 
 /// Prints the added latency per gzip SSE event over 200 events, for identity and recompressed output. Run with `--nocapture`.
 #[tokio::test]
 async fn measure_gzip_sse_latency_per_event() {
+    print_coded_sse_latency("gzip").await;
+}
+
+/// Prints the added latency per deflate and per br SSE event over 200 events, for identity and recompressed gzip output.
+/// Run with `--nocapture`; the numbers are in `secret-handling.md`.
+#[tokio::test]
+async fn measure_deflate_and_br_sse_latency_per_event() {
+    print_coded_sse_latency("deflate").await;
+    print_coded_sse_latency("br").await;
+}
+
+async fn print_coded_sse_latency(coding: &str) {
     let events = sse_events(200);
-    for (label, headers) in [
-        ("gzip to identity", vec![]),
-        ("gzip to gzip", vec![("Accept-Encoding", "gzip, identity;q=0")]),
-    ] {
-        let mut latencies = stream_gzip_events(&events, &headers).await;
+    for (output, headers) in [("identity", vec![]), ("gzip", vec![("Accept-Encoding", "gzip, identity;q=0")])] {
+        let mut latencies = stream_coded_events(coding, &events, &headers).await;
         latencies.sort();
         let micros = |d: Duration| d.as_micros();
         eprintln!(
-            "gzip SSE latency, {label}, over {} events: median {} us, p95 {} us, max {} us",
+            "{coding} SSE latency, {coding} to {output}, over {} events: median {} us, p95 {} us, max {} us",
             latencies.len(),
             micros(latencies[latencies.len() / 2]),
             micros(latencies[latencies.len() * 95 / 100]),
@@ -272,7 +310,7 @@ async fn timed_exchange(coding: &str, coded: Vec<u8>) -> (Vec<u8>, Duration) {
         body: coded,
     };
     let upstream = MockUpstream::start(&ca, reply).await;
-    let proxy = start(&ca, &upstream, vec![fx()]).await;
+    let proxy = start(&ca, upstream.port(), vec![fx()]).await;
     let request = CallerRequest::get("/fx/listing").signed(Via::Unix);
     let began = Instant::now();
     let raw = proxy.endpoints().send_raw(Via::Unix, &request).await;
@@ -378,7 +416,7 @@ async fn bombed(cred: Cred, bomb: Vec<u8>) -> Vec<u8> {
     )
     .await;
     let route = cred.route;
-    let proxy = start(&ca, &upstream, vec![cred]).await;
+    let proxy = start(&ca, upstream.port(), vec![cred]).await;
     let request = CallerRequest::get(&format!("/{route}/bomb")).signed(Via::Unix);
     proxy.endpoints().send_raw(Via::Unix, &request).await
 }
