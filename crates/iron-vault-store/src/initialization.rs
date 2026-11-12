@@ -1,11 +1,28 @@
-//! The initialization state of the state and config directories, and the `init.unfinished` and `import.unfinished`
-//! files that mark an initialization or an import in progress (design/vault-initialization.md,
-//! design/migration-bundle.md).
+//! The initialization state: what the state and config directories hold before a vault is unlocked, and the
+//! `init.unfinished` and `import.unfinished` markers that make `init` and `import` safe to interrupt
+//! ([vault initialization](../../../design/vault-initialization.md#initialization-state),
+//! [unfinished import](../../../design/migration-bundle.md#the-unfinished-import)).
 //!
 //! Initialization writes about nine durable files, an import many more, and the filesystem has no transaction. The
-//! marker is written first and removed last, so a crash between leaves a directory that reads Unfinished instead of a
-//! vault that opens as damaged. The state is read from names alone, without the vault identity, so it is known while
-//! the vault is locked.
+//! marker is written first and removed last, so a crash in between leaves a directory that reads Unfinished, not a
+//! vault that opens as damaged. The next `init` or `import` discards what the unfinished run wrote and starts again.
+//! `unlock` calls [`require_initialized`] first, so it never opens a half-written vault:
+//!
+//! ```text
+//!                begin_initialization                                   finish_initialization
+//!                writes init.unfinished                                 removes init.unfinished
+//! Uninitialized ───────────────────────▶ Unfinished(Initialization) ───────────────────────▶ Initialized
+//!       │                                    │                ▲
+//!       │                                    │ crash          │ begin_initialization or begin_import:
+//!       │                                    ▼                │ discard, then write its own marker
+//!       │                                 Unfinished ─────────┘
+//!       │        begin_import                                           finish_import
+//!       │        writes import.unfinished                               removes import.unfinished
+//!       └──────────────────────────────▶ Unfinished(Import) ───────────────────────────────▶ Initialized
+//! ```
+//!
+//! The state is read from names alone, plus the bytes of the config files beside `init.unfinished`, without the vault
+//! identity, so it is known while the vault is locked.
 
 use std::ffi::OsStr;
 use std::io;
@@ -23,11 +40,13 @@ use crate::{
 };
 
 /// The initial config: the only bytes initialization ever writes to `config.toml` and `config.toml.pending`, approved
-/// as version 1. It names no listener, caller or route, because a new vault holds no credential. A config file with any
-/// other bytes is the owner's and is never discarded.
+/// as version 1.
+///
+/// It names no listener, caller or route, because a new vault holds no credential. A config file with any other bytes
+/// is the owner's and is never discarded.
 pub const INITIAL_CONFIG: &[u8] = b"schema_version = 1\n";
 
-/// The directory a filesystem check creates on a fresh volume; it is not a vault file, so the checks ignore it.
+/// The directory `mkfs` creates at the root of a fresh ext4 volume. It is not a vault file, so the checks ignore it.
 const LOST_FOUND: &str = "lost+found";
 
 /// How many offending names an [`InitStateError::Unrecognized`] carries.
@@ -35,12 +54,24 @@ const MAX_NAMED: usize = 5;
 
 /// What the state and config directories hold, read without the vault identity.
 ///
-/// The checks run in this order and the first that matches decides: `reset.unfinished` present (Unfinished reset,
-/// whatever else is there), else `init.unfinished` present (Unfinished, unless `import.unfinished` is there too, or a
-/// record file, a foreign file, a second approver key envelope or a config file that is not the initial config is),
-/// else `import.unfinished` present (Unfinished, unless a foreign file or a config file but `config.toml` is there),
-/// else `manifest.age` present (Initialized, whatever else is there), else no vault file and no config file
-/// (Uninitialized), else Unrecognized. `init` and `import` proceed only on Uninitialized and Unfinished.
+/// The checks run in this order, and the first that matches decides. A blocker turns the state it guards into
+/// Unrecognized:
+///
+/// ```text
+/// reset.unfinished present                ──▶ UnfinishedReset, whatever else is there
+/// init.unfinished and import.unfinished    ──▶ Unrecognized: no run writes both
+/// init.unfinished present                  ──▶ Unfinished(Initialization)
+///                                              blockers: a record file, a foreign or other store-owned file, a
+///                                              second approver key envelope, a config file failing the config test
+/// import.unfinished present                ──▶ Unfinished(Import)
+///                                              blockers: a foreign or other store-owned file, a config file other
+///                                              than config.toml
+/// manifest.age present                     ──▶ Initialized, whatever else is there
+/// otherwise                                ──▶ Uninitialized
+///                                              blockers: a vault file, a foreign file, any config file
+/// ```
+///
+/// `init` and `import` proceed only on Uninitialized and Unfinished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitializationState {
     /// Nothing of a vault or its config is there.
@@ -49,14 +80,15 @@ pub enum InitializationState {
     Unfinished(UnfinishedKind),
     /// A manifest and neither `init.unfinished` nor `import.unfinished`.
     Initialized,
-    /// Files init or import did not write, or a vault's files without its manifest. Nothing may be written or removed.
+    /// Files `init` or `import` did not write, or a vault's files without its manifest. Nothing may be written or
+    /// removed.
     Unrecognized,
-    /// A reset past its commit point that has not finished: `reset.unfinished` is there. Only the next reset finishes
-    /// it; every other command refuses it.
+    /// A reset past its commit point that has not finished: `reset.unfinished` is there. Only the next `reset` finishes
+    /// it, and every other command refuses it.
     UnfinishedReset,
 }
 
-/// Which run left an Unfinished directory: the one whose marker is there. Each is discarded by either command.
+/// Names the run that left an Unfinished directory: the one whose marker is there. Either command discards either kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnfinishedKind {
     /// `init.unfinished`: an initialization.
@@ -66,7 +98,7 @@ pub enum UnfinishedKind {
 }
 
 impl UnfinishedKind {
-    /// The marker this kind of run writes first and removes last.
+    /// Returns the marker this kind of run writes first and removes last.
     pub fn marker(self) -> StateFileName {
         match self {
             Self::Initialization => StateFileName::unfinished_initialization(),
@@ -98,14 +130,14 @@ pub enum InitStateError {
         /// The underlying error kind.
         kind: io::ErrorKind,
     },
-    /// The vault is initialized, so init and import have nothing to do.
+    /// The vault is initialized, so `init` and `import` have nothing to do.
     #[error("the vault is already initialized")]
     AlreadyInitialized,
-    /// A reset was interrupted; until it finishes the directories may hold a vault that has served, so neither init nor
-    /// import may discard them.
+    /// A reset was interrupted. Until it finishes, the directories may hold a vault that has served, so neither `init`
+    /// nor `import` may discard them.
     #[error("a reset was interrupted; run `iron-vault reset` again")]
     ResetUnfinished,
-    /// The directories hold files init and import did not write; neither will write or remove anything there.
+    /// The directories hold files `init` and `import` did not write, so neither writes or removes anything there.
     #[error("the vault directories hold files that init or import did not write, first {files:?}; move them aside")]
     Unrecognized {
         /// The first offending names, sorted state-directory names first.
@@ -114,23 +146,24 @@ pub enum InitStateError {
     /// Writing or removing a state file failed.
     #[error(transparent)]
     State(#[from] WriteError),
-    /// Removing a leftover `recovery.toml` from an Uninitialized directory failed; nothing else was written.
+    /// Removing a leftover `recovery.toml` from an Uninitialized directory failed. Nothing else was written.
     #[error("cannot remove the leftover recovery check record: {0}")]
     LeftoverRecoveryCheck(WriteError),
-    /// Removing a stale owner-lock file from an Uninitialized directory failed; nothing else was written.
+    /// Removing a stale owner-lock file from an Uninitialized directory failed. Nothing else was written.
     #[error("cannot remove the stale owner-lock file: {0}")]
     LeftoverOwnerLock(WriteError),
     /// Removing a config file failed.
     #[error(transparent)]
     Config(ConfigWriteError),
-    /// `init.unfinished` was unlinked but the directory fsync failed, so the removal may not survive power loss and
-    /// the vault may read Unfinished again after a reboot.
+    /// `init.unfinished` was unlinked but the directory fsync failed. The removal may not survive power loss, and the
+    /// vault may read Unfinished again after a reboot.
     #[error("init.unfinished is removed but the removal may not survive power loss: {kind}")]
     FinishUncertain {
         /// The underlying error kind.
         kind: io::ErrorKind,
     },
-    /// `import.unfinished` was unlinked but the directory fsync failed: [`InitStateError::FinishUncertain`] for an import.
+    /// `import.unfinished` was unlinked but the directory fsync failed: [`InitStateError::FinishUncertain`] for an
+    /// import.
     #[error("import.unfinished is removed but the removal may not survive power loss: {kind}")]
     ImportFinishUncertain {
         /// The underlying error kind.
@@ -138,24 +171,26 @@ pub enum InitStateError {
     },
 }
 
-/// An unfinished run that a `begin_*` discarded, and the files the discard unlinked, for the `vault.init-discarded` or
-/// `migration.import-discarded` log.
+/// Records an unfinished run that [`begin_initialization`] or [`begin_import`] discarded, and the files the discard
+/// unlinked, for the `vault.init-discarded` or `migration.import-discarded` audit event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Discarded {
     /// Which run left the files.
     pub kind: UnfinishedKind,
-    /// The files unlinked, config directory first, in removal order. When the other command's marker went too, it is last.
+    /// The files unlinked, config directory first, in removal order. When the other command's marker went too, it is
+    /// last.
     pub files: Vec<String>,
 }
 
-/// Why [`begin_initialization`] or [`begin_import`] stopped, with what its discard removed before it did. A discard that
-/// fails part-way has still removed files, and the discarded log must name them.
+/// Says why [`begin_initialization`] or [`begin_import`] stopped, with what its discard removed before it did.
+///
+/// A discard that fails part-way has still removed files, and the audit event must name them.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{cause}")]
 pub struct BeginError {
     /// Why it stopped.
     pub cause: InitStateError,
-    /// What the discard unlinked before it stopped; `None` unless a discard ran.
+    /// What the discard unlinked before it stopped, or `None` if no discard ran.
     pub discarded: Option<Discarded>,
 }
 
@@ -173,10 +208,12 @@ impl InitializationState {
     }
 }
 
-/// Refuses, as [`begin_initialization`] and [`begin_import`] do, directories neither may write to, and writes nothing:
-/// Initialized is [`InitStateError::AlreadyInitialized`], Unfinished reset is [`InitStateError::ResetUnfinished`], and
-/// Unrecognized names its first offending files. Otherwise it returns Uninitialized or Unfinished, so `init` or
-/// `import` can refuse, or warn of a discard, before it prompts for anything.
+/// Refuses the directories that [`begin_initialization`] and [`begin_import`] refuse, and writes nothing.
+///
+/// Initialized fails with [`InitStateError::AlreadyInitialized`], Unfinished reset with
+/// [`InitStateError::ResetUnfinished`], and Unrecognized with [`InitStateError::Unrecognized`] naming its first
+/// offending files. Otherwise it returns Uninitialized or Unfinished, so `init` or `import` can refuse, or warn of a
+/// discard, before it prompts for anything.
 pub fn ensure_initializable(
     state: &StateDirLock,
     config: &ConfigDirLock,
@@ -195,19 +232,20 @@ pub fn ensure_initializable(
 
 /// Starts an initialization: step 1 of the write order, plus the discard of an earlier unfinished run of either kind.
 ///
-/// On Uninitialized this durably removes a leftover `recovery.toml`, so the new vault does not inherit the old vault's
-/// `last_checked`, and a stale owner-lock file, so the new vault host-unlocks, then durably writes an empty
-/// `init.unfinished`. The removal is not an audit event, so it is not reported. On Unfinished it durably removes, in an
-/// order that never leaves a signature alone, every file the unfinished run wrote; it returns what it removed for the
-/// `vault.init-discarded` or `migration.import-discarded` log, and a discard that fails part-way names it on its error.
-/// An unfinished import's marker is removed last and `init.unfinished` written, so the caller always holds its own
-/// marker. On Initialized, Unfinished reset and Unrecognized it refuses and changes nothing.
+/// - On Uninitialized, it durably removes a leftover `recovery.toml`, so the new vault does not inherit the old vault's
+///   `last_checked`, and a stale owner-lock file, so the new vault can host-unlock. Then it durably writes an empty
+///   `init.unfinished` and returns `None`. These removals are not audit events, so they are not reported.
+/// - On Unfinished, it durably removes every file the unfinished run wrote, in an order that never leaves a signature
+///   alone, and returns them for the `vault.init-discarded` or `migration.import-discarded` audit event. A discard
+///   that fails part-way names them on its error. An unfinished import's marker is removed last and `init.unfinished`
+///   written, so the caller always holds its own marker.
+/// - On Initialized, Unfinished reset and Unrecognized, it refuses and changes nothing.
 pub fn begin_initialization(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Option<Discarded>, BeginError> {
     begin(state, config, fs, UnfinishedKind::Initialization)
 }
 
-/// Starts an import: [`begin_initialization`] for `import`, which writes `import.unfinished` and discards an unfinished
-/// initialization or import.
+/// Starts an import: does what [`begin_initialization`] does, but writes `import.unfinished`. It discards an unfinished
+/// initialization or import alike.
 pub fn begin_import(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Option<Discarded>, BeginError> {
     begin(state, config, fs, UnfinishedKind::Import)
 }
@@ -268,13 +306,13 @@ fn finish(state: &StateDirLock, fs: &impl StoreFs, kind: UnfinishedKind) -> Resu
     })
 }
 
-/// Requires the Initialized state for an unlock and returns the names of the foreign files beside the manifest, sorted,
-/// so the caller can warn of them. Never refuses over a foreign file there: `Vault::open` ignores names it does not
-/// know, and a stray `lost+found` or an editor's backup must not lock the owner out of a working vault.
+/// Requires the Initialized state for an unlock and returns the sorted names of the foreign files beside the manifest,
+/// so the caller can warn of them.
 ///
-/// Any other state is refused with the file names only, before a passphrase is asked for: Uninitialized and Unfinished
-/// with their `iron-vault init` or `iron-vault import` text, Unfinished reset with its `iron-vault reset` text, and Unrecognized naming its
-/// first offending files.
+/// It never refuses over a foreign file there: `Vault::open` ignores names it does not know, and an editor's backup
+/// must not lock the owner out of a working vault. Any other state is refused with the file names only, before a
+/// passphrase is asked for: Uninitialized and Unfinished with their `iron-vault init` or `iron-vault import` text,
+/// Unfinished reset with its `iron-vault reset` text, and Unrecognized naming its first offending files.
 pub fn require_initialized(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, UnlockError> {
     let found = survey(state, config, fs).map_err(UnlockError::InitializationState)?;
     match found.state {
@@ -289,7 +327,8 @@ pub fn require_initialized(state: &StateDirLock, config: &ConfigDirLock, fs: &im
     }
 }
 
-/// Refuses an unlock that cannot succeed, before any envelope is read or scrypt runs.
+/// Refuses an unlock that cannot succeed, before any envelope is read or scrypt runs: a marker of an unfinished reset,
+/// initialization or import is there, or neither `operational.age` nor `manifest.age` is.
 pub(crate) fn ensure_unlockable(lock: &StateDirLock, fs: &impl StoreFs) -> Result<(), UnlockError> {
     let names = fs.list_dir(lock.dir()).map_err(|e| UnlockError::ListStateDir { kind: e.kind() })?;
     let has = |file: StateFileName| names.iter().any(|n| n.as_os_str() == OsStr::new(file.as_str()));
@@ -309,7 +348,7 @@ pub(crate) fn ensure_unlockable(lock: &StateDirLock, fs: &impl StoreFs) -> Resul
     }
 }
 
-/// Entries of the state directory, by what they mean to the initialization state.
+/// Classifies an entry of the state directory by what it means to the initialization state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Entry {
     /// The lock file, `lost+found` and stale temp files.
@@ -324,17 +363,17 @@ pub(crate) enum Entry {
     Manifest,
     /// Another file an initialization writes.
     InitFile,
-    /// An approver key envelope, `approver-<approver ID>.age`: an initialization writes one, an import any number.
+    /// An approver key envelope, `approver-<approver ID>.age`. An initialization writes one, an import any number.
     ApproverKey,
-    /// `recovery.toml`: part of the vault beside a manifest, removed by the discard, and never a foreign file.
+    /// `recovery.toml`: part of the vault beside a manifest, removed by a discard, and never a foreign file.
     RecoveryRecord,
-    /// `locked-by-owner`: part of no vault, so it blocks nothing, and removed by every discard.
+    /// `locked-by-owner`: part of no vault, so it blocks nothing. Every discard removes it.
     OwnerLock,
-    /// A `record-*.age` file: an import writes any number, an initialization none.
+    /// A `record-*.age` file. An import writes any number, an initialization none.
     Record,
-    /// Another store-owned file that neither an initialization nor an import writes, such as `recipients.age.staged` or an
-    /// approver's `.tpm` key blob: part of the vault beside a manifest, and a blocker beside either marker, where the
-    /// discard would sweep it into the new vault.
+    /// Another store-owned file that neither an initialization nor an import writes, such as `recipients.age.staged`
+    /// or an approver's `.tpm` key blob. It is part of the vault beside a manifest, and a blocker beside either marker:
+    /// the discard would leave it in the new vault.
     OtherOwned,
     /// A file the store does not own.
     Foreign,
@@ -367,11 +406,12 @@ impl Survey {
     }
 }
 
-/// The files a discard of an unfinished initialization or import removes from the state directory, in order: a recovery
-/// check record and an owner-lock file, which beside the marker were left by an earlier vault and were not written after
-/// this one was initialized, then what the run writes except the marker. `variable_files` sit between `manifest.age` and
-/// `operational.age`: the approver key envelopes and, for an import, the record files. Their names hold generated IDs, so
-/// they are known only from the listing.
+/// Lists the files a discard of an unfinished initialization or import removes from the state directory, in order.
+///
+/// First come a recovery check record and an owner-lock file: beside the marker, an earlier vault left them. Then come
+/// the files the run writes, except the marker. `variable_files` sit between `manifest.age` and `operational.age`: the
+/// approver key envelopes and, for an import, the record files. Their names hold generated IDs, so they are known only
+/// from the listing.
 fn written_files(variable_files: impl IntoIterator<Item = StateFileName>) -> Vec<StateFileName> {
     [
         StateFileName::recovery_check_record(),
@@ -389,7 +429,7 @@ fn written_files(variable_files: impl IntoIterator<Item = StateFileName>) -> Vec
     .collect()
 }
 
-/// The valid state file names in the state directory.
+/// Lists the valid state file names in the state directory.
 fn listed_names(state: &StateDirLock, fs: &impl StoreFs) -> Result<Vec<StateFileName>, InitStateError> {
     let listing = fs
         .list_dir(state.dir())
@@ -397,23 +437,23 @@ fn listed_names(state: &StateDirLock, fs: &impl StoreFs) -> Result<Vec<StateFile
     Ok(listing.iter().filter_map(|name| StateFileName::new(name.to_str()?).ok()).collect())
 }
 
-/// The names in `listing` that `is_member` accepts, sorted so a discard's log is deterministic.
+/// Returns the names in `listing` that `is_member` accepts, sorted so a discard's audit event is deterministic.
 fn family(listing: &[StateFileName], is_member: fn(&str) -> bool) -> Vec<StateFileName> {
     let mut members: Vec<_> = listing.iter().filter(|name| is_member(name.as_str())).cloned().collect();
     members.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     members
 }
 
-/// The files a discard of an unfinished import removes from the state directory, in order: the leftovers of an earlier
-/// vault, then what an import writes except the marker. All of them are on the store-owned list.
+/// Lists the files a discard of an unfinished import removes from the state directory, in order: the leftovers of an
+/// earlier vault, then what an import writes except the marker. All of them are on the store-owned list.
 fn import_files(listing: &[StateFileName]) -> Vec<StateFileName> {
     let records = family(listing, is_record_file_name);
     let approver_keys = family(listing, |name| StateFileName::approver_key_id(name).is_some());
     written_files(records.into_iter().chain(approver_keys))
 }
 
-/// What the state-directory entry `name` means to the initialization state. A name not on the store-owned list is
-/// foreign, unless it is the lock file, `lost+found` or a stale temp file.
+/// Classifies the state-directory entry `name`. A name not on the store-owned list is foreign, unless it is the lock
+/// file, `lost+found` or a stale temporary file.
 pub(crate) fn classify(name: &OsStr) -> Entry {
     let Some(text) = name.to_str() else { return Entry::Foreign };
     if text == LOCK_FILE || text == LOST_FOUND || StateFileName::from_temp_name(text).is_some() {
@@ -471,8 +511,8 @@ fn survey(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Re
     Ok(Survey::new(InitializationState::Uninitialized, blockers))
 }
 
-/// Check 1 with `init.unfinished`: Unfinished unless a record file, a foreign or other store-owned file, a second approver
-/// key envelope or a config file that fails the config test is there.
+/// Decides the state beside `init.unfinished`: Unfinished, unless a record file, a foreign or other store-owned file, a
+/// second approver key envelope or a config file that fails the config test is there.
 fn unfinished_initialization(config: &ConfigDirLock, fs: &impl StoreFs, entries: &[(Entry, String)]) -> Result<Survey, InitStateError> {
     // An initialization writes one approver key envelope, so beside a second neither is known to be its own.
     let several_keys = entries.iter().filter(|(kind, _)| *kind == Entry::ApproverKey).count() > 1;
@@ -490,9 +530,9 @@ fn unfinished_initialization(config: &ConfigDirLock, fs: &impl StoreFs, entries:
     ))
 }
 
-/// Check 1 with `import.unfinished`: Unfinished unless a foreign or other store-owned file is there, or a config file
-/// but `config.toml`. An import writes any number of approver key and record files, and `config.toml` with the bundle's
-/// bytes, which are not judged.
+/// Decides the state beside `import.unfinished`: Unfinished, unless a foreign or other store-owned file is there, or a
+/// config file other than `config.toml`. An import writes any number of approver key and record files, and
+/// `config.toml` with the bundle's bytes, which are not judged.
 fn unfinished_import(config: &ConfigDirLock, fs: &impl StoreFs, entries: &[(Entry, String)]) -> Result<Survey, InitStateError> {
     let other_config = present_config_files(config, fs)?
         .into_iter()
@@ -517,8 +557,9 @@ pub(crate) fn present_config_files(config: &ConfigDirLock, fs: &impl StoreFs) ->
         .collect())
 }
 
-/// The config files that fail the config test: a config holding other bytes than the initial config, and signatures
-/// with no config beside them. Only the four config names count; everything else in the directory is ignored.
+/// Lists the config files that fail the [config test](../../../design/vault-initialization.md#the-config-test): a
+/// config holding other bytes than the initial config, and signatures with no config beside them. Only the four config
+/// names count; everything else in the directory is ignored.
 fn config_test_failures(config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<String>, InitStateError> {
     let (configs, signatures): (Vec<_>, Vec<_>) = present_config_files(config, fs)?
         .into_iter()
@@ -536,8 +577,10 @@ fn config_test_failures(config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec
         .collect())
 }
 
-/// Whether `file` holds exactly the initial config. The read is bounded by the initial config's length, so a larger
-/// file is refused unread.
+/// Returns `true` if and only if `file` holds exactly the initial config.
+///
+/// The read is bounded by the initial config's length, so a larger file, or one that is not a regular file, gives
+/// `false` unread.
 fn is_initial_config(config: &ConfigDirLock, fs: &impl StoreFs, file: ConfigFileName) -> Result<bool, InitStateError> {
     // The initial config is 19 bytes, so the length always fits in a u64.
     match read_in(fs, config.dir(), file.as_str(), INITIAL_CONFIG.len() as u64) {
@@ -554,7 +597,7 @@ enum Removal {
 }
 
 impl Removal {
-    /// Removes the file, durably, and says its name, whether it was unlinked, and whether that failed.
+    /// Removes the file durably, and returns its name, whether it was unlinked, and whether the removal failed.
     fn run(&self, state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> (String, bool, Result<(), InitStateError>) {
         let (name, (unlinked, result)) = match self {
             Self::Config(file) => (file.to_string(), config_removal(remove_config_file(config, fs, *file))),
@@ -582,10 +625,11 @@ fn removals(state: &StateDirLock, fs: &impl StoreFs, found: UnfinishedKind) -> R
         .collect())
 }
 
-/// Removes what an unfinished `found` wrote, config files first, and stops at the first failure. The marker stays, so a
-/// crash part-way reads Unfinished again and the next run discards again. When `own`, the command's kind, differs from
-/// `found`, the discard ends by durably removing the other command's marker, which reads Uninitialized, and writing
-/// `own`'s: a crash between the two leaves Uninitialized, which either command starts from.
+/// Removes what an unfinished `found` wrote, config files first, and stops at the first failure.
+///
+/// The marker stays, so a crash part-way reads Unfinished again and the next run discards again. When `own`, the
+/// command's kind, differs from `found`, the discard ends by durably removing the other command's marker, which reads
+/// Uninitialized, and writing `own`'s. A crash between the two leaves Uninitialized, which either command starts from.
 ///
 /// Every file unlinked is named, on success and on failure alike. A failed directory fsync comes after its unlink, so
 /// that file is named too: it is gone now, though power loss may bring it back.
@@ -617,8 +661,10 @@ fn discard(
     }
 }
 
-/// Whether a config file's removal unlinked it, and whether it failed. A failed `SyncDir` counts as unlinked because
-/// `remove_in` (durable.rs) unlinks before its directory fsync; if that order changes, so must this.
+/// Splits a config file's removal result into whether it unlinked the file and whether it failed.
+///
+/// A failed `SyncDir` counts as unlinked because `remove_in` in `durable.rs` unlinks before its directory fsync. If
+/// that order changes, so must this.
 fn config_removal(removed: Result<bool, ConfigWriteError>) -> (bool, Result<(), InitStateError>) {
     match removed {
         Ok(existed) => (existed, Ok(())),
@@ -635,8 +681,8 @@ fn config_removal(removed: Result<bool, ConfigWriteError>) -> (bool, Result<(), 
     }
 }
 
-/// Whether a state file's removal unlinked it, and whether it failed. An absent file is skipped. A failed `SyncDir`
-/// counts as unlinked, as in [`config_removal`].
+/// Splits a state file's removal result into whether it unlinked the file and whether it failed. An absent file is
+/// skipped. A failed `SyncDir` counts as unlinked, as in [`config_removal`].
 fn state_removal(removed: Result<(), WriteError>) -> (bool, Result<(), InitStateError>) {
     match removed {
         Ok(()) => (true, Ok(())),
