@@ -1,4 +1,5 @@
-//! The credential record: a secret bound to its identity and the origins it may reach (spec §6).
+//! The credential record: a secret bound to its identity and the origins it may reach
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 
 mod encoding;
 mod resolved;
@@ -14,7 +15,8 @@ use crate::record_id::RecordId;
 pub use encoding::{RecordError, decode, encode};
 pub use resolved::ResolvedCredential;
 
-/// Where a credential record's secret came from (spec §3, §6).
+/// Names where a credential record's secret came from ([spec §3](../../../design/iron-vault-specification.md#3-terms-and-definitions),
+/// [§6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     /// The owner entered the secret through `add` or `replace`.
@@ -54,17 +56,17 @@ impl CredentialRecord {
         })
     }
 
-    /// The record's GUID.
+    /// Returns the record's GUID.
     pub fn id(&self) -> RecordId {
         self.id
     }
 
-    /// The credential's unique name.
+    /// Returns the credential's unique name.
     pub fn name(&self) -> &CredentialName {
         &self.name
     }
 
-    /// The kind the material belongs to.
+    /// Returns the kind the material belongs to.
     pub fn kind(&self) -> CredentialKind {
         match self.material {
             CredentialMaterial::Static { .. } => CredentialKind::Static,
@@ -72,23 +74,24 @@ impl CredentialRecord {
         }
     }
 
-    /// The decrypted secret fields, for a kind to resolve.
+    /// Returns the decrypted secret fields, for a kind to resolve.
     pub fn material(&self) -> &CredentialMaterial {
         &self.material
     }
 
-    /// The exact host and port pairs the secret may reach.
+    /// Returns the exact host and port pairs the secret may reach.
     pub fn origins(&self) -> &PermittedOrigins {
         &self.origins
     }
 
-    /// Where the secret came from.
+    /// Returns where the secret came from.
     pub fn source(&self) -> Source {
         self.source
     }
 
-    /// Resolves this record's material for `slot` and keeps it with this record's origins, the intended way to build
-    /// the bound credential the final outgoing-request check takes (§6).
+    /// Resolves this record's material for `slot` and keeps it with this record's origins. This is how the bound
+    /// credential the final outgoing-request check takes is built
+    /// ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
     pub fn resolve(&self, slot: &Slot, request: &AuthorizedRequest) -> Result<ResolvedCredential<'_>, KindError> {
         iron_vault_kinds::resolve(&self.material, slot, request).map(|resolution| ResolvedCredential::new(resolution, &self.origins))
     }

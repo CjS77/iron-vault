@@ -1,4 +1,5 @@
-//! The stable identity of one credential record (spec §3, §6).
+//! The stable identity of one credential record ([spec §3](../../../design/iron-vault-specification.md#3-terms-and-definitions),
+//! [§6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 
 use std::fmt;
 use std::str::FromStr;
@@ -8,13 +9,22 @@ use uuid::{Uuid, Variant, Version};
 
 /// A credential record's GUID: a random version 4 UUID, new on every add and every replace.
 ///
-/// A replacement gets a fresh ID rather than reusing the name's old one, so the service can tell the record a grant was
-/// approved against from one that took its name later (spec §6). Its text form is the lowercase hyphenated UUID, and
-/// parsing accepts nothing else, so every record has exactly one spelling.
+/// A replacement gets a fresh ID, not the name's old one, so the service can tell the record a grant was approved
+/// against from one that took its name later. Its text form is the lowercase hyphenated UUID, and parsing accepts
+/// nothing else, so every record has exactly one spelling.
+///
+/// ```
+/// use iron_vault_store::{RecordId, RecordIdError};
+///
+/// let id: RecordId = "7c9e6679-7425-40de-944b-e07fc1f90ae7".parse().unwrap();
+/// assert_eq!(id.to_string(), "7c9e6679-7425-40de-944b-e07fc1f90ae7");
+/// assert_eq!("7C9E6679-7425-40DE-944B-E07FC1F90AE7".parse::<RecordId>(), Err(RecordIdError::NotCanonical));
+/// assert_eq!("7c9e6679-7425-10de-944b-e07fc1f90ae7".parse::<RecordId>(), Err(RecordIdError::NotVersion4));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RecordId(Uuid);
 
-/// Text or bytes that are not a record ID. The ID is not secret, but the error carries no input either way.
+/// Says why text or bytes are not a record ID. The ID is not secret, but the error carries no input either way.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RecordIdError {
     /// The text is not a UUID in lowercase hyphenated form.
@@ -26,17 +36,17 @@ pub enum RecordIdError {
 }
 
 impl RecordId {
-    /// A fresh random ID for a newly added or replacing record.
+    /// Generates a fresh random ID for a newly added or replacing record.
     pub fn new_random() -> Self {
         Self(Uuid::new_v4())
     }
 
-    /// The ID from its 16 raw bytes, as a record payload stores it.
+    /// Creates the ID from its 16 raw bytes, as a record payload stores it.
     pub fn from_bytes(bytes: [u8; 16]) -> Result<Self, RecordIdError> {
         Self::checked(Uuid::from_bytes(bytes))
     }
 
-    /// The ID's 16 raw bytes, in the order its text form shows them.
+    /// Returns the ID's 16 raw bytes, in the order its text form shows them.
     pub fn as_bytes(&self) -> &[u8; 16] {
         self.0.as_bytes()
     }

@@ -1,7 +1,16 @@
-//! Reading the stanza tags of an `age` v1 header without decrypting anything (c2sp.org/age).
+//! Reading the stanza tags of an `age` v1 header without decrypting anything ([age v1](https://c2sp.org/age)).
 //!
 //! `age` keeps its parsed header private, so the store reads the header's text form itself. Both the sealed-file guard
-//! and the identity envelope use this one parser to refuse foreign stanzas before any key work.
+//! and the identity envelope use this one parser to refuse foreign stanzas before any key work. The lines it reads:
+//!
+//! ```text
+//! age-encryption.org/v1          version line
+//! -> X25519 <share>              stanza line: its tag is the first word
+//! <body>                         body line, skipped
+//! -> <word>-grease <args>        grease stanza: a tag ending in -grease
+//! <body>
+//! --- <MAC>                      closing MAC line: the header is complete
+//! ```
 
 use std::fmt;
 
@@ -9,7 +18,7 @@ use std::fmt;
 const VERSION_LINE: &[u8] = b"age-encryption.org/v1";
 /// The start of a recipient stanza line in an `age` header.
 const STANZA_PREFIX: &[u8] = b"-> ";
-/// The start of the header's closing MAC line; neither a stanza line nor a base64 body line can begin this way.
+/// The start of the header's closing MAC line. Neither a stanza line nor a base64 body line can begin this way.
 const MAC_PREFIX: &[u8] = b"---";
 /// The tag of an X25519 recipient stanza.
 const X25519_TAG: &[u8] = b"X25519";
@@ -23,7 +32,7 @@ const GREASE_SUFFIX: &[u8] = b"-grease";
 pub enum StanzaKind {
     /// An X25519 recipient stanza, the only kind the store unwraps.
     X25519,
-    /// The random stanza `age` adds to every file it writes without a passphrase; no identity ever unwraps it.
+    /// The random stanza `age` adds to every file it writes without a passphrase. No identity ever unwraps it.
     Grease,
     /// A passphrase stanza, which would make the reader run scrypt.
     Scrypt,
@@ -41,7 +50,8 @@ impl StanzaKind {
         }
     }
 
-    /// Whether an X25519 identity may be offered a file holding this stanza: X25519 stanzas and the inert grease stanza.
+    /// Returns `true` if and only if an X25519 identity may be offered a file holding this stanza: an X25519 stanza or
+    /// the inert grease stanza.
     pub(crate) fn is_x25519_or_grease(&self) -> bool {
         matches!(self, Self::X25519 | Self::Grease)
     }
@@ -62,14 +72,15 @@ impl fmt::Display for StanzaKind {
 pub(crate) struct Header {
     /// One kind per stanza, in header order.
     pub(crate) kinds: Vec<StanzaKind>,
-    /// Whether the header's closing MAC line was found; a truncated file has no MAC line.
+    /// `true` if and only if the header's closing MAC line was found. A truncated file has no MAC line.
     pub(crate) complete: bool,
     /// The work factor argument of each scrypt stanza, in header order: `Some(log_n)` when it is one or two decimal
-    /// digits, `None` when it is anything else. Read so a caller can refuse a costly file before `age` runs scrypt.
+    /// digits, `None` when it is anything else. A caller reads it to refuse a costly file before `age` runs scrypt.
     pub(crate) scrypt_work_factors: Vec<Option<u8>>,
 }
 
-/// The stanza kinds of `file`'s `age` v1 header, or `None` when the file does not start with the `age` v1 version line.
+/// Parses the stanza kinds of `file`'s `age` v1 header, or returns `None` when the file does not start with the `age`
+/// v1 version line.
 ///
 /// Only newline-terminated lines are read, so a truncated file never shows a cut-off tag that would be mistaken for a
 /// foreign stanza.
@@ -99,22 +110,24 @@ pub(crate) fn parse_header(file: &[u8]) -> Option<Header> {
     })
 }
 
-/// The newline-terminated lines of `bytes`, without their terminators; an unterminated final line is dropped.
+/// Returns the newline-terminated lines of `bytes`, without their terminators. An unterminated final line is dropped.
 fn complete_lines(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
     let terminated = bytes.iter().rposition(|&b| b == b'\n').map_or(&[][..], |end| &bytes[..end]);
     terminated.split(|&b| b == b'\n')
 }
 
-/// The work factor of an scrypt stanza line, given the text after its `-> ` prefix: the third space-separated field
-/// (`scrypt <salt> <log_n>`) as one or two decimal digits without a leading zero. `age` refuses a leading zero too, and
-/// any value of three digits is far beyond every work factor the store accepts, so refusing it as unreadable is safe.
+/// Returns the work factor of an scrypt stanza line, given the text after its `-> ` prefix: the third space-separated
+/// field (`scrypt <salt> <log_n>`) as one or two decimal digits without a leading zero.
+///
+/// `age` refuses a leading zero too, and any value of three digits is far beyond every work factor the store accepts,
+/// so refusing it as unreadable is safe.
 fn scrypt_work_factor(rest: &[u8]) -> Option<u8> {
     let field = rest.split(|&b| b == b' ').nth(2)?;
     let digits = (1..=2).contains(&field.len()) && field.iter().all(u8::is_ascii_digit) && field[0] != b'0';
     digits.then(|| field.iter().fold(0, |n, d| n * 10 + (d - b'0')))
 }
 
-/// The tag of a stanza line, given the text after its `-> ` prefix.
+/// Returns the tag of a stanza line, given the text after its `-> ` prefix.
 fn stanza_tag(rest: &[u8]) -> &[u8] {
     rest.split(|&b| b == b' ').next().unwrap_or(rest)
 }

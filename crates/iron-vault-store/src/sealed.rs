@@ -1,8 +1,9 @@
-//! Sealed files: binary `age` ciphertext encrypted to the vault public key (specification §13).
+//! Sealed files: binary `age` ciphertext encrypted to the vault public key
+//! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 //!
 //! [`seal`] and [`open`] are the only way the store encrypts and decrypts with an X25519 key, so `age` types and error
 //! text stay inside this crate; the passphrase envelope's scrypt use lives in `passphrase`. Plaintext comes back in a
-//! buffer that is cleared on drop (specification §14).
+//! buffer that is cleared on drop ([spec §14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).
 
 use std::{
     io::{self, Read, Write},
@@ -18,7 +19,8 @@ use crate::{
     vault_identity::{VaultIdentity, VaultPublicKey},
 };
 
-/// Sealing failed. The cause is not carried: it could only come from `age`, whose text is not passed through.
+/// Reports that sealing failed. The cause is not carried: it could only come from `age`, whose text is not passed
+/// through.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SealError {
     /// `age` refused to encrypt to the key or to write the output.
@@ -26,7 +28,7 @@ pub enum SealError {
     Encryption,
 }
 
-/// Opening a sealed file failed. No variant carries plaintext, key material or `age` error text.
+/// Says why opening a sealed file failed. No variant carries plaintext, key material or `age` error text.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OpenError {
     /// No stanza in the header unwraps with this vault identity.
@@ -35,7 +37,7 @@ pub enum OpenError {
     /// The file is not a well-formed, authentic `age` file: truncated, altered, or not `age` at all.
     #[error("the sealed file is malformed or has been altered")]
     Malformed,
-    /// The plaintext is longer than the caller's limit; reading stopped at the first byte past it.
+    /// The plaintext is longer than the caller's limit. Reading stopped at the first byte past it.
     #[error("the sealed plaintext exceeds the {limit}-byte limit")]
     TooLarge {
         /// The `max_plaintext` that was exceeded.
@@ -53,7 +55,8 @@ pub fn seal(key: &VaultPublicKey, plaintext: &[u8]) -> Result<Vec<u8>, SealError
 
 /// Encrypts `plaintext` as binary `age` output with one X25519 stanza per key in `keys`.
 ///
-/// Taking only X25519 recipients means no caller can put a passphrase stanza beside them (specification §14).
+/// Taking only X25519 recipients means no caller can put a passphrase stanza beside them
+/// ([spec §14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).
 pub(crate) fn seal_to<'a>(keys: impl Iterator<Item = &'a x25519::Recipient>, plaintext: &[u8]) -> Result<Vec<u8>, SealError> {
     let encryptor = Encryptor::with_recipients(keys.map(|key| key as &dyn age::Recipient)).map_err(|_| SealError::Encryption)?;
     let mut writer = encryptor
@@ -72,7 +75,7 @@ pub fn open(identity: &VaultIdentity, ciphertext: &[u8], max_plaintext: usize) -
     open_as(identity.as_age(), ciphertext, max_plaintext)
 }
 
-/// [`open`] with any X25519 identity, under the same header check and plaintext bound.
+/// Does what [`open`] does with any X25519 identity, under the same header check and plaintext bound.
 pub(crate) fn open_as(identity: &x25519::Identity, ciphertext: &[u8], max_plaintext: usize) -> Result<Zeroizing<Vec<u8>>, OpenError> {
     check_stanzas(ciphertext)?;
     let decryptor = Decryptor::new_buffered(ciphertext).map_err(map_decrypt_error)?;
@@ -137,13 +140,13 @@ mod tests {
         (identity, ciphertext)
     }
 
-    /// The offset of the first payload byte: just past the header's `---` MAC line.
+    /// Returns the offset of the first payload byte: just past the header's `---` MAC line.
     fn payload_start(ciphertext: &[u8]) -> usize {
         let mac = ciphertext.windows(5).position(|w| w == b"\n--- ").unwrap() + 1;
         mac + ciphertext[mac..].iter().position(|&b| b == b'\n').unwrap() + 1
     }
 
-    /// A passphrase file made with a tiny work factor so the test stays fast.
+    /// Returns a passphrase file made with a tiny work factor, so the test stays fast.
     fn scrypt_file() -> Vec<u8> {
         let mut recipient = age::scrypt::Recipient::new(SecretString::from("planted passphrase"));
         recipient.set_work_factor(2);
@@ -153,7 +156,7 @@ mod tests {
         writer.finish().unwrap()
     }
 
-    /// `ciphertext` with an extra stanza line inserted just before its MAC line.
+    /// Returns `ciphertext` with an extra stanza line inserted just before its MAC line.
     fn with_stanza(ciphertext: &[u8], stanza: &[u8]) -> Vec<u8> {
         let mac = ciphertext.windows(5).position(|w| w == b"\n--- ").unwrap() + 1;
         [&ciphertext[..mac], stanza, &ciphertext[mac..]].concat()

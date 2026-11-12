@@ -1,7 +1,17 @@
-//! The record payload v1 encoding: the plaintext a credential file encrypts (`design/storage-formats.md`).
+//! The record payload v1 encoding: the plaintext a credential file encrypts
+//! ([record payload v1](../../../../design/storage-formats.md#record-payload-v1)).
 //!
-//! The layout is hand-written rather than serde or TOML so that decoding reads each secret straight out of the caller's
-//! decrypted buffer into a [`SecretString`], with no intermediate `String` left unwiped on the heap (spec §14).
+//! The layout is hand-written, not serde or TOML, so decoding reads each secret straight out of the caller's decrypted
+//! buffer into a [`SecretString`], with no intermediate `String` left unwiped on the heap
+//! ([spec §14](../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).
+//!
+//! A field is a big-endian `u64` length, then that many bytes. The payload, in order:
+//!
+//! ```text
+//! "IVCR" │ 01 │ record ID (16) │ name field │ material tag │ material fields │ origin count (u64) │ origins │ source tag
+//!                                           01 static: key field                each: host field,     01 direct
+//!                                           02 basic: username, password        then port (u16)       entry
+//! ```
 
 use std::collections::BTreeSet;
 
@@ -26,7 +36,7 @@ const TAG_STATIC: u8 = 1;
 const TAG_BASIC: u8 = 2;
 const TAG_DIRECT_ENTRY: u8 = 1;
 
-/// Why a record payload cannot be decoded. No variant carries secret bytes: secret fields are named, never shown.
+/// Says why a record payload cannot be decoded. No variant carries secret bytes: secret fields are named, never shown.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RecordError {
     /// The payload does not start with the record magic.
@@ -77,7 +87,7 @@ pub enum RecordError {
     /// The material tag names no known kind.
     #[error("unknown credential material tag {0}")]
     UnknownMaterialTag(u8),
-    /// The material breaks its kind's rules; the inner error names the rule, never the value.
+    /// The material breaks its kind's rules. The inner error names the rule, never the value.
     #[error(transparent)]
     InvalidMaterial(#[from] KindError),
     /// The source tag names no known source.
@@ -85,8 +95,8 @@ pub enum RecordError {
     UnknownSourceTag(u8),
 }
 
-/// The record's v1 payload. The same record always encodes to the same bytes, because origins are written in their
-/// set order and every other field has one form.
+/// Encodes the record's v1 payload. The same record always encodes to the same bytes, because origins are written in
+/// their set order and every other field has one form.
 ///
 /// The buffer is sized exactly before writing, so it never reallocates and leaves no unwiped copy of the secret behind.
 pub fn encode(record: &CredentialRecord) -> Zeroizing<Vec<u8>> {
@@ -101,7 +111,7 @@ pub fn encode(record: &CredentialRecord) -> Zeroizing<Vec<u8>> {
     out
 }
 
-/// The record a v1 payload holds, validated with the same value objects that build a record any other way.
+/// Decodes the record a v1 payload holds, validated with the same value objects that build a record any other way.
 pub fn decode(payload: &[u8]) -> Result<CredentialRecord, RecordError> {
     let mut reader = Reader::new(payload);
     if reader.take(MAGIC.len())? != MAGIC {
@@ -184,7 +194,7 @@ fn read_material(reader: &mut Reader<'_>) -> Result<CredentialMaterial, RecordEr
     }
 }
 
-/// Reads the origins, requiring them strictly ascending so that a payload is the one encoding of its record.
+/// Reads the origins, requiring them strictly ascending, so a payload is the one encoding of its record.
 fn read_origins(reader: &mut Reader<'_>) -> Result<PermittedOrigins, RecordError> {
     let count = reader.len()?;
     if count == 0 {
@@ -219,12 +229,12 @@ fn read_source(reader: &mut Reader<'_>) -> Result<Source, RecordError> {
     }
 }
 
-/// A length-prefixed UTF-8 field, borrowed from the payload.
+/// Reads a length-prefixed UTF-8 field, borrowed from the payload.
 fn read_text<'a>(reader: &mut Reader<'a>, field: &'static str) -> Result<&'a str, RecordError> {
     std::str::from_utf8(reader.field()?).map_err(|_| RecordError::NotUtf8 { field })
 }
 
-/// The field as a secret: its one owned copy is the [`SecretString`], which zeroizes it on drop.
+/// Reads the field as a secret: its one owned copy is the [`SecretString`], which zeroizes it on drop.
 fn read_secret(reader: &mut Reader<'_>, field: &'static str) -> Result<SecretString, RecordError> {
     read_text(reader, field).map(SecretString::from)
 }
@@ -378,7 +388,7 @@ mod tests {
         assert_eq!(&expected.0[..5], b"IVCR\x01");
     }
 
-    /// The example in `design/storage-formats.md`, byte for byte.
+    /// Checks the [example](../../../../design/storage-formats.md#record-payload-v1) byte for byte.
     #[test]
     fn documented_example_decodes() {
         let hex = "49564352 01 7c9e6679742540de944be07fc1f90ae7 0000000000000006 66785f6b6579 01 0000000000000001 6b \
