@@ -9,7 +9,8 @@ const TPM_BLOB: &str = "approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.tpm";
 const INIT: UnfinishedKind = UnfinishedKind::Initialization;
 const IMPORT: UnfinishedKind = UnfinishedKind::Import;
 
-/// Every file an import writes, and the leftovers a discard sweeps with them, in the order the discard removes them.
+/// Lists every file an import writes, and the leftovers a discard sweeps with them, in the order the discard removes
+/// them.
 const IMPORT_FILES: [&str; 12] = [
     "recovery.toml",
     "locked-by-owner",
@@ -26,8 +27,8 @@ const IMPORT_FILES: [&str; 12] = [
 ];
 
 impl Dirs {
-    /// The directory a crash leaves in the middle of an import: the marker and every file an import writes, any number
-    /// of record and approver key files, and a `config.toml` that is the bundle's, not the initial config.
+    /// Builds the directory a crash leaves in the middle of an import: the marker and every file an import writes, any
+    /// number of record and approver key files, and a `config.toml` that is the bundle's, not the initial config.
     fn crashed_import(&self, fs: &impl StoreFs) {
         self.put_bytes(fs, "import.unfinished", b"");
         IMPORT_FILES
@@ -37,7 +38,7 @@ impl Dirs {
         self.put_config(fs, Active, b"[listeners.a]\naddress = \"127.0.0.1:1\"\n");
     }
 
-    /// The directory a crash leaves in the middle of `kind`'s run.
+    /// Builds the directory a crash leaves in the middle of `kind`'s run.
     fn crashed(&self, fs: &impl StoreFs, kind: UnfinishedKind) {
         match kind {
             INIT => self.crashed_after(fs, PUBLISHED),
@@ -185,8 +186,8 @@ fn a_leftover_recovery_record_and_owner_lock_go_before_the_marker_is_written() {
     dirs.assert_only_marker(&fs, IMPORT, "uninitialized");
 }
 
-/// A failed or interrupted discard leaves a directory a second run completes from: Unfinished of either kind, or
-/// Uninitialized once the other marker is gone; never Unrecognized or Initialized.
+/// Checks that a failed or interrupted discard leaves a directory a second run completes from: Unfinished of either
+/// kind, or Uninitialized once the other marker is gone; never Unrecognized or Initialized.
 fn assert_resumable(dirs: &Dirs, fs: &FaultFs, own: UnfinishedKind, context: &str) {
     let state = dirs.read(fs);
     assert!(

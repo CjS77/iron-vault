@@ -1,5 +1,33 @@
-//! Vault identity, recipient envelopes, record files, manifests, approval metadata, durable transactions,
-//! recovery, and connector storage.
+//! Iron Vault's on-disk store: the files the service keeps in its state and config directories, and the rules for
+//! reading and writing them ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
+//!
+//! The store decides how files are written, never when: the service calls in with a [`StoreFs`] ([`OsFs`] outside
+//! tests) and holds [`StateDirLock`] or [`ConfigDirLock`] for each directory it touches.
+//!
+//! One vault identity opens everything sealed. Each recipient of `identity.age` can unwrap it, and the vault identity
+//! then opens the manifest, which names each record file with its digest:
+//!
+//! ```text
+//! vault passphrase ──▶ operational.age ──┐
+//! recovery key ──────────────────────────┼──▶ identity.age ──▶ vault identity ──▶ manifest.age ──▶ record-<id>.age …
+//! host unlock identity ──────────────────┘    (one stanza       (in memory          (names and        (one credential
+//!                                              per recipient)    only)              digests records)   each)
+//! ```
+//!
+//! What lives where:
+//!
+//! - **Vault and records:** [`Vault`] opens and writes the manifest and record files. [`CredentialRecord`] is one
+//!   record, and [`encode`] and [`decode`] give its payload.
+//! - **Keys and recipients:** [`VaultIdentity`]; [`wrap_identity`] and [`unwrap_identity`] for `identity.age`;
+//!   [`unlock_with_passphrase`]; [`RecoveryKey`]; [`RecipientInventory`] and [`rewrap_identity`] for recipient changes.
+//! - **Approvals:** [`ApprovalEnvelope`], the signed `config.toml.sig`, and [`ApprovalState`], which pins the
+//!   approvers and holds the approval version counters.
+//! - **Configuration:** `config.toml` and its signature, written by [`write_pending`] and [`write_staged`] and made
+//!   active by [`publish`].
+//! - **Lifecycle:** [`initialize`] for `init`, [`stream_export_snapshot`], [`migration_bundle`] and [`import_vault`]
+//!   for migration, [`discard_vault`] for `reset`, [`check_recovery_key`] for `recovery check`, and
+//!   [`write_owner_lock`] for `lock`.
+//! - **Durable writes:** [`durable_replace`] and [`durable_remove`], so a crash leaves the old file or the new one.
 
 mod approval;
 mod config_dir;

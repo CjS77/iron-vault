@@ -1,5 +1,5 @@
 //! The owner-lock file: the empty state file `locked-by-owner` that makes an explicit `lock` outlast a crash, a restart
-//! and a reboot (design/tpm-unlock.md, "`lock` across restarts").
+//! and a reboot ([`lock` across restarts](../../../design/tpm-unlock.md#lock-across-restarts)).
 //!
 //! The store only writes, removes and tests for the file. The service decides when: `lock` and `reset` write it, a
 //! passphrase `unlock` removes it, and startup skips host unlock while it is there.
@@ -23,7 +23,8 @@ pub fn remove_owner_lock(lock: &StateDirLock, fs: &impl StoreFs) -> Result<bool,
     }
 }
 
-/// Whether anything is at the owner-lock file's name, whatever its type, so a directory or a dangling symlink counts.
+/// Returns `true` if and only if anything is at the owner-lock file's name, whatever its type, so a directory or a
+/// dangling symlink counts.
 ///
 /// It fails closed: a state directory that cannot be listed counts as holding the file, since a service that cannot tell
 /// must not host-unlock a vault the owner may have locked. Only a missing state directory holds nothing.

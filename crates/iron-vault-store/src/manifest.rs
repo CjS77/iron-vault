@@ -293,7 +293,7 @@ pub(crate) mod tests {
     const FILE_VERSION: u8 = KIND.version;
 
     /// The known-answer identity: the `age` secret-key text of the X25519 key bytes 01 02 … 20
-    /// ([test vectors](../../../../design/storage-formats.md#manifest-file-v1)).
+    /// ([test vectors](../../../design/storage-formats.md#manifest-file-v1)).
     pub(crate) const KAT_IDENTITY: &str = "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE";
     /// The manifest key of [`KAT_IDENTITY`].
     pub(crate) const KAT_MANIFEST_KEY: &str =

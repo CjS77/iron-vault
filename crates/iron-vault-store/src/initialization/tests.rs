@@ -12,13 +12,14 @@ use crate::{
     unlock_with_passphrase, wrap_identity, write_pending, write_staged,
 };
 
-/// The approver key envelope the crash points write, as `init` names its approver's.
+/// Names the approver key envelope the crash points write, as `init` names its approver's.
 const APPROVER_KEY: &str = "approver-8d1c6f0e-2b7a-4c59-9e3d-5a4b3c2d1e0f.age";
 
-/// A second approver's key envelope.
+/// Names a second approver's key envelope.
 const OTHER_APPROVER_KEY: &str = "approver-3f2a9b1c-7d4e-4a8b-b6c5-0e1d2c3b4a59.age";
 
-/// Locked state and config directories. The locks are real; the files live wherever the `fs` passed to each call puts them.
+/// Holds locked state and config directories. The locks are real; the files live wherever the `fs` passed to each call
+/// puts them.
 struct Dirs {
     state_dir: TestDir,
     config_dir: TestDir,
@@ -48,7 +49,7 @@ impl Dirs {
             .map_err(|e| e.cause)
     }
 
-    /// The names in both directories, sorted, for comparing what a discard removed.
+    /// Returns the names in both directories, sorted, for comparing what a discard removed.
     fn all_names(&self, fs: &impl StoreFs) -> Vec<String> {
         let mut all: Vec<_> = self.state_names(fs).into_iter().chain(self.config_names(fs)).collect();
         all.sort();
@@ -79,7 +80,7 @@ impl Dirs {
         }
     }
 
-    /// The directory after the write-order step `step` (0 to 7) is durable, with every earlier step. Step 8 is the
+    /// Builds the directory as it is once write-order step `step` (0 to 7) is durable, with every earlier step. Step 8 is the
     /// publish, and its three outcomes are `PUBLISHED` (both renames), `ONLY_CONFIG_PUBLISHED` (`config.toml` beside
     /// the staged signature) and `ONLY_SIGNATURE_PUBLISHED` (the pending config beside `config.toml.sig`).
     fn crashed_after(&self, fs: &impl StoreFs, step: usize) {
@@ -102,7 +103,7 @@ impl Dirs {
         published.into_iter().for_each(|set| publish(&self.config, fs, set).unwrap());
     }
 
-    /// A [`FaultFs`] that shows the two lock files, which are real files the fault filesystem does not see.
+    /// Returns a [`FaultFs`] that shows the two lock files, which are real files the fault filesystem does not see.
     fn fault_fs(&self) -> FaultFs {
         FaultFs::new()
             .with_durable_file(&self.state_dir.path().join("lock"), b"")
@@ -286,7 +287,8 @@ fn begin_leaves_no_marker_when_the_stale_owner_lock_cannot_be_removed() {
     assert_eq!(dirs.read(&fs), InitializationState::Uninitialized);
 }
 
-/// A staged inventory and a TPM key blob are store-owned files an initialization never writes.
+/// Checks that a staged inventory and a TPM key blob, store-owned files an initialization never writes, count as the
+/// vault's own beside a manifest and as foreign elsewhere.
 #[test]
 fn owned_files_init_never_writes_are_the_vaults_own_beside_a_manifest_and_foreign_elsewhere() {
     ["recipients.age.staged", "approver-5b0e9a1c-7d2f-4e83-b6a4-0c1d2e3f4a5b.tpm"]
@@ -594,8 +596,8 @@ fn an_unrecognized_error_names_files_only_and_at_most_five() {
     );
 }
 
-/// The discard unlinks every signature before any config, so a crash after any call reads Unfinished again and never
-/// Unrecognized, from each state the publish step can leave, the half-published ones included.
+/// Checks that the discard unlinks every signature before any config, so a crash after any call reads Unfinished again
+/// and never Unrecognized, from each state the publish step can leave, the half-published ones included.
 #[test]
 fn a_crash_during_the_discard_reads_unfinished() {
     [PUBLISHED, ONLY_CONFIG_PUBLISHED, ONLY_SIGNATURE_PUBLISHED]
@@ -673,7 +675,8 @@ fn begin_on_an_unfinished_directory_fails_cleanly_at_every_call() {
         .for_each(|(i, _, state)| assert_eq!(*state, InitializationState::Unfinished(UnfinishedKind::Initialization), "call {i}"));
 }
 
-/// A discard that fails at any call still names every file it unlinked first, so `vault.init-discarded` can log them.
+/// Checks that a discard that fails at any call still names every file it unlinked first, so `vault.init-discarded`
+/// can log them.
 #[test]
 fn a_discard_failing_part_way_names_the_files_it_removed() {
     let dirs = Dirs::new("init-fault-discard-names");

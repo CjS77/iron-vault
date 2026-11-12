@@ -1,4 +1,4 @@
-//! The vault identity and its public key (specification §13).
+//! The vault identity and its public key ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 //!
 //! The vault identity is the one `age` X25519 private key that opens every sealed file in the vault. It stays in
 //! service memory while the vault is unlocked; this module never writes it anywhere. Wrapping it for recipients is a
@@ -28,15 +28,15 @@ impl VaultIdentity {
         }
     }
 
-    /// The public half of this identity, which anything can be sealed to.
+    /// Returns the public half of this identity, which anything can be sealed to.
     pub fn public_key(&self) -> VaultPublicKey {
         VaultPublicKey::from_recipient(self.secret.to_public())
     }
 
-    /// A 64-byte key derived from this identity: BLAKE2b-512, personalized with `persona`, of the identity's `age`
+    /// Derives a 64-byte key from this identity: BLAKE2b-512, personalized with `persona`, of the identity's `age`
     /// secret-key text (the 74 ASCII bytes `Identity::to_string` gives, uppercase Bech32, no newline).
     ///
-    /// The secret is hashed as the message rather than used as the BLAKE2b key because its text is 74 bytes, over
+    /// The secret is hashed as the message, not used as the BLAKE2b key, because its text is 74 bytes, over
     /// BLAKE2b's 64-byte key limit; it carries the full 256-bit X25519 key either way. The text form is fixed by the
     /// `age` specification, and a known-answer test pins it. Each use passes its own persona of at most 16 bytes, so
     /// keys for different purposes are independent.
@@ -49,13 +49,13 @@ impl VaultIdentity {
         key
     }
 
-    /// The identity's `age` secret-key text, `AGE-SECRET-KEY-1…`, in a buffer cleared on drop; the identity envelope's
-    /// plaintext.
+    /// Returns the identity's `age` secret-key text, `AGE-SECRET-KEY-1…`, in a buffer cleared on drop. It is the
+    /// identity envelope's plaintext.
     pub(crate) fn secret_text(&self) -> SecretString {
         self.secret.to_string()
     }
 
-    /// The identity whose `age` secret-key text is `text`, or `None` when `text` is not one.
+    /// Parses the identity whose `age` secret-key text is `text`, or returns `None` when `text` is not one.
     ///
     /// `text` is borrowed from the caller's cleared buffer and parsed in place, so no uncleared copy of it is made here.
     pub(crate) fn from_secret_text(text: &[u8]) -> Option<Self> {
@@ -63,8 +63,9 @@ impl VaultIdentity {
         Some(Self { secret })
     }
 
-    /// The identity a literal `AGE-SECRET-KEY-1…` string encodes, so tests can pin derived keys to known answers, and
-    /// other crates' tests can hold the same identity in a vault and in an approval's storage (the type has no `Clone`).
+    /// Returns the identity a literal `AGE-SECRET-KEY-1…` string encodes. Tests use it to pin derived keys to known
+    /// answers, and other crates' tests to hold the same identity in a vault and in an approval's storage, since the
+    /// type has no `Clone`.
     #[cfg(any(test, feature = "test-support"))]
     #[allow(clippy::unwrap_used, reason = "test support: a malformed literal is a bug in the test")]
     pub fn from_secret(text: &str) -> Self {
@@ -73,7 +74,7 @@ impl VaultIdentity {
         }
     }
 
-    /// The `age` identity, for decryption inside this crate only.
+    /// Returns the `age` identity, for decryption inside this crate only.
     pub(crate) fn as_age(&self) -> &x25519::Identity {
         &self.secret
     }
@@ -91,6 +92,16 @@ impl fmt::Debug for VaultIdentity {
 ///
 /// Safe to log. Two keys are equal when their canonical lowercase encodings are equal, and they order by that
 /// encoding so that any list of keys written to disk sorts deterministically.
+///
+/// ```
+/// use iron_vault_store::{VaultIdentity, VaultPublicKey};
+///
+/// let key = VaultIdentity::generate().public_key();
+/// let text = key.to_string();
+/// assert!(text.starts_with("age1"));
+/// assert_eq!(text.parse::<VaultPublicKey>(), Ok(key));
+/// assert!("age1notakey".parse::<VaultPublicKey>().is_err());
+/// ```
 #[derive(Clone)]
 pub struct VaultPublicKey {
     encoded: String,
@@ -105,13 +116,13 @@ impl VaultPublicKey {
         }
     }
 
-    /// The `age` recipient, for encryption inside this crate only.
+    /// Returns the `age` recipient, for encryption inside this crate only.
     pub(crate) fn as_age(&self) -> &x25519::Recipient {
         &self.recipient
     }
 }
 
-/// A string that is not an `age1…` X25519 public key.
+/// Reports a string that is not an `age1…` X25519 public key.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("not an age X25519 public key")]
 pub struct ParseVaultPublicKeyError;
@@ -197,7 +208,7 @@ mod tests {
         assert!(keys.windows(2).all(|w| w[0].to_string() < w[1].to_string()));
     }
 
-    /// Known answer for the manifest key, computed independently with Python's `hashlib.blake2b`. A change to `age`'s
+    /// Checks the known answer for the manifest key, computed independently with Python's `hashlib.blake2b`. A change to `age`'s
     /// secret-key text or to the derivation fails here instead of making every existing manifest open as damaged.
     #[test]
     fn manifest_key_matches_its_known_answer() {

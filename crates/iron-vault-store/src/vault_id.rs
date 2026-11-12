@@ -1,4 +1,4 @@
-//! The stable identity of one vault (spec §13).
+//! The stable identity of one vault ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 
 use std::fmt;
 
@@ -12,7 +12,7 @@ use uuid::{Uuid, Variant, Version};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VaultId(Uuid);
 
-/// Bytes that are not a vault ID. The ID is not secret, but the error carries no input either way.
+/// Says why bytes are not a vault ID. The ID is not secret, but the error carries no input either way.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum VaultIdError {
     /// The UUID is not a random (version 4, RFC 9562 variant) UUID, so the service did not generate it.
@@ -21,12 +21,12 @@ pub enum VaultIdError {
 }
 
 impl VaultId {
-    /// A fresh random ID for a newly created vault.
+    /// Generates a fresh random ID for a newly created vault.
     pub fn new_random() -> Self {
         Self(Uuid::new_v4())
     }
 
-    /// The ID from its 16 raw bytes, as the manifest stores it.
+    /// Creates the ID from its 16 raw bytes, as the manifest stores it.
     pub fn from_bytes(bytes: [u8; 16]) -> Result<Self, VaultIdError> {
         let uuid = Uuid::from_bytes(bytes);
         match (uuid.get_version(), uuid.get_variant()) {
@@ -35,7 +35,7 @@ impl VaultId {
         }
     }
 
-    /// The ID's 16 raw bytes, in the order its text form shows them.
+    /// Returns the ID's 16 raw bytes, in the order its text form shows them.
     pub fn as_bytes(&self) -> &[u8; 16] {
         self.0.as_bytes()
     }

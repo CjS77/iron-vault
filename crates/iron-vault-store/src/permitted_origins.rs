@@ -1,4 +1,5 @@
-//! The exact destinations a credential record's secret may reach (spec §6).
+//! The exact destinations a credential record's secret may reach
+//! ([spec §6](../../../design/iron-vault-specification.md#6-credential-records-and-configuration)).
 
 use std::collections::BTreeSet;
 
@@ -7,12 +8,12 @@ use thiserror::Error;
 
 /// A credential record's non-empty set of exact host and port pairs.
 ///
-/// There is no scheme field: HTTPS is mandatory (spec §6), so an origin with any other scheme cannot be expressed.
+/// There is no scheme field: HTTPS is mandatory, so an origin with any other scheme cannot be expressed.
 /// The set is ordered, so iterating it, and so encoding it, always gives the same sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermittedOrigins(BTreeSet<(Host, Port)>);
 
-/// Why a set of origins cannot be a record's permitted origins.
+/// Says why a set of origins cannot be a record's permitted origins.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PermittedOriginsError {
     /// The set is empty, so the secret could reach nowhere and the record would be useless.
@@ -29,12 +30,12 @@ impl PermittedOrigins {
         }
     }
 
-    /// The pairs in ascending order, the order a record payload stores them in.
+    /// Returns the pairs in ascending order, the order a record payload stores them in.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &(Host, Port)> {
         self.0.iter()
     }
 
-    /// The set as activation and the final outgoing-request check consume it.
+    /// Returns the set as activation and the final outgoing-request check consume it.
     pub fn as_set(&self) -> &BTreeSet<(Host, Port)> {
         &self.0
     }
