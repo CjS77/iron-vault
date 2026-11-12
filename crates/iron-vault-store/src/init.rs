@@ -1,9 +1,30 @@
-//! Vault initialization at store level: the write order of design/vault-initialization.md, from `init.unfinished` to
-//! committed approval version 1 (spec §12, §13, §14, §16).
+//! Vault initialization at store level: the [write order](../../../design/vault-initialization.md#write-order), from
+//! `init.unfinished` to committed approval version 1
+//! ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
+//! [§13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
+//! [§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),
+//! [§16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration)).
 //!
 //! [`crate::InitializationState`] and the `init.unfinished` marker live in `initialization`; this module runs the steps
 //! between writing the marker and removing it. Each step is durable before the next starts, so a failure at any step
-//! after the first leaves a directory that reads Unfinished, which the next initialization discards.
+//! after the first leaves a directory that reads Unfinished, which the next initialization discards:
+//!
+//! ```text
+//! step  InitStep            durable change
+//! ────  ──────────────────  ──────────────────────────────────────────────────────────────────────────────
+//!   -   Discard             an unfinished run's files; a leftover recovery.toml and locked-by-owner
+//!   1   Begin               init.unfinished                       a refusal here changes nothing
+//!   2   IdentityEnvelope    identity.age, then recipients.age     each recipient must unwrap the vault identity
+//!   3   PassphraseEnvelope  operational.age
+//!   4   ApproverKey         approver-<approver ID>.age
+//!   5   Manifest            manifest.age
+//!   6   ApprovalState       approval.age, then manifest.age
+//!   7   OpenSigner          none                                  the approver key envelope opens as read back
+//!   8   FirstApproval       config.toml.pending, approval.age,    the initial config approved as version 1
+//!                           config.toml.sig.staged, approval.age,
+//!                           config.toml, config.toml.sig
+//!   9   Finish              init.unfinished removed               the commit point
+//! ```
 
 mod keys;
 mod passphrases;
@@ -33,13 +54,13 @@ use crate::{
 pub use keys::{NewVaultKeys, SealingKeys};
 pub use passphrases::{InitPassphrases, InitPassphrasesError, MIN_PASSPHRASE_CHARS, WhichPassphrase};
 
-/// One step of the write order, or the discard of an unfinished initialization that comes before step 1.
+/// Names one step of the write order, or the discard of an unfinished initialization that comes before step 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitStep {
     /// Removing the files an unfinished initialization wrote, or a leftover `recovery.toml` or `locked-by-owner` from an
     /// Uninitialized directory.
     Discard,
-    /// Step 1: writing `init.unfinished`, or refusing a directory init must not write to.
+    /// Step 1: writing `init.unfinished`, or refusing a directory `init` must not write to.
     Begin,
     /// Step 2: writing `identity.age`, proving each recipient unwraps it, and writing `recipients.age`.
     IdentityEnvelope,
@@ -47,9 +68,9 @@ pub enum InitStep {
     PassphraseEnvelope,
     /// Step 4: writing the approver key envelope, `approver-<approver ID>.age`.
     ApproverKey,
-    /// Step 5: creating the vault's manifest.
+    /// Step 5: creating the vault's manifest, `manifest.age`.
     Manifest,
-    /// Step 6: creating the approval state and recording it in the manifest.
+    /// Step 6: creating the approval state, `approval.age`, and recording it in the manifest.
     ApprovalState,
     /// Step 7: opening the approver key envelope as read back.
     OpenSigner,
@@ -60,7 +81,7 @@ pub enum InitStep {
 }
 
 impl InitStep {
-    /// The step's number in the write order, or `None` for the discard.
+    /// Returns the step's number in the write order, or `None` for the discard.
     pub fn number(self) -> Option<u8> {
         match self {
             Self::Discard => None,
@@ -98,9 +119,10 @@ impl fmt::Display for InitStep {
     }
 }
 
-/// A failed initialization: the step it failed at, why, and what its discard removed before the failure. It carries no
-/// key material, passphrase text or config bytes, because none of its causes do. When the first approval committed
-/// before the failure, [`InitError::approved`] reports it.
+/// A failed initialization: the step it failed at, why, and what its discard removed before the failure.
+///
+/// It carries no key material, passphrase text or config bytes, because none of its causes do. When the first approval
+/// committed before the failure, [`InitError::approved`] reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("vault initialization failed at {step}: {cause}")]
 pub struct InitError {
@@ -111,7 +133,7 @@ pub struct InitError {
 }
 
 impl InitError {
-    /// A failure at `step` for `cause`, with nothing discarded, so the binary's tests can build each message.
+    /// Creates a failure at `step` for `cause`, with nothing discarded, so the binary's tests can build each message.
     #[cfg(any(test, feature = "test-support"))]
     pub fn for_tests(step: InitStep, cause: InitFailure) -> Self {
         Self {
@@ -122,34 +144,34 @@ impl InitError {
         }
     }
 
-    /// The step that failed.
+    /// Returns the step that failed.
     pub fn step(&self) -> InitStep {
         self.step
     }
 
-    /// Why it failed.
+    /// Returns why it failed.
     pub fn cause(&self) -> &InitFailure {
         &self.cause
     }
 
-    /// What the discard removed, for the `vault.init-discarded` or `migration.import-discarded` log: all of it when a
-    /// later step failed, what was removed before the failure when the discard itself failed part-way, and `None` when
-    /// nothing was discarded.
+    /// Returns what the discard removed, for the `vault.init-discarded` or `migration.import-discarded` audit event: all
+    /// of it when a later step failed, what was removed before the failure when the discard itself failed part-way, and
+    /// `None` when nothing was discarded.
     pub fn discarded(&self) -> Option<&Discarded> {
         self.discarded.as_deref()
     }
 
-    /// Step 8's outcome, set only when the first approval was committed and a later step failed. Its events are the
-    /// caller's to record even though initialization did not finish.
+    /// Returns step 8's outcome, set only when the first approval was committed and a later step failed. The caller
+    /// records its audit events even though initialization did not finish.
     pub fn approved(&self) -> Option<&FirstApproval> {
         self.approved.as_deref()
     }
 }
 
-/// Why a step of initialization failed.
+/// Says why a step of initialization failed.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum InitFailure {
-    /// Reading the initialization state, refusing it, discarding or the marker's write or removal failed;
+    /// Reading the initialization state, refusing it, discarding, or the marker's write or removal failed.
     /// [`InitStateError::FinishUncertain`] at [`InitStep::Finish`] means the vault may read Unfinished after power loss.
     #[error(transparent)]
     State(#[from] InitStateError),
@@ -180,7 +202,7 @@ pub enum InitFailure {
     /// The inventory as read back names a recipient set other than the one the envelope was wrapped for.
     #[error("the recipient inventory as read back does not match the identity envelope")]
     InventoryMismatch,
-    /// `identity.age` as read back unwraps to another identity from the one generated.
+    /// `identity.age` as read back unwraps to another identity than the one generated.
     #[error("the identity envelope as read back does not hold the generated vault identity")]
     IdentityMismatch,
     /// The approver key could not be sealed or opened.
@@ -192,7 +214,8 @@ pub enum InitFailure {
     /// The approval transaction failed.
     #[error(transparent)]
     Approval(#[from] ApprovalError),
-    /// The approval committed a version other than 1, so the counters did not start at zero (spec §12).
+    /// The approval committed a version other than 1, so the counters did not start at zero
+    /// ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
     #[error("the first approval committed version {0}, not 1")]
     UnexpectedVersion(ApprovalVersion),
 }
@@ -206,16 +229,17 @@ pub struct InitializedVault {
     pub version: ApprovalVersion,
     /// The digest of the initial config that version 1 approves.
     pub digest: ConfigDigest,
-    /// The kind of the directory fsync failure that made the first commit uncertain until it was settled, if one did.
+    /// The kind of the directory fsync failure that made the first commit uncertain until it was settled, or `None`.
     pub commit_uncertain: Option<ErrorKindLabel>,
-    /// The unfinished run discarded before step 1, for the `vault.init-discarded` or `migration.import-discarded` log.
+    /// The unfinished run discarded before step 1, for the `vault.init-discarded` or `migration.import-discarded`
+    /// audit event.
     pub discarded: Option<Discarded>,
     /// The roles of the recipients enrolled, in the order `identity.age` was wrapped for them: kinds, never keys.
     pub recipients: Vec<RecipientRole>,
 }
 
 impl InitializedVault {
-    /// The first approval's outcome, as an [`InitError`] that failed after it reports it.
+    /// Returns the first approval's outcome, in the form an [`InitError`] that failed after it reports it.
     pub fn approved(&self) -> FirstApproval {
         FirstApproval {
             version: self.version,
@@ -228,10 +252,10 @@ impl InitializedVault {
 /// Initializes a vault in the locked state and config directories: discards an unfinished initialization, then runs
 /// the write order from `init.unfinished` to its removal, approving the initial config as version 1.
 ///
-/// The caller holds the service-wide lock, has revealed the recovery key and had its saving confirmed, and passes the
-/// admission pause guard the approval's commit requires. A refusal at step 1 changes nothing; a failure at any later
-/// step leaves the directories Unfinished, for the next initialization to discard. Every key and both passphrases are
-/// dropped on return.
+/// The caller holds the service-wide lock, has revealed the recovery key and had the owner confirm saving it, and passes
+/// the admission pause guard the approval's commit requires. A refusal at step 1 changes nothing. A failure at any
+/// later step leaves the directories Unfinished, for the next initialization to discard. Every key and both
+/// passphrases are dropped on return.
 pub fn initialize<F: StoreFs>(
     state: &StateDirLock,
     config: &ConfigDirLock,
@@ -251,7 +275,8 @@ pub fn initialize<F: StoreFs>(
     )
 }
 
-/// [`initialize`] sealing both passphrase envelopes at work factor `log_n`, so tests do not spend seconds in scrypt.
+/// Does what [`initialize`] does, sealing both passphrase envelopes at work factor `log_n`, so tests do not spend
+/// seconds in scrypt.
 pub(crate) fn initialize_at<F: StoreFs>(
     state: &StateDirLock,
     config: &ConfigDirLock,
@@ -277,7 +302,7 @@ pub(crate) fn initialize_at<F: StoreFs>(
     }
 }
 
-/// Steps 2 to 9, once step 1 is durable: the vault's ID and its first approval.
+/// Runs steps 2 to 9, once step 1 is durable, and returns the vault's ID and its first approval.
 fn write_vault<F: StoreFs>(
     state: &StateDirLock,
     config: &ConfigDirLock,
@@ -320,8 +345,8 @@ fn write_vault<F: StoreFs>(
     Ok((created.manifest().vault_id(), approved, recipients))
 }
 
-/// The discard and step 1. The state is read first only to name the step a failure belongs to: with the service-wide
-/// lock held, nothing else changes it before `begin_initialization` reads it again.
+/// Runs the discard and step 1. The state is read first only to name the step a failure belongs to: with the
+/// service-wide lock held, nothing else changes it before `begin_initialization` reads it again.
 fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Option<Discarded>, InitError> {
     let unfinished = matches!(
         InitializationState::read(state, config, fs).map_err(at(InitStep::Begin))?,
@@ -344,13 +369,15 @@ fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Res
     })
 }
 
-/// One recipient init enrols: its identity, role and default label.
+/// One recipient `init` enrols: its identity, role and default label.
 type Enrolment<'a> = (&'a RecipientIdentity, RecipientRole, &'static str);
 
-/// Step 2, and import's step 6. Every recipient path is proved on the file as read back, before anything depends on
-/// it, while the recovery key the owner saved still means nothing: each identity must unwrap the same vault identity.
-/// Then the recipient inventory is written for the same keys and read back, so `recipients.age` exists from the moment
-/// the vault does. The recovery and host unlock identities are dropped on return. Returns the roles enrolled.
+/// Runs step 2, and import's step 6, and returns the roles enrolled.
+///
+/// Every recipient path is proved on the file as read back, before anything depends on it, while the recovery key the
+/// owner saved still means nothing: each identity must unwrap the same vault identity. Then the recipient inventory is
+/// written for the same keys and read back, so `recipients.age` exists from the moment the vault does. The recovery
+/// and host unlock identities are dropped on return.
 pub(crate) fn write_checked_identity(
     state: &StateDirLock,
     fs: &impl StoreFs,
@@ -379,7 +406,7 @@ pub(crate) fn write_checked_identity(
     Ok(enrolments.iter().map(|(_, role, _)| *role).collect())
 }
 
-/// The recipient inventory for `enrolments`, written and read back, so `recipients.age` exists from the moment the
+/// Writes the recipient inventory for `enrolments` and reads it back, so `recipients.age` exists from the moment the
 /// vault does.
 fn write_checked_inventory(
     state: &StateDirLock,
@@ -408,7 +435,7 @@ fn write_checked_inventory(
     }
 }
 
-/// Step 3, and import's step 7. The operational identity and the vault passphrase are dropped on return.
+/// Runs step 3, and import's step 7. The operational identity and the vault passphrase are dropped on return.
 pub(crate) fn seal_operational(
     state: &StateDirLock,
     fs: &impl StoreFs,
@@ -419,7 +446,7 @@ pub(crate) fn seal_operational(
     Ok(write_passphrase_envelope(state, fs, &seal_at(&operational, &passphrase, log_n)?)?)
 }
 
-/// Step 4: writes the signer key under the approver ID it will be pinned with. The key is dropped on return.
+/// Runs step 4: writes the signer key under the approver ID it will be pinned with. The key is dropped on return.
 fn seal_approver(
     state: &StateDirLock,
     fs: &impl StoreFs,
@@ -433,16 +460,16 @@ fn seal_approver(
 /// The label `init` pins the software signer under: the owner knows it as the approval passphrase.
 pub const SOFTWARE_APPROVER_LABEL: &str = "approval passphrase";
 
-/// The software signer's public key as step 6 pins it: the approver ID generated with the keys, the `software` signer
-/// kind, the label the owner knows it by, and the initialization time.
+/// Pins the software signer's public key as step 6 does: under the approver ID generated with the keys, the `software`
+/// signer kind, the label the owner knows it by, and the initialization time.
 fn pin_software_signer(id: ApproverId, key: ApproverPublicKey, enrolled_at: UtcSecond) -> Result<PinnedApprover, InitFailure> {
     let label = ApproverLabel::new(SOFTWARE_APPROVER_LABEL)?;
     // Pinning is the first step of creating the approval state, so a refused pin is that creation's failure.
     PinnedApprover::new(id, SignerKind::Software, key, label, enrolled_at).map_err(|error| VaultError::ApprovalState(error).into())
 }
 
-/// Step 7: proves the approver key envelope of `id` as written opens with the approval passphrase, which is dropped on
-/// return.
+/// Runs step 7: proves the approver key envelope of `id` as written opens with the approval passphrase, which is
+/// dropped on return.
 fn open_signer(
     state: &StateDirLock,
     fs: &impl StoreFs,
@@ -456,19 +483,19 @@ fn open_signer(
     )?)
 }
 
-/// What step 8 committed.
+/// Records what step 8 committed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirstApproval {
     /// The committed version, always 1.
     pub version: ApprovalVersion,
     /// The digest of the initial config that version approves.
     pub digest: ConfigDigest,
-    /// The kind of the directory fsync failure that made the commit uncertain until it was settled, if one did.
+    /// The kind of the directory fsync failure that made the commit uncertain until it was settled, or `None`.
     pub commit_uncertain: Option<ErrorKindLabel>,
 }
 
-/// Step 8: the approval transaction on the initial config, which a new vault's counters must commit as version 1. The
-/// service records its events from what the store returns, as for any approval.
+/// Runs step 8: the approval transaction on the initial config, which a new vault's counters must commit as version 1.
+/// The service records its audit events from what the store returns, as for any approval.
 fn approve_initial_config<F: StoreFs>(
     storage: &ApprovalStorage<'_, F>,
     approval: &mut ApprovalState,

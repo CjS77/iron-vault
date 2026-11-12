@@ -1,5 +1,5 @@
-//! The two passphrases the owner chooses at initialization, checked against the passphrase rules together
-//! (design/vault-initialization.md, "Passphrase rules").
+//! The two passphrases the owner chooses at initialization, checked together against the
+//! [passphrase rules](../../../../design/vault-initialization.md#passphrase-rules).
 
 use std::fmt;
 
@@ -15,12 +15,30 @@ pub const MIN_PASSPHRASE_CHARS: usize = 12;
 ///
 /// The rules apply when a passphrase is chosen, never when one is typed to unlock or approve, so a vault created before
 /// them still opens. It has no `Clone` or `Display`, and its `Debug` shows nothing of either passphrase.
+///
+/// ```
+/// use iron_vault_store::{ApprovalPassphrase, InitPassphrases, InitPassphrasesError, Passphrase, WhichPassphrase};
+/// use secrecy::SecretString;
+///
+/// let vault = |text: &str| Passphrase::new(SecretString::from(text)).unwrap();
+/// let approval = |text: &str| ApprovalPassphrase::new(SecretString::from(text)).unwrap();
+///
+/// assert!(InitPassphrases::new(vault("correct horse battery"), approval("staple of approval")).is_ok());
+/// assert!(matches!(
+///     InitPassphrases::new(vault("short"), approval("staple of approval")),
+///     Err(InitPassphrasesError::TooShort { which: WhichPassphrase::Vault }),
+/// ));
+/// assert!(matches!(
+///     InitPassphrases::new(vault("correct horse battery"), approval("correct horse battery")),
+///     Err(InitPassphrasesError::Same),
+/// ));
+/// ```
 pub struct InitPassphrases {
     vault: Passphrase,
     approval: ApprovalPassphrase,
 }
 
-/// Which of the two passphrases broke a rule.
+/// Names the passphrase that broke a rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WhichPassphrase {
     /// The vault-unlock passphrase.
@@ -41,7 +59,7 @@ impl fmt::Display for WhichPassphrase {
     }
 }
 
-/// A passphrase rule the owner's choice broke. No variant carries the input or its length.
+/// Names the passphrase rule the owner's choice broke. No variant carries the input or its length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum InitPassphrasesError {
     /// The passphrase has fewer than [`MIN_PASSPHRASE_CHARS`] Unicode scalar values.
@@ -75,7 +93,7 @@ impl InitPassphrases {
         }
     }
 
-    /// The two passphrases, for the steps that seal and open with them.
+    /// Returns the two passphrases, for the steps that seal and open with them.
     pub(crate) fn into_parts(self) -> (Passphrase, ApprovalPassphrase) {
         (self.vault, self.approval)
     }

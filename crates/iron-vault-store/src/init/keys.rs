@@ -1,4 +1,5 @@
-//! Every key initialization generates, before anything is written (design/vault-initialization.md, "The exchange").
+//! Every key initialization generates, before anything is written
+//! ([the exchange](../../../../design/vault-initialization.md#the-exchange)).
 
 use std::fmt;
 
@@ -19,8 +20,8 @@ pub struct NewVaultKeys {
 /// The keys initialization writes with, once the recovery key's text is gone: what [`crate::initialize`] takes.
 ///
 /// It keeps the recovery key's recipient identity, and the host unlock identity when one is enrolled, only for the
-/// identity envelope's unwrap check, and every key is dropped when initialization returns, so the service keeps no
-/// recovery path it could use by itself (spec §16).
+/// identity envelope's unwrap check. Every key is dropped when initialization returns, so the service keeps no recovery
+/// path it could use by itself ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration)).
 pub struct SealingKeys {
     pub(super) vault: VaultIdentity,
     pub(super) vault_id: VaultId,
@@ -55,7 +56,7 @@ impl NewVaultKeys {
         })
     }
 
-    /// The recovery key's secret text, for the service's one reveal to the owner.
+    /// Returns the recovery key's secret text, for the service's one reveal to the owner.
     pub fn recovery_secret(&self) -> &RecoveryKeySecret {
         &self.recovery_secret
     }
@@ -67,15 +68,16 @@ impl NewVaultKeys {
 }
 
 impl SealingKeys {
-    /// The approver ID the software signer is pinned as, chosen before anything is written so the service can name it
-    /// in the first approval's audit records, even when initialization fails after the reservation.
+    /// Returns the approver ID the software signer is pinned as. It is chosen before anything is written, so the
+    /// service can name it in the first approval's audit records, even when initialization fails after the reservation.
     pub fn approver_id(&self) -> ApproverId {
         self.approver_id
     }
 
     /// Enrols `host_unlock`, the identity read from the unlock handoff, as a third recipient of the identity envelope,
-    /// so a container-profile service can unlock with no owner present (spec §17). The recovery key stays a separate
-    /// recipient, so losing the host's TPM never loses the vault.
+    /// so a container-profile service can unlock with no owner present
+    /// ([spec §17](../../../../design/iron-vault-specification.md#17-docker-remote-servers-and-appliances)). The recovery
+    /// key stays a separate recipient, so losing the host's TPM never loses the vault.
     pub fn with_host_unlock(mut self, host_unlock: RecipientIdentity) -> Self {
         self.host_unlock = Some(host_unlock);
         self

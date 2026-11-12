@@ -26,7 +26,7 @@ struct Paused;
 
 impl AdmissionPaused for Paused {}
 
-/// Locked state and config directories. The locks are real; the files live wherever the `fs` passed puts them.
+/// Locked state and config directories. The locks are real; the files live wherever the `fs` passed in puts them.
 struct Dirs {
     state_dir: TestDir,
     config_dir: TestDir,
@@ -94,7 +94,7 @@ impl Dirs {
         InitializationState::read(&self.state, &self.config, fs).unwrap()
     }
 
-    /// Every file in both directories with its contents, sorted, read through `fs`.
+    /// Returns every file in both directories with its contents, sorted, read through `fs`.
     fn snapshot(&self, fs: &impl StoreFs) -> Vec<(String, Vec<u8>)> {
         let mut files: Vec<_> = [self.state_dir.path(), self.config_dir.path()]
             .into_iter()
@@ -159,7 +159,7 @@ fn assert_initialized(dirs: &Dirs, fs: &impl StoreFs, initialized: &InitializedV
     assert_eq!(approver_keys(dirs, fs), [pinned.as_str()]);
 }
 
-/// The names in the state directory that start `approver`, sorted, `approver.age` included.
+/// Returns the names in the state directory that start `approver`, sorted, `approver.age` included.
 fn approver_keys(dirs: &Dirs, fs: &impl StoreFs) -> Vec<String> {
     let mut names: Vec<_> = fs
         .list_dir(dirs.state.dir())
@@ -171,8 +171,8 @@ fn approver_keys(dirs: &Dirs, fs: &impl StoreFs) -> Vec<String> {
     names
 }
 
-/// The inventory opens with the vault identity, holds the `operational` and `recovery` entries with their default
-/// labels and the enrolment time, and names exactly the recipients `identity.age` unwraps for.
+/// Checks the inventory opens with the vault identity, holds the `operational` and `recovery` entries with their
+/// default labels and the enrolment time, and names exactly the recipients `identity.age` unwraps for.
 fn assert_inventory(dirs: &Dirs, fs: &impl StoreFs, identity: &VaultIdentity, vault_id: VaultId, wrapped_for: &RecipientSet) {
     let inventory = read_recipient_inventory(&dirs.state, fs, identity).unwrap();
     assert_eq!(inventory.vault_id(), vault_id);
@@ -370,7 +370,8 @@ fn an_unfinished_initialization_is_discarded_and_started_over() {
     assert_initialized(&dirs, &fs, &initialized, &secrets);
 }
 
-/// What the discard of a run that failed only at its commit point removes, in order, its one approver key included.
+/// Returns what the discard of a run that failed only at its commit point removes, in order, its one approver key
+/// included.
 fn discarded(dirs: &Dirs, fs: &impl StoreFs) -> Vec<String> {
     let [approver_key] = approver_keys(dirs, fs).try_into().unwrap();
     assert!(approver_key.starts_with("approver-"), "{approver_key}");
@@ -407,8 +408,8 @@ fn the_first_approval_is_reported_with_the_initial_config_digest_and_not_logged(
     assert!(events.is_empty(), "{events:?}");
 }
 
-/// The state a failure at `error`'s step must leave: untouched before the marker is durable, Unfinished after it, and
-/// Initialized only once the marker's unlink has landed.
+/// Checks the state a failure at `error`'s step leaves: untouched before the marker is durable, Unfinished after it,
+/// and Initialized only once the marker's unlink has landed.
 fn assert_left_by(dirs: &Dirs, fs: &FaultFs, error: &InitError, call: usize) {
     let state = dirs.read(fs);
     let expected: &[InitializationState] = match (error.step(), error.cause()) {
@@ -425,7 +426,7 @@ fn assert_left_by(dirs: &Dirs, fs: &FaultFs, error: &InitError, call: usize) {
     assert!(expected.contains(&state), "call {call}: {error} left {state:?}");
 }
 
-/// The number of file-system calls `run` makes on the directory `setup` leaves.
+/// Counts the filesystem calls `run` makes on the directory `setup` leaves.
 fn calls_of(dirs: &Dirs, setup: &impl Fn(&FaultFs), run: impl FnOnce(&FaultFs)) -> usize {
     let probe = dirs.fault_fs();
     setup(&probe);
@@ -450,7 +451,7 @@ fn fail_call(dirs: &Dirs, setup: &impl Fn(&FaultFs), call: usize) -> Option<Init
     failed.map(|error| error.step())
 }
 
-/// [`fail_call`] for each of the first `calls` calls, spread over threads because every run seals and opens three
+/// Runs [`fail_call`] for each of the first `calls` calls, spread over threads because every run seals and opens three
 /// envelopes and signs an approval. Returns the steps that failed.
 fn fail_each_call(dirs: &Dirs, setup: impl Fn(&FaultFs) + Sync, calls: usize) -> Vec<InitStep> {
     let workers = std::thread::available_parallelism().map_or(4, usize::from);
