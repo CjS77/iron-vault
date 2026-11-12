@@ -1,8 +1,20 @@
-//! The TPM work: creating a TPM approval key and signing with it (`design/tpm-approval-signer.md` "The TPM approval
-//! key", "Helper protocol").
+//! Runs the TPM commands that create a TPM approval key and sign with it (`design/tpm-approval-signer.md` "The TPM
+//! approval key", "Helper protocol").
 //!
-//! Every refusal that needs no authorization comes before the one authorized command, so it spends no try, and every
-//! handle is flushed on every path: without a resource manager a leaked handle would stay in the TPM.
+//! A sign request passes every check that needs no authorization before the one authorized command, so a refusal
+//! spends no dictionary-attack try:
+//!
+//! ```text
+//! message signable? ──no──▶ RefusedMessage          (before the TPM is opened)
+//! key parts decode? ──no──▶ Malformed
+//! DA settings strong? ──no──▶ WeakDaSettings
+//! primary's name = blob's? ──no──▶ NotThisTpm     (another TPM, or this one after a clear)
+//! loaded key = pinned key? ──no──▶ KeyMismatch
+//! counter below the share? ──no──▶ LockedOut
+//! TPM2_Sign with the auth value ──▶ Signed, or WrongPin (one try spent)
+//! ```
+//!
+//! Every handle is flushed on every path: without a resource manager, a leaked handle would stay in the TPM.
 
 use std::str::FromStr;
 
@@ -28,7 +40,7 @@ use tss_esapi::traits::{Marshall, UnMarshall};
 use tss_esapi::tss2_esys::TPMT_TK_HASHCHECK;
 use tss_esapi::{Context, Error, WrapperErrorKind};
 
-/// Why a step stopped short of its answer: a refusal to send as it is, or a TSS failure to map to a status.
+/// Says why a step stopped short of its answer: a refusal to send as it is, or a TSS failure to map to a status.
 enum Stop {
     Refuse(Box<Response>),
     Tss(Error),
@@ -53,7 +65,7 @@ fn refuse(refusal: Option<Response>) -> Step<()> {
     refusal.map_or(Ok(()), |response| Err(response.into()))
 }
 
-/// The helper's answer to `request` on the TPM `tcti` names.
+/// Answers `request` using the TPM that `tcti` names. Every failure becomes a [`Response`], so the peer always gets one.
 pub fn answer(tcti: &str, request: Request) -> Response {
     let outcome = match request {
         Request::Create { auth } => create(tcti, &auth),
@@ -65,7 +77,9 @@ pub fn answer(tcti: &str, request: Request) -> Response {
     })
 }
 
-/// Create (`01`): the settings check, then the key under a transient primary, in a salted session.
+/// Creates a TPM approval key under the transient primary, in a salted session (request `01`).
+///
+/// Refuses weak dictionary-attack settings first, since a key on such a TPM would not limit PIN guessing.
 fn create(tcti: &str, auth: &TpmAuthValue) -> Step<Response> {
     let mut context = open(tcti)?;
     refuse(read_reserve(&mut context)?.settings_refusal())?;
@@ -86,8 +100,7 @@ fn create(tcti: &str, auth: &TpmAuthValue) -> Step<Response> {
     })
 }
 
-/// Sign (`02`): the message, the settings, the primary's name and the loaded key are each checked before the reserve
-/// and the one authorized command.
+/// Signs the request's message with its key (request `02`), after the checks in the module doc, in that order.
 fn sign(tcti: &str, request: &SignRequest) -> Step<Response> {
     if !is_signable(&request.message) {
         return Err(Response::RefusedMessage.into());
@@ -129,7 +142,8 @@ fn open(tcti: &str) -> Step<Context> {
     Ok(Context::new(TctiNameConf::from_str(tcti)?)?)
 }
 
-/// The dictionary-attack state, read fresh: `TPM2_PT_PERMANENT` through `TPM2_PT_LOCKOUT_INTERVAL` in one call.
+/// Reads the TPM's dictionary-attack state fresh: `TPM2_PT_PERMANENT` through `TPM2_PT_LOCKOUT_INTERVAL` in one
+/// `TPM2_GetCapability` call.
 fn read_reserve(context: &mut Context) -> Step<LockoutReserve> {
     let first = PropertyTag::Permanent;
     let count = u32::from(PropertyTag::LockoutInterval) - u32::from(first) + 1;
@@ -148,8 +162,11 @@ fn read_reserve(context: &mut Context) -> Step<LockoutReserve> {
     })
 }
 
-/// Runs `f` with the transient storage primary, from the TCG storage root key template for ECC NIST P-256, and
-/// flushes it. The same TPM always derives the same key, so nothing persists in the TPM.
+/// Creates the transient storage primary from the TCG storage root key template for ECC NIST P-256, runs `f` with it,
+/// and flushes it.
+///
+/// The same TPM always derives the same primary from the same template, so nothing persists in the TPM: no
+/// persistent handle for `forget-machine` or `reset` to remove, and no dependence on `systemd-creds` having run.
 fn with_primary<T>(context: &mut Context, f: impl FnOnce(&mut Context, KeyHandle) -> Step<T>) -> Step<T> {
     let template = storage_primary_template()?;
     let primary = context
@@ -160,8 +177,9 @@ fn with_primary<T>(context: &mut Context, f: impl FnOnce(&mut Context, KeyHandle
     with_flushed(context, primary.into(), |context| f(context, primary))
 }
 
-/// Runs `f` with an HMAC session salted with `primary`, with parameter encryption, then flushes the session. Salting
-/// keeps a recorded TPM bus from testing PIN guesses offline against the session HMAC.
+/// Runs `f` in an HMAC session salted with `primary`, with parameter encryption, then flushes the session.
+///
+/// Salting stops anyone who records the TPM bus from testing PIN guesses offline against the session HMAC.
 fn with_salted_session<T>(context: &mut Context, primary: KeyHandle, f: impl FnOnce(&mut Context) -> Step<T>) -> Step<T> {
     let session = context
         .start_auth_session(
@@ -184,8 +202,9 @@ fn with_salted_session<T>(context: &mut Context, primary: KeyHandle, f: impl FnO
     })
 }
 
-/// Runs `f`, then flushes `handle` whatever `f` returned. A flush failure after a success is reported, since it leaves
-/// a handle in the TPM.
+/// Runs `f`, then flushes `handle` whatever `f` returned.
+///
+/// An error from `f` wins. A flush failure after a success is still reported, since it leaves a handle in the TPM.
 fn with_flushed<T>(context: &mut Context, handle: ObjectHandle, f: impl FnOnce(&mut Context) -> Step<T>) -> Step<T> {
     let result = f(context);
     let flushed = context.flush_context(handle);
@@ -194,8 +213,11 @@ fn with_flushed<T>(context: &mut Context, handle: ObjectHandle, f: impl FnOnce(&
     Ok(value)
 }
 
-/// Refuses with `05` unless the loaded key, as the TPM reads it back, is the approval key template with the pinned
-/// point: a blob replaced in the state directory, even by a key the same TPM made, cannot sign for a pinned approver.
+/// Refuses with `05`, [`Response::KeyMismatch`], unless the loaded key, as the TPM reads it back, matches the approval
+/// key template and has the pinned point.
+///
+/// A blob replaced in the state directory, even with another key the same TPM made, therefore cannot sign for a pinned
+/// approver.
 fn check_pinned(context: &mut Context, key: KeyHandle, pinned: &[u8; 65]) -> Step<()> {
     let (public, _, _) = context.execute_without_session(|context| context.read_public(key))?;
     let Public::Ecc { unique, .. } = &public else {
@@ -208,8 +230,8 @@ fn check_pinned(context: &mut Context, key: KeyHandle, pinned: &[u8; 65]) -> Ste
     }
 }
 
-/// The TCG storage root key template for ECC NIST P-256: a restricted decryption key, `noDA`, AES-128-CFB, with a
-/// zero-length unique field.
+/// Builds the TCG storage root key template for ECC NIST P-256: a restricted decryption key, `noDA`, AES-128-CFB,
+/// with a zero-length unique field.
 fn storage_primary_template() -> Result<Public, Error> {
     let attributes = ObjectAttributesBuilder::new()
         .with_fixed_tpm(true)
@@ -225,9 +247,11 @@ fn storage_primary_template() -> Result<Public, Error> {
     ecc_public(attributes, parameters, EccPoint::default())
 }
 
-/// The TPM approval key: an unrestricted ECDSA P-256 signing key bound to this TPM, generated inside it, whose use needs
-/// the authorization value. `noDA` is clear, so every wrong PIN counts against the TPM's lockout; `adminWithPolicy` is
-/// clear and there is no policy.
+/// Builds the TPM approval key's template: an unrestricted ECDSA P-256 signing key, generated inside this TPM and bound
+/// to it, whose use needs the authorization value.
+///
+/// `noDA` is clear, so every wrong PIN counts against the TPM's lockout. `adminWithPolicy` is clear and there is no
+/// policy, so the authorization value is the only way to use the key.
 fn approval_key_template(unique: EccPoint) -> Result<Public, Error> {
     let attributes = ObjectAttributesBuilder::new()
         .with_fixed_tpm(true)
@@ -255,7 +279,7 @@ fn ecc_public(
         .build()
 }
 
-/// The key's uncompressed SEC1 point.
+/// Returns the key's uncompressed SEC1 point, or `None` for a key that is not ECC.
 fn public_point(public: &Public) -> Option<[u8; 65]> {
     match public {
         Public::Ecc { unique, .. } => sec1_point(unique.x().value(), unique.y().value()),
@@ -263,7 +287,7 @@ fn public_point(public: &Public) -> Option<[u8; 65]> {
     }
 }
 
-/// `r ‖ s` with low `s`, from an ECDSA signature.
+/// Encodes an ECDSA signature as `r ‖ s` with low `s`; returns `None` for any other signature type.
 fn signature_bytes(signature: &Signature) -> Option<[u8; 64]> {
     match signature {
         Signature::EcDsa(ecc) => low_s_signature(ecc.signature_r().value(), ecc.signature_s().value()),
@@ -271,7 +295,7 @@ fn signature_bytes(signature: &Signature) -> Option<[u8; 64]> {
     }
 }
 
-/// A null hash-check ticket: the key is unrestricted, so the TPM needs no proof that it hashed the digest itself.
+/// Builds a null hash-check ticket: the key is unrestricted, so the TPM needs no proof that it hashed the digest itself.
 fn null_ticket() -> Result<HashcheckTicket, Error> {
     HashcheckTicket::try_from(TPMT_TK_HASHCHECK {
         tag: TPM2_ST_HASHCHECK,
@@ -280,14 +304,14 @@ fn null_ticket() -> Result<HashcheckTicket, Error> {
     })
 }
 
-/// A marshalled `TPM2B_PRIVATE`: its `u16` big-endian size, then the bytes. A `Private` holds at most a few hundred
-/// bytes, so the size always fits.
+/// Marshals a `TPM2B_PRIVATE`: its `u16` big-endian size, then the bytes. A `Private` holds at most a few hundred
+/// bytes, so the size always fits in a `u16`.
 fn marshall_private(private: &Private) -> Vec<u8> {
     let bytes = private.value();
     [&(bytes.len() as u16).to_be_bytes(), bytes].concat()
 }
 
-/// The `Private` a marshalled `TPM2B_PRIVATE` holds, accepted only when its size is exactly the bytes that follow.
+/// Unmarshals a `TPM2B_PRIVATE`, accepting it only when its size prefix equals the number of bytes that follow.
 fn unmarshall_private(bytes: &[u8]) -> Option<Private> {
     let (size, rest) = bytes.split_first_chunk::<2>()?;
     match usize::from(u16::from_be_bytes(*size)) == rest.len() {
@@ -296,9 +320,11 @@ fn unmarshall_private(bytes: &[u8]) -> Option<Private> {
     }
 }
 
-/// How the key's own `TPM2_Sign` failed. Only there is a refused authorization value the PIN's: a wrong PIN, one try
-/// spent. Lockout there means the TPM went into lockout after the reserve was read, so the wait is at least the interval
-/// at which the TPM forgets one failure, the earliest it can leave lockout.
+/// Maps a failure of the key's own `TPM2_Sign` to a response.
+///
+/// Only this command uses the PIN's authorization value, so only here does a refused authorization mean a wrong PIN,
+/// with one try spent. Lockout here means the TPM entered lockout after the reserve was read; the wait is then one
+/// lockout interval, the earliest the TPM can leave lockout.
 fn sign_failure(error: Error, reserve: &LockoutReserve) -> Stop {
     let kind = match &error {
         Error::Tss2Error(code) => code.kind(),
@@ -314,8 +340,11 @@ fn sign_failure(error: Error, reserve: &LockoutReserve) -> Stop {
     }
 }
 
-/// `08` with the TPM response code, or 0 when the failure has none (a TSS wrapper or TCTI error). An authorization
-/// failure anywhere but the key's sign, such as an owner authorization another OS set, lands here: no PIN was tried.
+/// Builds the `08` response, [`Response::TpmError`], carrying the TPM response code, or 0 when the failure has none
+/// (a TSS wrapper or TCTI error).
+///
+/// An authorization failure anywhere but the key's sign, such as an owner authorization another OS set, lands here:
+/// no PIN was tried, so it is not a wrong PIN.
 fn tpm_error(error: Error) -> Response {
     let code = match error {
         Error::Tss2Error(code) => raw_code(code),
@@ -324,7 +353,7 @@ fn tpm_error(error: Error) -> Response {
     Response::TpmError { code }
 }
 
-/// The whole `TSS2_RC`, which `tss-esapi` keeps in private fields; its bitfield types give it up through `BitRange`.
+/// Recovers the whole `TSS2_RC`, which `tss-esapi` keeps in private fields; its bitfield types expose it through `BitRange`.
 fn raw_code(code: Tss2ResponseCode) -> u32 {
     match code {
         Tss2ResponseCode::Success => 0,

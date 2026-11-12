@@ -1,10 +1,11 @@
-//! The encodings of the TPM's ECC values on the helper's wire (`design/tpm-approval-signer.md` "The signing key").
+//! Converts the TPM's ECC values into the fixed-length forms the helper sends: a 65-byte public point and a 64-byte
+//! signature (`design/tpm-approval-signer.md` "The signing key").
 
 use iron_vault_tpm_protocol::{PUBLIC_KEY_LEN, SIGNATURE_LEN};
 use p256::ecdsa::Signature;
 
-/// The 32-byte big-endian form of a TPM ECC parameter, which the TPM may send without leading zeros; `None` when it
-/// is longer than a P-256 coordinate.
+/// Left-pads a TPM ECC parameter to 32 big-endian bytes, since the TPM may drop leading zeros. Returns `None` when the
+/// value is longer than a P-256 coordinate.
 fn left_padded(value: &[u8]) -> Option<[u8; 32]> {
     let mut out = [0; 32];
     let start = 32usize.checked_sub(value.len())?;
@@ -12,7 +13,8 @@ fn left_padded(value: &[u8]) -> Option<[u8; 32]> {
     Some(out)
 }
 
-/// The uncompressed SEC1 point `04 ‖ x ‖ y` of a key the TPM reports as its two coordinates.
+/// Builds the uncompressed SEC1 point `04 ‖ x ‖ y` from the two coordinates the TPM reports. Returns `None` when
+/// either is longer than 32 bytes.
 pub fn sec1_point(x: &[u8], y: &[u8]) -> Option<[u8; PUBLIC_KEY_LEN]> {
     let (x, y) = (left_padded(x)?, left_padded(y)?);
     let mut out = [0x04; PUBLIC_KEY_LEN];
@@ -21,9 +23,10 @@ pub fn sec1_point(x: &[u8], y: &[u8]) -> Option<[u8; PUBLIC_KEY_LEN]> {
     Some(out)
 }
 
-/// The 64-byte `r ‖ s` of a TPM ECDSA signature, with `s` rewritten to the low half of the curve order. ECDSA accepts
-/// both `s` and `n − s`, and every verifier refuses the high one, so each signature has one encoding. `None` when `r`
-/// or `s` is not in `1..n`.
+/// Encodes a TPM ECDSA signature as the 64-byte `r ‖ s`, with `s` rewritten into the low half of the curve order.
+///
+/// ECDSA accepts both `s` and `n − s`. Iron Vault's verifiers refuse the high one, so each signature has exactly one
+/// encoding. Returns `None` when `r` or `s` is not in `1..n`.
 pub fn low_s_signature(r: &[u8], s: &[u8]) -> Option<[u8; SIGNATURE_LEN]> {
     let signature = Signature::from_scalars(left_padded(r)?, left_padded(s)?).ok()?;
     let signature = signature.normalize_s().unwrap_or(signature);

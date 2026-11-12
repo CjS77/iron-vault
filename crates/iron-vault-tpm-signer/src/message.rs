@@ -1,11 +1,18 @@
-//! The three messages the helper signs (`design/tpm-approval-signer.md` "What the helper signs").
+//! Recognises the three messages the helper signs (`design/tpm-approval-signer.md` "What the helper signs").
+//!
+//! The helper signs an approval payload, a presence payload or a migration proof payload, and nothing else, so a
+//! compromised service cannot use the TPM approval key as a general signing oracle.
 
-/// Each signable message's magic, format version and exact length. The magics are the domain separation: no message
-/// can be read as another, so the helper needs no state to refuse being a general signing oracle.
+/// Each signable message's magic, format version and exact length.
+///
+/// The magics separate the domains: no message can be read as another, so the helper needs no state to tell them
+/// apart.
 const SIGNABLE: [(&[u8; 4], u8, usize); 3] = [(b"IVAP", 1, 89), (b"IVPP", 1, 69), (b"IVMA", 1, 37)];
 
-/// Whether `message` is an approval payload, a presence payload or a migration proof payload, by magic, version and
-/// length. Checked before any TPM command, so a refused message spends no try.
+/// Returns whether `message` is an approval payload, a presence payload or a migration proof payload, judged by
+/// magic, version and length.
+///
+/// The helper calls this before any TPM command, so a refused message spends no dictionary-attack try.
 pub fn is_signable(message: &[u8]) -> bool {
     SIGNABLE
         .iter()

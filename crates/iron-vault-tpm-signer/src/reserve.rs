@@ -1,18 +1,33 @@
-//! The lockout reserve: the part of the TPM's shared dictionary-attack counter the helper never spends
-//! (`design/tpm-approval-signer.md` "Lockout reserve").
+//! Decides whether the helper may try a PIN, from the TPM's dictionary-attack state (`design/tpm-approval-signer.md`
+//! "Lockout reserve").
+//!
+//! The TPM keeps one failure counter for every PIN-protected object on the machine. The helper spends at most its
+//! share of that counter and leaves the rest, the lockout reserve, for other users, so Iron Vault never brings the TPM
+//! into lockout. For a TPM whose maximum is 32 failures:
+//!
+//! ```text
+//! counter  0 ─────────── 15 │ 16 ─────────── 31 │ 32
+//!          the helper's share │ the reserve       │ TPM lockout
+//!          (min(32 / 2, 16))  │ never spent here  │
+//! ```
+//!
+//! With the counter at or above the share, the helper answers locked out with the wait until the TPM has forgotten
+//! enough failures for one more try.
 
 use iron_vault_tpm_protocol::Response;
 
-/// The shortest lockout interval the helper accepts. With the share spent, a compromised service then gets at most 144
-/// guesses a day.
+/// The shortest lockout interval the helper accepts, in seconds.
+///
+/// The TPM forgets one failure per interval, so once the share is spent a compromised service gets at most one guess
+/// every 600 seconds: 144 a day.
 pub const INTERVAL_FLOOR_SECONDS: u32 = 600;
-/// The most failures the helper spends however large the TPM's maximum.
+/// The most failures the helper spends, however large the TPM's maximum.
 pub const MAX_SHARE: u32 = 16;
 
-/// The TPM's dictionary-attack state, read fresh at every request, and what it allows the helper.
+/// Holds the TPM's dictionary-attack state, read fresh at every request, and decides what it allows the helper.
 ///
-/// The reserve rests on one helper instance at a time: the read and the try are two TPM commands, so two instances
-/// could each read a counter below the share and both spend a try.
+/// The reserve holds only while one helper instance runs at a time (`MaxConnections=1`): the read and the try are two
+/// TPM commands, so two instances could each read a counter below the share and both spend a try.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LockoutReserve {
     /// `TPM2_PT_LOCKOUT_COUNTER`: failures the TPM still remembers.
@@ -26,20 +41,26 @@ pub struct LockoutReserve {
 }
 
 impl LockoutReserve {
-    /// The failures the helper may spend: half the maximum, rounded down, and at most [`MAX_SHARE`]. The rest, at least
-    /// half, is the reserve, left for every other DA-protected object on the machine.
+    /// Returns the failures the helper may spend: half the maximum, rounded down, and at most [`MAX_SHARE`].
+    ///
+    /// The rest, at least half, is the reserve, left for every other dictionary-attack-protected object on the
+    /// machine.
     pub fn share(&self) -> u32 {
         (self.max_tries / 2).min(MAX_SHARE)
     }
 
-    /// The `06` refusal when the settings would not limit guessing: an interval below the floor (0 turns protection off)
-    /// or a share of 0.
+    /// Returns the `06` refusal, [`Response::WeakDaSettings`], when the TPM's settings would not limit guessing: an
+    /// interval below [`INTERVAL_FLOOR_SECONDS`] (0 turns protection off) or a share of 0.
     pub fn settings_refusal(&self) -> Option<Response> {
         (self.interval_seconds < INTERVAL_FLOOR_SECONDS || self.share() == 0).then_some(Response::WeakDaSettings)
     }
 
-    /// The [`settings_refusal`](Self::settings_refusal), else the `03` refusal while the TPM is in lockout or one more
-    /// failure would take the counter past the share. The wait is the time the TPM takes to forget enough failures.
+    /// Returns the refusal to send instead of trying a PIN, or `None` when the helper may try one.
+    ///
+    /// The [`settings_refusal`](Self::settings_refusal) comes first. Otherwise the helper refuses with `03`,
+    /// [`Response::LockedOut`], while the TPM is in lockout or the counter has reached the share. The wait is the time
+    /// the TPM takes to forget enough failures for one more try: with a share of 3, a counter of 5 and a 1000-second
+    /// interval, it must forget 3 failures, so the wait is 3000 seconds.
     pub fn try_refusal(&self) -> Option<Response> {
         let share = self.share();
         self.settings_refusal().or_else(|| {

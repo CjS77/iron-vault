@@ -1,10 +1,21 @@
-//! `iron-vault-tpm-signer`, the TPM signing helper (`design/tpm-approval-signer.md` "The helper process").
+//! `iron-vault-tpm-signer`, the TPM signing helper: the one process that opens the TPM to create and use TPM approval
+//! keys for the service (`design/tpm-approval-signer.md` "The helper process").
 //!
 //! systemd starts one instance per connection to the helper socket (`Accept=yes`, `MaxConnections=1`), with the
 //! connection as standard input (`StandardInput=socket`); the response goes back on that descriptor. Standard output
-//! and error go to the journal (`StandardOutput=journal`), so a diagnostic never reaches the peer. The instance checks
-//! the peer, reads one request within 5 seconds, answers it and exits: nothing runs between requests, and no request
-//! sees another's memory.
+//! and error go to the journal (`StandardOutput=journal`), so a diagnostic never reaches the peer. Each instance lives
+//! for one request:
+//!
+//! ```text
+//! systemd accepts a connection ──▶ start one instance, connection on stdin
+//!   mark the process non-dumpable
+//!   check the peer's uid ─────────── not the service account ──▶ exit, nothing read
+//!   read one frame within 5 s ────── bad frame or request ─────▶ answer Malformed
+//!   answer the request on the TPM
+//!   write one response and exit
+//! ```
+//!
+//! Nothing runs between requests, and no request sees another's memory.
 
 mod helper;
 
@@ -20,7 +31,7 @@ use crate::helper::{Connection, answer, uid_of};
 #[derive(Parser)]
 #[command(version)]
 struct Args {
-    /// The TPM, as a TCTI configuration. A test seam: the unit never passes it.
+    /// The TPM to use, as a TCTI configuration. Tests point it at a software TPM; the systemd unit never passes it.
     #[arg(long, default_value = "device:/dev/tpmrm0")]
     tcti: String,
     /// The only account whose connection is answered; any other peer is refused before its request is read.

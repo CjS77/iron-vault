@@ -1,8 +1,11 @@
-//! The peer account's uid, from `/etc/passwd`, where the package's `sysusers.d` file puts the service account.
+//! Looks up the uid of the one account the helper answers, by default the service account `iron-vault`.
+//!
+//! The helper reads `/etc/passwd` directly, where the package's `sysusers.d` file puts the service account, rather
+//! than going through NSS.
 
 use anyhow::Context;
 
-/// The uid of account `name` in `/etc/passwd`.
+/// Returns the uid of account `name` in `/etc/passwd`.
 pub fn uid_of(name: &str) -> anyhow::Result<u32> {
     let passwd = std::fs::read_to_string("/etc/passwd").context("reading /etc/passwd")?;
     passwd
@@ -11,7 +14,7 @@ pub fn uid_of(name: &str) -> anyhow::Result<u32> {
         .with_context(|| format!("no account {name:?} in /etc/passwd"))
 }
 
-/// The uid on a `name:password:uid:…` line for `name`.
+/// Returns the uid on a `name:password:uid:…` line, or `None` when the line is for another account or its uid is not a number.
 fn uid_in_line(line: &str, name: &str) -> Option<u32> {
     let mut fields = line.split(':');
     match fields.next() == Some(name) {

@@ -1,4 +1,4 @@
-//! The helper's parts: the connection it answers, the account it answers, and the TPM work.
+//! The binary's I/O: the connection it answers, the account it accepts, and the TPM commands it runs.
 
 mod connection;
 mod passwd;
