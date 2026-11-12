@@ -1,5 +1,5 @@
-//! The writer the subscriber holds, which activation can point at another log destination (`design/audit-logging.md`,
-//! "Switching at activation").
+//! The writer the subscriber holds, which activation can point at another log destination
+//! ([audit logging: switching at activation](../../../../design/audit-logging.md#switching-at-activation)).
 //!
 //! The subscriber is installed once, at startup, so it cannot be given a new writer. It holds a [`LogSwitch`] instead,
 //! and each record takes the writer that is current when the record begins: a record being written while the switch

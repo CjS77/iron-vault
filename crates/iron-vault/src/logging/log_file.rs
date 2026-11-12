@@ -1,4 +1,6 @@
-//! The log directory and `iron-vault.log` in it, written only through a directory descriptor the trust check verified.
+//! The log directory and `iron-vault.log` in it, written only through a directory descriptor the trust check verified
+//! ([audit logging: trust](../../../../design/audit-logging.md#trust);
+//! [audit logging: log file and rotation](../../../../design/audit-logging.md#log-file-and-rotation)).
 //!
 //! A walk of the path by name followed by an open by name would leave a gap: a member of a group that can write an
 //! ancestor (`syslog` on stock `/var/log`) could rename the directory away between the two and plant their own. So the
@@ -26,7 +28,8 @@ use crate::trusted_path_report::PathFailure;
 /// The one file the service writes in the log directory.
 pub const LOG_FILE_NAME: &str = "iron-vault.log";
 
-/// The mode of a log file the service creates, whatever its umask: the group may read it for a collector, never write.
+/// The mode of a log file the service creates, which the umask does not change: the group may read it for a collector,
+/// never write.
 const LOG_FILE_MODE: u32 = 0o640;
 
 /// Why a log file the service opened is not one it may append to.
@@ -114,6 +117,7 @@ fn describe(path: &Path, stat: &Stat) -> PathComponent {
     }
 }
 
+/// The device and inode that identify a file.
 fn file_id(stat: &Stat) -> FileId {
     FileId {
         dev: stat.st_dev,
@@ -171,8 +175,8 @@ impl LogFile {
         Ok(())
     }
 
-    /// Whether the name in the directory is no longer the open file. `AT_SYMLINK_NOFOLLOW` makes a planted symlink differ
-    /// from the open file too, and the reopen then refuses it.
+    /// Returns `true` if and only if the name in the directory no longer names the open file. `AT_SYMLINK_NOFOLLOW` makes a
+    /// planted symlink differ from the open file too, and the reopen then refuses it.
     fn renamed(&self, open: &OpenLog) -> io::Result<bool> {
         match statat(&self.dir.fd, LOG_FILE_NAME, AtFlags::SYMLINK_NOFOLLOW) {
             Ok(stat) => Ok(file_id(&stat) != open.id),
@@ -198,8 +202,8 @@ fn open_log(dir: &LogDir, owner: ExpectedOwner) -> Result<OpenLog, LogOpenError>
     })
 }
 
-/// Whether a non-empty file's last byte is not `\n`. Uses `pread`, since the descriptor is `O_APPEND` and a seek would
-/// not be needed or wanted.
+/// Returns `true` if and only if the file is not empty and its last byte is not `\n`. Uses `pread`, since the descriptor
+/// is `O_APPEND` and a seek would not be needed or wanted.
 fn ends_mid_record(fd: &OwnedFd, stat: &Stat) -> Result<bool, Errno> {
     let Some(last) = u64::try_from(stat.st_size).ok().and_then(|len| len.checked_sub(1)) else {
         return Ok(false);

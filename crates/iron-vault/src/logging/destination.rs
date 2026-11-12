@@ -1,4 +1,5 @@
-//! Where the log goes, and installing the subscriber on it.
+//! Where the log goes, and installing the subscriber on it
+//! ([audit logging: log destination](../../../../design/audit-logging.md#log-destination)).
 //!
 //! The destination is fixed before the subscriber exists, so a destination that cannot be used stops `serve` with one line
 //! on stderr, before any socket is bound or anything is unlocked. Only the bootstrap destination is resolved here: the
@@ -147,6 +148,7 @@ impl LogOpenError {
     }
 }
 
+/// What stderr says about a log directory that could not be opened, by the error's kind only.
 const fn directory_phrase(kind: io::ErrorKind) -> &'static str {
     match kind {
         io::ErrorKind::NotFound => "the log directory does not exist",
@@ -168,8 +170,8 @@ const fn problem_phrase(problem: &Problem) -> &'static str {
     }
 }
 
-/// Creates the development log directory and any missing parents at `0700`; an existing directory keeps its mode, so a
-/// wrong one is refused by the trust check rather than repaired.
+/// Creates the development log directory and any missing parents at `0700`. An existing directory keeps its mode, so the
+/// trust check refuses a wrong one and nothing repairs it.
 fn create_development_dir(profile: DeploymentProfile, path: &Path) -> Result<(), LogOpenError> {
     match profile {
         DeploymentProfile::Protected | DeploymentProfile::Container => Ok(()),

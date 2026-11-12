@@ -1,16 +1,27 @@
-//! The service's log subscriber: JSON Lines records and the caps on HTTP and TLS dependency logging.
+//! The service's log subscriber: JSON Lines records and the caps on HTTP and TLS dependency logging
+//! ([spec §18](../../../design/iron-vault-specification.md#18-logging);
+//! [audit logging: record shape](../../../design/audit-logging.md#record-shape)). Audit events, request events and
+//! diagnostic records all reach the log through it:
+//!
+//! ```text
+//! tracing event ─→ level ─→ dependency_caps ─→ RecordFormat ─→ LogSwitch ─→ LogFile or LogStdout
+//!                  INFO     hyper, h2, …       constant        moved by          │ first failed write
+//!                  and up   WARN at most       fields first    a config check    ▼
+//!                                                                             LogFailure: serve stops
+//! ```
 //!
 //! Every record is one flat JSON object on one line ([`RecordFormat`]); JSON escapes newlines and control characters in
 //! values, so no value can start a second record. The writer is a parameter, so the destination can change without
 //! touching the format: [`LogFile`] appends to `iron-vault.log` in a verified log directory, [`LogStdout`] writes to
-//! stdout for Docker, and either trips [`LogFailure`] on its first failed write so `serve` stops rather than run without
-//! its audit log. [`install`] opens the bootstrap destination and installs the subscriber on a [`LogSwitch`] holding it,
-//! which a config check can later point at the destination the approved config chooses.
+//! stdout for Docker, and either trips [`LogFailure`] on its first failed write, so `serve` never runs without its audit
+//! log. [`install`] opens the bootstrap destination and installs the subscriber on a [`LogSwitch`] holding it, which a
+//! config check can later point at the destination the approved config chooses.
 //!
 //! At `DEBUG` and `TRACE`, `hyper` and `h2` log frames and headers, and those headers carry the injected credential
-//! (§10, §18). [`dependency_caps`] is installed as its own layer, so no global level, `RUST_LOG` value or trace
-//! setting can lift it: a layer filter only ever narrows what reaches the subscriber. EP-26 must keep this layer
-//! whatever logging configuration it adds.
+//! ([spec §10](../../../design/iron-vault-specification.md#10-outbound-tls-and-environment),
+//! [spec §18](../../../design/iron-vault-specification.md#18-logging)). [`dependency_caps`] is installed as its own
+//! layer, so no global level, `RUST_LOG` value or trace setting can lift it: a layer filter only ever narrows what
+//! reaches the subscriber. Any logging configuration EP-26 adds must keep this layer.
 //!
 //! `reqwest` and `rustls` also log through the `log` crate. No `log` backend is installed, so those records are
 //! discarded. If a future change installs a `log` bridge, the bridged records carry the same targets and the caps
@@ -71,9 +82,9 @@ pub fn dependency_caps() -> Targets {
 
 /// Formats a record as `tracing-subscriber`'s flat JSON and puts the constant fields first.
 ///
-/// The constants ([`CONSTANT_FIELDS`](crate::audit::CONSTANT_FIELDS)) are the same in every record,
-/// diagnostic ones included, so they are added here rather than by each emitter. The JSON formatter's own output is
-/// reused, so escaping stays its job.
+/// The constants ([`CONSTANT_FIELDS`](crate::audit::CONSTANT_FIELDS)) are the same in every record, diagnostic ones
+/// included, so they are added here once and no emitter can leave them out. The JSON formatter's own output is reused,
+/// so escaping stays its job.
 pub struct RecordFormat {
     inner: Format<Json>,
     constants: String,
@@ -132,6 +143,7 @@ where
     build(writer, profile, level)
 }
 
+/// The subscriber at `level`: the level filter, then [`dependency_caps`], then the JSON output layer.
 fn build<W>(writer: W, profile: DeploymentProfile, level: LevelFilter) -> impl Subscriber + Send + Sync
 where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,

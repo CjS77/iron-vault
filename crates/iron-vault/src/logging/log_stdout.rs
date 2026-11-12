@@ -1,4 +1,5 @@
-//! The stdout writer, for Docker, where the container runtime collects the records.
+//! The stdout writer, for Docker, where the container runtime collects the records
+//! ([audit logging: stdout is never the journal](../../../../design/audit-logging.md#stdout-is-never-the-journal)).
 
 use std::ffi::OsStr;
 use std::fs::File;
@@ -51,11 +52,12 @@ impl LogStdout {
     }
 }
 
+/// A failure to duplicate or inspect stdout, by its kind only.
 fn stdout_error(e: io::Error) -> LogOpenError {
     LogOpenError::Stdout { kind: e.kind() }
 }
 
-/// Whether stdout, with the given device and inode, may be the journal's stream.
+/// Returns `true` if and only if stdout, with the given device and inode, may be the journal's stream.
 ///
 /// A `JOURNAL_STREAM` that is unset cannot be. One that is set is the journal's when it names stdout's device and inode.
 /// One that is set but is not two decimal numbers joined by a colon is refused as if it matched: systemd never writes

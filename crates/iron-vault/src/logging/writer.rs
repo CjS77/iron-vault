@@ -1,4 +1,5 @@
-//! What the log file and stdout writers share: the latch a failed write trips, and the `Write` adapter that trips it.
+//! What the log file and stdout writers share: the latch a failed write trips, and the `Write` adapter that trips it
+//! ([audit logging: failure behaviour](../../../../design/audit-logging.md#failure-behaviour)).
 //!
 //! `tracing-subscriber`'s `fmt::Layer` discards a writer's error, so the writer is the one place that sees a failed write
 //! and can act on it. The service never runs without its audit log, so the first failed write trips [`LogFailure`] and
@@ -30,7 +31,7 @@ impl LogFailure {
         self.0.wake.notify_waiters();
     }
 
-    /// Whether a log write has failed.
+    /// Returns `true` if and only if a log write has failed.
     pub fn is_tripped(&self) -> bool {
         self.0.tripped.load(Ordering::SeqCst)
     }
@@ -59,7 +60,7 @@ pub trait Append {
 }
 
 /// The `Write` the formatter gets for one record: `fmt::Layer` writes the formatted record with a single `write_all`, so
-/// each [`Write::write`] here carries a whole record.
+/// each [`Write::write`](std::io::Write::write) here carries a whole record.
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct RecordWriter<'a, A>(pub(super) &'a A);
