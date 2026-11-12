@@ -2,10 +2,10 @@
 # Measures test coverage of the workspace with cargo-llvm-cov, the same way locally and in CI.
 #
 # Usage: scripts/coverage.sh [html|lcov]
-#   html (default): writes target/llvm-cov/html/index.html, for reading locally.
-#   lcov: writes target/llvm-cov/lcov.info, for .github/workflows/coverage.yml to upload to Coveralls.
-# Both land under CARGO_TARGET_DIR in place of target/ when it is set, and both print a per-file summary. The format
-# changes only the report; the tests that run are the same.
+#   html (default): writes <target>/llvm-cov/html/index.html, for reading locally.
+#   lcov: writes <target>/llvm-cov/lcov.info, for .github/workflows/coverage.yml to upload to Coveralls.
+# <target> is cargo's target directory (target/ unless cargo's configuration names another). Both print a per-file
+# summary. The format changes only the report; the tests that run are the same.
 #
 # Tools (not workspace dependencies):
 #   cargo install cargo-llvm-cov --locked
@@ -39,7 +39,9 @@ cargo llvm-cov report
 case $format in
     html) cargo llvm-cov report --html ;;
     lcov)
-        lcov=${CARGO_TARGET_DIR:-target}/llvm-cov/lcov.info
+        target=$(cargo metadata --no-deps --locked --format-version 1 \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+        lcov=$target/llvm-cov/lcov.info
         mkdir -p "$(dirname "$lcov")"
         cargo llvm-cov report --lcov --output-path "$lcov"
         echo "report: $lcov"
