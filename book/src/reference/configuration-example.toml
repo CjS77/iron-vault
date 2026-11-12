@@ -60,15 +60,17 @@ routes = ["venice", "tickets"]
 
 # --- Routes: where requests go, and with which credential -------------------------------------------------------
 
-# A query slot: the key is sent as `?access_key=<key>`.
+# A query slot: the key is sent as `?app_id=<key>`. OpenExchangeRates serves one file per date, so `/historical/*`
+# matches one segment such as `2026-11-01.json`. Its plans have monthly quotas, so the rate limit is low. The free
+# plan serves rates against USD only, so a request should not set `base`.
 [routes.fx]
 prefix = "/fx"
-upstream = "https://api.fx.example"
+upstream = "https://openexchangerates.org/api"
 credential = "fx_key"
-slot = { query = "access_key" }
+slot = { query = "app_id" }
 methods = ["GET"]
-paths = ["/latest", "/historical/**"]
-rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
+paths = ["/latest.json", "/historical/*", "/currencies.json", "/usage.json"]
+rate_limit = { requests = 10, per_seconds = 60, burst = 2 }
 
 # A header slot with a format. The upstream has a base path, which `paths` leaves out: a request for
 # /venice/chat/completions is sent to /api/v1/chat/completions.

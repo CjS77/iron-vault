@@ -421,8 +421,8 @@ it matches nothing the provider serves.
 **Wildcards stand for whole segments.**
 
 - `*` matches exactly one segment: `/repos/*/*/issues` matches `/repos/octo/demo/issues`, not `/repos/octo/issues`.
-- `**` matches zero or more segments: `/historical/**` matches `/historical`, `/historical/2024` and
-  `/historical/2024/01/02`.
+  `/historical/*` matches `/historical/2026-11-01.json`.
+- `**` matches zero or more segments: `/files/**` matches `/files`, `/files/2024` and `/files/2024/01/02`.
 - `/` alone has no segments and matches only the root path.
 - `["/**"]` allows every path. It must be written out; an empty list is refused.
 
@@ -449,7 +449,7 @@ placeholder key in the application is replaced, never forwarded. There are three
 |---------------------------------------------------|-----------------|--------------------------------------------|
 | `{ header = "X-Subscription-Token" }`             | static          | `X-Subscription-Token: <key>`              |
 | `{ header = "Authorization", format = "Bearer {}" }` | static       | `Authorization: Bearer <key>`              |
-| `{ query = "access_key" }`                        | static          | `?access_key=<key>`, added to the query    |
+| `{ query = "app_id" }`                           | static          | `?app_id=<key>`, added to the query        |
 | `"basic"`                                         | basic           | `Authorization: Basic <base64 of user:password>` |
 
 - **`header`** is an HTTP header name that is not a [reserved header](#reserved-headers). `Authorization` is allowed.

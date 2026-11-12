@@ -13,7 +13,7 @@ service prompt for it, and the CLI reads the answer in one of two ways:
 
 - **From a terminal**, with echo off.
 - **From stdin**, one line per prompt, when stdin is not a terminal. Pipe a secret in from a password manager, so it
-  never reaches your shell history: `pass show fx | iron-vault add fx --origin api.fx.example`.
+  never reaches your shell history: `pass show fx | iron-vault add fx --origin openexchangerates.org`.
 
 `init` is the exception: it shows the recovery key, so it needs a controlling terminal and refuses to run without
 one.
@@ -196,7 +196,7 @@ Issue a fresh caller token: it goes to stdout once, and its token_hash line to s
 iron-vault add [OPTIONS] --origin <ORIGIN> <NAME>
 ```
 
-Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron-vault add fx --origin api.fx.example` works. It never overwrites an existing name.
+Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron-vault add fx --origin openexchangerates.org` works. It never overwrites an existing name.
 
 - `<NAME>`: The credential name, which routes reference.
   - required

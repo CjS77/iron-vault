@@ -90,7 +90,7 @@ Run this on the vault that stays. Removing a recipient cannot revoke ciphertext 
 credential in `iron-vault list`, have the provider reissue the key, then give the name and the origins `list` shows:
 
 ```sh
-iron-vault replace NAME --origin api.fx.example
+iron-vault replace NAME --origin openexchangerates.org
 ```
 
 See [rotate a key](rotate-key.md).
