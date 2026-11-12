@@ -977,7 +977,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
             .await;
         failures
             .iter()
-            .for_each(|error| tracing::warn!("approved request listener missing until restart: {error}"));
+            .for_each(|error| tracing::warn!("approved request listener not open: {error}"));
         inner.listener_failures = listener_failure::failures(&failures, config.listeners().keys());
         inner.serving = Some(serving);
         self.holder.serve(snapshot);

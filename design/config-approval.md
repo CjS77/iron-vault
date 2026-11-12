@@ -617,14 +617,15 @@ open, and takes its default until the owner decides.
    old policy after the commit. The alternative cancels, or re-admits under the new snapshot, every request not yet
    forwarded when the pause begins.
 2. **Listener changes in an approval.** *Decided (2026-11-09):* the rebuild closes, binds or adopts as the default says,
-   and logs a listener it cannot open at WARN as missing until restart while the service enters Ready
+   and logs a listener it cannot open at WARN as not open while the service enters Ready
    (`crates/iron-vault/src/service_context.rs`), but the approval summary does not mark that listener "takes effect
    after restart" (`crates/iron-vault-policy/src/approval_summary.rs`). On entry to Ready the listener set is rebuilt
    from the verified config. But in a protected Linux install every TCP listener comes from socket activation
    ([§7](iron-vault-specification.md#7-caller-authentication-and-listeners)), so a running service cannot bind a TCP
    listener that the new config adds. *Default:* the rebuild closes the sockets the new config no longer names and binds
-   or adopts what it can. A listener it cannot bind is logged at WARN and stays missing until restart, the service still
-   enters Ready, and the approval summary marks that listener "takes effect after restart".
+   or adopts what it can. A listener it cannot bind is logged at WARN and listed by `status` until a later approval
+   opens it or removes it, the service still enters Ready, and the approval summary marks that listener "takes effect
+   after restart".
 3. **The events an approval uses.** *Decided: default accepted (2026-11-09).* The
    [§15](iron-vault-specification.md#15-service-states-and-errors) diagram labels its one edge from Ready to Checking
    "explicit reload", and nothing else, and `ServiceEvent::Reload` is SIGHUP's. *Default:* a new event, such as

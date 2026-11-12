@@ -49,7 +49,7 @@ pub enum ListenerFailureReason {
 }
 
 impl ListenerFailureReason {
-    /// Every reason, in wire-code order.
+    /// Every reason.
     pub const ALL: [Self; 10] = [
         Self::TlsKeyMismatch,
         Self::TlsFileUnreadable,
@@ -95,14 +95,26 @@ impl ListenerFailureReason {
         }
     }
 
-    /// The wire code: the index in [`ALL`](Self::ALL) plus one.
-    pub fn code(self) -> u8 {
-        (1..).zip(Self::ALL).find(|(_, reason)| *reason == self).map_or(0, |(code, _)| code)
+    /// The wire code, as `design/admin-protocol.md#status` lists it. Literal, so reordering [`ALL`](Self::ALL) cannot
+    /// change the protocol.
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::TlsKeyMismatch => 1,
+            Self::TlsFileUnreadable => 2,
+            Self::TlsCertificateInvalid => 3,
+            Self::TlsKeyUnusable => 4,
+            Self::AddressInUse => 5,
+            Self::PlainOffLoopback => 6,
+            Self::SocketPath => 7,
+            Self::SocketActivationMissing => 8,
+            Self::SocketActivationMismatch => 9,
+            Self::BindRefused => 10,
+        }
     }
 
     /// The reason a wire `code` stands for.
     pub fn from_code(code: u8) -> Option<Self> {
-        usize::from(code).checked_sub(1).and_then(|index| Self::ALL.get(index)).copied()
+        Self::ALL.into_iter().find(|reason| reason.code() == code)
     }
 
     fn of(error: &OpenError) -> Self {
@@ -144,7 +156,8 @@ impl ListenerFailureReason {
             | RequestBindError::NoDirectory { .. }
             | RequestBindError::UntrustedDirectory { .. } => Self::SocketPath,
             RequestBindError::Bind(BindError::Io { kind, .. }) => Self::of_kind(*kind),
-            RequestBindError::Bind(_) => Self::BindRefused,
+            RequestBindError::Bind(BindError::Occupied { .. }) => Self::AddressInUse,
+            RequestBindError::Bind(BindError::Unverified { .. }) => Self::BindRefused,
         }
     }
 
@@ -191,6 +204,7 @@ fn tls_listener(error: &ListenerTlsError) -> &ListenerName {
 
 fn adopt_listener(error: &AdoptError) -> Option<&ListenerName> {
     match error {
+        // `adopt` never returns it: the activation variables are parsed in `PassedSockets::take` before the service starts.
         AdoptError::Activation(_) => None,
         AdoptError::Missing { listener, .. }
         | AdoptError::NotStream { listener }
@@ -203,8 +217,8 @@ fn adopt_listener(error: &AdoptError) -> Option<&ListenerName> {
     }
 }
 
-/// The failures `errors` come to, in name order. An error about the whole set (the runtime directory is unknown, the
-/// activation variables are malformed) leaves every listener in `configured` unopened, so it is reported for each.
+/// The failures `errors` come to, in name order. An error about the whole set (`NoRuntime`, `NoRuntimeDir`) leaves
+/// every listener in `configured` unopened, so it is reported for each.
 pub fn failures<'a>(errors: &[OpenError], configured: impl Iterator<Item = &'a ListenerName>) -> Vec<ListenerFailure> {
     let mut failures: Vec<_> = match errors.iter().find(|error| listener_of(error).is_none()) {
         Some(error) => configured
@@ -237,6 +251,26 @@ mod tests {
             .for_each(|reason| assert_eq!(ListenerFailureReason::from_code(reason.code()), Some(*reason)));
         assert_eq!(ListenerFailureReason::from_code(0), None);
         assert_eq!(ListenerFailureReason::from_code(11), None);
+    }
+
+    #[test]
+    fn the_wire_codes_are_the_documented_ones() {
+        let codes: Vec<u8> = ListenerFailureReason::ALL.iter().map(|reason| reason.code()).collect();
+        assert_eq!(codes, (1..=10).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn an_occupied_path_is_an_address_in_use() {
+        let occupied = BindError::Occupied {
+            role: crate::socket_file::SocketRole::Request,
+            path: "/run/x.sock".into(),
+            found: "a file".to_owned(),
+            owner: 0,
+        };
+        assert_eq!(
+            ListenerFailureReason::of_bind(&RequestBindError::Bind(occupied)),
+            ListenerFailureReason::AddressInUse
+        );
     }
 
     #[test]

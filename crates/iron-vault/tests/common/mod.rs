@@ -33,6 +33,8 @@ pub mod request_log;
 pub mod scrub_stream;
 pub mod shared_fs;
 #[cfg(target_os = "linux")]
+pub mod tls_dir;
+#[cfg(target_os = "linux")]
 pub mod tpm_helper;
 
 /// How long a test waits for one response, or for a test upstream to record something, before failing.

@@ -27,6 +27,7 @@ use common::body_stream::eventually;
 use common::gated_fs::GatedFs;
 use common::mock_upstream::{MockUpstream, Reply, TestCa};
 use common::proxy_harness::{CallerRequest, Response, TOKEN_BYTES, TOKEN_HEADER, TempDir, Via, WAIT, next_free_port, token_hash};
+use common::tls_dir::TlsDir;
 use ed25519_dalek::{Signer, SigningKey};
 use iron_vault::admin::ADMIN_SOCKET_NAME;
 use iron_vault::admin::dispatch::Handlers;
@@ -36,7 +37,6 @@ use iron_vault::admin::protocol::{
 };
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
-use iron_vault::admin_file::AdminFile;
 use iron_vault::attempt_limit::FAILURE_THRESHOLD;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
@@ -388,16 +388,6 @@ async fn admin_with(
     request: AdminRequest,
     answer: &str,
 ) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
-    admin_answering(service, handlers, request, &[answer]).await
-}
-
-/// [`admin_with`] answering the prompts in turn with `answers`; the last answer serves any prompt beyond them.
-async fn admin_answering(
-    service: &Arc<ServiceContext>,
-    handlers: Handlers,
-    request: AdminRequest,
-    answers: &[&str],
-) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
     let paths = service.paths().clone();
     let runtime_dir = paths.runtime_dir.clone().unwrap();
     let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
@@ -410,7 +400,7 @@ async fn admin_answering(
             })
             .await
     });
-    let exchanged = converse(&runtime_dir.join(ADMIN_SOCKET_NAME), request, answers).await;
+    let exchanged = converse(&runtime_dir.join(ADMIN_SOCKET_NAME), request, answer.to_owned()).await;
     let _ = stop.send(());
     served.await.unwrap().unwrap();
     exchanged
@@ -418,7 +408,7 @@ async fn admin_answering(
 
 /// Sends `request` on a new connection to the admin socket at `socket`, answering each prompt with `answer`. Returns
 /// the response frame's bytes, the prompts and the response.
-async fn converse(socket: &Path, request: AdminRequest, answers: &[&str]) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
+async fn converse(socket: &Path, request: AdminRequest, answer: String) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
     let mut stream = UnixStream::connect(socket).await.unwrap();
     send(&mut stream, &Frame::Request(request)).await;
     let mut prompts = Vec::new();
@@ -426,7 +416,6 @@ async fn converse(socket: &Path, request: AdminRequest, answers: &[&str]) -> (Ve
         match read_frame(&mut stream).await {
             (bytes, Frame::Response(response)) => break (bytes, response),
             (_, Frame::Prompt(prompt)) => {
-                let answer = answers.get(prompts.len()).or(answers.last()).copied().unwrap_or_default();
                 prompts.push(prompt);
                 let input = OwnerInput::new(Zeroizing::new(answer.as_bytes().to_vec()));
                 send(&mut stream, &Frame::OwnerInput(input)).await;
@@ -1135,7 +1124,7 @@ async fn a_protected_install_without_locked_memory_refuses_recovery_check_before
     let (key, _) = iron_vault_store::RecoveryKey::generate();
     let key = secrecy::ExposeSecret::expose_secret(&key).to_owned();
 
-    let (_, prompts, response) = converse(&session.socket, AdminRequest::RecoveryCheck, &[key.as_str()]).await;
+    let (_, prompts, response) = converse(&session.socket, AdminRequest::RecoveryCheck, key.clone()).await;
 
     assert_eq!(prompts, []);
     let AdminResponse::Error { code, message } = response else {
@@ -1161,7 +1150,7 @@ async fn a_protected_install_without_locked_memory_refuses_unlock_before_any_pro
     let memory = MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 });
     let (service, session, mut reached) = protected_without_locked_memory(&fixture, memory).await;
 
-    let (_, prompts, response) = converse(&session.socket, AdminRequest::Unlock, &[PASSPHRASE]).await;
+    let (_, prompts, response) = converse(&session.socket, AdminRequest::Unlock, PASSPHRASE.to_owned()).await;
 
     assert_eq!(prompts, []);
     let message = "memory is not locked against swap (RLIMIT_MEMLOCK soft limit is 65536 bytes, not unlimited), so a \
@@ -1902,7 +1891,7 @@ impl AdminSession {
     /// Sends `request` on its own connection, in a task of its own, answering each prompt with `answer`.
     fn send(&self, request: AdminRequest, answer: &str) -> tokio::task::JoinHandle<AdminResponse> {
         let (socket, answer) = (self.socket.clone(), answer.to_owned());
-        tokio::spawn(async move { converse(&socket, request, &[answer.as_str()]).await.2 })
+        tokio::spawn(async move { converse(&socket, request, answer).await.2 })
     }
 
     async fn close(self) {
@@ -2242,69 +2231,6 @@ async fn locking_while_serving_gives_503_locked_and_unlock_restores_serving_at_t
 // is never opened, neither in the provisional set at startup nor in the rebuild on entry to Ready. The other listeners
 // still answer, so the service stays in an explicit state.
 
-/// A directory for listener TLS files, removed on drop.
-///
-/// The trusted-path rules refuse a certificate or key below a shared sticky directory such as `/tmp`, or below a
-/// group-writable one, so the directory goes in the first base whose ancestors pass: the build's own temporary
-/// directory, else `$XDG_RUNTIME_DIR`.
-struct TlsDir(PathBuf);
-
-impl TlsDir {
-    /// A fresh `0700` directory holding `server.crt` (`0644`) and `server.key` (`key_mode`): a leaf for `localhost` and
-    /// a key that is the leaf's own when `matching`, another key otherwise.
-    fn new(name: &str, matching: bool, key_mode: u32) -> Self {
-        let bases = [
-            Some(PathBuf::from(env!("CARGO_TARGET_TMPDIR"))),
-            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
-        ];
-        bases
-            .into_iter()
-            .flatten()
-            .map(|base| Self::create(&base, name, matching, key_mode))
-            .find(|tls| {
-                let owner = invoking_user().unwrap();
-                iron_vault::admin_file::read(
-                    AdminFile::Certificate,
-                    DeploymentProfile::Development,
-                    owner,
-                    &tls.path("server.crt"),
-                )
-                .is_ok()
-            })
-            .expect("no base directory whose ancestors the trusted-path rules accept for listener TLS files")
-    }
-
-    fn create(base: &Path, name: &str, matching: bool, key_mode: u32) -> Self {
-        let dir = base.join(format!("iv-tls-{}-{name}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        mkdir(&dir, 0o700);
-        let leaf_key = rcgen::KeyPair::generate().unwrap();
-        let leaf = rcgen::CertificateParams::new(vec!["localhost".to_owned()])
-            .unwrap()
-            .self_signed(&leaf_key)
-            .unwrap();
-        let key = if matching { leaf_key } else { rcgen::KeyPair::generate().unwrap() };
-        let tls = Self(dir);
-        [("server.crt", leaf.pem(), 0o644), ("server.key", key.serialize_pem(), key_mode)]
-            .into_iter()
-            .for_each(|(file, pem, mode)| {
-                fs::write(tls.path(file), pem).unwrap();
-                fs::set_permissions(tls.path(file), fs::Permissions::from_mode(mode)).unwrap();
-            });
-        tls
-    }
-
-    fn path(&self, file: &str) -> PathBuf {
-        self.0.join(file)
-    }
-}
-
-impl Drop for TlsDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
 /// The TCP listener `name` on `0.0.0.0:port` with these TLS files, and its token caller granted `fx`.
 fn wide_tls_listener(name: &str, port: u16, certificate: &Path, key: &Path) -> String {
     format!(
@@ -2354,7 +2280,7 @@ async fn assert_tls_listener_never_opens(name: &str, certificate: &Path, key: &P
     let (_, report) = status(&service).await;
     assert_eq!(report.state, ServiceState::Ready);
     assert_eq!(report.listener_failures, [failure(name, reason)]);
-    let missing = format!("approved request listener missing until restart: listener {name}: ");
+    let missing = format!("approved request listener not open: listener {name}: ");
     let warning = logs.text().lines().find(|line| line.contains(&missing)).map(str::to_owned);
     assert!(warning.as_deref().is_some_and(|line| line.contains(why)), "{warning:?}");
     assert!(!logs.text().contains(SECRET), "the credential reached the log");
@@ -2415,6 +2341,10 @@ async fn an_unapproved_plain_http_listener_off_loopback_never_opens_at_startup()
     assert_safe_state(&fixture, &service, ServiceState::Locked, UnavailableReason::Locked, 0).await;
     let refused = format!("listener plainwide on 0.0.0.0:{port} is plain HTTP off loopback and was not opened");
     assert!(logs.text().contains(&refused), "no warning names the listener");
+    assert_eq!(
+        status(&service).await.1.listener_failures,
+        [failure("plainwide", ListenerFailureReason::PlainOffLoopback)]
+    );
 }
 
 fn failure(name: &str, reason: ListenerFailureReason) -> ListenerFailure {

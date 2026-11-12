@@ -56,7 +56,12 @@ While the service is not Ready, the request listeners come from the published `c
 verified. They answer only `503` with the reason: they never identify a caller, select a route or touch a credential.
 That way a caller sees why it is refused, instead of a refused connection.
 
-A listener that cannot be opened, whether provisional or approved, is left out and the others keep serving, so the state does not change. `iron-vault status` lists it under `Listeners not open:` with a reason: `tls-key-mismatch`, `tls-file-unreadable`, `tls-certificate-invalid`, `tls-key-unusable`, `address-in-use`, `plain-http-off-loopback`, `socket-path`, `socket-activation-missing`, `socket-activation-mismatch` or `bind-refused`. The log names the path or address. Fix the cause and approve a config again to open it; the entry drops off when the listener opens or the config no longer names it.
+A listener that cannot be opened, whether provisional or approved, is left out and the others keep serving, so the state
+does not change. `iron-vault status` lists it under `Listeners not open:` with a reason: `tls-key-mismatch`, `tls-file-
+unreadable`, `tls-certificate-invalid`, `tls-key-unusable`, `address-in-use`, `plain-http-off-loopback`, `socket-path`,
+`socket-activation-missing`, `socket-activation-mismatch` or `bind-refused`. The log names the path or address. Fix the
+cause and approve a config again to open it; the entry drops off when the listener opens or the config no longer names
+it.
 
 Unavailable has two reasons:
 

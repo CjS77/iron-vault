@@ -13,9 +13,11 @@ pub mod content_coding;
 pub mod deployment;
 pub mod hardening;
 pub mod library_error;
-// The TLS acceptor runs on tokio and tokio-rustls, which this crate depends on only on Linux.
+// It maps the Linux-only `request_listeners::OpenError`.
 #[cfg(target_os = "linux")]
 pub mod listener_failure;
+// The TLS acceptor runs on tokio and tokio-rustls, which this crate depends on only on Linux.
+#[cfg(target_os = "linux")]
 pub mod listener_tls;
 pub mod logging;
 pub mod migration_authorization;

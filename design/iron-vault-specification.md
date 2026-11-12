@@ -906,10 +906,10 @@ stateDiagram-v2
 | Upstream transport or TLS failure                               | Return `502`, or `504` for timeout, without raw secret-bearing client diagnostics                               |
 | Supported size limit exceeded                                   | Return `413` for requests; fail oversized response processing without returning unscreened secret-bearing bytes |
 
-An approved listener can fail to open: its TLS key does not match its certificate, its address is in use, or its socket
-path's directory is missing. The service leaves it out and the other listeners keep serving, so the service state does
-not change, but `status` lists each approved listener that is not open with a fixed reason category, never a path or a
-key. A later approval that fixes the cause, or removes the listener, clears the entry.
+An approved or provisional listener can fail to open: its TLS key does not match its certificate, its address is in use,
+or its socket path's directory is missing. The service leaves it out and the other listeners keep serving, so the
+service state does not change, but `status` lists each such listener that is not open with a fixed reason category,
+never a path or a key. A later approval that fixes the cause, or removes the listener, clears the entry.
 
 A healthy TPM service restarts unattended using a policy such as `Restart=on-failure`. Passphrase-only and later
 YubiKey-only profiles remain locked until the owner supplies the required input. The YubiKey profile reports

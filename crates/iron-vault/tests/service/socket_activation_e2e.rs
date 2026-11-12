@@ -251,7 +251,7 @@ async fn a_passed_socket_on_another_port_is_refused_and_the_listener_stays_unava
         return;
     };
     wait_for(&install, "the mismatch to be logged", || {
-        install.log().contains("approved request listener missing until restart")
+        install.log().contains("approved request listener not open")
     });
     assert!(
         status_line(configured, WAIT).is_err(),
