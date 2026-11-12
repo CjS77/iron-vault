@@ -1,5 +1,42 @@
-//! The admin protocol's frames and their pure codec (`design/admin-protocol.md`). Nothing here does I/O: the transport
-//! hands [`decode`] the bytes it has read and sends what [`encode`] writes.
+//! The admin protocol's frames and their pure codec ([admin protocol](../../../../design/admin-protocol.md)). The CLI and the admin server
+//! both encode and decode with it, so the two sides agree on every byte. Nothing here does I/O: the transport hands
+//! [`decode`] the bytes it has read and sends what [`encode`] writes.
+//!
+//! Every frame is a 7-byte header and a body ([admin protocol: Frame](../../../../design/admin-protocol.md#frame)):
+//!
+//! ```text
+//! offset  size  field
+//! 0       2     protocol version, u16 big-endian: 1
+//! 2       1     frame kind: 1 request, 2 prompt, 3 owner input, 4 success, 5 error, 6 notice, 7 reveal, 8 switch,
+//!               9 bundle data
+//! 3       4     body length, u32 big-endian: at most 65 536
+//! 7       ...   body: tag-length-value fields in ascending tag order, or the bare value for owner input, reveal and
+//!               bundle data
+//! ```
+//!
+//! For example, `ping` is a request whose body is one field, the command ID:
+//!
+//! ```
+//! use iron_vault::admin::protocol::{AdminRequest, Decoded, Frame, decode, encode};
+//!
+//! let mut bytes = Vec::new();
+//! encode(&Frame::Request(AdminRequest::Ping), &mut bytes)?;
+//! assert_eq!(
+//!     bytes,
+//!     [
+//!         0x00, 0x01, // protocol version 1
+//!         0x01, // frame kind 1: admin request
+//!         0x00, 0x00, 0x00, 0x08, // body length 8
+//!         0x00, 0x01, // field tag 1: the command
+//!         0x00, 0x00, 0x00, 0x02, // field length 2
+//!         0x00, 0x01, // command ID 1: ping
+//!     ]
+//! );
+//! assert!(matches!(decode(&bytes)?, Decoded::Frame { frame: Frame::Request(AdminRequest::Ping), used: 15 }));
+//! // A partial header asks for the rest of it before anything is judged.
+//! assert!(matches!(decode(&bytes[..5])?, Decoded::NeedMore(2)));
+//! # Ok::<(), iron_vault::admin::protocol::FrameError>(())
+//! ```
 
 mod add;
 mod approver_add;
@@ -40,7 +77,7 @@ pub use status::{MemoryStatus, StatusReport, UnlockedVault, VaultStatus};
 
 /// The protocol version this code writes and the only one it reads.
 pub const PROTOCOL_VERSION: u16 = 1;
-/// The largest body a frame may carry; a declared length above it is refused before any body byte is read.
+/// The largest body a frame may carry, 64 KiB; a declared length above it is refused before any body byte is read.
 pub const MAX_BODY_LEN: usize = 64 * 1024;
 /// The fixed header size: version (2), kind (1), body length (4).
 pub const HEADER_LEN: usize = 7;
@@ -48,7 +85,7 @@ pub const HEADER_LEN: usize = 7;
 pub const MAX_ORIGINS: usize = 32;
 /// The longest requested origin host, in bytes: the DNS name limit.
 pub const MAX_ORIGIN_HOST_LEN: usize = 253;
-/// The most foreign files a `reset` result names: escaped names of up to 255 bytes each must fit one frame.
+/// The most foreign files a `reset` result names, so that escaped names of up to 255 bytes each fit one frame.
 pub const MAX_RESET_FOREIGN: usize = 16;
 
 /// One command with its arguments, sent by the CLI as the first frame of an exchange.
@@ -70,7 +107,8 @@ pub enum AdminRequest {
     /// Creates the vault and approves the initial config as version 1; the service prompts for both passphrases and
     /// reveals the recovery key. Command ID 7.
     Init {
-        /// Also enrol the identity in the unlock handoff as a recipient, which a Development service refuses.
+        /// `true` if and only if the identity is also enrolled in the unlock handoff as a recipient; a Development
+        /// service refuses `true`.
         host_unlock: bool,
     },
     /// Lists every credential with its kind, permitted origins and standing; allowed in every state. No arguments.
@@ -104,10 +142,11 @@ pub enum AdminRequest {
         /// The credential name, as the owner wrote it; the service validates it.
         name: String,
     },
-    /// Lists every enrolled recipient of the vault identity, in inventory order; Ready only. No arguments. Command ID 13.
+    /// Lists every enrolled recipient of the vault identity, in inventory order; Ready only. No arguments. Command ID
+    /// 13.
     RecipientList,
-    /// Enrols a recipient key the owner supplies, after migration authorization: the vault passphrase, typed at a prompt.
-    /// Command ID 14. Source `1` on the wire.
+    /// Enrols a recipient key the owner supplies, after migration authorization: the vault passphrase or a `tpm`
+    /// approver's TPM approval PIN, typed at a prompt. Command ID 14, source `1` on the wire.
     RecipientAdd {
         /// The `age1...` key as the owner wrote it; the service parses it.
         recipient: String,
@@ -129,8 +168,8 @@ pub enum AdminRequest {
         /// The recipient label as the owner wrote it; the service validates it.
         label: String,
     },
-    /// Removes an enrolled recipient from the identity envelope and the inventory after owner presence; the service prompts
-    /// for the approval passphrase. Command ID 15.
+    /// Removes an enrolled recipient from the identity envelope and the inventory after owner presence; the service
+    /// prompts for the approval passphrase. Command ID 15.
     RecipientRemove {
         /// The recipient key's `age1...` text, as the owner wrote it; the service parses it.
         recipient: String,
@@ -145,33 +184,36 @@ pub enum AdminRequest {
         /// The approver label as the owner wrote it; the service validates it.
         label: String,
     },
-    /// Removes the approver with this ID after owner presence from any pinned approver, the one removed included. The ID is
-    /// 16 raw bytes; the service decides whether it is a version 4 UUID that names a pinned approver. Command ID 18.
+    /// Removes the approver with this ID after owner presence from any pinned approver, the one removed included. The ID
+    /// travels as 16 raw bytes, and the service checks that it is a version 4 UUID that names a pinned approver. Command
+    /// ID 18.
     ApproverRemove {
         /// The approver ID's bytes.
         approver: [u8; 16],
     },
-    /// Exports the vault as a migration bundle after migration authorization; Ready only. No arguments: the bundle comes
-    /// back as bundle data frames ([`Frame::BundleData`]). Command ID 19.
+    /// Exports the vault as a migration bundle after migration authorization; Ready only. No arguments: the bundle
+    /// comes back as bundle data frames ([`Frame::BundleData`]). Command ID 19.
     Export,
-    /// Imports a migration bundle into a service that holds no vault; Locked only. The bundle follows the request as bundle
-    /// data frames. Command ID 20.
+    /// Imports a migration bundle into a service that holds no vault; Locked only. The bundle follows the request as
+    /// bundle data frames. Command ID 20.
     Import {
-        /// Also enrol the identity in the unlock handoff as a recipient, as for [`Self::Init`].
+        /// `true` if and only if the identity is also enrolled in the unlock handoff as a recipient, as for
+        /// [`Self::Init`].
         host_unlock: bool,
     },
     /// Discards the vault and the config after a confirmation typed at a terminal; allowed in Locked, Ready and
     /// Unavailable. No arguments. Command ID 21.
     Reset,
-    /// Checks that a retired machine's recipient key is no longer enrolled; Ready only, and it changes nothing. Command ID 22.
+    /// Checks that a retired machine's recipient key is no longer enrolled; Ready only, and it changes nothing. Command
+    /// ID 22.
     ForgetMachine {
         /// The retired machine's `age1...` key as the owner wrote it; the service parses it.
         recipient: String,
     },
 }
 
-/// A requested origin: one permitted origin as an `add` or `replace` request carries it. The host stays text on the wire, at most
-/// [`MAX_ORIGIN_HOST_LEN`] bytes, and the service parses it.
+/// A requested origin: one permitted origin as an `add` or `replace` request carries it. The host stays text on the
+/// wire, at most [`MAX_ORIGIN_HOST_LEN`] bytes, and the service parses it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RequestedOrigin {
     /// The host as the CLI sent it.
@@ -181,7 +223,7 @@ pub struct RequestedOrigin {
 }
 
 impl AdminRequest {
-    /// The command this request names, without its arguments.
+    /// Returns the command this request names, without its arguments.
     pub const fn command(&self) -> AdminCommand {
         match self {
             Self::Ping => AdminCommand::Ping,
@@ -262,7 +304,7 @@ pub enum AdminCommand {
 }
 
 impl AdminCommand {
-    /// The command's name as the CLI spells it, for logs.
+    /// Returns the command's name as the CLI spells it, for logs: for example `config approve`.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Ping => "ping",
@@ -290,7 +332,8 @@ impl AdminCommand {
         }
     }
 
-    /// The command's ID in snake_case, as `admin.command` records it.
+    /// Returns the command's name in snake_case, as the `admin.command` audit event records it: for example
+    /// `config_approve`.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Ping => "ping",
@@ -318,7 +361,7 @@ impl AdminCommand {
         }
     }
 
-    /// The admin operation class the state gate decides this command on: each command maps onto exactly one.
+    /// Returns the admin operation class the state gate decides this command on; each command maps onto exactly one.
     pub const fn operation(self) -> AdminOperation {
         match self {
             Self::Ping => AdminOperation::Ping,
@@ -346,9 +389,11 @@ impl AdminCommand {
     }
 }
 
-/// No command accepts an external signature (§5): the service signs only the pending config of its own approval
-/// transaction. The test lists every argument of every command through an exhaustive match, so a new command does not
-/// compile until its arguments are listed and checked here.
+/// No command accepts an external signature ([spec §5][spec-5]): the service signs only the pending config of its own
+/// approval transaction. The test lists every argument of every command through an exhaustive match, so a new command
+/// does not compile until its arguments are listed and checked here.
+///
+/// [spec-5]: ../../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns
 #[cfg(test)]
 mod no_external_signatures {
     use super::{AdminCommand, FrameError, body, fields};
@@ -432,17 +477,17 @@ mod no_external_signatures {
 pub struct ProposedConfig(Vec<u8>);
 
 impl ProposedConfig {
-    /// Wraps `bytes`, refusing more than [`MAX_CONFIG_LEN`] of them.
+    /// Wraps `bytes`. Returns `None` if there are more than [`MAX_CONFIG_LEN`] of them.
     pub fn new(bytes: Vec<u8>) -> Option<Self> {
         (bytes.len() <= MAX_CONFIG_LEN).then_some(Self(bytes))
     }
 
-    /// The bytes as proposed.
+    /// Returns the bytes as proposed.
     pub fn bytes(&self) -> &[u8] {
         &self.0
     }
 
-    /// The bytes, for the approval transaction that keeps them as its one byte snapshot.
+    /// Returns the bytes, for the approval transaction that keeps them as its one byte snapshot.
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
     }
@@ -459,11 +504,12 @@ impl fmt::Debug for ProposedConfig {
 pub struct Prompt {
     /// The text the CLI shows the owner.
     pub label: String,
-    /// Whether the value is secret, so the CLI turns terminal echo off while the owner types.
+    /// `true` if and only if the value is secret, so the CLI turns terminal echo off while the owner types.
     pub secret: bool,
-    /// Whether the CLI may answer with a [switch frame](Frame::Switch) instead of owner input, asking for the next
-    /// approver (`design/approval-signers.md`, "Switching"). Set only on an approver prompt while more than one approver
-    /// is pinned.
+    /// `true` if and only if the CLI may answer with a [switch frame](Frame::Switch) instead of owner input, asking for
+    /// the next approver ([approval signers: Switching](../../../../design/approval-signers.md#switching)). Set only when more than one
+    /// method is left to ask: on an approver prompt with more than one approver pinned, or on a migration authorization
+    /// prompt with more than one source-owner method.
     pub switchable: bool,
 }
 
@@ -488,7 +534,7 @@ pub struct Notice {
 pub const MAX_NOTICE_LEN: usize = MAX_BODY_LEN - fields::FIELD_HEADER_LEN;
 
 impl Notice {
-    /// `text` as notices that each fit one frame, split between UTF-8 characters and never truncated.
+    /// Splits `text` into notices that each fit one frame, cutting between UTF-8 characters and never truncating.
     pub fn split(text: &str) -> Vec<Self> {
         let mut rest = text;
         std::iter::from_fn(|| {
@@ -502,7 +548,7 @@ impl Notice {
     }
 }
 
-/// The bytes the owner typed in answer to a prompt: a secret-bearing type (`design/secret-handling.md`).
+/// The bytes the owner typed in answer to a prompt: a secret-bearing type ([secret handling](../../../../design/secret-handling.md)).
 ///
 /// It has no `Clone`, `Display` or serde impl, and its `Debug` shows no byte, so the value cannot be copied, printed
 /// or serialized by accident. Its buffer clears itself on drop.
@@ -514,14 +560,14 @@ impl OwnerInput {
         Self(bytes)
     }
 
-    /// The typed bytes, for the operation that turns them into its own secret type.
+    /// Returns the typed bytes, for the operation that turns them into its own secret type.
     pub fn expose_secret(&self) -> &[u8] {
         &self.0
     }
 
-    /// The input as a vault passphrase, for `unlock` and the vault passphrase source-owner method. Empty or non-UTF-8
-    /// input cannot be the passphrase, which was sealed as non-empty text, so it is `None`, which both refuse as a wrong
-    /// passphrase. The input's buffer is cleared when it drops here.
+    /// Reads the input as a vault passphrase, for `unlock` and the vault passphrase source-owner method. Returns `None`
+    /// for empty or non-UTF-8 input, which cannot be the passphrase because it was sealed as non-empty text; both
+    /// callers refuse `None` as a wrong passphrase. The input's buffer is cleared when it drops here.
     pub fn into_vault_passphrase(self) -> Option<Passphrase> {
         let text = std::str::from_utf8(self.expose_secret()).ok()?;
         Passphrase::new(SecretString::from(text)).ok()
@@ -535,7 +581,7 @@ impl fmt::Debug for OwnerInput {
 }
 
 /// A secret value the service shows the owner once, received in a reveal frame: a secret-bearing type
-/// (`design/secret-handling.md`).
+/// ([secret handling](../../../../design/secret-handling.md)).
 ///
 /// Like [`OwnerInput`], it has no `Clone`, `Display` or serde impl, its `Debug` shows no byte, and its buffer clears
 /// itself on drop. The service never builds one: it encodes a reveal straight from the secret's own type with
@@ -548,7 +594,7 @@ impl RevealedSecret {
         Self(bytes)
     }
 
-    /// The value, for the owner console to show.
+    /// Returns the value, for the owner console to show.
     pub fn expose_secret(&self) -> &[u8] {
         &self.0
     }
@@ -560,8 +606,8 @@ impl fmt::Debug for RevealedSecret {
     }
 }
 
-/// The final frame of an exchange. It holds a secret when it is `caller-token`'s result, so it is secret-bearing: it has
-/// no `Clone`, `PartialEq` or `Display`, and its `Debug` shows no token byte, through [`CallerToken`]'s own.
+/// The final frame of an exchange. It holds a secret when it is `caller-token`'s result, so it is secret-bearing: it
+/// has no `Clone`, `PartialEq` or `Display`, and its `Debug` shows no token byte, through [`CallerToken`]'s own.
 #[derive(Debug)]
 pub enum AdminResponse {
     /// The command completed, and it has no result.
@@ -577,16 +623,17 @@ pub enum AdminResponse {
     ConfigApprove(ApprovalResult),
     /// `lock` completed: the service is Locked.
     Lock {
-        /// Whether every snapshot holding secrets was dropped within the lock drain. When false, a request that ignored
-        /// its cancellation may still hold them, and the service has logged how many.
+        /// `true` if and only if every snapshot holding secrets was dropped within the lock drain. When `false`, a
+        /// request that ignored its cancellation may still hold them, and the service has logged how many.
         cleared: bool,
-        /// Whether the owner-lock file was written, so the lock survives a crash or restart. When false, a restart may
-        /// undo the lock by host unlock.
+        /// `true` if and only if the owner-lock file was written, so the lock survives a crash or restart. When `false`,
+        /// a restart may undo the lock by host unlock.
         persisted: bool,
     },
     /// `unlock` completed: the vault is open and the service is Ready.
     Unlock {
-        /// Whether the owner-lock file is gone. When false, the next start stays Locked until another `unlock`.
+        /// `true` if and only if the owner-lock file is gone. When `false`, the next start stays Locked until another
+        /// `unlock`.
         owner_lock_removed: bool,
     },
     /// `list` completed.
@@ -658,7 +705,7 @@ pub enum AdminResponse {
         vault_id: VaultId,
         /// The check time, Unix seconds UTC, as written to the record.
         checked_at: u64,
-        /// Whether the check record was written; false when the write failed, though the check passed.
+        /// `true` if and only if the check record was written. `false` means the write failed, though the check passed.
         recorded: bool,
     },
     /// `export` completed: the bundle was sent as bundle data frames, the last of them the empty one.
@@ -672,7 +719,8 @@ pub enum AdminResponse {
     },
     /// `import` completed: the vault is written and its committed approval kept; the service is still Locked.
     Import(ImportResult),
-    /// `reset` completed: the vault and the config are discarded and the service is Locked over a directory `init` can use.
+    /// `reset` completed: the vault and the config are discarded and the service is Locked over a directory `init` can
+    /// use.
     Reset {
         /// The vault ID that was confirmed; `None` when the confirmation was the state directory's path.
         vault_id: Option<VaultId>,
@@ -681,9 +729,10 @@ pub enum AdminResponse {
         /// The foreign files left in the state directory, as escaped names; at most the first
         /// [`MAX_RESET_FOREIGN`], since the summary named them all.
         foreign: Vec<String>,
-        /// Whether every snapshot was released within the lock drain and the vault identity was cleared.
+        /// `true` if and only if every snapshot was released within the lock drain and the vault identity was cleared.
         cleared: bool,
-        /// Whether `reset.unfinished` was unlinked but the directory fsync failed, so it may come back after a power loss.
+        /// `true` if and only if `reset.unfinished` was unlinked but the directory fsync failed, so it may come back
+        /// after a power loss.
         finish_uncertain: bool,
     },
     /// `forget-machine` completed: the key is not a recipient. The two facts the guidance is conditional on follow.
@@ -702,8 +751,8 @@ pub enum AdminResponse {
     },
 }
 
-/// What a completed `config approve` reports. The full summary was shown as notices before the confirmation; the result
-/// carries only its headline, which is bounded whatever the config's size.
+/// What a completed `config approve` reports. The full summary was shown as notices before the confirmation; the
+/// result carries only its headline, whose size does not grow with the config's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApprovalResult {
     /// The approval version committed.
@@ -714,7 +763,7 @@ pub struct ApprovalResult {
     pub headline: String,
 }
 
-/// A config digest as the owner reads it: `blake2b:` and 64 lowercase hex digits.
+/// Formats a config digest as the owner reads it: `blake2b:` and 64 lowercase hex digits.
 pub fn digest_text(digest: &[u8; 32]) -> String {
     let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
     format!("blake2b:{hex}")
@@ -733,19 +782,20 @@ pub enum ErrorCode {
     UnexpectedFrame = 4,
     /// The connecting account is not an admin principal; nothing it sent was read.
     NotAdminPrincipal = 5,
-    /// The service is already serving as many admin connections as it allows, or another operation holds the lock a command
-    /// needs; `import` and `export` also raise it while another import holds the import slot.
+    /// The service is already serving as many admin connections as it allows, or another operation holds the lock a
+    /// command needs; `import` and `export` also raise it while another import holds the import slot.
     Busy = 6,
     /// `config approve`: the proposed config fails parsing, validation or activation.
     ConfigInvalid = 7,
     /// The owner declined at a confirmation prompt: `init`'s recovery key confirmation, `import`'s, and `reset`'s.
     Declined = 8,
-    /// `config approve`, `replace`, `rm`, `recipient remove`, `approver add`, `approver remove`: owner presence failed: the approval
-    /// passphrase did not open the pinned approver's key.
+    /// `config approve`, `replace`, `rm`, `recipient remove`, `approver add`, `approver remove`: owner presence failed.
+    /// The approval passphrase did not open the approver key, the key it opened is not the asked approver's, or the TPM
+    /// refused a TPM approver's PIN.
     ApprovalDenied = 9,
     /// `config approve`: the service cannot run an approval now; no version was reserved. `replace`, `rm`,
-    /// `recipient remove`, `approver add`, `approver remove`: owner presence could not be checked, or a `lock` cancelled the change at its
-    /// passphrase prompt; nothing was written.
+    /// `recipient remove`, `approver add`, `approver remove`: owner presence could not be checked, or a `lock`
+    /// cancelled the change at its passphrase prompt; nothing was written.
     ApprovalUnavailable = 10,
     /// `config approve`: failed after reserving a version, before committing it; the version is consumed.
     ApprovalFailed = 11,
@@ -773,9 +823,9 @@ pub enum ErrorCode {
     NameTaken = 20,
     /// `add`: the name, an origin or the material breaks its rule; the message names the rule, never a typed byte.
     CredentialInvalid = 21,
-    /// `add`, `replace`: writing the vault failed; the message says whether the write may have committed. `approver add`:
-    /// the approval state did not read back before the change, or the approver change failed; the message says whether
-    /// it may have committed.
+    /// `add`, `replace`, `rm`, `recipient remove`: writing the vault failed. `approver add`, `approver remove`: the
+    /// approval state did not read back before any prompt, or the approver change failed. Either way the message says
+    /// whether the change may have committed.
     VaultWriteFailed = 22,
     /// `replace`, `rm`: the manifest holds no credential of that name.
     UnknownCredential = 23,
@@ -786,16 +836,19 @@ pub enum ErrorCode {
     RandomSourceFailed = 25,
     /// `list`: the credential list does not fit one frame; the message names the count.
     ListTooLarge = 26,
-    /// `unlock`, `recovery check`, `init`, `import`: a protected install's memory is not locked, so the vault identity is not
-    /// unwrapped, or for `init` and `import` not generated; the message names the memory-lock limit or the locking error.
+    /// `unlock`, `recovery check`, `init`, `import`: a protected install's memory is not locked, so the vault identity
+    /// is not unwrapped, or for `init` and `import` not generated; the message names the memory-lock limit or the
+    /// locking error.
     MemoryUnprotected = 27,
-    /// `export`, `recipient add`: migration authorization was refused: the vault passphrase was wrong, the envelopes it
-    /// opened are not this vault's, or the authorization expired, was already used or is for another operation; nothing
-    /// was exported or rewrapped.
+    /// `export`, `recipient add`: migration authorization was refused. The vault passphrase or TPM approval PIN was
+    /// wrong, the envelopes it opened are not this vault's, or the authorization expired, was already used or is for
+    /// another operation; nothing was exported or rewrapped.
     MigrationDenied = 28,
-    /// `export`, `recipient add`: migration authorization could not be checked: an envelope could not be read or opened for a
-    /// reason other than the passphrase, the random source failed, or a `lock` cancelled the command at its prompt (for
-    /// `export`, at the vault passphrase prompt or at either export passphrase prompt); nothing was exported or rewrapped.
+    /// `export`, `recipient add`: migration authorization could not be checked. An envelope could not be read or opened
+    /// for a reason other than the passphrase, the TPM signing helper refused for a reason other than the PIN or a
+    /// lockout, the random source failed, no source-owner method could be asked, or a `lock` cancelled the command at
+    /// its authorization prompt (for `export`, also at either export passphrase prompt); nothing was exported or
+    /// rewrapped.
     MigrationUnavailable = 29,
     /// `recovery check`: the text is not an `AGE-SECRET-KEY-1...` recovery key; the message holds nothing typed.
     RecoveryKeyInvalid = 30,
@@ -804,26 +857,27 @@ pub enum ErrorCode {
     /// `recovery check`: the vault is not Initialized, or a file the check reads could not be read or is malformed, so the
     /// key was not judged.
     RecoveryCheckUnavailable = 32,
-    /// `export`, `recipient add`: too many wrong vault passphrases in a row; the attempt limit refused the attempt before any
-    /// prompt, and the message gives the whole seconds to wait; nothing was exported or rewrapped.
+    /// `export`, `recipient add`: too many wrong vault passphrases in a row; the attempt limit refused the attempt
+    /// before any prompt, and the message gives the whole seconds to wait; nothing was exported or rewrapped.
     MigrationRateLimited = 33,
     /// `unlock`: too many wrong vault passphrases, here or in migration authorization; no prompt was sent. The message
     /// gives the whole seconds to wait, and the service stays Locked.
     UnlockRateLimited = 34,
-    /// `recipient add`, `recipient remove`: the key is not an `age1...` X25519 recipient key, or the label breaks its rule;
-    /// the message names the rule.
+    /// `recipient add`, `recipient remove`: the key is not an `age1...` X25519 recipient key, or the label breaks its
+    /// rule; the message names the rule.
     RecipientInvalid = 35,
     /// `recipient add`: the key is already enrolled; nothing was changed.
     RecipientEnrolled = 36,
     /// `recipient remove`: no enrolled recipient has this key; nothing was changed.
     UnknownRecipient = 37,
-    /// `recipient add`, `recipient remove`: the set after the change would break the independence rule or hold more than 64
-    /// recipients; the message names which part; nothing was changed.
+    /// `recipient add`, `recipient remove`: the set after the change would break the independence rule or hold more
+    /// than 64 recipients; the message names which part; nothing was changed.
     RecipientSetInvalid = 38,
     /// `recipient list`, `recipient add`, `recipient remove`: the inventory check found the recipient inventory missing or
     /// damaged; the message names the damage; nothing was changed.
     RecipientInventoryDamaged = 39,
-    /// `approver add`: the label breaks its rule; `approver remove`: the ID is not a version 4 UUID. The message names the rule.
+    /// `approver add`: the label breaks its rule; `approver remove`: the ID is not a version 4 UUID. The message names
+    /// the rule.
     ApproverInvalid = 40,
     /// `approver remove`: no pinned approver has this ID; nothing was changed.
     UnknownApprover = 41,
@@ -835,25 +889,25 @@ pub enum ErrorCode {
     /// `approver add`: this install does not offer that signer kind yet; nothing was changed.
     ApproverKindUnavailable = 44,
     /// `export`: the snapshot checks found damage before any prompt; or the snapshot or the transfer failed after the
-    /// authorization was consumed, a transfer deadline passed, or a `lock` cancelled it between frames; the message names the
-    /// step and, for a file, its name and the error kind; no bundle was completed.
+    /// authorization was consumed, a transfer deadline passed, or a `lock` cancelled it between frames; the message
+    /// names the step and, for a file, its name and the error kind; no bundle was completed.
     ExportFailed = 45,
     /// `import`: the bytes are not a migration bundle this version reads, exceed the size limit, or fail a check with the
     /// vault identity; the message names the rule or check, never a byte of the bundle; nothing was written.
     BundleInvalid = 46,
     /// `import`: the export passphrase does not open the exported identity envelope; nothing was written.
     ImportDenied = 47,
-    /// `import`: the host unlock flag was set and the service has no host unlock identity to enrol, raised before any prompt;
-    /// or a write failed, and the message names the step and says to run `import` again.
+    /// `import`: the host unlock flag was set and the service has no host unlock identity to enrol, raised before any
+    /// prompt; or a write failed, and the message names the step and says to run `import` again.
     ImportFailed = 48,
     /// `reset`: the directories hold no vault file, so there is nothing to discard; the message says what to run next.
     NothingToReset = 49,
-    /// `reset`: writing `reset.unfinished`, a removal or the state read failed; the message names the step and the file, and
-    /// says whether the vault is intact or the next `reset` resumes.
+    /// `reset`: writing `reset.unfinished`, a removal or the state read failed; the message names the step and the
+    /// file, and says whether the vault is intact or the next `reset` resumes.
     ResetFailed = 50,
-    /// `config approve`, `replace`, `rm`, `recipient remove`, `recipient add`, `approver add`, `approver remove` and `export`:
-    /// the TPM is in dictionary-attack lockout, or the lockout reserve withheld the try. The message gives the whole seconds to
-    /// wait; nothing was reserved, signed or changed.
+    /// `config approve`, `replace`, `rm`, `recipient remove`, `recipient add`, `approver add`, `approver remove` and
+    /// `export`: the TPM is in dictionary-attack lockout, or the lockout reserve withheld the try. The message gives the
+    /// whole seconds to wait; nothing was reserved, signed or changed.
     TpmLockedOut = 51,
     /// `forget-machine`: the key is still a recipient of the vault; the message names the key's role only, says to run
     /// `recipient remove` with the same key, and never repeats the key or the label. Nothing was changed.
@@ -861,7 +915,10 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    /// The code's name in `design/admin-protocol.md`, for the CLI to show beside its number.
+    /// Returns the code's name in the [admin protocol's error table][errors], for the CLI to show beside its number:
+    /// for example `approval-denied`.
+    ///
+    /// [errors]: ../../../../design/admin-protocol.md#admin-response-error-kind-5
     pub const fn name(self) -> &'static str {
         match self {
             Self::UnsupportedVersion => "unsupported-version",
@@ -919,7 +976,7 @@ impl ErrorCode {
         }
     }
 
-    /// The code a frame the service could not decode is answered with.
+    /// Returns the code the service answers a frame it could not decode with.
     pub const fn for_frame_error(error: FrameError) -> Self {
         match error {
             FrameError::UnsupportedVersion(_) => Self::UnsupportedVersion,
@@ -1047,7 +1104,8 @@ impl FrameKind {
 }
 
 /// Appends `frame`'s one encoding to `out`. A caller sending owner input, a reveal or `caller-token`'s result passes a
-/// clearing buffer, because the encoding holds the value; `out` is grown once, before writing, so no partial copy is left behind in a freed allocation.
+/// clearing buffer, because the encoding holds the value. `out` is grown once, before writing, so no partial copy is
+/// left behind in a freed allocation.
 pub fn encode(frame: &Frame, out: &mut Vec<u8>) -> Result<(), FrameError> {
     match frame {
         Frame::Request(request) => put_frame(out, FrameKind::Request, &body::encode_request(request)?),
@@ -1191,8 +1249,8 @@ fn put_frame(out: &mut Vec<u8>, kind: FrameKind, body: &[u8]) -> Result<(), Fram
     Ok(())
 }
 
-/// The frame kind and body length, after the version check, so a newer peer is told its version is unsupported even
-/// when its kinds are unknown here.
+/// Reads the frame kind and body length after the version check, so a newer peer is told its version is unsupported
+/// even when its kinds are unknown here.
 fn read_header(header: &[u8; HEADER_LEN]) -> Result<(FrameKind, usize), FrameError> {
     let [v0, v1, kind, l0, l1, l2, l3] = *header;
     let version = u16::from_be_bytes([v0, v1]);
