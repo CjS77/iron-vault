@@ -1,8 +1,10 @@
 //! Process hardening: turn off core dumps and keep memory out of swap before the service holds any secret.
 //!
 //! A core dump or a swapped-out page would leave the vault identity and credential values on disk in plain text
-//! (specification §14). This module only measures and reports what took effect; whether an incomplete
-//! report stops the service is a deployment-profile decision.
+//! ([spec §14][s14]). This module only measures and reports what took effect; whether an incomplete report stops the
+//! service is a deployment-profile decision.
+//!
+//! [s14]: ../../../design/iron-vault-specification.md#14-recipients-startup-and-memory
 
 // Off Linux only the unsupported report is built; the locking outcomes wait for the platform adapters.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -20,7 +22,7 @@ pub const MEMLOCK_REMEDIATION: &str =
 /// What process hardening achieved, reported at startup and later in `status`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HardeningReport {
-    /// Whether core dumps are off for this process.
+    /// The core dump status.
     pub core_dumps: CoreDumps,
     /// The memory protection status.
     pub memory: MemoryProtection,
@@ -93,7 +95,7 @@ pub fn harden_process() -> HardeningReport {
     }
 }
 
-/// Reports that this platform has no hardening adapter yet, rather than claiming protection it lacks.
+/// Reports that this platform has no hardening adapter yet, instead of claiming protection it lacks.
 #[cfg(not(target_os = "linux"))]
 pub fn harden_process() -> HardeningReport {
     HardeningReport {

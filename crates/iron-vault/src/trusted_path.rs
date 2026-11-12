@@ -2,10 +2,20 @@
 //!
 //! Encryption cannot protect a vault whose binary, config or state directory a caller can replace, so before it
 //! unlocks anything the service walks each trusted path from `/` down and refuses to start on the first unsafe
-//! component (specification §4).
+//! component ([spec §4][s4]). For example, the config file under [`TrustedPathRule::Config`] in a protected install:
+//!
+//! ```text
+//! component                    owner       mode  rule                                                       result
+//! /                            root        0755  ancestor: root or the service account; nobody else writes  ok
+//! /etc                         root        0755  ancestor                                                   ok
+//! /etc/iron-vault              iron-vault  0770  ancestor: but the group can write it                       refused: WritableByGroup
+//! /etc/iron-vault/config.toml  iron-vault  0600  leaf: the service account's, mode exactly 0600             not reached
+//! ```
 //!
 //! The rules are pure functions over metadata the platform adapter reads, so every case is testable without a
 //! filesystem. This module performs no I/O and names users and groups only by the ids and names it is given.
+//!
+//! [s4]: ../../../design/iron-vault-specification.md#4-installation-and-ownership
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -27,8 +37,8 @@ pub const MAX_SYMLINK_DEPTH: usize = 40;
 pub struct Mode(u32);
 
 impl Mode {
-    /// Keeps only the permission, set-id and sticky bits, so modes compare and display the same whatever the
-    /// adapter passed in the file-type bits.
+    /// Keeps only the permission, set-id and sticky bits, so modes compare and display the same, with or without the
+    /// file-type bits the adapter passed in.
     pub const fn new(bits: u32) -> Self {
         Self(bits & 0o7777)
     }
@@ -50,7 +60,7 @@ impl Mode {
         self.0 & 0o077 != 0
     }
 
-    /// Whether any bit outside `allowed` is set, in the permission bits only.
+    /// Returns `true` if and only if a permission bit outside `allowed` is set; set-id and sticky bits are ignored.
     const fn exceeds(self, allowed: Self) -> bool {
         self.0 & 0o777 & !allowed.0 != 0
     }
@@ -166,15 +176,17 @@ pub enum TrustedPathRule {
     /// all for others, so callers cannot read or change the log. Its ancestors differ from the other rules': a
     /// root-owned one may be group-writable, as stock `/var/log` is, and none may be writable by others, sticky or not.
     LogDir,
-    /// The host unlock handoff file, which holds the host unlock identity's secret text (`design/docker-compose.md`). The
-    /// service account owns it with no group or other permission bits, so only the service can read it and nobody else
-    /// could have planted it. The directory holding it may be root's or the service account's, which the ancestor rule
-    /// already allows, as long as neither group nor others can write it.
+    /// The host unlock handoff file, which holds the host unlock identity's secret text
+    /// ([Host unlock](../../../design/docker-compose.md#host-unlock)). The service account owns it with no group or
+    /// other permission bits, so only the service can read it and nobody else could have planted it. The directory
+    /// holding it may be root's or the service account's, which the ancestor rule already allows, as long as neither
+    /// group nor others can write it.
     UnlockHandoff,
 }
 
 impl TrustedPathRule {
-    /// Whether a root-owned sticky ancestor such as `/tmp` may be group- or world-writable on this path.
+    /// Returns `true` if and only if a root-owned sticky ancestor such as `/tmp` may be group- or world-writable on this
+    /// path.
     const fn allows_sticky_ancestor(self) -> bool {
         !matches!(
             self,
@@ -182,7 +194,7 @@ impl TrustedPathRule {
         )
     }
 
-    /// Whether the leaf must be the file itself rather than a symlink to it. These files are opened with
+    /// Returns `true` if and only if the leaf must be the file itself, not a symlink to it. These files are opened with
     /// `O_NOFOLLOW`, so a symlinked leaf could never be read.
     const fn refuses_leaf_symlink(self) -> bool {
         matches!(
@@ -191,7 +203,7 @@ impl TrustedPathRule {
         )
     }
 
-    /// The problem to report for a symlinked leaf that [`Self::refuses_leaf_symlink`] refuses.
+    /// Returns the problem to report for a symlinked leaf that [`Self::refuses_leaf_symlink`] refuses.
     const fn leaf_symlink_problem(self) -> Problem {
         match self {
             Self::LogDir => Problem::NotADirectory,
@@ -199,7 +211,7 @@ impl TrustedPathRule {
         }
     }
 
-    /// The file this rule's path cautions are about: only the binary must be root's alone, while the other rules
+    /// Returns the file this rule's path cautions are about, if any: only the binary must be root's alone, while the other rules
     /// expect the service account to own their files or directories.
     pub const fn cautioned_file(self) -> Option<CautionedFile> {
         match self {
@@ -236,7 +248,7 @@ pub enum OwnerRequirement {
 }
 
 impl OwnerRequirement {
-    /// Root or `uid`, collapsed to [`OwnerRequirement::Root`] when `uid` is root, so messages do not repeat it.
+    /// Requires root or `uid`, collapsed to [`OwnerRequirement::Root`] when `uid` is root, so messages do not repeat it.
     const fn root_or(uid: u32) -> Self {
         match uid {
             ROOT_UID => Self::Root,
@@ -252,7 +264,7 @@ impl OwnerRequirement {
         }
     }
 
-    /// The owner `chown` should set: root whenever root is acceptable, since root is the stricter choice.
+    /// Returns the owner `chown` should set: root whenever root is acceptable, since root is the stricter choice.
     fn chown_target(self) -> String {
         match self {
             Self::Root | Self::RootOr(_) => "root".to_string(),
@@ -421,8 +433,8 @@ pub fn check(
 /// A directory above the binary that passes its rule but is not owned by root.
 ///
 /// Anything running as the owning account can rename the binary out of the way and put its own in its place, and the
-/// next service start would run it with the vault unlocked. That is safe enough to start on, so it
-/// is a warning, never a refusal.
+/// next service start would run it with the vault unlocked. That is safe enough to start on, so it is a warning, never
+/// a refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathCaution {
     /// The trusted file the directory is on the path to.
@@ -439,8 +451,7 @@ pub struct PathCaution {
 /// once.
 ///
 /// Only the protected profile's binary has cautions: development already reports that it gives no isolation, and the
-/// other rules expect the service account to own their directories. A refused path has its
-/// refusal only.
+/// other rules expect the service account to own their directories. A refused path has its refusal only.
 pub fn check_with_cautions(
     rule: TrustedPathRule,
     profile: DeploymentProfile,
@@ -458,7 +469,7 @@ pub fn check_with_cautions(
     Ok(cautions.into_iter().filter(|caution| seen.insert(caution.path.clone())).collect())
 }
 
-/// Whether a component is the end of the path being checked or a directory above it.
+/// The part a component plays: the end of the path being checked, or a directory above it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Role {
     Leaf,
@@ -602,7 +613,7 @@ impl Walk {
         }
     }
 
-    /// The account the service runs as: the packaged service account, or the invoking user's uid in development.
+    /// Returns the account the service runs as: the packaged service account, or the invoking user's uid in development.
     fn service_account_name(self) -> String {
         match self.profile {
             DeploymentProfile::Protected | DeploymentProfile::Container => SERVICE_ACCOUNT.to_string(),
@@ -625,8 +636,8 @@ impl Walk {
         Ok(self.caution(component))
     }
 
-    /// A passing ancestor's caution: in the protected profile, the binary must be root's alone, so an ancestor the
-    /// service account owns lets that account replace it.
+    /// Returns a passing ancestor's caution, if it has one: in the protected profile, the binary must be root's alone,
+    /// so an ancestor the service account owns lets that account replace it.
     fn caution(self, component: &PathComponent) -> Option<PathCaution> {
         let cautioned = self.profile.is_service_account_install() && component.uid != ROOT_UID;
         self.rule.cautioned_file().filter(|_| cautioned).map(|file| PathCaution {
@@ -637,7 +648,7 @@ impl Walk {
         })
     }
 
-    /// Who may own the binary. Development also accepts root: a root-owned binary is beyond the invoking user's
+    /// Returns who may own the binary. Development also accepts root: a root-owned binary is beyond the invoking user's
     /// reach, so it is never less safe than one the user owns.
     const fn binary_owner(self) -> OwnerRequirement {
         match self.profile {
@@ -681,7 +692,7 @@ fn require_mode(component: &PathComponent, expected: Mode) -> Result<(), Problem
     }
 }
 
-/// The real entry a component stands for: itself, or for a symlink the last component of its resolved chain,
+/// Returns the real entry a component stands for: itself, or for a symlink the last component of its resolved chain,
 /// followed through nested links. A loop or an empty resolution stands for nothing.
 fn resolved(component: &PathComponent) -> Option<&PathComponent> {
     match &component.kind {
@@ -695,7 +706,7 @@ fn resolved(component: &PathComponent) -> Option<&PathComponent> {
     }
 }
 
-/// Whether a directory is shared like `/tmp`: root-owned, sticky and writable by other users. The sticky bit stops
+/// Returns `true` if and only if a directory is shared like `/tmp`: root-owned, sticky and writable by other users. The sticky bit stops
 /// those users renaming or removing the entries that lead to a trusted path, but not creating new ones.
 const fn is_shared_sticky(component: &PathComponent) -> bool {
     let mode = component.mode;
@@ -712,7 +723,7 @@ fn require_mode_within(component: &PathComponent, allowed: Mode) -> Result<(), P
     }
 }
 
-/// A log directory's ancestor: the group may write it only when root owns it, because stock Debian and Ubuntu ship
+/// Checks a log directory's ancestor: the group may write it only when root owns it, because stock Debian and Ubuntu ship
 /// `/var/log` as `drwxrwxr-x root syslog`; others may never write it, sticky or not, since any local account could then
 /// create entries beside the log directory. Sticky only narrows what a group can do, so it changes neither answer.
 fn require_log_ancestor_writes(component: &PathComponent) -> Result<(), Problem> {

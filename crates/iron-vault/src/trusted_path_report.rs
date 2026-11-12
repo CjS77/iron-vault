@@ -84,7 +84,7 @@ impl TrustedPathReport {
         }
     }
 
-    /// The first path that stops startup, in report order: every untrusted or unchecked path, except a file that is
+    /// Returns the first path that stops startup, in report order: every untrusted or unchecked path, except a file that is
     /// missing before it is first needed. `config.toml` is missing until the first approval publishes it, and a lock
     /// file until the first start, whose lock creates it; their directories are checked all the same.
     pub fn refusal(&self) -> Option<(&TrustedPathEntry, &PathFailure)> {
@@ -96,7 +96,7 @@ impl TrustedPathReport {
 }
 
 impl TrustedPathEntry {
-    /// Whether `failure` is only that this entry's file, a config or lock file, does not exist.
+    /// Returns `true` if and only if `failure` is only that this entry's file, a config or lock file, does not exist.
     fn missing_file(&self, failure: &PathFailure) -> bool {
         let missing = matches!(
             failure,
@@ -130,7 +130,7 @@ pub fn log_cautions(report: &TrustedPathReport) {
         .for_each(|warning| tracing::warn!("{warning}"));
 }
 
-/// The plain-language warning for a caution above `trusted`: the folder and its owner, the risk, the fix, and that
+/// Composes the plain-language warning for a caution above `trusted`: the folder and its owner, the risk, the fix, and that
 /// the service starts anyway. It names only paths and accounts, never anything from the vault.
 fn caution_warning(caution: &PathCaution, trusted: &Path) -> String {
     let folder = caution.path.display();
@@ -154,7 +154,7 @@ fn caution_warning(caution: &PathCaution, trusted: &Path) -> String {
     )
 }
 
-/// The running binary's entry: it must still be the file the process started from, and pass the binary rule.
+/// Checks the running binary and returns its entry: it must still be the file the process started from, and pass the binary rule.
 fn binary_entry(profile: DeploymentProfile, owner: ExpectedOwner) -> TrustedPathEntry {
     let rule = TrustedPathRule::Binary;
     match std::env::current_exe() {

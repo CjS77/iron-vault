@@ -1,10 +1,14 @@
 //! Reading administrator-installed files: a TLS listener's certificate chain and key, and a route's pinned CA file.
 //!
 //! Whoever can write one of these files can impersonate Iron Vault to TLS callers or send a route's credential to an
-//! interceptor (specification §6, §7, §10), so each is read only through its trusted-path rule. The path is walked
+//! interceptor ([spec §6][s6], [§7][s7], [§10][s10]), so each is read only through its trusted-path rule. The path is walked
 //! and checked first; the leaf is then opened without following a symlink, and the open file must be the very file
 //! the walk checked, with the same type, owner, group, mode, device and inode. A file swapped in between the two
-//! steps is refused rather than read.
+//! steps is refused, not read.
+//!
+//! [s6]: ../../../design/iron-vault-specification.md#6-credential-records-and-configuration
+//! [s7]: ../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners
+//! [s10]: ../../../design/iron-vault-specification.md#10-outbound-tls-and-environment
 
 // Off Linux the walk reports itself unsupported, so the open and read below are never reached.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -98,7 +102,8 @@ struct Opened {
     len: u64,
 }
 
-/// Whether the open file is the regular file the walk checked, unchanged in owner, group and mode.
+/// Returns `true` if and only if the open file is the regular file the walk checked, unchanged in owner, group and
+/// mode.
 fn matches_walk(walked: &PathComponent, opened: &Opened) -> bool {
     walked.kind == ComponentKind::RegularFile
         && opened.regular
@@ -168,7 +173,7 @@ mod linux {
         }
     }
 
-    /// The open file's `fstat`, which describes the file itself whatever now stands at its path.
+    /// Returns the open file's `fstat`, which describes the file itself, not whatever now stands at its path.
     pub(super) fn opened(file: &File) -> io::Result<Opened> {
         let metadata = file.metadata()?;
         Ok(Opened {

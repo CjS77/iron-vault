@@ -69,7 +69,7 @@ pub fn collect(_path: &Path) -> Result<Vec<PathComponent>, CollectError> {
 }
 
 /// Checks that the file at `path` is still the binary this process is running, so a deleted or replaced binary is
-/// reported rather than checked in its replacement's place.
+/// reported instead of checked in its replacement's place.
 #[cfg(target_os = "linux")]
 pub fn ensure_running_binary(path: &Path) -> Result<(), CollectError> {
     linux::ensure_running_binary(path)
@@ -81,7 +81,7 @@ pub fn ensure_running_binary(_path: &Path) -> Result<(), CollectError> {
     Err(CollectError::Unsupported)
 }
 
-/// The invoking user, who is the expected owner in a development deployment.
+/// Returns the invoking user, who is the expected owner in a development deployment.
 #[cfg(target_os = "linux")]
 pub fn invoking_user() -> Result<ExpectedOwner, CollectError> {
     Ok(ExpectedOwner {

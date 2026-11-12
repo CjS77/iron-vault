@@ -26,7 +26,7 @@ struct Collector {
 }
 
 impl Collector {
-    /// The components of `path` from `/` down, stopping after a symlink reported as a loop.
+    /// Collects the components of `path` from `/` down, stopping after a symlink reported as a loop.
     fn chain(&self, path: &Path) -> Result<Vec<PathComponent>, CollectError> {
         prefixes(path)?.iter().try_fold(Vec::new(), |mut chain, prefix| {
             if !chain.last().is_some_and(is_loop) {
@@ -78,7 +78,7 @@ impl Collector {
     }
 }
 
-/// Every prefix of the absolute `path`, from `/` to the whole path, as the kernel walks it.
+/// Returns every prefix of the absolute `path`, from `/` to the whole path, as the kernel walks it.
 ///
 /// `.` adds nothing and is dropped; `..` is kept, because after a symlink it leads to the parent of the link's target,
 /// which only the kernel can tell.
@@ -119,7 +119,7 @@ pub(super) fn ensure_running_binary(path: &Path) -> Result<(), CollectError> {
     binary_status(path, file_id(&running), on_disk)
 }
 
-/// The device and inode `metadata` describes.
+/// Returns the device and inode `metadata` describes.
 pub(super) fn file_id(metadata: &Metadata) -> FileId {
     FileId {
         dev: metadata.dev(),
@@ -127,8 +127,8 @@ pub(super) fn file_id(metadata: &Metadata) -> FileId {
     }
 }
 
-/// The binary at `path` is the running one only if the kernel has not marked it deleted and the file now at `path` is
-/// the same inode the process was started from.
+/// Checks that the binary at `path` is the running one: the kernel has not marked it deleted, and the file now at
+/// `path` is the same inode the process was started from.
 fn binary_status(path: &Path, running: FileId, on_disk: Option<FileId>) -> Result<(), CollectError> {
     let deleted = path.as_os_str().as_encoded_bytes().ends_with(DELETED_SUFFIX.as_bytes());
     match !deleted && on_disk == Some(running) {

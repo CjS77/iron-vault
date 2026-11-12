@@ -1,10 +1,13 @@
-//! Reading the host unlock handoff: the file through which the host gives a Protected or Container service the host unlock
-//! identity (`design/docker-compose.md`, specification §17).
+//! Reading the host unlock handoff: the file through which the host gives a Protected or Container service the host
+//! unlock identity ([Host unlock][hu], [spec §17][s17]).
 //!
-//! The file holds the recovery key's secret text, so it is read only through its own trusted-path rule: whoever could
+//! The file holds the host unlock identity's secret text, so it is read only through its own trusted-path rule: whoever could
 //! plant or read it could unlock the vault. The path is walked first; the leaf is then opened without following a
 //! symlink and its open descriptor is checked against the same rule, so a file swapped in after the walk is judged as
 //! itself. No error carries the file's bytes.
+//!
+//! [hu]: ../../../design/docker-compose.md#host-unlock
+//! [s17]: ../../../design/iron-vault-specification.md#17-docker-remote-servers-and-appliances
 
 // Off Linux the walk reports itself unsupported, so the open and read below are never reached.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -24,7 +27,7 @@ use crate::trusted_path::{self, ExpectedOwner, PathComponent, TrustedPathRule, U
 pub const HANDOFF_PATH: &str = "/run/iron-vault-unlock/host-unlock";
 
 /// The unseal-failure file's name. The file sits in the handoff's own directory, `/run/iron-vault-unlock/unseal-failed`
-/// in production (`design/tpm-unlock.md`, "Reporting a failed unseal").
+/// in production ([Reporting a failed unseal](../../../design/tpm-unlock.md#reporting-a-failed-unseal)).
 pub const UNSEAL_FAILED_NAME: &str = "unseal-failed";
 
 /// The most bytes a handoff may hold: the 74-byte `AGE-SECRET-KEY-1…` text, a newline, and room to spare. A longer file
@@ -67,9 +70,9 @@ pub fn read_handoff(profile: DeploymentProfile, owner: ExpectedOwner, path: &Pat
     read_leaf(profile, owner, path, ancestors).map(Some)
 }
 
-/// Whether the unseal-failure file is at `path`: a regular file owned by `owner`, found without following a symlink. A
-/// symlink, a directory, another owner's file or any error counts as not there, since the file is a diagnostic and
-/// never a reason to refuse anything.
+/// Returns `true` if and only if the unseal-failure file is at `path`: a regular file owned by `owner`, found without
+/// following a symlink. A symlink, a directory, another owner's file or any error counts as not there, since the file
+/// is a diagnostic and never a reason to refuse anything.
 pub fn unseal_failed_present(owner: ExpectedOwner, path: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.uid() == owner.uid)
@@ -84,7 +87,7 @@ fn collect_kind(error: &CollectError) -> io::ErrorKind {
     }
 }
 
-/// The text of the identity in `bytes`: one secret key and at most one trailing newline.
+/// Parses the identity in `bytes`: one secret key and at most one trailing newline.
 fn parse(bytes: &[u8]) -> Result<RecipientIdentity, HandoffError> {
     let text = bytes.strip_suffix(b"\n").unwrap_or(bytes);
     RecipientIdentity::from_secret_text(text).ok_or(HandoffError::NotAnIdentity)
@@ -147,7 +150,7 @@ mod linux {
         }
     }
 
-    /// The open file as the path walk would describe it, from `fstat`, which describes the file itself whatever now
+    /// Describes the open file as the path walk would, from `fstat`, which describes the file itself, not whatever now
     /// stands at its path.
     pub(super) fn opened(path: &Path, file: &File) -> io::Result<PathComponent> {
         let metadata = file.metadata()?;
