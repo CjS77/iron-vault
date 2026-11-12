@@ -128,7 +128,10 @@ pub enum Command {
     /// Check that the service is running and show its deployment profile.
     Ping,
     /// Show the service, vault, approval, memory protection, host unlock outcome and credential states, without
-    /// secrets. It exits 4 when the service answers and is not Ready.
+    /// secrets. When an approved listener did not open (a TLS key that does not match its certificate, an address in
+    /// use, a socket directory that is missing), it adds a `Listeners not open:` section naming each listener and a
+    /// short reason; the other listeners keep serving, and that alone does not change the exit code. It exits 4 when
+    /// the service answers and is not Ready.
     Status,
     /// List every credential with its kind, permitted origins and standing, never a secret. It needs an open vault,
     /// and exits 4 while none is open.
@@ -191,7 +194,7 @@ pub enum Command {
     /// the token works once a config naming the hash is approved with `config approve`.
     CallerToken,
     /// Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so
-    /// `pass show fx | iron-vault add fx --origin api.fx.example` works. It never overwrites an existing name.
+    /// `pass show fx | iron-vault add fx --origin openexchangerates.org` works. It never overwrites an existing name.
     Add {
         /// The credential name, which routes reference.
         name: String,

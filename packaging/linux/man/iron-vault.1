@@ -26,7 +26,7 @@ iron\-vault\-ping(1)
 Check that the service is running and show its deployment profile
 .TP
 iron\-vault\-status(1)
-Show the service, vault, approval, memory protection, host unlock outcome and credential states, without secrets. It exits 4 when the service answers and is not Ready
+Show the service, vault, approval, memory protection, host unlock outcome and credential states, without secrets. When an approved listener did not open (a TLS key that does not match its certificate, an address in use, a socket directory that is missing), it adds a `Listeners not open:` section naming each listener and a short reason; the other listeners keep serving, and that alone does not change the exit code. It exits 4 when the service answers and is not Ready
 .TP
 iron\-vault\-list(1)
 List every credential with its kind, permitted origins and standing, never a secret. It needs an open vault, and exits 4 while none is open
@@ -53,7 +53,7 @@ iron\-vault\-caller\-token(1)
 Issue a fresh caller token: it goes to stdout once, and its token_hash line to stderr. The service keeps no copy; the token works once a config naming the hash is approved with `config approve`
 .TP
 iron\-vault\-add(1)
-Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron\-vault add fx \-\-origin api.fx.example` works. It never overwrites an existing name
+Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron\-vault add fx \-\-origin openexchangerates.org` works. It never overwrites an existing name
 .TP
 iron\-vault\-replace(1)
 Replace NAME\*(Aqs record with a new one, and with it the kind and the origins; the old record need not be readable, so this also repairs a damaged one. The service shows what changes, asks for the approval passphrase as owner presence, then prompts for the new secret. On stdin, the first line is the approval passphrase and the rest the secret. Routes that use NAME keep working only if the new kind and origins suit them; otherwise nothing changes

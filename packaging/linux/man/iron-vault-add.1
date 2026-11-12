@@ -2,11 +2,11 @@
 .el .ds Aq '
 .TH iron-vault-add 1  "Iron Vault" "Iron Vault Manual"
 .SH NAME
-iron\-vault\-add \- Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron\-vault add fx \-\-origin api.fx.example` works. It never overwrites an existing name
+iron\-vault\-add \- Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron\-vault add fx \-\-origin openexchangerates.org` works. It never overwrites an existing name
 .SH SYNOPSIS
 \fBiron\-vault add\fR [\fB\-\-admin\-socket\fR] [\fB\-\-kind\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-origin\fR> <\fINAME\fR> 
 .SH DESCRIPTION
-Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron\-vault add fx \-\-origin api.fx.example` works. It never overwrites an existing name
+Enrol a new credential under NAME; the service prompts for the secret, read with echo off or from stdin, so `pass show fx | iron\-vault add fx \-\-origin openexchangerates.org` works. It never overwrites an existing name
 .SH OPTIONS
 .TP
 \fB\-\-admin\-socket\fR \fI<PATH>\fR
