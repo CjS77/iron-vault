@@ -1,11 +1,22 @@
-//! `reset`'s side of the service context (`design/reset.md`, "The exchange"): the plan read before the summary, and the
-//! withdrawal and discard once the owner has confirmed.
+//! Runs the service's part of `reset` ([reset: The exchange](../../../../design/reset.md#the-exchange)), which
+//! discards a vault whose every way in is lost: the plan read before the summary, and the withdrawal and discard once
+//! the owner has confirmed.
 //!
-//! The summary and the confirmation hold no lock. After the confirmation the rest runs in a task the service owns, so a
-//! CLI that closes does not stop it: it takes the service-wide lock, checks the service and the directories again under
-//! the context's mutex, withdraws the vault as `lock` does, releases the mutex and keeps the service-wide lock to the end.
-//! Releasing the mutex before `discard_vault` lets `status` answer while the files go; the service-wide lock, which every
-//! store writer takes, is what keeps the directories still.
+//! ```text
+//!   steps 1-2   reset_plan           check the state, read the directories, work out the confirmation   no lock
+//!   step 3      (exchange) the owner types the vault ID, or the state directory's path
+//!   ─────────── from here a task the service owns runs to the end, even if the CLI closes ───────────
+//!   step 4      withdraw_for_reset   lock request, service-wide lock, check again, withdraw as `lock` does
+//!   steps 5-7   discard              write reset.unfinished (the commit point), the removal order, remove it;
+//!                                    then reset clears the passphrase attempt limit
+//!   step 8      reset                wait for the lock drain, answer
+//! ```
+//!
+//! The summary and the confirmation hold no lock. After the confirmation the rest runs in a task the service owns, so
+//! a CLI that closes does not stop it: it takes the service-wide lock, checks the service and the directories again
+//! under the context's mutex, withdraws the vault as `lock` does, releases the mutex and keeps the service-wide lock
+//! to the end. Releasing the mutex before `discard_vault` lets `status` answer while the files go; the service-wide
+//! lock, which every store writer takes, is what keeps the directories still.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,9 +36,9 @@ use crate::serving_snapshot::Withdrawn;
 /// The vault reset would discard, when the state is Initialized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlannedVault {
-    /// The vault ID: from the open vault in Ready, else from the manifest's clear header.
+    /// The vault ID: from the open vault in Ready, or else from the manifest's clear header.
     pub id: VaultId,
-    /// Whether the ID came from an open vault. Without one nothing checks the manifest's MAC.
+    /// `true` if and only if the ID came from an open vault. Without one nothing checks the manifest's MAC.
     pub verified: bool,
 }
 
@@ -47,12 +58,13 @@ pub struct ResetPlan {
 }
 
 impl ResetPlan {
-    /// The text the owner must type: the vault ID of an Initialized vault, else the state directory's path.
+    /// Returns the text the owner must type: the vault ID of an Initialized vault, or else the state directory's path.
     pub fn confirmation(&self) -> String {
         self.vault.map_or_else(|| self.state_dir.clone(), |vault| vault.id.to_string())
     }
 
-    /// Whether `typed` is the confirmation. A vault ID is hex, so it matches in either case; a path matches byte for byte.
+    /// Returns `true` if and only if `typed` is the confirmation. A vault ID is hex, so it matches in either case; a
+    /// path matches byte for byte.
     pub fn confirmed_by(&self, typed: &[u8]) -> bool {
         match self.vault {
             Some(vault) => typed.eq_ignore_ascii_case(vault.id.to_string().as_bytes()),
@@ -60,7 +72,7 @@ impl ResetPlan {
         }
     }
 
-    /// Whether this resumes an interrupted reset.
+    /// Returns `true` if and only if this resumes an interrupted reset.
     pub fn resumes(&self) -> bool {
         self.scope.state == InitializationState::UnfinishedReset
     }
@@ -90,12 +102,12 @@ pub struct ResetOutcome {
     pub vault_id: Option<VaultId>,
     /// What the discard removed and left.
     pub discarded: DiscardedVault,
-    /// Whether the lock drain cleared the vault identity.
+    /// `true` if and only if the lock drain cleared the vault identity.
     pub cleared: bool,
 }
 
-/// The step a failed discard names: the step of a failed file operation, else `begin`, since every other failure comes
-/// before the first write.
+/// Returns the step a failed discard names: the step of a failed file operation, or else `begin`, since every other
+/// failure comes before the first write.
 pub fn failure_step(cause: &DiscardFailure) -> ResetStep {
     match cause {
         DiscardFailure::Io { step, .. } => *step,
@@ -103,7 +115,7 @@ pub fn failure_step(cause: &DiscardFailure) -> ResetStep {
     }
 }
 
-/// The file, if any, and the error kind a failed discard logs.
+/// Returns the file, if any, and the error kind a failed discard logs.
 fn failure_facts(cause: &DiscardFailure) -> (&str, ErrorKindLabel) {
     match cause {
         DiscardFailure::NothingToReset => ("", ErrorKindLabel::fixed("nothing_to_reset")),
@@ -114,8 +126,8 @@ fn failure_facts(cause: &DiscardFailure) -> (&str, ErrorKindLabel) {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Steps 1 and 2: checks the service state, reads the directories without the vault identity, and works out the
-    /// confirmation. Nothing is locked.
+    /// Runs steps 1 and 2: checks the service state, reads the directories without the vault identity, and works out
+    /// the confirmation. Nothing is locked.
     pub async fn reset_plan(&self) -> Result<ResetPlan, ResetRefusal> {
         let (from, open) = {
             let inner = self.inner.lock().await;
@@ -146,8 +158,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         })
     }
 
-    /// Steps 4 to 8, in a task the service owns. Withdraws the vault as `lock` does, discards it, clears the passphrase
-    /// attempt limit and waits up to `drain` for the last holder of the old snapshot.
+    /// Runs steps 4 to 8 in a task the service owns. Withdraws the vault as `lock` does, discards it, clears the
+    /// passphrase attempt limit and waits up to `drain` for the last holder of the old snapshot.
     pub async fn reset(self: &Arc<Self>, plan: ResetPlan, drain: Duration) -> Result<ResetOutcome, ResetRefusal> {
         let service = Arc::clone(self);
         tokio::spawn(async move { service.run_reset(plan, drain).await })
@@ -186,9 +198,10 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         })
     }
 
-    /// Step 4: announces a lock request, which cancels an approval or vault change waiting at a prompt, waits for the
-    /// service-wide lock, checks the service and the directories again under the context's mutex, and withdraws the
-    /// vault. The mutex is released on return; the service-wide lock is handed back to be held to the end.
+    /// Runs step 4: announces a lock request, which cancels an approval or vault change waiting at a prompt, waits
+    /// for the service-wide lock, checks the service and the directories again under the context's mutex, and
+    /// withdraws the vault. The mutex is released on return; the service-wide lock is handed back to be held to the
+    /// end.
     async fn withdraw_for_reset(
         &self,
         plan: &ResetPlan,
@@ -212,7 +225,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         Ok((service_wide, withdrawn, identity))
     }
 
-    /// Steps 5 to 7: the store's discard on the blocking pool, logging `vault.reset-failed` when it stops.
+    /// Runs steps 5 to 7, the store's discard, on the blocking pool, logging `vault.reset-failed` when it stops.
     async fn discard(&self) -> Result<DiscardedVault, ResetRefusal> {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let discarded = tokio::task::spawn_blocking(move || discard_vault(&locks.state, &locks.config, &setup.fs)).await;
@@ -236,8 +249,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// Step 4's second look at the directories: nothing there ends with `NothingToReset`, any other change from what the
-    /// summary described with `Changed`.
+    /// Runs step 4's second look at the directories: nothing there ends with `NothingToReset`, and any other change
+    /// from what the summary described ends with `Changed`.
     async fn recheck_scope(&self, plan: &ResetPlan) -> Result<(), ResetRefusal> {
         let now = self.read_reset_scope().await?;
         if !now.has_vault_file {
@@ -258,7 +271,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// The vault of an Initialized state: the open vault's ID, else the manifest's clear header.
+    /// Returns the vault of an Initialized state: the open vault's ID, or else the manifest's clear header.
     async fn planned_vault(&self, open_id: Option<VaultId>) -> Result<PlannedVault, ResetRefusal> {
         match open_id {
             Some(id) => Ok(PlannedVault { id, verified: true }),
@@ -287,7 +300,8 @@ fn unreadable(why: impl ToString) -> ResetRefusal {
     ResetRefusal::Unreadable(why.to_string())
 }
 
-/// The refusal for directories with no vault file: a clean one says to run `init`; one holding other files names the first.
+/// Returns the refusal for directories with no vault file: a clean one says to run `init`; one holding other files
+/// names the first.
 fn nothing_to_reset(scope: &ResetScope) -> ResetRefusal {
     let first = scope
         .foreign
