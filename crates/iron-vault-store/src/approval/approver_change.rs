@@ -1,11 +1,21 @@
-//! Approver changes: enrolling and removing one software approver, and the checks that keep `approval.age` and the
-//! `approver-<approver ID>.age` key files consistent (`design/approval-signers.md`, "Approver changes").
+//! Approver changes: enrolls or removes one approver, and keeps `approval.age` and the approvers' key files
+//! (`approver-<approver ID>.age` for software, `approver-<approver ID>.tpm` for TPM) consistent
+//! ([approval signers, "Approver changes"](../../../../design/approval-signers.md#approver-changes)). The service runs these for
+//! `init`, `approver add` and `approver remove`.
 //!
-//! The approval state write is each change's single commit point. An enrollment writes and checks the key file first, so
-//! a failure before the commit leaves the approval state as it was and at most an orphan key file. A removal commits
-//! first and deletes the key file after, so a file it cannot delete is an orphan and never fails the removal. Before
-//! either change the caller reads the approval state back and sweeps the orphans against the state that read returned.
-//! The caller holds the service-wide lock and has the owner's authorization; nothing here asks for either.
+//! The durable replace of `approval.age` is each change's one commit point. An enrollment writes and checks the key file
+//! before it; a removal deletes the key file after it:
+//!
+//! ```text
+//! enroll:  read back + sweep orphans ─→ write key file ─→ read it back, check it ─→ pin in approval.age  ← commit
+//! remove:  read back + sweep orphans ─→ unpin in approval.age  ← commit ─→ delete key file
+//! ```
+//!
+//! A failure before the commit leaves the approval state as it was and at most an orphan key file. After a removal's
+//! commit, a key file that cannot be deleted is an orphan and never fails the removal. Before either change the caller
+//! reads the approval state back with [`ApproverChanges::read_back_approval_state`] and sweeps the orphans against the
+//! state that read returned. The caller holds the service-wide lock and has the owner's authorization; nothing here asks
+//! for either.
 
 #[cfg(test)]
 mod tests;
@@ -25,7 +35,8 @@ use crate::{ErrorKindLabel, PASSPHRASE_WORK_FACTOR, StateDirLock, StateFileName,
 /// The step of an approver change that failed, as `approver.change-failed` records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApproverChangeStep {
-    /// Step 3 of the commands: reading `approval.age` back, and the orphan sweep that follows. Nothing is ever committed.
+    /// Reading `approval.age` back, and the orphan sweep that follows: step 3 of `approver add` and `approver remove` in
+    /// [approval signers](../../../../design/approval-signers.md#reading-the-approval-state-back). It never commits anything.
     ReadBack,
     /// The TPM signing helper creating or using the new TPM approver's key.
     TpmHelper,
@@ -38,7 +49,7 @@ pub enum ApproverChangeStep {
 }
 
 impl ApproverChangeStep {
-    /// The snake_case label `approver.change-failed` records in its `step` field.
+    /// The `snake_case` label `approver.change-failed` records in its `step` field, such as `key_check`.
     pub fn label(self) -> &'static str {
         match self {
             Self::ReadBack => "read_back",
@@ -52,7 +63,7 @@ impl ApproverChangeStep {
 
 /// Whether a failed approver change may have committed.
 ///
-/// There is no "yes": a failure after the commit point is not a failure. A removal that cannot delete its key file still
+/// There is no `Yes`: nothing after the commit point fails the change. A removal that cannot delete its key file still
 /// succeeds ([`KeyFileOutcome::Left`]), and an enrollment ends at its commit point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MayHaveCommitted {
@@ -64,7 +75,8 @@ pub enum MayHaveCommitted {
 }
 
 impl MayHaveCommitted {
-    /// The label `approver.change-failed` records in its `committed` field, as `recipient.change-failed` does.
+    /// The label `approver.change-failed` records in its `committed` field, `no` or `unknown`, as
+    /// `recipient.change-failed` does.
     pub fn label(self) -> &'static str {
         match self {
             Self::No => "no",
@@ -76,9 +88,9 @@ impl MayHaveCommitted {
 /// What a removal did with the removed approver's key file, which is no longer a pinned approver's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyFileOutcome {
-    /// The file is gone: deleted and the directory fsync succeeded, or it was not there to delete (no fsync runs then).
+    /// The file is gone: deleted and the directory fsync succeeded, or it was not there to delete (then no fsync runs).
     Removed,
-    /// The file could not be deleted, or its deletion may not survive power loss. It is an orphan the next sweep removes.
+    /// The file could not be deleted, or its deletion may not survive power loss. The next sweep removes the orphan.
     Left(WriteError),
 }
 
@@ -97,12 +109,12 @@ pub enum KeyCheckError {
     /// The helper's signature over a fresh presence payload does not verify against the key about to be pinned.
     #[error("the helper's signature does not verify against the new key")]
     Signature,
-    /// The operating system gave no random bytes for the check's presence payload.
+    /// The operating system's random source failed, so the check has no nonce for its presence payload.
     #[error("the check's presence payload could not be made: no random bytes")]
     Randomness,
 }
 
-/// An approver change or the checks before it failed. Every variant says whether the change may have committed
+/// An approver change, or the checks before it, failed. Every variant says whether the change may have committed
 /// ([`Self::may_have_committed`]) and at which step ([`Self::step`]). No variant carries key material or a passphrase.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ApproverChangeError {
@@ -114,8 +126,9 @@ pub enum ApproverChangeError {
     /// Nothing was changed and no key file was deleted.
     #[error("the approval state on disk differs from the one in memory; nothing was changed")]
     ReadBackDiffers,
-    /// An orphan key file could not be listed or deleted, which ends the sweep. `removed` are the IDs it deleted before
-    /// that, in the order of its file names, for the caller to log. No approver change was made.
+    /// The state directory could not be listed, or an orphan key file could not be deleted, which ends the sweep.
+    /// `removed` holds the IDs it deleted before that, in file name order, for the caller to log. No approver change was
+    /// made.
     #[error("cannot remove orphan approver key files ({error}); no approver change was made")]
     OrphanSweep {
         /// What stopped the sweep.
@@ -139,8 +152,8 @@ pub enum ApproverChangeError {
     /// The key file was written but does not pass the check. The approval state is as it was; the file is an orphan.
     #[error("the approver key file fails its check: {0}; nothing was committed")]
     KeyCheck(KeyCheckError),
-    /// The approval state refused the change or could not write it. Unless it is
-    /// [`ApprovalStateError::WriteUncertain`], the approval state is as it was.
+    /// The approval state refused the change or could not write it. The approval state is as it was unless the cause
+    /// is [`ApprovalStateError::WriteUncertain`].
     #[error("the approval state change failed: {0}")]
     ApprovalState(ApprovalStateError),
 }
@@ -157,8 +170,8 @@ impl ApproverChangeError {
         }
     }
 
-    /// Whether the change may have committed: only a directory fsync that failed after the rename of `approval.age` leaves
-    /// that open.
+    /// Whether the change may have committed. Only a directory fsync that failed after the rename of `approval.age`
+    /// leaves that open, as [`MayHaveCommitted::Unknown`].
     pub fn may_have_committed(&self) -> MayHaveCommitted {
         match self {
             Self::ApprovalState(ApprovalStateError::WriteUncertain(_)) => MayHaveCommitted::Unknown,
@@ -166,7 +179,8 @@ impl ApproverChangeError {
         }
     }
 
-    /// The failure as a label that holds no file name, key or error text, for `approver.change-failed`'s `error_kind`.
+    /// The failure as a label that holds no file name, key or error text, for `approver.change-failed`'s `error_kind`:
+    /// for example `differs` or `key_mismatch`.
     pub fn error_kind_label(&self) -> ErrorKindLabel {
         match self {
             Self::ReadBackUnreadable(ApprovalStateError::PartialRestore(_)) => ErrorKindLabel::fixed("partial_restore"),
@@ -197,7 +211,7 @@ pub struct ApproverChanges<'a, F> {
 }
 
 impl<'a, F: StoreFs> ApproverChanges<'a, F> {
-    /// The approver changes of the state directory `lock` holds.
+    /// Prepares approver changes in the state directory that `lock` holds.
     pub fn new(lock: &'a StateDirLock, fs: &'a F, identity: &'a VaultIdentity) -> Self {
         Self { lock, fs, identity }
     }
@@ -218,8 +232,8 @@ impl<'a, F: StoreFs> ApproverChanges<'a, F> {
         self.enroll_at(state, (label, now), passphrase, PASSPHRASE_WORK_FACTOR)
     }
 
-    /// [`Self::enroll_software_approver`] sealing at work factor 2 instead of [`PASSPHRASE_WORK_FACTOR`], so a test that
-    /// opens the key spends no seconds in scrypt. Only the `test-support` feature exposes it.
+    /// Runs [`Self::enroll_software_approver`] sealing at work factor 2 instead of [`PASSPHRASE_WORK_FACTOR`], so a test
+    /// that opens the key spends no seconds in scrypt. Only the `test-support` feature exposes it.
     #[cfg(any(test, feature = "test-support"))]
     pub fn enroll_software_approver_for_tests(
         &self,
@@ -252,8 +266,8 @@ impl<'a, F: StoreFs> ApproverChanges<'a, F> {
         Ok(approver)
     }
 
-    /// The refusals the approval state write would make after the key file is written, made before so they leave no
-    /// orphan: a seventeenth approver, and a state that is unsettled or no longer the one on disk.
+    /// Makes, before any file is written, the refusals the approval state write would make after it, so they leave no
+    /// orphan: an approver past [`MAX_APPROVERS`], and a state that is unsettled or no longer the one on disk.
     fn refuse_before_any_file(&self, state: &ApprovalState) -> Result<(), ApproverChangeError> {
         if state.approvers().len() >= MAX_APPROVERS {
             return Err(ApproverChangeError::ApprovalState(ApprovalStateError::TooManyApprovers));
@@ -263,8 +277,8 @@ impl<'a, F: StoreFs> ApproverChanges<'a, F> {
             .map_err(ApproverChangeError::ApprovalState)
     }
 
-    /// Reads the new key file back and opens it with `passphrase` as `approver`, so a pinned software approver always has a
-    /// key file that opens. The opened signer is dropped at once.
+    /// Reads the new key file back and opens it with `passphrase` as `approver`, so a pinned software approver always
+    /// has a key file that opens. The opened signer is dropped at once.
     fn check_key_file(&self, approver: &PinnedApprover, passphrase: &ApprovalPassphrase) -> Result<(), ApproverChangeError> {
         let envelope =
             read_signer_key(self.lock, self.fs, approver.id()).map_err(|e| ApproverChangeError::KeyCheck(KeyCheckError::Read(e)))?;
@@ -273,11 +287,11 @@ impl<'a, F: StoreFs> ApproverChanges<'a, F> {
             .map_err(|e| ApproverChangeError::KeyCheck(KeyCheckError::Open(e)))
     }
 
-    /// Unpins the approver `id` and then deletes its key file, which is the order that keeps a pinned approver's key.
+    /// Unpins the approver `id`, then deletes its key file. In this order a pinned approver never loses its key.
     ///
-    /// The approval state write is the commit point; the refusals (an unknown ID, the last approver, a stale state) come
+    /// The approval state write is the commit point. The refusals (an unknown ID, the last approver, a stale state) come
     /// before it and change nothing. After it, a key file that cannot be deleted is reported as [`KeyFileOutcome::Left`]
-    /// and never fails the removal: the approver is gone and the file is an orphan the next sweep deletes.
+    /// and never fails the removal: the approver is gone, and the next sweep deletes the orphan file.
     pub fn remove_approver(&self, state: &mut ApprovalState, id: ApproverId) -> Result<KeyFileOutcome, ApproverChangeError> {
         let kind = state.approver(id).map(PinnedApprover::kind);
         // `remove_approver` below fails for an unknown ID, so on success `kind` is always `Some`; the default is never used.
@@ -295,12 +309,12 @@ impl<'a, F: StoreFs> ApproverChanges<'a, F> {
     /// Loads `approval.age` from disk, opening it and checking it against the manifest as every approval does, and
     /// returns the state read.
     ///
-    /// When `state` is unsettled the state read replaces it, as the next approval does after such a reservation.
-    /// Otherwise the two must be equal, the check the store makes before every approval state write. A file that cannot
+    /// When `state` is unsettled, the state read replaces it, as the next approval does after such a reservation.
+    /// Otherwise the two must be equal: the check the store makes before every approval state write. A file that cannot
     /// be read or opened, that differs, or that is one half of a partial restore (an older `approval.age` put back
-    /// beside a newer manifest) is an error and nothing was changed, so the caller deletes no key file. The manifest pair
-    /// check applies to an unsettled state too: it is what stops a restored older `approval.age` from being adopted and
-    /// the key of an approver it does not pin from looking like an orphan.
+    /// beside a newer manifest) is an error and nothing changed, so the caller deletes no key file. The manifest pair
+    /// check applies to an unsettled state too. It stops a restored older `approval.age` from being adopted, which would
+    /// make the key of an approver it does not pin look like an orphan.
     pub fn read_back_approval_state(&self, state: &mut ApprovalState) -> Result<ReadBack, ApproverChangeError> {
         let on_disk =
             ApprovalState::load(self.lock, self.fs, self.identity, state.vault_id()).map_err(ApproverChangeError::ReadBackUnreadable)?;
@@ -315,8 +329,8 @@ impl<'a, F: StoreFs> ApproverChanges<'a, F> {
     /// Deletes every `approver-<id>.age` and `approver-<id>.tpm` whose ID no approver pinned in `read_back` has, and
     /// returns the IDs removed in ascending order of file name.
     ///
-    /// Only the state [`Self::read_back_approval_state`] returned is accepted, never the in-memory state: an in-memory
-    /// state that missed a committed enrollment would make that approver's key file look like an orphan, and this would
+    /// It takes only the state [`Self::read_back_approval_state`] returned, never the in-memory state. An in-memory state
+    /// that missed a committed enrollment would make that approver's key file look like an orphan, and the sweep would
     /// delete the only key of a pinned approver. A failure ends the sweep and still reports the IDs deleted so far
     /// ([`ApproverChangeError::OrphanSweep`]).
     pub fn remove_orphan_key_files(&self, read_back: &ReadBack) -> Result<Vec<ApproverId>, ApproverChangeError> {
@@ -337,8 +351,8 @@ impl<'a, F: StoreFs> ApproverChanges<'a, F> {
     }
 }
 
-/// The state file that holds a `kind` approver's key: the software approver's `approver-<id>.age`, or the TPM approver's key
-/// blob `approver-<id>.tpm`.
+/// Names the state file that holds a `kind` approver's key: the software approver's `approver-<id>.age`, or the TPM
+/// approver's key blob `approver-<id>.tpm`.
 fn key_file_name(kind: SignerKind, id: ApproverId) -> StateFileName {
     match kind {
         SignerKind::Software => StateFileName::approver_key(id),
@@ -346,7 +360,8 @@ fn key_file_name(kind: SignerKind, id: ApproverId) -> StateFileName {
     }
 }
 
-/// The approver ID and file when `name` is exactly an approver's key file of either kind.
+/// Returns the approver ID and file when `name` is exactly an approver's key file of either kind, and `None`
+/// otherwise.
 fn orphan_candidate(name: &str) -> Option<(ApproverId, StateFileName)> {
     let software = StateFileName::approver_key_id(name).map(|id| (id, key_file_name(SignerKind::Software, id)));
     software.or_else(|| StateFileName::tpm_key_blob_id(name).map(|id| (id, key_file_name(SignerKind::Tpm, id))))

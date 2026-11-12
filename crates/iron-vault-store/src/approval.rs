@@ -1,16 +1,40 @@
-//! Config approvals: the payload a signer signs and the `config.toml.sig` envelope that carries it (spec §12,
-//! implementation spec §2.2 Q-9).
+//! Config approvals: what a pinned approver signs, the `config.toml.sig` file that carries the signature, and the
+//! approval state that decides whether a signature still counts
+//! ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
+//! [implementation spec §2.2](../../../design/implementation-specification.md#22-product-decisions-and-resulting-behavior)
+//! Q-9).
 //!
-//! The signature covers the purpose, the vault ID, the approval version and the config digest together, so an old
-//! config cannot be paired with a newer signature and an old approval's version cannot be edited. Software, TPM and
-//! later YubiKey signers all produce the same envelope, so it is verified one way. Both byte layouts are in
-//! `design/storage-formats.md`.
+//! The service proxies only under a config the owner approved. An approval is one pinned approver's signature over an
+//! [`ApprovalPayload`]: the purpose, the vault ID, a reserved [`ApprovalVersion`] and the [`ConfigDigest`], signed
+//! together. An old config cannot be paired with a newer signature, and an old approval's version cannot be edited.
+//! The signature travels in an [`ApprovalEnvelope`]. Software, TPM and later YubiKey signers all produce the same
+//! envelope, so the service verifies it one way. The byte layouts are in
+//! [storage formats](../../../design/storage-formats.md#approval-payload-v1).
 //!
-//! The approval state, which pins the approvers and holds the version counters, is in [`state`]; checking an approval
-//! against it is in [`verify`]. The signer that produces approvals is [`signer`], with the software signer in
-//! [`software_signer`]. The approval transaction's durable steps, which build on all of these, are in [`transaction`],
-//! and the approval recovery every config check runs first is in [`recovery`]. The presence and migration proof payloads,
-//! the other messages a TPM approver signs, are in [`proof_payload`].
+//! `config approve` runs the [`transaction`]; every config check, at startup and on reload, runs [`recovery`] and then
+//! [`verify`]. Both read and write the approval state in [`state`]:
+//!
+//! ```text
+//!  config approve: the transaction                     every config check
+//!  ───────────────────────────────                     ──────────────────
+//!  1 write   config.toml.pending                       recover   finish or discard a transaction
+//!  2 reserve version N ───────────────→ approval.age             that stopped part way
+//!  3 sign    payload (vault ID, N, digest)              │         │
+//!  4 stage   config.toml.sig.staged                     │         ▼
+//!  5 commit  (N, digest) ─────────────→ approval.age ──┼──→ verify   config.toml + config.toml.sig
+//!  6 publish config.toml + config.toml.sig ────────────┘            against the pinned approvers and
+//!                                                                    the committed (N, digest)
+//! ```
+//!
+//! The submodules:
+//!
+//! - [`state`]: the pinned approvers and the approval version counters, in `approval.age`.
+//! - [`signer`]: the [`ApprovalSigner`] trait every signer implements; [`software_signer`] is the software one.
+//! - [`transaction`]: the six durable steps of an approval.
+//! - [`recovery`]: settles the files a stopped transaction left behind.
+//! - [`verify`]: checks an approval against the approval state.
+//! - [`approver_change`]: pins or unpins an approver, with its key file.
+//! - [`proof_payload`]: the presence and migration proof payloads, the other messages a TPM approver signs.
 
 mod approver_change;
 mod encoding;
@@ -54,17 +78,16 @@ pub use transaction::{
 };
 pub use verify::{VerifiedApproval, VerifyError, verify_approval};
 
-/// The largest approval envelope accepted, in bytes, checked before anything else is read.
+/// The largest approval envelope accepted, in bytes. Decoding checks it before it reads anything else.
 ///
 /// A v1 envelope is 191 bytes with either algorithm, since both signatures are 64 bytes. The limit leaves room for a
 /// later algorithm with a large signature while keeping a planted file cheap to refuse.
 pub const MAX_APPROVAL_ENVELOPE_LEN: usize = 4096;
 
-/// The purpose every approval payload names, so a signature made for anything else is never read as a config
-/// approval.
+/// The purpose every approval payload names. A signature made for any other purpose never reads as a config approval.
 pub const APPROVAL_PURPOSE: &str = "iron-vault-config-v1";
 
-/// A reserved approval version: positive, because zero is the reserved counter's value before any approval.
+/// A reserved approval version. It is never zero: zero is the reserved counter's value before the first reservation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ApprovalVersion(NonZeroU64);
 
@@ -72,7 +95,7 @@ impl ApprovalVersion {
     /// Version 1, the first a new vault reserves.
     pub const FIRST: Self = Self(NonZeroU64::MIN);
 
-    /// The version `value`, or `None` for zero.
+    /// Returns the version `value`, or `None` for zero.
     pub fn new(value: u64) -> Option<Self> {
         NonZeroU64::new(value).map(Self)
     }
@@ -82,7 +105,7 @@ impl ApprovalVersion {
         self.0.get()
     }
 
-    /// The version after this one, or `None` once the counter is exhausted; it never wraps.
+    /// Returns the version after this one, or `None` at `u64::MAX`. It never wraps.
     pub fn next(self) -> Option<Self> {
         self.0.checked_add(1).map(Self)
     }
@@ -96,18 +119,18 @@ impl fmt::Display for ApprovalVersion {
 
 /// The BLAKE2b-256 digest of the exact config bytes the service reviewed.
 ///
-/// It is built only from config bytes, so every digest names a config. Equality is constant time because verification
-/// compares a digest from a caller-supplied signature file against one the service computed.
+/// Only config bytes build one, so every digest names a config. Equality is constant time because verification compares
+/// a digest from a signature file anyone could have written against one the service computed.
 #[derive(Debug, Clone, Copy)]
 pub struct ConfigDigest([u8; 32]);
 
 impl ConfigDigest {
-    /// The digest of `config`, byte for byte: whitespace and comments count.
+    /// Hashes `config` byte for byte: whitespace and comments count, so two configs that parse alike can have different digests.
     pub fn of(config: &[u8]) -> Self {
         Self(Blake2b256::digest(config).into())
     }
 
-    /// A digest read back from an encoding the service wrote or verifies.
+    /// Wraps a digest read back from an encoding the service wrote or verifies.
     pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
@@ -136,7 +159,7 @@ impl Eq for ConfigDigest {}
 
 /// The algorithm a config approval is signed with, by its one-byte wire ID.
 ///
-/// ID `00` is never valid, and any ID without a variant is unknown.
+/// ID `0x00` is never valid, and any ID without a variant is unknown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SignatureAlgorithm {
     /// Ed25519 (RFC 8032), used by the software signer; a signature is exactly 64 bytes.
@@ -155,7 +178,7 @@ impl SignatureAlgorithm {
         }
     }
 
-    /// The algorithm with wire ID `id`.
+    /// Returns the algorithm with wire ID `id`, or [`ApprovalDecodeError::UnknownAlgorithm`].
     pub fn from_id(id: u8) -> Result<Self, ApprovalDecodeError> {
         match id {
             0x01 => Ok(Self::Ed25519),
@@ -164,7 +187,7 @@ impl SignatureAlgorithm {
         }
     }
 
-    /// Whether `len` is a valid signature length for this algorithm.
+    /// Returns `true` if and only if `len` is a valid signature length for this algorithm.
     fn accepts_signature_len(self, len: usize) -> bool {
         match self {
             Self::Ed25519 | Self::EcdsaP256 => len == 64,
@@ -184,7 +207,7 @@ pub struct ApprovalPayload {
 }
 
 impl ApprovalPayload {
-    /// The payload approving the config with `digest` as `version` of vault `vault_id`.
+    /// Builds the payload that approves the config with `digest` as `version` of vault `vault_id`.
     pub fn new(vault_id: VaultId, version: ApprovalVersion, digest: ConfigDigest) -> Self {
         Self { vault_id, version, digest }
     }
@@ -204,12 +227,12 @@ impl ApprovalPayload {
         self.digest
     }
 
-    /// The exact bytes a signer signs; one payload has one encoding.
+    /// Encodes the exact bytes a signer signs. One payload has one encoding.
     pub fn encode(&self) -> Vec<u8> {
         encoding::encode_payload(self)
     }
 
-    /// The payload `bytes` encode, accepted only in its one canonical form.
+    /// Decodes a payload, accepting `bytes` only in their one canonical form.
     pub fn decode(bytes: &[u8]) -> Result<Self, ApprovalDecodeError> {
         encoding::decode_payload(bytes)
     }
@@ -218,11 +241,11 @@ impl ApprovalPayload {
 /// The contents of `config.toml.sig`: a payload, the algorithm and approver ID of the approver that signed it, and the
 /// signature.
 ///
-/// It carries no public key: the service verifies against the key of the approver the ID names, pinned in protected
-/// vault metadata, never a key from the signature file. The ID is outside the signed payload and needs no signature of
-/// its own: a changed ID selects another approver's key, the signature then fails, and no two approvers share a key.
-/// The signature covers [`ApprovalPayload::encode`], which is the payload's exact bytes in the envelope because
-/// decoding accepts only that encoding.
+/// It carries no public key. The service verifies against the key of the approver the ID names, pinned in the approval
+/// state, never a key from the signature file. The ID is outside the signed payload and needs no signature of its own:
+/// a changed ID selects another approver's key, the signature then fails, and no two approvers share a key. The
+/// signature covers [`ApprovalPayload::encode`], which equals the payload bytes in the envelope because decoding accepts
+/// only that encoding.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ApprovalEnvelope {
     algorithm: SignatureAlgorithm,
@@ -232,8 +255,8 @@ pub struct ApprovalEnvelope {
 }
 
 impl ApprovalEnvelope {
-    /// An envelope for `payload` signed with `algorithm` by the approver `approver_id`, refusing a signature of the
-    /// wrong length for the algorithm.
+    /// Builds an envelope for `payload` signed with `algorithm` by the approver `approver_id`. Refuses a signature of
+    /// the wrong length for the algorithm with [`ApprovalDecodeError::SignatureLength`].
     pub fn new(
         algorithm: SignatureAlgorithm,
         approver_id: ApproverId,
@@ -274,18 +297,19 @@ impl ApprovalEnvelope {
         &self.signature
     }
 
-    /// The `config.toml.sig` bytes.
+    /// Encodes the `config.toml.sig` bytes.
     pub fn encode(&self) -> Vec<u8> {
         encoding::encode_envelope(self)
     }
 
-    /// The envelope `bytes` encode, after the size limit, accepted only in its one canonical form.
+    /// Decodes an envelope after checking [`MAX_APPROVAL_ENVELOPE_LEN`], accepting `bytes` only in their one canonical
+    /// form.
     pub fn decode(bytes: &[u8]) -> Result<Self, ApprovalDecodeError> {
         encoding::decode_envelope(bytes)
     }
 }
 
-/// Shows the signature's length rather than its bytes, which are long and say nothing to a reader.
+/// Shows the signature's length, not its bytes, which are long and tell a reader nothing.
 impl fmt::Debug for ApprovalEnvelope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ApprovalEnvelope")

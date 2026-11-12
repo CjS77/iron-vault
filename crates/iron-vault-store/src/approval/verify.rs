@@ -1,8 +1,27 @@
-//! Verifying a config approval against the approval state at startup and reload (spec §12, §19).
+//! Verifies a config approval against the approval state
+//! ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
+//! [§19](../../../../design/iron-vault-specification.md#19-v0-user-acceptance)). Every config check, at startup and on reload, calls
+//! [`verify_approval`] before the service builds a serving snapshot, and the approval transaction calls it on the pair
+//! it has just published.
 //!
-//! The checks run in a fixed order and stop at the first failure. The signature is checked before any payload field
-//! is trusted, so an unsigned payload never reaches the vault, digest or version checks. Verification only reads the
-//! state: loading a config never advances a counter or repairs trusted state from a caller-supplied file.
+//! The checks run in a fixed order and stop at the first failure:
+//!
+//! ```text
+//! config.toml.sig is not a well-formed envelope ─────────→ Malformed
+//! its approver ID is not pinned ─────────────────────────→ UnknownApprover
+//! its algorithm is not that approver's ──────────────────→ WrongAlgorithm
+//! the signature fails against that approver's key ───────→ BadSignature
+//! the payload names another vault ───────────────────────→ WrongVault
+//! the payload digest is not the digest of config.toml ───→ ConfigChanged
+//! nothing is committed ──────────────────────────────────→ NothingCommitted
+//! version below / above the committed version ───────────→ Superseded / Uncommitted
+//! committed version, but another digest ─────────────────→ DigestNotCommitted
+//! otherwise ─────────────────────────────────────────────→ VerifiedApproval
+//! ```
+//!
+//! The signature is checked before any payload field is trusted, so an unsigned payload never reaches the vault,
+//! digest or version checks. Verification only reads the state: loading a config never advances a counter or repairs
+//! trusted state from a file anyone could have written.
 
 #[cfg(test)]
 mod tests;
@@ -41,13 +60,15 @@ impl VerifiedApproval {
         self.digest
     }
 
-    /// The pinned approver that signed the approval, from the envelope. The service asks it first at the next prompt.
+    /// The pinned approver that signed the approval, from the envelope. The service asks this approver first at the next
+    /// prompt.
     pub fn approver(&self) -> ApproverId {
         self.approver
     }
 }
 
-/// Why a config approval does not verify. Any variant stops proxying (spec §12).
+/// Why a config approval does not verify. Any variant stops proxying
+/// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
 ///
 /// No variant carries key material, signature bytes or config bytes. Versions are not secret, so they are named for the
 /// operator.
@@ -62,7 +83,7 @@ pub enum VerifyError {
         /// The approver ID the envelope names.
         approver: ApproverId,
     },
-    /// The envelope names another algorithm than the named approver's.
+    /// The envelope names a different algorithm from the named approver's.
     #[error("the config approval is signed with {envelope:?}, but the named approver uses {pinned:?}")]
     WrongAlgorithm {
         /// The named approver's algorithm.
@@ -110,12 +131,13 @@ pub enum VerifyError {
     },
 }
 
-/// Verifies the `config.toml.sig` bytes `envelope` for the `config.toml` bytes `config` against `state` (spec §12).
+/// Verifies the `config.toml.sig` bytes `envelope` for the `config.toml` bytes `config` against `state`
+/// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
 ///
 /// Checks, in order: the envelope decodes; its approver ID is pinned; that approver uses its algorithm; its signature
 /// verifies against that approver's key over the exact payload bytes; the payload names this vault; the payload digest
-/// is the digest of `config`; and the payload's version and digest are the committed approval. Reads nothing but its arguments and
-/// changes nothing.
+/// is the digest of `config`; and the payload's version and digest are the committed approval. Reads nothing but its
+/// arguments and changes nothing.
 pub fn verify_approval(state: &ApprovalState, config: &[u8], envelope: &[u8]) -> Result<VerifiedApproval, VerifyError> {
     let payload = verify_signed(state, ConfigDigest::of(config), envelope)?;
     check_committed(state.committed(), payload.version(), payload.digest())?;
@@ -128,10 +150,10 @@ pub fn verify_approval(state: &ApprovalState, config: &[u8], envelope: &[u8]) ->
     })
 }
 
-/// Runs every check of [`verify_approval`] but the last, the committed approval, and returns the signed payload.
+/// Runs every check of [`verify_approval`] except the last, the committed approval, and returns the signed payload.
 ///
-/// For the approval transaction, which must check a new approval before it commits it, so the committed approval is
-/// not yet the one to compare with.
+/// The approval transaction calls this to check a new approval before it commits it, when the committed approval is
+/// still the previous one.
 pub(crate) fn verify_signed(state: &ApprovalState, digest: ConfigDigest, envelope: &[u8]) -> Result<ApprovalPayload, VerifyError> {
     let envelope = ApprovalEnvelope::decode(envelope)?;
     check_signature(state, &envelope)?;
@@ -146,7 +168,9 @@ pub(crate) fn verify_signed(state: &ApprovalState, digest: ConfigDigest, envelop
 }
 
 /// Checks the envelope's algorithm and signature against the pinned approver its ID names, never against a key in the
-/// envelope itself. Any one pinned approver's signature approves (spec §12); the ID only selects which key to check.
+/// envelope itself. Any one pinned approver's signature approves
+/// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)); the ID only
+/// selects which key to check.
 fn check_signature(state: &ApprovalState, envelope: &ApprovalEnvelope) -> Result<(), VerifyError> {
     let approver = state.approver(envelope.approver_id()).ok_or(VerifyError::UnknownApprover {
         approver: envelope.approver_id(),
@@ -160,7 +184,7 @@ fn check_signature(state: &ApprovalState, envelope: &ApprovalEnvelope) -> Result
     }
 }
 
-/// Checks the envelope's signature against one approver's key, over the payload's encoding, which is exactly the
+/// Checks the envelope's signature against one approver's key, over the payload's encoding. That encoding equals the
 /// payload field's bytes because decoding accepts only that encoding.
 fn verify_with(approver: &PinnedApprover, envelope: &ApprovalEnvelope) -> Result<(), VerifyError> {
     let message = envelope.payload().encode();
@@ -170,16 +194,16 @@ fn verify_with(approver: &PinnedApprover, envelope: &ApprovalEnvelope) -> Result
     }
 }
 
-/// Ed25519 verification with `verify_strict`, which refuses malleable signatures; the pinned key is already a valid,
-/// non-weak point.
+/// Verifies an Ed25519 signature with `verify_strict`, which refuses malleable signatures. The pinned key is already a
+/// valid point that is not weak.
 fn verify_ed25519(key: &VerifyingKey, message: &[u8], signature: &[u8]) -> Result<(), VerifyError> {
     let signature = Signature::from_slice(signature).map_err(|_| VerifyError::BadSignature)?;
     key.verify_strict(message, &signature).map_err(|_| VerifyError::BadSignature)
 }
 
-/// ECDSA P-256 verification over the SHA-256 of `message`, of a 64-byte `r ‖ s` signature with each in `1..n`.
+/// Verifies an ECDSA P-256 signature over the SHA-256 of `message`: 64 bytes, `r ‖ s`, each in `1..n`.
 ///
-/// ECDSA accepts both `s` and `n − s`; the signer writes the low one, and a high `s` is refused, so each approval has
+/// ECDSA accepts both `s` and `n − s`. The signer writes the low one and a high `s` is refused, so each approval has
 /// one signature encoding and a rewritten signature never verifies. The pinned key is already a point on the curve.
 pub(super) fn verify_p256(key: &p256::ecdsa::VerifyingKey, message: &[u8], signature: &[u8]) -> Result<(), VerifyError> {
     let signature = p256::ecdsa::Signature::from_slice(signature).map_err(|_| VerifyError::BadSignature)?;
@@ -189,7 +213,8 @@ pub(super) fn verify_p256(key: &p256::ecdsa::VerifyingKey, message: &[u8], signa
     key.verify(message, &signature).map_err(|_| VerifyError::BadSignature)
 }
 
-/// Accepts only the committed approval: its version and its digest.
+/// Accepts only the committed approval: its version and its digest. Refuses an older version as
+/// [`VerifyError::Superseded`] and a newer one as [`VerifyError::Uncommitted`].
 fn check_committed(
     committed: Option<(ApprovalVersion, ConfigDigest)>,
     version: ApprovalVersion,

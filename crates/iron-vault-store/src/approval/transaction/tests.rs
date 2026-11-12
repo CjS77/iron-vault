@@ -1,8 +1,10 @@
 //! The approval transaction end to end, and under an injected failure or a power cut at every filesystem call.
 //!
-//! Every failure is checked against the split spec §12 requires: a transaction that fails before its commit leaves
-//! the previous committed approval and the published pair that verifies as it; one that fails after leaves the new
-//! committed approval and files that recovery rows 1 to 4 of design/config-approval.md finish.
+//! Every failure is checked against the split that
+//! [spec §12](../../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload) requires. A
+//! transaction that fails before its commit leaves the previous committed approval and the published pair that verifies
+//! as it. One that fails after its commit leaves the new committed approval, and files that rows 1 to 4 of the
+//! [recovery table](../../../../../design/config-approval.md#recovery-table) finish.
 
 use std::io;
 use std::path::{Path, PathBuf};

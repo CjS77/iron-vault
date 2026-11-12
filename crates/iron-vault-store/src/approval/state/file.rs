@@ -1,8 +1,13 @@
-//! The approval state file v1: a clear header, the payload sealed to the vault public key, then a MAC
-//! (`design/storage-formats.md`).
+//! Seals and opens the [approval state file v1](../../../../../design/storage-formats.md#approval-state-file-v1), `approval.age`: a clear
+//! header, the payload sealed to the vault public key, then a MAC.
+//!
+//! ```text
+//! "IVAF" 01 | vault ID (16) | age ciphertext of the payload | MAC (32) over everything before it
+//! ```
 //!
 //! It is a MAC'd file like the manifest file (`crate::mac_file`), with its own magic, MAC key persona and domain tag, so
-//! a MAC from one file never verifies the other.
+//! a MAC from one file never verifies the other. Anyone with the vault public key can seal a payload, but only the
+//! vault identity gives the MAC key, so only the service writes a file that opens.
 
 use super::{ApprovalState, ApprovalStateError, MAX_APPROVAL_STATE_LEN, encoding};
 use crate::approval::ApprovalDecodeError;
@@ -10,8 +15,8 @@ use crate::mac_file::MacFileKind;
 use crate::sealed::SealError;
 use crate::vault_identity::VaultIdentity;
 
-/// The approval state's MAC'd file frame: magic `IVAF`, version 1, and a key persona and domain tag of its own, so a
-/// MAC from the manifest never verifies here.
+/// The approval state's MAC'd file frame: magic `IVAF`, format version 1, and a key persona and domain tag of its own,
+/// so a MAC from the manifest never verifies here.
 const KIND: MacFileKind<ApprovalStateError> = MacFileKind {
     magic: *b"IVAF",
     version: 1,
@@ -28,14 +33,15 @@ const KIND: MacFileKind<ApprovalStateError> = MacFileKind {
     invalid_vault_id: |error| ApprovalDecodeError::InvalidVaultId(error).into(),
 };
 
-/// The approval state file's bytes: header, the payload sealed to the vault public key, then the MAC.
+/// Seals `state` as the approval state file's bytes: header, the payload sealed to the vault public key, then the MAC.
 pub fn seal_approval_state(identity: &VaultIdentity, state: &ApprovalState) -> Result<Vec<u8>, SealError> {
     KIND.seal(identity, state.vault_id, &encoding::encode(state))
 }
 
-/// The approval state a file holds, after its size, header and MAC are checked and before anything is decrypted.
+/// Opens an approval state file. Checks its size, header and MAC before it decrypts anything, then decodes the payload.
 ///
-/// A MAC mismatch, a payload for another vault or a broken invariant is damaged shared state (spec §13).
+/// A MAC mismatch, a payload for another vault or a broken invariant is damaged shared state
+/// ([spec §13](../../../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 pub fn open_approval_state(identity: &VaultIdentity, file: &[u8]) -> Result<ApprovalState, ApprovalStateError> {
     let (vault_id, payload) = KIND.open(identity, file)?;
     let state = encoding::decode(&payload)?;
@@ -103,8 +109,8 @@ mod tests {
         .unwrap()
     }
 
-    /// A file with the given header vault ID and payload, MACed under `key`: what anyone could build who holds the
-    /// vault public key, plus whatever key they claim.
+    /// Builds a file with the given header vault ID and payload, MACed under `key`: what anyone who holds the vault
+    /// public key could build, with a MAC key of their choosing.
     fn forged(identity: &VaultIdentity, header_id: VaultId, payload: &[u8], key: &[u8; 64]) -> Vec<u8> {
         let mut file = [&FILE_MAGIC[..], &[FILE_VERSION], header_id.as_bytes()].concat();
         file.extend_from_slice(&sealed::seal(&identity.public_key(), payload).unwrap());

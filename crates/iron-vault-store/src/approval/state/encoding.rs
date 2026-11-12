@@ -1,4 +1,13 @@
-//! The approval state payload v1 encoding: the plaintext an approval state file seals (`design/storage-formats.md`).
+//! Encodes and decodes the plaintext that `approval.age` seals, the
+//! [approval state payload v1](../../../../../design/storage-formats.md#approval-state-payload-v1).
+//!
+//! Every integer is a big-endian `u64` unless a width is given, and a "field" is a `u64` length followed by its bytes:
+//!
+//! ```text
+//! "IVAM" 01 | vault ID (16) | state generation | peer generation | approver count (1 to 16)
+//!   per approver: approver ID (16) | algorithm ID (1) | signer kind (1) | public key field | label field | enrolled at
+//! highest reserved version | committed tag (1): 00, or 01 then committed version and config digest (32)
+//! ```
 
 use super::{ApprovalState, ApprovalStateError, ApproverId, ApproverLabel, ApproverPublicKey, MAX_APPROVERS, PinnedApprover, SignerKind};
 use crate::UtcSecond;
@@ -17,8 +26,8 @@ const NOT_COMMITTED: u8 = 0x00;
 /// The committed-approval tag when a version and digest follow.
 const COMMITTED: u8 = 0x01;
 
-/// The state's v1 payload: magic, version, vault ID, state and peer generations, approvers, highest reserved version,
-/// committed approval.
+/// Encodes `state` as a v1 payload: magic, format version, vault ID, state and peer generations, approvers, highest
+/// reserved version, committed approval.
 pub(super) fn encode(state: &ApprovalState) -> Vec<u8> {
     let mut out = header(MAGIC, VERSION);
     out.extend_from_slice(state.vault_id.as_bytes());
@@ -39,7 +48,7 @@ pub(super) fn encode(state: &ApprovalState) -> Vec<u8> {
     out
 }
 
-/// One approver entry: ID, algorithm, signer kind, public key field, label field, enrolment time.
+/// Encodes one approver entry: ID, algorithm, signer kind, public key field, label field, enrolment time.
 fn put_approver(out: &mut Vec<u8>, approver: &PinnedApprover) {
     out.extend_from_slice(approver.id().as_bytes());
     out.push(approver.algorithm().id());
@@ -49,7 +58,7 @@ fn put_approver(out: &mut Vec<u8>, approver: &PinnedApprover) {
     out.extend_from_slice(&approver.enrolled_at().unix_seconds().to_be_bytes());
 }
 
-/// The state a v1 payload holds, accepted only if it is that state's one encoding and the state's invariant holds.
+/// Decodes a v1 payload, accepting it only if it is that state's one encoding and the state's invariants hold.
 pub(super) fn decode(payload: &[u8]) -> Result<ApprovalState, ApprovalStateError> {
     let mut reader = Reader::new(payload);
     read_header(&mut reader, MAGIC, VERSION)?;
@@ -69,8 +78,8 @@ pub(super) fn decode(payload: &[u8]) -> Result<ApprovalState, ApprovalStateError
     )
 }
 
-/// The approver entries. The count is checked against its limits before any entry is read, so a huge count never
-/// drives a long loop; their order and distinct keys are checked once all are read.
+/// Reads the approver entries. The count is checked against its limits before any entry is read, so a huge count never
+/// drives a long loop. [`ApprovalState::from_parts`] checks their order and distinct keys once all are read.
 fn read_approvers(reader: &mut Reader<'_>) -> Result<Vec<PinnedApprover>, ApprovalStateError> {
     let count = reader.u64()?;
     let count = usize::try_from(count)
@@ -91,7 +100,8 @@ fn read_approver(reader: &mut Reader<'_>) -> Result<PinnedApprover, ApprovalStat
     PinnedApprover::new(id, kind, key, label, enrolled_at)
 }
 
-/// A state or peer generation; the approval state always has a manifest to name, so neither is ever 0.
+/// Reads a state or peer generation, refusing 0: the approval state always has a manifest to name, so neither is
+/// ever 0.
 fn read_generation(reader: &mut Reader<'_>) -> Result<StateGeneration, ApprovalStateError> {
     StateGeneration::new(reader.u64()?).ok_or(ApprovalStateError::ZeroStateGeneration)
 }
@@ -107,7 +117,7 @@ fn read_committed(reader: &mut Reader<'_>) -> Result<Option<(ApprovalVersion, Co
     }
 }
 
-/// The payload shares the approval encodings' layout, so its framing failures are the same format errors theirs are.
+/// The payload shares the approval encodings' framing, so its framing failures map to the same format errors.
 impl From<WireError> for ApprovalStateError {
     fn from(error: WireError) -> Self {
         ApprovalStateError::Format(error.into())
@@ -232,7 +242,8 @@ mod tests {
         assert_eq!(decode(&bytes), Ok(example()));
     }
 
-    /// The example's hex column in `design/storage-formats.md` is these bytes; comments start past column 48.
+    /// Checks that these bytes are the hex column of the example in
+    /// [storage formats](../../../../../design/storage-formats.md#approval-state-payload-v1); comments start past column 48.
     #[test]
     fn documented_examples_are_the_ones_in_the_storage_formats() {
         assert_eq!(

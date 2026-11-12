@@ -1,8 +1,16 @@
-//! The presence payload v1 and the migration proof payload v1: the two messages besides the approval payload that a TPM
-//! approver signs (`design/tpm-approval-signer.md` "What the helper signs", `design/storage-formats.md`).
+//! The [presence payload v1](../../../../design/storage-formats.md#presence-payload-v1) and the
+//! [migration proof payload v1](../../../../design/storage-formats.md#migration-proof-payload-v1): the two messages
+//! besides the approval payload that a TPM approver signs
+//! ([TPM approval signer, "What the helper signs"](../../../../design/tpm-approval-signer.md#what-the-helper-signs)).
 //!
-//! Each starts with its own magic, so a signature over one can never be read as a signature over another, over an
-//! approval payload, or over bytes of any other structure. Both have a fixed length and one encoding.
+//! A TPM approver proves owner presence for `replace`, `rm` and the migration commands by signing one of these once the
+//! owner types its PIN. Each payload starts with its own magic, so a signature over one never reads as a signature over
+//! another, over an approval payload, or over bytes of any other structure. Both have a fixed length and one encoding:
+//!
+//! ```text
+//! presence:        "IVPP" 01 | vault ID (16) | approver ID (16) | nonce (32)     69 bytes
+//! migration proof: "IVMA" 01 | binding digest (32)                               37 bytes
+//! ```
 
 #[cfg(test)]
 mod tests;
@@ -32,8 +40,8 @@ pub struct PresencePayload {
 }
 
 impl PresencePayload {
-    /// The payload asking approver `approver_id` of vault `vault_id` to sign over `nonce`, which the caller draws fresh
-    /// from the operating system's random source for each prompt.
+    /// Builds the payload that asks approver `approver_id` of vault `vault_id` to sign over `nonce`. The caller draws
+    /// `nonce` fresh from the operating system's random source for each prompt.
     pub fn new(vault_id: VaultId, approver_id: ApproverId, nonce: [u8; 32]) -> Self {
         Self {
             vault_id,
@@ -57,7 +65,7 @@ impl PresencePayload {
         &self.nonce
     }
 
-    /// The 69 bytes a signer signs: magic, version, vault ID, approver ID, nonce.
+    /// Encodes the 69 bytes a signer signs: magic, format version, vault ID, approver ID, nonce.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = header(PRESENCE_MAGIC, PRESENCE_VERSION);
         out.extend_from_slice(self.vault_id.as_bytes());
@@ -66,7 +74,7 @@ impl PresencePayload {
         out
     }
 
-    /// The payload `bytes` encode, accepted only in its one encoding.
+    /// Decodes a presence payload, accepting `bytes` only in its one encoding.
     pub fn decode(bytes: &[u8]) -> Result<Self, ApprovalDecodeError> {
         let mut reader = Reader::new(bytes);
         read_header(&mut reader, PRESENCE_MAGIC, PRESENCE_VERSION)?;
@@ -86,7 +94,7 @@ pub struct MigrationProofPayload {
 }
 
 impl MigrationProofPayload {
-    /// The payload proving the challenge whose binding digest is `binding_digest`.
+    /// Builds the payload that proves the challenge whose binding digest is `binding_digest`.
     pub fn new(binding_digest: [u8; 32]) -> Self {
         Self { binding_digest }
     }
@@ -96,14 +104,14 @@ impl MigrationProofPayload {
         &self.binding_digest
     }
 
-    /// The 37 bytes a signer signs: magic, version, binding digest.
+    /// Encodes the 37 bytes a signer signs: magic, format version, binding digest.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = header(MIGRATION_PROOF_MAGIC, MIGRATION_PROOF_VERSION);
         out.extend_from_slice(&self.binding_digest);
         out
     }
 
-    /// The payload `bytes` encode, accepted only in its one encoding.
+    /// Decodes a migration proof payload, accepting `bytes` only in its one encoding.
     pub fn decode(bytes: &[u8]) -> Result<Self, ApprovalDecodeError> {
         let mut reader = Reader::new(bytes);
         read_header(&mut reader, MIGRATION_PROOF_MAGIC, MIGRATION_PROOF_VERSION)?;

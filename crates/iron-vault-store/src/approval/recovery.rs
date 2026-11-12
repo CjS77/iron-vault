@@ -1,10 +1,28 @@
-//! Approval recovery: the first part of every config check (design/config-approval.md, "Recovery"; spec §12).
+//! Approval recovery: the first part of every config check, at startup and on reload
+//! ([config approval, "Recovery"](../../../../design/config-approval.md#recovery);
+//! [spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
 //!
-//! Multiple renames do not form a filesystem transaction, so after a crash the config directory may hold a committed
-//! transaction that is only partly published. Recovery decides what to do from the committed approval alone, never
-//! from which file landed: it finishes publishing only the committed transaction, and only when its files verify. It
-//! never promotes a signed but uncommitted version, never accepts an older pair beside a newer commit, and never writes
-//! the approval state, so loading never advances or repairs a counter.
+//! Two renames do not form a filesystem transaction, so after a crash the config directory may hold a committed
+//! transaction that is only partly published. Recovery decides what to do from the committed approval `C` alone, never
+//! from which file landed. It looks for `C`'s config and `C`'s approval, preferring a file in place over one waiting
+//! to be published, and follows the [recovery table](../../../../design/config-approval.md#recovery-table):
+//!
+//! ```text
+//! row  C's config in          C's approval in           outcome
+//! 1    config.toml            config.toml.sig           serve the published pair
+//! 2    config.toml            config.toml.sig.staged    finish publishing: rename the staged approval
+//! 3    config.toml.pending    config.toml.sig           finish publishing: rename the pending config
+//! 4    config.toml.pending    config.toml.sig.staged    finish publishing: both renames
+//! 5    config.toml.pending    nowhere                   refuse, RecoveryNeeded (CommittedFileMissing)
+//! 6    nowhere                config.toml.sig.staged    refuse, RecoveryNeeded (CommittedFileMissing)
+//! 7    config.toml or nowhere nowhere                   refuse, PolicyInvalid (PublishedPairInvalid)
+//! 8    nowhere                config.toml.sig           refuse, PolicyInvalid (PublishedPairInvalid)
+//! ```
+//!
+//! After rows 1 to 4 the published pair verifies as `C`, and any pending or staged file left is an uncommitted
+//! leftover that recovery removes. Recovery finishes publishing only the committed transaction, and only when its files
+//! verify. It never promotes a signed but uncommitted version, never accepts an older pair beside a newer commit, and
+//! never writes the approval state, so loading never advances or repairs a counter.
 
 #[cfg(test)]
 mod tests;
@@ -21,19 +39,19 @@ use crate::{
     read_config_file, remove_pending_and_staged, verify_approval,
 };
 
-/// The store's counterpart of the service's failure reason: what a refused recovery leaves the service as. The
+/// The store's counterpart of the service's failure reason: the state a refused recovery leaves the service in. The
 /// service maps each variant to its `FailureReason` of the same name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveryFailure {
-    /// A config file cannot be read, or a committed transaction is on disk that cannot be completed; only a repair, a
+    /// A config file cannot be read, or a committed transaction is on disk that cannot be completed. Only a repair, a
     /// fix to the file's permissions or disk, or a restart leaves it.
     RecoveryNeeded,
-    /// Nothing is committed, or the published pair does not verify as the committed approval; a new approval leaves it.
+    /// Nothing is committed, or the published pair does not verify as the committed approval. A new approval leaves it.
     PolicyInvalid,
 }
 
-/// Why the published pair is not the committed approval: the first of these that applies, in the order of the detail
-/// table in design/config-approval.md.
+/// Why the published pair is not the committed approval: the first of these that applies, in the order of the
+/// [detail table](../../../../design/config-approval.md#detail-when-the-service-stays-unavailable-rows-5-to-8).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PublishedPairFault {
     /// `config.toml` or `config.toml.sig` is absent: missing, over its limit or not a regular file. A file that is there
@@ -42,7 +60,7 @@ pub enum PublishedPairFault {
     #[error("{0} is missing, oversized or not a regular file")]
     Missing(ConfigFileName),
     /// Reading back `config.toml` or `config.toml.sig` after recovery's publish renames failed with an I/O error other
-    /// than NotFound. Only [`ApprovalRecoveryError::PublishNotVerified`] carries it.
+    /// than `NotFound`. Only [`ApprovalRecoveryError::PublishNotVerified`] carries it.
     #[error("cannot read {file}: {kind}")]
     Unreadable {
         /// The file that could not be read.
@@ -55,8 +73,8 @@ pub enum PublishedPairFault {
     DoesNotVerify(VerifyError),
 }
 
-/// Why recovery left the service unavailable. Nothing on disk was changed, except as [`PublishFailed`] and
-/// [`PublishNotVerified`] say; no variant carries config or signature bytes.
+/// Why recovery left the service unavailable. Nothing on disk changed, except as [`PublishFailed`] and
+/// [`PublishNotVerified`] say. No variant carries config or signature bytes.
 ///
 /// [`PublishFailed`]: ApprovalRecoveryError::PublishFailed
 /// [`PublishNotVerified`]: ApprovalRecoveryError::PublishNotVerified
@@ -66,18 +84,18 @@ pub enum ApprovalRecoveryError {
     #[error("no approved config: no approval has been committed")]
     NothingCommitted,
     /// A config file is there but reading it failed, so recovery cannot tell what it holds. It may be the file that
-    /// completes the commit, so recovery refuses before the recovery table and touches nothing. It is only ever
-    /// returned before any rename: an unreadable file in the read-back after a publish is
+    /// completes the commit, so recovery refuses before the recovery table and touches nothing. Recovery returns it only
+    /// before any rename: an unreadable file in the read-back after a publish is
     /// [`PublishNotVerified`](ApprovalRecoveryError::PublishNotVerified), which says the renames ran.
     #[error("cannot read {file}: {kind}")]
     Unreadable {
         /// The first unreadable file, in the order `config.toml`, `config.toml.sig`, `config.toml.pending`,
         /// `config.toml.sig.staged`.
         file: ConfigFileName,
-        /// The I/O error kind; never [`io::ErrorKind::NotFound`], which is absent.
+        /// The I/O error kind. Never [`io::ErrorKind::NotFound`], which recovery treats as absent.
         kind: io::ErrorKind,
     },
-    /// One file of the committed approval waits to be published, but the other is gone (recovery rows 5 and 6).
+    /// One file of the committed approval waits to be published, but the other is gone (recovery table rows 5 and 6).
     #[error("committed version {version} cannot be published: its {missing} is missing; the published pair: {published}")]
     CommittedFileMissing {
         /// The committed version.
@@ -88,8 +106,8 @@ pub enum ApprovalRecoveryError {
         /// Why the published pair does not verify.
         published: PublishedPairFault,
     },
-    /// The published pair does not verify as the committed approval, and nothing of it waits to be published
-    /// (recovery rows 7 and 8).
+    /// The published pair does not verify as the committed approval, and no file of it waits to be published
+    /// (recovery table rows 7 and 8).
     #[error("the published config is not committed version {version}: {published}")]
     PublishedPairInvalid {
         /// The committed version.
@@ -97,7 +115,7 @@ pub enum ApprovalRecoveryError {
         /// Why the published pair does not verify.
         published: PublishedPairFault,
     },
-    /// Finishing the publish failed. Any rename that ran left a state the next recovery finishes.
+    /// Finishing the publish failed. Any rename that ran leaves a state the next recovery finishes.
     #[error("cannot finish publishing committed version {version}: {cause}")]
     PublishFailed {
         /// The committed version.
@@ -119,7 +137,8 @@ pub enum ApprovalRecoveryError {
 }
 
 impl ApprovalRecoveryError {
-    /// What the refusal leaves the service as (design/config-approval.md, open question 4).
+    /// Returns the state the refusal leaves the service in
+    /// ([config approval, open question 4](../../../../design/config-approval.md#open-questions)).
     pub fn failure(&self) -> RecoveryFailure {
         match self {
             Self::NothingCommitted | Self::PublishedPairInvalid { .. } => RecoveryFailure::PolicyInvalid,
@@ -135,10 +154,10 @@ impl ApprovalRecoveryError {
 pub struct DiscardedFile {
     /// The pending config or the staged approval.
     pub file: ConfigFileName,
-    /// For a staged approval signed by the pinned approver for this vault, the version it was signed for.
+    /// For a staged approval that a pinned approver signed for this vault, the version it was signed for.
     pub signed_for: Option<ApprovalVersion>,
-    /// Whether this staged approval was signed for the committed version over another config, which only a second
-    /// signature over that version, or a file the service did not write, produces.
+    /// `true` if and only if this staged approval was signed for the committed version over a different config. Only a
+    /// second signature over that version, or a file the service did not write, produces this.
     pub conflicting: bool,
 }
 
@@ -169,12 +188,12 @@ impl RecoveredApproval {
 
 /// Runs approval recovery on the config directory against the committed approval in `state`, which it never writes.
 ///
-/// Refuses and touches nothing if any config file is there but unreadable. Otherwise serves the published pair when it
-/// verifies as the committed approval (row 1), finishes publishing when the committed approval's files wait as the
-/// pending config or staged approval (rows 2 to 4), and otherwise refuses and touches nothing (rows 5 to 8). Once the
-/// published pair verifies, any pending or staged file left is an uncommitted leftover and is removed, best effort. A
-/// recovery that fails midway leaves a state the next one resolves, so it is safe to run again, at startup or in any
-/// later config check (design/config-approval.md, open question 7).
+/// Refuses and touches nothing if any config file is there but unreadable. Otherwise it serves the published pair when
+/// it verifies as the committed approval (row 1), finishes publishing when the committed approval's files wait as the
+/// pending config or staged approval (rows 2 to 4), and refuses and touches nothing in every other case (rows 5 to 8).
+/// Once the published pair verifies, it removes any pending or staged file left, best effort. A recovery that fails
+/// midway leaves a state the next one resolves, so it is safe to run again, at startup or in any later config check
+/// ([config approval, open question 7](../../../../design/config-approval.md#open-questions)).
 pub fn recover_approval(
     config_dir: &ConfigDirLock,
     fs: &impl StoreFs,
@@ -188,7 +207,7 @@ pub fn recover_approval(
     }
 }
 
-/// Rows 2 to 8: the published pair is not the committed approval.
+/// Handles rows 2 to 8, where the published pair is not the committed approval.
 fn recover_unpublished(
     config_dir: &ConfigDirLock,
     fs: &impl StoreFs,
@@ -231,7 +250,7 @@ enum Place {
 }
 
 impl Place {
-    /// A file already in place is preferred over its waiting counterpart.
+    /// Places a file from where it was found. A file already in place is preferred over its waiting counterpart.
     fn of(in_place: bool, waiting: bool) -> Option<Self> {
         match (in_place, waiting) {
             (true, _) => Some(Self::InPlace),
@@ -241,9 +260,9 @@ impl Place {
     }
 }
 
-/// Rows 2 to 4: renames the committed approval's waiting files into place, then verifies the pair as read back. A
-/// failed directory fsync after the renames is passed over, because the commit is the durable record and the
-/// read-back decides; the leftovers are discarded only once the pair verifies, so a publish that did not happen never
+/// Handles rows 2 to 4: renames the committed approval's waiting files into place, then verifies the pair as read back.
+/// A failed directory fsync after the renames is passed over, because the commit is the durable record and the
+/// read-back decides. Leftovers are discarded only once the pair verifies, so a publish that did not happen never
 /// costs the committed transaction its files.
 fn publish_committed(
     config_dir: &ConfigDirLock,
@@ -279,8 +298,8 @@ fn publish_committed(
     Ok(serve_discarding_leftovers(config_dir, fs, state, files, published, Some(set)))
 }
 
-/// The published pair verifies: discards the leftovers and serves the pair. `files` is what recovery read before any
-/// rename; a staged approval it held is still the one on disk if the publish left it there.
+/// Discards the leftovers beside a published pair that verifies, and serves the pair. `files` is what recovery read
+/// before any rename; a staged approval it held is still the one on disk if the publish left it there.
 fn serve_discarding_leftovers(
     config_dir: &ConfigDirLock,
     fs: &impl StoreFs,
@@ -296,9 +315,9 @@ fn serve_discarding_leftovers(
     }
 }
 
-/// Durably removes the pending config and staged approval beside a published pair that verifies, best effort: a
-/// leftover is never promoted, so one left behind is discarded by the next config check. Reports every file that was
-/// removed, even when the removal then failed. The counters are not touched.
+/// Durably removes the pending config and staged approval beside a published pair that verifies, best effort. A
+/// leftover is never promoted, so the next config check discards one left behind. Reports every file that was removed,
+/// even when a later removal failed. The counters are not touched.
 fn discard_leftovers(config_dir: &ConfigDirLock, fs: &impl StoreFs, state: &ApprovalState, staged: Option<&[u8]>) -> Vec<DiscardedFile> {
     let removed = remove_pending_and_staged(config_dir, fs).unwrap_or_else(|failed| {
         let removed = failed.removed.iter().map(|file| file.as_str()).collect::<Vec<_>>().join(",");
@@ -328,13 +347,15 @@ fn discard_leftovers(config_dir: &ConfigDirLock, fs: &impl StoreFs, state: &Appr
         .collect()
 }
 
-/// The payload of a staged leftover that a pinned approver signed for this vault.
+/// Returns the payload of a staged leftover that a pinned approver signed for this vault, or `None` for any other
+/// file.
 fn staged_payload(state: &ApprovalState, envelope: &[u8]) -> Option<ApprovalPayload> {
     let claimed = ApprovalEnvelope::decode(envelope).ok()?.payload().digest();
     verify_signed(state, claimed, envelope).ok()
 }
 
-/// Whether `payload` names the committed version with another digest, which only a misbehaving signer produces.
+/// Returns `true` if and only if `payload` names the committed version with a different digest, which only a
+/// misbehaving signer produces.
 fn conflicts_with_committed(state: &ApprovalState, payload: &ApprovalPayload) -> bool {
     state
         .committed()
@@ -378,7 +399,7 @@ impl From<UnreadableFile> for PublishedPairFault {
     }
 }
 
-/// The file's bytes, `None` if it is absent, or [`UnreadableFile`] if it is there but reading it failed.
+/// Reads `file`: its bytes, `None` if it is absent, or [`UnreadableFile`] if it is there but reading it failed.
 fn read_if_present(config_dir: &ConfigDirLock, fs: &impl StoreFs, file: ConfigFileName) -> Result<Option<Vec<u8>>, UnreadableFile> {
     match read_config_file(config_dir, fs, file) {
         Ok(bytes) => Ok(Some(bytes)),
@@ -401,7 +422,7 @@ impl PublishedPair {
         })
     }
 
-    /// The pair, verified as the committed approval.
+    /// Verifies the pair as the committed approval.
     fn verify(&self, state: &ApprovalState) -> Result<CommittedApproval, PublishedPairFault> {
         let config = self.config.as_deref().ok_or(PublishedPairFault::Missing(Active))?;
         let envelope = self.envelope.as_deref().ok_or(PublishedPairFault::Missing(ActiveSignature))?;

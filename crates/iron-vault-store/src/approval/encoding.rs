@@ -1,4 +1,13 @@
-//! The approval payload v1 and approval envelope v1 encodings (`design/storage-formats.md`).
+//! Encodes and decodes the [approval payload v1](../../../../design/storage-formats.md#approval-payload-v1) and the
+//! [approval envelope v1](../../../../design/storage-formats.md#approval-envelope-v1).
+//!
+//! Both are binary with one encoding each, so the bytes a signer signs are the bytes the verifier rebuilds. Every field
+//! is fixed width or a `u64` big-endian length followed by its bytes:
+//!
+//! ```text
+//! payload:  "IVAP" 01 | len "iron-vault-config-v1" | vault ID (16) | approval version (u64) | config digest (32)
+//! envelope: "IVAS" 01 | algorithm ID (1) | approver ID (16) | len payload | len signature
+//! ```
 
 use super::{
     APPROVAL_PURPOSE, ApprovalDecodeError, ApprovalEnvelope, ApprovalPayload, ApprovalVersion, ApproverId, ConfigDigest,
@@ -16,7 +25,7 @@ const ENVELOPE_MAGIC: [u8; 4] = *b"IVAS";
 /// The envelope format version this code writes and the only one it reads.
 const ENVELOPE_VERSION: u8 = 1;
 
-/// The payload's v1 encoding: magic, version, purpose field, vault ID, approval version, config digest.
+/// Encodes `payload` as v1: magic, format version, purpose field, vault ID, approval version, config digest.
 pub(super) fn encode_payload(payload: &ApprovalPayload) -> Vec<u8> {
     let mut out = header(PAYLOAD_MAGIC, PAYLOAD_VERSION);
     put_field(&mut out, APPROVAL_PURPOSE.as_bytes());
@@ -26,7 +35,7 @@ pub(super) fn encode_payload(payload: &ApprovalPayload) -> Vec<u8> {
     out
 }
 
-/// The payload a v1 encoding holds, accepted only if it is that payload's one encoding.
+/// Decodes a v1 payload, accepting `bytes` only if they are that payload's one encoding.
 pub(super) fn decode_payload(bytes: &[u8]) -> Result<ApprovalPayload, ApprovalDecodeError> {
     let mut reader = Reader::new(bytes);
     read_header(&mut reader, PAYLOAD_MAGIC, PAYLOAD_VERSION)?;
@@ -40,7 +49,7 @@ pub(super) fn decode_payload(bytes: &[u8]) -> Result<ApprovalPayload, ApprovalDe
     Ok(ApprovalPayload::new(vault_id, version, digest))
 }
 
-/// The envelope's v1 encoding: magic, version, algorithm ID, approver ID, payload field, signature field.
+/// Encodes `envelope` as v1: magic, format version, algorithm ID, approver ID, payload field, signature field.
 pub(super) fn encode_envelope(envelope: &ApprovalEnvelope) -> Vec<u8> {
     let mut out = header(ENVELOPE_MAGIC, ENVELOPE_VERSION);
     out.push(envelope.algorithm.id());
@@ -50,9 +59,11 @@ pub(super) fn encode_envelope(envelope: &ApprovalEnvelope) -> Vec<u8> {
     out
 }
 
-/// The envelope a v1 encoding holds, after the size limit, accepted only if it is that envelope's one encoding.
+/// Decodes a v1 envelope after checking [`MAX_APPROVAL_ENVELOPE_LEN`], accepting `bytes` only if they are that
+/// envelope's one encoding.
 ///
-/// Whether the approver ID is pinned is the verifier's check: decoding refuses only an ID that is no approver's ID.
+/// Decoding refuses an approver ID that is not a version 4 UUID. The verifier, not the decoder, checks that the ID is
+/// pinned.
 pub(super) fn decode_envelope(bytes: &[u8]) -> Result<ApprovalEnvelope, ApprovalDecodeError> {
     if bytes.len() > MAX_APPROVAL_ENVELOPE_LEN {
         return Err(ApprovalDecodeError::TooLarge {
@@ -69,7 +80,7 @@ pub(super) fn decode_envelope(bytes: &[u8]) -> Result<ApprovalEnvelope, Approval
     ApprovalEnvelope::new(algorithm, approver_id, payload, signature)
 }
 
-/// The magic, then the format version: the start of every approval encoding.
+/// Starts an approval encoding: the magic, then the format version.
 pub(super) fn header(magic: [u8; 4], version: u8) -> Vec<u8> {
     let mut out = magic.to_vec();
     out.push(version);
@@ -82,7 +93,7 @@ pub(super) fn put_field(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(bytes);
 }
 
-/// The magic, then the format version, which must be the one this code reads: the start of every approval encoding.
+/// Reads the start of an approval encoding: refuses any magic but `magic` and any format version but `version`.
 pub(super) fn read_header(reader: &mut Reader<'_>, magic: [u8; 4], version: u8) -> Result<(), ApprovalDecodeError> {
     if reader.array()? != magic {
         return Err(ApprovalDecodeError::BadMagic);

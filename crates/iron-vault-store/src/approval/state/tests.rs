@@ -1,4 +1,4 @@
-//! Approval state operations end to end, and under an injected failure or a power cut at every file-system step.
+//! Approval state operations end to end, and under an injected failure or a power cut at every filesystem step.
 
 use std::io;
 use std::path::PathBuf;

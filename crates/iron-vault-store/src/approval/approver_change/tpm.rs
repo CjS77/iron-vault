@@ -1,6 +1,15 @@
-//! Enrolling a TPM approver (`design/tpm-approval-signer.md`, "Enrollment"): the TPM signing helper makes the key, the
-//! service writes its blob as `approver-<approver ID>.tpm`, and the approver is pinned only after the helper has signed a
-//! fresh presence payload from that blob and the signature verifies against the new key.
+//! Enrolling a TPM approver for `approver add --kind tpm`
+//! ([TPM approval signer, "Enrollment"](../../../../../design/tpm-approval-signer.md#enrollment)). The TPM signing
+//! helper makes the key, the service writes its blob as `approver-<approver ID>.tpm`, and the approver is pinned only
+//! after the helper has signed a fresh presence payload from that blob and the signature verifies against the new key:
+//!
+//! ```text
+//! helper: create key ─→ write approver-<id>.tpm ─→ read it back ─→ helper: sign presence payload
+//!                                                                          │
+//!                                       verify against the new key ←───────┘
+//!                                                  │
+//!                                                  └─→ pin in approval.age  ← commit
+//! ```
 
 use iron_vault_tpm_protocol::{MAX_TPM_KEY_BLOB_LEN, PUBLIC_KEY_LEN, SIGNATURE_LEN, TpmKeyBlob};
 use thiserror::Error;
@@ -14,14 +23,15 @@ use crate::approval::{
 use crate::durable::{ReadError, durable_replace, read_state_file};
 use crate::{StateDirLock, StateFileName, StoreFs, UtcSecond, VaultId};
 
-/// Why the TPM signing helper did not make or use a key: its refusal by status, or that it could not be reached. The text
-/// names the status and never anything the owner typed.
+/// Why the TPM signing helper did not make or use a key: its refusal by status, or that it could not be reached. The
+/// message names the status, never anything the owner typed.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{message}")]
 pub struct TpmHelperFailure {
     /// What the helper said, by status.
     pub message: String,
-    /// The whole seconds to wait when the failure is the TPM's lockout (or the reserve withholding the try); `None` for
+    /// The whole seconds to wait when the failure is the TPM's lockout, or the
+    /// [lockout reserve](../../../../../design/tpm-approval-signer.md#lockout-reserve) withholding the try; `None` for
     /// every other failure.
     pub locked_out_for: Option<u64>,
 }
@@ -47,13 +57,13 @@ impl TpmHelperFailure {
 /// A TPM approval key the helper created.
 #[derive(Debug)]
 pub struct CreatedTpmKey {
-    /// The key's parts, which every signature needs again; kept as the approver's key blob.
+    /// The key's parts, which every signature needs again, kept as the approver's key blob.
     pub blob: TpmKeyBlob,
     /// The key's uncompressed SEC1 point, to pin.
     pub public_key: [u8; PUBLIC_KEY_LEN],
 }
 
-/// What an enrollment needs of the TPM signing helper. The service implements it over the helper's socket, holding the
+/// What an enrollment needs of the TPM signing helper. The service implements it over the helper's socket and holds the
 /// owner's PIN; the store never sees the PIN or the authorization value.
 pub trait TpmHelper {
     /// Creates a key for the new approver `id` under the owner's PIN.
@@ -71,10 +81,10 @@ pub trait TpmHelper {
 impl<F: StoreFs> ApproverChanges<'_, F> {
     /// Enrolls a new TPM approver named `label`, with `helper` making its key, and returns the pinned approver.
     ///
-    /// Has `helper` create a key under a new approver ID, durably writes the blob as `approver-<id>.tpm`, reads it back and
-    /// has `helper` sign a fresh presence payload from the file, verified against the new key, and only then enrolls the
-    /// approver in `approval.age`: the commit point. A failure before it leaves `state` as it was and at most an orphan
-    /// blob; the TPM holds nothing to clean up.
+    /// It has `helper` create a key under a new approver ID, durably writes the blob as `approver-<id>.tpm`, reads it
+    /// back, has `helper` sign a fresh presence payload from the file and verifies that signature against the new key.
+    /// Only then does it enroll the approver in `approval.age`, the commit point. A failure before the commit leaves
+    /// `state` as it was and at most an orphan blob; the TPM holds nothing to clean up.
     pub fn enroll_tpm_approver(
         &self,
         state: &mut ApprovalState,
@@ -122,7 +132,7 @@ impl<F: StoreFs> ApproverChanges<'_, F> {
 /// Why `approver-<id>.tpm` cannot be used as a key blob.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TpmBlobError {
-    /// The file cannot be read: it may not exist.
+    /// The file cannot be read, or does not exist.
     #[error("it cannot be read: {0}")]
     Read(ReadError),
     /// The file is not a well-formed key blob for the approver.
@@ -145,13 +155,15 @@ pub fn read_tpm_key_blob(lock: &StateDirLock, fs: &impl StoreFs, id: ApproverId)
     TpmKeyBlob::decode(&bytes, id.as_bytes()).map_err(|_| TpmBlobError::Blob)
 }
 
-/// A presence payload for `approver_id` of `vault_id` with a fresh nonce from the operating system's random source: the
-/// bytes the helper signs to prove owner presence. The caller verifies the signature and drops the message.
+/// Builds a [presence payload](../../../../../design/storage-formats.md#presence-payload-v1) for `approver_id` of `vault_id`, with a fresh
+/// nonce from the operating system's random source: the bytes the helper signs to prove owner presence. The caller
+/// verifies the signature and drops the message.
 pub fn presence_message(vault_id: VaultId, approver_id: ApproverId) -> Result<Vec<u8>, KeyCheckError> {
     Ok(PresencePayload::new(vault_id, approver_id, fresh_nonce()?).encode())
 }
 
-/// Whether `signature` (`r ‖ s`) over `message` verifies against the key `approver` pins.
+/// Returns `true` if and only if `signature` (`r ‖ s`) over `message` verifies against the ECDSA P-256 key that `approver`
+/// pins. An approver that pins an Ed25519 key always gets `false`.
 pub fn verify_tpm_signature(approver: &PinnedApprover, message: &[u8], signature: &[u8]) -> bool {
     match approver.public_key().key() {
         ApproverKey::EcdsaP256 { key, .. } => verify_p256(key, message, signature).is_ok(),
@@ -159,7 +171,7 @@ pub fn verify_tpm_signature(approver: &PinnedApprover, message: &[u8], signature
     }
 }
 
-/// 32 bytes from the operating system's random source, for one presence payload.
+/// Draws 32 bytes from the operating system's random source, for one presence payload.
 fn fresh_nonce() -> Result<[u8; 32], KeyCheckError> {
     let mut nonce = [0; 32];
     getrandom::fill(&mut nonce).map_err(|_| KeyCheckError::Randomness)?;

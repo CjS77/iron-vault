@@ -1,15 +1,34 @@
-//! The approval state: the pinned approvers and the approval version counters (spec §12, §13).
+//! The approval state: the pinned approvers and the approval version counters, kept in `approval.age`
+//! ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
+//! [§13](../../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 //!
-//! Versioned approval stops an old `config.toml` and `config.toml.sig` pair from becoming valid again only if the
-//! counters never go backwards. The state lives in `approval.age`, sealed to the vault public key and authenticated with
-//! a MAC keyed from the vault identity, so only the service can write one that opens. Every change is one durable replace
-//! of that file, and memory changes only after the replace returns: a version handed out here is already durable, so it
-//! is never handed out twice. The byte layouts are in `design/storage-formats.md`.
+//! Versioned approval stops an old `config.toml` and `config.toml.sig` pair from becoming valid again only while the
+//! counters never go backwards. For example, after the owner approves version 7, the service refuses the version 6 pair
+//! even though its signature is genuine. Two counters do this: the highest reserved version, which every approval
+//! raises before it signs, and the committed `(version, digest)`, which the config check compares with
+//! `config.toml.sig`.
 //!
-//! Every write also reads the manifest from disk, before touching any file, and takes the next vault-wide state
-//! generation after the manifest's and its own, recording the manifest's as its peer generation. The state-directory
-//! lock makes the service the only writer, so the file on disk is the current one and no two writes share a state
-//! generation. Restoring the whole state directory from an older copy restores older counters too; spec §12 leaves
+//! `approval.age` is sealed to the vault public key and carries a MAC keyed from the vault identity, so only the service
+//! can write one that opens. Every change is one durable replace of that file, and memory changes only after the
+//! replace returns: a version handed out here is already durable, so it is never handed out twice. The byte layouts are
+//! in [storage formats](../../../../design/storage-formats.md#approval-state-file-v1).
+//!
+//! Every write first reads the manifest from disk. It takes the next vault-wide state generation, above both the
+//! manifest's and its own, and records the manifest's as its peer generation. The manifest does the same in return, so
+//! the file written last names the other's current state generation:
+//!
+//! ```text
+//!                                  manifest           approval.age
+//! vault created                    gen 1
+//! approval state created                              gen 2, peer 1
+//! manifest records approval.age    gen 3, peer 2
+//! version 1 reserved                                  gen 4, peer 3
+//! ```
+//!
+//! A pair that breaks this rule means one file was restored from an older copy or deleted, and every read and write
+//! refuses it. The state-directory lock makes the service the only writer, so the file on disk is the current one and
+//! no two writes share a state generation. Restoring the whole state directory from an older copy restores older
+//! counters too; [spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload) leaves
 //! protection against that outside v0.
 
 mod approver;
@@ -34,7 +53,8 @@ pub(crate) use approver::ApproverKey;
 pub use approver::{ApproverId, ApproverLabel, ApproverPublicKey, InvalidKeyReason, MAX_APPROVERS, PinnedApprover, SignerKind};
 pub use file::{open_approval_state, seal_approval_state};
 
-/// The largest approval state file accepted, in bytes on disk, checked before any other work; also the payload limit.
+/// The largest approval state file accepted, in bytes on disk, checked before any other work. It is also the payload
+/// limit.
 ///
 /// A payload with [`MAX_APPROVERS`] approvers is at most 2,830 bytes. `age` adds a header of at most about 400 bytes plus
 /// a 16-byte nonce and a 16-byte tag, and the file adds 53 bytes of header and MAC: about 3,315 bytes in all. The limit
@@ -44,10 +64,13 @@ pub const MAX_APPROVAL_STATE_LEN: usize = 4096;
 /// One vault's approval state: the pinned approvers, the highest reserved version and the committed approval, at one
 /// state generation.
 ///
-/// The committed version is never above the highest reserved version, whether the state was built or decoded. The
-/// highest reserved version is 0 only in a newly created state, and no operation lowers it. The peer generation is
-/// always below the state generation. It pins from 1 to [`MAX_APPROVERS`] approvers, in strictly ascending order of
-/// approver ID, no two with the same public key.
+/// Its invariants hold whether the state was built or decoded:
+///
+/// - the committed version is never above the highest reserved version;
+/// - the highest reserved version is 0 only in a newly created state, and no operation lowers it;
+/// - the peer generation is always below the state generation;
+/// - it pins from 1 to [`MAX_APPROVERS`] approvers, in strictly ascending order of approver ID, no two with the same
+///   public key.
 #[derive(Debug, Clone)]
 pub struct ApprovalState {
     vault_id: VaultId,
@@ -57,13 +80,13 @@ pub struct ApprovalState {
     highest_reserved: u64,
     committed: Option<(ApprovalVersion, ConfigDigest)>,
     /// Set when a write renamed the new state into place but its directory fsync failed, so the disk may hold a state
-    /// this one does not. An unsettled state accepts no write; [`ApprovalState::load`], which the approver change read-back calls,
-    /// state to continue with.
+    /// this one does not. An unsettled state accepts no write. [`ApprovalState::load`], which the approver change
+    /// read-back calls, gives the state to continue with.
     unsettled: bool,
 }
 
-/// Two states are equal when they say the same thing; whether memory has lost track of the disk is not part of what
-/// the state says.
+/// Two states are equal when they hold the same vault, generations, approvers and counters. The `unsettled` flag says
+/// whether memory has lost track of the disk, which is not part of the state, so equality ignores it.
 impl PartialEq for ApprovalState {
     fn eq(&self, other: &Self) -> bool {
         self.vault_id == other.vault_id
@@ -94,8 +117,8 @@ pub enum ApprovalStateError {
     /// The MAC matched but the ciphertext did not open.
     #[error("approval state ciphertext cannot be opened: {0}")]
     Sealed(#[from] OpenError),
-    /// The payload names a different vault from the file header, or the file is for a different vault from the one
-    /// being opened.
+    /// The payload names a different vault from the file header, or the file belongs to a different vault from the
+    /// one being opened.
     #[error("approval state belongs to a different vault")]
     VaultIdMismatch,
     /// The approver's public key has the wrong length for its algorithm.
@@ -114,7 +137,7 @@ pub enum ApprovalStateError {
         /// What is wrong with the key.
         reason: InvalidKeyReason,
     },
-    /// The approver's signer kind code is reserved for a later epic, which this build cannot ask.
+    /// The approver's signer kind code is reserved for a later signer kind, which this build cannot ask.
     #[error("signer kind {0} is reserved and not supported by this build")]
     ReservedSignerKind(u8),
     /// The approver's signer kind code is not one any build has defined.
@@ -161,14 +184,14 @@ pub enum ApprovalStateError {
     /// `remove_approver` named an approver ID that is not pinned. Nothing was written.
     #[error("no pinned approver has ID {0}")]
     UnknownApprover(ApproverId),
-    /// The byte saying whether an approval is committed is neither `00` nor `01`.
+    /// The byte saying whether an approval is committed is neither `0x00` nor `0x01`.
     #[error("unknown committed-approval tag {0}")]
     BadCommittedTag(u8),
     /// The committed version is above the highest reserved version, which no service write produces.
     #[error("approval state commits a version that was never reserved")]
     CommittedNotReserved,
-    /// The peer generation is not below the state generation. Every write takes one above both files' state
-    /// generations, so no service write produces this, and the two files would share a state generation.
+    /// The peer generation is not below the state generation. Every write takes a state generation above both files',
+    /// so no service write produces this.
     #[error("approval state peer generation is not below its state generation")]
     PeerNotOlder,
     /// The manifest, whose state generation every write needs, cannot be read; a missing manifest is refused too.
@@ -203,12 +226,15 @@ pub enum ApprovalStateError {
         /// The version already committed.
         committed: ApprovalVersion,
     },
-    /// `create` found an approval state file already in the state directory; creating would reset its counters.
+    /// `create` found an approval state file already in the state directory. Creating it again would reset its
+    /// counters.
     #[error("the approval state already exists; creating it again would reset its version counters")]
     AlreadyExists,
     /// The approval state and the manifest are not a pair any sequence of writes leaves: one was restored from an older
     /// copy or deleted. `load` and every write refuse such a pair, and `create` refuses a manifest that records an
-    /// approval state, because creating one again would reset its counters (spec §12). Nothing was written.
+    /// approval state, because creating one again would reset its counters
+    /// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)). Nothing was
+    /// written.
     #[error(transparent)]
     PartialRestore(PartialRestore),
     /// The approval state file could not be read, or is over its size limit.
@@ -221,7 +247,7 @@ pub enum ApprovalStateError {
     #[error("the approval state write failed and changed nothing: {0}")]
     Write(WriteError),
     /// The new state was renamed into place but the state directory fsync failed, so it may not survive power loss.
-    /// Disk may hold the new state while memory holds the old: reload before using it.
+    /// The disk may hold the new state while memory holds the old: reload before using it.
     #[error("the approval state write may or may not have committed ({0}); reload the approval state to see which")]
     WriteUncertain(WriteError),
     /// The state on disk is not the one in memory, or cannot be read: another writer changed it, an earlier write was
@@ -231,8 +257,8 @@ pub enum ApprovalStateError {
 }
 
 impl ApprovalState {
-    /// A state from its parts, refusing approvers that break the state's invariant, a committed version above the
-    /// highest reserved one, and a peer generation not below the state generation.
+    /// Builds a state from its parts. Refuses approvers that break the state's invariants, a committed version above
+    /// the highest reserved one, and a peer generation not below the state generation.
     fn from_parts(
         vault_id: VaultId,
         (state_generation, peer_generation): (StateGeneration, StateGeneration),
@@ -258,8 +284,9 @@ impl ApprovalState {
         }
     }
 
-    /// Writes the state of the vault whose manifest is in the state directory to `approval.age` and returns it:
-    /// `approver` alone pinned, nothing reserved and nothing committed, at the state generation after the manifest's.
+    /// Writes the first approval state of the vault whose manifest is in the state directory to `approval.age`, and
+    /// returns it: `approver` alone pinned, nothing reserved and nothing committed, at the state generation after the
+    /// manifest's.
     ///
     /// Refuses a missing or damaged manifest: the vault is created first, and its manifest names the vault and the
     /// state generation to follow. Refuses with [`ApprovalStateError::AlreadyExists`] if the file exists, and with
@@ -290,12 +317,14 @@ impl ApprovalState {
         Ok(state)
     }
 
-    /// Reads `approval.age` and opens it as the approval state of vault `vault_id`, refusing it unless it and this
+    /// Reads `approval.age` and opens it as the approval state of vault `vault_id`. Refuses it unless it and this
     /// vault's manifest on disk are a pair some sequence of writes leaves together.
     ///
-    /// Any error is damaged shared state (spec §13): approvals cannot be checked, so the service must not proxy. A
-    /// [`ApprovalStateError::PartialRestore`] means one of the two files was restored from an older copy, so the
-    /// counters may have gone backwards; it is never repaired here (spec §12).
+    /// Any error is damaged shared state
+    /// ([spec §13](../../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)): approvals
+    /// cannot be checked, so the service must not proxy. [`ApprovalStateError::PartialRestore`] means one of the two
+    /// files was restored from an older copy, so the counters may have gone backwards; nothing here repairs it
+    /// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
     pub fn load(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, vault_id: VaultId) -> Result<Self, ApprovalStateError> {
         let state = Self::read(lock, fs, identity, vault_id)?;
         let manifest = read_vault_manifest(lock, fs, identity, vault_id)?;
@@ -304,7 +333,7 @@ impl ApprovalState {
     }
 
     /// Reads `approval.age` and opens it as the approval state of vault `vault_id`, without comparing it with the
-    /// manifest: for a caller that holds the manifest already and runs that check itself.
+    /// manifest. For a caller that already holds the manifest and runs that check itself.
     pub(crate) fn read(
         lock: &StateDirLock,
         fs: &impl StoreFs,
@@ -336,7 +365,7 @@ impl ApprovalState {
         self.peer_generation
     }
 
-    /// The state generation and the peer generation, as the partial restore check takes them.
+    /// The state generation and the peer generation, in the form the partial restore check takes.
     pub(crate) fn generations(&self) -> (StateGeneration, StateGeneration) {
         (self.state_generation, self.peer_generation)
     }
@@ -346,7 +375,7 @@ impl ApprovalState {
         &self.approvers
     }
 
-    /// The pinned approver with ID `id`, if any.
+    /// The pinned approver with ID `id`, or `None` when no approver has that ID.
     pub fn approver(&self, id: ApproverId) -> Option<&PinnedApprover> {
         self.approvers.iter().find(|approver| approver.id() == id)
     }
@@ -356,16 +385,17 @@ impl ApprovalState {
         self.highest_reserved
     }
 
-    /// The committed approval version and config digest, if any approval has been committed.
+    /// The committed approval version and config digest, or `None` before the first commit.
     pub fn committed(&self) -> Option<(ApprovalVersion, ConfigDigest)> {
         self.committed
     }
 
-    /// Durably reserves the next approval version and returns it, before anything is signed (spec §12).
+    /// Durably reserves the next approval version and returns it, before anything is signed
+    /// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
     ///
     /// The version is consumed whether or not signing succeeds. At `u64::MAX` this returns
-    /// [`ApprovalStateError::Exhausted`] and touches no file, and the caller must not sign. Only an `Ok` version may
-    /// be signed: any error means the reservation may not be durable.
+    /// [`ApprovalStateError::Exhausted`] and touches no file, and the caller must not sign. Sign only an `Ok` version:
+    /// any error means the reservation may not be durable.
     pub fn reserve(
         &mut self,
         lock: &StateDirLock,
@@ -389,9 +419,10 @@ impl ApprovalState {
         Ok(version)
     }
 
-    /// Durably makes `(version, digest)` the committed approval: the commit point of an approval (spec §12, step 5).
+    /// Durably makes `(version, digest)` the committed approval: the commit point of an approval
+    /// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload), step 5).
     ///
-    /// `version` must be reserved and newer than the committed version; anything else is refused before any file is
+    /// `version` must be reserved and newer than the committed version. Anything else is refused before any file is
     /// touched. The caller has already checked the signature over this version and digest.
     pub fn commit(
         &mut self,
@@ -421,11 +452,12 @@ impl ApprovalState {
         }
     }
 
-    /// Durably pins `approver` beside the approvers already pinned, keeping both counters (spec §12). Signing-key
-    /// rotation is an enroll followed by a [`remove_approver`](Self::remove_approver).
+    /// Durably pins `approver` beside the approvers already pinned, keeping both counters
+    /// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)). To rotate a
+    /// signing key, enroll the new approver, then [`remove_approver`](Self::remove_approver) the old one.
     ///
-    /// Refuses, before any file is touched, an approver ID or a public key already pinned and a seventeenth approver.
-    /// This performs an already authorized change: the caller checks the owner's authorization.
+    /// Refuses, before any file is touched, an approver ID or a public key already pinned, and an approver past
+    /// [`MAX_APPROVERS`]. This performs an already authorized change: the caller checks the owner's authorization.
     pub fn enroll_approver(
         &mut self,
         lock: &StateDirLock,
@@ -448,7 +480,8 @@ impl ApprovalState {
         self.write(lock, fs, identity, Self { approvers, ..self.clone() })
     }
 
-    /// Durably unpins the approver `id`, keeping both counters (spec §12).
+    /// Durably unpins the approver `id`, keeping both counters
+    /// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
     ///
     /// If that approver signed the active `config.toml.sig`, the signature stops verifying, because the approver ID it
     /// names is no longer pinned, until the owner approves the config again at a new version. Refuses, before any file is
@@ -474,7 +507,8 @@ impl ApprovalState {
     }
 
     /// Writes the state on disk again, its counters unchanged, after a commit of `expected` whose rename landed but
-    /// whose directory fsync failed (design/config-approval.md, "Settling an uncertain commit").
+    /// whose directory fsync failed
+    /// ([config approval, "Settling an uncertain commit"](../../../../design/config-approval.md#settling-an-uncertain-commit)).
     ///
     /// Reading the file back proves nothing, since the page cache serves it, and neither does a second fsync, which
     /// Linux can report as successful after a failed writeback. A fresh durable write is the only proof. Refuses with
@@ -498,8 +532,9 @@ impl ApprovalState {
 
     /// Replaces the file with `next` at the next state generation, then makes that the state in memory. The disk checks
     /// come first: a stale in-memory state would otherwise write lower counters over newer ones, and the manifest on
-    /// disk gives the peer generation. A partial restore is refused rather than written over: recording the restored
-    /// manifest as the peer would make the pair agree again and hide the restore (spec §12).
+    /// disk gives the peer generation. A partial restore is refused, not written over: recording the restored manifest
+    /// as the peer would make the pair agree again and hide the restore
+    /// ([spec §12](../../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
     fn write(&mut self, lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity, next: Self) -> Result<(), ApprovalStateError> {
         self.ensure_disk_matches(lock, fs, identity)?;
         let manifest = read_vault_manifest(lock, fs, identity, self.vault_id)?;
@@ -515,16 +550,16 @@ impl ApprovalState {
         Ok(())
     }
 
-    /// Whether an earlier write of this state renamed the new file into place but failed its directory fsync, so the disk
-    /// may hold a state this one does not. Such a state accepts no write until [`ApprovalState::load`], or the approver change read-back that calls it,
-    /// replaces it.
+    /// Returns `true` if and only if an earlier write of this state renamed the new file into place but failed its
+    /// directory fsync, so the disk may hold a state this one does not. Such a state accepts no write until
+    /// [`ApprovalState::load`], or the approver change read-back that calls it, replaces it.
     pub fn is_unsettled(&self) -> bool {
         self.unsettled
     }
 
     /// Refuses with [`ApprovalStateError::ReloadRequired`] unless this state is settled and the state on disk is exactly
-    /// it. Every write calls this first; an approver change calls it before it writes a key file, so a refusal leaves no
-    /// orphan.
+    /// it. Every write calls this first. An approver change calls it before it writes a key file, so a refusal leaves
+    /// no orphan key file.
     pub(crate) fn ensure_disk_matches(
         &self,
         lock: &StateDirLock,
@@ -540,7 +575,7 @@ impl ApprovalState {
 
 #[cfg(test)]
 impl ApprovalState {
-    /// This state as if written at `state_generation`, which no service write can choose.
+    /// Returns this state as if written at `state_generation`, which no service write can choose.
     pub(crate) fn with_state_generation(&self, state_generation: StateGeneration) -> Self {
         Self {
             state_generation,
@@ -548,7 +583,7 @@ impl ApprovalState {
         }
     }
 
-    /// This state with `highest_reserved` reserved, which only a run of reservations reaches.
+    /// Returns this state with `highest_reserved` reserved, which only a long run of reservations reaches.
     pub(crate) fn with_highest_reserved(&self, highest_reserved: u64) -> Self {
         Self {
             highest_reserved,
@@ -557,8 +592,8 @@ impl ApprovalState {
     }
 }
 
-/// Refuses approvers no service write leaves: none or more than [`MAX_APPROVERS`], IDs not strictly ascending, or one
-/// public key pinned twice. Every entry was validated when it was built.
+/// Refuses approvers no service write leaves: none, more than [`MAX_APPROVERS`], IDs not strictly ascending, or one
+/// public key pinned twice. Each entry was validated when it was built.
 fn check_approvers(approvers: &[PinnedApprover]) -> Result<(), ApprovalStateError> {
     if approvers.is_empty() || approvers.len() > MAX_APPROVERS {
         // At most 16 here or 0, so it always fits in a u64.
@@ -579,12 +614,13 @@ fn check_approvers(approvers: &[PinnedApprover]) -> Result<(), ApprovalStateErro
     }
 }
 
-/// The state generation the next approval state write takes, given the manifest's and the approval state's current ones.
+/// Returns the state generation the next approval state write takes, given the manifest's and the approval state's
+/// current ones.
 fn next_generation(manifest: StateGeneration, approval: Option<StateGeneration>) -> Result<StateGeneration, ApprovalStateError> {
     StateGeneration::next(Some(manifest), approval).ok_or(ApprovalStateError::StateGenerationExhausted)
 }
 
-/// The manifest on disk, whose state generation every approval state write follows and records.
+/// Reads the manifest on disk, whose state generation every approval state write follows and records.
 fn read_manifest(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentity) -> Result<VaultManifest, ApprovalStateError> {
     // MAX_MANIFEST_LEN is 1 MiB, so it always fits in a u64.
     let file =
@@ -592,7 +628,7 @@ fn read_manifest(lock: &StateDirLock, fs: &impl StoreFs, identity: &VaultIdentit
     open_manifest(identity, &file).map_err(ApprovalStateError::ManifestDamaged)
 }
 
-/// The manifest of vault `vault_id` on disk, refusing another vault's.
+/// Reads the manifest of vault `vault_id` on disk, refusing another vault's.
 fn read_vault_manifest(
     lock: &StateDirLock,
     fs: &impl StoreFs,
@@ -606,7 +642,7 @@ fn read_vault_manifest(
     }
 }
 
-/// Refuses to create the approval state over an existing file, whatever it holds.
+/// Refuses to create the approval state over an existing file, even an oversized one.
 fn refuse_existing(lock: &StateDirLock, fs: &impl StoreFs) -> Result<(), ApprovalStateError> {
     match read_state_file(lock, fs, &StateFileName::approval_state(), MAX_APPROVAL_STATE_LEN as u64) {
         Err(ReadError::Io {
@@ -619,7 +655,7 @@ fn refuse_existing(lock: &StateDirLock, fs: &impl StoreFs) -> Result<(), Approva
 }
 
 /// Durably replaces `approval.age`. A failure at the directory fsync comes after the rename, so the disk may already
-/// hold the new state; that is [`ApprovalStateError::WriteUncertain`], never "unchanged".
+/// hold the new state: that is [`ApprovalStateError::WriteUncertain`], never [`ApprovalStateError::Write`].
 fn replace_file(lock: &StateDirLock, fs: &impl StoreFs, bytes: &[u8]) -> Result<(), ApprovalStateError> {
     durable_replace(lock, fs, &StateFileName::approval_state(), bytes).map_err(|error| match error {
         WriteError::Io {

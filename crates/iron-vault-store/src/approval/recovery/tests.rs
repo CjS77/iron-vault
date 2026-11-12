@@ -1,5 +1,6 @@
-//! Approval recovery against every row of design/config-approval.md's recovery table, built on [`FaultFs`], and after
-//! a failure or power loss at every filesystem call of the approval transaction and of recovery itself.
+//! Approval recovery against every row of the [recovery table](../../../../../design/config-approval.md#recovery-table), built on
+//! [`FaultFs`], and after a failure or power loss at every filesystem call of the approval transaction and of recovery
+//! itself.
 
 use std::io;
 use std::path::{Path, PathBuf};
