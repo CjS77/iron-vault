@@ -122,7 +122,7 @@ impl Setup {
         state.remove_approver(&self.lock, fs, &self.identity, approver(seed).id())
     }
 
-    /// Writes `state` as the durable file, whatever its counters, the way only a test can.
+    /// Writes `state` as the durable file with any counters, which only a test can do.
     fn plant(&self, fs: &impl StoreFs, state: &ApprovalState) {
         durable_replace(
             &self.lock,

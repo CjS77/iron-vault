@@ -1,4 +1,4 @@
-//! Bundle order: the fixed entries in turn, then approvers and records strictly ascending, numbering the header's counts
+//! Bundle order: the fixed entries one after another, then approvers and records strictly ascending, numbering the header's counts
 //! ([migration bundle v1, "Entries"](../../../../../design/storage-formats.md#entries)).
 
 use super::BundleError;
@@ -41,7 +41,7 @@ impl EntryOrder {
         }
     }
 
-    /// Refuses an entry out of bundle order. The fixed entries follow one another in turn, an approver or record only
+    /// Refuses an entry out of bundle order. The fixed entries follow one another in the listed order, an approver or record only
     /// follows a lower one of its kind, and the first record follows the last approver.
     fn check_follows(&self, name: EntryName) -> Result<(), BundleError> {
         use EntryName::{ApprovalState, Approver, BundleHeader, Config, ExportedIdentity, Manifest, Record};

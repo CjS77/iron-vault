@@ -82,7 +82,7 @@ impl Vault {
         envelope
     }
 
-    /// A vault whose versions 1 to `n` are each approved and committed in turn, with every envelope.
+    /// A vault whose versions 1 to `n` are each approved and committed one after another, with every envelope.
     fn approved(label: &str, n: u64) -> (Self, Vec<Vec<u8>>) {
         let mut vault = Self::new(label);
         let envelopes = (0..n).map(|_| vault.approve_next()).collect();
@@ -115,7 +115,7 @@ impl Vault {
         ApprovalPayload::new(self.state.vault_id(), version(v), ConfigDigest::of(&config(v)))
     }
 
-    /// Verifies and checks the state is unchanged afterwards, whatever the outcome.
+    /// Verifies and checks that the state is unchanged afterwards, on success or failure.
     fn verify(&self, config: &[u8], envelope: &[u8]) -> Result<VerifiedApproval, VerifyError> {
         let before = self.state.clone();
         let result = verify_approval(&self.state, config, envelope);
@@ -189,7 +189,7 @@ fn envelope_naming_another_pinned_approver_fails_on_the_signature() {
         });
 }
 
-/// Approver IDs are random, so signing with every pinned approver in turn is what covers approvers after the first.
+/// Approver IDs are random, so signing with each pinned approver one after another is what covers approvers after the first.
 #[test]
 fn approval_signed_by_any_pinned_approver_verifies() {
     let (mut vault, _) = Vault::approved("verify-several", 1);

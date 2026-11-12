@@ -120,7 +120,7 @@ impl Setup {
 
 /// The indices, from the end of `prepare`, of the calls of `op` that `act` makes on a fresh [`Setup`], so a test fails a
 /// call by what it is and not by a count that changes with the implementation. `prepare` and `act` make the same calls
-/// whenever they run, whatever IDs they use.
+/// whenever they run and with any IDs.
 fn calls_of<T>(op: FsOp, prepare: impl Fn(&mut Setup) -> T, act: impl Fn(&mut Setup, T)) -> Vec<usize> {
     let mut setup = Setup::new();
     let prepared = prepare(&mut setup);
