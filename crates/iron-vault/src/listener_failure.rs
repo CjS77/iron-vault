@@ -1,8 +1,10 @@
-//! Why an approved or provisional listener did not open, as `status` reports it (`design/admin-protocol.md#status`).
+//! Why an approved or provisional listener did not open, as [`status`][status] reports it.
 //!
 //! A listener that fails to open is left out while the others keep serving, so without a report the owner would learn of
 //! it only from the log. The reason is one fixed category chosen from the open error, never the error's text: that text
 //! names paths and addresses, and no type here can hold a file's contents or a key.
+//!
+//! [status]: ../../../design/admin-protocol.md#status
 
 use std::io;
 
@@ -95,7 +97,7 @@ impl ListenerFailureReason {
         }
     }
 
-    /// The wire code, as `design/admin-protocol.md#status` lists it. Literal, so reordering [`ALL`](Self::ALL) cannot
+    /// The wire code, as [`status`](../../../design/admin-protocol.md#status) lists it. Literal, so reordering [`ALL`](Self::ALL) cannot
     /// change the protocol.
     pub const fn code(self) -> u8 {
         match self {
@@ -112,7 +114,7 @@ impl ListenerFailureReason {
         }
     }
 
-    /// The reason a wire `code` stands for.
+    /// Returns the reason a wire `code` stands for, or `None` for an unknown code.
     pub fn from_code(code: u8) -> Option<Self> {
         Self::ALL.into_iter().find(|reason| reason.code() == code)
     }
@@ -174,7 +176,7 @@ impl ListenerFailureReason {
     }
 }
 
-/// The listener `error` is about, or `None` for an error about the whole set.
+/// Returns the listener `error` is about, or `None` for an error about the whole set.
 fn listener_of(error: &OpenError) -> Option<&ListenerName> {
     match error {
         OpenError::Unix { listener, .. }
@@ -217,7 +219,7 @@ fn adopt_listener(error: &AdoptError) -> Option<&ListenerName> {
     }
 }
 
-/// The failures `errors` come to, in name order. An error about the whole set (`NoRuntime`, `NoRuntimeDir`) leaves
+/// Returns the failures `errors` come to, in name order. An error about the whole set (`NoRuntime`, `NoRuntimeDir`) leaves
 /// every listener in `configured` unopened, so it is reported for each.
 pub fn failures<'a>(errors: &[OpenError], configured: impl Iterator<Item = &'a ListenerName>) -> Vec<ListenerFailure> {
     let mut failures: Vec<_> = match errors.iter().find(|error| listener_of(error).is_none()) {

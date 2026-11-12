@@ -7,7 +7,7 @@ use rustls::crypto::CryptoProvider;
 use rustls_pki_types::CertificateDer;
 use rustls_pki_types::pem::PemObject;
 
-/// What starts every PEM item, whatever its label.
+/// What starts every PEM item, of any label.
 const PEM_BEGIN: &[u8] = b"-----BEGIN ";
 
 /// The start of a certificate item.
@@ -24,8 +24,8 @@ pub(crate) enum CertificatePemError {
     NoCertificates,
 }
 
-/// The TLS crypto provider. It is passed to each config explicitly rather than installed as the process default, so
-/// the provider never depends on what other code installs.
+/// Returns the TLS crypto provider. It is passed to each config explicitly instead of being installed as the process
+/// default, so the provider never depends on what other code installs.
 pub(crate) fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
 }

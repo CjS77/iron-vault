@@ -1,17 +1,27 @@
-//! The request listeners (spec §7, §8): every configured listener open at once, each accepted connection tagged
+//! The request listeners ([spec §7][s7], [§8][s8]): every configured listener open at once, each accepted connection tagged
 //! by the transport with the listener it arrived on and, on a Unix socket, the peer identity the kernel reports.
 //!
 //! Caller identification takes the listener name and the peer uid from here and never from the request, so an
 //! [`IncomingConnection`]'s tags are its only inputs besides the request headers.
 //!
-//! [`RequestServer::serve`](crate::request_server::RequestServer::serve) runs the accept loop on
-//! [`RequestListeners::accept`]. The service opens a provisional set from the unverified config at startup
-//! ([`RequestListeners::open_each`]) and rebuilds it from the verified config on entry to Ready
-//! ([`RequestListeners::rebuild`]).
+//! The listeners go through four steps, in this order:
 //!
-//! Startup order matters. [`PassedSockets::take`] runs first, before the async runtime or any other thread exists,
-//! because `listenfd` edits the environment as it takes the fds. [`RequestListeners::open`] runs
-//! afterwards inside the runtime, because it registers each socket with the runtime's reactor.
+//! ```text
+//! when                               call                          what it does
+//! ---------------------------------  ----------------------------  ---------------------------------------------------------
+//! startup, before any thread         PassedSockets::take           takes the fds systemd passed; listenfd edits the environment
+//! startup, inside the runtime        RequestListeners::open_each   the provisional set, from the unverified config
+//! entry to Ready                     RequestListeners::rebuild     the verified set: unchanged listeners kept, the rest reopened
+//! every connection                   RequestListeners::accept      tags the stream with its listener and peer
+//! ```
+//!
+//! [`PassedSockets::take`] runs before the async runtime exists because `listenfd` edits the environment as it takes
+//! the fds. [`RequestListeners::open_each`] and [`RequestListeners::rebuild`] run inside the runtime, because they
+//! register each socket with the runtime's reactor. [`RequestServer::serve`](crate::request_server::RequestServer::serve)
+//! runs the accept loop on [`RequestListeners::accept`].
+//!
+//! [s7]: ../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners
+//! [s8]: ../../../design/iron-vault-specification.md#8-request-flow
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -165,8 +175,8 @@ impl RequestListeners {
         })
     }
 
-    /// [`open`](Self::open) with the TLS file reader passed in, so tests can supply certificates without trusted
-    /// paths on disk.
+    /// Opens the listeners as [`open`](Self::open) does, with the TLS file reader passed in, so tests can supply
+    /// certificates without trusted paths on disk.
     pub(crate) fn open_with(
         listeners: &BTreeMap<ListenerName, ListenerConfig>,
         paths: &ServicePaths,
@@ -200,7 +210,7 @@ impl RequestListeners {
         Self::partition(results)
     }
 
-    /// The listener set the verified `listeners` name (the listener rebuild on entry to Ready).
+    /// Rebuilds the set as the verified `listeners` name it (the listener rebuild on entry to Ready).
     ///
     /// An open listener is kept only when `listeners` names it with exactly the configuration it was opened for: the
     /// same endpoint, TLS files and token header. Its socket is then checked again as an adopted socket is, and its TLS
@@ -235,7 +245,7 @@ impl RequestListeners {
         Rebuilt { listeners, kept, failures }
     }
 
-    /// A set with no listeners, which never accepts.
+    /// Returns a set with no listeners, which never accepts.
     pub fn empty() -> Self {
         Self::of(Vec::new())
     }
@@ -260,9 +270,9 @@ impl RequestListeners {
         )
     }
 
-    /// The next connection on any listener, tagged with its listener and, on a Unix socket, its peer identity. Its TLS
-    /// handshake has not run: [`IncomingConnection::establish`] runs it in the connection's own task, so a slow client
-    /// cannot hold up accepting.
+    /// Waits for the next connection on any listener and returns it tagged with its listener and, on a Unix socket, its
+    /// peer identity. Its TLS handshake has not run: [`IncomingConnection::establish`] runs it in the connection's own
+    /// task, so a slow client cannot hold up accepting.
     ///
     /// Accept errors are logged and never returned. Running out of file descriptors pauses accepting briefly; a
     /// connection the peer abandoned before it was accepted is skipped at once, so a client cannot slow accepting by
@@ -282,7 +292,7 @@ impl RequestListeners {
         }
     }
 
-    /// The first listener with a connection, looking from a different one each time.
+    /// Polls for the first listener with a connection, starting from a different one each time.
     fn poll_any(&self, cx: &mut Context<'_>) -> Poll<(&OpenListener, io::Result<Accepted>)> {
         let count = self.open.len();
         let start = self.next.fetch_add(1, Ordering::Relaxed).checked_rem(count).unwrap_or(0);
@@ -300,7 +310,7 @@ impl RequestListeners {
 }
 
 impl OpenListener {
-    /// This listener, kept through a rebuild, after its socket and TLS files pass their checks again.
+    /// Checks this listener's socket and TLS files again, for a listener kept through a rebuild.
     fn recheck(
         mut self,
         paths: &ServicePaths,
@@ -407,7 +417,7 @@ fn admin_socket_path(paths: &ServicePaths) -> Result<PathBuf, OpenError> {
         .ok_or(OpenError::NoRuntimeDir)
 }
 
-/// The listener's TLS acceptor, when its endpoint has TLS files.
+/// Loads the listener's TLS acceptor, or returns `None` when its endpoint has no TLS files.
 fn load_tls(
     name: &ListenerName,
     endpoint: &Endpoint,

@@ -1,9 +1,11 @@
-//! Binding a request socket (spec §7): a Unix socket on which callers reach the request interface.
+//! Binding a request socket ([spec §7][s7]): a Unix socket on which callers reach the request interface.
 //!
 //! Any local account may connect, so the socket has mode `0666` and the mode grants nothing: each connection carries
 //! the peer identity the kernel recorded, and caller authentication decides from that peer account, or from a caller
 //! token, what the connection may use. What stops another account squatting on the path while the service is down
-//! (§7) is the directory: it must pass the runtime-directory rule, so only the service account can write it.
+//! ([§7][s7]) is the directory: it must pass the runtime-directory rule, so only the service account can write it.
+//!
+//! [s7]: ../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -116,8 +118,8 @@ fn check_dir(path: &Path, owner: ExpectedOwner) -> Result<(), RequestBindError> 
     })
 }
 
-/// Checks the directory holding the request socket `path` against the runtime-directory rule, whether the service
-/// binds the socket or systemd passed it.
+/// Checks the directory holding the request socket `path` against the runtime-directory rule. Both a socket the service
+/// binds and one systemd passed are checked.
 pub(crate) fn check_socket_dir(path: &Path, owner: ExpectedOwner) -> Result<(), DirFault> {
     let dir = path
         .parent()
@@ -132,7 +134,8 @@ pub(crate) fn check_socket_dir(path: &Path, owner: ExpectedOwner) -> Result<(), 
         })
 }
 
-/// Whether `path` names `admin`: the same path, or the same file name in the same directory reached another way.
+/// Returns `true` if and only if `path` names `admin`: the same path, or the same file name in the same directory
+/// reached another way.
 /// Binding there would remove the live admin socket as stale.
 fn is_same_socket_path(path: &Path, admin: &Path) -> bool {
     let dir_id = |p: &Path| {

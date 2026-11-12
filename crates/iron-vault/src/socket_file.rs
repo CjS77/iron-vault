@@ -1,9 +1,12 @@
-//! Binding the service's Unix socket files (spec §7, `design/admin-protocol.md`, "Admin socket"): a socket owned by
-//! the service account at one fixed mode, never connectable at any other.
+//! Binding the service's Unix socket files ([spec §7][s7], [Admin socket][admin]): a socket owned by the service account
+//! at one fixed mode, never connectable at any other.
 //!
 //! A socket is bound, set to its mode and checked before it listens. A Unix socket that is bound but not listening
 //! refuses every connection, so the mode the kernel created it with is never reachable. The umask is left alone: it is
 //! process-wide and would race with other threads.
+//!
+//! [s7]: ../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners
+//! [admin]: ../../../design/admin-protocol.md#admin-socket
 
 use std::fmt;
 use std::fs::{self, Metadata};
@@ -178,7 +181,7 @@ impl Drop for SocketFile {
     }
 }
 
-/// A new non-blocking Unix stream socket bound to the spec's path, not yet listening.
+/// Creates a non-blocking Unix stream socket bound to the spec's path, not yet listening.
 fn bound_socket(spec: SocketSpec<'_>) -> Result<OwnedFd, BindError> {
     let flags = SocketFlags::CLOEXEC | SocketFlags::NONBLOCK;
     let fd = rustix::net::socket_with(AddressFamily::UNIX, SocketType::STREAM, flags, None)
@@ -227,7 +230,7 @@ fn verify(spec: SocketSpec<'_>) -> Result<Metadata, BindError> {
     }
 }
 
-/// "a socket owned by uid 1000 with mode 0644", for error messages.
+/// Describes what `metadata` shows, such as "a socket owned by uid 1000 with mode 0644", for error messages.
 pub(crate) fn describe(metadata: &Metadata) -> String {
     let file_type = metadata.file_type();
     let kind = if file_type.is_socket() {

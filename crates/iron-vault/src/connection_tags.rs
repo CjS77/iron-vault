@@ -1,5 +1,8 @@
-//! The connection tags the transport sets on every request (§7). They live outside the Linux-only request server so
-//! the request pipeline, which reads them, stays pure and builds on every platform.
+//! The connection tags the transport sets on every request ([spec §7][s7]): the listener it arrived on and, on a Unix
+//! socket, the peer's uid. Caller authentication trusts them because no request can set them. They live outside the
+//! Linux-only request server so the request pipeline, which reads them, stays pure and builds on every platform.
+//!
+//! [s7]: ../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,7 +18,7 @@ pub struct ConnectionTags {
 }
 
 impl ConnectionTags {
-    /// Tags for a connection accepted on `listener` from `peer_uid`. Crate-private, so nothing outside the service can
+    /// Creates the tags for a connection accepted on `listener` from `peer_uid`. Crate-private, so nothing outside the service can
     /// forge them. Outside tests only the request server calls it, and that is built only on Linux.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn new(listener: ListenerName, peer_uid: Option<u32>) -> Self {
@@ -33,10 +36,11 @@ impl ConnectionTags {
     }
 }
 
-/// Whether the service itself is closing the connections of a listener, so a request that ends because its connection
-/// was aborted is recorded as the service's doing and not the caller's (`design/audit-logging.md`, "Closes the service
-/// makes"). It is set before the connections are aborted and shared by clones, but it is not part of [`ConnectionTags`],
-/// which the pipeline compares by value.
+/// A shared flag, set when the service itself is closing the connections of a listener, so a request that ends because
+/// its connection was aborted is recorded as the service's doing and not the caller's
+/// ([Closes the service makes](../../../design/audit-logging.md#closes-the-service-makes)). It is set before the
+/// connections are aborted and shared by clones, but it is not part of [`ConnectionTags`], which the pipeline compares
+/// by value.
 #[derive(Debug, Clone, Default)]
 pub struct ServiceClose(Arc<AtomicBool>);
 
@@ -46,7 +50,7 @@ impl ServiceClose {
         self.0.store(true, Ordering::Release);
     }
 
-    /// Whether the service has begun closing the connections.
+    /// Returns `true` if and only if the service has begun closing the connections.
     pub fn is_set(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }

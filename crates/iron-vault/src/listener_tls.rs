@@ -1,14 +1,16 @@
-//! TLS listeners (specification §7): a TCP listener that terminates TLS with the certificate chain and private
+//! TLS listeners ([spec §7][s7]): a TCP listener that terminates TLS with the certificate chain and private
 //! key the administrator installed for it, so a network observer can neither read caller tokens and request bodies
 //! nor change them.
 //!
 //! Both files are read through their trusted-path rules when the listener is opened, and the key must match the leaf
-//! certificate then, so a broken pair stops the listener opening rather than failing its first handshake. Certificate
+//! certificate then, so a broken pair stops the listener opening instead of failing its first handshake. Certificate
 //! rotation therefore takes effect when the listeners are next opened, at restart or reload; nothing watches the
 //! files.
 //!
-//! The listener uses the same rustls build and crypto provider as the outbound client ([`crate::tls`]), so the
-//! service carries one TLS stack.
+//! The listener uses the same rustls build and crypto provider as the outbound client (`crate::tls`), so the service
+//! carries one TLS stack.
+//!
+//! [s7]: ../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners
 
 use std::fmt;
 use std::io;
@@ -34,8 +36,9 @@ use crate::trusted_path::ExpectedOwner;
 
 /// How long a client has to finish the TLS handshake before its connection is dropped.
 ///
-/// A placeholder until implementation spec §3 publishes the listener limits: long enough for a slow network, short enough
-/// that silent connections cannot pile up.
+/// A placeholder until
+/// [implementation spec §3](../../../design/implementation-specification.md#3-implementation-gates-and-unresolved-details)
+/// publishes the listener limits: long enough for a slow network, short enough that silent connections cannot pile up.
 pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The only application protocol offered. HTTP/2 is added if the request interface comes to serve it.
@@ -178,7 +181,8 @@ impl ListenerTls {
         })
     }
 
-    /// [`open`](Self::open) with the file reader passed in, so loading is testable without trusted paths on disk.
+    /// Loads the acceptor as [`open`](Self::open) does, with the file reader passed in, so loading is testable without
+    /// trusted paths on disk.
     pub(crate) fn open_with(
         listener: &ListenerName,
         files: &TlsFiles,
@@ -275,8 +279,8 @@ impl Source<'_> {
     ///
     /// The key is moved into the provider because ring's key provider wraps the `PrivateKeyDer` it receives in
     /// `Zeroizing`, so that buffer is wiped once loading returns; `PrivateKeyDer` does not wipe itself on drop. The
-    /// loader still makes unwiped intermediate copies of a SEC1 key while converting it to PKCS#8 (see the residual
-    /// copies in `design/secret-handling.md`).
+    /// loader still makes unwiped intermediate copies of a SEC1 key while converting it to PKCS#8 (see
+    /// [Known residual copies](../../../design/secret-handling.md#known-residual-copies)).
     fn certified_key(
         &self,
         provider: &CryptoProvider,

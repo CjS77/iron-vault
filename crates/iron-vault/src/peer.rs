@@ -1,8 +1,11 @@
-//! Who is at the other end of a Unix socket, as the kernel reports it (spec §5, §7).
+//! Who is at the other end of a Unix socket, as the kernel reports it ([spec §5][s5], [§7][s7]).
 //!
 //! Both the admin socket and the request sockets judge a connection only by this answer: the admin socket checks it
 //! against the admin principals, and a request socket hands it to caller authentication. Nothing the peer sends takes
 //! part.
+//!
+//! [s5]: ../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns
+//! [s7]: ../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners
 
 // Windows has no Unix-socket peer credentials in std; its transports get their own adapter.
 #[cfg(unix)]
@@ -25,13 +28,13 @@ pub struct PeerIdentity {
 }
 
 impl PeerIdentity {
-    /// A peer identity for unit tests of the rules that judge one; outside tests only the adapter builds one.
+    /// Creates a peer identity for unit tests of the rules that judge one; outside tests only the adapter builds one.
     #[cfg(test)]
     pub(crate) const fn for_test(uid: u32, gid: u32, pid: u32) -> Self {
         Self { uid, gid, pid: Some(pid) }
     }
 
-    /// A test peer whose pid the kernel could not report, as for a peer in another PID namespace.
+    /// Creates a test peer whose pid the kernel could not report, as for a peer in another PID namespace.
     #[cfg(test)]
     pub(crate) const fn for_test_without_pid(uid: u32, gid: u32) -> Self {
         Self { uid, gid, pid: None }
@@ -48,9 +51,10 @@ impl PeerIdentity {
     }
 
     /// The peer's process ID, for the audit log only. It is never used to look up an executable: `/proc/<pid>/exe`
-    /// cannot tell the owner from malware running as the same account (§7), and the pid may already be reused. It is
-    /// absent when the peer is in a PID namespace the service cannot see, such as the host CLI talking to the service in
-    /// the Container profile.
+    /// cannot tell the owner from malware running as the same account
+    /// ([§7](../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners)), and the pid may
+    /// already be reused. It is absent when the peer is in a PID namespace the service cannot see, such as the host CLI
+    /// talking to the service in the Container profile.
     pub const fn pid(&self) -> Option<u32> {
         self.pid
     }

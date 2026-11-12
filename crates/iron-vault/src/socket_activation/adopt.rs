@@ -146,7 +146,8 @@ impl PassedSockets {
         }
     }
 
-    /// The socket passed for `listener`, once it passes [`verify`] against `endpoint`; `None` when none was passed.
+    /// Hands out the socket passed for `listener`, once it passes [`verify`] against `endpoint`; `None` when none was
+    /// passed.
     /// A socket that fails is kept, so a later listener rebuild can adopt it against another endpoint.
     pub fn adopt(
         &mut self,
@@ -213,7 +214,7 @@ pub fn verify(listener: &ListenerName, fd: BorrowedFd<'_>, endpoint: &Endpoint, 
     }
 }
 
-/// The socket at `index` as whichever stream listener it is; anything else stays with `listenfd` and is refused.
+/// Takes the socket at `index` as whichever stream listener it is; anything else stays with `listenfd` and is refused.
 fn take(fds: &mut ListenFd, index: usize, listener: &ListenerName, fd: RawFd) -> Result<AdoptedSocket, AdoptError> {
     let missing = || AdoptError::Missing {
         listener: listener.clone(),

@@ -1,7 +1,7 @@
-//! Socket activation (spec §7): request listeners that systemd binds and passes to the service by name.
+//! Socket activation ([spec §7][s7]): request listeners that systemd binds and passes to the service by name.
 //!
 //! A service that binds its own TCP port leaves a gap at every restart in which another local process can bind the
-//! port, collect caller tokens and forge responses (§7). Under socket activation systemd holds the port from boot and
+//! port, collect caller tokens and forge responses ([§7][s7]). Under socket activation systemd holds the port from boot and
 //! across restarts, so in a protected Linux install every TCP listener must arrive that way. A Unix request socket is
 //! protected by its service-owned directory instead, so it may be activated or bound by the service.
 //!
@@ -13,10 +13,12 @@
 //!
 //! The service never removes the variables itself: removing one needs `remove_var`, which is unsafe in edition 2024.
 //! `listenfd`, which takes ownership of the fds, removes `LISTEN_PID` and `LISTEN_FDS` as it does so, so adoption must
-//! run before the service starts any thread, its async runtime included. `LISTEN_FDNAMES` stays set; the service starts no child process, so
-//! nothing inherits it.
+//! run before the service starts any thread, its async runtime included. `LISTEN_FDNAMES` stays set; the service starts
+//! no child process, so nothing inherits it.
 //!
-//! An end-to-end run under `systemd-socket-activate` is EP-34's release test.
+//! The integration test `tests/service/socket_activation_e2e.rs` runs the service under `systemd-socket-activate`.
+//!
+//! [s7]: ../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners
 
 use std::collections::BTreeMap;
 use std::os::fd::RawFd;
@@ -178,7 +180,7 @@ pub fn check_origin(profile: DeploymentProfile, listener: &ListenerName, endpoin
     }
 }
 
-/// `LISTEN_FDS` as a positive count. systemd sets the variables only when it passes at least one socket.
+/// Parses `LISTEN_FDS` as a positive count. systemd sets the variables only when it passes at least one socket.
 fn fd_count(value: Option<&str>) -> Result<usize, ActivationError> {
     let value = value.ok_or(ActivationError::MissingCount)?;
     value
@@ -188,7 +190,7 @@ fn fd_count(value: Option<&str>) -> Result<usize, ActivationError> {
         .ok_or_else(|| ActivationError::BadCount { value: quoted(value) })
 }
 
-/// `LISTEN_FDNAMES` split into one name per socket; when it is unset, the first socket has no name.
+/// Splits `LISTEN_FDNAMES` into one name per socket; when it is unset, the first socket has no name.
 fn fd_names(value: Option<&str>, count: usize) -> Result<Vec<&str>, ActivationError> {
     let names: Vec<&str> = value.ok_or(ActivationError::Unnamed { fd: FIRST_FD })?.split(':').collect();
     match names.len() == count {
@@ -197,7 +199,7 @@ fn fd_names(value: Option<&str>, count: usize) -> Result<Vec<&str>, ActivationEr
     }
 }
 
-/// The listener name `name`, passed as `fd`.
+/// Parses `name`, passed as `fd`, as a listener name.
 fn claim(name: &str, fd: RawFd) -> Result<ListenerName, ActivationError> {
     if name.is_empty() {
         return Err(ActivationError::Unnamed { fd });
@@ -221,7 +223,7 @@ fn check_unique(listeners: &[ListenerName]) -> Result<(), ActivationError> {
         .map(|_| ())
 }
 
-/// `s` in double quotes with control and non-ASCII characters escaped, since the environment may hold anything.
+/// Returns `s` in double quotes with control and non-ASCII characters escaped, since the environment may hold anything.
 fn quoted(s: &str) -> String {
     format!("\"{}\"", s.escape_default())
 }
