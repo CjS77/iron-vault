@@ -7,13 +7,15 @@
 //! `pipeline_egress.rs` sends a fixed list of hostile requests, and the property tests in `iron-vault-policy` generate
 //! them but stop at the policy's own types. Here generated targets, headers, markers, methods and caller tokens go
 //! through the real request server, pipeline and upstream client, and the property is checked on the wire: each
-//! upstream received nothing, or exactly one request to the route's enrolled origin, on one of the route's paths under
-//! every percent-decoding an upstream might apply, with the route's credential once and in its slot only, and no other
-//! credential anywhere.
+//! upstream received nothing, or exactly one request from a caller the config grants the route, to the route's enrolled
+//! origin, on one of the route's paths under every percent-decoding an upstream might apply, with no forwarding,
+//! override or caller-token header, with the route's credential once and in its slot only, and no other credential
+//! anywhere.
 //!
 //! Requests are written to the socket byte for byte, so NUL and control bytes, absolute-form and authority-form targets
 //! and over-limit heads reach the server as an attacker would send them. A mismatched final URL cannot be produced
-//! through the public API; `pipeline_egress.rs` names the tests that show the final check refusing one.
+//! through the public API; release check 2 in `design/v0-acceptance.md` names the tests that show the final check
+//! refusing one.
 
 #![cfg(target_os = "linux")]
 
@@ -23,7 +25,7 @@ use std::cell::RefCell;
 
 use common::WAIT;
 use common::mock_upstream::{MockUpstream, RecordedRequest, Reply, TestCa};
-use common::proxy_harness::{CallerRequest, Credential, Endpoints, Proxy, Setup, TOKEN_BYTES, Via, token_hash, token_of};
+use common::proxy_harness::{CallerRequest, Credential, Endpoints, Proxy, Setup, TOKEN_BYTES, TOKEN_HEADER, Via, token_hash, token_of};
 use iron_vault_kinds::CredentialMaterial;
 use proptest::collection::vec;
 use proptest::prelude::*;
@@ -156,6 +158,17 @@ fn callers_and_routes(ports: &[u16]) -> String {
         .iter()
         .zip(ports)
         .fold(callers, |toml, (route, port)| toml + &route.toml(*port))
+}
+
+/// The routes the config in [`callers_and_routes`] grants the caller a case authenticates as. A token on the wrong
+/// listener, a token no caller holds, or none at all is granted nothing.
+fn granted(via: Via, token: Token) -> &'static [&'static str] {
+    match (via, token) {
+        (Via::Unix, Token::Valid) => &["fx", "brave", "venice", "billing"],
+        (Via::Unix, Token::Narrow) => &["brave"],
+        (Via::Tcp, Token::Valid) => &["fx", "brave", "billing"],
+        _ => &[],
+    }
 }
 
 // Generated requests.
@@ -441,9 +454,16 @@ fn counts(upstream: &MockUpstream) -> (usize, usize) {
     (upstream.connections(), upstream.requests().len())
 }
 
-/// Checks what the upstreams received since `before`; returns the index of the route whose upstream got a request.
-fn check_egress(upstreams: &[MockUpstream], before: &[(usize, usize)]) -> Result<Option<usize>, TestCaseError> {
-    let reached: Vec<usize> = (0..upstreams.len()).filter(|&i| counts(&upstreams[i]) != before[i]).collect();
+/// Checks what the upstreams received since `before` from a caller on `via`; returns the index of the route whose
+/// upstream got a request.
+fn check_egress(upstreams: &[MockUpstream], before: &[(usize, usize)], via: Via) -> Result<Option<usize>, TestCaseError> {
+    let reached: Vec<usize> = upstreams
+        .iter()
+        .zip(before)
+        .enumerate()
+        .filter(|(_, (upstream, was))| counts(upstream) != **was)
+        .map(|(index, _)| index)
+        .collect();
     let [index] = reached[..] else {
         prop_assert!(reached.is_empty(), "upstreams {reached:?} were all contacted");
         return Ok(None);
@@ -455,41 +475,83 @@ fn check_egress(upstreams: &[MockUpstream], before: &[(usize, usize)]) -> Result
         "one connection carrying one request"
     );
     let sent = upstreams[index].requests().pop().unwrap();
-    check_request(&ROUTES[index], upstreams[index].port(), &sent)?;
+    check_request(&ROUTES[index], upstreams[index].port(), &sent, via)?;
     Ok(Some(index))
 }
 
-fn check_request(route: &RouteSpec, port: u16, sent: &RecordedRequest) -> Result<(), TestCaseError> {
+/// Forwarding, method-override and URL-rewrite headers, and `Proxy-Authorization`, which no upstream may receive.
+/// `x-forwarded-*` is matched by prefix in [`forbidden_header`].
+const FORBIDDEN_HEADERS: &[&str] = &[
+    "forwarded",
+    "x-original-url",
+    "x-rewrite-url",
+    "x-http-method-override",
+    "x-method-override",
+    "x-http-method",
+    "proxy-authorization",
+];
+
+/// Whether `name` must not reach an upstream from a caller on `via`. The Unix listener's dedicated token header is
+/// caller authentication only there; on the TCP listener it is an ordinary header and is forwarded.
+fn forbidden_header(name: &str, via: Via) -> bool {
+    let name = name.to_ascii_lowercase();
+    let token_header = matches!(via, Via::Unix) && name.eq_ignore_ascii_case(TOKEN_HEADER);
+    token_header || name.starts_with("x-forwarded-") || FORBIDDEN_HEADERS.contains(&name.as_str())
+}
+
+/// The values of every header named `name`, in any case.
+fn values(headers: &[(String, String)], name: &str) -> Vec<String> {
+    headers
+        .iter()
+        .filter(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.clone())
+        .collect()
+}
+
+fn check_request(route: &RouteSpec, port: u16, sent: &RecordedRequest, via: Via) -> Result<(), TestCaseError> {
     let headers = sent.headers();
-    let values = |name: &str| {
-        headers
-            .iter()
-            .filter(|(n, _)| n.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.clone())
-            .collect::<Vec<_>>()
-    };
     prop_assert_eq!(sent.server_name.as_deref(), Some("localhost"));
-    prop_assert_eq!(values("host"), [format!("localhost:{port}")]);
+    prop_assert_eq!(values(&headers, "host"), [format!("localhost:{port}")]);
+    let forbidden: Vec<_> = headers
+        .iter()
+        .map(|(name, _)| name)
+        .filter(|name| forbidden_header(name, via))
+        .collect();
+    prop_assert!(forbidden.is_empty(), "{forbidden:?} reached {}", route.name);
     let mut line = sent.request_line().split(' ');
     let (method, target) = (line.next().unwrap_or_default(), line.next().unwrap_or_default());
     prop_assert!(route.methods.contains(&method), "{method} is not one of {}'s methods", route.name);
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     prop_assert!(path_allowed(route, path), "{path} is outside {}'s paths", route.name);
-    let wire = format!("{}\r\n\r\n{}", sent.head, String::from_utf8_lossy(&sent.body));
+    check_slot(route, &headers, query)?;
+    check_secrets(route, &format!("{}\r\n\r\n{}", sent.head, String::from_utf8_lossy(&sent.body)))
+}
+
+/// The credential is in the route's slot, once. A query parameter is matched by its percent-decoded name, so an
+/// encoded `access_key` the caller sent counts as a second one.
+fn check_slot(route: &RouteSpec, headers: &[(String, String)], query: &str) -> Result<(), TestCaseError> {
+    match route.slot {
+        Slot::Query(name) => {
+            let params: Vec<_> = query
+                .split('&')
+                .filter(|param| decode_once(param.split('=').next().unwrap_or_default().as_bytes()) == name.as_bytes())
+                .collect();
+            prop_assert_eq!(params, [format!("{name}={}", route.wire)]);
+        }
+        Slot::Header(name, before) => prop_assert_eq!(values(headers, name), [format!("{before}{}", route.wire)]),
+        Slot::Basic => prop_assert_eq!(values(headers, "authorization"), [format!("Basic {}", route.wire)]),
+    }
+    Ok(())
+}
+
+/// `wire`, the whole request, carries the route's credential exactly once and no other credential or caller token.
+fn check_secrets(route: &RouteSpec, wire: &str) -> Result<(), TestCaseError> {
     prop_assert_eq!(
         wire.matches(route.wire).count(),
         1,
         "{}'s credential is not on the wire exactly once",
         route.name
     );
-    match route.slot {
-        Slot::Query(name) => {
-            let params: Vec<_> = query.split('&').filter(|p| p.split('=').next() == Some(name)).collect();
-            prop_assert_eq!(params, [format!("{name}={}", route.wire)]);
-        }
-        Slot::Header(name, before) => prop_assert_eq!(values(name), [format!("{before}{}", route.wire)]),
-        Slot::Basic => prop_assert_eq!(values("authorization"), [format!("Basic {}", route.wire)]),
-    }
     let others = ROUTES
         .iter()
         .filter(|other| other.name != route.name)
@@ -515,15 +577,9 @@ fn path_allowed(route: &RouteSpec, path: &str) -> bool {
 
 /// `path` and each percent-decoding of it, until decoding changes nothing.
 fn readings(path: &[u8]) -> Vec<Vec<u8>> {
-    let mut readings = vec![path.to_vec()];
-    while let Some(last) = readings.last().filter(|_| readings.len() <= MAX_PASSES) {
-        let next = decode_once(last);
-        if &next == last {
-            break;
-        }
-        readings.push(next);
-    }
-    readings
+    std::iter::successors(Some(path.to_vec()), |last| Some(decode_once(last)).filter(|next| next != last))
+        .take(MAX_PASSES + 1)
+        .collect()
 }
 
 /// One lenient decoding pass: every well-formed escape is decoded, everything else is kept.
@@ -546,8 +602,8 @@ fn decode_once(input: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A rooted path whose segments, but for one trailing slash, are non-empty, not dot segments, and free of backslashes
-/// and control bytes.
+/// A rooted path whose segments, but for one trailing slash, are non-empty, not dot segments (counting `..;`, which some
+/// servers read as `..`), and free of backslashes and control bytes.
 fn clean(path: &[u8]) -> bool {
     let Some(rest) = path.strip_prefix(b"/") else {
         return false;
@@ -557,7 +613,7 @@ fn clean(path: &[u8]) -> bool {
     rest.is_empty()
         || rest
             .split(|b| *b == b'/')
-            .all(|seg| !matches!(seg, b"" | b"." | b"..") && !seg.iter().any(bad_byte))
+            .all(|seg| !matches!(seg, b"" | b"." | b"..") && !seg.starts_with(b"..;") && !seg.iter().any(bad_byte))
 }
 
 /// Whether a clean `path` matches `pattern`: exactly, or for `<dir>/**` at or under `<dir>`, ignoring one trailing slash.
@@ -605,7 +661,14 @@ fn generated_hostile_requests_produce_no_credentialed_egress() {
     let result = TestRunner::new(config).run(&case(), |case| {
         let before: Vec<_> = upstreams.iter().map(counts).collect();
         runtime.block_on(send(&endpoints, &case))?;
-        if let Some(index) = check_egress(&upstreams, &before)? {
+        if let Some(index) = check_egress(&upstreams, &before, case.via)? {
+            let name = ROUTES[index].name;
+            prop_assert!(
+                granted(case.via, case.token).contains(&name),
+                "{name} forwarded for {:?} {:?}",
+                case.via,
+                case.token
+            );
             forwarded.borrow_mut()[index] += 1;
         }
         Ok(())
