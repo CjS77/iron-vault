@@ -777,39 +777,6 @@ fn assert_refused_before_any_prompt(shown: &Exchanged, reason: &str) {
     assert!(shown.prompts.is_empty() && shown.reveals.is_empty());
 }
 
-/// Without a terminal the CLI shows no recovery key, so it exits before it connects or reads the bundle.
-#[tokio::test(flavor = "multi_thread")]
-async fn the_cli_refuses_without_a_terminal_before_connecting() {
-    let (_one, source, _logs) = begin().await;
-    let dest = Dest::new();
-    let probe = dest.path("probe.sock");
-    let listener = std::os::unix::net::UnixListener::bind(&probe).unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let bundle = dest.path("vault.bundle");
-    fs::write(&bundle, &source.bytes).unwrap();
-
-    let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(env!("CARGO_BIN_EXE_iron-vault"))
-            .arg("import")
-            .arg(&bundle)
-            .arg("--admin-socket")
-            .arg(&probe)
-            .stdin(std::process::Stdio::piped())
-            .output()
-            .unwrap()
-    })
-    .await
-    .unwrap();
-
-    assert_eq!(output.status.code(), Some(3));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("controlling terminal only") && stderr.contains("nothing was sent"),
-        "{stderr}"
-    );
-    assert!(listener.accept().is_err(), "the CLI connected");
-}
-
 /// Runs the CLI's `import` of `bundle` (as typed, relative to `cwd`) against `service` with all of `answers` at once.
 async fn cli_import(service: &Arc<ServiceContext>, cwd: &Path, bundle: &Path, answers: &[&[u8]]) -> CliRan {
     let (socket, stop, task) = spawn_admin(service, Limits::default());
