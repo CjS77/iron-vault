@@ -1,5 +1,6 @@
-//! Iron Vault service binary: HTTP and admin interfaces, CLI client, config loading, deployment adapters, response
-//! scrubbing, logging, and notifications.
+//! The `iron-vault` binary: the service (`iron-vault serve`) and the owner's CLI, whose commands talk to the service over
+//! the admin socket ([spec §5](../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns)).
+//! This file only dispatches a parsed command; the library crate holds the service and its rules.
 
 mod cli;
 #[cfg(target_os = "linux")]

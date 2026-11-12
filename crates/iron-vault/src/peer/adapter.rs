@@ -1,4 +1,5 @@
-//! The platform adapter that asks the kernel who is at the other end of a Unix socket.
+//! The platform adapter that asks the kernel who is at the other end of a Unix socket. On Linux it reads
+//! `SO_PEERCRED`; other platforms have no adapter yet and refuse every connection that needs one.
 
 use std::io;
 
