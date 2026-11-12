@@ -36,6 +36,7 @@ use iron_vault::admin::protocol::{
 };
 use iron_vault::admin::server::{AdminServer, Limits};
 use iron_vault::admin::socket::AdminSocket;
+use iron_vault::admin_file::AdminFile;
 use iron_vault::attempt_limit::FAILURE_THRESHOLD;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
@@ -2224,6 +2225,180 @@ async fn locking_while_serving_gives_503_locked_and_unlock_restores_serving_at_t
         (before.committed, before.highest_reserved)
     );
     assert_eq!(after.id, before.id);
+}
+
+// Unsafe listeners (specification §7, §19): a TCP listener off loopback whose TLS files do not load, or that has no TLS,
+// is never opened, neither in the provisional set at startup nor in the rebuild on entry to Ready. The other listeners
+// still answer, so the service stays in an explicit state.
+
+/// A directory for listener TLS files, removed on drop.
+///
+/// The trusted-path rules refuse a certificate or key below a shared sticky directory such as `/tmp`, or below a
+/// group-writable one, so the directory goes in the first base whose ancestors pass: the build's own temporary
+/// directory, else `$XDG_RUNTIME_DIR`.
+struct TlsDir(PathBuf);
+
+impl TlsDir {
+    /// A fresh `0700` directory holding `server.crt` (`0644`) and `server.key` (`key_mode`): a leaf for `localhost` and
+    /// a key that is the leaf's own when `matching`, another key otherwise.
+    fn new(name: &str, matching: bool, key_mode: u32) -> Self {
+        let bases = [
+            Some(PathBuf::from(env!("CARGO_TARGET_TMPDIR"))),
+            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+        ];
+        bases
+            .into_iter()
+            .flatten()
+            .map(|base| Self::create(&base, name, matching, key_mode))
+            .find(|tls| {
+                let owner = invoking_user().unwrap();
+                iron_vault::admin_file::read(
+                    AdminFile::Certificate,
+                    DeploymentProfile::Development,
+                    owner,
+                    &tls.path("server.crt"),
+                )
+                .is_ok()
+            })
+            .expect("no base directory whose ancestors the trusted-path rules accept for listener TLS files")
+    }
+
+    fn create(base: &Path, name: &str, matching: bool, key_mode: u32) -> Self {
+        let dir = base.join(format!("iv-tls-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        mkdir(&dir, 0o700);
+        let leaf_key = rcgen::KeyPair::generate().unwrap();
+        let leaf = rcgen::CertificateParams::new(vec!["localhost".to_owned()])
+            .unwrap()
+            .self_signed(&leaf_key)
+            .unwrap();
+        let key = if matching { leaf_key } else { rcgen::KeyPair::generate().unwrap() };
+        let tls = Self(dir);
+        [("server.crt", leaf.pem(), 0o644), ("server.key", key.serialize_pem(), key_mode)]
+            .into_iter()
+            .for_each(|(file, pem, mode)| {
+                fs::write(tls.path(file), pem).unwrap();
+                fs::set_permissions(tls.path(file), fs::Permissions::from_mode(mode)).unwrap();
+            });
+        tls
+    }
+
+    fn path(&self, file: &str) -> PathBuf {
+        self.0.join(file)
+    }
+}
+
+impl Drop for TlsDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The TCP listener `name` on `0.0.0.0:port` with these TLS files, and its token caller granted `fx`.
+fn wide_tls_listener(name: &str, port: u16, certificate: &Path, key: &Path) -> String {
+    format!(
+        "\n[listeners.{name}]\naddress = \"0.0.0.0:{port}\"\ntls_certificate = \"{certificate}\"\ntls_key = \"{key}\"\n\n\
+         [callers.{name}-caller]\nlistener = \"{name}\"\ntoken_hash = \"{hash}\"\nroutes = [\"fx\"]\n",
+        certificate = certificate.display(),
+        key = key.display(),
+        hash = token_hash(TOKEN_BYTES),
+    )
+}
+
+/// Asserts that nothing accepts on `port`: the listener on it was never opened.
+async fn assert_nothing_listens(port: u16) {
+    let refused = TcpStream::connect(("127.0.0.1", port)).await.map(|_| ()).unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::ConnectionRefused, "a listener opened on port {port}");
+}
+
+/// Starts a service whose approved config adds the TLS listener `name` naming `certificate` and `key`, which do not
+/// load, and asserts it is never opened: at startup the service is in the Locked safe state with only `local` open,
+/// and after unlock it is Ready with `local` serving, the listener still missing and a warning saying why that
+/// contains `why`.
+async fn assert_tls_listener_never_opens(name: &str, certificate: &Path, key: &Path, why: &str) {
+    let logs = captured_logs();
+    let mut fixture = approved().await;
+    let port = next_free_port();
+    fixture.approve(&fixture.config(&wide_tls_listener(name, port, certificate, key)));
+    let service = fixture.start().unwrap();
+
+    assert_eq!(service.listener_names().await, [listener("local")]);
+    assert_nothing_listens(port).await;
+    assert_safe_state(&fixture, &service, ServiceState::Locked, UnavailableReason::Locked, 0).await;
+    assert!(
+        logs.text()
+            .contains(&format!("provisional request listener not open: listener {name}: "))
+    );
+
+    assert_response(
+        &unlock(&service, PASSPHRASE).await,
+        &AdminResponse::Unlock { owner_lock_removed: true },
+    );
+
+    assert_eq!(service.state().await, ServiceState::Ready);
+    assert_eq!(service.listener_names().await, [listener("local")]);
+    assert_nothing_listens(port).await;
+    assert_served(&get_unix(&fixture.socket(), true).await);
+    let missing = format!("approved request listener missing until restart: listener {name}: ");
+    let warning = logs.text().lines().find(|line| line.contains(&missing)).map(str::to_owned);
+    assert!(warning.as_deref().is_some_and(|line| line.contains(why)), "{warning:?}");
+    assert!(!logs.text().contains(SECRET), "the credential reached the log");
+}
+
+/// §19: "Locked startup, invalid policy, TLS failures, unsafe listener configurations, and ownership failures produce
+/// explicit safe states."
+///
+/// §7: "Every non-loopback listener uses TLS." An approved listener on `0.0.0.0` whose key is not its certificate's
+/// key cannot present Iron Vault's certificate, so it is never opened, before or after unlock.
+#[tokio::test]
+async fn an_approved_tls_listener_whose_key_does_not_match_its_certificate_never_opens() {
+    let tls = TlsDir::new("mismatch", false, 0o600);
+    let (certificate, key) = (tls.path("server.crt"), tls.path("server.key"));
+    let why = format!(
+        "the key in {} does not match the first certificate in {}",
+        key.display(),
+        certificate.display()
+    );
+
+    assert_tls_listener_never_opens("mismatched", &certificate, &key, &why).await;
+}
+
+/// §19: "Locked startup, invalid policy, TLS failures, unsafe listener configurations, and ownership failures produce
+/// explicit safe states."
+///
+/// §7: "Every non-loopback listener uses TLS." An approved listener on `0.0.0.0` whose key file is missing, or readable
+/// by other accounts and so refused by its trusted-path rule, is never opened, before or after unlock.
+#[tokio::test]
+async fn an_approved_tls_listener_whose_key_file_cannot_be_read_never_opens() {
+    let tls = TlsDir::new("unreadable", true, 0o644);
+    let (certificate, exposed) = (tls.path("server.crt"), tls.path("server.key"));
+    let missing = tls.path("absent.key");
+
+    assert_tls_listener_never_opens("missingkey", &certificate, &missing, &missing.display().to_string()).await;
+    assert_tls_listener_never_opens("exposedkey", &certificate, &exposed, &exposed.display().to_string()).await;
+}
+
+/// §19: "Locked startup, invalid policy, TLS failures, unsafe listener configurations, and ownership failures produce
+/// explicit safe states."
+///
+/// §7: "Every non-loopback listener uses TLS. This is verified at config load." `config approve` refuses such a config
+/// (`tests/proxy/release_safe_states.rs`), but the published `config.toml` is not verified before unlock: here it names
+/// a plain-HTTP listener on `0.0.0.0` that no approval signed. The provisional set leaves it closed, and the service
+/// is in the Locked safe state.
+#[tokio::test]
+async fn an_unapproved_plain_http_listener_off_loopback_never_opens_at_startup() {
+    let logs = captured_logs();
+    let fixture = approved().await;
+    let port = next_free_port();
+    let plain = tcp_listener("plainwide", port).replace("127.0.0.1", "0.0.0.0");
+    fixture.swap_config(&fixture.config(&plain));
+    let service = fixture.start().unwrap();
+
+    assert_eq!(service.listener_names().await, [listener("local")]);
+    assert_nothing_listens(port).await;
+    assert_safe_state(&fixture, &service, ServiceState::Locked, UnavailableReason::Locked, 0).await;
+    let refused = format!("listener plainwide on 0.0.0.0:{port} is plain HTTP off loopback and was not opened");
+    assert!(logs.text().contains(&refused), "no warning names the listener");
 }
 
 const BASIC_USER: &str = "basic-user-9f3a";
