@@ -7,13 +7,15 @@
 //! command runs over the admin socket, on a fresh vault for each command and damage:
 //!
 //! - `add` of a fourth credential, `replace` and `rm` of `alpha_key`, and `recipient add` and `recipient remove`
-//!   succeed. Recipient changes rewrap `identity.age` only (§13, `design/recipients.md`), so no record file changes;
+//!   succeed. After each, every record file other than `alpha_key`'s is byte-identical to before, the damaged one
+//!   included, and `list` still shows `bravo_key` damaged;
+//! - `replace` and `rm` of `bravo_key` itself succeed. After each, `alpha_key`'s and `charlie_key`'s record files are
+//!   byte-identical to before; `list` shows `bravo_key` healthy after `replace` and no longer lists it after `rm`;
 //! - `export` refuses with a typed error naming the damaged record file, before any prompt
-//!   (`design/migration-bundle.md`, "The snapshot").
+//!   (`design/migration-bundle.md`, "The snapshot"), and every record file is byte-identical to before.
 //!
-//! After each, every record file other than `alpha_key`'s is byte-identical to before, the damaged one included, and
-//! `list` still shows `bravo_key` damaged. `reset` is the exception the design makes: it runs from Ready whatever a record
-//! holds, and discards every record file (`design/reset.md`).
+//! `reset` is the exception the design makes: it runs from Ready whatever a record holds, and discards every record file
+//! (`design/reset.md`).
 //!
 //! Not covered here: a `tpm` approver authorizing `replace`, `rm`, `recipient remove` or `export`, which needs a TPM, and
 //! the same commands under a protected install, which needs root. Both reach the same vault writes as the software
@@ -25,11 +27,11 @@ use crate::common;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 
 use common::approval_harness::{identity, read_frame, send, spawn_admin};
-use common::recipient_harness::{APPROVAL_PASSPHRASE, Fixture, VAULT_PASSPHRASE, ready};
+use common::recipient_harness::{APPROVAL_PASSPHRASE, Fixture, VAULT_PASSPHRASE, exchange, ready};
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, OwnerInput, Prompt, RequestedOrigin};
 use iron_vault::service_context::ServiceContext;
 use iron_vault::service_state::ServiceState;
@@ -55,7 +57,7 @@ enum Damage {
 impl Damage {
     const ALL: [Self; 3] = [Self::Truncated, Self::FlippedByte, Self::OtherRecipient];
 
-    fn apply(self, path: &PathBuf) {
+    fn apply(self, path: &Path) {
         let mut bytes = fs::read(path).unwrap();
         match self {
             Self::Truncated => bytes.truncate(bytes.len() / 2),
@@ -75,6 +77,8 @@ enum Command {
     Add,
     Replace,
     Rm,
+    ReplaceDamaged,
+    RmDamaged,
     RecipientAdd,
     RecipientRemove,
     Export,
@@ -121,18 +125,44 @@ impl Damaged {
             .collect()
     }
 
-    async fn assert_still_damaged(&self, damage: Damage) {
+    /// The standing `list` shows for `bravo_key`, or `None` when it is not listed.
+    async fn damaged_standing(&self) -> Option<Standing> {
         let listed = match run(&self.service, AdminRequest::List, &[]).await {
             AdminResponse::List {
                 credentials: Some(credentials),
             } => credentials,
             other => panic!("expected the credential list, got {other:?}"),
         };
-        let standing = listed
-            .iter()
+        listed
+            .into_iter()
             .find(|credential| credential.name.as_str() == DAMAGED)
-            .map(|credential| &credential.standing);
-        assert_eq!(standing, Some(&Standing::Damaged(RecordDamage::Substituted)), "{damage:?}");
+            .map(|credential| credential.standing)
+    }
+
+    async fn assert_still_damaged(&self, damage: Damage) {
+        assert_eq!(
+            self.damaged_standing().await,
+            Some(Standing::Damaged(RecordDamage::Substituted)),
+            "{damage:?}"
+        );
+    }
+
+    /// `list` shows `bravo_key` as the command leaves it: healthy after its `replace`, gone after its `rm`, else still damaged.
+    async fn assert_listed_after(&self, command: Command, damage: Damage) {
+        match command {
+            Command::ReplaceDamaged => assert_eq!(self.damaged_standing().await, Some(Standing::Healthy), "{damage:?}"),
+            Command::RmDamaged => assert_eq!(self.damaged_standing().await, None, "{damage:?}"),
+            _ => self.assert_still_damaged(damage).await,
+        }
+    }
+
+    /// The record file the command writes to by name, left out of the byte-identity comparison.
+    fn named(&self, command: Command) -> Option<&String> {
+        match command {
+            Command::Replace | Command::Rm => Some(&self.records[HEALTHY]),
+            Command::ReplaceDamaged | Command::RmDamaged => Some(&self.records[DAMAGED]),
+            _ => None,
+        }
     }
 
     async fn run(&self, command: Command) -> AdminResponse {
@@ -140,6 +170,8 @@ impl Damaged {
             Command::Add => run(&self.service, add_request("delta_key"), &[SECRET]).await,
             Command::Replace => run(&self.service, replace_request(HEALTHY), &[APPROVAL_PASSPHRASE, SECRET]).await,
             Command::Rm => run(&self.service, AdminRequest::Rm { name: HEALTHY.to_owned() }, &[APPROVAL_PASSPHRASE]).await,
+            Command::ReplaceDamaged => run(&self.service, replace_request(DAMAGED), &[APPROVAL_PASSPHRASE, SECRET]).await,
+            Command::RmDamaged => run(&self.service, AdminRequest::Rm { name: DAMAGED.to_owned() }, &[APPROVAL_PASSPHRASE]).await,
             Command::RecipientAdd => run(&self.service, recipient_add(&RecoveryKey::generate().1), &[VAULT_PASSPHRASE]).await,
             Command::RecipientRemove => {
                 let request = AdminRequest::RecipientRemove {
@@ -156,8 +188,8 @@ impl Damaged {
     fn assert_outcome(&self, command: Command, damage: Damage, response: &AdminResponse) {
         let ok = match (command, response) {
             (Command::Add, AdminResponse::Add { .. })
-            | (Command::Replace, AdminResponse::Replace { .. })
-            | (Command::Rm, AdminResponse::Success)
+            | (Command::Replace | Command::ReplaceDamaged, AdminResponse::Replace { .. })
+            | (Command::Rm | Command::RmDamaged, AdminResponse::Success)
             | (Command::RecipientAdd, AdminResponse::RecipientAdd { recipients: 4, .. })
             | (Command::RecipientRemove, AdminResponse::RecipientRemove { recipients: 2 }) => true,
             (Command::Export, AdminResponse::Error { code, message }) => {
@@ -174,23 +206,20 @@ async fn check(command: Command) {
     for damage in Damage::ALL {
         let damaged = Damaged::new(damage).await;
         let before = damaged.record_bytes();
-        let named = matches!(command, Command::Replace | Command::Rm).then(|| damaged.records[HEALTHY].clone());
+        let named = damaged.named(command);
 
         let response = damaged.run(command).await;
 
         damaged.assert_outcome(command, damage, &response);
         let after = damaged.record_bytes();
-        before
-            .iter()
-            .filter(|(file, _)| Some(*file) != named.as_ref())
-            .for_each(|(file, bytes)| {
-                assert_eq!(
-                    after.get(file),
-                    Some(bytes),
-                    "{command:?} beside a {damage:?} record changed {file}"
-                )
-            });
-        damaged.assert_still_damaged(damage).await;
+        before.iter().filter(|(file, _)| Some(*file) != named).for_each(|(file, bytes)| {
+            assert_eq!(
+                after.get(file),
+                Some(bytes),
+                "{command:?} beside a {damage:?} record changed {file}"
+            )
+        });
+        damaged.assert_listed_after(command, damage).await;
     }
 }
 
@@ -207,6 +236,16 @@ async fn release_check_9_replace_beside_a_damaged_record_leaves_the_other_record
 #[tokio::test]
 async fn release_check_9_rm_beside_a_damaged_record_leaves_the_other_records_byte_identical() {
     check(Command::Rm).await;
+}
+
+#[tokio::test]
+async fn release_check_9_replace_of_the_damaged_record_heals_it_and_leaves_the_healthy_records_byte_identical() {
+    check(Command::ReplaceDamaged).await;
+}
+
+#[tokio::test]
+async fn release_check_9_rm_of_the_damaged_record_removes_it_and_leaves_the_healthy_records_byte_identical() {
+    check(Command::RmDamaged).await;
 }
 
 #[tokio::test]
@@ -286,36 +325,21 @@ async fn add(service: &Arc<ServiceContext>, name: &str) -> AdminResponse {
 
 /// Sends `request` and answers its prompts in turn with `answers`.
 async fn run(service: &Arc<ServiceContext>, request: AdminRequest, answers: &[&str]) -> AdminResponse {
-    let mut answers = answers.iter();
-    converse(service, request, |_| {
-        answers.next().expect("a prompt beyond the answers given").to_string()
-    })
-    .await
+    let answers: Vec<&[u8]> = answers.iter().map(|answer| answer.as_bytes()).collect();
+    exchange(service, request, &answers).await.0
 }
 
 /// `reset`, answering its confirmation prompt with the vault ID it shows: `Type <vault ID> to discard this vault`.
 async fn reset(service: &Arc<ServiceContext>) -> AdminResponse {
-    converse(service, AdminRequest::Reset, |prompt| {
-        prompt
-            .label
-            .strip_prefix("Type ")
-            .and_then(|rest| rest.split(' ').next())
-            .unwrap()
-            .to_owned()
-    })
-    .await
-}
-
-async fn converse(service: &Arc<ServiceContext>, request: AdminRequest, mut answer: impl FnMut(&Prompt) -> String) -> AdminResponse {
     let (path, stop, task) = spawn_admin(service);
     let mut stream = UnixStream::connect(path).await.unwrap();
-    send(&mut stream, &Frame::Request(request)).await;
+    send(&mut stream, &Frame::Request(AdminRequest::Reset)).await;
     let response = loop {
         match read_frame(&mut stream).await {
             Frame::Response(response) => break response,
             Frame::Notice(_) => {}
             Frame::Prompt(prompt) => {
-                let typed = Zeroizing::new(answer(&prompt).into_bytes());
+                let typed = Zeroizing::new(vault_id(&prompt).into_bytes());
                 send(&mut stream, &Frame::OwnerInput(OwnerInput::new(typed))).await;
             }
             other => panic!("unexpected frame {other:?}"),
@@ -324,4 +348,13 @@ async fn converse(service: &Arc<ServiceContext>, request: AdminRequest, mut answ
     let _ = stop.send(());
     task.await.unwrap();
     response
+}
+
+fn vault_id(prompt: &Prompt) -> String {
+    prompt
+        .label
+        .strip_prefix("Type ")
+        .and_then(|rest| rest.split(' ').next())
+        .unwrap()
+        .to_owned()
 }
