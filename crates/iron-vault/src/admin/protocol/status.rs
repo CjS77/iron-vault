@@ -680,7 +680,8 @@ mod tests {
             name: "a".parse().unwrap(),
             reason: ListenerFailureReason::BindRefused,
         }]);
-        body.last_mut().map(|code| *code = 0);
+        body.pop();
+        body.push(0);
         assert_eq!(
             take_listener_failure(&mut body.as_slice()),
             Err(FrameError::InvalidValue(TAG_LISTENER_FAILURES))
