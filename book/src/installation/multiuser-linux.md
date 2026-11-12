@@ -78,11 +78,10 @@ When a program connects to Iron Vault's **Unix socket** (a special file programs
 same machine), the Linux kernel tells Iron Vault which user account the program runs as. A program can't lie about
 this; only root could fake it.
 
-So the rule is simple: **a request that arrives from the `code` account is the `code` caller**. You don't need
-passwords, tokens or groups. You write in the config which account may use which routes, and the kernel's answer
-does the rest.
+So **a request that arrives from the `code` account is the `code` caller**. It needs no passwords, tokens or groups.
+The config says which account may use which routes, and the kernel says which account is connecting.
 
-The spec calls this **peer-account** identity, written `auth = "peer"` in the config.
+This is **peer-account** identity, written `auth = "peer"` in the config.
 
 ### What about `http://localhost`?
 
@@ -129,11 +128,11 @@ forget the vault passphrase. Then unlock the vault, which you do again after eve
 sudo iron-vault unlock
 ```
 
-> **Why `sudo`, and not just `alice`?** Admin commands only work for root. If plain
-> `alice` could run them, malware in `alice`'s account could too. Going through `sudo` means typing your password
-> every time, if you set `sudo` up with `timestamp_timeout=0` as [linux-install.md](linux-install.md#harden-sudo) recommends
-> (with `tty` it is once per terminal per timeout). Approving a config change *also* needs your approval passphrase,
-> so a hijacked `sudo` session alone isn't enough.
+> **Why `sudo`, and not just `alice`?** Admin commands work only for root. If plain `alice` could run them, malware in
+> `alice`'s account could too. With `Defaults timestamp_timeout=0`, the stronger choice in
+> [linux-install.md](linux-install.md#harden-sudo), `sudo` asks for your password for every admin command; with
+> `timestamp_type=tty` it asks once per terminal until the timeout ends. Approving a config change *also* needs your
+> approval passphrase, so a hijacked `sudo` session alone isn't enough.
 
 ### 3. Add the credentials
 
@@ -207,7 +206,7 @@ rate_limit = { requests = 30, per_seconds = 60, burst = 5 }
 Reading it in plain words:
 
 - **Listener:** where programs knock. Here it's one socket file.
-- **Caller:** who is knocking. `code` is whatever runs as the `code` account.
+- **Caller:** who is knocking. `code` is every process that runs as the `code` account.
 - **Route:** a door to one API. It names the website, which key to use, and where in the request the key goes
   (the **slot**).
 - **`methods` and `paths`:** which kinds of request the door allows. CoinGecko only allows reading (`GET`). Every
@@ -259,8 +258,9 @@ curl --unix-socket /run/iron-vault/proxy.sock \
 The `http://localhost` part is only there because `curl` needs a web address; the request goes through the socket
 file.
 
-For a program that has a "base URL" setting, set it to the route. A Python script, for example, would use
-`/gh` in place of `https://api.github.com`. Not every tool can talk to a socket file; for those, use the
+For a program that has a "base URL" setting, set it to the route. A Python script that can talk to a Unix socket, for
+example, would send its requests to `http://localhost/gh` over the socket in place of `https://api.github.com`. Not
+every tool can talk to a socket file; for those, use the
 `http://127.0.0.1` listener with a caller token. The step-4 config has no such listener. Add one as described in
 [linux-install.md](linux-install.md#add-a-tcp-listener): it needs a listener socket unit, a `[listeners.<name>]` table
 with the same address, and a caller with `token_hash`. Get the token with

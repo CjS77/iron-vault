@@ -45,7 +45,7 @@ permissions.
 
 ## Callers need a token
 
-Development mode runs the service as your own account, and a caller may never be the service's own account. So in
+Development mode runs the service as your own account, and a caller may never be the service's own account, so in
 development every caller needs a token. A protected installation runs the service as the `iron-vault` system account,
 and then your account can be a caller identified by the kernel, with no token file to steal:
 
@@ -67,8 +67,8 @@ socket away from your login account: you administer it with `sudo`.
 ## A tour through the cookbook
 
 These recipes, in this order, start the service and try each part of Iron Vault against
-[httpbin.org](https://httpbin.org), which echoes back each request it receives, and two [Venice.ai](https://venice.ai)
-API keys. The tour needs `curl` and `jq`, and the Venice recipe needs two Venice API keys.
+[httpbin.org](https://httpbin.org), which echoes back each request it receives, and [Venice.ai](https://venice.ai). The
+tour needs `curl` and `jq`, and the two-callers recipe needs two Venice API keys.
 
 1. [Getting started in development mode](../cookbook/getting-started.md): start the service, create and unlock the
    vault, store a credential, approve a route and send a request.

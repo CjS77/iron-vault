@@ -252,15 +252,25 @@ on a real machine yet, so don't rely on it for real secrets.** For a walk-throug
 see the [recipe](../cookbook/tpm-unlock.md). The design is [tpm-unlock.md](../../../design/tpm-unlock.md).
 
 **What it needs.** Ubuntu 24.04 LTS only (systemd 255): on any other release the provisioning helper stops, and the service
-starts Locked and waits for `iron-vault unlock` as before. It also needs a TPM 2.0, Secure Boot on (the seal is bound to PCR 7,
-which records the Secure Boot policy) and `age-keygen` (Ubuntu package `age`). **TPM unlock has no PIN in v0** (the [TPM approver](#tpm-approval-signer) has one). A laptop gets its second
-secret from full-disk encryption instead, as below.
+starts Locked and waits for `iron-vault unlock`, as it does without TPM unlock. It also needs a TPM 2.0, Secure Boot on (the
+seal is bound to PCR 7, which records the Secure Boot policy) and `age-keygen` (Ubuntu package `age`). **TPM unlock has no
+PIN in v0** (the [TPM approver](#tpm-approval-signer) has one). A laptop gets its second secret from full-disk encryption
+instead, as below.
 
 **How it works.** The host unlock identity is a key that `systemd-creds` seals to the TPM as the root-only file
 `/etc/iron-vault-host/host-unlock.cred`. At each boot the package's handoff unit, `iron-vault-host-unlock.service`, unseals
 it as root onto a ramfs at `/run/iron-vault-unlock` and hands it to the service, which uses it to open the vault. The service
 never opens the TPM, and the identity is never written to disk in the clear. There is nothing to enable: the service pulls the
 handoff unit in at every start, and the unit is skipped on a machine with no blob.
+
+```mermaid
+flowchart LR
+    T[("TPM, at PCR 7")] -->|unseals| U["iron-vault-host-unlock.service<br/>(root)"]
+    B["/etc/iron-vault-host/host-unlock.cred"] --> U
+    U -->|installs the identity| R["/run/iron-vault-unlock<br/>(ramfs)"]
+    R -->|read at start| S["iron-vault.service"]
+    S -->|opens| V[("the vault")]
+```
 
 ### Provision
 

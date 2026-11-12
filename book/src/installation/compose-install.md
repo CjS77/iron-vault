@@ -17,6 +17,31 @@ container are not supported.
 Iron Vault's Compose profile has had no release check on a real machine yet, so don't rely on it to protect real
 secrets. Every `sudo` line here is for you to run; none of it runs by itself.
 
+The reference Compose file, with its two example callers, sets up this layout. Each caller container reaches only its
+own listener, on a network that has no other member and no way out; only Iron Vault joins the `egress` network:
+
+```text
++------------------------------------ host ------------------------------------+
+|                                                                              |
+|  caller-a network (internal)            iron-vault container                 |
+|  172.30.1.0/29                          +-----------------------+            |
+|  +------------+  TLS, no token          |                       |  egress    |
+|  | caller-a   |------------------------>| 172.30.1.2:8443       |  network   |
+|  | 172.30.1.3 |                         |                       |------------+--> provider APIs
+|  +------------+                         |                       |  (HTTPS)   |
+|                                         |                       |            |
+|  caller-b network (internal)            |                       |            |
+|  172.30.2.0/29                          |                       |            |
+|  +------------+  TLS, no token          |                       |            |
+|  | caller-b   |------------------------>| 172.30.2.2:8443       |            |
+|  | 172.30.2.3 |                         +-----------------------+            |
+|  +------------+                                     ^                        |
+|                                                     | read-only mount        |
+|  TPM --> iron-vault-host-unlock.service --> /run/iron-vault-unlock (ramfs)   |
+|                                                                              |
++------------------------------------------------------------------------------+
+```
+
 ## Before you start
 
 ### Who may control the Docker daemon
