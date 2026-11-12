@@ -95,15 +95,17 @@ for the file only.
 | Case | Shown by | Runs where |
 |---|---|---|
 | Representations: raw, Basic token, URL-encoded | `crates/iron-vault/tests/proxy/proxy_scrub.rs::the_secret_its_basic_token_and_its_url_encoded_form_are_all_replaced` | `cargo test` |
+| Every derived form (raw, `%XX` both cases, each base64 variant; Basic token forms) in a header and the body | `crates/iron-vault/tests/proxy/proxy_scrub.rs::every_derived_form_echoed_in_a_header_and_the_body_is_replaced_in_both` | `cargo test` |
 | A reply without the secret is unchanged | `crates/iron-vault/tests/proxy/proxy_scrub.rs::a_reply_without_the_secret_comes_back_unchanged_but_for_its_framing_integrity_and_etag_headers` | `cargo test` |
 | Any chunking matches one-shot scrubbing | `crates/iron-vault/src/scrub/tests.rs::any_chunking_matches_one_shot` | `cargo test` |
 | HTTP/1.1 body split at every byte offset | `crates/iron-vault/tests/proxy/proxy_scrub_stream.rs::a_body_split_at_every_byte_offset_scrubs_to_the_same_bytes` | `cargo test` |
+| HTTP/2 body split at every byte offset across two DATA frames | `crates/iron-vault/tests/proxy/proxy_scrub_stream.rs::an_http2_body_split_at_every_byte_offset_across_two_data_frames_scrubs_to_the_same_bytes` | `cargo test` |
 | SSE events relayed one at a time; a streamed reply arrives unchanged | `crates/iron-vault/tests/proxy/proxy_scrub_stream.rs::an_sse_event_reaches_the_caller_before_the_next_one_is_sent`, `crates/iron-vault/tests/proxy/proxy_scrub_stream.rs::a_streamed_chat_completion_without_the_secret_arrives_unchanged_and_in_at_least_as_many_chunks` | `cargo test` |
+| HTTP/2: SSE events relayed one at a time; a streamed reply arrives unchanged | `crates/iron-vault/tests/proxy/proxy_scrub_stream.rs::an_http2_sse_event_reaches_the_caller_before_the_next_one_is_sent`, `crates/iron-vault/tests/proxy/proxy_scrub_stream.rs::an_http2_streamed_chat_completion_without_the_secret_arrives_unchanged_and_in_at_least_as_many_chunks` | `cargo test` |
 | gzip, deflate and br decoded and scrubbed | `crates/iron-vault/tests/proxy/proxy_coding.rs::gzip_deflate_and_br_bodies_reach_the_caller_decoded_and_scrubbed` | `cargo test` |
 | Decompression bombs and truncated bodies | `crates/iron-vault/tests/proxy/proxy_coding.rs::a_decompression_bomb_aborts_the_connection_before_a_secret_planted_past_the_limit`, `crates/iron-vault/tests/proxy/proxy_coding.rs::a_truncated_gzip_body_aborts_the_connection` | `cargo test` |
-| gzip split at every compressed offset; br at chosen offsets | `crates/iron-vault/tests/proxy/proxy_coding_stream.rs::a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes`, `crates/iron-vault/tests/proxy/proxy_coding_stream.rs::a_br_body_split_at_chosen_compressed_offsets_scrubs_to_the_same_bytes` | `cargo test` |
+| gzip, deflate and br split at every compressed offset | `crates/iron-vault/tests/proxy/proxy_coding_stream.rs::a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes`, `crates/iron-vault/tests/proxy/proxy_coding_stream.rs::a_deflate_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes`, `crates/iron-vault/tests/proxy/proxy_coding_stream.rs::a_br_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes` | `cargo test` |
 | gzip SSE relayed one event at a time | `crates/iron-vault/tests/proxy/proxy_coding_stream.rs::a_gzip_sse_event_reaches_the_caller_decoded_before_the_next_is_sent` | `cargo test` |
-| HTTP/2 chunk boundaries; deflate and br at every offset; every derived form in headers and body end to end | **gap**: K-364 | `cargo test` |
 
 ## 6. Approval counters
 
@@ -254,5 +256,6 @@ figures.
 | Bytes held back per chunk | `crates/iron-vault/tests/proxy/proxy_scrub_stream.rs::measure_bytes_held_back_per_chunk` | `cargo test` |
 | SSE latency, identity and gzip | `crates/iron-vault/tests/proxy/proxy_scrub_stream.rs::measure_sse_latency_per_event`, `crates/iron-vault/tests/proxy/proxy_coding_stream.rs::measure_gzip_sse_latency_per_event` | `cargo test` |
 | Decompression limits and throughput | `crates/iron-vault/tests/proxy/proxy_coding_stream.rs::the_default_limits_accept_a_10_mib_gzip_json_reply`, `crates/iron-vault/tests/proxy/proxy_coding_stream.rs::measure_gzip_decode_throughput`, `crates/iron-vault/tests/proxy/proxy_coding_stream.rs::a_decompression_bomb_is_cut_off_with_no_chunk_over_one_decoder_step_plus_the_hold_back` | `cargo test` |
-| HTTP/2 streams; br and deflate latency | **gap**: K-364 | `cargo test` |
+| SSE latency from an HTTP/2 upstream | `crates/iron-vault/tests/proxy/proxy_scrub_stream.rs::measure_http2_sse_latency_per_event` | `cargo test` |
+| SSE latency, deflate and br | `crates/iron-vault/tests/proxy/proxy_coding_stream.rs::measure_deflate_and_br_sse_latency_per_event` | `cargo test` |
 | A figure from a real target API | **gap**: K-373 | `owner, real provider keys` |

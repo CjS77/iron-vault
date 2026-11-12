@@ -115,7 +115,8 @@ operation.
 ## Streamed response compatibility
 
 [Implementation spec §3](implementation-specification.md#3-implementation-gates-and-unresolved-details) asks for measured overlap buffering and SSE latency. `crates/iron-vault/tests/proxy/proxy_scrub_stream.rs` runs
-the real request server and pipeline against a test upstream that sends scripted chunks, each flushed as its own write.
+the real request server and pipeline against a test upstream that sends scripted chunks, each flushed as its own write:
+an HTTP/1.1 chunk, or an HTTP/2 DATA frame from the same script.
 
 The scrubber holds back only the tail of the pending bytes that is a proper prefix of some pattern (`Scrubber::scan`
 stops at the first such position), at most the longest pattern minus one. A chunk that ends in no such prefix is released
@@ -137,20 +138,35 @@ row, not one of the three target credentials). A typical event ends in `\n\n`, w
 only that far: a chunk ending in `B` holds one byte when a Brave key is injected. The stand-ins have the shape of each
 provider's key, not a real key; a longer real key raises the maximum by 4/3 of the difference.
 
-**Latency per SSE event** comes from `measure_sse_latency_per_event`: 200 events, each sent by the upstream only after the
-caller has received the one before, timed from the upstream's write to the caller's read, through TLS to the proxy, the
-scrubber and the Unix socket. Observed in a debug build on one development machine (Linux 6.8, loopback), twelve runs:
-median 75-78 us, 95th percentile 82-106 us, maximum 210-247 us. These are loopback figures with no network, so they
-bound the proxy's own cost and do not predict a deployment's.
+**Latency per SSE event** comes from `measure_sse_latency_per_event` (HTTP/1.1 upstream) and
+`measure_http2_sse_latency_per_event` (HTTP/2 upstream): 200 events, each sent by the upstream only after the caller has
+received the one before, timed from the upstream's write to the caller's read, through TLS to the proxy, the scrubber and
+the Unix socket. Median / 95th percentile / maximum on one development machine (Linux 6.8, loopback), the range over
+the runs named:
+
+| Upstream | debug | release |
+|---|---|---|
+| HTTP/1.1 | 75-78 / 82-106 / 210-247 us (twelve runs) | 12 / 12 / 37-38 us (three runs) |
+| HTTP/2 | 105-106 / 115-122 / 323-342 us (three runs) | 12-13 / 13 / 53-61 us (three runs) |
+
+These are loopback figures with no network, so they bound the proxy's own cost and do not predict a deployment's.
 
 **Chunk boundaries.** `a_body_split_at_every_byte_offset_scrubs_to_the_same_bytes` sends a body holding every scrub
 pattern of a Basic credential and of a static key with URL-reserved characters, split at every byte offset, and requires
 the caller to receive exactly the one-shot scrubbed body. `an_sse_event_reaches_the_caller_before_the_next_one_is_sent`
 proves the first event is relayed while the upstream is still waiting to send the second, and
 `a_streamed_chat_completion_without_the_secret_arrives_unchanged_and_in_at_least_as_many_chunks` checks that traffic
-holding no secret is byte-identical and not coalesced.
+holding no secret is byte-identical and not coalesced. Each has an HTTP/2 twin
+(`an_http2_body_split_at_every_byte_offset_across_two_data_frames_scrubs_to_the_same_bytes`,
+`an_http2_sse_event_reaches_the_caller_before_the_next_one_is_sent`,
+`an_http2_streamed_chat_completion_without_the_secret_arrives_unchanged_and_in_at_least_as_many_chunks`), where the split
+falls between two DATA frames.
 
-Not covered here: the HTTP/2 upstream path, whose relay shares the scrubber but is not exercised with scripted chunks.
+**Every form in headers and body.** `every_derived_form_echoed_in_a_header_and_the_body_is_replaced_in_both`
+(`proxy_scrub.rs`) has the upstream echo each form the credential's kind derives, raw, `%XX` in both hex cases and each
+base64 variant for a static key, and the token, `Basic <token>` and the URL forms for a Basic credential, once in a
+header of its own and once in the body; none reaches the caller.
+
 Compressed bodies are covered in the next section.
 
 ### Compressed responses
@@ -183,14 +199,23 @@ up. The bomb test sends the bomb in a single chunk: the caller receives exactly 
 64 KiB chunks, and the largest is 65,536 bytes. A valid 10 MiB gzip JSON reply reaches the caller in chunks of at most
 65,537 bytes (`measure_gzip_decode_throughput`), where gathering a chunk's output first gave 1.9 MB.
 
-**Latency per gzip SSE event** comes from `measure_gzip_sse_latency_per_event`: 200 events, each coded with a sync flush
-and sent only after the caller has the one before, timed from the upstream's write to the moment the caller holds the
-event decoded. Median, 95th percentile and maximum on one development machine (Linux 6.8, loopback):
+**Chunk boundaries in coded bodies.** `a_gzip_body_split_at_every_compressed_offset_scrubs_to_the_same_bytes` and its
+`deflate` and `br` twins code a body holding every scrub pattern of a static key and of a Basic credential, split the
+compressed stream into two upstream chunks at every offset, and require the one-shot scrubbed body.
 
-| Build | gzip to identity | gzip to gzip (`identity;q=0`) |
-|---|---|---|
-| debug | 105 / 113 / 286 us | 127 / 136 / 311 us |
-| release | 13 / 16 / 74 us | 15 / 17 / 63 us |
+**Latency per coded SSE event** comes from `measure_gzip_sse_latency_per_event` and
+`measure_deflate_and_br_sse_latency_per_event`: 200 events, each coded with a flush and sent only after the caller has the
+one before, timed from the upstream's write to the moment the caller holds the event decoded. Median, 95th percentile and
+maximum on one development machine (Linux 6.8, loopback); the deflate and br figures are the range over three runs:
+
+| Build | Coding | to identity | to gzip (`identity;q=0`) |
+|---|---|---|---|
+| debug | gzip | 105 / 113 / 286 us | 127 / 136 / 311 us |
+| debug | deflate | 103-107 / 111-136 / 306-325 us | 124-129 / 133-145 / 401-505 us |
+| debug | br | 106-107 / 114-116 / 433-444 us | 130-132 / 140-141 / 527-542 us |
+| release | gzip | 13 / 16 / 74 us | 15 / 17 / 63 us |
+| release | deflate | 13 / 14-16 / 72-78 us | 15 / 19-24 / 170-228 us |
+| release | br | 14 / 15-17 / 62-178 us | 16-17 / 19-31 / 145-230 us |
 
 `a_gzip_sse_event_reaches_the_caller_decoded_before_the_next_is_sent` and its `..._recompressed_...` twin gate the
 upstream on a channel, so they prove the event is relayed before the next exists without a timing threshold.
