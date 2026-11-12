@@ -51,7 +51,15 @@ pub const RESERVED_HEADERS: &[&str] = &[
     // URL-rewrite headers.
     "x-original-url",
     "x-rewrite-url",
+    // The dedicated caller-token header. A listener may read its token from it (see `CALLER_TOKEN_HEADERS`), but a
+    // token in it must never reach an upstream, whichever header the listener reads: a caller admitted by another means
+    // may still send it.
+    "x-iron-vault-token",
 ];
+
+/// Reserved headers a listener's `token_header` may still name: the default and the dedicated header. The listener
+/// strips the token from them, so naming them cannot leak it.
+pub const CALLER_TOKEN_HEADERS: &[&str] = &["proxy-authorization", "x-iron-vault-token"];
 
 /// Reserved header-name prefixes, lowercase; any header starting with one is reserved.
 pub const RESERVED_PREFIXES: &[&str] = &["x-forwarded-"];
@@ -108,6 +116,7 @@ mod tests {
             "True-Client-IP",
             "X-Client-IP",
             "CF-Connecting-IP",
+            "X-Iron-Vault-Token",
         ]
         .iter()
         .for_each(|h| assert!(reserved(h), "{h}"));

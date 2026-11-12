@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::config_path::ConfigPath;
 use crate::display::quoted;
 use crate::header_name::HeaderName;
-use crate::reserved_headers::is_reserved;
+use crate::reserved_headers::{CALLER_TOKEN_HEADERS, is_reserved};
 
 /// The header callers authenticate with when a listener sets no `token_header`.
 pub const DEFAULT_TOKEN_HEADER: &str = "proxy-authorization";
@@ -189,10 +189,11 @@ fn tcp_endpoint(text: &str, tls: Option<TlsFiles>) -> Result<Endpoint, ListenerE
 /// Rejects a reserved header as the caller-token header.
 ///
 /// Reserved headers carry framing, hop-by-hop or forwarding meaning (spec §9), which an intermediary may add,
-/// rewrite or drop, so a token placed in one could be lost or replaced in transit. `Proxy-Authorization` is the
-/// one exception: it is the default token header, so naming it explicitly changes nothing.
+/// rewrite or drop, so a token placed in one could be lost or replaced in transit. [`CALLER_TOKEN_HEADERS`] are the
+/// exceptions: `Proxy-Authorization` is the default, and `X-Iron-Vault-Token` is the dedicated header, which is
+/// reserved only so that no listener forwards it.
 fn check_token_header(header: HeaderName) -> Result<HeaderName, ListenerError> {
-    match is_reserved(&header) && header.lowercase() != DEFAULT_TOKEN_HEADER {
+    match is_reserved(&header) && !CALLER_TOKEN_HEADERS.contains(&header.lowercase()) {
         true => Err(ListenerError::ReservedTokenHeader {
             header: header.as_str().to_owned(),
         }),
@@ -331,6 +332,22 @@ mod tests {
         let default = parse("address = \"127.0.0.1:7878\"").unwrap();
         assert_eq!(default.caller_token_header().as_str(), "Proxy-Authorization");
         assert_eq!(default.caller_token_header().lowercase(), DEFAULT_TOKEN_HEADER);
+    }
+
+    #[test]
+    fn only_the_caller_token_headers_may_be_reserved_token_headers() {
+        ["Proxy-Authorization", "X-Iron-Vault-Token", "x-iron-vault-token"]
+            .iter()
+            .for_each(|h| {
+                assert!(
+                    parse(&format!("address = \"127.0.0.1:7878\"\ntoken_header = \"{h}\"")).is_ok(),
+                    "{h}"
+                )
+            });
+        rejected(
+            "address = \"127.0.0.1:7878\"\ntoken_header = \"X-Forwarded-Token\"",
+            "token_header X-Forwarded-Token is a reserved header; choose a dedicated header such as X-Iron-Vault-Token",
+        );
     }
 
     #[test]

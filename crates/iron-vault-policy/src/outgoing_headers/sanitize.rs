@@ -172,9 +172,24 @@ mod tests {
 
     #[test]
     fn strips_the_listener_token_header_only_when_configured() {
-        let pairs = [("x-iron-vault-token", "t"), ("Accept", "*/*")];
-        assert_eq!(names(&pairs, &name("X-Iron-Vault-Token")), ["Accept"]);
-        assert_eq!(names(&pairs, &proxy_authorization()), ["x-iron-vault-token", "Accept"]);
+        let pairs = [("x-caller-key", "t"), ("Accept", "*/*")];
+        assert_eq!(names(&pairs, &name("X-Caller-Key")), ["Accept"]);
+        assert_eq!(names(&pairs, &proxy_authorization()), ["x-caller-key", "Accept"]);
+    }
+
+    #[test]
+    fn strips_the_dedicated_token_header_on_every_listener() {
+        let pairs = [
+            ("Accept", "*/*"),
+            ("X-Iron-Vault-Token", "a"),
+            ("User-Agent", "u"),
+            ("x-iron-vault-token", "b"),
+            ("X-IRON-VAULT-TOKEN", "c"),
+        ];
+        let expected = ["Accept", "User-Agent"];
+        assert_eq!(names(&pairs, &proxy_authorization()), expected);
+        assert_eq!(names(&pairs, &name("X-Iron-Vault-Token")), expected);
+        assert_eq!(names(&pairs, &name("X-Caller-Key")), expected);
     }
 
     #[test]

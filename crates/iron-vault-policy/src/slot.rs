@@ -301,6 +301,7 @@ mod tests {
             "True-Client-IP",
             "x-client-ip",
             "CF-Connecting-IP",
+            "X-Iron-Vault-Token",
         ]
         .iter()
         .for_each(|h| {

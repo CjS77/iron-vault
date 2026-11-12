@@ -454,9 +454,9 @@ fn counts(upstream: &MockUpstream) -> (usize, usize) {
     (upstream.connections(), upstream.requests().len())
 }
 
-/// Checks what the upstreams received since `before` from a caller on `via`; returns the index of the route whose
+/// Checks what the upstreams received since `before`; returns the index of the route whose
 /// upstream got a request.
-fn check_egress(upstreams: &[MockUpstream], before: &[(usize, usize)], via: Via) -> Result<Option<usize>, TestCaseError> {
+fn check_egress(upstreams: &[MockUpstream], before: &[(usize, usize)]) -> Result<Option<usize>, TestCaseError> {
     let reached: Vec<usize> = upstreams
         .iter()
         .zip(before)
@@ -475,7 +475,7 @@ fn check_egress(upstreams: &[MockUpstream], before: &[(usize, usize)], via: Via)
         "one connection carrying one request"
     );
     let sent = upstreams[index].requests().pop().unwrap();
-    check_request(&ROUTES[index], upstreams[index].port(), &sent, via)?;
+    check_request(&ROUTES[index], upstreams[index].port(), &sent)?;
     Ok(Some(index))
 }
 
@@ -491,11 +491,10 @@ const FORBIDDEN_HEADERS: &[&str] = &[
     "proxy-authorization",
 ];
 
-/// Whether `name` must not reach an upstream from a caller on `via`. The Unix listener's dedicated token header is
-/// caller authentication only there; on the TCP listener it is an ordinary header and is forwarded.
-fn forbidden_header(name: &str, via: Via) -> bool {
+/// Whether `name` must not reach an upstream. The dedicated token header is reserved, so no listener forwards it.
+fn forbidden_header(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    let token_header = matches!(via, Via::Unix) && name.eq_ignore_ascii_case(TOKEN_HEADER);
+    let token_header = name.eq_ignore_ascii_case(TOKEN_HEADER);
     token_header || name.starts_with("x-forwarded-") || FORBIDDEN_HEADERS.contains(&name.as_str())
 }
 
@@ -508,15 +507,11 @@ fn values(headers: &[(String, String)], name: &str) -> Vec<String> {
         .collect()
 }
 
-fn check_request(route: &RouteSpec, port: u16, sent: &RecordedRequest, via: Via) -> Result<(), TestCaseError> {
+fn check_request(route: &RouteSpec, port: u16, sent: &RecordedRequest) -> Result<(), TestCaseError> {
     let headers = sent.headers();
     prop_assert_eq!(sent.server_name.as_deref(), Some("localhost"));
     prop_assert_eq!(values(&headers, "host"), [format!("localhost:{port}")]);
-    let forbidden: Vec<_> = headers
-        .iter()
-        .map(|(name, _)| name)
-        .filter(|name| forbidden_header(name, via))
-        .collect();
+    let forbidden: Vec<_> = headers.iter().map(|(name, _)| name).filter(|name| forbidden_header(name)).collect();
     prop_assert!(forbidden.is_empty(), "{forbidden:?} reached {}", route.name);
     let mut line = sent.request_line().split(' ');
     let (method, target) = (line.next().unwrap_or_default(), line.next().unwrap_or_default());
@@ -661,7 +656,7 @@ fn generated_hostile_requests_produce_no_credentialed_egress() {
     let result = TestRunner::new(config).run(&case(), |case| {
         let before: Vec<_> = upstreams.iter().map(counts).collect();
         runtime.block_on(send(&endpoints, &case))?;
-        if let Some(index) = check_egress(&upstreams, &before, case.via)? {
+        if let Some(index) = check_egress(&upstreams, &before)? {
             let name = ROUTES[index].name;
             prop_assert!(
                 granted(case.via, case.token).contains(&name),

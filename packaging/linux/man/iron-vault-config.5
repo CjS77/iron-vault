@@ -68,9 +68,10 @@ network in clear, and refused on a Unix socket.
 The header from which callers on this listener send their caller token.
 With \fBProxy\-Authorization\fR the caller sends \fBProxy\-Authorization: Bearer\fR \fITOKEN\fR.
 With any other header, such as \fBX\-Iron\-Vault\-Token\fR, the whole value is the token.
-It must not be a reserved header, apart from \fBProxy\-Authorization\fR itself, nor the slot header of a route this
+It must not be a reserved header, apart from \fBProxy\-Authorization\fR and \fBX\-Iron\-Vault\-Token\fR, nor the slot header of a route this
 listener's callers can use.
 The service strips it before forwarding.
+A token sent in any other header is forwarded upstream as an ordinary header.
 .SH CALLERS
 A \fB[callers.\fINAME\fB]\fR table is one program, or group of programs, that Iron Vault recognises and grants routes
 to.
@@ -195,7 +196,7 @@ Install it where only an administrator can write.
 If it cannot be read, the config is still approved, but the routes that pin it are unavailable.
 .SH RESERVED HEADERS
 The service removes these from every request before forwarding, and sets \fBHost\fR itself.
-None may be a slot, and none but \fBProxy\-Authorization\fR may be a \fBtoken_header\fR.
+None may be a slot, and none but \fBProxy\-Authorization\fR and \fBX\-Iron\-Vault\-Token\fR may be a \fBtoken_header\fR.
 Names are compared without regard to case.
 .PP
 \fBConnection\fR, \fBKeep\-Alive\fR, \fBProxy\-Connection\fR, \fBProxy\-Authenticate\fR,
@@ -203,7 +204,7 @@ Names are compared without regard to case.
 \fBContent\-Length\fR, \fBForwarded\fR, \fBVia\fR, \fBX\-Real\-IP\fR, \fBTrue\-Client\-IP\fR, \fBX\-Client\-IP\fR,
 \fBCF\-Connecting\-IP\fR, \fBX\-Host\fR, \fBX\-Original\-Host\fR, \fBX\-HTTP\-Host\-Override\fR,
 \fBX\-HTTP\-Method\-Override\fR, \fBX\-Method\-Override\fR, \fBX\-HTTP\-Method\fR, \fBX\-Original\-URL\fR,
-\fBX\-Rewrite\-URL\fR, and every header starting with \fBX\-Forwarded\-\fR.
+\fBX\-Rewrite\-URL\fR, \fBX\-Iron\-Vault\-Token\fR, and every header starting with \fBX\-Forwarded\-\fR.
 .SH LIMITS
 The \fB[limits]\fR table holds service\-wide limits.
 Every key is optional, and a key left out keeps its default.

@@ -179,8 +179,9 @@ see [Add a TCP listener](../installation/linux-install.md#add-a-tcp-listener).
 
 A missing token, an unknown one, or the header sent more than once is refused with `401`. The service strips the token
 header before forwarding, so the upstream never sees it. The header must not be a
-[reserved header](#reserved-headers), apart from `Proxy-Authorization` itself, and must not be the slot header of a
-route that this listener's callers can use.
+[reserved header](#reserved-headers), apart from `Proxy-Authorization` and `X-Iron-Vault-Token`, and must not be the
+slot header of a route that this listener's callers can use. A caller token sent in any other header is forwarded
+upstream as an ordinary header; see [Reserved headers](#reserved-headers).
 
 | Fault                                  | Parser message                                                                                                 |
 |----------------------------------------|----------------------------------------------------------------------------------------------------------------|
@@ -520,7 +521,7 @@ ca_file = "/etc/iron-vault/ca/tickets.pem"
 ## Reserved headers
 
 The service removes these headers from every request before forwarding, and controls `Host` itself. None of them may be
-a route's slot, and none but `Proxy-Authorization` may be a listener's `token_header`. Names are compared without
+a route's slot, and none but `Proxy-Authorization` and `X-Iron-Vault-Token` may be a listener's `token_header`. Names are compared without
 regard to case.
 
 - Hop-by-hop: `Connection`, `Keep-Alive`, `Proxy-Connection`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`,
@@ -529,9 +530,15 @@ regard to case.
   `CF-Connecting-IP`, `X-Host`, `X-Original-Host`, `X-HTTP-Host-Override`.
 - Method override and URL rewrite: `X-HTTP-Method-Override`, `X-Method-Override`, `X-HTTP-Method`, `X-Original-URL`,
   `X-Rewrite-URL`.
+- Caller token: `X-Iron-Vault-Token`, the dedicated caller-token header. It is stripped on every listener, whether or not
+  that listener reads its token from it, so a caller admitted by another means never sends a token upstream in it.
 - Any header starting with `X-Forwarded-`.
 
 The service also strips the listener's own `token_header` and any header that `Connection` names.
+
+Iron Vault strips a caller token only from `Proxy-Authorization`, `X-Iron-Vault-Token` and the listener's own
+`token_header`. A token a client sends in any other header, including another listener's custom `token_header`, is
+forwarded upstream as an ordinary header. Configure each client to send its token only in its listener's token header.
 
 ## `[limits]`
 
