@@ -3,6 +3,7 @@
 
 use iron_vault::admin::protocol::{MemoryStatus, RecoveryStatus, StatusReport, UnlockedVault, VaultStatus};
 use iron_vault::deployment::{DeploymentProfile, no_isolation_warning};
+use iron_vault::listener_failure::ListenerFailure;
 use iron_vault::service_state::{FailureReason, ServiceState, UnavailableReason};
 use iron_vault::standing::{CredentialStanding, RouteFault, Standing};
 use iron_vault_store::UtcSecond;
@@ -25,7 +26,21 @@ pub fn render(report: &StatusReport, user: impl FnOnce() -> String) -> String {
     lines.push(recovery_line(&report.recovery));
     lines.extend(credential_lines(&report.vault));
     lines.extend(route_fault_lines(&report.vault));
+    lines.extend(listener_failure_lines(&report.listener_failures));
     lines.iter().map(|line| format!("{line}\n")).collect()
+}
+
+/// The "Listeners not open" section: empty when every listener opened, so a healthy report prints nothing for it.
+fn listener_failure_lines(failures: &[ListenerFailure]) -> Vec<String> {
+    let header = (!failures.is_empty()).then(|| "Listeners not open:".to_owned());
+    header
+        .into_iter()
+        .chain(
+            failures
+                .iter()
+                .map(|failure| format!("  {}: {} ({})", failure.name, failure.reason.words(), failure.reason.tag())),
+        )
+        .collect()
 }
 
 fn service_lines(state: ServiceState) -> Vec<String> {

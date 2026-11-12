@@ -67,6 +67,7 @@ use crate::clock::{SystemClock, WallClock};
 use crate::config_check::{CheckFailure, Checked, UpstreamSettings, open_and_check, parse_detail};
 use crate::deployment::PasswdDirectory;
 use crate::hardening::{HardeningReport, MemoryProtection};
+use crate::listener_failure::{self, ListenerFailure};
 use crate::logging::{LogSwitch, OpenedLog};
 use crate::migration_authorization::PendingMigration;
 use crate::request_listeners::RequestListeners;
@@ -315,6 +316,9 @@ struct Inner {
     open: Option<OpenVault>,
     /// The request listeners and the task serving them; `None` only while they are being rebuilt or once stopped.
     serving: Option<Serving>,
+    /// The listeners the last open or rebuild left out, which `status` reports; replaced whole on each rebuild so a fixed or
+    /// removed listener drops off.
+    listener_failures: Vec<ListenerFailure>,
     /// The sockets systemd passed that no listener has adopted yet, for a later listener rebuild to adopt.
     passed: PassedSockets,
     /// The check generation: how many config checks the service has run. An approval commits only at the generation it
@@ -346,6 +350,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         failures
             .iter()
             .for_each(|error| tracing::warn!("provisional request listener not open: {error}"));
+        let listener_failures = listener_failure::failures(&failures, provisional.keys());
         // Starting refuses as Locked does, before any listener accepts. The default limits bound the provisional set:
         // nothing of the unverified config but its listeners is used.
         let holder = Arc::new(SnapshotHolder::refusing(UnavailableReason::Locked));
@@ -363,6 +368,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
                 checks: 0,
                 migration: PendingMigration::new(Instant::now()),
                 attempts: AttemptLimiter::new(),
+                listener_failures,
                 serving: Some(Serving::start(
                     listeners,
                     Limits::default(),
@@ -631,6 +637,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             memory: MemoryStatus::from(&self.setup.hardening.memory),
             recovery,
             host_unlock_outcome: inner.host_unlock_outcome,
+            listener_failures: inner.listener_failures.clone(),
         }
     }
 
@@ -971,6 +978,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
         failures
             .iter()
             .for_each(|error| tracing::warn!("approved request listener missing until restart: {error}"));
+        inner.listener_failures = listener_failure::failures(&failures, config.listeners().keys());
         inner.serving = Some(serving);
         self.holder.serve(snapshot);
         inner.open = Some(open);

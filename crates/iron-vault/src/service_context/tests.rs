@@ -19,6 +19,7 @@ fn inner_in(state: ServiceState) -> Arc<Mutex<Inner>> {
         identity: None,
         open: None,
         serving: None,
+        listener_failures: Vec::new(),
         passed: PassedSockets::default(),
         checks: 0,
         migration: PendingMigration::new(tokio::time::Instant::now()),

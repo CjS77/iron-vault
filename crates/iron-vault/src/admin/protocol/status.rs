@@ -13,6 +13,7 @@ use super::recovery_status::{self, RecoveryStatus};
 use super::{FrameError, body::TAG_COMMAND};
 use crate::deployment::DeploymentProfile;
 use crate::hardening::MemoryProtection;
+use crate::listener_failure::{ListenerFailure, ListenerFailureReason};
 use crate::service_context::HostUnlockOutcome;
 use crate::service_state::{FailureReason, ServiceState};
 use crate::standing::{CredentialStanding, RouteFault, RouteFaultKind, Standing};
@@ -28,6 +29,7 @@ const TAG_MEMORY_DETAIL: u16 = 9;
 const TAG_CREDENTIALS: u16 = 10;
 const TAG_ROUTE_FAULTS: u16 = 11;
 const TAG_INITIALIZATION: u16 = 12;
+const TAG_LISTENER_FAILURES: u16 = 19;
 
 /// What the service answers `status` with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +46,9 @@ pub struct StatusReport {
     pub recovery: RecoveryStatus,
     /// What the startup host unlock came to; `None` in a profile that tries none (Development).
     pub host_unlock_outcome: Option<HostUnlockOutcome>,
+    /// Each listener the config names that is not open, in name order, with a fixed reason; empty when all are open. The
+    /// service state is unchanged by one: the other listeners keep serving.
+    pub listener_failures: Vec<ListenerFailure>,
 }
 
 /// The vault's lock state, and what is known only while it is unlocked.
@@ -143,6 +148,11 @@ pub(super) fn encode(command: u16, report: &StatusReport) -> Vec<u8> {
         host_unlock_status::TAG_OUTCOME,
         &host_unlock_status::encode(report.host_unlock_outcome),
     );
+    fields::put(
+        &mut out,
+        TAG_LISTENER_FAILURES,
+        &encode_listener_failures(&report.listener_failures),
+    );
     out
 }
 
@@ -167,6 +177,7 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
         recovery_due,
         recovery_detail,
         host_unlock,
+        listener_failures,
     ] = exact(
         fields,
         [
@@ -188,6 +199,7 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
             recovery_status::TAG_DUE,
             recovery_status::TAG_DETAIL,
             host_unlock_status::TAG_OUTCOME,
+            TAG_LISTENER_FAILURES,
         ],
     )?;
     Ok(StatusReport {
@@ -209,6 +221,7 @@ pub(super) fn decode(fields: &[fields::Field<'_>]) -> Result<StatusReport, Frame
             detail: recovery_detail,
         })?,
         host_unlock_outcome: host_unlock_status::decode(host_unlock)?,
+        listener_failures: decode_listener_failures(listener_failures)?,
     })
 }
 
@@ -397,6 +410,27 @@ fn take_route_fault(rest: &mut &[u8]) -> Result<RouteFault, FrameError> {
     Ok(RouteFault { name, kind })
 }
 
+/// Each entry: name length, name, reason code.
+fn encode_listener_failures(failures: &[ListenerFailure]) -> Vec<u8> {
+    let mut out = Vec::new();
+    failures.iter().for_each(|failure| {
+        put_name(&mut out, failure.name.as_str());
+        out.push(failure.reason.code());
+    });
+    out
+}
+
+fn decode_listener_failures(mut rest: &[u8]) -> Result<Vec<ListenerFailure>, FrameError> {
+    std::iter::from_fn(|| (!rest.is_empty()).then(|| take_listener_failure(&mut rest))).collect()
+}
+
+fn take_listener_failure(rest: &mut &[u8]) -> Result<ListenerFailure, FrameError> {
+    let name = take_name_in(TAG_LISTENER_FAILURES, rest)?;
+    let code = take_in(TAG_LISTENER_FAILURES, rest, 1)?[0];
+    let reason = ListenerFailureReason::from_code(code).ok_or(FrameError::InvalidValue(TAG_LISTENER_FAILURES))?;
+    Ok(ListenerFailure { name, reason })
+}
+
 #[cfg(test)]
 mod tests {
     use iron_vault_store::UtcSecond;
@@ -415,6 +449,7 @@ mod tests {
                 due: false,
             },
             host_unlock_outcome: Some(HostUnlockOutcome::UnsealFailed),
+            listener_failures: Vec::new(),
         }
     }
 
@@ -619,5 +654,36 @@ mod tests {
         bytes.extend_from_slice(b"A!");
         bytes.extend_from_slice(&[0, 0, 0]);
         assert_eq!(decode_credentials(&bytes), Err(FrameError::InvalidValue(TAG_CREDENTIALS)));
+    }
+
+    #[test]
+    fn listener_failures_round_trip_and_an_empty_list_is_an_empty_field() {
+        let failures = ListenerFailureReason::ALL
+            .iter()
+            .enumerate()
+            .map(|(index, reason)| ListenerFailure {
+                name: format!("l{index}").parse().unwrap(),
+                reason: *reason,
+            })
+            .collect::<Vec<_>>();
+        let full = StatusReport {
+            listener_failures: failures,
+            ..report(VaultStatus::Locked)
+        };
+        assert_eq!(decoded(&encode(6, &full)), Ok(full));
+        assert!(encode_listener_failures(&[]).is_empty());
+    }
+
+    #[test]
+    fn an_unknown_listener_failure_code_is_refused() {
+        let mut body = encode_listener_failures(&[ListenerFailure {
+            name: "a".parse().unwrap(),
+            reason: ListenerFailureReason::BindRefused,
+        }]);
+        body.last_mut().map(|code| *code = 0);
+        assert_eq!(
+            take_listener_failure(&mut body.as_slice()),
+            Err(FrameError::InvalidValue(TAG_LISTENER_FAILURES))
+        );
     }
 }

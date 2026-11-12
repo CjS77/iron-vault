@@ -265,6 +265,7 @@ impl AdminHandler for FixedStatus {
                 due: false,
             },
             host_unlock_outcome: None,
+            listener_failures: Vec::new(),
         };
         Box::pin(async move { Ok(AdminResponse::Status(Box::new(report))) })
     }

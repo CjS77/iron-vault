@@ -15,6 +15,7 @@ pub mod hardening;
 pub mod library_error;
 // The TLS acceptor runs on tokio and tokio-rustls, which this crate depends on only on Linux.
 #[cfg(target_os = "linux")]
+pub mod listener_failure;
 pub mod listener_tls;
 pub mod logging;
 pub mod migration_authorization;

@@ -31,6 +31,7 @@ fn ready(credentials: Vec<CredentialStanding>) -> StatusReport {
         }),
         memory: MemoryStatus::Locked,
         host_unlock_outcome: None,
+        listener_failures: Vec::new(),
         recovery: RecoveryStatus::Unknown {
             detail: "no check record yet".to_owned(),
             due: false,
@@ -276,4 +277,27 @@ fn the_host_unlock_outcome_follows_memory_protection_and_only_when_there_is_one(
         Some("host unlock: owner_locked")
     );
     assert!(!line(None).1.unwrap_or_default().starts_with("host unlock"));
+}
+
+#[test]
+fn listeners_not_open_print_one_line_each_and_nothing_when_all_are_open() {
+    use iron_vault::listener_failure::ListenerFailureReason;
+
+    assert!(!render(&ready(Vec::new()), alice).contains("Listeners not open"));
+    let report = StatusReport {
+        listener_failures: vec![ListenerFailure {
+            name: "wide".parse().unwrap(),
+            reason: ListenerFailureReason::TlsKeyMismatch,
+        }],
+        ..ready(Vec::new())
+    };
+    let text = render(&report, alice);
+    let lines = text.lines().skip_while(|line| *line != "Listeners not open:").collect::<Vec<_>>();
+    assert_eq!(
+        lines,
+        [
+            "Listeners not open:",
+            "  wide: the TLS key does not match the certificate (tls-key-mismatch)"
+        ]
+    );
 }

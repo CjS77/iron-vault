@@ -41,6 +41,7 @@ use iron_vault::attempt_limit::FAILURE_THRESHOLD;
 use iron_vault::config_check::UpstreamSettings;
 use iron_vault::deployment::{Accounts, DeploymentProfile, PasswdDirectory};
 use iron_vault::hardening::{CoreDumps, HardeningReport, LockUnavailable, MemoryProtection};
+use iron_vault::listener_failure::{ListenerFailure, ListenerFailureReason};
 use iron_vault::migration_authorization::{MigrationOperation, MigrationRefusal};
 use iron_vault::path_metadata::invoking_user;
 use iron_vault::service_context::{LockOutcome, LockResult, ServiceContext, ServiceLocks, ServiceSetup, StartError, UnlockRefusal};
@@ -387,6 +388,16 @@ async fn admin_with(
     request: AdminRequest,
     answer: &str,
 ) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
+    admin_answering(service, handlers, request, &[answer]).await
+}
+
+/// [`admin_with`] answering the prompts in turn with `answers`; the last answer serves any prompt beyond them.
+async fn admin_answering(
+    service: &Arc<ServiceContext>,
+    handlers: Handlers,
+    request: AdminRequest,
+    answers: &[&str],
+) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
     let paths = service.paths().clone();
     let runtime_dir = paths.runtime_dir.clone().unwrap();
     let socket = AdminSocket::bind(&runtime_dir, paths.owner).unwrap();
@@ -399,7 +410,7 @@ async fn admin_with(
             })
             .await
     });
-    let exchanged = converse(&runtime_dir.join(ADMIN_SOCKET_NAME), request, answer.to_owned()).await;
+    let exchanged = converse(&runtime_dir.join(ADMIN_SOCKET_NAME), request, answers).await;
     let _ = stop.send(());
     served.await.unwrap().unwrap();
     exchanged
@@ -407,7 +418,7 @@ async fn admin_with(
 
 /// Sends `request` on a new connection to the admin socket at `socket`, answering each prompt with `answer`. Returns
 /// the response frame's bytes, the prompts and the response.
-async fn converse(socket: &Path, request: AdminRequest, answer: String) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
+async fn converse(socket: &Path, request: AdminRequest, answers: &[&str]) -> (Vec<u8>, Vec<Prompt>, AdminResponse) {
     let mut stream = UnixStream::connect(socket).await.unwrap();
     send(&mut stream, &Frame::Request(request)).await;
     let mut prompts = Vec::new();
@@ -415,6 +426,7 @@ async fn converse(socket: &Path, request: AdminRequest, answer: String) -> (Vec<
         match read_frame(&mut stream).await {
             (bytes, Frame::Response(response)) => break (bytes, response),
             (_, Frame::Prompt(prompt)) => {
+                let answer = answers.get(prompts.len()).or(answers.last()).copied().unwrap_or_default();
                 prompts.push(prompt);
                 let input = OwnerInput::new(Zeroizing::new(answer.as_bytes().to_vec()));
                 send(&mut stream, &Frame::OwnerInput(input)).await;
@@ -1123,7 +1135,7 @@ async fn a_protected_install_without_locked_memory_refuses_recovery_check_before
     let (key, _) = iron_vault_store::RecoveryKey::generate();
     let key = secrecy::ExposeSecret::expose_secret(&key).to_owned();
 
-    let (_, prompts, response) = converse(&session.socket, AdminRequest::RecoveryCheck, key.clone()).await;
+    let (_, prompts, response) = converse(&session.socket, AdminRequest::RecoveryCheck, &[key.as_str()]).await;
 
     assert_eq!(prompts, []);
     let AdminResponse::Error { code, message } = response else {
@@ -1149,7 +1161,7 @@ async fn a_protected_install_without_locked_memory_refuses_unlock_before_any_pro
     let memory = MemoryProtection::Unavailable(LockUnavailable::LimitTooLow { limit_bytes: 65_536 });
     let (service, session, mut reached) = protected_without_locked_memory(&fixture, memory).await;
 
-    let (_, prompts, response) = converse(&session.socket, AdminRequest::Unlock, PASSPHRASE.to_owned()).await;
+    let (_, prompts, response) = converse(&session.socket, AdminRequest::Unlock, &[PASSPHRASE]).await;
 
     assert_eq!(prompts, []);
     let message = "memory is not locked against swap (RLIMIT_MEMLOCK soft limit is 65536 bytes, not unlimited), so a \
@@ -1890,7 +1902,7 @@ impl AdminSession {
     /// Sends `request` on its own connection, in a task of its own, answering each prompt with `answer`.
     fn send(&self, request: AdminRequest, answer: &str) -> tokio::task::JoinHandle<AdminResponse> {
         let (socket, answer) = (self.socket.clone(), answer.to_owned());
-        tokio::spawn(async move { converse(&socket, request, answer).await.2 })
+        tokio::spawn(async move { converse(&socket, request, &[answer.as_str()]).await.2 })
     }
 
     async fn close(self) {
@@ -2314,7 +2326,7 @@ async fn assert_nothing_listens(port: u16) {
 /// load, and asserts it is never opened: at startup the service is in the Locked safe state with only `local` open,
 /// and after unlock it is Ready with `local` serving, the listener still missing and a warning saying why that
 /// contains `why`.
-async fn assert_tls_listener_never_opens(name: &str, certificate: &Path, key: &Path, why: &str) {
+async fn assert_tls_listener_never_opens(name: &str, certificate: &Path, key: &Path, why: &str, reason: ListenerFailureReason) {
     let logs = captured_logs();
     let mut fixture = approved().await;
     let port = next_free_port();
@@ -2328,6 +2340,7 @@ async fn assert_tls_listener_never_opens(name: &str, certificate: &Path, key: &P
         logs.text()
             .contains(&format!("provisional request listener not open: listener {name}: "))
     );
+    assert_eq!(status(&service).await.1.listener_failures, [failure(name, reason)]);
 
     assert_response(
         &unlock(&service, PASSPHRASE).await,
@@ -2338,6 +2351,9 @@ async fn assert_tls_listener_never_opens(name: &str, certificate: &Path, key: &P
     assert_eq!(service.listener_names().await, [listener("local")]);
     assert_nothing_listens(port).await;
     assert_served(&get_unix(&fixture.socket(), true).await);
+    let (_, report) = status(&service).await;
+    assert_eq!(report.state, ServiceState::Ready);
+    assert_eq!(report.listener_failures, [failure(name, reason)]);
     let missing = format!("approved request listener missing until restart: listener {name}: ");
     let warning = logs.text().lines().find(|line| line.contains(&missing)).map(str::to_owned);
     assert!(warning.as_deref().is_some_and(|line| line.contains(why)), "{warning:?}");
@@ -2359,7 +2375,7 @@ async fn an_approved_tls_listener_whose_key_does_not_match_its_certificate_never
         certificate.display()
     );
 
-    assert_tls_listener_never_opens("mismatched", &certificate, &key, &why).await;
+    assert_tls_listener_never_opens("mismatched", &certificate, &key, &why, ListenerFailureReason::TlsKeyMismatch).await;
 }
 
 /// §19: "Locked startup, invalid policy, TLS failures, unsafe listener configurations, and ownership failures produce
@@ -2373,8 +2389,9 @@ async fn an_approved_tls_listener_whose_key_file_cannot_be_read_never_opens() {
     let (certificate, exposed) = (tls.path("server.crt"), tls.path("server.key"));
     let missing = tls.path("absent.key");
 
-    assert_tls_listener_never_opens("missingkey", &certificate, &missing, &missing.display().to_string()).await;
-    assert_tls_listener_never_opens("exposedkey", &certificate, &exposed, &exposed.display().to_string()).await;
+    let unreadable = ListenerFailureReason::TlsFileUnreadable;
+    assert_tls_listener_never_opens("missingkey", &certificate, &missing, &missing.display().to_string(), unreadable).await;
+    assert_tls_listener_never_opens("exposedkey", &certificate, &exposed, &exposed.display().to_string(), unreadable).await;
 }
 
 /// §19: "Locked startup, invalid policy, TLS failures, unsafe listener configurations, and ownership failures produce
@@ -2398,6 +2415,13 @@ async fn an_unapproved_plain_http_listener_off_loopback_never_opens_at_startup()
     assert_safe_state(&fixture, &service, ServiceState::Locked, UnavailableReason::Locked, 0).await;
     let refused = format!("listener plainwide on 0.0.0.0:{port} is plain HTTP off loopback and was not opened");
     assert!(logs.text().contains(&refused), "no warning names the listener");
+}
+
+fn failure(name: &str, reason: ListenerFailureReason) -> ListenerFailure {
+    ListenerFailure {
+        name: listener(name),
+        reason,
+    }
 }
 
 const BASIC_USER: &str = "basic-user-9f3a";
