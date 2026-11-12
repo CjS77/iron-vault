@@ -1,5 +1,15 @@
-//! `import`'s side of the service context (specification §16 steps 3 to 6; design/migration-bundle.md, "Import"): the
-//! import slot, opening and verifying a received bundle, and the writes once the owner has confirmed the recovery key.
+//! Runs the service's part of `import`
+//! ([specification §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration),
+//! migration steps 4 and 5; [migration bundle: Import](../../../../design/migration-bundle.md#import-1)): the import
+//! slot, opening and verifying a received bundle, and the writes once the owner has confirmed the recovery key.
+//!
+//! ```text
+//!   step 1   take_import_slot            Busy while another import holds the slot
+//!   step 2   (exchange) read and decode the bundle frames
+//!   step 3-4 open_bundle                 export passphrase opens the identity envelope; verify with the vault identity
+//!   step 5-7 (exchange) summary, new vault passphrase, recovery key confirmation
+//!   step 8   import                      the write order, under the service-wide lock; the service stays Locked
+//! ```
 //!
 //! Like `init`, the writes take the service-wide lock without waiting and check the service state again under the
 //! context's mutex, and the service stays Locked throughout: import keeps no key it unwraps and runs no config check.
@@ -47,8 +57,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             .map_err(|_| InitRefusal::Busy)
     }
 
-    /// Steps 3 and 4: opens the exported identity envelope with `passphrase`, then verifies the bundle with the vault
-    /// identity it held, on the blocking pool since the envelope is a 256 MiB scrypt run. Nothing is written.
+    /// Runs steps 3 and 4: opens the exported identity envelope with `passphrase`, then verifies the bundle with the
+    /// vault identity it held, on the blocking pool since the envelope is a 256 MiB scrypt run. Nothing is written.
     pub async fn open_bundle(&self, decoded: DecodedBundle, passphrase: ExportPassphrase) -> Result<VerifiedBundle, BundleRefusal> {
         let opened = tokio::task::spawn_blocking(move || {
             open_bundle(decoded, &passphrase).and_then(|opened| verify_bundle(opened).map_err(OpenBundleError::from))
@@ -57,7 +67,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         opened.map_err(|_| BundleRefusal::Interrupted)?.map_err(BundleRefusal::Open)
     }
 
-    /// Step 8: runs the write order for `bundle` on the blocking pool, since scrypt runs once and every file is
+    /// Runs step 8, the write order for `bundle` on the blocking pool, since scrypt runs once and every file is
     /// fsynced. It takes the service-wide lock without waiting, so another holder ends it with [`InitRefusal::Busy`].
     ///
     /// The blocking task owns both guards and drops them only once the store has returned and the outcome is logged. If
@@ -124,7 +134,7 @@ fn settled(written: Result<Result<ImportedVault, ImportError>, JoinError>) -> Re
     written.map_err(|error| begin_refusal(&error).unwrap_or(InitRefusal::Import(error)))
 }
 
-/// Step 1's refusal of the directories, which writes nothing; `None` for a failed step.
+/// Returns step 1's refusal of the directories, which writes nothing, or `None` when `error` is a failed step.
 fn begin_refusal(error: &ImportError) -> Option<InitRefusal> {
     match (error.step(), error.cause()) {
         (ImportStep::Begin, ImportFailure::State(refused)) => directory_refusal(refused),

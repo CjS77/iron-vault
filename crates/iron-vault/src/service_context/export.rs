@@ -1,10 +1,19 @@
-//! `export` in the running service (`design/migration-bundle.md`, "Export"): step 3, the snapshot checks before any
-//! prompt, and steps 9 and 10, consuming the authorization and streaming the snapshot.
+//! Runs the service's part of `export` ([migration bundle: Export](../../../../design/migration-bundle.md#export-1)):
+//! step 3, the snapshot checks before any prompt, and steps 9 and 10, consuming the authorization and streaming the
+//! snapshot.
 //!
-//! Both read the state and config directories on the blocking pool with a clone of the session's service-wide lock, so
-//! no writer can start while a read is under way, even if the exchange is dropped meanwhile. The stream starts only from
-//! the witness that consuming the authorization returns, so no bundle leaves without a consumed authorization. Export
-//! writes nothing to either directory and changes no counter.
+//! ```text
+//!   step 3      check_export: the snapshot checks             export-failed (step `check`), naming the file
+//!   steps 4-8   summary, migration authorization, export passphrase, in the admin exchange
+//!   step 9      start_export: consume the authorization       migration-denied: nothing starts
+//!   step 10     blocking task ──▶ FrameSink ──▶ chunks ──▶ exchange ──▶ bundle data frames
+//!                     ◀── BrokenPipe once the exchange drops `chunks`
+//! ```
+//!
+//! `check_export` and `start_export` read the state and config directories on the blocking pool with a clone of the
+//! session's service-wide lock, so no writer can start while a read is under way, even if the exchange is dropped
+//! meanwhile. The stream starts only from the witness that consuming the authorization returns, so no bundle leaves
+//! without a consumed authorization. Export writes nothing to either directory and changes no counter.
 
 use std::io::{self, Write};
 use std::mem;
@@ -25,8 +34,8 @@ use crate::audit::migration::ExportFailed;
 use crate::migration_authorization::{AuthorizedMigration, MigrationAuthorization, MigrationOperation, MigrationRefusal};
 use crate::service_state::ServiceState;
 
-/// How many bundle data frames' worth of bytes may wait between the blocking task and the exchange. Two lets the store
-/// read the next file while a frame is written, and bounds what an export holds in memory beyond the store's own reads.
+/// The number of bundle data frames that may wait between the blocking task and the exchange. Two lets the store read
+/// the next file while a frame is written, and bounds what an export holds in memory beyond the store's own reads.
 const FRAMES_IN_FLIGHT: usize = 2;
 
 /// Why an export's store work gave no result.
@@ -52,8 +61,8 @@ pub struct ExportStream {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Step 3: the snapshot checks, before any prompt or challenge. A failure is recorded as `migration.export-failed`
-    /// (step `check`), naming the file.
+    /// Runs step 3, the snapshot checks, before any prompt or challenge. A failure is recorded as
+    /// `migration.export-failed` (step `check`), naming the file.
     pub async fn check_export(&self, session: &MigrationSession<'_, F>) -> Result<SnapshotSummary, ExportError> {
         let (identity, held) = held_vault(&*self.inner.lock().await)?;
         let (locks, setup, lock) = (Arc::clone(&self.locks), Arc::clone(&self.setup), session.hold());
@@ -72,9 +81,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// Steps 9 and 10: consumes `authorization` for `export`, then starts streaming the snapshot sealed to `passphrase` on
-    /// the blocking pool. The caller relays the chunks and records how the stream ended. A refused authorization starts
-    /// nothing.
+    /// Runs steps 9 and 10: consumes `authorization` for `export`, then starts streaming the snapshot sealed to
+    /// `passphrase` on the blocking pool. The caller relays the chunks and records how the stream ended. A refused
+    /// authorization starts nothing.
     pub async fn start_export(
         &self,
         session: &MigrationSession<'_, F>,
@@ -98,7 +107,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// The vault identity and approval state the service holds, which the snapshot is checked against.
+/// Returns the vault identity and approval state the service holds, which the snapshot is checked against, or
+/// [`ExportError::WrongState`] when it holds neither.
 fn held_vault(inner: &Inner) -> Result<(Arc<VaultIdentity>, ApprovalState), ExportError> {
     match (&inner.identity, &inner.open) {
         (Some(identity), Some(open)) => Ok((Arc::clone(identity), open.approval.clone())),
@@ -108,7 +118,7 @@ fn held_vault(inner: &Inner) -> Result<(Arc<VaultIdentity>, ApprovalState), Expo
 
 /// Gathers the bundle's bytes into chunks of one bundle data frame and hands each to the exchange, waiting while
 /// [`FRAMES_IN_FLIGHT`] are queued. Once the exchange drops its receiver every write fails with `BrokenPipe`, so the
-/// store stops at its next write rather than reading the rest of the vault for nobody.
+/// store stops at its next write and does not read the rest of the vault for nobody.
 struct FrameSink {
     sender: mpsc::Sender<Vec<u8>>,
     buffer: Vec<u8>,
