@@ -20,3 +20,4 @@ mod recipients;
 mod recovery_check;
 mod recovery_reminder;
 mod recovery_status;
+mod rewrap_stanzas;

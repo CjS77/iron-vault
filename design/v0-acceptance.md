@@ -156,7 +156,8 @@ The approver commands' own release checks are in [approval-signers.md](approval-
 | A rotated recovery key works and the old one does not | `crates/iron-vault/tests/signers/recipients.rs::after_rotating_the_recovery_key_the_new_key_passes_recovery_check_and_the_old_fails` | `cargo test` |
 | Mixed scrypt and X25519 stanzas are refused | `crates/iron-vault-store/src/envelope.rs::a_scrypt_stanza_beside_x25519_is_refused`, `crates/iron-vault-store/src/envelope.rs::stanza_kinds_lists_one_x25519_per_recipient_and_one_grease` | `cargo test` |
 | Compose host unlock: `identity.age` has three X25519 stanzas and no scrypt stanza; the recovery key opens the vault | `scripts/release/compose-unlock-check.sh` items `identity_has_three_x25519_stanzas`, `recovery_key_opens_the_same_vault`; `design/evidence/compose-unlock-check-2026-11-11.md` | `root + VM` |
-| After every rewrap, `identity.age` stays X25519-only and the recovery key still opens the vault | **gap**: K-365 | `cargo test` |
+| After `recipient add`, `add --host-unlock`, `add --recovery`, `recipient remove`, `approver add` and `approver remove`, `identity.age` has one X25519 stanza per listed recipient and no scrypt stanza, each passphrase envelope has exactly one scrypt stanza, and the current recovery key opens the Locked vault; the replaced key does not once removed | `crates/iron-vault/tests/signers/rewrap_stanzas.rs::identity_age_stays_x25519_only_and_the_recovery_key_opens_the_vault_after_every_rewrap` | `cargo test` |
+| Not covered there: a vault passphrase change (v0 has no command), and `approver add` of a `tpm` approver (needs a TPM) | not shown by a `cargo test` | not run |
 
 ## 9. Second writers, damaged records and directory fsync
 
