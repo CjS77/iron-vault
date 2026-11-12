@@ -276,7 +276,7 @@ async fn export(steps: &Steps, service: &Service, bundle: &Path) -> (Vec<u8>, St
 
 #[tokio::test]
 async fn every_rename_and_unlink_in_a_whole_session_syncs_its_directory() {
-    let _one = super::export::ONE_AT_A_TIME.lock().await;
+    let _one = super::export::one_at_a_time().await;
     let ca = TestCa::new("session dir sync CA");
     let upstream = MockUpstream::start(&ca, Reply::ok("ok")).await;
     let settings = || {
