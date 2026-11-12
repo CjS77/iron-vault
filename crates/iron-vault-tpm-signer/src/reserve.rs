@@ -1,5 +1,5 @@
-//! Decides whether the helper may try a PIN, from the TPM's dictionary-attack state (`design/tpm-approval-signer.md`
-//! "Lockout reserve").
+//! Decides whether the helper may try a PIN, from the TPM's dictionary-attack state
+//! ([TPM approval signer: lockout reserve](../../../design/tpm-approval-signer.md#lockout-reserve)).
 //!
 //! The TPM keeps one failure counter for every PIN-protected object on the machine. The helper spends at most its
 //! share of that counter and leaves the rest, the lockout reserve, for other users, so Iron Vault never brings the TPM
@@ -36,7 +36,7 @@ pub struct LockoutReserve {
     pub max_tries: u32,
     /// `TPM2_PT_LOCKOUT_INTERVAL`: seconds after which the TPM forgets one failure.
     pub interval_seconds: u32,
-    /// `TPMA_PERMANENT.inLockout`.
+    /// `true` if and only if the TPM is in lockout: `TPMA_PERMANENT.inLockout`.
     pub in_lockout: bool,
 }
 

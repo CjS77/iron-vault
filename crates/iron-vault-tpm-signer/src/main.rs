@@ -1,5 +1,5 @@
 //! `iron-vault-tpm-signer`, the TPM signing helper: the one process that opens the TPM to create and use TPM approval
-//! keys for the service (`design/tpm-approval-signer.md` "The helper process").
+//! keys for the service ([TPM approval signer: the helper process](../../../design/tpm-approval-signer.md#the-helper-process)).
 //!
 //! systemd starts one instance per connection to the helper socket (`Accept=yes`, `MaxConnections=1`), with the
 //! connection as standard input (`StandardInput=socket`); the response goes back on that descriptor. Standard output

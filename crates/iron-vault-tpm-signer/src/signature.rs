@@ -1,5 +1,5 @@
 //! Converts the TPM's ECC values into the fixed-length forms the helper sends: a 65-byte public point and a 64-byte
-//! signature (`design/tpm-approval-signer.md` "The signing key").
+//! signature ([TPM approval signer: the signing key](../../../design/tpm-approval-signer.md#the-signing-key)).
 
 use iron_vault_tpm_protocol::{PUBLIC_KEY_LEN, SIGNATURE_LEN};
 use p256::ecdsa::Signature;

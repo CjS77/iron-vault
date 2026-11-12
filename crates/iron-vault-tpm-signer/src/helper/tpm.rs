@@ -1,5 +1,6 @@
-//! Runs the TPM commands that create a TPM approval key and sign with it (`design/tpm-approval-signer.md` "The TPM
-//! approval key", "Helper protocol").
+//! Runs the TPM commands that create a TPM approval key and sign with it
+//! ([TPM approval signer: the TPM approval key](../../../../design/tpm-approval-signer.md#the-tpm-approval-key),
+//! [helper protocol](../../../../design/tpm-approval-signer.md#helper-protocol)).
 //!
 //! A sign request passes every check that needs no authorization before the one authorized command, so a refusal
 //! spends no dictionary-attack try:
@@ -60,7 +61,7 @@ impl From<Error> for Stop {
 
 type Step<T> = Result<T, Stop>;
 
-/// Stops with `refusal`, if there is one.
+/// Fails with `refusal` when there is one, and succeeds otherwise.
 fn refuse(refusal: Option<Response>) -> Step<()> {
     refusal.map_or(Ok(()), |response| Err(response.into()))
 }
@@ -202,7 +203,7 @@ fn with_salted_session<T>(context: &mut Context, primary: KeyHandle, f: impl FnO
     })
 }
 
-/// Runs `f`, then flushes `handle` whatever `f` returned.
+/// Runs `f`, then flushes `handle` on success and on failure.
 ///
 /// An error from `f` wins. A flush failure after a success is still reported, since it leaves a handle in the TPM.
 fn with_flushed<T>(context: &mut Context, handle: ObjectHandle, f: impl FnOnce(&mut Context) -> Step<T>) -> Step<T> {
@@ -353,7 +354,8 @@ fn tpm_error(error: Error) -> Response {
     Response::TpmError { code }
 }
 
-/// Recovers the whole `TSS2_RC`, which `tss-esapi` keeps in private fields; its bitfield types expose it through `BitRange`.
+/// Recovers the whole `TSS2_RC`, which `tss-esapi` keeps in private fields; its bitfield types expose it through
+/// `BitRange`.
 fn raw_code(code: Tss2ResponseCode) -> u32 {
     match code {
         Tss2ResponseCode::Success => 0,

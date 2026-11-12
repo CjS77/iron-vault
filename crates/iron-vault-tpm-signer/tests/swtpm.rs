@@ -1,4 +1,5 @@
-//! The real helper against `swtpm`, the software TPM (`design/tpm-approval-signer.md` "Testing").
+//! The real helper against `swtpm`, the software TPM
+//! ([TPM approval signer: testing](../../../design/tpm-approval-signer.md#testing)).
 //!
 //! Start an emulator and name it in `IRON_VAULT_SWTPM`, then run the ignored tests:
 //!
