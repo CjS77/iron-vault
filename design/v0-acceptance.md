@@ -207,8 +207,10 @@ suite has one test per row.
 | The TPM PIN authorizes only its pending migration | `crates/iron-vault/tests/lifecycle/migration_tpm_pin.rs::a_signature_over_another_message_never_authorizes`, `crates/iron-vault/tests/lifecycle/migration_tpm_pin.rs::a_pin_answer_takes_its_challenge_once`, `crates/iron-vault/tests/lifecycle/migration_tpm_pin.rs::a_pin_answer_after_the_challenge_expires_is_refused_before_the_tpm_signs` | `cargo test` |
 | The TPM PIN through the real helper | `crates/iron-vault/tests/lifecycle/migration_tpm_pin.rs::the_real_helper_authorizes_a_migration_by_pin_and_denies_a_wrong_one` | `swtpm (ignored)` |
 | `recipient add`: wrong passphrase, cancelled, unlocked vault alone, another key's authorization | `crates/iron-vault/tests/signers/recipient_add.rs::a_wrong_vault_passphrase_adds_nothing`, `crates/iron-vault/tests/signers/recipient_add.rs::a_cancelled_prompt_adds_nothing_and_releases_the_lock`, `crates/iron-vault/tests/signers/recipient_add.rs::an_unlocked_vault_alone_never_adds_a_key_because_the_prompt_comes_first`, `crates/iron-vault/tests/signers/recipient_add.rs::an_authorization_for_another_key_or_operation_never_reaches_the_rewrap` | `cargo test` |
-| `recipient add`: expired and replayed authorization through the real command | **gap**: K-368 | `cargo test` |
-| YubiKey touch | **not in v0**: no hardware-key provider exists; `approver add` refuses hardware signers | |
+| `recipient add`: expired at the prompt, through the real command | `crates/iron-vault/tests/signers/recipient_add.rs::a_passphrase_typed_after_the_challenge_expired_adds_nothing` | `cargo test` |
+| `recipient add`: expired before the rewrap; the exchange has no prompt between the proof and the rewrap, so this drives the `add_recipient` the handler calls | `crates/iron-vault/tests/signers/recipient_add.rs::an_authorization_that_expires_before_the_rewrap_adds_nothing` | `cargo test` |
+| `recipient add`: replayed; the authorization is move-only and the binding digest never reaches the client, so a replay cannot be sent through the command and its `not_pending` audit record is unreachable there; this drives the service the handler calls | `crates/iron-vault/tests/signers/recipient_add.rs::a_challenge_used_for_one_add_is_refused_for_a_second` | `cargo test` |
+| YubiKey touch | **not in v0**: no hardware-key provider exists; `approver add` refuses hardware signers as unavailable | |
 
 ## 12. Explicit safe states
 

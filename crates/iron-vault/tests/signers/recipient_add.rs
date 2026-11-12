@@ -15,7 +15,7 @@ use common::approval_harness::{Captured, assert_audit_record, captured_logs, con
 use common::recipient_harness::{Fixture, VAULT_PASSPHRASE, ready};
 use iron_vault::admin::protocol::OwnerInput;
 use iron_vault::admin::protocol::{AdminRequest, AdminResponse, ErrorCode, Frame, Prompt};
-use iron_vault::migration_authorization::{MigrationOperation, MigrationRefusal};
+use iron_vault::migration_authorization::{CHALLENGE_LIFETIME, MigrationOperation, MigrationRefusal};
 use iron_vault::service_context::{AddRefusal, RecipientRefusal, ServiceContext};
 use iron_vault_store::{RecipientEntry, RecipientKey, RecipientLabel, RecipientRole, RecoveryKey, RecoveryKeySecret, unwrap_identity};
 use secrecy::{ExposeSecret, SecretString};
@@ -491,4 +491,126 @@ async fn host_unlock_with_a_wrong_vault_passphrase_adds_nothing() {
     served.assert_nothing_written(&before);
     assert_eq!(served.entries().await.len(), 2);
     assert!(served.events_for("recipient.added", &key).is_empty());
+}
+
+/// §19 check 11: destination-recipient enrollment rejects "expired [...] source-owner authorization". The real `recipient
+/// add` exchange: the right vault passphrase arrives after the challenge's lifetime, so taking the challenge at step 7
+/// refuses it as `expired` before any scrypt work, and nothing is rewrapped.
+#[tokio::test]
+async fn a_passphrase_typed_after_the_challenge_expired_adds_nothing() {
+    let served = Served::new().await;
+    let (key, identity) = new_recipient();
+    let before = served.recipient_files();
+    let mut stream = served.connect(add_request(&key, LABEL)).await;
+    while !matches!(read_frame(&mut stream).await, Frame::Prompt(_)) {}
+
+    tokio::time::pause();
+    tokio::time::advance(CHALLENGE_LIFETIME).await;
+    let answer = OwnerInput::new(Zeroizing::new(VAULT_PASSPHRASE.as_bytes().to_vec()));
+    send(&mut stream, &Frame::OwnerInput(answer)).await;
+    let Frame::Response(response) = read_frame(&mut stream).await else {
+        panic!("expected the response after the prompt");
+    };
+
+    let (code, message) = error_of(&response);
+    assert_eq!(code, ErrorCode::MigrationDenied);
+    assert!(message.contains("expired"), "{message}");
+    served.assert_nothing_written(&before);
+    assert!(unwrap_identity(&fs::read(served.fixture.path("state/identity.age")).unwrap(), &identity).is_err());
+    assert_eq!(served.entries().await.len(), 2);
+    let refused = served.events_for("migration.authorization-refused", &key);
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_audit_record(&refused[0], "WARN", &["operation", "method", "refusal", "destination_recipient"]);
+    assert_eq!(
+        (&refused[0]["operation"], &refused[0]["refusal"]),
+        (&"add_recipient".into(), &"expired".into())
+    );
+    assert!(served.events_for("migration.authorized", &key).is_empty());
+    assert!(served.events_for("recipient.added", &key).is_empty());
+}
+
+/// §19 check 11: destination-recipient enrollment rejects "expired [...] source-owner authorization". An authorization
+/// proved in time but expired by the rewrap is refused when `add_recipient` consumes it (step 9). The real exchange has
+/// no prompt between the proof (step 7) and the rewrap, so a client cannot hold it there; this drives the same
+/// `ServiceContext::add_recipient` the `recipient add` handler calls, with tokio's paused clock in place of waiting.
+#[tokio::test]
+async fn an_authorization_that_expires_before_the_rewrap_adds_nothing() {
+    let served = Served::new().await;
+    let (key, identity) = new_recipient();
+    let before = served.recipient_files();
+    let session = served.service.begin_migration().await.unwrap();
+    let plan = served
+        .service
+        .plan_recipient_add(&session, key.clone(), RecipientLabel::new(LABEL).unwrap())
+        .await
+        .unwrap();
+    let authorization = authorization_for(&served.service, MigrationOperation::AddRecipient(key.clone())).await;
+
+    tokio::time::pause();
+    tokio::time::advance(CHALLENGE_LIFETIME).await;
+    let refusal = served.service.add_recipient(&session, authorization, plan).await.unwrap_err();
+    drop(session);
+
+    assert!(
+        matches!(refusal, AddRefusal::Unauthorized(MigrationRefusal::Expired)),
+        "{refusal:?}"
+    );
+    served.assert_nothing_written(&before);
+    assert!(unwrap_identity(&fs::read(served.fixture.path("state/identity.age")).unwrap(), &identity).is_err());
+    assert_eq!(served.entries().await.len(), 2);
+    let refused = served.events_for("migration.authorization-refused", &key);
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_audit_record(&refused[0], "WARN", &["operation", "method", "refusal", "destination_recipient"]);
+    assert_eq!(refused[0]["refusal"], "expired");
+    assert!(served.events_for("recipient.added", &key).is_empty());
+}
+
+/// §19 check 11: destination-recipient enrollment rejects "replayed source-owner authorization". The authorization
+/// is move-only and `add_recipient` takes it by value, so a used one cannot be presented again: the compiler refuses
+/// that row. What can be replayed is the challenge it proved. Each `recipient add` exchange issues its own challenge and
+/// never sends its binding digest to the client, so a replay cannot be expressed through the command either, and the
+/// `not_pending` audit record that the admin exchange writes for it is unreachable there
+/// (design/migration-authorization.md, "Error codes"). This drives the service the handler calls: the challenge that
+/// authorized the first key's rewrap, presented again for a second key, is refused as `not_pending`, and only the first
+/// key is enrolled.
+#[tokio::test]
+async fn a_challenge_used_for_one_add_is_refused_for_a_second() {
+    let served = Served::new().await;
+    let (first, _) = new_recipient();
+    let (second, second_identity) = new_recipient();
+    let session = served.service.begin_migration().await.unwrap();
+    let label = || RecipientLabel::new(LABEL).unwrap();
+    let plan = served.service.plan_recipient_add(&session, first.clone(), label()).await.unwrap();
+    let used = served
+        .service
+        .issue_migration_challenge(MigrationOperation::AddRecipient(first.clone()))
+        .await
+        .unwrap();
+    let method = served.service.vault_passphrase_method().await.unwrap();
+    let typed = || OwnerInput::new(Zeroizing::new(VAULT_PASSPHRASE.as_bytes().to_vec()));
+    let authorization = served.service.authorize_migration(&used, &method, typed()).await.unwrap();
+    served.service.add_recipient(&session, authorization, plan).await.unwrap();
+    let after_first = served.recipient_files();
+
+    let _pending = served
+        .service
+        .issue_migration_challenge(MigrationOperation::AddRecipient(second.clone()))
+        .await
+        .unwrap();
+    let replayed = served.service.authorize_migration(&used, &method, typed()).await.unwrap_err();
+    drop(session);
+
+    assert_eq!(replayed, MigrationRefusal::NotPending);
+    served.assert_nothing_written(&after_first);
+    assert!(unwrap_identity(&fs::read(served.fixture.path("state/identity.age")).unwrap(), &second_identity).is_err());
+    let added: Vec<_> = served
+        .entries()
+        .await
+        .into_iter()
+        .filter(|entry| entry.role() == RecipientRole::Added)
+        .map(|entry| entry.key().clone())
+        .collect();
+    assert_eq!(added, std::slice::from_ref(&first));
+    assert_eq!(served.events_for("recipient.added", &first).len(), 1);
+    assert!(served.events_for("recipient.added", &second).is_empty());
 }
