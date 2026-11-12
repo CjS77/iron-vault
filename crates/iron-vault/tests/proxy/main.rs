@@ -6,6 +6,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod hostile_egress;
 mod pipeline_egress;
 mod proxy_coding;
 mod proxy_coding_stream;
