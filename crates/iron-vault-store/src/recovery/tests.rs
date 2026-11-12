@@ -40,7 +40,7 @@ fn passphrase() -> Passphrase {
     Passphrase::new(SecretString::from(PASSPHRASE)).unwrap()
 }
 
-/// `text` with the character at `index` swapped for another bech32 character, as a mistyped key would be.
+/// Returns `text` with the character at `index` swapped for another bech32 character, as a mistyped key would be.
 fn with_typo(text: &str, index: usize) -> String {
     let swapped = match text.as_bytes()[index] {
         b'Q' => 'P',
@@ -104,8 +104,8 @@ struct Initialized {
     operational_text: String,
 }
 
-/// What init will do, at store level: lock, generate the three identities, write both envelopes, create the vault and
-/// add two records. Every key and the lock are dropped on return.
+/// Does what `init` does at store level: lock, generate the three identities, write both envelopes, create the vault
+/// and add two records. Every key and the lock are dropped on return.
 fn initialize(dir: &Path) -> Initialized {
     let lock = StateDirLock::acquire(dir).unwrap();
     let vault_identity = VaultIdentity::generate();
@@ -135,7 +135,7 @@ fn assert_both_records_healthy(lock: &StateDirLock, identity: VaultIdentity) {
     });
 }
 
-/// Every file in the state directory, by name.
+/// Returns every file in the state directory, by name.
 fn state_files(dir: &Path) -> Vec<(String, Vec<u8>)> {
     let mut files: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
@@ -146,7 +146,8 @@ fn state_files(dir: &Path) -> Vec<(String, Vec<u8>)> {
     files
 }
 
-/// The `age` file inside state file `name`: the manifest's follows its clear header, every other file is one whole.
+/// Returns the `age` file inside state file `name`: the manifest's follows its clear header, and every other file is
+/// one whole.
 fn age_part<'a>(name: &str, bytes: &'a [u8]) -> &'a [u8] {
     match name == StateFileName::manifest().as_str() {
         true => &bytes[MANIFEST_HEADER_LEN..],
@@ -154,8 +155,9 @@ fn age_part<'a>(name: &str, bytes: &'a [u8]) -> &'a [u8] {
     }
 }
 
-/// The no-mixed-recipient release check (§19): the passphrase envelope is scrypt only, every other `age` file is
-/// X25519 plus at most one grease stanza, and no file has both scrypt and X25519.
+/// Checks the no-mixed-recipient release check
+/// ([spec §19](../../../../design/iron-vault-specification.md#19-v0-user-acceptance)): the passphrase envelope is scrypt
+/// only, every other `age` file is X25519 plus at most one grease stanza, and no file has both scrypt and X25519.
 fn assert_no_mixed_recipients(files: &[(String, Vec<u8>)]) {
     let operational = StateFileName::passphrase_envelope();
     let age_files: Vec<_> = files.iter().filter(|(name, _)| name != LOCK_FILE).collect();
@@ -188,7 +190,7 @@ fn assert_no_mixed_recipients(files: &[(String, Vec<u8>)]) {
     );
 }
 
-/// Neither private key's text appears in any file, in either case.
+/// Checks that neither private key's text appears in any file, in either case.
 fn assert_no_key_text(files: &[(String, Vec<u8>)], keys: &[&str]) {
     let needles: Vec<String> = keys.iter().flat_map(|key| [key.to_string(), key.to_lowercase()]).collect();
     files.iter().for_each(|(name, bytes)| {

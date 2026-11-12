@@ -16,7 +16,7 @@ fn rewrap(vault: &TestVault, current: &RecipientInventory, change: &RecipientCha
     rewrap_identity(&vault.lock, &vault.fs, &vault.vault, current, change, None)
 }
 
-/// `recipient add --recovery`: enrolls `recovery` and proves the new envelope with `prover`.
+/// Runs `recipient add --recovery`: enrolls `recovery` and proves the new envelope with `prover`.
 fn add_recovery(
     vault: &TestVault,
     recovery: &RecipientIdentity,
@@ -26,7 +26,7 @@ fn add_recovery(
     rewrap_identity(&vault.lock, &vault.fs, &vault.vault, &vault.inventory, &change, Some(prover))
 }
 
-/// A vault with a third, `added` recipient enrolled through a rewrap, and that recipient's identity.
+/// Returns a vault with a third, `added` recipient enrolled through a rewrap, and that recipient's identity.
 fn with_added(label: &str) -> (TestVault, RecipientIdentity, RecipientInventory) {
     let vault = TestVault::new(label);
     let added = RecipientIdentity::generate();
@@ -63,8 +63,9 @@ fn a_removed_recipient_no_longer_opens_the_new_envelope() {
     assert!(vault.opens_with(&vault.operational) && vault.opens_with(&vault.recovery));
 }
 
-/// §16: removal reaches only envelopes written from now on. A copy of `identity.age` taken before still opens with the
-/// removed key; this is the documented limit, not a defect.
+/// Removal reaches only envelopes written from now on
+/// ([spec §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration)). A copy of
+/// `identity.age` taken before still opens with the removed key; this is the documented limit, not a defect.
 #[test]
 fn a_copy_of_the_old_envelope_still_opens_with_a_removed_key() {
     let (vault, added, inventory) = with_added("rewrap-old-copy");
@@ -171,7 +172,7 @@ fn the_steps_run_in_the_designed_order() {
     );
 }
 
-/// The number of filesystem calls a clean rewrap makes.
+/// Counts the filesystem calls a clean rewrap makes.
 fn rewrap_calls() -> usize {
     let vault = TestVault::new("rewrap-count");
     let from = vault.calls();
@@ -179,7 +180,7 @@ fn rewrap_calls() -> usize {
     vault.calls() - from
 }
 
-/// The number of filesystem calls a clean rewrap makes up to its commit point: through the read back of `identity.age`.
+/// Counts the filesystem calls a clean rewrap makes up to its commit point: through the read back of `identity.age`.
 fn commit_calls() -> usize {
     let vault = TestVault::new("rewrap-commit-point");
     let from = vault.calls();
@@ -189,8 +190,9 @@ fn commit_calls() -> usize {
     vault.fs.trace()[from..].iter().position(is_read_back).unwrap() + 1
 }
 
-/// After power loss, whatever the rewrap reported: the old recipients still open the vault, and the inventory check
-/// settles on the inventory of the envelope on disk, the old set or the new one as the rewrap's outcome allows.
+/// Checks the state after power loss, for any outcome the rewrap reported: the old recipients still open the vault, and
+/// the inventory check settles on the inventory of the envelope on disk, the old set or the new one as the rewrap's
+/// outcome allows.
 fn assert_recoverable(vault: &TestVault, added: &RecipientIdentity, outcome: &Result<RewrappedIdentity, RecipientChangeError>) {
     vault.fs.crash();
     assert!(vault.opens_with(&vault.operational) && vault.opens_with(&vault.recovery));
@@ -236,8 +238,8 @@ fn power_loss_at_any_call_leaves_a_vault_that_opens_and_checks() {
     });
 }
 
-/// Power lost after the envelope's commit and before the inventory's replace: the next check finishes the change from
-/// the staged inventory. Without the staged file the same disk is damage, never accepted.
+/// Power is lost after the envelope's commit and before the inventory's replace: the next check finishes the change
+/// from the staged inventory. Without the staged file the same disk is damage, never accepted.
 #[test]
 fn a_crash_between_the_two_replaces_is_finished_from_the_staged_inventory_and_nothing_else() {
     let finish = |label| {

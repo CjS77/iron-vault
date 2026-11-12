@@ -1,9 +1,16 @@
-//! The recovery check: proves that a recovery key opens the vault on disk, changing nothing (specification §16,
-//! `design/recovery.md`, "What the check proves").
+//! The recovery check: proves that a recovery key opens the vault on disk, changing nothing
+//! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration),
+//! [what the check proves](../../../design/recovery.md#what-the-check-proves)).
 //!
 //! `age` does not authenticate the sender, so unwrapping `identity.age` proves nothing by itself: anyone who knows the
 //! recovery key's recipient can wrap an identity of their own for it. Only the manifest's MAC, keyed from the vault
-//! identity, shows the unwrapped identity is this vault's.
+//! identity, shows the unwrapped identity is this vault's:
+//!
+//! ```text
+//! recovery key ──unwrap──▶ identity.age ──▶ an identity ──derive manifest key──▶ manifest.age MAC verifies?
+//!                │                                                                   │          │
+//!                └─ no stanza opens: NotARecipient                         yes: this vault   no: IdentityNotGenuine
+//! ```
 
 use std::io;
 
@@ -27,7 +34,7 @@ impl RecoveryCheck {
     }
 }
 
-/// Why a file of the vault is unusable, in words that name no key material and no file content.
+/// Says why a file of the vault is unusable, in words that name no key material and no file content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum MalformedReason {
     /// The file is longer than the store's bound for it.
@@ -44,10 +51,10 @@ pub enum MalformedReason {
     UnknownVersion,
 }
 
-/// A recovery check ended without confirming the key. No variant carries the key's text or any key material.
+/// Says why a recovery check ended without confirming the key. No variant carries the key's text or any key material.
 ///
-/// [`NotARecipient`](Self::NotARecipient) and [`IdentityNotGenuine`](Self::IdentityNotGenuine) say the key cannot be shown
-/// to open the vault; the other two mean the check could not be run, which says nothing against the key.
+/// [`NotARecipient`](Self::NotARecipient) and [`IdentityNotGenuine`](Self::IdentityNotGenuine) say the key cannot be
+/// shown to open the vault. The others mean the check could not be run, which says nothing against the key.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RecoveryCheckError {
     /// The key has no stanza in `identity.age`, or its stanza is damaged, which `age` cannot tell apart.
@@ -84,8 +91,9 @@ pub enum RecoveryCheckError {
 /// Proves that `recipient`, the identity parsed from the recovery key the owner typed, opens the vault on disk.
 ///
 /// Reads `identity.age`, unwraps it, then opens `manifest.age` with what it unwrapped, so the manifest's MAC is checked
-/// before anything is decrypted. Nothing is written: the caller holds the state directory lock so both files come from
-/// one vault state. The unwrapped vault identity is dropped, and so cleared, before this returns; only the vault ID leaves.
+/// before anything is decrypted. Nothing is written. The caller holds the state directory lock, so both files come from
+/// one vault state. The unwrapped vault identity is dropped, and so cleared, before this returns; only the vault ID
+/// leaves.
 ///
 /// The recipient need not be the recovery key: any enrolled recipient's identity passes. The envelope's size bound and
 /// stanza kinds are checked by [`unwrap_identity`] before any key work.
@@ -113,12 +121,13 @@ pub fn check_recovery_key(
 }
 
 impl RecoveryCheckError {
-    /// Whether the key was judged and found not to open the vault, as opposed to the check not being run.
+    /// Returns `true` if and only if the key was judged and found not to open the vault: `false` when the check could
+    /// not run.
     pub fn is_key_rejected(&self) -> bool {
         matches!(self, Self::NotARecipient | Self::IdentityNotGenuine)
     }
 
-    /// The file the check could not use, for the errors that name one.
+    /// Returns the file the check could not use, for the errors that name one.
     pub fn file(&self) -> Option<&StateFileName> {
         match self {
             Self::Unreadable { file, .. } | Self::NotARegularFile { file } | Self::EnvelopeMalformed { file, .. } => Some(file),
@@ -126,7 +135,7 @@ impl RecoveryCheckError {
         }
     }
 
-    /// The error as a label that holds no file name or error text, for a log record.
+    /// Returns the error as a label that holds no file name or error text, for an audit record.
     pub fn error_kind_label(&self) -> ErrorKindLabel {
         match self {
             Self::Unreadable { kind, .. } => ErrorKindLabel::from(*kind),
@@ -147,7 +156,7 @@ fn malformed(file: StateFileName, reason: MalformedReason) -> RecoveryCheckError
     RecoveryCheckError::EnvelopeMalformed { file, reason }
 }
 
-/// A failed read: an oversized file is unusable, anything else is unreadable.
+/// Maps a failed read: an oversized file is unusable, anything else is unreadable.
 fn unreadable(file: StateFileName, error: ReadError) -> RecoveryCheckError {
     match error {
         ReadError::TooLarge { .. } => malformed(file, MalformedReason::TooLarge),
@@ -222,7 +231,7 @@ mod tests {
             self.dir.path().join(file.as_str())
         }
 
-        /// The state directory's vault files, copied into a fault filesystem that records every call.
+        /// Copies the state directory's vault files into a fault filesystem that records every call.
         fn fault_fs(&self) -> FaultFs {
             [StateFileName::identity_envelope(), StateFileName::manifest()]
                 .iter()
@@ -234,7 +243,8 @@ mod tests {
             check_recovery_key(&self.lock, &OsFs, recipient)
         }
 
-        /// The outcome of the check run against a fault filesystem, which must have seen reads and nothing else.
+        /// Runs the check against a fault filesystem, which must have seen reads and nothing else, and returns its
+        /// outcome.
         fn check_without_writes(&self, recipient: &RecipientIdentity) -> Result<RecoveryCheck, RecoveryCheckError> {
             let fs = self.fault_fs();
             let outcome = check_recovery_key(&self.lock, &fs, recipient);

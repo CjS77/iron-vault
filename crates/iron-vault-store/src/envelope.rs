@@ -1,10 +1,21 @@
-//! The identity envelope: the vault identity wrapped for every enrolled recipient in `identity.age` (specification
-//! §13, §14).
+//! The identity envelope: the vault identity wrapped for every enrolled recipient in `identity.age`
+//! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
+//! [§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).
 //!
 //! The envelope is a plain binary `age` file whose plaintext is the vault identity's secret text. It holds only X25519
-//! stanzas, because `age` forbids a passphrase stanza beside any other recipient; passphrase unlock and the recovery key
+//! stanzas, because `age` forbids a passphrase stanza beside any other recipient. Passphrase unlock and the recovery key
 //! each reach the vault through an X25519 recipient listed here. Unwrapping it is the one secret-key operation at
-//! startup, so every check that needs no key runs first.
+//! startup, so every check that needs no key runs first:
+//!
+//! ```text
+//! age-encryption.org/v1
+//! -> X25519 …          operational recipient      (passphrase unlock, through operational.age)
+//! -> X25519 …          recovery recipient         (the offline recovery key)
+//! -> X25519 …          any other enrolled key     (host unlock, added keys)
+//! -> <grease> …        age's inert grease stanza  (skipped)
+//! --- <header MAC>
+//! <payload>            the vault identity's AGE-SECRET-KEY-1… text
+//! ```
 
 use secrecy::ExposeSecret;
 use thiserror::Error;
@@ -22,23 +33,23 @@ use crate::{
 ///
 /// An X25519 stanza is 98 bytes (`-> X25519 `, a 43-character share, a 43-character body and two newlines), `age`'s
 /// grease stanza at most about 220, the version and MAC lines 70, and the payload 106 (a 16-byte nonce, the 74-byte
-/// secret text and a 16-byte tag). A [`RecipientSet`] of [`crate::MAX_RECIPIENTS`] (64) keys therefore makes an
-/// envelope of under 6,700 bytes; 16 KiB leaves room for later stanza kinds without letting a planted file make
-/// startup read an unbounded amount.
+/// secret text and a 16-byte tag). A [`RecipientSet`] of [`crate::MAX_RECIPIENTS`] (64) keys makes an envelope of under
+/// 6,700 bytes. 16 KiB leaves room for later stanza kinds without letting a planted file make startup read an unbounded
+/// amount.
 pub const MAX_IDENTITY_ENVELOPE_LEN: usize = 16 * 1024;
 
 /// The length of the envelope's plaintext: the `AGE-SECRET-KEY-1…` text of an X25519 identity.
 const SECRET_TEXT_LEN: usize = 74;
 
-/// Sealing or opening the identity envelope or the passphrase envelope failed. No variant carries key material,
-/// passphrase text or `age` error text.
+/// Says why sealing or opening the identity envelope or the passphrase envelope failed. No variant carries key
+/// material, passphrase text or `age` error text.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum EnvelopeError {
     /// `age` refused to encrypt to the recipient keys or the passphrase.
     #[error("could not seal the envelope")]
     Encryption,
     /// The envelope is longer than its file's limit, [`MAX_IDENTITY_ENVELOPE_LEN`] or
-    /// [`crate::MAX_PASSPHRASE_ENVELOPE_LEN`]; nothing in it was parsed.
+    /// [`crate::MAX_PASSPHRASE_ENVELOPE_LEN`]. Nothing in it was parsed.
     #[error("the envelope exceeds its size limit")]
     TooLarge,
     /// The envelope is not a well-formed, authentic `age` file holding an X25519 identity.
@@ -48,16 +59,16 @@ pub enum EnvelopeError {
     /// one scrypt stanza in the passphrase envelope.
     #[error("the envelope has an unexpected {0} stanza")]
     UnexpectedStanza(StanzaKind),
-    /// No stanza unwraps with the recipient identity: its key is not listed, or its stanza is damaged, which `age`
+    /// No stanza unwraps with the recipient identity. Its key is not listed, or its stanza is damaged, which `age`
     /// cannot tell apart from a stanza for another key.
     #[error("the identity envelope is not wrapped for this recipient")]
     NotARecipient,
-    /// The passphrase envelope's scrypt stanza asks for more work than [`crate::MAX_PASSPHRASE_WORK_FACTOR`]; it was
+    /// The passphrase envelope's scrypt stanza asks for more work than [`crate::MAX_PASSPHRASE_WORK_FACTOR`]. It was
     /// refused before any scrypt work.
     #[error("the passphrase envelope's scrypt work factor is above the accepted maximum")]
     WorkFactorTooHigh,
     /// The exported identity envelope's scrypt stanza asks for a work factor other than
-    /// [`crate::PASSPHRASE_WORK_FACTOR`]; it was refused before any scrypt work.
+    /// [`crate::PASSPHRASE_WORK_FACTOR`]. It was refused before any scrypt work.
     #[error("the envelope's scrypt work factor is not the one exports use")]
     WrongWorkFactor,
     /// The passphrase does not open the passphrase envelope. A damaged scrypt stanza looks the same to `age`.
@@ -67,8 +78,9 @@ pub enum EnvelopeError {
 
 /// Encrypts the vault identity's secret text as an `age` file with one X25519 stanza per key in `recipients`.
 ///
-/// A [`RecipientSet`] holds only X25519 keys, so no passphrase stanza can be mixed in (specification §14). The secret
-/// text lives only in a buffer that is cleared on drop.
+/// A [`RecipientSet`] holds only X25519 keys, so no passphrase stanza can be mixed in
+/// ([spec §14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)). The secret text lives
+/// only in a buffer that is cleared on drop.
 pub fn wrap_identity(identity: &VaultIdentity, recipients: &RecipientSet) -> Result<Vec<u8>, EnvelopeError> {
     let secret = identity.secret_text();
     seal_to(recipients.iter().map(|key| key.as_age()), secret.expose_secret().as_bytes()).map_err(|_| EnvelopeError::Encryption)
@@ -80,15 +92,15 @@ pub fn wrap_identity(identity: &VaultIdentity, recipients: &RecipientSet) -> Res
 /// refused without running scrypt, and only the X25519 recipient identity is ever offered to `age`.
 ///
 /// `age` does not authenticate the sender: anyone who knows a recipient key can write an envelope that unwraps
-/// cleanly. The identity returned here is therefore trusted only once the vault manifest's MAC, keyed from this
-/// identity, verifies; a forged envelope can only yield an identity that fails that check.
+/// cleanly. So the identity returned here is trusted only once the vault manifest's MAC, keyed from this identity,
+/// verifies. A forged envelope can only yield an identity that fails that check.
 pub fn unwrap_identity(envelope: &[u8], recipient: &RecipientIdentity) -> Result<VaultIdentity, EnvelopeError> {
     check_identity_envelope(envelope)?;
     let secret = open_as(recipient.as_age(), envelope, SECRET_TEXT_LEN).map_err(map_open_error)?;
     VaultIdentity::from_secret_text(&secret).ok_or(EnvelopeError::Malformed)
 }
 
-/// The checks on `identity.age` that need no key: the size bound, then that the header holds only X25519 stanzas.
+/// Runs the checks on `identity.age` that need no key: the size bound, then that the header holds only X25519 stanzas.
 ///
 /// The header is read here and again by `age` when the envelope is opened. This read refuses an scrypt or plugin stanza
 /// before any key work; `age`'s parse is the one that authenticates the header. Neither replaces the other.
@@ -99,12 +111,12 @@ pub(crate) fn check_identity_envelope(envelope: &[u8]) -> Result<(), EnvelopeErr
     check_x25519_only(&stanza_kinds(envelope)?)
 }
 
-/// The kinds of the stanzas in an `age` file's header, in header order, read without decrypting anything.
+/// Returns the kinds of the stanzas in an `age` file's header, in header order, read without decrypting anything.
 ///
 /// The list includes the grease stanza `age` adds to every file without a passphrase, so an envelope wrapped for `n`
 /// recipients lists `n` [`StanzaKind::X25519`] and one [`StanzaKind::Grease`].
 ///
-/// A file that is not `age` v1, or whose header is cut off before its MAC line, is [`EnvelopeError::Malformed`].
+/// A file that is not `age` v1, or whose header is cut off before its MAC line, gives [`EnvelopeError::Malformed`].
 pub fn stanza_kinds(file: &[u8]) -> Result<Vec<StanzaKind>, EnvelopeError> {
     parse_header(file)
         .filter(|header| header.complete)
@@ -152,7 +164,7 @@ mod tests {
     use super::*;
     use crate::{MAX_RECIPIENTS, OsFs, recipient::RecipientKey, test_dir::TestDir};
 
-    /// A vault identity wrapped for `n` fresh recipients, with their identities.
+    /// Returns a vault identity wrapped for `n` fresh recipients, with their identities.
     fn wrapped(n: usize) -> (VaultIdentity, Vec<RecipientIdentity>, Vec<u8>) {
         let vault = VaultIdentity::generate();
         let recipients: Vec<RecipientIdentity> = (0..n).map(|_| RecipientIdentity::generate()).collect();
@@ -161,7 +173,7 @@ mod tests {
         (vault, recipients, envelope)
     }
 
-    /// An `age` passphrase file whose header asks for scrypt work factor `log_n`.
+    /// Returns an `age` passphrase file whose header asks for scrypt work factor `log_n`.
     ///
     /// The file is written with a tiny work factor and its header's work-factor argument is then raised, because
     /// writing it at the high factor would itself take seconds and a gigabyte. Any reader that started scrypt on it
@@ -178,7 +190,7 @@ mod tests {
         [&file[..line_end - 1], log_n.to_string().as_bytes(), &file[line_end..]].concat()
     }
 
-    /// `envelope` with an extra stanza line inserted just before its MAC line.
+    /// Returns `envelope` with an extra stanza line inserted just before its MAC line.
     fn with_stanza(envelope: &[u8], stanza: &[u8]) -> Vec<u8> {
         let mac = envelope.windows(5).position(|w| w == b"\n--- ").unwrap() + 1;
         [&envelope[..mac], stanza, &envelope[mac..]].concat()

@@ -1,4 +1,5 @@
-//! The recovery check record: state file `recovery.toml` (design/recovery.md, design/storage-formats.md).
+//! The recovery check record: state file `recovery.toml` ([recovery](../../../design/recovery.md#the-recovery-check-record),
+//! [file format](../../../design/storage-formats.md#recovery-check-record)).
 //!
 //! It is plaintext, so reminders work while the vault is locked. The store reads no clock: every time here is an
 //! argument or a decoded value.
@@ -13,7 +14,7 @@ use crate::{
     ErrorKindLabel, ReadError, StateDirLock, StateFileName, StoreFs, WriteError, durable_remove, durable_replace, read_state_file,
 };
 
-/// The longest `recovery.toml` a reader accepts. The record is two lines of under 50 bytes; a larger file is not one.
+/// The longest `recovery.toml` a reader accepts. The record is two lines of under 50 bytes, so a larger file is not one.
 pub const MAX_RECOVERY_CHECK_RECORD_LEN: u64 = 1024;
 
 /// The last second of year 9999, the latest time RFC 3339 can write with four year digits.
@@ -26,7 +27,7 @@ const SECONDS_PER_DAY: u64 = 86_400;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UtcSecond(u64);
 
-/// A time outside the range a [`UtcSecond`] holds.
+/// Reports a time outside the range a [`UtcSecond`] holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("time is outside 1970-01-01T00:00:00Z to 9999-12-31T23:59:59Z")]
 pub struct UtcSecondError;
@@ -35,18 +36,18 @@ impl UtcSecond {
     /// 1970-01-01T00:00:00Z.
     pub const EPOCH: Self = Self(0);
 
-    /// The time `seconds` after the Unix epoch.
+    /// Returns the time `seconds` after the Unix epoch, refusing one after 9999-12-31T23:59:59Z.
     pub fn from_unix_seconds(seconds: u64) -> Result<Self, UtcSecondError> {
         (seconds <= MAX_UNIX_SECONDS).then_some(Self(seconds)).ok_or(UtcSecondError)
     }
 
-    /// `time` truncated to whole seconds. The caller reads the clock; the store never does.
+    /// Returns `time` truncated to whole seconds. The caller reads the clock; the store never does.
     pub fn from_system_time(time: SystemTime) -> Result<Self, UtcSecondError> {
         let elapsed = time.duration_since(UNIX_EPOCH).map_err(|_| UtcSecondError)?;
         Self::from_unix_seconds(elapsed.as_secs())
     }
 
-    /// Whole seconds since the Unix epoch.
+    /// Returns the whole seconds since the Unix epoch.
     pub fn unix_seconds(self) -> u64 {
         self.0
     }
@@ -74,7 +75,7 @@ impl fmt::Display for UtcSecond {
     }
 }
 
-/// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's `days_from_civil`).
+/// Returns the days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's `days_from_civil`).
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let y = if month <= 2 { year - 1 } else { year };
     let era = y.div_euclid(400);
@@ -84,7 +85,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// The `(year, month, day)` of a day count since 1970-01-01 (Hinnant's `civil_from_days`).
+/// Returns the `(year, month, day)` of a day count since 1970-01-01 (Hinnant's `civil_from_days`).
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -99,13 +100,27 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 
 /// The recovery check record: when the reminder schedule started counting, and when the last successful recovery check
 /// ran, absent when there has been none. Valid on construction: a check never precedes the start of the schedule.
+///
+/// ```
+/// use iron_vault_store::{RecoveryCheckRecord, RecoveryCheckRecordError, UtcSecond};
+///
+/// let since = UtcSecond::from_unix_seconds(1_793_958_553).unwrap();
+/// let checked = UtcSecond::from_unix_seconds(1_801_476_000).unwrap();
+/// let record = RecoveryCheckRecord::new(since, Some(checked)).unwrap();
+/// let bytes = record.encode();
+/// assert_eq!(bytes, b"since = 2026-11-06T09:49:13Z\nlast_checked = 2027-02-01T10:00:00Z\n");
+/// assert_eq!(RecoveryCheckRecord::decode(&bytes), Ok(record));
+///
+/// assert_eq!(RecoveryCheckRecord::new(checked, Some(since)), Err(RecoveryCheckRecordError::CheckedBeforeSince));
+/// assert_eq!(RecoveryCheckRecord::decode(b"since = 2026-11-06T09:49:13+01:00\n"), Err(RecoveryCheckRecordError::BadTime));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecoveryCheckRecord {
     since: UtcSecond,
     last_checked: Option<UtcSecond>,
 }
 
-/// Why bytes are not a recovery check record. Every message is fixed: the file's text is never copied into an error.
+/// Says why bytes are not a recovery check record. Every message is fixed: the file's text is never copied into an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum RecoveryCheckRecordError {
     /// The bytes are longer than [`MAX_RECOVERY_CHECK_RECORD_LEN`].
@@ -133,7 +148,7 @@ pub enum RecoveryCheckRecordError {
 }
 
 impl RecoveryCheckRecord {
-    /// A record, refused when `last_checked` is before `since`.
+    /// Creates a record, refusing one whose `last_checked` is before `since`.
     pub fn new(since: UtcSecond, last_checked: Option<UtcSecond>) -> Result<Self, RecoveryCheckRecordError> {
         match last_checked {
             Some(checked) if checked < since => Err(RecoveryCheckRecordError::CheckedBeforeSince),
@@ -141,17 +156,17 @@ impl RecoveryCheckRecord {
         }
     }
 
-    /// When the reminder schedule started counting.
+    /// Returns when the reminder schedule started counting.
     pub fn since(&self) -> UtcSecond {
         self.since
     }
 
-    /// When the last successful recovery check ran, if there has been one.
+    /// Returns when the last successful recovery check ran, or `None` if there has been none.
     pub fn last_checked(&self) -> Option<UtcSecond> {
         self.last_checked
     }
 
-    /// The file's bytes: `since`, then `last_checked` when present, one per line, always in that order.
+    /// Returns the file's bytes: `since`, then `last_checked` when present, one per line, always in that order.
     pub fn encode(&self) -> Vec<u8> {
         let checked = self.last_checked.map(|t| format!("last_checked = {t}\n")).unwrap_or_default();
         format!("since = {}\n{checked}", self.since).into_bytes()
@@ -179,7 +194,7 @@ impl RecoveryCheckRecord {
     }
 }
 
-/// Why the record could not be read: the file is unusable. An absent file is not an error; it reads as `None`.
+/// Says why the record could not be read: the file is unusable. An absent file is not an error; it reads as `None`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RecoveryCheckReadError {
     /// The file could not be read, is not a regular file or is larger than the limit.
@@ -191,7 +206,7 @@ pub enum RecoveryCheckReadError {
 }
 
 impl RecoveryCheckReadError {
-    /// The error as a label that holds no file name, path or file text, for a log record.
+    /// Returns the error as a label that holds no file name, path or file text, for an audit record.
     pub fn error_kind_label(&self) -> ErrorKindLabel {
         match self {
             Self::Read(ReadError::Io { kind, .. }) => ErrorKindLabel::from(*kind),
@@ -203,7 +218,7 @@ impl RecoveryCheckReadError {
 }
 
 impl RecoveryCheckRecordError {
-    /// A fixed snake_case name for the reason, for `error_kind_label`.
+    /// Returns a fixed snake_case name for the reason, for `error_kind_label`.
     fn label(self) -> &'static str {
         match self {
             Self::TooLarge => "too_large",
@@ -217,13 +232,13 @@ impl RecoveryCheckRecordError {
     }
 }
 
-/// The state file `recovery.toml`.
+/// Returns the state file name `recovery.toml`.
 fn file() -> StateFileName {
     StateFileName::recovery_check_record()
 }
 
-/// Reads `recovery.toml`: `None` when it is absent, and an error when it is there and unusable, so the caller can tell a
-/// missing record (create it) from a damaged one (leave it for the owner, count a reminder as due).
+/// Reads `recovery.toml`: `None` when it is absent, and an error when it is there and unusable. The caller can then tell
+/// a missing record (create it) from a damaged one (leave it for the owner, and count a reminder as due).
 pub fn read_recovery_check(lock: &StateDirLock, fs: &impl StoreFs) -> Result<Option<RecoveryCheckRecord>, RecoveryCheckReadError> {
     match read_state_file(lock, fs, &file(), MAX_RECOVERY_CHECK_RECORD_LEN) {
         Ok(bytes) => Ok(Some(RecoveryCheckRecord::decode(&bytes)?)),
@@ -235,13 +250,15 @@ pub fn read_recovery_check(lock: &StateDirLock, fs: &impl StoreFs) -> Result<Opt
     }
 }
 
-/// Replaces `recovery.toml` with `record`, durably: a temp file, its fsync, the rename and the directory fsync.
+/// Replaces `recovery.toml` with `record`, durably: a temporary file, its fsync, the rename and the directory fsync.
 pub fn write_recovery_check(lock: &StateDirLock, fs: &impl StoreFs, record: &RecoveryCheckRecord) -> Result<(), WriteError> {
     durable_replace(lock, fs, &file(), &record.encode())
 }
 
-/// Removes `recovery.toml` durably and says whether it was there. `begin_initialization` calls this on an Uninitialized
-/// directory, so a new vault never starts with the `last_checked` of a vault that is gone.
+/// Removes `recovery.toml` durably, and returns `true` if and only if it was there.
+///
+/// `begin_initialization` calls this on an Uninitialized directory, so a new vault never starts with the `last_checked`
+/// of a vault that is gone.
 pub(crate) fn remove_recovery_check(lock: &StateDirLock, fs: &impl StoreFs) -> Result<bool, WriteError> {
     match durable_remove(lock, fs, &file()) {
         Ok(()) => Ok(true),
