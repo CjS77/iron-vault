@@ -264,8 +264,7 @@ compatibility").
 
 | Case | Shown by | Runs where |
 |---|---|---|
-| FX MCP, Brave MCP and Venice clients through Iron Vault: a check script and a compatibility page | **gap**: K-371 | `owner, real provider keys` |
-| FX, Brave and Venice with real keys; a Naomi static caller | **gap**: K-373 | `owner, real provider keys` |
+| FX (OpenExchangeRates), Brave and Venice with real keys; a Naomi static caller | **gap**: K-373 | `owner, real provider keys` |
 
 ### Streamed response compatibility
 
