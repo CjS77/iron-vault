@@ -1,4 +1,14 @@
-//! The byte forms of an injected secret that response scrubbing watches for (spec §11).
+//! Scrub patterns: the byte forms of an injected secret that response scrubbing removes (spec §11).
+//!
+//! Each kind builds a [`ScrubPatterns`] set alongside its slot value. The scrubber in the `iron-vault` crate replaces
+//! every occurrence of every pattern in the response headers and body. An upstream rarely echoes a secret in exactly
+//! the form it was sent, so the set holds the encodings an echo is likely to take. For the key `a/b`:
+//!
+//! ```text
+//! a/b            as sent
+//! a%2Fb  a%2fb   URL-encoded, upper- and lowercase hex
+//! YS9i           base64, standard and URL-safe, with and without padding (all the same here)
+//! ```
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -9,15 +19,15 @@ use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_S
 use iron_vault_policy::encode_query_value;
 use secrecy::zeroize::Zeroizing;
 
-/// A deterministic, ordered set of secret byte strings, each wiped on drop.
+/// A set of secret byte strings for the scrubber to remove, each wiped on drop.
 ///
-/// The order is bytewise, so the scrubber sees the same patterns in the same order on every run. Patterns are never
-/// case-folded: a provider key is case-sensitive, and folding it would scrub unrelated text. `Debug` shows the count
-/// only.
+/// The set is ordered bytewise, so the scrubber sees the same patterns in the same order on every run. Patterns are
+/// never case-folded: a provider key is case-sensitive, and folding it would scrub unrelated text. `Debug` shows the
+/// count only.
 #[derive(Default)]
 pub struct ScrubPatterns(BTreeSet<ScrubPattern>);
 
-/// One pattern; a newtype because [`Zeroizing`] does not implement `Ord`.
+/// One pattern. It is a newtype only because [`Zeroizing`] does not implement `Ord`, which the set needs.
 #[derive(PartialEq, Eq)]
 struct ScrubPattern(Zeroizing<Vec<u8>>);
 
@@ -34,22 +44,22 @@ impl PartialOrd for ScrubPattern {
 }
 
 impl ScrubPatterns {
-    /// The patterns in bytewise order.
+    /// Iterates over the patterns in bytewise order.
     pub fn iter(&self) -> impl Iterator<Item = &[u8]> {
         self.0.iter().map(|pattern| pattern.0.as_slice())
     }
 
-    /// How many distinct patterns there are.
+    /// Returns how many distinct patterns the set holds.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// Whether there are no patterns.
+    /// Returns whether the set is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Adds `pattern`; an empty one is dropped, since it would match everywhere.
+    /// Adds `pattern`, unless it is empty: an empty pattern would match everywhere.
     pub(crate) fn insert(&mut self, pattern: Zeroizing<Vec<u8>>) {
         if !pattern.is_empty() {
             self.0.insert(ScrubPattern(pattern));
@@ -81,18 +91,20 @@ impl fmt::Debug for ScrubPatterns {
     }
 }
 
-/// `bytes` in a buffer sized exactly, so the copy never reallocates and leaves no stale partial copy.
+/// Copies `bytes` into a wiped-on-drop buffer sized up front, so the copy never reallocates and leaves no stale partial
+/// copy behind.
 ///
-/// Base64 needs no such care: the engine allocates its output at the exact encoded length.
+/// Base64 output needs no such care: the engine allocates it at the exact encoded length.
 pub(crate) fn copy(bytes: &[u8]) -> Zeroizing<Vec<u8>> {
     let mut out = Zeroizing::new(Vec::with_capacity(bytes.len()));
     out.extend_from_slice(bytes);
     out
 }
 
-/// `encoded` with the two hex digits after each `%` in lowercase and every other byte unchanged.
+/// Lowercases the two hex digits after each `%` in `encoded` and leaves every other byte unchanged: `A%2FB` becomes
+/// `A%2fB`.
 ///
-/// Only the escapes are lowered: the unescaped characters are part of a case-sensitive key.
+/// Only the escapes are lowered, because the unescaped characters are part of a case-sensitive key.
 fn lowercase_escapes(encoded: &[u8]) -> Zeroizing<Vec<u8>> {
     let mut out = Zeroizing::new(Vec::with_capacity(encoded.len()));
     out.extend(encoded.iter().enumerate().map(|(i, byte)| lowered_if_escape(encoded, i, *byte)));

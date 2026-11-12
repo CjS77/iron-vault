@@ -1,4 +1,7 @@
 //! The kind boundary: credential material in, slot value and scrub patterns out (future spec §2.2).
+//!
+//! [`resolve()`] is the one entry point the store calls for each request. It dispatches on the material's variant to the
+//! kind that handles it, so every caller outside this crate stays the same when a kind is added.
 
 use iron_vault_policy::{AuthorizedRequest, Slot, SlotValue, SlotValueError};
 use thiserror::Error;
@@ -8,7 +11,7 @@ use crate::material::CredentialMaterial;
 use crate::scrub::ScrubPatterns;
 use crate::static_kind;
 
-/// What a kind produced for one request: the value for the route's slot and the forms of it to scrub.
+/// Holds what a kind produced for one request: the value for the route's slot and the forms of it to scrub.
 ///
 /// The two travel together so that the scrubber always watches for exactly the secret that was injected.
 #[derive(Debug)]
@@ -17,7 +20,7 @@ pub struct Resolution {
     patterns: ScrubPatterns,
 }
 
-/// Why a kind could not produce a slot value. No variant carries secret bytes, so the error is safe to log.
+/// Says why a kind could not produce a slot value. No variant carries secret bytes, so the error is safe to log.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum KindError {
     /// The credential's kind cannot fill this kind of slot, such as a static key on a Basic slot.
@@ -42,12 +45,12 @@ impl Resolution {
         Self { value, patterns }
     }
 
-    /// The bare value for the slot, before the slot's format or encoding is applied.
+    /// Returns the bare value for the slot, before the slot's format or encoding is applied.
     pub fn value(&self) -> &SlotValue {
         &self.value
     }
 
-    /// The forms of the injected secret response scrubbing must remove.
+    /// Returns the forms of the injected secret that response scrubbing must remove.
     pub fn patterns(&self) -> &ScrubPatterns {
         &self.patterns
     }
@@ -60,8 +63,11 @@ impl Resolution {
 
 /// Resolves `material` into the value for `slot` and its scrub patterns.
 ///
-/// `request` is the authorized request plan every kind receives (future spec §2.2): a static key ignores it, but signing kinds
-/// need the final method and path, so the boundary carries it from the start.
+/// Every kind receives the authorized request (future spec §2.2). The `static` and `basic` kinds ignore it, but a
+/// signing kind will need the final method and path, so the boundary carries it from the start.
+///
+/// Fails with [`KindError::SlotMismatch`] when the kind cannot fill this slot, and with a validation error when the
+/// stored fields cannot form a slot value.
 pub fn resolve(material: &CredentialMaterial, slot: &Slot, request: &AuthorizedRequest) -> Result<Resolution, KindError> {
     match material {
         CredentialMaterial::Static { key } => static_kind::resolve(key, slot, request),
@@ -69,7 +75,7 @@ pub fn resolve(material: &CredentialMaterial, slot: &Slot, request: &AuthorizedR
     }
 }
 
-/// The name a slot's kind goes by in errors.
+/// Names a slot's kind for errors: `header`, `query` or `basic`.
 pub(crate) fn slot_kind(slot: &Slot) -> &'static str {
     match slot {
         Slot::Header(_) => "header",

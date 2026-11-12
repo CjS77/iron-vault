@@ -1,4 +1,8 @@
-//! The decrypted secret fields a kind consumes (spec §6, future spec §2.2).
+//! Credential material: the decrypted secret fields of one credential record, in the shape its kind consumes (spec §6,
+//! future spec §2.2).
+//!
+//! The store decrypts a record and builds the material; the kinds in this crate only read it. Keeping record parsing
+//! out of this crate means a kind never sees a file format, and the store never needs to know how a kind uses a field.
 
 use iron_vault_policy::SlotValue;
 use secrecy::{ExposeSecret, SecretString};
@@ -28,8 +32,10 @@ pub enum CredentialMaterial {
 }
 
 impl CredentialMaterial {
-    /// Checks the material against its kind's rules, the same ones [`resolve`](crate::resolve()) applies, so the store
-    /// can refuse a record that could never fill a slot when it is read rather than on its first request.
+    /// Checks the material against its kind's rules, the same ones [`resolve`](crate::resolve()) applies.
+    ///
+    /// The store calls this when it reads a record, so a record that could never fill a slot fails at once rather
+    /// than on its first request.
     pub fn validate(&self) -> Result<(), KindError> {
         match self {
             CredentialMaterial::Static { key } => Ok(SlotValue::validate(key.expose_secret())?),

@@ -1,7 +1,10 @@
-//! Short secrets: stored secret fields so short that they are probably a mistake (spec §11, §18, future spec §2.2).
+//! Finds short secrets: stored secret fields so short that they are probably a mistake (spec §11, §18, future spec
+//! §2.2).
 //!
-//! A short value is allowed, since only the owner sets values, but it usually means the wrong field was pasted, and
-//! response scrubbing blanks every occurrence of it, so a value of a few bytes mangles ordinary response text.
+//! The store reports them when a credential is added or replaced, and the service logs a warning that names the field
+//! and its length, never the value. A short value is still allowed, since only the owner sets values. It is worth a
+//! warning for two reasons: it usually means the wrong field was pasted, and response scrubbing blanks every
+//! occurrence of it. A password of `abc` would turn `abcdef` in a response body into `[iron-vault:scrubbed]def`.
 
 use std::fmt;
 
@@ -16,7 +19,7 @@ use crate::CredentialMaterial;
 /// password of 6 or 7 characters still warns, rightly: scrubbing will blank it wherever it appears in a response.
 pub const SHORT_SECRET_LEN: usize = 8;
 
-/// The secret field of a credential a [`ShortSecret`] names. It never carries the value.
+/// Names the secret field a [`ShortSecret`] refers to. It never carries the value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SecretField {
     /// A static credential's key.
@@ -47,10 +50,10 @@ pub struct ShortSecret {
 }
 
 impl CredentialMaterial {
-    /// The secret fields shorter than [`SHORT_SECRET_LEN`], so the store can warn the owner about them.
+    /// Lists the secret fields shorter than [`SHORT_SECRET_LEN`], so the store can warn the owner about them.
     ///
     /// A Basic username counts only when the password is empty: then the username is the secret the scrubber watches.
-    /// It returns a `Vec` because later kinds may hold several secrets.
+    /// The result is a `Vec` because later kinds may hold several secrets.
     pub fn short_secrets(&self) -> Vec<ShortSecret> {
         let secret = match self {
             CredentialMaterial::Static { key } => (SecretField::Key, key.expose_secret().len()),

@@ -1,4 +1,14 @@
-//! The `basic` kind: a username and password sent as HTTP Basic authorization (spec §9, future spec §2.2; RFC 7617).
+//! The `basic` kind: sends a username and password as HTTP Basic authorization (spec §9, future spec §2.2; RFC 7617).
+//!
+//! The kind joins the pair as `username:password` and base64-encodes it into the Basic token; slot filling then writes
+//! `Authorization: Basic <token>`. RFC 7617's own example:
+//!
+//! ```text
+//! username "Aladdin", password "open sesame"
+//!   ──▶ "Aladdin:open sesame"
+//!   ──▶ token "QWxhZGRpbjpvcGVuIHNlc2FtZQ=="
+//!   ──▶ Authorization: Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==
+//! ```
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -30,8 +40,9 @@ pub enum BasicCredentialError {
     ControlChar,
 }
 
-/// The Basic token as the slot value, with its scrub patterns. A header or query slot would send the token without
-/// its scheme, so only a Basic slot accepts it.
+/// Returns the Basic token as the slot value, with its scrub patterns.
+///
+/// Refuses a header or query slot: either would send the token without its `Basic` scheme, which no upstream accepts.
 pub(crate) fn resolve(
     username: &SecretString,
     password: &SecretString,
@@ -65,10 +76,12 @@ pub(crate) fn validate(username: &str, password: &str) -> Result<(), BasicCreden
     }
 }
 
-/// Every form an upstream may echo: the token, the complete header value, the `user:pass` pair and the password. The
-/// username alone is scrubbed only when the password is empty: then the username is the API key (Stripe's
-/// `sk_live_…:` is one), and an upstream error may echo it. Beside a password it is usually an email address or
-/// account ID, and scrubbing it would corrupt ordinary responses.
+/// Lists every form of the credential an upstream may echo: the token, the complete header value, the `user:pass`
+/// pair and the password.
+///
+/// The username alone is scrubbed only when the password is empty. Then the username is the API key (Stripe's
+/// `sk_live_…:` is one), and an upstream error may echo it. Beside a password the username is usually an email
+/// address or account ID, and scrubbing it would corrupt ordinary responses.
 fn scrub_patterns(token: &str, user_pass: &str, username: &str, password: &str) -> ScrubPatterns {
     let mut patterns = ScrubPatterns::default();
     patterns.insert(copy(token.as_bytes()));
@@ -82,7 +95,7 @@ fn scrub_patterns(token: &str, user_pass: &str, username: &str, password: &str) 
     patterns
 }
 
-/// `parts` concatenated into a buffer sized exactly, so building it never reallocates and leaves no unwiped copy.
+/// Concatenates `parts` into a buffer sized up front, so building it never reallocates and leaves no unwiped copy behind.
 fn join(parts: &[&str]) -> Zeroizing<String> {
     let mut out = Zeroizing::new(String::with_capacity(parts.iter().map(|part| part.len()).sum()));
     parts.iter().for_each(|part| out.push_str(part));

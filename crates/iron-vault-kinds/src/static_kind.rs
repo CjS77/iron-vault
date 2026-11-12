@@ -1,4 +1,8 @@
-//! The `static` kind: a stored provider key sent as is in a header or query slot (future spec §2.2).
+//! The `static` kind: sends a stored provider key, unchanged, in a header or query slot (future spec §2.2).
+//!
+//! For example, the key `sk-123` on a route whose slot is `{ header = "Authorization", format = "Bearer {}" }` becomes
+//! `Authorization: Bearer sk-123`. This module returns only `sk-123`; slot filling in `iron-vault-policy` applies the
+//! format.
 
 use iron_vault_policy::{AuthorizedRequest, Slot, SlotValue};
 use secrecy::{ExposeSecret, SecretString};
@@ -9,8 +13,9 @@ use crate::scrub::ScrubPatterns;
 /// The kind's name in errors.
 const KIND: &str = "static";
 
-/// The key as the slot value, with its scrub patterns. A Basic slot needs a username and password, which a static
-/// key does not have.
+/// Returns the stored key as the slot value, with its scrub patterns.
+///
+/// Refuses a Basic slot, which needs a username and password that a static key does not have.
 pub(crate) fn resolve(key: &SecretString, slot: &Slot, _request: &AuthorizedRequest) -> Result<Resolution, KindError> {
     if matches!(slot, Slot::Basic) {
         return Err(KindError::SlotMismatch {
