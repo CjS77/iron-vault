@@ -118,7 +118,7 @@ impl StoreFs for OsFs {
     }
 
     /// Checks the entry with `lstat` before opening it, so an oversized file is refused before any buffer is
-    /// allocated. [`open_checked`] refuses an entry swapped in between the check and the open: it is never followed,
+    /// allocated. `open_checked` refuses an entry swapped in between the check and the open: it is never followed,
     /// blocked on or read.
     fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>> {
         let checked = regular_file_metadata(path)?;

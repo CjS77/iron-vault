@@ -12,7 +12,7 @@ fn export(text: &str) -> ExportPassphrase {
     ExportPassphrase::new(SecretString::from(text)).unwrap()
 }
 
-/// An exported identity envelope sealed at the test work factor.
+/// Returns an exported identity envelope sealed at the test work factor.
 fn sealed_cheap(identity: &VaultIdentity) -> Vec<u8> {
     seal_scrypt_file(
         identity.secret_text().expose_secret().as_bytes(),
@@ -22,8 +22,8 @@ fn sealed_cheap(identity: &VaultIdentity) -> Vec<u8> {
     .unwrap()
 }
 
-/// `envelope` with its scrypt stanza's work factor argument replaced by `log_n`. The MAC no longer matches, which is fine
-/// for a file that must be refused from its header.
+/// Returns `envelope` with its scrypt stanza's work factor argument replaced by `log_n`. The MAC no longer matches,
+/// which does not matter for a file that must be refused from its header.
 fn with_work_factor(envelope: &[u8], log_n: u8) -> Vec<u8> {
     let line_end = 22 + envelope[22..].iter().position(|&b| b == b'\n').unwrap();
     let suffix = format!(" {TEST_WORK_FACTOR}");
@@ -41,7 +41,7 @@ fn assert_fast(started: Instant) {
     assert!(elapsed < Duration::from_millis(100), "took {elapsed:?}");
 }
 
-/// An approver key envelope sealed at the test work factor.
+/// Returns an approver key envelope sealed at the test work factor.
 fn approver_key() -> Vec<u8> {
     let (key, _) = SoftwareSigner::generate().unwrap();
     seal_signer_key_for_tests(&key, &ApprovalPassphrase::new(SecretString::from("approval phrase")).unwrap()).unwrap()
@@ -103,7 +103,7 @@ fn an_envelope_that_could_cost_scrypt_work_is_refused_first() {
     });
 }
 
-/// An identity envelope: X25519 stanzas only.
+/// Returns an identity envelope: X25519 stanzas only.
 fn wrap_for_x25519() -> Vec<u8> {
     let vault = VaultIdentity::generate();
     seal_bundled_approver_key(b"x", &vault.public_key()).unwrap()

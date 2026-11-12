@@ -1,5 +1,6 @@
 //! Recipients of the identity envelope: their public keys, the private keys that unwrap it, and the set it is wrapped
-//! for (specification §13, §14).
+//! for ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
+//! [§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).
 
 use std::{cmp::Ordering, collections::BTreeSet, fmt, hash, str::FromStr};
 
@@ -9,13 +10,13 @@ use thiserror::Error;
 
 /// The most recipient keys an identity envelope is wrapped for.
 ///
-/// Enough for every planned recipient (TPM, passphrase, recovery, hardware keys) many times over, and small enough
-/// that a full envelope stays well inside [`crate::MAX_IDENTITY_ENVELOPE_LEN`].
+/// It is enough for every planned recipient (TPM, passphrase, recovery, hardware keys) many times over, and small
+/// enough that a full envelope stays well inside [`crate::MAX_IDENTITY_ENVELOPE_LEN`].
 pub const MAX_RECIPIENTS: usize = 64;
 
 /// An X25519 public key, written as an `age1…` string, listed as a recipient of the identity envelope.
 ///
-/// Safe to log. Keys compare and order by their canonical lowercase encoding, so a [`RecipientSet`] iterates in a
+/// It is safe to log. Keys compare and order by their canonical lowercase encoding, so a [`RecipientSet`] iterates in a
 /// deterministic order.
 #[derive(Clone)]
 pub struct RecipientKey {
@@ -31,13 +32,13 @@ impl RecipientKey {
         }
     }
 
-    /// The `age` recipient, for encryption inside this crate only.
+    /// Returns the `age` recipient, for encryption inside this crate only.
     pub(crate) fn as_age(&self) -> &x25519::Recipient {
         &self.recipient
     }
 }
 
-/// A string that is not an `age1…` X25519 public key.
+/// Reports a string that is not an `age1…` X25519 public key.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("not an age X25519 recipient key")]
 pub struct ParseRecipientKeyError;
@@ -107,30 +108,30 @@ impl RecipientIdentity {
             .map_err(|_| ParseRecipientIdentityError)
     }
 
-    /// The public key this identity unwraps for.
+    /// Returns the public key this identity unwraps for.
     pub fn recipient_key(&self) -> RecipientKey {
         RecipientKey::from_recipient(self.secret.to_public())
     }
 
-    /// The `age` identity, for decryption inside this crate only.
+    /// Returns the `age` identity, for decryption inside this crate only.
     pub(crate) fn as_age(&self) -> &x25519::Identity {
         &self.secret
     }
 
-    /// A fresh identity from the operating system's random source.
+    /// Generates a fresh identity from the operating system's random source.
     pub(crate) fn generate() -> Self {
         Self {
             secret: x25519::Identity::generate(),
         }
     }
 
-    /// The identity's `age` secret-key text, `AGE-SECRET-KEY-1…`, in a buffer cleared on drop; the passphrase
-    /// envelope's plaintext.
+    /// Returns the identity's `age` secret-key text, `AGE-SECRET-KEY-1…`, in a buffer cleared on drop. It is the
+    /// passphrase envelope's plaintext.
     pub(crate) fn secret_text(&self) -> SecretString {
         self.secret.to_string()
     }
 
-    /// The identity whose `age` secret-key text is `text`, or `None` when `text` is not one.
+    /// Parses the identity whose `age` secret-key text is `text`, or returns `None` when `text` is not one.
     ///
     /// `text` is borrowed from the caller's cleared buffer and parsed in place, so no uncleared copy of it is made here.
     /// It is parsed exactly as written: no whitespace is trimmed, which is for the caller to decide.
@@ -148,19 +149,20 @@ impl fmt::Debug for RecipientIdentity {
     }
 }
 
-/// A string that is not an `age` X25519 secret key. The rejected text is not carried.
+/// Reports a string that is not an `age` X25519 secret key. The rejected text is not carried.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("not an age X25519 secret key")]
 pub struct ParseRecipientIdentityError;
 
 /// The recipient keys an identity envelope is wrapped for: at least two and at most [`MAX_RECIPIENTS`].
 ///
-/// Two is the floor because every vault needs a second way in (specification §14); whether the two are independent
-/// is for the caller that enrolls them to decide.
+/// Two is the floor because every vault needs a second way in
+/// ([spec §14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)). The caller that enrolls
+/// them decides if the two are independent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecipientSet(BTreeSet<RecipientKey>);
 
-/// Why a set of recipient keys cannot wrap an identity envelope.
+/// Says why a set of recipient keys cannot wrap an identity envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RecipientSetError {
     /// Fewer than two distinct keys; repeated keys count once.
@@ -178,7 +180,7 @@ pub enum RecipientSetError {
 }
 
 impl RecipientSet {
-    /// The distinct keys of `keys`, if there are between two and [`MAX_RECIPIENTS`] of them.
+    /// Creates the set of the distinct keys of `keys`, if there are between two and [`MAX_RECIPIENTS`] of them.
     pub fn new(keys: impl IntoIterator<Item = RecipientKey>) -> Result<Self, RecipientSetError> {
         let keys: BTreeSet<RecipientKey> = keys.into_iter().collect();
         match keys.len() {
@@ -188,28 +190,28 @@ impl RecipientSet {
         }
     }
 
-    /// A set from keys already known to number between two and [`MAX_RECIPIENTS`], such as the keys of a validated
-    /// recipient inventory.
+    /// Creates a set from keys already known to number between two and [`MAX_RECIPIENTS`], such as the keys of a
+    /// validated recipient inventory.
     pub(crate) fn from_validated(keys: BTreeSet<RecipientKey>) -> Self {
         Self(keys)
     }
 
-    /// The keys in their canonical order.
+    /// Returns the keys in their canonical order.
     pub fn iter(&self) -> impl Iterator<Item = &RecipientKey> {
         self.0.iter()
     }
 
-    /// The number of keys, always at least two.
+    /// Returns the number of keys, always at least two.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// Always `false`: a recipient set has at least two keys.
+    /// Returns `false`: a recipient set has at least two keys.
     pub fn is_empty(&self) -> bool {
         false
     }
 
-    /// Whether `key` is in the set.
+    /// Returns `true` if and only if `key` is in the set.
     pub fn contains(&self, key: &RecipientKey) -> bool {
         self.0.contains(key)
     }

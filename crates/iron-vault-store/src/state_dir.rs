@@ -3,7 +3,7 @@
 //!
 //! The service takes it at startup and holds it for its lifetime. Every function in this crate that reads or writes a
 //! state file takes a `&StateDirLock`, so the type system rules out a write made without it. A second service started
-//! against the same directory fails at once with [`LockError::Held`](crate::LockError::Held).
+//! against the same directory fails at once with [`LockError::Held`].
 
 use std::fs::File;
 use std::path::{Path, PathBuf};

@@ -1,11 +1,21 @@
 //! The inventory check: how every recipient command opens the recipient inventory, bound to the identity envelope on
-//! disk (spec §13, §15, `design/recipients.md`).
+//! disk ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
+//! [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors),
+//! [the inventory check](../../../design/recipients.md#the-inventory-check)).
 //!
 //! An inventory describes only the envelope whose digest it carries, and must list as many recipients as the envelope
 //! has X25519 stanzas. A staged inventory that matches the envelope is a recipient change that committed and was not
 //! finished, so it is finished; one that does not is discarded once `recipients.age` matches. Anything else is damaged
 //! shared state, reported and never repaired: the inventory is the only record of the recipient keys, and a rebuilt one
-//! could silently drop a real recipient at the next rewrap.
+//! could drop a real recipient at the next rewrap. The first case that matches decides:
+//!
+//! ```text
+//! read identity.age: digest D, n X25519 stanzas      fails ──▶ Damaged(EnvelopeUnreadable)
+//! recipients.age carries D and n entries          ──▶ current. A staged file beside it is removed:
+//!                                                     Completed if it carries D too, else Discarded
+//! recipients.age.staged carries D and n entries   ──▶ recipients.age ← staged bytes, staged removed: Completed
+//! otherwise                                       ──▶ Damaged(the first damage of recipients.age); nothing written
+//! ```
 
 #[cfg(test)]
 mod tests;
@@ -20,7 +30,7 @@ use crate::{
     read_state_file, stanza_kinds,
 };
 
-/// What is wrong with the recipient inventory, in the order the check decides it.
+/// Names what is wrong with the recipient inventory, in the order the check decides it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum InventoryDamage {
     /// `identity.age` cannot be read, or holds a stanza other than X25519 and grease.
@@ -53,7 +63,7 @@ pub enum InventoryDamage {
 }
 
 impl InventoryDamage {
-    /// The damage's label in the audit log.
+    /// Returns the damage's label in the audit log, such as `count_mismatch`.
     pub fn label(self) -> &'static str {
         match self {
             Self::EnvelopeUnreadable => "envelope_unreadable",
@@ -69,7 +79,7 @@ impl InventoryDamage {
     }
 }
 
-/// How the check settled a staged inventory it found.
+/// Says how the check settled a staged inventory it found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangeRecovery {
     /// The staged change had committed: `recipients.age` now holds it, or already did.
@@ -79,7 +89,7 @@ pub enum ChangeRecovery {
 }
 
 impl ChangeRecovery {
-    /// The value's label in the audit log.
+    /// Returns the value's label in the audit log.
     pub fn label(self) -> &'static str {
         match self {
             Self::Completed => "completed",
@@ -97,10 +107,10 @@ pub struct CheckedInventory {
     pub recovered: Option<ChangeRecovery>,
 }
 
-/// Why the inventory check failed. No variant carries file contents or key material.
+/// Says why the inventory check failed. No variant carries file contents or key material.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum InventoryCheckError {
-    /// The inventory is damaged shared state; nothing was written.
+    /// The inventory is damaged shared state. Nothing was written.
     #[error("the recipient inventory is damaged: {0}")]
     Damaged(InventoryDamage),
     /// Finishing or discarding a staged inventory failed.
@@ -145,8 +155,8 @@ pub fn check_recipient_inventory(
     }
 }
 
-/// The inventory matches: a staged file beside it is removed, as `Completed` when it matches too and `Discarded` when
-/// it does not.
+/// Settles the case where the inventory matches: a staged file beside it is removed, as `Completed` when it matches too
+/// and `Discarded` when it does not.
 fn settle_staged(
     lock: &StateDirLock,
     fs: &impl StoreFs,
@@ -161,7 +171,7 @@ fn settle_staged(
     Ok(Some(recovery))
 }
 
-/// Only the staged inventory matches: the change committed, so `recipients.age` takes its bytes.
+/// Settles the case where only the staged inventory matches: the change committed, so `recipients.age` takes its bytes.
 fn complete_staged(lock: &StateDirLock, fs: &impl StoreFs, staged: Opened) -> Result<CheckedInventory, InventoryCheckError> {
     durable_replace(lock, fs, &StateFileName::recipient_inventory(), &staged.bytes)?;
     durable_remove(lock, fs, &StateFileName::staged_recipient_inventory())?;

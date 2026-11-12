@@ -1,8 +1,18 @@
 //! The sealed entries of a migration bundle that hold keys: the exported identity envelope and the bundled approver keys
-//! (specification §16 step 2; `design/storage-formats.md`, "Exported identity envelope" and "Migration bundle v1").
+//! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration) step 2;
+//! [exported identity envelope](../../../design/storage-formats.md#exported-identity-envelope),
+//! [migration bundle v1](../../../design/storage-formats.md#migration-bundle-v1)).
 //!
 //! Both are built from the store's existing sealing code. Nothing here writes to disk: the bundle codec streams the
-//! bytes these functions return.
+//! bytes these functions return. The two layers:
+//!
+//! ```text
+//! exported identity envelope   age, one scrypt stanza at PASSPHRASE_WORK_FACTOR ──▶ the vault identity's secret text
+//!          (export passphrase)
+//! bundled approver key         age, one X25519 stanza for the vault public key  ──▶ approver-<approver ID>.age bytes
+//!          (vault identity)                                                           (still sealed to its approval
+//!                                                                                      passphrase)
+//! ```
 
 use std::fmt;
 
@@ -22,7 +32,7 @@ const SECRET_TEXT_LEN: usize = 74;
 
 /// The owner's passphrase for the exported identity envelope, and nothing else.
 ///
-/// It is a different type from [`crate::Passphrase`] and [`crate::ApprovalPassphrase`] so one can never be passed for
+/// It is a different type from [`crate::Passphrase`] and [`crate::ApprovalPassphrase`], so one can never be passed for
 /// another: the export passphrase protects the transfer only and never authorizes a migration. It has no `Display` or
 /// `Clone`, its `Debug` shows nothing of it, and its text is cleared when it is dropped. The 12-character rule is
 /// applied when it is chosen, through [`crate::InitPassphrases::ensure_long_enough`].
@@ -37,7 +47,7 @@ impl ExportPassphrase {
         }
     }
 
-    /// A copy of the passphrase for `age`, which takes its passphrase by value; the copy is also cleared on drop.
+    /// Returns a copy of the passphrase for `age`, which takes its passphrase by value. The copy is cleared on drop too.
     fn for_age(&self) -> SecretString {
         SecretString::from(self.0.expose_secret())
     }
@@ -64,7 +74,7 @@ pub fn seal_exported_identity(identity: &VaultIdentity, passphrase: &ExportPassp
 /// Every check that needs no passphrase runs first, in this order: the size bound, that the header holds exactly one
 /// scrypt stanza, and that its work factor is exactly [`PASSPHRASE_WORK_FACTOR`]. The bundle comes from outside the
 /// machine, so its sender must not choose how much memory and time scrypt spends. A passphrase that does not open the
-/// file is [`EnvelopeError::WrongPassphrase`].
+/// file gives [`EnvelopeError::WrongPassphrase`].
 ///
 /// As with [`crate::unwrap_identity`], the identity is trusted only once the bundle's manifest MAC verifies.
 pub fn open_exported_identity(bytes: &[u8], passphrase: &ExportPassphrase) -> Result<VaultIdentity, EnvelopeError> {
@@ -73,7 +83,7 @@ pub fn open_exported_identity(bytes: &[u8], passphrase: &ExportPassphrase) -> Re
     VaultIdentity::from_secret_text(&secret).ok_or(EnvelopeError::Malformed)
 }
 
-/// The envelope checks that need no passphrase, ending in the exact work factor.
+/// Runs the envelope checks that need no passphrase, ending in the exact work factor.
 fn check_exact_work_factor(bytes: &[u8]) -> Result<(), EnvelopeError> {
     if bytes.len() > MAX_PASSPHRASE_ENVELOPE_LEN {
         return Err(EnvelopeError::TooLarge);
@@ -85,7 +95,7 @@ fn check_exact_work_factor(bytes: &[u8]) -> Result<(), EnvelopeError> {
     }
 }
 
-/// A bundled approver key could not be sealed or opened. No variant carries key material or input bytes.
+/// Says why a bundled approver key could not be sealed or opened. No variant carries key material or input bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum BundledApproverKeyError {
     /// The approver key envelope could not be encrypted to the vault public key.

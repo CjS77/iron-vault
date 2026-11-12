@@ -11,7 +11,7 @@ fn staged() -> StateFileName {
     StateFileName::staged_recipient_inventory()
 }
 
-/// An inventory sealed by this vault's identity, with the vault ID, digest and entries `vary` gives it.
+/// Returns an inventory sealed by this vault's identity, with the vault ID, digest and entries `vary` gives it.
 fn sealed(vault: &TestVault, vary: impl FnOnce(&TestVault) -> (VaultId, [u8; 32], Vec<RecipientEntry>)) -> Vec<u8> {
     let (vault_id, digest, entries) = vary(vault);
     let inventory = RecipientInventory::new(vault_id, digest, entries).unwrap();
@@ -22,7 +22,7 @@ fn setup_entries(vault: &TestVault) -> Vec<RecipientEntry> {
     vault.inventory.entries().cloned().collect()
 }
 
-/// An inventory of this vault that describes another envelope.
+/// Returns an inventory of this vault that describes another envelope.
 fn other_envelope(vault: &TestVault) -> Vec<u8> {
     sealed(vault, |vault| (vault.vault_id, [7; 32], setup_entries(vault)))
 }
