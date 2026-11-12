@@ -11,8 +11,8 @@
 //! approvers), after `init` and an `unlock` and `lock` round trip.
 //!
 //! Not covered here: a vault passphrase change, which v0 has no command for; `import`, whose wrapping is checked by the
-//! import tests; `approver add --kind tpm` and the Compose host unlock enrolment, which need a TPM and are on the
-//! `root + VM` checks.
+//! import tests; `approver add --kind tpm`, which writes a TPM key blob and no `age` file, so it is outside this check;
+//! and the Compose host unlock enrolment, which needs a TPM and is on the `root + VM` checks.
 
 #![cfg(target_os = "linux")]
 
@@ -34,8 +34,15 @@ fn stanza_types(file: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(file);
     let mut lines = text.lines();
     assert_eq!(lines.next(), Some("age-encryption.org/v1"), "not an age v1 file");
-    let header: Vec<&str> = lines.by_ref().take_while(|line| !line.starts_with("---")).collect();
-    assert!(lines.next().is_some() || text.contains("\n---"), "the header has no MAC line");
+    let mut saw_mac = false;
+    let header: Vec<&str> = lines
+        .by_ref()
+        .take_while(|line| {
+            saw_mac = line.starts_with("---");
+            !saw_mac
+        })
+        .collect();
+    assert!(saw_mac, "the header has no MAC line");
     header
         .iter()
         .filter_map(|line| line.strip_prefix("-> "))
@@ -53,6 +60,11 @@ fn assert_identity_is_x25519_only(fixture: &Fixture, recipients: usize, step: &s
         .filter(|kind| *kind != "X25519" && !kind.ends_with("-grease"))
         .collect();
     assert!(others.is_empty(), "{step}: identity.age has stanzas {others:?}");
+    let grease = types
+        .iter()
+        .filter(|kind| kind.len() > "-grease".len() && kind.ends_with("-grease"))
+        .count();
+    assert!(grease <= 1, "{step}: identity.age has {grease} grease stanzas: {types:?}");
     assert_eq!(
         x25519, recipients,
         "{step}: identity.age has {x25519} X25519 stanzas for {recipients} recipients: {types:?}"
@@ -184,7 +196,8 @@ async fn identity_age_stays_x25519_only_and_the_recovery_key_opens_the_vault_aft
     assert_rewrapped_vault_is_sound(&fixture, &service, &new_recovery, 1, "recipient remove the old recovery key").await;
     assert_eq!(
         recovery_check_locked(&service, &recovery_key).await,
-        Err(ErrorCode::RecoveryCheckFailed)
+        Err(ErrorCode::RecoveryCheckFailed),
+        "the removed recovery key still opens the vault"
     );
     let recovery_key = new_recovery;
 
