@@ -1,14 +1,22 @@
-//! The partial restore check: whether the manifest and the approval state on disk are a pair some sequence of writes
-//! leaves together (spec §12, §13).
+//! The partial restore check: refuses a manifest and approval state that no sequence of writes leaves on disk together
+//! ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
+//! [§13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 //!
 //! Each write replaces one file, records the other file's current state generation as its peer, and takes a state
 //! generation above both. So the file with the higher state generation was written last, and its peer generation must
 //! be exactly the other file's state generation. A crash cannot break this: each write is one atomic replace of one
 //! file, so the disk holds the old file or the new one, and either agrees with the other file. A pair that disagrees
-//! means one file was restored from an older copy, or deleted.
+//! means one file was restored from an older copy, or deleted. For example:
+//!
+//! ```text
+//!                     manifest.age (state, peer)   approval.age (state, peer)
+//! on disk             (4, 2)                       (5, 4)       accepted: approval.age is newer and names peer 4
+//! manifest restored   (3, 2)                       (5, 4)       refused: approval.age expects manifest.age at 4
+//! approval deleted    (4, 2)                       missing      refused: manifest.age expects approval.age at 2
+//! ```
 //!
 //! Restoring both files together, or restoring one file to a copy that was on disk beside the other file's current
-//! copy, leaves a pair that once existed, which this check cannot tell from the current one; outside v0, a TPM
+//! copy, leaves a pair that once existed, which this check cannot tell from the current one. Outside v0, a TPM
 //! monotonic counter anchoring the state generation is what detects that.
 
 use std::fmt;
@@ -17,8 +25,8 @@ use thiserror::Error;
 
 use crate::{StateFileName, StateGeneration};
 
-/// The manifest and the approval state on disk are not a pair any sequence of writes leaves: a control file looks
-/// restored from an older copy, or deleted. Carries state generations only, never file contents.
+/// Says that the manifest and the approval state on disk are not a pair any sequence of writes leaves: a control file
+/// looks restored from an older copy, or deleted. It carries state generations only, never file contents.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PartialRestore {
     /// `file` is not at the state generation the file written after it recorded as its peer.
@@ -34,12 +42,13 @@ pub enum PartialRestore {
     SameGeneration(StateGeneration),
 }
 
-/// What the operator should do. Repairing the pair automatically would accept the older copy as current (spec §12).
+/// Tells the operator what to do. Repairing the pair automatically would accept the older copy as current
+/// ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)).
 const REMEDIATION: &str = "a control file looks restored from an older copy or deleted; \
     recover the vault with the recovery key or reset it, and do not edit or delete state files by hand";
 
 impl PartialRestore {
-    /// The control file the error names: the one behind, or the manifest when neither is.
+    /// Returns the control file the error names: the one behind, or the manifest when neither is.
     pub fn file(&self) -> StateFileName {
         match self {
             Self::Behind { file, .. } => file.clone(),
@@ -68,7 +77,7 @@ impl fmt::Display for PartialRestore {
     }
 }
 
-/// The control file that is not `file`.
+/// Returns the control file that is not `file`.
 fn other_file(file: &StateFileName) -> StateFileName {
     match *file == StateFileName::manifest() {
         true => StateFileName::approval_state(),
@@ -95,7 +104,8 @@ pub(crate) fn check_control_generations(
     }
 }
 
-/// Accepts `file` at `found` only if that is exactly the state generation the file written after it `expected`.
+/// Accepts `file` at `found` if and only if that is exactly the state generation that the file written after it
+/// `expected`.
 fn agree(file: StateFileName, expected: Option<StateGeneration>, found: Option<StateGeneration>) -> Result<(), PartialRestore> {
     match expected == found {
         true => Ok(()),

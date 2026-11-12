@@ -1,35 +1,39 @@
-//! The error kind label: how a log records a library error (`design/audit-logging.md`, "Library errors").
+//! The error kind label: how a log records a library error
+//! ([audit logging, "Library errors"](../../../design/audit-logging.md#library-errors)).
 //!
 //! A library error's `Display` and `Debug` may hold a URL with its query, a header value or a path, so a log records
-//! only a label chosen from the error's kind or type. This crate is the lowest that logs, so the label lives here; the
-//! service crate adds the labels of its own dependencies' errors.
+//! only a label chosen from the error's kind or type: `io::ErrorKind::PermissionDenied` is logged as
+//! `permission_denied`. This crate is the lowest that logs, so the label lives here. The service crate adds the labels
+//! of its own dependencies' errors.
 
 use std::borrow::Cow;
 use std::{fmt, io};
 
-/// A library error reduced to a fixed snake_case label for a log record's `error_kind` field.
+/// A library error reduced to a fixed `snake_case` label for a log record's `error_kind` field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorKindLabel(Cow<'static, str>);
 
 impl ErrorKindLabel {
-    /// A label fixed in the source, for an error type whose kinds are not worth telling apart or cannot be read.
+    /// Creates a label fixed in the source, for an error type whose kinds are not worth telling apart or cannot be read.
     pub const fn fixed(label: &'static str) -> Self {
         Self(Cow::Borrowed(label))
     }
 
-    /// The label of an `io::Error`: its kind only, since its message may name a path.
+    /// Returns the label of an `io::Error`: its kind only, because its message may name a path.
     pub fn of_io(error: &io::Error) -> Self {
         Self::from(error.kind())
     }
 
-    /// The label as written in a log record.
+    /// Returns the label as written in a log record.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 impl From<io::ErrorKind> for ErrorKindLabel {
-    /// `ErrorKind`'s `Debug` is its variant name, which std fixes and which holds nothing from the failure; its
+    /// Labels `kind` with its variant name in `snake_case`.
+    ///
+    /// `ErrorKind`'s `Debug` is its variant name, which std fixes and which holds nothing from the failure. Its
     /// `Display` is a prose description, not a label.
     fn from(kind: io::ErrorKind) -> Self {
         Self(Cow::Owned(snake_case(&format!("{kind:?}"))))
@@ -42,7 +46,7 @@ impl fmt::Display for ErrorKindLabel {
     }
 }
 
-/// `PermissionDenied` as `permission_denied`.
+/// Converts a `CamelCase` name to `snake_case`: `PermissionDenied` becomes `permission_denied`.
 fn snake_case(camel: &str) -> String {
     camel
         .chars()

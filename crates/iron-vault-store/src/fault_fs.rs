@@ -1,12 +1,21 @@
 //! The fault filesystem: an in-memory [`StoreFs`] that records every call, fails chosen calls and models power loss.
 //!
-//! Durable-write bugs only show after a power cut, which ordinary tests never cause. This double keeps two views of
-//! the filesystem. The visible view is what reads see now. The durable view is what survives a crash: a file's
-//! contents enter it only on [`StoreFs::sync_file`], and a directory entry change (create, rename, unlink) only on
-//! the next [`StoreFs::sync_dir`] of the containing directory. [`FaultFs::crash`] throws the visible view away.
+//! Durable-write bugs only show after a power cut, which ordinary tests never cause. The store's crash tests, and the
+//! service's under the `test-support` feature, run a write against [`FaultFs`], fail or cut the power at one call per
+//! run, and check what survives. The double keeps two views of the filesystem: the visible view is what reads see
+//! now, and the durable view is what survives a crash.
 //!
-//! The model is deliberately pessimistic: a real filesystem may keep an unsynced change, but a write that is correct
-//! here is correct whether or not it does.
+//! ```text
+//!                      visible view                        durable view
+//! file contents        changed by write_all  ──sync_file──▶  copied from the visible view
+//! directory entries    changed by create,    ──sync_dir───▶  copied from the visible view, for that directory only
+//!                      rename and unlink
+//!
+//! crash(): the visible view is thrown away, and the durable view becomes the visible view
+//! ```
+//!
+//! The model is pessimistic: a real filesystem may keep an unsynced change, but a write that is correct here is
+//! correct whether or not it does.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -39,7 +48,8 @@ pub enum FsOp {
     ReadBounded,
 }
 
-/// One recorded [`StoreFs`] call and the path it acted on; a file-handle call records the path the file was created at.
+/// One recorded [`StoreFs`] call and the path it acted on. A call on an open file records the path the file was created
+/// at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsCall {
     /// A private file was created at this path.
@@ -73,7 +83,7 @@ pub enum FsCall {
 }
 
 impl FsCall {
-    /// The method this call went to.
+    /// Returns the method this call went to.
     pub fn op(&self) -> FsOp {
         match self {
             Self::CreatePrivate(_) => FsOp::CreatePrivate,
@@ -96,7 +106,7 @@ pub struct FaultFile {
     path: PathBuf,
 }
 
-/// The fault filesystem: see the module documentation.
+/// The fault filesystem: an in-memory [`StoreFs`] with a visible and a durable view (see the module documentation).
 ///
 /// Calls are numbered from 0 in the order they arrive. A failed call is recorded in the trace and changes nothing.
 #[derive(Debug, Default)]
@@ -135,7 +145,7 @@ enum Trigger {
 }
 
 impl FaultFs {
-    /// An empty filesystem with no faults.
+    /// Creates an empty filesystem with no faults.
     pub fn new() -> Self {
         Self::default()
     }
@@ -182,11 +192,11 @@ impl FaultFs {
         st.power_cut_at = None;
     }
 
-    /// Simulates power loss in which the filesystem also persisted the unsynced directory entries at `kept`: each
-    /// path takes its visible state (present with its inode, or absent) before everything else unsynced is lost.
+    /// Simulates power loss in which the filesystem also persisted the unsynced directory entries at `kept`.
     ///
-    /// A real filesystem may persist directory changes before an fsync and in any order, so a rename's two paths, the
-    /// old name and the new, are passed together to keep or lose that rename as a whole.
+    /// Each path in `kept` takes its visible state (present with its inode, or absent), and everything else unsynced
+    /// is lost. A real filesystem may persist directory changes before an fsync and in any order. Pass a rename's two
+    /// paths, the old name and the new, together, to keep or lose that rename as a whole.
     pub fn crash_keeping(&self, kept: &[&Path]) {
         {
             let mut guard = self.state.borrow_mut();
@@ -203,13 +213,15 @@ impl FaultFs {
         self.crash();
     }
 
-    /// Every call so far, in order.
+    /// Returns every call so far, in order.
     pub fn trace(&self) -> Vec<FsCall> {
         self.state.borrow().trace.clone()
     }
 
-    /// The calls from number `from` on that succeeded, in order: what [`assert_trace_properties`] checks, since a
-    /// failed rename or unlink, such as one of a file that is not there, changed nothing a directory fsync must keep.
+    /// Returns the calls from number `from` on that succeeded, in order.
+    ///
+    /// This is the trace to pass to [`assert_trace_properties`]. A failed rename or unlink, such as one of a file that
+    /// is not there, changed nothing that a directory fsync must keep.
     pub fn succeeded_since(&self, from: usize) -> Vec<FsCall> {
         let st = self.state.borrow();
         let succeeded = |i: &usize| st.failed.binary_search(i).is_err();
@@ -219,7 +231,7 @@ impl FaultFs {
             .collect()
     }
 
-    /// The visible contents of the file at `path`, without recording a call.
+    /// Returns the visible contents of the file at `path`, or `None` if there is none, without recording a call.
     pub fn contents(&self, path: &Path) -> Option<Vec<u8>> {
         let st = self.state.borrow();
         st.data_at(path).ok().map(<[u8]>::to_vec)
@@ -248,7 +260,8 @@ impl State {
         self.inodes.len() - 1
     }
 
-    /// The error kind call `index` must fail with, consuming a one-shot fault.
+    /// Returns the error kind call `index` must fail with, or `None` if it succeeds. A matching one-shot fault is used
+    /// up.
     fn take_fault(&mut self, index: usize, op: FsOp) -> Option<io::ErrorKind> {
         if self.power_cut_at.is_some_and(|k| index >= k) {
             return Some(io::ErrorKind::Other);
@@ -391,8 +404,8 @@ impl StoreFs for FaultFs {
 /// Asserts the durable-write rules on a call trace: every rename, hard link and unlink is followed by an fsync of its
 /// directory, and every write is fsynced before its file is renamed or linked into place.
 ///
-/// A failed call changed nothing, so pass a trace without them: [`FaultFs::succeeded_since`], or the trace of a run in
-/// which every call succeeded.
+/// A failed call changed nothing, so pass a trace without failed calls: [`FaultFs::succeeded_since`], or the trace of a
+/// run in which every call succeeded.
 pub fn assert_trace_properties(trace: &[FsCall]) {
     let synced_dir_after = |i: usize, path: &Path| {
         path.parent()

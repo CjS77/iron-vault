@@ -17,7 +17,7 @@ const NEW_CONFIG: &[u8] = b"new config";
 const OLD_SIG: &[u8] = b"old signature, longer than the new one";
 const NEW_SIG: &[u8] = b"new signature";
 
-/// A locked scratch config directory; the lock is real, the files live in a [`FaultFs`] under the same path.
+/// A locked scratch config directory. The lock is real; the files live in a [`FaultFs`] under the same path.
 struct Setup {
     dir: TestDir,
     lock: ConfigDirLock,
@@ -38,7 +38,7 @@ impl Setup {
         self.dir.path().join(name.temp_name())
     }
 
-    /// A filesystem where a transaction has staged a new pair beside the published old pair, all durable.
+    /// Creates a filesystem where a transaction has staged a new pair beside the published old pair, all durable.
     fn staged_fs(&self) -> FaultFs {
         [
             (Active, OLD_CONFIG),
@@ -54,7 +54,9 @@ impl Setup {
         fs.contents(&self.path(name))
     }
 
-    /// Which generation each of the active config and signature holds. Panics on any other bytes, which is a torn file.
+    /// Returns the generation each of the active config and its signature holds.
+    ///
+    /// Panics on any other bytes: they mean a torn file.
     fn active_pair(&self, fs: &FaultFs) -> (Gen, Gen) {
         let gen_of = |name, old: &[u8], new: &[u8]| match self.contents(fs, name) {
             Some(b) if b == old => Gen::Old,
@@ -92,7 +94,7 @@ fn write_step(op: FsOp) -> WriteStep {
     }
 }
 
-/// A filesystem holding `old` durably at `name`, or nothing there.
+/// Creates a filesystem holding `old` durably at `name`, or nothing there if `old` is `None`.
 fn fs_with(setup: &Setup, name: ConfigFileName, old: Option<&[u8]>) -> FaultFs {
     old.into_iter()
         .fold(FaultFs::new(), |fs, b| fs.with_durable_file(&setup.path(name), b))
@@ -269,8 +271,8 @@ fn publish_survives_a_crash_at_every_point() {
     });
 }
 
-/// Every pair of active files on disk after a publish that failed, or lost power with the filesystem persisting any
-/// subset of the two renames. The recovery ticket relies on this list.
+/// Returns every pair of active files a publish can leave on disk: after it failed, or after it lost power with the
+/// filesystem persisting any subset of its two renames. Approval recovery relies on this list.
 fn reachable_pairs(setup: &Setup) -> BTreeSet<(Gen, Gen)> {
     let renames = [(Pending, Active), (StagedSignature, ActiveSignature)];
     let power_loss = (0..4u8).map(|keep| {
@@ -388,7 +390,7 @@ fn config_only_leaves_a_leftover_staged_signature_and_the_active_signature_alone
     assert_eq!(renames(&fs), [setup.path(Pending)]);
 }
 
-/// The sources of every rename in the trace.
+/// Returns the source path of every rename in the trace.
 fn renames(fs: &FaultFs) -> Vec<PathBuf> {
     fs.trace()
         .into_iter()

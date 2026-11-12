@@ -1,4 +1,6 @@
-//! Compile-time and `Debug` checks for this crate's secret-bearing types (spec §14, `design/secret-handling.md`).
+//! Compile-time and `Debug` checks for this crate's secret-bearing types
+//! ([spec §14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),
+//! [secret handling](../../../design/secret-handling.md)).
 //!
 //! A type that gains `Clone`, `Copy`, `Display` or a serde impl would start copying, printing or writing the secret it
 //! holds; each assertion below turns that change into a build failure.
@@ -39,7 +41,7 @@ assert_not_impl_any!(SealingKeys: Clone, Copy, Display, Serialize, Deserialize<'
 // `Rc` is neither `Send` nor `Sync`, so a vault that shared its identity or a record through one would fail here.
 assert_impl_all!(Vault: Send, Sync);
 
-/// Distinctive enough that a match in `Debug` output can only be the secret leaking.
+/// A test secret distinctive enough that a match in `Debug` output can only be the secret leaking.
 pub(crate) const MARKER: &str = "MARKER-secret-5d1c9e";
 
 /// Asserts that neither `Debug` form of `value` contains `secret`, compared case-insensitively because `age` secret
@@ -157,12 +159,16 @@ fn vault_debug_hides_the_identity_and_every_record() {
     assert_hides(&vault, identity_secret.expose_secret());
 }
 
-/// Shared ownership or a process-wide cache would let a copy of a record outlive the `Vault` that dropped it. The store's
-/// production sources must use neither, so dropping a `Vault` drops its only copies of the records.
+/// Checks that the store's production sources use no shared ownership or process-wide cache.
+///
+/// Either would let a copy of a record outlive the `Vault` that dropped it. With neither, dropping a `Vault` drops its
+/// only copies of the records.
 ///
 /// The vault identity is the one exception, as `Arc<VaultIdentity>`: the service keeps it from unlock until lock or stop
-/// and opens a new `Vault` from it on every config check (§14, §15), so its holders share the one copy, cleared when
-/// the last drops it.
+/// and opens a new `Vault` from it on every config check
+/// ([spec §14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),
+/// [§15](../../../design/iron-vault-specification.md#15-service-states-and-errors)). Its holders share the one copy,
+/// cleared when the last drops it.
 #[test]
 fn no_shared_or_global_owner_of_vault_secrets() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -182,7 +188,8 @@ fn no_shared_or_global_owner_of_vault_secrets() {
     assert!(offenders.is_empty(), "{offenders:?}");
 }
 
-/// Whether `line` names a shared owner other than the shared vault identity, or declares a non-`const` `static` item.
+/// Returns `true` if and only if `line` names a shared owner other than `Arc<VaultIdentity>`, or declares a non-`const`
+/// `static` item.
 fn is_shared_or_global(line: &str) -> bool {
     let line = line.replace("Arc<VaultIdentity>", "");
     const FORBIDDEN: [&str; 10] = [
@@ -200,7 +207,7 @@ fn is_shared_or_global(line: &str) -> bool {
     FORBIDDEN.iter().any(|word| line.contains(word)) || line.split_whitespace().take_while(|word| *word != "=").any(|word| word == "static")
 }
 
-/// The lines of `text` outside comments and outside every item marked `#[cfg(test)]`, whatever its visibility.
+/// Returns the lines of `text` outside comments and outside every item marked `#[cfg(test)]`.
 fn production_lines(text: &str) -> Vec<&str> {
     // State: whether the next item is test-only, and the brace depth inside a test-only item being skipped.
     let mut pending = false;
@@ -224,7 +231,7 @@ fn brace_balance(line: &str) -> i64 {
     line.chars().map(|c| i64::from(c == '{') - i64::from(c == '}')).sum()
 }
 
-/// Every `.rs` file under `dir` except test modules and test doubles.
+/// Returns every `.rs` file under `dir` except test modules and test doubles.
 fn production_sources(dir: &Path) -> Vec<std::path::PathBuf> {
     const TEST_ONLY: [&str; 4] = ["fault_fs.rs", "test_dir.rs", "test_request.rs", "durable_faults.rs"];
     std::fs::read_dir(dir)

@@ -1,7 +1,18 @@
-//! Durable replace, durable remove and bounded reads of state files.
+//! Durable writes: replace or remove a file so the change survives power loss, and read a file with a size limit
+//! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
 //!
 //! An atomic rename alone is not durable: after a power cut the rename can be lost, or the new name can point at an
-//! empty file. Every store write goes through these functions so the file and directory fsyncs are right in one place.
+//! empty file. Every write the store makes, in the state directory and the config directory, goes through the bodies
+//! in this module, so the file and directory fsyncs are right in one place. A durable replace of `manifest.age` runs:
+//!
+//! ```text
+//! create .manifest.age.tmp (mode 0600, exclusive)  ┐
+//! write the new bytes to it                        │  a failure here removes the temporary file
+//! fsync it                                         │  and leaves manifest.age unchanged
+//! rename it over manifest.age                      ┘
+//! fsync the state directory                           a failure here comes after the rename: manifest.age holds
+//!                                                     the new bytes, but they may not survive power loss
+//! ```
 
 use std::fmt;
 use std::io;
@@ -46,7 +57,7 @@ impl fmt::Display for WriteStep {
 /// Why a durable replace or remove failed. It names the file but never carries its contents.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum WriteError {
-    /// A durable remove found no file; callers that only need the file gone may treat this as success.
+    /// A durable remove found no file. A caller that only needs the file gone may treat this as success.
     #[error("cannot remove state file {file}: it does not exist")]
     NotFound {
         /// The file that was to be removed.
@@ -71,7 +82,7 @@ pub enum WriteError {
 }
 
 impl WriteError {
-    /// The kind of the failed file operation as a label that holds no file name or error text.
+    /// Returns the kind of the failed file operation as a label that holds no file name or error text.
     pub fn error_kind_label(&self) -> ErrorKindLabel {
         match self {
             Self::Io { kind, .. } | Self::ListStateDir { kind } => ErrorKindLabel::from(*kind),
@@ -108,7 +119,7 @@ pub enum ReadError {
 }
 
 impl ReadError {
-    /// The kind of the failed read as a label that holds no file name or error text.
+    /// Returns the kind of the failed read as a label that holds no file name or error text.
     pub fn error_kind_label(&self) -> ErrorKindLabel {
         match self {
             Self::Io { kind, .. } => ErrorKindLabel::from(*kind),
@@ -121,8 +132,8 @@ impl ReadError {
 /// Replaces the state file `name` with exactly `bytes`, durably.
 ///
 /// Writes a private `.<name>.tmp`, fsyncs it, renames it over `name` and fsyncs the state directory. A failure before
-/// the rename removes the temporary file and leaves `name` untouched; the destination is never half-written. A stale
-/// temporary file blocks the write with a [`WriteStep::CreateTemp`] error rather than being reused or followed.
+/// the rename removes the temporary file and leaves `name` untouched, so the destination is never half-written. A stale
+/// temporary file blocks the write with a [`WriteStep::CreateTemp`] error; it is never reused or followed.
 ///
 /// A [`WriteStep::SyncDir`] failure comes after the rename: `name` already holds the new bytes and no temporary file is
 /// left, but the replacement may not survive power loss. Callers must not treat that error as "unchanged". Where
@@ -139,9 +150,9 @@ pub fn durable_remove(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileNa
     remove_in(fs, lock.dir(), name.as_str()).map_err(|f| f.in_state_file(name))
 }
 
-/// The most any state file read may return: 1 MiB, the manifest's own limit and the largest state file.
+/// The most any state file read may return: 1 MiB, the limit of the manifest, the largest state file.
 ///
-/// A caller's larger limit is lowered to this, so no read of the state directory buffers more.
+/// [`read_state_file`] lowers a caller's larger limit to this, so no read of the state directory buffers more.
 pub const MAX_STATE_FILE_LEN: u64 = 1 << 20;
 
 /// Reads the regular state file `name`, refusing one longer than `max_len` bytes, or than [`MAX_STATE_FILE_LEN`],
@@ -163,8 +174,8 @@ pub fn read_state_file(lock: &StateDirLock, fs: &impl StoreFs, name: &StateFileN
 
 /// A durable write or remove that failed at `step`, before it is attributed to a file of one directory or the other.
 ///
-/// The state directory and the config directory share the durable-write bodies below, and each wraps this in its own
-/// error type, so a failure always names a file of the directory it happened in.
+/// The state directory and the config directory share the durable-write bodies below. Each wraps this in its own error
+/// type, so a failure always names a file of the directory it happened in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StepFailure {
     pub(crate) step: WriteStep,
@@ -196,12 +207,12 @@ pub(crate) enum ReadFailure {
     Io(io::ErrorKind),
 }
 
-/// The temporary name a durable replace of the file `name` writes first: `.<name>.tmp`.
+/// Returns the temporary name a durable replace of the file `name` writes first: `.<name>.tmp`.
 pub(crate) fn temp_name(name: &str) -> String {
     format!(".{name}.tmp")
 }
 
-/// Durably replaces `dir/name`: private temp file, fsync, rename, directory fsync. See [`durable_replace`].
+/// Durably replaces `dir/name`: private temporary file, fsync, rename, directory fsync. See [`durable_replace`].
 pub(crate) fn replace_in<F: StoreFs>(fs: &F, dir: &Path, name: &str, bytes: &[u8]) -> Result<(), StepFailure> {
     dir_sync_supported()?;
     let temp = dir.join(temp_name(name));
@@ -256,7 +267,7 @@ pub(crate) fn dir_sync_supported() -> Result<(), StepFailure> {
     }
 }
 
-/// [`dir_sync_supported`] as a state-file [`WriteError`].
+/// Runs [`dir_sync_supported`] and reports its failure as a [`WriteError`] that names the state file `name`.
 pub(crate) fn ensure_dir_sync_supported(name: &StateFileName) -> Result<(), WriteError> {
     dir_sync_supported().map_err(|f| f.in_state_file(name))
 }

@@ -26,10 +26,10 @@ paths = ["/**"]
 rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 "#;
 
-/// The route's upstream, the one origin a record must permit for the route to activate.
+/// The host of the route's upstream: the one origin a record must permit for the route to activate.
 pub(crate) const HOST: &str = "api.example.com";
 
-/// A host with no accounts: this config has no peer callers, so activation never looks one up.
+/// A host with no accounts. This config has no peer callers, so activation never looks one up.
 struct NoAccounts;
 
 impl AccountDirectory for NoAccounts {
@@ -46,7 +46,7 @@ impl AccountDirectory for NoAccounts {
     }
 }
 
-/// Every credential is a static key permitting [`HOST`].
+/// A catalog in which every credential is a static key permitting [`HOST`].
 struct Catalog;
 
 impl CredentialCatalog for Catalog {
@@ -58,7 +58,7 @@ impl CredentialCatalog for Catalog {
     }
 }
 
-/// The `fx` route's header slot and an authorized `GET /fx/latest` on it.
+/// Returns the `fx` route's header slot and an authorized `GET /fx/latest` on it.
 pub(crate) fn header_request() -> (Slot, AuthorizedRequest) {
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
     let policy: ActivePolicy = activate(&config, &Catalog, &NoAccounts).unwrap();

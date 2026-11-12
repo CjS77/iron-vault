@@ -1,11 +1,19 @@
-//! The cursor every store payload decoder reads with (spec §13, `design/storage-formats.md`).
+//! The byte reader every store payload decoder uses
+//! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
+//! [storage formats](../../../design/storage-formats.md#conventions)).
 //!
 //! The record, manifest, approval and approval state encodings share one layout vocabulary: fixed-width fields,
-//! big-endian integers and `u64` length prefixes. They read it through this one reader, so a bounds check fixed here is
+//! big-endian integers and `u64` length prefixes. They all read through [`Reader`], so a bounds check fixed here is
 //! fixed for every file a planted copy could reach. Each decoder maps [`WireError`] into its own error once, with a
-//! `From` impl, so its public variants stay its own.
+//! `From` impl, so its public variants stay its own. Reading a length-prefixed field followed by a byte:
+//!
+//! ```text
+//! bytes   00 00 00 00 00 00 00 02  'h' 'i'  07
+//!         └──── u64 length 2 ────┘ └field┘  └u8┘
+//! reader.field() == b"hi", reader.u8() == 7, reader.finish() succeeds
+//! ```
 
-/// Why the bytes could not be read as the layout asked for. Each decoder reports these as its own variants.
+/// Says why the bytes could not be read as the layout asked for. Each decoder reports these as its own variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WireError {
     /// The bytes end inside a fixed-width field.
@@ -16,47 +24,50 @@ pub(crate) enum WireError {
     TrailingBytes,
 }
 
-/// The unread rest of an encoding. Every read borrows from the input, so nothing is copied until the caller asks.
+/// A cursor over the unread rest of an encoding. Every read borrows from the input, so nothing is copied until the
+/// caller asks.
 pub(crate) struct Reader<'a>(&'a [u8]);
 
 impl<'a> Reader<'a> {
-    /// A reader positioned at the start of `bytes`.
+    /// Creates a reader positioned at the start of `bytes`.
     pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Reader(bytes)
     }
 
-    /// The next `n` bytes.
+    /// Reads the next `n` bytes, or fails with [`WireError::Truncated`] if fewer are left.
     pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], WireError> {
         let (head, rest) = self.0.split_at_checked(n).ok_or(WireError::Truncated)?;
         self.0 = rest;
         Ok(head)
     }
 
-    /// The next `N` bytes as an array, for IDs, digests and integers.
+    /// Reads the next `N` bytes as an array, for IDs, digests and integers.
     pub(crate) fn array<const N: usize>(&mut self) -> Result<[u8; N], WireError> {
         let (head, rest) = self.0.split_first_chunk::<N>().ok_or(WireError::Truncated)?;
         self.0 = rest;
         Ok(*head)
     }
 
-    /// The next byte.
+    /// Reads the next byte.
     pub(crate) fn u8(&mut self) -> Result<u8, WireError> {
         self.array().map(|[byte]| byte)
     }
 
-    /// The next two bytes as a big-endian `u16`.
+    /// Reads the next two bytes as a big-endian `u16`.
     pub(crate) fn u16(&mut self) -> Result<u16, WireError> {
         self.array().map(u16::from_be_bytes)
     }
 
-    /// The next eight bytes as a big-endian `u64`.
+    /// Reads the next eight bytes as a big-endian `u64`.
     pub(crate) fn u64(&mut self) -> Result<u64, WireError> {
         self.array().map(u64::from_be_bytes)
     }
 
-    /// A `u64` length prefix or count. Either is refused when it exceeds the bytes left, since a field's bytes follow
-    /// its prefix and every counted item takes at least one byte, so a huge value fails here rather than driving a
-    /// long loop or a large slice.
+    /// Reads a `u64` length prefix or item count, and fails with [`WireError::LengthPastEnd`] if it exceeds the bytes
+    /// left.
+    ///
+    /// A field's bytes follow its prefix and every counted item takes at least one byte, so neither can honestly
+    /// exceed the bytes left. A huge value fails here, before it can drive a long loop or a large slice.
     pub(crate) fn len(&mut self) -> Result<usize, WireError> {
         let len = self.u64()?;
         usize::try_from(len)
@@ -65,13 +76,14 @@ impl<'a> Reader<'a> {
             .ok_or(WireError::LengthPastEnd)
     }
 
-    /// A length-prefixed field. A length past the bytes left fails before anything is read.
+    /// Reads a `u64` length-prefixed field. A length past the bytes left fails before anything is read.
     pub(crate) fn field(&mut self) -> Result<&'a [u8], WireError> {
         let len = self.len()?;
         self.take(len)
     }
 
-    /// Succeeds only when every byte has been read, so an encoding has no second spelling with extra bytes on the end.
+    /// Succeeds if and only if every byte has been read, so an encoding has no second spelling with extra bytes on the
+    /// end.
     pub(crate) fn finish(&self) -> Result<(), WireError> {
         match self.0.is_empty() {
             true => Ok(()),

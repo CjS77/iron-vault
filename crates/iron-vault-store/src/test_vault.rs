@@ -60,7 +60,7 @@ impl TestVault {
         }
     }
 
-    /// Every file in the state directory but the lock, with its visible contents.
+    /// Returns every file in the state directory except the lock, with its visible contents.
     pub(crate) fn files(&self) -> BTreeMap<String, Vec<u8>> {
         let names = self.fs.list_dir(self.dir.path()).unwrap();
         names
@@ -86,8 +86,10 @@ impl TestVault {
         crate::durable_remove(&self.lock, &self.fs, name).unwrap();
     }
 
-    /// Whether `recipient` unwraps `identity.age` on disk to this vault's identity, and the manifest's MAC verifies with
-    /// what it unwraps.
+    /// Returns `true` if and only if `recipient` unwraps `identity.age` on disk and the manifest's MAC verifies with the
+    /// identity it unwraps.
+    ///
+    /// Panics if the unwrapped identity is not this vault's.
     pub(crate) fn opens_with(&self, recipient: &RecipientIdentity) -> bool {
         let envelope = read_identity_envelope(&self.lock, &self.fs).unwrap();
         match unwrap_identity(&envelope, recipient) {
@@ -103,13 +105,13 @@ impl TestVault {
         check_recipient_inventory(&self.lock, &self.fs, &self.vault, self.vault_id)
     }
 
-    /// The number of filesystem calls so far, so a test can fail one of the calls that follow.
+    /// Returns the number of filesystem calls so far, so a test can fail one of the calls that follow.
     pub(crate) fn calls(&self) -> usize {
         self.fs.trace().len()
     }
 }
 
-/// An entry for `identity` enrolled at the epoch, labelled with its role's name.
+/// Returns an inventory entry for `identity`, enrolled at the Unix epoch and labelled with its role's name.
 pub(crate) fn entry(identity: &RecipientIdentity, role: RecipientRole) -> RecipientEntry {
     RecipientEntry::new(
         identity.recipient_key(),
@@ -119,7 +121,7 @@ pub(crate) fn entry(identity: &RecipientIdentity, role: RecipientRole) -> Recipi
     )
 }
 
-/// A second handle on `identity`, which has no `Clone`.
+/// Returns a second copy of `identity`, which has no `Clone`.
 pub(crate) fn copy(identity: &VaultIdentity) -> VaultIdentity {
     VaultIdentity::from_secret_text(identity.secret_text().expose_secret().as_bytes()).unwrap()
 }

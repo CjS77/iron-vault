@@ -1,18 +1,26 @@
-//! The stale temp sweep: clearing the temporary files that unfinished durable replaces left behind.
+//! The stale temporary file sweep: removes the temporary files that unfinished durable replaces left behind.
+//!
+//! A durable replace of `manifest.age` first writes `.manifest.age.tmp`. A crash before the rename leaves that file
+//! behind, and the next replace of `manifest.age` refuses to reuse it. The sweep clears such files once at startup:
+//!
+//! ```text
+//! before:  lock  manifest.age  .manifest.age.tmp  .bashrc  notes.tmp
+//! after:   lock  manifest.age                     .bashrc  notes.tmp      returns [manifest.age]
+//! ```
 
 use crate::durable::{ensure_dir_sync_supported, io_error};
 use crate::{StateDirLock, StateFileName, StoreFs, WriteError, WriteStep};
 
-/// Durably removes every stale temp file in the state directory and returns the state files they belonged to, in
+/// Durably removes every stale temporary file in the state directory and returns the state files they belonged to, in
 /// name order, for the audit log.
 ///
 /// A durable replace cut short by a crash leaves `.<name>.tmp`, and the next replace of `name` refuses to reuse it.
 /// The service runs this once after taking the state-directory lock and before any write. It removes only names that
-/// [`StateFileName`]'s temporary naming can produce; every other entry, including other dotfiles and the lock file,
-/// is left alone.
+/// [`StateFileName`]'s temporary naming can produce, and leaves every other entry alone, including other dotfiles and
+/// the lock file.
 ///
 /// All removals share one directory fsync, whose failure is reported against the first name. If a removal fails, the
-/// earlier ones may not survive power loss; that only leaves stale temps for the next sweep.
+/// earlier ones may not survive power loss, which only leaves stale temporary files for the next sweep.
 pub fn sweep_stale_temps(lock: &StateDirLock, fs: &impl StoreFs) -> Result<Vec<StateFileName>, WriteError> {
     let dir = lock.dir();
     let entries = fs.list_dir(dir).map_err(|e| WriteError::ListStateDir { kind: e.kind() })?;

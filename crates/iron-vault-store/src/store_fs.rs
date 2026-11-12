@@ -1,4 +1,8 @@
-//! The filesystem seam under every store write: one method per durable-write step.
+//! The filesystem seam: the trait every store read and write goes through, one method per durable-write step.
+//!
+//! Production code passes [`OsFs`]. Tests pass a double (the crate's `fault_fs` module) that fails or crashes at one
+//! chosen step, so each crash point of a durable write in [`durable`](crate::durable) can be tested without pulling
+//! the power.
 
 use std::ffi::OsString;
 use std::fs::{File, Metadata, OpenOptions};
@@ -7,15 +11,16 @@ use std::path::Path;
 
 /// The filesystem operations a durable write is built from, one method per step.
 ///
-/// Each step is separate so a test double can observe or fail any one of them on its own. The trait is used
-/// generically (`&impl StoreFs`); the open-file type is an associated type so a double can wrap [`OsFs`] or keep
+/// Each step is a separate method so a test double can observe or fail any one of them on its own. Callers take it
+/// generically (`&impl StoreFs`). The open-file type is an associated type, so a double can wrap [`OsFs`] or keep
 /// files in memory.
 pub trait StoreFs {
     /// An open, writable file returned by [`StoreFs::create_private`].
     type File;
 
-    /// Creates `path` as a new file readable and writable only by the owner, failing if anything already exists
-    /// there; exclusive creation means a planted symlink is never followed.
+    /// Creates `path` as a new file readable and writable only by its owner (mode `0600`).
+    ///
+    /// Fails if anything already exists at `path`. Exclusive creation means a planted symlink is never followed.
     fn create_private(&self, path: &Path) -> io::Result<Self::File>;
 
     /// Writes every byte of `bytes` to `file`.
@@ -30,10 +35,10 @@ pub trait StoreFs {
     /// Unlinks the file at `path`.
     fn remove_file(&self, path: &Path) -> io::Result<()>;
 
-    /// Gives the file at `from` the second name `to`, failing if anything already exists at `to`; unlike
-    /// [`StoreFs::rename`], it never replaces a file someone else put there.
+    /// Gives the file at `from` the second name `to`, failing if anything already exists at `to`.
     ///
-    /// No store write uses it, so a double that never meets a caller of it may leave it out and fail closed.
+    /// Unlike [`StoreFs::rename`], it never replaces a file someone else put there. No store write uses it, so the
+    /// default fails with [`io::ErrorKind::Unsupported`] and a double that never meets a caller may leave it out.
     fn hard_link(&self, _from: &Path, _to: &Path) -> io::Result<()> {
         Err(io::Error::new(io::ErrorKind::Unsupported, "hard links are not supported here"))
     }
@@ -41,18 +46,18 @@ pub trait StoreFs {
     /// Flushes the directory `dir`'s entries to stable storage, so renames and unlinks in it survive power loss.
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
 
-    /// The names of the entries in `dir`, sorted so callers act on them in a deterministic order.
+    /// Lists the names of the entries in `dir`, sorted so callers act on them in a deterministic order.
     fn list_dir(&self, dir: &Path) -> io::Result<Vec<OsString>>;
 
-    /// Reads the regular file at `path`, failing with [`io::ErrorKind::FileTooLarge`] after at most `max_len + 1` bytes
-    /// if it is longer than `max_len`.
+    /// Reads the regular file at `path`, or fails with [`io::ErrorKind::FileTooLarge`] if it is longer than `max_len`
+    /// bytes. It reads at most `max_len + 1` bytes either way.
     ///
     /// A symlink, directory, FIFO, socket or device at `path` fails with [`io::ErrorKind::InvalidInput`] before it is
     /// opened: opening a FIFO blocks until a writer appears, and a device can be read without end.
     fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>>;
 }
 
-/// The real filesystem.
+/// The real filesystem, through `std::fs`. Every production caller uses it.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OsFs;
 
@@ -92,8 +97,10 @@ impl StoreFs for OsFs {
         File::open(dir)?.sync_all()
     }
 
-    /// No directory fsync exists here yet. The durable functions check the platform before mutating anything, so
-    /// they fail closed; a direct caller of this method has already renamed or unlinked by the time it fails.
+    /// Fails with [`io::ErrorKind::Unsupported`]: this platform has no directory fsync yet.
+    ///
+    /// The durable functions check the platform before they change anything, so they fail closed. A direct caller of
+    /// this method has already renamed or unlinked by the time it fails.
     #[cfg(not(unix))]
     fn sync_dir(&self, _dir: &Path) -> io::Result<()> {
         Err(io::Error::new(
@@ -111,8 +118,8 @@ impl StoreFs for OsFs {
     }
 
     /// Checks the entry with `lstat` before opening it, so an oversized file is refused before any buffer is
-    /// allocated. An entry swapped in between the check and the open is refused by [`open_checked`] rather than
-    /// followed, blocked on or read.
+    /// allocated. [`open_checked`] refuses an entry swapped in between the check and the open: it is never followed,
+    /// blocked on or read.
     fn read_bounded(&self, path: &Path, max_len: u64) -> io::Result<Vec<u8>> {
         let checked = regular_file_metadata(path)?;
         if checked.len() > max_len {
@@ -125,8 +132,8 @@ impl StoreFs for OsFs {
 
 /// Opens `path` for reading and refuses the handle unless it is the regular file `checked` describes.
 ///
-/// On Unix the open neither follows a symlink nor waits for a FIFO writer, so an entry swapped in after the `lstat`
-/// is refused instead of followed or blocked on. `O_NONBLOCK` has no effect on reads of a regular file.
+/// On Unix the open uses `O_NOFOLLOW | O_NONBLOCK`: it neither follows a symlink nor waits for a FIFO writer, so an
+/// entry swapped in after the `lstat` is refused. `O_NONBLOCK` has no effect on reads of a regular file.
 fn open_checked(path: &Path, checked: &Metadata) -> io::Result<File> {
     let file = open_options().open(path).map_err(symlink_as_invalid)?;
     ensure_same_entry(checked, &file.metadata()?)?;
@@ -141,7 +148,8 @@ fn open_options() -> OpenOptions {
     options
 }
 
-/// `O_NOFOLLOW` reports a symlink as `ELOOP`; it is a non-regular entry like any other.
+/// Maps `ELOOP` to [`io::ErrorKind::InvalidInput`]. `O_NOFOLLOW` reports a symlink as `ELOOP`, and a symlink is a
+/// non-regular entry like any other.
 #[cfg(unix)]
 fn symlink_as_invalid(e: io::Error) -> io::Error {
     match e.raw_os_error() {
@@ -155,7 +163,8 @@ fn symlink_as_invalid(e: io::Error) -> io::Error {
     e
 }
 
-/// The metadata of the entry at `path`, without following a symlink, if it is a regular file.
+/// Returns the metadata of the entry at `path`, without following a symlink, or fails with
+/// [`io::ErrorKind::InvalidInput`] if the entry is not a regular file.
 fn regular_file_metadata(path: &Path) -> io::Result<Metadata> {
     let metadata = std::fs::symlink_metadata(path)?;
     match metadata.is_file() {
@@ -164,7 +173,8 @@ fn regular_file_metadata(path: &Path) -> io::Result<Metadata> {
     }
 }
 
-/// Refuses an open file that is not the regular file checked before opening it.
+/// Refuses an open file unless it is a regular file with the same device and inode as the entry checked before
+/// opening it.
 fn ensure_same_entry(checked: &Metadata, opened: &Metadata) -> io::Result<()> {
     match opened.is_file() && same_inode(checked, opened) {
         true => Ok(()),
@@ -178,7 +188,8 @@ fn same_inode(checked: &Metadata, opened: &Metadata) -> bool {
     checked.dev() == opened.dev() && checked.ino() == opened.ino()
 }
 
-/// No inode identity is exposed here; the regular-file check on the open handle is all that applies.
+/// Returns `true` always: this platform exposes no inode identity, so only the regular-file check on the open handle
+/// applies.
 #[cfg(not(unix))]
 fn same_inode(_checked: &Metadata, _opened: &Metadata) -> bool {
     true
@@ -190,8 +201,8 @@ fn too_large(max_len: u64) -> io::Error {
 
 /// Reads `reader` to its end, stopping after `max_len + 1` bytes so an oversized file is never read whole.
 ///
-/// The buffer is sized for `expected_len` bytes, capped at `max_len`, plus one byte to detect growth, so reading a
-/// file whose length was checked never reallocates past the cap.
+/// The buffer holds `expected_len` bytes, capped at `max_len`, plus one byte to detect a file that grew. Reading a file
+/// whose length was checked never reallocates past the cap.
 fn read_at_most(reader: impl Read, max_len: u64, expected_len: u64) -> io::Result<Vec<u8>> {
     let capacity = usize::try_from(expected_len.min(max_len).saturating_add(1)).map_err(|_| too_large(max_len))?;
     let mut bytes = Vec::with_capacity(capacity);

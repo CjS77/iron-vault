@@ -1,4 +1,14 @@
-//! The names of the data files in the config directory.
+//! Config file names: the four data files the approval transaction keeps in the config directory
+//! ([config approval](../../../design/config-approval.md#file-layout)).
+//!
+//! ```text
+//! <config directory>/          /etc/iron-vault in a protected install
+//! ├── config.toml              Active: the config the service serves
+//! ├── config.toml.sig          ActiveSignature: its config approval
+//! ├── config.toml.pending      Pending: a proposed config, written before it is signed
+//! ├── config.toml.sig.staged   StagedSignature: the approval of the pending config, written before the commit
+//! └── config.toml.lock         the config-directory lock (not a ConfigFileName)
+//! ```
 
 use std::fmt;
 
@@ -8,14 +18,14 @@ use crate::durable::temp_name;
 /// The most a config file may hold: 60 KiB.
 ///
 /// The proposed config travels in one admin request frame whose body is at most 64 KiB, less the command and field
-/// headers; 60 KiB leaves headroom and is about forty times the specification's example config.
+/// headers. 60 KiB leaves headroom and is about forty times the specification's example config.
 pub const MAX_CONFIG_LEN: usize = 61_440;
 
 /// One of the four data files the approval transaction keeps in the config directory.
 ///
-/// The set is closed, so a name needs no validation and cannot be the lock file. Which of the files the store may
-/// write by itself is decided by the functions that take a name: `Pending` and `StagedSignature` are written by a
-/// durable replace, `Active` and `ActiveSignature` only by publish.
+/// The set is closed, so a name needs no validation and cannot be the lock file. The functions that take a name decide
+/// how each file may be written: `Pending` and `StagedSignature` by a durable replace, `Active` and `ActiveSignature`
+/// only by publish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ConfigFileName {
     /// `config.toml`, the active config.
@@ -29,10 +39,10 @@ pub enum ConfigFileName {
 }
 
 impl ConfigFileName {
-    /// Every data file.
+    /// Every data file, in declaration order.
     pub const ALL: [Self; 4] = [Self::Active, Self::ActiveSignature, Self::Pending, Self::StagedSignature];
 
-    /// The file's name in the config directory.
+    /// Returns the file's name in the config directory, such as `config.toml`.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Active => "config.toml",
@@ -42,7 +52,7 @@ impl ConfigFileName {
         }
     }
 
-    /// The most the file may hold; a read or write beyond it is refused.
+    /// Returns the most the file may hold. A read or write beyond it is refused.
     pub const fn max_len(self) -> usize {
         match self {
             Self::Active | Self::Pending => MAX_CONFIG_LEN,
@@ -50,7 +60,7 @@ impl ConfigFileName {
         }
     }
 
-    /// The temporary name a durable replace of this file writes first: `.<name>.tmp`.
+    /// Returns the temporary name a durable replace of this file writes first: `.<name>.tmp`.
     pub fn temp_name(self) -> String {
         temp_name(self.as_str())
     }

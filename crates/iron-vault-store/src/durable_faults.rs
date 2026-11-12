@@ -10,7 +10,7 @@ use crate::{StateDirLock, StateFileName, WriteError, WriteStep, durable_remove, 
 const OLD: &[u8] = b"the old record, longer than the new one";
 const NEW: &[u8] = b"the new record";
 
-/// A locked scratch state directory; the lock is real, the files live in a [`FaultFs`] under the same path.
+/// A locked scratch state directory. The lock is real; the files live in a [`FaultFs`] under the same path.
 struct Setup {
     dir: TestDir,
     lock: StateDirLock,
@@ -31,7 +31,7 @@ impl Setup {
         self.dir.path().join(".rec.tmp")
     }
 
-    /// A fresh filesystem holding `old` durably at the destination, or nothing there.
+    /// Creates a fresh filesystem holding `old` durably at the destination, or nothing there if `old` is `None`.
     fn fs(&self, old: Option<&[u8]>) -> FaultFs {
         old.into_iter()
             .fold(FaultFs::new(), |fs, bytes| fs.with_durable_file(&self.dest(), bytes))
@@ -50,7 +50,7 @@ fn rec() -> StateFileName {
     StateFileName::new("rec").unwrap()
 }
 
-/// The trace of an uninterrupted run of `op` on a fresh filesystem.
+/// Returns the call trace of an uninterrupted run of `op` on a fresh filesystem.
 fn clean_trace(setup: &Setup, old: Option<&[u8]>, op: impl Fn(&Setup, &FaultFs) -> Result<(), WriteError>) -> Vec<FsCall> {
     let fs = setup.fs(old);
     op(setup, &fs).unwrap();
@@ -69,7 +69,8 @@ fn write_step(op: FsOp) -> WriteStep {
     }
 }
 
-/// The destination holds exactly the old bytes (or is absent when there were none) or exactly the new bytes.
+/// Asserts that the destination holds exactly the old bytes (or is absent when there were none) or exactly the new
+/// bytes.
 fn assert_old_or_new(fs: &FaultFs, setup: &Setup, old: Option<&[u8]>, context: &str) {
     let now = fs.contents(&setup.dest());
     assert!(

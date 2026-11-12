@@ -1,4 +1,9 @@
-//! The state-directory lock: proof that this process is the only writer of vault and control files.
+//! The state-directory lock: proof that this process is the only writer of vault and control files
+//! ([spec §13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes)).
+//!
+//! The service takes it at startup and holds it for its lifetime. Every function in this crate that reads or writes a
+//! state file takes a `&StateDirLock`, so the type system rules out a write made without it. A second service started
+//! against the same directory fails at once with [`LockError::Held`](crate::LockError::Held).
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -6,12 +11,12 @@ use std::path::{Path, PathBuf};
 use crate::LockError;
 use crate::dir_lock::lock_file;
 
-/// Name of the lock file inside the state directory.
+/// The name of the lock file inside the state directory.
 pub(crate) const LOCK_FILE: &str = "lock";
 
 /// An exclusive lock on a state directory, held until this guard drops.
 ///
-/// Store writes take a reference to this guard so a write cannot happen without the lock.
+/// Store reads and writes take a reference to this guard, so none can happen without the lock.
 #[derive(Debug)]
 pub struct StateDirLock {
     dir: PathBuf,
@@ -20,7 +25,7 @@ pub struct StateDirLock {
 }
 
 impl StateDirLock {
-    /// Takes the exclusive lock on `dir`, failing at once if another instance holds it.
+    /// Takes the exclusive lock on `dir`, or fails at once with [`LockError::Held`] if another instance holds it.
     pub fn acquire(dir: &Path) -> Result<Self, LockError> {
         Ok(Self {
             dir: dir.to_path_buf(),
@@ -28,7 +33,7 @@ impl StateDirLock {
         })
     }
 
-    /// The locked state directory; later writes resolve their paths through it.
+    /// Returns the locked state directory. Every state-file path is resolved through it.
     pub fn dir(&self) -> &Path {
         &self.dir
     }

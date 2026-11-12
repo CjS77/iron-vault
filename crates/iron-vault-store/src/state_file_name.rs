@@ -1,4 +1,23 @@
-//! The name of one file in the state directory.
+//! State file names: the validated name of one file in the state directory.
+//!
+//! Every file the store reads or writes in the state directory is named by a [`StateFileName`]. The constructors below
+//! name every file the store owns:
+//!
+//! ```text
+//! <state directory>/             /var/lib/iron-vault in a protected install
+//! ├── lock                        the state-directory lock (never a StateFileName)
+//! ├── identity.age                identity envelope: the vault identity, wrapped for every recipient
+//! ├── operational.age             passphrase envelope: the operational identity, sealed with the vault passphrase
+//! ├── manifest.age                vault manifest: which credential records exist
+//! ├── record-<uuid>.age           one credential record
+//! ├── approval.age                approval state: pinned approvers and approval counters
+//! ├── approver-<uuid>.age         a software approver's key envelope
+//! ├── approver-<uuid>.tpm         a TPM approver's key blob
+//! ├── recipients.age              recipient inventory  (recipients.age.staged during a recipient change)
+//! ├── recovery.toml               recovery check record
+//! ├── locked-by-owner             owner lock
+//! └── init.unfinished, import.unfinished, reset.unfinished    markers of an unfinished operation
+//! ```
 
 use std::fmt;
 
@@ -7,13 +26,13 @@ use uuid::Uuid;
 use crate::ApproverId;
 use crate::record_id::RecordId;
 
-/// Name of the lock file, which no store write may touch in any letter case.
+/// The name of the lock file, which no store write may touch in any letter case.
 const LOCK_NAME: &str = "lock";
 
 /// One flat file name inside the state directory, valid on construction.
 ///
 /// Store files sit directly in the state directory, so a durable write only ever fsyncs that one directory. A name
-/// never starts with `.`, which keeps it distinct from every temporary name, and is never `lock` in any letter case:
+/// never starts with `.`, which keeps it distinct from every temporary name. It is never `lock` in any letter case:
 /// on a case-insensitive filesystem `LOCK` names the held lock file, and replacing it would break the single writer.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StateFileName(String);
@@ -36,7 +55,8 @@ pub enum StateFileNameError {
 }
 
 impl StateFileName {
-    /// Validates `name` as a flat state file name.
+    /// Validates `name` as a flat state file name: non-empty, ASCII `[A-Za-z0-9._-]` only, no leading `.`, and not
+    /// `lock` in any letter case.
     pub fn new(name: &str) -> Result<Self, StateFileNameError> {
         match name {
             "" => Err(StateFileNameError::Empty),
@@ -47,105 +67,111 @@ impl StateFileName {
         }
     }
 
-    /// The identity envelope's file, `identity.age`.
+    /// Returns the name of the identity envelope's file, `identity.age`.
     pub fn identity_envelope() -> Self {
         Self("identity.age".to_owned())
     }
 
-    /// The passphrase envelope's file, `operational.age`.
+    /// Returns the name of the passphrase envelope's file, `operational.age`.
     pub fn passphrase_envelope() -> Self {
         Self("operational.age".to_owned())
     }
 
-    /// The vault manifest's file, `manifest.age`.
+    /// Returns the name of the vault manifest's file, `manifest.age`.
     pub fn manifest() -> Self {
         Self("manifest.age".to_owned())
     }
 
-    /// The approval state's file, `approval.age`.
+    /// Returns the name of the approval state's file, `approval.age`.
     pub fn approval_state() -> Self {
         Self("approval.age".to_owned())
     }
 
-    /// The recipient inventory's file, `recipients.age`.
+    /// Returns the name of the recipient inventory's file, `recipients.age`.
     pub fn recipient_inventory() -> Self {
         Self("recipients.age".to_owned())
     }
 
-    /// The staged inventory's file, `recipients.age.staged`: the inventory a recipient change writes before the identity
-    /// envelope, so a change interrupted after its commit point can be finished from it.
+    /// Returns the name of the staged inventory's file, `recipients.age.staged`.
+    ///
+    /// A recipient change writes the staged inventory before the identity envelope, so a change interrupted after its
+    /// commit point can be finished from it.
     pub fn staged_recipient_inventory() -> Self {
         Self("recipients.age.staged".to_owned())
     }
 
-    /// The approver key envelope's file for the software approver `id`: `approver-<id>.age`, the ID in lowercase
+    /// Returns the name of the software approver `id`'s key envelope file: `approver-<id>.age`, with the ID in lowercase
     /// hyphenated form. Its text uses only `[0-9a-f-]`, so the name always passes [`StateFileName::new`].
     pub fn approver_key(id: ApproverId) -> Self {
         Self(format!("approver-{id}.age"))
     }
 
-    /// The approver ID `name` is the approver key envelope of, if it is exactly [`StateFileName::approver_key`] of a
-    /// version 4 UUID. Any other spelling of an ID, such as upper case, names no approver key.
+    /// Returns the approver ID whose key envelope file `name` is, if `name` is exactly [`StateFileName::approver_key`]
+    /// of a version 4 UUID. Any other spelling of an ID, such as upper case, gives `None`.
     pub(crate) fn approver_key_id(name: &str) -> Option<ApproverId> {
         approver_file_id(name, ".age", Self::approver_key)
     }
 
-    /// The TPM key blob's file for the TPM approver `id`: `approver-<id>.tpm`, the ID in lowercase hyphenated form, beside
-    /// the software approvers' `approver-<id>.age`.
+    /// Returns the name of the TPM approver `id`'s key blob file: `approver-<id>.tpm`, with the ID in lowercase
+    /// hyphenated form. It sits beside the software approvers' `approver-<id>.age` files.
     pub(crate) fn tpm_key_blob(id: ApproverId) -> Self {
         Self(format!("approver-{id}.tpm"))
     }
 
-    /// The approver ID `name` is the TPM key blob of, if it is exactly [`StateFileName::tpm_key_blob`] of a version 4
-    /// UUID. Any other spelling of an ID names no key blob.
+    /// Returns the approver ID whose TPM key blob file `name` is, if `name` is exactly [`StateFileName::tpm_key_blob`]
+    /// of a version 4 UUID. Any other spelling of an ID gives `None`.
     pub(crate) fn tpm_key_blob_id(name: &str) -> Option<ApproverId> {
         approver_file_id(name, ".tpm", Self::tpm_key_blob)
     }
 
-    /// The empty file `init.unfinished`, which marks a vault initialization that has not finished.
+    /// Returns the name `init.unfinished`: an empty file that marks a vault initialization that has not finished.
     pub fn unfinished_initialization() -> Self {
         Self("init.unfinished".to_owned())
     }
 
-    /// The empty file `import.unfinished`, which marks a vault import that has not finished.
+    /// Returns the name `import.unfinished`: an empty file that marks a vault import that has not finished.
     pub fn unfinished_import() -> Self {
         Self("import.unfinished".to_owned())
     }
 
-    /// The empty file `reset.unfinished`, which marks a reset past its commit point that has not finished.
+    /// Returns the name `reset.unfinished`: an empty file that marks a reset past its commit point that has not
+    /// finished.
     pub fn unfinished_reset() -> Self {
         Self("reset.unfinished".to_owned())
     }
 
-    /// The owner-lock file, `locked-by-owner`: empty, and while anything is at this name a starting service skips host
-    /// unlock. `lock` writes it and a passphrase `unlock` removes it.
+    /// Returns the name of the owner lock file, `locked-by-owner`.
+    ///
+    /// The file is empty. While anything is at this name, a starting service skips host unlock. `lock` writes it and a
+    /// passphrase `unlock` removes it.
     pub fn owner_lock() -> Self {
         Self("locked-by-owner".to_owned())
     }
 
-    /// The recovery check record's file, `recovery.toml`.
+    /// Returns the name of the recovery check record's file, `recovery.toml`.
     pub fn recovery_check_record() -> Self {
         Self("recovery.toml".to_owned())
     }
 
-    /// The file of the credential record with ID `id`: `record-<id>.age`. A record ID's text uses only `[0-9a-f-]`, so
-    /// the name always passes [`StateFileName::new`].
+    /// Returns the name of the credential record file for ID `id`: `record-<id>.age`. A record ID's text uses only
+    /// `[0-9a-f-]`, so the name always passes [`StateFileName::new`].
     pub fn record(id: &RecordId) -> Self {
         Self(format!("record-{id}.age"))
     }
 
-    /// The name as a string.
+    /// Returns the name as a string.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// The temporary name a durable replace of this file writes first: `.<name>.tmp`.
+    /// Returns the temporary name a durable replace of this file writes first: `.<name>.tmp`.
     pub fn temp_name(&self) -> String {
         crate::durable::temp_name(&self.0)
     }
 
-    /// The state file whose temporary name is exactly `temp`, if `temp` is one [`StateFileName::temp_name`] can
-    /// produce. Any other name, including every other dotfile, gives `None`, so nothing else is taken for a temp file.
+    /// Returns the state file whose temporary name is exactly `temp`, if [`StateFileName::temp_name`] can produce
+    /// `temp`. Any other name, including every other dotfile, gives `None`, so nothing else is taken for a temporary
+    /// file.
     pub(crate) fn from_temp_name(temp: &str) -> Option<Self> {
         let name = Self::new(temp.strip_prefix('.')?.strip_suffix(".tmp")?).ok()?;
         (name.temp_name() == temp).then_some(name)
@@ -158,8 +184,9 @@ impl fmt::Display for StateFileName {
     }
 }
 
-/// The approver ID in `name`, if `name` is exactly `file` of it: `approver-`, the ID, then `suffix`. Comparing with the
-/// name `file` builds refuses every other spelling of the same ID.
+/// Returns the approver ID in `name`, if `name` is exactly `file` of it: `approver-`, the ID, then `suffix`.
+///
+/// Comparing with the name that `file` builds refuses every other spelling of the same ID.
 fn approver_file_id(name: &str, suffix: &str, file: fn(ApproverId) -> StateFileName) -> Option<ApproverId> {
     let uuid = Uuid::try_parse(name.strip_prefix("approver-")?.strip_suffix(suffix)?).ok()?;
     let id = ApproverId::from_bytes(uuid.into_bytes()).ok()?;

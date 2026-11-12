@@ -1,15 +1,15 @@
-//! Scratch directories for filesystem tests, removed when the guard drops.
+//! Scratch directories for tests that use the real filesystem, removed when the guard drops.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
-/// A fresh, empty directory under the system temp directory, deleted on drop.
+/// A fresh, empty directory under the system temporary directory, deleted on drop.
 pub(crate) struct TestDir(PathBuf);
 
 impl TestDir {
-    /// Creates a directory unique to this process, `name` and call.
+    /// Creates a directory whose name is unique to this process, `name` and call.
     pub(crate) fn new(name: &str) -> Self {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("iv-store-{name}-{}-{n}", std::process::id()));
@@ -18,7 +18,7 @@ impl TestDir {
         Self(dir)
     }
 
-    /// The directory path.
+    /// Returns the directory's path.
     pub(crate) fn path(&self) -> &Path {
         &self.0
     }
@@ -30,8 +30,10 @@ impl Drop for TestDir {
     }
 }
 
-/// Makes a FIFO at `path` with a system call. Spawning `mkfifo` would fork, and the child would share this process's
-/// lock fds until it execs, so a concurrent test retaking its own lock could find it held.
+/// Makes a FIFO at `path` with the `mkfifo` system call.
+///
+/// Spawning the `mkfifo` command would fork, and the child would share this process's lock file descriptors until it
+/// execs, so a concurrent test retaking its own lock could find it held.
 #[cfg(unix)]
 pub(crate) fn make_fifo(path: &Path) {
     rustix::fs::mknodat(
