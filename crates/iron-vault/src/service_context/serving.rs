@@ -1,5 +1,12 @@
-//! The task that accepts on the request listeners, and the listener rebuild that replaces it without cutting off the
-//! requests already being served.
+//! Runs the task that accepts on the request listeners, and the
+//! [listener rebuild](../../../../design/glossary.md#terms) that replaces it without cutting off the requests already
+//! being served.
+//!
+//! ```text
+//!   Serving::start ──▶ accept loop ──▶ Connections ──▶ ProxyHandler ──▶ SnapshotHolder::load
+//!   Serving::rebuild:  halt the loop (connections keep running) ──▶ RequestListeners::rebuild
+//!                      ──▶ close the connections of closed listeners, or all of them on new limits ──▶ accept again
+//! ```
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -20,15 +27,15 @@ use crate::trusted_path_report::ServicePaths;
 /// The request server with the proxy handler, accepting on one listener set until it is stopped or rebuilt.
 ///
 /// Every request it serves takes its admission from the holder, so the same server answers `503` while the set is
-/// provisional and serves once a snapshot is held. The connections live beside the accept loop rather than in it, so a
-/// rebuild can stop accepting without closing them.
+/// provisional and serves once a snapshot is held. The connections are kept apart from the accept loop, so a rebuild
+/// can stop accepting without closing them.
 #[derive(Debug)]
 pub(super) struct Serving {
     names: Vec<ListenerName>,
     server: Arc<RequestServer<ProxyHandler>>,
-    /// What a server built for new limits admits requests by.
+    /// The holder that a server built for new limits admits requests by.
     holder: Arc<SnapshotHolder>,
-    /// What a server built for new limits refuses requests by once a log write has failed.
+    /// The flag that a server built for new limits refuses requests by once a log write has failed.
     log_failure: LogFailure,
     stop: oneshot::Sender<()>,
     task: JoinHandle<(RequestListeners, Connections)>,
@@ -76,12 +83,12 @@ impl Serving {
         }
     }
 
-    /// The names of the listeners being served, in name order.
+    /// Returns the names of the listeners being served, in name order.
     pub(super) fn names(&self) -> Vec<ListenerName> {
         self.names.clone()
     }
 
-    /// The listener rebuild against the verified `listeners` and `limits`, adopting from `passed` where it can.
+    /// Runs the listener rebuild against the verified `listeners` and `limits`, adopting from `passed` where it can.
     ///
     /// Accepting pauses while the set is rebuilt; a connection that arrives meanwhile waits in its socket's backlog.
     /// The connections of every listener the rebuild closes are closed before this returns, so the next snapshot is
