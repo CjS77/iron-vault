@@ -1,5 +1,22 @@
-//! Vault import at store level: the write order of design/migration-bundle.md, "Write order", from `import.unfinished`
-//! to its removal (specification §12, §13, §14, §16 steps 4 and 5).
+//! Vault import at store level: the [write order](../../../design/migration-bundle.md#write-order) that `import` runs
+//! on the destination, from `import.unfinished` to its removal
+//! ([spec §12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload),
+//! [§13](../../../design/iron-vault-specification.md#13-vault-structure-and-durable-writes),
+//! [§14](../../../design/iron-vault-specification.md#14-recipients-startup-and-memory),
+//! [§16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration) steps 4 and 5).
+//!
+//! ```text
+//!  1  discard leftovers, write import.unfinished   ← after this, a failure leaves the vault Unfinished
+//!  2  record-<record ID>.age        the bundle's bytes, ascending record ID
+//!  3  approver-<approver ID>.age    the envelope inside each bundled approver key
+//!  4  approval.age                  the bundle's bytes
+//!  5  config.toml                   the bundle's bytes
+//!  6  identity.age, recipients.age  wrapped for the new recipients, each proved
+//!  7  operational.age               sealed to the new vault passphrase
+//!  8  manifest.age                  the bundle's bytes, last of the vault files
+//!  9  read every file back and check it with the vault identity
+//! 10  remove import.unfinished      ← commit
+//! ```
 //!
 //! [`crate::begin_import`] and [`crate::finish_import`] write and remove the marker; this module runs the steps between.
 //! Each step is durable before the next starts, so a failure at any step after the first leaves a directory that reads
@@ -24,7 +41,8 @@ use crate::{
 };
 
 /// The keys an import enrols for the destination: a new operational identity, a new recovery key and, with
-/// `--host-unlock`, this machine's host unlock identity (design/migration-bundle.md, "Destination recipients").
+/// `--host-unlock`, this machine's host unlock identity
+/// ([migration bundle, "Destination recipients"](../../../design/migration-bundle.md#destination-recipients)).
 ///
 /// The source's recipients never come across, so the destination has its own two ways in from its commit point. It has
 /// no `Clone`, its `Debug` shows nothing of any key, and every key is dropped when the import returns.
@@ -91,7 +109,7 @@ pub enum ImportStep {
 }
 
 impl ImportStep {
-    /// The step's number in the write order, or `None` for the discard.
+    /// Returns the step's number in the write order, or `None` for the discard.
     pub fn number(self) -> Option<u8> {
         match self {
             Self::Discard => None,
@@ -132,14 +150,15 @@ impl fmt::Display for ImportStep {
 }
 
 /// What the write order tells its caller as it goes, so the service can send the owner progress notices and the CLI's
-/// reads never wait out its socket timeout on a large vault (design/migration-bundle.md, "Write order").
+/// reads never wait out its socket timeout on a large vault
+/// ([migration bundle, "Write order"](../../../design/migration-bundle.md#write-order)).
 ///
 /// The methods return nothing: a notice that cannot be sent never stops the write order.
 pub trait ImportProgress {
-    /// `step` is about to start. Step 1 is told before any discard.
+    /// Tells the caller that `step` is about to start. Step 1 is told before any discard.
     fn step(&mut self, step: ImportStep);
 
-    /// Within step 2 or step 9, `done` of the `total` record files are written or checked.
+    /// Tells the caller that, within step 2 or step 9, `done` of the `total` record files are written or checked.
     fn records(&mut self, step: ImportStep, done: usize, total: usize);
 }
 
@@ -154,18 +173,18 @@ pub struct ImportError {
 }
 
 impl ImportError {
-    /// The step that failed.
+    /// Returns the step that failed.
     pub fn step(&self) -> ImportStep {
         self.step
     }
 
-    /// Why it failed. [`InitStateError::ImportFinishUncertain`] at [`ImportStep::Finish`] means the outcome is
+    /// Returns why it failed. [`InitStateError::ImportFinishUncertain`] at [`ImportStep::Finish`] means the outcome is
     /// unknown: the vault reads Initialized now and may read Unfinished after power loss.
     pub fn cause(&self) -> &ImportFailure {
         &self.cause
     }
 
-    /// What the discard removed, for the `vault.init-discarded` or `migration.import-discarded` log, as
+    /// Returns what the discard removed, for the `vault.init-discarded` or `migration.import-discarded` log, as
     /// [`crate::InitError::discarded`] reports it.
     pub fn discarded(&self) -> Option<&Discarded> {
         self.discarded.as_deref()
@@ -245,7 +264,8 @@ pub fn import_vault<F: StoreFs>(
     )
 }
 
-/// [`import_vault`] sealing the passphrase envelope at work factor `log_n`, so tests do not spend seconds in scrypt.
+/// Runs [`import_vault`] sealing the passphrase envelope at work factor `log_n`, so tests do not spend seconds in
+/// scrypt.
 pub(crate) fn import_vault_at<F: StoreFs>(
     (state, config): (&StateDirLock, &ConfigDirLock),
     fs: &F,
@@ -273,7 +293,7 @@ pub(crate) fn import_vault_at<F: StoreFs>(
     }
 }
 
-/// The discard and step 1. The state is read first only to name the step a failure belongs to, as `init`'s is.
+/// Runs the discard and step 1. The state is read first only to name the step a failure belongs to, as `init`'s is.
 fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Result<Option<Discarded>, ImportError> {
     let unfinished = matches!(
         InitializationState::read(state, config, fs).map_err(at(ImportStep::Begin))?,
@@ -297,7 +317,7 @@ fn begin(state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> Res
     })
 }
 
-/// Steps 2 to 10, once step 1 is durable. Returns the roles enrolled.
+/// Runs steps 2 to 10, once step 1 is durable. Returns the roles enrolled.
 fn write_vault<F: StoreFs>(
     (state, config): (&StateDirLock, &ConfigDirLock),
     fs: &F,
@@ -327,7 +347,8 @@ fn write_vault<F: StoreFs>(
     Ok(recipients)
 }
 
-/// Steps 2 to 5: the files whose bytes the bundle holds, apart from the manifest, which comes last of the vault files.
+/// Runs steps 2 to 5: writes the files whose bytes the bundle holds, apart from the manifest, which comes last of the
+/// vault files.
 fn copy_bundle_files(
     (state, config): (&StateDirLock, &ConfigDirLock),
     fs: &impl StoreFs,
@@ -348,7 +369,7 @@ fn copy_bundle_files(
     write_imported_config(config, fs, bundle.config()).map_err(at(ImportStep::Config))
 }
 
-/// Step 2: every record file, in ascending record ID, each with its own directory fsync.
+/// Runs step 2: writes every record file, in ascending record ID, each with its own directory fsync.
 fn write_records(
     state: &StateDirLock,
     fs: &impl StoreFs,
@@ -363,10 +384,10 @@ fn write_records(
     })
 }
 
-/// Step 9: the files as read back, held to the bundle checks `unlock`'s config check rests on. The manifest and the
-/// approval state must open with the vault identity and pair; they must name the bundle's records and approvers; each
-/// record file's digest must match its manifest entry, each approver key file must have its form, and `config.toml`
-/// must match the committed config digest.
+/// Runs step 9: holds the files as read back to the bundle checks that `unlock`'s config check rests on. The manifest
+/// and the approval state must open with the vault identity and pair, and must name the bundle's records and approvers.
+/// Each record file's digest must match its manifest entry, each approver key file must have its form, and
+/// `config.toml` must match the committed config digest.
 fn check_written(
     (state, config): (&StateDirLock, &ConfigDirLock),
     fs: &impl StoreFs,

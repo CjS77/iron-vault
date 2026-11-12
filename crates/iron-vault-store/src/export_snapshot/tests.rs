@@ -40,7 +40,7 @@ pub(crate) fn approver_key() -> Vec<u8> {
     seal_signer_key_for_tests(&key, &ApprovalPassphrase::new(SecretString::from("approval phrase")).unwrap()).unwrap()
 }
 
-/// `envelope` with its scrypt stanza's work factor (2) replaced by `log_n`.
+/// Returns `envelope` with its scrypt stanza's work factor (2) replaced by `log_n`.
 pub(crate) fn with_work_factor(envelope: &[u8], log_n: u8) -> Vec<u8> {
     let line_end = 22 + envelope[22..].iter().position(|&b| b == b'\n').unwrap();
     [&envelope[..line_end - 2], format!(" {log_n}").as_bytes(), &envelope[line_end..]].concat()
@@ -174,7 +174,7 @@ fn read(lock: &StateDirLock, fs: &FaultFs, name: &StateFileName) -> Vec<u8> {
     crate::read_state_file(lock, fs, name, MAX_MANIFEST_LEN as u64).unwrap()
 }
 
-/// The calls since call `from` changed no file and no directory entry.
+/// Asserts that the calls since call `from` changed no file and no directory entry.
 fn assert_nothing_written(fs: &FaultFs, from: usize) {
     let writes = [
         FsOp::CreatePrivate,

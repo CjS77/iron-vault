@@ -14,7 +14,7 @@ pub(crate) struct Parts {
 }
 
 impl Parts {
-    /// The fixture's vault as export bundles it. The exported identity envelope is a stand-in: step 4 never reads it,
+    /// Builds the fixture's vault as export bundles it. The exported identity envelope is a stand-in: step 4 never reads it,
     /// and sealing it would run scrypt.
     pub(crate) fn of(fixture: &Fixture) -> Self {
         let vault = fixture.identity.public_key();
@@ -65,7 +65,7 @@ impl Parts {
         encoder.finish().unwrap()
     }
 
-    /// Step 4 on the encoded and decoded bundle, with the fixture's vault identity as step 3 would have opened it.
+    /// Runs step 4 on the encoded and decoded bundle, with the fixture's vault identity as step 3 would have opened it.
     fn verify(&self) -> Result<VerifiedBundle, BundleCheckError> {
         verify_encoded(&self.encode())
     }
@@ -75,14 +75,14 @@ impl Parts {
     }
 }
 
-/// Step 4 on the bundle `encoded`, with the fixture's vault identity as step 3 would have opened it.
+/// Runs step 4 on the bundle `encoded`, with the fixture's vault identity as step 3 would have opened it.
 pub(crate) fn verify_encoded(encoded: &[u8]) -> Result<VerifiedBundle, BundleCheckError> {
     let (header, entries) = decode(encoded).into_parts();
     let identity = VaultIdentity::from_secret(KAT_IDENTITY);
     verify_bundle(OpenedBundle { header, entries, identity })
 }
 
-/// The fixture's manifest sealed again with `vault_id`, recording the current approval state as its peer, so it is the
+/// Returns the fixture's manifest sealed again with `vault_id`, recording the current approval state as its peer, so it is the
 /// newer file of the pair.
 fn manifest_after_approval(fixture: &Fixture, vault_id: VaultId) -> Vec<u8> {
     let manifest = open_manifest(&fixture.identity, &fixture.file(&StateFileName::manifest())).unwrap();

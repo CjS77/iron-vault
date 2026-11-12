@@ -116,7 +116,7 @@ impl Dirs {
         names
     }
 
-    /// Every file in both directories with its contents, sorted, read through `fs`.
+    /// Returns every file in both directories with its contents, sorted, read through `fs`.
     fn snapshot(&self, fs: &impl StoreFs) -> Vec<(String, Vec<u8>)> {
         [self.state_dir.path(), self.config_dir.path()]
             .into_iter()
@@ -137,7 +137,7 @@ fn vault_passphrase() -> Passphrase {
     Passphrase::new(SecretString::from(VAULT_PASSPHRASE)).unwrap()
 }
 
-/// The fixture's vault, exported as a bundle.
+/// Returns the fixture's vault, exported as a bundle.
 fn source() -> (Fixture, Vec<u8>) {
     let fixture = Fixture::new();
     let encoded = Parts::of(&fixture).encode();

@@ -1,9 +1,21 @@
 //! The export snapshot: the vault files `export` checks before any prompt and streams into a migration bundle after its
-//! authorization is consumed (specification §16 steps 1 and 2; `design/migration-bundle.md`, "The snapshot").
+//! authorization is consumed
+//! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration) steps 1 and 2;
+//! [migration bundle, "The snapshot"](../../../design/migration-bundle.md#the-snapshot)).
+//!
+//! The service calls it at two steps of the [export exchange](../../../design/migration-bundle.md#export-1):
+//!
+//! ```text
+//! step 3   check_export_snapshot    read and check manifest, approval.age, config.toml,
+//!                                   approver key files (form only), every record file's digest; keep nothing
+//! step 4–9 summary, migration authorization, export passphrase
+//! step 10  stream_export_snapshot   read and check the same files again, seal the identity and approver keys,
+//!                                   stream the bundle entry by entry, one record file at a time
+//! ```
 //!
 //! No record is ever decrypted: a record file is checked against its manifest digest and copied as it is. Nothing is
 //! written to the state or config directory, and nothing to a temp file. The caller holds the service-wide lock from
-//! exchange step 2 to the end, which is what makes the files read at the two steps one consistent vault.
+//! exchange step 2 to the end, so the files read at the two steps are one consistent vault.
 
 use std::fmt;
 use std::io::{self, Write};
@@ -33,7 +45,7 @@ pub enum SnapshotStep {
 }
 
 impl SnapshotStep {
-    /// The step's fixed name in a message and a log record.
+    /// Returns the step's fixed name for a message and a log record.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Check => "check",
@@ -57,8 +69,8 @@ pub struct SnapshotSummary {
     pub vault_id: VaultId,
     /// The number of record files the manifest names.
     pub record_count: usize,
-    /// The number of software approver key files the bundle carries. A `tpm` approver has none, so this can be fewer than the
-    /// pinned approvers.
+    /// The number of software approver key files the bundle carries. A `tpm` approver has none, so this can be fewer
+    /// than the pinned approvers.
     pub approver_count: usize,
     /// The committed approval version.
     pub committed_version: ApprovalVersion,
@@ -151,7 +163,7 @@ pub enum SnapshotError {
 }
 
 impl SnapshotError {
-    /// The step that failed.
+    /// Returns the step that failed.
     pub fn step(&self) -> SnapshotStep {
         match self {
             Self::Unreadable { step, .. } | Self::Damaged { step, .. } => *step,
@@ -162,7 +174,7 @@ impl SnapshotError {
         }
     }
 
-    /// The file that failed, when a file did.
+    /// Returns the file that failed, or `None` when the failure is not a file's.
     pub fn file(&self) -> Option<EntryName> {
         match self {
             Self::Unreadable { file, .. } | Self::Damaged { file, .. } | Self::SealApprover { file, .. } => Some(*file),
@@ -170,7 +182,7 @@ impl SnapshotError {
         }
     }
 
-    /// The kind of the failure as a label that holds no file name or error text.
+    /// Returns the kind of the failure as a label that holds no file name or error text.
     pub fn error_kind_label(&self) -> ErrorKindLabel {
         match self {
             Self::Unreadable { kind, .. } => kind.clone(),
@@ -197,7 +209,7 @@ pub fn check_record_digest(file: &[u8], entry: &ManifestEntry) -> Result<(), Sna
         .ok_or(SnapshotDamage::DigestMismatch)
 }
 
-/// Exchange step 3, before any prompt: checks the vault without decrypting a record, and keeps none of the files.
+/// Checks the vault at exchange step 3, before any prompt, without decrypting a record, and keeps none of the files.
 ///
 /// In order: the manifest and approval state open, and the approval state equals `held`; `config.toml` matches the
 /// committed config digest; each pinned approver's key file, in ascending approver ID, has the form of an approver key
@@ -219,8 +231,8 @@ pub fn check_export_snapshot(
     Ok(control.summary)
 }
 
-/// Exchange step 10, after the migration authorization is consumed: reads the vault again with the checks of
-/// [`check_export_snapshot`], seals it and writes the bundle to `sink` in bundle order.
+/// Streams the bundle at exchange step 10, after the migration authorization is consumed: reads the vault again with
+/// the checks of [`check_export_snapshot`], seals it and writes the bundle to `sink` in bundle order.
 ///
 /// It holds at most one record, the manifest, the config and the bundled approver keys. A record file is read when its
 /// turn comes and its digest is checked before any of its bytes reach the encoder. The export passphrase is dropped
@@ -248,7 +260,7 @@ pub fn stream_export_snapshot<W: Write>(
     write_bundle(&reader, &control, &envelope, &approvers, sink)
 }
 
-/// The files `control` read in step 1, kept for the bundle.
+/// The files [`Reader::control`] read, kept for the bundle: everything but the record files.
 struct Control {
     manifest_file: Vec<u8>,
     manifest: VaultManifest,
@@ -294,7 +306,7 @@ impl<'a, F: StoreFs> Reader<'a, F> {
         })
     }
 
-    /// Steps 1 to 3 of the check: the manifest, the approval state, the config and the approver key files.
+    /// Runs steps 1 to 3 of the check: the manifest, the approval state, the config and the approver key files.
     fn control(&self, held: &ApprovalState) -> Result<Control, SnapshotError> {
         let has_software = held.approvers().iter().any(|approver| approver.kind() == SignerKind::Software);
         if !has_software {
@@ -357,7 +369,7 @@ impl<'a, F: StoreFs> Reader<'a, F> {
         Ok(bytes)
     }
 
-    /// Each `software` approver's key file, in ascending approver ID, checked for form and never opened. A `tpm`
+    /// Reads each `software` approver's key file, in ascending approver ID, checked for form and never opened. A `tpm`
     /// approver has none: its key stays in the source machine's TPM.
     fn approver_keys(&self, held: &ApprovalState) -> Result<Vec<(ApproverId, Vec<u8>)>, SnapshotError> {
         held.approvers()
@@ -372,7 +384,7 @@ impl<'a, F: StoreFs> Reader<'a, F> {
             .collect()
     }
 
-    /// One record file, checked against its manifest entry and never decrypted.
+    /// Reads one record file, checked against its manifest entry and never decrypted.
     fn record(&self, id: &RecordId, entry: &ManifestEntry) -> Result<Vec<u8>, SnapshotError> {
         let file = EntryName::Record(*id);
         let bytes = self.state_file(file, &StateFileName::record(id), MAX_RECORD_FILE_LEN)?;
@@ -427,7 +439,7 @@ fn write_bundle<W: Write>(
     })
 }
 
-/// A sink's `io::Error` goes through the encoder unchanged; any other refusal is the snapshot's own.
+/// Maps an encoder error: a sink's `io::Error` passes through unchanged, and any other refusal is the snapshot's own.
 fn encode_error(error: EncodeError) -> SnapshotError {
     match error {
         EncodeError::Io(error) => SnapshotError::Transfer(error),

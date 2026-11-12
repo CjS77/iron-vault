@@ -1,6 +1,14 @@
-//! Import exchange steps 3 and 4: open a decoded migration bundle with the export passphrase, then verify that its
-//! contents belong together before import trusts or writes any of it (specification §16 steps 3 to 5;
-//! `design/migration-bundle.md`, "Admin exchanges", "Import").
+//! Import exchange steps 3 and 4: opens a decoded migration bundle with the export passphrase, then verifies that its
+//! contents belong together before `import` trusts or writes any of it
+//! ([spec §16](../../../design/iron-vault-specification.md#16-administration-recovery-and-migration) steps 3 to 5;
+//! [migration bundle, "Admin exchanges", "Import"](../../../design/migration-bundle.md#import-1)).
+//!
+//! ```text
+//! step 2  BundleDecoder          form only            ─→ DecodedBundle
+//! step 3  open_bundle            export passphrase    ─→ OpenedBundle   (identity opened, nothing trusted)
+//! step 4  verify_bundle          MACs, digests, IDs   ─→ VerifiedBundle (every file belongs to one vault)
+//! step 8  the write order        files read back      ─→ ControlFiles checks run again on disk
+//! ```
 //!
 //! The decoder checked the bundle's form only. Here the vault identity from the exported identity envelope opens the
 //! manifest and the approval state, whose MACs are keyed from it, and the bundle header and every other entry are held
@@ -77,7 +85,7 @@ pub enum BundleCheckError {
 }
 
 impl BundleCheckError {
-    /// The check's fixed short name, for the `bundle-invalid` message and the audit event's `detail`.
+    /// Returns the check's fixed short name, for the `bundle-invalid` message and the audit event's `detail`.
     pub fn name(&self) -> &'static str {
         match self {
             Self::ExportedIdentity => "exported_identity",
@@ -127,7 +135,7 @@ impl fmt::Debug for OpenedBundle {
     }
 }
 
-/// Import step 3: opens the exported identity envelope with `passphrase`, with `open_exported_identity`'s checks.
+/// Opens the exported identity envelope with `passphrase` at import step 3, with `open_exported_identity`'s checks.
 ///
 /// A passphrase that does not open it is [`OpenBundleError::WrongPassphrase`]; `age` cannot tell it from a damaged
 /// scrypt stanza. The envelope is dropped once opened: it is never written anywhere.
@@ -303,12 +311,19 @@ impl fmt::Debug for VerifiedBundle {
     }
 }
 
-/// Import step 4: verifies an opened bundle with its vault identity, returning the first failed bundle check.
+/// Verifies an opened bundle with its vault identity at import step 4, returning the first failed bundle check.
 ///
-/// In order: the manifest and the approval state ([`ControlFiles::open`]); the header's counts; the config's digest;
-/// the record IDs, then each record file's digest; the approver IDs, then each bundled approver key, opened with the
-/// vault identity to an approver key envelope of valid form. The header's counts are checked right after the two
-/// files they are held to, so a bundle whose header counts an entry the manifest does not is refused as `counts`.
+/// The checks run in this order:
+///
+/// 1. the manifest and the approval state ([`ControlFiles::open`]);
+/// 2. the header's counts;
+/// 3. the config's digest;
+/// 4. the record IDs, then each record file's digest;
+/// 5. the approver IDs, then each bundled approver key, opened with the vault identity to an approver key envelope of
+///    valid form.
+///
+/// The header's counts are checked right after the two files they are held to, so a bundle whose header counts an
+/// entry the manifest does not is refused as `counts`.
 pub fn verify_bundle(opened: OpenedBundle) -> Result<VerifiedBundle, BundleCheckError> {
     let OpenedBundle {
         header,
@@ -338,7 +353,7 @@ pub fn verify_bundle(opened: OpenedBundle) -> Result<VerifiedBundle, BundleCheck
     })
 }
 
-/// The bundled approver keys and the record files among `entries`; the fixed entries were taken out before.
+/// The bundled approver keys and the record files of a bundle, by ID; the fixed entries were taken out before.
 type ById = (BTreeMap<ApproverId, Vec<u8>>, BTreeMap<RecordId, Vec<u8>>);
 
 fn split_by_id(entries: BTreeMap<EntryName, Vec<u8>>) -> ById {
