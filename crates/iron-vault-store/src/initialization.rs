@@ -27,7 +27,7 @@
 use std::ffi::OsStr;
 use std::io;
 
-use crate::config_dir::remove_config_file;
+use crate::config_dir::{remove_config_file, remove_config_temp};
 use crate::durable::{ReadFailure, ensure_dir_sync_supported, read_in};
 use crate::owner_lock::remove_owner_lock;
 use crate::recovery_record::remove_recovery_check;
@@ -593,6 +593,8 @@ fn is_initial_config(config: &ConfigDirLock, fs: &impl StoreFs, file: ConfigFile
 /// One removal of a discard: a config file or a state file.
 enum Removal {
     Config(ConfigFileName),
+    /// The temp file of a durable replace of a config file, left by a crash before its rename.
+    ConfigTemp(ConfigFileName),
     State(StateFileName),
 }
 
@@ -601,6 +603,7 @@ impl Removal {
     fn run(&self, state: &StateDirLock, config: &ConfigDirLock, fs: &impl StoreFs) -> (String, bool, Result<(), InitStateError>) {
         let (name, (unlinked, result)) = match self {
             Self::Config(file) => (file.to_string(), config_removal(remove_config_file(config, fs, *file))),
+            Self::ConfigTemp(file) => (file.temp_name(), config_removal(remove_config_temp(config, fs, *file))),
             Self::State(file) => (file.to_string(), state_removal(durable_remove(state, fs, file))),
         };
         (name, unlinked, result)
@@ -618,9 +621,13 @@ fn removals(state: &StateDirLock, fs: &impl StoreFs, found: UnfinishedKind) -> R
         ),
         UnfinishedKind::Import => (vec![ConfigFileName::Active], import_files(&listing)),
     };
+    // Import step 5 writes `config.toml` by durable replace, so a crash can leave its temp file, which a later replace refuses
+    // to reuse. No other config file is written that way by an import.
+    let temps = (found == UnfinishedKind::Import).then_some(Removal::ConfigTemp(ConfigFileName::Active));
     Ok(configs
         .into_iter()
         .map(Removal::Config)
+        .chain(temps)
         .chain(files.into_iter().map(Removal::State))
         .collect())
 }

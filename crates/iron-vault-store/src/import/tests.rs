@@ -5,7 +5,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 use super::*;
 use crate::export_snapshot::tests::Fixture;
-use crate::fault_fs::{FaultFs, FsOp};
+use crate::fault_fs::{FaultFs, FsCall, FsOp};
 use crate::import_check::tests::{Parts, verify_encoded};
 use crate::test_dir::TestDir;
 use crate::{
@@ -301,6 +301,31 @@ fn an_unfinished_import_is_discarded_first() {
     // config.toml, the three records, the two approver keys, and the five fixed state files an import writes.
     assert_eq!(discarded.files.len(), 1 + 3 + 2 + 5, "{discarded:?}");
     assert_opens(&dirs, &fs, &run, imported);
+}
+
+/// Power lost after step 5 created `.config.toml.tmp` and before its rename leaves that temp file behind, which the
+/// durable replace of the retried import would otherwise refuse to reuse. The discard of the unfinished import removes it.
+#[test]
+fn a_retry_recovers_from_a_temp_config_left_by_a_crash_in_step_5() {
+    let (_fixture, encoded) = source();
+    let dirs = Dirs::new("import-config-temp");
+    let probe = dirs.fault_fs();
+    dirs.import(&probe, &encoded).unwrap();
+    let temp = dirs.config_dir.path().join(".config.toml.tmp");
+    let created = probe
+        .trace()
+        .iter()
+        .position(|call| *call == FsCall::CreatePrivate(temp.clone()))
+        .unwrap();
+    let fs = dirs.fault_fs();
+    fs.cut_power_after(created + 1);
+    assert_eq!(dirs.import(&fs, &encoded).unwrap_err().step(), ImportStep::Config);
+    fs.crash_keeping(&[&temp]);
+    assert!(fs.contents(&temp).is_some(), "the crash must leave the temp file");
+    let run = dirs.import_with(&fs, &encoded, None);
+    let imported = run.result.as_ref().unwrap();
+    assert_opens(&dirs, &fs, &run, imported);
+    assert_eq!(dirs.names(&fs, dirs.config_dir.path()), ["config.toml", "config.toml.lock"]);
 }
 
 /// A directory a refused import starts from, and the refusal it expects.

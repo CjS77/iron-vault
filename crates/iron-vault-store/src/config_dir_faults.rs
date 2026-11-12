@@ -461,7 +461,8 @@ fn remove_survives_a_crash_at_every_point() {
 #[test]
 fn sweep_removes_only_the_pending_and_staged_temp_names_durably() {
     let setup = Setup::new("cfg-sweep");
-    // The active files are written only by rename, so their temp names are never produced and never swept.
+    // Approvals write the active files only by rename. The one other writer of `config.toml`, import, has its leftover temp
+    // removed by the unfinished-import discard, so the sweep leaves these names alone.
     let bystanders = [
         ".config.toml.tmp",
         ".config.toml.sig.tmp",

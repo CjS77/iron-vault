@@ -267,7 +267,17 @@ pub fn remove_pending_and_staged(lock: &ConfigDirLock, fs: &impl StoreFs) -> Res
 /// Removing several files one call each, with the fsync inside each call, keeps their order durable: power loss cannot
 /// keep a later unlink and lose an earlier one.
 pub(crate) fn remove_config_file(lock: &ConfigDirLock, fs: &impl StoreFs, name: ConfigFileName) -> Result<bool, ConfigWriteError> {
-    match remove_in(fs, lock.dir(), name.as_str()) {
+    remove_named(lock, fs, name, name.as_str())
+}
+
+/// Durably removes the temporary file of a durable replace of `name`, `.<name>.tmp`. Same contract as
+/// [`remove_config_file`].
+pub(crate) fn remove_config_temp(lock: &ConfigDirLock, fs: &impl StoreFs, name: ConfigFileName) -> Result<bool, ConfigWriteError> {
+    remove_named(lock, fs, name, &name.temp_name())
+}
+
+fn remove_named(lock: &ConfigDirLock, fs: &impl StoreFs, name: ConfigFileName, entry: &str) -> Result<bool, ConfigWriteError> {
+    match remove_in(fs, lock.dir(), entry) {
         Ok(()) => Ok(true),
         Err(StepFailure {
             step: WriteStep::Remove,
@@ -346,7 +356,8 @@ fn rename_staged(fs: &impl StoreFs, dir: &Path, from: ConfigFileName, to: Config
 ///
 /// A durable replace cut short by a crash leaves `.<name>.tmp`, and the next replace of `name` refuses to reuse it.
 /// The service runs this once after taking the config-directory lock and before any write. Every other entry,
-/// including the lock file and `.config.toml.tmp`, is left alone. All removals share one directory fsync, reported
+/// including the lock file, is left alone. `.config.toml.tmp` is not swept: approvals write `config.toml` only by
+/// rename, and its sole writer is import step 5, whose unfinished-import discard removes the leftover. All removals share one directory fsync, reported
 /// against the first file.
 pub fn sweep_stale_config_temps(lock: &ConfigDirLock, fs: &impl StoreFs) -> Result<Vec<ConfigFileName>, ConfigWriteError> {
     let dir = lock.dir();

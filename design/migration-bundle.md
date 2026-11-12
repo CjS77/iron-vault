@@ -333,7 +333,9 @@ Unfinished:
   then `recovery.toml`, `locked-by-owner`, `approval.age`, `manifest.age`, the record files, the approver key files,
   `operational.age`, `recipients.age` and `identity.age`. `config.toml` is removed whatever its bytes: beside `import.unfinished` it is
   the bundle's copy, and the bundle and the source still hold it. The Unfinished notice names `config.toml` when one is
-  there, so the owner knows that file goes too. The marker stays, so a crash during the discard reads Unfinished again.
+  there, so the owner knows that file goes too. The discard also removes `.config.toml.tmp`, which step 5's durable replace leaves
+  when power is lost before its rename and which the next import's replace would refuse to reuse; the `files` field names it when it
+  was there. The marker stays, so a crash during the discard reads Unfinished again.
 - **Either command discards either kind.** `import` and `init` each discard an unfinished initialization and an
   unfinished import. When the kind changes, the discard ends by removing the other command's marker durably, which
   leaves Uninitialized, and the command's step 1 then writes its own. A crash between the two reads Uninitialized,
