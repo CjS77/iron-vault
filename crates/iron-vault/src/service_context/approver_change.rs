@@ -1,11 +1,24 @@
-//! The approver commands' side of the service context (`design/approval-signers.md`, "States and the service-wide lock").
+//! Runs `approver add` and `approver remove`, which change the set of pinned approvers that may sign a config
+//! approval
+//! ([approval signers: States and the service-wide lock](../../../../design/approval-signers.md#states-and-the-service-wide-lock)).
 //!
-//! [`ServiceContext::plan_approver_enrollment`] and [`ServiceContext::plan_approver_removal`] take the service-wide lock without
-//! waiting and run step 3: they read `approval.age` back, sweep orphan key files against the state read, and check the approver
-//! set. The [`ApproverChangePlan`] they return holds the lock through the summary, owner presence, the new signer's prompts and the
-//! write, so the summary stays true until the write. Like a recipient removal's plan it keeps no vault identity, so a
-//! `lock` while the owner is at a prompt leaves no copy behind; the write takes the identity from the context again, and
-//! refuses unless the service is still in the state and at the check generation it recorded.
+//! ```text
+//!   plan_approver_enrollment / plan_approver_removal
+//!       step 2: try the service-wide lock, record the state and check generation     busy
+//!       step 3: read approval.age back, sweep orphan key files, check the set         approver-set-invalid, ...
+//!       steps 4-6 (4-5): summary, owner presence (prove_presence), for `add` the new secret
+//!          ↓
+//!   enroll_software / enroll_tpm / remove_approver
+//!       step 7 (6 for remove): still Ready at the recorded check generation?          wrong-state
+//!       step 8 (7): the approver change, one durable replace of approval.age, commits
+//! ```
+//!
+//! [`ServiceContext::plan_approver_enrollment`] and [`ServiceContext::plan_approver_removal`] take the service-wide
+//! lock without waiting and run step 3. The [`ApproverChangePlan`] they return holds the lock through the summary,
+//! owner presence, the new signer's prompts and the write, so the summary stays true until the write. Like a recipient
+//! removal's plan it keeps no vault identity, so a `lock` while the owner is at a prompt leaves no copy behind. The
+//! write takes the identity from the context again, and refuses unless the service is still in the state and at the
+//! check generation it recorded.
 //!
 //! Every write runs on a blocking task that owns the lock guard and the approval state, and hands both back, so the
 //! in-memory approval state is replaced under the lock even when the caller's future is dropped mid-write.
@@ -49,15 +62,16 @@ pub enum ApproverRefusal {
     /// `approver remove` named the approver that signed the active approval.
     #[error("this approver signed the active approval")]
     InUse,
-    /// The TPM signing helper refused or could not be reached while enrolling a TPM approver; the message names its status.
-    /// Nothing was committed.
+    /// The TPM signing helper refused or could not be reached while enrolling a TPM approver; the message names its
+    /// status. Nothing was committed.
     #[error("{0}")]
     KindUnavailable(String),
-    /// The TPM was in dictionary-attack lockout, or the lockout reserve withheld the try, while enrolling a TPM approver.
-    /// Nothing was committed.
+    /// The TPM was in dictionary-attack lockout, or the lockout reserve withheld the try, while enrolling a TPM
+    /// approver. Nothing was committed.
     #[error("{0}")]
     TpmLockedOut(String),
-    /// Step 3's read-back or orphan sweep, or the approver change, failed; `committed` says whether it may have committed.
+    /// Step 3's read-back or orphan sweep, or the approver change, failed; `committed` says whether the change may have
+    /// committed.
     #[error("{cause}")]
     Failed {
         /// Whether the change may have committed.
@@ -67,8 +81,8 @@ pub enum ApproverRefusal {
     },
 }
 
-/// Step 3 of an approver command done: the service-wide lock is held, `approval.age` read back and the orphans swept. See
-/// the module docs.
+/// An approver command past step 3: the service-wide lock is held, `approval.age` is read back and the orphans are
+/// swept. See the module documentation.
 pub struct ApproverChangePlan<'a, F> {
     service: &'a ServiceContext<F>,
     service_wide: OwnedMutexGuard<()>,
@@ -82,8 +96,9 @@ pub struct ApproverChangePlan<'a, F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Steps 2 and 3 of `approver add`: takes the service-wide lock, refusing at once with [`ApproverRefusal::Busy`] while
-    /// another holds it, reads the approval state back and sweeps orphans, then refuses a seventeenth approver.
+    /// Runs steps 2 and 3 of `approver add`: takes the service-wide lock, refusing at once with
+    /// [`ApproverRefusal::Busy`] while another holds it, reads the approval state back and sweeps orphans. Then
+    /// refuses a seventeenth approver.
     pub async fn plan_approver_enrollment(&self) -> Result<ApproverChangePlan<'_, F>, ApproverRefusal> {
         let plan = self.plan_approver_change(ADD, None).await?;
         if plan.approval.approvers().len() >= MAX_APPROVERS {
@@ -93,9 +108,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         Ok(plan)
     }
 
-    /// Steps 2 and 3 of `approver remove`: the lock, the read-back and the orphan sweep, then refuses an ID that no pinned
-    /// approver has, the last approver, and the approver that signed the active approval, in that order. Returns the plan
-    /// and the approver `id` names, which the summary describes.
+    /// Runs steps 2 and 3 of `approver remove`: the lock, the read-back and the orphan sweep. Then refuses an ID that
+    /// no pinned approver has, the last approver, and the approver that signed the active approval, in that order.
+    /// Returns the plan and the approver `id` names, which the summary describes.
     pub async fn plan_approver_removal(&self, id: ApproverId) -> Result<(ApproverChangePlan<'_, F>, PinnedApprover), ApproverRefusal> {
         let plan = self.plan_approver_change(REMOVE, Some(id)).await?;
         let refuse = |failure, refusal| {
@@ -119,8 +134,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         Ok((plan, approver))
     }
 
-    /// Steps 2 and 3 of an approver command (`change` is `add` or `remove`): the lock, the read-back and the orphan sweep.
-    /// `approver` is the ID the command names, when it names one, so a failure is logged with it.
+    /// Runs steps 2 and 3 of an approver command (`change` is `add` or `remove`): the lock, the read-back and the
+    /// orphan sweep. `approver` is the ID the command names, when it names one, so a failure is logged with it.
     async fn plan_approver_change(
         &self,
         change: &'static str,
@@ -148,9 +163,9 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         })
     }
 
-    /// Reads the approval state back and sweeps orphans on a blocking task that owns `held` until both end, and returns the
-    /// state read. Each orphan removed is logged as `approver.orphan-removed`; a read-back or sweep that fails is logged as
-    /// `approver.change-failed` at step `read_back`, and never committed anything.
+    /// Reads the approval state back and sweeps orphans on a blocking task that owns `held` until both end, and
+    /// returns the state read. Each orphan removed is logged as `approver.orphan-removed`; a read-back or sweep that
+    /// fails is logged as `approver.change-failed` at step `read_back`, and never committed anything.
     async fn read_back(
         &self,
         (change, approver): (&'static str, Option<ApproverId>),
@@ -197,28 +212,29 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
-    /// The vault the approval state belongs to, which the summary names.
+    /// Returns the vault the approval state belongs to, which the summary names.
     pub fn vault_id(&self) -> VaultId {
         self.approval.vault_id()
     }
 
-    /// How many approvers are pinned now.
+    /// Returns how many approvers are pinned now.
     pub fn approver_count(&self) -> usize {
         self.approval.approvers().len()
     }
 
-    /// The pinned approvers in approver order: owner presence asks the first and lets the owner switch to the rest.
+    /// Returns the pinned approvers in approver order: owner presence asks the first and lets the owner switch to the
+    /// rest.
     pub fn approvers(&self) -> &[PinnedApprover] {
         &self.approvers
     }
 
-    /// Completes once a `lock` is waiting for the service-wide lock this plan holds, so a prompt can end the change rather
-    /// than make the `lock` wait for the owner.
+    /// Completes once a `lock` is waiting for the service-wide lock this plan holds. A prompt ends the change when it
+    /// completes, so the `lock` does not wait for the owner to answer.
     pub async fn lock_requested(&self) {
         self.service.lock_requested().await;
     }
 
-    /// Owner presence with `approver`'s key; see [`ServiceContext::prove_presence`].
+    /// Proves owner presence with `approver`'s key, as the context's `prove_presence` does for `replace` and `rm`.
     pub async fn prove_presence(
         &self,
         secret: impl Into<ApproverSecret>,
@@ -232,10 +248,10 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
         log_failure(ADD, None, ChangeFailure::PassphraseRejected);
     }
 
-    /// Steps 7 and 8 for `software`: refuses unless the service is still in the state and at the check generation of step
-    /// 2, then enrolls a software approver named `label` with its key sealed to `passphrase`. Logs `approver.enrolled` at
-    /// the commit point, naming the approver `proof` came from, and `approver.change-failed` when the change fails. Taking
-    /// the proof by value makes one proof authorize one change.
+    /// Runs steps 7 and 8 for `software`: refuses unless the service is still in the state and at the check
+    /// generation of step 2, then enrolls a software approver named `label` with its key sealed to `passphrase`. Logs
+    /// `approver.enrolled` at the commit point, naming the approver `proof` came from, and `approver.change-failed`
+    /// when the change fails. Taking the proof by value makes one proof authorize one change.
     pub async fn enroll_software(
         self,
         proof: OwnerPresence,
@@ -248,8 +264,8 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
         .await
     }
 
-    /// Steps 7 and 8 for `tpm`, as [`Self::enroll_software`], with the helper at `socket` making the key under `pin`. A
-    /// helper that refuses or cannot be reached is [`ApproverRefusal::KindUnavailable`].
+    /// Runs steps 7 and 8 for `tpm`, as [`Self::enroll_software`] does, with the helper at `socket` making the key
+    /// under `pin`. A helper that refuses or cannot be reached is [`ApproverRefusal::KindUnavailable`].
     pub async fn enroll_tpm(
         self,
         proof: OwnerPresence,
@@ -263,8 +279,8 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
         .await
     }
 
-    /// Runs `enroll` on a blocking task that owns the lock guard and the approval state, once the service is confirmed to be
-    /// where step 2 recorded it.
+    /// Runs `enroll` on a blocking task that owns the lock guard and the approval state, once the service is confirmed
+    /// to be where step 2 recorded it.
     async fn enroll_with(
         self,
         proof: OwnerPresence,
@@ -308,11 +324,11 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
-    /// Steps 6 and 7 of `approver remove`: refuses unless the service is still in the state and at the check generation of
-    /// step 2, then unpins `approver` and deletes its key file. Logs `approver.removed` at the commit point, naming the
-    /// approver `proof` came from, and `approver.change-failed` when the change fails. A key file that cannot be deleted
-    /// is [`KeyFileOutcome::Left`], not a failure: the approver is gone and the next approver command sweeps the file.
-    /// Returns how many approvers remain.
+    /// Runs steps 6 and 7 of `approver remove`: refuses unless the service is still in the state and at the check
+    /// generation of step 2, then unpins `approver` and deletes its key file. Logs `approver.removed` at the commit
+    /// point, naming the approver `proof` came from, and `approver.change-failed` when the change fails. A key file
+    /// that cannot be deleted is [`KeyFileOutcome::Left`], not a failure: the approver is gone and the next approver
+    /// command sweeps the file. Returns how many approvers remain.
     pub async fn remove_approver(
         self,
         proof: OwnerPresence,
@@ -356,8 +372,9 @@ impl<F: StoreFs + Send + Sync + 'static> ApproverChangePlan<'_, F> {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// The vault identity, provided the service is still in `state` at check generation `checks`, as when a change took
-    /// the lock. The plan keeps no identity so that a `lock` while the owner is at a prompt leaves no copy behind.
+    /// Returns the vault identity if the service is still in `state` at check generation `checks`, as when the change
+    /// took the lock, and refuses otherwise. The plan keeps no identity so that a `lock` while the owner is at a
+    /// prompt leaves no copy behind.
     async fn identity_at(&self, state: ServiceState, checks: u64) -> Result<Arc<VaultIdentity>, ApproverRefusal> {
         let inner = self.inner.lock().await;
         let unchanged = inner.state == state && inner.checks == checks;
@@ -384,7 +401,8 @@ fn failed(error: &ApproverChangeError) -> ApproverRefusal {
     }
 }
 
-/// A blocking task that ended without a result. Whether it committed cannot be known from here.
+/// The refusal for a blocking task that ended without a result. Whether it committed cannot be known from here, so the
+/// refusal says the change may have committed.
 fn interrupted() -> ApproverRefusal {
     ApproverRefusal::Failed {
         committed: MayHaveCommitted::Unknown,

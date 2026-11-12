@@ -1,4 +1,5 @@
-//! `approver list`'s side of the service context (`design/approval-signers.md`, "`approver list`").
+//! Runs `approver list`, which shows the pinned approvers and which one signed the active approval
+//! ([approval signers: `approver list`](../../../../design/approval-signers.md#approver-list)).
 
 use std::sync::Arc;
 
@@ -20,11 +21,12 @@ pub enum ApproverListRefusal {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Every pinned approver in approver order, each with whether it signed the active approval.
+    /// Lists every pinned approver in approver order, each paired with `true` if and only if it signed the active
+    /// approval.
     ///
     /// Fails with [`ApproverListRefusal::Busy`] at once while another operation holds the service-wide lock, and with
-    /// [`ApproverListRefusal::WrongState`] outside Ready. The lock is held only while the approvers are read, so the order
-    /// and the active marker come from one moment.
+    /// [`ApproverListRefusal::WrongState`] outside Ready. The lock is held only while the approvers are read, so the
+    /// order and the active marker come from one moment.
     pub async fn list_approvers(&self) -> Result<Vec<(PinnedApprover, bool)>, ApproverListRefusal> {
         let _service_wide = Arc::clone(&self.service_wide)
             .try_lock_owned()

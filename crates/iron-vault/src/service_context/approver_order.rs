@@ -1,14 +1,18 @@
-//! The approver order (design/approval-signers.md, "Approver order"): which pinned approver the approver prompt asks
-//! first, and which each switch moves to.
+//! Decides the approver order
+//! ([approval signers: Approver order](../../../../design/approval-signers.md#approver-order)): which pinned approver
+//! the approver prompt asks first, and which each switch moves to.
 //!
-//! Pure, so the order is testable without a service. Nothing is stored: the order is recomputed from the approval state
-//! and the active approval's signer at each prompt, so an owner has no preference to set.
+//! For example, with approvers `laptop`, `tpm` and `backup`, enrolled in that order, where `tpm` signed the active
+//! approval, the prompt asks `tpm` first, then `laptop`, then `backup`.
+//!
+//! The order is pure, so it is testable without a service. Nothing is stored: the order is recomputed from the approval
+//! state and the active approval's signer at each prompt, so an owner has no preference to set.
 
 use iron_vault_store::{ApproverId, PinnedApprover};
 
-/// `approvers` in approver order: the signer of the active approval first, when it is still pinned, then every other
-/// approver by enrolment time, earliest first, with ties broken by approver ID. With no active approval (the service is
-/// Unavailable) that is enrolment order alone.
+/// Sorts `approvers` into approver order: the signer of the active approval first, when it is still pinned, then
+/// every other approver by enrolment time, earliest first, with ties broken by approver ID. With no active approval
+/// (the service is Unavailable) that is enrolment order alone.
 pub(super) fn approver_order(approvers: &[PinnedApprover], active: Option<ApproverId>) -> Vec<PinnedApprover> {
     let mut ordered = approvers.to_vec();
     ordered.sort_by_key(|approver| (Some(approver.id()) != active, approver.enrolled_at(), approver.id()));
