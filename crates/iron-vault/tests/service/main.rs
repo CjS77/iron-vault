@@ -6,6 +6,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod acceptance_index;
 mod cli;
 mod deployment_profile;
 mod hardening;
