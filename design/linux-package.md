@@ -648,7 +648,8 @@ helper needs `libtss2-dev` and `pkg-config` on the build machine. It needs `carg
   `-` before the revision (see below);
 - the newest entry of the changelog, `packaging/linux/debian/changelog`, is not that package version, so a version bump
   needs a changelog entry;
-- the packaged binary's `--version` lists any feature, so a `dev-mode` package is refused;
+- the packaged binary's `--version` lists any feature, so a `dev-mode` package is refused (`scripts/build-deb-test.sh`,
+  run in CI, shows this check refusing `dev-mode`, `container` and both);
 - a file's owner or mode differs from the [ownership table](#ownership), a path is owned by anyone but root, or
   anything is shipped under `/etc/iron-vault`, `/var/lib/iron-vault`, `/var/log/iron-vault` or `/run/iron-vault`;
 - `/usr/bin/iron-vault` links `libtss2`, or the helper does not (it was built without its `tpm` feature);

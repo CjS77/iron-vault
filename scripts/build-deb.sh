@@ -25,12 +25,24 @@
 #  - the maintainer scripts are present and executable;
 #  - lintian reports no error. A missing lintian fails the script; IRON_VAULT_SKIP_LINTIAN=1 opts out explicitly.
 # A package that passes every check, lintian included, is copied to target/debian/<package>_<version>_<arch>.deb.
+
+fail() { echo "error: $*" >&2; exit 1; }
+
+# Takes the binary's `--version` output; fails unless it lists no feature, so neither `dev-mode` nor `container` is packaged.
+require_no_features() {
+    case "$1" in
+        *" (features: none)") ;;
+        *) fail "the packaged binary lists features; a package must be built with default features only" ;;
+    esac
+}
+
+# Sourced (by scripts/build-deb-test.sh), the script only defines the functions above.
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
+
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
-
-fail() { echo "error: $*" >&2; exit 1; }
 
 command -v dpkg-deb >/dev/null 2>&1 || { echo "error: dpkg-deb is not installed; install dpkg" >&2; exit 2; }
 cargo deb --version >/dev/null 2>&1 || { echo "error: cargo-deb is not installed; run: cargo install cargo-deb --locked" >&2; exit 2; }
@@ -76,10 +88,7 @@ dpkg-deb --fsys-tarfile "$deb" | tar -xO ./usr/bin/iron-vault >"$work/iron-vault
 chmod +x "$work/iron-vault"
 version=$("$work/iron-vault" --version)
 echo "$version"
-case "$version" in
-    *"(features: none)"*) ;;
-    *) fail "the packaged binary lists features; a package must be built with default features only" ;;
-esac
+require_no_features "$version"
 
 echo "== no libtss2 in the service binary"
 # The helper is its own binary so the service, which holds the vault, never links the TPM library.

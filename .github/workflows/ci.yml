@@ -46,6 +46,8 @@ jobs:
         run: scripts/release/tpm-unlock-check-test.sh
       - name: Host unlock provisioning helper
         run: scripts/provision-host-unlock-test.sh
+      - name: Package build refuses a binary that lists features
+        run: scripts/build-deb-test.sh
       - name: Test development mode
         run: cargo test -p iron-vault --features dev-mode --locked
       - name: Clippy development mode
