@@ -1,8 +1,10 @@
-//! The request form gate (spec §8 step 2): only an origin-form request that asks for no protocol change goes on.
+//! The request form gate ([spec §8][s8] step 2): only an origin-form request that asks for no protocol change goes on.
 //!
 //! A `CONNECT` tunnel, an absolute-form target or an upgrade would carry a request around route selection and the final
 //! outgoing-request check, so each is refused before authentication. The check is a pure function over the parts of
 //! the request head it reads, so it allocates nothing and costs no token lookup.
+//!
+//! [s8]: ../../../../design/iron-vault-specification.md#8-request-flow
 
 use hyper::header::{CONNECTION, UPGRADE};
 use hyper::{HeaderMap, Method, Uri, Version};
@@ -55,7 +57,7 @@ pub fn check_form(method: &Method, uri: &Uri, version: Version, headers: &Header
     }
 }
 
-/// Whether any `Connection` header lists the `upgrade` token, in any case and among other tokens.
+/// Returns `true` if and only if a `Connection` header lists the `upgrade` token, in any case and among other tokens.
 fn connection_asks_upgrade(headers: &HeaderMap) -> bool {
     headers
         .get_all(CONNECTION)

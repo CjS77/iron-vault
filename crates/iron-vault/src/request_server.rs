@@ -1,5 +1,5 @@
-//! The request server (spec §8 step 1, implementation spec §3): HTTP/1.1 on every connection the request listeners accept, bounded by
-//! the operational limits before anyone is authenticated.
+//! The request server ([spec §8][s8] step 1, [implementation spec §3][i3]): HTTP/1.1 on every connection the request
+//! listeners accept, bounded by the operational limits before anyone is authenticated.
 //!
 //! Callers reach the service over local sockets and loopback, so it serves HTTP/1.1 only; HTTP/2 from callers is out
 //! of scope, and a TLS listener offers only `http/1.1` by ALPN.
@@ -8,7 +8,7 @@
 //!
 //! | Limit | Enforced by | Answer |
 //! |---|---|---|
-//! | Request form (§8 step 2) | [`check_form`], first, before the body limit and the handler | `400` |
+//! | Request form ([§8][s8] step 2) | [`check_form`], first, before the body limit and the handler | `400` |
 //! | `max_connections` | A semaphore permit taken before the TLS handshake | Closed unread |
 //! | `max_header_bytes` | hyper's `max_header_size`, which counts the request line and headers on the wire exactly | `431` |
 //! | `max_header_count` | hyper's `max_headers` | `431` |
@@ -23,11 +23,16 @@
 //! closes the connection, since the rest of that request is never read.
 //!
 //! A request that arrives once a log write has failed ([`LogFailure`]) is not answered: its connection is closed, as
-//! the audit design's stop-on-log-failure default requires (`design/audit-logging.md`, "Failure behaviour"). The
-//! service never serves a request it cannot record.
+//! the audit design's stop-on-log-failure default requires ([Failure behaviour][fail]). The service never serves a
+//! request it cannot record.
 //!
 //! The handler sees only the connection tags the transport set ([`ConnectionTags`]), never anything from the request
-//! that claims to be one (§7).
+//! that claims to be one ([§7][s7]).
+//!
+//! [s7]: ../../../design/iron-vault-specification.md#7-caller-authentication-and-listeners
+//! [s8]: ../../../design/iron-vault-specification.md#8-request-flow
+//! [i3]: ../../../design/implementation-specification.md#3-implementation-gates-and-unresolved-details
+//! [fail]: ../../../design/audit-logging.md#failure-behaviour
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -83,7 +88,7 @@ impl ConnectionTags {
 
 /// Answers one request that has passed the request server's limits. The proxy handler implements it.
 pub trait RequestHandler: Send + Sync + 'static {
-    /// The response to `request`, which arrived on the connection `tags` describes. Its body fails with
+    /// Returns the response to `request`, which arrived on the connection `tags` describes. Its body fails with
     /// [`RequestBodyError::TooLarge`] once it passes the body limit, and the server then answers `413` itself.
     ///
     /// `deadline` is the request deadline. A handler that answers by then is heard, even at the deadline itself, so it
@@ -117,7 +122,7 @@ pub struct RequestServer<H> {
 struct LogUnwritable;
 
 impl<H: RequestHandler> RequestServer<H> {
-    /// A server that hands each request within `limits` to `handler`.
+    /// Creates a server that hands each request within `limits` to `handler`.
     pub fn new(limits: Limits, handler: H) -> Self {
         let permits = to_usize(limits.max_connections()).min(Semaphore::MAX_PERMITS);
         Self {
@@ -147,8 +152,7 @@ impl<H: RequestHandler> RequestServer<H> {
     }
 
     /// Serves as [`serve`](Self::serve) does until `stop` completes, then closes every connection it is serving and
-    /// returns once each connection's task has ended, so nothing of the connections outlives the call, whatever runtime
-    /// it runs on.
+    /// returns once each connection's task has ended, so nothing of the connections outlives the call, on any runtime.
     pub async fn serve_until(&self, listeners: &RequestListeners, stop: impl Future<Output = ()>) {
         let mut connections = Connections::default();
         self.accept_until(listeners, &mut connections, stop).await;
@@ -167,7 +171,7 @@ impl<H: RequestHandler> RequestServer<H> {
         }
     }
 
-    /// The limits this server enforces.
+    /// Returns the limits this server enforces.
     pub fn limits(&self) -> &Limits {
         &self.limits
     }
@@ -254,7 +258,7 @@ impl Connections {
         self.close_except(&BTreeSet::new()).await;
     }
 
-    /// The flag the connections of `listener` read to tell that the service closed them.
+    /// Returns the flag the connections of `listener` read to tell that the service closed them.
     fn service_close(&mut self, listener: &ListenerName) -> ServiceClose {
         self.0.entry(listener.clone()).or_default().closing.clone()
     }
@@ -278,7 +282,7 @@ impl Drop for ListenerConnections {
     }
 }
 
-/// hyper's HTTP/1.1 settings for the header limits and the header read timeout.
+/// Builds hyper's HTTP/1.1 settings for the header limits and the header read timeout.
 fn http_builder(limits: &Limits) -> http1::Builder {
     let header_bytes = to_usize(limits.max_header_bytes());
     let mut http = http1::Builder::new();
@@ -313,7 +317,8 @@ async fn respond<H: RequestHandler>(
     Ok(response.map(|body| Recorded::new(body, record, can_have_body).boxed_unsync()))
 }
 
-/// Whether a response has no body whatever its headers say (RFC 9110 §6.4.1): one to `HEAD`, a `204` or a `304`.
+/// Returns `true` if and only if a response has no body, whatever its headers say
+/// ([RFC 9110 §6.4.1](https://www.rfc-editor.org/rfc/rfc9110#section-6.4.1)): one to `HEAD`, a `204` or a `304`.
 pub(crate) fn has_no_body(head: bool, status: StatusCode) -> bool {
     head || matches!(status, StatusCode::NO_CONTENT | StatusCode::NOT_MODIFIED)
 }
@@ -354,13 +359,13 @@ async fn answer<H: RequestHandler>(
     response.map(|body| Deadline::new(body, deadline, facts).boxed_unsync())
 }
 
-/// The server's own refusal in place of the handler's answer, which the request's record then disowns.
+/// Builds the server's own refusal in place of the handler's answer, which the request's record then disowns.
 fn replaced(record: &RequestRecord, reason: ReasonCode, status: StatusCode) -> Response<ResponseBody> {
     record.replace_answer(reason);
     refusal(status)
 }
 
-/// An empty response with `status` that closes the connection.
+/// Builds an empty response with `status` that closes the connection.
 fn refusal(status: StatusCode) -> Response<ResponseBody> {
     let mut response = Response::new(Empty::new().map_err(|never| match never {}).boxed_unsync());
     *response.status_mut() = status;
@@ -368,7 +373,7 @@ fn refusal(status: StatusCode) -> Response<ResponseBody> {
     response
 }
 
-/// A `400` that closes the connection, with the rule broken as its body; the body never repeats the target.
+/// Builds a `400` that closes the connection, with the rule broken as its body; the body never repeats the target.
 fn form_refusal(violation: FormViolation) -> Response<ResponseBody> {
     let mut response = refusal(StatusCode::BAD_REQUEST);
     *response.body_mut() = Full::new(Bytes::from(violation.to_string()))
@@ -384,7 +389,8 @@ fn request_timeout(limits: &Limits) -> Duration {
     Duration::from_secs(limits.request_timeout_secs())
 }
 
-/// Every limit fits a `usize` on the platforms the service runs on; saturating keeps a 32-bit build bounded.
+/// Converts a limit to `usize`. Every limit fits on the platforms the service runs on; saturating keeps a 32-bit build
+/// bounded.
 fn to_usize(value: u64) -> usize {
     usize::try_from(value).unwrap_or(usize::MAX)
 }

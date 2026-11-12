@@ -29,7 +29,7 @@ pub enum RequestBodyError {
     Read(#[from] hyper::Error),
 }
 
-/// Whether a request's body has passed the body limit, set by its [`RequestBody`] and awaited by the server.
+/// A flag, set by a request's [`RequestBody`] once the body passes the body limit, that the server awaits.
 #[derive(Debug, Default)]
 pub(super) struct Overflow {
     tripped: AtomicBool,
