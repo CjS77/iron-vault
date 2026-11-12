@@ -4,6 +4,7 @@ pub mod admin;
 pub mod admin_file;
 pub mod attempt_limit;
 pub mod audit;
+pub mod bundle_file;
 pub mod caller_token;
 pub mod clock;
 pub mod config_check;

@@ -30,6 +30,15 @@ pub trait StoreFs {
     /// Unlinks the file at `path`.
     fn remove_file(&self, path: &Path) -> io::Result<()>;
 
+    /// Gives the file at `from` the second name `to`, failing if anything already exists at `to`; unlike
+    /// [`StoreFs::rename`], it never replaces a file someone else put there.
+    ///
+    /// No store write uses it, so a double that never meets a caller of it may leave it out and fail closed.
+    fn hard_link(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let _ = (from, to);
+        Err(io::Error::new(io::ErrorKind::Unsupported, "hard links are not supported here"))
+    }
+
     /// Flushes the directory `dir`'s entries to stable storage, so renames and unlinks in it survive power loss.
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
 
@@ -73,6 +82,10 @@ impl StoreFs for OsFs {
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         std::fs::remove_file(path)
+    }
+
+    fn hard_link(&self, from: &Path, to: &Path) -> io::Result<()> {
+        std::fs::hard_link(from, to)
     }
 
     #[cfg(unix)]
