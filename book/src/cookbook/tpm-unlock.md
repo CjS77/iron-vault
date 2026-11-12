@@ -5,8 +5,8 @@ output is shown. Every command comes from the [TPM unlock section](../installati
 Linux install guide.*
 
 At the end of this recipe a protected Linux install reboots and reaches Ready with no `iron-vault unlock`. The vault
-identity gets one more way in, a key that `systemd-creds` seals to the machine's TPM. The
-vault passphrase and the offline recovery key still work, and a machine that cannot unseal its key simply starts Locked.
+identity gets one more way in, a key that `systemd-creds` seals to the machine's TPM. The vault passphrase and the
+offline recovery key still work, and a machine that cannot unseal its key starts Locked.
 
 **TPM unlock has had no release check on a real machine yet, so don't rely on it to protect real secrets.**
 
@@ -14,12 +14,13 @@ What it does not do, in v0:
 
 - **There is no TPM PIN.** Anyone who can boot the machine into a trusted image can start the vault. On a server that is the
   condition you accept with `--server`. On a laptop the second secret is the disk's: a LUKS passphrase typed at boot, or a
-  LUKS TPM slot that needs a PIN, which `--portable` checks once. A TPM PIN for the vault itself needs a later adapter.
+  LUKS TPM slot that needs a PIN, which `--portable` checks once.
 - **It does not survive a Secure Boot update.** A change to the Secure Boot keys or databases changes PCR 7, the service
   starts Locked, and someone with the vault passphrase types it, then provisions again. The
   [install guide](../installation/linux-install.md#before-a-secure-boot-key-or-firmware-update) has the lists for before and
   after.
-- **It runs on Ubuntu 24.04 LTS only.** On any other release the helper stops, and the service waits Locked as before.
+- **It runs on Ubuntu 24.04 LTS only.** On any other release the helper stops, and the service starts Locked and waits for
+  `unlock`, as it does without TPM unlock.
 
 ## Prerequisites
 
@@ -89,6 +90,10 @@ host unlock: unlocked
   [After the update](../installation/linux-install.md#after-the-update).
 - **`host unlock: absent`.** No blob, or the handoff unit did not run. Check `systemctl status iron-vault-host-unlock.service`
   and that `/etc/iron-vault-host/host-unlock.cred` exists.
+- **`host unlock: refused`.** The service found the handoff but would not use it, for example because its files are not
+  owned and protected as it requires, or the identity is not one of the vault's recipients. The `vault.host-unlock`
+  record in the [audit log](../reference/audit-log.md#service-and-lock-state) gives the reason. Run
+  `sudo iron-vault unlock`, fix the cause, and restart the service.
 - **`host unlock: owner_locked`.** An earlier `lock` is still in force. A passphrase `unlock` clears it
   ([lock, unlock and restart](lock-unlock-restart.md#a-lock-survives-a-restart)).
 - **The helper fails with an error from `systemd-creds`.** Another operating system may have set the TPM's owner password.

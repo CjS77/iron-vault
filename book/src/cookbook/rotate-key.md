@@ -110,9 +110,20 @@ iron-vault replace httpbin_key --origin postman-echo.com
 iron-vault: the service answered error 24 (credential-in-use): routes use credential httpbin_key and would stop working: route httpbin sends credential httpbin_key to postman-echo.com:443, which its record does not permit; approve a config without them first
 ```
 
-To move a key to another host, first add the new origin alongside the old one (`--origin httpbin.org --origin
-postman-echo.com`), then approve a config that points the route at the new host, then `replace` again with only the
-new origin.
+To move a key to another host, change one side at a time, so that at every step the route's upstream is one of the
+record's origins:
+
+1. `replace` with the new origin alongside the old one: `--origin httpbin.org --origin postman-echo.com`.
+2. Approve a config that points the route at the new host.
+3. `replace` again with only the new origin.
+
+```text
+                          the record's origins              the route's upstream
+before                    httpbin.org                       https://httpbin.org
+1. replace                httpbin.org, postman-echo.com     https://httpbin.org
+2. config approve         httpbin.org, postman-echo.com     https://postman-echo.com
+3. replace                postman-echo.com                  https://postman-echo.com
+```
 
 ## What can go wrong
 

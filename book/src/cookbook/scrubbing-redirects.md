@@ -50,8 +50,7 @@ after the approval, so wait a few seconds before the next step or the first requ
 
 ### 2. Scrub compressed and streamed responses
 
-The scrubber removes the credential from compressed and streamed responses too. httpbin's `/gzip` answers with a
-gzip-compressed echo of the request, and `/stream/3` with three echoes sent as they are produced:
+httpbin's `/gzip` answers with a gzip-compressed echo of the request, and `/stream/3` with three echoes sent as they are produced:
 
 ```sh
 curl -si -H "$AUTH" http://127.0.0.1:7878/httpbin/gzip
@@ -93,9 +92,10 @@ curl -sN -H "$AUTH" http://127.0.0.1:7878/httpbin/stream/3
 {"id":2,"args":{},"headers":{"Accept":"*/*","Accept-Encoding":"gzip, deflate, br","Authorization":"Bearer [iron-vault:scrubbed]","Host":"httpbin.org","User-Agent":"curl/8.5.0"},"origin":"203.0.113.7","url":"https://httpbin.org/stream/3"}
 ```
 
-httpbin's `origin` is your public address; it is shown here as `203.0.113.7`. In both, the echoed `Authorization` header reads `Bearer [iron-vault:scrubbed]`. The `/gzip` response arrives without
-`Content-Encoding`: Iron Vault decompressed the body to scrub it and compresses it again only when the caller's
-`Accept-Encoding` demands it. Each response also produces a `response.scrubbed` record in the log, with one match
+httpbin's `origin` is your public address, shown here as `203.0.113.7`. In both responses the echoed `Authorization`
+header reads `Bearer [iron-vault:scrubbed]`. The `/gzip` response arrives without `Content-Encoding`: Iron Vault
+decompressed the body to scrub it, and compresses it again if and only if the caller's `Accept-Encoding` rules out an
+uncompressed body. Each response also produces a `response.scrubbed` record in the log, with one match
 per echo. This one is from `/stream/3`:
 
 ```json
@@ -114,7 +114,16 @@ curl -sN -H "$CHAT" -H 'Content-Type: application/json' \
 ### 3. See a redirect come back
 
 Iron Vault never follows a redirect itself, so the credential is never sent anywhere the route doesn't name. It
-passes the redirect back to the caller:
+passes the redirect back to the caller, after deciding what its `Location` should say:
+
+```mermaid
+flowchart TD
+    R["Upstream answers 3xx with Location"] --> O{"Same origin as the upstream?"}
+    O -- no --> P["Passed to the caller unchanged"]
+    O -- yes --> B{"Inside the upstream's base path?"}
+    B -- yes --> W["Rewritten under the route prefix"]
+    B -- no --> F["Refused with 502 redirect_refused"]
+```
 
 ```sh
 # a redirect within httpbin is rewritten under the route prefix
@@ -126,7 +135,7 @@ curl -si -H "$AUTH" 'http://127.0.0.1:7878/httpbin/redirect-to?url=https://examp
 # location: https://example.com/
 ```
 
-A redirect to the same host but outside the upstream's base path, such as `/other` from an upstream at `/api/v1`, is
+A redirect to the same origin but outside the upstream's base path, such as `/other` from an upstream at `/api/v1`, is
 refused with `502`, so it can't land in another route.
 
 ## What can go wrong

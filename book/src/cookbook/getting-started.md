@@ -274,6 +274,19 @@ httpbin received `Authorization: Bearer not-a-real-key-123` and echoed it back. 
 `[iron-vault:scrubbed]` before the response reached you. Your caller token never reached httpbin: there is no
 `Proxy-Authorization` in the echo.
 
+```mermaid
+sequenceDiagram
+    participant C as curl
+    participant V as Iron Vault
+    participant H as httpbin.org
+    C->>V: GET /httpbin/headers<br/>Proxy-Authorization: Bearer (caller token)
+    Note over V: checks the token, the route, the method,<br/>the path and the rate limit
+    V->>H: GET /headers over verified TLS<br/>Authorization: Bearer not-a-real-key-123
+    H-->>V: 200, echo containing the secret
+    Note over V: scrubs the secret from the response
+    V-->>C: 200, echo with Bearer [iron-vault:scrubbed]
+```
+
 The service's terminal shows the request and the scrub, trimmed here to the useful fields:
 
 ```json

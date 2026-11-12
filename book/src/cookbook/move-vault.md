@@ -12,6 +12,19 @@ invalid on the new machine, because its first approval commits at a version abov
 The commands below are for a protected installation: run every `iron-vault` command through `sudo` (see [`sudo` in a
 protected installation](../reference/cli.md#sudo-in-a-protected-installation)).
 
+```mermaid
+sequenceDiagram
+    participant S as Source machine
+    participant N as New machine
+    S->>S: export (vault passphrase, new export passphrase)
+    S->>N: carry vault.bundle
+    N->>N: import (export passphrase, new vault passphrase, new recovery key)
+    N->>N: unlock, then config approve (software approver)
+    Note over N: routes requests from here
+    N-->>S: compare approval versions
+    S->>S: retire the source
+```
+
 ## Prerequisites
 
 - **The source**, running and Ready, and its **vault passphrase**. Export asks for it every time, even while the vault
@@ -22,7 +35,7 @@ protected installation](../reference/cli.md#sudo-in-a-protected-installation)).
 - **A software approver** on the source, and its approval passphrase. The new machine's first `config approve` asks
   for it. A TPM approver's key cannot leave its TPM, so `export` refuses a vault with no software approver
   (`approver-set-invalid`, error 42); enroll one first with [`approver add`](approval-signers.md).
-- **A way to carry one file** between the machines: a USB stick, `scp`, anything. The bundle is encrypted, but it
+- **A way to carry one file** between the machines, such as a USB stick or `scp`. The bundle is encrypted, but it
   opens with the export passphrase, so carry the passphrase separately.
 
 ## Steps
@@ -142,7 +155,7 @@ Only now stop using the old machine. Stop its service, and keep or destroy its s
 copy of the vault: its passphrase and recovery key still open it. If it had TPM unlock, follow
 [retire a machine](forget-machine.md) for its TPM.
 
-## If something goes wrong
+## What can go wrong
 
 - **`import-denied`.** The export passphrase was wrong. Nothing was written; run `import` again.
 - **`already-initialized`.** The new machine has a vault, or files in its state directory that are not a vault. Import

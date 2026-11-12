@@ -5,9 +5,8 @@
 At the end of this recipe your vault has a new approval passphrase, the old one no longer approves anything, and every
 route kept serving throughout. It also shows why to keep a second approver.
 
-An **approval signer** is whatever signs your config approvals: a key sealed under an approval passphrase, or on a protected
-Linux install a key held in the TPM behind a PIN ([the TPM recipe](tpm-approval.md)).
-The vault pins one **approver** for each signer, and any one of them gives the service your approval: for `config
+An **approval signer** is the key that signs your config approvals: a key sealed under an approval passphrase or, on a
+protected Linux install, a key held in the TPM behind a PIN ([the TPM recipe](tpm-approval.md)). The vault pins one **approver** for each signer, and any one of them gives the service your approval: for `config
 approve`, and for `replace`, `rm`, `recipient remove`, `approver add` and `approver remove`. Rotating means enrolling the new
 approver, approving the active config with it, then removing the old one.
 
@@ -78,7 +77,7 @@ a53f9f72-74c7-403e-82a7-c34f9474ce25
 ```
 
 The last line, the bare approver ID, is the only thing written to stdout; the rest goes to the terminal, so
-`NEW=$(iron-vault approver add --label ...)` captures just the ID.
+`NEW=$(iron-vault approver add --label ...)` captures only the ID.
 
 If you are only adding a second approver, stop here and store its passphrase. Until you approve a config with the new
 approver, the old one is still the active signer and every route keeps serving.
@@ -139,7 +138,7 @@ Approval passphrase for "approval passphrase 2026" (Ctrl-Y to try another way):
 removed approver d69d992b-fcf3-481b-b12d-1ec89a59ae67; the vault has 1 approvers.
 ```
 
-The old approval passphrase is now just a wrong answer, and its key file is deleted.
+The old approval passphrase is now a wrong answer, and its key file is deleted.
 
 ### 5. Check that it worked
 

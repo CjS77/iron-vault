@@ -5,7 +5,16 @@
 At the end of this recipe you will have seen what the service does when its published config is changed without an
 approval, and brought it back. The service publishes each approved config as `config.toml` with its signature,
 `config.toml.sig`, beside it. When it reloads, it checks the pair against the approved version. A config that nobody
-approved is refused, and the service stops proxying rather than run it.
+approved is refused, and the service stops proxying instead of running it:
+
+```mermaid
+flowchart LR
+    E["config.toml changed<br/>without approval"] --> R["reload (SIGHUP)"]
+    R --> C{"config.toml and<br/>config.toml.sig match the<br/>committed version?"}
+    C -- yes --> Ready
+    C -- no --> U["Unavailable:<br/>503 policy invalid"]
+    U -->|config approve| Ready
+```
 
 Every command below was run as shown, against the real httpbin.org. Step 1 plays the attacker. Don't do it to a
 service that holds real keys.
@@ -73,7 +82,7 @@ jq -c 'select(.event == "config.reload-failed")' ~/iron-vault-dev.log
 ```
 
 A `config.check-failed` record with the same `detail` comes just before it. The service keeps none of the old route
-policy: it would rather serve nothing than guess which config is real.
+policy: it serves nothing instead of guessing which config is real.
 
 ### 3. Find out how it happened
 

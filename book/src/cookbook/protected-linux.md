@@ -96,8 +96,8 @@ Another account gets `401` unless the config names it, and `sudo curl` is refuse
 ### 6. Add a TCP listener, if a caller needs one
 
 systemd holds every TCP port, through an `iron-vault-listener@<name>.socket` instance named after the listener. Give
-the instance its address, enable it, start it while the service is stopped, start and unlock the service, then approve a config with a listener of the
-same name and address. The four steps are in
+the instance its address, enable it, start it while the service is stopped, start and unlock the service, then approve
+a config with a listener of the same name and address. The four steps are in
 [Add a TCP listener](../installation/linux-install.md#add-a-tcp-listener). A non-loopback address also needs
 `tls_certificate` and `tls_key`.
 
@@ -117,7 +117,7 @@ for removing it.
 ## What can go wrong
 
 - **An admin command run without `sudo` is refused.** Your login account is never an admin principal in a protected
-  install. That is the point: malware running as you can't reach the admin socket.
+  install, so malware running as you can't reach the admin socket.
 - **`unlock` is refused with `memory-unprotected`.** An edited unit or drop-in lowered `LimitMEMLOCK`. Fix it and
   restart the service.
 - **Every request gets `503` after an upgrade or reboot.** The service restarted Locked. Run `sudo iron-vault unlock`.

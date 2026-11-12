@@ -174,8 +174,8 @@ Don't assume an application uses the base URL for every request. Before you rely
    jq -c 'select(.event == "request.completed") | {caller, route, http_method, status, outcome, reason}' ~/iron-vault-dev.log
    ```
 
-3. Look for what is missing. A feature that works but leaves no record went somewhere else, with whatever key the
-   application had. With a placeholder key it fails instead, which is what you want.
+3. Look for what is missing. A feature that works but leaves no record sent its request somewhere else, with the key
+   the application holds. If that key is a placeholder, the feature fails instead, which is what you want.
 4. Look for `no_route` and `path_not_allowed` refusals: the application calls paths you haven't allowed, or dropped
    the prefix.
 
@@ -198,9 +198,8 @@ HTTPS_PROXY=http://127.0.0.1:7878 curl -sv https://httpbin.org/headers
 ```
 
 The body is `CONNECT is not supported`, and the log reason is `connect_not_supported`. Iron Vault must see the
-request to add the credential, and a tunnel hides it. Setting `HTTPS_PROXY` alone does not enable credential
-injection in base-URL mode. Integrations with `gh`, `npm` and `cargo` need end-to-end compatibility checks before
-anyone claims they work.
+request to add the credential, and a tunnel hides it. Tools such as `gh`, `npm` and `cargo` count as supported only
+once an end-to-end check covers their whole workflow in base-URL mode.
 
 ## What can go wrong
 

@@ -1,13 +1,12 @@
 # Reset the vault
 
 At the end of this recipe the vault and its config are gone, and a new, empty vault with new passphrases is running under
-the same service. Use it only when no way into the vault is left: you have lost the vault passphrase and the recovery
-key, or every approval passphrase (see [why to keep a second approver](approval-signers.md#why-keep-a-second-approver)).
-If you still have the vault passphrase or the recovery key, and at least one approval passphrase, you don't need
-reset: [rotate the recovery key or add a recipient](recipients.md), or [rotate the approval passphrase](approval-signers.md).
+the same service. Use it only when no way into the vault is left: neither the vault passphrase nor the recovery key
+opens the vault, or no approver can answer (see [why to keep a second approver](approval-signers.md#why-keep-a-second-approver)).
+If you still know the vault passphrase and at least one approver answers, you don't need reset:
+[rotate the recovery key or add a recipient](recipients.md), or [rotate the approval passphrase](approval-signers.md).
 
-`reset` is destructive and cannot be undone. Every credential in the vault is deleted, and the config with its signatures
-goes too. Removal is not secure erasure: a backup of the old vault still opens with the old recovery key and vault
+`reset` is destructive and cannot be undone. Every credential in the vault is deleted, and so are the config and its signatures. Removal is not secure erasure: a backup of the old vault still opens with the old recovery key and vault
 passphrase, so rotate at the provider any credential that may have leaked.
 
 The commands below are for [development mode](../installation/development-mode.md). In a protected installation, run every
@@ -45,15 +44,15 @@ Credential values cannot be recovered. Each key is reissued by its provider.
 iron-vault reset
 ```
 
-The service keeps serving while it shows what it will discard: the vault ID, the credential names, the config files, any file
-it does not recognise (these stay), and what to keep. It then asks you to type the vault ID:
+While it shows what it will discard, the service keeps serving. The summary lists the vault ID, the credential names,
+the config files, any file it does not recognise (these stay), and what to keep. It then asks you to type the vault ID:
 
 ```text
 Type 3f1c9a5e-0b9c-4f7e-8a41-6d2b7e0c1a55 to discard this vault
 ```
 
 Type the ID, or paste it. `yes` is not accepted, and neither is an empty line. Anything else, or Ctrl-C, removes nothing.
-Until you type the confirmation the service keeps serving requests; once you do, it stops serving and stays Locked.
+Until you type the confirmation, the service keeps serving requests; once you do, it stops serving and stays Locked.
 When no vault is Initialized (a half-finished `init`), you type the state directory's path instead.
 
 The confirmation must come from a terminal. With standard input a pipe, a file or `/dev/null`, or with no terminal for the

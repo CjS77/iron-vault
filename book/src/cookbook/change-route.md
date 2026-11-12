@@ -24,7 +24,12 @@ Allow httpbin's compressed and streamed echoes too. In `[routes.httpbin]`:
 paths = ["/anything/**", "/headers", "/gzip", "/stream/*"]
 ```
 
-`*` matches exactly one path segment, and `**` any number.
+`*` matches exactly one path segment, and `**` zero or more:
+
+| Pattern        | Matches                                  | Does not match              |
+|----------------|------------------------------------------|-----------------------------|
+| `/stream/*`    | `/stream/2`                              | `/stream`, `/stream/2/x`    |
+| `/anything/**` | `/anything`, `/anything/a`, `/anything/a/b` | `/anythingx`, `/headers` |
 
 ```sh
 iron-vault config approve dev-config.toml
@@ -131,8 +136,8 @@ What to check in a summary:
   config doesn't define. A listener moved to `192.0.2.10:8443` without `tls_certificate` and `tls_key` gives
   `the proposed config is invalid: listener public on 192.0.2.10:8443 needs tls_certificate and tls_key: plain HTTP is
   allowed only on loopback`. Check the [configuration reference](../reference/configuration.md) for that table.
-- **`403` with `path_not_allowed` after widening.** Patterns match the path after the route prefix, as the provider
-  documents it, without the upstream's base path.
+- **`403` with `path_not_allowed` after widening.** Patterns match the path after the route prefix, which leaves out
+  the upstream's base path.
 - **`429` straight after the approval.** The bucket [starts empty](getting-started.md#rate-limits-start-empty).
 
 ## Reference

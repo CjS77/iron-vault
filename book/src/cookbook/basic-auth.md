@@ -3,10 +3,10 @@
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `cc59b80`.*
 
 At the end of this recipe Iron Vault holds a username and password and sends them to an upstream as
-`Authorization: Basic …`. With a real upstream the caller holds neither. The recipe uses httpbin's
-`/basic-auth/<user>/<password>` endpoint, which answers `200` only when the request carries exactly that username and
-password. That demo endpoint needs both in its own path, so here the caller does know them; a real upstream checks
-the header alone, and the caller's requests carry neither value.
+`Authorization: Basic …`, so the caller holds neither. The recipe tests against httpbin's
+`/basic-auth/<user>/<password>` endpoint, which answers `200` if and only if the `Authorization` header carries the
+username and password named in the path. Because that test endpoint puts both values in its path, the caller here
+knows them. A real upstream checks only the header, and the caller's requests carry neither value.
 
 Every command below was run against the real httpbin.org.
 

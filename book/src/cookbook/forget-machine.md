@@ -11,6 +11,20 @@ so a machine that was lost, as opposed to retired, also means rotating the provi
 The commands below are for a protected installation: run every `iron-vault` command through `sudo` (see [`sudo` in a
 protected installation](../reference/cli.md#sudo-in-a-protected-installation)).
 
+The work is split between two machines:
+
+```mermaid
+flowchart LR
+    subgraph stays["The vault that stays"]
+        A["1. recipient remove age1…"] --> B["2. forget-machine age1…"]
+    end
+    subgraph retired["The retired machine"]
+        C["3. check what else uses the TPM"] --> D["delete the sealed credential"] --> E["clear the TPM, if nothing else needs it"]
+    end
+    B -- prints the steps --> C
+    B -. lost or stolen .-> F["4. replace each credential"]
+```
+
 ## Prerequisites
 
 - **The vault that stays**, running and Ready, on another machine. `forget-machine` reads its recipient list; the retired
@@ -50,8 +64,7 @@ independence rule: holds
 recovery last checked: 2026-11-04 (7 days ago)
 ```
 
-It cannot tell a removed key from one that was never a recipient, so a mistyped key reads as gone. Compare the key it
-repeats with the one on the retired machine.
+A mistyped key also reads as gone, so compare the key it repeats with the one on the retired machine.
 
 Any warnings are printed first, on stderr, above the steps. A warning means something needs fixing before you clear any TPM:
 
@@ -72,7 +85,7 @@ Steps 1 to 3 run as root on the retired machine. In order:
    list the persistent handles with `tpm2_getcap handles-persistent`. The handle `0x81000001` is systemd's storage root key,
    shared by every `systemd-creds` user on the machine. List the NV indices with `tpm2_getcap handles-nv-index`: clearing
    the TPM destroys them, and other software keeps state there (the systemd-pcrlock policy, which LUKS keyslots enrolled with
-   `--tpm2-pcrlock` depend on, and `tpm2-totp`). Remember other software that keeps keys in the TPM, and the machine's other users.
+   `--tpm2-pcrlock` depend on, and `tpm2-totp`). Also ask the machine's other users, and check for other software that keeps keys in the TPM.
 2. **Delete the sealed credential.** `systemctl stop iron-vault-host-unlock.service`, then
    `rm /etc/iron-vault-host/host-unlock.cred`. A copy of that file in a backup still opens on this TPM.
 3. **Clear the TPM only if nothing else needs it and the recovery path is verified.** Use the firmware's clear-TPM setting, or `tpm2_clear`. If step 1 found

@@ -3,14 +3,23 @@
 *The prompts below match the code; the test suite runs the same steps against a software TPM without asserting their text.
 **This has had no release check on a real machine yet**, so don't rely on it for real secrets. Ubuntu 24.04 LTS on a protected install only.*
 
-At the end of this recipe a signing key held in your machine's TPM approves your configs once you type its PIN, and a
-software approver beside it means a forgotten PIN costs you one command, not the vault.
+At the end of this recipe a signing key held in your machine's TPM approves your configs once you type its PIN. A
+software approver kept beside it means a forgotten PIN does not cost you the vault.
 
 A TPM approver is one more [approver](approval-signers.md): the vault pins its public key, and any one pinned approver speaks
 for you at `config approve`, `replace`, `rm`, `recipient remove`, `recipient add`, `export` and the approver commands. The
 private key never leaves the TPM and works only on this machine. The service never opens the TPM itself: a separate helper
 program, `iron-vault-tpm-signer`, does, and it signs only the three fixed payloads the service sends it, each under a PIN you
 typed. A vault that unlocks at boot with [TPM unlock](tpm-unlock.md) still needs you, with the PIN, to change its policy.
+
+```mermaid
+flowchart LR
+    CLI["sudo iron-vault config approve<br/>(you type the PIN)"] -->|admin socket| S["iron-vault service<br/>account iron-vault"]
+    S -->|"signer.sock: fixed payload + PIN"| H["iron-vault-tpm-signer<br/>account iron-vault-tpm"]
+    H -->|/dev/tpmrm0| T["TPM<br/>holds the private key"]
+```
+
+The service account has no access to the TPM device; only the helper's account does.
 
 ## Before you start
 
@@ -118,7 +127,8 @@ the way out:
    approver, or the remove fails with `approver-in-use`.
 3. `sudo iron-vault approver remove <the TPM approver's ID>`, which also deletes its blob.
 
-Both approval counters carry over. A vault whose only approver is a lost TPM approver has no way left to authorize anything:
+None of this changes the approval counters: the committed and highest reserved versions stay where they were. A vault
+whose only approver is a lost TPM approver has no way left to authorize anything:
 [`reset`](reset-vault.md) is the only way out, which is why this recipe keeps a software approver. The TPM approver's key
 cannot move with a [migration bundle](move-vault.md); a software approver is needed on the destination.
 

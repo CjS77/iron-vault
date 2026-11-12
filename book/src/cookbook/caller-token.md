@@ -90,6 +90,16 @@ HTTP/1.1 200 OK
 Give the new token to the program that uses it, and restart that program if it read the token only at startup. Between
 the approval and that restart, the program's requests get `401`.
 
+```text
+              caller-token        config approve       program restarted
+                   │                    │                     │
+time ──────────────┼────────────────────┼─────────────────────┼──────────▶
+old token          works                │ refused
+new token          refused              │ works
+program sends      old token ─────────────────────────────────┤ new token
+program gets       200                  │ 401                 │ 200
+```
+
 ## Revoke a caller
 
 Delete the caller's whole `[callers.<name>]` table from `dev-config.toml` and approve. Here the caller is `ci`, which

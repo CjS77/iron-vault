@@ -12,10 +12,24 @@ At the end of this recipe two Venice API keys each have one job, each used by it
 A program holding the `chat` token can chat, slowly, and do nothing else. A program holding the `dev` token can use
 the rest of the API with the other key.
 
+```mermaid
+flowchart LR
+    CH[program with the chat token] -- "/venice-chat/..." --> RC
+    DV[program with the dev token] -- "/venice-dev/..." --> RD
+    CH -. "/venice-dev/... refused: 403" .-x RD
+    subgraph Iron Vault
+        RC["route venice-chat<br/>POST /chat/completions<br/>6 a minute"]
+        RD["route venice-dev<br/>GET, POST /**<br/>600 a minute"]
+        KC[(venice_chat)] -. key .-> RC
+        KD[(venice_dev)] -. key .-> RD
+    end
+    RC -- HTTPS --> V[api.venice.ai]
+    RD -- HTTPS --> V
+```
+
 **What was really run.** Each `pass show` below was replaced by `echo` with a dummy Venice key; every other command
-was run as shown. So the chat requests that Iron Vault
-forwarded got Venice's real `401` refusal, and the model list, which Venice serves without a key, came back for real.
-With real keys, the chat requests get answers instead.
+was run as shown. So the chat requests that Iron Vault forwarded got Venice's real `401` refusal, and the model list,
+which Venice serves without a key, came back for real. With real keys, the chat requests get answers instead.
 
 ## Prerequisites
 
@@ -97,7 +111,7 @@ rate_limit = { requests = 600, per_seconds = 60, burst = 100 }
   one.
 - **The rate limit is a token bucket.** It holds up to `burst` requests and refills at `requests` every `per_seconds`.
   The chat route can send 6 at once, then one every 10 seconds. The bucket is shared by every caller of the route.
-- **Every route needs a rate limit.** A route that should be effectively unlimited gets a generous one.
+- **Every route needs a rate limit.** A route you don't want to limit gets a generous one.
 
 Approve it:
 

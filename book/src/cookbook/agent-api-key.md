@@ -110,7 +110,17 @@ rate_limit = { requests = 10, per_seconds = 60, burst = 2 }
 - A header slot with no `format` sends the key as the whole header value.
 - `paths` match the path after the route prefix, without the upstream's base path. The Venice upstream ends in
   `/api/v1`, so the agent's `/venice/chat/completions` reaches Venice as `/api/v1/chat/completions`, and `paths` names
-  `/chat/completions`.
+  `/chat/completions`:
+
+  ```text
+  the agent sends     http://127.0.0.1:7878/venice/chat/completions
+                                           └─────┘└───────────────┘
+                                           prefix path, matched against paths
+
+  Venice receives     https://api.venice.ai/api/v1/chat/completions
+                      └──────────────────────────┘└───────────────┘
+                      upstream                    path
+  ```
 - Each route allows only the methods and paths the agent needs. Widen them when it needs more.
 
 Approve it:
@@ -178,16 +188,15 @@ curl -s -H "$AG" 'http://127.0.0.1:7878/fx/latest.json?symbols=EUR'
 ```
 
 The Brave and Venice answers came from the provider, so those requests left Iron Vault with a key in their slots. The
-log agrees (fields trimmed; the FX line is not re-checked):
+log agrees (fields trimmed):
 
 ```json
 {"event":"request.completed","caller":"agent","route":"brave","status":422,"outcome":"success"}
 {"event":"request.completed","caller":"agent","route":"venice","status":401,"outcome":"success"}
-{"event":"request.completed","caller":"agent","route":"fx","status":401,"outcome":"success"}
 ```
 
-`outcome` is about Iron Vault's part: `success` means it forwarded the request and relayed the answer, whatever status
-the provider chose.
+`outcome` describes Iron Vault's part only: `success` means it forwarded the request and relayed the answer. The
+provider's status does not change it.
 
 ### 5. Configure the agent
 
@@ -195,8 +204,8 @@ Give the agent three things:
 
 - **Base URL:** the route's prefix on the listener, from the table at the top. The agent appends its usual API path.
   For Venice, an OpenAI-compatible client sets its base URL to `http://127.0.0.1:7878/venice`.
-- **API key:** any placeholder, such as `placeholder`. Many SDKs refuse to start without a key. Iron Vault removes
-  every copy of the slot's header or query parameter and writes the real one.
+- **API key:** any placeholder, such as `placeholder`, because many SDKs refuse to start without a key. Iron Vault
+  removes every copy of the slot's header or query parameter and writes the real key in its place.
 - **Caller token:** sent as `Proxy-Authorization: Bearer <token>` on every request. If the agent can only add a header
   with a fixed name, see [point a real application at Iron Vault](real-application.md#3-send-the-caller-token).
 
@@ -225,8 +234,8 @@ routes = ["fx"]
   `method_not_allowed` or `path_not_allowed`. Remember that `paths` leave out the upstream's base path.
 - **`401` or `422` from the provider.** The request reached the provider with the stored key, and the provider refused
   it. Check the key, or `replace` it.
-- **`400 Bad Request` with `foreign_marker` in the log.** The agent sent a marker such as `{iv:brave}` in a route
-  whose credential is another one.
+- **`400 Bad Request` with `foreign_marker` in the log.** The agent put a marker such as `{iv:brave}` in the slot of a
+  route whose credential is not `brave`.
 - **`429 Too Many Requests` right after an approval or unlock.** Each route's token bucket
   [starts empty](getting-started.md#rate-limits-start-empty) whenever the service becomes Ready; wait a few seconds.
 

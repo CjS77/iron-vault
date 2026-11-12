@@ -48,9 +48,9 @@ reaches its route.
 
 ## Not yet built
 
-- **A TPM approval key.** The service signs each approval with a key opened by the approval passphrase, which you
-  type over the admin socket. A key in the host's TPM, reached through a host-side helper that signs only the service's
-  approval transaction, is built for the [Linux package](tpm-approval.md) but not yet wired into this profile.
+- **A TPM approval signer.** In this profile every approver is opened by its approval passphrase. The
+  [TPM approval signer](tpm-approval.md), a key in the host's TPM reached through a host-side helper, is built for the
+  Linux package but not yet for this profile.
 
 ## Reference
 

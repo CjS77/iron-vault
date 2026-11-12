@@ -2,8 +2,8 @@
 
 *Checked with `iron-vault 0.2.0-alpha (features: dev-mode)`, built from `main` at `378d57d`.*
 
-At the end of this recipe you can answer the questions that come up after something odd happens: which requests were
-refused and why, which responses had a secret scrubbed from them, and who changed what, and when. The log is JSON
+At the end of this recipe you can answer three questions from the audit log: which requests were refused and why,
+which responses had a secret scrubbed from them, and who changed what, and when. The log is JSON
 Lines, one record per line, and `jq` answers each question in one command. No record holds a secret, a token or a
 header value, so you can share the output.
 
@@ -85,7 +85,7 @@ strings.
 
 A `response.scrubbed` record means the upstream sent a credential back and Iron Vault removed it before it reached
 the caller. An echo service like httpbin does that on every request. A real API that does it may be logging or
-reflecting your key, which is worth raising with the provider:
+reflecting your key, so report it to the provider. To list them:
 
 ```sh
 jq -c 'select(.event == "response.scrubbed") | {timestamp, request_id, route, credential, matches}' $LOG

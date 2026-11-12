@@ -1,14 +1,12 @@
 # Rotate the recovery key, or add a machine's key
 
 At the end of this recipe your vault opens with a new recovery key, and new copies of `identity.age` no longer open
-with the old one. The last step
-enrols an `age` key you hold on another machine, ready for when moving a vault there is supported.
+with the old one. The last step enrols an `age` key that you hold on another machine.
 
 A **recipient** is a key the vault identity is wrapped for (the [security model](../security-model.md) explains the
 lockboxes). `init` enrols two: your vault passphrase and the offline recovery key. The `recipient` commands add and
 remove recipients without re-encrypting the credentials. The service refuses any change that would leave the vault
 without its vault passphrase recipient or without a recovery key.
-
 
 ## Prerequisites
 

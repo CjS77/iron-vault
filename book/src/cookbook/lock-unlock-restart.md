@@ -7,7 +7,18 @@ again, and restarted it. Lock the service when you step away from a machine that
 something on it is misbehaving: `lock` clears the vault identity and every secret from the service's memory, and
 nothing is proxied until someone with the vault passphrase unlocks it.
 
-Every command below was run as shown, against the real httpbin.org.
+Every command below was run as shown, against the real httpbin.org. The recipe moves the service around this cycle;
+the [service states](../reference/states.md#the-state-diagram) page has the full diagram:
+
+```mermaid
+stateDiagram-v2
+    Ready --> Locked: iron-vault lock (step 1)
+    Locked --> Checking: iron-vault unlock (step 3)
+    Checking --> Ready: the config check passes
+    Ready --> [*]: stop (step 4)
+    [*] --> Starting: start (step 4)
+    Starting --> Locked: an interactive unlock is needed
+```
 
 ## Prerequisites
 
@@ -40,7 +51,7 @@ credentials: unknown while the vault is locked
 
 ### 2. See what callers get
 
-The listener stays open, so a caller gets a clear answer rather than a refused connection:
+The listener stays open, so a caller gets an answer that says why, instead of a refused connection:
 
 ```sh
 AUTH="Proxy-Authorization: Bearer $(cat ~/.iron-vault-tokens/me)"
