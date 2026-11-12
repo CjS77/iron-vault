@@ -1,5 +1,16 @@
-//! `init`'s side of the service context (specification §16; design/vault-initialization.md, "The exchange"): the
-//! initialization state read before any prompt, and the writes once the owner has confirmed the recovery key.
+//! Runs the service's part of `init`
+//! ([specification §16](../../../../design/iron-vault-specification.md#16-administration-recovery-and-migration);
+//! [vault initialization: The exchange](../../../../design/vault-initialization.md#the-exchange)): the initialization
+//! state read before any prompt, and the writes once the owner has confirmed the recovery key.
+//!
+//! The writes follow the [write order](../../../../design/vault-initialization.md#write-order). Until step 9 removes
+//! `init.unfinished` the state directory reads Unfinished, and the next `init` discards what an interrupted one left:
+//!
+//! ```text
+//!   1  init.unfinished             4  approver-<approver ID>.age    7  read the signer key back
+//!   2  identity.age, recipients    5  manifest                      8  approve the initial config as version 1
+//!   3  operational.age             6  approval.age                  9  remove init.unfinished: the commit point
+//! ```
 //!
 //! The prompts hold no lock, so the writes take the service-wide lock without waiting, check the service state again
 //! under the context's mutex, and leave the store to read the initialization state again before its first write. The
@@ -35,14 +46,15 @@ pub enum InitRefusal {
     Initialized,
     /// A reset was interrupted; only the next reset finishes it.
     ResetUnfinished,
-    /// The directories hold files init did not write; the first of them.
+    /// The directories hold files init did not write; the first of them is named.
     Unrecognized(Vec<String>),
     /// The initialization state could not be read, so nothing was written.
     Unreadable(String),
     /// The service clock could not be read for the first approval's enrolment time, before any write.
     Clock(String),
     /// A protected install's memory is not locked against swap, so `init` would put fresh secrets in swappable memory
-    /// (§14). Refused before the handoff is read, any prompt or any write.
+    /// ([specification §14](../../../../design/iron-vault-specification.md#14-recipients-startup-and-memory)).
+    /// Refused before the handoff is read, any prompt or any write.
     MemoryUnprotected(MemoryProtection),
     /// `init --host-unlock` found no identity to enrol, before any prompt.
     HostUnlock(HostUnlockUnavailable),
@@ -69,10 +81,10 @@ pub enum HostUnlockUnavailable {
 }
 
 impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
-    /// Refuses `init` in a protected install whose memory is not locked, since `init` generates the vault identity and
-    /// the recovery key and takes both passphrases. It runs the guard `unlock` runs, before the handoff is read, any
-    /// prompt or any write, and that guard logs the refusal as `vault.unlock-refused` with `memory_unprotected`, the one
-    /// event for a memory refusal wherever it comes from.
+    /// Refuses `init` in a protected install whose memory is not locked, since `init` generates the vault identity
+    /// and the recovery key and takes both passphrases. It runs the guard `unlock` runs, before the handoff is read,
+    /// any prompt or any write, and that guard logs the refusal as `vault.unlock-refused` with `memory_unprotected`,
+    /// the one event for a memory refusal wherever it comes from.
     pub fn require_locked_memory_for_init(&self) -> Result<(), InitRefusal> {
         self.require_locked_memory().map_err(|refusal| match refusal {
             UnlockRefusal::MemoryUnprotected(memory) => InitRefusal::MemoryUnprotected(memory),
@@ -81,8 +93,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         })
     }
 
-    /// The host unlock identity in the unlock handoff, read on the blocking pool before `init` or `import` prompts for anything, so a
-    /// missing or untrusted handoff ends the exchange with nothing written.
+    /// Reads the host unlock identity in the unlock handoff on the blocking pool before `init` or `import` prompts
+    /// for anything, so a missing or untrusted handoff ends the exchange with nothing written.
     pub async fn read_host_unlock(&self) -> Result<RecipientIdentity, InitRefusal> {
         let setup = Arc::clone(&self.setup);
         if !tries_host_unlock(setup.paths.profile) {
@@ -98,8 +110,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
         }
     }
 
-    /// Whether init may write here, read on the blocking pool under the service's own directory locks: Uninitialized
-    /// or Unfinished, or the refusal naming what is there.
+    /// Reads the initialization state on the blocking pool under the service's own directory locks, and returns it if
+    /// `init` may write here (Uninitialized or Unfinished), or the refusal naming what is there.
     pub async fn initializable(&self) -> Result<InitializationState, InitRefusal> {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         let read = tokio::task::spawn_blocking(move || ensure_initializable(&locks.state, &locks.config, &setup.fs)).await;
@@ -142,8 +154,8 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     }
 }
 
-/// A failed step's two names, from one place so they cannot drift apart: the log's (`3`, or `discard` for the discard of
-/// an unfinished initialization) and the owner's (`step 3`, or `the discard`).
+/// Returns a failed step's two names, built in one place so they cannot drift apart: the log's (`3`, or `discard` for
+/// the discard of an unfinished initialization) and the owner's (`step 3`, or `the discard`).
 pub fn step_names(step: InitStep) -> (String, String) {
     step.number().map_or_else(
         || ("discard".to_owned(), "the discard".to_owned()),
@@ -151,7 +163,7 @@ pub fn step_names(step: InitStep) -> (String, String) {
     )
 }
 
-/// The software signer as `init` pins it, which signs version 1, named for the first approval's audit records.
+/// Names the software signer that `init` pins, which signs version 1, for the first approval's audit records.
 fn software_approver(keys: &SealingKeys) -> NamedApprover<'static> {
     NamedApprover {
         id: keys.approver_id(),
@@ -197,9 +209,9 @@ pub(super) fn emit_discarded(discarded: Option<&Discarded>) {
     });
 }
 
-/// Records the uncertain writes behind a failed step before its `vault.init-failed`, the order a success records its
-/// approval events in: the facts, then the outcome. Step 6's approval state creation fails as a vault error; step 8's
-/// transaction as an approval error, whose reservation (if durable) is recorded too.
+/// Records the uncertain writes behind a failed step before its `vault.init-failed`, in the order a success records
+/// its approval events: the facts, then the outcome. Step 6's approval state creation fails as a vault error; step 8's
+/// transaction as an approval error, whose reservation is recorded too if it was durable.
 fn record_uncertain_init_writes(cause: &InitFailure, approver: NamedApprover<'_>) {
     match cause {
         InitFailure::Approval(approval) => record_failed_approval(approval, ConfigDigest::of(INITIAL_CONFIG), approver),
@@ -208,7 +220,7 @@ fn record_uncertain_init_writes(cause: &InitFailure, approver: NamedApprover<'_>
     }
 }
 
-/// Init's version 1 is audited like any approval: reserved, uncertain if its commit was, then completed. The store ran
+/// Audits init's version 1 like any approval: reserved, uncertain if its commit was, then completed. The store ran
 /// the transaction to its end before returning, so the events follow it in order. A later step's failure records them
 /// too, before its own `vault.init-failed`.
 fn record_first_approval(approved: &FirstApproval, approver: NamedApprover<'_>) {
@@ -245,7 +257,7 @@ fn settled(written: Result<Result<InitializedVault, InitError>, JoinError>) -> R
     written.map_err(|error| begin_refusal(&error).unwrap_or(InitRefusal::Failed(error)))
 }
 
-/// Step 1's refusal of the directories, which writes nothing; `None` for a failed step.
+/// Returns step 1's refusal of the directories, which writes nothing, or `None` when `error` is a failed step.
 fn begin_refusal(error: &InitError) -> Option<InitRefusal> {
     match (error.step(), error.cause()) {
         (InitStep::Begin, InitFailure::State(refused)) => directory_refusal(refused),
@@ -253,7 +265,7 @@ fn begin_refusal(error: &InitError) -> Option<InitRefusal> {
     }
 }
 
-/// The refusal for directories init must not write to; `None` for any other error.
+/// Returns the refusal for directories `init` must not write to, or `None` for any other error.
 pub(super) fn directory_refusal(error: &InitStateError) -> Option<InitRefusal> {
     match error {
         InitStateError::AlreadyInitialized => Some(InitRefusal::Initialized),
