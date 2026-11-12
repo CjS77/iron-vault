@@ -35,6 +35,7 @@ use iron_vault::service_state::ServiceState;
 use iron_vault::service_state::UnavailableReason;
 use iron_vault::serving_snapshot::SnapshotHolder;
 use iron_vault::socket_activation::PassedSockets;
+use iron_vault::trusted_path::ExpectedOwner;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
@@ -284,8 +285,22 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
         clock: Arc<dyn WallClock>,
     ) -> Arc<ServiceContext<F>> {
         let service = self.start_as(fs, log, DeploymentProfile::Development, MemoryProtection::Unsupported);
-        let service = Arc::new(service.with_clock(clock));
-        service.enter_checking(identity()).await.unwrap();
+        enter_checking(service, clock).await
+    }
+
+    /// [`ready`](Self::ready), with the local account `account` standing for the test's own uid, so a peer caller naming
+    /// it is recognised on the connections this test makes.
+    ///
+    /// A peer caller may not be the service account (spec §7), and a development service runs as the test's own uid, so
+    /// the service resolves accounts as a protected install would: with the service account a uid no test runs as.
+    pub async fn ready_with_peer(&self, account: &str) -> Arc<ServiceContext> {
+        let uid = invoking_user().unwrap().uid;
+        let accounts = Accounts::parse(&format!("{account}:x:{uid}:{uid}::/:/usr/sbin/nologin"));
+        let log = LogSwitch::stdout_for_tests(invoking_user().unwrap()).unwrap();
+        let profile = DeploymentProfile::Development;
+        let service = self.start_resolving(OsFs, log, profile, MemoryProtection::Unsupported, accounts, STAND_IN_SERVICE_UID);
+        let service = enter_checking(service, Arc::new(SystemClock)).await;
+        assert_eq!(service.state().await, ServiceState::Ready);
         service
     }
 
@@ -297,6 +312,21 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
         profile: DeploymentProfile,
         memory: MemoryProtection,
     ) -> ServiceContext<F> {
+        let owner = invoking_user().unwrap().uid;
+        self.start_resolving(fs, log, profile, memory, Accounts::parse(""), owner)
+    }
+
+    /// [`start_as`](Self::start_as), resolving peer callers against `accounts` with `service_uid` as the service
+    /// account's uid. The service's files still belong to the test's own uid.
+    fn start_resolving<F: StoreFs + Send + Sync + 'static>(
+        &self,
+        fs: F,
+        log: LogSwitch,
+        profile: DeploymentProfile,
+        memory: MemoryProtection,
+        accounts: Accounts,
+        service_uid: u32,
+    ) -> ServiceContext<F> {
         let paths = ServicePaths {
             profile,
             owner: invoking_user().unwrap(),
@@ -306,8 +336,12 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
         };
         let locks = service_locks(&paths);
         let provisional = locks.unverified_listeners(&fs);
+        let account_paths = ServicePaths {
+            owner: ExpectedOwner { uid: service_uid },
+            ..paths.clone()
+        };
         let setup = ServiceSetup {
-            accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
+            accounts: PasswdDirectory::new(accounts, &account_paths, Path::new("/nonexistent")).unwrap(),
             paths,
             fs,
             capabilities: Capabilities::default(),
@@ -333,6 +367,20 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
         assert_eq!(service.state().await, ServiceState::Ready);
         service
     }
+}
+
+/// The uid [`Fixture::ready_with_peer`] takes as the service account's: not root, the overflow uid or any account a test
+/// runs as.
+const STAND_IN_SERVICE_UID: u32 = 4_000_000_000;
+
+/// Gives `service` the clock `clock` and enters Checking with the vault identity.
+async fn enter_checking<F: StoreFs + Send + Sync + 'static>(
+    service: ServiceContext<F>,
+    clock: Arc<dyn WallClock>,
+) -> Arc<ServiceContext<F>> {
+    let service = Arc::new(service.with_clock(clock));
+    service.enter_checking(identity()).await.unwrap();
+    service
 }
 
 /// How long the harness waits out `Held` on a lock it dropped. A test thread that spawns a child shares every open file

@@ -4,6 +4,7 @@
 //! It speaks HTTP/1.1 only and records each request's head byte for byte, before any parsing could normalise it. It
 //! counts TCP connections separately, so a test can prove a server saw no connection at all, not just no request.
 
+use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -263,7 +264,13 @@ impl MockUpstream {
 
     /// Starts a server with its own TLS config, such as one whose certificate names another host.
     pub async fn start_with(config: Arc<ServerConfig>, reply: Reply) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        Self::start_on(Ipv4Addr::LOCALHOST, config, reply).await
+    }
+
+    /// [`start_with`](Self::start_with) on another loopback address, such as `127.0.0.2`, so upstreams can differ by
+    /// host and not only by port.
+    pub async fn start_on(ip: Ipv4Addr, config: Arc<ServerConfig>, reply: Reply) -> Self {
+        let listener = TcpListener::bind((ip, 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let connections = Arc::new(AtomicUsize::new(0));
