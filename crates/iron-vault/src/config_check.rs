@@ -1,14 +1,31 @@
-//! The config check: the work the service does in Checking (specification §12, §15, implementation spec §2.2 Q-5).
+//! The config check: the work the service does in Checking ([spec §12][s12], [§15][s15], [Q-5][i22]).
 //!
 //! Every entry to Checking (an unlock, a reload, an approval's commit, a repair) calls [`open_and_check`], which opens a
 //! new vault from the vault identity the service keeps and then runs [`check_config`], so they cannot disagree about
-//! what a servable config is. It recovers any committed transaction, parses, validates and activates the config the
-//! recovered pair holds, and builds one [`ServingSnapshot`]. Any failure is a [`CheckFailure`] that names the safe state
-//! that follows and carries nothing a `503` body or a status answer must not show. The check never writes the approval
-//! state.
+//! what a servable config is. The steps, and the failure and `503` category each one ends in:
+//!
+//! ```text
+//! open_and_check(identity)
+//!   open the vault from the kept identity            CheckFailure::Vault           recovery needed
+//!   open the approval state                          CheckFailure::ApprovalState   recovery needed
+//!   check_config
+//!     recover the committed config and signature     CheckFailure::Recovery        recovery needed, or policy invalid
+//!     parse, validate and activate the config        CheckFailure::Config          policy invalid
+//!     build the upstream clients                     CheckFailure::Config          policy invalid
+//!     build the ServingSnapshot                      CheckFailure::Config          policy invalid
+//! a check task that panics                           CheckFailure::Interrupted     recovery needed
+//! ```
+//!
+//! The check recovers any committed transaction, parses, validates and activates the config the recovered pair holds,
+//! and builds one [`ServingSnapshot`]. Any failure is a [`CheckFailure`] that names the safe state that follows and
+//! carries nothing a `503` body or a status answer must not show. The check never writes the approval state.
 //!
 //! Recovery verifies the published pair against the committed approval and returns the config bytes as read back, so
 //! the check parses exactly the bytes that verified and does not verify a second time.
+//!
+//! [s12]: ../../../design/iron-vault-specification.md#12-configuration-approval-and-reload
+//! [s15]: ../../../design/iron-vault-specification.md#15-service-states-and-errors
+//! [i22]: ../../../design/implementation-specification.md#22-product-decisions-and-resulting-behavior
 
 #[cfg(test)]
 mod tests;
@@ -54,7 +71,7 @@ pub struct UpstreamSettings {
 }
 
 impl UpstreamSettings {
-    /// Settings that read each pinned CA file through its trusted-path rule for `profile` and `owner`.
+    /// Creates settings that read each pinned CA file through its trusted-path rule for `profile` and `owner`.
     pub fn new(profile: DeploymentProfile, owner: ExpectedOwner, limits: TransportLimits) -> Self {
         Self {
             profile,
@@ -115,7 +132,7 @@ pub enum CheckFailure {
     #[error("policy invalid: config invalid")]
     Config(InvalidConfig),
     /// The check's task ended without a result: it panicked, or the runtime is shutting down. Nothing was checked, so
-    /// the service fails closed. The status says the check crashed, so the owner retries it rather than recovering a
+    /// the service fails closed. The status says the check crashed, so the owner retries it instead of recovering a
     /// vault that may be sound.
     #[error("recovery needed: config check crashed; lock and unlock to check again")]
     Interrupted,
@@ -153,7 +170,7 @@ pub struct UnusableLog {
     pub phrase: String,
 }
 
-/// The status text for a recovery refusal. A file that cannot be read, before recovery or in the read-back after its
+/// Returns the status text for a recovery refusal. A file that cannot be read, before recovery or in the read-back after its
 /// publish, gets its own text and no path; the `503` body is still the fixed `recovery needed`.
 fn recovery_status(error: &ApprovalRecoveryError) -> &'static str {
     match error {
@@ -240,7 +257,7 @@ impl InvalidConfig {
     }
 }
 
-/// A parse error by position only: the parser's message may quote the offending value.
+/// Describes a parse error by position only: the parser's message may quote the offending value.
 pub(crate) fn parse_detail(error: &ConfigError) -> String {
     match error {
         ConfigError::NotUtf8 { location } => format!("config is not valid UTF-8 at {location}"),
@@ -255,7 +272,7 @@ pub(crate) fn parse_detail(error: &ConfigError) -> String {
     }
 }
 
-/// A validation error's message, except for the two that quote config content (an address and a path prefix).
+/// Returns a validation error's message, except for the two that quote config content (an address and a path prefix).
 /// `ListenerNeedsTls` keeps its address: it is re-rendered from a parsed `SocketAddr`, so it holds no config text.
 fn validation_detail(error: &ValidationError) -> String {
     match error {
@@ -267,7 +284,7 @@ fn validation_detail(error: &ValidationError) -> String {
     }
 }
 
-/// An activation error's message, except for the one that quotes the route's upstream.
+/// Returns an activation error's message, except for the one that quotes the route's upstream.
 fn activation_detail(error: &ActivationError) -> String {
     match error {
         ActivationError::OriginNotPermitted { route, credential, .. } => {
@@ -334,7 +351,8 @@ fn open_and_run(
 /// Runs the config check and returns the snapshot to serve, or the failure that leaves the service Unavailable.
 ///
 /// `vault` and `state` are the opened shared state; `config_dir` is the held config directory lock. A damaged or
-/// needs-login credential record is not a failure: activation marks only its routes unavailable (§12). Nor is a
+/// needs-login credential record is not a failure: activation marks only its routes unavailable
+/// ([§12](../../../design/iron-vault-specification.md#12-configuration-approval-and-reload)). Nor is a
 /// pinned CA that fails to load: the routes that pin it are marked unavailable the same way, and logged. The vault moves
 /// into the snapshot on success and is dropped on failure, so the next check opens it again. A failure is logged here at
 /// WARN as `config.check-failed`, with its [`detail`](CheckFailure::detail). Opening the vault and the approval state

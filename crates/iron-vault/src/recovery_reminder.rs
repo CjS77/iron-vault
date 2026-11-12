@@ -1,4 +1,4 @@
-//! When a recovery reminder is due (`design/recovery.md`, "Reminders"). Every rule of the schedule is in
+//! When a recovery reminder is due ([Reminders](../../../design/recovery.md#reminders)). Every rule of the schedule is in
 //! [`reminder_due`], which reads no clock and no file: the service passes in the record, the interval, how long ago it
 //! last reminded and the time.
 
@@ -29,7 +29,7 @@ impl RecordState {
         record.last_checked().map_or(Self::NeverChecked(record.since()), Self::Checked)
     }
 
-    /// The time the interval counts from; `None` for an unusable record, which has none.
+    /// Returns the time the interval counts from; `None` for an unusable record, which has none.
     fn reference(&self) -> Option<UtcSecond> {
         match self {
             Self::Checked(time) | Self::NeverChecked(time) => Some(*time),
@@ -47,7 +47,7 @@ pub struct Due {
     pub reminder_days: u16,
 }
 
-/// Decides whether a recovery reminder is due.
+/// Decides whether a recovery reminder is due, returning it when it is.
 ///
 /// It is due once the whole days elapsed since the record's reference time (`last_checked`, else `since`) reach the
 /// interval, or while the record is unusable, unless a reminder was written `since_last_reminder` ago and that is under
@@ -69,7 +69,7 @@ pub fn reminder_due(
     })
 }
 
-/// Whole days from `earlier` to `later`; zero when `later` is the earlier time.
+/// Returns the whole days from `earlier` to `later`; zero when `later` is the earlier time.
 pub fn whole_days_between(earlier: UtcSecond, later: UtcSecond) -> u64 {
     later.unix_seconds().saturating_sub(earlier.unix_seconds()) / SECONDS_PER_DAY
 }

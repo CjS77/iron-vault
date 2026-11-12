@@ -1,4 +1,4 @@
-//! The migration bundle file `export` writes (`design/migration-bundle.md`, "Transfer"), through the store's file-system
+//! The migration bundle file `export` writes ([Transfer](../../../design/migration-bundle.md#transfer)), through the store's file-system
 //! seam so the same durable-write checks that cover the vault's files cover the bundle too.
 //!
 //! The bundle grows in a partial file beside the bundle's path and takes the bundle's name only once it is whole, so a
@@ -98,7 +98,7 @@ impl<'a, F: StoreFs> PartialBundle<'a, F> {
     ///
     /// An error means no bundle has the bundle's name. After `Ok(_)` the bundle has its name, and the directory has
     /// been fsynced since the link unless the returned warning is that fsync's own error. `Ok(Some(_))` carries the
-    /// first tidy-up error, the unlink's before the fsync's: the caller warns rather than failing the export.
+    /// first tidy-up error, the unlink's before the fsync's: the caller warns instead of failing the export.
     pub fn keep(&mut self) -> Result<Option<io::Error>, BundleFileError> {
         let path = &self.path;
         self.fs.sync_file(&self.file).map_err(|source| BundleFileError::Sync {

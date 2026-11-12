@@ -1,11 +1,16 @@
-//! The vault change summary (glossary; design/credential-commands.md, "Vault change summary"): the service's own account
-//! of one `replace` or `rm`, which the owner reads before owner presence (specification §5). The CLI's display of it
+//! The vault change summary ([glossary: *Vault change summary*][gl], [design][design]): the service's own account of one
+//! `replace` or `rm`, which the owner reads before owner presence ([spec §5][s5]). The CLI's display of it
 //! is never evidence of what the owner authorized.
 //!
 //! It is pure: the service context builds it under the service-wide lock, from the served policy and its credential
 //! report, so it stays true until the write. It holds names, record IDs, kinds and origins only, never material. Every
 //! configured name it prints follows the name rule (`[a-z0-9_-]`) and every host is validated, so nothing in it needs the
-//! escaping a free-text value would (§18).
+//! escaping a free-text value would ([§18][s18]).
+//!
+//! [gl]: ../../../design/glossary.md#terms
+//! [design]: ../../../design/credential-commands.md#vault-change-summary
+//! [s5]: ../../../design/iron-vault-specification.md#5-service-and-cli-separation-of-concerns
+//! [s18]: ../../../design/iron-vault-specification.md#18-logging
 
 use std::fmt;
 
@@ -34,7 +39,7 @@ pub struct RouteUse {
 }
 
 impl VaultChangeSummary {
-    /// The summary of `change` to `current`, whose standing in the service's credential report is `before`, with the
+    /// Builds the summary of `change` to `current`, whose standing in the service's credential report is `before`, with the
     /// routes `policy` has that use it. Only a damaged record's routes can become available again: a healthy record makes
     /// none unavailable, and a route that also has a pinned CA fault stays unavailable.
     pub fn new(change: PlannedChange, current: CurrentRecord, before: &CredentialStanding, policy: &ActivePolicy) -> Self {
@@ -101,7 +106,8 @@ impl VaultChangeSummary {
     }
 }
 
-/// The text the owner reads, one line per fact, each ending in a newline (design/credential-commands.md).
+/// Formats the text the owner reads, one line per fact, each ending in a newline
+/// ([Vault change summary](../../../design/credential-commands.md#vault-change-summary)).
 impl fmt::Display for VaultChangeSummary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = self.change.name();
@@ -132,13 +138,13 @@ impl fmt::Display for VaultChangeSummary {
     }
 }
 
-/// Origins as `host:port`, separated by `, `.
+/// Formats origins as `host:port`, separated by `, `.
 fn origins_line<'a>(origins: impl Iterator<Item = &'a (Host, Port)>) -> String {
     let origins = origins.map(|(host, port)| format!("{host}:{}", port.get()));
     origins.collect::<Vec<_>>().join(", ")
 }
 
-/// Names separated by `, `, or `none`.
+/// Formats names separated by `, `, or `none` when there are none.
 fn names_line<N: fmt::Display>(names: &[N]) -> String {
     if names.is_empty() {
         return "none".to_owned();

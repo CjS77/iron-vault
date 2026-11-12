@@ -1,9 +1,21 @@
-//! The vault change check (glossary; design/credential-commands.md, "Vault change check"): the dry run `replace` and
-//! `rm` make before any prompt. It activates the active config against the credential catalog as it would be after the
-//! change and keeps only the failures the change causes, so every name the active config references stays in the vault
-//! manifest (specification §6, §12).
+//! The vault change check ([glossary: *Vault change check*][gl], [design][design]): the dry run `replace` and `rm` make
+//! before any prompt. It activates the active config against the credential catalog as it would be after the change
+//! and keeps only the failures the change causes, so every name the active config references stays in the vault
+//! manifest ([spec §6][s6], [§12][s12]). For example, with a route `fx` that uses `fx_key` for `api.fx.example`:
+//!
+//! ```text
+//! change                                       failures kept                          answer
+//! rm fx_key                                    fx: unknown credential                 credential-in-use, naming fx
+//! replace fx_key, origin api.other.example     fx: origin not permitted               credential-in-use, naming fx and why
+//! replace fx_key, origin api.fx.example        none                                   go on to owner presence
+//! ```
 //!
 //! It is pure: the service supplies the active config, its catalog and account directory.
+//!
+//! [gl]: ../../../design/glossary.md#terms
+//! [design]: ../../../design/credential-commands.md#vault-change-check
+//! [s6]: ../../../design/iron-vault-specification.md#6-credential-records-and-configuration
+//! [s12]: ../../../design/iron-vault-specification.md#12-configuration-approval-and-reload
 
 use iron_vault_policy::{
     AccountDirectory, ActivationError, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, RouteName, ValidatedConfig,
@@ -91,7 +103,7 @@ pub fn vault_change_check(
     if affected.is_empty() { Ok(()) } else { Err(affected) }
 }
 
-/// The affected route when `error` is about the credential `name`.
+/// Returns the affected route when `error` is about the credential `name`, or `None` when it is not.
 fn caused_by(error: ActivationError, name: &CredentialName) -> Option<AffectedRoute> {
     use ActivationError as E;
     let route = match &error {

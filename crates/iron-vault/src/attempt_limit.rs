@@ -1,5 +1,5 @@
-//! The vault passphrase attempt limit (design/migration-authorization.md, "Passphrase attempt limit"): a count of
-//! consecutive owner failures that refuses further attempts for a cooldown which doubles with each failure. `unlock`
+//! The vault passphrase attempt limit ([Passphrase attempt limit][design]): a count of consecutive owner failures that
+//! refuses further attempts for a cooldown which doubles with each failure. `unlock`
 //! and migration authorization prompt for the same passphrase and share one count.
 //!
 //! Pure: the clock is an argument, so the policy is deterministic under a paused tokio clock. Which outcomes count is
@@ -7,6 +7,15 @@
 //! `not_this_vault` in migration authorization) calls [`AttemptLimiter::record_failure`]. An `unavailable` check, a
 //! `cancelled` prompt, a `lock`, a `rate_limited` refusal and a failure after a proof (`expired`, `not_pending`,
 //! `binding_mismatch`) record nothing.
+//!
+//! With the threshold of 5, a base of 30 s and a cap of 15 min, consecutive wrong passphrases give:
+//!
+//! ```text
+//! failures   1-4    5      6      7      8      9      10     11 and on
+//! cooldown   none   30 s   1 min  2 min  4 min  8 min  15 min 15 min
+//! ```
+//!
+//! [design]: ../../../design/migration-authorization.md#passphrase-attempt-limit
 
 use std::time::Duration;
 
@@ -21,8 +30,8 @@ pub const BASE_COOLDOWN: Duration = Duration::from_secs(30);
 pub const MAX_COOLDOWN: Duration = Duration::from_secs(15 * 60);
 
 /// An attempt was refused because the limiter is in a cooldown. The exchange ends with `migration-rate-limited` or
-/// `unlock-rate-limited` before any prompt, so the owner is not asked to type. Its audit refusal label is `rate_limited`, as the design's
-/// tables name it; the type is named apart from a route's rate limiter, which is a different concept.
+/// `unlock-rate-limited` before any prompt, so the owner is not asked to type. Its audit refusal label is
+/// `rate_limited`, as the design's tables name it; the type is named apart from a route's rate limiter, which is a different concept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("too many wrong vault passphrases; try again in {retry_after} seconds")]
 pub struct AttemptsCoolingDown {
@@ -41,12 +50,13 @@ pub struct AttemptLimiter {
 }
 
 impl AttemptLimiter {
-    /// A limiter with no failures.
+    /// Creates a limiter with no failures.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Whether an attempt may start at `now`. Call it before any prompt.
+    /// Checks whether an attempt may start at `now`, returning [`AttemptsCoolingDown`] while a cooldown runs. Call it
+    /// before any prompt.
     pub fn check(&self, now: Instant) -> Result<(), AttemptsCoolingDown> {
         let Some(last) = self.last_failure else { return Ok(()) };
         let remaining = self.cooldown().saturating_sub(now.saturating_duration_since(last));
@@ -69,7 +79,7 @@ impl AttemptLimiter {
         *self = Self::default();
     }
 
-    /// The cooldown the current count carries: none below the threshold, then the base doubled per further failure.
+    /// Returns the cooldown the current count carries: none below the threshold, then the base doubled per further failure.
     fn cooldown(&self) -> Duration {
         let Some(doublings) = self.failures.checked_sub(FAILURE_THRESHOLD) else {
             return Duration::ZERO;

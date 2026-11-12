@@ -1,4 +1,5 @@
-//! The `status` result: the status report and its field encoding (`design/admin-protocol.md#status`).
+//! The `status` result: the status report and its field encoding
+//! ([admin protocol: `status`](../../../../../design/admin-protocol.md#status)).
 //!
 //! The report holds names, versions and fixed categories only. No type here can hold a secret value, a record digest or
 //! a permitted origin, so the response cannot leak one however it is built.
@@ -54,8 +55,8 @@ pub struct StatusReport {
 /// The vault's lock state, and what is known only while it is unlocked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultStatus {
-    /// An initialized vault is not open, so the vault ID, the approval versions and the credentials are unknown. The service is also
-    /// here in Unavailable, where the failed check dropped the vault, though the service context keeps the vault identity.
+    /// An initialized vault is not open, so the vault ID, the approval versions and the credentials are unknown. The
+    /// service is also here in Unavailable, where the failed check dropped the vault, though the service context keeps the vault identity.
     Locked,
     /// Nothing of a vault is on disk, so there is nothing to unlock; `iron-vault init` creates one.
     NotInitialized,
@@ -85,7 +86,7 @@ pub struct UnlockedVault {
     pub route_faults: Vec<RouteFault>,
 }
 
-/// Whether the service's memory is kept out of swap. Only `Locked` is protection.
+/// The memory protection status: whether the service's memory is kept out of swap. Only `Locked` is protection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemoryStatus {
     /// Memory is locked against swap.
@@ -106,7 +107,7 @@ impl From<&MemoryProtection> for MemoryStatus {
     }
 }
 
-/// `status`'s success body: the command it answers, then the report's fields.
+/// Encodes `status`'s success body: the command it answers, then the report's fields.
 pub(super) fn encode(command: u16, report: &StatusReport) -> Vec<u8> {
     let (state, reason) = state_codes(report.state);
     let (initialization, id, committed, reserved, credentials, faults) = match &report.vault {
@@ -256,8 +257,8 @@ struct SealedLists<'a> {
     faults: &'a [u8],
 }
 
-/// An empty vault ID is a vault that is not open, which has nothing else to report; anything else must be a whole unlocked
-/// vault, whose initialization code is `0`.
+/// Reads the vault status. An empty vault ID is a vault that is not open, which has nothing else to report; anything
+/// else must be a whole unlocked vault, whose initialization code is `0`.
 fn read_vault(initialization: &[u8], id: &[u8], committed: u64, reserved: u64, lists: SealedLists<'_>) -> Result<VaultStatus, FrameError> {
     let SealedLists { credentials, faults } = lists;
     if id.is_empty() {
@@ -297,7 +298,8 @@ fn read_memory(kind: &[u8], detail: &[u8]) -> Result<MemoryStatus, FrameError> {
     }
 }
 
-/// Each entry: name length, name, standing, route count (`u16`), then each route's length and name.
+/// Encodes the credential list. Each entry: name length, name, standing, route count (`u16`), then each route's length
+/// and name.
 fn encode_credentials(credentials: &[CredentialStanding]) -> Vec<u8> {
     let mut out = Vec::new();
     credentials.iter().for_each(|credential| {
@@ -312,7 +314,7 @@ fn encode_credentials(credentials: &[CredentialStanding]) -> Vec<u8> {
     out
 }
 
-/// A name is at most 64 bytes, so its length fits the byte.
+/// Appends a name with a one-byte length prefix. A name is at most 64 bytes, so its length fits the byte.
 pub(super) fn put_name(out: &mut Vec<u8>, name: &str) {
     out.push(u8::try_from(name.len()).unwrap_or(u8::MAX));
     out.extend_from_slice(name.as_bytes());
@@ -362,26 +364,26 @@ fn take_name<T: FromStr>(rest: &mut &[u8]) -> Result<T, FrameError> {
     take_name_in(TAG_CREDENTIALS, rest)
 }
 
-/// A length-prefixed name from the list in field `tag`.
+/// Takes a length-prefixed name from the list in field `tag`.
 pub(super) fn take_name_in<T: FromStr>(tag: u16, rest: &mut &[u8]) -> Result<T, FrameError> {
     let len = usize::from(take_in(tag, rest, 1)?[0]);
     let text = std::str::from_utf8(take_in(tag, rest, len)?).map_err(|_| FrameError::InvalidValue(tag))?;
     text.parse().map_err(|_| FrameError::InvalidValue(tag))
 }
 
-/// The first `n` bytes of `rest`, which then starts after them.
+/// Takes the first `n` bytes of `rest`, which then starts after them.
 fn take<'a>(rest: &mut &'a [u8], n: usize) -> Result<&'a [u8], FrameError> {
     take_in(TAG_CREDENTIALS, rest, n)
 }
 
-/// [`take`] for the list in field `tag`.
+/// Takes the first `n` bytes as [`take`] does, for the list in field `tag`.
 pub(super) fn take_in<'a>(tag: u16, rest: &mut &'a [u8], n: usize) -> Result<&'a [u8], FrameError> {
     let (head, tail) = rest.split_at_checked(n).ok_or(FrameError::InvalidValue(tag))?;
     *rest = tail;
     Ok(head)
 }
 
-/// Each entry: name length, name, fault code.
+/// Encodes the route fault list. Each entry: name length, name, fault code.
 fn encode_route_faults(faults: &[RouteFault]) -> Vec<u8> {
     let mut out = Vec::new();
     faults.iter().for_each(|route| {
@@ -410,7 +412,7 @@ fn take_route_fault(rest: &mut &[u8]) -> Result<RouteFault, FrameError> {
     Ok(RouteFault { name, kind })
 }
 
-/// Each entry: name length, name, reason code.
+/// Encodes the listener failure list. Each entry: name length, name, reason code.
 fn encode_listener_failures(failures: &[ListenerFailure]) -> Vec<u8> {
     let mut out = Vec::new();
     failures.iter().for_each(|failure| {
