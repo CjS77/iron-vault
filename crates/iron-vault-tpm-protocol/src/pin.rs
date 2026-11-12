@@ -1,5 +1,5 @@
 //! Checks the TPM approval PIN and derives the authorization value the TPM approval key is created under
-//! (`design/tpm-approval-signer.md` "The approval PIN").
+//! ([TPM approval signer: the approval PIN](../../../design/tpm-approval-signer.md#the-approval-pin)).
 //!
 //! The service reads the PIN at a prompt, derives the value at once and drops the PIN; only the value crosses the
 //! helper socket:

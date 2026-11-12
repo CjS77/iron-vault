@@ -1,5 +1,5 @@
 //! Encodes and decodes the helper request `IVTQ` v1, the one message the service sends on each helper connection
-//! (`design/tpm-approval-signer.md` "Helper protocol").
+//! ([TPM approval signer: helper protocol](../../../design/tpm-approval-signer.md#helper-protocol)).
 //!
 //! ```text
 //! "IVTQ" | version 01 | 01 create | auth value (32 bytes)

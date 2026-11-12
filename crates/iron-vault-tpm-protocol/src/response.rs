@@ -1,5 +1,5 @@
 //! Encodes and decodes the helper response `IVTR` v1: a status byte, then the fields that status carries
-//! (`design/tpm-approval-signer.md` "Helper protocol").
+//! ([TPM approval signer: helper protocol](../../../design/tpm-approval-signer.md#helper-protocol)).
 //!
 //! The helper writes exactly one response per connection, and the service turns each status into what it tells the
 //! owner, such as a wrong PIN or a wait before the TPM accepts another try.

@@ -1,5 +1,6 @@
 //! Reads and writes the byte conventions every message and blob in this crate shares: big-endian integers, `u64`
-//! length-prefixed fields, and no trailing bytes (`design/storage-formats.md` "Conventions").
+//! length-prefixed fields, and no trailing bytes
+//! ([storage formats: conventions](../../../design/storage-formats.md#conventions)).
 //!
 //! The conventions give each value exactly one encoding, so a decoder can refuse anything else.
 
@@ -45,7 +46,7 @@ impl<'a> Reader<'a> {
         Ok(head.to_vec())
     }
 
-    /// Succeeds only when every byte has been read, so an encoding has one spelling.
+    /// Fails with [`ProtocolError::TrailingBytes`] unless every byte has been read, so an encoding has one spelling.
     pub(crate) fn finish(self) -> Result<(), ProtocolError> {
         match self.0.is_empty() {
             true => Ok(()),

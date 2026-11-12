@@ -1,5 +1,5 @@
 //! Encodes and decodes the TPM key blob `IVTK` v1, which the store keeps as `approver-<approver ID>.tpm`
-//! (`design/tpm-approval-signer.md` "The TPM key blob").
+//! ([TPM approval signer: the TPM key blob](../../../design/tpm-approval-signer.md#the-tpm-key-blob)).
 //!
 //! The blob holds what the helper needs to load a TPM approval key again: the parent's name and the key's public and
 //! private areas. The service writes it after enrollment and sends its parts in each sign request.

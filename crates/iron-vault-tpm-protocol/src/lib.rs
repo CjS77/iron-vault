@@ -1,5 +1,6 @@
 //! The shared language between the service and the TPM signing helper: the helper's wire protocol, the TPM key blob,
-//! and the TPM approval PIN with the authorization value derived from it (`design/tpm-approval-signer.md`).
+//! and the TPM approval PIN with the authorization value derived from it
+//! ([TPM approval signer](../../../design/tpm-approval-signer.md)).
 //!
 //! The service (`iron-vault`) and the helper (`iron-vault-tpm-signer`) both depend on this crate, so it has no TPM
 //! dependency: the service never links `tpm2-tss` and never opens the TPM. Each approval signature is one exchange on
