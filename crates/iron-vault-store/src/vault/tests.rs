@@ -4,9 +4,7 @@ use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Once};
 
-use iron_vault_policy::{
-    AccountDirectory, AccountName, Capabilities, CredentialKind, ParsedConfig, Port, RouteName, ValidatedConfig, activate,
-};
+use iron_vault_policy::{AccountDirectory, AccountName, CredentialKind, ParsedConfig, Port, RouteName, ValidatedConfig, activate};
 use tracing::field::{Field, Visit};
 use tracing::subscriber::Interest;
 use tracing::{Dispatch, Event, Level, Metadata, Subscriber, span};
@@ -577,7 +575,7 @@ fn a_missing_record_makes_only_its_routes_unavailable() {
     let (opened, _) = fixture.open();
     let (vault, _) = opened.unwrap();
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(SPEC_EXAMPLE.as_bytes()).unwrap()).unwrap();
-    let policy = activate(&config, &Capabilities::default(), &vault, &NoAccounts).unwrap();
+    let policy = activate(&config, &vault, &NoAccounts).unwrap();
     assert!(policy.unavailable_routes().keys().eq([&n::<RouteName>("venice")]));
     assert!(policy.is_available(&n("fx")) && policy.is_available(&n("brave")));
 }

@@ -28,7 +28,6 @@ use iron_vault::service_context::{InitRefusal, ServiceContext, ServiceLocks, Ser
 use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
-use iron_vault_policy::Capabilities;
 use iron_vault_store::{ApprovalPassphrase, ConfigDigest, INITIAL_CONFIG, InitPassphrases, NewVaultKeys, OsFs, Passphrase, StoreFs};
 use secrecy::SecretString;
 use serde_json::Value;
@@ -224,7 +223,6 @@ impl InitFixture {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
             paths,
             fs,
-            capabilities: Capabilities::default(),
             upstream: UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default()),
             hardening: HardeningReport {
                 core_dumps: CoreDumps::Disabled,

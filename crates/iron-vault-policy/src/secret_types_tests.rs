@@ -10,7 +10,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use static_assertions::assert_not_impl_any;
 
-use crate::activation::{ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
+use crate::activation::{ActivePolicy, CatalogEntry, CredentialCatalog, activate};
 use crate::spec_example::SPEC_EXAMPLE;
 use crate::test_accounts::FakeAccounts;
 use crate::{
@@ -105,7 +105,7 @@ fn origins(credential: &CredentialName) -> BTreeSet<(Host, Port)> {
 
 fn policy() -> ActivePolicy {
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(SPEC_EXAMPLE.as_bytes()).unwrap()).unwrap();
-    activate(&config, &Capabilities::default(), &Catalog, &FakeAccounts::host()).unwrap()
+    activate(&config, &Catalog, &FakeAccounts::host()).unwrap()
 }
 
 /// One §6 request through every stage that holds the marker: `target` is authorized for `caller`, built, assembled

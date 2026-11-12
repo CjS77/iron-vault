@@ -100,8 +100,8 @@ services.
 | Conditional | Forward-proxy interception if required callers cannot use base-URL mode                                                                                                                                                                           |
 
 Integrations with `gh`, `npm`, and `cargo` require end-to-end compatibility checks. Setting `HTTPS_PROXY` alone does
-not enable credential injection in base-URL mode. Routes that require touch must stay unavailable until a supported
-confirmation provider exists.
+not enable credential injection in base-URL mode. Until a supported confirmation provider exists, a config with a
+route that requires touch is refused when it is read.
 
 ## Security boundary
 

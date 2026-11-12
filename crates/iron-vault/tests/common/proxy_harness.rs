@@ -25,9 +25,7 @@ use iron_vault::upstream::client::TransportLimits;
 use iron_vault::upstream::clients::UpstreamClients;
 use iron_vault::upstream::trust::PinnedCaError;
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::{
-    AccountDirectory, AccountName, CallerToken, Capabilities, ParsedConfig, RateLimiter, TokenHash, ValidatedConfig, activate,
-};
+use iron_vault_policy::{AccountDirectory, AccountName, CallerToken, ParsedConfig, RateLimiter, TokenHash, ValidatedConfig, activate};
 use iron_vault_store::{OsFs, PermittedOrigins, StateDirLock, Vault, VaultIdentity};
 use secrecy::ExposeSecret;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -159,7 +157,7 @@ pub const UNLOADABLE_CA: &str = "/etc/iron-vault/ca/unloadable.pem";
 /// route trusts the test CA, except one pinning [`UNLOADABLE_CA`], which the config check's marking makes unavailable.
 fn snapshot(setup: Setup<'_>, config: &ValidatedConfig, state_dir: &Path) -> ServingSnapshot {
     let vault = vault(setup.credentials, state_dir);
-    let policy = activate(config, &Capabilities::default(), &vault, &NoAccounts).unwrap();
+    let policy = activate(config, &vault, &NoAccounts).unwrap();
     let trust = setup.ca.trust();
     let clients = UpstreamClients::with_pinned_loader(&policy, TransportLimits::default(), |path| match path == Path::new(UNLOADABLE_CA) {
         true => Err(PinnedCaError::NoCertificates { path: path.to_path_buf() }),

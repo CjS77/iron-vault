@@ -3,8 +3,8 @@
 //!
 //! Requests race on one route, two callers share one route's bucket, and an approval narrows a route while requests run.
 //! A recording upstream shows what left the service: each request target carries an index, so every recorded request is
-//! matched to the request the test sent and to the answer that caller got. A touch route goes through `config approve`
-//! and through a start, and never reaches the upstream.
+//! matched to the request the test sent and to the answer that caller got. A config with a touch route goes through
+//! `config approve` and through a start; it is refused when read, and its route never reaches the upstream.
 //!
 //! The first two tests serve a snapshot from [`Proxy`], whose buckets start full; the last three run the service from
 //! [`Fixture`], whose buckets start empty at each config check, as a real service's do.
@@ -405,14 +405,19 @@ confirm = "touch"
     fixture.config("fx").replace(r#"routes = ["fx"]"#, r#"routes = ["fx", "gated"]"#) + &gated
 }
 
-/// The activation error the configuration reference quotes for a touch route.
-const TOUCH_REFUSED: &str = r#"route gated sets confirm = "touch", but no touch confirmation provider is available"#;
+/// The `config-invalid` message for `config`, refused at its `confirm = "touch"` value. A parse fault is reported by
+/// position only (configuration reference, "Reading a refusal"); the policy crate's tests show the parser's own message
+/// there is the fixed "not yet available" refusal.
+fn touch_refusal(config: &str) -> String {
+    let line = config.lines().position(|line| line == r#"confirm = "touch""#).unwrap() + 1;
+    format!("the proposed config is invalid: config is invalid at line {line}, column 11")
+}
 
 /// §19: "Rate limits and path/method restrictions apply under concurrency; unavailable touch requirements never degrade
 /// to unconfirmed access."
 ///
-/// §6: "v0 refuses to activate a route that requires touch, because no confirmation provider exists yet." `config
-/// approve` refuses the config before any prompt, naming the route and why, and reserves no version. The service keeps
+/// §6: "v0 refuses a config that sets `confirm = "touch"` when it is read, because no confirmation provider exists
+/// yet." `config approve` refuses the config before any prompt, at the touch value, and reserves no version. The service keeps
 /// serving the config it had: `fx` still answers, and the touch route's prefix is unknown, so its request never reaches
 /// the upstream.
 #[tokio::test]
@@ -420,13 +425,14 @@ async fn config_approve_refuses_a_touch_route_and_keeps_serving_the_previous_con
     let fixture = Fixture::new().await;
     let service = fixture.ready().await;
 
-    let refused = approve(&service, &touch_config(&fixture), &["yes", APPROVAL_PASSPHRASE]).await;
+    let config = touch_config(&fixture);
+    let refused = approve(&service, &config, &["yes", APPROVAL_PASSPHRASE]).await;
 
     match &refused.response {
         AdminResponse::Error {
             code: ErrorCode::ConfigInvalid,
             message,
-        } => assert!(message.contains(TOUCH_REFUSED), "{message}"),
+        } => assert_eq!(message, &touch_refusal(&config)),
         other => panic!("expected config-invalid, got {other:?}"),
     }
     assert!(refused.prompts.is_empty());
@@ -442,10 +448,10 @@ async fn config_approve_refuses_a_touch_route_and_keeps_serving_the_previous_con
 /// §19: "Rate limits and path/method restrictions apply under concurrency; unavailable touch requirements never degrade
 /// to unconfirmed access."
 ///
-/// A signed and committed config with a touch route, such as one a later version with a confirmation provider approved,
-/// fails the config check at start. The configuration reference: "a config with a touch route is refused at activation",
-/// so no route of it is served: `status` reports Unavailable with an invalid policy, every request gets `503`, and the
-/// upstream sees no connection.
+/// A signed and committed config with a touch route, such as one an older build wrote, fails the config check at start:
+/// it does not parse, so no route of it is served. `status` reports Unavailable with an invalid policy. An unparsable
+/// config names no listener either, so no request listener is bound, as for any unparsable config (§15): no request
+/// gets past the service, and the upstream sees no connection.
 #[tokio::test]
 async fn a_committed_touch_route_leaves_the_service_unavailable_with_no_upstream_connection() {
     let fixture = Fixture::new().await;
@@ -462,9 +468,9 @@ async fn a_committed_touch_route_leaves_the_service_unavailable_with_no_upstream
         service.status().await.state,
         ServiceState::Unavailable(FailureReason::PolicyInvalid)
     );
-    for route in ["gated", "fx"] {
-        let answer = get(&fixture, route).await;
-        assert_eq!((answer.status, answer.body.as_str()), (503, "policy invalid"), "{route}");
-    }
+    assert!(
+        tokio::net::UnixStream::connect(fixture.socket()).await.is_err(),
+        "a request listener is bound"
+    );
     assert_eq!(fixture.upstream().connections(), 0);
 }

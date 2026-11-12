@@ -310,7 +310,6 @@ fn route_fields(route: &RouteConfig) -> Vec<Field> {
 fn confirm_text(confirm: Confirmation) -> &'static str {
     match confirm {
         Confirmation::None => "none",
-        Confirmation::Touch => "touch",
     }
 }
 
@@ -559,11 +558,6 @@ mod tests {
                 "requests = 60, per_seconds = 60, burst = 10 }\n\n[routes.venice]",
                 "requests = 30, per_seconds = 60, burst = 10 }\n\n[routes.venice]",
                 "rate limit 60 per 60s burst 10 -> 30 per 60s burst 10",
-            ),
-            (
-                FX_LIMIT_END,
-                &FX_LIMIT_END.replace("\n\n", "\nconfirm = \"touch\"\n\n"),
-                "confirm none -> touch",
             ),
             (
                 FX_LIMIT_END,

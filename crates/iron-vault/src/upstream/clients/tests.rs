@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 
 use iron_vault_policy::{
-    AccountDirectory, AccountName, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, ParsedConfig,
-    UnavailableCause, ValidatedConfig, activate,
+    AccountDirectory, AccountName, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, ParsedConfig, UnavailableCause,
+    ValidatedConfig, activate,
 };
 
 use super::*;
@@ -122,7 +122,7 @@ fn policy() -> ActivePolicy {
         .values()
         .map(|route| (route.upstream().host().clone(), route.upstream().port()))
         .collect();
-    activate(&config, &Capabilities::default(), &Catalog(origins), &NoAccounts).unwrap()
+    activate(&config, &Catalog(origins), &NoAccounts).unwrap()
 }
 
 fn broken() -> PinnedCaError {

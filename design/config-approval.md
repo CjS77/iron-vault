@@ -134,7 +134,7 @@ These are defaults ([open question 8](#open-questions)).
 
 | Step | What the service does | Durable change | Service state |
 |---|---|---|---|
-| 1 | Writes the proposed bytes as `config.toml.pending`. Then parses, validates and activates them against the credential catalog, capabilities and account directory, using the one owned buffer it wrote, and dry-runs the upstream clients, so a config that cannot be served is invalid before any prompt. Never reads the file back to do this. | `config.toml.pending` | Ready, or Unavailable with `PolicyInvalid` |
+| 1 | Writes the proposed bytes as `config.toml.pending`. Then parses, validates and activates them against the credential catalog and account directory, using the one owned buffer it wrote, and dry-runs the upstream clients, so a config that cannot be served is invalid before any prompt. Never reads the file back to do this. | `config.toml.pending` | Ready, or Unavailable with `PolicyInvalid` |
 | 2 | Shows the approval summary and asks the owner to confirm it. Then asks for one pinned approver's authorization, naming it by label (see [Choosing the signer](#choosing-the-signer)); for the software signer, takes the approval passphrase and opens the approver key with it. Then reserves the next version. | `approval.age`: highest reserved version + 1 | unchanged |
 | 3 | Signs the approval payload (purpose, vault ID, the reserved version, the digest of the buffer), writes the envelope with the signer's approver ID, and drops the signer. | none | unchanged |
 | 4 | Writes the envelope as `config.toml.sig.staged`. | `config.toml.sig.staged` | unchanged |

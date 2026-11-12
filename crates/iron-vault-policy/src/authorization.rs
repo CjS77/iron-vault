@@ -180,7 +180,7 @@ fn plan(name: &RouteName, method: Method, route: &RouteConfig, path: &Normalized
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::activation::{Capabilities, CatalogEntry, CredentialCatalog, activate};
+    use crate::activation::{CatalogEntry, CredentialCatalog, activate};
     use crate::config::ParsedConfig;
     use crate::name::CredentialName;
     use crate::port::Port;
@@ -215,7 +215,7 @@ mod tests {
 
     fn policy_from(doc: &str, unusable: &'static [&'static str]) -> ActivePolicy {
         let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-        activate(&config, &Capabilities::default(), &Catalog(unusable), &FakeAccounts::host()).unwrap()
+        activate(&config, &Catalog(unusable), &FakeAccounts::host()).unwrap()
     }
 
     fn policy(unusable: &'static [&'static str]) -> ActivePolicy {

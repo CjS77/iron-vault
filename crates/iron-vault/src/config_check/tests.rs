@@ -226,15 +226,7 @@ impl Fixture {
     /// Runs the check on a freshly opened vault, building the upstream clients with `upstream`.
     fn check_with(&self, upstream: &UpstreamSettings) -> Result<ServingSnapshot, CheckFailure> {
         let (vault, _) = Vault::open(&self.state_lock, &OsFs, identity()).unwrap();
-        check_config(
-            &self.config_lock,
-            &OsFs,
-            vault,
-            &self.state,
-            &Capabilities::default(),
-            &NoAccounts,
-            upstream,
-        )
+        check_config(&self.config_lock, &OsFs, vault, &self.state, &NoAccounts, upstream)
     }
 }
 
@@ -253,7 +245,7 @@ fn failure(result: Result<ServingSnapshot, CheckFailure>) -> CheckFailure {
 fn the_initial_config_activates_against_an_empty_catalog_and_serves_nothing() {
     let fixture = Fixture::new(&[]);
     let (vault, _) = Vault::open(&fixture.state_lock, &OsFs, identity()).unwrap();
-    let policy = activate_config(iron_vault_store::INITIAL_CONFIG, &Capabilities::default(), &vault, &NoAccounts).unwrap();
+    let policy = activate_config(iron_vault_store::INITIAL_CONFIG, &vault, &NoAccounts).unwrap();
     let config = policy.config();
     assert!(config.listeners().is_empty() && config.callers().is_empty() && config.routes().is_empty());
 }
@@ -441,7 +433,6 @@ fn an_unreadable_config_file_reports_its_own_reason_and_the_fixed_body() {
         &UnreadableFs("config.toml.sig.staged"),
         vault,
         &fixture.state,
-        &Capabilities::default(),
         &NoAccounts,
         &development(),
     );
@@ -493,7 +484,6 @@ impl Fixture {
             &self.config_lock,
             &OsFs,
             Arc::new(identity()),
-            &Capabilities::default(),
             &NoAccounts,
             &upstream,
         )

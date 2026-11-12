@@ -12,8 +12,8 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use iron_vault_policy::{
-    AccountDirectory, AccountName, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, Host,
-    ParsedConfig, Port, ValidatedConfig, activate,
+    AccountDirectory, AccountName, ActivePolicy, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, Host, ParsedConfig, Port,
+    ValidatedConfig, activate,
 };
 use proptest::collection::vec;
 use proptest::prelude::*;
@@ -157,7 +157,7 @@ impl AccountDirectory for NoAccounts {
 /// [`CONFIG`] activated with every credential permitted on every route's upstream, so each route is available.
 pub static POLICY: LazyLock<ActivePolicy> = LazyLock::new(|| {
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
-    activate(&config, &Capabilities::default(), &Catalog(route_origins(&config)), &NoAccounts).unwrap()
+    activate(&config, &Catalog(route_origins(&config)), &NoAccounts).unwrap()
 });
 
 /// Every route upstream's host and port pair.

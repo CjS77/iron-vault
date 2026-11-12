@@ -17,7 +17,6 @@ use iron_vault::service_context::{ServiceContext, ServiceSetup};
 use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
-use iron_vault_policy::Capabilities;
 use iron_vault_store::{OsFs, RecipientEntry, StoreFs};
 use tokio::net::UnixStream;
 use zeroize::Zeroizing;
@@ -81,7 +80,6 @@ impl Fixture {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
             paths,
             fs,
-            capabilities: Capabilities::default(),
             upstream,
             hardening: HardeningReport {
                 core_dumps: CoreDumps::Disabled,

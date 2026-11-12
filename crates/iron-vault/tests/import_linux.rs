@@ -40,7 +40,6 @@ use iron_vault::service_state::{FailureReason, ServiceState};
 use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
-use iron_vault_policy::Capabilities;
 use iron_vault_store::{OsFs, RecipientRole, RecoveryKey};
 use secrecy::ExposeSecret;
 use tokio::net::UnixStream;
@@ -96,7 +95,6 @@ impl Dest {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
             paths,
             fs: OsFs,
-            capabilities: Capabilities::default(),
             upstream: iron_vault::config_check::UpstreamSettings::new(
                 DeploymentProfile::Development,
                 invoking_user().unwrap(),

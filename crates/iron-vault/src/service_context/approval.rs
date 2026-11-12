@@ -177,7 +177,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
     /// The pending config activated against `vault`, once its upstream clients build and the log destination it chooses
     /// passes its pre-check.
     fn servable(&self, bytes: &[u8], vault: &Vault) -> Result<ActivePolicy, InvalidConfig> {
-        let policy = activate_config(bytes, &self.setup.capabilities, vault, &self.setup.accounts)?;
+        let policy = activate_config(bytes, vault, &self.setup.accounts)?;
         self.setup.upstream.clients(&policy).map_err(InvalidConfig::Clients)?;
         log_destination::precheck(policy.config(), &self.setup.log, &self.setup.paths)?;
         Ok(policy)

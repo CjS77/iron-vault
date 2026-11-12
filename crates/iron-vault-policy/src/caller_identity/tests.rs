@@ -3,7 +3,7 @@ use std::cell::Cell;
 use secrecy::ExposeSecret;
 
 use super::*;
-use crate::activation::{Capabilities, CatalogEntry, CredentialCatalog, activate};
+use crate::activation::{CatalogEntry, CredentialCatalog, activate};
 use crate::caller_token::CALLER_TOKEN_BYTES;
 use crate::config::ParsedConfig;
 use crate::name::CredentialName;
@@ -123,7 +123,7 @@ rate_limit = {{ requests = 60, per_seconds = 60, burst = 10 }}
         hash(DELTA),
     );
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-    activate(&config, &Capabilities::default(), &NoCredentials, &FakeAccounts::host()).unwrap()
+    activate(&config, &NoCredentials, &FakeAccounts::host()).unwrap()
 }
 
 fn headers(fields: &[(&str, &str)]) -> Vec<(HeaderName, HeaderValue)> {
@@ -432,7 +432,7 @@ rate_limit = {{ requests = 60, per_seconds = 60, burst = 10 }}
 "#
     );
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-    let policy = activate(&config, &Capabilities::default(), &NoCredentials, &FakeAccounts::host()).unwrap();
+    let policy = activate(&config, &NoCredentials, &FakeAccounts::host()).unwrap();
     let authorization = format!("Bearer {printed_token}");
     let caller = identify_caller(
         &policy,

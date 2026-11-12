@@ -83,8 +83,8 @@ mod tests {
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
     use iron_vault_policy::{
-        AccountDirectory, AccountName, ActivationError, ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind,
-        CredentialName, Method, ParsedConfig, Port, RequestTarget, ValidatedConfig, activate, authorize,
+        AccountDirectory, AccountName, ActivationError, ActivePolicy, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName,
+        Method, ParsedConfig, Port, RequestTarget, ValidatedConfig, activate, authorize,
     };
     use secrecy::{ExposeSecret, SecretString};
 
@@ -173,7 +173,7 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 
     fn policy() -> ActivePolicy {
         let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
-        activate(&config, &Capabilities::default(), &Catalog(natural_kind), &NoAccounts).unwrap()
+        activate(&config, &Catalog(natural_kind), &NoAccounts).unwrap()
     }
 
     fn resolve_material(target: &str, material: &CredentialMaterial) -> Result<Resolution, KindError> {
@@ -315,9 +315,7 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
     /// Routes `activate` refuses when every credential is of `kind`.
     fn refused_at_activation(kind: fn(&CredentialName) -> CredentialKind) -> Vec<String> {
         let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
-        let errors = activate(&config, &Capabilities::default(), &Catalog(kind), &NoAccounts)
-            .err()
-            .unwrap_or_default();
+        let errors = activate(&config, &Catalog(kind), &NoAccounts).err().unwrap_or_default();
         errors
             .iter()
             .map(|err| match err {

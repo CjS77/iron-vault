@@ -51,7 +51,7 @@ use iron_vault::standing::{CredentialStanding, Standing};
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::{Capabilities, CredentialKind, ListenerName};
+use iron_vault_policy::{CredentialKind, ListenerName};
 use iron_vault_store::{
     ApprovalEnvelope, ApprovalPayload, ApprovalSigner, ApprovalState, ApprovalStorage, ApproverId, ApproverPublicKey, ConfigDirLock,
     LockError, OperationalIdentity, OsFs, Passphrase, PendingConfig, PermittedOrigins, PinnedApprover, RecipientSet, RecordDamage,
@@ -286,7 +286,6 @@ rate_limit = {{ requests = 100000, per_seconds = 1, burst = 100000 }}
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
             paths,
             fs,
-            capabilities: Capabilities::default(),
             upstream: UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default())
                 .with_pinned_trust(self.ca.trust()),
             hardening: HardeningReport {

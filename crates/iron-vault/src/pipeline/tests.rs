@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use iron_vault_kinds::CredentialMaterial;
 use iron_vault_policy::{
-    AccountDirectory, AccountName, AuthzError, CallerToken, Capabilities, CatalogEntry, CredentialCatalog, ParsedConfig, Port, Refusal,
-    TokenHash, ValidatedConfig, activate,
+    AccountDirectory, AccountName, AuthzError, CallerToken, CatalogEntry, CredentialCatalog, ParsedConfig, Port, Refusal, TokenHash,
+    ValidatedConfig, activate,
 };
 use iron_vault_store::{OsFs, PermittedOrigins, RecordId, Source, StateDirLock, Vault, VaultIdentity};
 use secrecy::ExposeSecret;
@@ -178,7 +178,7 @@ struct TestSources {
 impl TestSources {
     fn new() -> Self {
         let records = records();
-        let policy = activate(&validated(), &Capabilities::default(), &Catalog(&records), &Accounts).unwrap();
+        let policy = activate(&validated(), &Catalog(&records), &Accounts).unwrap();
         let start = Instant::now();
         let limiter = RateLimiter::new(&policy, start);
         Self {
@@ -196,7 +196,7 @@ impl TestSources {
         let mut sources = Self::new();
         let parsed = ParsedConfig::from_toml(config.as_bytes()).unwrap();
         let validated = ValidatedConfig::try_from(parsed).unwrap();
-        let policy = activate(&validated, &Capabilities::default(), &Catalog(&sources.records), &Accounts).unwrap();
+        let policy = activate(&validated, &Catalog(&sources.records), &Accounts).unwrap();
         sources.limiter = RateLimiter::new(&policy, sources.start);
         sources
     }
@@ -516,7 +516,7 @@ fn prepare_reads_a_serving_snapshot() {
         };
         vault.add(&lock, &OsFs, name, material, origins(&host)).unwrap();
     });
-    let policy = activate(&validated(), &Capabilities::default(), &vault, &Accounts).unwrap();
+    let policy = activate(&validated(), &vault, &Accounts).unwrap();
     let clients = UpstreamClients::new(
         &policy,
         DeploymentProfile::Development,

@@ -81,7 +81,7 @@ fn the_page_names_every_key_and_value_the_parser_accepts() {
         "isolated-network",
         "query",
         "per_seconds",
-        "touch",
+        "none",
         "reminder_days",
     ]
     .iter()
@@ -107,5 +107,8 @@ fn expected_names_reads_one_or_many() {
         expected_names("unknown field `x`, expected `destination` at line 3"),
         ["destination"]
     );
-    assert_eq!(expected_names("unknown variant `x`, expected `none` or `touch`"), ["none", "touch"]);
+    assert_eq!(
+        expected_names("unknown variant `x`, expected `header` or `query`"),
+        ["header", "query"]
+    );
 }

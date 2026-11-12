@@ -1,8 +1,8 @@
 //! An authorized request and its route's slot, for tests that resolve a credential record.
 
 use iron_vault_policy::{
-    AccountDirectory, AccountName, ActivePolicy, AuthorizedRequest, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind,
-    CredentialName, Method, ParsedConfig, Port, RequestTarget, Slot, ValidatedConfig, activate, authorize,
+    AccountDirectory, AccountName, ActivePolicy, AuthorizedRequest, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName,
+    Method, ParsedConfig, Port, RequestTarget, Slot, ValidatedConfig, activate, authorize,
 };
 
 /// One caller and one static-key route to `https://api.example.com` with a header slot.
@@ -61,7 +61,7 @@ impl CredentialCatalog for Catalog {
 /// The `fx` route's header slot and an authorized `GET /fx/latest` on it.
 pub(crate) fn header_request() -> (Slot, AuthorizedRequest) {
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(CONFIG.as_bytes()).unwrap()).unwrap();
-    let policy: ActivePolicy = activate(&config, &Capabilities::default(), &Catalog, &NoAccounts).unwrap();
+    let policy: ActivePolicy = activate(&config, &Catalog, &NoAccounts).unwrap();
     let (path, query) = RequestTarget::parse("/fx/latest").unwrap().into_parts();
     let request = authorize(&policy, &"agent".parse().unwrap(), &Method::Get, &path, query).unwrap();
     let slot = policy.route(request.route()).unwrap().slot().clone();

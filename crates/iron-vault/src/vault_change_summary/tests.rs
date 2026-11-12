@@ -1,8 +1,7 @@
 use std::collections::BTreeSet;
 
 use iron_vault_policy::{
-    AccountDirectory, AccountName, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, ParsedConfig,
-    ValidatedConfig, activate,
+    AccountDirectory, AccountName, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, ParsedConfig, ValidatedConfig, activate,
 };
 use iron_vault_store::{PermittedOrigins, RecordDamage};
 
@@ -80,7 +79,7 @@ impl AccountDirectory for NoAccounts {
 }
 
 fn policy(healthy: bool) -> ActivePolicy {
-    activate(&config(), &Capabilities::default(), &Catalog { healthy }, &NoAccounts).unwrap()
+    activate(&config(), &Catalog { healthy }, &NoAccounts).unwrap()
 }
 
 fn origin(host: &str, port: u16) -> (Host, Port) {

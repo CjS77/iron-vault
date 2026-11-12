@@ -261,8 +261,8 @@ Configuration contains:
   operations a caller needs, for example read-only `GET` requests on a few endpoints.
 - **Rate limits:** a token bucket per route, optionally tightened per caller. They cap how fast a misbehaving or
   compromised caller can spend quota, run up cost or extract data.
-- **Confirmation rules:** whether each request on a route needs the owner's touch on a security key. v0 refuses to
-  activate a route that requires touch, because no confirmation provider exists yet.
+- **Confirmation rules:** whether each request on a route needs the owner's touch on a security key. v0 refuses a
+  config that sets `confirm = "touch"` when it is read, because no confirmation provider exists yet.
 - **CA references:** paths to administrator-installed CA certificates that a route trusts instead of the built-in roots.
   They let Iron Vault reach a self-hosted upstream with a private CA, still over verified TLS.
 

@@ -34,8 +34,7 @@ use crate::upstream::UpstreamUrl;
 ///
 /// Methods, paths and the rate limit are required so a missing restriction never widens into "allow all" (spec §6).
 /// Whether prefixes overlap needs the whole configuration, so [`ValidatedConfig`](crate::ValidatedConfig) checks it.
-/// Whether `credential` exists and permits `upstream`, and whether `confirm = "touch"` can be honoured, need the vault
-/// and the service, so [`activate`](crate::activate) checks them.
+/// Whether `credential` exists and permits `upstream` needs the vault, so [`activate`](crate::activate) checks it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawRoute")]
 pub struct RouteConfig {
@@ -204,8 +203,8 @@ rate_limit = { requests = 60, per_seconds = 60, burst = 10 }
 
     #[test]
     fn optional_fields_parse() {
-        let r = parse(&format!("{FX}confirm = \"touch\"\nca_file = \"/etc/iron-vault/ca/fx.pem\"")).unwrap();
-        assert_eq!(r.confirm(), Confirmation::Touch);
+        let r = parse(&format!("{FX}confirm = \"none\"\nca_file = \"/etc/iron-vault/ca/fx.pem\"")).unwrap();
+        assert_eq!(r.confirm(), Confirmation::None);
         assert_eq!(r.ca_file().map(ToString::to_string).as_deref(), Some("/etc/iron-vault/ca/fx.pem"));
     }
 

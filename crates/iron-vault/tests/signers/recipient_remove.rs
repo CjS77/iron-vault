@@ -21,7 +21,6 @@ use iron_vault::service_context::{ServiceContext, ServiceSetup};
 use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
-use iron_vault_policy::Capabilities;
 use iron_vault_store::{
     OsFs, RecipientEntry, RecipientIdentity, RecipientInventory, RecipientKey, RecipientLabel, RecipientRole, RecipientSet, RecoveryKey,
     StateFileName, UtcSecond, envelope_digest, open_recipient_inventory, seal_recipient_inventory, unwrap_identity, wrap_identity,
@@ -65,7 +64,6 @@ impl Fixture {
             accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
             paths,
             fs: OsFs,
-            capabilities: Capabilities::default(),
             upstream: iron_vault::config_check::UpstreamSettings::new(
                 DeploymentProfile::Development,
                 invoking_user().unwrap(),

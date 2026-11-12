@@ -64,7 +64,7 @@ Only the following follow-up work remains in this section:
 | Q-7: license                             | Release Iron Vault under Apache-2.0 ([§4](#4-license-and-design-references))                                                                                       |
 | Q-9: one approval flow                   | Use one versioned signature envelope for TPM, YubiKey, and software signers; keep the version in protected state ([product spec §12](iron-vault-specification.md#12-configuration-approval-and-reload))         |
 | Config approval retained                 | Retain it for grants and route policy while credential records independently restrict destinations ([product spec §6](iron-vault-specification.md#6-credential-records-and-configuration), [product spec §12](iron-vault-specification.md#12-configuration-approval-and-reload))             |
-| Touch policy without a device            | Refuse to activate a touch-required route; never silently downgrade ([product spec §6](iron-vault-specification.md#6-credential-records-and-configuration), [future spec §2.1](future-specifications.md#21-hardware-key-recipients-signers-and-touch-confirmation))                                                  |
+| Touch policy without a device            | Refuse a config that requires touch when it is read; never silently downgrade ([product spec §6](iron-vault-specification.md#6-credential-records-and-configuration), [future spec §2.1](future-specifications.md#21-hardware-key-recipients-signers-and-touch-confirmation))                                        |
 
 ## 3. Implementation gates and unresolved details
 

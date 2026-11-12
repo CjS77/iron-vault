@@ -248,10 +248,9 @@ fn charge_and_build(
     headers: OutgoingHeaders,
     now: Instant,
 ) -> Result<Prepared, PipelineRefusal> {
-    // §8 step 5 also obtains owner confirmation, which needs no code in v0: activation refuses a route with
-    // `confirm = "touch"` unless `Capabilities::touch_provider` is set, and v0 never sets it (§6, implementation spec §2.2
-    // "Touch policy without a device"). A confirmation provider must add its check here, after the charge and before
-    // resolution.
+    // §8 step 5 also obtains owner confirmation, which needs no code in v0: `confirm = "touch"` is refused when the
+    // config is read, so no route here requires it (§6). A confirmation provider must add its check here, after the
+    // charge and before resolution.
     sources.limiter().charge(caller, authorized.route(), now)?;
     let resolved = resolve(sources, route, authorized)?;
     let outgoing = assemble(route, authorized, headers, &resolved)?;

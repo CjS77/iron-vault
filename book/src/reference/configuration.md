@@ -497,14 +497,15 @@ needs a token from both. A route that should be effectively unlimited still gets
 
 ### `confirm`
 
-`"none"`, the default, or `"touch"`. A touch route will need confirmation on a security key for each request. No
-confirmation provider exists in v0, so a config with a touch route is refused at activation:
+`"none"`, the default and the only value v0 accepts. `"touch"` is reserved for a
+[later phase](../cookbook/roadmap/yubikey.md), where a touch route will need confirmation on a security key for each
+request. No confirmation provider exists in v0, so a config that sets `confirm = "touch"` is refused when it is read,
+before any prompt, at the position of the value.
 
-```text
-route github sets confirm = "touch", but no touch confirmation provider is available
-```
-
-Any other value: `` unknown variant `always`, expected `none` or `touch` ``.
+| Fault     | Parser message                                                                      |
+|-----------|-------------------------------------------------------------------------------------|
+| `"touch"` | `` confirm = "touch" is not yet available: v0 has no touch confirmation provider `` |
+| any other | `` unknown variant `always`, expected `none` ``                                     |
 
 ### `ca_file`
 

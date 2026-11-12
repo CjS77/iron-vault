@@ -189,7 +189,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::activation::{Capabilities, CatalogEntry, CredentialCatalog, activate};
+    use crate::activation::{CatalogEntry, CredentialCatalog, activate};
     use crate::config::ParsedConfig;
     use crate::name::CredentialName;
     use crate::port::Port;
@@ -229,10 +229,7 @@ routes = ["fx"]
 
     fn limiter(doc: &str, now: Instant) -> RateLimiter {
         let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-        RateLimiter::new(
-            &activate(&config, &Capabilities::default(), &Healthy, &FakeAccounts::host()).unwrap(),
-            now,
-        )
+        RateLimiter::new(&activate(&config, &Healthy, &FakeAccounts::host()).unwrap(), now)
     }
 
     fn two_callers(now: Instant) -> RateLimiter {

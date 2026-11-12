@@ -89,13 +89,13 @@ high-severity event that names no secret.
 | Concurrent requests never exceed a bucket | `crates/iron-vault/tests/proxy/pipeline_egress.rs::concurrent_requests_cannot_exceed_a_bucket` | `cargo test` |
 | Path and method restrictions, one request at a time | `crates/iron-vault-policy/src/authorization.rs::method_and_path_restrictions_apply`, `crates/iron-vault/src/pipeline/tests.rs::a_method_off_the_allowlist_is_refused_before_authorization` | `cargo test` |
 | A rate-limited request is refused unsent | `crates/iron-vault/src/pipeline/tests.rs::a_rate_limited_request_is_not_resolved` | `cargo test` |
-| A touch route never activates without a provider | `crates/iron-vault-policy/src/activation.rs::touch_route_is_refused_without_a_provider` | `cargo test` |
+| A touch route never parses without a provider: `confirm = "touch"` is refused as not yet available, at its line | `crates/iron-vault-policy/src/confirmation.rs::touch_is_refused_as_not_yet_available`, `crates/iron-vault-policy/src/config.rs::a_touch_route_is_refused_at_its_line_as_not_yet_available` | `cargo test` |
 | Allowed and forbidden paths and methods racing on one route: only allowed requests reach the upstream, one per `200` | `crates/iron-vault/tests/proxy/release_restrictions.rs::allowed_and_forbidden_requests_racing_on_one_route_reach_the_upstream_only_when_allowed` | `cargo test` |
 | Two callers on one route share its bucket (§8), and the upstream count never exceeds it | `crates/iron-vault/tests/proxy/release_restrictions.rs::two_callers_on_one_route_share_its_bucket` | `cargo test` |
 | An approval narrowing a route while requests run: nothing the new policy forbids is admitted after it, a request both policies forbid is never admitted, and no approval hands out a fresh burst | `crates/iron-vault/tests/proxy/release_restrictions.rs::an_approval_that_narrows_a_route_while_requests_run_admits_nothing_the_new_policy_forbids` | `cargo test` |
-| `config approve` refuses a touch route, naming it, and the previous config keeps serving | `crates/iron-vault/tests/proxy/release_restrictions.rs::config_approve_refuses_a_touch_route_and_keeps_serving_the_previous_config` | `cargo test` |
-| A committed config with a touch route leaves the service Unavailable, every request `503`, no upstream connection | `crates/iron-vault/tests/proxy/release_restrictions.rs::a_committed_touch_route_leaves_the_service_unavailable_with_no_upstream_connection` | `cargo test` |
-| A touch-confirmed request | **not in v0**: no confirmation provider exists, so a touch route is refused at activation | |
+| `config approve` refuses a config with a touch route as `config-invalid` before any prompt, at the touch value; no version is reserved and the previous config keeps serving | `crates/iron-vault/tests/proxy/release_restrictions.rs::config_approve_refuses_a_touch_route_and_keeps_serving_the_previous_config` | `cargo test` |
+| A committed config with a touch route does not parse: the service is Unavailable with an invalid policy, binds no request listener, and makes no upstream connection | `crates/iron-vault/tests/proxy/release_restrictions.rs::a_committed_touch_route_leaves_the_service_unavailable_with_no_upstream_connection` | `cargo test` |
+| A touch-confirmed request | **not in v0**: no confirmation provider exists, so a config with a touch route is refused when it is read | |
 
 ## 5. Scrubbing
 

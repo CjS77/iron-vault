@@ -1,7 +1,7 @@
 use secrecy::SecretString;
 
 use super::*;
-use crate::activation::{ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
+use crate::activation::{ActivePolicy, CatalogEntry, CredentialCatalog, activate};
 use crate::authorization::authorize;
 use crate::config::ParsedConfig;
 use crate::header_value::HeaderValue;
@@ -49,7 +49,7 @@ fn policy() -> ActivePolicy {
     .iter()
     .fold(SPEC_EXAMPLE.to_owned(), |doc, paths| doc.replace(paths, "[\"/**\"]"));
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-    activate(&config, &Capabilities::default(), &Catalog, &FakeAccounts::host()).unwrap()
+    activate(&config, &Catalog, &FakeAccounts::host()).unwrap()
 }
 
 /// Everything `final_check` takes, starting from a valid assembled request; tests change exactly one fact.

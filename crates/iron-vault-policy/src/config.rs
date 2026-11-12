@@ -486,6 +486,13 @@ mod tests {
     }
 
     #[test]
+    fn a_touch_route_is_refused_at_its_line_as_not_yet_available() {
+        let doc = SPEC_EXAMPLE.replace("credential = \"fx_key\"", "credential = \"fx_key\"\nconfirm = \"touch\"");
+        let expected = r#"confirm = "touch" is not yet available: v0 has no touch confirmation provider"#;
+        invalid(&doc, "confirm = \"touch\"", expected);
+    }
+
+    #[test]
     fn bad_prefixes_are_located() {
         [("/", "must not be \"/\""), ("/fx/", "trailing slash"), ("/fx/*", "wildcard")]
             .iter()

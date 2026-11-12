@@ -115,8 +115,7 @@ impl<F: StoreFs + Send + Sync + 'static> ServiceContext<F> {
             return Err(VaultChangeRefusal::UnknownCredential(change.name().clone()));
         };
         let config = snapshot.policy().config();
-        vault_change_check(config, &self.setup.capabilities, &*snapshot, &self.setup.accounts, &change)
-            .map_err(|routes| in_use(&change, routes))?;
+        vault_change_check(config, &*snapshot, &self.setup.accounts, &change).map_err(|routes| in_use(&change, routes))?;
         Ok(VaultChangePlan {
             service: self,
             service_wide,

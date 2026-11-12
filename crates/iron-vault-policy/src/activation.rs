@@ -1,16 +1,14 @@
 //! Activation: checking a validated config against facts only the running service knows (spec §6, §7, §12).
 //!
-//! The configuration cannot know which credential records exist, which hosts they permit, whether this machine can
-//! confirm a touch, or which uid each peer account has. The service supplies those facts as [`Capabilities`], a
-//! [`CredentialCatalog`] and an [`AccountDirectory`]; activation then either refuses the whole configuration or
-//! produces the [`ActivePolicy`] that requests are served under.
+//! The configuration cannot know which credential records exist, which hosts they permit, or which uid each peer account
+//! has. The service supplies those facts as a [`CredentialCatalog`] and an [`AccountDirectory`]; activation then either
+//! refuses the whole configuration or produces the [`ActivePolicy`] that requests are served under.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 
 use crate::account_name::AccountName;
-use crate::confirmation::Confirmation;
 use crate::credential_kind::CredentialKind;
 use crate::display::joined;
 use crate::host::Host;
@@ -19,13 +17,6 @@ use crate::port::Port;
 use crate::reminder_interval::ReminderInterval;
 use crate::route::RouteConfig;
 use crate::validated::ValidatedConfig;
-
-/// What this service installation can do that some routes depend on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Capabilities {
-    /// Whether a supported touch-confirmation provider exists; v0 never has one (spec §6).
-    pub touch_provider: bool,
-}
 
 /// The service's view of the vault's credential records, as activation needs it.
 ///
@@ -68,7 +59,7 @@ pub enum CatalogEntry {
     },
 }
 
-/// A validated config activated against the service's capabilities, credential catalog and account directory.
+/// A validated config activated against the service's credential catalog and account directory.
 ///
 /// Only [`activate`] builds one. Unavailable routes stay listed so the service can answer for them, each with its
 /// causes; every other route may serve requests.
@@ -97,12 +88,6 @@ pub enum UnavailableCause {
 /// Why a validated config cannot be activated.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ActivationError {
-    /// The route requires touch confirmation, which this service cannot provide; it is never silently downgraded.
-    #[error("route {route} sets confirm = \"touch\", but no touch confirmation provider is available")]
-    TouchUnavailable {
-        /// The route.
-        route: RouteName,
-    },
     /// The route names a credential the vault does not hold, which invalidates the whole config (spec §12).
     #[error("route {route} uses credential {credential}, which the vault does not hold")]
     UnknownCredential {
@@ -243,7 +228,6 @@ impl ActivePolicy {
 /// again once the record is repaired, and checks its origins then. The directory is asked once per peer caller.
 pub fn activate(
     config: &ValidatedConfig,
-    capabilities: &Capabilities,
     catalog: &impl CredentialCatalog,
     accounts: &impl AccountDirectory,
 ) -> Result<ActivePolicy, Vec<ActivationError>> {
@@ -258,7 +242,7 @@ pub fn activate(
         .filter_map(|(name, route)| entries.get(route.credential()).map(|entry| (name, route, entry)));
     let errors: Vec<_> = routes
         .clone()
-        .flat_map(|(name, route, entry)| route_errors(name, route, capabilities, entry))
+        .flat_map(|(name, route, entry)| route_errors(name, route, entry))
         .collect();
     match (errors.is_empty(), peer_accounts::resolve(config, accounts)) {
         (true, Ok(peer_uids)) => {
@@ -276,12 +260,9 @@ pub fn activate(
     }
 }
 
-fn route_errors(name: &RouteName, route: &RouteConfig, capabilities: &Capabilities, entry: &CatalogEntry) -> Vec<ActivationError> {
-    let touch = (route.confirm() == Confirmation::Touch && !capabilities.touch_provider)
-        .then(|| ActivationError::TouchUnavailable { route: name.clone() });
-    touch
+fn route_errors(name: &RouteName, route: &RouteConfig, entry: &CatalogEntry) -> Vec<ActivationError> {
+    credential_error(name, route, entry)
         .into_iter()
-        .chain(credential_error(name, route, entry))
         .chain(slot_error(name, route, entry))
         .collect()
 }
@@ -328,8 +309,6 @@ mod tests {
     use crate::config::ParsedConfig;
     use crate::spec_example::SPEC_EXAMPLE;
     use crate::test_accounts::{FakeAccounts, SERVICE_UID};
-
-    const NO_TOUCH: Capabilities = Capabilities { touch_provider: false };
 
     /// A catalog held in memory: names map to entries, and any other name is unknown.
     struct FakeCatalog(BTreeMap<CredentialName, CatalogEntry>);
@@ -388,7 +367,7 @@ mod tests {
     fn each_credential_is_looked_up_once() {
         let shared = config(&SPEC_EXAMPLE.replace("credential = \"brave\"", "credential = \"venice\""));
         let catalog = CountingCatalog(std::cell::RefCell::default());
-        assert!(activate(&shared, &NO_TOUCH, &catalog, &FakeAccounts::host()).is_ok());
+        assert!(activate(&shared, &catalog, &FakeAccounts::host()).is_ok());
         assert_eq!(
             catalog.0.borrow().iter().map(CredentialName::as_str).collect::<Vec<_>>(),
             ["fx_key", "venice"]
@@ -397,7 +376,7 @@ mod tests {
 
     #[test]
     fn spec_example_activates() {
-        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap();
+        let policy = activate(&config(SPEC_EXAMPLE), &spec_catalog(&[]), &FakeAccounts::host()).unwrap();
         assert!(policy.unavailable_routes().is_empty());
         assert!(["fx", "venice", "brave"].iter().all(|route| policy.is_available(&n(route))));
         assert!(!policy.is_available(&n("missing")));
@@ -406,14 +385,14 @@ mod tests {
 
     #[test]
     fn the_policy_holds_each_peer_callers_uid() {
-        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap();
+        let policy = activate(&config(SPEC_EXAMPLE), &spec_catalog(&[]), &FakeAccounts::host()).unwrap();
         assert_eq!(policy.peer_uids(), &[(n("fx-mcp"), 1001)].into());
     }
 
     #[test]
     fn peer_account_errors_follow_route_errors() {
         let catalog = spec_catalog(&[("brave", CatalogEntry::Unknown)]);
-        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::with(&[("fx-mcp", 0)])).unwrap_err();
+        let err = activate(&config(SPEC_EXAMPLE), &catalog, &FakeAccounts::with(&[("fx-mcp", 0)])).unwrap_err();
         let expected = [
             ActivationError::UnknownCredential {
                 route: n("brave"),
@@ -429,33 +408,17 @@ mod tests {
 
     #[test]
     fn a_peer_account_error_alone_refuses_the_config() {
-        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::with(&[])).map(|_| ());
+        let err = activate(&config(SPEC_EXAMPLE), &spec_catalog(&[]), &FakeAccounts::with(&[])).map(|_| ());
         assert_eq!(err, Ok(()));
         let accounts = FakeAccounts::with(&[("fx-mcp", SERVICE_UID)]);
-        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &spec_catalog(&[]), &accounts).unwrap_err();
+        let err = activate(&config(SPEC_EXAMPLE), &spec_catalog(&[]), &accounts).unwrap_err();
         assert!(matches!(&err[..], [ActivationError::PrivilegedAccount { .. }]), "{err:?}");
-    }
-
-    #[test]
-    fn touch_route_is_refused_without_a_provider() {
-        let touch = spec_with("credential = \"fx_key\"", "credential = \"fx_key\"\nconfirm = \"touch\"");
-        let err = activate(&touch, &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap_err();
-        assert_eq!(err, [ActivationError::TouchUnavailable { route: n("fx") }]);
-        assert!(
-            activate(
-                &touch,
-                &Capabilities { touch_provider: true },
-                &spec_catalog(&[]),
-                &FakeAccounts::host()
-            )
-            .is_ok()
-        );
     }
 
     #[test]
     fn unknown_credential_is_refused() {
         let catalog = spec_catalog(&[("brave", CatalogEntry::Unknown)]);
-        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap_err();
+        let err = activate(&config(SPEC_EXAMPLE), &catalog, &FakeAccounts::host()).unwrap_err();
         assert_eq!(
             err,
             [ActivationError::UnknownCredential {
@@ -468,7 +431,7 @@ mod tests {
     #[test]
     fn damaged_credential_disables_only_its_route() {
         let catalog = spec_catalog(&[("venice", CatalogEntry::Unusable)]);
-        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap();
+        let policy = activate(&config(SPEC_EXAMPLE), &catalog, &FakeAccounts::host()).unwrap();
         let causes = BTreeSet::from([UnavailableCause::CredentialUnusable]);
         assert_eq!(policy.unavailable_routes(), &BTreeMap::from([(n("venice"), causes)]));
         assert!(!policy.is_available(&n("venice")));
@@ -478,7 +441,7 @@ mod tests {
     #[test]
     fn route_lookup_omits_unavailable_and_missing_routes() {
         let catalog = spec_catalog(&[("venice", CatalogEntry::Unusable)]);
-        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap();
+        let policy = activate(&config(SPEC_EXAMPLE), &catalog, &FakeAccounts::host()).unwrap();
         assert_eq!(policy.route(&n("fx")), policy.config().routes().get(&n("fx")));
         assert!(policy.route(&n("fx")).is_some() && policy.route(&n("brave")).is_some());
         assert_eq!(policy.route(&n("venice")), None);
@@ -489,7 +452,7 @@ mod tests {
     #[test]
     fn a_pinned_ca_route_is_unavailable_and_keeps_its_credential_cause() {
         let catalog = spec_catalog(&[("venice", CatalogEntry::Unusable)]);
-        let policy = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap();
+        let policy = activate(&config(SPEC_EXAMPLE), &catalog, &FakeAccounts::host()).unwrap();
         let policy = policy.with_pinned_ca_unavailable(&[n("fx"), n("venice"), n("missing")]);
         let both = BTreeSet::from([UnavailableCause::CredentialUnusable, UnavailableCause::PinnedCaUnavailable]);
         let expected = BTreeMap::from([
@@ -506,7 +469,7 @@ mod tests {
     #[test]
     fn upstream_host_must_be_permitted_exactly() {
         let evil = spec_with("https://api.fx.example", "https://api.fx.example.evil.com");
-        let err = activate(&evil, &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap_err();
+        let err = activate(&evil, &spec_catalog(&[]), &FakeAccounts::host()).unwrap_err();
         let host = n("api.fx.example.evil.com");
         let expected = ActivationError::OriginNotPermitted {
             route: n("fx"),
@@ -524,26 +487,24 @@ mod tests {
     #[test]
     fn upstream_port_must_be_permitted() {
         let other_port = spec_with("https://api.fx.example", "https://api.fx.example:8443");
-        let err = activate(&other_port, &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap_err();
+        let err = activate(&other_port, &spec_catalog(&[]), &FakeAccounts::host()).unwrap_err();
         assert!(
             matches!(&err[..], [ActivationError::OriginNotPermitted { port, .. }] if port.get() == 8443),
             "{err:?}"
         );
         let catalog = spec_catalog(&[("fx_key", usable(&[("api.fx.example", 443), ("api.fx.example", 8443)]))]);
-        assert!(activate(&other_port, &NO_TOUCH, &catalog, &FakeAccounts::host()).is_ok());
+        assert!(activate(&other_port, &catalog, &FakeAccounts::host()).is_ok());
     }
 
     #[test]
     fn every_error_is_reported_in_route_order() {
-        let touch = spec_with("credential = \"fx_key\"", "credential = \"fx_key\"\nconfirm = \"touch\"");
         let catalog = spec_catalog(&[("brave", CatalogEntry::Unknown), ("fx_key", usable(&[("api.fx.example", 8443)]))]);
-        let err = activate(&touch, &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap_err();
+        let err = activate(&config(SPEC_EXAMPLE), &catalog, &FakeAccounts::host()).unwrap_err();
         let expected = [
             ActivationError::UnknownCredential {
                 route: n("brave"),
                 credential: n("brave"),
             },
-            ActivationError::TouchUnavailable { route: n("fx") },
             ActivationError::OriginNotPermitted {
                 route: n("fx"),
                 credential: n("fx_key"),
@@ -564,7 +525,7 @@ mod tests {
     #[test]
     fn static_credential_on_basic_slot_is_refused() {
         let basic = spec_with("slot = { query = \"access_key\" }", "slot = \"basic\"");
-        let err = activate(&basic, &NO_TOUCH, &spec_catalog(&[]), &FakeAccounts::host()).unwrap_err();
+        let err = activate(&basic, &spec_catalog(&[]), &FakeAccounts::host()).unwrap_err();
         assert_eq!(
             err,
             [ActivationError::SlotMismatch {
@@ -583,7 +544,7 @@ mod tests {
     fn basic_credential_on_header_slot_is_reported_with_other_errors() {
         let brave = with_kind(usable(&[("api.search.brave.com", 443)]), CredentialKind::Basic);
         let catalog = spec_catalog(&[("brave", brave), ("fx_key", CatalogEntry::Unknown)]);
-        let err = activate(&config(SPEC_EXAMPLE), &NO_TOUCH, &catalog, &FakeAccounts::host()).unwrap_err();
+        let err = activate(&config(SPEC_EXAMPLE), &catalog, &FakeAccounts::host()).unwrap_err();
         let expected = [
             ActivationError::SlotMismatch {
                 route: n("brave"),

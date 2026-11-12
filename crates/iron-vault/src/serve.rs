@@ -23,7 +23,6 @@ use iron_vault::socket_activation::{ActivationEnv, PassedSockets};
 use iron_vault::trusted_path_report::{self, ServicePaths, TrustedPathReport};
 use iron_vault::unlock_handoff::HANDOFF_PATH;
 use iron_vault::upstream::client::TransportLimits;
-use iron_vault_policy::Capabilities;
 use iron_vault_store::OsFs;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -53,7 +52,6 @@ pub fn run(paths: &ServicePaths, accounts: Accounts, hardening: HardeningReport,
         paths: paths.clone(),
         fs: OsFs,
         accounts: PasswdDirectory::new(accounts, paths, Path::new(OVERFLOW_UID_FILE))?,
-        capabilities: Capabilities::default(),
         upstream: UpstreamSettings::new(paths.profile, paths.owner, TransportLimits::default()),
         hardening,
         log,

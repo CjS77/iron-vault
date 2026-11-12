@@ -50,7 +50,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
-use iron_vault_policy::{Capabilities, CredentialName, Limits, ListenerConfig, ListenerName, ParsedConfig};
+use iron_vault_policy::{CredentialName, Limits, ListenerConfig, ListenerName, ParsedConfig};
 use iron_vault_store::{
     ApprovalState, ApprovalVersion, ConfigDirLock, ConfigFileName, InitializationState, LockError, OsFs, Passphrase, RecordId,
     StateDirLock, StateFileName, StoreFs, UnfinishedKind, UnlockError, VaultIdentity, read_config_file, sweep_stale_config_temps,
@@ -246,8 +246,6 @@ pub struct ServiceSetup<F = OsFs> {
     pub fs: F,
     /// The accounts peer callers resolve against.
     pub accounts: PasswdDirectory,
-    /// What this installation can do, for activation.
-    pub capabilities: Capabilities,
     /// How the config check builds upstream clients.
     pub upstream: UpstreamSettings,
     /// What process hardening achieved before anything secret existed.
@@ -855,15 +853,7 @@ impl<F: StoreFs + Send + Sync + 'static> Settler<F> {
     async fn run_check(&self, identity: Arc<VaultIdentity>) -> Result<(Checked, Option<OpenedLog>), CheckFailure> {
         let (locks, setup) = (Arc::clone(&self.locks), Arc::clone(&self.setup));
         tokio::task::spawn_blocking(move || {
-            let checked = open_and_check(
-                &locks.state,
-                &locks.config,
-                &setup.fs,
-                identity,
-                &setup.capabilities,
-                &setup.accounts,
-                &setup.upstream,
-            )?;
+            let checked = open_and_check(&locks.state, &locks.config, &setup.fs, identity, &setup.accounts, &setup.upstream)?;
             let log = open_chosen_log(&checked, &setup)?;
             Ok((checked, log))
         })

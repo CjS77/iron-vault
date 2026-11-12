@@ -3,9 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::{
-    AccountDirectory, AccountName, Capabilities, CatalogEntry, CredentialCatalog, ParsedConfig, Port, ValidatedConfig, activate,
-};
+use iron_vault_policy::{AccountDirectory, AccountName, CatalogEntry, CredentialCatalog, ParsedConfig, Port, ValidatedConfig, activate};
 use iron_vault_store::{OsFs, PermittedOrigins, StateDirLock, Vault, VaultIdentity};
 
 use super::*;
@@ -91,7 +89,7 @@ fn vault(scratch: &Scratch, route: &str, credential: &str) -> Vault {
 
 fn policy(route: &str, credential: &str, vault: &Vault) -> ActivePolicy {
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(config(route, credential).as_bytes()).unwrap()).unwrap();
-    activate(&config, &Capabilities::default(), vault, &NoAccounts).unwrap()
+    activate(&config, vault, &NoAccounts).unwrap()
 }
 
 fn parts(policy: &ActivePolicy) -> (UpstreamClients, RateLimiter) {
@@ -185,7 +183,7 @@ fn a_route_unavailable_in_the_policy_but_healthy_in_the_vault_is_refused() {
     let scratch = Scratch::new();
     let vault = vault(&scratch, "fx", "key");
     let config = ValidatedConfig::try_from(ParsedConfig::from_toml(config("fx", "key").as_bytes()).unwrap()).unwrap();
-    let policy = activate(&config, &Capabilities::default(), &AllUnusable, &NoAccounts).unwrap();
+    let policy = activate(&config, &AllUnusable, &NoAccounts).unwrap();
     let (clients, limiter) = parts(&policy);
 
     let refused = ServingSnapshot::new(policy, vault, clients, limiter).unwrap_err();

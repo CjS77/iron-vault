@@ -48,7 +48,6 @@ use iron_vault::socket_activation::PassedSockets;
 use iron_vault::trusted_path_report::ServicePaths;
 use iron_vault::upstream::client::TransportLimits;
 use iron_vault_kinds::CredentialMaterial;
-use iron_vault_policy::Capabilities;
 use iron_vault_store::OsFs;
 use tokio::net::UnixStream;
 use tracing_subscriber::filter::LevelFilter;
@@ -578,7 +577,6 @@ fn uninitialized_service(dir: &TempDir, ca: &TestCa) -> Arc<ServiceContext> {
         accounts: PasswdDirectory::new(Accounts::parse(""), &paths, Path::new("/nonexistent")).unwrap(),
         paths,
         fs: OsFs,
-        capabilities: Capabilities::default(),
         upstream: UpstreamSettings::new(DeploymentProfile::Development, invoking_user().unwrap(), TransportLimits::default())
             .with_pinned_trust(ca.trust()),
         hardening: HardeningReport {

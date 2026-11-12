@@ -4,9 +4,9 @@
 use std::collections::BTreeSet;
 
 use iron_vault_policy::{
-    AccountDirectory, AccountName, ActivePolicy, BoundCredential, Capabilities, CatalogEntry, CheckedRequest, CredentialCatalog,
-    CredentialKind, CredentialName, HeaderName, HeaderValue, Host, Method, OutgoingRequest, ParsedConfig, Port, RequestTarget,
-    UpstreamTarget, ValidatedConfig, activate, authorize, final_check, sanitize,
+    AccountDirectory, AccountName, ActivePolicy, BoundCredential, CatalogEntry, CheckedRequest, CredentialCatalog, CredentialKind,
+    CredentialName, HeaderName, HeaderValue, Host, Method, OutgoingRequest, ParsedConfig, Port, RequestTarget, UpstreamTarget,
+    ValidatedConfig, activate, authorize, final_check, sanitize,
 };
 use secrecy::SecretString;
 
@@ -85,7 +85,7 @@ pub fn policy(origin: &str) -> ActivePolicy {
         .values()
         .map(|route| (route.upstream().host().clone(), route.upstream().port()))
         .collect();
-    activate(&config, &Capabilities::default(), &Catalog(origins), &NoAccounts).unwrap()
+    activate(&config, &Catalog(origins), &NoAccounts).unwrap()
 }
 
 /// The checked request the service would send for the caller request `method target` with `headers`, filling the

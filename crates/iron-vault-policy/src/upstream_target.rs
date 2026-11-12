@@ -146,7 +146,7 @@ fn check_query(url: &Url, request: &AuthorizedRequest) -> Result<(), UpstreamTar
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::activation::{ActivePolicy, Capabilities, CatalogEntry, CredentialCatalog, activate};
+    use crate::activation::{ActivePolicy, CatalogEntry, CredentialCatalog, activate};
     use crate::authorization::authorize;
     use crate::config::ParsedConfig;
     use crate::method::Method;
@@ -189,7 +189,7 @@ mod tests {
 
     fn policy(doc: &str) -> ActivePolicy {
         let config = ValidatedConfig::try_from(ParsedConfig::from_toml(doc.as_bytes()).unwrap()).unwrap();
-        activate(&config, &Capabilities::default(), &Catalog, &FakeAccounts::host()).unwrap()
+        activate(&config, &Catalog, &FakeAccounts::host()).unwrap()
     }
 
     /// Authorizes `target` for the caller granted its route, builds the target, and checks the round trip.

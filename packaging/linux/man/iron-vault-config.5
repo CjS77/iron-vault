@@ -185,8 +185,9 @@ All the route's callers share the bucket.
 Every bucket starts empty each time the service becomes Ready, such as after \fBunlock\fR or an approval.
 .TP
 \fBconfirm\fR (string, default \fBnone\fR)
-\fBnone\fR or \fBtouch\fR.
-No touch confirmation provider exists in this release, so a route with \fBtouch\fR is refused.
+\fBnone\fR, the only value this release accepts.
+\fBtouch\fR is named for a later release; no touch confirmation provider exists in this one, so a config with
+\fBtouch\fR is refused when it is read, before any approval prompt.
 .TP
 \fBca_file\fR (path)
 A PEM file of CA certificates that the route trusts instead of the built\-in roots.

@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use iron_vault_policy::{
-    AccountDirectory, ActivationError, ActivePolicy, Capabilities, ConfigError, CredentialName, ParsedConfig, RateLimiter, ValidatedConfig,
+    AccountDirectory, ActivationError, ActivePolicy, ConfigError, CredentialName, ParsedConfig, RateLimiter, ValidatedConfig,
     ValidationError, activate,
 };
 use iron_vault_store::{
@@ -130,7 +130,7 @@ pub enum InvalidConfig {
     /// The sections contradict each other.
     #[error("{} validation errors", .0.len())]
     Validation(Vec<ValidationError>),
-    /// The config cannot be activated against the vault, the capabilities and the host's accounts.
+    /// The config cannot be activated against the vault and the host's accounts.
     #[error("{} activation errors", .0.len())]
     Activation(Vec<ActivationError>),
     /// The built-in upstream client cannot be built, so no route could be served.
@@ -305,11 +305,10 @@ pub fn open_and_check(
     config_dir: &ConfigDirLock,
     fs: &impl StoreFs,
     identity: Arc<VaultIdentity>,
-    capabilities: &Capabilities,
     accounts: &impl AccountDirectory,
     upstream: &UpstreamSettings,
 ) -> Result<Checked, CheckFailure> {
-    open_and_run(state_dir, config_dir, fs, identity, capabilities, accounts, upstream).inspect_err(log_failure)
+    open_and_run(state_dir, config_dir, fs, identity, accounts, upstream).inspect_err(log_failure)
 }
 
 fn open_and_run(
@@ -317,13 +316,12 @@ fn open_and_run(
     config_dir: &ConfigDirLock,
     fs: &impl StoreFs,
     identity: Arc<VaultIdentity>,
-    capabilities: &Capabilities,
     accounts: &impl AccountDirectory,
     upstream: &UpstreamSettings,
 ) -> Result<Checked, CheckFailure> {
     let (vault, opened) = open_vault(state_dir, fs, identity).map_err(CheckFailure::Vault)?;
     let approval = vault.load_approval_state(state_dir, fs).map_err(CheckFailure::ApprovalState)?;
-    let snapshot = run(config_dir, fs, vault, &approval, capabilities, accounts, upstream)?;
+    let snapshot = run(config_dir, fs, vault, &approval, accounts, upstream)?;
     Ok(Checked {
         credentials: snapshot.credential_standings(&opened),
         record_ids: snapshot.record_ids(),
@@ -346,11 +344,10 @@ pub fn check_config(
     fs: &impl StoreFs,
     vault: Vault,
     state: &ApprovalState,
-    capabilities: &Capabilities,
     accounts: &impl AccountDirectory,
     upstream: &UpstreamSettings,
 ) -> Result<ServingSnapshot, CheckFailure> {
-    run(config_dir, fs, vault, state, capabilities, accounts, upstream).inspect_err(log_failure)
+    run(config_dir, fs, vault, state, accounts, upstream).inspect_err(log_failure)
 }
 
 fn log_failure(failure: &CheckFailure) {
@@ -362,7 +359,6 @@ fn run(
     fs: &impl StoreFs,
     vault: Vault,
     state: &ApprovalState,
-    capabilities: &Capabilities,
     accounts: &impl AccountDirectory,
     upstream: &UpstreamSettings,
 ) -> Result<ServingSnapshot, CheckFailure> {
@@ -370,7 +366,7 @@ fn run(
         .inspect_err(record_unverified_publish)
         .map_err(CheckFailure::Recovery)?;
     record_recovery(&recovered);
-    let policy = activate_config(recovered.published().config(), capabilities, &vault, accounts).map_err(CheckFailure::Config)?;
+    let policy = activate_config(recovered.published().config(), &vault, accounts).map_err(CheckFailure::Config)?;
     let clients = upstream
         .clients(&policy)
         .map_err(|error| CheckFailure::Config(InvalidConfig::Clients(error)))?;
@@ -382,13 +378,8 @@ fn run(
 }
 
 /// Parses, validates and activates `bytes` against `vault`'s credential catalog.
-pub(crate) fn activate_config(
-    bytes: &[u8],
-    capabilities: &Capabilities,
-    vault: &Vault,
-    accounts: &impl AccountDirectory,
-) -> Result<ActivePolicy, InvalidConfig> {
+pub(crate) fn activate_config(bytes: &[u8], vault: &Vault, accounts: &impl AccountDirectory) -> Result<ActivePolicy, InvalidConfig> {
     let parsed = ParsedConfig::from_toml(bytes).map_err(InvalidConfig::Parse)?;
     let config = ValidatedConfig::try_from(parsed).map_err(InvalidConfig::Validation)?;
-    activate(&config, capabilities, vault, accounts).map_err(InvalidConfig::Activation)
+    activate(&config, vault, accounts).map_err(InvalidConfig::Activation)
 }

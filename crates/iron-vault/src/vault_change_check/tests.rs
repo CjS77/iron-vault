@@ -92,7 +92,7 @@ impl AccountDirectory for NoAccounts {
 }
 
 fn check(config: &ValidatedConfig, catalog: &Catalog, change: &PlannedChange) -> Result<(), Vec<AffectedRoute>> {
-    vault_change_check(config, &Capabilities::default(), catalog, &NoAccounts, change)
+    vault_change_check(config, catalog, &NoAccounts, change)
 }
 
 fn replace(name: &str, kind: CredentialKind, ports: &[u16]) -> PlannedChange {

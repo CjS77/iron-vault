@@ -3,11 +3,11 @@
 //! change and keeps only the failures the change causes, so every name the active config references stays in the vault
 //! manifest (specification §6, §12).
 //!
-//! It is pure: the service supplies the active config, its catalog, capabilities and account directory.
+//! It is pure: the service supplies the active config, its catalog and account directory.
 
 use iron_vault_policy::{
-    AccountDirectory, ActivationError, Capabilities, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, RouteName,
-    ValidatedConfig, activate,
+    AccountDirectory, ActivationError, CatalogEntry, CredentialCatalog, CredentialKind, CredentialName, RouteName, ValidatedConfig,
+    activate,
 };
 use iron_vault_store::PermittedOrigins;
 
@@ -80,12 +80,11 @@ impl<C: CredentialCatalog> CredentialCatalog for Changed<'_, C> {
 /// for the config check after the write to find.
 pub fn vault_change_check(
     config: &ValidatedConfig,
-    capabilities: &Capabilities,
     current: &impl CredentialCatalog,
     accounts: &impl AccountDirectory,
     change: &PlannedChange,
 ) -> Result<(), Vec<AffectedRoute>> {
-    let Err(errors) = activate(config, capabilities, &Changed { current, change }, accounts) else {
+    let Err(errors) = activate(config, &Changed { current, change }, accounts) else {
         return Ok(());
     };
     let affected: Vec<_> = errors.into_iter().filter_map(|error| caused_by(error, change.name())).collect();
