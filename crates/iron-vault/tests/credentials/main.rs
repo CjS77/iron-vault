@@ -11,5 +11,6 @@ mod approval_release;
 mod caller_token;
 mod config_approve;
 mod credential_commands;
+mod damaged_neighbours;
 mod replace;
 mod rm;
